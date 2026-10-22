@@ -1,0 +1,12 @@
+# SPEC?: 62_pipelines   # aus dem Dateinamen, zu bestaetigen
+# F62-17: `host:` traegt NAMEN, nie name=value — ein Wert im Quelltext waere
+# Requires: driver
+# ein Geheimnis im Quelltext.
+- pipeline:
+    name: with_host_value
+    params: { arch: [x86_64] }
+    stages:
+      - stage:
+          name: one
+          steps:
+            - step: { name: first, host: ["PKG=secret"], return: i32, body: [{ return: 0 }] }

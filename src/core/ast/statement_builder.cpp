@@ -77,6 +77,7 @@ bool StatementBuilder::OnScalar(const std::string& value, const std::string& tag
 
 class ModifierBuilder : public StateHandler {
     bool* is_const;
+    bool* is_singleton;      // spec/21 §6.2 F21-S1
     bool* is_volatile;
     bool* is_extern;
     std::string* lifetime;
@@ -86,9 +87,9 @@ class ModifierBuilder : public StateHandler {
     std::string currentKey;
 public:
     ModifierBuilder(Builder* b, bool* ic, bool* iv, bool* ie, std::string* lt,
-                    int* lv, std::string wh)
-        : StateHandler(b), is_const(ic), is_volatile(iv), is_extern(ie), lifetime(lt),
-          level(lv), where(std::move(wh)) {}
+                    int* lv, std::string wh, bool* sg = nullptr)
+        : StateHandler(b), is_const(ic), is_singleton(sg), is_volatile(iv), is_extern(ie),
+          lifetime(lt), level(lv), where(std::move(wh)) {}
     bool OnMapStart() override { expectingKey = true; return true; }
     bool OnMapEnd() override { builder->popState(); return true; }
     bool OnScalar(const std::string& value, const std::string& tag) override {
@@ -97,6 +98,8 @@ public:
             expectingKey = false;
         } else {
             if (currentKey == "const")    *is_const   = (value == "true" || value == "1");
+            if (currentKey == "singleton" && is_singleton)
+                *is_singleton = (value == "true" || value == "1");
             if (currentKey == "volatile") *is_volatile = (value == "true" || value == "1");
             if (currentKey == "extern")   *is_extern   = (value == "true" || value == "1");
             if (currentKey == "lifetime") {  // spec/61 ownership qualifier
@@ -133,7 +136,7 @@ bool StatementBuilder::OnMapStart() {
         // `[name, type, {new:T}, {lifetime: persistent}]`.
         if (args.size() >= 3 || exprArg) {
             builder->pushState(std::make_unique<ModifierBuilder>(builder, &is_const, &is_volatile, &is_extern, &decl_lifetime, &decl_level,
-                                   "decl " + (args.empty() ? std::string("(?)") : args[0].first)));
+                                   "decl " + (args.empty() ? std::string("(?)") : args[0].first), &is_singleton));
             return true;
         }
     }
@@ -181,7 +184,7 @@ std::unique_ptr<Node> StatementBuilder::finish() {
                      bool modifierOnly = !dict->entries.empty();
                      for (const auto& [k, v] : dict->entries) {
                          if (k != "const" && k != "volatile" && k != "extern" && k != "lifetime" &&
-                             k != "level") {
+                             k != "level" && k != "singleton") {
                              modifierOnly = false;
                              break;
                          }
@@ -213,6 +216,7 @@ std::unique_ptr<Node> StatementBuilder::finish() {
          }
 
          decl->is_const    = is_const;
+         decl->is_singleton = is_singleton;
          decl->is_volatile = is_volatile;
          decl->is_extern   = is_extern;
          decl->lifetime    = decl_lifetime;

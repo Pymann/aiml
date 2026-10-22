@@ -1,0 +1,117 @@
+# SPEC: 62_pipelines
+# spec/62 §5.9: Anhalten am Schritt-Rand und Fortsetzen aus dem Cache.
+#
+# Der Kern ist F62-56: Fortsetzen braucht KEINEN eigenen Zustand.  Was ein
+# resume fortsetzt, ist die Menge der schon aufgezeichneten (Schritt, Lane) —
+# also der Cache.  Darum wird hier geprueft, dass ein fortgesetzter Lauf die
+# erledigten Schritte TRIFFT statt sie zu wiederholen; waere das nicht so,
+# muesste man einen Fortsetzungszustand bauen, und genau das will §5.9 nicht.
+#
+# Zwei Wege ins Anhalten, beide verlangt:
+#   pause_before   -> im Quelltext erklaert, ein Freigabe-Tor (F62-54)
+#   request_pause  -> von aussen, wirkt NACH dem laufenden Schritt (F62-55)
+# Expected exit code: 0
+
+- decl: [g_seen, i32, 0]
+- decl: [g_pipe_handle, pipeline]
+
+- def:
+    name: step_one
+    return: i32
+    body: [{ return: 0 }]
+
+- def:
+    name: step_two
+    return: i32
+    body: [{ return: 0 }]
+
+- def:
+    name: expect
+    args: [[what, string], [cond, i32]]
+    return: i32
+    body:
+      - if:
+          condition: { eq: [cond, 1] }
+          then: [{ print: ["  ok   ${what}"] }, { return: 0 }]
+      - print: ["  FAIL ${what}"]
+      - return: 1
+
+# Beobachter, der von AUSSEN anhaelt: nach dem ersten Schritt (F62-97).
+- def:
+    name: pause_after_first
+    args: [[event, ref<StepRun>]]
+    static_off: ["str_cmp"]
+    body:
+      - set: [g_seen, { +: [g_seen, 1] }]
+      - if: { condition: { eq: [event.name, "one"] }, then: [{ call: [g_pipe_handle.request_pause] }] }
+
+- def:
+    name: two_steps
+    args: [[gate, i32]]
+    return: pipeline
+    body:
+      - decl: [one, step, { call: [step.new] }]
+      - call: [one.set_name, "one"]
+      - call: [one.set_body, { call: [sys.bundle, "step_one", { context: true }] }]
+      - call: [one.set_cache, CacheClass.pure]
+      - decl: [two, step, { call: [step.new] }]
+      - call: [two.set_name, "two"]
+      - call: [two.set_body, { call: [sys.bundle, "step_two", { context: true }] }]
+      - call: [two.set_cache, CacheClass.pure]
+      - if: { condition: { eq: [gate, 1] }, then: [{ call: [two.set_pause_before, 1] }] }
+      - decl: [stg, stage, { call: [stage.new] }]
+      - call: [stg.set_name, "only"]
+      - call: [stg.add_step, one]
+      - call: [stg.add_step, two]
+      - decl: [pipe, pipeline, { call: [pipeline.new] }]
+      - call: [pipe.set_name, "pausable"]
+      - call: [pipe.add_stage, stg]
+      - return: pipe
+
+- def:
+    name: main
+    static_off: ["str_cmp"]
+    return: i32
+    body:
+      - decl: [fails, i32, 0]
+
+      # ── deklariertes Tor: der Lauf haelt VOR dem zweiten Schritt ────────
+      - decl: [gated, pipeline, { call: [two_steps, 1] }]
+      - decl: [rc_g1, i32, { call: [gated.run] }]
+      - set: [fails, { +: [fails, { call: [expect, "Tor: der Lauf meldet 'angehalten'", { eq: [rc_g1, -6] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "Tor: der Lebenszyklus ist paused", { eq: [{ call: [gated.lifecycle] }, Lifecycle.paused] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "Tor: der erste Schritt lief", { eq: [{ call: [gated.ran_count] }, 1] }] }] }]
+
+      # ── Freigabe + Fortsetzen: der erledigte Schritt TRIFFT ────────────
+      - call: [gated.release, "two"]
+      - call: [gated.resume]
+      - decl: [rc_g2, i32, { call: [gated.run] }]
+      - set: [fails, { +: [fails, { call: [expect, "Freigabe: der Lauf kommt durch", { eq: [rc_g2, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "Fortsetzen: der erledigte Schritt trifft", { eq: [{ call: [gated.reused_count] }, 1] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "Fortsetzen: nur der offene Schritt laeuft", { eq: [{ call: [gated.ran_count] }, 1] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "Fortsetzen: der Lebenszyklus ist done", { eq: [{ call: [gated.lifecycle] }, Lifecycle.done] }] }] }]
+
+      # ── ohne Tor laeuft dieselbe Pipeline durch ────────────────────────
+      - decl: [plain, pipeline, { call: [two_steps, 0] }]
+      - decl: [rc_p, i32, { call: [plain.run] }]
+      - set: [fails, { +: [fails, { call: [expect, "ohne Tor: der Lauf kommt durch", { eq: [rc_p, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "ohne Tor: beide Schritte liefen", { eq: [{ call: [plain.ran_count] }, 2] }] }] }]
+
+      # ── von aussen: der Beobachter haelt NACH dem ersten Schritt an ────
+      - set: [g_seen, 0]
+      - decl: [outer, pipeline, { call: [two_steps, 0] }]
+      - set: [g_pipe_handle, outer]
+      - decl: [rc_o1, i32, { call: [outer.run, pause_after_first] }]
+      - set: [fails, { +: [fails, { call: [expect, "von aussen: der Lauf meldet 'angehalten'", { eq: [rc_o1, -6] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "von aussen: erst NACH dem laufenden Schritt", { eq: [g_seen, 1] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "von aussen: der erste Schritt ist erledigt", { eq: [{ call: [outer.ran_count] }, 1] }] }] }]
+      - call: [outer.resume]
+      - decl: [rc_o2, i32, { call: [outer.run] }]
+      - set: [fails, { +: [fails, { call: [expect, "von aussen: fortgesetzt kommt er durch", { eq: [rc_o2, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "von aussen: der erledigte Schritt trifft", { eq: [{ call: [outer.reused_count] }, 1] }] }] }]
+
+      - if:
+          condition: { neq: [fails, 0] }
+          then: [{ print: ["test_pipeline_pause FAIL (${fails})"] }, { return: 1 }]
+      - print: ["test_pipeline_pause PASS"]
+      - return: 0

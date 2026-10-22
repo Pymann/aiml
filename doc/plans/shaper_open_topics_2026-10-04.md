@@ -26,7 +26,7 @@ W4 zum separaten Vertrag von `buffer.write` nicht.
 
 | ID | Befund | Umgang |
 |---|---|---|
-| W10 | Borrow als `ptr<T>` bei deklarierender Initialisierung abgewiesen, späteres `set` laut Register weiterhin möglich. | Spec-61-Lücke. Gemeldet: 43 Tests, 7 kosmos-Stellen, 0 in 9rooms; hier nicht nachgezählt. Vor Umsetzung Inventar erneuern und Migration zusammen mit Diagnostik planen. |
+| W10 | Borrow als `ptr<T>` bei deklarierender Initialisierung abgewiesen, späteres `set` laut Register weiterhin möglich. | Spec-61-Lücke. Gemeldet: 43 Tests, 7 cosmos-Stellen, 0 in 9rooms; hier nicht nachgezählt. Vor Umsetzung Inventar erneuern und Migration zusammen mit Diagnostik planen. |
 | W1 | Literale werden als f32 erzeugt; gemischte f64-Ausdrücke können ungültiges IR ergeben. | Weiter nur melden. f64-Zwischenwerte vermeiden gemischte Typen, stellen aber zuvor verlorene Dezimalpräzision nicht wieder her. |
 | W3 | Spec 22: typisierte mehrteilige catch-Klauseln; laut Register nur ein Catch-all. | Weiter nur melden; shaper-Diagnostik als Daten/Status. Spec-61-Unwind bleibt separat einzuhalten. |
 | W4 | Spec-11-Schreibvertrag weicht von nativen Stores ab: Endianness, Strings und Bounds/Exceptions; Register meldet auch kein Wachstum. | Weiter nur melden; Kapazitäten prüfen und kontrolliert packen. Automatisches Wachstum nicht allein aus der Zusammenfassung als Spec-Pflicht ableiten. |

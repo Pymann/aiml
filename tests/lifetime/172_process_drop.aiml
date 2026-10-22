@@ -1,0 +1,54 @@
+# SPEC: 23_system,61_memory_management_DRAFT
+# static-check: off
+# spec/61 Class 4 + spec/23 §5.2: process locals, rebinds and model fields are released at owner
+# drop (handle + capture pipes); captured strings bound to locals/fields are owned; no fd leak.
+- model: {name: Run, fields: [[proc, process], [output, string]]}
+- def:
+    name: fd_count
+    return: string
+    body:
+      - decl: [lister_argv, list<string>, ["sh", "-c", "ls /proc/$PPID/fd | wc -l"]]
+      - decl: [lister, process, { call: [sys.exe, lister_argv, {capture: true}] }]
+      - call: [lister.wait]
+      - decl: [listed, string, lister.stdout_buffer]
+      - return: { call: [listed.trim] }
+- def:
+    name: one_round
+    args: [[idx, i32]]
+    return: i32
+    body:
+      - decl: [proc_argv, list<string>, ["printf", "a${idx}\\nb\\n"]]
+      - decl: [proc, process, { call: [sys.exe, proc_argv, {capture: true}] }]
+      - decl: [line, string, { call: [proc.read_line] }]
+      - call: [proc.wait]
+      - if: { condition: { neq: [line, "a${idx}"] }, then: [{ return: 1 }] }
+      - decl: [rest, string, proc.stdout_buffer]
+      - if: { condition: { neq: [rest, "b\n"] }, then: [{ return: 2 }] }
+      - decl: [err_argv, list<string>, ["sh", "-c", "echo x >&2"]]
+      - set: [proc, { call: [sys.exe, err_argv, {capture: true}] }]
+      - call: [proc.wait]
+      - decl: [run, Run]
+      - decl: [field_argv, list<string>, ["echo", "field"]]
+      - set: [run.proc, { call: [sys.exe, field_argv, {capture: true}] }]
+      - call: [run.proc.wait]
+      - set: [run.output, run.proc.stdout_buffer]
+      - if: { condition: { neq: [run.output, "field\n"] }, then: [{ return: 3 }] }
+      - decl: [unwaited_argv, list<string>, ["true"]]
+      - decl: [unwaited, process, { call: [sys.exe, unwaited_argv, {capture: true}] }]
+      - return: 0
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [before, string, { call: [fd_count] }]
+      - decl: [counter, i32, 0]
+      - while:
+          condition: { lt: [counter, 30] }
+          body:
+            - decl: [round_rc, i32, { call: [one_round, counter] }]
+            - if: { condition: { neq: [round_rc, 0] }, then: [{ print: ["FAIL round ${counter} rc=${round_rc}"] }, { return: 1 }] }
+            - set: [counter, { +: [counter, 1] }]
+      - decl: [after, string, { call: [fd_count] }]
+      - if: { condition: { neq: [before, after] }, then: [{ print: ["FAIL fd leak ${before} -> ${after}"] }, { return: 1 }] }
+      - print: ["PASS 172 process drop (fds ${before} -> ${after})"]
+      - return: 0

@@ -1,0 +1,45 @@
+# SPEC: 31_db_integration
+# spec/31: `path: "sub/dir/"` legt den Unterbau an — einschliesslich der
+# Zwischenebenen.  Bis 2026-10-15 war es ein einstufiges `mkdir`: beim ersten
+# Oeffnen scheiterte es mit ENOENT, der Store blieb still leer, und nur der
+# ZWEITE Lauf (mit dann vorhandenem Verzeichnis) funktionierte.
+#
+# Expected exit code: 0
+
+- class:
+    name: NestedStore
+    members:
+      - [store, Kv<string:string>]
+    methods:
+      - def:
+          name: open
+          access: public
+          body:
+            - set: [<.store, { call: [db.open_kv, "tief", {persist: true, path: "a/b/c/"}] }]
+      - def:
+          name: roundtrip
+          access: public
+          static_off: ["str_cmp"]
+          return: i32
+          body:
+            - call: [<.store.set, "schluessel", "wert-42"]
+            - if: { condition: { eq: [{ call: [<.store.has, "schluessel"] }, 0] }, then: [{ return: 0 }] }
+            - decl: [back, string, { call: [<.store.get_copy, "schluessel"] }]
+            - if: { condition: { neq: [back, "wert-42"] }, then: [{ return: 0 }] }
+            - return: 1
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [nest, ptr<NestedStore>, { new: NestedStore }]
+      - call: [nest.open]
+      - if:
+          condition: { neq: [{ call: [nest.roundtrip] }, 1] }
+          then: [{ print: ["FAIL verschachtelter path: Store schreibt/liest nicht"] }, { call: [sys.exit, 1] }]
+      - decl: [made, path, "aiondb/a/b/c"]
+      - if:
+          condition: { eq: [{ call: [io.is_dir, made] }, false] }
+          then: [{ print: ["FAIL das Verzeichnis aiondb/a/b/c wurde nicht angelegt"] }, { call: [sys.exit, 1] }]
+      - print: ["PASS test_db_kv_nested_path"]
+      - return: 0

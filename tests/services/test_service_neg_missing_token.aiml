@@ -1,0 +1,32 @@
+# SPEC: 66_services §6 / §5.5 — a guarded service reads the token from the request
+# model's `token: string` field.  Without that field the gate could never run.
+# Expected exit code: 1
+- import: "tests/services/_auth.aiml"
+
+- model:
+    name: TokenlessReq
+    fields:
+      - [purl, string, ""]
+
+- model:
+    name: TokenlessResp
+    fields:
+      - [spdx, string, ""]
+
+- service:
+    name: TokenlessApi
+    base: "/v1"
+    transport: [rpc]
+    auth: TokenAuth
+    endpoints:
+      - def: { name: resolve, http: [post, "/a"], roles: [viewer], args: [[req, TokenlessReq]], return: TokenlessResp, body: [{ decl: [out, TokenlessResp] }, { return: out }] }
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [gate, ptr<TokenAuth>, { new: TokenAuth }]
+      - free: gate
+      - decl: [api, ptr<TokenlessApi>, { new: TokenlessApi }]
+      - free: api
+      - return: 0

@@ -1892,9 +1892,21 @@ int32_t aiml_mirror_session_take_response(void* session, int64_t id, const char*
 }
 
 /* Forget a request whose response is no longer wanted (a late response is then dropped). */
+/* spec/44_5 §7.2: drop interest in `id`.  Erasing the registration alone is not
+ * enough — a response that already ARRIVED sits in the rpc queue, and once the id
+ * is gone take_response can no longer reach it (it checks `outstanding` first).
+ * Nothing is ever dropped to make room, so such an orphan counts against the
+ * per-peer 4096/64 MiB budget forever and eventually disconnects our own peer.
+ * So remove and free the queued response too. */
 void aiml_mirror_session_cancel_request(void* session, int64_t id) {
     auto* s = (AimlMirrorSession*)session;
-    if (s && id > 0) s->outstanding.erase((uint64_t)id);
+    if (!s || id <= 0) return;
+    const uint64_t rid = (uint64_t)id;
+    s->outstanding.erase(rid);
+    while (AimlRpcEvent* ev = rpc_take_matching(s, [rid](AimlRpcEvent* e) {
+               return e->kind == RPC_RESPONSE && e->request_id == rid;
+           }))
+        aiml_free_rpc_event(ev);
 }
 
 /* Decode a received typed-RPC payload into a caller-allocated, zero-initialised struct

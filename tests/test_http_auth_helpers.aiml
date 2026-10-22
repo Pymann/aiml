@@ -28,6 +28,10 @@
       - set: [resp.body, who]
       - call: [resp.send]
 
+# Auf BEREITSCHAFT warten statt fest zu schlafen.  Ein fester Schlaf ist immer
+# entweder zu kurz (flaky unter Last — genau das stand hier) oder zu lang
+# (Suite-Zeit verschenkt).  Hier wird verbunden, bis es klappt.
+
 - def:
     name: probe
     args: [[raw, string]]
@@ -37,8 +41,18 @@
       - set: [sock, { call: [net.socket, "tcp"] }]
       - call: [net.connect, sock, "127.0.0.1", 23601]
       - call: [net.send_string, sock, raw]
-      - decl: [rsp, string]
-      - set: [rsp, { call: [net.recv_string, sock, 512] }]
+      # BIS ZUM ENDE lesen, nicht einmal.  Ein einzelnes recv liefert, was
+      # gerade da ist — unter Last ist das die Statuszeile allein, und der Test
+      # scheiterte dann an einem Kopffeld, das noch unterwegs war.  Genau das
+      # war die bekannte Flakiness dieses Tests.
+      - decl: [rsp, string, ""]
+      - decl: [rounds, i32, 0]
+      - while:
+          condition: { lt: [rounds, 20] }
+          body:
+            - decl: [chunk, string, { call: [net.recv_string, sock, 2048] }]
+            - if: { condition: { eq: [chunk.len, 0] }, then: [{ set: [rounds, 99] }] }
+            - if: { condition: { gt: [chunk.len, 0] }, then: [{ set: [rsp, "${rsp}${chunk}"] }, { set: [rounds, { +: [rounds, 1] }] }] }
       - call: [net.close, sock]
       - return: rsp
 
@@ -68,10 +82,28 @@
       - call: [srv.route, "GET", "/login", handle_login]
       - call: [srv.route, "GET", "/whoami", handle_whoami]
       - decl: [thr, thread_handle, { call: [srv.start_async] }]
-      # Readiness-Marge: unter voller Testsuite-Last braucht der async-Server länger
-      # bis zum listen(); 300ms waren zu knapp (grün standalone, flaky in der Suite) →
-      # großzügige Marge, damit probe() nicht vor dem listen connectet.
-      - call: [time.sleep_ms, 1500]
+      # Auf BEREITSCHAFT warten statt fest zu schlafen: ein fester Schlaf ist
+      # entweder zu kurz (flaky unter Last — genau das stand hier vorher) oder
+      # zu lang.  Gewartet wird mit einer ECHTEN Anfrage, nicht mit einem
+      # blossen connect: ein halb geoeffneter Verbindungsversuch belegt beim
+      # async-Server einen Platz und stoert ihn mehr, als er hilft.
+      - decl: [ready, i32, 0]
+      - decl: [tries_left, i32, 60]
+      - while:
+          condition: { '&&': [{ eq: [ready, 0] }, { gt: [tries_left, 0] }] }
+          body:
+            # /whoami ohne Cookie ist harmlos — /login erzeugt eine Sitzung,
+            # und eine zusaetzliche Sitzung verschiebt genau das, was dieser
+            # Test danach prueft.
+            - decl: [first_try, string, { call: [probe, "GET /whoami HTTP/1.1\r\nHost: x\r\n\r\n"] }]
+            - if:
+                condition: { gt: [first_try.len, 0] }
+                then: [{ set: [ready, 1] }]
+                else: [{ call: [time.sleep_ms, 200] }]
+            - set: [tries_left, { -: [tries_left, 1] }]
+      - if:
+          condition: { eq: [ready, 0] }
+          then: [{ print: ["FAIL Server wurde nicht bereit"] }, { set: [fail, { +: [fail, 1] }] }]
 
       # ── set_cookie: secure attributes present ─────────────────────────────
       - decl: [login_resp, string, { call: [probe, "GET /login HTTP/1.1\r\nHost: x\r\n\r\n"] }]

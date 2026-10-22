@@ -1,0 +1,116 @@
+# SPEC: 61_memory_management_DRAFT
+# Ein lokal mit `new` angelegter Zeiger wird in ein GLOBAL gehaengt, dann
+# endet die Funktion.
+#
+# spec/61: `new` erzeugt eine Heap-Allokation mit Eigentuemer.  Haengt die
+# Funktion sie in ein Global und endet, muss das Eigentum MITWANDERN — sonst
+# gibt das Verwerfen der Lokalen den Speicher frei und das Global zeigt auf
+# befreiten Heap.  Der naechste Lesezugriff ist dann ein Griff ins Leere.
+#
+# Anlass: der WASM-Client von cosmos stuerzte mit "memory access out of
+# bounds" ab, sobald ein Live-Push angekommen war.  Der Push-Handler hat
+# genau diese Form (`decl fresh = new ClusterView` ... `set g_live = fresh`).
+# Nativ faellt das still durch, weil befreiter Speicher meist noch abgebildet
+# ist; WASM prueft die Grenzen und bricht ab.
+#
+# Geprueft wird der VERSCHACHTELTE Fall (Modell mit list<Model> und Strings),
+# weil nur der inneren Heap besitzt — ein flaches Modell wuerde den Fehler
+# nicht zeigen.
+# Expected exit code: 0
+
+- model:
+    name: Inner
+    fields:
+      - [name,   string]
+      - [status, string]
+      - [count,  i32]
+
+- model:
+    name: Outer
+    fields:
+      - [tag,    string]
+      - [items,  list<Inner>]
+
+- decl: [g_view, ptr<Outer>, null]
+- decl: [g_seq,  i32,        0]
+
+- def:
+    name: expect
+    args: [[what, string], [cond, i32]]
+    return: i32
+    body:
+      - if:
+          condition: { eq: [cond, 1] }
+          then: [{ call: [log.info, "  ok   ${what}"] }, { return: 0 }]
+      - call: [log.info, "  FAIL ${what}"]
+      - return: 1
+
+# Genau die Form des Push-Handlers: frisch allozieren, fuellen, ins Global
+# haengen, zurueckkehren.
+- def:
+    name: apply_push
+    static_off: ["str_cmp"]
+    args: [[rounds, i32]]
+    return: i32
+    body:
+      - decl: [fresh, ptr<Outer>, { new: Outer }]
+      - set: [fresh.tag, "schnappschuss-${rounds}"]
+      - decl: [fix_ix, i32, 0]
+      - while:
+          condition: { lt: [fix_ix, rounds] }
+          body:
+            - decl: [row, Inner]
+            - set: [row.name,   "eintrag-${fix_ix}"]
+            - set: [row.status, "pending"]
+            - set: [row.count,  fix_ix]
+            - call: [fresh.items.push, row]
+            - set: [fix_ix, { +: [fix_ix, 1] }]
+      - set: [g_view, fresh]
+      - set: [g_seq, { +: [g_seq, 1] }]
+      - return: 1
+
+- def:
+    name: main
+    static_off: ["str_cmp"]
+    return: i32
+    body:
+      - decl: [fails, i32, 0]
+
+      # Erster Push: genau der Fall, der im Client abgestuerzt ist.
+      - call: [apply_push, 5]
+      - set: [fails, { +: [fails, { call: [expect, "Global gesetzt", { pneq: [g_view, null] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "5 Eintraege ueberlebt", { eq: [g_view.items.len, 5] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "Zeichenkette ueberlebt", { eq: [g_view.tag, "schnappschuss-5"] }] }] }]
+
+      # Die verschachtelten Elemente lesen — hier greift ein baumelndes
+      # Global ins Leere.
+      - decl: [sum, i32, 0]
+      - decl: [row_ix, i32, 0]
+      - while:
+          condition: { lt: [row_ix, g_view.items.len] }
+          body:
+            - decl: [cur, Inner, { at: [g_view.items, row_ix] }]
+            - set: [sum, { +: [sum, cur.count] }]
+            - set: [fails, { +: [fails, { call: [expect, "Element ${row_ix} lesbar", { eq: [cur.status, "pending"] }] }] }]
+            - set: [row_ix, { +: [row_ix, 1] }]
+      - set: [fails, { +: [fails, { call: [expect, "Summe 0+1+2+3+4", { eq: [sum, 10] }] }] }]
+
+      # Mehrere Pushes hintereinander: jeder ersetzt das Global.  Der alte
+      # Schnappschuss muss freigegeben werden, der neue lesbar bleiben.
+      - decl: [round, i32, 2]
+      - while:
+          condition: { lt: [round, 9] }
+          body:
+            - call: [apply_push, round]
+            - set: [fails, { +: [fails, { call: [expect, "Runde ${round} lesbar", { eq: [g_view.items.len, round] }] }] }]
+            - decl: [last, Inner, { at: [g_view.items, { -: [round, 1] }] }]
+            - set: [fails, { +: [fails, { call: [expect, "Runde ${round} letztes Element", { eq: [last.count, { -: [round, 1] }] }] }] }]
+            - set: [round, { +: [round, 1] }]
+
+      - set: [fails, { +: [fails, { call: [expect, "7 Updates gezaehlt", { eq: [g_seq, 8] }] }] }]
+
+      - if:
+          condition: { eq: [fails, 0] }
+          then: [{ call: [log.info, "test_global_ptr_from_local_new PASS"] }, { return: 0 }]
+      - call: [log.info, "test_global_ptr_from_local_new FAIL (${fails})"]
+      - return: 1

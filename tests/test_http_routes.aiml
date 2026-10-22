@@ -9,8 +9,11 @@
       - set: [var_p, req.params]
       - decl: [uid, string]
       - set: [uid, { call: [var_p.get, "id"] }]
+      # ein GET hat keinen Rumpf: req.body muss der LEERE String sein, kein Nullzeiger
+      - decl: [get_body, string]
+      - set: [get_body, req.body]
       - set: [resp.status, 200]
-      - set: [resp.body, "user:${uid}"]
+      - set: [resp.body, "user:${uid}:${get_body.len}"]
       - call: [resp.send]
 
 - def:
@@ -58,11 +61,11 @@
             - set: [fail, { +: [fail, 1] }]
 
       - if:
-          condition: { eq: [get_body, "user:42"] }
+          condition: { eq: [get_body, "user:42:0"] }
           then:
             - set: [pass, { +: [pass, 1] }]
           else:
-            - print: ["[FAIL] GET /users/:id body expected user:42 got ${get_body}"]
+            - print: ["[FAIL] GET /users/:id body expected user:42:0 got ${get_body}"]
             - set: [fail, { +: [fail, 1] }]
 
       - decl: [post_url, url]

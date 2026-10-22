@@ -1,0 +1,19 @@
+# SPEC?: 62_pipelines   # aus dem Dateinamen, zu bestaetigen
+# Reiner Rumpf: nur Rechnen und log (log ist immer erlaubt, §10.2).
+# Requires: driver
+# Keine Reinheits-Diagnose erwartet.
+- def:
+    name: body_ok
+    return: i32
+    body:
+      - decl: [val, i32, { '*': [6, 7] }]
+      - call: [log.info, "rechne"]
+      - if: { condition: { neq: [val, 42] }, then: [{ return: 1 }] }
+      - return: 0
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [pkg, Code, { call: [sys.bundle, "body_ok", { context: true, pure: true }] }]
+      - return: 0

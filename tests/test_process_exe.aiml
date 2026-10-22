@@ -1,0 +1,161 @@
+# SPEC: 23_system
+# static-check: off
+# spec/23 §5: sys.exe options (cwd/env/shell/capture/stdout/stderr/timeout), process members
+# (pid/returncode/stdout_buffer/stderr_buffer), running/wait/kill/read_line/eof, failed spawn,
+# no descriptor inheritance, detach + status_file + sys.process_attach.
+#
+# Expected exit code: 0
+
+- def:
+    name: check
+    args: [[label, string], [cond, bool]]
+    return: i32
+    body:
+      - if: { condition: { eq: [cond, true] }, then: [{ return: 0 }] }
+      - print: ["FAIL ${label}"]
+      - return: 1
+
+- def:
+    name: main
+    static_off: ["str_cmp"]
+    return: i32
+    body:
+      - decl: [fails, i32, 0]
+      - decl: [work, string, "/tmp/aiml_test_process_exe"]
+      - decl: [prep_argv, list<string>, ["rm", "-rf", work]]
+      - decl: [prep, process, { call: [sys.exe, prep_argv] }]
+      - call: [prep.wait]
+      - decl: [mkdir_proc_argv, list<string>, ["mkdir", "-p", work]]
+      - decl: [mkdir_proc, process, { call: [sys.exe, mkdir_proc_argv] }]
+      - call: [mkdir_proc.wait]
+
+      # exit codes, pid
+      - decl: [ok_proc_argv, list<string>, ["true"]]
+      - decl: [ok_proc, process, { call: [sys.exe, ok_proc_argv] }]
+      - set: [fails, { +: [fails, { call: [check, "pid > 0", { gt: [ok_proc.pid, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [check, "true exits 0", { eq: [{ call: [ok_proc.wait] }, 0] }] }] }]
+      - decl: [three_argv, list<string>, ["sh", "-c", "exit 3"]]
+      - decl: [three, process, { call: [sys.exe, three_argv] }]
+      - set: [fails, { +: [fails, { call: [check, "exit 3", { eq: [{ call: [three.wait] }, 3] }] }] }]
+      - set: [fails, { +: [fails, { call: [check, "returncode 3", { eq: [three.returncode, 3] }] }] }]
+
+      # cwd + capture
+      - decl: [pwd_proc_argv, list<string>, ["pwd"]]
+      - decl: [pwd_proc, process, { call: [sys.exe, pwd_proc_argv, {cwd: work, capture: true}] }]
+      - call: [pwd_proc.wait]
+      - set: [fails, { +: [fails, { call: [check, "cwd", { eq: [pwd_proc.stdout_buffer, "${work}\n"] }] }] }]
+
+      # env replaces the environment
+      - decl: [envm, map<string:string>]
+      - call: [envm.put, "AIML_PROC_T", "xyz"]
+      - decl: [env_proc_argv, list<string>, ["/bin/sh", "-c", "echo $AIML_PROC_T:$HOME"]]
+      - decl: [env_proc, process, { call: [sys.exe, env_proc_argv, {env: envm, capture: true}] }]
+      - call: [env_proc.wait]
+      - set: [fails, { +: [fails, { call: [check, "env", { eq: [env_proc.stdout_buffer, "xyz:\n"] }] }] }]
+
+      # shell: argv[0] is the command line
+      - decl: [sh_proc_argv, list<string>, ["echo a b c | wc -w"]]
+      - decl: [sh_proc, process, { call: [sys.exe, sh_proc_argv, {shell: true, capture: true}] }]
+      - call: [sh_proc.wait]
+      - decl: [sh_out, string, sh_proc.stdout_buffer]
+      - decl: [words, string, { call: [sh_out.trim] }]
+      - set: [fails, { +: [fails, { call: [check, "shell", { eq: [words, "3"] }] }] }]
+
+      # stderr capture
+      - decl: [err_proc_argv, list<string>, ["sh", "-c", "echo oops >&2"]]
+      - decl: [err_proc, process, { call: [sys.exe, err_proc_argv, {capture: true}] }]
+      - call: [err_proc.wait]
+      - set: [fails, { +: [fails, { call: [check, "stderr_buffer", { eq: [err_proc.stderr_buffer, "oops\n"] }] }] }]
+      - set: [fails, { +: [fails, { call: [check, "stdout empty", { eq: [err_proc.stdout_buffer, ""] }] }] }]
+
+      # read_line / eof
+      - decl: [lines_proc_argv, list<string>, ["printf", "l1\\nl2\\n"]]
+      - decl: [lines_proc, process, { call: [sys.exe, lines_proc_argv, {capture: true}] }]
+      - decl: [first, string, { call: [lines_proc.read_line] }]
+      - decl: [second, string, { call: [lines_proc.read_line] }]
+      - decl: [third, string, { call: [lines_proc.read_line] }]
+      - call: [lines_proc.wait]
+      - set: [fails, { +: [fails, { call: [check, "read_line 1", { eq: [first, "l1"] }] }] }]
+      - set: [fails, { +: [fails, { call: [check, "read_line 2", { eq: [second, "l2"] }] }] }]
+      - set: [fails, { +: [fails, { call: [check, "read_line end", { eq: [third, ""] }] }] }]
+      - set: [fails, { +: [fails, { call: [check, "eof", { eq: [{ call: [lines_proc.eof] }, true] }] }] }]
+      - set: [fails, { +: [fails, { call: [check, "consumed lines not buffered", { eq: [lines_proc.stdout_buffer, ""] }] }] }]
+      - decl: [err_lines_argv, list<string>, ["sh", "-c", "echo e1 >&2"]]
+      - decl: [err_lines, process, { call: [sys.exe, err_lines_argv, {capture: true}] }]
+      - set: [fails, { +: [fails, { call: [check, "read_err_line", { eq: [{ call: [err_lines.read_err_line] }, "e1"] }] }] }]
+      - call: [err_lines.wait]
+
+      # stdout / stderr redirection to files
+      - decl: [out_file, string, "${work}/out.txt"]
+      - decl: [red_proc_argv, list<string>, ["sh", "-c", "echo to-file; echo to-err >&2"]]
+      - decl: [red_proc, process, { call: [sys.exe, red_proc_argv, {stdout: out_file, stderr: "${work}/err.txt", capture: true}] }]
+      - call: [red_proc.wait]
+      - decl: [out_h, file_handle, { call: [io.open, out_file, "r"] }]
+      - decl: [out_text, string, { call: [io.read_all, out_h] }]
+      - call: [io.close, out_h]
+      - set: [fails, { +: [fails, { call: [check, "stdout file", { eq: [out_text, "to-file\n"] }] }] }]
+      - set: [fails, { +: [fails, { call: [check, "redirect beats capture", { eq: [red_proc.stdout_buffer, ""] }] }] }]
+      - set: [fails, { +: [fails, { call: [check, "stderr file", { eq: [{ call: [io.is_file, "${work}/err.txt"] }, true] }] }] }]
+
+      # running / timeout / kill
+      - decl: [slow_argv, list<string>, ["sleep", "0.3"]]
+      - decl: [slow, process, { call: [sys.exe, slow_argv] }]
+      - set: [fails, { +: [fails, { call: [check, "running", { eq: [{ call: [slow.running] }, true] }] }] }]
+      - call: [slow.wait]
+      - set: [fails, { +: [fails, { call: [check, "not running after wait", { eq: [{ call: [slow.running] }, false] }] }] }]
+      - decl: [t_start, i64, { call: [time.mono_ms] }]
+      - decl: [late_argv, list<string>, ["sleep", "5"]]
+      - decl: [late, process, { call: [sys.exe, late_argv, {timeout: 200}] }]
+      - decl: [late_rc, i32, { call: [late.wait] }]
+      - decl: [t_used, i64, { -: [{ call: [time.mono_ms] }, t_start] }]
+      - set: [fails, { +: [fails, { call: [check, "timeout 124", { eq: [late_rc, 124] }] }] }]
+      - set: [fails, { +: [fails, { call: [check, "timeout fast", { lt: [t_used, 3000] }] }] }]
+      - decl: [victim_argv, list<string>, ["sleep", "10"]]
+      - decl: [victim, process, { call: [sys.exe, victim_argv] }]
+      - call: [victim.kill]
+      - set: [fails, { +: [fails, { call: [check, "kill 137", { eq: [{ call: [victim.wait] }, 137] }] }] }]
+
+      # failed spawn → null process, null-safe
+      - decl: [missing_argv, list<string>, ["/nonexistent/aiml_no_such_binary"]]
+      - decl: [missing, process, { call: [sys.exe, missing_argv] }]
+      - set: [fails, { +: [fails, { call: [check, "spawn failure null", { eq: [missing, null] }] }] }]
+      - set: [fails, { +: [fails, { call: [check, "null wait -1", { eq: [{ call: [missing.wait] }, -1] }] }] }]
+
+      # no descriptor inheritance (open file + persistent KV held by the parent)
+      - decl: [held, file_handle, { call: [io.open, "${work}/held.txt", "w"] }]
+      - decl: [held_kv, Kv<string:string>, { call: [db.open_kv, "proc_fd", {persist: true, path: "/tmp/aiml_test_process_exe_db/"}] }]
+      - call: [held_kv.set, "k", "v"]
+      - decl: [fd_proc_argv, list<string>, ["sh", "-c", "ls /proc/$$/fd | tr '\\n' ' '"]]
+      - decl: [fd_proc, process, { call: [sys.exe, fd_proc_argv, {capture: true}] }]
+      - call: [fd_proc.wait]
+      - set: [fails, { +: [fails, { call: [check, "only fds 0 1 2 (got '${fd_proc.stdout_buffer}')", { eq: [fd_proc.stdout_buffer, "0 1 2 "] }] }] }]
+      - call: [io.close, held]
+
+      # detach + status_file + attach
+      - decl: [status, string, "${work}/job.status"]
+      - decl: [job_argv, list<string>, ["sh", "-c", "echo job-out; sleep 0.4; exit 7"]]
+      - decl: [job, process, { call: [sys.exe, job_argv, {detach: true, stdout: "${work}/job.log", status_file: status}] }]
+      - set: [fails, { +: [fails, { call: [check, "detach pid", { gt: [job.pid, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [check, "detach running", { eq: [{ call: [job.running] }, true] }] }] }]
+      - decl: [att, process, { call: [sys.process_attach, job.pid, status] }]
+      - set: [fails, { +: [fails, { call: [check, "attach running", { eq: [{ call: [att.running] }, true] }] }] }]
+      - set: [fails, { +: [fails, { call: [check, "attach wait 7", { eq: [{ call: [att.wait] }, 7] }] }] }]
+      - set: [fails, { +: [fails, { call: [check, "detach wait 7", { eq: [{ call: [job.wait] }, 7] }] }] }]
+      - decl: [st_h, file_handle, { call: [io.open, status, "r"] }]
+      - decl: [st_text, string, { call: [io.read_all, st_h] }]
+      - call: [io.close, st_h]
+      - set: [fails, { +: [fails, { call: [check, "status file", { eq: [st_text, "7\n"] }] }] }]
+      - decl: [gone, process, { call: [sys.process_attach, 999999999, "${work}/none.status"] }]
+      - set: [fails, { +: [fails, { call: [check, "attach vanished", { eq: [{ call: [gone.running] }, false] }] }] }]
+      - set: [fails, { +: [fails, { call: [check, "attach vanished rc -1", { eq: [gone.returncode, -1] }] }] }]
+      - decl: [dkill_argv, list<string>, ["sleep", "10"]]
+      - decl: [dkill, process, { call: [sys.exe, dkill_argv, {detach: true, status_file: "${work}/k.status"}] }]
+      - call: [dkill.kill]
+      - set: [fails, { +: [fails, { call: [check, "detach kill 137", { eq: [{ call: [dkill.wait] }, 137] }] }] }]
+      - decl: [dlate_argv, list<string>, ["sleep", "5"]]
+      - decl: [dlate, process, { call: [sys.exe, dlate_argv, {detach: true, timeout: 200, status_file: "${work}/t.status"}] }]
+      - set: [fails, { +: [fails, { call: [check, "detach timeout 124", { eq: [{ call: [dlate.wait] }, 124] }] }] }]
+
+      - if: { condition: { gt: [fails, 0] }, then: [{ print: ["test_process_exe: ${fails} failed"] }, { return: 1 }] }
+      - print: ["test_process_exe PASS"]
+      - return: 0

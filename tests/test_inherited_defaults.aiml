@@ -22,25 +22,25 @@
     condition: { neq: [cfg.host, "localhost"] }
     then:
       - print: ["FAIL inherited model default host: ${cfg.host}"]
-      - exit: [1]
+      - call: [sys.exit, 1]
 
 - if:
     condition: { neq: [cfg.port, 8080] }
     then:
       - print: ["FAIL inherited model default port: ${cfg.port}"]
-      - exit: [1]
+      - call: [sys.exit, 1]
 
 - if:
     condition: { neq: [cfg.ssl, true] }
     then:
       - print: ["FAIL child model default ssl"]
-      - exit: [1]
+      - call: [sys.exit, 1]
 
 - if:
     condition: { neq: [cfg.retries, 3] }
     then:
       - print: ["FAIL child model default retries: ${cfg.retries}"]
-      - exit: [1]
+      - call: [sys.exit, 1]
 
 - decl: [heap_cfg, ptr<RuntimeConfig>, { new: RuntimeConfig }]
 
@@ -48,25 +48,25 @@
     condition: { neq: [heap_cfg.host, "localhost"] }
     then:
       - print: ["FAIL inherited heap model default host: ${heap_cfg.host}"]
-      - exit: [1]
+      - call: [sys.exit, 1]
 
 - if:
     condition: { neq: [heap_cfg.port, 8080] }
     then:
       - print: ["FAIL inherited heap model default port: ${heap_cfg.port}"]
-      - exit: [1]
+      - call: [sys.exit, 1]
 
 - if:
     condition: { neq: [heap_cfg.ssl, true] }
     then:
       - print: ["FAIL inherited heap model default ssl"]
-      - exit: [1]
+      - call: [sys.exit, 1]
 
 - if:
     condition: { neq: [heap_cfg.retries, 3] }
     then:
       - print: ["FAIL inherited heap model default retries: ${heap_cfg.retries}"]
-      - exit: [1]
+      - call: [sys.exit, 1]
 
 - model:
     name: EntityModel
@@ -87,43 +87,43 @@
     condition: { neq: [var_w.host, "localhost"] }
     then:
       - print: ["FAIL class-model default host: ${var_w.host}"]
-      - exit: [1]
+      - call: [sys.exit, 1]
 
 - if:
     condition: { neq: [var_w.port, 8080] }
     then:
       - print: ["FAIL class-model default port: ${var_w.port}"]
-      - exit: [1]
+      - call: [sys.exit, 1]
 
 - if:
     condition: { neq: [var_w.ssl, true] }
     then:
       - print: ["FAIL class-model default ssl"]
-      - exit: [1]
+      - call: [sys.exit, 1]
 
 - if:
     condition: { neq: [var_w.retries, 3] }
     then:
       - print: ["FAIL class-model default retries: ${var_w.retries}"]
-      - exit: [1]
+      - call: [sys.exit, 1]
 
 - if:
     condition: { neq: [var_w.entity_id, 77] }
     then:
       - print: ["FAIL class-model default entity_id: ${var_w.entity_id}"]
-      - exit: [1]
+      - call: [sys.exit, 1]
 
 - if:
     condition: { neq: [var_w.var_hp, 15] }
     then:
       - print: ["FAIL class member default var_hp: ${var_w.var_hp}"]
-      - exit: [1]
+      - call: [sys.exit, 1]
 
 - if:
     condition: { neq: [var_w.alive, true] }
     then:
       - print: ["FAIL class member default alive"]
-      - exit: [1]
+      - call: [sys.exit, 1]
 
 - decl: [heap_w, ptr<Worker>, { new: Worker }]
 
@@ -131,43 +131,43 @@
     condition: { neq: [heap_w.host, "localhost"] }
     then:
       - print: ["FAIL heap class-model default host: ${heap_w.host}"]
-      - exit: [1]
+      - call: [sys.exit, 1]
 
 - if:
     condition: { neq: [heap_w.port, 8080] }
     then:
       - print: ["FAIL heap class-model default port: ${heap_w.port}"]
-      - exit: [1]
+      - call: [sys.exit, 1]
 
 - if:
     condition: { neq: [heap_w.ssl, true] }
     then:
       - print: ["FAIL heap class-model default ssl"]
-      - exit: [1]
+      - call: [sys.exit, 1]
 
 - if:
     condition: { neq: [heap_w.retries, 3] }
     then:
       - print: ["FAIL heap class-model default retries: ${heap_w.retries}"]
-      - exit: [1]
+      - call: [sys.exit, 1]
 
 - if:
     condition: { neq: [heap_w.entity_id, 77] }
     then:
       - print: ["FAIL heap class-model default entity_id: ${heap_w.entity_id}"]
-      - exit: [1]
+      - call: [sys.exit, 1]
 
 - if:
     condition: { neq: [heap_w.var_hp, 15] }
     then:
       - print: ["FAIL heap class member default var_hp: ${heap_w.var_hp}"]
-      - exit: [1]
+      - call: [sys.exit, 1]
 
 - if:
     condition: { neq: [heap_w.alive, true] }
     then:
       - print: ["FAIL heap class member default alive"]
-      - exit: [1]
+      - call: [sys.exit, 1]
 
 - free: [heap_cfg]
 - free: [heap_w]

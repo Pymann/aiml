@@ -39,6 +39,7 @@ The compiler currently supports these static structural checks:
 | `ptr<T>` pushed into a value `list<T>` | always-on | Compiler error |
 | Unused enum member (never referenced `Enum.Member`) | whole-program, gated | Warning |
 | Blocking call reachable from a per-frame `engine.run` callback | whole-program, gated | Warning |
+| Unknown statement key (`- foo: …` in a body) | always-on | Compiler error |
 
 The current compiler also contains two hard OOP architecture rules:
 
@@ -65,6 +66,76 @@ a per-`def` opt-out:
 
 The **void-call-as-initializer** rule cannot be disabled — storing a
 `void` value into a typed location produces malformed IR.  See §12 below.
+
+---
+
+## 2a. Unknown statement keys
+
+A statement is a map whose key names the statement: `decl`, `set`, `store`, `idx`, `call`,
+`print`, `return`, `free`, `throw`, `if`, `while`, `ret`, `try`, `text`.  **Any other key is a
+compiler error.**
+
+Until 2026-10-15 it was not.  The statement builder returned `nullptr` for a key it did not
+know, and the block builder silently dropped the result — the statement simply **vanished**,
+with no diagnostic at any level.  Two things that cost real time:
+
+- `- exit: [1]` was never a statement (the documented form is `call: [sys.exit, N]`, spec/23).
+  54 places in the test corpus used it, so every `FAIL` branch printed its message and then
+  returned **0** — the suite reported `PASS` for tests that had failed.
+- `- continue: []` does not exist in aiml either.  Written inside a loop in another project, it
+  vanished, both branches of a classification ran, and the bug looked like a runtime fault in
+  the surrounding code.
+
+The rule therefore is: **a key that is not a statement is an error, not a no-op.**  A dropped
+statement is undetectable by reading the source — the text says what should happen, and it
+simply does not.  That is strictly worse than a parse error, which at least names the line.
+
+The diagnostic names the key, the line, and the nearest legal spelling where one exists
+(`exit` → `call: [sys.exit, N]`).
+
+### 2a.1 Dasselbe gilt fuer die OBERSTE Ebene (17.10.2026)
+
+Die Regel oben deckte nur Statements ab.  Auf der obersten Ebene — dort, wo `def`, `class`,
+`model`, `enum`, `interface`, `cascade`, `classgroup`, `alias`, `prefab`, `material`,
+`namespace`, `import`, `config`, `text`, `extern` stehen — lief jeder unbekannte Schluessel in
+einen `SkipBuilder` und **verschwand wortlos**.
+
+Das ist dieselbe Fehlerklasse mit groesserer Wirkung: ein `- mdoel:` laesst nicht ein Statement
+verschwinden, sondern **den ganzen Typ**, und der Fehler zeigt sich erst viel spaeter als
+„Unknown type" an einer ganz anderen Stelle — oder gar nicht, wenn der Typ nur an einer Stelle
+benutzt wird, die ebenfalls verschwand.
+
+Gefunden beim Bauen von `spec/65`: die Probe `neg/n04_self_certify.aiml` schreibt ein
+Top-Level `- clearance: 0`, das abgelehnt werden muss (die Freigabe setzt der Wirt, F65-6).
+Sie wurde **angenommen**, weil der Schluessel einfach uebersprungen wurde.
+
+Die Regel lautet daher: **ein Schluessel, der auf der obersten Ebene keine Deklaration ist, ist
+ein Fehler.**  Geparst wird weiter, damit ein Lauf mehr als einen Fehler meldet.  Die Diagnose
+nennt den Schluessel und, wo es eine gibt, die naechstliegende richtige Schreibweise
+(`function` → `def:`, `struct` → `class:`/`model:`, `include`/`use` → `import:`,
+
+#### Was die Regel sofort gefunden hat: `free:` lief auf oberster Ebene nie
+
+Beim Einschalten der Regel schlugen **8 Korpus-Tests** fehl, alle mit demselben unbekannten
+Schluessel: `free`.  Das war kein Fehlalarm, sondern der Befund.
+
+`free: [p]` ist ein Statement (spec/20).  Die Weiche auf der obersten Ebene reichte
+`decl`, `set`, `call`, `print`, `idx` und `store` an den StatementBuilder weiter — **`free`
+fehlte**.  Ein `- free: [p]` auf oberster Ebene fiel damit in den `SkipBuilder` und wurde
+wortlos verworfen: die Freigabe ist nie passiert.  Betroffen u.a.
+`tests/test_oo.aiml:55` (`- free: [var_c]`), `tests/test_model_defaults.aiml`,
+`tests/test_chan_class_member.aiml` und die drei
+`*_class_member_heap_init_repro`-Tests.
+
+Bei einer Sprache, deren Speichermodell ausdruecklich auf `new`/`free` steht (spec/61, spec/20),
+ist ein stillschweigend verworfenes `free` kein Randfall: der Quelltext sagt, dass freigegeben
+wird, und es wird nicht freigegeben — und kein Test konnte es merken, weil ein fehlendes `free`
+nur leakt und nichts bricht.  Genau die Eigenschaft, die `exit:` so teuer gemacht hat.
+
+Behoben am 17.10.2026: `free` steht in der Weiche.  `return:` und `throw:` bleiben auf der
+obersten Ebene Fehler — sie haben dort keine Bedeutung — bekommen aber einen Hinweis statt
+stiller Verwerfung.
+`clearance` → gibt es nicht, das setzt der Wirt).
 
 ---
 
@@ -979,13 +1050,40 @@ any single member would be a false positive:
   enum's members and the selection is read back via `dropdown_enum`; recorded in
   `checkPrefabUsage` (per prefab child's `enum_type`).
 
+### 18.2a `wire: true` — ein Vokabular, das über eine Grenze geht
+
+Ein Enum, dessen Mitglieder über ein **Protokoll**, eine **Datei** oder eine
+**Datenbank** gehen, wird in *einem* Build nur teilweise benannt und im anderen
+vollständig: `JobState.agent_lost` schreibt der Server, liest der Client, und
+der Client-Build sieht das Wort nirgends.  Der Hinweis „remove the unused
+enumerator" wäre dort das genaue Gegenteil des Richtigen — das Mitglied ist
+**der Vertrag**.
+
+```aiml
+- enum:
+    name: JobState
+    wire: true          # Vokabular einer Schnittstelle, nicht dieses Builds
+    values: [queued, running, agent_lost, finished]
+```
+
+- **F49-W1** `wire: true` markiert **alle** Mitglieder des Enums als verwendet —
+  dieselbe Wirkung wie eine reflexive Ganz-Enum-Nutzung (§18.2), nur erklärt
+  statt erschlossen.
+- **F49-W2** Es ist eine **Behauptung des Autors**, keine Messung: wer es setzt,
+  sagt „dieses Vokabular wird auswärts benannt".  Darum steht es am Enum und
+  nicht an einem Schalter des Builds — ein `AIML_LINT=0` hätte alle Enums
+  stummgeschaltet, auch die, deren tote Mitglieder man finden will.
+- **F49-W3** Es ändert **nichts** an der Kodierung: `wire` ist kein Format,
+  keine Stabilitätszusage für Zahlenwerte und keine Erlaubnis, Mitglieder
+  umzusortieren.  Es schaltet genau eine Warnung ab.
+
 ### 18.3 What Does **Not** Count (V1)
 
 These are intentionally **not** treated as a use, so an otherwise-unreferenced
 member still warns:
 
 - a raw integer literal that happens to equal a member's value,
-- implicit use only through persisted / networked data,
+- implicit use only through persisted / networked data (dafür gibt es `wire: true`, §18.2a),
 - using the enum **type** (e.g. as a field or argument type) without naming a member.
 
 (A `enum: SomeEnum` dropdown/radio binding *does* now count — see the reflective
@@ -1265,3 +1363,68 @@ None — the rule cannot be disabled.
 ### 21.5 Negative Test
 
 `tests/test_static_value_roundtrip_error.aiml` must fail with the diagnostic above.
+
+## 22. Symbol Clearance Flow (**opt-in**, see spec/65)
+
+`spec/65_symbol_clearance.md` defines levels for symbols at a trust boundary (a console, a
+bundle that travelled, a loaded library).  Its **flow rule** — for every call edge `f → g`,
+`level(g) >= level(f)` (F65-9) — is a static check and therefore belongs in this chapter, but it
+is **off by default** and enabled with `AIML_STATIC_CLEARANCE=1` (F65-17).
+
+It is opt-in rather than always-on because the normal case is one binary written by one party
+(F65-1), where the rule has nothing to say.  What *is* always on is the syntax of the
+annotations themselves (`invalid-level`, `invalid-grants`), so an annotation can never be
+silently ignored and rot.
+
+The identifiers in spec/65 §10 (F65-21) are fixed strings, assigned once.  They are a small,
+local instance of the open item at the end of this chapter — they do not solve it for the rest
+of the compiler, and a caller matching them must not assume any other check offers the same.
+
+## `--check` — machine-readable diagnostics
+
+```
+aiml --check <file.aiml>
+```
+
+Analysis only: walks the whole import graph, emits no objects and no binary — the same shape as
+`--prefab-report`.  Human log output is suppressed, so the output is **only** records, one per
+line, tab-separated:
+
+```
+<severity>\t<file>\t<line>\t<column>\t<origin>\t<message>
+```
+
+| Field | Meaning |
+|---|---|
+| `severity` | `error` or `warning` |
+| `file` | source file, or `-` when the diagnostic carries no location |
+| `line` | 1-based, `0` when unknown |
+| `column` | 1-based, `0` when unknown (see below) |
+| `origin` | the compiler source position that raised it, e.g. `ast_compiler.cpp:5110` |
+| `message` | the text, with the location prefix stripped |
+
+Tab-separated because messages contain colons, spaces and quotes; a caller must not have to guess
+where the location ends.  Exit code is `1` when any error was emitted, `0` otherwise.
+
+### The column is partial, and that is not a formatting problem
+
+`fmtLoc(node)` now emits `file:line:column`, the column coming from the YAML mark — it had been
+available all along and was simply never printed (cosmos `doc/spec/98` F98-9).  Where the AST
+retains the mark, a caller can underline the exact token:
+
+```
+error  pipe.aiml  1  3  ast_compiler.cpp:5110  prefab 'BadScene' child 'img_one': texture stem …
+```
+
+But roughly half the diagnostics are raised through `fmtLoc()` **without** a node and fall back to
+`ctx.currentLine`, which has no column companion — those report `column 0`.  Closing that gap is
+not a change to this mode: the AST would have to carry a source **column** alongside
+`sourceLine`, set wherever `capturedLine` is set today.  Until then a caller highlights the line
+and, where a column is present, the token.
+
+### Offen: stable diagnostic codes
+
+`origin` is the compiler file and line that raised the finding.  It is stable enough to group by
+and unstable across refactors, so it is a diagnostic aid, not an identifier.  A caller that must
+react to a *specific* check still has to match message text, which breaks when the wording
+improves.  Real codes (`AIML-E0042`-style, assigned once and never reused) are open.

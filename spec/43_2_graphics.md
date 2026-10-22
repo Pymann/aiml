@@ -182,6 +182,67 @@ outside 6..15, components outside 1..4, empty data, a byte size that is not a mu
 
 ---
 
+### 3.5 Bounded uploads and instancing (VFX 1)
+
+These calls implement the AIML portion of [ShapeML VFX 1](../../shaper/doc/spec/vfx_v1.md),
+sections 10 and 13.1. They use the GL 3.3 / ES 3 / WebGL2 baseline, not compute or
+geometry shaders. All calls require the resource's owning GL context current.
+
+- `buffer.reserve_bytes(capacity: i32) -> bool`: negative capacity/null handle fails.
+  A request at or below current capacity succeeds without allocation or shrinking.
+  Growth stages new dynamic GPU storage, preserves the old prefix, and commits only
+  after allocation/copy succeeds. Failure preserves old contents/capacity and VAO
+  bindings. Successful growth preserves logical bindings of all AIML VAOs. New VBO
+  bytes are unspecified until uploaded; new IBO bytes are zero. Reserve at load or
+  quality changes, not per frame.
+- `buffer.update_range(offset: i32, data: buffer<u8>) -> bool`: `offset` and the
+  buffer's logical byte size must fit the reserved capacity without overflow.
+  Negative offsets, invalid data or an out-of-range write fail without a GPU write.
+  Empty data succeeds for offsets through capacity inclusive. Upload is synchronous:
+  input data is borrowed for the call, never retained or consumed. A temporary
+  producer buffer is released after the call; a named buffer stays with its owner.
+  No reallocation occurs. The formerly listed `(data, offset, size)` overload was
+  not implemented and is replaced by this signature.
+- `vao.attrib_divisor(location: i32, divisor: i32) -> bool`: validates location
+  against GL_MAX_VERTEX_ATTRIBS and rejects negative divisors. Zero means per-vertex;
+  divisor N>0 selects element floor(instance/N). Set 1 for particle attributes.
+- `gl.draw_elements_instanced(vao, index_count, instance_count) -> bool`: negative
+  counts fail; either zero count succeeds as a no-op. Nonempty draws require a live
+  VAO/IBO and enough storage for all requested u32 indices and enabled vertex/instance
+  attributes (including stride, offset, maximum referenced index and divisor).
+  Failure returns false instead of issuing an out-of-bounds draw. No implicit buffer
+  growth or CPU upload occurs. Index validation uses a CPU shadow maintained by the
+  IBO upload API; mutate these resources through AIML, not external raw GL calls.
+
+Existing `update`, `attrib`, `attrib_i` and draw signatures remain unchanged.
+`update` ignores invalid/oversized writes; it no longer submits such writes to GL.
+The new calls return bool (C ABI i32 status); incorrect arity/types are compile errors.
+The GPU owner and upload-data owner are separate; reserving GPU storage never changes
+or retains the caller's Class-3 buffer.
+
+### 3.6 Buffer/VAO ownership (spec 61)
+
+`gl_buffer` and `gl_vao` are **Class-4 unique resources**, not shared handles.
+Constructors/producer returns transfer ownership to the receiving slot. Local
+owners release at scope exit, including return and exception unwind. Owning model
+fields release with their model; assignment transfers the handle and clears the
+source, while reassignment releases the previous destination. `delete()` is an
+optional early release and clears the slot so the eventual drop is harmless.
+A `persistent` local explicitly opts out of scope release; the escaping owner
+must release it. Parameters used by rendering/upload calls are borrows.
+
+A VAO borrows buffer bindings; it never takes ownership of their AIML wrappers.
+Keep buffers alive while drawing with the VAO. Early buffer release invalidates
+its tracked bindings so checked instanced draws fail rather than dereference a
+stale wrapper. Scope GPU owners inside a function/block that finishes **before**
+`engine.destroy_window`; automatic release cannot operate after context destruction.
+No global shutdown list substitutes for deterministic owner cleanup. Copying or
+cloning these owners (also recursively through owning models/containers) is not a
+GPU duplication operation; cloning is rejected. Discarded producer results and
+fresh resource arguments borrowed by calls are released by the caller.
+
+Implementation and validation: [VFX AIML acceptance](../doc/analysis/vfx_aiml_implementation_2026-10-05.md).
+
 ## 4. Shaders
 
 ### 4.1 Compilation
@@ -594,6 +655,7 @@ in just a few lines. Manual VBO/VAO setup is entirely unnecessary.
 | `gl.bind_texture` | `tex: gl_texture, slot: i32` | — | Bind texture unit |
 | `gl.draw_arrays` | `vao: gl_vao, count: i32` | — | GL_TRIANGLES |
 | `gl.draw_elements` | `vao: gl_vao, count: i32` | — | GL_TRIANGLES, GL_UNSIGNED_INT |
+| `gl.draw_elements_instanced` | `vao: gl_vao, index_count, instance_count: i32` | `bool` | Checked instanced GL_TRIANGLES, GL_UNSIGNED_INT |
 | `gl.draw_arrays_mode` | `vao, mode: i32, count: i32` | — | Explicit primitive type |
 | `gl.create_framebuffer` | `w, h: i32` | `gl_framebuffer` | Color tex + depth RBO |
 | `gl.bind_framebuffer` | `fb: gl_framebuffer` | — | |
@@ -607,6 +669,7 @@ in just a few lines. Manual VBO/VAO setup is entirely unnecessary.
 | `bind_ibo` | `ibo: gl_buffer` | Bind IBO to VAO |
 | `attrib` | `index, components, stride, offset: i32` | `glVertexAttribPointer` (f32) |
 | `attrib_i` | `index, components, stride, offset: i32` | `glVertexAttribIPointer` (i32) |
+| `attrib_divisor` | `location, divisor: i32` | `bool`: 0 = per vertex, positive = per N instances |
 | `delete` | — | `glDeleteVertexArrays` |
 
 ### `gl_buffer` Methods
@@ -614,7 +677,8 @@ in just a few lines. Manual VBO/VAO setup is entirely unnecessary.
 | Method | Arguments | Description |
 |---------|-----------|--------------|
 | `update` | `data: buffer<f32>` | `glBufferSubData` (same size) |
-| `update_range` | `data, offset, size: i32` | Update a sub-range |
+| `reserve_bytes` | `capacity: i32` | `bool`: reserve at least this many bytes, never shrink |
+| `update_range` | `offset: i32, data: buffer<u8>` | `bool`: synchronous checked byte upload, no reallocation |
 | `delete` | — | `glDeleteBuffers` |
 
 ### `gl_shader` Methods

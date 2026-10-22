@@ -82,6 +82,7 @@ struct AimlInputState {
     /* spec/44: latched edges since the last frame (a press+release inside one poll is not lost) */
     uint8_t press_latch[AIML_MAX_MOUSE];
     uint8_t release_latch[AIML_MAX_MOUSE];
+    uint8_t cancel_latch[AIML_MAX_MOUSE];   /* spec/44_0 §2.2: aborted press, NOT a release */
 
     /* Mouse position and delta */
     double curr_pos_x, curr_pos_y;
@@ -129,8 +130,11 @@ struct AimlInputState {
         bool  held;               /* button currently down */
         bool  active;             /* drag threshold exceeded */
         bool  started_this_frame; /* active became true this polling cycle */
-        bool  ended_this_frame;   /* drag ended this polling cycle */
+        bool  ended_this_frame;   /* drag ended this polling cycle (release) */
+        bool  cancelled_this_frame; /* drag aborted this polling cycle (no drop) */
         float origin_x, origin_y; /* cursor pos when button pressed */
+        float start_x, start_y;   /* press point of the drag that STARTED this frame */
+        float end_x, end_y;       /* cursor pos at the release that ended the drag */
         float acc_x, acc_y;       /* total delta from origin */
     };
     ButtonDragState drag[AIML_MAX_MOUSE] = {};
@@ -387,6 +391,8 @@ static void glfw_cursor_cb(GLFWwindow*, double x, double y) {
         if (!ds.active && dist >= g_input->drag_threshold) {
             ds.active             = true;
             ds.started_this_frame = true;
+            ds.start_x = ds.origin_x;
+            ds.start_y = ds.origin_y;
             AimlInputEvent dev = {};
             dev.type     = "drag_start";
             dev.btn      = b;
@@ -425,8 +431,10 @@ static void glfw_mbtn_cb(GLFWwindow*, int btn, int action, int /*mods*/) {
         auto& ds = g_input->drag[btn];
         ds.held               = true;
         ds.active             = false;
-        ds.started_this_frame = false;
-        ds.ended_this_frame   = false;
+        /* started/ended NICHT loeschen: glfwPollEvents arbeitet alle Ereignisse
+         * einer Luecke am Frame-Anfang in einem Rutsch ab, ein Release+Druck in
+         * derselben Luecke verlor damit den Drop (spec/44_0 §2.3 — Kanten werden
+         * aufbewahrt, nicht verworfen).  aiml_input_update raeumt sie auf. */
         ds.origin_x = (float)g_input->curr_pos_x;
         ds.origin_y = (float)g_input->curr_pos_y;
         ds.acc_x = 0.f;
@@ -435,6 +443,8 @@ static void glfw_mbtn_cb(GLFWwindow*, int btn, int action, int /*mods*/) {
         auto& ds = g_input->drag[btn];
         if (ds.active) {
             ds.ended_this_frame = true;
+            ds.end_x = (float)g_input->curr_pos_x;
+            ds.end_y = (float)g_input->curr_pos_y;
             g_input->drag_payload = nullptr;
             AimlInputEvent dev = {};
             dev.type     = "drag_end";
@@ -470,6 +480,32 @@ extern "C" void aiml_input_post_mouse_down(int32_t btn) {
 extern "C" void aiml_input_post_mouse_up(int32_t btn) {
     if (!g_input) return;
     glfw_mbtn_cb(nullptr, (int)btn, GLFW_RELEASE, 0);
+}
+/* spec/44_0 §8.2: abort the active press on button 0 without a release latch. */
+/* GLFW focus callback: a button held while the window loses focus can never be
+ * completed — cancel it (spec/44_0 §2.2) instead of leaving it stuck down. */
+static void glfw_focus_cb(GLFWwindow* /*w*/, int focused) {
+    if (!g_input || focused) return;
+    for (int b = 0; b < AIML_MAX_MOUSE; b++) {
+        if (!g_input->curr_mouse[b]) continue;
+        g_input->curr_mouse[b]   = 0;
+        g_input->cancel_latch[b] = 1;
+        auto& ds = g_input->drag[b];
+        if (ds.active) ds.cancelled_this_frame = true;
+        ds.held = false; ds.active = false;
+    }
+}
+
+extern "C" void aiml_input_post_touch_cancel(void) {
+    if (!g_input) return;
+    for (int b = 0; b < AIML_MAX_MOUSE; b++) {
+        if (!g_input->curr_mouse[b]) continue;
+        g_input->curr_mouse[b]  = 0;
+        g_input->cancel_latch[b] = 1;
+        auto& ds = g_input->drag[b];
+        if (ds.active) ds.cancelled_this_frame = true;
+        ds.held = false; ds.active = false;
+    }
 }
 extern "C" void aiml_input_post_scroll(float dx, float dy) {
     if (!g_input) return;
@@ -546,6 +582,7 @@ void aiml_input_init(void* win_handle) {
 #endif
     glfwSetCursorPosCallback(glfw, glfw_cursor_cb);
     glfwSetMouseButtonCallback(glfw, glfw_mbtn_cb);
+    glfwSetWindowFocusCallback(glfw, glfw_focus_cb);
 
     /* Register per-frame update with the engine */
     aiml_engine_register_input_update(aiml_input_update);
@@ -562,6 +599,7 @@ void aiml_input_update(void) {
     memcpy(g_input->prev_mouse, g_input->curr_mouse, AIML_MAX_MOUSE);
     memset(g_input->press_latch,   0, AIML_MAX_MOUSE);
     memset(g_input->release_latch, 0, AIML_MAX_MOUSE);
+    memset(g_input->cancel_latch,  0, AIML_MAX_MOUSE);
     memset(g_input->key_press_latch,   0, AIML_MAX_KEYS);
     memset(g_input->key_release_latch, 0, AIML_MAX_KEYS);
     /* New frame → rising-edge consumption for key_pressed_once resets, so the
@@ -611,8 +649,9 @@ void aiml_input_update(void) {
 
     /* Reset per-frame drag flags */
     for (int b = 0; b < AIML_MAX_MOUSE; b++) {
-        g_input->drag[b].started_this_frame = false;
-        g_input->drag[b].ended_this_frame   = false;
+        g_input->drag[b].started_this_frame   = false;
+        g_input->drag[b].ended_this_frame     = false;
+        g_input->drag[b].cancelled_this_frame = false;
     }
 }
 
@@ -687,6 +726,10 @@ int32_t aiml_input_mouse_pressed (int32_t b) {
 int32_t aiml_input_mouse_released(int32_t b) {
     if (!g_input || b < 0 || b >= AIML_MAX_MOUSE) return 0;
     return g_input->release_latch[b] ? 1 : 0;
+}
+int32_t aiml_input_mouse_cancelled(int32_t b) {
+    if (!g_input || b < 0 || b >= AIML_MAX_MOUSE) return 0;
+    return g_input->cancel_latch[b] ? 1 : 0;
 }
 
 /* ── Raw polling: gamepad ────────────────────────────────────────────────── */
@@ -913,6 +956,10 @@ int32_t aiml_input_drag_ended(int32_t btn) {
     if (!g_input || btn < 0 || btn >= AIML_MAX_MOUSE) return 0;
     return g_input->drag[btn].ended_this_frame ? 1 : 0;
 }
+int32_t aiml_input_drag_cancelled(int32_t btn) {
+    if (!g_input || btn < 0 || btn >= AIML_MAX_MOUSE) return 0;
+    return g_input->drag[btn].cancelled_this_frame ? 1 : 0;
+}
 float aiml_input_drag_origin_x(int32_t btn) {
     if (!g_input || btn < 0 || btn >= AIML_MAX_MOUSE) return 0.f;
     return g_input->drag[btn].origin_x;
@@ -920,6 +967,22 @@ float aiml_input_drag_origin_x(int32_t btn) {
 float aiml_input_drag_origin_y(int32_t btn) {
     if (!g_input || btn < 0 || btn >= AIML_MAX_MOUSE) return 0.f;
     return g_input->drag[btn].origin_y;
+}
+float aiml_input_drag_start_x(int32_t btn) {
+    if (!g_input || btn < 0 || btn >= AIML_MAX_MOUSE) return 0.f;
+    return g_input->drag[btn].start_x;
+}
+float aiml_input_drag_start_y(int32_t btn) {
+    if (!g_input || btn < 0 || btn >= AIML_MAX_MOUSE) return 0.f;
+    return g_input->drag[btn].start_y;
+}
+float aiml_input_drag_end_x(int32_t btn) {
+    if (!g_input || btn < 0 || btn >= AIML_MAX_MOUSE) return 0.f;
+    return g_input->drag[btn].end_x;
+}
+float aiml_input_drag_end_y(int32_t btn) {
+    if (!g_input || btn < 0 || btn >= AIML_MAX_MOUSE) return 0.f;
+    return g_input->drag[btn].end_y;
 }
 float aiml_input_drag_delta_x(int32_t btn) {
     if (!g_input || btn < 0 || btn >= AIML_MAX_MOUSE) return 0.f;
@@ -954,8 +1017,34 @@ void aiml_input_drag_set_threshold(float px) {
 struct BrowserDrag {
     bool  held;
     bool  active;
+    /* frame-visible edges (what the queries return) … */
     bool  started_this_frame;
     bool  ended_this_frame;
+    bool  cancelled_this_frame;
+    /* … and the pending ones the DOM handlers write.  Same split as
+     * pend_press/frame_press: an edge that happens while a frame is still
+     * running (long frame, e.g. a blocking RPC) must be reported in the NEXT
+     * frame, not dropped (spec/44_0 §2.4). */
+    bool  pend_started;
+    bool  pend_ended;
+    bool  pend_cancelled;
+    /* Wo das Loslassen stattfand.  Der gelatchte Rand allein genuegt nicht: er
+     * wird evtl. erst im naechsten Frame gemeldet, und bis dahin steht der
+     * Cursor woanders — ohne diese Position landete der Drop am neuen
+     * Druckpunkt (falsches Ziel) statt am Loslasspunkt (spec/44_0 §2.3). */
+    float pend_end_x;
+    float pend_end_y;
+    float end_x;
+    float end_y;
+    /* Wo der Drag BEGANN, gelatcht mit der started-Kante.  `origin_*` allein
+     * genuegt nicht: das wird von JEDEM neuen Druck sofort ueberschrieben,
+     * waehrend die Kante erst im naechsten Frame gemeldet wird.  Bei
+     * "Druecken A -> ziehen -> loslassen -> Druecken B" in einer Luecke
+     * zeigte origin_* dann auf B, und die Aufnahme griff an B statt an A. */
+    float pend_start_x;
+    float pend_start_y;
+    float start_x;
+    float start_y;
     float origin_x;
     float origin_y;
     float acc_x;
@@ -974,6 +1063,8 @@ struct BrowserInputState {
     uint8_t pend_release[AIML_MAX_MOUSE];
     uint8_t frame_press[AIML_MAX_MOUSE];  // edges visible this frame
     uint8_t frame_release[AIML_MAX_MOUSE];
+    uint8_t pend_cancel[AIML_MAX_MOUSE];  // spec/44_0 §2.2: aborted press, NOT a release
+    uint8_t frame_cancel[AIML_MAX_MOUSE];
     float   scroll_accum_x, scroll_accum_y;
     float   scroll_this_x, scroll_this_y;
     BrowserDrag drag[AIML_MAX_MOUSE];
@@ -1029,6 +1120,19 @@ static void bin_event_xy(double clientX, double clientY, double* out_x, double* 
     *out_y = (clientY - rectT) * sy;
 }
 
+/* spec/44_0 §2: kanonisch ist 0=links, 1=RECHTS, 2=Mitte (die GLFW-Reihenfolge,
+ * die der native Pfad einhaelt).  DOM `MouseEvent.button` nummeriert 0=links,
+ * 1=Mitte, 2=rechts.  Dieser Adapter reichte den DOM-Index unveraendert durch,
+ * womit im WASM-Build 1 und 2 gegenueber der Spec getauscht waren. */
+static inline int dom_btn_to_aiml(int dom_btn) {
+    switch (dom_btn) {
+        case 0:  return 0;   /* links  */
+        case 1:  return 2;   /* Mitte  */
+        case 2:  return 1;   /* rechts */
+        default: return -1;
+    }
+}
+
 static EM_BOOL bin_mousemove(int /*type*/, const EmscriptenMouseEvent* e, void* /*ud*/) {
     if (!g_b) return EM_FALSE;
     double mx, my; bin_event_xy(e->clientX, e->clientY, &mx, &my);
@@ -1043,35 +1147,73 @@ static EM_BOOL bin_mousemove(int /*type*/, const EmscriptenMouseEvent* e, void* 
         float dist = sqrtf(ds.acc_x * ds.acc_x + ds.acc_y * ds.acc_y);
         if (!ds.active && dist >= g_b->drag_threshold) {
             ds.active             = true;
-            ds.started_this_frame = true;
+            ds.pend_started       = true;
+            ds.pend_start_x       = ds.origin_x;
+            ds.pend_start_y       = ds.origin_y;
         }
     }
     return EM_TRUE;
 }
 static EM_BOOL bin_mousedown(int /*type*/, const EmscriptenMouseEvent* e, void* /*ud*/) {
     if (!g_b) return EM_FALSE;
-    int b = e->button; /* 0=left 1=middle 2=right */
+    int b = dom_btn_to_aiml(e->button);
     if (b < 0 || b >= AIML_MAX_MOUSE) return EM_TRUE;
     g_b->raw_mouse[b] = 1; g_b->pend_press[b] = 1;
     double mx, my; bin_event_xy(e->clientX, e->clientY, &mx, &my);
     g_b->curr_pos_x = mx; g_b->curr_pos_y = my;
     auto& ds = g_b->drag[b];
     ds.held = true; ds.active = false;
-    ds.started_this_frame = ds.ended_this_frame = false;
+    /* Auch started/ended_this_frame bleiben stehen: das sind die Werte DIESES
+     * Frames, und spec/44_0 §2.3 sagt, sie gelten fuer den ganzen Frame (jeder
+     * Leser sieht denselben Wert).  Ein mitten im Frame eintreffender Druck
+     * haette sie sonst fuer den Rest des Frames genullt — der Drop wuerde
+     * schon im LAUFENDEN Frame verschwinden, noch vor dem Latch.
+     * `aiml_input_update` setzt sie am Frame-Anfang aus den pend_* neu.
+     *
+     * pend_started/ended/cancelled werden ebenfalls bewusst nicht geloescht.
+     * Es sind noch nicht ausgelieferte Kanten: die DOM-Handler laufen zwischen
+     * den Frames UND mitten im Frame (jeder blockierende Netzaufruf pollt mit
+     * emscripten_sleep und gibt an die JS-Ereignisschleife ab).  Loeschte ein
+     * neuer Druck sie, verschwaende ein Release+Druck innerhalb desselben
+     * Frames den Drop ersatzlos — der Benutzer zieht, laesst los, drueckt
+     * ungeduldig nochmal, und der Drop ist weg.  spec/44_0 §2.3 sagt dazu
+     * normativ: aufbewahrt und im naechsten Frame gemeldet, nicht verworfen.
+     * `aiml_input_update` leert sie beim Ausliefern, das genuegt. */
     ds.origin_x = (float)mx; ds.origin_y = (float)my;
     ds.acc_x = ds.acc_y = 0.f;
     return EM_TRUE;
 }
 static EM_BOOL bin_mouseup(int /*type*/, const EmscriptenMouseEvent* e, void* /*ud*/) {
     if (!g_b) return EM_FALSE;
-    int b = e->button;
+    int b = dom_btn_to_aiml(e->button);
     if (b < 0 || b >= AIML_MAX_MOUSE) return EM_TRUE;
     if (g_b->raw_mouse[b]) g_b->pend_release[b] = 1;   // mouseup is window-wide: only after our mousedown
     g_b->raw_mouse[b] = 0;
     auto& ds = g_b->drag[b];
-    if (ds.active) ds.ended_this_frame = true;
+    if (ds.active) {
+        double ux, uy; bin_event_xy(e->clientX, e->clientY, &ux, &uy);
+        ds.pend_ended = true;
+        ds.pend_end_x = (float)ux;
+        ds.pend_end_y = (float)uy;
+    }
     ds.held = false; ds.active = false;
     return EM_TRUE;
+}
+static void bin_cancel_press(int btn);   /* defined with the touch handlers below */
+
+/* touchcancel = the system took the press away (incoming call, edge gesture,
+ * browser took over scrolling, notification overlay).  The gesture did NOT
+ * happen, so this must not look like touchend (spec/44_0 §2.2). */
+static EM_BOOL bin_touchcancel(int /*type*/, const EmscriptenTouchEvent* /*e*/, void* /*ud*/) {
+    if (!g_b) return EM_FALSE;
+    bin_cancel_press(0);
+    return EM_TRUE;
+}
+/* Focus loss / tab hidden with a button still held: same reasoning — the press
+ * cannot be completed, so cancel it instead of leaving it stuck down. */
+static EM_BOOL bin_blur(int /*type*/, const EmscriptenFocusEvent* /*e*/, void* /*ud*/) {
+    for (int b = 0; b < AIML_MAX_MOUSE; b++) bin_cancel_press(b);
+    return EM_FALSE;   /* don't swallow the event */
 }
 static EM_BOOL bin_wheel(int /*type*/, const EmscriptenWheelEvent* e, void* /*ud*/) {
     if (!g_b) return EM_FALSE;
@@ -1086,12 +1228,25 @@ static EM_BOOL bin_wheel(int /*type*/, const EmscriptenWheelEvent* e, void* /*ud
  * mouse button 0 using the same clientX/Y→backing mapping as the mouse path, so
  * taps, hover-position and press-move-release DRAGS all work with one finger.
  * Returning EM_TRUE preventDefault()s → no page scroll/zoom/synthetic-mouse. */
+/* spec/44_0 §2.2: abort the active press on `btn` WITHOUT reporting a release.
+ * A cancel means the gesture did not happen, so it must never reach the drop
+ * path.  Used by touchcancel, the two-finger takeover and focus loss. */
+static void bin_cancel_press(int btn) {
+    if (!g_b || btn < 0 || btn >= AIML_MAX_MOUSE) return;
+    if (g_b->raw_mouse[btn]) g_b->pend_cancel[btn] = 1;
+    g_b->raw_mouse[btn] = 0;
+    auto& ds = g_b->drag[btn];
+    if (ds.active) ds.pend_cancelled = true;
+    ds.held = false; ds.active = false;
+}
+
 static EM_BOOL bin_touchstart(int /*type*/, const EmscriptenTouchEvent* e, void* /*ud*/) {
     if (!g_b || e->numTouches <= 0) return EM_FALSE;
     if (e->numTouches >= 2) {   /* two fingers = pan/zoom gesture (shell), not game
-                                 * input — release any in-progress single-tap press. */
-        if (g_b->raw_mouse[0]) g_b->pend_release[0] = 1;
-        g_b->raw_mouse[0] = 0; g_b->drag[0].held = false; g_b->drag[0].active = false;
+                                 * input — CANCEL the in-progress single-tap press.
+                                 * A release here would look like a deliberate lift
+                                 * and commit a drop (spec/44_0 §2.2). */
+        bin_cancel_press(0);
         return EM_FALSE;
     }
     double mx, my; bin_event_xy(e->touches[0].clientX, e->touches[0].clientY, &mx, &my);
@@ -1099,7 +1254,7 @@ static EM_BOOL bin_touchstart(int /*type*/, const EmscriptenTouchEvent* e, void*
     g_b->raw_mouse[0] = 1; g_b->pend_press[0] = 1;
     auto& ds = g_b->drag[0];
     ds.held = true; ds.active = false;
-    ds.started_this_frame = ds.ended_this_frame = false;
+    /* started/ended + pend_* bleiben stehen — siehe bin_mousedown (spec/44_0 §2.3). */
     ds.origin_x = (float)mx; ds.origin_y = (float)my;
     ds.acc_x = ds.acc_y = 0.f;
     return EM_TRUE;
@@ -1115,20 +1270,26 @@ static EM_BOOL bin_touchmove(int /*type*/, const EmscriptenTouchEvent* e, void* 
         ds.acc_y = (float)my - ds.origin_y;
         float dist = sqrtf(ds.acc_x * ds.acc_x + ds.acc_y * ds.acc_y);
         if (!ds.active && dist >= g_b->drag_threshold) {
-            ds.active = true; ds.started_this_frame = true;
+            ds.active = true; ds.pend_started = true;
+            ds.pend_start_x = ds.origin_x; ds.pend_start_y = ds.origin_y;
         }
     }
     return EM_TRUE;
 }
-/* Used for both touchend and touchcancel — the last touchmove already set the
- * final position, so we only release button 0 here (touchend's `touches` list
- * no longer contains the lifted finger). */
+/* touchend = the finger was lifted deliberately → a real release.  The last
+ * touchmove already set the final position, so we only release button 0 here
+ * (touchend's `touches` list no longer contains the lifted finger).
+ * touchcancel does NOT come here — see bin_touchcancel. */
 static EM_BOOL bin_touchend(int /*type*/, const EmscriptenTouchEvent* /*e*/, void* /*ud*/) {
     if (!g_b) return EM_FALSE;
     if (g_b->raw_mouse[0]) g_b->pend_release[0] = 1;
     g_b->raw_mouse[0] = 0;
     auto& ds = g_b->drag[0];
-    if (ds.active) ds.ended_this_frame = true;
+    if (ds.active) {
+        ds.pend_ended = true;
+        ds.pend_end_x = (float)g_b->curr_pos_x;
+        ds.pend_end_y = (float)g_b->curr_pos_y;
+    }
     ds.held = false; ds.active = false;
     return EM_TRUE;
 }
@@ -1381,6 +1542,20 @@ EM_JS(void, aiml_web_kbd_open, (int is_secret, int is_numeric, int is_email), {
         var ZWSP = String.fromCharCode(0x200b);
         var reset = function () { el.value = ZWSP; try { el.setSelectionRange(1, 1); } catch (e) {} };
         el._composing = false;
+        /* Kam diese Eingabe von einer ECHTEN Taste?  Dann hat der Fenster-
+         * keydown-Handler (bin_keydown) sie schon eingereiht, und die Bruecke
+         * muss schweigen — sonst loescht eine Ruecktaste ZWEI Zeichen und ein
+         * Pfeil springt um zwei Stellen.  Gemeldet am Konsolen-Quelltextfeld
+         * von cosmos: „die ruecktaste loeschte immer 2 zeichen" (2026-10-18).
+         *
+         * 'Unidentified'/'Process' zaehlen NICHT als echte Taste: genau die
+         * melden Soft-Keyboards und IMEs, und dort ist die Bruecke die einzige
+         * Quelle. */
+        el._hwkey = false;
+        el.addEventListener('keydown', function (e) {
+            el._hwkey = (e.key && e.key !== 'Unidentified' && e.key !== 'Process' && !e.isComposing);
+        });
+        el.addEventListener('keyup', function () { el._hwkey = false; });
         el.addEventListener('compositionstart', function () { el._composing = true; });
         el.addEventListener('compositionend', function (e) {
             el._composing = false;
@@ -1390,24 +1565,25 @@ EM_JS(void, aiml_web_kbd_open, (int is_secret, int is_numeric, int is_email), {
         el.addEventListener('beforeinput', function (e) {
             if (el._composing) return;               /* commit handled at compositionend */
             var t = e.inputType;
+            /* Das DOM-Feld ist nur ein DURCHGANG, nie ein Textspeicher: jede
+             * Eingabe wird abgefangen und der Wachposten wiederhergestellt.
+             * Ohne das driftet `el.value` und die naechste Ruecktaste meldet
+             * sich gar nicht mehr. */
+            e.preventDefault();
+            var ctrl_op = (t === 'insertLineBreak' || t === 'insertParagraph' ||
+                           t === 'deleteContentBackward' || t === 'deleteContentForward');
+            if (ctrl_op && el._hwkey) { reset(); return; }   /* bin_keydown hat sie schon */
             if (t === 'insertText' || t === 'insertFromPaste' ||
                 t === 'insertReplacementText' || t === 'insertFromComposition') {
                 if (e.data) pushText(e.data);
-                e.preventDefault();
             } else if (t === 'insertLineBreak' || t === 'insertParagraph') {
-                pushKey('Enter'); e.preventDefault();
+                pushKey('Enter');
             } else if (t === 'deleteContentBackward') {
-                pushKey('Backspace'); e.preventDefault(); reset();
+                pushKey('Backspace');
             } else if (t === 'deleteContentForward') {
-                pushKey('Delete'); e.preventDefault();
+                pushKey('Delete');
             }
-        });
-        /* Hardware-keyboard / some-IME fallback (character keys still go through
-         * beforeinput above; this only covers control keys). */
-        el.addEventListener('keydown', function (e) {
-            if      (e.key === 'Enter')      { pushKey('Enter'); e.preventDefault(); }
-            else if (e.key === 'ArrowLeft')  { pushKey('Left');  e.preventDefault(); }
-            else if (e.key === 'ArrowRight') { pushKey('Right'); e.preventDefault(); }
+            reset();
         });
     }
     el.type = is_secret ? 'password' : (is_email ? 'email' : 'text');
@@ -1442,7 +1618,8 @@ void aiml_input_init(void* /*win*/) {
     emscripten_set_touchstart_callback ("#canvas", nullptr, EM_TRUE, bin_touchstart);
     emscripten_set_touchmove_callback  (EMSCRIPTEN_EVENT_TARGET_WINDOW, nullptr, EM_TRUE, bin_touchmove);
     emscripten_set_touchend_callback   (EMSCRIPTEN_EVENT_TARGET_WINDOW, nullptr, EM_TRUE, bin_touchend);
-    emscripten_set_touchcancel_callback(EMSCRIPTEN_EVENT_TARGET_WINDOW, nullptr, EM_TRUE, bin_touchend);
+    emscripten_set_touchcancel_callback(EMSCRIPTEN_EVENT_TARGET_WINDOW, nullptr, EM_TRUE, bin_touchcancel);
+    emscripten_set_blur_callback       (EMSCRIPTEN_EVENT_TARGET_WINDOW, nullptr, EM_TRUE, bin_blur);
     /* Keyboard goes on the window target — canvas elements need explicit
      * tabindex to receive key events, but window always works. */
     emscripten_set_keydown_callback (EMSCRIPTEN_EVENT_TARGET_WINDOW, nullptr, EM_TRUE, bin_keydown);
@@ -1479,6 +1656,8 @@ void aiml_input_update(void) {
     memcpy(g_b->curr_mouse, g_b->raw_mouse, AIML_MAX_MOUSE);
     memcpy(g_b->frame_press, g_b->pend_press, AIML_MAX_MOUSE);
     memcpy(g_b->frame_release, g_b->pend_release, AIML_MAX_MOUSE);
+    memcpy(g_b->frame_cancel, g_b->pend_cancel, AIML_MAX_MOUSE);
+    memset(g_b->pend_cancel, 0, AIML_MAX_MOUSE);
     memset(g_b->pend_press, 0, AIML_MAX_MOUSE);
     memset(g_b->pend_release, 0, AIML_MAX_MOUSE);
     memcpy(g_b->prev_keys,  g_b->curr_keys,  AIML_MAX_KEYS);
@@ -1497,8 +1676,15 @@ void aiml_input_update(void) {
     g_b->scroll_accum_x = 0.f;
     g_b->scroll_accum_y = 0.f;
     for (int b = 0; b < AIML_MAX_MOUSE; b++) {
-        g_b->drag[b].started_this_frame = false;
-        g_b->drag[b].ended_this_frame   = false;
+        auto& ds = g_b->drag[b];
+        ds.started_this_frame   = ds.pend_started;
+        ds.ended_this_frame     = ds.pend_ended;
+        ds.cancelled_this_frame = ds.pend_cancelled;
+        /* Position MIT dem Rand latchen, sonst gehoert sie beim Ausliefern
+         * schon zur naechsten Geste. */
+        if (ds.pend_started) { ds.start_x = ds.pend_start_x; ds.start_y = ds.pend_start_y; }
+        if (ds.pend_ended) { ds.end_x = ds.pend_end_x; ds.end_y = ds.pend_end_y; }
+        ds.pend_started = ds.pend_ended = ds.pend_cancelled = false;
     }
     /* Trim event queue if it grew unbounded (e.g. event consumer never ran). */
     while (g_b->events.size() > 256) g_b->events.pop_front();
@@ -1571,6 +1757,7 @@ extern "C" void aiml_input_post_mouse_move(float x, float y) {
         float dist = sqrtf(ds.acc_x * ds.acc_x + ds.acc_y * ds.acc_y);
         if (!ds.active && dist >= g_b->drag_threshold) {
             ds.active = true; ds.started_this_frame = true;
+            ds.start_x = ds.origin_x; ds.start_y = ds.origin_y;
         }
     }
 }
@@ -1587,6 +1774,7 @@ extern "C" void aiml_input_post_mouse_down(int32_t btn) {
     auto& ds = g_b->drag[btn];
     ds.held = true; ds.active = false;
     ds.started_this_frame = ds.ended_this_frame = false;
+    ds.pend_started = ds.pend_ended = ds.pend_cancelled = false;
     ds.origin_x = (float)g_b->curr_pos_x; ds.origin_y = (float)g_b->curr_pos_y;
     ds.acc_x = ds.acc_y = 0.f;
 }
@@ -1596,8 +1784,78 @@ extern "C" void aiml_input_post_mouse_up(int32_t btn) {
     g_b->curr_mouse[btn] = 0;
     g_b->frame_release[btn] = 1;
     auto& ds = g_b->drag[btn];
-    if (ds.active) ds.ended_this_frame = true;
+    if (ds.active) {
+        ds.ended_this_frame = true;
+        ds.end_x = (float)g_b->curr_pos_x;
+        ds.end_y = (float)g_b->curr_pos_y;
+    }
     ds.held = false; ds.active = false;
+}
+/* ── Injektion in die EREIGNIS-Schicht (spec/44_0 §8.4) ─────────────────────
+ *
+ * Die drei Hooks oben schreiben die FRAME-sichtbaren Slots: injizieren, lesen,
+ * beim naechsten update weg.  Damit ist aber genau die Schicht unerreichbar,
+ * um die es in §2.3 geht — die `pend_*`-Schicht, in der die DOM-Handler
+ * zwischen den Frames UND mitten im Frame schreiben.  Die Zusicherung „eine
+ * waehrend eines Frames entstandene Kante wird aufbewahrt und im naechsten
+ * Frame gemeldet" war deshalb von aussen nicht pruefbar.
+ *
+ * Diese Varianten tun genau das, was `bin_mousedown`/`bin_mouseup`/
+ * `bin_mousemove` tun.  Ein Test kann damit eine echte Ereignisfolge
+ * nachspielen — insbesondere Release UND Druck in derselben Luecke — und danach
+ * mit `input.update()` pruefen, was ausgeliefert wird. */
+extern "C" void aiml_input_post_mouse_down_pending(int32_t btn) {
+    if (!g_b || btn < 0 || btn >= AIML_MAX_MOUSE) return;
+    g_b->raw_mouse[btn] = 1;
+    g_b->pend_press[btn] = 1;
+    auto& ds = g_b->drag[btn];
+    ds.held = true; ds.active = false;
+    /* pend_* und started/ended_this_frame bleiben stehen — wie bin_mousedown. */
+    ds.origin_x = (float)g_b->curr_pos_x; ds.origin_y = (float)g_b->curr_pos_y;
+    ds.acc_x = ds.acc_y = 0.f;
+}
+extern "C" void aiml_input_post_mouse_up_pending(int32_t btn) {
+    if (!g_b || btn < 0 || btn >= AIML_MAX_MOUSE) return;
+    if (g_b->raw_mouse[btn]) g_b->pend_release[btn] = 1;
+    g_b->raw_mouse[btn] = 0;
+    auto& ds = g_b->drag[btn];
+    if (ds.active) {
+        ds.pend_ended = true;
+        ds.pend_end_x = (float)g_b->curr_pos_x;
+        ds.pend_end_y = (float)g_b->curr_pos_y;
+    }
+    ds.held = false; ds.active = false;
+}
+extern "C" void aiml_input_post_mouse_move_pending(float x, float y) {
+    if (!g_b) return;
+    g_b->curr_pos_x = (double)x;
+    g_b->curr_pos_y = (double)y;
+    for (int b = 0; b < AIML_MAX_MOUSE; b++) {
+        auto& ds = g_b->drag[b];
+        if (!ds.held) continue;
+        ds.acc_x = x - ds.origin_x;
+        ds.acc_y = y - ds.origin_y;
+        float dist = sqrtf(ds.acc_x * ds.acc_x + ds.acc_y * ds.acc_y);
+        if (!ds.active && dist >= g_b->drag_threshold) {
+            ds.active = true; ds.pend_started = true;
+            ds.pend_start_x = ds.origin_x; ds.pend_start_y = ds.origin_y;
+        }
+    }
+}
+
+/* spec/44_0 §8.2 + §8.3: write the FRAME-visible cancel slot directly (same rule
+ * as post_mouse_up here), so an injected cancel fires exactly once. */
+extern "C" void aiml_input_post_touch_cancel(void) {
+    if (!g_b) return;
+    for (int b = 0; b < AIML_MAX_MOUSE; b++) {
+        if (!g_b->raw_mouse[b] && !g_b->curr_mouse[b]) continue;
+        g_b->raw_mouse[b]    = 0;
+        g_b->curr_mouse[b]   = 0;
+        g_b->frame_cancel[b] = 1;
+        auto& ds = g_b->drag[b];
+        if (ds.active) ds.cancelled_this_frame = true;
+        ds.held = false; ds.active = false;
+    }
 }
 extern "C" void aiml_input_post_scroll(float dx, float dy) {
     if (!g_b) return;
@@ -1691,6 +1949,10 @@ int32_t aiml_input_mouse_released(int32_t b) {
     if (!g_b || b < 0 || b >= AIML_MAX_MOUSE) return 0;
     return g_b->frame_release[b] ? 1 : 0;
 }
+int32_t aiml_input_mouse_cancelled(int32_t b) {
+    if (!g_b || b < 0 || b >= AIML_MAX_MOUSE) return 0;
+    return g_b->frame_cancel[b] ? 1 : 0;
+}
 float   aiml_input_mouse_scroll_x(void) { return g_b ? g_b->scroll_this_x : 0.f; }
 float   aiml_input_mouse_scroll_y(void) { return g_b ? g_b->scroll_this_y : 0.f; }
 
@@ -1741,6 +2003,10 @@ int32_t aiml_input_drag_ended  (int32_t b) {
     if (!g_b || b < 0 || b >= AIML_MAX_MOUSE) return 0;
     return g_b->drag[b].ended_this_frame ? 1 : 0;
 }
+int32_t aiml_input_drag_cancelled(int32_t b) {
+    if (!g_b || b < 0 || b >= AIML_MAX_MOUSE) return 0;
+    return g_b->drag[b].cancelled_this_frame ? 1 : 0;
+}
 float   aiml_input_drag_origin_x(int32_t b) {
     if (!g_b || b < 0 || b >= AIML_MAX_MOUSE) return 0.f;
     return g_b->drag[b].origin_x;
@@ -1748,6 +2014,22 @@ float   aiml_input_drag_origin_x(int32_t b) {
 float   aiml_input_drag_origin_y(int32_t b) {
     if (!g_b || b < 0 || b >= AIML_MAX_MOUSE) return 0.f;
     return g_b->drag[b].origin_y;
+}
+float   aiml_input_drag_start_x (int32_t b) {
+    if (!g_b || b < 0 || b >= AIML_MAX_MOUSE) return 0.f;
+    return g_b->drag[b].start_x;
+}
+float   aiml_input_drag_start_y (int32_t b) {
+    if (!g_b || b < 0 || b >= AIML_MAX_MOUSE) return 0.f;
+    return g_b->drag[b].start_y;
+}
+float   aiml_input_drag_end_x   (int32_t b) {
+    if (!g_b || b < 0 || b >= AIML_MAX_MOUSE) return 0.f;
+    return g_b->drag[b].end_x;
+}
+float   aiml_input_drag_end_y   (int32_t b) {
+    if (!g_b || b < 0 || b >= AIML_MAX_MOUSE) return 0.f;
+    return g_b->drag[b].end_y;
 }
 float   aiml_input_drag_delta_x (int32_t b) {
     if (!g_b || b < 0 || b >= AIML_MAX_MOUSE) return 0.f;
@@ -1809,6 +2091,10 @@ extern "C" void        aiml_input_clipboard_set(const char* s) {
 void aiml_input_post_mouse_move(float, float) {}
 void aiml_input_post_mouse_down(int32_t) {}
 void aiml_input_post_mouse_up  (int32_t) {}
+void aiml_input_post_mouse_move_pending(float, float) {}
+void aiml_input_post_mouse_down_pending(int32_t) {}
+void aiml_input_post_mouse_up_pending  (int32_t) {}
+void aiml_input_post_touch_cancel(void)   {}
 void aiml_input_post_scroll    (float, float) {}
 void aiml_input_post_key_down  (const char*) {}
 void aiml_input_post_key_up    (const char*) {}
@@ -1830,6 +2116,7 @@ float   aiml_input_mouse_delta_y (void) { return 0.f; }
 int32_t aiml_input_mouse_button  (int32_t) { return 0; }
 int32_t aiml_input_mouse_pressed (int32_t) { return 0; }
 int32_t aiml_input_mouse_released(int32_t) { return 0; }
+int32_t aiml_input_mouse_cancelled(int32_t) { return 0; }
 float   aiml_input_mouse_scroll_x(void) { return 0.f; }
 float   aiml_input_mouse_scroll_y(void) { return 0.f; }
 
@@ -1863,8 +2150,13 @@ int32_t aiml_input_action_released(const char*) { return 0; }
 int32_t aiml_input_drag_active       (int32_t) { return 0; }
 int32_t aiml_input_drag_started      (int32_t) { return 0; }
 int32_t aiml_input_drag_ended        (int32_t) { return 0; }
+int32_t aiml_input_drag_cancelled    (int32_t) { return 0; }
 float   aiml_input_drag_origin_x     (int32_t) { return 0.f; }
 float   aiml_input_drag_origin_y     (int32_t) { return 0.f; }
+float   aiml_input_drag_start_x      (int32_t) { return 0.f; }
+float   aiml_input_drag_start_y      (int32_t) { return 0.f; }
+float   aiml_input_drag_end_x        (int32_t) { return 0.f; }
+float   aiml_input_drag_end_y        (int32_t) { return 0.f; }
 float   aiml_input_drag_delta_x      (int32_t) { return 0.f; }
 float   aiml_input_drag_delta_y      (int32_t) { return 0.f; }
 void    aiml_input_drag_set_payload  (void*)    {}

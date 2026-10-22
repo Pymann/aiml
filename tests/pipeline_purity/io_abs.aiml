@@ -1,0 +1,17 @@
+# SPEC?: 62_pipelines   # aus dem Dateinamen, zu bestaetigen
+# Konstanter absoluter Pfad ausserhalb des Arbeitsbereichs: Fehler (F62-19).
+# Requires: driver
+- def:
+    name: body_read
+    return: i32
+    body:
+      - decl: [txt, string, { call: [io.read_file, "/etc/hostname"] }]
+      - if: { condition: { eq: [txt.len, 0] }, then: [{ return: 1 }] }
+      - return: 0
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [pkg, Code, { call: [sys.bundle, "body_read", { context: true, pure: true }] }]
+      - return: 0

@@ -295,6 +295,21 @@ The following escape sequences are supported inside string literals:
 
 All other `\X` sequences are a CompilationError.
 
+**Escapes gehören dem YAML, nicht aiml.**  Ein aiml-Programm ist ein YAML-Dokument: was in
+`"…"` steht, löst der YAML-Leser auf, und aiml sieht das Ergebnis.  In einem **einfach**
+quotierten Skalar (`'…'`) löst YAML nichts auf — dort bleibt `\n` buchstäblich ein
+Backslash und ein `n`.  Gemessen am 18.10.2026: ein mit `'set -e\ntar …'` gebauter
+Shell-Befehl kam als EINE Zeile an (`/bin/sh: 1: set: Illegal option -t`).  Die Regel für
+mehrzeilige Zeichenketten:
+
+- **doppelte** Quotes, wenn `\n`/`\t` wirken sollen — dann müssen innen liegende
+  Anführungszeichen für aiml als `\\\"` geschrieben werden, weil YAML die erste Ebene
+  bereits wegnimmt;
+- **einfache** Quotes, wenn der Text wörtlich gelten soll (Shell-Befehle mit `"` und `$(…)`)
+  — dann **keine** Backslashes verwenden (ein unbekanntes `\X` wäre ein Übersetzungsfehler)
+  und Zeilen mit `;` statt mit `\n` trennen.
+- `${…}` interpoliert aiml in **beiden** Formen; `$(…)` und `$var` bleiben unberührt.
+
 ## `print`
 
 **Transitional:** `print` is scheduled for removal. New code logs with the `log`

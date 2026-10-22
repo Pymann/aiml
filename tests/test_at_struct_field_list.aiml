@@ -32,7 +32,7 @@
     condition: { neq: [var_a0, 10] }
     then:
       - print: ["FAIL bare-variable at: expected 10, got ${var_a0}"]
-      - exit: [1]
+      - call: [sys.exit, 1]
 
 # Variante B: struct.field als at-container — Compile-Error in current state.
 # Wenn future-fix das erlaubt, sollte dies var_a1 = 10 setzen.
@@ -41,6 +41,6 @@
     condition: { neq: [var_a1, 10] }
     then:
       - print: ["FAIL struct-field at: expected 10, got ${var_a1}"]
-      - exit: [1]
+      - call: [sys.exit, 1]
 
 - print: ["PASS test_at_struct_field_list"]

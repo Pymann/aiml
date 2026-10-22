@@ -1,0 +1,18 @@
+# SPEC: 64_closures
+# static-check: off
+# Requires: driver
+# NEGATIVE (spec/64 §9): a capture of form (a)/(b) names a variable that is not in scope.
+# EXPECT-ERROR: closure-capture-unknown
+- callable: { name: Pick, return: i32 }
+- def:
+    name: main
+    return: i32
+    body:
+      - decl:
+          - bad
+          - closure<Pick>
+          - closure:
+              capture: [nowhere]                  # ← no such variable
+              body:
+                - return: nowhere
+      - return: 0

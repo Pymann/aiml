@@ -1,0 +1,70 @@
+# SPEC: 04_1_precedence,04_math
+# spec/04_1 §7a: ein Literal nimmt den Typ des anderen Operanden an.
+#
+# Vorher fiel ein gemischtes Paar durch den Abgleich-Schritt und erreichte LLVM
+# als Instruktion mit zwei verschiedenen Operandentypen — die Modul-Prüfung
+# scheiterte dann mit "Both operands to FCmp instruction are not of the same
+# type!", also mit einer Meldung über den Compiler statt über die Quellzeile.
+# Expected exit code: 0
+
+- def:
+    name: main
+    static_off: ["str_cmp"]
+    return: i32
+    body:
+      - decl: [fails, i32, 0]
+
+      # ── Vergleich: f64 gegen Fliesskomma-Literal (Literal ist sonst f32) ──
+      - decl: [ratio, f64, 2.75]
+      - if:
+          condition: { gt: [ratio, 2.5] }
+          then: []
+          else: [{ print: ["FAIL f64 > Literal"] }, { set: [fails, { +: [fails, 1] }] }]
+      - if:
+          condition: { neq: [ratio, 2.75] }
+          then: [{ print: ["FAIL f64 != Literal (gleiche Werte)"] }, { set: [fails, { +: [fails, 1] }] }]
+
+      # Umgekehrte Reihenfolge: Literal links
+      - if:
+          condition: { lt: [2.5, ratio] }
+          then: []
+          else: [{ print: ["FAIL Literal < f64"] }, { set: [fails, { +: [fails, 1] }] }]
+
+      # ── f32 gegen Literal muss weiter gehen ──────────────────────────────
+      - decl: [small, f32, 0.5]
+      - if:
+          condition: { gt: [small, 0.25] }
+          then: []
+          else: [{ print: ["FAIL f32 > Literal"] }, { set: [fails, { +: [fails, 1] }] }]
+
+      # ── Ganzzahl-Literal gegen Fliesskomma-Wert ──────────────────────────
+      - decl: [whole, f64, 3.0]
+      - if:
+          condition: { eq: [whole, 3] }
+          then: []
+          else: [{ print: ["FAIL f64 == Ganzzahl-Literal"] }, { set: [fails, { +: [fails, 1] }] }]
+
+      # ── Arithmetik, gleicher Abgleich-Schritt ────────────────────────────
+      - decl: [sum_val, f64, { +: [ratio, 0.25] }]
+      - decl: [want_three, f64, 3.0]
+      - if:
+          condition: { neq: [sum_val, want_three] }
+          then: [{ print: ["FAIL f64 + Literal = ${sum_val}, erwartet 3"] }, { set: [fails, { +: [fails, 1] }] }]
+
+      - decl: [prod, f64, { '*': [ratio, 2] }]
+      - decl: [want_55, f64, 5.5]
+      - if:
+          condition: { neq: [prod, want_55] }
+          then: [{ print: ["FAIL f64 * Ganzzahl-Literal = ${prod}, erwartet 5.5"] }, { set: [fails, { +: [fails, 1] }] }]
+
+      # ── Gegenprobe: mit cast bleibt alles wie bisher moeglich ────────────
+      - if:
+          condition: { neq: [ratio, { cast: [small, f64] }] }
+          then: []
+          else: [{ print: ["FAIL cast-Vergleich: 2.75 darf nicht 0.5 sein"] }, { set: [fails, { +: [fails, 1] }] }]
+
+      - if:
+          condition: { neq: [fails, 0] }
+          then: [{ print: ["mixed_operand_literal FAIL — ${fails} Fall(e)"] }, { return: 1 }]
+      - print: ["PASS mixed_operand_literal"]
+      - return: 0

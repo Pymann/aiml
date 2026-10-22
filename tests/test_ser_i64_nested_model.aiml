@@ -1,0 +1,109 @@
+# SPEC?: 29_serialize,15_models   # aus dem Dateinamen, zu bestaetigen
+# Ein i64-Feld in einem VERSCHACHTELTEN Modell ueber den Serialisierer und
+# zurueck.
+#
+# Gefunden 2026-10-13: `ClusterView.live.taken_ms` (i64, im verschachtelten
+# Modell) kam nach sys.deserialize falsch an, waehrend Listen und Zeichenketten
+# daneben stimmten.  Ein stiller Zahlenfehler ueber die Leitung ist die
+# unangenehmste Sorte: nichts stuerzt ab, alles sieht aus wie Daten.
+# Expected exit code: 0
+
+- model:
+    name: Stamped
+    fields:
+      - [label,    string]
+      - [taken_ms, i64]
+      - [count,    i32]
+
+- model:
+    name: Wrapper
+    fields:
+      - [title, string]
+      - [inner, Stamped]
+
+- model:
+    name: WrapperWithList
+    fields:
+      - [title, string]
+      - [inner, Stamped]
+      - [notes, list<string>]
+
+- def:
+    name: expect
+    args: [[what, string], [cond, i32]]
+    return: i32
+    body:
+      - if:
+          condition: { eq: [cond, 1] }
+          then: [{ print: ["  ok   ${what}"] }, { return: 0 }]
+      - print: ["  FAIL ${what}"]
+      - return: 1
+
+- def:
+    name: main
+    static_off: ["str_cmp"]
+    return: i32
+    body:
+      - decl: [fails, i32, 0]
+      - decl: [big, i64, 1760000000000]
+
+      # 1) i64 direkt im obersten Modell — der Vergleichsfall.
+      - decl: [flat, Stamped]
+      - set: [flat.label, "flach"]
+      - set: [flat.taken_ms, big]
+      - set: [flat.count, 7]
+      - decl: [flat_wire, string, { call: [sys.serialize, flat] }]
+      - decl: [flat_back, Stamped, { call: [sys.deserialize, flat_wire, "Stamped"] }]
+      - set: [fails, { +: [fails, { call: [expect, "i64 im obersten Modell", { eq: [flat_back.taken_ms, big] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "und das i32 daneben", { eq: [flat_back.count, 7] }] }] }]
+
+      # 2) i64 in einem VERSCHACHTELTEN Modell — hier ging es schief.
+      - decl: [nested, Wrapper]
+      - set: [nested.title, "huelle"]
+      - set: [nested.inner.label, "innen"]
+      - set: [nested.inner.taken_ms, big]
+      - set: [nested.inner.count, 9]
+      - decl: [nested_wire, string, { call: [sys.serialize, nested] }]
+      - decl: [nested_back, Wrapper, { call: [sys.deserialize, nested_wire, "Wrapper"] }]
+      - set: [fails, { +: [fails, { call: [expect, "Zeichenkette im verschachtelten Modell", { eq: [nested_back.inner.label, "innen"] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "i64 im verschachtelten Modell", { eq: [nested_back.inner.taken_ms, big] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "i32 im verschachtelten Modell", { eq: [nested_back.inner.count, 9] }] }] }]
+      - print: ["  (verschachtelt: taken_ms=${nested_back.inner.taken_ms}, erwartet ${big})"]
+
+      # 3) Dasselbe mit einer Liste hinter dem verschachtelten Modell.
+      - decl: [mixed, WrapperWithList]
+      - set: [mixed.title, "huelle2"]
+      - set: [mixed.inner.label, "innen2"]
+      - set: [mixed.inner.taken_ms, big]
+      - set: [mixed.inner.count, 11]
+      - call: [mixed.notes.push, "erste notiz"]
+      - call: [mixed.notes.push, "zweite notiz"]
+      - decl: [mixed_wire, string, { call: [sys.serialize, mixed] }]
+      - decl: [mixed_back, WrapperWithList, { call: [sys.deserialize, mixed_wire, "WrapperWithList"] }]
+      - set: [fails, { +: [fails, { call: [expect, "i64 mit Liste dahinter", { eq: [mixed_back.inner.taken_ms, big] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "die Liste dahinter kommt an", { eq: [mixed_back.notes.len, 2] }] }] }]
+
+      # ── 4) Der BINAERE Weg: typisierter KV-Speicher (ser_encode/ser_decode),
+      # derselbe Weg, den auch Mirror-RPC nimmt.  JSON und binaer sind zwei
+      # verschiedene Strecken — ein Fehler auf der einen sagt nichts ueber die
+      # andere.
+      - decl: [db_path, path, "/tmp/aiml_ser_i64/"]
+      - decl: [store, Kv<string:Stamped>]
+      - set: [store, { call: [db.open_kv, "ser_i64_demo", { persist: true, path: db_path }] }]
+      - call: [store.clear]
+      - decl: [to_store, Stamped]
+      - set: [to_store.label, "binaer"]
+      - set: [to_store.taken_ms, big]
+      - set: [to_store.count, 13]
+      - call: [store.set, "eins", to_store]
+      - decl: [from_store, Stamped, { call: [store.get_copy, "eins"] }]
+      - set: [fails, { +: [fails, { call: [expect, "binaer: Zeichenkette kommt an", { eq: [from_store.label, "binaer"] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "binaer: i64 kommt an", { eq: [from_store.taken_ms, big] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "binaer: i32 dahinter kommt an", { eq: [from_store.count, 13] }] }] }]
+      - print: ["  (binaer: taken_ms=${from_store.taken_ms}, erwartet ${big})"]
+
+      - if:
+          condition: { neq: [fails, 0] }
+          then: [{ print: ["test_ser_i64_nested_model FAIL (${fails})"] }, { return: 1 }]
+      - print: ["test_ser_i64_nested_model PASS"]
+      - return: 0

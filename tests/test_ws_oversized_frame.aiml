@@ -1,0 +1,83 @@
+# SPEC: 32_4_network_websockets,32_network
+# spec/32_4 §3.4: a WebSocket server MUST reject a frame whose declared payload length exceeds
+# set_max_frame_size (default 1 MB) and drop the connection — it must NOT malloc the attacker-
+# declared length.  Regression probe for the unchecked `malloc(plen + 1)` in ws_recv_frame_raw:
+# a raw client completes the WS upgrade, then sends ONE frame header declaring a 2^64-1 payload.
+#   unpatched: malloc(plen+1) wraps to malloc(0); (int)plen == -1 skips the short-read guard; the
+#              mask-XOR loop writes from payload[0] over 2^64 bytes -> OOB heap write -> SIGSEGV.
+#   patched:   the listener rejects the frame, drops that peer, and keeps serving -> clean exit.
+#
+# Both roles share one process (server in a spawned thread): a server-thread OOB write crashes the
+# whole process, so the harness scores the unpatched build as rc!=0 and the patched build as rc 0.
+#
+# Expected exit code: 0
+
+- def:
+    name: ws_victim_server
+    body:
+      - decl: [sess, mirror_session, { call: [mirror.listen, "ws://127.0.0.1:19977"] }]
+      - if: { condition: { eq: [sess, null] }, then: [{ call: [log.error, "listen failed"] }, { return: [] }] }
+      - decl: [iters, i32, 0]
+      - while:
+          condition: { lt: [iters, 600] }
+          body:
+            - call: [sess.update]
+            - call: [time.sleep_ms, 10]
+            - set: [iters, { +: [iters, 1] }]
+      - call: [sess.close]
+
+# net.send takes the buffer by pointer.  Under memV3 a `buffer` CLASS MEMBER is a handle pointer
+# (a local/param buffer is an inline struct value → type mismatch), so the attacker holds its
+# frame as a member and sends from a method — the shape ws.send_binary uses in production.
+- class:
+    name: Attacker
+    members:
+      - [frame, buffer]
+    methods:
+      - def:
+          name: run
+          static_off: ["str_cmp"]
+          return: i32
+          body:
+            - decl: [sock, socket_handle, { call: [net.socket, "tcp"] }]
+            - decl: [conn_rc, i32, { call: [net.connect, sock, "127.0.0.1", 19977] }]
+            - if: { condition: { lt: [conn_rc, 0] }, then: [{ print: ["FAIL connect rc=${conn_rc}"] }, { return: 1 }] }
+            - decl: [req, string, "GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n"]
+            - call: [net.send_string, sock, req]
+            - decl: [resp, string, { call: [net.recv_string, sock, 512] }]
+            - if: { condition: { lt: [{ call: [resp.index_of, "101"] }, 0] }, then: [{ print: ["FAIL no 101 upgrade (got '${resp}')"] }, { return: 1 }] }
+            # Malicious frame (raw bytes): 0x82 (FIN+binary), 0xFF (MASK + len7=127),
+            # 8x 0xFF extended length = 0xFFFFFFFFFFFFFFFF, 4x mask key.  No payload.
+            - call: [<.frame.alloc, 16]
+            - call: [<.frame.write, 130, u8]    # 0x82
+            - call: [<.frame.write, 255, u8]    # 0xFF
+            - decl: [byte_idx, i32, 0]
+            - while:
+                condition: { lt: [byte_idx, 8] }
+                body:
+                  - call: [<.frame.write, 255, u8]
+                  - set: [byte_idx, { +: [byte_idx, 1] }]
+            - decl: [mask_idx, i32, 0]
+            - while:
+                condition: { lt: [mask_idx, 4] }
+                body:
+                  - call: [<.frame.write, 1, u8]
+                  - set: [mask_idx, { +: [mask_idx, 1] }]
+            - decl: [sent, i32, { call: [net.send, sock, <.frame] }]
+            - print: ["attacker: sent ${sent}-byte oversized-length frame"]
+            - call: [time.sleep_ms, 500]   # server-thread parses it here; unpatched -> SIGSEGV
+            - call: [net.close, sock]
+            - return: 0
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [srv_th, thread_handle, { spawn: [ws_victim_server] }]
+      - call: [time.sleep_ms, 200]
+      - decl: [atk, ptr<Attacker>, { new: Attacker }]
+      - decl: [arc, i32, { call: [atk.run] }]
+      - if: { condition: { neq: [arc, 0] }, then: [{ call: [sys.exit, 1] }] }
+      - call: [srv_th.join]
+      - print: ["PASS ws oversized frame rejected (server survived)"]
+      - return: 0

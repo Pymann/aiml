@@ -1,0 +1,99 @@
+# SPEC: 62_pipelines
+# spec/62 §4: Parameterraum und exclude.
+#
+# Die Matrix ist die Hauptsache (§1): drei Achsen ergeben acht Lanes, eine
+# Teilbindung schliesst zwei davon aus.  Geprueft wird vor allem, dass ein
+# FALSCHES exclude auffaellt (F62-4) statt still nichts auszuschliessen — das
+# ist die Fehlerart, die Matrix-Konfiguration anderswo unzuverlaessig macht.
+# Expected exit code: 0
+
+- def:
+    name: noop_step
+    return: i32
+    body: [{ return: 0 }]
+
+- def:
+    name: expect
+    args: [[what, string], [cond, i32]]
+    return: i32
+    body:
+      - if:
+          condition: { eq: [cond, 1] }
+          then: [{ print: ["  ok   ${what}"] }, { return: 0 }]
+      - print: ["  FAIL ${what}"]
+      - return: 1
+
+# build_three: Pipeline mit drei Achsen, frisch gebaut.
+- def:
+    name: build_three
+    return: pipeline
+    body:
+      - decl: [stp, step, { call: [step.new] }]
+      - call: [stp.set_name, "noop"]
+      - call: [stp.set_body, { call: [sys.bundle, "noop_step", { context: true }] }]
+      - decl: [stg, stage, { call: [stage.new] }]
+      - call: [stg.set_name, "only"]
+      - call: [stg.add_step, stp]
+      - decl: [arch, list<string>]
+      - call: [arch.push, "x86_64"]
+      - call: [arch.push, "arm64"]
+      - decl: [comp, list<string>]
+      - call: [comp.push, "gcc"]
+      - call: [comp.push, "clang"]
+      - decl: [mode, list<string>]
+      - call: [mode.push, "debug"]
+      - call: [mode.push, "release"]
+      - decl: [pipe, pipeline, { call: [pipeline.new] }]
+      - call: [pipe.set_name, "matrix"]
+      - call: [pipe.add_param, "arch", arch]
+      - call: [pipe.add_param, "compiler", comp]
+      - call: [pipe.add_param, "mode", mode]
+      - call: [pipe.add_stage, stg]
+      - return: pipe
+
+- def:
+    name: main
+    static_off: ["str_cmp"]
+    return: i32
+    body:
+      - decl: [fails, i32, 0]
+
+      # ── Kreuzprodukt ────────────────────────────────────────────────────
+      - decl: [full, pipeline, { call: [build_three] }]
+      - set: [fails, { +: [fails, { call: [expect, "2x2x2 ergibt acht Lanes", { eq: [{ call: [full.lane_count] }, 8] }] }] }]
+
+      # ── exclude als Teilbindung: zwei Lanes fallen weg ──────────────────
+      - decl: [cut, pipeline, { call: [build_three] }]
+      - call: [cut.add_exclude, "arch=arm64,compiler=gcc"]
+      - set: [fails, { +: [fails, { call: [expect, "eine Teilbindung schliesst zwei Lanes aus", { eq: [{ call: [cut.lane_count] }, 6] }] }] }]
+      - decl: [rc_cut, i32, { call: [cut.run] }]
+      - set: [fails, { +: [fails, { call: [expect, "der gekuerzte Lauf gelingt", { eq: [rc_cut, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "und fuehrt genau sechs Schritte aus", { eq: [{ call: [cut.ran_count] }, 6] }] }] }]
+
+      # ── F62-4: unbekannte Achse im exclude ist ein FEHLER ───────────────
+      - decl: [bad_axis, pipeline, { call: [build_three] }]
+      - call: [bad_axis.add_exclude, "gibtsnicht=egal"]
+      - decl: [rc_axis, i32, { call: [bad_axis.run] }]
+      - set: [fails, { +: [fails, { call: [expect, "unbekannte Achse im exclude wird abgelehnt", { neq: [rc_axis, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "dabei lief kein Schritt", { eq: [{ call: [bad_axis.ran_count] }, 0] }] }] }]
+
+      # ── F62-4: Wert ausserhalb der Domaene ist ein FEHLER ───────────────
+      # Sonst schliesst ein Tippfehler still NICHTS aus, und die Matrix laeuft
+      # groesser als gedacht — ohne dass jemand es merkt.
+      - decl: [bad_val, pipeline, { call: [build_three] }]
+      - call: [bad_val.add_exclude, "arch=sparc"]
+      - decl: [rc_val, i32, { call: [bad_val.run] }]
+      - set: [fails, { +: [fails, { call: [expect, "Wert ausserhalb der Domaene wird abgelehnt", { neq: [rc_val, 0] }] }] }]
+
+      # ── F62-5: alles ausschliessen ist ein FEHLER ───────────────────────
+      - decl: [all_out, pipeline, { call: [build_three] }]
+      - call: [all_out.add_exclude, "arch=x86_64"]
+      - call: [all_out.add_exclude, "arch=arm64"]
+      - decl: [rc_all, i32, { call: [all_out.run] }]
+      - set: [fails, { +: [fails, { call: [expect, "eine leere Matrix wird abgelehnt", { neq: [rc_all, 0] }] }] }]
+
+      - if:
+          condition: { neq: [fails, 0] }
+          then: [{ print: ["test_pipeline_matrix FAIL (${fails})"] }, { return: 1 }]
+      - print: ["test_pipeline_matrix PASS"]
+      - return: 0

@@ -1,0 +1,147 @@
+# SPEC: 64_closures
+# static-check: off
+# Requires: driver
+# TIER: T2
+# CONSTRUCT: per-instance closure state vs in-place block state (spec/64 §6.1-§6.3).
+# COVERS: two closure instances are independent; a factory's captures survive the factory;
+#         `set:` on a closure capture persists across calls and is INVISIBLE outside;
+#         the same write through a BLOCK hits the enclosing variable (the contrast);
+#         a captured shared<T> IS mutually visible (the opt-in shared-state escape hatch);
+#         nested closures enumerate the outer names; nested scopes / shadowing.
+# EXPECT: exit 0.
+
+- model: { name: Box, fields: [[count, i32, 0]] }
+
+- callable: { name: Adder,  args: [[x, i32]], return: i32 }
+- callable: { name: Next,   return: i32 }
+- callable: { name: Bump }
+- callable: { name: MakeAdder, args: [[step, i32]], return: closure<Adder> }
+
+# a factory — the returned closure outlives this frame; its capture lives in the heap
+# environment, never in this stack frame (§6.1)
+- def:
+    name: make_adder
+    args: [[k, i32]]
+    return: { type: closure<Adder>, lifetime: producer }
+    body:
+      - return:
+          closure:
+            capture: [k]
+            body:
+              - return: { +: [x, k] }
+
+# a counter factory — the state has no counterpart in any scope (§6.2)
+- def:
+    name: make_counter
+    args: [[start, i32]]
+    return: { type: closure<Next>, lifetime: producer }
+    body:
+      - return:
+          closure:
+            capture: [[n, i32, start]]
+            body:
+              - set: [n, { +: [n, 1] }]
+              - return: n
+
+- def:
+    name: main
+    return: i32
+    body:
+
+      # ── A: two instances, different captures, independent ──────────────────────
+      - decl: [add3, closure<Adder>, { call: [make_adder, 3] }]
+      - decl: [add5, closure<Adder>, { call: [make_adder, 5] }]
+      - decl: [a1, i32, { call: [add3, 10] }]
+      - decl: [a2, i32, { call: [add5, 10] }]
+      - if: { condition: { neq: [a1, 13] }, then: [{ print: ["FAIL A1 a1=${a1}"] }, { return: 1 }] }
+      - if: { condition: { neq: [a2, 15] }, then: [{ print: ["FAIL A2 a2=${a2}"] }, { return: 1 }] }
+      - decl: [a3, i32, { call: [add3, 0] }]       # still independent after use
+      - if: { condition: { neq: [a3, 3] }, then: [{ print: ["FAIL A3 a3=${a3}"] }, { return: 1 }] }
+
+      # ── B: closure mutation persists per instance; instances do not share ──────
+      - decl: [c1, closure<Next>, { call: [make_counter, 0] }]
+      - decl: [c2, closure<Next>, { call: [make_counter, 100] }]
+      - decl: [b1, i32, { call: [c1] }]
+      - decl: [b2, i32, { call: [c1] }]
+      - decl: [b3, i32, { call: [c1] }]
+      - decl: [b4, i32, { call: [c2] }]
+      - if: { condition: { neq: [b1, 1] }, then: [{ print: ["FAIL B1 b1=${b1}"] }, { return: 1 }] }
+      - if: { condition: { neq: [b3, 3] }, then: [{ print: ["FAIL B3 b3=${b3}"] }, { return: 1 }] }
+      - if: { condition: { neq: [b4, 101] }, then: [{ print: ["FAIL B4 b4=${b4}"] }, { return: 1 }] }
+
+      # ── C: a mutated closure capture is INVISIBLE outside… ────────────────────
+      - decl: [outer, i32, 10]
+      - decl:
+          - mutate_closure
+          - closure<Next>
+          - closure:
+              capture: [outer]
+              body:
+                - set: [outer, { +: [outer, 1] }]
+                - return: outer
+      - decl: [c_in1, i32, { call: [mutate_closure] }]
+      - decl: [c_in2, i32, { call: [mutate_closure] }]
+      - if: { condition: { neq: [c_in2, 12] }, then: [{ print: ["FAIL C inner=${c_in2}"] }, { return: 1 }] }
+      - if: { condition: { neq: [outer, 10] }, then: [{ print: ["FAIL C outer leaked=${outer}"] }, { return: 1 }] }
+
+      # ── D: …and the same write through a BLOCK hits the enclosing variable ────
+      - decl:
+          - mutate_block
+          - block<Bump>
+          - block:
+              body:
+                - set: [outer, { +: [outer, 1] }]
+      - call: [mutate_block]
+      - call: [mutate_block]
+      - if: { condition: { neq: [outer, 12] }, then: [{ print: ["FAIL D outer=${outer}"] }, { return: 1 }] }
+
+      # ── E: shared mutable state for a closure is opt-in via shared<T> (§6.2) ──
+      - decl: [cell, shared<Box>, { share: { new: Box } }]      # fresh co-owned handle, rc=1
+      - decl:
+          - inc_cell
+          - closure<Bump>
+          - closure:
+              capture: [cell]                      # mode value on a shared<T> = incref
+              body:
+                - set: [cell.count, { +: [cell.count, 1] }]
+      - call: [inc_cell]
+      - call: [inc_cell]
+      - if: { condition: { neq: [cell.count, 2] }, then: [{ print: ["FAIL E cell=${cell.count}"] }, { return: 1 }] }
+
+      # ── F: nested closures — the inner list names the outer names explicitly ──
+      - decl: [base, i32, 1000]
+      - decl:
+          - make_inner
+          - closure<MakeAdder>
+          - closure:
+              capture: [base]
+              body:
+                - return:
+                    closure:
+                      capture: [base, step]        # outer capture + outer arg
+                      body:
+                        - return: { +: [base, { +: [step, x] }] }
+      - decl: [inner, closure<Adder>, { call: [make_inner, 20] }]
+      - decl: [f1, i32, { call: [inner, 3] }]
+      - if: { condition: { neq: [f1, 1023] }, then: [{ print: ["FAIL F f1=${f1}"] }, { return: 1 }] }
+
+      # ── G: nested scopes / shadowing read the intended value ─────────────────
+      - decl: [shadow, i32, 1]
+      - decl: [picked, i32, 0]
+      - while:
+          condition: { lt: [picked, 1] }
+          body:
+            - decl: [shadow_inner, i32, 2]
+            - decl:
+                - read_inner
+                - closure<Next>
+                - closure:
+                    capture: [[shadow, i32, shadow_inner]]   # field `shadow` := inner value
+                    body:
+                      - return: shadow
+            - set: [picked, { call: [read_inner] }]
+      - if: { condition: { neq: [picked, 2] }, then: [{ print: ["FAIL G picked=${picked}"] }, { return: 1 }] }
+      - if: { condition: { neq: [shadow, 1] }, then: [{ print: ["FAIL G shadow=${shadow}"] }, { return: 1 }] }
+
+      - print: ["PASS 04 instances_state"]
+      - return: 0

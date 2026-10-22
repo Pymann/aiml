@@ -1,0 +1,135 @@
+# SPEC: 61_memory_management_DRAFT,64_closures
+# static-check: off
+# Requires: driver
+# TIER: T2
+# CONSTRUCT: the four closure capture modes (spec/64 §4.1, §4.2) are exactly spec/61 vocabulary.
+# COVERS: mode value (default) = §8 value-parameter rule -> scalar copied, container SHARED
+#         (aliases!), string incref'd, value model member-wise with its container field shared;
+#         mode copy = §5.1 shallow; mode clone = §5.1 deep; mode move = §61 move (required for
+#         ptr<T>); the decl-shaped capture forms [n, T, init] and [n, T, init, {mode}].
+# EXPECT: exit 0 — and every captured field released exactly once at scope exit.
+
+- model: { name: Tag,  fields: [[label, string], [hits, list<i32>]] }
+- model: { name: Node, fields: [[ident, i32, 0]] }
+
+- callable: { name: GetI32, return: i32 }
+- callable: { name: GetStr, return: string }
+
+- def:
+    name: main
+    return: i32
+    body:
+
+      # ── A: value capture of a scalar is an independent copy ────────────────────
+      - decl: [n, i32, 1]
+      - decl:
+          - read_n
+          - closure<GetI32>
+          - closure:
+              capture: [n]                         # mode value (default)
+              body:
+                - return: n
+      - set: [n, 99]                               # the enclosing variable moves on…
+      - decl: [a1, i32, { call: [read_n] }]
+      - if: { condition: { neq: [a1, 1] }, then: [{ print: ["FAIL A a1=${a1}"] }, { return: 1 }] }
+
+      # ── B: value capture of a container SHARES it (aliasing, §5 rule 1) ───────
+      - decl: [live, list<i32>]
+      - call: [live.push, 1]
+      - decl:
+          - live_len
+          - closure<GetI32>
+          - closure:
+              capture: [live]                      # incref -> alias
+              body:
+                - return: live.len
+      - call: [live.push, 2]                       # mutation outside IS visible inside
+      - decl: [b1, i32, { call: [live_len] }]
+      - if: { condition: { neq: [b1, 2] }, then: [{ print: ["FAIL B alias b1=${b1}"] }, { return: 1 }] }
+
+      # ── C: mode copy = shallow — independent spine ────────────────────────────
+      - decl:
+          - snap_len
+          - closure<GetI32>
+          - closure:
+              capture: [[live, { mode: copy }]]
+              body:
+                - return: live.len
+      - call: [live.push, 3]                       # does NOT reach the copied spine
+      - decl: [c1, i32, { call: [snap_len] }]
+      - if: { condition: { neq: [c1, 2] }, then: [{ print: ["FAIL C copy c1=${c1}"] }, { return: 1 }] }
+
+      # ── D: mode clone = deep — fully independent ─────────────────────────────
+      - decl: [nested, list<list<i32>>]
+      - decl: [inner, list<i32>]
+      - call: [inner.push, 7]
+      - call: [nested.push, inner]
+      - decl:
+          - deep_first_len
+          - closure<GetI32>
+          - closure:
+              capture: [[nested, { mode: clone }]]
+              body:
+                - decl: [row, list<i32>, { at: [nested, 0] }]
+                - return: row.len
+      - call: [inner.push, 8]                      # reaches neither the spine nor the inner row
+      - decl: [d1, i32, { call: [deep_first_len] }]
+      - if: { condition: { neq: [d1, 1] }, then: [{ print: ["FAIL D clone d1=${d1}"] }, { return: 1 }] }
+
+      # ── E: mode move — the only legal way to capture a ptr<T> (§4.2) ──────────
+      - decl: [box, ptr<Node>, { new: Node }]
+      - set: [box.ident, 42]
+      - decl:
+          - read_box
+          - closure<GetI32>
+          - closure:
+              capture: [[box, { mode: move }]]     # ownership moves INTO the environment
+              body:
+                - return: box.ident
+      # `box` is moved-out here — using it now is a use-after-move error (see neg/n16)
+      - decl: [e1, i32, { call: [read_box] }]
+      - if: { condition: { neq: [e1, 42] }, then: [{ print: ["FAIL E move e1=${e1}"] }, { return: 1 }] }
+
+      # ── F: decl-shaped capture [name, type, init] — a field with no outer twin ─
+      - decl:
+          - greet
+          - closure<GetStr>
+          - closure:
+              capture: [[prefix, string, "hi "]]
+              body:
+                - return: "${prefix}there"
+      - decl: [f1, string, { call: [greet] }]
+      - if: { condition: { neq: [f1, "hi there"] }, then: [{ print: ["FAIL F f1=${f1}"] }, { return: 1 }] }
+
+      # ── G: decl-shaped capture with an explicit mode (4-element form) ─────────
+      - decl:
+          - owned_len
+          - closure<GetI32>
+          - closure:
+              capture: [[own, list<i32>, live, { mode: clone }]]   # init = live, deep-copied
+              body:
+                - return: own.len
+      - call: [live.push, 4]                       # live is 4 long now, the clone stayed at 3
+      - decl: [g1, i32, { call: [owned_len] }]
+      - if: { condition: { neq: [g1, 3] }, then: [{ print: ["FAIL G g1=${g1}"] }, { return: 1 }] }
+
+      # ── H: string + value-model capture (incref / member-wise, §8) ───────────
+      - decl: [who, string, "ada"]
+      - decl: [tag, Tag]
+      - set: [tag.label, "t1"]
+      - call: [tag.hits.push, 5]
+      - decl:
+          - describe
+          - closure<GetStr>
+          - closure:
+              capture: [who, tag]                  # string incref'd; model member-wise,
+              body:                                #   its `hits` container SHARED (§7/§8)
+                - return: "${who}/${tag.label}/${tag.hits.len}"
+      - call: [tag.hits.push, 6]                   # shared container field -> visible inside
+      - decl: [h1, string, { call: [describe] }]
+      - if: { condition: { neq: [h1, "ada/t1/2"] }, then: [{ print: ["FAIL H h1=${h1}"] }, { return: 1 }] }
+
+      # scope exit: every environment released once — the captured ptr box freed with
+      # read_box, shared containers decref'd, clones free their own buffers, strings decref
+      - print: ["PASS 03 capture_modes"]
+      - return: 0

@@ -39,7 +39,8 @@ precedence level (for mental model and documentation purposes).
 ```
 - Operands: `i32 | i64 | f32 | f64`
 - Result: same type as operands
-- Both operands must have the same type. Use `cast` for mixed types.
+- Both operands must have the same type. Use `cast` for mixed types — mixing two *typed* values
+  is a compile error, while a literal adopts the other operand's type (§7a).
 
 ### `-` — Subtraction
 ```yaml
@@ -108,7 +109,12 @@ All comparison operators return `bool`.
 
 - Operands: `i32 | i64 | f32 | f64 | string | bool`
 - String comparison: lexicographic (UTF-8 byte order)
-- Cross-type comparison (e.g. `i32` vs `f64`): **compilation error** — use `cast` explicitly
+- Cross-type comparison (e.g. `i32` vs `f64`, or `f32` vs `f64`): **compilation error** — use
+  `cast` explicitly. The error names both types; it is never silently converted.
+- **A numeric literal is not a type.** `{ neq: [d, 1280.0] }` with `d: f64` is well-formed: the
+  literal is materialized as `f64`, because a written-out constant has no type of its own until
+  it is used. Nothing is converted at run time, so this is literal typing, not an implicit cast
+  (see §7a).
 
 ---
 
@@ -131,6 +137,23 @@ All comparison operators return `bool`.
 - Result: `bool`
 - Accepts 2 or more arguments
 - **Short-circuit evaluation**: if first operand is `true`, remaining operands are not evaluated
+
+> **Umgesetzt erst 2026-10-15 — vorher war diese Regel nur Text.**  `and`/`&&` und
+> `or`/`||` erzeugten `CreateAnd` / `CreateOr` auf **beiden bereits ausgewerteten**
+> Operanden; eine Kurzauswertung gab es nicht.  Damit war das häufigste Schutzmuster der
+> Sprache wirkungslos:
+>
+> ```yaml
+> - if:
+>     condition: { '&&': [{ pneq: [<.live, null] }, { gt: [{ call: [<.live.has] }, 0] }] }
+> ```
+>
+> Die Wache bestand, der zweite Operand lief trotzdem — gemessen im cosmos-Client als
+> `SIGSEGV at addr=0x8`.  Jeder Null-Test vor einem Zugriff, jede Bereichsprüfung vor einem
+> Index war auf dieselbe Weise blind.  Seither emittiert `visitBinary` echten Kontrollfluss
+> (bedingter Sprung + `phi`), **bevor** die Operanden ausgewertet werden.  `equiv` und `xor`
+> brauchen beide Seiten und bleiben bitweise.  Regressionstest:
+> `tests/test_and_short_circuit_guard.aiml`.
 
 ### `not` — Logical NOT
 ```yaml
@@ -195,22 +218,66 @@ All bitwise operators work on integer types only (`i32`, `i64`, `u32`, `u64`).
 - set: [f, { cast: [n, f64] }]        # i32 -> f64
 ```
 
-Supported conversions:
+`cast` converts between **all** numeric scalar types — `bool`, `i32`, `i64`, `f32`, `f64` — in
+every direction. The table below is complete: every source/target pair is defined, including the
+identity cast (which is a no-op). An earlier version listed only the pairs around `i32`/`f64`,
+which made ordinary conversions such as `i32` → `f32` a compile error.
+
+| From → To | `bool` | `i32` / `i64` | `f32` / `f64` |
+|---|---|---|---|
+| `bool` | identity | zero-extend: `false`→0, `true`→1 | `false`→`0.0`, `true`→`1.0` |
+| `i32` / `i64` | `0`→`false`, else `true` | sign-extend / truncate | signed integer → float (see rounding) |
+| `f32` / `f64` | `0.0`→`false`, else `true` (NaN → `false`) | truncate toward zero (see range) | extend / round to nearest |
+
+**Rounding.** `i64` → `f32` and `i64` → `f64` round to nearest when the value exceeds the mantissa
+(2^24 and 2^53); `i32` → `f64` is always exact. `f64` → `f32` may lose precision; `f32` → `f64` is
+always exact.
+
+**Range (float → integer).** The value is truncated toward zero. Two inputs have no integer
+image and are therefore **defined** rather than left to the hardware: `NaN` yields `0`, and a
+value outside the target's range is **clamped** to that range (`i32`: −2147483648 … 2147483647).
+Without this, an out-of-range conversion is undefined at IR level and a build could legitimately
+produce any value at all.
+
+**NaN as a truth value** is `false`, the same answer `if` gives for it — `cast` to `bool` and a
+condition must not disagree about the same value.
 
 | From | To | Behavior |
 |------|----|---------|
-| `i32` | `i64` | Zero/sign-extends |
-| `i64` | `i32` | Truncates high bits |
-| `i32` | `f64` | Exact for values ≤ 2^53 |
-| `f64` | `i32` | Truncates toward zero; NaN → 0 |
-| `f32` | `f64` | Widening, always exact |
-| `f64` | `f32` | Narrowing, may lose precision |
-| `bool` | `i32` | `false` → 0, `true` → 1 |
-| `i32` | `bool` | 0 → `false`, non-zero → `true` |
 | `ptr<T>` | `any` | Implicit (no explicit cast needed) |
 | `any` | `ptr<T>` | Implicit (no runtime check in v1) |
 
 Unsupported conversions (compile error): `string` → `i32`, `i32` → `string` (use `sys.to_string` / `sys.parse_int`)
+
+---
+
+## 7a. Literal typing vs. implicit conversion
+
+These two look alike and are not:
+
+```yaml
+- decl: [ratio, f64, 0.5]
+- decl: [other, f32, 0.25]
+
+- if: { condition: { gt: [ratio, 0.4] },         then: [...] }   # ok — literal becomes f64
+- if: { condition: { gt: [ratio, other] },       then: [...] }   # ERROR — f64 vs f32
+- if: { condition: { gt: [ratio, { cast: [other, f64] }] }, then: [...] }   # ok — asked for
+```
+
+A **literal** has no type until its context gives it one, so materializing `0.4` as `f64`
+converts nothing; the constant is simply built in that type. A **value** already has a type, and
+changing it loses information (`f64` → `f32` loses precision, `f32` → `i32` loses the fraction) —
+that has to be written down.
+
+The rule applies to both comparison (§3) and arithmetic (§2), which share one operand-reconciling
+step in the compiler. Before this was specified, a mixed pair fell through that step unchanged and
+reached LLVM as an instruction with two different operand types: the module then failed
+verification (`Both operands to FCmp instruction are not of the same type!`) instead of producing
+the error promised here — a diagnostic that pointed at the compiler rather than at the source
+line.
+
+Integer width mixing (`i32` vs `i64`) is still reconciled silently by sign-extension; it is part
+of the implicit-conversion set listed in `/spec/13_cast.md` §6 and kept for now.
 
 ---
 

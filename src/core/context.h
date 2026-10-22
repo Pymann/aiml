@@ -63,6 +63,15 @@ namespace AIML {
         // must be deep-copied so the caller does not double-free the aliased buffer with the
         // container's own drop (9rooms load_entry_at / creature-cost helpers → drive_ai_combat).
         bool is_view_alias = false;
+        // spec/61 §7: ein Wertmodell-Lokal, das aus einem ANDEREN LOKAL kopiert wurde
+        // (`decl: [kopie, Model, original]`).  Die Kopie ist member-weise: Skalare sind
+        // unabhaengig, String-/Container-Felder sind INCREF'd geteilt.  Ohne das incref
+        // teilen beide einen Puffer mit rc=1, und der naechste Member-Store der Kopie gibt
+        // den String des ORIGINALS frei (gefunden am Cache-Schluessel in cosmos,
+        // doc/spec/92 Befund 5; Probe tests/test_value_model_copy_share.aiml).  Getrennt
+        // von is_view_alias, weil dieses zusaetzlich das Escape-Verhalten (Deep-Copy bei
+        // return/store) steuert — eine Kopie braucht das nicht, sie ist schon eigenstaendig.
+        bool is_copy_retain = false;
         llvm::AllocaInst* excRecordSlot = nullptr;
         bool paramOwnsRef = false;   // spec/61 §8: a value-model/shared param retained its own refs (moves like a local)   // catch var: its caught exception record slot (spec/61 §9.3)
         AccessLevel access = AccessLevel::Public; // Default for vars
@@ -143,6 +152,7 @@ namespace AIML {
             int index;
             llvm::Type* type;
             std::string typeName;
+            std::string alias;   // spec/15: externer Name, leer = Feldname
             AccessLevel access = AccessLevel::Public; // Default Public
             bool is_const = false;
             bool is_volatile = false;
@@ -284,7 +294,7 @@ namespace AIML {
         llvm::Type* i32 = llvm::Type::getInt32Ty(context);
         llvm::Type* p = llvm::PointerType::get(context, 0);
         llvm::StructType* jsTy = llvm::StructType::getTypeByName(context, "JsonStyle");
-        if (!jsTy) jsTy = llvm::StructType::create(context, {i32, p, p}, "JsonStyle");
+        if (!jsTy) jsTy = llvm::StructType::create(context, {i32, p, p, i32, i32}, "JsonStyle");
         ClassInfo jsInfo;
         jsInfo.name = "JsonStyle";
         jsInfo.type = jsTy;
@@ -295,6 +305,10 @@ namespace AIML {
         jsInfo.members["pretty"] = prettyMember;
         jsInfo.members["indent"] = indentMember;
         jsInfo.members["newline"] = newlineMember;
+        StructMember bareMember; bareMember.index = 3; bareMember.type = i32; bareMember.typeName = "i32";
+        jsInfo.members["bare"] = bareMember;   // spec/29 §5.2a: Ausgabe ohne __type
+        StructMember leanMember; leanMember.index = 4; leanMember.type = i32; leanMember.typeName = "i32";
+        jsInfo.members["skip_empty"] = leanMember;   // spec/29 §5.2c: Leeres weglassen
         classes["JsonStyle"] = std::move(jsInfo);
         // spec/33_2 archive entries: registered here (like JsonStyle) so registerTypes builds their
         // release descriptor — a list<ptr<zip_entry>> frees each box and decrefs its name string.
@@ -653,6 +667,17 @@ namespace AIML {
     /// build can warn on declared-but-never-instantiated prefabs (Tier 3
     /// dead-prefab).  See spec/44_8_prefab_static.md.
     std::set<std::string> prefabUses;
+
+    /// spec/66 §5.6 — services declared in THIS module (name -> decl location) and
+    /// the ones something in this module uses (endpoint body, `__describe`, facade
+    /// instance).  Merged up the sub-compiler hierarchy exactly like the prefab
+    /// sets, so the top-level build can refuse a service nothing touches.
+    std::map<std::string, std::string> serviceDecls;
+    std::set<std::string> serviceUses;
+    /// Laeuft gerade ein von der Service-Synthese erzeugter Rumpf?  Ein Aufruf aus
+    /// ihm heraus zaehlt nicht als Benutzung — sonst haelt der generierte Dispatch
+    /// seinen eigenen Service am Leben und §5.6 findet nie etwas.
+    bool inServiceSynthFn = false;
 
     /// Prefab-report mode (`--prefab-report`): when set, checkPrefabUsage also
     /// emits tab-separated fact records into `prefabReportLines` (declarations,
@@ -1428,7 +1453,7 @@ namespace AIML {
 
         if (typeName == "JsonStyle") {
             llvm::StructType* t = llvm::StructType::getTypeByName(context, "JsonStyle");
-            if (!t) t = llvm::StructType::create(context, {llvm::Type::getInt32Ty(context), llvm::PointerType::get(context, 0), llvm::PointerType::get(context, 0)}, "JsonStyle");
+            if (!t) t = llvm::StructType::create(context, {llvm::Type::getInt32Ty(context), llvm::PointerType::get(context, 0), llvm::PointerType::get(context, 0), llvm::Type::getInt32Ty(context), llvm::Type::getInt32Ty(context)}, "JsonStyle");
             return t;
         }
 

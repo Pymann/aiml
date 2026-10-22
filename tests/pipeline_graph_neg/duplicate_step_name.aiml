@@ -1,0 +1,13 @@
+# SPEC?: 62_pipelines   # aus dem Dateinamen, zu bestaetigen
+# Requires: driver
+# F62-9: Schrittnamen sind in der Pipeline EINDEUTIG — sonst ist nicht
+# entscheidbar, welchen Schritt ein `needs` meint.
+- pipeline:
+    name: dup_names
+    params: { arch: [x86_64] }
+    stages:
+      - stage:
+          name: one
+          steps:
+            - step: { name: twice, return: i32, body: [{ return: 0 }] }
+            - step: { name: twice, return: i32, body: [{ return: 0 }] }

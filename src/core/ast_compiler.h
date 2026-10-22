@@ -20,6 +20,8 @@ public:
     // in header-only mode).  Method BODIES are emitted only in the defining unit.
     void synthesizeImportedGroups(Program* prog);
     void synthesizeRpcMethods(Program* prog);       // spec/44_5 §7.1: rpc: wrappers/thunks/args (before registerTypes)
+    void synthesizeServices(Program* prog);
+    void synthesizeServiceBodies(Program* prog);    // spec/66 §4.3: nach registerTypes         // spec/66 §3: lift endpoints + facade (before registerTypes)
     void registerTypeDecl(Node* node);
     void visitFunction(FunctionDecl* func);
     void visitTopLevel(Node* node);
@@ -67,6 +69,7 @@ private:
     void synthesizeCascadeClasses(Program* prog);   // M3: emit each pool's render class
     void mergeGroupMethods(Program* prog);          // spec/58: fold external `groupmethods:` into groups
     void checkClassGroups(Program* prog);           // spec/58: validate group wiring
+    void checkServices(Program* prog);              // spec/66 §5: validate service declarations
     void synthesizeClassGroups(Program* prog);      // spec/58: emit subclasses + container
     void visitExternBlock(ExternBlock* ext);
     

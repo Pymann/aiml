@@ -370,7 +370,8 @@ int maxStmtSourceLine(const AIML::AST::Stmt* stmt) {
         maxLine = std::max(maxLine, maxBlockSourceLine(whileStmt->body.get()));
     } else if (auto tryStmt = dynamic_cast<const AIML::AST::TryStmt*>(stmt)) {
         maxLine = std::max(maxLine, maxBlockSourceLine(tryStmt->tryBlock.get()));
-        maxLine = std::max(maxLine, maxBlockSourceLine(tryStmt->catchBlock.get()));
+        for (auto* cb : tryStmt->catchBodies())
+            maxLine = std::max(maxLine, maxBlockSourceLine(cb));
     }
     return maxLine;
 }
@@ -965,7 +966,9 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
                 if (subProg) {
                     AIML::AST::Compiler subCompiler(ctx);
                     subCompiler.synthesizeRpcMethods(subProg.get());
+                    subCompiler.synthesizeServices(subProg.get());   // spec/66 §3
                     subCompiler.registerTypes(subProg.get());
+                    subCompiler.synthesizeServiceBodies(subProg.get());   // spec/66 §4.3
                     // spec/58 §11: synthesize any classgroup DEFINED in this
                     // imported file so its container + subclass TYPES are visible
                     // here.  This appends the synthesized ClassDecls to
@@ -1121,7 +1124,9 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
             // A unit sees exactly its own transitive import closure (spec/21 §2.1):
             // imported types/signatures arrive through its own import directives.
             astCompiler.synthesizeRpcMethods(programAST.get());
+            astCompiler.synthesizeServices(programAST.get());        // spec/66 §3
             astCompiler.registerTypes(programAST.get());
+            astCompiler.synthesizeServiceBodies(programAST.get());   // spec/66 §4.3
 
             for (const auto& decl : programAST->declarations) {
                 if (auto func = dynamic_cast<AIML::AST::FunctionDecl*>(decl.get())) {
@@ -1203,6 +1208,8 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
             // the top level these unions are whole-build complete.
             for (const auto& kv : ctx.prefabDecls) allPrefabDecls.insert(kv.first);
             allPrefabUses.insert(ctx.prefabUses.begin(), ctx.prefabUses.end());
+            for (const auto& kv : ctx.serviceDecls) allServiceDecls.emplace(kv.first, kv.second);
+            allServiceUses.insert(ctx.serviceUses.begin(), ctx.serviceUses.end());
 
             // Unused-enumerator (spec/49): fold THIS module's declared/used enum
             // members + decl locations into the whole-build sets, per enum.
@@ -1230,6 +1237,16 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
             // both give a complete picture.  A warm-cache multi-file JIT run can
             // skip imports, so we stay silent there to avoid false "dead" noise.
             if (!libraryMode && !reportPrefabsMode && (noCache || importedSourceFiles.empty())) {
+                // spec/66 §5.6 — ein Service, den nichts im Build anfasst, ist toter
+                // Code: die Endpunkte waeren nie erreichbar.  FEHLER, nicht Warnung.
+                for (const auto& sv : allServiceDecls) {
+                    if (!allServiceUses.count(sv.first))
+                        LOG_ERROR(sv.second + "service '" + sv.first + "' is declared but "
+                            "nothing in this build uses it — no endpoint call, no '" + sv.first +
+                            "__describe', no instance. Serve it or remove the declaration "
+                            "(spec/66 §5.6).");
+                }
+
                 for (const auto& pname : allPrefabDecls) {
                     if (!allPrefabUses.count(pname)) {
                         LOG_WARNING("prefab '" + pname + "' is declared but never "
@@ -1332,7 +1349,9 @@ void AIMLCompiler::compileFromString(const std::string& yaml_source) {
 
             AIML::AST::Compiler astCompiler(ctx);
             astCompiler.synthesizeRpcMethods(programAST.get());
+            astCompiler.synthesizeServices(programAST.get());        // spec/66 §3
             astCompiler.registerTypes(programAST.get());
+            astCompiler.synthesizeServiceBodies(programAST.get());   // spec/66 §4.3
             astCompiler.compile(programAST.get());
             // spec/65 F65-9 (opt-in, F65-17): Privilegienfluss ueber die Aufrufkanten.
             // Laeuft je uebersetzter Datei; datei-UEBERGREIFENDE Kanten deckt das noch
@@ -1622,6 +1641,7 @@ void AIMLCompiler::generateEntryPoint() {
                 case AIML::AssetKind::Shader:  return 2;
                 case AIML::AssetKind::Font:    return 3;
                 case AIML::AssetKind::Data:    return 4;
+                case AIML::AssetKind::Mesh:    return 5;
                 default: return -1;
             }
         };
@@ -2138,6 +2158,7 @@ int AIMLCompiler::jitRun() {
     llvm::sys::DynamicLibrary::AddSymbol("aiml_asset_get_music",       (void*)(intptr_t)aiml_asset_get_music);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_asset_read_data",       (void*)(intptr_t)aiml_asset_read_data);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_asset_get_font",        (void*)(intptr_t)aiml_asset_get_font);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_asset_mesh_path",      (void*)(intptr_t)aiml_asset_mesh_path);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_asset_init_runtime",    (void*)(intptr_t)aiml_asset_init_runtime);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_asset_runtime_register",(void*)(intptr_t)aiml_asset_runtime_register);
     // Iterator
@@ -3461,6 +3482,8 @@ void AIMLCompiler::resolveImport(const std::string& path) {
     // Propagate transitive prefab decl/use sets for Tier-3 dead-prefab analysis.
     allPrefabDecls.insert(subCompiler.allPrefabDecls.begin(), subCompiler.allPrefabDecls.end());
     allPrefabUses.insert(subCompiler.allPrefabUses.begin(),  subCompiler.allPrefabUses.end());
+    allServiceDecls.insert(subCompiler.allServiceDecls.begin(), subCompiler.allServiceDecls.end());
+    allServiceUses.insert(subCompiler.allServiceUses.begin(),   subCompiler.allServiceUses.end());
 
     // Propagate transitive enum decl/use sets for unused-enumerator analysis.
     for (const auto& kv : subCompiler.allEnumDeclMembers)

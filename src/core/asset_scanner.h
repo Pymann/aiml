@@ -19,6 +19,7 @@ enum class AssetKind {
     Shader,
     Font,
     Data,
+    Mesh,      // spec/44_7: .glb/.gltf — `gltf.model(stem)`
     Unknown
 };
 

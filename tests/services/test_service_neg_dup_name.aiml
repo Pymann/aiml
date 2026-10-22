@@ -1,0 +1,12 @@
+# SPEC: 66_services §5.1 — two endpoints of one service may not share a name.
+# Expected exit code: 1
+- import: "tests/services/_models.aiml"
+- service:
+    name: DupApi
+    base: "/v1"
+    transport: [rpc]
+    auth: none
+    endpoints:
+      - def: { name: resolve, http: [post, "/a"], roles: [], args: [[req, ResolveReq]], return: ResolveResp, body: [{ decl: [out, ResolveResp] }, { return: out }] }
+      - def: { name: resolve, http: [post, "/b"], roles: [], args: [[req, ResolveReq]], return: ResolveResp, body: [{ decl: [out, ResolveResp] }, { return: out }] }
+- def: { name: main, return: i32, body: [{ decl: [api, ptr<DupApi>, { new: DupApi }] }, { free: api }, { return: 0 }] }

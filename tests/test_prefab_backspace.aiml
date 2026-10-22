@@ -1,0 +1,138 @@
+# SPEC: 44_6_prefabs
+# spec/44_6 §5g: ein `text_input` nimmt Tastendruecke des FOKUSSIERTEN Feldes —
+# einer je Druck.  Gemeldet am Konsolen-Quelltextfeld von cosmos: „die ruecktaste
+# loeschte immer 2 zeichen" (2026-10-18).
+#
+# Geprueft wird die ZAHL: ein Backspace, ein Zeichen weniger.  Ohne diesen Test
+# ist ein doppelt eingereihtes Ereignis unsichtbar — das Feld sieht bei jedem
+# Einzeldruck „irgendwie falsch" aus, aber nichts ist messbar.
+#
+# Requires: display
+# Expected exit code: 0
+
+- prefab:
+    name: BackspaceScene
+    width: 520
+    height: 300
+    children:
+      # Wie cosmos' src_box: mehrzeilig mit Zeilennummern.
+      - { name: code_input, type: text_input, gutter: true,
+          x: 20, y: 20, width: 480, height: 200,
+          bg_color: 0x0D1218FF, border_color: 0x2D3642FF, border_width: 1.0,
+          color: 0xDDE6F0FF }
+
+# Ein Rahmen so, wie der Wirt ihn fahrt: Maus-Pipeline, dann zeichnen.
+- def:
+    name: one_frame
+    args: [[win, window_handle], [pos_x, f32], [pos_y, f32]]
+    body:
+      - call: [engine.update_hover, pos_x, pos_y]
+      - call: [engine.draw_scene]
+      - call: [engine.swap, win]
+
+- def:
+    name: main
+    static_off: ["str_cmp"]
+    return: i32
+    body:
+      - decl: [win, window_handle, { call: [engine.create_window, 520, 300, "backspace"] }]
+      - if: { condition: { eq: [win, null] }, then: [{ print: ["FAIL create_window"] }, { return: 1 }] }
+      - call: [gl.init]
+      - call: [ui.init]
+      - call: [engine.prefab_scene_init, 520, 300]
+      - call: [input.init, win]
+      - decl: [font, ui_font, { call: [ui.load_font_default, 12.0] }]
+      - if: { condition: { neq: [font, null] }, then: [{ call: [engine.prefab_set_font, font] }] }
+
+      - decl: [scene, prefab_instance, { call: [engine.instantiate, "BackspaceScene"] }]
+      - call: [scene.set_pos, 0.0, 0.0]
+      - call: [scene.set_text, "code_input", "abcdef"]
+
+      - decl: [box_x, f32, { call: [scene.child_rect_x, "code_input"] }]
+      - decl: [box_y, f32, { call: [scene.child_rect_y, "code_input"] }]
+      - decl: [box_w, f32, { call: [scene.child_rect_w, "code_input"] }]
+      - if: { condition: { lt: [box_w, 1.0] }, then: [{ print: ["FAIL Widget nicht gefunden"] }, { return: 1 }] }
+      - call: [one_frame, win, 0.0, 0.0]
+
+      # Hinter das letzte Zeichen klicken: ganz rechts in der ersten Zeile.
+      - decl: [aim_x, f32, { +: [box_x, { -: [box_w, 20.0] }] }]
+      - decl: [aim_y, f32, { +: [box_y, 8.0] }]
+      - call: [input.post_mouse_move, aim_x, aim_y]
+      - call: [one_frame, win, aim_x, aim_y]
+      - call: [input.post_mouse_down, 0]
+      - call: [one_frame, win, aim_x, aim_y]
+      - call: [input.post_mouse_up, 0]
+      - call: [one_frame, win, aim_x, aim_y]
+
+      # Ein Druck, ein Rahmen.
+      - call: [input.post_key_down, "backspace"]
+      - call: [one_frame, win, aim_x, aim_y]
+      - call: [input.post_key_up, "backspace"]
+      - call: [one_frame, win, aim_x, aim_y]
+      - decl: [after_one, string, { call: [scene.text_value, "code_input"] }]
+      - print: ["nach einem Backspace: '${after_one}' (${after_one.len} Zeichen)"]
+      - if:
+          condition: { neq: [after_one, "abcde"] }
+          then:
+            - print: ["FAIL ein Backspace loescht nicht genau EIN Zeichen: '${after_one}' statt 'abcde'"]
+            - call: [engine.destroy_window, win]
+            - return: 1
+
+      # Und noch einer — damit ein Fehler nicht nur am ersten Druck haengt.
+      - call: [input.post_key_down, "backspace"]
+      - call: [one_frame, win, aim_x, aim_y]
+      - call: [input.post_key_up, "backspace"]
+      - call: [one_frame, win, aim_x, aim_y]
+      - decl: [after_two, string, { call: [scene.text_value, "code_input"] }]
+      - print: ["nach zwei Backspace: '${after_two}' (${after_two.len} Zeichen)"]
+      - if:
+          condition: { neq: [after_two, "abcd"] }
+          then:
+            - print: ["FAIL zwei Backspace loeschen nicht genau ZWEI Zeichen: '${after_two}' statt 'abcd'"]
+            - call: [engine.destroy_window, win]
+            - return: 1
+
+      # Dasselbe fuer Entfernen: der Cursor steht am Ende, also darf NICHTS
+      # verschwinden — ein Delete am Textende ist ein Nicht-Ereignis.
+      - call: [input.post_key_down, "delete"]
+      - call: [one_frame, win, aim_x, aim_y]
+      - call: [input.post_key_up, "delete"]
+      - call: [one_frame, win, aim_x, aim_y]
+      - decl: [after_del, string, { call: [scene.text_value, "code_input"] }]
+      - if:
+          condition: { neq: [after_del, "abcd"] }
+          then:
+            - print: ["FAIL Delete am Textende aendert etwas: '${after_del}'"]
+            - call: [engine.destroy_window, win]
+            - return: 1
+
+      # ── Eingabetaste im MEHRZEILIGEN Feld (spec/44_6 §5g) ───────────────
+      # Ein Code-Feld, in dem man keine Zeile anfangen kann, ist kein Editor.
+      # Vor dem Fix (2026-10-18) tat Enter hier GAR NICHTS.
+      - call: [input.post_key_down, "enter"]
+      - call: [one_frame, win, aim_x, aim_y]
+      - call: [input.post_key_up, "enter"]
+      - call: [one_frame, win, aim_x, aim_y]
+      - decl: [after_ret, string, { call: [scene.text_value, "code_input"] }]
+      - print: ["nach Enter: '${after_ret}' (${after_ret.len} Zeichen)"]
+      - if:
+          condition: { neq: [after_ret, "abcd\n"] }
+          then:
+            - print: ["FAIL Enter macht im mehrzeiligen Feld keine neue Zeile: '${after_ret}'"]
+            - call: [engine.destroy_window, win]
+            - return: 1
+      # Und genau EINE: ein zweiter Umbruch je Druck waere dieselbe Dopplung
+      # wie bei der Ruecktaste.
+      - call: [input.post_text, "x"]
+      - call: [one_frame, win, aim_x, aim_y]
+      - decl: [after_x, string, { call: [scene.text_value, "code_input"] }]
+      - if:
+          condition: { neq: [after_x, "abcd\nx"] }
+          then:
+            - print: ["FAIL nach Enter landet das Zeichen nicht in der neuen Zeile: '${after_x}'"]
+            - call: [engine.destroy_window, win]
+            - return: 1
+
+      - print: ["test_prefab_backspace PASS"]
+      - call: [engine.destroy_window, win]
+      - return: 0

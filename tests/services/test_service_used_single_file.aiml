@@ -1,0 +1,44 @@
+# SPEC: 66_services §5.6 (Gegenprobe) — derselbe Build-Gate wie im Negativtest, aber
+# der Service WIRD benutzt: der Endpunkt-Rumpf und die Reflexionstabelle.  Hier darf
+# §5.6 nicht anschlagen.
+# Expected exit code: 0
+- model:
+    name: PingReq
+    fields:
+      - [who, string, ""]
+
+- model:
+    name: PingResp
+    fields:
+      - [echo, string, ""]
+
+- service:
+    name: PingApi
+    base: "/v1"
+    transport: [rpc]
+    auth: none
+    endpoints:
+      - def:
+          name: ping
+          http: [get, "/ping"]
+          roles: []
+          args: [[req, PingReq]]
+          return: PingResp
+          body:
+            - decl: [out, PingResp]
+            - set: [out.echo, req.who]
+            - return: out
+
+- def:
+    name: main
+    static_off: ["str_cmp"]
+    return: i32
+    body:
+      - decl: [req, PingReq]
+      - set: [req.who, "lio"]
+      - decl: [res, PingResp, { call: [PingApi_ping, req] }]
+      - if: { condition: { neq: [res.echo, "lio"] }, then: [{ print: ["FAIL echo=${res.echo}"] }, { return: 1 }] }
+      - decl: [rows, list<ServiceEndpoint>, { call: [PingApi__describe] }]
+      - if: { condition: { neq: [rows.len, 1] }, then: [{ print: ["FAIL rows=${rows.len}"] }, { return: 2 }] }
+      - print: ["test_service_used_single_file PASS"]
+      - return: 0

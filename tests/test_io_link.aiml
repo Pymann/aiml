@@ -1,0 +1,50 @@
+# SPEC: 42_path_type
+# spec/42: io.link(src, dst) — harter Link, zwei Namen auf denselben Inhalt.
+# Grundlage für inhaltsadressierte Ablagen (cosmos doc/spec/92): aufnehmen und
+# materialisieren ohne zweiten Datenblock.
+# Expected exit code: 0
+- def:
+    name: main
+    static_off: ["str_cmp"]
+    return: i32
+    body:
+      - decl: [dir, string, "/tmp/aiml_io_link_test"]
+      - call: [io.remove_all, dir]
+      - call: [io.mkdir_all, dir]
+      - decl: [src, string, "${dir}/original.txt"]
+      - decl: [dst, string, "${dir}/zweiter_name.txt"]
+      - decl: [fhw, file_handle, { call: [io.open, src, "wb"] }]
+      - call: [io.write, fhw, "inhalt"]
+      - call: [io.close, fhw]
+
+      # verlinken: beide Namen zeigen auf denselben Inhalt
+      - decl: [rc_link, i32, { call: [io.link, src, dst] }]
+      - if: { condition: { neq: [rc_link, 0] }, then: [{ print: ["FAIL link rc=${rc_link}"] }, { return: 1 }] }
+      - if: { condition: { eq: [{ call: [io.is_file, dst] }, false] }, then: [{ print: ["FAIL Ziel fehlt"] }, { return: 1 }] }
+      - if: { condition: { neq: [{ call: [io.read_file, dst] }, "inhalt"] }, then: [{ print: ["FAIL Inhalt"] }, { return: 1 }] }
+      # gleiche Inhaltsadresse — es IST derselbe Inhalt, keine Kopie.
+      # Zwei Call-Ergebnisse NICHT direkt vergleichen: eq/neq auf zwei Zeigern
+      # ohne auflösbaren Typ fällt auf Zeiger-Identität zurück (Compiler warnt).
+      - decl: [hash_src, string, { call: [hash.sha256_file, src] }]
+      - decl: [hash_dst, string, { call: [hash.sha256_file, dst] }]
+      - if: { condition: { neq: [hash_dst, hash_src] }, then: [{ print: ["FAIL Hash ${hash_dst} != ${hash_src}"] }, { return: 1 }] }
+
+      # Quelle löschen: der Inhalt bleibt über den zweiten Namen erreichbar
+      - call: [io.remove, src]
+      - if: { condition: { eq: [{ call: [io.is_file, dst] }, false] }, then: [{ print: ["FAIL nach remove"] }, { return: 1 }] }
+      - if: { condition: { neq: [{ call: [io.read_file, dst] }, "inhalt"] }, then: [{ print: ["FAIL Inhalt nach remove"] }, { return: 1 }] }
+
+      # bestehendes Ziel → -1 (der Aufrufer entscheidet, ob das ein Fehler ist)
+      - decl: [again, string, "${dir}/noch_einer.txt"]
+      - decl: [rc_ok, i32, { call: [io.link, dst, again] }]
+      - if: { condition: { neq: [rc_ok, 0] }, then: [{ print: ["FAIL zweiter link"] }, { return: 1 }] }
+      - decl: [rc_exists, i32, { call: [io.link, dst, again] }]
+      - if: { condition: { eq: [rc_exists, 0] }, then: [{ print: ["FAIL vorhandenes Ziel haette -1 geben muessen"] }, { return: 1 }] }
+
+      # fehlende Quelle → -1, kein Crash
+      - decl: [rc_missing, i32, { call: [io.link, "${dir}/gibts_nicht", "${dir}/egal"] }]
+      - if: { condition: { eq: [rc_missing, 0] }, then: [{ print: ["FAIL fehlende Quelle"] }, { return: 1 }] }
+
+      - call: [io.remove_all, dir]
+      - print: ["PASS io_link"]
+      - return: 0

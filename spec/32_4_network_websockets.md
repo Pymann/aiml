@@ -71,7 +71,8 @@
 # Send binary (buffer)
 - decl: [buf, buffer]
 - call: [buf.alloc, 256]
-- call: [buf.write_string, "\x00\x01\x02"]
+- call: [buf.write, 1, u8]      # raw bytes: write_string stops at a 0x00 (spec/11)
+- call: [buf.write, 2, u8]
 - call: [ws.send_bytes, buf]
 
 # Receive binary
@@ -107,7 +108,7 @@ Ping frames from the peer are automatically answered with pong.
 | `ping`        | —               | `i32`    | Send ping frame |
 | `close`       | —               | `i32`    | Send close frame + close connection |
 | `is_open`     | —               | `bool`   | `false` after close frame or TCP error |
-| `set_timeout` | `ms: i32`       | —        | Recv/send timeout |
+| `set_timeout` | `ms: i32`       | `i32`    | Connection: recv/send timeout (`0` = blocking). Listener: handshake timeout (§5.1). `0` on success, `-1` on error |
 | `fd`          | —               | `i32`    | Raw TCP file descriptor |
 
 ---
@@ -205,7 +206,7 @@ Ping frames from the peer are automatically answered with pong.
 HTTPS server (chapter 32_2 §4) via the shared `aiml_tls_harden_server_ctx` helper —
 **minimum TLS 1.2**, SSLv2/SSLv3/TLS 1.0/TLS 1.1 and TLS-layer compression disabled, server
 cipher preference honoured. A missing or unreadable cert/key makes `ws.server_tls` fail
-(returns null) rather than starting a listener that cannot complete any handshake. The
+(returns null) rather than starting a listener that cannot complete any handshake. `cert` may hold the full chain (leaf first, then intermediates, e.g. Let's Encrypt `fullchain.pem`); the whole chain is sent to clients, so clients that do not cache intermediates can verify it. The
 `tests/test_ws.aiml` Phase C wss loopback exercises this hardened path.
 
 ### 3.4 `ws_server_handle` Methods
@@ -290,6 +291,26 @@ Binary frames are moved with these primitives (all binary-safe — no NUL trunca
 | `{ call: [buf.ws_recv_append, conn] }` | `i32` | Receive the next frame **appended** at `buf`'s write index (advances wIdx/size). Reassemble N chunk frames: `buf.alloc(cap)` once, then `buf.ws_recv_append(conn)` N times. Returns bytes / `0` close / `-1` err / `-2` overflow. |
 | `{ call: [ws.peer_ip, conn] }` | `string` | Dotted peer IP of an accepted connection (owned copy). For per-IP rate-limiting on a server's accept loop. |
 
+**Asynchronous accept.** A listener runs the TLS handshake (wss) and the HTTP upgrade of
+every incoming connection itself, non-blocking and concurrently. A client is handed out
+only once its handshake is complete, so a client that connects and then stalls or
+drip-feeds never delays other clients or the caller's loop (media accept loop, mirror
+WS/WSS hosts — spec/44_5):
+
+| Call | Return | Description |
+|------|--------|-------------|
+| `{ call: [ws.poll_listener, srv, ms] }` | `i32` | Advance pending handshakes for up to `ms` (`0` = no wait). `1` = a handshaken client is ready, `0` = none yet, `-1` = error. |
+| `{ call: [ws.accept, srv] }` | `ws_handle` | Next handshaken client; blocks until one is ready (never on one particular client). `null` on listener error. |
+| `{ call: [ws.set_timeout, srv, ms] }` | `i32` | On a listener: handshake timeout per connection (default **5000 ms**); a client not handshaken in time is closed. `0` on success. |
+
+- At most **64** handshakes are pending per listener; connections beyond that are closed
+  immediately.
+- Pending handshakes advance (and time out) only inside `ws.poll_listener` / `ws.accept`,
+  so a server should poll its listener regularly.
+- `ws.close(srv)` closes all pending handshakes.
+
+See `tests/test_ws_accept_stall.aiml`.
+
 `buf.ws_send` / `buf.ws_recv` are **buffer methods** (not `ws.*` namespace calls) because
 the buffer must be passed by its real address so `ws_recv` can write the length back — a
 `ws.func(conn, buf)` form would receive the buffer struct by value and could not mutate it.
@@ -340,6 +361,15 @@ WebSocket frames have the following wire format:
 - 0–125: directly in the 7-bit field
 - 126: next 2 bytes as big-endian `uint16`
 - 127: next 8 bytes as big-endian `uint64`
+
+**Hard frame-size ceiling (memory safety).** The frame reader rejects any frame whose declared
+payload length exceeds a hard ceiling (64 MiB) **before** allocating for it: the receive returns
+"no frame" and the caller (a `ws` server, or the Mirror transport) drops that connection. This is
+a non-negotiable floor independent of `set_max_frame_size` (which may lower, never raise it). It
+stops a single forged header — e.g. the 127 marker with a `2^64-1` length — from driving a
+`malloc` of the attacker-declared size (an unauthenticated remote crash; regression
+`tests/test_ws_oversized_frame.aiml`). An application layer that needs a tighter bound (Mirror
+caps RPC/object payloads at 8 MiB, spec/44_5 §10) still enforces its own limit on top.
 
 ### 6.1 Handshake (Client → Server)
 

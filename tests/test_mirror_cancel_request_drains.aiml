@@ -1,0 +1,138 @@
+# SPEC: 44_5_mirror
+# spec/44_5 §7.2 cancel_request: eine BEREITS EINGEREIHTE Antwort wird mit
+# entfernt und freigegeben — nicht nur die Anmeldung geloescht.
+#
+# Der Fehler, den dieser Test festnagelt: cancel_request loeschte nur die ID aus
+# `outstanding`.  Eine Antwort, die vorher schon angekommen und eingereiht war,
+# blieb fuer immer in der Queue liegen — und war ueber take_response nicht mehr
+# erreichbar, weil das zuerst die ID gegen `outstanding` prueft.  Da nie etwas
+# verworfen wird, um Platz zu machen, laufen solche Waisen gegen das
+# Per-Peer-Limit (4096 Events / 64 MiB) und trennen am Ende den eigenen Peer.
+# Ein Client, der nur take_response benutzt (9rooms), hat keinen poll_rpc-Drain,
+# der sie noch abholen koennte.
+#
+# Geprueft wird in dieser Reihenfolge:
+#   1. die Antwort ist eingereiht (has_rpc steigt), aber noch nicht abgeholt
+#   2. cancel_request senkt has_rpc wieder — die Waise ist weg
+#   3. take_response auf die abgebrochene ID meldet -1 (Request beendet)
+#   4. Gegenprobe: eine zweite, NICHT abgebrochene Antwort ist weiter abholbar
+#      (ohne 4. waere 2. auch mit "Queue komplett leeren" erfuellt)
+#
+# Expected exit code: 0
+
+- model:
+    name: CancelReq
+    fields: [[tag, string]]
+
+- model:
+    name: CancelResp
+    fields: [[value, i32], [tag, string]]
+
+- def:
+    name: cancel_server
+    static_off: ["str_cmp"]
+    body:
+      - decl: [sess, mirror_session, { call: [mirror.listen, "ws://127.0.0.1:19964"] }]
+      - decl: [served, i32, 0]
+      - decl: [tries, i32, 0]
+      - while:
+          condition: { '&&': [{ lt: [served, 2] }, { lt: [tries, 600] }] }
+          body:
+            - call: [sess.update]
+            - if:
+                condition: { gt: [{ call: [sess.has_rpc] }, 0] }
+                then:
+                  - decl: [rpc, rpc_event, { call: [sess.next_rpc] }]
+                  - decl: [req, CancelReq]
+                  - decl: [rc_d, i32, { call: [sess.decode_rpc, rpc, req] }]
+                  - decl: [resp, CancelResp]
+                  - set: [resp.tag, req.tag]
+                  - set: [resp.value, 7]
+                  - call: [sess.reply_rpc, rpc, "set_result", 0, resp]
+                  - set: [served, { +: [served, 1] }]
+            - call: [time.sleep_ms, 5]
+            - set: [tries, { +: [tries, 1] }]
+      # letzte Pakete rauslassen, bevor geschlossen wird
+      - decl: [drain, i32, 0]
+      - while:
+          condition: { lt: [drain, 20] }
+          body:
+            - call: [sess.update]
+            - call: [time.sleep_ms, 5]
+            - set: [drain, { +: [drain, 1] }]
+      - call: [sess.close]
+
+- def:
+    name: cancel_fail
+    args: [[msg, string]]
+    body:
+      - call: [log.error, "FAIL ${msg}"]
+      - call: [sys.exit, 1]
+
+- def:
+    name: main
+    body:
+      - decl: [host_th, thread_handle, { spawn: [cancel_server] }]
+      - call: [time.sleep_ms, 150]
+      - decl: [client, mirror_session, { call: [mirror.connect_timeout, "ws://127.0.0.1:19964", 3000] }]
+      - call: [time.sleep_ms, 50]
+      - call: [client.update]
+
+      # ── 1. Anfrage stellen und die Antwort EINREIHEN lassen ─────────────
+      # Bewusst NICHT take_response rufen — die Antwort soll in der Queue liegen,
+      # genau wie bei einem Screen, der inzwischen geschlossen wurde.
+      - decl: [req_one, CancelReq]
+      - set: [req_one.tag, "abandoned"]
+      - decl: [id_one, i64, { call: [client.send_request, 0, "num", 0, req_one] }]
+      - if: { condition: { le: [id_one, 0] }, then: [{ call: [cancel_fail, "send_request lieferte keine ID (${id_one})"] }] }
+
+      - decl: [queued, i32, 0]
+      - decl: [wait_q, i32, 0]
+      - while:
+          condition: { '&&': [{ eq: [queued, 0] }, { lt: [wait_q, 400] }] }
+          body:
+            - call: [client.update]
+            - if: { condition: { gt: [{ call: [client.has_rpc] }, 0] }, then: [{ set: [queued, 1] }] }
+            - call: [time.sleep_ms, 5]
+            - set: [wait_q, { +: [wait_q, 1] }]
+      - if: { condition: { neq: [queued, 1] }, then: [{ call: [cancel_fail, "Antwort wurde nie eingereiht"] }] }
+
+      - decl: [n_before, i32, { call: [client.has_rpc] }]
+      - if: { condition: { lt: [n_before, 1] }, then: [{ call: [cancel_fail, "has_rpc=${n_before} vor dem Abbruch"] }] }
+
+      # ── 2. Abbruch muss die Waise mitnehmen ────────────────────────────
+      - call: [client.cancel_request, id_one]
+      - decl: [n_after, i32, { call: [client.has_rpc] }]
+      - if:
+          condition: { neq: [n_after, { -: [n_before, 1] }] }
+          then: [{ call: [cancel_fail, "cancel_request liess die eingereihte Antwort liegen (has_rpc ${n_before} -> ${n_after}); sie ist jetzt unerreichbar und zaehlt dauerhaft gegen das Per-Peer-Limit"] }]
+
+      # ── 3. die abgebrochene ID ist beendet ─────────────────────────────
+      - decl: [dead, CancelResp]
+      - decl: [rc_dead, i32, { call: [client.take_response, id_one, dead] }]
+      - if:
+          condition: { neq: [rc_dead, -1] }
+          then: [{ call: [cancel_fail, "take_response auf die abgebrochene ID gab ${rc_dead}, erwartet -1"] }]
+
+      # ── 4. Gegenprobe: eine nicht abgebrochene Antwort bleibt abholbar ──
+      - decl: [req_two, CancelReq]
+      - set: [req_two.tag, "kept"]
+      - decl: [id_two, i64, { call: [client.send_request, 0, "num", 0, req_two] }]
+      - if: { condition: { le: [id_two, 0] }, then: [{ call: [cancel_fail, "zweite Anfrage lieferte keine ID"] }] }
+      - decl: [kept, CancelResp]
+      - decl: [got_two, i32, 0]
+      - decl: [wait_two, i32, 0]
+      - while:
+          condition: { '&&': [{ eq: [got_two, 0] }, { lt: [wait_two, 400] }] }
+          body:
+            - call: [client.update]
+            - set: [got_two, { call: [client.take_response, id_two, kept] }]
+            - if: { condition: { lt: [got_two, 0] }, then: [{ call: [cancel_fail, "zweite Antwort war undekodierbar"] }] }
+            - call: [time.sleep_ms, 5]
+            - set: [wait_two, { +: [wait_two, 1] }]
+      - if: { condition: { neq: [got_two, 1] }, then: [{ call: [cancel_fail, "zweite Antwort kam nicht an — der Abbruch hat zu viel entfernt"] }] }
+      - if: { condition: { neq: [kept.value, 7] }, then: [{ call: [cancel_fail, "zweite Antwort hat value=${kept.value}, erwartet 7"] }] }
+
+      - call: [client.close]
+      - call: [host_th.join]
+      - call: [log.info, "PASS mirror_cancel_request_drains"]

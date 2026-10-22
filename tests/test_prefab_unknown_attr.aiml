@@ -1,0 +1,24 @@
+# SPEC: 44_6_prefabs
+# Ein unbekanntes Prefab-Attribut muss den Bau ABBRECHEN (spec/44_6 §4).
+#
+# Anlass: im cosmos-Client stand `password: true` an den Eingabefeldern fuer
+# SSH- und sudo-Passwort.  Der Maskierungs-Schluessel heisst `secret`, also
+# wurde `password` beim Parsen stillschweigend verworfen — die Passwoerter
+# standen im Klartext auf dem Schirm.  YAML nahm die Zeile an, niemand
+# widersprach.  Seitdem ist ein unbekanntes Attribut ein Compile-Fehler.
+# Expected exit code: 1
+
+- prefab:
+    name: TypoScene
+    width: 200
+    height: 100
+    children:
+      - { name: pw_field, type: text_input, x: 10, y: 10, width: 180, height: 30,
+          password: true }
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [scene, prefab_instance, { call: [engine.instantiate, "TypoScene"] }]
+      - return: 0

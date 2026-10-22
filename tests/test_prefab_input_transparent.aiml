@@ -1,0 +1,137 @@
+# SPEC: 44_6_prefabs
+# spec/44_6 "Durchklickbar: set_input_transparent".
+#
+# Die Luecke, die dieser Test festnagelt: es gab nur `visible` und `draggable`,
+# also konnte eine rein dekorative Instanz Eingabe STEHLEN.  hit_test liefert die
+# oberste sichtbare Instanz, ohne zu fragen, ob sie bedient werden will, und
+# update_hover setzt `hovered` nur auf dieses Ergebnis.  Eine grosse Vorschau
+# ueber einer Karte machte die Karte damit unerreichbar: nie is_hovered, also
+# kein was_clicked und keine Zielauswahl mehr (in 9rooms deckte die Vorschau die
+# unteren 47 px des Mittelraums und der Angriff war nicht deklarierbar).
+#
+# Geprueft wird in dieser Reihenfolge:
+#   1. Ausgangslage: das Overlay liegt oben und FAENGT den Treffer (ohne das
+#      waere 2. wertlos — dann koennte der Test auch bei kaputter Z-Ordnung gruen sein)
+#   2. input_transparent=1 → hit_test trifft die Karte DARUNTER
+#   3. update_hover setzt hovered auf die Karte, nicht auf das Overlay
+#   4. zurueckgeschaltet faengt das Overlay wieder (die Eigenschaft wirkt beidseitig)
+# Requires: display
+# Expected exit code: 0
+
+- prefab:
+    name: TranspCard
+    width: 60
+    height: 80
+    children:
+      - { name: card_body, type: rect, x: 0, y: 0, width: 60, height: 80,
+          bg_color: 0x3A5A8AFF }
+
+# Dekoration, die es am PREFAB erklaert — so vergisst man es beim naechsten
+# Effekt nicht (spec/44_6 "Prefab-Schluessel").
+- prefab:
+    name: TranspDecor
+    width: 300
+    height: 200
+    input_transparent: true
+    children:
+      - { name: decor_body, type: rect, pos_x: 0, pos_y: 0, width: 300, height: 200,
+          bg_color: 0x80303030 }
+
+- prefab:
+    name: TranspOverlay
+    width: 300
+    height: 200
+    children:
+      - { name: over_body, type: rect, x: 0, y: 0, width: 300, height: 200,
+          bg_color: 0x20202080 }
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [win, window_handle, { call: [engine.create_window, 400, 300, "transp"] }]
+      - if: { condition: { eq: [win, null] }, then: [{ call: [log.error, "FAIL create_window"] }, { return: 1 }] }
+      - call: [gl.init]
+      - call: [ui.init]
+      - call: [engine.prefab_scene_init, 400, 300]
+      - call: [input.init, win]
+
+      # Karte unten (z=5), Overlay darueber (z=200) — wie Feldkarte vs. Vorschau.
+      - decl: [card, prefab_instance, { call: [engine.instantiate, "TranspCard"] }]
+      - call: [card.set_pos, 100.0, 100.0]
+      - call: [card.set_z, 5]
+      - decl: [over, prefab_instance, { call: [engine.instantiate, "TranspOverlay"] }]
+      - call: [over.set_pos, 50.0, 50.0]
+      - call: [over.set_z, 200]
+      # draw_scene stellt die Z-Reihenfolge fuer hit_test her (spec/44_6).
+      - call: [engine.draw_scene]
+
+      # Punkt mitten auf der Karte, der auch im Overlay liegt (100..160 / 100..180
+      # gegen 50..350 / 50..250).
+      - decl: [probe_x, f32, 130.0]
+      - decl: [probe_y, f32, 140.0]
+
+      # ── 1. Ausgangslage: das Overlay faengt ─────────────────────────────
+      - decl: [hit_over, prefab_instance, { call: [engine.hit_test, probe_x, probe_y] }]
+      - if:
+          condition: { pneq: [hit_over, over] }
+          then: [{ call: [log.error, "FAIL Ausgangslage: das Overlay liegt oben, faengt den Treffer aber nicht — Z-Ordnung kaputt, Test waere wertlos"] }, { return: 1 }]
+
+      # ── 2. durchklickbar → die Karte darunter wird getroffen ────────────
+      - call: [over.set_input_transparent, 1]
+      - if:
+          condition: { neq: [{ call: [over.get_input_transparent] }, 1] }
+          then: [{ call: [log.error, "FAIL get_input_transparent liefert den gesetzten Wert nicht"] }, { return: 1 }]
+      - decl: [hit_card, prefab_instance, { call: [engine.hit_test, probe_x, probe_y] }]
+      - if:
+          condition: { pneq: [hit_card, card] }
+          then: [{ call: [log.error, "FAIL durchklickbares Overlay faengt den Treffer weiterhin — die Karte darunter bleibt unerreichbar"] }, { return: 1 }]
+      # Sichtbar bleibt es trotzdem: Zeichnen und Eingabe sind getrennt.
+      - if:
+          condition: { neq: [{ call: [over.get_visible] }, 1] }
+          then: [{ call: [log.error, "FAIL Overlay wurde unsichtbar — set_input_transparent darf nur die EINGABE abschalten"] }, { return: 1 }]
+
+      # ── 3. update_hover setzt hovered auf die Karte ─────────────────────
+      - call: [engine.swap, win]
+      - call: [input.post_mouse_move, probe_x, probe_y]
+      - call: [engine.update_hover, probe_x, probe_y]
+      - if:
+          condition: { neq: [{ call: [card.is_hovered] }, 1] }
+          then: [{ call: [log.error, "FAIL Karte ist nicht gehovert — was_clicked und Zielauswahl bleiben damit tot"] }, { return: 1 }]
+      - if:
+          condition: { neq: [{ call: [over.is_hovered] }, 0] }
+          then: [{ call: [log.error, "FAIL durchklickbares Overlay meldet sich als gehovert"] }, { return: 1 }]
+
+      # ── 4. zurueckgeschaltet faengt es wieder ──────────────────────────
+      - call: [over.set_input_transparent, 0]
+      - decl: [hit_again, prefab_instance, { call: [engine.hit_test, probe_x, probe_y] }]
+      - if:
+          condition: { pneq: [hit_again, over] }
+          then: [{ call: [log.error, "FAIL nach dem Zurueckschalten faengt das Overlay nicht wieder"] }, { return: 1 }]
+
+      # ── 5. am PREFAB deklariert: gilt ohne jeden Setter-Aufruf ─────────
+      # Begruendung (spec/44_6): pro Aufrufstelle zu setzen ist eine Zeile, die
+      # man beim naechsten Effekt vergisst — und dann stiehlt die Dekoration
+      # wieder den Hover.
+      - call: [over.set_visible, 0]
+      - decl: [decor, prefab_instance, { call: [engine.instantiate, "TranspDecor"] }]
+      - call: [decor.set_pos, 50.0, 50.0]
+      - call: [decor.set_z, 210]
+      - call: [engine.draw_scene]
+      - if:
+          condition: { neq: [{ call: [decor.get_input_transparent] }, 1] }
+          then: [{ call: [log.error, "FAIL input_transparent am Prefab wirkt nicht auf die Instanz"] }, { return: 1 }]
+      - decl: [hit_dec, prefab_instance, { call: [engine.hit_test, probe_x, probe_y] }]
+      - if:
+          condition: { pneq: [hit_dec, card] }
+          then: [{ call: [log.error, "FAIL die am Prefab erklaerte Dekoration faengt den Treffer trotzdem"] }, { return: 1 }]
+      # Die Instanzmethode ueberschreibt den Prefab-Wert — auch zurueck.
+      - call: [decor.set_input_transparent, 0]
+      - decl: [hit_dec2, prefab_instance, { call: [engine.hit_test, probe_x, probe_y] }]
+      - if:
+          condition: { pneq: [hit_dec2, decor] }
+          then: [{ call: [log.error, "FAIL set_input_transparent(0) ueberschreibt den Prefab-Wert nicht"] }, { return: 1 }]
+
+      - call: [engine.destroy_window, win]
+      - call: [log.info, "PASS prefab_input_transparent"]
+      - return: 0

@@ -1,0 +1,15 @@
+# A list field with an `[]` default makes the NEXT list field lose its methods.
+- model:
+    name: Bag
+    fields:
+      - [tags, list<string>, []]
+      - [items, list<string>]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [bag, Bag]
+      - call: [bag.items.push, "one"]
+      - print: ["items=${bag.items.len}"]
+      - return: 0

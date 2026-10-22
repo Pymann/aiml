@@ -294,7 +294,8 @@ was validated at compile time, no runtime check).
 
 **Hot-reloading an interface** practically always means hot-reloading all
 implementing classes as well. These are captured in the bundle dependency graph
-(sys.bundle includes dependencies transitively).
+(sys.bundle includes dependencies transitively: referenced types AND called user
+functions — see spec/29_2 §16; builtins stay out, they live in the runtime library).
 
 ---
 

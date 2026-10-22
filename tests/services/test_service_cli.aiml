@@ -1,0 +1,49 @@
+# SPEC: 66_services §4.3 — CLI-Transport: run_cli fuellt das Request-Modell aus
+# --flag-Werten, ruft denselben Rumpf und schreibt die Antwort als JSON nach stdout.
+# Ein unbekanntes Unterkommando gibt 1 zurueck (dann ist es nicht unseres).
+# Expected exit code: 0
+- import: "tests/services/_models.aiml"
+
+# Der Rumpf haelt fest, was im Modell ankam — sonst wuerde der Test nur die
+# Rueckgabewerte pruefen und ein NICHT gefuelltes Feld nicht bemerken.
+- decl: [seen_purl, string, ""]
+
+- service:
+    name: CliApi
+    base: "/api/v1"
+    transport: [cli]
+    auth: none
+    endpoints:
+      - def:
+          name: resolve_component
+          cli: [resolve]
+          args: [[req, ResolveReq]]
+          return: ResolveResp
+          body:
+            - set: [seen_purl, req.purl]
+            - decl: [out, ResolveResp]
+            - set: [out.spdx, req.purl]
+            - set: [out.confidence, 42]
+            - return: out
+
+- def:
+    name: main
+    static_off: ["str_cmp"]
+    return: i32
+    body:
+      - decl: [bad, i32, 0]
+      - decl: [api, ptr<CliApi>, { new: CliApi }]
+
+      - decl: [mine, list<string>, ["resolve", "--purl", "pkg:conan/zlib"]]
+      - decl: [ran, i32, { call: [api.run_cli, mine] }]
+      - if: { condition: { neq: [ran, 0] }, then: [{ print: ["FAIL eigenes Unterkommando -> ${ran}"] }, { set: [bad, 1] }] }
+
+      - if: { condition: { neq: [seen_purl, "pkg:conan/zlib"] }, then: [{ print: ["FAIL --purl kam als '${seen_purl}' an"] }, { set: [bad, 1] }] }
+
+      - decl: [foreign, list<string>, ["nicht-meins"]]
+      - decl: [skipped, i32, { call: [api.run_cli, foreign] }]
+      - if: { condition: { neq: [skipped, 1] }, then: [{ print: ["FAIL fremdes Unterkommando -> ${skipped}"] }, { set: [bad, 1] }] }
+
+      - free: api
+      - if: { condition: { eq: [bad, 0] }, then: [{ print: ["test_service_cli PASS"] }] }
+      - return: bad

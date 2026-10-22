@@ -855,6 +855,11 @@ IRValue* Compiler::visitCall(CallExpr* call) {
         ctx.functions.count(ctx.bundleTrackingTarget)) {
         ctx.functions[ctx.bundleTrackingTarget].referencedFuncs.insert(funcName);
     }
+    // spec/66 §5.6: ein Aufruf von `<Service>_<endpoint>` oder `<Service>__describe`
+    // zaehlt als Benutzung des Service.
+    if (!ctx.inServiceSynthFn)
+        for (const auto& sd : ctx.serviceDecls)
+            if (funcName.rfind(sd.first + "_", 0) == 0) ctx.serviceUses.insert(sd.first);
     llvm::Function* f = funcInfo ? funcInfo->func : ctx.module().getFunction(funcName);
 
     // meta: [deprecated] → warn at this call site (one per usage location).
@@ -4156,7 +4161,20 @@ IRValue* Compiler::visitSysSerializeCall(const std::string& method, CallExpr* ca
         }
 
         llvm::Value* stylePtr = nullptr;
-        if (call->args.size() >= 3) {
+        // spec/29 §5.2a: der Stil darf als ZWEITES Argument stehen —
+        // `sys.serialize(wert, stil)` —, nicht nur hinter einem ausdruecklichen
+        // Typnamen.  Bis 18.10.2026 wurde die Kurzform STILL verworfen: kein
+        // Fehler, nur keine Wirkung (gemessen an `pretty` wie an `bare`).
+        // Mehrdeutig ist das nicht: ein JsonStyle ist eine Variable dieses Typs,
+        // ein Typname ein Literal.
+        bool styleIsSecondArg = false;
+        if (call->args.size() == 2) {
+            if (auto* maybeStyle = dynamic_cast<VariableExpr*>(call->args.back().get())) {
+                Symbol* sym = resolveVariable(maybeStyle->name);
+                styleIsSecondArg = (sym && sym->typeName == "JsonStyle");
+            }
+        }
+        if (call->args.size() >= 3 || styleIsSecondArg) {
             if (auto* styleVar = dynamic_cast<VariableExpr*>(call->args.back().get())) {
                 Symbol* styleSym = resolveVariable(styleVar->name);
                 if (styleSym && styleSym->typeName == "JsonStyle") {

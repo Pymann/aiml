@@ -1,0 +1,20 @@
+# SPEC: 64_closures
+# static-check: off
+# Requires: driver
+# NEGATIVE (spec/64 §4, §9): a closure outlives its frame, so it must enumerate its captures.
+# There is no implicit capture in a `closure:` — that is the `block:` kind's feature.
+# EXPECT-ERROR: closure-free-variable
+- callable: { name: Adder, args: [[x, i32]], return: i32 }
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [k, i32, 7]
+      - decl:
+          - bad
+          - closure<Adder>
+          - closure:
+              capture: []                         # k is NOT captured
+              body:
+                - return: { +: [x, k] }           # ← must be rejected
+      - return: 0

@@ -1,0 +1,136 @@
+# SPEC: 64_closures
+# static-check: off
+# Requires: driver
+# TIER: T1
+# CONSTRUCT: block<Sig> — the non-escaping body (spec/64 §2, §3).
+# COVERS: `callable:` signature declaration; a block passed as the LAST argument; implicit
+#         capture that mutates the CALLER's locals; `args:` omitted -> names from the signature;
+#         structural signature identity (Each == Each2); a block parameter passed on to another
+#         block parameter; a block with a return value; a block bound to a local in its own
+#         scope and called repeatedly; nested blocks; `return:` returns from the block;
+#         `throw:` reaches the block's caller.
+# EXPECT: exit 0.
+
+- callable: { name: Each,  args: [[v, i32]] }
+- callable: { name: Each2, args: [[v, i32]] }                  # identical signature -> same type
+- callable: { name: Pred,  args: [[v, i32]], return: bool }
+
+- def:
+    name: each
+    args: [[xs, list<i32>], [body, block<Each>]]
+    body:
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, xs.len] }
+          body:
+            - call: [body, { at: [xs, idx] }]
+            - set: [idx, { +: [idx, 1] }]
+
+# a block parameter may be called AND passed on to another block<Sig> parameter (§3.2)
+- def:
+    name: each_twice
+    args: [[xs, list<i32>], [body, block<Each2>]]              # Each2 == Each structurally
+    body:
+      - call: [each, xs, body]
+      - call: [each, xs, body]
+
+- def:
+    name: count_if
+    args: [[xs, list<i32>], [pred, block<Pred>]]
+    return: i32
+    body:
+      - decl: [hitn, i32, 0]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, xs.len] }
+          body:
+            - if:
+                condition: { call: [pred, { at: [xs, idx] }] }
+                then:
+                  - set: [hitn, { +: [hitn, 1] }]
+            - set: [idx, { +: [idx, 1] }]
+      - return: hitn
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [nums, list<i32>]
+      - call: [nums.push, 3]
+      - call: [nums.push, 4]
+      - call: [nums.push, 5]
+
+      # ── A: trailing block, implicit capture, mutates the caller's local ───────────
+      - decl: [sum, i32, 0]
+      - call:
+          - each
+          - nums
+          - block:
+              body:
+                - set: [sum, { +: [sum, v] }]     # `v` from Each; `sum` IS main's local
+      - if: { condition: { neq: [sum, 12] }, then: [{ print: ["FAIL A sum=${sum}"] }, { return: 1 }] }
+
+      # ── B: passed on through a second block parameter (structural match) ─────────
+      - set: [sum, 0]
+      - call:
+          - each_twice
+          - nums
+          - block:
+              body:
+                - set: [sum, { +: [sum, v] }]
+      - if: { condition: { neq: [sum, 24] }, then: [{ print: ["FAIL B sum=${sum}"] }, { return: 1 }] }
+
+      # ── C: a block with a return value, args: written out explicitly ─────────────
+      - decl: [odd, i32, { call: [count_if, nums, { block: { args: [[v, i32]], body: [ { return: { eq: [{ '%': [v, 2] }, 1] } } ] } }] }]
+      - if: { condition: { neq: [odd, 2] }, then: [{ print: ["FAIL C odd=${odd}"] }, { return: 1 }] }
+
+      # ── D: bound to a local in its own scope, called directly and passed on ──────
+      - decl: [hits, i32, 0]
+      - decl:
+          - tally
+          - block<Each>                            # declared type -> args: inferrable
+          - block:
+              body:
+                - set: [hits, { +: [hits, v] }]
+      - call: [tally, 10]
+      - call: [tally, 5]
+      - if: { condition: { neq: [hits, 15] }, then: [{ print: ["FAIL D1 hits=${hits}"] }, { return: 1 }] }
+      - call: [each, nums, tally]                  # the same block, now as an argument
+      - if: { condition: { neq: [hits, 27] }, then: [{ print: ["FAIL D2 hits=${hits}"] }, { return: 1 }] }
+
+      # ── E: nested blocks — the inner one captures implicitly too ────────────────
+      - decl: [pairs, i32, 0]
+      - call:
+          - each
+          - nums
+          - block:
+              body:
+                - call:
+                    - each
+                    - nums
+                    - block:
+                        args: [[w, i32]]           # explicit, so it does not shadow `v`
+                        body:
+                          - set: [pairs, { +: [pairs, { +: [v, w] }] }]
+      - if: { condition: { neq: [pairs, 72] }, then: [{ print: ["FAIL E pairs=${pairs}"] }, { return: 1 }] }
+
+      # ── F: throw out of a block body reaches the block's caller and unwinds ─────
+      - decl: [caught, i32, 0]
+      - try:
+          body:
+            - call:
+                - each
+                - nums
+                - block:
+                    body:
+                      - throw: { new: Exception, message: "boom" }
+          catch:
+            - type: Exception
+              var: err
+              body:
+                - set: [caught, 1]
+      - if: { condition: { neq: [caught, 1] }, then: [{ print: ["FAIL F caught=${caught}"] }, { return: 1 }] }
+
+      # no block allocated anything — nothing to release (§3.2)
+      - print: ["PASS 01 block_basics"]
+      - return: 0

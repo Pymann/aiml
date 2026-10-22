@@ -1,0 +1,22 @@
+# SPEC: 64_closures
+# static-check: off
+# Requires: driver
+# NEGATIVE (spec/64 §3.2, §9): a block borrows its creating frame, so it may not be returned.
+# EXPECT-ERROR: block-escapes
+- callable: { name: Each, args: [[v, i32]] }
+- def:
+    name: leak_block
+    return: block<Each>
+    body:
+      - decl: [sum, i32, 0]
+      - return:
+          block:
+            body:
+              - set: [sum, { +: [sum, v] }]    # ← sum dies with this frame
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [b, block<Each>, { call: [leak_block] }]
+      - call: [b, 1]
+      - return: 0

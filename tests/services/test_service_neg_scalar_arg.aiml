@@ -1,0 +1,12 @@
+# SPEC: 66_services §5.4 — argument and return must be models; a scalar has no wire
+# shape that all three transports share.
+# Expected exit code: 1
+- import: "tests/services/_models.aiml"
+- service:
+    name: ScalarApi
+    base: "/v1"
+    transport: [rpc]
+    auth: none
+    endpoints:
+      - def: { name: counter, http: [get, "/count"], roles: [], args: [[amount, i32]], return: i32, body: [{ return: 7 }] }
+- def: { name: main, return: i32, body: [{ decl: [api, ptr<ScalarApi>, { new: ScalarApi }] }, { free: api }, { return: 0 }] }

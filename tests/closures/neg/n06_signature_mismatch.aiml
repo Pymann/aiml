@@ -1,0 +1,16 @@
+# SPEC: 64_closures
+# static-check: off
+# Requires: driver
+# NEGATIVE (spec/64 §2, §9): type identity is structural — parameter types in order plus the
+# return type. No implicit conversion of any kind.
+# EXPECT-ERROR: callable-signature-mismatch
+- callable: { name: IntMap, args: [[x, i32]],    return: i32 }
+- callable: { name: StrMap, args: [[s, string]], return: i32 }
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [c, closure<IntMap>, { closure: { body: [ { return: x } ] } }]
+      - decl: [wrong, closure<StrMap>]
+      - set: [wrong, c]                           # ← i32 param vs string param
+      - return: 0

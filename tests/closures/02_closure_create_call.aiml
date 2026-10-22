@@ -1,0 +1,99 @@
+# SPEC: 64_closures
+# static-check: off
+# Requires: driver
+# TIER: T1
+# CONSTRUCT: closure<Sig> creation and calling (spec/64 §2, §4, §5).
+# COVERS: the `closure:` expression (capture/args/return via the signature); signature forms
+#         (no args / no return / both / nested generics); call as statement and as expression;
+#         repeated calls (a call BORROWS, never consumes); `args:` omitted -> names from the
+#         signature, and written out explicitly; a capture shadowing a global; capture: omitted;
+#         an uninitialised closure is null; block and flow YAML are the same statement.
+# EXPECT: exit 0.
+
+- callable: { name: Adder,  args: [[x, i32]], return: i32 }
+- callable: { name: Bump }                                   # () -> void
+- callable: { name: Pick,   return: i32 }                    # () -> i32
+- callable: { name: Greet,  args: [[who, string]], return: string }
+- callable: { name: Total,  args: [[xs, list<i32>]], return: i32 }
+
+- decl: [g_k, i32, 100]          # global — shadowed by the capture in phase C
+- decl: [side, i32, 0]           # written by a void closure in phase B
+
+- def:
+    name: main
+    return: i32
+    body:
+
+      # ── A: value capture of a scalar; `x` comes from the signature ──────────────
+      - decl: [k, i32, 7]
+      - decl:
+          - add_k
+          - closure<Adder>
+          - closure:
+              capture: [k]
+              body:
+                - return: { +: [x, k] }
+      - decl: [r1, i32, { call: [add_k, 10] }]
+      - if: { condition: { neq: [r1, 17] }, then: [{ print: ["FAIL A1 r1=${r1}"] }, { return: 1 }] }
+      - decl: [r2, i32, { call: [add_k, 1] }]      # a call borrows — still live
+      - if: { condition: { neq: [r2, 8] }, then: [{ print: ["FAIL A2 r2=${r2}"] }, { return: 1 }] }
+
+      # ── B: no params, no return; called as a statement; flow YAML spelling ──────
+      - decl: [bump, closure<Bump>, { closure: { body: [ { set: [side, { +: [side, 1] }] } ] } }]
+      - call: [bump]
+      - call: [bump]
+      - if: { condition: { neq: [side, 2] }, then: [{ print: ["FAIL B side=${side}"] }, { return: 1 }] }
+
+      # ── C: a capture shadows a global — the body sees the capture ───────────────
+      - decl: [k2, i32, 5]
+      - decl:
+          - pick
+          - closure<Pick>
+          - closure:
+              capture: [[g_k, i32, k2]]            # new field NAMED g_k, initialised from k2
+              body:
+                - return: g_k
+      - decl: [r3, i32, { call: [pick] }]
+      - if: { condition: { neq: [r3, 5] }, then: [{ print: ["FAIL C r3=${r3}"] }, { return: 1 }] }
+      - if: { condition: { neq: [g_k, 100] }, then: [{ print: ["FAIL C global clobbered"] }, { return: 1 }] }
+
+      # ── D: capture: omitted; string return; args: written out explicitly ────────
+      - decl:
+          - hello
+          - closure<Greet>
+          - closure:
+              args: [[who, string]]                # explicit — must match Greet
+              body:
+                - return: "hello ${who}"
+      - decl: [msg, string, { call: [hello, "world"] }]
+      - if: { condition: { neq: [msg, "hello world"] }, then: [{ print: ["FAIL D msg=${msg}"] }, { return: 1 }] }
+
+      # ── E: a signature with a nested generic parameter ──────────────────────────
+      - decl: [nums, list<i32>]
+      - call: [nums.push, 4]
+      - call: [nums.push, 6]
+      - decl:
+          - total
+          - closure<Total>
+          - closure:
+              body:
+                - decl: [acc, i32, 0]
+                - decl: [idx, i32, 0]
+                - while:
+                    condition: { lt: [idx, xs.len] }
+                    body:
+                      - set: [acc, { +: [acc, { at: [xs, idx] }] }]
+                      - set: [idx, { +: [idx, 1] }]
+                - return: acc
+      - decl: [r4, i32, { call: [total, nums] }]
+      - if: { condition: { neq: [r4, 10] }, then: [{ print: ["FAIL E r4=${r4}"] }, { return: 1 }] }
+
+      # ── F: an uninitialised closure is null ────────────────────────────────────
+      - decl: [cb, closure<Bump>]
+      - decl: [is_null, i32, 0]
+      - if: { condition: { eq: [cb, null] }, then: [{ set: [is_null, 1] }] }
+      - if: { condition: { neq: [is_null, 1] }, then: [{ print: ["FAIL F null closure not null"] }, { return: 1 }] }
+
+      # scope exit releases add_k / bump / pick / hello / total exactly once each (§6)
+      - print: ["PASS 02 closure_create_call"]
+      - return: 0

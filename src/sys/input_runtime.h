@@ -63,6 +63,7 @@ float   aiml_input_mouse_delta_y  (void);
 int32_t aiml_input_mouse_button   (int32_t btn);   /* currently held */
 int32_t aiml_input_mouse_pressed  (int32_t btn);   /* went down this frame */
 int32_t aiml_input_mouse_released (int32_t btn);   /* came up this frame */
+int32_t aiml_input_mouse_cancelled(int32_t btn);   /* press aborted this frame (spec/44_0 §2.2) */
 float   aiml_input_mouse_scroll_x (void);  /* scroll delta this frame */
 float   aiml_input_mouse_scroll_y (void);
 
@@ -112,9 +113,14 @@ int32_t aiml_input_action_released(const char* name);
 /* btn: 0=Left, 1=Right, 2=Middle */
 int32_t aiml_input_drag_active       (int32_t btn);  /* drag in progress */
 int32_t aiml_input_drag_started      (int32_t btn);  /* drag started this frame */
-int32_t aiml_input_drag_ended        (int32_t btn);  /* drag ended this frame */
+int32_t aiml_input_drag_ended        (int32_t btn);  /* drag ended this frame (release) */
+int32_t aiml_input_drag_cancelled    (int32_t btn);  /* drag aborted this frame (no drop) */
 float   aiml_input_drag_origin_x     (int32_t btn);  /* cursor position when drag began */
 float   aiml_input_drag_origin_y     (int32_t btn);
+float   aiml_input_drag_start_x      (int32_t btn);  /* press point of the drag that STARTED this frame */
+float   aiml_input_drag_start_y      (int32_t btn);
+float   aiml_input_drag_end_x        (int32_t btn);  /* cursor position at the release that ended the drag */
+float   aiml_input_drag_end_y        (int32_t btn);
 float   aiml_input_drag_delta_x      (int32_t btn);  /* total delta from origin */
 float   aiml_input_drag_delta_y      (int32_t btn);
 void    aiml_input_drag_set_payload  (void* data);   /* attach user data */

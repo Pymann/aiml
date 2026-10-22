@@ -1,0 +1,71 @@
+# SPEC: 29_2_sys_exec,29_serialize,62_pipelines
+# spec/29_2 + spec/62 §5.6: was der Rueckgabewert von sys.exec eigentlich sagt.
+#
+# Dieser Test haelt die ANTWORT fest, nicht eine Wunschvorstellung: ein Schritt
+# gilt nach spec/62 als gescheitert, wenn sein Rumpf WIRFT (F62-41) — nicht,
+# wenn er eine Zahl != 0 zurueckgibt, denn der Rueckgabewert ist nach §5.3 ein
+# Ergebnis und wird gecacht.  Beides wird hier unterschieden.
+# Expected exit code: 0
+
+- class:
+    name: StepFailed
+    members: [[message, string]]
+
+- def:
+    name: ret_seven
+    return: i32
+    body: [{ return: 7 }]
+
+- def:
+    name: throws
+    return: i32
+    body:
+      - throw: { new: StepFailed, message: "geplatzt" }
+      - return: 0
+
+# Container-Methoden mit String-Literal IM Bundle — das ist der Fall, der im
+# Pipeline-Test 'Unknown Type: sleep' meldete.
+- def:
+    name: uses_list
+    return: i32
+    body:
+      - decl: [parts, list<string>]
+      - call: [parts.push, "eins"]
+      - call: [parts.push, "zwei"]
+      - if: { condition: { neq: [parts.len, 2] }, then: [{ return: 1 }] }
+      - return: 0
+
+- def:
+    name: expect
+    args: [[what, string], [cond, i32]]
+    return: i32
+    body:
+      - if:
+          condition: { eq: [cond, 1] }
+          then: [{ print: ["  ok   ${what}"] }, { return: 0 }]
+      - print: ["  FAIL ${what}"]
+      - return: 1
+
+- def:
+    name: main
+    static_off: ["str_cmp"]
+    return: i32
+    body:
+      - decl: [fails, i32, 0]
+
+      - decl: [rc_seven, i32, { call: [sys.exec, { call: [sys.bundle, "ret_seven", { context: true }] }] }]
+      - print: ["  (Rueckgabe 7 im Bundle -> rc=${rc_seven})"]
+
+      - decl: [rc_throw, i32, { call: [sys.exec, { call: [sys.bundle, "throws", { context: true }] }] }]
+      - print: ["  (werfender Rumpf -> rc=${rc_throw})"]
+      - set: [fails, { +: [fails, { call: [expect, "ein werfender Rumpf meldet einen Fehler", { neq: [rc_throw, 0] }] }] }]
+
+      - decl: [rc_list, i32, { call: [sys.exec, { call: [sys.bundle, "uses_list", { context: true }] }] }]
+      - print: ["  (list<string> + push im Bundle -> rc=${rc_list})"]
+      - set: [fails, { +: [fails, { call: [expect, "Container-Methoden wirken im Bundle", { eq: [rc_list, 0] }] }] }]
+
+      - if:
+          condition: { neq: [fails, 0] }
+          then: [{ print: ["test_bundle_exec_semantics FAIL (${fails})"] }, { return: 1 }]
+      - print: ["test_bundle_exec_semantics PASS"]
+      - return: 0

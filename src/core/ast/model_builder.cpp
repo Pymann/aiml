@@ -47,7 +47,9 @@ bool ModelBuilder::OnScalar(const std::string& value, const std::string& tag) {
         // Apply value to the modifier slot.  Only db_indexed-family keys are
         // recognized today; unknown keys are silently ignored to allow forward
         // compatibility (other modifier families can layer on later).
-        if (modifierKey == "db_indexed") {
+        if (modifierKey == "alias") {        // spec/15: externer Name
+            curAlias = value;
+        } else if (modifierKey == "db_indexed") {
             if (value == "true")       { curDbIndexed = true; }
             else if (value == "lower") { curDbIndexed = true; curDbIndexedMode = "lower"; }
             // "false" leaves curDbIndexed = false (default).
@@ -163,6 +165,7 @@ bool ModelBuilder::OnSequenceEnd() {
             m.db_indexed_unique     = curDbIndexedUnique;
             m.db_indexed_skip_empty = curDbIndexedSkipEmpty;
             m.level                 = curLevel;
+            m.alias                 = curAlias;
             modelNode->fields.push_back(std::move(m));
             currentField = ""; currentType = "";
             memberAttrIndex = 0;
@@ -170,6 +173,7 @@ bool ModelBuilder::OnSequenceEnd() {
             curDbIndexed = false; curDbIndexedMode.clear();
             curDbIndexedUnique = false; curDbIndexedSkipEmpty = false;
             curLevel = -1;   // spec/65: nicht ans naechste Feld vererben
+            curAlias.clear();  // spec/15: ein Alias gilt genau einem Feld
             return true;
         } else {
             insideFields = false;

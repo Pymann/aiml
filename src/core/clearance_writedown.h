@@ -126,7 +126,7 @@ inline int walkBody(const BlockStmt* blk, const std::string& fname, const LevelE
             bad += walkBody(wh->body.get(), fname, env, bound, carried);
         } else if (auto* tr = dynamic_cast<TryStmt*>(s)) {
             bad += walkBody(tr->tryBlock.get(), fname, env, bound, carried);
-            bad += walkBody(tr->catchBlock.get(), fname, env, bound, carried);
+            for (auto* cb : tr->catchBodies()) bad += walkBody(cb, fname, env, bound, carried);
         } else if (auto* bs = dynamic_cast<BlockStmt*>(s)) {
             bad += walkBody(bs, fname, env, bound, carried);
         }

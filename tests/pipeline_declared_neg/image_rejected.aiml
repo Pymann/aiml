@@ -1,0 +1,12 @@
+# SPEC: 62_pipelines §18.1
+# F62-124: `image:` nennt die Umgebung und verlangt eine Laufzeit.  Ein lokaler
+# Lauf hat keine — also ABLEHNEN statt still gegen den Wirt laufen.
+- pipeline:
+    name: with_image
+    image: ubuntu-base
+    params: { arch: [x86_64] }
+    stages:
+      - stage:
+          name: one
+          steps:
+            - step: { name: first, return: i32, body: [{ return: 0 }] }

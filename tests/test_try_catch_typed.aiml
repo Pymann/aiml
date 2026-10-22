@@ -1,0 +1,94 @@
+# SPEC: 22_exceptions — mehrere catch-Zweige: der erste PASSENDE faengt, ein Zweig
+# auf der Basisklasse faengt auch die Abkoemmlinge, und was kein Zweig faengt,
+# laeuft zum umschliessenden try weiter.
+# Expected exit code: 0
+- class:
+    name: Exception
+    members:
+      - [message, string]
+
+- class:
+    name: NotHere
+    extends: Exception
+
+- class:
+    name: Wrong
+    extends: Exception
+
+- def:
+    name: thrower
+    static_off: ["str_cmp"]
+    args: [[which, i32]]
+    return: i32
+    body:
+      - if: { condition: { eq: [which, 1] }, then: [{ throw: { new: NotHere, message: "nicht da" } }] }
+      - if: { condition: { eq: [which, 2] }, then: [{ throw: { new: Wrong, message: "falsch" } }] }
+      - if: { condition: { eq: [which, 3] }, then: [{ throw: { new: Exception, message: "sonstwas" } }] }
+      - return: 0
+
+# Liefert 1/2/3 je nach gefangenem Zweig, 0 wenn nichts geworfen wurde.
+- def:
+    name: catch_kind
+    static_off: ["str_cmp"]
+    args: [[which, i32]]
+    return: i32
+    body:
+      - decl: [kind, i32, 0]
+      - try:
+          body:
+            - call: [thrower, which]
+          catch:
+            - type: NotHere
+              var: miss
+              body:
+                - set: [kind, 1]
+            - type: Wrong
+              var: wrong
+              body:
+                - set: [kind, 2]
+            - type: Exception
+              var: other
+              body:
+                - set: [kind, 3]
+      - return: kind
+
+- def:
+    name: main
+    static_off: ["str_cmp"]
+    return: i32
+    body:
+      - decl: [bad, i32, 0]
+
+      - decl: [kind_none, i32, { call: [catch_kind, 0] }]
+      - if: { condition: { neq: [kind_none, 0] }, then: [{ print: ["FAIL ohne throw -> ${kind_none}"] }, { set: [bad, 1] }] }
+
+      - decl: [kind_miss, i32, { call: [catch_kind, 1] }]
+      - if: { condition: { neq: [kind_miss, 1] }, then: [{ print: ["FAIL NotHere -> Zweig ${kind_miss}, erwartet 1"] }, { set: [bad, 1] }] }
+
+      - decl: [kind_wrong, i32, { call: [catch_kind, 2] }]
+      - if: { condition: { neq: [kind_wrong, 2] }, then: [{ print: ["FAIL Wrong -> Zweig ${kind_wrong}, erwartet 2"] }, { set: [bad, 1] }] }
+
+      - decl: [kind_base, i32, { call: [catch_kind, 3] }]
+      - if: { condition: { neq: [kind_base, 3] }, then: [{ print: ["FAIL Exception -> Zweig ${kind_base}, erwartet 3"] }, { set: [bad, 1] }] }
+
+      # kein Zweig passt -> laeuft zum umschliessenden try weiter
+      - decl: [outer, i32, 0]
+      - try:
+          body:
+            - try:
+                body:
+                  - call: [thrower, 2]
+                catch:
+                  - type: NotHere
+                    var: only_miss
+                    body:
+                      - set: [outer, 1]
+          catch:
+            - type: Exception
+              var: caught_outside
+              body:
+                - set: [outer, 2]
+      - if: { condition: { neq: [outer, 2] }, then: [{ print: ["FAIL Weiterreichen -> ${outer}, erwartet 2"] }, { set: [bad, 1] }] }
+
+      - if: { condition: { eq: [bad, 0] }, then: [{ print: ["test_try_catch_typed PASS"] }] }
+      - return: bad

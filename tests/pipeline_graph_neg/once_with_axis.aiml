@@ -1,0 +1,12 @@
+# SPEC?: 62_pipelines   # aus dem Dateinamen, zu bestaetigen
+# Requires: driver
+# F62-115: `per: once` mit deklarierter Achse ist ein Fehler — es gibt EIN
+# Ergebnis fuer die ganze Matrix, also kann es nicht von einer Achse haengen.
+- pipeline:
+    name: once_axis
+    params: { arch: [x86_64, arm64] }
+    stages:
+      - stage:
+          name: one
+          steps:
+            - step: { name: shared, per: once, args: [arch], return: i32, body: [{ return: 0 }] }

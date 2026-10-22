@@ -277,6 +277,7 @@ Sampling rules:
 | Call | Arguments | Return | Description |
 |------|-----------|--------|-------------|
 | `{ call: [gltf.load, p] }` | `path` | `gltf_scene` | Loads .glb or .gltf |
+| `{ call: [gltf.model, stem] }` | `string` | `gltf_scene` | Asset-Register: Stem statt Pfad (spec/44_7) |
 
 ### `gltf_scene` Methods
 

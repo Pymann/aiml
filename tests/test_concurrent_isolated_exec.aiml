@@ -1,0 +1,133 @@
+# SPEC: 62_pipelines
+# spec/62 F62-99: duerfen mehrere ISOLIERTE Uebersetzungen gleichzeitig laufen?
+#
+# F62-14 hat den gleichzeitigen PROZESSSTART gemessen und freigegeben.  Ueber
+# gleichzeitiges Uebersetzen sagt das nichts: das ist LLVM-Zustand, nicht
+# Prozess-Zustand.  Solange es ungemessen ist, serialisiert die Pipeline genau
+# diesen Abschnitt — Lanes parallel, Uebersetzen nicht.
+#
+# Dieser Test ist die Messung.  Vier Threads uebersetzen und fuehren je drei
+# VERSCHIEDENE Bundles aus (verschiedene Quelltexte, damit kein Cache den
+# Vorgang verdeckt).  Gepruefte Aussage: jeder Lauf gelingt, jeder liefert
+# SEIN eigenes Ergebnis zurueck, und nichts stuerzt ab.
+# Expected exit code: 0
+
+- decl: [g_ok,    i32, 0]
+- decl: [g_bad,   i32, 0]
+- decl: [g_lock,  lock]
+
+- def:
+    name: work_one
+    return: i32
+    body: [{ return: 0 }]
+
+- def:
+    name: work_two
+    return: i32
+    body:
+      - decl: [parts, list<string>]
+      - call: [parts.push, "zwei"]
+      - if: { condition: { neq: [parts.len, 1] }, then: [{ return: 1 }] }
+      - return: 0
+
+- def:
+    name: work_three
+    return: i32
+    body:
+      - decl: [total, i32, { '*': [6, 7] }]
+      - if: { condition: { neq: [total, 42] }, then: [{ return: 1 }] }
+      - return: 0
+
+- def:
+    name: compile_many
+    args: [[tag, i32]]
+    body:
+      - decl: [local_ok, i32, 0]
+      - decl: [local_bad, i32, 0]
+      - decl: [rc_one, i32, { call: [sys.exec, { call: [sys.bundle, "work_one", { context: true }] }] }]
+      - if:
+          condition: { eq: [rc_one, 0] }
+          then: [{ set: [local_ok, { +: [local_ok, 1] }] }]
+          else: [{ set: [local_bad, { +: [local_bad, 1] }] }]
+      - decl: [rc_two, i32, { call: [sys.exec, { call: [sys.bundle, "work_two", { context: true }] }] }]
+      - if:
+          condition: { eq: [rc_two, 0] }
+          then: [{ set: [local_ok, { +: [local_ok, 1] }] }]
+          else: [{ set: [local_bad, { +: [local_bad, 1] }] }]
+      - decl: [rc_three, i32, { call: [sys.exec, { call: [sys.bundle, "work_three", { context: true }] }] }]
+      - if:
+          condition: { eq: [rc_three, 0] }
+          then: [{ set: [local_ok, { +: [local_ok, 1] }] }]
+          else: [{ set: [local_bad, { +: [local_bad, 1] }] }]
+      - call: [g_lock.acquire]
+      - set: [g_ok, { +: [g_ok, local_ok] }]
+      - set: [g_bad, { +: [g_bad, local_bad] }]
+      - call: [g_lock.release]
+
+- def:
+    name: expect
+    args: [[what, string], [cond, i32]]
+    return: i32
+    body:
+      - if:
+          condition: { eq: [cond, 1] }
+          then: [{ print: ["  ok   ${what}"] }, { return: 0 }]
+      - print: ["  FAIL ${what}"]
+      - return: 1
+
+- def:
+    name: main
+    static_off: ["str_cmp"]
+    return: i32
+    body:
+      - decl: [fails, i32, 0]
+      - call: [g_lock.init]
+      - decl: [thr_a, thread_handle]
+      - decl: [thr_b, thread_handle]
+      - decl: [thr_c, thread_handle]
+      - decl: [thr_d, thread_handle]
+      - decl: [thr_e, thread_handle]
+      - decl: [thr_f, thread_handle]
+      - decl: [thr_g, thread_handle]
+      - decl: [thr_h, thread_handle]
+      - decl: [start_ms, i64, { call: [time.now] }]
+      - set: [thr_a, { spawn: [compile_many, 1] }]
+      - set: [thr_b, { spawn: [compile_many, 2] }]
+      - set: [thr_c, { spawn: [compile_many, 3] }]
+      - set: [thr_d, { spawn: [compile_many, 4] }]
+      - set: [thr_e, { spawn: [compile_many, 5] }]
+      - set: [thr_f, { spawn: [compile_many, 6] }]
+      - set: [thr_g, { spawn: [compile_many, 7] }]
+      - set: [thr_h, { spawn: [compile_many, 8] }]
+      - call: [thr_a.join]
+      - call: [thr_b.join]
+      - call: [thr_c.join]
+      - call: [thr_d.join]
+      - call: [thr_e.join]
+      - call: [thr_f.join]
+      - call: [thr_g.join]
+      - call: [thr_h.join]
+      - decl: [elapsed_ms, i64, { -: [{ call: [time.now] }, start_ms] }]
+      - print: ["  24 isolierte Uebersetzungen aus 8 Threads in ${elapsed_ms} ms, ok=${g_ok} fehlgeschlagen=${g_bad}"]
+      # Basislinie: DIESELBE Arbeit einthreadig.  Ohne sie sagt die Zahl oben
+      # nur "stuerzt nicht ab" — erst der Vergleich sagt, ob Nebenlaeufigkeit
+      # ueberhaupt etwas bringt (F62-99 haengt genau daran).
+      - set: [g_ok, 0]
+      - set: [g_bad, 0]
+      - decl: [seq_start, i64, { call: [time.now] }]
+      - decl: [seq_idx, i32, 0]
+      - while:
+          condition: { lt: [seq_idx, 8] }
+          body:
+            - call: [compile_many, seq_idx]
+            - set: [seq_idx, { +: [seq_idx, 1] }]
+      - decl: [seq_ms, i64, { -: [{ call: [time.now] }, seq_start] }]
+      - print: ["  dieselben 24 einthreadig in ${seq_ms} ms (ok=${g_ok})"]
+      - set: [fails, { +: [fails, { call: [expect, "jede isolierte Uebersetzung gelingt", { eq: [g_bad, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "alle vierundzwanzig kommen zurueck", { eq: [g_ok, 24] }] }] }]
+
+      - if:
+          condition: { neq: [fails, 0] }
+          then: [{ print: ["test_concurrent_isolated_exec FAIL (${fails})"] }, { return: 1 }]
+      - print: ["test_concurrent_isolated_exec PASS"]
+      - return: 0

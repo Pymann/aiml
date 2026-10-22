@@ -1,0 +1,33 @@
+# SPEC: 44_6_prefabs
+# spec/44_6: engine.text_width — Breite in der Prefab-Schrift, inklusive der
+# Inline-Marken-Regeln ({icon:stem} zaehlt ascent_px).  Zentrierung und Umbruch
+# haengen daran: zaehlt eine Marke faelschlich Breite, verschiebt sich jede
+# zentrierte Zeile und Textboxen brechen an der falschen Stelle um.
+#
+# (Farbe pro Zeile macht set_color_runs, spec/44_6 §5g — Byte-Bereich → Farbe,
+#  korrekt ueber Umbrueche hinweg.  Eine eigene Inline-Farbmarke waere eine
+#  Doppelung und brach genau an Umbruechen.)
+# Requires: display
+# Expected exit code: 0
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [win, window_handle, { call: [engine.create_window, 400, 300, "color"] }]
+      - if: { condition: { eq: [win, null] }, then: [{ call: [log.error, "FAIL create_window"] }, { return: 1 }] }
+      - call: [gl.init]
+      - call: [ui.init]
+      - call: [engine.prefab_scene_init, 400, 300]
+      - decl: [font, ui_font, { call: [ui.load_font_default, 14.0] }]
+      - if: { condition: { peq: [font, null] }, then: [{ call: [log.error, "FAIL keine Schrift"] }, { return: 1 }] }
+      - call: [engine.prefab_set_font, font]
+
+      # ── 1. Messung funktioniert ueberhaupt ──────────────────────────────
+      - decl: [plain_w, f32, { call: [engine.text_width, "Angriff abgelehnt"] }]
+      - if:
+          condition: { le: [plain_w, 0.0] }
+          then: [{ call: [log.error, "FAIL text_width liefert ${plain_w} fuer echten Text"] }, { return: 1 }]
+      - decl: [short_w, f32, { call: [engine.text_width, "Angriff"] }]
+      - if:
+          condition: { ge: [short_w, plain_w] }
+          then: [{ call: [log.error, "FAIL kuerzerer Text nicht schmaler (${short_w} vs ${plain_w})"] }, { return: 1 }]

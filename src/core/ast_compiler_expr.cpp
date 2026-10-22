@@ -128,6 +128,14 @@ IRValue* Compiler::visitNewExpr(NewExpr* newExpr) {
         !ctx.bundleTrackingTarget.empty() &&
         ctx.functions.count(ctx.bundleTrackingTarget))
         ctx.functions[ctx.bundleTrackingTarget].referencedTypes.insert(className);
+    if (!ctx.inServiceSynthFn) {                                       // spec/66 §5.6
+        if (ctx.serviceDecls.count(className)) ctx.serviceUses.insert(className);
+        // ein reiner Client benutzt den Service ueber seinen Stub
+        if (className.size() > 6 && className.compare(className.size() - 6, 6, "Client") == 0) {
+            const std::string base = className.substr(0, className.size() - 6);
+            if (ctx.serviceDecls.count(base)) ctx.serviceUses.insert(base);
+        }
+    }
     if (!className.empty() && ctx.classes.count(className)) {
         auto& classInfo = ctx.classes[className];
         llvm::StructType* structTy = classInfo.type;
@@ -410,7 +418,20 @@ IRValue* Compiler::visitVariable(VariableExpr* var) {
     if (!sym) {
         // special built-in names
         if (baseName == "sys" && propName == "env") {
-            return ctx.ir_gen->wrap(llvm::ConstantPointerNull::get(ctx.builder.getInt8Ty()->getPointerTo()));
+            // spec/23: sys.env is documented as a PROPERTY.  It used to compile to a
+            // null pointer here, so `set: [m, sys.env]` succeeded and the first read
+            // (.len/.contains/.get) dereferenced null.  Emit the same call as the
+            // builtin form (builtin_registry.cpp, sys.builtinFuncs["env"]).
+            llvm::Type* envStrTy = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::StructType* envMapTy = llvm::StructType::get(ctx.context, {
+                ctx.builder.getInt32Ty(), ctx.builder.getInt32Ty(),
+                ctx.builder.getInt8Ty()->getPointerTo(),
+                envStrTy->getPointerTo(), envStrTy->getPointerTo()
+            });
+            llvm::Function* envFn = ctx.getFunction("aiml_sys_env",
+                ctx.builder.getInt8Ty()->getPointerTo(), {});
+            llvm::Value* envRaw = ctx.builder.CreateCall(envFn);
+            return ctx.ir_gen->wrap(ctx.builder.CreateBitCast(envRaw, envMapTy->getPointerTo(), "sys_env_map"));
         }
         if (baseName == "io" && (propName == "stdout" || propName == "stderr" || propName == "stdin")) {
             // spec/23: the process's own standard stream — never a fresh fdopen per access (that

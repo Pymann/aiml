@@ -1,0 +1,18 @@
+# SPEC: 66_services §5.5 / §6 — the auth class must exist and answer principal_of/has_role.
+# Expected exit code: 1
+- import: "tests/services/_models.aiml"
+- import: "tests/services/_auth.aiml"
+- service:
+    name: GhostApi
+    base: "/v1"
+    transport: [rpc]
+    auth: NoSuchAuthClass
+    endpoints:
+      - def: { name: resolve, http: [post, "/a"], roles: [viewer], args: [[req, ResolveReq]], return: ResolveResp, body: [{ decl: [out, ResolveResp] }, { return: out }] }
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [api, ptr<GhostApi>, { new: GhostApi }]
+      - free: api
+      - return: 0

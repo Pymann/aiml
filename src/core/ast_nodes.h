@@ -166,6 +166,9 @@ public:
     std::string typeName;
     std::unique_ptr<Expr> initialValue;
     bool is_const = false;
+    // spec/21 §6.2 F21-S1: erklaerter Anker eines Rueckrufs — keine
+    // Globals-Warnung, dafuer die Pruefung aus F21-S2.
+    bool is_singleton = false;
     bool is_volatile = false;
     bool is_extern = false;   // {extern: true} → cross-file ExternalLinkage (plain __lib_<name>)
     std::string lifetime = "scope";  // {lifetime: scope|persistent|consumed} — spec/61.
@@ -261,12 +264,25 @@ public:
     std::string toString() const override { return "Throw(" + value->toString() + ")"; }
 };
 
+// spec/22: ein `catch:` ist eine LISTE von Zweigen.  Bis 18.10.2026 hielt der AST
+// nur einen, und jeder weitere ueberschrieb ihn wortlos.
+struct CatchClause {
+    std::string type;                  // leer = faengt alles
+    std::string var;
+    std::unique_ptr<BlockStmt> body;
+};
+
 class TryStmt : public Stmt {
 public:
     std::unique_ptr<BlockStmt> tryBlock;
-    std::unique_ptr<BlockStmt> catchBlock;
-    std::string catchVar;
-    std::string catchType;
+    std::vector<CatchClause> catches;  // in geschriebener Reihenfolge
+
+    // Alle Zweig-Rumpfe — fuer die Analysen, die jeden Pfad sehen muessen.
+    std::vector<BlockStmt*> catchBodies() const {
+        std::vector<BlockStmt*> out;
+        for (const auto& c : catches) if (c.body) out.push_back(c.body.get());
+        return out;
+    }
 
     std::string toString() const override { return "Try(...) Catch(...)"; }
 };
@@ -320,6 +336,15 @@ public:
     // registry currently: "vocab" (wraps string returns with vocab.lookup).
     // Empty list = no decoration.  See /spec/55_decorators.md.
     std::vector<std::string> decorators;
+    // spec/66 §2 — endpoint annotations.  Only meaningful on a `def` inside a
+    // `- service:`; the service pass reads them, an ordinary def ignores them.
+    std::vector<std::string> http;    // [verb, path]; empty = no REST transport
+    std::vector<std::string> roles;   // required roles; empty list + hasRoles = open
+    bool hasRoles = false;            // was `roles:` written at all?  (§5.3)
+    std::vector<std::string> cli;     // [subcommand, ...]; empty = no CLI transport
+    // spec/66 §5.6: von der Service-Synthese erzeugt.  Ein Aufruf AUS so einem
+    // Rumpf zaehlt nicht als Benutzung des Service.
+    bool serviceSynth = false;
     // Free-form metadata tags.  Recognised today: "deprecated" — every call
     // site of this function/method gets a compile-time warning.  Unknown tags
     // are ignored (forward-compatible).  Parsed from `meta: [...]`.
@@ -335,6 +360,10 @@ public:
 struct StructMember {
     std::string name;
     std::string type;
+    // spec/15: zweiter Name NACH AUSSEN (Serialisierung).  Leer = der echte
+    // Name gilt.  Noetig fuer fremde Formate, deren Schluessel aimls
+    // Drei-Zeichen-Regel nicht erfuellen (OCI: `id`).
+    std::string alias;
     std::unique_ptr<Expr> initialValue; // Applicable for classes/models
     uint64_t version = 1;
     std::string access = "public";
@@ -430,6 +459,9 @@ public:
 class EnumDecl : public Node {
 public:
     int level = -1;   // spec/65 F65-19: Typform traegt `level:`.  -1 = absent.
+    // spec/49 §18.2a: Vokabular einer Schnittstelle — alle Mitglieder gelten als
+    // verwendet, auch wenn DIESER Build sie nicht benennt.
+    bool wire = false;
     std::string name;
     std::vector<std::pair<std::string, int>> values; // enum name, integer value
     // Optional map: id → display label.  If empty, labels are derived from
@@ -537,6 +569,38 @@ public:
     std::vector<ClassGroupInstance> instances;
 
     std::string toString() const override { return "ClassGroupDecl(" + name + ")"; }
+};
+
+// One endpoint of a service (spec/66 §2): an ordinary `def` plus its transport
+// annotations, which live on the FunctionDecl itself.
+struct ServiceEndpoint {
+    std::unique_ptr<FunctionDecl> fn;   // owned until synthesis lifts it into the program
+    // Synthesis runs BEFORE type registration (so the lifted function and the
+    // description model are known like any other declaration), the checks run
+    // AFTER it (so models are registered).  The metadata the checks need is
+    // therefore captured here while `fn` is still owned.
+    std::string name, verb, path, requestType, returnType;
+    std::vector<std::string> roles;
+    std::vector<std::string> cli;   // §4.3 Unterkommando(s)
+    bool hasRoles = false;
+    int  argCount = 0;
+    bool captured = false;
+};
+
+// A service declaration (spec/66).  One statement of an endpoint — name, request
+// and response model, verb and path, required roles — from which the compiler
+// synthesizes the RPC handler, the HTTP route, the client stub and the
+// description table.  The body is written once and reached through every
+// transport.
+class ServiceDecl : public Node {
+public:
+    std::string name;
+    std::string base;                        // HTTP path prefix, e.g. "/api/v1"
+    std::string auth;                        // auth class, or "none"/"" = no gate
+    std::vector<std::string> transports;     // rpc | rest | cli
+    std::vector<ServiceEndpoint> endpoints;
+
+    std::string toString() const override { return "ServiceDecl(" + name + ")"; }
 };
 
 // One target of an external `groupmethods:` block: the coordination methods to
@@ -716,6 +780,10 @@ public:
     float width = 0, height = 0;
     std::string texture;
     bool draggable = false;
+    /* spec/44_6: `input_transparent: true` am Prefab — gilt dann fuer JEDE
+     * Instanz.  Pro Aufrufstelle zu setzen hiess, es beim naechsten Effekt zu
+     * vergessen, und dann stiehlt die Dekoration wieder den Hover. */
+    bool inputTransparent = false;
     /// `binds: <TypeName>` — declares which Model/cascade this prefab is a
     /// visual representation of.  Runtime uses it to route field bindings
     /// (`bind:` on children) to the correct Model-instance-per-Prefab-instance.

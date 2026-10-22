@@ -45,18 +45,18 @@
     condition: { neq: [got_stop, 0] }
     then:
       - print: ["FAIL ptr-channel stop mismatch: expected 0, got ${got_stop}"]
-      - exit: [1]
+      - call: [sys.exit, 1]
 
 - if:
     condition: { neq: [got_win_start, 123] }
     then:
       - print: ["FAIL ptr-channel win_start mismatch: expected 123, got ${got_win_start}"]
-      - exit: [1]
+      - call: [sys.exit, 1]
 
 - if:
     condition: { neq: [got_seq_len, 31] }
     then:
       - print: ["FAIL ptr-channel seq_len mismatch: expected 31, got ${got_seq_len}"]
-      - exit: [1]
+      - call: [sys.exit, 1]
 
 - print: ["PASS test_chan_ptr_model_repro"]

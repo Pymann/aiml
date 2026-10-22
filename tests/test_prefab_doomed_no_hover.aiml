@@ -1,0 +1,103 @@
+# SPEC: 44_6_prefabs
+# Eine zum Loeschen markierte Instanz darf keine Eingabe mehr nehmen, und die
+# Szene darf nach dem Freigeben keine Referenz auf sie behalten.
+#
+# Die Luecke: `destroy` raeumt genestete Kinder nicht sofort weg, sondern setzt
+# sie auf parent=null + pending_delete; der Sweep am Frame-Ende gibt sie frei und
+# markiert IHRE Kinder genauso.  Damit existiert ein Kind der zweiten Ebene
+# EINEN ganzen Frame als Waise: top-level (parent==null), sichtbar, und
+# `hit_test` fragte `pending_delete` nicht ab — die Waise konnte also den Hover
+# an sich nehmen, obwohl sie schon tot ist.  Sie rendert dabei an rohen lokalen
+# Koordinaten, taucht also irgendwo am Fensterursprung auf.  Gibt der naechste
+# Sweep sie frei, zeigte `g_scene->hovered` auf freigegebenen Speicher, und der
+# naechste `update_hover` schrieb dort hinein (`hovered->hovered = false`).
+#
+# Geprueft wird in dieser Reihenfolge:
+#   1. Ausgangslage: der Enkel ist genestet und NICHT hit-testbar (sonst wuerde
+#      Schritt 3 auch bei kaputtem Nesting gruen)
+#   2. nach destroy+Sweep lebt der Enkel noch (Waisen-Frame) ...
+#   3. ... nimmt aber keinen Hover: get_hovered bleibt null
+#   4. nach dem zweiten Sweep haelt die Szene keine Hover-Referenz mehr
+# Requires: display
+# Expected exit code: 0
+
+- prefab:
+    name: DoomRoot
+    width: 120
+    height: 90
+    children:
+      - { name: root_body, type: rect, x: 0, y: 0, width: 120, height: 90,
+          bg_color: 0x404040FF }
+
+- prefab:
+    name: DoomRow
+    width: 100
+    height: 70
+    children:
+      - { name: row_body, type: rect, x: 0, y: 0, width: 100, height: 70,
+          bg_color: 0x606060FF }
+
+- prefab:
+    name: DoomLeaf
+    width: 80
+    height: 60
+    children:
+      - { name: leaf_body, type: rect, x: 0, y: 0, width: 80, height: 60,
+          bg_color: 0x8A3A3AFF }
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [win, window_handle, { call: [engine.create_window, 400, 300, "doomed"] }]
+      - if: { condition: { eq: [win, null] }, then: [{ call: [log.error, "FAIL create_window"] }, { return: 1 }] }
+      - call: [gl.init]
+      - call: [ui.init]
+      - call: [engine.prefab_scene_init, 400, 300]
+      - call: [input.init, win]
+
+      # root → row → leaf.  Die lokale Position des Enkels ist gleichzeitig seine
+      # Waisen-Position, denn eine Waise rendert an rohen lokalen Koordinaten.
+      - decl: [root, prefab_instance, { call: [engine.instantiate, "DoomRoot"] }]
+      - call: [root.set_pos, 10.0, 10.0]
+      - call: [root.set_z, 5]
+      - decl: [row, prefab_instance, { call: [engine.instantiate, "DoomRow"] }]
+      - call: [root.add_child, row]
+      - decl: [leaf, prefab_instance, { call: [engine.instantiate, "DoomLeaf"] }]
+      - call: [row.add_child, leaf]
+      - call: [leaf.set_pos, 200.0, 180.0]
+
+      - decl: [probe_x, f32, 230.0]
+      - decl: [probe_y, f32, 200.0]
+
+      # ── 1. Ausgangslage: genestet, also nicht hit-testbar ───────────────
+      - call: [engine.draw_scene]
+      - decl: [hit_nested, prefab_instance, { call: [engine.hit_test, probe_x, probe_y] }]
+      - if:
+          condition: { peq: [hit_nested, leaf] }
+          then: [{ call: [log.error, "FAIL genesteter Enkel ist hit-testbar — Nesting kaputt, der Test waere wertlos"] }, { return: 1 }]
+
+      # ── 2. destroy + Sweep: der Enkel lebt noch als Waise ──────────────
+      - call: [engine.destroy, root]
+      - call: [engine.draw_scene]
+
+      # ── 3. ... nimmt aber keinen Hover mehr ────────────────────────────
+      - call: [engine.swap, win]
+      - call: [input.post_mouse_move, probe_x, probe_y]
+      - call: [engine.update_hover, probe_x, probe_y]
+      - decl: [hov_doomed, prefab_instance, { call: [engine.get_hovered] }]
+      - if:
+          condition: { pneq: [hov_doomed, null] }
+          then: [{ call: [log.error, "FAIL eine zum Loeschen markierte Waise hat den Hover genommen"] }, { return: 1 }]
+
+      # ── 4. zweiter Sweep gibt die Waise frei — keine Referenz bleibt ───
+      - call: [engine.draw_scene]
+      - call: [engine.update_hover, probe_x, probe_y]
+      - decl: [hov_after, prefab_instance, { call: [engine.get_hovered] }]
+      - if:
+          condition: { pneq: [hov_after, null] }
+          then: [{ call: [log.error, "FAIL die Szene haelt nach dem Freigeben noch eine Hover-Referenz"] }, { return: 1 }]
+
+      - call: [engine.destroy_window, win]
+      - call: [log.info, "PASS prefab_doomed_no_hover"]
+      - return: 0

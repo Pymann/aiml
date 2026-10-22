@@ -53,6 +53,7 @@ Klassifikation per Extension:
 | shader   | `.glsl .frag .vert`              | (V2) `gl.shader(stem) → gl_shader`      |
 | font     | `.ttf .otf`                      | `gl.font(stem, size) → ui_font`         |
 | data     | `.json .yml .yaml .txt .md`      | `io.read_asset(stem) → string`          |
+| mesh     | `.glb .gltf`                     | `gltf.model(stem) → gltf_scene`         |
 
 Selber Stem in verschiedenen Stores ist erlaubt:
 `golem.png` (texture) und `golem.mp3` (audio) koexistieren konfliktfrei.
@@ -91,6 +92,8 @@ Fehlerfälle führen zu Compile-Hard-Errors:
 |---|---|
 | `gl.tex("misspelled")` mit String-Literal und Stem nicht im Texture-Store | `gl.tex: stem 'misspelled' not in texture store` |
 | `gl.load_texture("resources/...")` mit String-Literal-Pfad in einem `asset_directory` | `gl.load_texture: literal path '<path>' is in the asset bundle; use gl.tex("<stem>") instead` |
+| `gltf.model("misspelled")` mit String-Literal und Stem nicht im Mesh-Store | `gltf.model: stem 'misspelled' not in mesh store` |
+| `gltf.load("assets/...")` mit String-Literal-Pfad in einem `asset_directory` | `gltf.load: literal path '<path>' is in the asset bundle; use gltf.model("<stem>") instead` |
 | Prefab-Spec `texture: "resources/foo.png"` (enthält `/`) | `prefab texture must be a stem, not a path: 'resources/foo.png'` |
 | Prefab-Spec `texture: "foo.png"` (enthält `.`) | `prefab texture must be a stem (no extension): 'foo.png'` |
 | Prefab-Spec `texture: "unknown"` (Stem nicht im Store) | `prefab texture: stem 'unknown' not in texture store` |
@@ -127,6 +130,36 @@ Files und Subdirs mit Großbuchstaben im Namen werden **gewarnt + geskippt**.
 Begründung: Lookup ist case-sensitive; halb-aliased Files (`Hammer.png` neben
 `hammer.png`) sollen erst gar nicht ins Store, sondern an die Quelle
 zurückgemeldet werden.
+
+### Mesh: 3D-Modelle sind Assets wie Texturen
+
+`gltf.load(path)` gibt es seit spec/43_1 — aber ohne Kind im Register waren `.glb`
+und `.gltf` **unbekannte Endungen**: der Scanner warnte und übersprang sie, und der
+einzige Weg zu einem Modell war ein **Pfad im Quelltext**.  Das ist genau das, was
+dieses Kapitel für Texturen verbietet (ein Pfad bricht, sobald jemand das
+Arbeitsverzeichnis wechselt oder nach WASM baut).  Gemessen in cosmos
+(18.10.2026): 248 Warnungen in einem Client-Build — zwei Dateien, einmal pro
+Übersetzungseinheit.
+
+```aiml
+- decl: [rack, gltf_scene, { call: [gltf.model, "cosmos_rack"] }]   # assets/shapes/cosmos_rack.glb
+```
+
+`gltf.model(stem)` schlägt den Stem im Mesh-Store nach und lädt die Datei mit
+demselben Loader wie `gltf.load`.  **Kein Cache**: eine `gltf_scene` ist eine
+eindeutige Ressource (spec/61 §2.1) mit `scene.free` — zwei Aufrufer, die sich
+ein Handle teilen, gäben ihr zweimal frei.  Wer dasselbe Modell mehrfach
+braucht, hält es in seiner Klasse, wie jede andere Ressource auch.
+
+`gltf.load` mit einem **String-Literal**, das in einem `asset_directory` liegt,
+ist seither ein Fehler — dieselbe Regel wie `gl.load_texture` (siehe
+Compile-Time-Validierung).  Ein dynamischer Pfad (Kommandozeile, Konfiguration)
+bleibt erlaubt: `glbview FILE.glb` lädt Dateien, die gar nicht zum Bündel gehören.
+
+**Was NICHT ins Register gehört:** die QUELLE eines Modells.  ShapeML (`.shaml`)
+beschreibt, wie ein `.glb` entsteht; ausgeliefert wird das Ergebnis.  Solche
+Quellen liegen neben dem Projekt, nicht im Asset-Verzeichnis — sonst wandert bei
+jedem WASM-Build Material ins Bündel, das niemand lädt.
 
 ### Unbekannte Extensions: warn + skip
 

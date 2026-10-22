@@ -857,10 +857,11 @@ extern "C" char* aiml_http_req_header(void* req_ptr, const char* name) {
     AimlHttpRequest* req = static_cast<AimlHttpRequest*>(req_ptr);
     if (!req || !name) return nullptr;
     std::string lname = str_tolower(name);
-    // Refcounted copy so the value outlives the request (no UAF after req free);
-    // preserve nullptr for "header not present".
+    // Refcounted copy so the value outlives the request (no UAF after req free).
+    // Ein fehlender Header ist der LEERE String — nullptr liess das Beispiel aus
+    // spec/32_3 §2.2 (`set: [auth, req.header("Authorization")]`) abstuerzen.
     const char* v = aiml_http_map_get(req->req_headers, lname.c_str());
-    return v ? aiml_str_dup(v) : nullptr;
+    return aiml_str_dup(v ? v : "");
 }
 
 extern "C" char* aiml_http_req_cookie(void* req_ptr, const char* name) {
@@ -1828,19 +1829,22 @@ extern "C" void* aiml_http_resp_get_headers(void* resp) {
 
 // method/path/body: return refcounted copies (aiml_str_dup) so they are lifetime-
 // safe if referenced past the request's own free — consistent with aiml_http_resp_body.
+// NIE nullptr: ein aiml-`string` hat fuer "nichts da" den LEEREN String.  Eine
+// Anfrage ohne Content-Length (jedes GET) liess `req->body` null, und ein voellig
+// korrektes `- set: [body, req.body]` starb dann in strlen(nullptr).
 extern "C" char* aiml_http_req_method(void* req) {
     const char* v = req ? static_cast<AimlHttpRequest*>(req)->method : nullptr;
-    return v ? aiml_str_dup(v) : nullptr;
+    return aiml_str_dup(v ? v : "");
 }
 
 extern "C" char* aiml_http_req_path(void* req) {
     const char* v = req ? static_cast<AimlHttpRequest*>(req)->path : nullptr;
-    return v ? aiml_str_dup(v) : nullptr;
+    return aiml_str_dup(v ? v : "");
 }
 
 extern "C" char* aiml_http_req_body(void* req) {
     const char* v = req ? static_cast<AimlHttpRequest*>(req)->body : nullptr;
-    return v ? aiml_str_dup(v) : nullptr;
+    return aiml_str_dup(v ? v : "");
 }
 
 extern "C" void* aiml_http_req_url(void* req) {

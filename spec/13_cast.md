@@ -34,14 +34,18 @@ AIML automatically handles casting between compatible pointer types, primarily t
 > [!WARNING]
 > This is a raw pointer cast. It is the programmer's responsibility to ensure the `any` value actually points to a valid instance of the target type. Runtime validation is planned but not yet enforced.
 
-## 3. Explicit Casting (Future)
+## 3. Explicit Casting
 
-While implicit casts handle common pointer scenarios, explicit casting will be required for value conversions (e.g., `f64` -> `int`, `any` -> `struct` copy).
+Numeric value conversions use the `cast` operator; the complete matrix for `bool`/`i32`/`i64`/
+`f32`/`f64` is normative in [`04_1_precedence.md` §7](04_1_precedence.md).
 
 ```yaml
-# Proposed Syntax
-- set: [val, { cast: [any_val, MyStruct] }] # Copies data from pointer
+- decl: [pixels, i32, 1280]
+- decl: [ratio,  f32, { cast: [pixels, f32] }]   # int → float
+- decl: [index,  i32, { cast: [ratio, i32] }]    # float → int, truncates toward zero
 ```
+
+Casting `any` to a struct (copying through a pointer) is **not** implemented.
 
 ## 4. Heterogeneous Collections
 
@@ -65,17 +69,30 @@ To access the value pointed to by a pointer (e.g. `any` cast to `ptr<T>`), use t
 
 ## 6. Numeric Conversion on Assignment
 
-Whenever a numeric value is stored into a numeric slot of a different type — `decl` initializer,
-`set` of a local or a model/class field (including `<.field` and nested paths), `idx` of a list
-element or element field, a function or method argument, and a `return` value — the compiler
-converts the **value**, never the bit pattern:
+**Target state (decided): there are no implicit casts.** Every numeric conversion is written out
+with `cast` (§3). A value of the wrong numeric type is a compile error, not a silent conversion —
+`f32` → `i32` loses information, `i64` → `f32` loses precision, and both are too easy to introduce
+by accident to happen unannounced.
 
-| Source → target | Conversion |
+**Current state: implicit conversion still happens** at the sites below, and is kept for now
+(decision 2026-10-09) because removing it changes every call site that relies on it. Treat it as
+deviation, not as contract: new code writes the `cast` explicitly.
+
+| Site | Implicit conversions performed |
 |---|---|
-| integer → `f32`/`f64` | signed integer to floating point (`bool` → `0.0`/`1.0`) |
-| `f32` ↔ `f64` | floating-point extend / round to nearest |
-| integer → wider integer | sign extension (`bool`: zero extension) |
-| integer → narrower integer | truncation |
+| Function / method arguments (`ast_compiler_call.cpp` ~870) | integer widening, `f32`→`f64`, integer→float, `f64`→`f32` |
+| `return` value (`ast_compiler_stmt.cpp` ~4904) | integer→float |
+| Default-value stores and member stores (`ast_compiler_stmt.cpp` ~158, ~2636, ~3571, ~3915, ~4207) | integer↔integer, `bool`→integer, integer→float, float↔float, **float→integer** |
+| List / map / array literal elements (`ast_compiler_stmt.cpp` ~909, ~1197, ~1327, ~2286, ~2317) | integer resize, integer→float |
+| `list.push` (`ast_compiler_call.cpp` ~2094) | integer resize, integer→float |
+| Model / class field defaults (`ast_compiler.cpp` ~277) | integer resize, integer→float |
+| `vec*`/`quat` scalar operand (`ast_compiler_expr.cpp` ~704) | integer→`f32`, `f64`→`f32` |
+| Bitwise right operand (`ast_compiler_expr.cpp` ~771) | integer width match |
 
-Floating point → integer is not an implicit argument conversion; use an explicit conversion
-where one is provided. Arithmetic operands are not covered by this section.
+⚠️ **Contradiction to record.** The store path at `ast_compiler_stmt.cpp:169` converts
+**float → integer** implicitly (`default_fp_to_int`). That is the one direction this chapter
+previously declared non-implicit, and it is the most lossy of all of them. It is the first
+candidate to remove when implicit conversion goes away.
+
+Arithmetic operands are not covered by any of this: mixed-type operands are a compile error
+(`04_1` §3), which is the rule the rest of the language is moving toward.

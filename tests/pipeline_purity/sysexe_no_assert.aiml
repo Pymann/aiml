@@ -1,0 +1,18 @@
+# SPEC?: 62_pipelines   # aus dem Dateinamen, zu bestaetigen
+# sys.exe im reinen Rumpf OHNE assert_pure: Fehler (F62-22/F62-104).
+# Requires: driver
+- def:
+    name: body_exe
+    return: i32
+    body:
+      - decl: [argv, list<string>]
+      - call: [argv.push, "/bin/true"]
+      - decl: [proc, process, { call: [sys.exe, argv] }]
+      - return: { call: [proc.wait] }
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [pkg, Code, { call: [sys.bundle, "body_exe", { context: true, pure: true }] }]
+      - return: 0

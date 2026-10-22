@@ -1,0 +1,75 @@
+# SPEC: 66_services §6 — REST-Gate: das Token kommt aus dem Authorization-Header
+# (Bearer), sonst aus dem Feld.  Ohne Token 401, mit falscher Rolle 403, sonst 200.
+# Expected exit code: 0
+- import: "tests/services/_models.aiml"
+- import: "tests/services/_auth.aiml"
+
+- service:
+    name: SecureApi
+    base: "/api/v1"
+    transport: [rest]
+    auth: TokenAuth
+    endpoints:
+      - def:
+          name: secret
+          http: [get, "/secret/:release_id"]
+          roles: [viewer]
+          args: [[req, ResolveReq]]
+          return: ResolveResp
+          body:
+            - decl: [out, ResolveResp]
+            - set: [out.spdx, req.release_id]
+            - return: out
+
+- def:
+    name: status_of
+    static_off: ["str_cmp"]
+    args: [[token, string]]
+    return: i32
+    body:
+      - decl: [ask_url, url]
+      - set: [ask_url, { call: [http.parse_url, "http://127.0.0.1:23192/api/v1/secret/rel-9"] }]
+      - decl: [client, http_client_handle]
+      - set: [client, { call: [http.new_request, "GET", ask_url] }]
+      - if:
+          condition: { gt: [token.len, 0] }
+          then:
+            - call: [client.headers.put, "Authorization", "Bearer ${token}"]
+      - decl: [answer, http_response_handle]
+      - set: [answer, { call: [client.send] }]
+      - decl: [code, i32]
+      - set: [code, { call: [answer.status] }]
+      - call: [answer.free]
+      - return: code
+
+- def:
+    name: main
+    static_off: ["str_cmp"]
+    return: i32
+    body:
+      - decl: [bad, i32, 0]
+      - decl: [srv, http_server_handle]
+      - set: [srv, { call: [http.server, "127.0.0.1", 23192] }]
+      - decl: [api, ptr<SecureApi>, { new: SecureApi }]
+      - decl: [gate, ptr<TokenAuth>, { new: TokenAuth }]
+      - call: [api.set_auth, gate]
+      - call: [api.serve_rest, srv]
+      - decl: [srv_thread, thread_handle]
+      - set: [srv_thread, { call: [srv.start_async] }]
+      - call: [time.sleep_ms, 200]
+
+      - decl: [no_token, i32, { call: [status_of, ""] }]
+      - if: { condition: { neq: [no_token, 401] }, then: [{ print: ["FAIL kein Token -> ${no_token}, erwartet 401"] }, { set: [bad, 1] }] }
+
+      - decl: [wrong_token, i32, { call: [status_of, "nope"] }]
+      - if: { condition: { neq: [wrong_token, 403] }, then: [{ print: ["FAIL falsche Rolle -> ${wrong_token}, erwartet 403"] }, { set: [bad, 1] }] }
+
+      - decl: [good_token, i32, { call: [status_of, "good"] }]
+      - if: { condition: { neq: [good_token, 200] }, then: [{ print: ["FAIL gueltiges Token -> ${good_token}, erwartet 200"] }, { set: [bad, 1] }] }
+
+      - call: [srv.stop]
+      - call: [srv_thread.join]
+      - free: gate
+      - free: api
+      - if: { condition: { eq: [bad, 0] }, then: [{ print: ["test_service_rest_auth PASS"] }] }
+      - return: bad

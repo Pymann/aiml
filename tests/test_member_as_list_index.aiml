@@ -1,0 +1,102 @@
+# SPEC?: 10_collections   # aus dem Dateinamen, zu bestaetigen
+# Ein KLASSEN-MEMBER als Listenindex: `{ at: [liste, <.feld] }`.
+#
+# In Tests steht dort fast immer eine lokale Variable.  Im Client steht dort ein
+# Member (die Lauf-Auswahl) — und genau diese Funktion stuerzte in WASM mit
+# "memory access out of bounds" ab.  Falls der erzeugte Code den Member anders
+# laedt als eine Lokale, waere das die Ursache.
+# Expected exit code: 0
+
+- model:
+    name: Item
+    fields:
+      - [tag,   string]
+      - [value, i32]
+
+- class:
+    name: Picker
+    members:
+      - [chosen, i32]
+      - [seen,   i32]
+    methods:
+      - def:
+          name: pick
+          access: public
+          static_off: ["str_cmp"]
+          args: [[items, list<Item>]]
+          return: { type: string, lifetime: producer }
+          body:
+            # Grenzen wie im Client: erst korrigieren, dann greifen.
+            - if: { condition: { ge: [<.chosen, items.len] }, then: [{ set: [<.chosen, 0] }] }
+            - if: { condition: { lt: [<.chosen, 0] }, then: [{ set: [<.chosen, { -: [items.len, 1] }] }] }
+            - decl: [picked, Item, { at: [items, <.chosen] }]
+            - set: [<.seen, { +: [<.seen, 1] }]
+            # Danach die ganze Liste durchlaufen — der Alias wird GEHALTEN.
+            - decl: [joined, string, ""]
+            - decl: [idx, i32, 0]
+            - while:
+                condition: { lt: [idx, items.len] }
+                body:
+                  - decl: [cur, Item, { at: [items, idx] }]
+                  - set: [joined, "${joined}${cur.tag} "]
+                  - set: [idx, { +: [idx, 1] }]
+            - return: "${picked.tag}=${picked.value} von ${items.len}: ${joined}"
+
+- def:
+    name: expect
+    args: [[what, string], [cond, i32]]
+    return: i32
+    body:
+      - if:
+          condition: { eq: [cond, 1] }
+          then: [{ print: ["  ok   ${what}"] }, { return: 0 }]
+      - print: ["  FAIL ${what}"]
+      - return: 1
+
+- def:
+    name: main
+    static_off: ["str_cmp"]
+    return: i32
+    body:
+      - decl: [fails, i32, 0]
+      - decl: [picker, ptr<Picker>, { new: Picker }]
+      - decl: [items, list<Item>]
+      - decl: [fill, i32, 0]
+      - while:
+          condition: { lt: [fill, 5] }
+          body:
+            - decl: [one, Item]
+            - set: [one.tag, "eintrag-${fill}"]
+            - set: [one.value, { '*': [fill, 10] }]
+            - call: [items.push, one]
+            - set: [fill, { +: [fill, 1] }]
+
+      - set: [picker.chosen, 2]
+      - decl: [text_a, string, { call: [picker.pick, items] }]
+      - set: [fails, { +: [fails, { call: [expect, "Member als Index greift das richtige Element", { gt: [{ call: [text_a.index_of, "eintrag-2=20"] }, -1] }] }] }]
+
+      # Ausserhalb des Bereichs: die Korrektur im Rumpf muss greifen.
+      - set: [picker.chosen, 99]
+      - decl: [text_b, string, { call: [picker.pick, items] }]
+      - set: [fails, { +: [fails, { call: [expect, "zu grosser Index wird korrigiert", { gt: [{ call: [text_b.index_of, "eintrag-0="] }, -1] }] }] }]
+      - set: [picker.chosen, -1]
+      - decl: [text_c, string, { call: [picker.pick, items] }]
+      - set: [fails, { +: [fails, { call: [expect, "negativer Index wird korrigiert", { gt: [{ call: [text_c.index_of, "eintrag-4="] }, -1] }] }] }]
+
+      # Mehrfach, wie in einer Bildschleife.
+      - decl: [round, i32, 0]
+      - while:
+          condition: { lt: [round, 30] }
+          body:
+            - set: [picker.chosen, { '%': [round, 5] }]
+            - decl: [text_d, string, { call: [picker.pick, items] }]
+            - if: { condition: { lt: [text_d.len, 10] }, then: [{ set: [fails, { +: [fails, 1] }] }] }
+            - set: [round, { +: [round, 1] }]
+      - set: [fails, { +: [fails, { call: [expect, "30 Runden ohne Schaden", { eq: [fails, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "der Zaehler stimmt", { eq: [picker.seen, 33] }] }] }]
+
+      - if:
+          condition: { neq: [fails, 0] }
+          then: [{ print: ["test_member_as_list_index FAIL (${fails})"] }, { return: 1 }]
+      - print: ["test_member_as_list_index PASS"]
+      - return: 0

@@ -1,0 +1,219 @@
+# SPEC: 62_pipelines
+# spec/62 §5.6 + §5.7: Reichweite eines Fehlschlags, Versuche, Status.
+#
+# Der Kern von §5.6 ist, dass die Reichweite am SCHRITT haengt, nicht an der
+# Pipeline: ein fehlgeschlagenes fetch_sources macht jede Lane sinnlos, ein
+# fehlgeschlagenes build in einer Lane sagt nichts ueber die anderen.  Drei
+# Reichweiten muessen sich daher MESSBAR unterscheiden — gleiche Pipeline,
+# gleicher Rumpf, nur on_fail anders:
+#   lane      -> jede Lane versucht es, keine kommt zur zweiten Stufe
+#   pipeline  -> nach dem ersten Fehlschlag startet nichts mehr
+#   continue  -> der Fehlschlag wird vermerkt, die Lane laeuft weiter
+#
+# Vom Status wird nur geprueft, was in spec/62 schon ENTSCHIEDEN ist (F62-93):
+# dass eine gesetzte Farbe den Schritt erreicht und dass die Lane aggregiert
+# statt zu mischen.  Keine einzelne Farbbedeutung — die ist offen (§16.6).
+# Expected exit code: 0
+
+- decl: [g_b_runs, i32, 0]
+
+- class:
+    name: StepFailed
+    members: [[message, string]]
+
+- def:
+    name: ok_body
+    return: i32
+    body: [{ return: 0 }]
+
+# bad_body: scheitert.  Ein Schritt scheitert, wenn sein Rumpf WIRFT (F62-41) —
+# NICHT, wenn er eine Zahl != 0 zurueckgibt: der Rueckgabewert ist nach §5.3 ein
+# Ergebnis und wird gecacht.  Gemessen in tests/test_bundle_exec_semantics.aiml.
+- def:
+    name: bad_body
+    return: i32
+    body:
+      - throw: { new: StepFailed, message: "geplatzt" }
+      - return: 0
+
+# yellow_body: gelingt, setzt aber seine Farbe selbst (§5.7).
+- def:
+    name: yellow_body
+    return: i32
+    body:
+      - call: [step.set_status, StepStatus.yellow]
+      - return: 0
+
+# lane_body: bricht ausdruecklich die eigene Lane ab (F62-46).
+- def:
+    name: lane_body
+    return: i32
+    body:
+      - call: [step.fail_lane, "ausdruecklich"]
+      - return: 0
+
+# slow_body: laeuft laenger als das Zeitlimit des Schritts.
+- def:
+    name: slow_body
+    return: i32
+    body:
+      - decl: [argv, list<string>]
+      - call: [argv.push, "sleep"]
+      - call: [argv.push, "2"]
+      - decl: [proc, process, { call: [sys.exe, argv] }]
+      - decl: [wait_rc, i32, { call: [proc.wait] }]
+      - return: 0
+
+- def:
+    name: expect
+    args: [[what, string], [cond, i32]]
+    return: i32
+    body:
+      - if:
+          condition: { eq: [cond, 1] }
+          then: [{ print: ["  ok   ${what}"] }, { return: 0 }]
+      - print: ["  FAIL ${what}"]
+      - return: 1
+
+# Beobachter: zaehlt, wie oft die ZWEITE Stufe laeuft — das ist das Mass fuer
+# die Reichweite.  Er laeuft im Kontext des Aufrufers (F62-89), darf also eine
+# globale Variable fuehren.
+- def:
+    name: on_step
+    args: [[event, ref<StepRun>]]
+    static_off: ["str_cmp"]
+    body:
+      - if: { condition: { eq: [event.name, "second"] }, then: [{ set: [g_b_runs, { +: [g_b_runs, 1] }] }] }
+
+# two_stage: zwei Lanes, Stufe 1 scheitert, Stufe 2 ist der Zeuge.
+- def:
+    name: two_stage
+    args: [[reach, i32], [cls, i32], [tries, i32]]
+    return: pipeline
+    body:
+      - decl: [bad, step, { call: [step.new] }]
+      - call: [bad.set_name, "first"]
+      - call: [bad.set_body, { call: [sys.bundle, "bad_body", { context: true }] }]
+      - call: [bad.set_cache, cls]
+      - call: [bad.set_on_fail, reach]
+      - if: { condition: { gt: [tries, 1] }, then: [{ call: [bad.set_retry, tries] }] }
+      - decl: [stg_one, stage, { call: [stage.new] }]
+      - call: [stg_one.set_name, "one"]
+      - call: [stg_one.add_step, bad]
+      - decl: [good, step, { call: [step.new] }]
+      - call: [good.set_name, "second"]
+      - call: [good.set_body, { call: [sys.bundle, "ok_body", { context: true }] }]
+      # Dieselbe Klasse wie der erste Schritt: sonst kann der zweite nie
+      # treffen, und "ein Erfolg WIRD aufgezeichnet" waere nicht pruefbar.
+      - call: [good.set_cache, cls]
+      - decl: [stg_two, stage, { call: [stage.new] }]
+      - call: [stg_two.set_name, "two"]
+      - call: [stg_two.add_step, good]
+      - decl: [lanes, list<string>]
+      - call: [lanes.push, "a"]
+      - call: [lanes.push, "b"]
+      - decl: [pipe, pipeline, { call: [pipeline.new] }]
+      - call: [pipe.set_name, "reach"]
+      - call: [pipe.add_param, "lane", lanes]
+      - call: [pipe.add_stage, stg_one]
+      - call: [pipe.add_stage, stg_two]
+      - return: pipe
+
+# one_step: eine Lane, ein Schritt — fuer Status und Zeitlimit.
+- def:
+    name: one_step
+    args: [[which, i32]]
+    return: pipeline
+    body:
+      - decl: [stp, step, { call: [step.new] }]
+      - call: [stp.set_name, "only"]
+      - call: [stp.set_cache, CacheClass.opaque]
+      - if: { condition: { eq: [which, 0] }, then: [{ call: [stp.set_body, { call: [sys.bundle, "yellow_body", { context: true }] }] }] }
+      - if: { condition: { eq: [which, 1] }, then: [{ call: [stp.set_body, { call: [sys.bundle, "lane_body", { context: true }] }] }] }
+      - if:
+          condition: { eq: [which, 2] }
+          then:
+            - call: [stp.set_body, { call: [sys.bundle, "slow_body", { context: true }] }]
+            - call: [stp.set_timeout, 100]
+      - decl: [stg, stage, { call: [stage.new] }]
+      - call: [stg.set_name, "only"]
+      - call: [stg.add_step, stp]
+      - decl: [pipe, pipeline, { call: [pipeline.new] }]
+      - call: [pipe.set_name, "single"]
+      - call: [pipe.add_stage, stg]
+      - return: pipe
+
+- def:
+    name: main
+    static_off: ["str_cmp"]
+    return: i32
+    body:
+      - decl: [fails, i32, 0]
+
+      # ── on_fail: lane (Vorgabe) ─────────────────────────────────────────
+      - set: [g_b_runs, 0]
+      - decl: [p_lane, pipeline, { call: [two_stage, OnFail.lane, CacheClass.opaque, 1] }]
+      - decl: [rc_l, i32, { call: [p_lane.run, on_step] }]
+      - set: [fails, { +: [fails, { call: [expect, "lane: der Lauf meldet den Fehlschlag", { neq: [rc_l, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "lane: JEDE Lane versucht es", { eq: [{ call: [p_lane.attempt_count] }, 2] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "lane: keine Lane kommt zur zweiten Stufe", { eq: [g_b_runs, 0] }] }] }]
+
+      # ── on_fail: pipeline ───────────────────────────────────────────────
+      - set: [g_b_runs, 0]
+      - decl: [p_pipe, pipeline, { call: [two_stage, OnFail.pipeline, CacheClass.opaque, 1] }]
+      - decl: [rc_p, i32, { call: [p_pipe.run, on_step] }]
+      - set: [fails, { +: [fails, { call: [expect, "pipeline: der Lauf meldet den Fehlschlag", { neq: [rc_p, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "pipeline: nach dem ersten Fehlschlag startet nichts mehr", { eq: [{ call: [p_pipe.attempt_count] }, 1] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "pipeline: zweite Stufe laeuft nicht", { eq: [g_b_runs, 0] }] }] }]
+
+      # ── on_fail: continue ───────────────────────────────────────────────
+      - set: [g_b_runs, 0]
+      - decl: [p_cont, pipeline, { call: [two_stage, OnFail.proceed, CacheClass.opaque, 1] }]
+      - decl: [rc_c, i32, { call: [p_cont.run, on_step] }]
+      - set: [fails, { +: [fails, { call: [expect, "continue: der Lauf gelingt trotz Fehlschlag", { eq: [rc_c, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "continue: die Lane laeuft weiter", { eq: [g_b_runs, 2] }] }] }]
+
+      # ── retry: der Rumpf wird mehrfach versucht (F62-41) ────────────────
+      - decl: [p_try, pipeline, { call: [two_stage, OnFail.pipeline, CacheClass.opaque, 3] }]
+      - decl: [rc_t, i32, { call: [p_try.run] }]
+      - set: [fails, { +: [fails, { call: [expect, "retry: drei Versuche, dann Fehlschlag", { eq: [{ call: [p_try.attempt_count] }, 3] }] }] }]
+
+      # ── retry + pure ist ein WIDERSPRUCH, kein Lauf (F62-41) ────────────
+      - decl: [p_bad, pipeline, { call: [two_stage, OnFail.lane, CacheClass.pure, 3] }]
+      - decl: [rc_bad, i32, { call: [p_bad.run] }]
+      - set: [fails, { +: [fails, { call: [expect, "retry mit pure wird abgelehnt", { neq: [rc_bad, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "und zwar BEVOR etwas laeuft", { eq: [{ call: [p_bad.attempt_count] }, 0] }] }] }]
+
+      # ── ein Fehlschlag wird NICHT aufgezeichnet (§7, F62-92) ────────────
+      # pure + continue: scheitert die erste Lane und wuerde das aufgezeichnet,
+      # traefe die zweite Lane den Fehlschlag statt ihn selbst zu versuchen.
+      - decl: [p_rec, pipeline, { call: [two_stage, OnFail.proceed, CacheClass.pure, 1] }]
+      - decl: [rc_rec, i32, { call: [p_rec.run] }]
+      # Der erste Schritt muss in BEIDEN Lanes gelaufen sein (2 Versuche), der
+      # zweite nur einmal (1 Versuch) und in der zweiten Lane getroffen haben.
+      - set: [fails, { +: [fails, { call: [expect, "ein Fehlschlag wird nicht aufgezeichnet", { eq: [{ call: [p_rec.attempt_count] }, 3] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "ein Erfolg schon", { eq: [{ call: [p_rec.reused_count] }, 1] }] }] }]
+
+      # ── set_status: die Farbe des Rumpfs erreicht den Schritt ───────────
+      - decl: [p_col, pipeline, { call: [one_step, 0] }]
+      - decl: [rc_col, i32, { call: [p_col.run] }]
+      - set: [fails, { +: [fails, { call: [expect, "set_status: der Lauf gelingt", { eq: [rc_col, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "set_status: die Farbe erreicht die Pipeline", { eq: [{ call: [p_col.status] }, StepStatus.yellow] }] }] }]
+
+      # ── fail_lane aus dem Rumpf (F62-46) ───────────────────────────────
+      - decl: [p_fl, pipeline, { call: [one_step, 1] }]
+      - decl: [rc_fl, i32, { call: [p_fl.run] }]
+      - set: [fails, { +: [fails, { call: [expect, "fail_lane bricht die Lane, obwohl der Rumpf 0 liefert", { neq: [rc_fl, 0] }] }] }]
+
+      # ── timeout begrenzt den GANZEN Schritt (F62-40) ────────────────────
+      - decl: [start_ms, i64, { call: [time.now] }]
+      - decl: [p_to, pipeline, { call: [one_step, 2] }]
+      - decl: [rc_to, i32, { call: [p_to.run] }]
+      - decl: [elapsed_ms, i64, { -: [{ call: [time.now] }, start_ms] }]
+      - set: [fails, { +: [fails, { call: [expect, "timeout: der Schritt gilt als gescheitert", { neq: [rc_to, 0] }] }] }]
+
+      - if:
+          condition: { neq: [fails, 0] }
+          then: [{ print: ["test_pipeline_failure FAIL (${fails})"] }, { return: 1 }]
+      - print: ["test_pipeline_failure PASS"]
+      - return: 0

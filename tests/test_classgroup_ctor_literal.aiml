@@ -1,0 +1,56 @@
+# SPEC: 58_classgroups
+# spec/58 §4: Konstruktor-Argumente kommen aus den Gruppen-`params` UND aus
+# Literalen.  String-Literale wurden bisher WÖRTLICH in die erzeugte Aufrufzeile
+# geschrieben — nach dem YAML-Parsen ohne Anführungszeichen, also las der
+# Compiler sie als Typnamen ("Unknown Type: 'cas'").  Zahlen gingen zufällig.
+# Expected exit code: 0
+
+- class:
+    name: Sink
+    members:
+      - [label, string]
+      - [size,  i32]
+      - [flag,  i32]
+    methods:
+      - def:
+          name: setup
+          access: public
+          args: [[label, string], [size, i32], [flag, i32]]
+          body:
+            - set: [<.label, label]
+            - set: [<.size, size]
+            - set: [<.flag, flag]
+      - def:
+          name: describe
+          access: public
+          return: string
+          body: [{ return: "${<.label}/${<.size}/${<.flag}" }]
+
+- classgroup:
+    name: LiteralRuntime
+    params: [[from_param, string]]
+    instances:
+      # Gemischt: ein Gruppen-Parameter und drei Literale (String, Zahl, Boolean).
+      - class: Sink
+        instance: mixed
+        constructor: [setup, from_param, 7, true]
+      # Nur Literale — der Fall, der vorher scheiterte.
+      - class: Sink
+        instance: literal_only
+        constructor: [setup, "run_logs", 42, false]
+
+- def:
+    name: main
+    static_off: ["str_cmp"]
+    return: i32
+    body:
+      - decl: [grp, ptr<LiteralRuntime>, { new: LiteralRuntime, from_param: "aus-param" }]
+
+      - decl: [got_mixed, string, { call: [grp.mixed.describe] }]
+      - if: { condition: { neq: [got_mixed, "aus-param/7/1"] }, then: [{ print: ["FAIL mixed: ${got_mixed}"] }, { return: 1 }] }
+
+      - decl: [got_lit, string, { call: [grp.literal_only.describe] }]
+      - if: { condition: { neq: [got_lit, "run_logs/42/0"] }, then: [{ print: ["FAIL literal: ${got_lit}"] }, { return: 1 }] }
+
+      - print: ["PASS classgroup_ctor_literal"]
+      - return: 0

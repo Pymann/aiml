@@ -1,0 +1,195 @@
+# SPEC: 44_0_input
+# spec/44_0 §8: Eingabe-Injektion im BROWSER-Zweig (Emscripten).
+#
+# Der Desktop-Zweig ist durch test_input_injection_click.aiml belegt.  Dieser
+# Test deckt den zweiten Zweig ab — den, in dem die WASM-Oberflächen laufen.
+# Er prüft bewusst NUR den Zustandsautomaten (kein GL, kein Prefab), damit er
+# unter node läuft: Injektion → Frame-Schnappschuss → Polling-Abfragen.
+#
+# Der eigentliche Punkt ist der Frame-Vertrag.  Die beiden Backends halten
+# Kanten unterschiedlich (Desktop leert Latches in update, der Browser schnappt
+# pending → frame), und naiv umgesetzt bräuchte der Browser die UMGEKEHRTE
+# Reihenfolge.  Dann verhielte sich ein auf dem Desktop geschriebenes Szenario
+# hier still anders.  Darum gilt überall dieselbe Regel: injizieren, lesen,
+# beim nächsten update ist die Kante weg — und genau das wird hier geprüft.
+# Requires: wasm
+#   Der Browser-Zweig existiert nur im wasm-Build; nativ wuerde input.init
+#   ohne Fenster scheitern.  Laeuft ueber run_wasm_tests.sh.
+# Expected exit code: 0
+
+- def:
+    name: main
+    static_off: ["str_cmp"]
+    return: i32
+    body:
+      - call: [input.init, null]
+
+      # ── Cursorposition ───────────────────────────────────────────────────
+      - call: [input.post_mouse_move, 123.0, 45.0]
+      - decl: [pos_x, f32, { call: [input.mouse_pos_x] }]
+      - decl: [pos_y, f32, { call: [input.mouse_pos_y] }]
+      - if:
+          condition: { neq: [pos_x, 123.0] }
+          then: [{ print: ["FAIL mouse_pos_x=${pos_x}, erwartet 123"] }, { return: 1 }]
+      - if:
+          condition: { neq: [pos_y, 45.0] }
+          then: [{ print: ["FAIL mouse_pos_y=${pos_y}, erwartet 45"] }, { return: 1 }]
+
+      # ── Druck ist SOFORT sichtbar (ohne update dazwischen) ───────────────
+      - call: [input.post_mouse_down, 0]
+      - decl: [held, i32, { call: [input.mouse_button, 0] }]
+      - decl: [edge, i32, { call: [input.mouse_pressed, 0] }]
+      - if:
+          condition: { neq: [held, 1] }
+          then: [{ print: ["FAIL mouse_button(0)=${held} direkt nach post_mouse_down"] }, { return: 1 }]
+      - if:
+          condition: { neq: [edge, 1] }
+          then: [{ print: ["FAIL mouse_pressed(0)=${edge} direkt nach post_mouse_down"] }, { return: 1 }]
+
+      # ── ... und nach update ist die KANTE weg, der Knopf aber noch gehalten
+      - call: [input.update]
+      - decl: [edge2, i32, { call: [input.mouse_pressed, 0] }]
+      - decl: [held2, i32, { call: [input.mouse_button, 0] }]
+      - if:
+          condition: { neq: [edge2, 0] }
+          then: [{ print: ["FAIL mouse_pressed(0)=${edge2} nach update — Kante feuert zweimal"] }, { return: 1 }]
+      - if:
+          condition: { neq: [held2, 1] }
+          then: [{ print: ["FAIL mouse_button(0)=${held2} nach update — Halten verloren"] }, { return: 1 }]
+
+      # ── Loslassen ────────────────────────────────────────────────────────
+      - call: [input.post_mouse_up, 0]
+      - decl: [rel, i32, { call: [input.mouse_released, 0] }]
+      - decl: [held3, i32, { call: [input.mouse_button, 0] }]
+      - if:
+          condition: { neq: [rel, 1] }
+          then: [{ print: ["FAIL mouse_released(0)=${rel} direkt nach post_mouse_up"] }, { return: 1 }]
+      - if:
+          condition: { neq: [held3, 0] }
+          then: [{ print: ["FAIL mouse_button(0)=${held3} nach Loslassen"] }, { return: 1 }]
+      - call: [input.update]
+      - decl: [rel2, i32, { call: [input.mouse_released, 0] }]
+      - if:
+          condition: { neq: [rel2, 0] }
+          then: [{ print: ["FAIL mouse_released(0)=${rel2} nach update — Kante feuert zweimal"] }, { return: 1 }]
+
+      # ── Tasten ───────────────────────────────────────────────────────────
+      - call: [input.post_key_down, "lctrl"]
+      - decl: [ctrl_down, i32, { call: [input.key_down, "lctrl"] }]
+      - decl: [ctrl_edge, i32, { call: [input.key_pressed, "lctrl"] }]
+      - if:
+          condition: { neq: [ctrl_down, 1] }
+          then: [{ print: ["FAIL key_down(lctrl)=${ctrl_down}"] }, { return: 1 }]
+      - if:
+          condition: { neq: [ctrl_edge, 1] }
+          then: [{ print: ["FAIL key_pressed(lctrl)=${ctrl_edge}"] }, { return: 1 }]
+      - call: [input.post_key_up, "lctrl"]
+      - decl: [ctrl_after, i32, { call: [input.key_down, "lctrl"] }]
+      - if:
+          condition: { neq: [ctrl_after, 0] }
+          then: [{ print: ["FAIL key_down(lctrl)=${ctrl_after} nach Loslassen"] }, { return: 1 }]
+
+      # ── Text landet als Ereignisse in der Queue ──────────────────────────
+      # Mit einem Mehrbyte-Zeichen: es muss EIN Ereignis sein, nicht zwei Bytes.
+      - call: [input.post_text, "aö"]
+      - decl: [ev_num, i32, 0]
+      - while:
+          condition: { gt: [{ call: [input.has_event] }, 0] }
+          body:
+            - decl: [ev, input_event, { call: [input.next_event] }]
+            - if:
+                condition: { eq: [ev.type, "text"] }
+                then: [{ set: [ev_num, { +: [ev_num, 1] }] }]
+      - if:
+          condition: { neq: [ev_num, 2] }
+          then: [{ print: ["FAIL post_text('aö') ergab ${ev_num} text-Ereignisse, erwartet 2"] }, { return: 1 }]
+
+      # ── Scrollen ─────────────────────────────────────────────────────────
+      - call: [input.post_scroll, 0.0, -3.0]
+      - decl: [scr, f32, { call: [input.mouse_scroll_y] }]
+      - if:
+          condition: { neq: [scr, -3.0] }
+          then: [{ print: ["FAIL mouse_scroll_y=${scr}, erwartet -3"] }, { return: 1 }]
+
+      # ── Drag-Flanken: Ein-Frame-Kanten, Zustand bleibt (§2.4) ────────────
+      # Wichtig fuer engine.update_drag_gesture (spec/44_6): es haengt an
+      # drag_started.  Geht diese Kante verloren, startet der Drag nicht,
+      # obwohl gezogen wurde — ununterscheidbar von "Karte nicht greifbar".
+      # Schwelle ist 5 px (Default), 12 px ueberschreiten sie sicher.
+      - call: [input.update]
+      - call: [input.post_mouse_move, 100.0, 100.0]
+      - call: [input.post_mouse_down, 0]
+      - call: [input.post_mouse_move, 100.0, 112.0]
+      - decl: [d_start, i32, { call: [input.drag_started, 0] }]
+      - decl: [d_act,   i32, { call: [input.drag_active, 0] }]
+      - if:
+          condition: { neq: [d_start, 1] }
+          then: [{ call: [log.error, "FAIL drag_started=${d_start} nach Ueberschreiten der Schwelle"] }, { return: 1 }]
+      - if:
+          condition: { neq: [d_act, 1] }
+          then: [{ call: [log.error, "FAIL drag_active=${d_act} waehrend des Drags"] }, { return: 1 }]
+      - call: [input.update]
+      - decl: [d_start2, i32, { call: [input.drag_started, 0] }]
+      - decl: [d_act2,   i32, { call: [input.drag_active, 0] }]
+      - if:
+          condition: { neq: [d_start2, 0] }
+          then: [{ call: [log.error, "FAIL drag_started haelt ueber den Frame hinaus (${d_start2})"] }, { return: 1 }]
+      - if:
+          condition: { neq: [d_act2, 1] }
+          then: [{ call: [log.error, "FAIL drag_active=${d_act2} nach dem Frame — der ZUSTAND muss bleiben, nur die Kante geht"] }, { return: 1 }]
+
+      # Loslassen = ended, nicht cancelled
+      - call: [input.post_mouse_up, 0]
+      - decl: [d_end, i32, { call: [input.drag_ended, 0] }]
+      - decl: [d_can, i32, { call: [input.drag_cancelled, 0] }]
+      - if:
+          condition: { neq: [d_end, 1] }
+          then: [{ call: [log.error, "FAIL drag_ended=${d_end} nach dem Loslassen"] }, { return: 1 }]
+      - if:
+          condition: { neq: [d_can, 0] }
+          then: [{ call: [log.error, "FAIL Loslassen meldete zusaetzlich drag_cancelled"] }, { return: 1 }]
+      # Der Drop traegt seine EIGENE Position (spec/44_0 §2.3).  Begruendung:
+      # die ended-Kante wird evtl. erst im naechsten Frame gemeldet, und bis
+      # dahin steht der Cursor woanders — wer den Drop dann ueber mouse_pos_*
+      # aufloest, trifft das falsche Ziel und loest einen Spielzug aus, den
+      # niemand wollte.  Losgelassen wurde bei 100/112.
+      - decl: [end_x, f32, { call: [input.drag_end_x, 0] }]
+      - decl: [end_y, f32, { call: [input.drag_end_y, 0] }]
+      - if:
+          condition: { neq: [end_x, 100.0] }
+          then: [{ call: [log.error, "FAIL drag_end_x=${end_x}, losgelassen wurde bei 100"] }, { return: 1 }]
+      - if:
+          condition: { neq: [end_y, 112.0] }
+          then: [{ call: [log.error, "FAIL drag_end_y=${end_y}, losgelassen wurde bei 112"] }, { return: 1 }]
+      # Und eine spaetere Bewegung darf den Loslasspunkt NICHT verschieben —
+      # genau das ist der Unterschied zu mouse_pos_*, das live ist.
+      - call: [input.post_mouse_move, 400.0, 400.0]
+      - if:
+          condition: { neq: [{ call: [input.drag_end_x, 0] }, 100.0] }
+          then: [{ call: [log.error, "FAIL eine Bewegung nach dem Loslassen hat drag_end_x verschoben"] }, { return: 1 }]
+      - if:
+          condition: { neq: [{ call: [input.mouse_pos_x] }, 400.0] }
+          then: [{ call: [log.error, "FAIL Gegenprobe: mouse_pos_x folgte der Bewegung nicht, der Test waere wertlos"] }, { return: 1 }]
+
+      - call: [input.update]
+      - if:
+          condition: { neq: [{ call: [input.drag_ended, 0] }, 0] }
+          then: [{ call: [log.error, "FAIL drag_ended haelt ueber den Frame hinaus"] }, { return: 1 }]
+
+      # Abbruch = cancelled, NICHT ended (sonst loest er einen Drop aus)
+      - call: [input.post_mouse_move, 200.0, 200.0]
+      - call: [input.post_mouse_down, 0]
+      - call: [input.post_mouse_move, 200.0, 212.0]
+      - call: [input.update]
+      - call: [input.post_touch_cancel]
+      - decl: [c_can, i32, { call: [input.drag_cancelled, 0] }]
+      - decl: [c_end, i32, { call: [input.drag_ended, 0] }]
+      - if:
+          condition: { neq: [c_can, 1] }
+          then: [{ call: [log.error, "FAIL drag_cancelled=${c_can} nach dem Abbruch"] }, { return: 1 }]
+      - if:
+          condition: { neq: [c_end, 0] }
+          then: [{ call: [log.error, "FAIL Abbruch meldete drag_ended=${c_end} — das loest einen Drop aus"] }, { return: 1 }]
+
+      - print: ["PASS input_injection_wasm"]
+      - return: 0

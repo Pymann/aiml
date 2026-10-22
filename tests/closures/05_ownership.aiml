@@ -1,0 +1,165 @@
+# SPEC: 61_memory_management_DRAFT,64_closures
+# static-check: off
+# Requires: driver
+# TIER: T2
+# CONSTRUCT: closure<Sig> is a Class-4 unique resource (spec/64 §6, spec/61 §2.1/§8/§9).
+# COVERS: move on assignment; ref<closure<Sig>> parameter = borrow (caller keeps it);
+#         by-value closure parameter = move-in sink (`lifetime: consumed` affirms);
+#         closure return = move out (`lifetime: producer`); list<closure<Sig>> holds move-only
+#         elements; a model with a closure field is move-only; early `free: [c]`; a throw out
+#         of a closure body reaches the closure's caller; a null call raises; create/drop in a
+#         loop does not accumulate.
+# EXPECT: exit 0 — and leak-free / no double free under the lifetime leak gates.
+
+- model: { name: Node, fields: [[ident, i32, 0], [tags, list<string>]] }
+- callable: { name: Read, return: i32 }
+- callable: { name: Boom }
+
+- model: { name: Slot, fields: [[name, string, "slot"], [run, closure<Read>]] }
+
+# borrow: the callee only CALLS it; the caller keeps ownership (§6)
+- def:
+    name: run_twice
+    args: [[cb, ref<closure<Read>>]]
+    return: i32
+    body:
+      - decl: [first, i32, { call: [cb] }]
+      - decl: [second, i32, { call: [cb] }]
+      - return: { +: [first, second] }
+
+# sink: a by-value closure parameter MOVES in; the callee owns and drops it
+- def:
+    name: consume_once
+    args: [[cb, closure<Read>, { lifetime: consumed }]]
+    return: i32
+    body:
+      - return: { call: [cb] }
+      # cb's environment (and its captured ptr box) is released here
+
+# producer: moves the closure out; the caller owns it
+- def:
+    name: make_reader
+    args: [[seed, i32]]
+    return: { type: closure<Read>, lifetime: producer }
+    body:
+      - decl: [box, ptr<Node>, { new: Node }]
+      - set: [box.ident, seed]
+      - call: [box.tags.push, "t"]
+      - return:
+          closure:
+            capture: [[box, { mode: move }]]       # the heap box moves into the environment
+            body:
+              - return: box.ident
+
+# a closure that throws — the throw reaches whoever CALLED the closure (§5)
+- def:
+    name: call_thrower
+    return: i32
+    body:
+      - decl: [payload, list<string>]
+      - call: [payload.push, "p"]
+      - decl:
+          - boom
+          - closure<Boom>
+          - closure:
+              capture: [payload]
+              body:
+                - throw: { new: Exception, message: "boom" }
+      - decl: [caught, i32, 0]
+      - try:
+          body:
+            - call: [boom]
+          catch:
+            - type: Exception
+              var: err
+              body:
+                - set: [caught, 1]
+      - return: caught
+      # boom's environment released at scope exit; payload decref'd exactly once
+
+- def:
+    name: main
+    return: i32
+    body:
+
+      # ── A: ref<closure<Sig>> parameter borrows — caller keeps and reuses it ───
+      - decl: [counter, closure<Read>, { closure: { capture: [[n, i32, 0]], body: [ { set: [n, { +: [n, 1] }] }, { return: n } ] } }]
+      - decl: [a1, i32, { call: [run_twice, counter] }]        # 1 + 2
+      - if: { condition: { neq: [a1, 3] }, then: [{ print: ["FAIL A1 a1=${a1}"] }, { return: 1 }] }
+      - decl: [a2, i32, { call: [counter] }]                    # still owned here -> 3
+      - if: { condition: { neq: [a2, 3] }, then: [{ print: ["FAIL A2 a2=${a2}"] }, { return: 1 }] }
+
+      # ── B: producer return + consumed sink (MOVED, not copied) ───────────────
+      - decl: [reader, closure<Read>, { call: [make_reader, 7] }]
+      - decl: [b1, i32, { call: [consume_once, reader] }]
+      - if: { condition: { neq: [b1, 7] }, then: [{ print: ["FAIL B1 b1=${b1}"] }, { return: 1 }] }
+      # `reader` is moved-out here — any use is a use-after-move error (see neg/n17)
+
+      # ── C: move on assignment ────────────────────────────────────────────────
+      - decl: [src, closure<Read>, { call: [make_reader, 11] }]
+      - decl: [dst, closure<Read>]
+      - set: [dst, src]                                         # MOVE — src is moved-out
+      - decl: [c1, i32, { call: [dst] }]
+      - if: { condition: { neq: [c1, 11] }, then: [{ print: ["FAIL C1 c1=${c1}"] }, { return: 1 }] }
+
+      # ── D: list<closure<Sig>> — move-only elements, released with the container ─
+      - decl: [jobs, list<closure<Read>>]
+      - call: [jobs.push, { call: [make_reader, 1] }]
+      - call: [jobs.push, { call: [make_reader, 2] }]
+      - decl: [idx, i32, 0]
+      - decl: [sum, i32, 0]
+      - while:
+          condition: { lt: [idx, jobs.len] }
+          body:
+            - decl: [job, ref<closure<Read>>, { at: [jobs, idx] }]   # borrow the element
+            - set: [sum, { +: [sum, { call: [job] }] }]
+            - set: [idx, { +: [idx, 1] }]
+      - if: { condition: { neq: [sum, 3] }, then: [{ print: ["FAIL D sum=${sum}"] }, { return: 1 }] }
+
+      # ── E: a model with a closure field is move-only; the field drops with it ─
+      - decl: [slot, Slot]
+      - set: [slot.name, "s1"]
+      - set: [slot.run, { call: [make_reader, 5] }]             # move into the field
+      - decl: [e1, i32, { call: [slot.run] }]
+      - if: { condition: { neq: [e1, 5] }, then: [{ print: ["FAIL E e1=${e1}"] }, { return: 1 }] }
+
+      # ── F: early free nulls the slot; the scope drop is then a no-op ─────────
+      - decl: [tmp, closure<Read>, { call: [make_reader, 9] }]
+      - decl: [f1, i32, { call: [tmp] }]
+      - if: { condition: { neq: [f1, 9] }, then: [{ print: ["FAIL F1 f1=${f1}"] }, { return: 1 }] }
+      - free: [tmp]                                              # early release, slot nulled
+      - decl: [freed_is_null, i32, 0]
+      - if: { condition: { eq: [tmp, null] }, then: [{ set: [freed_is_null, 1] }] }
+      - if: { condition: { neq: [freed_is_null, 1] }, then: [{ print: ["FAIL F2 free did not null the slot"] }, { return: 1 }] }
+
+      # ── G: throw out of a closure body reaches the closure's caller ──────────
+      - decl: [g1, i32, { call: [call_thrower] }]
+      - if: { condition: { neq: [g1, 1] }, then: [{ print: ["FAIL G g1=${g1}"] }, { return: 1 }] }
+
+      # ── H: calling a null closure raises NullPointerException ───────────────
+      - decl: [nothing, closure<Boom>]
+      - decl: [raised, i32, 0]
+      - try:
+          body:
+            - call: [nothing]
+          catch:
+            - type: NullPointerException
+              var: nerr
+              body:
+                - set: [raised, 1]
+      - if: { condition: { neq: [raised, 1] }, then: [{ print: ["FAIL H null call did not raise"] }, { return: 1 }] }
+
+      # ── I: created and dropped in a loop — no accumulation (§61 §9.1) ───────
+      - decl: [iter, i32, 0]
+      - while:
+          condition: { lt: [iter, 50] }
+          body:
+            - decl: [loop_cb, closure<Read>, { call: [make_reader, iter] }]
+            - decl: [got, i32, { call: [loop_cb] }]
+            - if: { condition: { neq: [got, iter] }, then: [{ print: ["FAIL I got=${got}"] }, { return: 1 }] }
+            - set: [iter, { +: [iter, 1] }]
+            # loop_cb (and its captured Node box) released every iteration
+
+      # scope exit: counter, dst, jobs (both elements), slot.run, nothing — each released once
+      - print: ["PASS 05 ownership"]
+      - return: 0

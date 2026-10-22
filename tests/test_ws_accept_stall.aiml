@@ -1,0 +1,113 @@
+# SPEC: 32_4_network_websockets,32_network
+# Expected exit code: 0
+# spec/32_4 §5.1: asynchronous accept. A client that connects and stalls neither blocks
+# ws.poll_listener nor delays the next client; it is closed after the listener's
+# handshake timeout (ws.set_timeout). Also covers ws_handle set_timeout (§2.5).
+
+- def:
+    name: serve
+    args: [[srv, ws_handle]]
+    return: i32
+    body:
+      - call: [time.sleep_ms, 300]
+      - decl: [t_start, i64, { call: [time.mono_ms] }]
+      - decl: [ready, i32, { call: [ws.poll_listener, srv, 0] }]
+      - decl: [elapsed, i64, { -: [{ call: [time.mono_ms] }, t_start] }]
+      - if: { condition: { neq: [ready, 0] }, then: [{ print: ["FAIL poll_listener reported stalled client ready=${ready}"] }, { return: 1 }] }
+      - if: { condition: { gt: [elapsed, 100] }, then: [{ print: ["FAIL poll_listener(0) took ${elapsed} ms"] }, { return: 1 }] }
+      - decl: [conn, ws_handle, { call: [ws.accept, srv] }]
+      - if: { condition: { peq: [conn, null] }, then: [{ print: ["FAIL real client not accepted"] }, { return: 1 }] }
+      - decl: [msg, string, { call: [ws.recv, conn] }]
+      - call: [ws.send, conn, "echo:${msg}"]
+      - call: [ws.recv, conn]
+      - call: [ws.close, conn]
+      # keep the listener polled so the stalled client hits its handshake timeout
+      - decl: [ticks, i32, 0]
+      - while:
+          condition: { lt: [ticks, 30] }
+          body:
+            - call: [ws.poll_listener, srv, 100]
+            - set: [ticks, { +: [ticks, 1] }]
+      - return: 0
+
+- def:
+    name: wss_server
+    args: []
+    body:
+      - decl: [cert, path, "tests/tls_certs/server.crt"]
+      - decl: [key,  path, "tests/tls_certs/server.key"]
+      - decl: [srv, ws_handle, { call: [wss.server, "127.0.0.1", 19894, cert, key] }]
+      - call: [ws.set_timeout, srv, 1500]
+      - if: { condition: { neq: [{ call: [serve, srv] }, 0] }, then: [{ print: ["FAIL wss server"] }, { call: [sys.exit, 1] }] }
+      - call: [ws.close, srv]
+
+- def:
+    name: ws_server
+    args: []
+    body:
+      - decl: [srv, ws_handle, { call: [ws.server, "127.0.0.1", 19895] }]
+      - call: [ws.set_timeout, srv, 1500]
+      - if: { condition: { neq: [{ call: [serve, srv] }, 0] }, then: [{ print: ["FAIL ws server"] }, { call: [sys.exit, 1] }] }
+      - call: [ws.close, srv]
+
+- def:
+    name: run_phase
+    args: [[port, i32], [secure, i32]]
+    return: i32
+    body:
+      - decl: [fail, i32, 0]
+      - decl: [silent, socket_handle, { call: [net.socket, "tcp"] }]
+      - call: [net.set_timeout, silent, 6000]
+      - decl: [t_silent, i64, { call: [time.mono_ms] }]
+      - call: [net.connect, silent, "127.0.0.1", port]
+      - call: [time.sleep_ms, 400]
+
+      - decl: [t_start, i64, { call: [time.mono_ms] }]
+      - decl: [conn, ws_handle]
+      - if:
+          condition: { eq: [secure, 1] }
+          then: [{ set: [conn, { call: [wss.connect, "127.0.0.1", port, "/"] }] }]
+          else: [{ set: [conn, { call: [ws.connect, "127.0.0.1", port, "/"] }] }]
+      - call: [ws.send, conn, "hi"]
+      - decl: [resp, string, { call: [ws.recv, conn] }]
+      - decl: [elapsed, i64, { -: [{ call: [time.mono_ms] }, t_start] }]
+      - if: { condition: { neq: [resp, "echo:hi"] }, then: [{ print: ["FAIL port ${port}: got '${resp}'"] }, { set: [fail, { +: [fail, 1] }] }] }
+      - if: { condition: { gt: [elapsed, 1000] }, then: [{ print: ["FAIL port ${port}: real client delayed ${elapsed} ms"] }, { set: [fail, { +: [fail, 1] }] }] }
+
+      # connection recv timeout: no data → recv returns after ~300 ms
+      - decl: [rc_to, i32, { call: [conn.set_timeout, 300] }]
+      - if: { condition: { neq: [rc_to, 0] }, then: [{ print: ["FAIL port ${port}: set_timeout rc=${rc_to}"] }, { set: [fail, { +: [fail, 1] }] }] }
+      - set: [t_start, { call: [time.mono_ms] }]
+      - call: [ws.recv, conn]
+      - set: [elapsed, { -: [{ call: [time.mono_ms] }, t_start] }]
+      - if: { condition: { gt: [elapsed, 2000] }, then: [{ print: ["FAIL port ${port}: recv timeout took ${elapsed} ms"] }, { set: [fail, { +: [fail, 1] }] }] }
+      - call: [ws.send, conn, "bye"]
+      - call: [ws.close, conn]
+
+      # stalled client is closed by the server after the 1.5 s handshake timeout
+      - decl: [eof, string, { call: [net.recv_string, silent, 16] }]
+      - set: [elapsed, { -: [{ call: [time.mono_ms] }, t_silent] }]
+      - if: { condition: { "||": [{ lt: [elapsed, 1000] }, { gt: [elapsed, 3500] }] }, then: [{ print: ["FAIL port ${port}: stalled client closed after ${elapsed} ms"] }, { set: [fail, { +: [fail, 1] }] }] }
+      - call: [net.close, silent]
+      - return: fail
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [fail, i32, 0]
+      - call: [mirror.tls_insecure, 1]   # self-signed test cert
+
+      - decl: [thr_wss, thread_handle, { spawn: [wss_server] }]
+      - call: [time.sleep_ms, 100]
+      - set: [fail, { +: [fail, { call: [run_phase, 19894, 1] }] }]
+      - call: [thr_wss.join]
+
+      - decl: [thr_ws, thread_handle, { spawn: [ws_server] }]
+      - call: [time.sleep_ms, 100]
+      - set: [fail, { +: [fail, { call: [run_phase, 19895, 0] }] }]
+      - call: [thr_ws.join]
+
+      - if: { condition: { neq: [fail, 0] }, then: [{ print: ["FAILED: ${fail}"] }, { call: [sys.exit, 1] }] }
+      - print: ["PASS ws_accept_stall"]
+      - return: 0

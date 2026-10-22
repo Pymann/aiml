@@ -1,0 +1,19 @@
+# SPEC: 64_closures
+# static-check: off
+# Requires: driver
+# NEGATIVE (spec/64 §3.2, §9): a block may not be put into a container — the container can
+# outlive the borrowed frame.
+# EXPECT-ERROR: block-escapes
+- callable: { name: Each, args: [[v, i32]] }
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [sum, i32, 0]
+      - decl: [bs, list<block<Each>>]
+      - call:
+          - bs.push
+          - block:
+              body:
+                - set: [sum, { +: [sum, v] }]   # ← must be rejected
+      - return: 0

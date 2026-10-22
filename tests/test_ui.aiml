@@ -10,6 +10,10 @@
 # Requires: display
 # Run: ./out/aiml -r tests/test_ui.aiml
 # Expected exit code: 0
+#
+# Requires: manual
+#   Oeffnet ein Fenster und laeuft, bis ein MENSCH es schliesst — in der
+#   Testschleife ist das ein Halt, kein Test (run_all_tests.sh --manual).
 
 # ── Setup ─────────────────────────────────────────────────────────────────────
 

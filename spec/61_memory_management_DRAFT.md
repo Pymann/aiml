@@ -173,7 +173,7 @@ job. The inventory below is by class:
 | **1′ — Inline value aggregate (element-recursive)** | **`array<T:N>`** — a fixed-size inline `[N × T]` **value block** (Class-1 *storage*: inline, no own heap block, no own rc), but its **copy / move / drop are recursive on `T`** (the composition rule, §7), **not** unconditionally POD: `array<i32:N>` is trivial; `array<string:N>` incref's/decref's each element; **`array<tensor:N>`** (real, and `tensor` is a Class-4 `ptr`-handle) is **move-only** — shallow-copy forbidden, drop frees each `tensor`, deep-`clone` via per-element `aiml_tensor_clone`; `array<ptr<T>:N>` likewise move-only (may be unimplemented today). Same footing as a value model with those field types. |
 | **2 — Immutable handle (rc-eligible)** | `string` (`char*`), `path` (interned immutable `char*` — **confirmed**, not Class 1) |
 | **3 — Mutable container (rc, Option B)** | `list<T>` `map<K:V>` `buffer` (rc handle → heap `{size,cap,…,data}` block) **`cascade<X>`** (reuses the `list<i32>` layout — a cascade *is* a `list<i32>` row, so same rc/aliasing discipline) |
-| **4 — Unique resource (move-only, close once)** | **OS/IO:** `file_handle` `process` `thread_handle` (released at owner drop: a thread neither joined nor detached is **detached**, then the handle block is freed — never an implicit join) `socket_handle` `tls_socket_handle` `ws_handle` `url` `url_credential` `http_server_handle` `http_route_handle` `http_request_handle` `http_response_handle` `http_client_handle` `http_session_handle` `fs_options`. **GPU/render:** `gl_buffer` `gl_vao` `gl_shader` `gl_texture` `gl_framebuffer` `gl_renderbuffer` `gl_mesh` `window_handle`. **Assets:** `gltf_scene/node/mesh/primitive/material/animation/skin/texture/image` `audio_sound` `audio_group` `audio_handle` (legacy V1 asset-registry sentinel) `tensor` (explicit `tensor.free()`; single-owner via `owns_data`, slices are non-owning views) `connector` `ui_font` `ui_slider_style ui_button_style ui_label_style ui_progress_style ui_panel_style` (heap, **mutable**, currently †leaked). **Iteration:** `iterator<T>`. **Session:** `mirror_session` (explicit `session.close()`). **Documents:** `yaml_doc` (released at owner drop; `yaml.free` = optional early release, spec/60). `Code` (JIT code object). **Raw buffer:** **`dyn_array<T>`** (a single-`malloc`, runtime-sized, **unmanaged** heap scalar buffer — a unique owner, **not** rc'd/aliased; its whole point is *one* allocation and no per-op rc; freed once at owner drop, with `.free` as an optional early release; §5.6, spec/53). |
+| **4 — Unique resource (move-only, close once)** | **OS/IO:** `file_handle` `process` `thread_handle` (released at owner drop: a thread neither joined nor detached is **detached**, then the handle block is freed — never an implicit join) `socket_handle` `tls_socket_handle` `ws_handle` `url` `url_credential` `http_server_handle` `http_route_handle` `http_request_handle` `http_response_handle` `http_client_handle` `http_session_handle` `fs_options`. **GPU/render:** `gl_buffer` `gl_vao` `gl_shader` `gl_texture` `gl_framebuffer` `gl_renderbuffer` `gl_mesh` `window_handle`. **Assets:** `gltf_scene/node/mesh/primitive/material/animation/skin/texture/image` `audio_sound` `audio_group` `audio_handle` (legacy V1 asset-registry sentinel) `tensor` (explicit `tensor.free()`; single-owner via `owns_data`, slices are non-owning views) `connector` `ui_font` `ui_slider_style ui_button_style ui_label_style ui_progress_style ui_panel_style` (heap, **mutable**, currently †leaked). **Iteration:** `iterator<T>`. **Session:** `mirror_session` (explicit `session.close()`). **Documents:** `yaml_doc` (released at owner drop; `yaml.free` = optional early release, spec/60). `Code` (JIT code object). **Raw buffer:** **`dyn_array<T>`** (a single-`malloc`, runtime-sized, **unmanaged** heap scalar buffer — a unique owner, **not** rc'd/aliased; its whole point is *one* allocation and no per-op rc; freed once at owner drop, with `.free` as an optional early release; §5.6, spec/53). **Escaping callable:** **`closure<Sig>`** (an owning handle to a heap environment `[code, captured fields]`; move-only, copy forbidden, the environment and every captured field released **once** at owner drop per the §7 composition rule; `ref<closure<Sig>>` is the borrow, `free` the early release — **PROPOSAL**, spec/64. Its non-escaping sibling `block<Sig>` is **non-owning** — see the last row. `fn<…>` stays **Class 1**: a bare code pointer with no environment and no teardown). |
 | **5 — Shared resource (rc + external close; **atomic** rc)** | `chan<T>` (an `i8*` to the channel block carrying an atomic rc; a copy/field store/spawn argument retains, owner drop releases, rc 0 destroys mutex/conds and frees buffer + block); `lock` (mutex — structurally co-owned by the threads it guards; currently †leaked, no `pthread_mutex_destroy`). Cross-thread by nature → their rc is **atomic** (§5.3), internal state runtime-synchronized. |
 | **6 — Runtime-owned singleton (non-owning user handle)** | **DB:** `Store<T>` `Kv<T>` `TimeSeries<T>` `VecStore` — `db.open_*` returns the **same handle** for the same name+path (Spec 47 §1, Category 1); the **runtime owns and mutex-protects** them. The user's handle is **non-owning**: never `free`/`close`d by user code (that would break other holders → premature close / double free). Lifetime is the runtime's. |
 | **special / non-owning (borrowed view)** | `any` (`void*`, type-erased borrow); `input_event` (pointer into a **static global** event buffer, overwritten each poll); `mirror_peer` (owned by its `mirror_session`; user code refers to it by `peer_id`); `yaml_node` (a view into its `yaml_doc`, spec/60); `prefab_instance` (**engine-owned, single classification: non-owning user handle** — like a
@@ -183,7 +183,7 @@ owns it — scope-drop is a **no-op**, it is never `free`d by scope, and it is *
 unique owner. `engine.destroy(inst)` is an **engine scene operation** (remove the node from the
 scene), the one way to end its life early — **not** user ownership; after it every handle
 dangles, so guard with `engine.is_alive(inst)`. `get_hovered`/`get_dragged`/`hit_test` are
-borrows into the same scene); a `tensor` **slice/reshape** (`owns_data=0`, aliases the parent buffer) — none of these are freed through the handle |
+borrows into the same scene); a `tensor` **slice/reshape** (`owns_data=0`, aliases the parent buffer); **`block<Sig>`** (a non-escaping callable body — a borrow of the frame it was written in; it owns nothing, its drop is a **no-op**, and spec/64 §3.2 statically forbids it from escaping that frame, which is what keeps the borrow valid — **PROPOSAL**, spec/64) — none of these are freed through the handle |
 
 *† = the type has **no teardown wired in the current runtime** and leaks for the process
 lifetime (verified for `lock`, `ui_font`, `ui_*_style`; the `mirror_session` struct itself is
@@ -249,6 +249,24 @@ mutating a **container field** through the parameter **is visible to the caller*
 one container, §5). A pass-by-value copy isolates the *scalar/inline* part and **shares** the
 rc-managed part. For an independent copy of the whole thing use `clone`; for full aliasing pass
 a handle (`ptr<T>`, §6).
+
+**`decl: [kopie, Model, original]` ist dieselbe Kopie — und das incref ist Pflicht.**  Eine
+Kopie aus einem anderen Lokal folgt derselben Regel wie ein Parameter: member-weise, Skalare
+unabhängig, String-/Container-/`shared`-Felder **incref'd geteilt**.  Fehlt das incref, teilen
+Kopie und Original einen Puffer mit `rc=1`, und der nächste `set: [kopie.feld, …]` gibt beim
+Freigeben des alten Werts den String des **Originals** frei — das Original liest danach Müll.
+Beide Seiten besitzen nach dem incref ihre **eigene** Referenz und geben am Blockende je einmal
+ab, also wird genau einmal freigegeben.
+
+> **Befund (2026-10-21).**  Genau dieses incref fehlte für den *plainen* Namen: `obj.feld` und
+> `{at: …}` wurden als Sicht erkannt und retained, ein schlichtes `original` nicht.  Aufgefallen
+> ist es an einem Cache-Schlüssel in cosmos (`doc/spec/92` Befund 5), der für **dieselbe**
+> Instanz bei jedem Lesen anders ausfiel — ein Schlüssel, der sich bewegt, trifft nie, und das
+> sieht wie ein harmloses „kein Treffer" aus.  Umsetzung: `Symbol::is_copy_retain` (getrennt von
+> `is_view_alias`, das zusätzlich das Escape-Verhalten steuert), die beiden `aiml_ser_retain`-
+> Stellen in `ast_compiler_stmt.cpp`, der Scope-Drop und `freshOwned` im Ownership-Analyzer —
+> alle vier im Gleichschritt.  Probe: `tests/test_value_model_copy_share.aiml` (Original direkt
+> und by value, Kopie, Kopie+`set`, Original **danach**, zweimal gelesen).
 
 ```yaml
 - def:
@@ -720,6 +738,23 @@ so access and ownership-transfer are **distinct verbs**. The rule per verb, by e
 | **`set`(i, v)** — replace (§5.5 order: **secure new first, then release old**) | move `v` in (`v` moved-out), then **free** the old box | incref/move new, then decref old | incref new, then decref old | copy/move new, then drop old |
 | **`push`/`insert`(v)** | **move** `v` in (`v` moved-out) | incref | incref | copy/move in |
 
+> ⚠️ **Abweichung (gefunden 2026-10-11, cosmos): für `map<string:string>` wird die zugesagte
+> `incref` NICHT ausgeführt.** Die Tabelle sagt für einen `string`-Wert „shared handle,
+> incref"; in der Praxis liefert `map.get` einen rohen Zeiger in die Map. Stirbt die Map,
+> dangelt der Wert.
+>
+> Reproduktion (cosmos `defaults_from_env`): ein `sys.env`-Map-Local wird gelesen, das
+> Ergebnis in ein Modellfeld gelegt, die Funktion kehrt zurück — danach stand im Feld der
+> **Name einer anderen Umgebungsvariablen** (`QT_IM_MODULE`) statt des gelesenen Werts, und
+> zwar nur bei manchen Schlüsseln (die übrigen Slots waren noch nicht überschrieben). Das
+> Symptom ist also sporadisch und sieht wie ein Konfigurationsfehler aus.
+>
+> Umgehung bis zur Behebung: den Wert über Interpolation (`"${raw}"`) in eine frische
+> Zeichenkette kopieren, oder die Map so lange leben lassen wie den Wert. Zu prüfen ist, ob
+> `map.get` increfen soll (dann Compiler-Fix) oder ob die Tabelle für `map` auf „borrow,
+> gültig nur solange die Map lebt" korrigiert gehört (dann Spec-Fix) — die beiden Fassungen
+> widersprechen sich, und das entscheidet, ob `get_copy` für `map` nötig wird.
+
 So: **`at`/`get` = borrow** (ownership stays in the list), **`pop`/`take` = move out** (the only
 way to get an owning `ptr<T>` back), **`remove` = release**. There is no verb that both keeps
 the element in the list *and* hands a second owner out — that would break unique ownership.
@@ -731,7 +766,9 @@ the element in the list *and* hands a second owner out — that would break uniq
 > The same rule applies to a **Class-6 store** read (`Kv`/`Store`/`TimeSeries`/`VecStore` `.get`) and
 > to builtin view reads (`yaml.get`): the store/document keeps ownership, so the result is a `ref<T>`
 > borrow, and `get_copy` is the independent-owned path. (Enforced in the compiler; the negative test
-> is `tests/test_ptr_bind_get_borrow_error.aiml`.)
+> is `tests/test_ptr_bind_get_borrow_error.aiml`.) Writing such a store borrow back to its own key
+> (`kv.set(k, view)` with `view` from `kv.get(k)`) is a **self-write** (§5.5 step 0): the slot is
+> persisted, not released, and `view` stays valid (spec/31 §6.7; probe `tests/lifetime/171`).
 
 **"`at`/`get` = borrow" is shorthand for the pointer/model cases only — read the table per class:**
 
@@ -970,6 +1007,35 @@ type descriptor for a nested container element are all driven by the **same** ty
 (a container element → a `*_PTR` handle descriptor, e.g. `AIML_TD_LIST_PTR`). `push`, `at`, `idx`,
 `pop`, `remove`, iteration, growth/realloc, `copy`/`clone` and serialization must all agree that the
 slot is a pointer; mixing a new pointer stride with an old inlined-struct copy corrupts memory.
+
+**A model handle is an element like any other — and it strides like one.** The element/value slot
+of a `list<Model>` / `map<K:Model>` (a refcounted model reference, §4) is a **target-pointer-sized
+handle** exactly as a nested container is: 8 bytes on 64-bit, **4 bytes on wasm32**. Every stride
+that touches such a slot — list indexing, the serializer type descriptor's `elem_size`, and the
+clone and free walkers — MUST be derived from the **target** ABI (the target `DataLayout`), never
+from a host `sizeof(...)` and never from a literal `8`. The host compiler is always 64-bit while
+the target may not be, so a host-derived stride is wrong precisely where it cannot be noticed.
+
+**Eine benannte Groesse, kein Literal.** Die Zeiger-Schrittweite steht EINMAL im Compiler
+(`CompilerContext::ptrStride()`, aus dem Ziel-`DataLayout`) und jede Stelle mit zeigergrossen
+Element-Slots nimmt sie: String-, Modell-Handle-, `ptr<T>`-Box- und verschachtelte
+Container-Elemente, die Element-Klassifikation (`classifyListElem`), die Scope-Drop-Deskriptoren
+und die `clear`/`pop`-Freigabe.  In der Laufzeit ist `sizeof(void*)` dieselbe Groesse, weil sie
+FUER das Ziel uebersetzt wird — ein Rueckfallwert `8` dort ist derselbe Fehler.
+
+> Gemessen am 2026-10-15: `classifyListElem` setzte fuer `string`, Modell-Handles und `ptr<T>`
+> hart `elemSize = 8`.  Auf wasm32 lief `list<string>.clear()` damit mit doppelter Schrittweite
+> ueber das Pufferende, dereferenzierte Datenmuell als String-Zeiger und riss den ganzen
+> cosmos-Client mit (Firefox meldet den Speicherzugriff als `index out of bounds`).  Dieselbe
+> Annahme stand an drei weiteren Stellen — genau das, was ein Literal an vielen Fundstellen
+> anrichtet und eine benannte Groesse verhindert.
+
+> A descriptor that claims 8 where the generated code indexes at 4 does not fail loudly: the
+> decoder writes element *i* at `base + 8i`, the reader loads it from `base + 4i`. Index 0 agrees
+> **by accident**, so a one-element container works and every larger one yields garbage handles
+> from the second element on. Found exactly this way in the wasm client (cosmos): a decoded
+> `list<Model>` of two or more elements trapped on its first read, while all 64-bit builds and
+> every valgrind run stayed clean.
 
 ## 6. Explicit heap — `new`, `ptr<T>`, `free`
 

@@ -1,0 +1,16 @@
+# SPEC: 44_7_asset_registry
+# Negative: `gltf.load` mit String-Literal-Pfad, der IM Asset-Bundle liegt →
+# Compile-Hard-Error.  Dieselbe Regel wie bei `gl.load_texture`: ein fester Pfad
+# bricht, sobald jemand das Arbeitsverzeichnis wechselt oder nach WASM baut.
+# Ein dynamischer Pfad (Kommandozeile) bleibt erlaubt.
+#
+# AssetRoots: tests/_asset_fixtures/mesh/resources/shapes
+# Expected exit code: 1
+# ExpectedStderr: gltf.load: literal path
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [scene, gltf_scene, { call: [gltf.load, "tests/_asset_fixtures/mesh/resources/shapes/probe_cube.glb"] }]
+      - return: 0

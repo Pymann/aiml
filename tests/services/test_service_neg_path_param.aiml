@@ -1,0 +1,12 @@
+# SPEC: 66_services §5.2 — a `:param` in the path needs a field of that name in the
+# request model; otherwise the route could never be filled.
+# Expected exit code: 1
+- import: "tests/services/_models.aiml"
+- service:
+    name: ParamApi
+    base: "/v1"
+    transport: [rest]
+    auth: none
+    endpoints:
+      - def: { name: approve, http: [post, "/releases/:missing_field/resolution"], roles: [], args: [[req, ResolveReq]], return: ResolveResp, body: [{ decl: [out, ResolveResp] }, { return: out }] }
+- def: { name: main, return: i32, body: [{ decl: [api, ptr<ParamApi>, { new: ParamApi }] }, { free: api }, { return: 0 }] }

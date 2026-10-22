@@ -1,0 +1,25 @@
+# The §6 auth contract for the spec/66 tests.
+- model:
+    name: Principal
+    fields:
+      - [subject, string, ""]
+      - [role, string, ""]
+
+- class:
+    name: TokenAuth
+    methods:
+      - def:
+          name: principal_of
+          args: [[token, string]]
+          return: Principal
+          body:
+            - decl: [who, Principal]
+            - if: { condition: { eq: [token, "good"] }, then: [{ set: [who.subject, "tester"] }, { set: [who.role, "viewer"] }] }
+            - return: who
+      - def:
+          name: has_role
+          args: [[who, Principal], [role, string]]
+          return: i32
+          body:
+            - if: { condition: { eq: [who.role, role] }, then: [{ return: 1 }] }
+            - return: 0

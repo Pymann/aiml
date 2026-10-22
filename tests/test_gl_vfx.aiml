@@ -1,0 +1,189 @@
+# SPEC: 43_2_graphics,61_memory_management_DRAFT
+# VFX 1 section 10; spec/43_2 and spec/61 Class 4.
+# Requires: display
+# Expected exit code: 0
+- text: vfx_vertex
+  value: |
+    #version 330 core
+    layout(location=0) in vec2 position;
+    layout(location=1) in vec2 center;
+    layout(location=2) in vec3 tint;
+    out vec3 color;
+    void main() { gl_Position=vec4(position+center,0,1); color=tint; }
+- text: vfx_fragment
+  value: |
+    #version 330 core
+    in vec3 color;
+    out vec4 pixel;
+    void main() { pixel=vec4(color,1); }
+- def:
+    name: check
+    args: [[valid, bool], [label, string]]
+    return: i32
+    body:
+      - if: { condition: { eq: [valid, false] }, then: [{ print: ["FAIL ${label}"] }, { return: 1 }] }
+      - return: 0
+- def:
+    name: render_probe
+    return: i32
+    body:
+      - decl: [fails, i32, 0]
+      - decl: [vertices, buffer<f32>]
+      - call: [vertices.alloc, 32]
+      - call: [vertices.write, -0.2, f32]
+      - call: [vertices.write, -0.2, f32]
+      - call: [vertices.write, 0.2, f32]
+      - call: [vertices.write, -0.2, f32]
+      - call: [vertices.write, 0.2, f32]
+      - call: [vertices.write, 0.2, f32]
+      - call: [vertices.write, -0.2, f32]
+      - call: [vertices.write, 0.2, f32]
+      - decl: [indices, buffer<u32>]
+      - call: [indices.alloc, 24]
+      - call: [indices.write, 0, u32]
+      - call: [indices.write, 1, u32]
+      - call: [indices.write, 2, u32]
+      - call: [indices.write, 2, u32]
+      - call: [indices.write, 3, u32]
+      - call: [indices.write, 0, u32]
+      - decl: [instances, buffer<f32>]
+      - call: [instances.alloc, 40]
+      - call: [instances.write, -0.5, f32]
+      - call: [instances.write, 0.0, f32]
+      - call: [instances.write, 1.0, f32]
+      - call: [instances.write, 0.0, f32]
+      - call: [instances.write, 0.0, f32]
+      - call: [instances.write, 0.5, f32]
+      - call: [instances.write, 0.0, f32]
+      - call: [instances.write, 0.0, f32]
+      - call: [instances.write, 1.0, f32]
+      - call: [instances.write, 0.0, f32]
+      - decl: [vbo, gl_buffer, { call: [gl.create_buffer, vertices] }]
+      - decl: [ibo, gl_buffer, { call: [gl.create_index_buffer, indices] }]
+      - decl: [instance_buffer, gl_buffer, { call: [gl.create_buffer_dynamic, instances] }]
+      - decl: [vao, gl_vao, { call: [gl.create_vao] }]
+      - call: [vao.bind_vbo, vbo]
+      - call: [vao.attrib, 0, 2, 8, 0]
+      - call: [vao.bind_vbo, instance_buffer]
+      - call: [vao.attrib, 1, 2, 20, 0]
+      - call: [vao.attrib, 2, 3, 20, 8]
+      - call: [vao.bind_ibo, ibo]
+      - decl: [shader, gl_shader, { call: [gl.compile_shader, vfx_vertex, vfx_fragment] }]
+      - decl: [target, gl_framebuffer, { call: [gl.create_framebuffer_format, 64, 64, gl.RGBA8, false] }]
+      - call: [gl.bind_framebuffer, target]
+      - call: [gl.disable_cull_face]
+      - call: [shader.use]
+      - call: [gl.viewport, 0, 0, 64, 64]
+      - call: [gl.disable_blend]
+      - call: [gl.disable_depth_test]
+      - call: [gl.clear_all, 0.0, 0.0, 0.0, 1.0]
+      - set: [fails, { +: [fails, { call: [check, { call: [vao.attrib_divisor, 1, 1] }, "center divisor"] }] }]
+      - set: [fails, { +: [fails, { call: [check, { call: [vao.attrib_divisor, 2, 1] }, "color divisor"] }] }]
+      - set: [fails, { +: [fails, { call: [check, { eq: [{ call: [vao.attrib_divisor, -1, 1] }, false] }, "negative location"] }] }]
+      - set: [fails, { +: [fails, { call: [check, { eq: [{ call: [vao.attrib_divisor, 2147483647, 1] }, false] }, "location limit"] }] }]
+      - set: [fails, { +: [fails, { call: [check, { eq: [{ call: [vao.attrib_divisor, 1, -1] }, false] }, "negative divisor"] }] }]
+      - set: [fails, { +: [fails, { call: [check, { eq: [{ call: [instance_buffer.reserve_bytes, -1] }, false] }, "negative capacity"] }] }]
+      - set: [fails, { +: [fails, { call: [check, { eq: [{ call: [gl.draw_elements_instanced, vao, 6, 3] }, false] }, "instance backing bounds"] }] }]
+      - set: [fails, { +: [fails, { call: [check, { eq: [{ call: [gl.draw_elements_instanced, vao, 7, 2] }, false] }, "index backing bounds"] }] }]
+      - set: [fails, { +: [fails, { call: [check, { call: [gl.draw_elements_instanced, vao, 6, 2] }, "two instances"] }] }]
+      - decl: [left, buffer<u8>, { call: [gl.read_rgba8, 16, 32, 1, 1] }]
+      - decl: [right, buffer<u8>, { call: [gl.read_rgba8, 48, 32, 1, 1] }]
+      - set: [fails, { +: [fails, { call: [check, { gt: [{ cast: [{ call: [left.get, 0] }, i32] }, 250] }, "left red"] }] }]
+      - set: [fails, { +: [fails, { call: [check, { gt: [{ cast: [{ call: [right.get, 1] }, i32] }, 250] }, "right green"] }] }]
+      - set: [fails, { +: [fails, { call: [check, { call: [vbo.reserve_bytes, 64] }, "vbo reserve preserves binding"] }] }]
+      - set: [fails, { +: [fails, { call: [check, { call: [ibo.reserve_bytes, 48] }, "ibo reserve preserves binding"] }] }]
+      - set: [fails, { +: [fails, { call: [check, { call: [instance_buffer.reserve_bytes, 80] }, "instance_buffer reserve preserves binding"] }] }]
+      - decl: [blue, buffer<u8>]
+      - call: [blue.alloc, 12]
+      - call: [blue.write, 0.0, f32]
+      - call: [blue.write, 0.0, f32]
+      - call: [blue.write, 1.0, f32]
+      - set: [fails, { +: [fails, { call: [check, { call: [instance_buffer.update_range, 28, blue] }, "partial bytes update"] }] }]
+      - set: [fails, { +: [fails, { call: [check, { eq: [{ call: [instance_buffer.update_range, 79, blue] }, false] }, "out of range update"] }] }]
+      - set: [fails, { +: [fails, { call: [check, { eq: [{ call: [instance_buffer.update_range, 2147483647, blue] }, false] }, "overflow update"] }] }]
+      - set: [fails, { +: [fails, { call: [check, { eq: [{ call: [instance_buffer.update_range, -1, blue] }, false] }, "negative offset"] }] }]
+      - set: [fails, { +: [fails, { call: [check, { call: [gl.draw_elements_instanced, vao, 6, 2] }, "draw after reserve"] }] }]
+      - decl: [changed, buffer<u8>, { call: [gl.read_rgba8, 48, 32, 1, 1] }]
+      - set: [fails, { +: [fails, { call: [check, { gt: [{ cast: [{ call: [changed.get, 2] }, i32] }, 250] }, "right blue after reserve/update"] }] }]
+      - set: [fails, { +: [fails, { call: [check, { lt: [{ cast: [{ call: [changed.get, 1] }, i32] }, 5] }, "right no green"] }] }]
+      - set: [fails, { +: [fails, { call: [check, { call: [gl.draw_elements_instanced, vao, 0, 2147483647] }, "zero draw no-op"] }] }]
+      - call: [vao.delete]
+      - call: [vao.delete]
+      - set: [fails, { +: [fails, { call: [check, { eq: [vao, null] }, "early delete nulls slot"] }] }]
+      - call: [gl.bind_default_framebuffer]
+      - call: [target.delete]
+      - call: [shader.delete]
+      - return: fails
+- model:
+    name: VfxOwned
+    fields: [[buffer, gl_buffer], [vao, gl_vao]]
+- def:
+    name: make_buffer
+    return: { type: gl_buffer, lifetime: producer }
+    body:
+      - decl: [data, buffer<f32>]
+      - decl: [owned, gl_buffer, { call: [gl.create_buffer_dynamic, data] }]
+      - call: [owned.reserve_bytes, 256]
+      - return: owned
+- def:
+    name: make_upload
+    return: buffer<u8>
+    body:
+      - decl: [data, buffer<u8>]
+      - call: [data.alloc, 4]
+      - call: [data.write, 1.0, f32]
+      - return: data
+- def:
+    name: throw_probe
+    body:
+      - decl: [owned, gl_buffer, { call: [make_buffer] }]
+      - decl: [vao, gl_vao, { call: [gl.create_vao] }]
+      - throw: { new: Exception, message: "VFX unwind" }
+- def:
+    name: owner_probe
+    return: i32
+    body:
+      - decl: [owned, gl_buffer, { call: [make_buffer] }]
+      - decl: [moved, gl_buffer, owned]
+      - if: { condition: { neq: [owned, null] }, then: [{ return: 1 }] }
+      - decl: [box, VfxOwned]
+      - set: [box.buffer, moved]
+      - if: { condition: { neq: [moved, null] }, then: [{ return: 2 }] }
+      - set: [box.vao, { call: [gl.create_vao] }]
+      - set: [box.buffer, { call: [make_buffer] }]
+      - decl: [list, list<VfxOwned>]
+      - call: [list.push, box]
+      - decl: [empty, gl_buffer]
+      - set: [empty, { call: [make_buffer] }]
+      - call: [empty.update_range, 0, { call: [make_upload] }]
+      - call: [empty.delete]
+      - call: [make_buffer]
+      - call: [gl.draw_elements_instanced, { call: [gl.create_vao] }, 0, 1]
+      - decl: [caught, i32, 0]
+      - try:
+          body:
+            - call: [throw_probe]
+          catch:
+            - type: Exception
+              var: err
+              body:
+                - set: [caught, 1]
+      - if: { condition: { neq: [caught, 1] }, then: [{ return: 3 }] }
+      - return: 0
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [win, window_handle, { call: [engine.create_window, 64, 64, "VFX API test"] }]
+      - if: { condition: { eq: [win, null] }, then: [{ return: 1 }] }
+      - decl: [fails, i32, { call: [render_probe] }]
+      - decl: [round, i32, 0]
+      - while:
+          condition: { lt: [round, 32] }
+          body:
+            - set: [fails, { +: [fails, { call: [owner_probe] }] }]
+            - set: [round, { +: [round, 1] }]
+      - call: [engine.destroy_window, win]
+      - if: { condition: { neq: [fails, 0] }, then: [{ print: ["FAIL VFX ${fails}"] }, { return: 1 }] }
+      - print: ["PASS gl_vfx: pixels, bounds, reserve, partial updates, Class-4 ownership"]
+      - return: 0

@@ -1,0 +1,19 @@
+# SPEC: 66_services §5.3 — with `auth:` set, an endpoint without `roles:` is an error.
+# There is no implicit open endpoint: `roles: []` has to be written down.
+# Expected exit code: 1
+- import: "tests/services/_models.aiml"
+- import: "tests/services/_auth.aiml"
+- service:
+    name: AuthApi
+    base: "/v1"
+    transport: [rpc]
+    auth: TokenAuth
+    endpoints:
+      - def: { name: resolve, http: [post, "/a"], args: [[req, ResolveReq]], return: ResolveResp, body: [{ decl: [out, ResolveResp] }, { return: out }] }
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [api, ptr<AuthApi>, { new: AuthApi }]
+      - free: api
+      - return: 0

@@ -1,0 +1,17 @@
+# SPEC?: 62_pipelines,24_time   # aus dem Dateinamen, zu bestaetigen
+# time ist die Uhr — in einem reinen Rumpf ein Fehler (F62-18).
+# Requires: driver
+- def:
+    name: body_clock
+    return: i32
+    body:
+      - decl: [stamp, i64, { call: [time.now] }]
+      - if: { condition: { lt: [stamp, 0] }, then: [{ return: 1 }] }
+      - return: 0
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [pkg, Code, { call: [sys.bundle, "body_clock", { context: true, pure: true }] }]
+      - return: 0

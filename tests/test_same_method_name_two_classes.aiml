@@ -1,0 +1,67 @@
+# SPEC?: 16_classes   # aus dem Dateinamen, zu bestaetigen
+# Zwei Klassen mit GLEICHNAMIGER Methode, aber verschiedenem Rueckgabetyp.
+#
+# Regression: der Compiler loeste den Rueckgabetyp ueber den blanken
+# Methodennamen auf statt ueber die Klasse des Empfaengers.  Traf er dabei die
+# string-liefernde Variante, behandelte er den void-Aufruf als String-Temporaere
+# und stuerzte in createEntryAlloca ab (SIGSEGV, gefunden 2026-10-12 an
+# cosmos: RunsScreen.render ist void, MatrixView.render liefert string).
+#
+# Gleichnamige Methoden in verschiedenen Klassen sind der Normalfall — `render`,
+# `init`, `run`, `size`.  Ein Absturz ist nie eine zulaessige Antwort.
+# Expected exit code: 0
+
+- class:
+    name: TextMaker
+    methods:
+      - def:
+          name: render
+          access: public
+          return: { type: string, lifetime: producer }
+          body: [{ return: "gerendert" }]
+
+- class:
+    name: SilentScreen
+    members:
+      - [draw_count, i32]
+    methods:
+      - def:
+          name: render
+          access: public
+          body:
+            - set: [<.draw_count, { +: [<.draw_count, 1] }]
+
+- def:
+    name: expect
+    args: [[what, string], [cond, i32]]
+    return: i32
+    body:
+      - if:
+          condition: { eq: [cond, 1] }
+          then: [{ print: ["  ok   ${what}"] }, { return: 0 }]
+      - print: ["  FAIL ${what}"]
+      - return: 1
+
+- def:
+    name: main
+    static_off: ["str_cmp"]
+    return: i32
+    body:
+      - decl: [fails, i32, 0]
+      - decl: [maker, ptr<TextMaker>, { new: TextMaker }]
+      - decl: [screen, ptr<SilentScreen>, { new: SilentScreen }]
+
+      # Der void-Aufruf: hier stuerzte der Compiler ab.
+      - call: [screen.render]
+      - call: [screen.render]
+      - set: [fails, { +: [fails, { call: [expect, "void-Methode laeuft zweimal", { eq: [screen.draw_count, 2] }] }] }]
+
+      # Und die gleichnamige string-Methode der anderen Klasse liefert ihren Wert.
+      - decl: [txt, string, { call: [maker.render] }]
+      - set: [fails, { +: [fails, { call: [expect, "string-Methode liefert ihren Wert", { eq: [txt, "gerendert"] }] }] }]
+
+      - if:
+          condition: { neq: [fails, 0] }
+          then: [{ print: ["test_same_method_name_two_classes FAIL (${fails})"] }, { return: 1 }]
+      - print: ["test_same_method_name_two_classes PASS"]
+      - return: 0

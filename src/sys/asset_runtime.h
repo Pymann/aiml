@@ -25,6 +25,11 @@ const char* aiml_asset_read_data(const char* stem);
 // includes size (same TTF at multiple sizes = multiple cached handles).
 void* aiml_asset_get_font(const char* stem, float size);
 
+// Mesh: resolves a .glb/.gltf stem to its on-disk path (spec/44_7).  Kein
+// Cache: eine gltf_scene ist eine eindeutige Ressource mit `free` (spec/61
+// §2.1) — zwei Aufrufer mit demselben Handle gaeben sie zweimal frei.
+const char* aiml_asset_mesh_path(const char* stem);
+
 // Shader: resolves a fragment-shader stem to its on-disk path for the current
 // target (abs on native, preload path on wasm).  Used by the material system.
 const char* aiml_asset_shader_path(const char* stem);
@@ -40,7 +45,7 @@ void aiml_asset_init_runtime(const char* comma_separated_roots);
 // state and emits one call per (kind, stem, path) — `path` is computed
 // cwd-relative so it works in both native (`assets/items/hammer.png` from
 // project root) and WASM (`/assets/items/hammer.png` after emcc preload).
-// kind: 0=texture, 1=audio, 2=shader, 3=font, 4=data.
+// kind: 0=texture, 1=audio, 2=shader, 3=font, 4=data, 5=mesh.
 void aiml_asset_runtime_register(int32_t kind, const char* stem, const char* path);
 
 }  // extern "C"

@@ -1,0 +1,162 @@
+# SPEC: 44_6_prefabs,44_0_input
+# spec/44_6 "engine.update_drag_gesture — Aufnehmen am Druckpunkt".
+#
+# Die zwei Fehlerklassen, die mit engine.update_drag unvermeidbar sind und die
+# dieser Test festnagelt:
+#   A) Aufnahme an der falschen Karte.  update_drag ist pegelgesteuert und pickt
+#      mit der Mausposition DIESES Frames.  Browser-Callbacks schreiben die
+#      Position live, Tastenflanken erst beim Frame-Snapshot (spec/44_0 §7.1) —
+#      die Flanke gehoert also zu einer aelteren Position.  Bei bewegter Maus
+#      greift update_drag die Karte, die JETZT unter dem Cursor liegt.
+#      update_drag_gesture nimmt am drag_origin auf, also am Druckpunkt.
+#   B) Ein Tipp wird zum Drag.  Ohne Schwelle ist jeder Klick ein Mini-Drag.
+#
+# Geprueft wird in dieser Reihenfolge:
+#   1. Druck ohne Bewegung = Kandidat (1), KEIN Drag
+#   2. Bewegung ueber die Schwelle = zieht (2) und zwar die Karte am Druckpunkt,
+#      auch wenn der Cursor inzwischen ueber einer anderen Karte steht
+#   3. Loslassen meldet genau einmal "losgelassen" (3); get_drag_source nennt
+#      im selben Frame noch die Quelle
+#   4. Gegenprobe Abbruch: meldet (4) und NICHT (3)
+# Requires: display
+# Expected exit code: 0
+
+- prefab:
+    name: GestureCardA
+    width: 80
+    height: 100
+    children:
+      - { name: card_a_body, type: rect, x: 0, y: 0, width: 80, height: 100,
+          bg_color: 0x3A5A8AFF }
+
+- prefab:
+    name: GestureCardB
+    width: 80
+    height: 100
+    children:
+      - { name: card_b_body, type: rect, x: 0, y: 0, width: 80, height: 100,
+          bg_color: 0x8A3A5AFF }
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [win, window_handle, { call: [engine.create_window, 400, 300, "gesture"] }]
+      - if: { condition: { eq: [win, null] }, then: [{ call: [log.error, "FAIL create_window"] }, { return: 1 }] }
+      - call: [gl.init]
+      - call: [ui.init]
+      - call: [engine.prefab_scene_init, 400, 300]
+      - call: [input.init, win]
+
+      # Karte A links (20,50), Karte B rechts (200,50) — weit auseinander, damit
+      # "Druckpunkt" und "aktueller Cursor" eindeutig verschiedene Karten sind.
+      - decl: [card_a, prefab_instance, { call: [engine.instantiate, "GestureCardA"] }]
+      - call: [card_a.set_pos, 20.0, 50.0]
+      - call: [card_a.set_draggable, 1]
+      - decl: [card_b, prefab_instance, { call: [engine.instantiate, "GestureCardB"] }]
+      - call: [card_b.set_pos, 200.0, 50.0]
+      - call: [card_b.set_draggable, 1]
+      - call: [engine.draw_scene]
+
+      - decl: [a_mid_x, f32, 60.0]
+      - decl: [a_mid_y, f32, 100.0]
+      - decl: [b_mid_x, f32, 240.0]
+      - decl: [b_mid_y, f32, 100.0]
+
+      # ── 1. Druck ohne Bewegung = Kandidat, kein Drag ────────────────────
+      - call: [engine.swap, win]
+      - call: [input.post_mouse_move, a_mid_x, a_mid_y]
+      - decl: [g_idle, i32, { call: [engine.update_drag_gesture, a_mid_x, a_mid_y] }]
+      - if: { condition: { neq: [g_idle, 0] }, then: [{ call: [log.error, "FAIL ohne Druck Zustand ${g_idle}, erwartet 0"] }, { return: 1 }] }
+
+      - call: [engine.swap, win]
+      - call: [input.post_mouse_down, 0]
+      - decl: [g_press, i32, { call: [engine.update_drag_gesture, a_mid_x, a_mid_y] }]
+      - if:
+          condition: { neq: [g_press, 1] }
+          then: [{ call: [log.error, "FAIL Druck ohne Bewegung gab Zustand ${g_press}, erwartet 1 (Kandidat) — ein Tipp darf kein Drag sein"] }, { return: 1 }]
+      - if:
+          condition: { pneq: [{ call: [engine.get_dragged] }, null] }
+          then: [{ call: [log.error, "FAIL Tipp hat bereits einen Drag gestartet"] }, { return: 1 }]
+
+      # ── 2. Ueber die Schwelle: Karte am DRUCKPUNKT wird gezogen ─────────
+      # Der Cursor steht jetzt ueber Karte B.  Aufgenommen werden muss trotzdem
+      # Karte A, weil dort gedrueckt wurde.
+      - call: [engine.swap, win]
+      - call: [input.post_mouse_move, b_mid_x, b_mid_y]
+      - decl: [g_drag, i32, { call: [engine.update_drag_gesture, b_mid_x, b_mid_y] }]
+      - if:
+          condition: { neq: [g_drag, 2] }
+          then: [{ call: [log.error, "FAIL nach Bewegung Zustand ${g_drag}, erwartet 2 (zieht)"] }, { return: 1 }]
+      - decl: [picked, prefab_instance, { call: [engine.get_dragged] }]
+      - if:
+          condition: { peq: [picked, null] }
+          then: [{ call: [log.error, "FAIL kein Drag nach Ueberschreiten der Schwelle"] }, { return: 1 }]
+      - if:
+          condition: { pneq: [picked, card_a] }
+          then: [{ call: [log.error, "FAIL es wurde die Karte unter dem CURSOR aufgenommen, nicht die am Druckpunkt"] }, { return: 1 }]
+
+      # ── 3. Loslassen = genau einmal "losgelassen" ──────────────────────
+      - call: [engine.swap, win]
+      - call: [input.post_mouse_up, 0]
+      - decl: [g_drop, i32, { call: [engine.update_drag_gesture, b_mid_x, b_mid_y] }]
+      - if:
+          condition: { neq: [g_drop, 3] }
+          then: [{ call: [log.error, "FAIL Loslassen gab Zustand ${g_drop}, erwartet 3"] }, { return: 1 }]
+      - decl: [src, prefab_instance, { call: [engine.get_drag_source] }]
+      - if:
+          condition: { pneq: [src, card_a] }
+          then: [{ call: [log.error, "FAIL get_drag_source nennt im Drop-Frame nicht die Quelle"] }, { return: 1 }]
+      - call: [engine.swap, win]
+      - decl: [g_after, i32, { call: [engine.update_drag_gesture, b_mid_x, b_mid_y] }]
+      - if:
+          condition: { eq: [g_after, 3] }
+          then: [{ call: [log.error, "FAIL Drop wurde zweimal gemeldet — ein Drop pro Geste"] }, { return: 1 }]
+
+      # ── 4. Gegenprobe: Abbruch meldet 4, nicht 3 ───────────────────────
+      - call: [engine.swap, win]
+      - call: [input.post_mouse_move, a_mid_x, a_mid_y]
+      - call: [engine.update_drag_gesture, a_mid_x, a_mid_y]
+      - call: [engine.swap, win]
+      - call: [input.post_mouse_down, 0]
+      - call: [engine.update_drag_gesture, a_mid_x, a_mid_y]
+      - call: [engine.swap, win]
+      - call: [input.post_mouse_move, b_mid_x, b_mid_y]
+      - decl: [g_drag2, i32, { call: [engine.update_drag_gesture, b_mid_x, b_mid_y] }]
+      - if:
+          condition: { neq: [g_drag2, 2] }
+          then: [{ call: [log.error, "FAIL zweite Geste zieht nicht (${g_drag2})"] }, { return: 1 }]
+      - call: [engine.swap, win]
+      - call: [input.post_touch_cancel]
+      - decl: [g_cancel, i32, { call: [engine.update_drag_gesture, b_mid_x, b_mid_y] }]
+      - if:
+          condition: { neq: [g_cancel, 4] }
+          then: [{ call: [log.error, "FAIL Abbruch gab Zustand ${g_cancel}, erwartet 4"] }, { return: 1 }]
+      - if:
+          condition: { pneq: [{ call: [engine.get_dragged] }, null] }
+          then: [{ call: [log.error, "FAIL Drag laeuft nach dem Abbruch weiter"] }, { return: 1 }]
+
+      # ── 5. NACH dem Abbruch muss die naechste Geste wieder ziehen ───────
+      # Diese Probe fehlte zuerst und haette einen echten Fehler verdeckt: die
+      # Abbruch-Flanke wurde im nativen Zweig nie geleert, also meldete
+      # drag_cancelled dauerhaft 1 und update_drag_gesture brach JEDEN weiteren
+      # Drag sofort ab — Symptom: ab dem ersten Abbruch gar nichts mehr ziehbar.
+      - call: [engine.swap, win]
+      - call: [input.post_mouse_move, a_mid_x, a_mid_y]
+      - decl: [g_recover, i32, { call: [engine.update_drag_gesture, a_mid_x, a_mid_y] }]
+      - if:
+          condition: { eq: [g_recover, 4] }
+          then: [{ call: [log.error, "FAIL Abbruch-Flanke klebt — jeder weitere Drag wird sofort abgebrochen"] }, { return: 1 }]
+      - call: [engine.swap, win]
+      - call: [input.post_mouse_down, 0]
+      - call: [engine.update_drag_gesture, a_mid_x, a_mid_y]
+      - call: [engine.swap, win]
+      - call: [input.post_mouse_move, b_mid_x, b_mid_y]
+      - decl: [g_drag3, i32, { call: [engine.update_drag_gesture, b_mid_x, b_mid_y] }]
+      - if:
+          condition: { neq: [g_drag3, 2] }
+          then: [{ call: [log.error, "FAIL dritte Geste zieht nach dem Abbruch nicht (${g_drag3})"] }, { return: 1 }]
+
+      - call: [engine.destroy_window, win]
+      - call: [log.info, "PASS prefab_drag_gesture"]
+      - return: 0

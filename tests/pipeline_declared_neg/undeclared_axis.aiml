@@ -1,0 +1,19 @@
+# SPEC?: 62_pipelines   # aus dem Dateinamen, zu bestaetigen
+# F62-110: ${mode} ist nicht deklariert (args nennt nur arch) -> im erzeugten
+# Requires: driver
+# Rumpf eine undefinierte Variable.  Der Fehler, den F62-7 verlangt, faellt
+# aus der Umschreibung heraus.
+- pipeline:
+    name: blind_key
+    params: { arch: [x86_64], mode: [debug] }
+    stages:
+      - stage:
+          name: one
+          steps:
+            - step:
+                name: first
+                args: [arch]
+                return: i32
+                body:
+                  - call: [io.write_file, "out.txt", "${mode}"]
+                  - return: 0

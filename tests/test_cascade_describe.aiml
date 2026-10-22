@@ -1,3 +1,7 @@
+# SPEC: 44_7_asset_registry,44_7_cascade_validate,49_static_analysis,49_static_off
+# `expect` ist eine FUNKTION, also `call: [expect, ...]`.  Bis 2026-10-15 stand
+# hier `- expect: [...]` — ein unbekannter Statement-Schluessel, den der Compiler
+# still verwarf (spec/49 §2a).  Der Test pruefte also NICHTS und druckte PASS.
 # cascade.describe / cascade.type_range — Schema-Introspektion (spec/44_7).
 #   type_range(type) → list<i32>  : mögliche Werte (enum-Member / cascade-Node-IDs)
 #   describe(cascade, opcodes?) → list<string> : Element0 = Opcode-Enum-Name,
@@ -39,19 +43,19 @@
     body:
       # type_range: enum-Member
       - decl: [trc, list<i32>, { call: [cascade.type_range, "Colr"] }]
-      - expect: [ "${trc.len}", "3" ]
-      - expect: [ "${{ call: [trc.get, 0] }}", "1" ]
-      - expect: [ "${{ call: [trc.get, 2] }}", "3" ]
+      - call: [expect, "${trc.len}", "3"]
+      - call: [expect, "${{ call: [trc.get, 0] }}", "1"]
+      - call: [expect, "${{ call: [trc.get, 2] }}", "3"]
       # type_range: cascade-Node-IDs
       - decl: [trn, list<i32>, { call: [cascade.type_range, "Casc"] }]
-      - expect: [ "${trn.len}", "2" ]
+      - call: [expect, "${trn.len}", "2"]
       # describe alle Opcodes
       - decl: [dall, list<string>, { call: [cascade.describe, "Casc"] }]
-      - expect: [ { call: [joinlist, dall] }, "ECode | [1]aa [1,2,3]Colr | [2]bb" ]
+      - call: [expect, { call: [joinlist, dall] }, "ECode | [1]aa [1,2,3]Colr | [2]bb"]
       # describe gefiltert auf Opcode 2
       - decl: [ops, list<i32>]
       - call: [ops.push, 2]
       - decl: [dflt, list<string>, { call: [cascade.describe, "Casc", ops] }]
-      - expect: [ { call: [joinlist, dflt] }, "ECode | [2]bb" ]
+      - call: [expect, { call: [joinlist, dflt] }, "ECode | [2]bb"]
       - print: ["PASS cascade_describe: type_range + describe (Element0=ECode, ranges, opcode-filter)"]
       - return: 0

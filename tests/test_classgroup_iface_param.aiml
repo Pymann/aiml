@@ -1,0 +1,105 @@
+# SPEC: 58_classgroups,61_memory_management_DRAFT
+# static-check: relaxed
+# PROBE/spec/58: Lässt sich eine Gruppen-Instanz mit instance-level
+# `implements: [Iface]` an einen Parameter vom Typ `ptr<Iface>` übergeben,
+# dort SPEICHERN und später über die vtable aufrufen?
+#
+# Das ist das Muster von cosmos' RpcDispatcher:
+#   disp.register(name, hnd: ref<mirror.RpcHandler>) → map<string:ref<Iface>>
+#   (ptr<> scheitert: eine Gruppen-Instanz ist ein BORROW — die Gruppe besitzt
+#    sie —, und ptr<T> als Parameter übernimmt die Box, spec/61 §8.)
+#   disp.dispatch(...)                                → hnd.run(...)
+# spec/58 listet „group type as a function-signature parameter" als NICHT
+# unterstützt — hier ist der Parameter aber der INTERFACE-Typ, nicht der
+# Gruppen-Typ.  M3 sagt, die synthetisierte Unterklasse trägt die vtable.
+# Diese Probe entscheidet, ob cosmos' 18 Handler Instanzen werden können.
+# Expected exit code: 0
+
+- interface:
+    name: Greeter
+    methods:
+      - [greet, i32, []]
+
+- class:
+    name: Backend
+    members:
+      - [base_value, i32]
+    methods:
+      - def: { name: seed,  args: [[val, i32]], body: [{ set: [<.base_value, val] }] }
+      - def: { name: value, return: i32, body: [{ return: <.base_value }] }
+
+# Die Dispatcher-Attrappe: speichert Interface-Zeiger und ruft sie später.
+- class:
+    name: Slots
+    members:
+      - [by_name, map<string:ref<Greeter>>]
+    methods:
+      - def:
+          name: put
+          args: [[name, string], [who, ref<Greeter>]]
+          body: [{ call: [<.by_name.put, name, who] }]
+      - def:
+          name: invoke
+          args: [[name, string]]
+          return: i32
+          body:
+            - if: { condition: { eq: [{ call: [<.by_name.contains, name] }, 0] }, then: [{ return: -1 }] }
+            - decl: [who, ref<Greeter>, { call: [<.by_name.get, name] }]
+            - return: { call: [who.greet] }
+
+- classgroup:
+    name: GreetRuntime
+    instances:
+      - class: Backend
+        instance: data
+        constructor: [seed, 20]
+
+      - class: Backend
+        instance: hello
+        sees: [data]
+        implements: [Greeter]
+        methods:
+          # Nutzt Basis-Zustand UND die sees-Kante — genau die Form, die eine
+          # Basis-Methode allein nicht ausdrücken kann (cosmos-Handler brauchen
+          # das: eigene Logik + Zugriff auf mehrere Dienste).
+          - def:
+              name: greet
+              return: i32
+              body:
+                - decl: [from_edge, i32, { call: [<.data.value] }]
+                - return: { +: [from_edge, 1] }
+
+- def:
+    name: via_free_function
+    args: [[who, ref<Greeter>]]
+    return: i32
+    body: [{ return: { call: [who.greet] } }]
+
+- def:
+    name: main
+    static_off: ["str_cmp"]
+    return: i32
+    body:
+      - decl: [grp, ptr<GreetRuntime>, { new: GreetRuntime }]
+
+      # 1) direkter Aufruf der Gruppen-Methode (bekannt funktionierend)
+      - decl: [direct, i32, { call: [grp.hello.greet] }]
+      - if: { condition: { neq: [direct, 21] }, then: [{ print: ["FAIL direkt: ${direct}"] }, { return: 1 }] }
+
+      # 2) als ptr<Iface> an eine freie Funktion
+      - decl: [via_fn, i32, { call: [via_free_function, grp.hello] }]
+      - if: { condition: { neq: [via_fn, 21] }, then: [{ print: ["FAIL freie Funktion: ${via_fn}"] }, { return: 1 }] }
+
+      # 3) in einer Map speichern und später über die vtable rufen
+      - decl: [slots, ptr<Slots>, { new: Slots }]
+      - call: [slots.put, "hello", grp.hello]
+      - decl: [via_map, i32, { call: [slots.invoke, "hello"] }]
+      - if: { condition: { neq: [via_map, 21] }, then: [{ print: ["FAIL ueber Map: ${via_map}"] }, { return: 1 }] }
+
+      # 4) Zustandsänderung hinter der Kante wirkt durch (kein Wert-Abzug)
+      - call: [grp.data.seed, 100]
+      - decl: [after, i32, { call: [slots.invoke, "hello"] }]
+      - if: { condition: { neq: [after, 101] }, then: [{ print: ["FAIL nach Aenderung: ${after}"] }, { return: 1 }] }
+
+      - print: ["PASS classgroup_iface_param"]
+      - return: 0

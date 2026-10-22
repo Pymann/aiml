@@ -56,13 +56,49 @@ build failure at the exact call site.
 A prefab addresses its children **by name**.  The child-addressing methods
 
 ```
-set_text  set_texture  set_child_visible  set_child_font_size  set_dropdown_options
+# schreibend — ein falscher Name WIRFT
+set_text set_texture set_child_visible set_child_font_size set_dropdown_options
+set_dropdown_index set_dropdown_selected set_compact set_bg_color set_border_color
+set_color set_color_runs clear_color_runs set_checked set_focus set_bar_value
+set_bar_max set_bar_fill set_slider_value set_slider_min set_slider_max focus
+select_all scroll_to_end bind_list
+# lesend — ein falscher Name liefert stumm einen Vorgabewert
+child_clicked text_value child_focused is_checked dropdown_value dropdown_index
+dropdown_enum get_slider_value selection container_row_count
 ```
 
+This list is **every** `prefab_instance` method whose first argument the runtime
+resolves through `find_child` (abgeglichen gegen `src/sys/prefab_runtime.cpp`,
+2026-10-15).  Until then it named 6 of them, which left 24 methods carrying the
+identical failure class with no check at all — found while giving a job row a
+status dot, where `set_bg_color("stat_dot")` on a mistyped name would have thrown
+at run time with nothing to catch it in WASM.  One list serves Tier 2 and Tier 2b:
+two copies of the same rule drift apart (that is how the memV3 double-gate bug
+happened).
+
 take the child name as their first argument and resolve it through the runtime
-`find_child`, which returns NULL — a silent no-op — when the name does not match
-any declared child (`child_index` is populated from exactly the declared
-`children:`, no synthetic entries).  Tier 2 turns that miss into a compile error.
+`find_child` (`child_index` is populated from exactly the declared `children:`,
+no synthetic entries).  A miss **throws** `std::runtime_error` with the prefab
+name and the list of valid children (`AIML_PREFAB_LENIENT=1` downgrades it to a
+warning + NULL).  Tier 2 moves that failure from run time to compile time.
+
+**Why compile time is not a nicety here.**  The throw is survivable natively
+(an aiml `try`/`catch` can hold it, otherwise `terminate` prints `what()` plus a
+backtrace to the call site).  In a **WASM** build it is not: exceptions are
+compiled out, so the throw reaches `___cxa_throw` and aborts the whole
+application —
+
+```
+[prefab-EXCEPTION] prefab widget child 'logo_img' not found in prefab 'MainMenuScene'
+Aborted(Assertion failed: Exception thrown, but exception catching is not enabled.)
+```
+
+— a black page at the first frame, with no aiml-level stack and nothing to
+recover from.  One stale child name therefore takes down the entire client, so
+for a WASM target the static check is not a convenience, it is the **only**
+line of defence.  Measured in cosmos on 2026-10-15: a child removed from a
+prefab while a `<.scene.set_texture("logo_img")` stayed behind in the owning
+class — exactly the member-held shape Tier 2 did not cover (see Tier 2b).
 
 Within each function body the compiler tracks which prefab every
 `prefab_instance` variable was instantiated from, but **only** for direct
@@ -98,6 +134,54 @@ Fix the child name or add the child to the prefab declaration.
 - Only **string-literal** child names are checked; a runtime string is left
   untouched.
 - Only simple `var.method(…)` receivers are considered (no chained receivers).
+
+## Tier 2b — member-held instances, reading methods
+
+Tier 2 as described above covers a scene in a **local variable**.  That is not how
+screens are built: a screen instantiates its scene **once** in `init` and keeps it
+in a class member, then addresses children from every other method.
+
+```yaml
+- set: [<.scene, { call: [engine.instantiate, "MainMenuScene"] }]   # init
+- call: [<.scene.set_text, "jobs_box", txt]                         # render
+```
+
+So the whole production shape sat outside the check.  Tier 2b closes it along both
+axes at once — the receiver and the method set:
+
+1. **Member receivers.**  Per class, the compiler collects `set: [<.<field>,
+   engine.instantiate("<Prefab>")]` bindings over **all** methods of that class
+   (a field is bound in `init` and used in `render` — a per-method map would see
+   nothing).  Every `<.<field>.<child-method>("<child>", …)` in that class is then
+   checked against `<Prefab>`'s declared children, with the same hard error as
+   Tier 2.
+2. **Reading methods.**  `child_clicked` and `text_value` are checked, not just the
+   writing `set_*` family.  These two are the click-critical ones: a typo in
+   `child_clicked("probe_btn")` is a **silently dead button** and one in
+   `text_value("host_input")` a **silently empty input field** — no exception, no
+   message, because reading a missing child legitimately yields "not clicked" /
+   "empty".  A dead button is the failure mode a user reports as "the button does
+   nothing", which is also the hardest to find by reading code.
+
+### Scope and limits
+
+- **One prefab per field, or nothing.**  A field is tracked only if *every*
+  literal-instantiate binding to it names the **same** prefab.  Two different
+  prefabs in two branches (a field reused for two scenes) drops it from tracking.
+- A field assigned from anything not statically resolvable (a helper, a parameter,
+  another field) is simply not tracked — it never produces an error.  The check
+  stays conservative: it reports only what it can prove.
+- **Fields only, not chains.**  `<.state.menu.scene.set_text(…)` is not tracked:
+  the receiver is another object's field, whose binding lives in another class.
+- Only **string-literal** child names, as in Tier 2.
+
+### Why a hard error and not a warning
+
+A warning here would be ignorable, and this failure class is specifically *not*
+ignorable: natively it throws at the call site, in WASM it aborts the program.
+There is also no legitimate reason to address a child that is not declared — the
+child list is fixed data in the same build.  The only false-positive risk is a
+name the compiler cannot resolve, and those are excluded by construction above.
 
 ## Tier 3 — dead-prefab
 
@@ -277,3 +361,47 @@ literal key is recorded (`Y` record) with its enclosing method, and printed in a
 **KEY BINDINGS** section: `"<key>" -> <class>.<method>` (e.g. `"space" ->
 BoardScreen.apply_reaction_window`, `"f"/"s"/"d"/"a" -> apply_movement_keys`).
 Filtered by class like collections, so a scene focus shows only that scene's keys.
+
+## Behoben (2026-10-15): Kindnamen-Check deckte die Produktionsform nicht ab
+
+Gefunden am 2026-10-11, geschlossen am 2026-10-15 — die Lücke bestand aus zwei Hälften,
+die zusammen genau die gebaute Wirklichkeit ausnahmen: geprüft wurden nur **schreibende**
+Kindmethoden (`set_*`) auf einer Instanz aus einer **lokalen** Bindung.  Beides traf auf
+keinen einzigen cosmos-Bildschirm zu: dort hält ein Klassen-Member die Szene, und die
+klickkritischen Methoden sind die lesenden (`child_clicked`, `text_value`).
+
+Bis dahin lautete die Auflage „der Abgleich bleibt Handarbeit".  Diese Handarbeit hat am
+2026-10-15 versagt: beim Umbau des cosmos-Hauptmenüs (doc/spec/107) fielen die Kinder
+`logo_img` und `build_lbl` aus der `MainMenuScene`, zwei Aufrufe blieben stehen, der Build
+war grün — und der WASM-Client brach im ersten Rahmen ab (`___cxa_throw`, schwarze Seite).
+Ein Check, der die vorherrschende Schreibweise nicht sieht, schützt nicht; die Regel steht
+jetzt als **Tier 2b** oben.
+
+## Behoben (2026-10-13): unknown child keys were silently ignored
+
+Found while adding the per-child `font:` attribute (cosmos `doc/spec/98` F98-15): the prefab child
+parser (`src/core/ast/prefab_builder.cpp`) is a chain of `else if (childKey == …)` with **no final
+`else`**.  A key it does not know is dropped without a word, so a prefab that asks for something
+the build cannot deliver compiles clean and then behaves as if the line were not there.
+
+That is how the `font:` attribute looked like it worked for a whole build-and-screenshot cycle
+before anyone noticed that nothing had changed.  Asset *values* are already strict — a texture
+stem that does not exist is a compile error, deliberately, "typo catched at build-time, not as
+black-square at runtime" — and the same reasoning applies one level up to the *keys*.
+
+Needed: an error on an unknown child key, with the valid keys listed (the error path that
+`prefab_runtime` already produces for an unknown child **name** is the model).  Same rule as aiml
+`spec/62` F62-65 for pipeline steps, for the same reason: here the defaults are the dangerous
+direction.
+
+**Behoben.** Die Kette hat ein abschliessendes `else`, das ein unbekanntes Attribut als
+Compile-Fehler meldet (Kind, Typ, Schluessel; bei `password` mit dem Hinweis auf `secret`).
+Die Regel steht in spec/44_6 §4, der Negativ-Test ist `tests/test_prefab_unknown_attr.aiml`.
+Anlass war ein unmaskiertes SSH- und sudo-Passwort im cosmos-Client: dort stand
+`password: true`, der Maskierungs-Schluessel heisst `secret` — die Zeile wurde verworfen und
+die Passwoerter standen im Klartext auf dem Schirm.
+
+Beim Scharfschalten kamen drei weitere stille Luecken ans Licht: `min`, `scrollable` und
+`tail` standen in der Attribut-Tabelle, wurden aber nur vom JSON-Lader der Laufzeit gelesen;
+und `visible` las **niemand**, obwohl 9rooms es an 44 Kindern deklariert. Alle vier sind
+inzwischen durchgezogen (Parser, Deskriptor, Laufzeit).

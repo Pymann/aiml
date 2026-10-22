@@ -61,6 +61,19 @@ prefer the mapping layer in game code.
 | `input.key_pressed_once(key: string)` | `bool` | Rising edge, **consumed on first read per frame**: the first poll this frame returns `true`, every later poll returns `false` until the edge resets next frame. Use for edge-triggered *actions* (skip, toggle, confirm) in code paths that may run more than once per frame — e.g. an input handler invoked from `render()`, which is often called several times per frame (once per reactive redraw after an action). Polling `key_pressed` there would fire the action once per redraw. |
 | `input.key_released(key: string)` | `bool` | Key came up **this frame** (falling edge) |
 
+**Key names** are the same on every target.  Letters are `"A"`..`"Z"` (always
+uppercase, regardless of Shift), digits `"0"`..`"9"`, and the named keys are
+`Space`, `Escape`, `Enter`, `Tab`, `Backspace`, `Delete`, `Insert`,
+`Up`/`Down`/`Left`/`Right`, `Home`, `End`, `PageUp`, `PageDown`,
+`LShift`/`RShift`, `LCtrl`/`RCtrl`, `LAlt`/`RAlt`, `F1`..`F12`.
+Polling (`input.key_down(…)`) is **case-insensitive** (`"lctrl"` == `"LCtrl"`),
+but the `key` field of a `key_down`/`key_up` **event** carries the canonical
+spelling above — compare against that, not against browser spellings.
+On wasm32 the browser's own names (`"c"`, `"ArrowLeft"`, `"Control"`, `" "`) are
+normalized to this canon, and `Ctrl`/`Shift`/`Alt` state is taken from the
+event's modifier flags, so a modifier held *before* the canvas got focus is
+still seen.
+
 Key state follows the same per-frame snapshot as mouse buttons (below): a key pressed and released
 between two frame boundaries reports `key_pressed`/`key_pressed_once` **and** `key_released` in the
 next frame; auto-repeat produces no further press edges.
@@ -76,6 +89,7 @@ next frame; auto-repeat produces no further press edges.
 | `input.mouse_button(btn: i32)` | `bool` | Button currently pressed |
 | `input.mouse_pressed(btn: i32)` | `bool` | Button went down this frame |
 | `input.mouse_released(btn: i32)` | `bool` | Button came up this frame |
+| `input.mouse_cancelled(btn: i32)` | `bool` | The press was **aborted** this frame — see below |
 | `input.mouse_scroll()` | `vec2` | Scroll delta this frame (x=horizontal, y=vertical) |
 
 Button state is a per-frame snapshot: every consumer in one frame sees the same `mouse_button` /
@@ -84,7 +98,53 @@ blocking network call). Edges are latched, never lost: a press and release that 
 between two frame boundaries report `mouse_pressed` **and** `mouse_released` in the next frame
 (`mouse_button` is then already false).
 
+#### Cancel is not release (normative)
+
+A press can end two ways, and they mean opposite things:
+
+- **Release** — the user let go. The gesture *completed*: a click, a tap, a drop.
+- **Cancel** — the press was taken away. The gesture *did not happen*.
+
+`input.mouse_cancelled(btn)` is the second one, latched per frame exactly like
+`mouse_pressed`/`mouse_released`. On a cancel the button state goes to
+`false` and any drag for that button ends (`drag_cancelled`, §2.4), but
+**`mouse_released` is NOT reported** — otherwise a cancel is indistinguishable
+from a deliberate release and every consumer treats it as a completed gesture.
+
+**Rule: a cancel must never be turned into a click, a tap or a drop.** Code that
+acts on `mouse_released` therefore acts only on real releases; code that must
+clean up on either outcome checks both.
+
+Sources of a cancel:
+
+| Source | Platform |
+|--------|----------|
+| `touchcancel` (system gesture, incoming call, browser takes over scrolling, notification overlay) | browser |
+| A second finger landing while a one-finger press is active (two fingers = pan/zoom, not game input) | browser |
+| Window focus loss / tab becoming hidden while a button is held (`blur`, `visibilitychange`) | browser, desktop |
+| `input.post_touch_cancel()` | injection (§8.2) |
+
+> **Why this is normative and not a detail.** Without a distinct cancel edge, an
+> aborted touch produces a release, a release completes a drag, and a completed
+> drag is a drop — so a system gesture the user never aimed at the application
+> commits whatever the drop handler does. In a game that is a move nobody made.
+
 Mouse button indices: `0` = left, `1` = right, `2` = middle.
+
+Diese Reihenfolge ist **normativ und plattformunabhängig**. Sie ist die von
+GLFW, also die des Desktop-Pfads. Andere Ereignisquellen nummerieren anders und
+**müssen umsetzen**:
+
+| Quelle | deren Reihenfolge | Umsetzung |
+|---|---|---|
+| GLFW (Desktop) | 0 links, 1 rechts, 2 Mitte | keine nötig |
+| DOM `MouseEvent.button` (WASM) | 0 links, **1 Mitte**, **2 rechts** | 1 ↔ 2 tauschen |
+| X11 / XTEST (`input.os_mouse_*`) | Button1 links, **Button2 Mitte**, **Button3 rechts** | 1 → Button3, 2 → Button2 |
+
+Ohne diese Umsetzung bedeutet `input.mouse_pressed(2)` je nach Build „rechts"
+oder „Mitte", und derselbe Quelltext verhält sich im Browser anders als auf dem
+Desktop — ohne dass irgendwo ein Fehler auftritt. Genau das war bis 2026-10-20
+der Fall (WASM- und XTEST-Pfad reichten ihren Index unverändert durch).
 
 > **Pixels vs. design coordinates.** `input.mouse_pos_*` returns raw **window pixels**. Prefab positions (`set_pos`, `get_x`/`get_y`) live in **design coordinates** — the engine scales the design canvas to the window by `rel_scale`. `engine.hit_test`/`update_drag`/`update_hover` take pixel input and convert internally, so mixing them is fine; but if you place a widget **directly at the cursor** with `set_pos`, feeding raw pixels is wrong on a scaled window (the widget lands far off). Use the design-space cursor helpers instead:
 >
@@ -129,14 +189,78 @@ than `threshold` pixels (default: 5.0) from the start position. The system track
 |------|--------|-------------|
 | `input.drag_active(btn: i32)` | `bool` | Drag currently active for button `btn` |
 | `input.drag_started(btn: i32)` | `bool` | Drag started **this frame** |
-| `input.drag_ended(btn: i32)` | `bool` | Drag ended **this frame** |
-| `input.drag_origin_x(btn: i32)` | `f32` | X position where the drag began |
+| `input.drag_ended(btn: i32)` | `bool` | Drag ended **this frame** by a release (completed → a drop) |
+| `input.drag_cancelled(btn: i32)` | `bool` | Drag ended **this frame** by a cancel (§2.2) — **no** drop |
+
+| `input.drag_origin_x(btn: i32)` | `f32` | X position where the drag began (= the press point, gültig ab `mousedown`, auch ohne aktiven Drag) |
 | `input.drag_origin_y(btn: i32)` | `f32` | Y position where the drag began |
+| `input.drag_start_x(btn: i32)` | `f32` | X des Punktes, an dem der Drag **begann** — gelatcht mit `drag_started` |
+| `input.drag_start_y(btn: i32)` | `f32` | Y dieses Punktes |
+| `input.drag_end_x(btn: i32)` | `f32` | X position of the release that ended the drag |
+| `input.drag_end_y(btn: i32)` | `f32` | Y position of that release |
 | `input.drag_delta_x(btn: i32)` | `f32` | Total movement X since drag start |
 | `input.drag_delta_y(btn: i32)` | `f32` | Total movement Y since drag start |
 | `input.drag_set_payload(data: ptr)` | — | Attach user data to the active drag |
 | `input.drag_get_payload()` | `ptr` | Read drag payload (null if none) |
 | `input.drag_set_threshold(px: f32)` | — | Minimum movement in pixels (default: `5.0`) |
+
+**Die drei Drag-Flanken sind gelatcht, genau wie die Tastenflanken in §2.2.**
+`drag_started` / `drag_ended` / `drag_cancelled` sind Ein-Frame-Kanten: sie
+gelten für **den ganzen** Frame (jeder Leser sieht denselben Wert) und
+verschwinden mit dem nächsten `update()`. Entsteht eine Kante *während* eines
+Frames — ein Ereignis trifft ein, nachdem die Anwendung ihre Gesten schon
+ausgewertet hat, was bei langen Frames (blockierender Netzaufruf, §44_5 §5)
+der Normalfall ist — dann wird sie **aufbewahrt und im nächsten Frame
+gemeldet**, nicht verworfen. Ohne diese Zusicherung geht ein überschrittener
+Schwellwert gelegentlich verloren und der Drag startet nicht, obwohl der
+Benutzer gezogen hat — ununterscheidbar von „die Karte lässt sich nicht
+greifen".
+
+Daraus folgt normativ: **ein neuer Druck löscht keine noch nicht ausgelieferte
+Kante.** Die Ereignis-Handler laufen zwischen den Frames *und* mitten im Frame
+(jeder blockierende Netzaufruf gibt an die Ereignisschleife ab). Lässt der
+Benutzer eine gezogene Karte los und drückt — weil nichts passiert — gleich
+wieder, liegen Release und Druck in derselben Lücke; dürfte der Druck die
+`ended`-Kante überschreiben, wäre der Drop ersatzlos weg.
+
+**Der Drop trägt seine eigene Position: `drag_end_x/y`.** Wird die `ended`-Kante
+erst einen Frame später gemeldet, steht der Cursor längst woanders — unter
+Umständen auf dem neuen Druckpunkt. Wer den Drop dann über `input.mouse_pos_*`
+auflöst, trifft das falsche Ziel; das ist schlimmer als ein verlorener Drop,
+weil es einen Spielzug auslöst, den niemand wollte. `drag_end_x/y` hält den
+Punkt des Loslassens und wird **gemeinsam** mit der Kante gelatcht. Eine
+Anwendung löst den Drop also so auf:
+
+```yaml
+- if: [{ call: [input.drag_ended, 0] }, true]
+  then:
+    - call: [drop_item, { call: [input.drag_end_x, 0] }, { call: [input.drag_end_y, 0] }]
+```
+
+`input.mouse_pos_*` ist dafür ungeeignet: diese Werte sind **live**, nicht pro
+Frame gelatcht, und können sich innerhalb eines Frames ändern.
+
+**`drag_origin_*` ist der lebende Druckpunkt, `drag_start_*` der gelatchte.**
+Das ist kein Duplikat, sondern die Gegenstücke zweier verschiedener Fragen:
+
+| Frage | Antwort |
+|---|---|
+| „Wo wurde **jetzt** gedrückt?" (Klick, Tipp) | `drag_origin_x/y` — gesetzt bei jedem `mousedown`, auch ohne Drag |
+| „Wo begann der Drag, dessen `started`-Kante dieser Frame meldet?" | `drag_start_x/y` |
+| „Wo wurde der Drag losgelassen, dessen `ended`-Kante dieser Frame meldet?" | `drag_end_x/y` |
+
+`drag_origin_*` wird von **jedem** neuen Druck sofort überschrieben, die Kanten
+werden aber erst im nächsten Frame gemeldet. Bei der Folge *Drücken A → ziehen →
+loslassen → Drücken B*, alles in einer Frame-Lücke, liefert der nächste Frame
+`drag_started` **und** `drag_ended` von Drag A — während `drag_origin_*` längst
+auf B zeigt. Wer die Aufnahme daran hängt, greift die Karte an **B** statt an
+**A**: ein Zug, den niemand begonnen hat. Darum wird der Startpunkt
+**gemeinsam mit seiner Kante** gelatcht, genau wie der Loslasspunkt.
+
+`engine.update_drag_gesture` (spec/44_6) nimmt deshalb an `drag_start_*` auf,
+nicht an `drag_origin_*`.
+
+`drag_cancelled` hat bewusst keine Position — ein Abbruch ist kein Drop (§2.2).
 
 **Drag events** in the event queue (`input.next_event()`):
 
@@ -145,6 +269,7 @@ than `threshold` pixels (default: 5.0) from the start position. The system track
 | `"drag_start"` | Drag began (`btn`, `pos`, `delta` set) |
 | `"drag_move"` | Cursor moved during drag (`btn`, `pos`, `delta` set) |
 | `"drag_end"` | Button released during drag (`btn`, `pos`, `delta` set) |
+| `"drag_cancel"` | Drag aborted, not released (`btn`, `pos`, `delta` set) — never a drop |
 
 `ev.delta_x` / `ev.delta_y` = total movement since drag start (shortcut for `pos - origin`).
 
@@ -162,7 +287,7 @@ than `threshold` pixels (default: 5.0) from the start position. The system track
 
 - if: [{ call: [input.drag_ended, 0] }, true]
   then:
-    - call: [drop_item, { call: [input.mouse_pos_x] }, { call: [input.mouse_pos_y] }]
+    - call: [drop_item, { call: [input.drag_end_x, 0] }, { call: [input.drag_end_y, 0] }]
 
 # Event-based (lossless for complex drag paths):
 - while:
@@ -181,6 +306,43 @@ than `threshold` pixels (default: 5.0) from the start position. The system track
 ```
 
 ---
+
+## 2.5 Clipboard
+
+```yaml
+- call: [input.clipboard_set, "text to copy"]
+- decl: [pasted, string, { call: [input.clipboard_get] }]
+```
+
+| Builtin | Signature | Notes |
+|---|---|---|
+| `input.clipboard_set` | `input.clipboard_set(s: string) -> void` | Writes to the **system** clipboard. |
+| `input.clipboard_get` | `input.clipboard_get() -> string` | Reads it; `""` when unavailable. |
+
+`text_input` uses the same path for `Ctrl+C/X/V` (spec/44_6 §5e), so a copy made
+in a widget and one made via `clipboard_set` end up in the same place.
+
+**Platform behaviour**
+- **Native:** backed by the GLFW window (`glfwGet/SetClipboardString`); `""`
+  before `input.init` or without a window.
+- **Browser (wasm32):** `clipboard_set` writes to the real system clipboard via
+  `navigator.clipboard.writeText`, falling back to a hidden textarea plus
+  `document.execCommand('copy')`.  Both need a **secure context** (https, or
+  http on `localhost`/`127.0.0.1`) **and** a running **user gesture**.  The AIML
+  frame loop runs *after* the key event, so a `clipboard_set` issued from
+  AIML-side key handling would already be outside the gesture.  The runtime
+  therefore handles `Ctrl+C`/`Ctrl+X` **inside** the browser's `keydown`: it
+  asks the focused widget what it would copy and writes that synchronously,
+  then suppresses the browser's own copy (which would otherwise overwrite the
+  clipboard with the canvas's empty page selection).  A `clipboard_set` from a
+  **button handler** is fine for the same reason — the click is the gesture.
+- **Paste in the browser** cannot be read synchronously
+  (`navigator.clipboard.readText` is async), so the runtime listens for the
+  `paste` event instead: it stores the pasted text and only *then* queues the
+  `Ctrl+V` key event, so the widget inserts the new content rather than the
+  previously held one.  `clipboard_get` returns that in-page value.  A paste
+  therefore needs the real `Ctrl+V` (or the browser's paste menu) — synthesizing
+  it from AIML cannot pull the system clipboard.
 
 ## 3. Event Queue
 
@@ -239,6 +401,41 @@ Event types (`type` field):
             then:
               - call: [buffer.chop_last]
 ```
+
+### 3.1 One press, one event (normative)
+
+A single physical key press puts **exactly one** `key_down` event in the queue, and a
+single typed character **exactly one** `text` event. A consumer may therefore treat
+"one event = one edit" and must not try to de-duplicate.
+
+This is an invariant about the *producers*, and every platform backend has to honour
+it:
+
+- **Native (GLFW):** the key callback queues on `GLFW_PRESS` only; `GLFW_REPEAT`
+  updates the polling state but queues nothing.
+- **Web (browser):** the window-level `keydown`/`keypress` handlers are the single
+  source for a hardware keyboard. The hidden DOM `<input>` that raises the mobile
+  soft keyboard is a *fallback* for input that never produces a usable `keydown`
+  (soft keyboards, IMEs, autocorrect, composition). It must stay silent while a
+  named hardware key is in flight — otherwise one press is queued twice.
+
+A doubled event is invisible in a screenshot and in any structural test: the widget
+is correct, the queue is not. It shows up only as behaviour — a Backspace that eats
+two characters, an arrow key that jumps two positions, a callback that fires twice.
+Measure the count, do not reason about it (`tests/test_prefab_backspace.aiml`).
+
+### 3.2 Queue vs. per-frame latch
+
+The queue is consumed; the polling values are **not**. `input.mouse_scroll_y()`,
+`input.mouse_button(…)`, `input.mouse_released(…)` and a prefab's
+`child_clicked(…)` all return the same value to *every* reader within the frame.
+
+That is the second shape of the same problem: one input, several consumers. A wheel
+notch over a scrollable container that lies under an application-drawn viewport is
+delivered to both — the list scrolls *and* the camera zooms. Nothing marks the input
+as used, so whoever asks, acts. When two consumers can overlap, the application has
+to decide by region (hit-test first, then act) rather than letting both read the
+latch.
 
 ---
 
@@ -402,3 +599,185 @@ the full range −1…+1.
 value = clamp(sum(source_i * scale_i for active source_i), -1.0, 1.0)
 ```
 When opposite keys are pressed simultaneously (`W` + `S`) the result is `0.0`.
+
+---
+
+## 8. Input Injection (`input.post_*`)
+
+Lets a program feed cursor movement, button and key events into its **own** input
+state, so an automated test can drive a real UI the way a user would.
+See `/spec/44_9_ui_testing.md` for the test-case format built on this.
+
+### 8.1 Why at this layer
+
+Widgets do not read the event queue of §3 — the prefab runtime polls the frame
+state (`mouse_pos`, `mouse_pressed`, `mouse_released`, `key_down`).  Injection
+therefore writes **the same frame-state buffer and the same latches** that the
+GLFW callbacks write (§7.1).  There is no second code path: whatever a widget,
+a drag gesture or hand-written polling code does with a real event, it does
+with an injected one.
+
+Injection is **in-process**.  It does not touch the windowing system and does
+not move the operating system's cursor, so a test cannot steal the pointer from
+the person running it, and several tests can run in parallel.
+
+> **Not covered by injection.** Everything *below* the application: window
+> focus, window position, a compositor putting another window on top.  A test
+> driven this way proves that the UI reacts correctly to input it receives — not
+> that the input would have arrived.  See §8.5.
+
+### 8.2 Calls
+
+| Call | Description |
+|------|-------------|
+| `input.post_mouse_move(x: f32, y: f32)` | Place the cursor at window coordinates `(x, y)` (origin top-left), as a motion event would.  Feeds `mouse_pos` and, on the next frame, `mouse_delta`. |
+| `input.post_mouse_down(btn: i32)` | Press button `btn` (0 = left): sets the current state **and** the press latch. |
+| `input.post_mouse_up(btn: i32)` | Release button `btn`: sets the current state **and** the release latch. |
+| `input.post_touch_cancel()` | Abort the active press on button 0: clears the current state and sets the **cancel** latch (§2.2) — never the release latch. Models `touchcancel`, the two-finger takeover and focus loss, so a scenario can prove that an aborted gesture produces no drop. |
+| `input.post_scroll(dx: f32, dy: f32)` | Add to the scroll accumulator; drained by the next `update()` exactly like a real wheel event. |
+| `input.post_key_down(name: string)` | Press a key.  `name` uses the canonical names of §5 (`"lctrl"`, `"Left"`, `"a"`). |
+| `input.post_key_up(name: string)` | Release a key. |
+| `input.post_text(s: string)` | Queue `s` as character input for the focused `text_input` — one `char` event per code point, as typing would. |
+| `input.post_mouse_move_pending(x: f32, y: f32)` | wie `post_mouse_move`, schreibt aber in die **Ereignis-Schicht** (§8.3a) |
+| `input.post_mouse_down_pending(btn: i32)` | wie `post_mouse_down`, Ereignis-Schicht |
+| `input.post_mouse_up_pending(btn: i32)` | wie `post_mouse_up`, Ereignis-Schicht |
+
+`btn` ist überall der **kanonische** Index aus §2 (`0`=links, `1`=rechts,
+`2`=Mitte); die Injektion setzt nichts um, weil sie unterhalb der
+Plattform-Adapter ansetzt.
+
+All calls are no-ops when input was never initialised (`input.init`), and
+`post_key_*` is a no-op for an unknown key name (it reports via `log.warn`
+rather than failing, so a scenario with a typo is diagnosable).
+
+### 8.3 Frame contract
+
+`input.update()` clears the latches at the start of a frame (§7.1).  Injected
+state is therefore visible to **the frame that follows the injection**, and only
+to that frame:
+
+```
+engine.swap(win)     # input.update() clears the latches, then PollEvents
+input.post_mouse_*   # inject
+<app reads input>    # sees it
+engine.swap(win)     # cleared again
+```
+
+`engine.swap` is where `input.update()` runs (`/spec/44_1_engine.md` §Loop), so a
+driver MUST inject **after** the swap and before the application reads — not
+before the swap, where the clear would discard it.
+
+**One contract on every platform.** The two backends keep per-frame edges
+differently — desktop clears latches in `update()` and the GLFW callbacks refill
+them, the browser snapshots pending edges into the frame on `update()`. Taken
+naively, injection would need the *opposite* ordering in the browser, and a
+scenario written on the desktop would behave differently there without saying
+so. The browser injection therefore writes the frame-visible slots directly
+(`curr_*`, `frame_press/release`) and leaves the pending ones alone, so that an
+injected edge fires exactly once and the rule above holds everywhere.
+
+### 8.3a Die Ereignis-Schicht (`*_pending`)
+
+Die Hooks aus §8.2 ohne Zusatz schreiben die **frame-sichtbaren** Slots:
+injizieren, lesen, beim nächsten `update()` weg. Das ist der richtige Vertrag
+für ein Szenario, das Bedienung nachspielt — aber es macht eine Schicht
+unerreichbar.
+
+Im Browser-Zweig schreiben die Ereignis-Handler nämlich nicht in die
+frame-sichtbaren Slots, sondern in eine **Ereignis-Schicht** (`pend_*`), die
+`update()` am Frame-Anfang in den Frame übernimmt. Diese Schicht trägt die
+Zusicherung aus §2.3: eine Kante, die *während* eines Frames entsteht, wird
+aufbewahrt und im nächsten Frame gemeldet. Und sie ist der Ort, an dem die
+interessanten Fälle liegen, weil die Handler **mitten im Frame** laufen,
+sobald ein blockierender Netzaufruf an die Ereignisschleife abgibt.
+
+Die `*_pending`-Varianten tun genau das, was die Ereignis-Handler tun. Damit
+kann ein Szenario eine echte Ereignisfolge nachspielen — insbesondere die, auf
+die es ankommt: **Loslassen und erneutes Drücken in derselben Lücke.** Danach
+`input.update()` aufrufen und prüfen, was ausgeliefert wird:
+
+```yaml
+# Drag läuft, dann Release UND neuer Druck, beides vor dem nächsten update
+- call: [input.post_mouse_up_pending, 0]
+- call: [input.post_mouse_down_pending, 0]
+- call: [input.update]
+# drag_ended MUSS 1 sein — der Druck darf die Kante nicht gelöscht haben (§2.3)
+```
+
+Ohne diese Hooks war genau diese Zusicherung von außen nicht prüfbar, und ein
+Verstoß dagegen blieb über Monate unentdeckt. Canonical:
+`tests/test_input_pending_layer_wasm.aiml`.
+
+> Für Szenarien, die Bedienung nachspielen, bleiben die Hooks **ohne** Zusatz
+> die richtige Wahl. Die `*_pending`-Varianten sind dafür da, den Frame-Vertrag
+> selbst zu prüfen.
+
+### 8.4 A click spans frames
+
+`engine.update_hover(mx, my)` is the pass that resolves which widget is under the
+cursor and fires the click (`/spec/44_6_prefabs.md`), so a driver calls it each
+frame with the injected position.
+
+A click is a press **and** a release inside the widget's hit rect
+(`/spec/44_6_prefabs.md` §5), and the widget records the rect at press time so
+the click survives a rebuild in between.  Press and release in the *same* frame
+would therefore not be a faithful click, and there is deliberately **no**
+`input.post_click`: the driver advances a frame between down and up.
+
+```yaml
+- call: [input.post_mouse_move, 412.0, 388.0]
+- call: [engine.update_hover, 412.0, 388.0]       # cursor is there
+- call: [engine.swap, win]
+- call: [input.post_mouse_down, 0]
+- call: [engine.update_hover, 412.0, 388.0]       # widget records the press
+- call: [engine.swap, win]
+- call: [input.post_mouse_up, 0]
+- call: [engine.update_hover, 412.0, 388.0]       # click fires → child_clicked
+```
+
+### 8.5 OS-level injection (`input.os_*`)
+
+The second channel injects **below** the application, into the X server, so it also covers window
+focus, window geometry and overlapping windows. The application cannot tell such an event from a
+real one.
+
+| Call | Description |
+|------|-------------|
+| `input.os_available()` | `1` if a display could be opened **and** it has the XTEST extension. Everything below is a no-op otherwise, so a scenario can report "not available" instead of failing. |
+| `input.os_mouse_move(x, y)` | Move the pointer to **screen** coordinates. |
+| `input.os_mouse_down(btn)` / `input.os_mouse_up(btn)` | Press / release. `btn` ist der **kanonische** Index aus §2 (`0`=left, `1`=right, `2`=middle); der Adapter setzt auf X11s Button1/3/2 um. |
+| `input.os_key_down(name)` / `input.os_key_up(name)` | Press / release a key by the §5 name. |
+| `input.os_pointer_x()` / `input.os_pointer_y()` | Where the pointer actually is — the check that a move arrived before clicking. |
+
+**Coordinates are screen coordinates**, while `.child_rect_*` gives **window** pixels. The caller
+adds the window origin (`engine.window_pos`), because only the caller knows which window a rect
+belongs to:
+
+```yaml
+- decl: [wpos, ivec2, { call: [engine.window_pos, win] }]
+- decl: [scr_x, f32, { +: [{ cast: [wpos.x, f32] }, mid_x] }]
+- call: [input.os_mouse_move, scr_x, scr_y]
+```
+
+**Run it on its own display.** XTEST moves the real, global cursor: a test sharing the session
+would yank the pointer away from whoever is at the machine. Use `Xvfb :99` (declared as an apt
+dependency, so `exodus pkg install` provides it) and point `DISPLAY` at it.
+
+**Wayland has no XTEST**, by design. There the equivalents are `/dev/uinput` (root or group
+`input`) or libei; neither is implemented. `os_available()` returns `0` there, which is not a test
+failure.
+
+#### Which channel proves what
+
+| | `input.post_*` | `input.os_*` |
+|---|---|---|
+| Covers | everything from the application boundary inward: widget resolution, handlers, state machine | additionally the X server, window focus, window position, foreign windows on top |
+| Needs a display | no | yes, and its own |
+| Moves the real cursor | no | **yes** — hence the separate display |
+| Parallel runs | yes | no (one cursor per display) |
+| Browser/WASM | yes | not applicable |
+
+Proven by `tests/test_input_injection_click.aiml` (in-process, desktop),
+`tests/test_input_injection_wasm.aiml` (in-process, browser code path under node),
+`tools/run_browser_test.sh` running the former in headless Chrome (in-process, real browser) and
+`tests/test_input_injection_os.aiml` (XTEST on Xvfb).

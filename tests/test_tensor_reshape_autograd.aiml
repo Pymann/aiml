@@ -32,7 +32,7 @@
     condition: { eq: [var_wg, null] }
     then:
       - print: ["FAIL: var_w.grad is null after backward — reshape breaks graph"]
-      - exit: [1]
+      - call: [sys.exit, 1]
 
 - decl: [var_g0, f32, { call: [var_wg.get, 0] }]
 - decl: [var_g3, f32, { call: [var_wg.get, 3] }]
@@ -42,16 +42,16 @@
     condition: { neq: [var_g0, 2.0] }
     then:
       - print: ["FAIL: var_w.grad[0]=${var_g0}, expected 2.0"]
-      - exit: [1]
+      - call: [sys.exit, 1]
 - if:
     condition: { neq: [var_g3, 2.0] }
     then:
       - print: ["FAIL: var_w.grad[3]=${var_g3}, expected 2.0"]
-      - exit: [1]
+      - call: [sys.exit, 1]
 - if:
     condition: { neq: [var_g5, 2.0] }
     then:
       - print: ["FAIL: var_w.grad[5]=${var_g5}, expected 2.0"]
-      - exit: [1]
+      - call: [sys.exit, 1]
 
 - print: ["PASS test_tensor_reshape_autograd"]

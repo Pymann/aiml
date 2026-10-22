@@ -1,9 +1,26 @@
 #!/bin/bash
 
 SKIP_BUILD=0
+RUN_MANUAL=0
+# Zeitgrenze je Test.  OHNE sie stoppt EIN haengender Test die ganze Suite —
+# genau das ist am 2026-10-15 passiert.  Eine Ueberschreitung ist ein
+# FEHLSCHLAG mit Begruendung, kein stilles Weiterlaufen.
+TEST_TIMEOUT="${TEST_TIMEOUT:-600}"
+# --only <muster>: nur passende Tests laufen lassen.  Die Suite kostet sonst
+# jedes Mal den ganzen Korpus, auch wenn eine Aenderung einen Test betrifft
+# (User-Direktive: nur betroffene Tests).
+ONLY=""
+TAKE_ONLY=0
 for arg in "$@"; do
+    if [ "$TAKE_ONLY" -eq 1 ]; then ONLY="$arg"; TAKE_ONLY=0; continue; fi
     if [ "$arg" = "--no-build" ] || [ "$arg" = "--test-only" ]; then
         SKIP_BUILD=1
+    fi
+    if [ "$arg" = "--manual" ]; then
+        RUN_MANUAL=1
+    fi
+    if [ "$arg" = "--only" ]; then
+        TAKE_ONLY=1
     fi
 done
 
@@ -133,6 +150,40 @@ for TEST in $TEST_FILES; do
         continue
     fi
 
+    # "# Requires: wasm" means the test exercises the Emscripten code path and
+    # is meaningless in the native JIT (e.g. the browser input backend, which
+    # only exists in the wasm build).  run_wasm_tests.sh runs these.
+    if grep -q "# Requires: wasm" "$TEST"; then
+        echo "[ SKIP ] $TEST (Requires: wasm — run via run_wasm_tests.sh)" | tee -a "$OUTPUT_FILE"
+        ((SKIPPED++))
+        ((TOTAL++))
+        continue
+    fi
+
+    # "# Requires: driver" means the file belongs to a run.sh in its own
+    # directory and is not a standalone test — ein Negativfall soll ja gerade
+    # NICHT uebersetzen, und einzeln gestartet sieht das wie ein Fehlschlag
+    # aus.  Die Treiber laufen am Ende dieses Skripts.
+    if grep -q "# Requires: driver" "$TEST"; then
+        echo "[ SKIP ] $TEST (Requires: driver — laeuft ueber run.sh seines Verzeichnisses)" | tee -a "$OUTPUT_FILE"
+        ((SKIPPED++))
+        ((TOTAL++))
+        continue
+    fi
+
+    # "# Requires: manual" — der Test oeffnet ein Fenster und laeuft, bis ein
+    # MENSCH es schliesst.  In einer Testschleife ist das kein Test, sondern ein
+    # Halt: der Lauf stand am 2026-10-15 ueber 20 Minuten in
+    # test_mem_render_probe, weil niemand davor sass.  Mit --manual laufen sie.
+    if grep -q "# Requires: manual" "$TEST"; then
+        if [ "${RUN_MANUAL:-0}" != "1" ]; then
+            echo "[ SKIP ] $TEST (Requires: manual — wartet auf einen Menschen; mit --manual starten)" | tee -a "$OUTPUT_FILE"
+            ((SKIPPED++))
+            ((TOTAL++))
+            continue
+        fi
+    fi
+
     # Peer-process tests need a paired server/client running elsewhere.
     # Without the peer they always fail (connect refused); skip in solo runs.
     if grep -q "# Requires: peer" "$TEST"; then
@@ -151,16 +202,24 @@ for TEST in $TEST_FILES; do
     # Asset-Registry tests use the helper-script: it parses `# AssetRoots:`
     # from the test header and invokes aiml with --asset-roots.
     if grep -q '^# AssetRoots:' "$TEST"; then
-        AIML_BIN="$AIML_BIN" tests/_asset_helper/run_asset_test.sh "$TEST" >> "$OUTPUT_FILE" 2>&1
+        AIML_BIN="$AIML_BIN" timeout -k 5 "$TEST_TIMEOUT" tests/_asset_helper/run_asset_test.sh "$TEST" >> "$OUTPUT_FILE" 2>&1
     else
-        $AIML_BIN "$TEST" >> "$OUTPUT_FILE" 2>&1
+        timeout -k 5 "$TEST_TIMEOUT" $AIML_BIN "$TEST" >> "$OUTPUT_FILE" 2>&1
     fi
 
     # Capture the exit code
     EXIT_CODE=$?
     
-    # Determine expected exit code
-    EXPECTED_CODE=0
+    # Determine expected exit code.
+    #
+    # Zuerst der DATEIKOPF: fast jeder Test traegt dort "# Expected exit code: N".
+    # Bis 2026-10-11 las das niemand, und die Liste darunter war die einzige
+    # Wahrheit — ein Negativtest ohne Eintrag galt als Fehlschlag, obwohl er
+    # genau das tat, was sein Kopf ankuendigt (test_mixed_operand_error).
+    # Die Liste darunter bleibt und UEBERSCHREIBT den Kopf, damit kein
+    # bestehender Eintrag seine Bedeutung verliert.
+    EXPECTED_CODE=$(grep -m1 -oE '^# Expected exit code: *[0-9]+' "$TEST" | grep -oE '[0-9]+$')
+    [ -n "$EXPECTED_CODE" ] || EXPECTED_CODE=0
     if [[ "$TEST" == *"test_collections.aiml" ]]; then
         EXPECTED_CODE=30
     elif [[ "$TEST" == *"test.aiml" ]]; then
@@ -229,6 +288,8 @@ for TEST in $TEST_FILES; do
         # into a value-struct slot corrupts the heap / SIGSEGVs on serialize.
         # Must be a compile error (deref { '?': [x] } or use list<ptr<T>>).
         EXPECTED_CODE=1
+    elif [[ "$TEST" == *"test_process_capture_detach_error.aiml" ]]; then
+        EXPECTED_CODE=1
     elif [[ "$TEST" == *"test_print_call_nonstring_error.aiml" ]]; then
         # Negative test (spec/09 §print): a call argument must return string.
         EXPECTED_CODE=1
@@ -295,6 +356,17 @@ for TEST in $TEST_FILES; do
         fi
     fi
 
+    # `timeout` meldet 124 (bzw. 137 nach SIGKILL).  Das als gewoehnlichen
+    # Fehlschlag zu zaehlen waere irrefuehrend — ein Test, der HAENGT, ist etwas
+    # anderes als einer, der ein falsches Ergebnis liefert.
+    if [ $EXIT_CODE -eq 124 ] || [ $EXIT_CODE -eq 137 ]; then
+        echo "[ FAIL ] $TEST (ZEITGRENZE ${TEST_TIMEOUT}s ueberschritten — haengt der Test?)" | tee -a "$OUTPUT_FILE"
+        ((FAILED++))
+        ((TOTAL++))
+        echo "" | tee -a "$OUTPUT_FILE"
+        continue
+    fi
+
     if [ $EXIT_CODE -eq $EXPECTED_CODE ]; then
         echo "[  OK  ] $TEST (Exit Code: $EXIT_CODE)" | tee -a "$OUTPUT_FILE"
         ((PASSED++))
@@ -304,6 +376,29 @@ for TEST in $TEST_FILES; do
     fi
     ((TOTAL++))
     
+    echo "" | tee -a "$OUTPUT_FILE"
+done
+
+# ── Treiber-Tests: ein run.sh je Verzeichnis ────────────────────────────────
+# Diese Tests brauchen mehr als "Datei starten, Exit-Code lesen": gepaarte
+# Prozesse (bundle_socket) oder erwartete DIAGNOSEN statt Laeufe
+# (pipeline_purity, pipeline_declared_neg).  Sie gehoeren trotzdem in die
+# Suite — sonst laufen sie nie mit und verrotten.
+for DRIVER in tests/*/run.sh; do
+    [ -x "$DRIVER" ] || continue
+    echo "--------------------------------------------------------" | tee -a "$OUTPUT_FILE"
+    echo "Running driver: $DRIVER" | tee -a "$OUTPUT_FILE"
+    echo "--------------------------------------------------------" | tee -a "$OUTPUT_FILE"
+    timeout 300 bash "$DRIVER" >> "$OUTPUT_FILE" 2>&1
+    DRC=$?
+    if [ $DRC -eq 0 ]; then
+        echo "[  OK  ] $DRIVER" | tee -a "$OUTPUT_FILE"
+        ((PASSED++))
+    else
+        echo "[ FAIL ] $DRIVER (Exit Code: $DRC)" | tee -a "$OUTPUT_FILE"
+        ((FAILED++))
+    fi
+    ((TOTAL++))
     echo "" | tee -a "$OUTPUT_FILE"
 done
 

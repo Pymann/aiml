@@ -1,0 +1,100 @@
+# SPEC: 61_memory_management_DRAFT
+# Regressionstest (spec/61 §5.7): `clear()` / `pop()` muessen zeigergrosse
+# Element-Slots mit der ZIEL-Schrittweite freigeben — 8 auf x86_64, 4 auf wasm32.
+#
+# Anlass: `classifyListElem` setzte fuer string / Modell-Handle / ptr<T> hart
+# `elemSize = 8`.  Auf wasm32 lief clear() damit mit doppelter Schrittweite ueber
+# das Pufferende und dereferenzierte Datenmuell als String-Zeiger — der
+# cosmos-WASM-Client starb daran (Firefox: "index out of bounds").  Nativ fiel
+# nichts auf: dort IST die Schrittweite 8.
+#
+# Darum gehoert dieser Test in die WASM-Liste (tests/wasm_tests.list).  Genug
+# Elemente, damit die doppelte Schrittweite ueber das Ende laeuft.
+# Expected exit code: 0
+
+- model:
+    name: StrideRow
+    fields:
+      - [row_id,   string]
+      - [row_num,  i32]
+
+- def:
+    name: expect
+    args: [[what, string], [cond, i32]]
+    return: i32
+    body:
+      - if:
+          condition: { eq: [cond, 1] }
+          then: [{ call: [log.info, "  ok   ${what}"] }, { return: 0 }]
+      - call: [log.info, "  FAIL ${what}"]
+      - return: 1
+
+- def:
+    name: main
+    static_off: ["str_cmp"]
+    return: i32
+    body:
+      - decl: [fails, i32, 0]
+
+      # 1) list<string>: der Fall, der den Client riss.
+      - decl: [names, list<string>]
+      - decl: [six, i32, 0]
+      - while:
+          condition: { lt: [six, 128] }
+          body:
+            - call: [names.push, "zeile-${six}-mit-etwas-laenge-damit-geheapt-wird"]
+            - set: [six, { +: [six, 1] }]
+      - set: [fails, { +: [fails, { call: [expect, "128 Strings", { eq: [names.len, 128] }] }] }]
+      - call: [names.clear]
+      - set: [fails, { +: [fails, { call: [expect, "clear auf list<string> ueberlebt", { eq: [names.len, 0] }] }] }]
+      # Derselbe Puffer wird wiederverwendet: ein zu grosser Schritt beim clear
+      # haette hier schon fremden Speicher freigegeben.
+      - call: [names.push, "danach"]
+      - set: [fails, { +: [fails, { call: [expect, "Puffer nach clear wieder nutzbar", { eq: [names.len, 1] }] }] }]
+
+      # 2) pop() mit verworfenem Ergebnis — gleiche Freigabe, letzter Slot.
+      - decl: [more, list<string>]
+      - decl: [pix, i32, 0]
+      - while:
+          condition: { lt: [pix, 64] }
+          body:
+            - call: [more.push, "weg-${pix}-weg-weg-weg-weg-weg-weg"]
+            - set: [pix, { +: [pix, 1] }]
+      - decl: [qix, i32, 0]
+      - while:
+          condition: { lt: [qix, 64] }
+          body:
+            - call: [more.pop]
+            - set: [qix, { +: [qix, 1] }]
+      - set: [fails, { +: [fails, { call: [expect, "64x pop auf list<string> ueberlebt", { eq: [more.len, 0] }] }] }]
+
+      # 3) list<Model> mit Heap-Feld: Element-Freigabe ueber die Deskriptoren.
+      - decl: [rows, list<StrideRow>]
+      - decl: [mix, i32, 0]
+      - while:
+          condition: { lt: [mix, 96] }
+          body:
+            - decl: [row, StrideRow]
+            - set: [row.row_id, "satz-${mix}-satz-satz-satz-satz"]
+            - set: [row.row_num, mix]
+            - call: [rows.push, row]
+            - set: [mix, { +: [mix, 1] }]
+      - set: [fails, { +: [fails, { call: [expect, "96 Modelle", { eq: [rows.len, 96] }] }] }]
+      # Vor dem clear lesen: die Inhalte muessen heil sein (Schrittweite beim at).
+      - decl: [bad, i32, 0]
+      - decl: [vix, i32, 0]
+      - while:
+          condition: { lt: [vix, rows.len] }
+          body:
+            - decl: [got, StrideRow, { at: [rows, vix] }]
+            - if: { condition: { neq: [got.row_num, vix] }, then: [{ set: [bad, { +: [bad, 1] }] }] }
+            - set: [vix, { +: [vix, 1] }]
+      - set: [fails, { +: [fails, { call: [expect, "jedes Modell liegt an seinem Platz", { eq: [bad, 0] }] }] }]
+      - call: [rows.clear]
+      - set: [fails, { +: [fails, { call: [expect, "clear auf list<Model> ueberlebt", { eq: [rows.len, 0] }] }] }]
+
+      - if:
+          condition: { eq: [fails, 0] }
+          then: [{ call: [log.info, "PASS wasm_list_clear_stride"] }, { return: 0 }]
+      - call: [log.info, "FAIL wasm_list_clear_stride (${fails})"]
+      - return: 1

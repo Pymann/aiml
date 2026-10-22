@@ -25,6 +25,11 @@ public:
     std::unique_ptr<Node> finish() override {
         auto decl = std::make_unique<DeclStmt>(varName, "string");
         decl->initialValue = std::make_unique<LiteralExpr>(content, "string");
+        // Ein Textblock ist ein BENANNTES LITERAL: es gibt keine Syntax, ihm
+        // etwas zuzuweisen.  Ohne `const` meldete der Globals-Lint (spec/21
+        // §6.2) jeden Shader-Quelltext als herrenlosen Zustand — und bestrafte
+        // damit genau das Benennen, das er belohnen will.
+        decl->is_const = true;
         return decl;
     }
 };

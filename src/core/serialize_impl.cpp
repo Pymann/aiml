@@ -87,7 +87,7 @@ static llvm::Function* gJwMapF64 (CompilerContext& c){return c.getFunction("aiml
 static llvm::Function* gJwMapBool(CompilerContext& c){return c.getFunction("aiml_jw_map_bool",voidT(c),{ptrT(c),i8pT(c),i32T(c)});}
 static llvm::Function* gJwMapStr (CompilerContext& c){return c.getFunction("aiml_jw_map_str",voidT(c),{ptrT(c),i8pT(c),i8pT(c)});}
 static llvm::Function* gJwDone   (CompilerContext& c){return c.getFunction("aiml_jw_done",i8pT(c),{ptrT(c)});}
-static llvm::Function* gJsonStyleFmt(CompilerContext& c){return c.getFunction("aiml_json_style_format",i8pT(c),{i8pT(c),i32T(c),i8pT(c),i8pT(c)});}
+static llvm::Function* gJsonStyleFmt(CompilerContext& c){return c.getFunction("aiml_json_style_format",i8pT(c),{i8pT(c),i32T(c),i8pT(c),i8pT(c),i32T(c),i32T(c)});}
 
 // ─── lazy read-API declarations ───────────────────────────────────────────────
 static llvm::Function* gJrParse    (CompilerContext& c){return c.getFunction("aiml_jr_parse",ptrT(c),{i8pT(c)});}
@@ -339,7 +339,9 @@ static void emitWriteField(CompilerContext& ctx, llvm::Value* writer,
                            llvm::Value* structPtr, llvm::StructType* structLLVMTy,
                            const std::string& fname,
                            const CompilerContext::StructMember& fm){
-    llvm::Value* fkey = ctx.builder.CreateGlobalStringPtr(fname, "fk_"+fname);
+    // spec/15: nach aussen zaehlt der Alias, drinnen der Feldname.
+    const std::string& fkeyName = fm.alias.empty() ? fname : fm.alias;
+    llvm::Value* fkey = ctx.builder.CreateGlobalStringPtr(fkeyName, "fk_"+fname);
     std::string tn = fm.typeName;
 
     // ── list field ────────────────────────────────────────────────────────────
@@ -375,10 +377,10 @@ static void emitWriteField(CompilerContext& ctx, llvm::Value* writer,
         // memV3: map FIELD is a handle pointer (see the list case) → load before GEP.
         if(ctx.memV3 && ctx.isMemV3ContainerHandle(tn))
             fp = memv3LoadContainerHandleOrEmpty(ctx, fp, mapTy);
-        llvm::Value* cg   = ctx.builder.CreateStructGEP(mapTy,fp,1,"mcg");
-        llvm::Value* cap  = ctx.builder.CreateLoad(i32T(ctx),cg,"mcap");
-        llvm::Value* og   = ctx.builder.CreateStructGEP(mapTy,fp,2,"mog");
-        llvm::Value* occ  = ctx.builder.CreateLoad(ptrT(ctx),og,"mocc");
+        // Dicht gezaehlt wird ueber `size` (Index 0), nicht ueber `capacity`:
+        // siehe die Anmerkung an emitSerializeMap.
+        llvm::Value* cg   = ctx.builder.CreateStructGEP(mapTy,fp,0,"msg");
+        llvm::Value* cap  = ctx.builder.CreateLoad(i32T(ctx),cg,"msize");
         llvm::Value* kg   = ctx.builder.CreateStructGEP(mapTy,fp,3,"mkg");
         llvm::Value* kp   = ctx.builder.CreateLoad(ptrT(ctx),kg,"mkeys");
         llvm::Value* vg   = ctx.builder.CreateStructGEP(mapTy,fp,4,"mvg");
@@ -398,9 +400,7 @@ static void emitWriteField(CompilerContext& ctx, llvm::Value* writer,
         idx->addIncoming(ctx.builder.getInt32(0),ph);
         ctx.builder.CreateCondBr(ctx.builder.CreateICmpSLT(idx,cap),lb,le);
         ctx.builder.SetInsertPoint(lb);
-        llvm::Value* oe  = ctx.builder.CreateGEP(i8T(ctx),occ,idx,"oe");
-        llvm::Value* occ2= ctx.builder.CreateLoad(i8T(ctx),oe,"oc2");
-        ctx.builder.CreateCondBr(ctx.builder.CreateICmpNE(occ2,ctx.builder.getInt8(0)),we,se);
+        ctx.builder.CreateBr(we);     // jeder Platz < size ist belegt
         ctx.builder.SetInsertPoint(we);
         llvm::Value* ks;
         if(intKey){
@@ -544,6 +544,14 @@ static llvm::Function* emitSerializeList(CompilerContext& ctx,
 }
 
 // ─── emitSerializeMap ─────────────────────────────────────────────────────────
+// spec/29 Zeile 109/112: eine Map wird MIT ihren Eintraegen geschrieben.  Bis
+// 18.10.2026 schrieb jede Map `{}` — der Schreiber lief ueber `capacity` und
+// liess nur Plaetze durch, deren `occupied`-Byte gesetzt war.  `MapImpl::put`
+// setzt dieses Byte aber NIE: die Map ist DICHT (Eintraege 0..size-1, `get`,
+// `len` und `remove` rechnen genauso, `remove` schiebt per memmove nach).  Das
+// occupied-Feld hat nie ein Schreiber beschrieben — der Serializer war sein
+// einziger Leser.  Gefunden am OCI-Wandler (cosmos doc/spec/110 §110.25), wo
+// `annotations` still leer blieb: stiller Datenverlust, nichts stuerzte ab.
 static llvm::Function* emitSerializeMap(CompilerContext& ctx,
                                         const std::string& mapTn){
     std::string fnName = "__aiml_ser_"+sanitize(mapTn);
@@ -564,10 +572,8 @@ static llvm::Function* emitSerializeMap(CompilerContext& ctx,
     llvm::Value* writer = ctx.builder.CreateCall(gJwNew(ctx),{},"w");
     ctx.builder.CreateCall(gJwSetTyp(ctx),{writer,ctx.builder.CreateGlobalStringPtr(mapTn,"tn")});
 
-    llvm::Value* cg  = ctx.builder.CreateStructGEP(mapTy,fn->getArg(0),1,"cg");
-    llvm::Value* cap = ctx.builder.CreateLoad(i32T(ctx),cg,"cap");
-    llvm::Value* og  = ctx.builder.CreateStructGEP(mapTy,fn->getArg(0),2,"og");
-    llvm::Value* occ = ctx.builder.CreateLoad(ptrT(ctx),og,"occ");
+    llvm::Value* cg  = ctx.builder.CreateStructGEP(mapTy,fn->getArg(0),0,"sg");
+    llvm::Value* cap = ctx.builder.CreateLoad(i32T(ctx),cg,"size");
     llvm::Value* kg  = ctx.builder.CreateStructGEP(mapTy,fn->getArg(0),3,"kg");
     llvm::Value* kp  = ctx.builder.CreateLoad(ptrT(ctx),kg,"kp");
     llvm::Value* vg  = ctx.builder.CreateStructGEP(mapTy,fn->getArg(0),4,"vg");
@@ -587,9 +593,7 @@ static llvm::Function* emitSerializeMap(CompilerContext& ctx,
     idx->addIncoming(ctx.builder.getInt32(0),ph);
     ctx.builder.CreateCondBr(ctx.builder.CreateICmpSLT(idx,cap),lb,le);
     ctx.builder.SetInsertPoint(lb);
-    llvm::Value* oe  = ctx.builder.CreateGEP(i8T(ctx),occ,idx,"oe");
-    llvm::Value* ov  = ctx.builder.CreateLoad(i8T(ctx),oe,"ov");
-    ctx.builder.CreateCondBr(ctx.builder.CreateICmpNE(ov,ctx.builder.getInt8(0)),we,se);
+    ctx.builder.CreateBr(we);     // jeder Platz < size ist belegt
     ctx.builder.SetInsertPoint(we);
     llvm::Value* ks;
     if(intKey){
@@ -814,7 +818,8 @@ static void emitDeserStructFields(CompilerContext& ctx, llvm::Value* reader,
     llvm::StructType* st = ctx.classes[typeName].type;
     if(!st) return;
     for(auto& [fname,fm]: sortedMembers(ctx,typeName)){
-        llvm::Value* fkey = ctx.builder.CreateGlobalStringPtr(fname,"fk_"+fname);
+        const std::string& fkeyName = fm.alias.empty() ? fname : fm.alias;   // spec/15
+        llvm::Value* fkey = ctx.builder.CreateGlobalStringPtr(fkeyName,"fk_"+fname);
         llvm::Value* fieldPtr = ctx.builder.CreateStructGEP(st,structPtr,fm.index,"fp_"+fname);
         std::string tn = fm.typeName;
 
@@ -1359,10 +1364,14 @@ llvm::Value* serialize(CompilerContext& ctx, llvm::Value* val,
         llvm::Value* prettyVal = ctx.builder.CreateLoad(i32T(ctx), prettyPtr, "jsonstyle_pretty");
         llvm::Value* indentVal = ctx.builder.CreateLoad(i8pT(ctx), indentPtr, "jsonstyle_indent");
         llvm::Value* newlineVal = ctx.builder.CreateLoad(i8pT(ctx), newlinePtr, "jsonstyle_newline");
+        auto* barePtr = ctx.builder.CreateStructGEP(ctx.getLLVMType("JsonStyle"), stylePtr, 3, "jsonstyle_bare_ptr");
+        llvm::Value* bareVal = ctx.builder.CreateLoad(i32T(ctx), barePtr, "jsonstyle_bare");   // spec/29 §5.2a
+        auto* leanPtr = ctx.builder.CreateStructGEP(ctx.getLLVMType("JsonStyle"), stylePtr, 4, "jsonstyle_lean_ptr");
+        llvm::Value* leanVal = ctx.builder.CreateLoad(i32T(ctx), leanPtr, "jsonstyle_skip_empty"); // spec/29 §5.2c
         // aiml_json_style_format returns a FRESH owned rc-string and does NOT free its input, so an
         // owned compound `json` would leak here — release it before replacing (the styled result is
         // itself owned → stays registered below).
-        llvm::Value* styled = ctx.builder.CreateCall(gJsonStyleFmt(ctx), {json, prettyVal, indentVal, newlineVal}, "ser_style");
+        llvm::Value* styled = ctx.builder.CreateCall(gJsonStyleFmt(ctx), {json, prettyVal, indentVal, newlineVal, bareVal, leanVal}, "ser_style");
         if (jsonOwned && ctx.lifetimeDropsEnabled) {
             llvm::Function* dref = ctx.getFunction("aiml_str_decref", ctx.builder.getVoidTy(), {i8pT(ctx)});
             ctx.builder.CreateCall(dref, { json });

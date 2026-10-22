@@ -1,0 +1,185 @@
+# SPEC: 04_1_precedence,04_math
+# spec/04_1 §7: `cast` über ALLE numerischen Skalare, in jede Richtung.
+#
+# Vorher deckte die Tabelle faktisch nur das Paar i32/f64 ab, also war
+# `{ cast: [i32_wert, f32] }` ein Übersetzungsfehler — eine Umwandlung, die
+# jedes Programm mit Pixelkoordinaten braucht.
+#
+# Geprüft wird jede Zelle der Matrix (bool/i32/i64/f32/f64) plus die drei
+# Festlegungen, die nicht aus der Hardware folgen:
+#   - NaN → 0 bei float→int
+#   - Bereichsüberschreitung wird GEKLAMMERT (sonst poison auf IR-Ebene)
+#   - NaN als Wahrheitswert ist false, genau wie in `if`
+# Hinweis: f64-Erwartungswerte stehen als f64-Locals, nicht als Literale —
+# Fliesskomma-Literale sind f32, und ein Vergleich f64 vs f32 ist laut
+# spec/04_1 §3 ein Fehler (die Implementierung erzeugt dort heute ungueltiges
+# IR statt einer Meldung; separat gemeldet).
+# Expected exit code: 0
+
+- def:
+    name: main
+    static_off: ["str_cmp"]
+    return: i32
+    body:
+      - decl: [fails, i32, 0]
+
+      # ── int → float ──────────────────────────────────────────────────────
+      - decl: [src_i32, i32, 1280]
+      - decl: [as_f32, f32, { cast: [src_i32, f32] }]
+      - if:
+          condition: { neq: [as_f32, 1280.0] }
+          then: [{ print: ["FAIL i32→f32: ${as_f32}"] }, { set: [fails, { +: [fails, 1] }] }]
+      - decl: [want_1280, f64, 1280.0]
+      - decl: [as_f64, f64, { cast: [src_i32, f64] }]
+      - if:
+          condition: { neq: [as_f64, want_1280] }
+          then: [{ print: ["FAIL i32→f64: ${as_f64}"] }, { set: [fails, { +: [fails, 1] }] }]
+
+      - decl: [src_i64, i64, 4096]
+      - decl: [i64_f32, f32, { cast: [src_i64, f32] }]
+      - if:
+          condition: { neq: [i64_f32, 4096.0] }
+          then: [{ print: ["FAIL i64→f32: ${i64_f32}"] }, { set: [fails, { +: [fails, 1] }] }]
+      - decl: [want_4096, f64, 4096.0]
+      - decl: [i64_f64, f64, { cast: [src_i64, f64] }]
+      - if:
+          condition: { neq: [i64_f64, want_4096] }
+          then: [{ print: ["FAIL i64→f64: ${i64_f64}"] }, { set: [fails, { +: [fails, 1] }] }]
+
+      # ── float → int: Abschneiden gegen Null, auch negativ ────────────────
+      - decl: [pos_f32, f32, 2.75]
+      - decl: [f32_i32, i32, { cast: [pos_f32, i32] }]
+      - if:
+          condition: { neq: [f32_i32, 2] }
+          then: [{ print: ["FAIL f32→i32: ${f32_i32}, erwartet 2"] }, { set: [fails, { +: [fails, 1] }] }]
+      - decl: [neg_f32, f32, -2.75]
+      - decl: [negf_i32, i32, { cast: [neg_f32, i32] }]
+      - if:
+          condition: { neq: [negf_i32, -2] }
+          then: [{ print: ["FAIL f32→i32 negativ: ${negf_i32}, erwartet -2 (gegen Null)"] }, { set: [fails, { +: [fails, 1] }] }]
+      - decl: [big_f64, f64, 9.75]
+      - decl: [f64_i64, i64, { cast: [big_f64, i64] }]
+      - if:
+          condition: { neq: [f64_i64, 9] }
+          then: [{ print: ["FAIL f64→i64: ${f64_i64}"] }, { set: [fails, { +: [fails, 1] }] }]
+      - decl: [f32_i64, i64, { cast: [pos_f32, i64] }]
+      - if:
+          condition: { neq: [f32_i64, 2] }
+          then: [{ print: ["FAIL f32→i64: ${f32_i64}"] }, { set: [fails, { +: [fails, 1] }] }]
+
+      # ── float ↔ float ───────────────────────────────────────────────────
+      - decl: [want_275, f64, 2.75]
+      - decl: [wide, f64, { cast: [pos_f32, f64] }]
+      - if:
+          condition: { neq: [wide, want_275] }
+          then: [{ print: ["FAIL f32→f64: ${wide}"] }, { set: [fails, { +: [fails, 1] }] }]
+      - decl: [narrow, f32, { cast: [wide, f32] }]
+      - if:
+          condition: { neq: [narrow, 2.75] }
+          then: [{ print: ["FAIL f64→f32: ${narrow}"] }, { set: [fails, { +: [fails, 1] }] }]
+
+      # ── int ↔ int ───────────────────────────────────────────────────────
+      - decl: [wide_i, i64, { cast: [src_i32, i64] }]
+      - if:
+          condition: { neq: [wide_i, 1280] }
+          then: [{ print: ["FAIL i32→i64: ${wide_i}"] }, { set: [fails, { +: [fails, 1] }] }]
+      - decl: [narrow_i, i32, { cast: [src_i64, i32] }]
+      - if:
+          condition: { neq: [narrow_i, 4096] }
+          then: [{ print: ["FAIL i64→i32: ${narrow_i}"] }, { set: [fails, { +: [fails, 1] }] }]
+      # Negative Zahl muss vorzeichenerweitert werden, nicht nullerweitert.
+      - decl: [neg_i32, i32, -7]
+      - decl: [neg_wide, i64, { cast: [neg_i32, i64] }]
+      - if:
+          condition: { neq: [neg_wide, -7] }
+          then: [{ print: ["FAIL i32→i64 negativ: ${neg_wide}, erwartet -7"] }, { set: [fails, { +: [fails, 1] }] }]
+
+      # ── bool → Zahl ─────────────────────────────────────────────────────
+      - decl: [yes_val, bool, true]
+      - decl: [no_val, bool, false]
+      - decl: [b_i32, i32, { cast: [yes_val, i32] }]
+      - if:
+          condition: { neq: [b_i32, 1] }
+          then: [{ print: ["FAIL bool→i32: ${b_i32}"] }, { set: [fails, { +: [fails, 1] }] }]
+      - decl: [b_i64, i64, { cast: [no_val, i64] }]
+      - if:
+          condition: { neq: [b_i64, 0] }
+          then: [{ print: ["FAIL bool(false)→i64: ${b_i64}"] }, { set: [fails, { +: [fails, 1] }] }]
+      - decl: [b_f32, f32, { cast: [yes_val, f32] }]
+      - if:
+          condition: { neq: [b_f32, 1.0] }
+          then: [{ print: ["FAIL bool→f32: ${b_f32}"] }, { set: [fails, { +: [fails, 1] }] }]
+      - decl: [want_one, f64, 1.0]
+      - decl: [b_f64, f64, { cast: [yes_val, f64] }]
+      - if:
+          condition: { neq: [b_f64, want_one] }
+          then: [{ print: ["FAIL bool→f64: ${b_f64}"] }, { set: [fails, { +: [fails, 1] }] }]
+
+      # ── Zahl → bool ─────────────────────────────────────────────────────
+      - decl: [i32_true, bool, { cast: [src_i32, bool] }]
+      - if:
+          condition: { neq: [i32_true, true] }
+          then: [{ print: ["FAIL i32→bool (1280 muss true sein)"] }, { set: [fails, { +: [fails, 1] }] }]
+      - decl: [zero_i32, i32, 0]
+      - decl: [i32_false, bool, { cast: [zero_i32, bool] }]
+      - if:
+          condition: { neq: [i32_false, false] }
+          then: [{ print: ["FAIL i32→bool (0 muss false sein)"] }, { set: [fails, { +: [fails, 1] }] }]
+      - decl: [i64_true, bool, { cast: [src_i64, bool] }]
+      - if:
+          condition: { neq: [i64_true, true] }
+          then: [{ print: ["FAIL i64→bool"] }, { set: [fails, { +: [fails, 1] }] }]
+      - decl: [f32_true, bool, { cast: [pos_f32, bool] }]
+      - if:
+          condition: { neq: [f32_true, true] }
+          then: [{ print: ["FAIL f32→bool (2.75 muss true sein)"] }, { set: [fails, { +: [fails, 1] }] }]
+      - decl: [zero_f64, f64, 0.0]
+      - decl: [f64_false, bool, { cast: [zero_f64, bool] }]
+      - if:
+          condition: { neq: [f64_false, false] }
+          then: [{ print: ["FAIL f64→bool (0.0 muss false sein)"] }, { set: [fails, { +: [fails, 1] }] }]
+
+      # ── Identität ───────────────────────────────────────────────────────
+      - decl: [same_f32, f32, { cast: [pos_f32, f32] }]
+      - if:
+          condition: { neq: [same_f32, 2.75] }
+          then: [{ print: ["FAIL f32→f32"] }, { set: [fails, { +: [fails, 1] }] }]
+      - decl: [same_i64, i64, { cast: [src_i64, i64] }]
+      - if:
+          condition: { neq: [same_i64, 4096] }
+          then: [{ print: ["FAIL i64→i64"] }, { set: [fails, { +: [fails, 1] }] }]
+      - decl: [same_bool, bool, { cast: [yes_val, bool] }]
+      - if:
+          condition: { neq: [same_bool, true] }
+          then: [{ print: ["FAIL bool→bool"] }, { set: [fails, { +: [fails, 1] }] }]
+
+      # ── NaN → 0, und NaN ist unwahr (wie in `if`) ───────────────────────
+      - decl: [nan_val, f64, { /: [0.0, 0.0] }]
+      - decl: [nan_i32, i32, { cast: [nan_val, i32] }]
+      - if:
+          condition: { neq: [nan_i32, 0] }
+          then: [{ print: ["FAIL NaN→i32: ${nan_i32}, erwartet 0"] }, { set: [fails, { +: [fails, 1] }] }]
+      - decl: [nan_bool, bool, { cast: [nan_val, bool] }]
+      - if:
+          condition: { neq: [nan_bool, false] }
+          then: [{ print: ["FAIL NaN→bool muss false sein (wie in if)"] }, { set: [fails, { +: [fails, 1] }] }]
+
+      # ── Bereichsüberschreitung wird geklammert, nicht poison ───────────
+      # 1e18 passt nicht in i32; ohne Klammerung ist das Ergebnis auf
+      # IR-Ebene undefiniert und der Build dürfte irgendeinen Wert liefern.
+      - decl: [huge, f64, 1000000000000000000.0]
+      - decl: [huge_i32, i32, { cast: [huge, i32] }]
+      - if:
+          condition: { neq: [huge_i32, 2147483647] }
+          then: [{ print: ["FAIL Überlauf f64→i32: ${huge_i32}, erwartet 2147483647"] }, { set: [fails, { +: [fails, 1] }] }]
+      - decl: [tiny, f64, -1000000000000000000.0]
+      - decl: [tiny_i32, i32, { cast: [tiny, i32] }]
+      - if:
+          condition: { neq: [tiny_i32, -2147483648] }
+          then: [{ print: ["FAIL Unterlauf f64→i32: ${tiny_i32}, erwartet -2147483648"] }, { set: [fails, { +: [fails, 1] }] }]
+
+      - if:
+          condition: { neq: [fails, 0] }
+          then: [{ print: ["cast_numeric FAIL — ${fails} Zelle(n) falsch"] }, { return: 1 }]
+      - print: ["PASS cast_numeric"]
+      - return: 0

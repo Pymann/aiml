@@ -334,7 +334,7 @@ struct BorrowChecker {
             auto pre = state; auto preRef = refInvalid;
             run(t->tryBlock.get());
             state = pre; refInvalid = preRef;
-            run(t->catchBlock.get());
+            for (auto* cb : t->catchBodies()) { state = pre; refInvalid = preRef; run(cb); }
             state = pre; refInvalid = preRef;   // conservative: exceptions make branch effects uncertain
             return;
         }

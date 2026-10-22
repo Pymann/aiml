@@ -1,0 +1,67 @@
+# SPEC: 29_2_sys_exec,29_serialize
+# Live-Test (spec/29_2 §12/§13), Senderseite — AOT, kein JIT.
+# Requires: peer — wird von tests/bundle_socket/run.sh paarweise gestartet
+# Expected exit code: 0
+
+# ── Durchgang 1: eine eigenstaendige Funktion ───────────────────────────
+- def:
+    name: remote_task
+    return: i32
+    body:
+      - print: ["   remote_task laeuft beim Empfaenger"]
+      - return: 0
+
+# ── Durchgang 2: "Bibliothek" + Pipeline, die sie benutzt ───────────────
+- def:
+    name: lib_greet
+    return: i32
+    body:
+      - print: ["   lib_greet aus der Bibliothek"]
+      - return: 7
+
+- def:
+    name: run_pipeline
+    return: i32
+    body:
+      - decl: [got, i32, { call: [lib_greet] }]
+      - print: ["   run_pipeline rief lib_greet, bekam ${got}"]
+      - if: { condition: { neq: [got, 7] }, then: [{ return: 1 }] }
+      - return: 0
+
+- def:
+    name: main
+    static_off: ["str_cmp"]
+    return: i32
+    body:
+      - decl: [fails, i32, 0]
+
+      - decl: [pkg_one, Code, { call: [sys.bundle, "remote_task"] }]
+      - decl: [wire_one, string, { call: [pkg_one.toString] }]
+      - decl: [sock_one, socket_handle, { call: [net.socket, "tcp"] }]
+      - decl: [conn_one, i32, { call: [net.connect, sock_one, "127.0.0.1", 47811] }]
+      - print: ["1) sende ${wire_one.len} Bytes"]
+      - call: [net.send_string, sock_one, wire_one]
+      - decl: [ans_one, string, { call: [net.recv_string, sock_one, 256] }]
+      - call: [net.close, sock_one]
+      - print: ["1) Antwort: ${ans_one}"]
+      - if: { condition: { neq: [ans_one, "ok"] }, then: [{ set: [fails, { +: [fails, 1] }] }] }
+
+      # Bibliothek und Pipeline getrennt buendeln und nacheinander schicken.
+      - decl: [lib_pkg, Code, { call: [sys.bundle, "lib_greet"] }]
+      - decl: [pipe_pkg, Code, { call: [sys.bundle, "run_pipeline"] }]
+      - decl: [wire_lib, string, { call: [lib_pkg.toString] }]
+      - decl: [wire_pipe, string, { call: [pipe_pkg.toString] }]
+      - decl: [sock_two, socket_handle, { call: [net.socket, "tcp"] }]
+      - decl: [conn_two, i32, { call: [net.connect, sock_two, "127.0.0.1", 47811] }]
+      - print: ["2) sende Bibliothek ${wire_lib.len} + Pipeline ${wire_pipe.len} Bytes"]
+      - call: [net.send_string, sock_two, wire_lib]
+      - call: [time.sleep_ms, 150]
+      - call: [net.send_string, sock_two, wire_pipe]
+      - decl: [ans_two, string, { call: [net.recv_string, sock_two, 256] }]
+      - call: [net.close, sock_two]
+      - print: ["2) Antwort: ${ans_two}"]
+      - if: { condition: { neq: [ans_two, "ok"] }, then: [{ set: [fails, { +: [fails, 1] }] }] }
+
+      - if: { condition: { neq: [fails, 0] }, then: [{ print: ["sender FAIL (${fails})"] }, { return: 1 }] }
+      - print: ["sender PASS"]
+      - return: 0

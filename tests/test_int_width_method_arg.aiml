@@ -1,0 +1,62 @@
+# Ein ganzzahliges LITERAL an einem i64-Parameter einer METHODE.
+#
+# Regression: fuer freie Funktionen glich coerceArgs() die Breite an, fuer
+# Methoden nicht — das Literal kam als i32 an einem i64-Parameter an, und die
+# IR-Pruefung scheiterte mit "Call parameter type does not match function
+# signature".  Im Quelltext sah der Aufruf voellig richtig aus; gefunden
+# 2026-10-13 an einem Zuteiler mit `lease_ms`.
+# Expected exit code: 0
+
+- class:
+    name: Widener
+    methods:
+      - def:
+          name: twice
+          access: public
+          args: [[value, i64]]
+          return: i64
+          body: [{ return: { +: [value, value] } }]
+      - def:
+          name: mixed
+          access: public
+          args: [[small, i32], [big, i64], [tag, string]]
+          return: i64
+          body: [{ return: { +: [big, small] } }]
+
+- def:
+    name: expect
+    args: [[what, string], [cond, i32]]
+    return: i32
+    body:
+      - if:
+          condition: { eq: [cond, 1] }
+          then: [{ print: ["  ok   ${what}"] }, { return: 0 }]
+      - print: ["  FAIL ${what}"]
+      - return: 1
+
+- def:
+    name: main
+    static_off: ["str_cmp"]
+    return: i32
+    body:
+      - decl: [fails, i32, 0]
+      - decl: [wide, ptr<Widener>, { new: Widener }]
+
+      # Literal an i64-Parameter — hier scheiterte die IR-Pruefung.
+      - decl: [doubled, i64, { call: [wide.twice, 30000] }]
+      - set: [fails, { +: [fails, { call: [expect, "Literal an i64-Parameter", { eq: [doubled, 60000] }] }] }]
+
+      # i32-Variable an i64-Parameter (Vorzeichen muss erhalten bleiben).
+      - decl: [neg, i32, -7]
+      - decl: [neg_doubled, i64, { call: [wide.twice, neg] }]
+      - set: [fails, { +: [fails, { call: [expect, "negative i32-Variable wird vorzeichenrichtig geweitet", { eq: [neg_doubled, -14] }] }] }]
+
+      # Gemischt, mit einem String dahinter (die Reihenfolge darf nicht rutschen).
+      - decl: [mixed_sum, i64, { call: [wide.mixed, 5, 1000000, "egal"] }]
+      - set: [fails, { +: [fails, { call: [expect, "gemischte Breiten in einem Aufruf", { eq: [mixed_sum, 1000005] }] }] }]
+
+      - if:
+          condition: { neq: [fails, 0] }
+          then: [{ print: ["test_int_width_method_arg FAIL (${fails})"] }, { return: 1 }]
+      - print: ["test_int_width_method_arg PASS"]
+      - return: 0

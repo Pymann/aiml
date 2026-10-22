@@ -1,0 +1,21 @@
+# SPEC: 64_closures
+# static-check: off
+# Requires: driver
+# NEGATIVE (spec/64 §4.2, §9): a ptr<T> may only be captured with `mode: move` — any other
+# mode would create a second owner for one unique box (double free).
+# EXPECT-ERROR: closure-move-required
+- model: { name: Node, fields: [[ident, i32, 0]] }
+- callable: { name: Read, return: i32 }
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [box, ptr<Node>, { new: Node }]
+      - decl:
+          - bad
+          - closure<Read>
+          - closure:
+              capture: [box]                      # ← default mode `value` on a ptr<T>
+              body:
+                - return: box.ident
+      - return: 0

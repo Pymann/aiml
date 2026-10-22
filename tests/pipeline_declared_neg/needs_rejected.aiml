@@ -1,0 +1,13 @@
+# SPEC?: 62_pipelines   # aus dem Dateinamen, zu bestaetigen
+# F62-111: `needs:` ist noch nicht abgedeckt und wird ABGELEHNT, nicht
+# Requires: driver
+# ignoriert — ein verworfenes needs waere eine Pipeline, die in falscher
+# Reihenfolge laeuft und dabei gruen meldet.
+- pipeline:
+    name: with_needs
+    params: { arch: [x86_64] }
+    stages:
+      - stage:
+          name: one
+          steps:
+            - step: { name: first, needs: [other], return: i32, body: [{ return: 0 }] }

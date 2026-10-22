@@ -1,0 +1,70 @@
+# SPEC?: 15_models   # aus dem Dateinamen, zu bestaetigen
+# Ein Modell, das eine LISTE VON MODELLEN als Feld hat — und eine Funktion,
+# die so ein Element mit `lifetime: producer` liefert.
+#
+# Regression: diese Kombination liess den Compiler mit SIGSEGV abstuerzen
+# (gefunden 2026-10-12 beim cosmos-Lauf-Datensatz: PipelineRun.axes ist
+# list<PipelineAxis>).  Ein Absturz ist nie eine zulaessige Antwort — selbst
+# wenn das Muster nicht unterstuetzt waere, muesste eine Diagnose kommen.
+# Expected exit code: 0
+
+- model:
+    name: InnerAxis
+    fields:
+      - [name,   string]
+      - [values, list<string>]
+
+- model:
+    name: OuterRun
+    fields:
+      - [run_id, string]
+      - [axes,   list<InnerAxis>]
+
+- def:
+    name: make_axis
+    args: [[axis_name, string], [first_val, string]]
+    return: { type: InnerAxis, lifetime: producer }
+    body:
+      - decl: [axis, InnerAxis]
+      - set: [axis.name, axis_name]
+      - call: [axis.values.push, first_val]
+      - return: axis
+
+- def:
+    name: expect
+    args: [[what, string], [cond, i32]]
+    return: i32
+    body:
+      - if:
+          condition: { eq: [cond, 1] }
+          then: [{ print: ["  ok   ${what}"] }, { return: 0 }]
+      - print: ["  FAIL ${what}"]
+      - return: 1
+
+- def:
+    name: main
+    static_off: ["str_cmp"]
+    return: i32
+    body:
+      - decl: [fails, i32, 0]
+      - decl: [run, OuterRun]
+      - set: [run.run_id, "run-1"]
+
+      # Variante A: ueber eine lokale Variable
+      - decl: [axis_a, InnerAxis, { call: [make_axis, "arch", "x86_64"] }]
+      - call: [run.axes.push, axis_a]
+      # Variante B: das Ergebnis direkt pushen
+      - call: [run.axes.push, { call: [make_axis, "mode", "debug"] }]
+
+      - set: [fails, { +: [fails, { call: [expect, "zwei Achsen im Modell", { eq: [run.axes.len, 2] }] }] }]
+      - decl: [got_a, InnerAxis, { at: [run.axes, 0] }]
+      - decl: [got_b, InnerAxis, { at: [run.axes, 1] }]
+      - set: [fails, { +: [fails, { call: [expect, "erste Achse heisst arch", { eq: [got_a.name, "arch"] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "zweite Achse heisst mode", { eq: [got_b.name, "mode"] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "innere Liste traegt ihren Wert", { eq: [{ at: [got_a.values, 0] }, "x86_64"] }] }] }]
+
+      - if:
+          condition: { neq: [fails, 0] }
+          then: [{ print: ["test_model_list_of_models FAIL (${fails})"] }, { return: 1 }]
+      - print: ["test_model_list_of_models PASS"]
+      - return: 0

@@ -1,0 +1,22 @@
+# SPEC: 04_1_precedence,04_math
+# spec/04_1 §3/§7a: zwei TYPISIERTE Werte verschiedener Fliesskomma-Breite in
+# einem Vergleich sind ein Übersetzungsfehler — nicht eine stille Umwandlung
+# und erst recht kein ungültiges Modul.
+#
+# Negativtest: die Übersetzung MUSS scheitern.  Die Meldung nennt beide Typen
+# und verweist auf `cast`.
+# Expected exit code: 1
+
+- def:
+    name: main
+    static_off: ["str_cmp"]
+    return: i32
+    body:
+      - decl: [wide_val, f64, 2.75]
+      - decl: [narrow_val, f32, 2.75]
+      # Hier ist nichts geraten: welche Seite umgewandelt wird, entscheidet der
+      # Autor, weil f64→f32 Genauigkeit verliert.
+      - if:
+          condition: { gt: [wide_val, narrow_val] }
+          then: [{ print: ["unerreichbar"] }]
+      - return: 0

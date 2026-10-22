@@ -1,0 +1,1053 @@
+# SPEC: 29_2_sys_exec,29_serialize
+# spec/29_2 §15: sys.lib_load — Bibliothek EINMAL uebersetzen.
+#
+# Die erste Fassung dieses Tests mass nichts: eine Bibliothek aus EINER
+# Funktion (`return 7`) kostet keine nennenswerte Codeerzeugung, also waren
+# lib_load und merge gleich schnell.  Hier ist die Bibliothek gross genug,
+# dass ihre Rumpfe ins Gewicht fallen — erst dann ist die Behauptung
+# "einmal uebersetzen statt jedes Mal" ueberhaupt pruefbar.
+# Expected exit code: 0
+
+- def:
+    name: lib_calc_1
+    static_off: ["same_arg"]
+    args: [[val, i32]]
+    return: i32
+    body:
+      - decl: [acc, i32, val]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 8] }
+          body:
+            - set: [acc, { +: [{ '*': [acc, 3] }, { -: [idx, 1] }] }]
+            - set: [acc, { -: [acc, { /: [acc, 7] }] }]
+            - set: [idx, { +: [idx, 1] }]
+      - return: acc
+
+- def:
+    name: lib_calc_2
+    static_off: ["same_arg"]
+    args: [[val, i32]]
+    return: i32
+    body:
+      - decl: [acc, i32, val]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 8] }
+          body:
+            - set: [acc, { +: [{ '*': [acc, 3] }, { -: [idx, 2] }] }]
+            - set: [acc, { -: [acc, { /: [acc, 7] }] }]
+            - set: [idx, { +: [idx, 1] }]
+      - return: acc
+
+- def:
+    name: lib_calc_3
+    static_off: ["same_arg"]
+    args: [[val, i32]]
+    return: i32
+    body:
+      - decl: [acc, i32, val]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 8] }
+          body:
+            - set: [acc, { +: [{ '*': [acc, 3] }, { -: [idx, 3] }] }]
+            - set: [acc, { -: [acc, { /: [acc, 7] }] }]
+            - set: [idx, { +: [idx, 1] }]
+      - return: acc
+
+- def:
+    name: lib_calc_4
+    static_off: ["same_arg"]
+    args: [[val, i32]]
+    return: i32
+    body:
+      - decl: [acc, i32, val]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 8] }
+          body:
+            - set: [acc, { +: [{ '*': [acc, 3] }, { -: [idx, 4] }] }]
+            - set: [acc, { -: [acc, { /: [acc, 7] }] }]
+            - set: [idx, { +: [idx, 1] }]
+      - return: acc
+
+- def:
+    name: lib_calc_5
+    static_off: ["same_arg"]
+    args: [[val, i32]]
+    return: i32
+    body:
+      - decl: [acc, i32, val]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 8] }
+          body:
+            - set: [acc, { +: [{ '*': [acc, 3] }, { -: [idx, 5] }] }]
+            - set: [acc, { -: [acc, { /: [acc, 7] }] }]
+            - set: [idx, { +: [idx, 1] }]
+      - return: acc
+
+- def:
+    name: lib_calc_6
+    static_off: ["same_arg"]
+    args: [[val, i32]]
+    return: i32
+    body:
+      - decl: [acc, i32, val]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 8] }
+          body:
+            - set: [acc, { +: [{ '*': [acc, 3] }, { -: [idx, 6] }] }]
+            - set: [acc, { -: [acc, { /: [acc, 7] }] }]
+            - set: [idx, { +: [idx, 1] }]
+      - return: acc
+
+- def:
+    name: lib_calc_7
+    static_off: ["same_arg"]
+    args: [[val, i32]]
+    return: i32
+    body:
+      - decl: [acc, i32, val]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 8] }
+          body:
+            - set: [acc, { +: [{ '*': [acc, 3] }, { -: [idx, 7] }] }]
+            - set: [acc, { -: [acc, { /: [acc, 7] }] }]
+            - set: [idx, { +: [idx, 1] }]
+      - return: acc
+
+- def:
+    name: lib_calc_8
+    static_off: ["same_arg"]
+    args: [[val, i32]]
+    return: i32
+    body:
+      - decl: [acc, i32, val]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 8] }
+          body:
+            - set: [acc, { +: [{ '*': [acc, 3] }, { -: [idx, 8] }] }]
+            - set: [acc, { -: [acc, { /: [acc, 7] }] }]
+            - set: [idx, { +: [idx, 1] }]
+      - return: acc
+
+- def:
+    name: lib_calc_9
+    static_off: ["same_arg"]
+    args: [[val, i32]]
+    return: i32
+    body:
+      - decl: [acc, i32, val]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 8] }
+          body:
+            - set: [acc, { +: [{ '*': [acc, 3] }, { -: [idx, 9] }] }]
+            - set: [acc, { -: [acc, { /: [acc, 7] }] }]
+            - set: [idx, { +: [idx, 1] }]
+      - return: acc
+
+- def:
+    name: lib_calc_10
+    static_off: ["same_arg"]
+    args: [[val, i32]]
+    return: i32
+    body:
+      - decl: [acc, i32, val]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 8] }
+          body:
+            - set: [acc, { +: [{ '*': [acc, 3] }, { -: [idx, 10] }] }]
+            - set: [acc, { -: [acc, { /: [acc, 7] }] }]
+            - set: [idx, { +: [idx, 1] }]
+      - return: acc
+
+- def:
+    name: lib_calc_11
+    static_off: ["same_arg"]
+    args: [[val, i32]]
+    return: i32
+    body:
+      - decl: [acc, i32, val]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 8] }
+          body:
+            - set: [acc, { +: [{ '*': [acc, 3] }, { -: [idx, 11] }] }]
+            - set: [acc, { -: [acc, { /: [acc, 7] }] }]
+            - set: [idx, { +: [idx, 1] }]
+      - return: acc
+
+- def:
+    name: lib_calc_12
+    static_off: ["same_arg"]
+    args: [[val, i32]]
+    return: i32
+    body:
+      - decl: [acc, i32, val]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 8] }
+          body:
+            - set: [acc, { +: [{ '*': [acc, 3] }, { -: [idx, 12] }] }]
+            - set: [acc, { -: [acc, { /: [acc, 7] }] }]
+            - set: [idx, { +: [idx, 1] }]
+      - return: acc
+
+- def:
+    name: lib_calc_13
+    static_off: ["same_arg"]
+    args: [[val, i32]]
+    return: i32
+    body:
+      - decl: [acc, i32, val]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 8] }
+          body:
+            - set: [acc, { +: [{ '*': [acc, 3] }, { -: [idx, 13] }] }]
+            - set: [acc, { -: [acc, { /: [acc, 7] }] }]
+            - set: [idx, { +: [idx, 1] }]
+      - return: acc
+
+- def:
+    name: lib_calc_14
+    static_off: ["same_arg"]
+    args: [[val, i32]]
+    return: i32
+    body:
+      - decl: [acc, i32, val]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 8] }
+          body:
+            - set: [acc, { +: [{ '*': [acc, 3] }, { -: [idx, 14] }] }]
+            - set: [acc, { -: [acc, { /: [acc, 7] }] }]
+            - set: [idx, { +: [idx, 1] }]
+      - return: acc
+
+- def:
+    name: lib_calc_15
+    static_off: ["same_arg"]
+    args: [[val, i32]]
+    return: i32
+    body:
+      - decl: [acc, i32, val]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 8] }
+          body:
+            - set: [acc, { +: [{ '*': [acc, 3] }, { -: [idx, 15] }] }]
+            - set: [acc, { -: [acc, { /: [acc, 7] }] }]
+            - set: [idx, { +: [idx, 1] }]
+      - return: acc
+
+- def:
+    name: lib_calc_16
+    static_off: ["same_arg"]
+    args: [[val, i32]]
+    return: i32
+    body:
+      - decl: [acc, i32, val]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 8] }
+          body:
+            - set: [acc, { +: [{ '*': [acc, 3] }, { -: [idx, 16] }] }]
+            - set: [acc, { -: [acc, { /: [acc, 7] }] }]
+            - set: [idx, { +: [idx, 1] }]
+      - return: acc
+
+- def:
+    name: lib_calc_17
+    static_off: ["same_arg"]
+    args: [[val, i32]]
+    return: i32
+    body:
+      - decl: [acc, i32, val]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 8] }
+          body:
+            - set: [acc, { +: [{ '*': [acc, 3] }, { -: [idx, 17] }] }]
+            - set: [acc, { -: [acc, { /: [acc, 7] }] }]
+            - set: [idx, { +: [idx, 1] }]
+      - return: acc
+
+- def:
+    name: lib_calc_18
+    static_off: ["same_arg"]
+    args: [[val, i32]]
+    return: i32
+    body:
+      - decl: [acc, i32, val]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 8] }
+          body:
+            - set: [acc, { +: [{ '*': [acc, 3] }, { -: [idx, 18] }] }]
+            - set: [acc, { -: [acc, { /: [acc, 7] }] }]
+            - set: [idx, { +: [idx, 1] }]
+      - return: acc
+
+- def:
+    name: lib_calc_19
+    static_off: ["same_arg"]
+    args: [[val, i32]]
+    return: i32
+    body:
+      - decl: [acc, i32, val]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 8] }
+          body:
+            - set: [acc, { +: [{ '*': [acc, 3] }, { -: [idx, 19] }] }]
+            - set: [acc, { -: [acc, { /: [acc, 7] }] }]
+            - set: [idx, { +: [idx, 1] }]
+      - return: acc
+
+- def:
+    name: lib_calc_20
+    static_off: ["same_arg"]
+    args: [[val, i32]]
+    return: i32
+    body:
+      - decl: [acc, i32, val]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 8] }
+          body:
+            - set: [acc, { +: [{ '*': [acc, 3] }, { -: [idx, 20] }] }]
+            - set: [acc, { -: [acc, { /: [acc, 7] }] }]
+            - set: [idx, { +: [idx, 1] }]
+      - return: acc
+
+- def:
+    name: lib_calc_21
+    static_off: ["same_arg"]
+    args: [[val, i32]]
+    return: i32
+    body:
+      - decl: [acc, i32, val]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 8] }
+          body:
+            - set: [acc, { +: [{ '*': [acc, 3] }, { -: [idx, 21] }] }]
+            - set: [acc, { -: [acc, { /: [acc, 7] }] }]
+            - set: [idx, { +: [idx, 1] }]
+      - return: acc
+
+- def:
+    name: lib_calc_22
+    static_off: ["same_arg"]
+    args: [[val, i32]]
+    return: i32
+    body:
+      - decl: [acc, i32, val]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 8] }
+          body:
+            - set: [acc, { +: [{ '*': [acc, 3] }, { -: [idx, 22] }] }]
+            - set: [acc, { -: [acc, { /: [acc, 7] }] }]
+            - set: [idx, { +: [idx, 1] }]
+      - return: acc
+
+- def:
+    name: lib_calc_23
+    static_off: ["same_arg"]
+    args: [[val, i32]]
+    return: i32
+    body:
+      - decl: [acc, i32, val]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 8] }
+          body:
+            - set: [acc, { +: [{ '*': [acc, 3] }, { -: [idx, 23] }] }]
+            - set: [acc, { -: [acc, { /: [acc, 7] }] }]
+            - set: [idx, { +: [idx, 1] }]
+      - return: acc
+
+- def:
+    name: lib_calc_24
+    static_off: ["same_arg"]
+    args: [[val, i32]]
+    return: i32
+    body:
+      - decl: [acc, i32, val]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 8] }
+          body:
+            - set: [acc, { +: [{ '*': [acc, 3] }, { -: [idx, 24] }] }]
+            - set: [acc, { -: [acc, { /: [acc, 7] }] }]
+            - set: [idx, { +: [idx, 1] }]
+      - return: acc
+
+- def:
+    name: lib_calc_25
+    static_off: ["same_arg"]
+    args: [[val, i32]]
+    return: i32
+    body:
+      - decl: [acc, i32, val]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 8] }
+          body:
+            - set: [acc, { +: [{ '*': [acc, 3] }, { -: [idx, 25] }] }]
+            - set: [acc, { -: [acc, { /: [acc, 7] }] }]
+            - set: [idx, { +: [idx, 1] }]
+      - return: acc
+
+- def:
+    name: lib_calc_26
+    static_off: ["same_arg"]
+    args: [[val, i32]]
+    return: i32
+    body:
+      - decl: [acc, i32, val]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 8] }
+          body:
+            - set: [acc, { +: [{ '*': [acc, 3] }, { -: [idx, 26] }] }]
+            - set: [acc, { -: [acc, { /: [acc, 7] }] }]
+            - set: [idx, { +: [idx, 1] }]
+      - return: acc
+
+- def:
+    name: lib_calc_27
+    static_off: ["same_arg"]
+    args: [[val, i32]]
+    return: i32
+    body:
+      - decl: [acc, i32, val]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 8] }
+          body:
+            - set: [acc, { +: [{ '*': [acc, 3] }, { -: [idx, 27] }] }]
+            - set: [acc, { -: [acc, { /: [acc, 7] }] }]
+            - set: [idx, { +: [idx, 1] }]
+      - return: acc
+
+- def:
+    name: lib_calc_28
+    static_off: ["same_arg"]
+    args: [[val, i32]]
+    return: i32
+    body:
+      - decl: [acc, i32, val]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 8] }
+          body:
+            - set: [acc, { +: [{ '*': [acc, 3] }, { -: [idx, 28] }] }]
+            - set: [acc, { -: [acc, { /: [acc, 7] }] }]
+            - set: [idx, { +: [idx, 1] }]
+      - return: acc
+
+- def:
+    name: lib_calc_29
+    static_off: ["same_arg"]
+    args: [[val, i32]]
+    return: i32
+    body:
+      - decl: [acc, i32, val]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 8] }
+          body:
+            - set: [acc, { +: [{ '*': [acc, 3] }, { -: [idx, 29] }] }]
+            - set: [acc, { -: [acc, { /: [acc, 7] }] }]
+            - set: [idx, { +: [idx, 1] }]
+      - return: acc
+
+- def:
+    name: lib_calc_30
+    static_off: ["same_arg"]
+    args: [[val, i32]]
+    return: i32
+    body:
+      - decl: [acc, i32, val]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 8] }
+          body:
+            - set: [acc, { +: [{ '*': [acc, 3] }, { -: [idx, 30] }] }]
+            - set: [acc, { -: [acc, { /: [acc, 7] }] }]
+            - set: [idx, { +: [idx, 1] }]
+      - return: acc
+
+- def:
+    name: lib_calc_31
+    static_off: ["same_arg"]
+    args: [[val, i32]]
+    return: i32
+    body:
+      - decl: [acc, i32, val]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 8] }
+          body:
+            - set: [acc, { +: [{ '*': [acc, 3] }, { -: [idx, 31] }] }]
+            - set: [acc, { -: [acc, { /: [acc, 7] }] }]
+            - set: [idx, { +: [idx, 1] }]
+      - return: acc
+
+- def:
+    name: lib_calc_32
+    static_off: ["same_arg"]
+    args: [[val, i32]]
+    return: i32
+    body:
+      - decl: [acc, i32, val]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 8] }
+          body:
+            - set: [acc, { +: [{ '*': [acc, 3] }, { -: [idx, 32] }] }]
+            - set: [acc, { -: [acc, { /: [acc, 7] }] }]
+            - set: [idx, { +: [idx, 1] }]
+      - return: acc
+
+- def:
+    name: lib_calc_33
+    static_off: ["same_arg"]
+    args: [[val, i32]]
+    return: i32
+    body:
+      - decl: [acc, i32, val]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 8] }
+          body:
+            - set: [acc, { +: [{ '*': [acc, 3] }, { -: [idx, 33] }] }]
+            - set: [acc, { -: [acc, { /: [acc, 7] }] }]
+            - set: [idx, { +: [idx, 1] }]
+      - return: acc
+
+- def:
+    name: lib_calc_34
+    static_off: ["same_arg"]
+    args: [[val, i32]]
+    return: i32
+    body:
+      - decl: [acc, i32, val]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 8] }
+          body:
+            - set: [acc, { +: [{ '*': [acc, 3] }, { -: [idx, 34] }] }]
+            - set: [acc, { -: [acc, { /: [acc, 7] }] }]
+            - set: [idx, { +: [idx, 1] }]
+      - return: acc
+
+- def:
+    name: lib_calc_35
+    static_off: ["same_arg"]
+    args: [[val, i32]]
+    return: i32
+    body:
+      - decl: [acc, i32, val]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 8] }
+          body:
+            - set: [acc, { +: [{ '*': [acc, 3] }, { -: [idx, 35] }] }]
+            - set: [acc, { -: [acc, { /: [acc, 7] }] }]
+            - set: [idx, { +: [idx, 1] }]
+      - return: acc
+
+- def:
+    name: lib_calc_36
+    static_off: ["same_arg"]
+    args: [[val, i32]]
+    return: i32
+    body:
+      - decl: [acc, i32, val]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 8] }
+          body:
+            - set: [acc, { +: [{ '*': [acc, 3] }, { -: [idx, 36] }] }]
+            - set: [acc, { -: [acc, { /: [acc, 7] }] }]
+            - set: [idx, { +: [idx, 1] }]
+      - return: acc
+
+- def:
+    name: lib_calc_37
+    static_off: ["same_arg"]
+    args: [[val, i32]]
+    return: i32
+    body:
+      - decl: [acc, i32, val]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 8] }
+          body:
+            - set: [acc, { +: [{ '*': [acc, 3] }, { -: [idx, 37] }] }]
+            - set: [acc, { -: [acc, { /: [acc, 7] }] }]
+            - set: [idx, { +: [idx, 1] }]
+      - return: acc
+
+- def:
+    name: lib_calc_38
+    static_off: ["same_arg"]
+    args: [[val, i32]]
+    return: i32
+    body:
+      - decl: [acc, i32, val]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 8] }
+          body:
+            - set: [acc, { +: [{ '*': [acc, 3] }, { -: [idx, 38] }] }]
+            - set: [acc, { -: [acc, { /: [acc, 7] }] }]
+            - set: [idx, { +: [idx, 1] }]
+      - return: acc
+
+- def:
+    name: lib_calc_39
+    static_off: ["same_arg"]
+    args: [[val, i32]]
+    return: i32
+    body:
+      - decl: [acc, i32, val]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 8] }
+          body:
+            - set: [acc, { +: [{ '*': [acc, 3] }, { -: [idx, 39] }] }]
+            - set: [acc, { -: [acc, { /: [acc, 7] }] }]
+            - set: [idx, { +: [idx, 1] }]
+      - return: acc
+
+- def:
+    name: lib_calc_40
+    static_off: ["same_arg"]
+    args: [[val, i32]]
+    return: i32
+    body:
+      - decl: [acc, i32, val]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 8] }
+          body:
+            - set: [acc, { +: [{ '*': [acc, 3] }, { -: [idx, 40] }] }]
+            - set: [acc, { -: [acc, { /: [acc, 7] }] }]
+            - set: [idx, { +: [idx, 1] }]
+      - return: acc
+
+- def:
+    name: lib_calc_41
+    static_off: ["same_arg"]
+    args: [[val, i32]]
+    return: i32
+    body:
+      - decl: [acc, i32, val]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 8] }
+          body:
+            - set: [acc, { +: [{ '*': [acc, 3] }, { -: [idx, 41] }] }]
+            - set: [acc, { -: [acc, { /: [acc, 7] }] }]
+            - set: [idx, { +: [idx, 1] }]
+      - return: acc
+
+- def:
+    name: lib_calc_42
+    static_off: ["same_arg"]
+    args: [[val, i32]]
+    return: i32
+    body:
+      - decl: [acc, i32, val]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 8] }
+          body:
+            - set: [acc, { +: [{ '*': [acc, 3] }, { -: [idx, 42] }] }]
+            - set: [acc, { -: [acc, { /: [acc, 7] }] }]
+            - set: [idx, { +: [idx, 1] }]
+      - return: acc
+
+- def:
+    name: lib_calc_43
+    static_off: ["same_arg"]
+    args: [[val, i32]]
+    return: i32
+    body:
+      - decl: [acc, i32, val]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 8] }
+          body:
+            - set: [acc, { +: [{ '*': [acc, 3] }, { -: [idx, 43] }] }]
+            - set: [acc, { -: [acc, { /: [acc, 7] }] }]
+            - set: [idx, { +: [idx, 1] }]
+      - return: acc
+
+- def:
+    name: lib_calc_44
+    static_off: ["same_arg"]
+    args: [[val, i32]]
+    return: i32
+    body:
+      - decl: [acc, i32, val]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 8] }
+          body:
+            - set: [acc, { +: [{ '*': [acc, 3] }, { -: [idx, 44] }] }]
+            - set: [acc, { -: [acc, { /: [acc, 7] }] }]
+            - set: [idx, { +: [idx, 1] }]
+      - return: acc
+
+- def:
+    name: lib_calc_45
+    static_off: ["same_arg"]
+    args: [[val, i32]]
+    return: i32
+    body:
+      - decl: [acc, i32, val]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 8] }
+          body:
+            - set: [acc, { +: [{ '*': [acc, 3] }, { -: [idx, 45] }] }]
+            - set: [acc, { -: [acc, { /: [acc, 7] }] }]
+            - set: [idx, { +: [idx, 1] }]
+      - return: acc
+
+- def:
+    name: lib_calc_46
+    static_off: ["same_arg"]
+    args: [[val, i32]]
+    return: i32
+    body:
+      - decl: [acc, i32, val]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 8] }
+          body:
+            - set: [acc, { +: [{ '*': [acc, 3] }, { -: [idx, 46] }] }]
+            - set: [acc, { -: [acc, { /: [acc, 7] }] }]
+            - set: [idx, { +: [idx, 1] }]
+      - return: acc
+
+- def:
+    name: lib_calc_47
+    static_off: ["same_arg"]
+    args: [[val, i32]]
+    return: i32
+    body:
+      - decl: [acc, i32, val]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 8] }
+          body:
+            - set: [acc, { +: [{ '*': [acc, 3] }, { -: [idx, 47] }] }]
+            - set: [acc, { -: [acc, { /: [acc, 7] }] }]
+            - set: [idx, { +: [idx, 1] }]
+      - return: acc
+
+- def:
+    name: lib_calc_48
+    static_off: ["same_arg"]
+    args: [[val, i32]]
+    return: i32
+    body:
+      - decl: [acc, i32, val]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 8] }
+          body:
+            - set: [acc, { +: [{ '*': [acc, 3] }, { -: [idx, 48] }] }]
+            - set: [acc, { -: [acc, { /: [acc, 7] }] }]
+            - set: [idx, { +: [idx, 1] }]
+      - return: acc
+
+- def:
+    name: lib_calc_49
+    static_off: ["same_arg"]
+    args: [[val, i32]]
+    return: i32
+    body:
+      - decl: [acc, i32, val]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 8] }
+          body:
+            - set: [acc, { +: [{ '*': [acc, 3] }, { -: [idx, 49] }] }]
+            - set: [acc, { -: [acc, { /: [acc, 7] }] }]
+            - set: [idx, { +: [idx, 1] }]
+      - return: acc
+
+- def:
+    name: lib_calc_50
+    static_off: ["same_arg"]
+    args: [[val, i32]]
+    return: i32
+    body:
+      - decl: [acc, i32, val]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 8] }
+          body:
+            - set: [acc, { +: [{ '*': [acc, 3] }, { -: [idx, 50] }] }]
+            - set: [acc, { -: [acc, { /: [acc, 7] }] }]
+            - set: [idx, { +: [idx, 1] }]
+      - return: acc
+
+- def:
+    name: lib_calc_51
+    static_off: ["same_arg"]
+    args: [[val, i32]]
+    return: i32
+    body:
+      - decl: [acc, i32, val]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 8] }
+          body:
+            - set: [acc, { +: [{ '*': [acc, 3] }, { -: [idx, 51] }] }]
+            - set: [acc, { -: [acc, { /: [acc, 7] }] }]
+            - set: [idx, { +: [idx, 1] }]
+      - return: acc
+
+- def:
+    name: lib_calc_52
+    static_off: ["same_arg"]
+    args: [[val, i32]]
+    return: i32
+    body:
+      - decl: [acc, i32, val]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 8] }
+          body:
+            - set: [acc, { +: [{ '*': [acc, 3] }, { -: [idx, 52] }] }]
+            - set: [acc, { -: [acc, { /: [acc, 7] }] }]
+            - set: [idx, { +: [idx, 1] }]
+      - return: acc
+
+- def:
+    name: lib_calc_53
+    static_off: ["same_arg"]
+    args: [[val, i32]]
+    return: i32
+    body:
+      - decl: [acc, i32, val]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 8] }
+          body:
+            - set: [acc, { +: [{ '*': [acc, 3] }, { -: [idx, 53] }] }]
+            - set: [acc, { -: [acc, { /: [acc, 7] }] }]
+            - set: [idx, { +: [idx, 1] }]
+      - return: acc
+
+- def:
+    name: lib_calc_54
+    static_off: ["same_arg"]
+    args: [[val, i32]]
+    return: i32
+    body:
+      - decl: [acc, i32, val]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 8] }
+          body:
+            - set: [acc, { +: [{ '*': [acc, 3] }, { -: [idx, 54] }] }]
+            - set: [acc, { -: [acc, { /: [acc, 7] }] }]
+            - set: [idx, { +: [idx, 1] }]
+      - return: acc
+
+- def:
+    name: lib_calc_55
+    static_off: ["same_arg"]
+    args: [[val, i32]]
+    return: i32
+    body:
+      - decl: [acc, i32, val]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 8] }
+          body:
+            - set: [acc, { +: [{ '*': [acc, 3] }, { -: [idx, 55] }] }]
+            - set: [acc, { -: [acc, { /: [acc, 7] }] }]
+            - set: [idx, { +: [idx, 1] }]
+      - return: acc
+
+- def:
+    name: lib_calc_56
+    static_off: ["same_arg"]
+    args: [[val, i32]]
+    return: i32
+    body:
+      - decl: [acc, i32, val]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 8] }
+          body:
+            - set: [acc, { +: [{ '*': [acc, 3] }, { -: [idx, 56] }] }]
+            - set: [acc, { -: [acc, { /: [acc, 7] }] }]
+            - set: [idx, { +: [idx, 1] }]
+      - return: acc
+
+- def:
+    name: lib_calc_57
+    static_off: ["same_arg"]
+    args: [[val, i32]]
+    return: i32
+    body:
+      - decl: [acc, i32, val]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 8] }
+          body:
+            - set: [acc, { +: [{ '*': [acc, 3] }, { -: [idx, 57] }] }]
+            - set: [acc, { -: [acc, { /: [acc, 7] }] }]
+            - set: [idx, { +: [idx, 1] }]
+      - return: acc
+
+- def:
+    name: lib_calc_58
+    static_off: ["same_arg"]
+    args: [[val, i32]]
+    return: i32
+    body:
+      - decl: [acc, i32, val]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 8] }
+          body:
+            - set: [acc, { +: [{ '*': [acc, 3] }, { -: [idx, 58] }] }]
+            - set: [acc, { -: [acc, { /: [acc, 7] }] }]
+            - set: [idx, { +: [idx, 1] }]
+      - return: acc
+
+- def:
+    name: lib_calc_59
+    static_off: ["same_arg"]
+    args: [[val, i32]]
+    return: i32
+    body:
+      - decl: [acc, i32, val]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 8] }
+          body:
+            - set: [acc, { +: [{ '*': [acc, 3] }, { -: [idx, 59] }] }]
+            - set: [acc, { -: [acc, { /: [acc, 7] }] }]
+            - set: [idx, { +: [idx, 1] }]
+      - return: acc
+
+- def:
+    name: lib_calc_60
+    static_off: ["same_arg"]
+    args: [[val, i32]]
+    return: i32
+    body:
+      - decl: [acc, i32, val]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 8] }
+          body:
+            - set: [acc, { +: [{ '*': [acc, 3] }, { -: [idx, 60] }] }]
+            - set: [acc, { -: [acc, { /: [acc, 7] }] }]
+            - set: [idx, { +: [idx, 1] }]
+      - return: acc
+
+- def:
+    name: lib_answer
+    return: i32
+    body:
+      - decl: [sum, i32, { call: [lib_calc_1, 1] }]
+      - set: [sum, { +: [sum, { call: [lib_calc_30, 2] }] }]
+      - set: [sum, { +: [sum, { call: [lib_calc_60, 3] }] }]
+      - if: { condition: { neq: [sum, sum] }, then: [{ return: 0 }] }
+      - return: 7
+
+- def:
+    name: pipe_one
+    return: i32
+    body:
+      - decl: [got, i32, { call: [lib_answer] }]
+      - if: { condition: { neq: [got, 7] }, then: [{ return: 1 }] }
+      - return: 0
+
+- def:
+    name: pipe_two
+    return: i32
+    body:
+      - decl: [got, i32, { call: [lib_answer] }]
+      - if: { condition: { neq: [got, 7] }, then: [{ return: 1 }] }
+      - return: 0
+
+- def:
+    name: expect
+    args: [[what, string], [cond, i32]]
+    return: i32
+    body:
+      - if:
+          condition: { eq: [cond, 1] }
+          then: [{ print: ["  ok   ${what}"] }, { return: 0 }]
+      - print: ["  FAIL ${what}"]
+      - return: 1
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [fails, i32, 0]
+
+      # Bibliothek buendeln (lib_answer zieht die 60 lib_calc_* transitiv mit).
+      - decl: [lib, Code, { call: [sys.bundle, "lib_answer"] }]
+      - decl: [lib_bytes, i64, { call: [lib.size] }]
+      - print: ["Bibliothek: ${lib_bytes} Bytes Quelltext"]
+
+      - decl: [dump, string, { call: [lib.toString] }]
+      - print: ["--- Bundle-Anfang ---"]
+      - print: [dump]
+      - print: ["--- Bundle-Ende ---"]
+      - decl: [has_c1, i32, { call: [lib.contains, "lib_calc_1"] }]
+      - decl: [has_c30, i32, { call: [lib.contains, "lib_calc_30"] }]
+      - print: ["Bundle enthaelt lib_calc_1=${has_c1} lib_calc_30=${has_c30}"]
+      - decl: [nsym, i32, { call: [sys.lib_load, lib] }]
+      - print: ["lib_load registrierte ${nsym} Symbole"]
+      - set: [fails, { +: [fails, { call: [expect, "lib_load registriert mehr als eine Funktion", { gt: [nsym, 1] }] }] }]
+
+      # Weg A: Pipeline OHNE Bibliothek im Bundle (nutzt die geladene).
+      - decl: [one, Code, { call: [sys.bundle, "pipe_one", { context: true }] }]
+      - decl: [t_a, i64, { call: [time.mono_ms] }]
+      - decl: [rc_a, i32, { call: [sys.exec, one] }]
+      - decl: [ms_a, i64, { -: [{ call: [time.mono_ms] }, t_a] }]
+      - print: ["A) lib_load-Weg: rc=${rc_a} in ${ms_a} ms"]
+      - set: [fails, { +: [fails, { call: [expect, "A laeuft", { eq: [rc_a, 0] }] }] }]
+
+      # Weg B: dieselbe Pipeline MIT mitgebuendelter Bibliothek (§14).
+      - decl: [two, Code, { call: [sys.bundle, "pipe_two", { context: true }] }]
+      - decl: [merged, Code, { call: [two.merge, lib] }]
+      - decl: [t_b, i64, { call: [time.mono_ms] }]
+      - decl: [rc_b, i32, { call: [sys.exec, merged] }]
+      - decl: [ms_b, i64, { -: [{ call: [time.mono_ms] }, t_b] }]
+      - print: ["B) merge-Weg:    rc=${rc_b} in ${ms_b} ms"]
+      - set: [fails, { +: [fails, { call: [expect, "B laeuft", { eq: [rc_b, 0] }] }] }]
+
+      - print: ["Unterschied: ${ms_b} ms (merge) gegen ${ms_a} ms (lib_load)"]
+
+      - if:
+          condition: { neq: [fails, 0] }
+          then: [{ print: ["test_lib_load FAIL (${fails})"] }, { return: 1 }]
+      - print: ["test_lib_load PASS"]
+      - return: 0
