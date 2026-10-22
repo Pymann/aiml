@@ -1,0 +1,30 @@
+# SPEC: 21_namespaces §6.2 F21-S2
+# Negativ: ein `singleton`-Global darf NICHT an einen `ptr<T>`-Parameter gehen.
+#
+# Genau dieser Zug liess in cosmos den WASM-Client zweimal abstuerzen: der
+# Parameter besitzt, sein Drop gibt frei, und der Global zeigt ins Leere.  Wer
+# die Warnung durch `singleton: true` abstellt, nimmt dafuer diese Pruefung in
+# Kauf — sonst waere die Markierung nur eine Stummschaltung.
+#
+# Expected exit code: 1
+# ExpectedStderr: singleton
+
+- class:
+    name: Anchor
+    members:
+      - [ticks, i32]
+
+- decl: [g_anchor, ptr<Anchor>, null, { singleton: true }]
+
+- def:
+    name: takes_owner
+    args: [[owned, ptr<Anchor>]]
+    body: [{ set: [owned.ticks, 1] }]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - set: [g_anchor, { new: Anchor }]
+      - call: [takes_owner, g_anchor]
+      - return: 0

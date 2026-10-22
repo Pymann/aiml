@@ -34,18 +34,18 @@
     condition: { neq: [var_n, 3] }
     then:
       - print: ["FAIL g_box.lst.len: expected 3, got ${var_n}"]
-      - exit: [1]
+      - call: [sys.exit, 1]
 - decl: [var_v0, string, { at: [out_lst, 0] }]
 - if:
     condition: { neq: [var_v0, "alpha"] }
     then:
       - print: ["FAIL g_box.lst[0]: expected 'alpha', got '${var_v0}'"]
-      - exit: [1]
+      - call: [sys.exit, 1]
 - decl: [var_v2, string, { at: [out_lst, 2] }]
 - if:
     condition: { neq: [var_v2, "gamma"] }
     then:
       - print: ["FAIL g_box.lst[2]: expected 'gamma', got '${var_v2}'"]
-      - exit: [1]
+      - call: [sys.exit, 1]
 
 - print: ["PASS test_struct_list_field_assign"]

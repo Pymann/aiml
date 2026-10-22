@@ -1,0 +1,58 @@
+# SPEC: 31_db_integration,61_memory_management_DRAFT
+# static-check: off
+# spec/61 §5.4/§5.5 step 0 + spec/31 §6.7: kv.set(k, view) with view = kv.get(k) is a self-write —
+# the cache slot is persisted, not released, so view stays valid (no UAF) and nothing leaks.
+# Literal / interpolated / pushed fields written through the view survive a later real replace.
+- model: {name: Job, fields: [[name, string], [log, string], [tags, list<string>], [state, i32]]}
+- def:
+    name: check_store
+    args: [[store, Kv<string:Job>], [rounds, i32]]
+    return: i32
+    body:
+      - decl: [seed, Job]
+      - set: [seed.name, "seed"]
+      - set: [seed.log, ""]
+      - call: [seed.tags.push, "t0"]
+      - call: [store.set, "k", seed]
+      - decl: [counter, i32, 0]
+      - while:
+          condition: {lt: [counter, rounds]}
+          body:
+            - decl: [view, ref<Job>, {call: [store.get, "k"]}]
+            - set: [view.name, "literal"]
+            - set: [view.name, "n-${counter}"]
+            - set: [view.log, "${view.log}x"]
+            - call: [view.tags.push, "t"]
+            - set: [view.state, counter]
+            - call: [store.set, "k", view]
+            # view must still be the live slot after the self-write
+            - if: {condition: {neq: [view.name, "n-${counter}"]}, then: [{return: 1}]}
+            - if: {condition: {neq: [view.tags.len, {+: [counter, 2]}]}, then: [{return: 2}]}
+            - if: {condition: {neq: [view.log.len, {+: [counter, 1]}]}, then: [{return: 3}]}
+            - call: [store.set, "k", view]
+            - decl: [again, ref<Job>, {call: [store.get, "k"]}]
+            - if: {condition: {neq: [again.state, counter]}, then: [{return: 4}]}
+            - decl: [copy1, Job, {call: [store.get_copy, "k"]}]
+            - if: {condition: {neq: [copy1.name, view.name]}, then: [{return: 5}]}
+            - if: {condition: {neq: [copy1.tags.len, view.tags.len]}, then: [{return: 6}]}
+            - set: [counter, {+: [counter, 1]}]
+      # a real replace (other value) releases the slot, including the fields written via the view
+      - decl: [other, Job]
+      - set: [other.name, "other"]
+      - call: [store.set, "k", other]
+      - decl: [after, ref<Job>, {call: [store.get, "k"]}]
+      - if: {condition: {neq: [after.name, "other"]}, then: [{return: 7}]}
+      - if: {condition: {neq: [after.tags.len, 0]}, then: [{return: 8}]}
+      - return: 0
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [mem_store, Kv<string:Job>, {call: [db.open_kv, "lt171_mem", {persist: false}]}]
+      - decl: [rc_mem, i32, {call: [check_store, mem_store, 30]}]
+      - if: {condition: {neq: [rc_mem, 0]}, then: [{print: ["FAIL non-persistent rc=${rc_mem}"]}, {return: 1}]}
+      - decl: [wal_store, Kv<string:Job>, {call: [db.open_kv, "lt171_wal", {persist: true, path: "/tmp/aiml_test_lt171/"}]}]
+      - decl: [rc_wal, i32, {call: [check_store, wal_store, 30]}]
+      - if: {condition: {neq: [rc_wal, 0]}, then: [{print: ["FAIL persistent rc=${rc_wal}"]}, {return: 1}]}
+      - print: ["PASS kv ref self-write keeps the slot (non-persistent + persistent)"]
+      - return: 0

@@ -1,0 +1,15 @@
+# SPEC: 64_closures
+# static-check: off
+# Requires: driver
+# NEGATIVE (spec/64 §1, §8, §9): fn<…> and closure<…> are different types — no implicit
+# conversion and no cast, in either direction, not even for an empty capture list.
+# EXPECT-ERROR: closure-fn-mismatch
+- callable: { name: IntMap, args: [[x, i32]], return: i32 }
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [c, closure<IntMap>, { closure: { body: [ { return: x } ] } }]
+      - decl: [f, fn<i32:i32>]
+      - set: [f, c]                                # ← closure -> fn is rejected
+      - return: 0

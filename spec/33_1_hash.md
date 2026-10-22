@@ -34,6 +34,20 @@
 ## 2. Signatures
 
 All hash functions accept `string` **or** `buffer<u8>` as input. For the hex digests
+### Hashing a file without loading it
+
+`hash.sha256(buf)` needs the whole content in memory.  For content-addressing
+large artifacts use **`hash.sha256_file(path)`**: it streams the file in 1 MiB
+blocks, so memory use is independent of the file size, and yields the **same
+digest** as hashing the full content in one go (same portable implementation,
+native and wasm32).  An unreadable or missing file returns `""` — never null,
+and unambiguous, since an *empty file* hashes to `e3b0c442…`.
+
+```yaml
+- decl: [blob_id, string, { call: [hash.sha256_file, "cas/tmp/incoming" }]
+- if: { condition: { eq: [blob_id.len, 0] }, then: [{ call: [log.error, "nicht lesbar"] }] }
+```
+
 `sha256`, `sha512`, `sha3_256`, `blake2b`, `blake2s`, `md5` a `buffer<u8>` argument is hashed
 **binary-safe over its exact byte length** (pointer + `size`), not as a C string — so bytes
 containing `0x00` hash correctly (verified by `tests/test_hash_buffer.aiml`). This makes
@@ -214,6 +228,7 @@ password) yields a completely different key. Known-answer check
 |------|-------|--------|-------------|
 | `{ call: [hash.sha256, data] }` | `string\|buffer<u8>` | `string` | SHA-256 hex |
 | `{ call: [hash.sha256_raw, data] }` | `string\|buffer<u8>` | `buffer<u8>` | SHA-256 raw bytes |
+| `{ call: [hash.sha256_file, path] }` | `string\|path` | `string` | SHA-256 of a FILE's content, read in 1 MiB blocks |
 | `{ call: [hash.sha512, data] }` | `string\|buffer<u8>` | `string` | SHA-512 hex |
 | `{ call: [hash.sha512_raw, data] }` | `string\|buffer<u8>` | `buffer<u8>` | SHA-512 raw bytes |
 | `{ call: [hash.sha3_256, data] }` | `string\|buffer<u8>` | `string` | NIST SHA-3-256 hex |

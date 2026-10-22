@@ -1,0 +1,36 @@
+# SPEC: 49_static_analysis,49_static_off
+# Negativ-Test (spec/49 §2a): ein unbekannter Statement-Schluessel MUSS ein
+# harter Fehler sein.  Vorher verschwand das Statement lautlos — der Quelltext
+# sagte, was passieren soll, und es passierte einfach nicht.  Genau so blieb
+# `exit:` 54× im Korpus wirkungslos (FAIL-Zweige lieferten 0).
+#
+# Expected exit code: 1
+#
+# Diagnostic-Form:
+#   ...: unknown statement 'continue' — not an aiml statement ...
+- class:
+    name: Zaehler
+    members:
+      - [wert, i32]
+    methods:
+      - def:
+          name: zaehle
+          access: public
+          return: i32
+          body:
+            - decl: [idx, i32, 0]
+            - while:
+                condition: { lt: [idx, 3] }
+                body:
+                  - set: [idx, { +: [idx, 1] }]
+                  - continue: []
+                  - set: [<.wert, { +: [<.wert, 1] }]
+            - return: <.wert
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [zz, ptr<Zaehler>, { new: Zaehler }]
+      - print: ["${{ call: [zz.zaehle] }}"]
+      - return: 0

@@ -1,0 +1,90 @@
+# SPEC: 62_pipelines
+# spec/62 §13.1/§13.2: Laufzeit-Abbildung und Beobachter.
+#
+# Der Wirt muss WAEHREND des Laufs sehen, was passiert — anzeigen, anhalten,
+# abbrechen.  Ein Ergebnis am Ende kaeme dafuer zu spaet (F62-78).  Geprueft
+# wird deshalb: der Beobachter wird je (Schritt, Lane) gerufen, traegt die
+# Lane-Bindung und den Schluessel, und meldet beim ZWEITEN Lauf reused=1.
+# Expected exit code: 0
+
+- def:
+    name: tiny_step
+    return: i32
+    body:
+      - return: 0
+
+- decl: [g_calls,  i32, 0]
+- decl: [g_reused, i32, 0]
+- decl: [g_keys,   i32, 0]
+- decl: [g_lanes,  string, ""]
+
+- def:
+    name: watch
+    args: [[run, ref<StepRun>]]
+    body:
+      - set: [g_calls, { +: [g_calls, 1] }]
+      - if: { condition: { eq: [run.reused, 1] }, then: [{ set: [g_reused, { +: [g_reused, 1] }] }] }
+      - if: { condition: { gt: [run.step_key.len, 0] }, then: [{ set: [g_keys, { +: [g_keys, 1] }] }] }
+      - set: [g_lanes, "${g_lanes}${run.bindings};"]
+
+- def:
+    name: expect
+    args: [[what, string], [cond, i32]]
+    return: i32
+    body:
+      - if:
+          condition: { eq: [cond, 1] }
+          then: [{ print: ["  ok   ${what}"] }, { return: 0 }]
+      - print: ["  FAIL ${what}"]
+      - return: 1
+
+- def:
+    name: main
+    static_off: ["str_cmp"]
+    return: i32
+    body:
+      - decl: [fails, i32, 0]
+
+      - decl: [stp, step, { call: [step.new] }]
+      - call: [stp.set_name, "tiny"]
+      - call: [stp.set_body, { call: [sys.bundle, "tiny_step", { context: true }] }]
+      - call: [stp.set_cache, CacheClass.pure]
+      - call: [stp.use_arg, "mode"]
+
+      - decl: [stg, stage, { call: [stage.new] }]
+      - call: [stg.set_name, "only"]
+      - call: [stg.add_step, stp]
+
+      - decl: [modes, list<string>]
+      - call: [modes.push, "debug"]
+      - call: [modes.push, "release"]
+      - decl: [pipe, pipeline, { call: [pipeline.new] }]
+      - call: [pipe.set_name, "observed"]
+      - call: [pipe.add_param, "mode", modes]
+      - call: [pipe.add_stage, stg]
+
+      # ── Erster Lauf mit Beobachter ──────────────────────────────────────
+      - decl: [rc_one, i32, { call: [pipe.run, watch] }]
+      - set: [fails, { +: [fails, { call: [expect, "Lauf gelingt", { eq: [rc_one, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "Beobachter je (Schritt, Lane) gerufen", { eq: [g_calls, 2] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "jeder Aufruf traegt einen Schluessel", { eq: [g_keys, 2] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "erster Lauf meldet nichts als wiederverwendet", { eq: [g_reused, 0] }] }] }]
+      - print: ["Lanes: ${g_lanes}"]
+      - set: [fails, { +: [fails, { call: [expect, "Bindungen sind mitgegeben", { gt: [g_lanes.len, 0] }] }] }]
+
+      # ── Zweiter Lauf: derselbe Schluessel → reused ──────────────────────
+      - set: [g_calls, 0]
+      - set: [g_reused, 0]
+      - decl: [rc_two, i32, { call: [pipe.run, watch] }]
+      - set: [fails, { +: [fails, { call: [expect, "zweiter Lauf gelingt", { eq: [rc_two, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "zweiter Lauf meldet beide als wiederverwendet", { eq: [g_reused, 2] }] }] }]
+
+      # ── Ohne Beobachter laeuft es ebenso (F62-79) ───────────────────────
+      - decl: [rc_three, i32, { call: [pipe.run] }]
+      - set: [fails, { +: [fails, { call: [expect, "ohne Beobachter laeuft es auch", { eq: [rc_three, 0] }] }] }]
+
+      - if:
+          condition: { neq: [fails, 0] }
+          then: [{ print: ["test_pipeline_observer FAIL (${fails})"] }, { return: 1 }]
+      - print: ["test_pipeline_observer PASS"]
+      - return: 0

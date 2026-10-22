@@ -96,9 +96,12 @@ struct Analyzer {
             // later member-store's release-old freed a handle the container still referenced:
             // mana_choice double-free). Lockstep with is_view_alias retain/drop in ast_compiler_stmt.cpp.
             if (dynamic_cast<const AtExpr*>(d->initialValue.get())) return true;
-            if (auto* ve = dynamic_cast<const VariableExpr*>(d->initialValue.get()))
-                if (ve->name.find('.') != std::string::npos || ve->name.find('<') != std::string::npos)
-                    return true;
+            // Ein DOTTED Name (`obj.feld`) ist eine Sicht; ein PLAINER Name ist eine Kopie aus
+            // einem anderen Lokal (spec/61 §7) — beide teilen die Feld-Handles und besitzen nach
+            // dem incref ihre EIGENEN Referenzen, also muessen beide am Ende abgeben.  Fehlte das
+            // beim plainen Namen, gab der naechste Member-Store der Kopie den String des
+            // Originals frei (Probe tests/test_value_model_copy_share.aiml).
+            if (dynamic_cast<const VariableExpr*>(d->initialValue.get())) return true;
             if (auto* c = dynamic_cast<CallExpr*>(d->initialValue.get())) {
                 // spec/61 §5.1: `{ clone: X }` / `{ copy: X }` produce a FRESH, INDEPENDENT owned
                 // value model → owned, dropped at scope exit (else the cloned heap leaks; probes
@@ -198,7 +201,7 @@ struct Analyzer {
             assignIds(w->body.get());
         } else if (auto* t = dynamic_cast<const TryStmt*>(s)) {
             assignIds(t->tryBlock.get());
-            assignIds(t->catchBlock.get());
+            for (auto* cb : t->catchBodies()) assignIds(cb);
         } else if (auto* b = dynamic_cast<const BlockStmt*>(s)) {
             assignIds(b);
         }
@@ -465,8 +468,11 @@ struct Analyzer {
         if (auto* t = dynamic_cast<const TryStmt*>(s)) {
             // the catch may be entered from any point of the try body → start from the join
             FlowState done = t->tryBlock ? analyzeBlock(t->tryBlock.get(), st) : st;
-            if (!t->catchBlock) return done;
-            FlowState caught = analyzeBlock(t->catchBlock.get(), joinStates(st, done));
+            auto bodies = t->catchBodies();
+            if (bodies.empty()) return done;
+            FlowState caught = analyzeBlock(bodies[0], joinStates(st, done));
+            for (size_t ci = 1; ci < bodies.size(); ++ci)
+                caught = joinStates(caught, analyzeBlock(bodies[ci], joinStates(st, done)));
             return joinStates(done, caught);
         }
         if (auto* b = dynamic_cast<const BlockStmt*>(s)) {

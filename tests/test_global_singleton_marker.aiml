@@ -1,0 +1,51 @@
+# SPEC: 21_namespaces §6.2, 44_1_engine §4.1
+# `singleton: true`: der erklaerte Anker eines Rueckrufs.
+#
+# `engine.run` nimmt FREIE Funktionen — ein Rueckruf traegt keinen Zustand, also
+# braucht jedes Fenster-Programm einen Anker auf Modulebene.  Die Markierung
+# nimmt ihm die Globals-Warnung und handelt sich dafuer eine PRUEFUNG ein
+# (F21-S2, Negativprobe: tests/test_global_singleton_move_neg.aiml).
+#
+# Hier wird geprueft, dass der Anker normal benutzbar bleibt: setzen, lesen,
+# Methoden rufen.  Eine Markierung, die still etwas anderes bedeutet als
+# „keine Warnung", waere schlimmer als die Warnung.
+#
+# Expected exit code: 0
+
+- class:
+    name: Anchor
+    members:
+      - [ticks, i32]
+    methods:
+      - def:
+          name: bump
+          access: public
+          body: [{ set: [<.ticks, { +: [<.ticks, 1] }] }]
+      - def:
+          name: count
+          access: public
+          return: i32
+          body: [{ return: <.ticks }]
+
+- decl: [g_anchor, ptr<Anchor>, null, { singleton: true }]
+
+- def:
+    name: tick_once
+    body:
+      - if: { condition: { peq: [g_anchor, null] }, then: [{ return: [] }] }
+      - call: [g_anchor.bump]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - set: [g_anchor, { new: Anchor }]
+      - call: [tick_once]
+      - call: [tick_once]
+      - decl: [seen, i32, { call: [g_anchor.count] }]
+      - if:
+          condition: { neq: [seen, 2] }
+          then: [{ print: ["FAIL singleton zaehlt ${seen} statt 2"] }, { return: 1 }]
+      - free: [g_anchor]
+      - print: ["global singleton PASS"]
+      - return: 0

@@ -91,6 +91,37 @@ Use `model` for data, `class` for data + behaviour.
 - call: [start_server, {host: "10.0.0.5", port: 9090}]
 ```
 
+## Field Aliases — speaking a foreign format
+
+A field carries an optional **modifier map** in 4th position (the same slot that holds
+`db_indexed`, `unique`, `level`).  The key `alias` gives the field a *second* name, used
+wherever the field meets the outside world — today that is `sys.serialize` /
+`sys.deserialize`.
+
+```aiml
+- model:
+    name: ContainerState
+    fields:
+      - [ociVersion, string]
+      - [ident,      string, "", { alias: "id" }]
+      - [status,     string]
+```
+
+Serialising writes `"id"`, deserialising accepts `"id"`, and the aiml side keeps `ident`.
+
+**Why this exists.**  Identifiers must be at least three characters long (a readability rule
+that has earned its keep).  Foreign formats do not know that rule: the OCI runtime
+specification names a field `id`, JSON APIs use `ts`, `os`, `cc`.  Without an alias such a
+format cannot be modelled at all — the mapping by field name simply misses.  The alias keeps
+the rule **and** the foreign contract, instead of weakening one for the other.
+
+- **F15-9** An alias changes only the *external* name.  Inside aiml the field is always
+  addressed by its real name; nothing reads `value.id`.
+- **F15-10** An alias must be unique within its model, and must not collide with another
+  field's real name.  Both would make deserialisation ambiguous.
+- **F15-11** An alias is **not** key material for the pipeline step key, and changing one does
+  not change a model's schema fingerprint — it is a name at the edge, not a shape.
+
 ## Model Inheritance (inherits:)
 
 Models support single inheritance via `inherits:`. The parent must be a model

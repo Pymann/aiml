@@ -65,6 +65,7 @@
 |--------|-----------|-------------|
 | `alloc` | `buffer.alloc(size: i32)` | Allocates `size` bytes (malloc). Must be called before any read/write. |
 | `write` | `buffer.write(value, type)` | Writes `sizeof(type)` bytes at writeIndex, advances writeIndex. |
+| `write_string` | `buffer.write_string(s: string) → i32` | Appends the string's bytes (up to its terminating `0x00`, so **not** usable for embedded NUL bytes) at writeIndex, advances writeIndex and raises `len` if it grew. Returns the byte count, `0` for an empty string, or `-1` if `s` is null or the bytes do not fit in the remaining capacity (no silent truncation — `alloc` enough first). |
 | `read` | `buffer.read(type) → T` | Reads `sizeof(type)` bytes at readIndex, advances readIndex. |
 | `seek` | `buffer.seek(pos: i32)` | Sets both readIndex and writeIndex to `pos` (byte offset). |
 | `zero` | `buffer.zero()` | `memset(data, 0, capacity)` + sets size and writeIndex to capacity. |

@@ -1,0 +1,19 @@
+# SPEC: 64_closures
+# static-check: off
+# Requires: driver
+# NEGATIVE (spec/64 §4, §9): `args` and `capture` share one namespace.
+# EXPECT-ERROR: closure-duplicate-capture
+- callable: { name: Adder, args: [[x, i32]], return: i32 }
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [x, i32, 1]
+      - decl:
+          - bad
+          - closure<Adder>
+          - closure:
+              capture: [x]                        # ← collides with Adder's parameter `x`
+              body:
+                - return: x
+      - return: 0

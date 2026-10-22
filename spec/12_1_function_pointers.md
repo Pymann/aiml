@@ -121,3 +121,33 @@ and return type match. No implicit conversion of any kind.
 - decl: [g, fn<i32:string>]
 - set: [g, greet]  # Error: parameter type does not match
 ```
+
+## Quoting a multi-parameter type in YAML
+
+A `fn<…>` with **more than one parameter** contains a comma, and a comma inside a YAML *flow*
+sequence separates the sequence. The type therefore **must be quoted** wherever it appears in a
+flow sequence:
+
+```aiml
+- decl: [sinkfn, 'fn<string,i32:i32>']            # correct
+- args: [[f, 'fn<i32, string:bool>']]             # correct
+- decl: [sinkfn, fn<string,i32:i32>]              # WRONG — parses as 3 elements
+```
+
+Single-parameter types (`fn<i32:i32>`, `fn<>`, `fn<:i32>`) contain no comma and need no quotes.
+The same applies to a `fn<…>` nested inside another generic
+(`map<string:fn<http_request, http_response>>` must be quoted as a whole).
+
+## No Environment
+
+An `fn<…>` is **one code pointer** — a trivially copyable value with no teardown
+(`61_memory_management_DRAFT.md` §2.1, Class 1). It sees only its parameters and globals; it
+cannot carry values captured from the scope it was created in, and this does not change.
+
+Code *plus* captured state is a different pair of types — `block<Sig>` (non-escaping, implicit
+captures, non-owning) and `closure<Sig>` (escaping, explicit captures, move-only owning) — see
+`64_closures.md`. They use the same `call` form but a **different, named** signature notation
+(`- callable: { name: Mapper, args: [[x, i32]], return: string }` → `closure<Mapper>`), which is
+why they never need the quoting above. A `callable:` name is **not** accepted in `fn<…>`, and
+there is **no** implicit conversion and **no** cast between `fn<…>` and `block`/`closure` in
+either direction.

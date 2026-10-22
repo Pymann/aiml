@@ -1,0 +1,138 @@
+# SPEC: 32_6_network_ssh,32_network
+# spec/32_6: SSH-Client gegen den Test-Server im eigenen Prozess.
+#
+# Ohne eigenen Server gäbe es keinen Nachweis: auf dem Entwicklungsrechner läuft
+# kein sshd (Port 22 leer, openssh-server nicht installiert).  libssh bringt
+# eine Server-Seite mit, also spannt der Test seinen eigenen auf — gebunden an
+# 127.0.0.1, mit Einmal-Hostkey und genau einem Zugangspaar (spec/32_6 §7).
+#
+# Geprüft wird in dieser Reihenfolge:
+#   1. Host-Prüfung ist VERBINDLICH — ohne accept_host geht nichts
+#   2. falscher Fingerprint → abgelehnt, richtiger → angenommen
+#   3. Passwort-Authentifizierung, falsches Passwort scheitert
+#   4. exec: stdout und stderr GETRENNT, Exit-Code stimmt
+#   5. stdin ist beschreibbar (das ist der Grund, warum es Kanäle sind)
+#   6. write_buffer überträgt Binärdaten unverfälscht
+# Expected exit code: 0
+
+- def:
+    name: main
+    static_off: ["str_cmp"]
+    return: i32
+    body:
+      - decl: [fails, i32, 0]
+      - decl: [port, i32, 22899]
+      - decl: [srv, ssh_test_server, { call: [ssh.test_listen, port, "deploy", "geheim-123"] }]
+      - if:
+          condition: { eq: [srv, null] }
+          then: [{ print: ["FAIL Test-Server startet nicht auf Port ${port}"] }, { return: 1 }]
+      # Bedienen MUSS nebenläufig laufen — einspurig wartet connect auf einen
+      # Server, der nie dran kommt (spec/32_6 §7).
+      - decl: [srv_thread, thread_handle, { call: [srv.serve_async] }]
+
+      - decl: [host_fp, string, { call: [srv.fingerprint] }]
+      - if:
+          condition: { lt: [{ call: [host_fp.index_of, "SHA256:"] }, 0] }
+          then: [{ print: ["FAIL Fingerprint hat nicht die Form SHA256:... ('${host_fp}')"] }, { set: [fails, { +: [fails, 1] }] }]
+
+      # ── 1./2. Host-Prüfung ───────────────────────────────────────────────
+      - decl: [sess_a, ssh_session, { call: [ssh.connect, "127.0.0.1", port, "deploy", 5000] }]
+      - if:
+          condition: { eq: [sess_a, null] }
+          then: [{ print: ["FAIL connect fehlgeschlagen"] }, { return: 1 }]
+
+      # Ohne accept_host MUSS die Authentifizierung scheitern — das ist die
+      # Zusage aus §3, und ohne diese Prüfung wäre sie nur Absicht.
+      - decl: [early, i32, { call: [sess_a.auth_password, "geheim-123"] }]
+      - if:
+          condition: { neq: [early, 0] }
+          then: [{ print: ["FAIL auth auf UNVERIFIZIERTER Sitzung war erlaubt (${early})"] }, { set: [fails, { +: [fails, 1] }] }]
+
+      - decl: [wrong_fp, i32, { call: [sess_a.accept_host, "SHA256:ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ"] }]
+      - if:
+          condition: { neq: [wrong_fp, 0] }
+          then: [{ print: ["FAIL falscher Fingerprint wurde angenommen"] }, { set: [fails, { +: [fails, 1] }] }]
+
+      - decl: [right_fp, i32, { call: [sess_a.accept_host, host_fp] }]
+      - if:
+          condition: { neq: [right_fp, 1] }
+          then: [{ print: ["FAIL richtiger Fingerprint wurde abgelehnt"] }, { return: 1 }]
+
+      # ── 3. Authentifizierung ─────────────────────────────────────────────
+      - decl: [bad_pw, i32, { call: [sess_a.auth_password, "falsch"] }]
+      - if:
+          condition: { neq: [bad_pw, 0] }
+          then: [{ print: ["FAIL falsches Passwort wurde akzeptiert"] }, { set: [fails, { +: [fails, 1] }] }]
+      - decl: [good_pw, i32, { call: [sess_a.auth_password, "geheim-123"] }]
+      - if:
+          condition: { neq: [good_pw, 1] }
+          then: [{ print: ["FAIL richtiges Passwort wurde abgelehnt"] }, { return: 1 }]
+
+      # ── 4. exec: getrennte Ströme, Exit-Code ────────────────────────────
+      - decl: [ch_ok, ssh_channel, { call: [sess_a.exec, "echo auf-stdout; echo auf-stderr 1>&2; exit 7"] }]
+      - if:
+          condition: { eq: [ch_ok, null] }
+          then: [{ print: ["FAIL exec lieferte null"] }, { return: 1 }]
+      - decl: [got_out, string, { call: [ch_ok.read_out, 4096] }]
+      - decl: [got_err, string, { call: [ch_ok.read_err, 4096] }]
+      - decl: [got_rc, i32, { call: [ch_ok.exit_code] }]
+      - if:
+          condition: { lt: [{ call: [got_out.index_of, "auf-stdout"] }, 0] }
+          then: [{ print: ["FAIL stdout fehlt ('${got_out}')"] }, { set: [fails, { +: [fails, 1] }] }]
+      - if:
+          condition: { lt: [{ call: [got_err.index_of, "auf-stderr"] }, 0] }
+          then: [{ print: ["FAIL stderr fehlt ('${got_err}')"] }, { set: [fails, { +: [fails, 1] }] }]
+      # Die Trennung ist der Punkt: stderr darf NICHT in stdout auftauchen.
+      - if:
+          condition: { gt: [{ call: [got_out.index_of, "auf-stderr"] }, -1] }
+          then: [{ print: ["FAIL stderr landete in stdout ('${got_out}')"] }, { set: [fails, { +: [fails, 1] }] }]
+      - if:
+          condition: { neq: [got_rc, 7] }
+          then: [{ print: ["FAIL exit_code=${got_rc}, erwartet 7"] }, { set: [fails, { +: [fails, 1] }] }]
+      - call: [ch_ok.close]
+
+      # ── 5. stdin ─────────────────────────────────────────────────────────
+      # Der Grund für die Kanal-API: ein sudo-Passwort darf nicht in argv.
+      - decl: [ch_in, ssh_channel, { call: [sess_a.exec, "cat"] }]
+      - decl: [n_wrote, i32, { call: [ch_in.write, "durch-stdin\n"] }]
+      - if:
+          condition: { lt: [n_wrote, 1] }
+          then: [{ print: ["FAIL write schrieb ${n_wrote} Bytes"] }, { set: [fails, { +: [fails, 1] }] }]
+      - decl: [eof_rc, i32, { call: [ch_in.send_eof] }]
+      - decl: [echoed, string, { call: [ch_in.read_out, 4096] }]
+      - if:
+          condition: { lt: [{ call: [echoed.index_of, "durch-stdin"] }, 0] }
+          then: [{ print: ["FAIL stdin kam nicht an ('${echoed}')"] }, { set: [fails, { +: [fails, 1] }] }]
+      - call: [ch_in.close]
+
+      # ── 6. Binärdaten über write_buffer ─────────────────────────────────
+      # Mit 0x00 und 0xFF drin: genau daran scheitert eine String-basierte
+      # Übertragung, und so wird der Agent später ausgebracht (§6).
+      - decl: [payload, buffer<u8>]
+      - call: [payload.alloc, 5]
+      - call: [payload.write, 0, u8]
+      - call: [payload.write, 255, u8]
+      - call: [payload.write, 65, u8]
+      - call: [payload.write, 0, u8]
+      - call: [payload.write, 66, u8]
+      - decl: [ch_bin, ssh_channel, { call: [sess_a.exec, "wc -c"] }]
+      - decl: [n_bin, i32, { call: [ch_bin.write_buffer, payload] }]
+      - if:
+          condition: { neq: [n_bin, 5] }
+          then: [{ print: ["FAIL write_buffer schrieb ${n_bin} von 5 Bytes"] }, { set: [fails, { +: [fails, 1] }] }]
+      - decl: [eof_bin, i32, { call: [ch_bin.send_eof] }]
+      - decl: [counted, string, { call: [ch_bin.read_out, 256] }]
+      - if:
+          condition: { lt: [{ call: [counted.index_of, "5"] }, 0] }
+          then: [{ print: ["FAIL Gegenseite zaehlte nicht 5 Bytes ('${counted}')"] }, { set: [fails, { +: [fails, 1] }] }]
+      - call: [ch_bin.close]
+
+      - call: [sess_a.close]
+      - call: [srv.stop]
+      - call: [srv_thread.join]
+
+      - if:
+          condition: { neq: [fails, 0] }
+          then: [{ print: ["test_ssh_client FAIL (${fails})"] }, { return: 1 }]
+      - print: ["PASS ssh_client"]
+      - return: 0

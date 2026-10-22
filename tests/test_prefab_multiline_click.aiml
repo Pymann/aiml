@@ -1,0 +1,124 @@
+# SPEC: 44_6_prefabs
+# spec/44_6 §5g + Widget-Tabelle: ein MEHRZEILIGES `text_input` hat „a movable
+# cursor, text selection (mouse drag)".  Fuer mehrzeilige Felder war das nicht
+# eingeloest: der Render-Pass legte genau EINEN Cursor-Halt an (Byte 0), also
+# sprang jeder Klick an den Dokumentanfang — und mit `gutter: true` lag die
+# Spalte zusaetzlich um die Breite der Nummernspalte daneben.
+#
+# Gemeldet am Quelltextfeld von cosmos: „in das textboxfeld fuer pipeline
+# schaffe ich es nicht das label zu enden, der cursor macht gar nicht, was die
+# tastatur sagt" (2026-10-15).
+#
+# Geprueft wird das, was der Mensch tut: in eine BESTIMMTE Zeile klicken und
+# tippen — das Zeichen muss DORT landen, nicht am Anfang.
+#
+# Requires: display
+# Expected exit code: 0
+
+- prefab:
+    name: EditorScene
+    width: 520
+    height: 300
+    children:
+      - { name: code_input, type: text_input, font_size: 12, gutter: true,
+          x: 20, y: 20, width: 480, height: 200,
+          bg_color: 0x0D1218FF, border_color: 0x2D3642FF, border_width: 1.0,
+          color: 0xDDE6F0FF }
+
+- def:
+    name: main
+    static_off: ["str_cmp"]
+    return: i32
+    body:
+      - decl: [win, window_handle, { call: [engine.create_window, 520, 300, "editor"] }]
+      - if: { condition: { eq: [win, null] }, then: [{ print: ["FAIL create_window"] }, { return: 1 }] }
+      - call: [gl.init]
+      - call: [ui.init]
+      - call: [engine.prefab_scene_init, 520, 300]
+      - call: [input.init, win]
+      - decl: [font, ui_font, { call: [ui.load_font_default, 12.0] }]
+      - if: { condition: { neq: [font, null] }, then: [{ call: [engine.prefab_set_font, font] }] }
+
+      - decl: [scene, prefab_instance, { call: [engine.instantiate, "EditorScene"] }]
+      - call: [scene.set_pos, 0.0, 0.0]
+      # Vier klar unterscheidbare Zeilen.  Zeile 3 ist das Ziel.
+      - call: [scene.set_text, "code_input", "eins\nzwei\nDRITTE\nvier"]
+
+      - decl: [box_x, f32, { call: [scene.child_rect_x, "code_input"] }]
+      - decl: [box_y, f32, { call: [scene.child_rect_y, "code_input"] }]
+      - decl: [box_w, f32, { call: [scene.child_rect_w, "code_input"] }]
+      - if: { condition: { lt: [box_w, 1.0] }, then: [{ print: ["FAIL Widget nicht gefunden"] }, { return: 1 }] }
+
+      # Einen Rahmen zeichnen, damit die Cursor-Karte steht.
+      - call: [engine.swap, win]
+      - call: [engine.draw_scene]
+      - call: [engine.swap, win]
+
+      # Zwei Ziele, beide OHNE Kenntnis der Schriftmetrik:
+      #   A) ganz oben rechts  → Ende der ERSTEN Zeile
+      #   B) weit unten rechts → Ende der LETZTEN sichtbaren Zeile
+      # Vor dem Fix landete beides am Dokumentanfang (ein einziger Halt, Byte 0).
+      - decl: [aim_x, f32, { +: [box_x, { -: [box_w, 20.0] }] }]
+      - decl: [aim_y, f32, { +: [box_y, 8.0] }]
+
+      - call: [engine.swap, win]
+      - call: [input.post_mouse_move, aim_x, aim_y]
+      - call: [engine.update_hover, aim_x, aim_y]
+      - call: [engine.draw_scene]
+      - call: [engine.swap, win]
+      - call: [input.post_mouse_down, 0]
+      - call: [engine.update_hover, aim_x, aim_y]
+      - call: [engine.draw_scene]
+      - call: [engine.swap, win]
+      - call: [input.post_mouse_up, 0]
+      - call: [engine.update_hover, aim_x, aim_y]
+      - call: [engine.draw_scene]
+      - call: [engine.swap, win]
+      - call: [input.post_text, "X"]
+      - call: [engine.update_hover, aim_x, aim_y]
+      - call: [engine.draw_scene]
+      - call: [engine.swap, win]
+
+      - decl: [got_a, string, { call: [scene.text_value, "code_input"] }]
+      - decl: [want_a, string, "einsX\nzwei\nDRITTE\nvier"]
+      - if:
+          condition: { neq: [got_a, want_a] }
+          then:
+            - if:
+                condition: { gt: [{ call: [got_a.index_of, "Xeins"] }, -1] }
+                then: [{ print: ["FAIL Klick landete am DOKUMENTANFANG statt am Ende von Zeile 1"] }]
+                else: [{ print: ["FAIL A: '${got_a}' erwartet '${want_a}'"] }]
+            - call: [engine.destroy_window, win]
+            - return: 1
+
+      # B) weit unten: die letzte sichtbare Zeile
+      - decl: [low_y, f32, { +: [box_y, 150.0] }]
+      - call: [engine.swap, win]
+      - call: [input.post_mouse_move, aim_x, low_y]
+      - call: [engine.update_hover, aim_x, low_y]
+      - call: [engine.draw_scene]
+      - call: [engine.swap, win]
+      - call: [input.post_mouse_down, 0]
+      - call: [engine.update_hover, aim_x, low_y]
+      - call: [engine.draw_scene]
+      - call: [engine.swap, win]
+      - call: [input.post_mouse_up, 0]
+      - call: [engine.update_hover, aim_x, low_y]
+      - call: [engine.draw_scene]
+      - call: [engine.swap, win]
+      - call: [input.post_text, "Y"]
+      - call: [engine.update_hover, aim_x, low_y]
+      - call: [engine.draw_scene]
+      - call: [engine.swap, win]
+
+      - decl: [got_b, string, { call: [scene.text_value, "code_input"] }]
+      - decl: [want_b, string, "einsX\nzwei\nDRITTE\nvierY"]
+      - if:
+          condition: { eq: [got_b, want_b] }
+          then:
+            - print: ["PASS multiline_click: Klick trifft Zeile UND Spalte (auch mit Gutter)"]
+            - call: [engine.destroy_window, win]
+            - return: 0
+      - print: ["FAIL B: '${got_b}' erwartet '${want_b}'"]
+      - call: [engine.destroy_window, win]
+      - return: 1

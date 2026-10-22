@@ -179,6 +179,26 @@ bool FunctionBuilder::OnSequenceStart() {
         expectingKey = true;
         expectingValue = false;
         return true;
+    } else if (currentKey == "http") {
+        /* spec/66 §2 — `http: [verb, path]` on a service endpoint. */
+        builder->pushState(std::make_unique<StringListBuilder>(builder, &func->http));
+        expectingKey = true;
+        expectingValue = false;
+        return true;
+    } else if (currentKey == "roles") {
+        /* spec/66 §5.3 — an empty list is "authenticated, any role"; the ABSENCE
+         * of the key is an error for a service with auth, so record that it was
+         * written at all. */
+        func->hasRoles = true;
+        builder->pushState(std::make_unique<StringListBuilder>(builder, &func->roles));
+        expectingKey = true;
+        expectingValue = false;
+        return true;
+    } else if (currentKey == "cli") {
+        builder->pushState(std::make_unique<StringListBuilder>(builder, &func->cli));
+        expectingKey = true;
+        expectingValue = false;
+        return true;
     } else if (currentKey == "meta") {
         /* meta: [deprecated, ...] — free-form tags.  "deprecated" triggers a
          * compile-time warning at every call site. */

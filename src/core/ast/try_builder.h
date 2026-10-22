@@ -75,8 +75,13 @@ public:
             }
             return true;
         } else {
-            if (currentKey == "type") tryStmt->catchType = value;
-            else if (currentKey == "var") tryStmt->catchVar = value;
+            if (currentKey == "type") {
+                tryStmt->catches.push_back(CatchClause{});     // spec/22: ein Zweig je `type:`
+                tryStmt->catches.back().type = value;
+            } else if (currentKey == "var") {
+                if (tryStmt->catches.empty()) tryStmt->catches.push_back(CatchClause{});
+                tryStmt->catches.back().var = value;
+            }
             expectingKey = true;
             return true;
         }
@@ -86,12 +91,16 @@ public:
         if (auto b = dynamic_cast<BlockStmt*>(node.get())) {
             b = dynamic_cast<BlockStmt*>(node.release());
             if (currentKey == "body") {
-                if (!tryStmt->tryBlock) {
+                if (!inCatch && !tryStmt->tryBlock) {
                     LOG_DEBUG("TryBuilder: Received tryBlock with " + std::to_string(b->statements.size()) + " statements");
                     tryStmt->tryBlock = std::unique_ptr<BlockStmt>(b);
                 } else {
-                    LOG_DEBUG("TryBuilder: Received catchBlock with " + std::to_string(b->statements.size()) + " statements");
-                    tryStmt->catchBlock = std::unique_ptr<BlockStmt>(b);
+                    // Rumpf des zuletzt begonnenen catch-Zweigs (ein Zweig ohne `type:`
+                    // faengt alles).
+                    if (tryStmt->catches.empty()) tryStmt->catches.push_back(CatchClause{});
+                    if (tryStmt->catches.back().body)
+                        tryStmt->catches.push_back(CatchClause{});
+                    tryStmt->catches.back().body = std::unique_ptr<BlockStmt>(b);
                 }
             }
         }

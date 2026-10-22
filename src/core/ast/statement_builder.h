@@ -21,6 +21,7 @@ class StatementBuilder : public StateHandler {
     std::vector<std::pair<std::string, std::unique_ptr<Expr>>> idxParts;
     bool expectingValue = false;
     bool is_const = false;
+    bool is_singleton = false;   // spec/21 §6.2 F21-S1
     bool is_volatile = false;
     bool is_extern = false;
     std::string decl_lifetime = "scope";   // {lifetime: scope|persistent|consumed} (spec/61)

@@ -165,6 +165,9 @@ bool PrefabBuilder::OnScalar(const std::string& value, const std::string& tag) {
     else if (currentKey == "width")  prefabNode->width = strtof(value.c_str(), nullptr);
     else if (currentKey == "height") prefabNode->height = strtof(value.c_str(), nullptr);
     else if (currentKey == "texture") prefabNode->texture = value;
+    else if (currentKey == "input_transparent") {
+        prefabNode->inputTransparent = (value == "true" || value == "1");
+    }
     else if (currentKey == "draggable") {
         prefabNode->draggable = (value == "true" || value == "1");
     }

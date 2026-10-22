@@ -1,0 +1,28 @@
+# SPEC: 66_services §5.6 — a declared service nothing in the build touches is dead
+# code; the endpoints would never be reachable.  No import here on purpose: the
+# check needs a COMPLETE use-set, and a lone file has one (same gate as dead-prefab).
+# Expected exit code: 1
+- model:
+    name: OrphanReq
+    fields:
+      - [purl, string, ""]
+
+- model:
+    name: OrphanResp
+    fields:
+      - [spdx, string, ""]
+
+- service:
+    name: OrphanApi
+    base: "/v1"
+    transport: [rpc]
+    auth: none
+    endpoints:
+      - def: { name: resolve, http: [post, "/a"], roles: [], args: [[req, OrphanReq]], return: OrphanResp, body: [{ decl: [out, OrphanResp] }, { return: out }] }
+
+- def:
+    name: main
+    return: i32
+    body:
+      - print: ["nobody serves OrphanApi"]
+      - return: 0

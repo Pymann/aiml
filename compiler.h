@@ -105,6 +105,8 @@ public:
     // as declared-but-never-instantiated.
     std::set<std::string> allPrefabDecls;
     std::set<std::string> allPrefabUses;
+    std::map<std::string, std::string> allServiceDecls;  // spec/66 §5.6
+    std::set<std::string> allServiceUses;
     // Unused-enumerator analysis (spec/49): union across this module AND every
     // (transitive) import of declared enum members (qualified enum → members),
     // referenced members, and each enum's decl location.  Merged up through

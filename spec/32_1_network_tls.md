@@ -117,7 +117,7 @@ for virtual hosting on HTTPS servers.
 | `tls.close` | `(sock) → i32` | TLS shutdown + TCP close + free |
 | `tls.fd` | `(sock) → i32` | Raw file descriptor |
 | `tls.set_timeout` | `(sock, ms: i32) → i32` | 0=blocking; >0=timeout for connect/recv/send |
-| `tls.set_cert` | `(sock, cert: path, key: path) → i32` | Loads certificate + private key (PEM) |
+| `tls.set_cert` | `(sock, cert: path, key: path) → i32` | Loads certificate + private key (PEM). `cert` may hold the full chain (leaf first, then intermediates, e.g. Let's Encrypt `fullchain.pem`); the whole chain is sent to peers |
 | `tls.set_ca` | `(sock, ca: path) → i32` | Sets CA bundle (PEM) instead of system store |
 | `tls.set_verify` | `(sock, mode: string) → i32` | "peer" / "require" / "none" |
 

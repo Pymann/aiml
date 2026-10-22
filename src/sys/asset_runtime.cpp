@@ -126,6 +126,17 @@ extern "C" const char* aiml_asset_shader_path(const char* stem) {
         AIML::AssetKind::Shader, stem);
 }
 
+extern "C" const char* aiml_asset_mesh_path(const char* stem) {
+    if (!stem) return nullptr;
+    const char* path = AIML::AssetScanner::instance().lookup_abs_path(
+        AIML::AssetKind::Mesh, stem);
+    if (!path) {
+        LOG_ERROR(std::string("gltf.model: stem '") + stem + "' not in mesh store");
+        return nullptr;
+    }
+    return path;
+}
+
 extern "C" void aiml_asset_init_runtime(const char* roots) {
     if (!roots || !*roots) return;
     AIML::AssetScanner::instance().scan(roots);
@@ -140,6 +151,7 @@ extern "C" void aiml_asset_runtime_register(int32_t kind_int, const char* stem, 
         case 2: k = AIML::AssetKind::Shader;  break;
         case 3: k = AIML::AssetKind::Font;    break;
         case 4: k = AIML::AssetKind::Data;    break;
+        case 5: k = AIML::AssetKind::Mesh;    break;
         default: return;
     }
     AIML::AssetScanner::instance().register_runtime_entry(k, stem, path);

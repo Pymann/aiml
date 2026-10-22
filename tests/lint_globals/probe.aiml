@@ -1,0 +1,27 @@
+# SPEC: 21_namespaces
+# Probe fuer den Globals-Lint (spec/21 §6.2 Regel 5).
+# Enthaelt absichtlich alle drei Faelle.
+
+# 1. const Primitiv — DARF NICHT warnen (eine benannte Konstante ist kein Zustand).
+- decl: [MAX_TRIES, i32, 5, { const: true }]
+- decl: [GREETING, string, "hallo", { const: true }]
+
+# 2. schreibbares Primitiv — warnt (geteilter veraenderlicher Zustand).
+- decl: [g_counter, i32, 0]
+
+# 3. besitzendes Global — warnt mit Begruendung (Weitergabe verschiebt den Besitz).
+- model:
+    name: LintBox
+    fields:
+      - [value, i32]
+
+- decl: [g_box, ptr<LintBox>, null]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - set: [g_counter, { +: [g_counter, MAX_TRIES] }]
+      - set: [g_box, { new: LintBox }]
+      - call: [log.info, "${GREETING} ${g_counter}"]
+      - return: 0

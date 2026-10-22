@@ -1,0 +1,12 @@
+# SPEC: 64_closures
+# static-check: off
+# Requires: driver
+# NEGATIVE (spec/64 §2, §9): block<X>/closure<X> must name a visible `callable:` declaration.
+# EXPECT-ERROR: callable-unknown-signature
+- callable: { name: Each, args: [[v, i32]] }
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [c, closure<Nope>]                  # ← no `callable: { name: Nope … }` anywhere
+      - return: 0

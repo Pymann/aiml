@@ -35,9 +35,9 @@ void aiml_prefab_scene_init(int32_t screen_w, int32_t screen_h);
 
 /* Register a prefab definition from the compiler.
  * children_json: JSON array of child defs (parsed at compile-time). */
-void aiml_prefab_register(const char* name, float width, float height,
+void  aiml_prefab_register(const char* name, float width, float height,
                           const char* texture_path, int32_t draggable,
-                          const char* children_json);
+                          const char* children_json, int32_t input_transparent);
 
 /* ── Instantiation / destruction ──────────────────────────────────────── */
 
@@ -216,7 +216,16 @@ int32_t aiml_prefab_was_clicked(void* inst, int32_t btn);
 
 /* Update drag state. Call once per frame with mouse state.
  * btn_down = mouse button currently held; btn_released = released this frame. */
+void  aiml_prefab_set_input_transparent(void* inst, int32_t on);   /* spec/44_6 click-through */
+int32_t aiml_prefab_get_input_transparent(void* inst);
+void  aiml_prefab_set_input_blocking(void* inst, int32_t on);      /* spec/44_6 modal */
+int32_t aiml_prefab_get_input_blocking(void* inst);
+float aiml_prefab_text_width(const char* text);                    /* prefab font, incl. markup */
 void  aiml_prefab_update_drag(float mx, float my, int32_t btn_down, int32_t btn_released);
+/* spec/44_6: gesture-driven drag — picks at the press point after the movement
+ * threshold.  0 none, 1 candidate, 2 dragging, 3 dropped, 4 cancelled. */
+int32_t aiml_prefab_update_drag_gesture(float mx, float my);
+void* aiml_prefab_get_drag_source(void);
 /* Returns currently dragged instance, or NULL. */
 void* aiml_prefab_get_dragged(void);
 /* Cancel active drag: restore position to drag_origin and clear dragged state. */

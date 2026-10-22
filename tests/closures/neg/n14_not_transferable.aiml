@@ -1,0 +1,15 @@
+# SPEC: 64_closures
+# static-check: off
+# Requires: driver
+# NEGATIVE (spec/64 §8, §9): a closure is a process-local code pointer plus a heap
+# environment — it is not move-sendable across threads and not serialisable.
+# EXPECT-ERROR: callable-not-transferable
+- callable: { name: Read, return: i32 }
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [c, closure<Read>, { closure: { capture: [[n, i32, 1]], body: [ { return: n } ] } }]
+      - decl: [ch, chan<closure<Read>>]
+      - call: [ch.send, c]                         # ← must be rejected
+      - return: 0

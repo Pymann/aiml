@@ -181,3 +181,74 @@ on these primitive document operations.
 
 Implemented (`src/sys/yaml_runtime.cpp`); tests `tests/test_yaml_documents.aiml` and
 `tests/lifetime/163_yaml_doc_scope_release.aiml`.
+
+## `yaml.tokens` — error-tolerant lexing for highlighting
+
+Syntax highlighting cannot use `yaml.parse`: while text is being typed it is almost always
+invalid, so the parser yields no document at all — and that is precisely the state in which
+highlighting is most wanted.  A parser also discards **comments**, which have to be coloured.
+
+```
+yaml.tokens(text: string) → list<i32>      # 3 entries per token: start, len, kind
+```
+
+A flat `list<i32>` with triples rather than a list of models, because builtins return
+`list<i32>`/`list<f32>`/`list<string>` and nothing else — the same shape as
+`cascade.field_indices`.
+
+### Token kinds
+
+| `YamlTok` | Value | Covers |
+|---|---|---|
+| `text` | 0 | anything not classified below |
+| `comment` | 1 | `#` to end of line |
+| `key` | 2 | a scalar followed by `:` |
+| `string` | 3 | `'…'` and `"…"`, including an unterminated one |
+| `number` | 4 | integer and float scalars |
+| `keyword` | 5 | `true`, `false`, `null`, `~`, `yes`, `no`, `on`, `off` |
+| `punct` | 6 | `-`, `:`, `,`, `[`, `]`, `{`, `}`, `?` |
+| `anchor` | 7 | `&name`, `*name` |
+| `tag` | 8 | `!tag`, `!!tag` |
+| `directive` | 9 | `%YAML`, `%TAG`, and `---` / `...` |
+
+### Contract
+
+- **Never fails.**  There is no error return and no exception: every input produces tokens.  An
+  unterminated quote yields a `string` token to the end of the line and lexing continues on the
+  next — a half-typed line is the normal case, not an error case.
+- **Byte offsets**, matching the caret and selection offsets of `ui.text_area` and the prefab
+  text widgets.  A caller never has to convert between two counting schemes.
+- **Complete and non-overlapping.**  The triples cover the input in order; concatenating every
+  `[start, start+len)` reproduces the input exactly.  Whitespace belongs to the preceding token's
+  gap, not to a token, so a caller that colours only the spans leaves whitespace untouched.
+- **Line-local.**  No token spans a `\n`, so a caller can colour one visible line without
+  lexing the rest.
+- **No semantics.**  `key` means "scalar followed by `:`", not "valid mapping key"; indentation is
+  not interpreted.  Deciding what is structurally correct is the parser's job, and the parser is
+  exactly what is unavailable while typing.
+
+```yaml
+- decl: [toks, list<i32>, { call: [yaml.tokens, src] }]
+- decl: [idx, i32, 0]
+- while:
+    condition: { lt: [idx, toks.len] }
+    body:
+      - decl: [start, i32, { at: [toks, idx] }]
+      - decl: [tlen,  i32, { at: [toks, { +: [idx, 1] }] }]
+      - decl: [kind,  i32, { at: [toks, { +: [idx, 2] }] }]
+      - set: [idx, { +: [idx, 3] }]
+```
+
+## 10. Verfügbarkeit in WASM
+
+`yaml.tokens` ist in **beiden** Zielen verfügbar, der Rest des Namensraums nur **native**.
+
+Der Grund ist nicht Geschmack, sondern eine Abhängigkeit: Parsen, Zugriff und `dump` setzen
+yaml-cpp voraus, der Lexer nicht — er liest Bytes.  `yaml.tokens` liegt deshalb in einer eigenen
+Übersetzungseinheit (`src/sys/yaml_tokens_runtime.cpp`), die in der WASM-Laufzeit mitgebaut wird.
+
+Aufgefallen ist das daran, dass die cosmos-Oberfläche ihre Pipeline-Hervorhebung mit
+`yaml.tokens` macht und der WASM-Client mit `undefined symbol: aiml_yaml_tokens` nicht mehr
+linkte (gemessen 2026-10-12) — die Hervorhebung war nur native getestet.  Lehre: ein Builtin, das
+eine **Oberfläche** benutzt, braucht einen Link-Test im WASM-Ziel, nicht nur einen Lauf.
+

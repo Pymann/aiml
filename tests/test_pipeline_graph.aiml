@@ -1,0 +1,194 @@
+# SPEC: 62_pipelines
+# spec/62 §5.5 + §13.5g: `per: once`, `needs`, Riegel, Uebersprung, input_keys.
+#
+# Das ist der Teil, um den es im Kern geht: dasselbe `git clone` oder
+# `apt install` NICHT je Lane zu wiederholen.  `args: []` allein genuegt dafuer
+# nicht — ein Schritt ohne Achsen trifft nur den Cache, er wird trotzdem je
+# Lane besucht, und bei `opaque` laeuft er sogar jedes Mal.  `per: once` laeuft
+# EINMAL.
+#
+# Geprueft wird ausserdem die Kehrseite, die eine Pipeline erst verlaesslich
+# macht:
+#   * scheitert der gemeinsame Schritt, werden genau seine Abhaengigen
+#     UEBERSPRUNGEN, der Rest laeuft (F62-117)
+#   * aendert sich der Schluessel des Vorgaengers, laeuft der Nachfolger neu,
+#     obwohl seine EIGENEN Eingaben gleich sind (input_keys, F62-114)
+#   * `per: once` mit deklarierter Achse ist ein Fehler (F62-115)
+#   * `needs` auf einen unbekannten Schritt ist ein Fehler (F62-9)
+# Expected exit code: 0
+
+- decl: [g_head, string, "commit-aaa"]
+- decl: [g_once_runs, i32, 0]
+- decl: [g_lane_runs, i32, 0]
+
+- class:
+    name: StepFailed
+    members: [[message, string]]
+
+- def:
+    name: shared_body
+    return: i32
+    body: [{ return: 0 }]
+
+- def:
+    name: shared_bad
+    return: i32
+    body:
+      - throw: { new: StepFailed, message: "clone kaputt" }
+      - return: 0
+
+- def:
+    name: lane_body
+    return: i32
+    body: [{ return: 0 }]
+
+- def:
+    name: other_body
+    return: i32
+    body: [{ return: 0 }]
+
+# Sonde des gemeinsamen Schritts: macht seinen Schluessel beweglich.
+- def:
+    name: head_probe
+    return: { type: string, lifetime: producer }
+    body: [{ return: g_head }]
+
+- def:
+    name: expect
+    args: [[what, string], [cond, i32]]
+    return: i32
+    body:
+      - if:
+          condition: { eq: [cond, 1] }
+          then: [{ print: ["  ok   ${what}"] }, { return: 0 }]
+      - print: ["  FAIL ${what}"]
+      - return: 1
+
+- def:
+    name: count_steps
+    args: [[event, ref<StepRun>]]
+    static_off: ["str_cmp"]
+    body:
+      - if: { condition: { eq: [event.name, "shared"] }, then: [{ set: [g_once_runs, { +: [g_once_runs, 1] }] }] }
+      - if: { condition: { eq: [event.name, "perlane"] }, then: [{ set: [g_lane_runs, { +: [g_lane_runs, 1] }] }] }
+
+# graph_pipe: vier Lanes.  Ein gemeinsamer Schritt, ein Schritt der ihn
+# braucht, und ein dritter der ihn NICHT braucht.
+#   broken=1  -> der gemeinsame Schritt scheitert
+#   probed=1  -> er bekommt eine Sonde (beweglicher Schluessel)
+- def:
+    name: graph_pipe
+    args: [[broken, i32], [probed, i32], [linked, i32]]
+    return: pipeline
+    body:
+      - decl: [shared, step, { call: [step.new] }]
+      - call: [shared.set_name, "shared"]
+      - if:
+          condition: { eq: [broken, 1] }
+          then: [{ call: [shared.set_body, { call: [sys.bundle, "shared_bad", { context: true }] }] }]
+          else: [{ call: [shared.set_body, { call: [sys.bundle, "shared_body", { context: true }] }] }]
+      - call: [shared.set_per, Per.once]
+      - if:
+          condition: { eq: [probed, 1] }
+          then:
+            - call: [shared.set_cache, CacheClass.resolved]
+            - call: [shared.set_resolve, head_probe]
+          else: [{ call: [shared.set_cache, CacheClass.opaque] }]
+
+      - decl: [dependent, step, { call: [step.new] }]
+      - call: [dependent.set_name, "perlane"]
+      - call: [dependent.set_body, { call: [sys.bundle, "lane_body", { context: true }] }]
+      - call: [dependent.set_cache, CacheClass.pure]
+      - call: [dependent.use_arg, "arch"]
+      - if: { condition: { eq: [linked, 1] }, then: [{ call: [dependent.add_need, "shared"] }] }
+
+      - decl: [independent, step, { call: [step.new] }]
+      - call: [independent.set_name, "lonely"]
+      - call: [independent.set_body, { call: [sys.bundle, "other_body", { context: true }] }]
+      - call: [independent.set_cache, CacheClass.pure]
+      - call: [independent.use_arg, "arch"]
+
+      - decl: [stg, stage, { call: [stage.new] }]
+      - call: [stg.set_name, "only"]
+      - call: [stg.add_step, shared]
+      - call: [stg.add_step, dependent]
+      - call: [stg.add_step, independent]
+      - decl: [arch, list<string>]
+      - call: [arch.push, "x86_64"]
+      - call: [arch.push, "arm64"]
+      - decl: [mode, list<string>]
+      - call: [mode.push, "debug"]
+      - call: [mode.push, "release"]
+      - decl: [pipe, pipeline, { call: [pipeline.new] }]
+      - call: [pipe.set_name, "graph"]
+      - call: [pipe.add_param, "arch", arch]
+      - call: [pipe.add_param, "mode", mode]
+      - call: [pipe.add_stage, stg]
+      - return: pipe
+
+- def:
+    name: main
+    static_off: ["str_cmp"]
+    return: i32
+    body:
+      - decl: [fails, i32, 0]
+
+      # ── per: once laeuft EINMAL, die Lane-Schritte je Lane ──────────────
+      - set: [g_once_runs, 0]
+      - set: [g_lane_runs, 0]
+      - decl: [pipe, pipeline, { call: [graph_pipe, 0, 0, 1] }]
+      - set: [fails, { +: [fails, { call: [expect, "2x2 ergibt vier Lanes", { eq: [{ call: [pipe.lane_count] }, 4] }] }] }]
+      - decl: [rc_one, i32, { call: [pipe.run, count_steps] }]
+      - set: [fails, { +: [fails, { call: [expect, "der Lauf gelingt", { eq: [rc_one, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "der gemeinsame Schritt lief EINMAL", { eq: [g_once_runs, 1] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "der Lane-Schritt lief je Lane", { eq: [g_lane_runs, 4] }] }] }]
+      # 1 (once) + 4 (perlane) + 2 (lonely: nur arch deklariert -> 2 Schluessel)
+      - set: [fails, { +: [fails, { call: [expect, "nur arch deklariert -> zwei Ausfuehrungen geteilt", { eq: [{ call: [pipe.ran_count] }, 5] }] }] }]
+
+      # ── scheitert der gemeinsame Schritt: Abhaengige uebersprungen ──────
+      - set: [g_once_runs, 0]
+      - set: [g_lane_runs, 0]
+      - decl: [broke, pipeline, { call: [graph_pipe, 1, 0, 1] }]
+      - decl: [rc_bad, i32, { call: [broke.run, count_steps] }]
+      - set: [fails, { +: [fails, { call: [expect, "der Fehlschlag kommt an", { neq: [rc_bad, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "der gemeinsame Schritt wurde einmal versucht", { eq: [g_once_runs, 1] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "seine Abhaengigen starten NICHT", { eq: [g_lane_runs, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "der unabhaengige Schritt laeuft trotzdem", { eq: [{ call: [broke.ran_count] }, 2] }] }] }]
+
+      # ── input_keys als A/B: zweimal dieselbe Pipeline, einmal MIT und
+      # einmal OHNE `needs`.  Nur der Unterschied beweist etwas — eine Zahl
+      # allein koennte auch aus einem anderen Grund zustande kommen.
+      #
+      # Der gemeinsame Schritt ist 'resolved', seine Sonde liefert g_head.
+      # Aendert sie sich, laeuft er neu.  Die EIGENEN Eingaben des Nachfolgers
+      # (die Achse arch) bleiben dabei unveraendert.
+      - set: [g_head, "commit-aaa"]
+      - decl: [chain, pipeline, { call: [graph_pipe, 0, 1, 1] }]
+      - decl: [rc_c1, i32, { call: [chain.run] }]
+      - set: [fails, { +: [fails, { call: [expect, "erster Lauf der Kette gelingt", { eq: [rc_c1, 0] }] }] }]
+      - decl: [rc_c2, i32, { call: [chain.run] }]
+      - set: [fails, { +: [fails, { call: [expect, "zweiter Lauf trifft durchweg", { eq: [{ call: [chain.ran_count] }, 0] }] }] }]
+      - set: [g_head, "commit-bbb"]
+      - decl: [rc_c3, i32, { call: [chain.run] }]
+      # 1x der gemeinsame Schritt + 2x der Nachfolger: er deklariert NUR arch,
+      # teilt sein Ergebnis also ueber mode hinweg (§5.2) — vier Lanes, zwei
+      # Schluessel.
+      - set: [fails, { +: [fails, { call: [expect, "MIT needs: der Nachfolger laeuft neu", { eq: [{ call: [chain.ran_count] }, 3] }] }] }]
+
+      - set: [g_head, "commit-aaa"]
+      - decl: [loose, pipeline, { call: [graph_pipe, 0, 1, 0] }]
+      - decl: [rc_l1, i32, { call: [loose.run] }]
+      - decl: [rc_l2, i32, { call: [loose.run] }]
+      - set: [fails, { +: [fails, { call: [expect, "OHNE needs: zweiter Lauf trifft auch durchweg", { eq: [{ call: [loose.ran_count] }, 0] }] }] }]
+      - set: [g_head, "commit-ccc"]
+      - decl: [rc_l3, i32, { call: [loose.run] }]
+      # Nur der gemeinsame Schritt laeuft neu.  Der Nachfolger trifft, weil
+      # ohne `needs` der Schluessel seines Vorgaengers nicht in seinen eingeht.
+      - set: [fails, { +: [fails, { call: [expect, "OHNE needs: nur der Vorgaenger laeuft neu", { eq: [{ call: [loose.ran_count] }, 1] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "also ist genau `needs` der Unterschied", { gt: [{ call: [chain.ran_count] }, { call: [loose.ran_count] }] }] }] }]
+
+      - if:
+          condition: { neq: [fails, 0] }
+          then: [{ print: ["test_pipeline_graph FAIL (${fails})"] }, { return: 1 }]
+      - print: ["test_pipeline_graph PASS"]
+      - return: 0

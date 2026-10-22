@@ -2,11 +2,38 @@
 # Regression: sys.env must return the process environment as a populated
 # map<string:string>, not an empty stub.  (Was previously a no-op that
 # allocated an empty map — silently broke every env-var read.)
+#
+# BEIDE Schreibweisen werden geprueft.  spec/23 dokumentiert sys.env als
+# PROPERTY; genau die kompilierte bis 2026-10-21 zu einem NULLPOINTER, waehrend
+# nur die Call-Form getestet war — `set: [m, sys.env]` lief durch und der erste
+# Lesezugriff segfaultete (addr=(nil)).  Deshalb hier zuerst die Property-Form.
 
 - def:
     name: main
     return: i32
     body:
+      # 1) Property-Form (spec/23) — Nullpointer-Regression.
+      - decl: [prop_env, map<string:string>]
+      - set: [prop_env, sys.env]
+      - decl: [prop_count, i32, prop_env.len]
+      - if:
+          condition: { le: [prop_count, 0] }
+          then:
+            - print: ["FAIL: sys.env (Property-Form) leer (count=${prop_count})"]
+            - call: [sys.exit, 1]
+      - if:
+          condition: { neq: [{ call: [prop_env.contains, "PATH"] }, 1] }
+          then:
+            - print: ["FAIL: sys.env (Property-Form) ohne PATH"]
+            - call: [sys.exit, 1]
+      - decl: [prop_path, string, { call: [prop_env.get, "PATH"] }]
+      - if:
+          condition: { le: [prop_path.len, 0] }
+          then:
+            - print: ["FAIL: sys.env (Property-Form) PATH leer"]
+            - call: [sys.exit, 1]
+
+      # 2) Call-Form.
       - decl: [envm, map<string:string>, { call: [sys.env] }]
       - decl: [count, i32, envm.len]
       # An empty map means the builtin is back to its broken stub state.
@@ -28,5 +55,5 @@
           then:
             - print: ["FAIL: sys.env PATH value is empty"]
             - call: [sys.exit, 1]
-      - print: ["sys.env OK — ${count} vars, PATH resolved"]
+      - print: ["sys.env OK — Property ${prop_count} vars, Call ${count} vars, PATH beide aufgeloest"]
       - return: 0

@@ -16,7 +16,7 @@
 | AIML | Desktop | Browser (WASM) | Android |
 |------|---------|----------------|---------|
 | `engine.create_window` | `glfwCreateWindow` | Emscripten Canvas | GameActivity Window |
-| `engine.run` | `while (!glfwWindowShouldClose)` | `emscripten_set_main_loop` + Asyncify | Android main loop |
+| `engine.run` | `while (!glfwWindowShouldClose)` | manual Asyncify `while` + `emscripten_sleep(16)` — **not** `emscripten_set_main_loop` (§7.1) | Android main loop |
 | `engine.swap` | `glfwSwapBuffers` + `glfwPollEvents` | `emscripten_flush_main_loop` | `ANativeWindow_unlockAndPost` |
 | `engine.running` | `!glfwWindowShouldClose` | Asyncify state | `app->destroyRequested == 0` |
 | `engine.dt` | `glfwGetTime()` delta | `performance.now()` delta | `clock_gettime` delta |
@@ -92,7 +92,9 @@ Per frame internally:
 
 Platform behavior:
 - **Desktop**: blocking `while` loop until `glfwWindowShouldClose`
-- **Browser**: `emscripten_set_main_loop_arg` — returns control to the browser event loop; Asyncify enables identical AIML source
+- **Browser**: a manual `while` loop that calls the frame body and then yields with
+  `emscripten_sleep(16)` (one Asyncify unwind/rewind per frame). It deliberately does
+  **not** use `emscripten_set_main_loop[_arg]` — see §7.1 for the reason and the price.
 - **Android**: NDK event loop until `destroyRequested`
 
 ### 4.2 Manual Loop Style (Desktop + Android)
@@ -209,14 +211,58 @@ This code runs **unchanged** on desktop, browser, and Android:
 
 ### 7.1 Browser (WebAssembly)
 
-- `engine.run` internally uses `emscripten_set_main_loop_arg` — the browser event loop
-  keeps running, animations and JS events remain functional
+- `engine.run` drives the loop **itself**, with a manual Asyncify `while`:
+
+  ```c
+  while (!win->quit_requested) {
+      web_loop_tick(&ctx);     // dt + update + render + input snapshot
+      emscripten_sleep(16);    // the ONE Asyncify yield per frame
+  }
+  ```
+
+  It must **not** be "simplified" back to `emscripten_set_main_loop[_arg]`.
+  Mixing Emscripten's rAF-driven main-loop scheduler with `-sASYNCIFY` and
+  WebSocket traffic makes the render loop **silently die**: the frame body simply
+  stops being called — no exception, no abort, `Asyncify.state == 0`, while the
+  browser event loop keeps running. Reproduced by isolation: an empty frame loops
+  forever, a frame that issues a WS send and then returns to the rAF scheduler
+  dies, the same send followed by an `emscripten_sleep` survives. Full write-up
+  and the isolation table: [`doc/wasm_frame_loop.md`](../doc/wasm_frame_loop.md).
+  This is load-bearing, not an accident.
+- **The price, and it is not small.** The sleep is *additive*, so the frame period
+  is `work + 16 ms`, never `max(16 ms, work)`:
+
+  | work per frame | resulting fps |
+  |---|---|
+  | ~1 ms | ~58 |
+  | ~3 ms | ~52 |
+  | ~18 ms | ~29 |
+
+  So 16 ms of work yields 30 fps here where a rAF-driven loop would still yield
+  60, and **60 fps is unreachable by construction**. Presentation is not coupled
+  to the display refresh, so even a steady frame rate can judder against the
+  compositor. In a background tab `setTimeout` is throttled to ~1 Hz (rAF would
+  pause cleanly), so the session keeps being pumped slowly rather than stopping —
+  background timeout and reconnect behaviour are therefore undefined. Nested
+  `setTimeout` is clamped to ≥4 ms by browsers, which also applies to the 2 ms
+  poll ticks inside blocking calls such as `session.send_and_await`.
 - **Asyncify**: the WASM output is compiled with Asyncify transformation, so the
   manual `while:` style also works in the browser (transparent coroutine
   transformation by the Emscripten linker)
 - Window size = canvas size; `engine.screen_size()` = `window.innerWidth/Height`
-- VSync via `requestAnimationFrame` (always active, `engine.target_fps` ignored)
+- `engine.target_fps` is ignored; the cadence is the `emscripten_sleep(16)` above
 - Filesystem: virtual FS (Emscripten), assets must be packed beforehand
+
+> **Offen: der rAF-Pfad.** Der Zielzustand sind browsergesteuerte Frames
+> (`emscripten_set_main_loop_arg` oder `requestAnimationFrame` direkt) — damit
+> fällt der additive 16-ms-Posten weg und die Darstellung hängt am Bildschirmtakt.
+> Vorbedingung ist, dass **kein** suspendierender Aufruf mehr im Frame liegt:
+> `session.send_and_await`, `ws.recv`/`ws.poll`/`ws.connect` und der synchrone
+> Artwork-Pfad müssen vorher aus der Frameloop heraus (asynchrone Requests,
+> inkrementeller WS-Empfang, Asset-Aufträge mit Platzhalter). Erst danach ist der
+> Schleifenwechsel prüfbar; ein isolierter Austausch reproduziert den oben
+> beschriebenen Schleifen-Tod. Zwischenschritt ohne Vertragsänderung: nur das
+> **restliche** Framebudget schlafen (monotone Zeit) statt fester 16 ms.
 
 ### 7.2 Android
 
@@ -311,13 +357,77 @@ win->last_time = now;
 ### 9.3 Frame Limiter
 
 Desktop: after `render()` and `swap()`, sleep remaining time via `time.sleep_ms`.
-Browser: `requestAnimationFrame` already limits to display refresh rate.
+Browser: a fixed `emscripten_sleep(16)` **after** the frame body, so the period is
+`work + 16 ms` and `engine.target_fps` has no effect (§7.1).
 Android: `ALooper_pollAll` with timeout.
 
 ### 9.4 Asyncify (Browser)
 
-The AIML AOT compiler invokes the Emscripten linker with
-`-s ASYNCIFY -s ASYNCIFY_IMPORTS=[engine_swap_internal]` for browser targets.
-This allows `engine.swap` (which internally calls `emscripten_sleep(0)`) to
-"freeze" the WASM stack and yield to the browser event loop —
-without any changes to the AIML `while:` source code.
+Browser targets are linked with `-sASYNCIFY=1`, which lets any
+`emscripten_sleep` "freeze" the WASM stack and yield to the browser event loop —
+without any changes to the AIML `while:` source code. The yields live in
+`engine.run`'s own loop (§7.1), in `engine.swap`, and in the blocking `ws`/
+`mirror` calls.
+
+> **Ist-Zustand, nicht Zielzustand:** real gebaut wird mit **globalem**
+> `-sASYNCIFY=1` **ohne** `ASYNCIFY_ONLY`/`ASYNCIFY_ADD`-Liste (siehe
+> `9rooms_v2/exodus-client.json`). Asyncify instrumentiert damit jede Funktion,
+> die es nicht als „erreicht nie einen Sleep" beweisen kann — bei `-O0` ist der
+> Aufrufgraph maximal unpräzise, also praktisch alles. Das kostet Codegröße und
+> Laufzeit auf *allen* instrumentierten Funktionen, nicht nur auf den
+> suspendierenden. Eine ermittelte `ASYNCIFY_ONLY`-Liste (die suspendierenden
+> Pfade plus ihre Aufrufer) ist der offene Optimierungspunkt; JSPI (`-sJSPI`)
+> wäre die Variante, die die Instrumentierung ganz ersetzt.
+
+## Offen: `engine.run` trägt keinen Kontext — und erzwingt damit ein Global
+
+`engine.run` nimmt die Rückrufe als **nackte Funktionszeiger** mit fester Signatur:
+
+```cpp
+void aiml_engine_run(void* win_ptr, void* update_fn, void* render_fn);   // kein ctx
+```
+
+Der Update-Rückruf bekommt nur `dt` und hat keinen Platz für seinen Empfänger. Jede App, die
+in `update` an ihren eigenen Zustand will, braucht deshalb **ein Global** als Brücke — auch
+wenn sie sonst keinen einzigen hat.
+
+**Gemessen 2026-10-14 an zwei unabhängig gewachsenen Clients:**
+
+| Projekt | Globals im Client | davon erzwungen durch diesen Rückruf |
+|---|---|---|
+| 9rooms | 2 | 1 (`g_app`) |
+| cosmos | 27 → (Migration läuft) | 1 (`g_cosmos_app`) |
+
+Beide landen aus demselben Grund bei demselben einen Global. Das ist kein Projektfehler,
+sondern eine Lücke dieser Schnittstelle — und sie steht quer zu spec/21 §6.2 Regel 5, die
+modulweite Globals als Geruch meldet.
+
+**Vorgeschlagene Form** (additiv, die Drei-Argument-Fassung bleibt gültig):
+
+```cpp
+void aiml_engine_run(void* win_ptr, void* update_fn, void* render_fn, void* ctx);
+//  update_fn wird (f32 dt, void* ctx)
+```
+
+```yaml
+- def:
+    name: on_frame
+    args: [[dtf, f32], [app, ref<MyApp>]]     # Empfänger reist mit
+    body: [{ call: [app.frame] }]
+
+- def:
+    name: main
+    body:
+      - decl: [app, ptr<MyApp>, { new: MyApp }]      # lokal in main, kein Global
+      - call: [engine.run, app.win, on_frame, on_render, app]
+```
+
+Der WASM-Pfad hat das Gegenstück bereits: `emscripten_set_main_loop_arg` statt
+`emscripten_set_main_loop`. Zu ändern wären die Signatur, der native Schleifen-Pfad, der
+WASM-Pfad und die Builtin-Deklaration; heutige Aufrufer (je einer in cosmos und 9rooms)
+bleiben gültig.
+
+**Entscheid 2026-10-14 (User):** jetzt **nicht** umsetzen — der cosmos-Client wird zuerst nach
+dem 9rooms-Muster aufgebaut (Kompositionswurzel). Dieses TODO bleibt der Weg, das letzte
+Global danach ersatzlos zu streichen.
+

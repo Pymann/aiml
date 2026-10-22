@@ -1,0 +1,14 @@
+listener bereit
+1) empfangen: 130 Bytes
+[INFO]  [/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/exec_impl.cpp:334] aiml_isolated_exec: compiled source (171 bytes)
+   remote_task laeuft beim Empfaenger
+[INFO]  [/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/exec_impl.cpp:366] aiml_isolated_exec: finished with rc=0
+1) sys.exec rc=0
+2) Bibliothek: 122 Bytes
+2) Pipeline:   368 Bytes
+[INFO]  [/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/exec_impl.cpp:334] aiml_isolated_exec: compiled source (562 bytes)
+   lib_greet aus der Bibliothek
+   run_pipeline rief lib_greet, bekam 7
+[INFO]  [/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/exec_impl.cpp:366] aiml_isolated_exec: finished with rc=0
+2) sys.exec rc=0
+listener PASS

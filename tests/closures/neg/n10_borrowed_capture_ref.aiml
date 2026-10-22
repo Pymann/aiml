@@ -1,0 +1,21 @@
+# SPEC: 64_closures
+# static-check: off
+# Requires: driver
+# NEGATIVE (spec/64 §4.3, §9): capturing a ref<T> would let a borrow escape its frame.
+# EXPECT-ERROR: closure-borrowed-capture
+- model: { name: Node, fields: [[ident, i32, 0]] }
+- callable: { name: Read, return: i32 }
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [node, Node]
+      - decl: [view, ref<Node>, { ref: node }]
+      - decl:
+          - bad
+          - closure<Read>
+          - closure:
+              capture: [view]                     # ← a weak/borrow handle may not be captured
+              body:
+                - return: view.ident
+      - return: 0

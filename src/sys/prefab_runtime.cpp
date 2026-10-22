@@ -56,6 +56,15 @@ static Material* material_find(const char* name);
 static void      register_material_def(const char* name, const char* shader_path,
                                        const char* uniforms_json);
 extern "C" int32_t aiml_input_mouse_released(int32_t btn);
+extern "C" int32_t aiml_input_mouse_cancelled(int32_t btn);
+extern "C" int32_t aiml_input_drag_started  (int32_t btn);
+extern "C" int32_t aiml_input_drag_ended    (int32_t btn);
+extern "C" int32_t aiml_input_drag_cancelled(int32_t btn);
+extern "C" float   aiml_input_drag_origin_x (int32_t btn);
+extern "C" float   aiml_input_drag_start_x  (int32_t btn);
+extern "C" float   aiml_input_drag_start_y  (int32_t btn);
+extern "C" float   aiml_input_drag_origin_y (int32_t btn);
+extern "C" int32_t aiml_input_mouse_button  (int32_t btn);
 extern "C" int32_t aiml_input_mouse_button(int32_t btn);
 extern "C" int32_t aiml_input_has_event(void);
 extern "C" void*   aiml_input_next_event(void);
@@ -253,6 +262,7 @@ struct PrefabDef {
     float width, height;
     std::string texture_path;
     bool draggable;
+    bool input_transparent = false;   /* spec/44_6: gilt fuer jede Instanz */
     /* Phase 6: which Model/cascade type this prefab is bound to.  Runtime
      * uses it to route per-child `bind:` lookups to the right Model instance
      * held by this prefab-instance.                                          */
@@ -420,6 +430,10 @@ struct PrefabChild {
     bool        scrollable = false;  /* container: engine-managed row window + visible scrollbar (track+thumb, wheel+drag) */
     bool        tail = false;         /* textbox: stick to bottom as content grows (chat) */
     int32_t     tb_prev_max = -1;     /* textbox: last max scroll offset (for tail-follow detection) */
+    /* text_input: mehrzeilig?  Entschieden wird das beim ZEICHNEN (Hoehe gegen
+     * Zeilenhoehe, spec/44_6 §5g) — der Eingabe-Pass liest dasselbe Ergebnis,
+     * statt die Entscheidung ein zweites Mal zu treffen. */
+    bool        ti_multiline = false;
     int32_t     tb_total = 0;         /* textbox render cache: wrapped line count (read by input) */
     int32_t     tb_visible = 0;       /* textbox render cache: visible line count (read by input) */
     /* textbox selection (read-only text, spec/44_6 §5f).  Caret stops are
@@ -481,6 +495,19 @@ struct AimlPrefabInstance {
     float alpha;
     bool visible;
     bool draggable;
+    /* spec/44_6: true = von hit_test/update_hover UEBERSPRUNGEN.  Trennt
+     * "wird gezeichnet" von "nimmt Eingabe": eine dekorative Flaeche (grosse
+     * Vorschau, Banner, Rahmen) macht sonst alles darunter unerreichbar, weil
+     * hit_test die oberste SICHTBARE Instanz liefert und `hovered` nur dieses
+     * eine Ergebnis bekommt. */
+    bool input_transparent = false;
+    /* spec/44_6: true = diese Instanz BLOCKIERT Eingabe fuer alles mit
+     * kleinerem z.  Das Gegenstueck zu input_transparent: hit_test arbitriert
+     * schon ueber z, der Widget-Durchlauf aber NICHT — er laeuft bewusst ueber
+     * alle Instanzen, damit eine transparente Platte ihre Widgets durchlaesst.
+     * Folge war, dass ein Vollbild-Overlay den Hover korrekt sperrte, die
+     * Buttons darunter aber weiter klickbar blieben. */
+    bool input_blocking = false;
     GLuint base_texture;
     std::vector<PrefabChild> children;
     std::unordered_map<std::string, int> child_index;
@@ -572,6 +599,7 @@ struct PrefabScene {
     std::vector<AimlPrefabInstance*> instances;
     std::vector<AimlConnector*>      connectors;   /* cables between instances */
     AimlPrefabInstance* dragged;
+    AimlPrefabInstance* drag_source = nullptr;  /* who this gesture picked up (survives the drop frame) */
     AimlPrefabInstance* hovered;
     /* Global keyboard-focus target for text_input children (one at a time). */
     AimlPrefabInstance* focused_input_inst = nullptr;
@@ -2693,6 +2721,7 @@ static void render_instance(AimlPrefabInstance* inst) {
                      * caret-follow scroll); otherwise SINGLE-LINE (horizontal
                      * caret-follow scroll).  Both clip to the inner box. */
                     bool multiline = ch_h >= 1.8f * line_h;
+                    ch.ti_multiline = multiline;   /* vom Eingabe-Pass gelesen */
 
                     GLboolean prev_sc = glIsEnabled(GL_SCISSOR_TEST);
                     GLint prev_box[4] = {0,0,0,0};
@@ -3574,6 +3603,7 @@ struct PendingPrefab {
     std::string texture_path;
     int32_t draggable;
     std::string children_json;
+    int32_t input_transparent;
 };
 static std::vector<PendingPrefab> g_pending_prefabs;
 
@@ -3586,7 +3616,7 @@ static std::vector<PendingMaterial> g_pending_materials;
 
 static void register_prefab_def(const char* name, float width, float height,
                                 const char* texture_path, int32_t draggable,
-                                const char* children_json);
+                                const char* children_json, int32_t input_transparent);
 
 /* Resize: nur screen-Dims + Projection updaten, ohne g_scene zu erzeugen.
  * design_w/h bleibt von der initialen aiml_prefab_scene_init.  Wird vom
@@ -3626,7 +3656,7 @@ void aiml_prefab_scene_init(int32_t screen_w, int32_t screen_h) {
     for (auto& p : g_pending_prefabs) {
         register_prefab_def(p.name.c_str(), p.width, p.height,
                             p.texture_path.c_str(), p.draggable,
-                            p.children_json.c_str());
+                            p.children_json.c_str(), p.input_transparent);
     }
     g_pending_prefabs.clear();
 
@@ -3640,7 +3670,7 @@ void aiml_prefab_scene_init(int32_t screen_w, int32_t screen_h) {
 
 static void register_prefab_def(const char* name, float width, float height,
                                 const char* texture_path, int32_t draggable,
-                                const char* children_json)
+                                const char* children_json, int32_t input_transparent)
 {
     PrefabDef* def = new PrefabDef();
     def->name = name ? name : "";
@@ -3648,6 +3678,7 @@ static void register_prefab_def(const char* name, float width, float height,
     def->height = height;
     def->texture_path = texture_path ? texture_path : "";
     def->draggable = (draggable != 0);
+    def->input_transparent = (input_transparent != 0);
     def->children = parse_children_json(children_json);
 
     g_scene->defs[def->name] = def;
@@ -3657,18 +3688,19 @@ static void register_prefab_def(const char* name, float width, float height,
 
 void aiml_prefab_register(const char* name, float width, float height,
                           const char* texture_path, int32_t draggable,
-                          const char* children_json)
+                          const char* children_json, int32_t input_transparent)
 {
     if (!g_scene) {
         g_pending_prefabs.push_back({
             name ? name : "", width, height,
             texture_path ? texture_path : "", draggable,
-            children_json ? children_json : ""
+            children_json ? children_json : "", input_transparent
         });
         return;
     }
 
-    register_prefab_def(name, width, height, texture_path, draggable, children_json);
+    register_prefab_def(name, width, height, texture_path, draggable,
+                        children_json, input_transparent);
 }
 
 void* aiml_prefab_instantiate(const char* prefab_name) {
@@ -3692,6 +3724,7 @@ void* aiml_prefab_instantiate(const char* prefab_name) {
     inst->alpha = 1.0f;
     inst->visible = true;
     inst->draggable = def->draggable;
+    inst->input_transparent = def->input_transparent;
     inst->is_dragging = false;
     inst->drag_offset_x = 0;
     inst->drag_offset_y = 0;
@@ -3822,16 +3855,28 @@ void* aiml_prefab_instantiate(const char* prefab_name) {
     return inst;
 }
 
-void aiml_prefab_destroy(void* p) {
-    AimlPrefabInstance* inst = (AimlPrefabInstance*)p;
+/* Jede Szenen-weite Referenz auf eine sterbende Instanz fallen lassen.  Muss
+ * von JEDEM Pfad gerufen werden, der eine Instanz freigibt — `destroy` tat das
+ * schon, der end-of-frame-Sweep fuer `pending_delete` nicht, und dort dangelte
+ * vor allem `focused_input_inst`: der ist KLEBEND (bleibt bis zum naechsten
+ * Klick woanders), also schrieb jeder weitere Tastendruck in freigegebenen
+ * Speicher. */
+static void scene_forget_instance(AimlPrefabInstance* inst) {
     if (!inst || !g_scene) return;
-
     if (g_scene->dragged == inst) g_scene->dragged = nullptr;
+    if (g_scene->drag_source == inst) g_scene->drag_source = nullptr;
     if (g_scene->hovered == inst) g_scene->hovered = nullptr;
     if (g_scene->focused_input_inst == inst) {
         g_scene->focused_input_inst = nullptr;
         g_scene->focused_input_child_idx = -1;
     }
+}
+
+void aiml_prefab_destroy(void* p) {
+    AimlPrefabInstance* inst = (AimlPrefabInstance*)p;
+    if (!inst || !g_scene) return;
+
+    scene_forget_instance(inst);
 
     /* Detach from parent, then take dynamically-spawned children (bind_list rows /
      * spawn_child) DOWN with this instance.  They must not be left as orphans:
@@ -3931,6 +3976,18 @@ float aiml_prefab_get_alpha(void* p) {
 }
 void aiml_prefab_set_draggable(void* p, int32_t d) {
     auto* inst = (AimlPrefabInstance*)p; if (inst) inst->draggable = (d != 0);
+}
+void aiml_prefab_set_input_transparent(void* p, int32_t t) {
+    auto* inst = (AimlPrefabInstance*)p; if (inst) inst->input_transparent = (t != 0);
+}
+void aiml_prefab_set_input_blocking(void* p, int32_t t) {
+    auto* inst = (AimlPrefabInstance*)p; if (inst) inst->input_blocking = (t != 0);
+}
+int32_t aiml_prefab_get_input_blocking(void* p) {
+    auto* inst = (AimlPrefabInstance*)p; return inst ? (inst->input_blocking ? 1 : 0) : 0;
+}
+int32_t aiml_prefab_get_input_transparent(void* p) {
+    auto* inst = (AimlPrefabInstance*)p; return inst ? (inst->input_transparent ? 1 : 0) : 0;
 }
 
 // ────────────────────────────────────────────────────────────────────────
@@ -5309,6 +5366,7 @@ void aiml_prefab_draw_scene(void) {
             }
             auto& all = g_scene->instances;
             all.erase(std::remove(all.begin(), all.end(), dead), all.end());
+            scene_forget_instance(dead);
             delete dead;
         }
     }
@@ -5469,10 +5527,16 @@ static void render_dropdown_popups(void) {
 void* aiml_prefab_hit_test(float mx, float my) {
     if (!g_scene) return nullptr;
 
-    /* Iterate in reverse z_order (topmost first) */
+    /* Iterate the instance list backwards.  That is topmost-first ONLY because
+     * prefab_draw_scene z-sorts this very list as a side effect — set_z does not
+     * sort.  So a z change takes effect for hit-testing one frame late, and an
+     * instance created after the last draw sits at the list end, i.e. on top,
+     * whatever its z.  Specified in spec/44_6 (§Treffer-Reihenfolge). */
     for (int i = (int)g_scene->instances.size() - 1; i >= 0; i--) {
         auto* inst = g_scene->instances[i];
         if (!inst->visible) continue;
+        if (inst->input_transparent) continue;   /* spec/44_6: click-through */
+        if (inst->pending_delete) continue;      /* stirbt am Frame-Ende: nimmt keine Eingabe mehr */
         if (inst->parent) continue;  /* nested children: not hit-tested (local coords) */
 
         float ax, ay;
@@ -5492,6 +5556,46 @@ void* aiml_prefab_hit_test(float mx, float my) {
 /* ── Hover tracking ──────────────────────────────────────────────────────── */
 
 static int32_t s_mouse_btn_pressed[3] = {0, 0, 0};
+
+/* Die z-Stufe, die fuer die Arbitrierung zaehlt: die der obersten
+ * Eltern-Instanz.  Genestete Instanzen (bind_list-Zeilen, spawn_child) haben
+ * ein bedeutungsloses eigenes z_order — sie werden MIT dem Elternteil
+ * gezeichnet.  Ohne das haette die modale Schwelle die Zeilen eines modalen
+ * Dialogs ausgesperrt: Zeile z=0 < Dialog z=460, also waere die Kartenauswahl
+ * im eigenen Overlay nicht mehr bedienbar gewesen. */
+static int32_t effective_z(const AimlPrefabInstance* inst) {
+    int guard = 0;
+    while (inst && inst->parent && ++guard < 64) inst = inst->parent;
+    return inst ? inst->z_order : 0;
+}
+
+/* spec/44_6 "Modal": z der OBERSTEN sichtbaren input_blocking-Instanz, deren
+ * Flaeche (mx,my) enthaelt.  `found` sagt, ob es ueberhaupt eine gibt.
+ *
+ * Der Widget-Durchlauf arbitriert bewusst nicht ueber z — er muss alle
+ * Instanzen sehen, damit eine transparente Platte ihre eigenen Widgets
+ * durchlaesst.  Genau dadurch blieb unter einem Vollbild-Overlay alles
+ * klickbar.  Diese Funktion liefert die Schwelle, unter der Widgets
+ * uebersprungen werden. */
+static int32_t modal_block_z(float mx, float my, bool& found) {
+    found = false;
+    int32_t top = 0;
+    if (!g_scene) return 0;
+    for (auto* inst : g_scene->instances) {
+        if (!inst || !inst->visible || inst->pending_delete) continue;
+        if (!inst->input_blocking) continue;
+        if (inst->parent) continue;   /* genestet: eigene lokale Koordinaten */
+        float ax, ay;
+        get_actual_pos(inst, ax, ay);
+        float sx = inst->scale_x, sy = inst->scale_y;
+        { float rsx, rsy; get_rel_scale(rsx, rsy); sx *= rsx; sy *= rsy; }
+        float w = inst->def->width * sx;
+        float h = inst->def->height * sy;
+        if (mx < ax || mx > ax + w || my < ay || my > ay + h) continue;
+        if (!found || inst->z_order > top) { top = inst->z_order; found = true; }  /* top-level: z_order == effective_z */
+    }
+    return top;
+}
 
 /* Compute a child's screen-space bbox (post-scale, post-instance-position). */
 static void child_screen_bbox(AimlPrefabInstance* inst, const PrefabChild& ch,
@@ -5682,8 +5786,20 @@ static void apply_text_events_to_focus() {
                     ch.sel_anchor = ch.cursor_pos; changed = true;
                 }
             } else if (strcmp(key, "Enter") == 0) {
-                if (!ch.on_change_fn.empty())
+                /* Ein mehrzeiliges Feld ist ein EDITOR: die Eingabetaste macht
+                 * dort eine neue Zeile.  Bis 2026-10-18 tat sie nichts dergleichen
+                 * — ein Code-Feld, in dem man keine Zeile anfangen kann, obwohl
+                 * spec/44_6 §5g mehrzeiliges Bearbeiten zusagt.  Im einzeiligen
+                 * Feld bleibt sie das Abschicken. */
+                if (ch.ti_multiline) {
+                    if (has_sel()) del_sel();
+                    ch.text.insert((size_t)ch.cursor_pos, "\n");
+                    ch.cursor_pos += 1;
+                    ch.sel_anchor = ch.cursor_pos;
+                    changed = true;
+                } else if (!ch.on_change_fn.empty()) {
                     prefab_invoke_callback(ch.on_change_fn, inst);
+                }
             } else if (strcmp(key, "Escape") == 0) {
                 ch.focused = false;
                 g_scene->focused_input_inst = nullptr;
@@ -5728,6 +5844,10 @@ void aiml_prefab_update_hover(float mx, float my) {
      * a transparent panel must still let widgets through their own bbox. */
     int32_t mb_pressed  = aiml_input_mouse_pressed(0);
     int32_t mb_released = aiml_input_mouse_released(0);
+    /* spec/44_6 "Modal": liegt eine blockierende Instanz unter dem Cursor,
+     * bekommen Widgets mit kleinerem z keine Eingabe. */
+    bool    modal_found = false;
+    int32_t modal_z     = modal_block_z(mx, my, modal_found);
     /* spec/44_6: a click = press + release inside the widget rect, independent of the instance —
      * a rebuild between press and release (board reload) must not swallow it. */
     static bool  s_press_valid = false;
@@ -5751,6 +5871,8 @@ void aiml_prefab_update_hover(float mx, float my) {
         for (size_t ii = 0; ii < g_scene->instances.size(); ii++) {
             auto* inst = g_scene->instances[ii];
             if (!inst || !inst->visible) continue;
+            if (inst->input_transparent) continue;   /* spec/44_6: click-through */
+            if (modal_found && effective_z(inst) < modal_z) continue;  /* spec/44_6: modal */
             for (auto& ch : inst->children) {
                 if (!ch.visible) continue;
                 float bx, by, bw, bh;
@@ -5830,6 +5952,15 @@ void aiml_prefab_update_hover(float mx, float my) {
 
     for (auto* inst : g_scene->instances) {
         if (!inst->visible) continue;
+        /* spec/44_6: wer am Frame-Ende stirbt, nimmt keine Eingabe mehr — hier
+         * besonders wichtig, weil sonst eine Waise in ihrem einen Frame noch
+         * den Tastatur-Fokus greifen kann, und der KLEBT bis zum naechsten
+         * Klick woanders. */
+        if (inst->pending_delete) continue;
+        /* spec/44_6 "Modal": unter einer blockierenden Instanz nimmt nichts
+         * mehr Eingabe — sonst ist ein Overlay nur optisch modal und ein Klick
+         * loest zusaetzlich aus, was darunter liegt. */
+        if (modal_found && effective_z(inst) < modal_z) continue;
         for (size_t i = 0; i < inst->children.size(); i++) {
             PrefabChild& ch = inst->children[i];
             if (!ch.visible) continue;
@@ -6743,8 +6874,133 @@ void aiml_prefab_set_checked(void* inst, const char* child_name, int32_t checked
 
 /* ── Drag-and-drop ───────────────────────────────────────────────────────── */
 
+/* Pick the topmost draggable instance containing (px,py) and begin dragging it.
+ * drag_offset is stored in WORLD pixels relative to the PICK point, drag_origin
+ * stays local for snap-back.  Shared by update_drag (picks at the cursor) and
+ * update_drag_gesture (picks at the press point). */
+static bool prefab_drag_pick_at(float px, float py) {
+    /* spec/44_6 "Modal": unter einer blockierenden Instanz beginnt kein Zug.
+     * Ohne das hiesse "blockiert Eingabe darunter" nur "blockiert Klicks" —
+     * die Auswahl hier ueberspringt Nicht-Draggbares und griffe munter durch
+     * einen Dialog hindurch nach der Karte darunter. */
+    bool mod_found = false;
+    int32_t mod_z = modal_block_z(px, py, mod_found);
+    for (int i = (int)g_scene->instances.size() - 1; i >= 0; i--) {
+        auto* inst = g_scene->instances[i];
+        if (!inst->visible || !inst->draggable) continue;
+        if (inst->pending_delete) continue;
+        if (mod_found && effective_z(inst) < mod_z) continue;
+        float ax, ay, w, h;
+        inst_bounds(inst, ax, ay, w, h);
+        if (px >= ax && px <= ax + w && py >= ay && py <= ay + h) {
+            inst->is_dragging = true;
+            inst->drag_offset_x = px - ax;
+            inst->drag_offset_y = py - ay;
+            inst->drag_origin_x = inst->x;
+            inst->drag_origin_y = inst->y;
+            g_scene->dragged = inst;
+            g_scene->drag_source = inst;
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Keep the dragged item under the cursor.  See the long note in update_drag for
+ * the coordinate-space conversions. */
+static void prefab_drag_follow(float mx, float my) {
+    auto* d = g_scene->dragged;
+    if (!d || !d->is_dragging) return;
+    float tgt_wx = mx - d->drag_offset_x;
+    float tgt_wy = my - d->drag_offset_y;
+    if (d->is_relative && g_scene->screen_w > 0 && g_scene->screen_h > 0) {
+        d->x = tgt_wx / g_scene->screen_w;
+        d->y = tgt_wy / g_scene->screen_h;
+    } else if (d->parent) {
+        float pwx, pwy, psx, psy;
+        inst_world_transform(d->parent, pwx, pwy, psx, psy);
+        if (psx <= 0.0f) psx = 1.0f;
+        if (psy <= 0.0f) psy = 1.0f;
+        d->x = (tgt_wx - pwx) / psx + d->parent->scroll_x;
+        d->y = (tgt_wy - pwy) / psy + d->parent->scroll_y;
+    } else {
+        float rsx, rsy; get_rel_scale(rsx, rsy);
+        if (rsx <= 0.0f) rsx = 1.0f;
+        if (rsy <= 0.0f) rsy = 1.0f;
+        d->x = tgt_wx / rsx;
+        d->y = tgt_wy / rsy;
+    }
+}
+
+/* End the gesture: snap the item back to where it was picked up (a drag is a
+ * GESTURE; the drop handler repositions it if it wants to) and clear state. */
+static void prefab_drag_release(void) {
+    if (!g_scene->dragged) return;
+    g_scene->dragged->x = g_scene->dragged->drag_origin_x;
+    g_scene->dragged->y = g_scene->dragged->drag_origin_y;
+    g_scene->dragged->is_dragging = false;
+    g_scene->dragged = nullptr;
+}
+
+/* spec/44_6: gesture-driven drag.  Picks at the PRESS POINT once the movement
+ * threshold is crossed (input.drag_started), instead of at this frame's cursor
+ * the moment the button is found down — so a moving cursor cannot shift the
+ * pick to a different card, and a tap never becomes a drag.
+ * 0 none, 1 candidate, 2 dragging, 3 dropped this frame, 4 cancelled this frame. */
+int32_t aiml_prefab_update_drag_gesture(float mx, float my) {
+    if (!g_scene) return 0;
+
+    if (aiml_input_mouse_cancelled(0) || aiml_input_drag_cancelled(0)) {
+        prefab_drag_release();
+        return 4;
+    }
+    if (aiml_input_drag_started(0) && !g_scene->dragged)
+        /* GELATCHTER Startpunkt, nicht der lebende Druckpunkt: `drag_origin_*`
+         * wird von jedem neuen Druck sofort ueberschrieben, die started-Kante
+         * aber erst im naechsten Frame gemeldet.  Bei "Druecken A -> ziehen ->
+         * loslassen -> Druecken B" in einer Frame-Luecke griff die Aufnahme
+         * sonst an B (spec/44_0 §2.3). */
+        prefab_drag_pick_at(aiml_input_drag_start_x(0), aiml_input_drag_start_y(0));
+
+    prefab_drag_follow(mx, my);
+
+    if (aiml_input_drag_ended(0)) {
+        if (g_scene->dragged) { prefab_drag_release(); return 3; }
+        return 0;
+    }
+    if (g_scene->dragged) return 2;
+    if (aiml_input_mouse_button(0)) return 1;
+    return 0;
+}
+
+/* spec/44_6: Breite von `text` in der Prefab-Schrift, inklusive der
+ * Inline-Marken-Regeln ({icon:…} zaehlt ascent_px).  Macht
+ * Zentrierung, Umbruch UND die Marken pruefbar — ohne das ist "die Marke wird
+ * konsumiert statt gezeichnet" von aussen nicht beobachtbar. */
+float aiml_prefab_text_width(const char* text) {
+    if (!g_scene || !g_scene->font || !text) return 0.0f;
+    return text_width_font(g_scene->font, text);
+}
+
+void* aiml_prefab_get_drag_source(void) {
+    return g_scene ? g_scene->drag_source : nullptr;
+}
+
 void aiml_prefab_update_drag(float mx, float my, int32_t btn_down, int32_t btn_released) {
     if (!g_scene) return;
+
+    /* spec/44_0 §2.2 + spec/44_6: an ABORTED press (touchcancel, second finger,
+     * focus loss) ends the drag without a drop.  It must not look like a release:
+     * callers detect a drop as "was dragging, now not", so a release here would
+     * commit whatever the drop handler does — in a game, a move nobody made.
+     * Checked before the start block so the same frame cannot re-grab. */
+    if (aiml_input_mouse_cancelled(0) && g_scene->dragged) {
+        g_scene->dragged->x = g_scene->dragged->drag_origin_x;
+        g_scene->dragged->y = g_scene->dragged->drag_origin_y;
+        g_scene->dragged->is_dragging = false;
+        g_scene->dragged = nullptr;
+        return;
+    }
 
     if (btn_down && !g_scene->dragged) {
         /* Start drag: find topmost draggable instance under cursor.
@@ -6767,6 +7023,7 @@ void aiml_prefab_update_drag(float mx, float my, int32_t btn_down, int32_t btn_r
                 inst->drag_origin_x = inst->x;
                 inst->drag_origin_y = inst->y;
                 g_scene->dragged = inst;
+                g_scene->drag_source = inst;
                 break;
             }
         }

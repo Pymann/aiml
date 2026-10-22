@@ -343,6 +343,11 @@ rest_client_handle    ← + base URL + auto JSON headers + relative paths
       - set: [resp.body, body]
       - call: [resp.send]
 
+`req.method`, `req.path` und `req.body` sind immer `string`.  Fehlt der Teil in der
+Anfrage — und eine Anfrage ohne `Content-Length`, also jedes GET, hat keinen Rumpf —, ist
+das Ergebnis der **leere** String, nie ein Nullzeiger.  Bis 18.10.2026 gab `req.body` dort
+null zurueck, und ein korrektes `- set: [body, req.body]` im GET-Handler starb mit SIGSEGV.
+
 - decl: [srv, http_server_handle]
 - set: [srv, { call: [http.server, "0.0.0.0", 8080] }]
 
@@ -753,10 +758,15 @@ protocol error and are **not** dispatched to any handler.
 | Malformed / negative `Content-Length` | — | `400 Bad Request` |
 | `Content-Length` over cap | 8 MiB | `413 Payload Too Large` |
 | Slow/stalled request read (slowloris) | `set_timeout`, default **15 s** | `408 Request Timeout` |
+| Stalled TLS handshake (`http.server_tls`) | `set_timeout`, default **15 s** | connection closed |
 
 - The read timeout is both a per-`recv` socket timeout **and** a total request-read
   deadline, so byte-at-a-time drip-feeding cannot hold a connection open indefinitely.
   Tune it with `srv.set_timeout(secs)` (e.g. `1` in tests, `15`–`30` in production).
+- The accept loop never reads from a client. On `http.server_tls` the TLS handshake runs
+  in the connection's handler thread with the same timeout as a **total** handshake
+  deadline, so a client that connects and sends nothing (or drip-feeds its handshake)
+  cannot block other connections or hold a connection slot beyond the timeout.
 - A validated `Content-Length` is required before the body buffer is allocated — an
   attacker cannot make the server allocate an arbitrary amount of memory.
 
@@ -783,7 +793,8 @@ Opt-in because e.g. `X-Frame-Options: DENY` breaks legitimate framing and HSTS i
 ```
 
 See `tests/test_http_hardening.aiml` (413/400/431/408), `tests/test_http_traversal.aiml`
-(path traversal), `tests/test_http_secure_headers.aiml` (headers on 200 + errors).
+(path traversal), `tests/test_http_secure_headers.aiml` (headers on 200 + errors),
+`tests/test_http_tls_handshake_stall.aiml` (silent client does not block HTTPS).
 
 ## 3.11 Mutual TLS — `srv.require_client_cert`
 
@@ -914,7 +925,7 @@ ignores XFF + `const_time_eq`).
 ```
 
 `http.server_tls` combines `tls.*` internally for the transport with the same
-HTTP/1.1 parser as `http.server`.
+HTTP/1.1 parser as `http.server`. `cert` may hold the full chain (leaf first, then intermediates, e.g. Let's Encrypt `fullchain.pem`); the whole chain is sent to clients, so clients that do not cache intermediates can verify it.
 
 **Secure TLS defaults:** the `SSL_CTX` enforces a **minimum of TLS 1.2** (TLS 1.3 is
 negotiated automatically when the client supports it); SSLv2/SSLv3/TLS 1.0/TLS 1.1 and

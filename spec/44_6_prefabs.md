@@ -15,11 +15,28 @@
     height: 280
     texture: "assets/frame.png"
     draggable: true
+    input_transparent: false      # Standard; true = Instanzen nehmen keine Eingabe
     children:
       - { name: title, type: label, pos_x: 100, pos_y: 250, anchor: center, font_size: 11, color: 0xFFFFFF }
       - { name: art,   type: sprite, pos_x: 15, pos_y: 100, width: 170, height: 120 }
       - { name: bg,    type: rect, pos_x: 0, pos_y: 0, width: 200, height: 280, color: 0x1A1A2E }
 ```
+
+**Prefab-Schlüssel.**
+
+| Schlüssel | Wirkung |
+|---|---|
+| `name` | Registrierungsname für `engine.instantiate` |
+| `width` / `height` | Maße in Design-Koordinaten |
+| `texture` | optionale Grundtextur |
+| `draggable` | `true` = ganze Instanz ziehbar |
+| `input_transparent` | `true` = **jede** Instanz dieses Prefabs nimmt keine Eingabe (§Durchklickbar) |
+
+`input_transparent` am Prefab ist der Ort für Dekoration: Schadenszahlen,
+Blitze, Rahmen, Banner. Setzt man es stattdessen pro `engine.instantiate`, ist
+es eine Zeile, die man beim nächsten Effekt vergisst — und dann stiehlt die
+Dekoration wieder den Hover. Die Instanzmethode `set_input_transparent` bleibt
+und überschreibt den Prefab-Wert für diese eine Instanz (in beide Richtungen).
 
 > **Position keys.** Children accept either **`x`/`y`** (legacy short form) or
 > **`pos_x`/`pos_y`** (recommended). Both are aliased by the parser. New code
@@ -37,14 +54,14 @@
 | `label` | Text line (requires `font_size`, `color`; optional `anchor`, `valign`, `label`). Supports `\n` for multi-line; combine with `valign: top` to align the text block to the top of the box (default centers a single line vertically). |
 | `rect` | Rectangle. Solid color (`color`), rounded with border (`bg_color` + `corner_radius` + `border_color`/`border_width`), or textured (`texture`). |
 | `button` | Interactive clickable widget. Hover/active states; callback on click. |
-| `text_input` | Editable single-line text field. Keyboard focus, a movable cursor, text **selection** (mouse drag, Shift+arrows, Ctrl+A) and **clipboard** (Ctrl+C / Ctrl+V / Ctrl+X); UTF-8-aware. `secret` mode. Text longer than the field **scrolls horizontally** so the caret stays visible, and is clipped to the field's inner box (no wrapping — the field is always one line regardless of its `height`). See §5e. |
+| `text_input` | Editable text field, **single-line or multi-line** (see below). Keyboard focus, a movable cursor, text **selection** (mouse drag, Shift+arrows, Ctrl+A) and **clipboard** (Ctrl+C / Ctrl+V / Ctrl+X); UTF-8-aware. `secret` mode. A field shorter than ~1.8 line heights is single-line and **scrolls horizontally** so the caret stays visible; a taller field is **multi-line** — it wraps at the inner width and scrolls vertically with the caret. Both clip to the inner box. With `gutter: true` it shows line numbers, and `set_color_runs` colours parts of the content (§5e, §5g). |
 | `checkbox` | Toggleable box + label. State stored on the child; click flips. Use `width × height` to size the surrounding region; the box itself is `min(width, height)` square on the left, label fills the remaining width. When neither `border_color` nor `border_width` is set, the box falls back to a subtle default outline (so an unstyled checkbox is always visible); set them explicitly to override. |
 | `radio` | Exclusive choice within a named `group`. Round toggle + label; visually identical layout to `checkbox` but rendered as a circle. Clicking sets THIS child checked and unchecks every other `radio` with the same `group` string across the entire scene. Use the same `is_checked` / `set_checked` API as checkbox for programmatic read/write. |
 | `dropdown` | Single-choice selector. Options come from a pipe-separated `options:` string ("A\|B\|C") **or** from an `enum: TypeName` binding (labels auto-derived from the enum members). Click opens a popup list; selection is stored as an index. Read the label with `dropdown_value`, the index with `dropdown_index`, and — for an `enum:`-bound dropdown — the true enum member value with `dropdown_enum` (see §5b). |
 | `bar` | Progress/gauge. A rounded track (`bg_color` + `border_*` + `corner_radius`) with a fill (`fill_color`) sized `value/max` of the width. Update at runtime via `set_bar_value` / `set_bar_max` / `set_bar_fill`. |
 | `slider` | Interactive horizontal slider. Same track + fill as `bar`, with a drag-handle knob centered on the value-position. Mouse press inside the track grabs the handle; while held, cursor-x maps linearly to a value in `[min, max]`. Fires `on_change` whenever the value changes. Reads via `get_slider_value(child)`, writes via `set_slider_value`/`set_slider_min`/`set_slider_max`. The handle uses `fill_color` (or white if absent) with `hover_color`/`active_color` tints. |
 | `container` | Dynamic list spawner. Bound to a `list<T>` on the instance's model via `bind_list:`; spawns one instance of `spawn: <Prefab>` per element and keeps the count synced with `.len`. `layout:` (`vflow`/`hflow`) + `gap:` control placement; `compact:` re-packs only visible rows; `scrollable:` gives it a **native scrollbar** (mouse wheel + draggable thumb, engine-windowed). See §5c. |
-| `textbox` | Multi-line, scrollable, read-only text area (chat logs, event logs). Wraps on width and on `\n`/`\|`; native scrollbar (mouse wheel + draggable thumb). `tail: true` sticks the view to the bottom as content grows. Set the whole text at once with `set_text`. See §5f. |
+| `textbox` | Multi-line, scrollable, read-only text area (chat logs, event logs). Wraps on width and on `\n`/`\|`; native scrollbar (mouse wheel + draggable thumb). Text can be **selected with the mouse and copied** (`Ctrl+A`/`Ctrl+C`), but not edited. `tail: true` sticks the view to the bottom as content grows. Set the whole text at once with `set_text`. See §5f. |
 
 ### Child Style Fields
 
@@ -65,6 +82,7 @@ All UI-widget children (`rect`, `button`, `text_input`) accept the following sty
 | `anchor` | `"left"` \| `"center"` \| `"right"` | `"left"` | (label) horizontal alignment of the text inside the box. |
 | `valign` | `"top"` \| `"center"` \| `"bottom"` | `"center"` (when `height>0`) | (label) vertical alignment. Default centers a single-line label inside its `height` box. Use `"top"` for multi-line text blocks (e.g. tooltip bodies) — without it, a 3-line string is centered around the first line's vertical center, pushing the block downward. `"bottom"` aligns the block flush to the bottom edge. |
 | `secret` | bool | `false` | (text_input) Render chars as `*` (password mode). |
+| `visible` | bool | `true` | Start state. `false` instantiates the child hidden, to be revealed with `set_visible`. Declaring it beats instantiating visible and hiding it in the first frame, which shows one frame of the wrong thing. |
 | `scrollable` | bool | `false` | (container) Engine-managed row window + native scrollbar (see §5c). |
 | `tail` | bool | `false` | (textbox) Keep the view pinned to the bottom (newest line) as content grows; releases while the user scrolls up, re-follows once back at the bottom (see §5f). |
 | `on_click` | function name | `""` | (button, checkbox, radio) Callback fired when the widget is clicked. |
@@ -75,6 +93,23 @@ All UI-widget children (`rect`, `button`, `text_input`) accept the following sty
 | `min` | float | `0.0` | (slider) Lower bound. `bar` always treats `0` as the lower bound and ignores this field. |
 | `max` | float | `1.0` | (bar / slider) Upper bound. For `bar`: fill width = `value/max`. For `slider`: handle position = `(value - min) / (max - min)`. |
 | `fill_color` | `0xRRGGBBAA` | `0` | (bar / slider) Colour of the filled portion of the track. For `slider` it also colours the handle (modulated by `hover_color` / `active_color`). |
+
+**An unknown child attribute is a compile error.** The attribute names above are
+the complete set; anything else is rejected at build time, naming the child, its
+type and the offending key. A silently dropped key is the worst of both worlds —
+the declaration reads as if the property were set, and nothing says otherwise.
+Masking is the case that proves it: `secret` is the only key that masks a
+`text_input`, and a plausible-looking `password: true` left an SSH and a sudo
+password readable on screen in the cosmos client (2026-10-13), because the key
+was accepted by YAML and then thrown away. The same rule catches a typo in an
+attribute name exactly as a typo in an asset stem is caught.
+
+> This cuts both ways: a key documented here must actually reach the runtime.
+> `min`, `scrollable` and `tail` were in this table while the **declarative**
+> path dropped them (only the runtime's JSON loader read them), so a prefab
+> declaring `tail: true` silently did nothing. Any key added to this table needs
+> the parser, the emitted descriptor and the runtime together — a table entry is
+> not an implementation.
 
 ### Example: Login Panel
 
@@ -122,6 +157,7 @@ Opaque handle (`i8*`) to a live prefab instance.
 | `engine.prefab_scene_init(w: i32, h: i32)` | Initialize the scene (shader, quad VAO, projection). Call after GL context + `ui.init()`. |
 | `engine.prefab_set_font(font: ui_font)` | Set font for label children. |
 | `engine.instantiate(name: string) -> prefab_instance` | Create a new instance of a registered prefab. |
+| `engine.destroy(inst: prefab_instance)` | Remove the instance from the scene and free it. Genestete Kinder werden **nicht** sofort frei, sondern zum Löschen markiert und beim nächsten `draw_scene` aufgeräumt — siehe „Sterbende Instanzen nehmen keine Eingabe". |
 | `engine.draw_scene()` | Render all visible instances in Z-order. Call after `gl.clear_all()`, before `engine.swap()`. |
 
 ---
@@ -163,6 +199,8 @@ Opaque handle (`i8*`) to a live prefab instance.
 | `.child_clicked(child)` | `(string) -> i32` | (button) `1` if button was clicked this frame, else `0` |
 | `.child_contains(child, sx, sy)` | `(string, f32, f32) -> i32` | `1` if the SCREEN point `(sx,sy)` is inside the child's bounds. Works for ANY child type (incl. non-interactive `rect`s), unlike `child_clicked` which only tracks widgets. Handles window scaling. Used for drop-target hit tests. |
 | `.child_focused(child)` | `(string) -> i32` | (text_input) `1` if input has keyboard focus, else `0` |
+| `.child_rect_x(child)` / `.child_rect_y(child)` | `(string) -> f32` | Top-left of the child's hit rect in SCREEN coordinates, window scaling applied — the inverse of `child_contains`, which only tests a point you already have. `-1` if the child does not exist. |
+| `.child_rect_w(child)` / `.child_rect_h(child)` | `(string) -> f32` | Width / height of the hit rect in screen coordinates. `-1` if the child does not exist. |
 | `.is_checked(child)` | `(string) -> i32` | (checkbox) `1` if box is currently checked, else `0` |
 | `.set_checked(child, v)` | `(string, i32) -> void` | (checkbox) Programmatically set state (no callbacks fired) |
 | `.set_bar_value(child, value)` | `(string, f32) -> void` | (bar) Set current value. |
@@ -183,7 +221,36 @@ A click (button, checkbox, radio, dropdown) is a press **and** release of mouse 
 the widget's hit rect. It survives the widget being destroyed and re-created between press and
 release (e.g. a screen rebuild): the new instance at the same rect receives the click.
 
----
+Four scalar getters rather than one rect type, matching `.get_x()`/`.get_y()`: a caller that wants
+the centre computes `x + w/2`, and one that wants a point *inside* a wide widget (a slider at 25 %)
+computes that just as directly.
+
+### Hit trace — `engine.prefab_trace_hits(on)` / `engine.prefab_last_hit()`
+
+| Call | Description |
+|------|-------------|
+| `engine.prefab_trace_hits(on)` | Off by default. When on, every mouse press writes the resolved target(s) to the log at **info** level — enabling the trace *is* the intent to see it, so it does not additionally depend on the log threshold. |
+| `engine.prefab_last_hit()` | The targets the last press resolved to, `"\|"`-separated. `""` = the press hit nothing; `"?"` = not collected because tracing is off. Collection runs only while tracing is on, so it costs an app that never enables it nothing; `"?"` keeps an assertion on "hit nothing" from passing for the wrong reason in that state. |
+
+```
+[prefab] hit ClickScene[0]/ok_btn at (200.0,120.0) kind=3
+[prefab] miss at (8.0,8.0)
+```
+
+The address is `<prefab-def>[<instance-index>]/<child>`. The def name alone would be ambiguous with
+several instances of the same prefab, so the scene index is part of it.
+
+**It reports every widget whose rect contains the press point, not one winner.** The widget pass
+deliberately does not gate on which instance owns the cursor (a transparent panel must let widgets
+through), so overlapping widgets can *both* fire. The trace shows that instead of hiding it — the
+`"|"`-separated list is the honest answer, and two entries where one was expected is itself the
+finding. Dropdown popups are the exception: an open popup absorbs clicks, so only it is hit.
+
+This is what makes an automated UI test meaningful. A test that only asserts on the end state cannot
+distinguish "the button did nothing" from "the click never reached the button" — three pixels off, a
+widget on top, or a rebuild between press and release all look alike. `prefab_last_hit` separates
+them, and `""` (miss) is an assertable outcome rather than a silent pass.
+`/spec/44_9_ui_testing.md` §4 builds `expect_hit` on it.
 
 ## 5b. Enum-Bound Dropdowns
 
@@ -465,6 +532,38 @@ accepts the usual style fields (`font_size`, `color`, optional `bg_color` +
 # on each poll: hand the full log to the box; windowing + tail are automatic
 - call: [<.scene.set_text, "chat_log", { call: [join_pipe, clog.lines] }]
 ```
+
+**Selection & copy** (read-only — the text can be marked and copied, never typed into)
+
+- Clicking the box **focuses** it and places the cursor; **dragging** selects a
+  range across wrapped lines; dragging past the top/bottom edge scrolls along.
+  A click on the scrollbar still scrolls instead of selecting.
+- `Ctrl+A` marks everything, `Shift`+`←/→/Home/End` extends, plain arrows
+  collapse the selection.
+- `Ctrl+C` copies the selection — or, with **nothing** marked, the **whole**
+  text (for a log box that is practically always what was meant). It copies the
+  **source** text verbatim, including the `\n` line breaks, not the wrapped
+  rendering.  The system clipboard is used (spec/44_0 §2.5), so in the browser
+  the copy needs a secure context; `input.init` must have run.
+- `Escape` drops the focus.
+- Because the widget is read-only there is no `Ctrl+V`/`Ctrl+X`, no typing, and
+  no caret is drawn.
+
+**Programmatic selection** — works for `textbox` and `text_input`:
+
+| Method | Signature | Description |
+|---|---|---|
+| `select_all` | `scene.select_all(child)` | Marks the whole content and gives the widget focus, so a following `Ctrl+C` copies it. |
+| `selection` | `scene.selection(child) -> string` | The marked text, `""` when nothing is marked. |
+
+```yaml
+# "Kopieren"-Button: Auswahl (oder alles) in die Zwischenablage
+- call: [<.scene.select_all, "token_box"]
+- call: [input.clipboard_set, { call: [<.scene.selection, "token_box"] }]
+```
+
+An unknown child name throws, like every other widget method (§find_child is
+deliberately loud — it is almost always a typo).
 
 ---
 
@@ -878,6 +977,134 @@ direction to the partner instance.
 
 Hit-test iterates in reverse Z-order (top-to-bottom).
 
+#### Durchklickbar: `set_input_transparent`
+
+| Instance Method | Signature | Description |
+|-----------------|-----------|-------------|
+| `.set_input_transparent(on)` | `(i32) -> void` | `1` = diese Instanz wird von `engine.hit_test` und `engine.update_hover` **übersprungen**; Eingabe trifft, was darunter liegt. `0` (Standard) = bisheriges Verhalten. |
+| `.get_input_transparent()` | `-> i32` | aktueller Wert |
+
+Bis hierher gab es nur zwei Eigenschaften, `visible` und `draggable`, und daraus
+folgte eine Lücke: **eine rein dekorative Instanz kann Eingabe stehlen.**
+`hit_test` liefert die oberste *sichtbare* Instanz, ohne zu fragen, ob sie
+überhaupt bedient werden will — und `update_hover` setzt `hovered` nur auf
+dieses eine Ergebnis. Eine große Vorschau, ein Banner oder ein Rahmen über einer
+Karte macht die Karte damit unerreichbar: sie wird nie `is_hovered`, also
+greifen `was_clicked`, Zielauswahl und jede hover-getriebene Logik darunter
+nicht mehr. Sichtbarkeit abzuschalten ist kein Ersatz — dann ist die Vorschau
+auch weg.
+
+`set_input_transparent(1)` trennt „wird gezeichnet" von „nimmt Eingabe": die
+Instanz bleibt sichtbar und zeichnet normal, wird aber beim Treffer-Test
+übersprungen.
+
+```yaml
+- call: [preview.set_input_transparent, 1]   # Vorschau zeigt, blockiert aber nicht
+```
+
+Gilt für `hit_test` und `update_hover`. Der Drag-Start (`update_drag`,
+`update_drag_gesture`) prüft ohnehin nur `draggable`, ist also nicht betroffen.
+
+#### Modal: `set_input_blocking`
+
+| Instance Method | Signature | Description |
+|-----------------|-----------|-------------|
+| `.set_input_blocking(on)` | `(i32) -> void` | `1` = diese Instanz **blockiert** Eingabe für alles mit kleinerem `z`, solange der Cursor in ihrer Fläche liegt. `0` (Standard) = bisheriges Verhalten. |
+| `.get_input_blocking()` | `-> i32` | aktueller Wert |
+
+Das ist das Gegenstück zu `set_input_transparent` und schließt die umgekehrte
+Lücke. `hit_test` arbitriert schon über `z`, der **Widget**-Durchlauf aber
+nicht: der läuft bewusst über *alle* Instanzen, damit eine transparente Platte
+ihre eigenen Widgets durchlässt. Folge war, dass ein Vollbild-Overlay den Hover
+korrekt sperrte, **die Buttons darunter aber weiter klickbar blieben** — ein
+Klick in den Dialog löste zusätzlich aus, was darunter lag.
+
+```yaml
+- call: [leave_confirm.set_input_blocking, 1]   # echter Modal-Dialog
+```
+
+Normativ:
+
+- Maßgeblich ist die **oberste sichtbare** blockierende Instanz, deren Fläche
+  den Cursor enthält. Widgets von Instanzen mit kleinerem `z` erhalten weder
+  Klick noch Tastatur-Fokus.
+- Die blockierende Instanz selbst und alles mit **gleichem oder größerem** `z`
+  bleibt bedienbar — ein Dialog kann also eigene Buttons haben, und ein noch
+  höheres Overlay sperrt wiederum ihn.
+- Blockiert wird nur **innerhalb der Fläche** der Instanz. Ein Vollbild-Dim
+  sperrt damit alles, ein kleines Panel nur, was es verdeckt.
+- Unsichtbare, durchklickbare und zum Löschen markierte Instanzen blockieren
+  nicht.
+- Auch der **Drag-Start** ist gesperrt: `update_drag` / `update_drag_gesture`
+  nehmen unter einer blockierenden Instanz nichts auf. Sonst hieße „blockiert
+  Eingabe darunter" nur „blockiert Klicks", und die Auswahl — die
+  Nicht-Draggbares überspringt — griffe durch den Dialog hindurch nach der
+  Karte darunter.
+
+Canonical: `tests/test_prefab_input_blocking.aiml`.
+
+#### Sterbende Instanzen nehmen keine Eingabe
+
+Eine Instanz wird nicht immer sofort freigegeben. `destroy` gibt die Instanz
+selbst frei, markiert ihre genesteten Kinder aber nur zum Löschen und löst deren
+Elternbindung — sie werden erst im Aufräumschritt am Ende des nächsten
+`draw_scene` freigegeben. Dasselbe gilt für Zeilen, die eine `bind_list` beim
+Schrumpfen oder Umschalten aufgibt.
+
+Daraus folgt normativ:
+
+- Eine zum Löschen markierte Instanz nimmt **keine Eingabe** mehr: `hit_test`
+  überspringt sie (sie wird also nicht `hovered`, `was_clicked` wird nicht wahr,
+  und `engine.get_hovered` nennt sie nicht), **und** ihre Widget-Kinder nehmen
+  weder Klicks noch den Tastatur-Fokus an. Der Fokus ist der wichtigere Teil:
+  er **klebt** bis zum nächsten Klick woanders, überlebt also die Freigabe.
+- Beim Freigeben verliert die Szene **jede** Referenz auf die Instanz:
+  `hovered`, die gezogene Instanz, die Drag-Quelle und der Tastatur-Fokus.
+
+Beides ist nötig, weil ein Kind der zweiten Ebene genau **einen Frame** als
+Waise überlebt: elternlos, also top-level, und sichtbar. Ohne die erste Regel
+konnte diese Waise den Hover an sich nehmen, obwohl sie schon tot ist — und sie
+zeichnet in diesem Zustand an rohen lokalen Koordinaten, taucht also irgendwo am
+Fensterursprung auf. Ohne die zweite Regel zeigte der Hover- bzw. Fokuszeiger
+danach auf freigegebenen Speicher; beim Fokus ist das besonders heikel, weil er
+**klebt**, bis woanders geklickt wird.
+
+Canonical: `tests/test_prefab_doomed_no_hover.aiml`.
+
+Das Modell hat damit drei der vier unabhängigen Eigenschaften: **nimmt selbst
+Eingabe** (`input_transparent`), **blockiert Eingabe darunter**
+(`input_blocking`, siehe unten) und **ist ziehbar** (`draggable`).
+
+> **Offen (vierte Eigenschaft):** „akzeptiert diesen Drop-Typ" fehlt weiter —
+> welche Ablage auf welcher Fläche erlaubt ist, entscheidet der Anwendungscode
+> im Drop-Handler, nicht die Engine.
+
+#### Treffer-Reihenfolge: wann `set_z` wirkt
+
+Die Z-Reihenfolge, nach der `hit_test` (und der Drag-Start in
+`engine.update_drag`) die Instanzen durchläuft, wird **von `engine.draw_scene`
+hergestellt** — dort wird die Instanzliste als Seiteneffekt stabil nach
+`z_order` sortiert. `.set_z(z)` schreibt nur das Feld und sortiert **nicht**.
+Daraus folgt für den aktuellen Stand:
+
+- Ein `set_z` wirkt für Treffer- und Drag-Prüfung erst **nach dem nächsten
+  `draw_scene`**, also einen Frame später. Wer im selben Frame eine Karte
+  hochzieht (`set_z`) und dann `hit_test` ruft, bekommt die **alte** Ordnung.
+- Eine Instanz, die nach dem letzten `draw_scene` erzeugt wurde, hängt am
+  **Listenende** und ist damit für den Rückwärtslauf *oberste* Instanz —
+  unabhängig von ihrem `z`. Wer eine Szene neu aufbaut und im selben Frame
+  Treffer prüft, prüft gegen die Erzeugungsreihenfolge, nicht gegen `z`.
+- Bei **gleichem** `z` entscheidet die Einfügereihenfolge (`stable_sort`), also
+  die Reihenfolge der `engine.instantiate`-Aufrufe. Flächen, die als Drop-Ziel
+  dienen und sich überlappen können, brauchen deshalb **ausdrücklich
+  verschiedene** `z`-Werte; sich auf die Erzeugungsreihenfolge zu verlassen ist
+  nicht zugesichert.
+
+> **Offen:** Eine Dirty-Markierung bei `set_z` (und beim Erzeugen), die
+> `hit_test`/`update_drag` bei Bedarf selbst sortieren lässt, würde alle drei
+> Punkte beseitigen und `set_z` sofort wirksam machen. Bis dahin gilt der Stand
+> oben.
+
 ### Hover Tracking
 
 | Call | Description |
@@ -923,6 +1150,89 @@ as it sets the hover state and mouse button snapshot for the current frame.
 | `engine.get_dragged() -> prefab_instance` | Currently dragged instance (or `null`) |
 
 Only instances with `draggable = true` and `visible = 1` are considered for dragging.
+
+#### Abbruch: `update_drag` beendet den Drag ohne Drop
+
+`update_drag` wertet zusätzlich die **Cancel-Flanke** aus
+(`input.mouse_cancelled(0)`, spec/44_0 §2.2 — abgebrochener Touch, zweiter
+Finger, Fokusverlust). Ein Cancel
+
+- setzt die gezogene Instanz auf ihren Ursprung zurück (wie `cancel_drag`),
+- räumt `engine.get_dragged()` auf **null**,
+- erzeugt **keinen** Release-Übergang.
+
+Damit greift das verbreitete Drop-Muster von selbst richtig: wer den Drop am
+Übergang „vorher gezogen, jetzt nicht mehr" erkennt, muss zusätzlich fragen, ob
+die Geste *vollendet* wurde:
+
+```yaml
+- decl: [pre, prefab_instance, { call: [engine.get_dragged] }]
+- call: [engine.update_drag, mx, my, btn, rel]
+- decl: [post, prefab_instance, { call: [engine.get_dragged] }]
+# Drop NUR bei echtem Release — ein Cancel darf keinen Spielzug auslösen.
+- if:
+    condition: { '&&': [{ neq: [pre, null] }, { '&&': [{ peq: [post, null] }, { eq: [{ call: [input.mouse_cancelled, 0] }, 0] }] }] }
+    then: [{ call: [handle_drop, pre] }]
+```
+
+Ohne diese Zusatzbedingung ist ein Abbruch von einem Loslassen nicht zu
+unterscheiden und löst die Drop-Aktion aus — in einem Spiel ein Zug, den
+niemand gemacht hat. Die `input.drag_cancelled(btn)`-Abfrage (spec/44_0 §2.4)
+ist das Gegenstück auf der Eingabeschicht.
+
+#### `engine.update_drag_gesture` — Aufnehmen am Druckpunkt
+
+| Call | Return | Description |
+|------|--------|-------------|
+| `engine.update_drag_gesture(mx, my)` | `i32` | Gestenzustand dieses Frames (Tabelle unten). Alternative zu `update_drag`, die die Gestenmaschine aus spec/44_0 §2.4 benutzt. |
+| `engine.get_drag_source()` | `prefab_instance` | Die Instanz, die diese Geste aufgenommen hat — auch noch im Drop-/Abbruch-Frame, wenn `get_dragged()` schon `null` ist. |
+
+Rückgabewerte:
+
+| Wert | Bedeutung |
+|---|---|
+| `0` | keine Geste |
+| `1` | gedrückt, Schwelle noch nicht überschritten (**Kandidat**, noch kein Drag) |
+| `2` | zieht |
+| `3` | **in diesem Frame losgelassen** → Drop ausführen |
+| `4` | **in diesem Frame abgebrochen** → nichts ausführen |
+
+Der Unterschied zu `update_drag` ist, *wann* und *wo* aufgenommen wird:
+
+| | `update_drag` | `update_drag_gesture` |
+|---|---|---|
+| Auslöser | Taste ist **gedrückt** (Pegel) | `input.drag_started(0)` (Flanke, nach Schwelle) |
+| Aufnahmepunkt | Mausposition **dieses Frames** | `input.drag_origin_*` = **Druckpunkt** |
+| Tippen (Press ohne Bewegung) | startet einen Drag | bleibt Kandidat (`1`), kein Drag |
+| Abbruch | nur über `input.mouse_cancelled` im Aufrufer | eigener Rückgabewert `4` |
+
+Das behebt zwei Fehlerklassen, die mit `update_drag` unvermeidbar sind:
+
+1. **Aufnahme an der falschen Karte.** Browser-Callbacks schreiben die
+   Mausposition live, Tastenflanken erst beim Frame-Snapshot (spec/44_0 §7.1) —
+   die Flanke gehört deshalb zu einer *älteren* Position als die, die derselbe
+   Frame liest. Bei bewegter Maus nimmt der Pegel-Trigger die Karte auf, die
+   *jetzt* unter dem Cursor liegt, nicht die, auf die gedrückt wurde. Der
+   Druckpunkt aus `drag_origin_*` hat dieses Problem nicht.
+2. **Tippen wird zum Drag.** Ohne Schwelle ist jeder Klick auf ein
+   ziehbares Element ein Mini-Drag; Anwendungen unterscheiden Tap und Drop
+   dann nachträglich an der Bewegungsdistanz, also erst, nachdem der Drag schon
+   gelaufen ist. Die Schwelle (`input.drag_set_threshold`, Default 5 px) trennt
+   beides **vorher**.
+
+```yaml
+- decl: [gst, i32, { call: [engine.update_drag_gesture, mx, my] }]
+# 3 = losgelassen → Drop.  4 = abgebrochen → NICHTS tun.
+- if:
+    condition: { eq: [gst, 3] }
+    then:
+      - decl: [src, prefab_instance, { call: [engine.get_drag_source] }]
+      - call: [handle_drop, src]
+```
+
+`update_drag` bleibt unverändert gültig; beide Wege greifen auf denselben
+`engine.get_dragged()`-Zustand zu, dürfen aber **nicht im selben Frame
+gemischt** werden (sie würden sich die Aufnahme gegenseitig wegnehmen).
 
 ---
 
@@ -1026,3 +1336,175 @@ void* aiml_prefab_get_dragged(void);
 // Utility
 void  aiml_prefab_set_font(void* font);
 ```
+
+## Leading whitespace and per-child fonts
+
+Both were added for a source-code viewer (cosmos `doc/spec/98` F98-14/F98-15); both apply to every
+prefab text.
+
+**Whitespace is preserved verbatim.**  `wrap_text_lines` used to treat every space as a word
+separator, so indentation vanished and runs between words collapsed to one.  Both are wrong for
+what the widget is actually used for: indented source and column-aligned logs.  Collapsing was a
+prose habit — a log table lost its columns and YAML lost its structure.
+
+Now every space is kept.  The only whitespace that disappears is the run at which a line is
+**wrapped**, because a continuation line starts at the left edge.  Selection became *simpler* as a
+result: a rendered line is a plain slice of the source, so the caret walk is 1:1, with that one
+break-run skipped at the start of a continuation line.
+
+**A child may choose its font.**
+
+| Attribute | Type | Default | Meaning |
+|---|---|---|---|
+| `font` | string | `""` (scene font) | name of a font registered with `engine.prefab_add_font` |
+
+| Call | Description |
+|---|---|
+| `engine.prefab_set_font(font)` | the scene's default font, as before |
+| `engine.prefab_add_font(name, font)` | register an extra font under a name |
+
+```yaml
+- { name: src_box, type: textbox, font: "mono", font_size: 12, ... }
+```
+
+```yaml
+- decl: [mono, ui_font, { call: [gl.font, "mono", 13.0] }]
+- if: { condition: { neq: [mono, null] }, then: [{ call: [engine.prefab_add_font, "mono", mono] }] }
+```
+
+An unknown name falls back to the scene font, so a missing asset degrades to the default face
+instead of drawing nothing.  One global font cannot serve both a proportional interface and a
+monospace code box, which is why this is per child rather than per scene.
+
+## Nachtrag: `set_bg_color` / `set_border_color` fehlten in der Methodenliste
+
+Beide existieren seit längerem (`aiml_prefab_set_bg_color`, `aiml_prefab_set_border_color`, als
+Instanzmethoden registriert), standen aber nicht in der Tabelle der Kind-Setter.  Folge beim
+Bauen der cosmos-Hülle: `set_color` wurde genommen, weil es das einzig sichtbare war — und das
+setzt bei einem `rect` die meist transparente `color`, nicht die sichtbare Füllung `bg_color`, und
+bei einem `button` die Textfarbe statt des Rahmens.  Der Aufruf tat also nichts Erkennbares.
+
+| Methode | Wirkung |
+|---|---|
+| `.set_color(child, rgba)` | `color` — Sprite-Tint, Rect-Solid, **Label-/Button-Textfarbe** |
+| `.set_bg_color(child, rgba)` | `bg_color` — die sichtbare Füllung eines `rect`/Buttons |
+| `.set_border_color(child, rgba)` | `border_color` — Rahmen/Strich |
+
+Bei einem `rect` ist die Füllung `bg_color` und `color` üblicherweise 0; wer eine Fläche umfärben
+will, braucht `set_bg_color`.
+
+
+## 5g. Code fields: multi-line editing, gutter, colour runs
+
+**Correction.**  This chapter used to state that `text_input` "is always one line regardless of its
+`height`".  That was never true of the implementation: `prefab_runtime.cpp` switches to a
+multi-line mode — wrapping plus vertical caret-follow scrolling — as soon as the field is taller
+than ~1.8 line heights.  The behaviour was there, undocumented, while cosmos `doc/spec/98` planned
+a second widget to get it (F98-2).  One editable multi-line field is enough; what it lacked was
+presentation.
+
+### Line numbers
+
+| Attribute | Type | Default | Meaning |
+|---|---|---|---|
+| `gutter` | bool | `false` | draw a line-number column at the left edge of a multi-line field |
+
+Numbers count **source** lines (`\n`-separated), not wrapped display lines: a long line that
+wraps three times keeps one number, because the number has to match what a compiler reports
+(cosmos `doc/spec/98` F98-9).
+
+### Ein Druck, ein Zeichen (behoben 2026-10-18)
+
+Dieselbe Familie wie die Klick-Positionierung, eine Ebene tiefer: das Feld **war** richtig,
+die Ereignis-Schlange nicht.  Im Web reihte die versteckte DOM-Brücke für die mobile
+Tastatur Steuertasten ein zweites Mal ein, die der Fenster-`keydown`-Handler schon
+eingereiht hatte — gemessen am Konsolenfeld von cosmos: `Delete`, `Enter` und die
+Pfeiltasten **doppelt**, also ein Zeichen zu viel gelöscht und zwei Stellen gesprungen.
+
+Die Regel steht jetzt in spec/44_0 §3.1 (ein Druck = genau ein Ereignis) samt der
+Zuständigkeit: die DOM-Brücke spricht nur, wenn keine benannte Hardware-Taste im Flug ist
+(Soft-Keyboard, IME, Autokorrektur).  Nachweis: `tests/test_prefab_backspace.aiml` zählt,
+was ein Druck bewirkt — strukturell ist so ein Fehler unsichtbar.
+
+### Die Eingabetaste im mehrzeiligen Feld (behoben 2026-10-18)
+
+Beim Nachmessen fiel ein zweiter Widerspruch auf: diese Tabelle und §5g sagen mehrzeiliges
+**Bearbeiten** zu, aber `Enter` fügte nie einen Zeilenumbruch ein — es rief nur `on_change`.
+In einem Code-Feld heißt das: man kann keine neue Zeile anfangen.  Der Quelltext musste
+eingefügt werden, um mehr als eine Zeile zu haben.
+
+Jetzt gilt die Unterscheidung, die das Feld ohnehin schon trifft:
+
+| Feldart | `Enter` |
+|---|---|
+| einzeilig (< ~1.8 Zeilenhöhen) | ruft `on_change` — das Abschicken |
+| mehrzeilig | fügt `\n` an der Schreibmarke ein (ersetzt eine Auswahl) |
+
+Mehrzeilig-oder-nicht wird beim **Zeichnen** entschieden (Höhe gegen Zeilenhöhe) und auf dem
+Kind vermerkt (`ti_multiline`); der Eingabe-Pass liest dasselbe Ergebnis, statt die
+Entscheidung ein zweites Mal zu treffen.
+
+### Klick-Positionierung (behoben 2026-10-15)
+
+Die Widget-Tabelle verspricht für `text_input` „a movable cursor, text **selection** (mouse
+drag…)".  Für **mehrzeilige** Felder war das nicht eingelöst: der Render-Pass legte genau
+**einen** Cursor-Halt an (Byte 0) mit dem Kommentar „multi-line click-positioning falls back
+to the start".  Jeder Klick sprang also an den Dokumentanfang — in einem Code-Feld heißt das,
+dass Tippen und Löschen irgendwo passieren, nur nicht dort, wo der Zeiger steht.
+
+Jetzt baut der Render-Pass dieselbe **2D-Karte** wie die Textbox (§5f): Cursor-Halte je
+sichtbarer Zeile, dazu die Zeilen-Oberkanten.  Der Eingabe-Pass bestimmt daraus erst die
+**Zeile** aus `y`, dann die **Spalte** aus `x` — eine reine x-Suche über alle Zeilen würde
+fast immer in der falschen Zeile landen.
+
+**Der Startpunkt enthält die Gutter-Breite.**  Mit `gutter: true` wird der Text um die
+Nummernspalte nach rechts gezeichnet; eine Karte ohne diesen Versatz liegt um genau diese
+Breite daneben — der Cursor stünde sichtbar neben dem Zeichen, das man angeklickt hat.
+Im `secret`-Modus wird die Karte **nicht** gebaut: dort sind die gezeichneten Zeichen Punkte,
+deren Breiten nichts über die Bytes des Textes aussagen.
+
+Regressionstest: `tests/test_prefab_multiline_click.aiml` — klickt rechts in die erste und
+danach weit unten in die letzte Zeile und prüft, **wo** das getippte Zeichen landet.  Ohne den
+Fix meldet er „Klick landete am DOKUMENTANFANG".
+
+### Colour runs
+
+| Method | Description |
+|---|---|
+| `.set_color_runs(child, runs: list<i32>)` | three entries per run: `start`, `len`, `rgba` |
+| `.clear_color_runs(child)` | back to the field's single `color` |
+
+`start`/`len` are **byte offsets into the field's text**, the same offsets the caret, the selection
+and `yaml.tokens` (spec/60) use — so a highlighter maps token kind to colour and passes the result
+through unchanged:
+
+```yaml
+- decl: [toks, list<i32>, { call: [yaml.tokens, src] }]
+- decl: [runs, list<i32>]
+- decl: [idx, i32, 0]
+- while:
+    condition: { lt: [idx, toks.len] }
+    body:
+      - call: [runs.push, { at: [toks, idx] }]
+      - call: [runs.push, { at: [toks, { +: [idx, 1] }] }]
+      - call: [runs.push, { call: [color_for_kind, { at: [toks, { +: [idx, 2] }] }] }]
+      - set: [idx, { +: [idx, 3] }]
+- call: [scene.set_color_runs, "src_box", runs]
+```
+
+Bytes not covered by a run keep the field's `color`.  Runs are applied in order; where two overlap,
+the later one wins.  A run that reaches past the end of the text is clipped rather than refused —
+a highlighter running one frame behind an edit must not be an error.
+
+## Farb-Läufe gelten auch für `textbox`
+
+`set_color_runs` wirkte zunächst nur im Eingabefeld (`text_input`, §5g) — dort entstand es für die
+Syntax-Hervorhebung.  Das war eine Einschränkung des Zeichners, keine der Sache: **Farbe ist eine
+Eigenschaft von Text, nicht von Editierbarkeit.**  Eine Statusspalte in einer Anzeige braucht sie
+genauso (cosmos `doc/spec/97` F97-17: die Farbe trägt den Status, der Text nennt ihn trotzdem).
+
+Seit 2026-10-12 zeichnet auch `textbox` die Läufe, mit derselben Regel: je Byte gilt der zuletzt
+gesetzte Lauf, gleichfarbige Nachbarn werden in einem Zug gezeichnet, und die Byte-Offsets beziehen
+sich auf den **Quelltext** der Box, nicht auf die umgebrochene Zeile.  Ohne Läufe bleibt der
+schnelle Pfad (eine Charge für alle sichtbaren Zeilen) unverändert.
+

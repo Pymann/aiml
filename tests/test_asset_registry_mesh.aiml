@@ -1,0 +1,56 @@
+# SPEC: 44_7_asset_registry, 43_1_gltf
+# Mesh-Kind: `.glb` gehoert ins Asset-Register, und `gltf.model(stem)` findet es.
+#
+# Vorher war `.glb` eine UNBEKANNTE Endung: der Scanner warnte je
+# Uebersetzungseinheit und uebersprang die Datei — in cosmos 248 Warnungen fuer
+# zwei Modelle.  Der einzige Weg zum Modell war ein Pfad im Quelltext, also
+# genau das, was spec/44_7 fuer Texturen verbietet.
+#
+# Geprueft wird nicht nur „nicht null": der Stem-Weg muss DASSELBE liefern wie
+# der Pfad-Weg — sonst beweist der Test nur, dass irgendeine Datei geladen wurde.
+#
+# AssetRoots: tests/_asset_fixtures/mesh/resources/shapes
+# Expected exit code: 0
+
+- def:
+    name: main
+    static_off: ["str_cmp"]
+    return: i32
+    body:
+      - decl: [fails, i32, 0]
+
+      - decl: [viaa, gltf_scene, { call: [gltf.model, "probe_cube"] }]
+      - if:
+          condition: { neq: [viaa.valid, 1] }
+          then: [{ print: ["FAIL mesh_stem: ${viaa.error}"] }, { call: [sys.exit, 1] }]
+
+      # Gegenprobe ueber den Pfad — ein Pfad AUSSERHALB des Bundles ist erlaubt
+      # (dieselbe Datei liegt auch unter tests/).
+      - decl: [viab, gltf_scene, { call: [gltf.load, "tests/cube_textured.glb"] }]
+      - if:
+          condition: { neq: [viab.valid, 1] }
+          then: [{ print: ["FAIL mesh_path: ${viab.error}"] }, { call: [sys.exit, 1] }]
+
+      - decl: [nodes_stem, i32, viaa.node_count]
+      - decl: [nodes_path, i32, viab.node_count]
+      - decl: [mesh_stem, list<gltf_mesh>, viaa.meshes]
+      - decl: [mesh_path, list<gltf_mesh>, viab.meshes]
+      - decl: [count_stem, i32, mesh_stem.len]
+      - decl: [count_path, i32, mesh_path.len]
+      - if:
+          condition: { neq: [nodes_stem, nodes_path] }
+          then: [{ print: ["FAIL node_count ${nodes_stem} != ${nodes_path}"] }, { set: [fails, { +: [fails, 1] }] }]
+      - if:
+          condition: { neq: [count_stem, count_path] }
+          then: [{ print: ["FAIL mesh_count ${count_stem} != ${count_path}"] }, { set: [fails, { +: [fails, 1] }] }]
+      - if:
+          condition: { lt: [count_stem, 1] }
+          then: [{ print: ["FAIL mesh_count ist 0 — nichts geladen"] }, { set: [fails, { +: [fails, 1] }] }]
+
+      - call: [viaa.free]
+      - call: [viab.free]
+      - if:
+          condition: { neq: [fails, 0] }
+          then: [{ print: ["Asset Registry mesh FAIL"] }, { return: 1 }]
+      - print: ["Asset Registry mesh PASS (${count_stem} Mesh(es), ${nodes_stem} Node(s) ueber beide Wege)"]
+      - return: 0

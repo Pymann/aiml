@@ -1,0 +1,46 @@
+# SPEC: 66_services
+# M3: the facade dispatches a typed RPC to the body and answers the request; an
+# unknown method is left alone (return 0) so hand-written handlers still get it.
+# Expected exit code: 0
+- import: "tests/services/_models.aiml"
+
+- service:
+    name: LioApi
+    base: "/api/v1"
+    transport: [rpc]
+    auth: none
+    endpoints:
+      - def:
+          name: resolve_component
+          http: [post, "/components/resolve"]
+          roles: []
+          args: [[req, ResolveReq]]
+          return: ResolveResp
+          body:
+            - decl: [out, ResolveResp]
+            - set: [out.spdx, "MIT"]
+            - return: out
+
+- def:
+    name: main
+    static_off: ["str_cmp"]
+    return: i32
+    body:
+      - decl: [sess, mirror_session, { call: [mirror.listen, "ws://127.0.0.1:19944"] }]
+      - decl: [api, ptr<LioApi>, { new: LioApi }]
+
+      # an event for a method nobody declared: not ours, must stay untouched
+      - decl: [foreign, rpc_event]
+      - set: [foreign.method, "not_a_service_method"]
+      - decl: [handled_foreign, i32, { call: [api.dispatch, sess, foreign] }]
+      - if: { condition: { neq: [handled_foreign, 0] }, then: [{ print: ["FAIL foreign method was swallowed"] }, { free: api }, { return: 1 }] }
+
+      # an event for our endpoint: handled
+      - decl: [mine, rpc_event]
+      - set: [mine.method, "resolve_component"]
+      - decl: [handled_mine, i32, { call: [api.dispatch, sess, mine] }]
+      - if: { condition: { neq: [handled_mine, 1] }, then: [{ print: ["FAIL own method not handled"] }, { free: api }, { return: 2 }] }
+
+      - free: api
+      - print: ["test_service_rpc_dispatch PASS"]
+      - return: 0

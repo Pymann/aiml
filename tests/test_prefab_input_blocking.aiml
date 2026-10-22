@@ -1,0 +1,167 @@
+# SPEC: 44_6_prefabs
+# spec/44_6 "Modal: set_input_blocking".
+#
+# Die Luecke, die dieser Test festnagelt: `hit_test` arbitriert ueber z, der
+# WIDGET-Durchlauf aber nicht.  Der laeuft bewusst ueber alle Instanzen, damit
+# eine transparente Platte ihre eigenen Widgets durchlaesst — mit der Folge,
+# dass ein Vollbild-Overlay den Hover korrekt sperrte, die Buttons DARUNTER aber
+# weiter klickbar blieben.  In 9rooms heisst das: der Aufgeben-Dialog liegt
+# ueber dem Board, und ein Klick in seine Flaeche loeste zusaetzlich den
+# Confirm-Button darunter aus — eine Kampfbestaetigung, die niemand wollte.
+#
+# Geprueft wird in dieser Reihenfolge:
+#   1. Ausgangslage OHNE Blockieren: der Button DARUNTER feuert, obwohl das
+#      Overlay darueber liegt.  Ohne diesen Schritt waere 2. wertlos — der Test
+#      koennte auch gruen sein, weil der Klick nie ankommt.
+#   2. Drag-Ausgangslage: die Karte unter dem Overlay laesst sich ziehen
+#   3. blockierend geschaltet → der Button darunter feuert NICHT mehr
+#   4. ... der EIGENE Button des Overlays feuert weiterhin (es sperrt nicht sich
+#      selbst, ein Dialog braucht eigene Knoepfe)
+#   5. ... und unter dem Overlay beginnt kein Zug mehr
+#   6. zurueckgeschaltet feuert der Button darunter wieder (beidseitig wirksam)
+# Requires: display
+# Expected exit code: 0
+
+- prefab:
+    name: BlkUnder
+    width: 200
+    height: 60
+    children:
+      - { name: und_btn, type: button, pos_x: 0, pos_y: 0, width: 200, height: 60,
+          label: "unten", bg_color: 0x334455FF, color: 0xFFFFFFFF, font_size: 12 }
+
+- prefab:
+    name: BlkCard
+    width: 60
+    height: 80
+    draggable: true
+    children:
+      - { name: card_face, type: rect, pos_x: 0, pos_y: 0, width: 60, height: 80,
+          bg_color: 0x3A5A8AFF }
+
+- prefab:
+    name: BlkModal
+    width: 400
+    height: 300
+    children:
+      - { name: dim_rect, type: rect, pos_x: 0, pos_y: 0, width: 400, height: 300,
+          bg_color: 0x20202080 }
+      - { name: mod_btn, type: button, pos_x: 10, pos_y: 10, width: 100, height: 40,
+          label: "oben", bg_color: 0x553333FF, color: 0xFFFFFFFF, font_size: 12 }
+
+- def:
+    name: click_at
+    args: [[win, window_handle], [clk_x, f32], [clk_y, f32]]
+    body:
+      # spec/44_0 §8.3: NACH engine.swap injizieren, swap leert die Latches.
+      # Ein Klick = Druck im einen, Loslassen im naechsten Frame (§8.4).
+      - call: [engine.swap, win]
+      - call: [input.post_mouse_move, clk_x, clk_y]
+      - call: [engine.update_hover, clk_x, clk_y]
+      - call: [engine.swap, win]
+      - call: [input.post_mouse_down, 0]
+      - call: [engine.update_hover, clk_x, clk_y]
+      - call: [engine.swap, win]
+      - call: [input.post_mouse_up, 0]
+      - call: [engine.update_hover, clk_x, clk_y]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [win, window_handle, { call: [engine.create_window, 400, 300, "blocking"] }]
+      - if: { condition: { eq: [win, null] }, then: [{ call: [log.error, "FAIL create_window"] }, { return: 1 }] }
+      - call: [gl.init]
+      - call: [ui.init]
+      - call: [engine.prefab_scene_init, 400, 300]
+      - call: [input.init, win]
+
+      - decl: [under, prefab_instance, { call: [engine.instantiate, "BlkUnder"] }]
+      - call: [under.set_pos, 50.0, 200.0]
+      - call: [under.set_z, 5]
+      - decl: [card, prefab_instance, { call: [engine.instantiate, "BlkCard"] }]
+      - call: [card.set_pos, 300.0, 200.0]
+      - call: [card.set_z, 5]
+      - decl: [modal, prefab_instance, { call: [engine.instantiate, "BlkModal"] }]
+      - call: [modal.set_pos, 0.0, 0.0]
+      - call: [modal.set_z, 100]
+      - call: [engine.draw_scene]
+
+      # Mitte des unteren Buttons (50..250 / 200..260) und des oberen (10..110 / 10..50).
+      - decl: [und_x, f32, 150.0]
+      - decl: [und_y, f32, 230.0]
+      - decl: [mod_x, f32, 60.0]
+      - decl: [mod_y, f32, 30.0]
+
+      # ── 1. Ausgangslage: der Button DARUNTER feuert trotz Overlay ───────
+      - call: [click_at, win, und_x, und_y]
+      - if:
+          condition: { neq: [{ call: [under.child_clicked, "und_btn"] }, 1] }
+          then: [{ call: [log.error, "FAIL Ausgangslage: der Klick erreicht den unteren Button gar nicht — der Test waere wertlos"] }, { return: 1 }]
+
+      # ── 2. Drag-Ausgangslage: die Karte unter dem Overlay ist greifbar ──
+      - call: [engine.swap, win]
+      - call: [input.post_mouse_move, 330.0, 240.0]
+      - call: [engine.update_hover, 330.0, 240.0]
+      - call: [engine.swap, win]
+      - call: [input.post_mouse_down, 0]
+      - call: [engine.update_hover, 330.0, 240.0]
+      - call: [engine.swap, win]
+      - call: [input.post_mouse_move, 330.0, 252.0]
+      - call: [engine.update_hover, 330.0, 252.0]
+      - decl: [gst_a, i32, { call: [engine.update_drag_gesture, 330.0, 252.0] }]
+      - decl: [drg_a, prefab_instance, { call: [engine.get_dragged] }]
+      - if:
+          condition: { pneq: [drg_a, card] }
+          then: [{ call: [log.error, "FAIL Drag-Ausgangslage: die Karte wurde nicht aufgenommen (gst=${gst_a}) — Schritt 5 waere wertlos"] }, { return: 1 }]
+      - call: [engine.swap, win]
+      - call: [input.post_mouse_up, 0]
+      - call: [engine.update_hover, 330.0, 252.0]
+      - call: [engine.update_drag_gesture, 330.0, 252.0]
+
+      # ── 3. blockierend: der Button darunter feuert NICHT mehr ──────────
+      - call: [modal.set_input_blocking, 1]
+      - if:
+          condition: { neq: [{ call: [modal.get_input_blocking] }, 1] }
+          then: [{ call: [log.error, "FAIL get_input_blocking liefert den gesetzten Wert nicht"] }, { return: 1 }]
+      - call: [click_at, win, und_x, und_y]
+      - if:
+          condition: { neq: [{ call: [under.child_clicked, "und_btn"] }, 0] }
+          then: [{ call: [log.error, "FAIL der Button unter dem modalen Overlay hat trotzdem gefeuert"] }, { return: 1 }]
+
+      # ── 4. der eigene Button des Overlays feuert weiterhin ─────────────
+      - call: [click_at, win, mod_x, mod_y]
+      - if:
+          condition: { neq: [{ call: [modal.child_clicked, "mod_btn"] }, 1] }
+          then: [{ call: [log.error, "FAIL das Overlay sperrt seinen EIGENEN Button — ein Dialog braucht Knoepfe"] }, { return: 1 }]
+
+      # ── 5. unter dem Overlay beginnt kein Zug mehr ─────────────────────
+      - call: [engine.swap, win]
+      - call: [input.post_mouse_move, 330.0, 240.0]
+      - call: [engine.update_hover, 330.0, 240.0]
+      - call: [engine.swap, win]
+      - call: [input.post_mouse_down, 0]
+      - call: [engine.update_hover, 330.0, 240.0]
+      - call: [engine.swap, win]
+      - call: [input.post_mouse_move, 330.0, 252.0]
+      - call: [engine.update_hover, 330.0, 252.0]
+      - call: [engine.update_drag_gesture, 330.0, 252.0]
+      - decl: [drg_b, prefab_instance, { call: [engine.get_dragged] }]
+      - if:
+          condition: { pneq: [drg_b, null] }
+          then: [{ call: [log.error, "FAIL unter dem modalen Overlay wurde ein Zug begonnen"] }, { return: 1 }]
+      - call: [engine.swap, win]
+      - call: [input.post_mouse_up, 0]
+      - call: [engine.update_hover, 330.0, 252.0]
+      - call: [engine.update_drag_gesture, 330.0, 252.0]
+
+      # ── 6. zurueckgeschaltet feuert der Button darunter wieder ─────────
+      - call: [modal.set_input_blocking, 0]
+      - call: [click_at, win, und_x, und_y]
+      - if:
+          condition: { neq: [{ call: [under.child_clicked, "und_btn"] }, 1] }
+          then: [{ call: [log.error, "FAIL nach dem Zurueckschalten feuert der untere Button nicht wieder"] }, { return: 1 }]
+
+      - call: [engine.destroy_window, win]
+      - call: [log.info, "PASS prefab_input_blocking"]
+      - return: 0

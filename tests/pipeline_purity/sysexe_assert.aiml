@@ -1,0 +1,18 @@
+# SPEC?: 62_pipelines   # aus dem Dateinamen, zu bestaetigen
+# Dasselbe MIT assert_pure: erlaubt — die Unterschrift ist da (F62-22).
+# Requires: driver
+- def:
+    name: body_exe
+    return: i32
+    body:
+      - decl: [argv, list<string>]
+      - call: [argv.push, "/bin/true"]
+      - decl: [proc, process, { call: [sys.exe, argv] }]
+      - return: { call: [proc.wait] }
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [pkg, Code, { call: [sys.bundle, "body_exe", { context: true, pure: true, assert_pure: true }] }]
+      - return: 0

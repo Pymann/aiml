@@ -1,0 +1,20 @@
+# SPEC?: 62_pipelines   # aus dem Dateinamen, zu bestaetigen
+# Berechneter Pfad: WARNUNG, kein Fehler — statisch nicht entscheidbar, und
+# Requires: driver
+# etwas anderes zu behaupten waere unehrlich (F62-20).
+- def:
+    name: body_read_rel
+    args: [[stem, string]]
+    return: i32
+    body:
+      - decl: [full, string, "out/${stem}.txt"]
+      - decl: [txt, string, { call: [io.read_file, full] }]
+      - if: { condition: { eq: [txt.len, 0] }, then: [{ return: 1 }] }
+      - return: 0
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [pkg, Code, { call: [sys.bundle, "body_read_rel", { context: true, pure: true }] }]
+      - return: 0

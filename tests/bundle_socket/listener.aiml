@@ -1,0 +1,71 @@
+# SPEC: 29_2_sys_exec,29_serialize
+# Live-Test (spec/29_2 §12/§13), Empfaengerseite — AOT, kein JIT.
+# Requires: peer — wird von tests/bundle_socket/run.sh paarweise gestartet
+#
+# Zwei Durchgaenge:
+#   1. Ein Bundle: Quelltext -> Code -> sys.exec im isolierten Kontext.
+#   2. Bibliothek + Pipeline GETRENNT empfangen, hier mit Code.merge
+#      zusammengefuehrt und in EINEM Lauf ausgefuehrt — das ist der einzige
+#      Weg, eine Bibliothek verfuegbar zu machen, weil ein isolierter Kontext
+#      zwischen zwei sys.exec-Aufrufen nichts behaelt.
+# Expected exit code: 0
+
+- def:
+    name: recv_text
+    args: [[conn, socket_handle]]
+    return: { type: string, lifetime: producer }
+    body:
+      - decl: [txt, string, { call: [net.recv_string, conn, 65536] }]
+      - return: txt
+
+- def:
+    name: reply
+    args: [[conn, socket_handle], [rcx, i32]]
+    body:
+      - if:
+          condition: { eq: [rcx, 0] }
+          then: [{ call: [net.send_string, conn, "ok"] }]
+          else: [{ call: [net.send_string, conn, "fail"] }]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [server, socket_handle, { call: [net.socket, "tcp"] }]
+      - call: [net.bind, server, "127.0.0.1", 47811]
+      - call: [net.listen, server]
+      - print: ["listener bereit"]
+      - decl: [fails, i32, 0]
+
+      # ── Durchgang 1: ein einzelnes Bundle ───────────────────────────────
+      - decl: [conn_one, socket_handle, { call: [net.accept, server] }]
+      - decl: [wire1, string, { call: [recv_text, conn_one] }]
+      - print: ["1) empfangen: ${wire1.len} Bytes"]
+      - decl: [job_one, Code, { call: [sys.code_from, wire1, { start: "remote_task", context: true }] }]
+      - decl: [rc_one, i32, { call: [sys.exec, job_one] }]
+      - print: ["1) sys.exec rc=${rc_one}"]
+      - if: { condition: { neq: [rc_one, 0] }, then: [{ set: [fails, { +: [fails, 1] }] }] }
+      - call: [reply, conn_one, rc_one]
+      - call: [net.close, conn_one]
+
+      # ── Durchgang 2: Bibliothek + Pipeline getrennt, hier gemerged ──────
+      - decl: [conn_two, socket_handle, { call: [net.accept, server] }]
+      - decl: [lib_wire, string, { call: [recv_text, conn_two] }]
+      - print: ["2) Bibliothek: ${lib_wire.len} Bytes"]
+      - decl: [pipe_wire, string, { call: [recv_text, conn_two] }]
+      - print: ["2) Pipeline:   ${pipe_wire.len} Bytes"]
+
+      - decl: [lib_pkg, Code, { call: [sys.code_from, lib_wire, { context: true }] }]
+      - decl: [pipe_pkg, Code, { call: [sys.code_from, pipe_wire, { start: "run_pipeline", context: true }] }]
+      # Reihenfolge zaehlt: start_call erbt vom ERSTEN Operanden.
+      - decl: [job_two, Code, { call: [pipe_pkg.merge, lib_pkg] }]
+      - decl: [rc_two, i32, { call: [sys.exec, job_two] }]
+      - print: ["2) sys.exec rc=${rc_two}"]
+      - if: { condition: { neq: [rc_two, 0] }, then: [{ set: [fails, { +: [fails, 1] }] }] }
+      - call: [reply, conn_two, rc_two]
+      - call: [net.close, conn_two]
+
+      - call: [net.close, server]
+      - if: { condition: { neq: [fails, 0] }, then: [{ print: ["listener FAIL (${fails})"] }, { return: 1 }] }
+      - print: ["listener PASS"]
+      - return: 0

@@ -45,9 +45,25 @@ Status: **Design settled. M1 + M2 + M3 implemented + tested.**
   implementer).  Wiring upcasts through the concrete base (which carries the
   vtable).  Test: `tests/test_classgroup_iface.aiml`.
 
+**Fixed 2026-10-09 — passing an instance to an interface-typed PARAMETER.**  An
+interface-typed parameter (`ptr<Iface>` and `ref<Iface>` are the same
+`AimlFatPtr_<Iface>` = {obj, vtable}) received a bare object pointer: the callee
+then read the vtable from the wrong place and the first interface call
+dereferenced null.  With a user-declared `- interface:` this **crashed**
+(`jitRun`, addr=nil) for a plain class too — only builtin interfaces
+(`mirror.RpcHandler`) worked, because they take a different path.  The upcast is
+now emitted at the argument boundary of free functions AND methods, using a new
+side-effect-free `declaredTypeOfExpr` so it also resolves **dotted** arguments
+such as a group instance `grp.handler` (whose type lives in the container class's
+member, not in a symbol).  This is what lets a coordinator hand a group instance
+to a registry typed on the interface.  Test:
+`tests/test_classgroup_iface_param.aiml` (free function, stored in a
+`map<string:ref<Iface>>` and invoked through the vtable, and state changes behind
+the sees edge showing through).
+
 Not yet: interface-typed edges combined with cross-group (`subgroup.inst:Iface`);
-using a group type as a function-signature parameter/return (same synthesis-
-timing limit as cascade_class pools).
+using a group type **itself** as a function-signature parameter/return (same
+synthesis-timing limit as cascade_class pools) — the interface type works.
 
 A `classgroup` is a purely declarative description of one architecture cluster:
 which classes participate, which named instances exist, which sibling instances
@@ -210,6 +226,15 @@ children are fully post-wired before the parent's phases 1–2).
 **a sees target is never a constructor argument** (sees are wired in phase 1). If
 `constructor` is omitted, the instance uses the base's default/zero-init.
 
+An argument that names a group `param` becomes `<.param`; anything else is a
+**literal**.  Numbers, `true`/`false` and qualified names (enum members such as
+`Kind.file`, and floats) pass through verbatim; every other scalar is emitted as
+a **string literal**.  That last step was missing until 2026-10-09: the YAML
+parse drops a string's quotes, so `constructor: [init, "cas"]` emitted a bare
+`cas` into the synthesized `__ctor` and the compiler read it as a type name
+(`Unknown Type: 'cas'`) — numeric literals worked by accident.  Test:
+`tests/test_classgroup_ctor_literal.aiml`.
+
 ## 5. sees typing & cross-edge visibility
 
 A sees edge binds the seeing instance to a sibling.  The edge member's **static
@@ -224,6 +249,28 @@ constructs.  So the edge exposes the sibling's **full API**: its base methods
 inheritance.  This means a coordination `methods:` method can drive a
 sibling's coordination method across the edge **without** an interface-typed
 edge (§5.2) and **without** the sibling declaring `implements:`.
+
+> **Eine sees-Instanz ist vollwertig — auch ihre ATTRIBUTE.**  Die Kante gibt
+> nicht nur Methoden frei: `<.dep.val` ist **lesbar und schreibbar** wie ein
+> eigenes Member.  Das ist der Unterschied zwischen „Zusammenarbeit" und
+> „Durchreichen": ohne diese Eigenschaft bräuchte jede Nachbar-Nutzung entweder
+> ein Getter/Setter-Paar oder einen zusätzlichen Parameter in **jeder** Signatur
+> auf dem Weg dorthin.
+>
+> ```yaml
+> - def: { name: peek_attr, return: i32,            body: [{ return: <.dep.val }] }
+> - def: { name: poke_attr, args: [[nval, i32]],    body: [{ set: [<.dep.val, nval] }] }
+> ```
+>
+> **Beleg:** `tests/test_classgroup_sees_base_member.aiml` liest `<.dep.val` über
+> die Kante, schreibt es und prüft die Änderung anschließend **an der
+> Nachbar-Instanz selbst** (`rtg.dep.get_v` → 7).  Lesen allein würde nicht
+> genügen: eine Kopie liesse sich lesen, ohne dass das Schreiben ankommt.
+>
+> Praktische Folge (User-Hinweis 2026-10-14): wer Zustand in Instanzen legt,
+> muss ihn **nicht** durch Signaturen fädeln.  Ein Bildschirm, der `session` und
+> `live` sieht, greift direkt auf `<.session.token` und `<.live.view` zu — das
+> ersetzt eine `ref<T>`-Leihgabe in jeder Methode der Aufrufkette.
 
 The subclass type is often not yet synthesized when the seeing subclass is built
 (any `sees` cycle, e.g. `A sees B` and `B sees A`), so this relies on two

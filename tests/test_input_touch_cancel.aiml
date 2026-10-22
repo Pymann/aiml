@@ -1,0 +1,156 @@
+# SPEC: 44_0_input,44_6_prefabs
+# spec/44_0 §2.2 "Cancel is not release" + §2.4 drag_cancelled + spec/44_6
+# "Abbruch: update_drag beendet den Drag ohne Drop".
+#
+# Der Fehler, den dieser Test festnagelt: ein abgebrochener Touch (touchcancel,
+# zweiter Finger, Fokusverlust) erzeugte ein NORMALES Release.  Damit war er von
+# einem bewussten Loslassen nicht zu unterscheiden, lief in die Drop-Erkennung
+# "vorher gezogen, jetzt nicht mehr" und loeste die Drop-Aktion aus — in 9rooms
+# ein Spielzug, den niemand gemacht hat.
+#
+# Geprueft wird in dieser Reihenfolge:
+#   1. Drag startet per injiziertem Druck und folgt dem Cursor
+#   2. post_touch_cancel beendet ihn: get_dragged null, Position am Ursprung
+#   3. die Flanken trennen die Faelle: cancelled=1 UND released=0
+#   4. Gegenprobe mit echtem Loslassen: released=1 UND cancelled=0
+#      (ohne 4. waere 3. wertlos — dann koennte der Cancel-Pfad einfach alles
+#       verschlucken, auch den echten Drop)
+# Requires: display
+# Expected exit code: 0
+
+- prefab:
+    name: CancelCard
+    width: 80
+    height: 100
+    children:
+      - { name: card_body, type: rect, x: 0, y: 0, width: 80, height: 100,
+          bg_color: 0x3A5A8AFF }
+
+- prefab:
+    name: CancelTarget
+    width: 120
+    height: 120
+    children:
+      - { name: tgt_body, type: rect, x: 0, y: 0, width: 120, height: 120,
+          bg_color: 0x2A2A2AFF }
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [win, window_handle, { call: [engine.create_window, 400, 300, "cancel"] }]
+      - if: { condition: { eq: [win, null] }, then: [{ call: [log.error, "FAIL create_window"] }, { return: 1 }] }
+      - call: [gl.init]
+      - call: [ui.init]
+      - call: [engine.prefab_scene_init, 400, 300]
+      - call: [input.init, win]
+
+      - decl: [tgt, prefab_instance, { call: [engine.instantiate, "CancelTarget"] }]
+      - call: [tgt.set_pos, 250.0, 50.0]
+      - call: [tgt.set_draggable, 0]
+
+      - decl: [card, prefab_instance, { call: [engine.instantiate, "CancelCard"] }]
+      - call: [card.set_pos, 50.0, 50.0]
+      - call: [card.set_draggable, 1]
+      - call: [card.set_z, 10]
+
+      # Mittelpunkte: Karte (50,50)+40/50, Ziel (250,50)+60/60.
+      - decl: [card_mx, f32, 90.0]
+      - decl: [card_my, f32, 100.0]
+      - decl: [tgt_mx, f32, 310.0]
+      - decl: [tgt_my, f32, 110.0]
+
+      # Erst einmal zeichnen: die Treffer-Reihenfolge fuer update_drag wird von
+      # draw_scene hergestellt (spec/44_6 §Treffer-Reihenfolge).
+      - call: [engine.draw_scene]
+
+      # ── 1. Greifen + ziehen ──────────────────────────────────────────────
+      # Injiziert wird NACH engine.swap, weil swap die Latches leert (§8.3).
+      - call: [engine.swap, win]
+      - call: [input.post_mouse_move, card_mx, card_my]
+      - call: [engine.update_drag, card_mx, card_my, { call: [input.mouse_button, 0] }, { call: [input.mouse_released, 0] }]
+
+      - call: [engine.swap, win]
+      - call: [input.post_mouse_down, 0]
+      - call: [engine.update_drag, card_mx, card_my, { call: [input.mouse_button, 0] }, { call: [input.mouse_released, 0] }]
+
+      - decl: [drg1, prefab_instance, { call: [engine.get_dragged] }]
+      - if:
+          condition: { peq: [drg1, null] }
+          then: [{ call: [log.error, "FAIL Drag startete nicht beim injizierten Druck"] }, { return: 1 }]
+
+      - call: [engine.swap, win]
+      - call: [input.post_mouse_move, tgt_mx, tgt_my]
+      - call: [engine.update_drag, tgt_mx, tgt_my, { call: [input.mouse_button, 0] }, { call: [input.mouse_released, 0] }]
+
+      - decl: [moved_x, f32, { call: [card.get_x] }]
+      - if:
+          condition: { lt: [moved_x, 100.0] }
+          then: [{ call: [log.error, "FAIL Karte folgte dem Cursor nicht (x=${moved_x})"] }, { return: 1 }]
+
+      # ── 2. + 3. Abbruch ─────────────────────────────────────────────────
+      - call: [engine.swap, win]
+      - call: [input.post_touch_cancel]
+      - decl: [cancelled, i32, { call: [input.mouse_cancelled, 0] }]
+      - decl: [released,  i32, { call: [input.mouse_released, 0] }]
+      - decl: [btn_after, i32, { call: [input.mouse_button, 0] }]
+      - call: [engine.update_drag, tgt_mx, tgt_my, btn_after, released]
+
+      - if:
+          condition: { neq: [cancelled, 1] }
+          then: [{ call: [log.error, "FAIL post_touch_cancel setzte die Cancel-Flanke nicht (cancelled=${cancelled})"] }, { return: 1 }]
+      # Der Kern: ein Abbruch ist KEIN Loslassen.
+      - if:
+          condition: { neq: [released, 0] }
+          then: [{ call: [log.error, "FAIL Abbruch meldete zusaetzlich ein Release — von einem echten Loslassen nicht unterscheidbar, loest einen Drop aus"] }, { return: 1 }]
+      - if:
+          condition: { neq: [btn_after, 0] }
+          then: [{ call: [log.error, "FAIL Taste gilt nach dem Abbruch noch als gedrueckt (btn=${btn_after})"] }, { return: 1 }]
+
+      - decl: [drg2, prefab_instance, { call: [engine.get_dragged] }]
+      - if:
+          condition: { pneq: [drg2, null] }
+          then: [{ call: [log.error, "FAIL Drag laeuft nach dem Abbruch weiter"] }, { return: 1 }]
+      - decl: [back_x, f32, { call: [card.get_x] }]
+      - decl: [back_y, f32, { call: [card.get_y] }]
+      - if:
+          condition: { '||': [{ gt: [back_x, 50.5] }, { lt: [back_x, 49.5] }] }
+          then: [{ call: [log.error, "FAIL Karte kehrte nach dem Abbruch nicht an den Ursprung zurueck (x=${back_x}, erwartet 50)"] }, { return: 1 }]
+      - if:
+          condition: { '||': [{ gt: [back_y, 50.5] }, { lt: [back_y, 49.5] }] }
+          then: [{ call: [log.error, "FAIL Karte y nach dem Abbruch ${back_y}, erwartet 50"] }, { return: 1 }]
+
+      # ── 4. Gegenprobe: echtes Loslassen MUSS als Release gelten ─────────
+      - call: [engine.swap, win]
+      - call: [input.post_mouse_move, card_mx, card_my]
+      - call: [engine.update_drag, card_mx, card_my, { call: [input.mouse_button, 0] }, { call: [input.mouse_released, 0] }]
+
+      - call: [engine.swap, win]
+      - call: [input.post_mouse_down, 0]
+      - call: [engine.update_drag, card_mx, card_my, { call: [input.mouse_button, 0] }, { call: [input.mouse_released, 0] }]
+
+      - decl: [drg3, prefab_instance, { call: [engine.get_dragged] }]
+      - if:
+          condition: { peq: [drg3, null] }
+          then: [{ call: [log.error, "FAIL zweiter Drag startete nicht"] }, { return: 1 }]
+
+      - call: [engine.swap, win]
+      - call: [input.post_mouse_up, 0]
+      - decl: [rel2, i32, { call: [input.mouse_released, 0] }]
+      - decl: [can2, i32, { call: [input.mouse_cancelled, 0] }]
+      - call: [engine.update_drag, tgt_mx, tgt_my, { call: [input.mouse_button, 0] }, rel2]
+
+      - if:
+          condition: { neq: [rel2, 1] }
+          then: [{ call: [log.error, "FAIL echtes Loslassen meldete kein Release (rel=${rel2})"] }, { return: 1 }]
+      - if:
+          condition: { neq: [can2, 0] }
+          then: [{ call: [log.error, "FAIL echtes Loslassen meldete zusaetzlich einen Abbruch (can=${can2}) — dann wuerde der Cancel-Pfad echte Drops verschlucken"] }, { return: 1 }]
+      - decl: [drg4, prefab_instance, { call: [engine.get_dragged] }]
+      - if:
+          condition: { pneq: [drg4, null] }
+          then: [{ call: [log.error, "FAIL Drag laeuft nach dem Loslassen weiter"] }, { return: 1 }]
+
+      - call: [engine.destroy_window, win]
+      - call: [log.info, "PASS input_touch_cancel"]
+      - return: 0

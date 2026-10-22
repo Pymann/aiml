@@ -1,0 +1,75 @@
+# SPEC: 44_8_prefab_static,44_8_vocab
+# Positiv-Test (Tier 2b, spec/44_8): der Member-Check darf bei korrekter
+# Verwendung nicht anschlagen — und er darf NICHT raten, wo er nichts beweisen
+# kann.  Zwei Fälle in einer Datei:
+#
+#   1. `<.scene` ist eindeutig an AlphaPanel gebunden; set_text/child_clicked/
+#      text_value mit deklarierten Kindnamen → kein Fehler.
+#   2. `<.dual` wird an ZWEI verschiedene Prefabs gebunden (init: AlphaPanel,
+#      switch_over: BetaPanel).  Damit ist statisch nicht entscheidbar, welches
+#      Prefab dort liegt → das Feld wird NICHT verfolgt, und `beta_lbl` (nur in
+#      BetaPanel) darf nicht als unbekanntes Kind gemeldet werden.  Ein Check,
+#      der hier rät, meldet Falsches und wird abgeschaltet.
+#
+# Expected exit code: 0
+#
+# Der GL-Pfad ist hinter einer zur Laufzeit falschen Bedingung geparkt bzw. wird
+# nie gerufen: die statischen Checks lesen die AST unabhängig von
+# Erreichbarkeit → headless-tauglich.
+
+- prefab:
+    name: AlphaPanel
+    width: 100
+    height: 60
+    children:
+      - { name: alpha_lbl, type: label, x: 0, y: 0, width: 100, height: 20 }
+      - { name: alpha_btn, type: button, x: 0, y: 20, width: 100, height: 20 }
+      - { name: alpha_inp, type: text_input, x: 0, y: 40, width: 100, height: 20 }
+
+- prefab:
+    name: BetaPanel
+    width: 100
+    height: 20
+    children:
+      - { name: beta_lbl, type: label, x: 0, y: 0, width: 100, height: 20 }
+
+- class:
+    name: DualScreen
+    members:
+      - [scene, prefab_instance]
+      - [dual,  prefab_instance]
+    methods:
+      - def:
+          name: init
+          body:
+            - set: [<.scene, { call: [engine.instantiate, "AlphaPanel"] }]
+            - set: [<.dual,  { call: [engine.instantiate, "AlphaPanel"] }]
+      - def:
+          name: switch_over
+          body:
+            - set: [<.dual, { call: [engine.instantiate, "BetaPanel"] }]
+      - def:
+          name: render
+          return: i32
+          body:
+            # Fall 1: eindeutiges Feld, deklarierte Kinder — schreibend und lesend.
+            - call: [<.scene.set_text, "alpha_lbl", "hallo"]
+            - decl: [txt, string, { call: [<.scene.text_value, "alpha_inp"] }]
+            - if: { condition: { eq: [{ call: [<.scene.child_clicked, "alpha_btn"] }, 1] }, then: [{ return: 1 }] }
+            # Fall 2: mehrdeutiges Feld — der Check muss schweigen.
+            - call: [<.dual.set_text, "beta_lbl", "welt"]
+            - return: 0
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [flag, i32, 0]
+      - decl: [scr, DualScreen]
+      - if:
+          condition: { eq: [flag, 1] }
+          then:
+            - call: [scr.init]
+            - decl: [hit, i32, { call: [scr.render] }]
+      - call: [log.info, "PASS prefab_member_child_ok: Member-Kindnamen akzeptiert, mehrdeutiges Feld nicht geraten"]
+      - return: 0

@@ -57,6 +57,23 @@
 - If no `catch` block matches at any level, the program calls `sys.exit(2)` and prints
   the exception message to stderr.
 
+### Which clause catches
+
+A `catch:` is a **list** of clauses.  They are tried **in written order**, and the first
+one whose `type:` the thrown object satisfies wins — satisfies meaning: the thrown class
+is that type, or inherits from it (`extends`).  A clause of the base type therefore
+belongs LAST; a clause after it is dead.  Matches nothing in this `try`?  Then the
+exception keeps unwinding to the enclosing `try`, exactly as if this `try` were not there.
+
+Bis 18.10.2026 war davon nichts umgesetzt, und zwar still: der Parser behielt **nur den
+letzten** Zweig (jeder `type:`/`var:`/`body:` ueberschrieb den vorherigen), und die
+Codegenerierung prueefte den Typ gar nicht — `__cxa_throw` bekam `nullptr` als Typinfo, der
+Handler fing alles.  Zwei Zweige zu schreiben hiess also: der erste verschwand wortlos, und
+der zweite bekam auch das, was er nie fangen wollte.  Dieselbe Fehlerklasse wie das frueher
+verschluckte `free:` (spec/61) und `exit:` (spec/23).  Das Ausnahme-Record traegt seitdem
+den Klassennamen, und der Handler vergleicht ihn gegen die statisch bekannte Menge
+"dieser Typ und alles, was von ihm erbt".
+
 ## Implementation invariant — calls inside `try` must be `invoke`
 
 For a `throw` in a *called* function/method to reach an enclosing `try`, **every

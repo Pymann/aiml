@@ -28,7 +28,7 @@
     width: 64
     height: 64
     children:
-      - { kind: button, name: bumpbtn, x: 0, y: 0, width: 64, height: 64,
+      - { type: button, name: bumpbtn, x: 0, y: 0, width: 64, height: 64,
           label: "Bump", on_click: g_counter.bump }
 
 - def:

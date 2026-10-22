@@ -1,0 +1,41 @@
+# SPEC: 66_services §3 — der Client-Stub: eine Methode je Endpunkt ueber
+# send_and_await.  Ohne Gegenstelle laeuft der Aufruf in den Timeout (0) statt zu
+# haengen oder zu sterben; getestet wird die erzeugte Signatur und dieser Weg.
+# Expected exit code: 0
+- import: "tests/services/_models.aiml"
+
+- service:
+    name: PkgApi
+    base: "/api/v1"
+    transport: [rpc]
+    auth: none
+    endpoints:
+      - def:
+          name: resolve_component
+          http: [post, "/components/resolve"]
+          args: [[req, ResolveReq]]
+          return: ResolveResp
+          body:
+            - decl: [out, ResolveResp]
+            - set: [out.spdx, "MIT"]
+            - return: out
+
+- def:
+    name: main
+    static_off: ["str_cmp"]
+    return: i32
+    body:
+      - decl: [sess, mirror_session, { call: [mirror.listen, "ws://127.0.0.1:19945"] }]
+      - decl: [cli, ptr<PkgApiClient>, { new: PkgApiClient }]
+      - call: [cli.set_timeout, 50]
+
+      - decl: [req, ResolveReq]
+      - set: [req.purl, "pkg:conan/wolfssl@5.6.0"]
+      - decl: [resp, ptr<ResolveResp>, { new: ResolveResp }]
+      - decl: [got, i32, { call: [cli.resolve_component, sess, req, resp] }]
+      - if: { condition: { neq: [got, 0] }, then: [{ print: ["FAIL expected timeout, got ${got}"] }, { free: resp }, { free: cli }, { return: 1 }] }
+
+      - free: resp
+      - free: cli
+      - print: ["test_service_client_stub PASS"]
+      - return: 0

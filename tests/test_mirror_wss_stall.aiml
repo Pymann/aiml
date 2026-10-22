@@ -1,0 +1,80 @@
+# SPEC: 32_4_network_websockets,32_network
+# Mirror WSS host with a stalled client (TCP open, no TLS handshake): sess.update must
+# never block on it (spec/32_4 §5.1 asynchronous accept) and a real client is served.
+#
+# Expected exit code: 0
+
+- model:
+    name: EchoReq
+    fields: [[message, string]]
+
+- model:
+    name: EchoResp
+    fields: [[success, i32], [echoed, string]]
+
+- def:
+    name: server_thread
+    body:
+      - decl: [cert, path, "tests/tls_certs/server.crt"]
+      - decl: [key,  path, "tests/tls_certs/server.key"]
+      - decl: [sess, mirror_session, { call: [mirror.listen_tls, "wss://127.0.0.1:19984", cert, key] }]
+      - decl: [running, i32, 1]
+      - decl: [tries,   i32, 0]
+      - decl: [worst,   i64, 0]
+      - while:
+          condition: { eq: [running, 1] }
+          body:
+            - decl: [t_start, i64, { call: [time.mono_ms] }]
+            - call: [sess.update]
+            - decl: [took, i64, { -: [{ call: [time.mono_ms] }, t_start] }]
+            - if: { condition: { gt: [took, worst] }, then: [{ set: [worst, took] }] }
+            - if:
+                condition: { gt: [{ call: [sess.has_rpc] }, 0] }
+                then:
+                  - decl: [rpc, rpc_event, { call: [sess.next_rpc] }]
+                  - decl: [req, EchoReq]
+                  - decl: [rc_val, i32, { call: [sess.decode_rpc, rpc, req] }]
+                  - if:
+                      condition: { eq: [rc_val, 0] }
+                      then:
+                        - decl: [resp, EchoResp]
+                        - set: [resp.success, 1]
+                        - set: [resp.echoed, "got: ${req.message}"]
+                        - call: [sess.reply_rpc, rpc, "set_result", 0, resp]
+                        - set: [running, 0]
+            - call: [time.sleep_ms, 20]
+            - set: [tries, { +: [tries, 1] }]
+            - if: { condition: { gt: [tries, 300] }, then: [{ set: [running, 0] }] }
+      - if: { condition: { gt: [worst, 200] }, then: [{ print: ["FAIL sess.update blocked ${worst} ms"] }, { call: [sys.exit, 1] }] }
+      - print: ["host worst update: ${worst} ms"]
+
+- def:
+    name: main
+    body:
+      - decl: [host_th, thread_handle, { spawn: [server_thread] }]
+      - call: [time.sleep_ms, 250]
+
+      - decl: [silent, socket_handle, { call: [net.socket, "tcp"] }]
+      - call: [net.connect, silent, "127.0.0.1", 19984]
+      - call: [time.sleep_ms, 200]
+
+      - call: [mirror.tls_insecure, 1]   # self-signed test cert
+      - decl: [t_start, i64, { call: [time.mono_ms] }]
+      - decl: [client, mirror_session, { call: [mirror.connect_timeout, "wss://127.0.0.1:19984", 4000] }]
+      - call: [time.sleep_ms, 100]
+      - call: [client.update]
+
+      - decl: [req, EchoReq]
+      - set: [req.message, "hello-stall"]
+      - decl: [resp, ptr<EchoResp>, { new: EchoResp }]
+      - decl: [got_resp, i32, { call: [client.send_and_await, 0, "echo", req, resp, 5000] }]
+      - decl: [elapsed, i64, { -: [{ call: [time.mono_ms] }, t_start] }]
+
+      - if: { condition: { eq: [got_resp, 0] }, then: [{ print: ["FAIL send_and_await timed out"] }, { call: [sys.exit, 1] }] }
+      - if: { condition: { neq: [resp.echoed, "got: hello-stall"] }, then: [{ print: ["FAIL echoed='${resp.echoed}'"] }, { call: [sys.exit, 1] }] }
+      - if: { condition: { gt: [elapsed, 2000] }, then: [{ print: ["FAIL real client served after ${elapsed} ms"] }, { call: [sys.exit, 1] }] }
+
+      - call: [host_th.join]
+      - call: [client.close]
+      - call: [net.close, silent]
+      - print: ["PASS mirror_wss_stall"]

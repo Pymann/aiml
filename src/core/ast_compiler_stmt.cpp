@@ -1827,6 +1827,13 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
                 } else if (auto* ve = dynamic_cast<VariableExpr*>(iv)) {
                     if (ve->name.find('.') != std::string::npos || ve->name.find('<') != std::string::npos)
                         sym.is_view_alias = true;
+                    else
+                        // spec/61 §7: Kopie aus einem anderen LOKAL — member-weise, mit incref
+                        // je geteiltem Feld.  Ohne das incref gibt der naechste Member-Store der
+                        // Kopie den String des Originals frei (Probe
+                        // tests/test_value_model_copy_share.aiml).  Gleichschritt: freshOwned in
+                        // ownership_analyzer.cpp und die beiden Retain-Stellen unten.
+                        sym.is_copy_retain = true;
                 } else if (auto* ce = dynamic_cast<CallExpr*>(iv)) {
                     const std::string& fn = ce->functionName;
                     size_t dp = fn.rfind('.');
@@ -1870,7 +1877,7 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
         // retains its shareable field handles below → it OWNS its own refs and must drop them at scope
         // exit (else release-old on a member-store frees a still-shared handle: mana_choice double-free,
         // endphase-crash). Lockstep with freshOwned (ownership_analyzer) + the retain below.
-        if ((modelOwnedInit || sym.is_view_alias) && decl->lifetime != "persistent"
+        if ((modelOwnedInit || sym.is_view_alias || sym.is_copy_retain) && decl->lifetime != "persistent"
             && decl->typeName.rfind("ptr<", 0) != 0
             && decl->typeName.rfind("ref<", 0) != 0
             && !ctx.cleanupStack.empty()) {
@@ -2623,7 +2630,8 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
                         // balances a later member-store's release-old (mana_choice double-free). Not a
                         // deserialize carrier (freed above; mutually exclusive with a view init).
                         Symbol* _vsym_mc = resolveVariable(decl->varName);
-                        if (_vsym_mc && _vsym_mc->is_view_alias && ciIt != ctx.classes.end()
+                        if (_vsym_mc && (_vsym_mc->is_view_alias || _vsym_mc->is_copy_retain)
+                            && ciIt != ctx.classes.end()
                             && ciIt->second.hasHeapFields && ciIt->second.serNodesVar) {
                             llvm::Function* rf = ctx.getFunction("aiml_ser_retain", ctx.builder.getVoidTy(),
                                 {ptrTy, ptrTy, ctx.builder.getInt32Ty()});
@@ -2689,7 +2697,7 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
                     // (registered above) balances a later member-store's release-old (mana_choice
                     // double-free). Lockstep with the memcpy-path retain + freshOwned.
                     Symbol* _vsym_st = resolveVariable(decl->varName);
-                    if (_vsym_st && _vsym_st->is_view_alias) {
+                    if (_vsym_st && (_vsym_st->is_view_alias || _vsym_st->is_copy_retain)) {
                         auto vmi = ctx.classes.find(decl->typeName);
                         if (vmi != ctx.classes.end() && vmi->second.hasHeapFields && vmi->second.serNodesVar) {
                             llvm::Type* ptrTy2 = llvm::PointerType::get(ctx.context, 0);
@@ -5624,28 +5632,94 @@ void Compiler::visitTry(TryStmt* tryStmt) {
         CompilerContext::ScopeDrop sd;
         sd.addr = recSlot;
         sd.kind = 12;
-        sd.debugName = tryStmt->catchVar;
+        sd.debugName = tryStmt->catches.empty() ? std::string() : tryStmt->catches.front().var;
         ctx.cleanupStack.back().push_back(sd);
     }
-    if (tryStmt->catchBlock) {
-        if (!tryStmt->catchVar.empty()) {
-            llvm::Value* userExc = ctx.builder.CreateLoad(ptrTy, rawExc, "actual_exc_ptr");
-            IRType* targetTy = ctx.ir_gen->wrapType(ptrTy);
-            IRValue* alloca = ctx.ir_gen->createAlloca(targetTy, tryStmt->catchVar);
-            ctx.builder.CreateStore(userExc, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(alloca)));
-            Symbol sym;
-            sym.ir_alloca_inst = alloca;
-            sym.ir_type = ctx.ir_gen->getPointerTy();
-            sym.ir_element_type = targetTy;
-            sym.typeName = tryStmt->catchType;
-            sym.excRecordSlot = recSlot;
-            ctx.symbol_table[tryStmt->catchVar] = sym;
+    // spec/22: die Zweige werden in GESCHRIEBENER Reihenfolge geprueft; es gewinnt der
+    // erste, dessen Typ der geworfene erfuellt (gleicher Typ oder Abkoemmling).  Passt
+    // keiner, laeuft die Ausnahme weiter, als gaebe es dieses `try` nicht.
+    llvm::Value* typeTag = ctx.builder.CreateLoad(
+        ptrTy, ctx.builder.CreateConstGEP1_64(ctx.builder.getInt8Ty(), rawExc, 16), "exc_type_tag");
+    llvm::Value* nullTag = llvm::ConstantPointerNull::get(ptrTy);
+
+    // "dieser Typ und alles, was von ihm erbt" — statisch aus der Klassentabelle.
+    auto matchingNames = [&](const std::string& base) {
+        std::set<std::string> out;
+        if (base.empty()) return out;
+        out.insert(base);
+        for (const auto& kv : ctx.classes) {
+            std::string cur = kv.second.parentName;
+            for (int guard = 0; !cur.empty() && guard < 32; ++guard) {
+                if (cur == base) { out.insert(kv.first); break; }
+                auto it = ctx.classes.find(cur);
+                if (it == ctx.classes.end()) break;
+                cur = it->second.parentName;
+            }
         }
-        visitBlockStmt(tryStmt->catchBlock.get());
+        return out;
+    };
+
+    llvm::Function* strcmpFn = ctx.getFunction("strcmp", ctx.builder.getInt32Ty(), {ptrTy, ptrTy});
+    for (const auto& clause : tryStmt->catches) {
+        llvm::BasicBlock* handler  = llvm::BasicBlock::Create(ctx.context, "catch_run", func);
+        llvm::BasicBlock* nextTest = llvm::BasicBlock::Create(ctx.context, "catch_test", func);
+        if (clause.type.empty()) {
+            ctx.builder.CreateBr(handler);                  // Zweig ohne Typ faengt alles
+        } else {
+            // Ein Wurf ohne Tag (fremder Pfad) soll nicht verschwinden: er nimmt den Zweig.
+            llvm::BasicBlock* cmpBB = llvm::BasicBlock::Create(ctx.context, "catch_cmp", func);
+            ctx.builder.CreateCondBr(ctx.builder.CreateICmpEQ(typeTag, nullTag, "exc_tag_missing"),
+                                     handler, cmpBB);
+            ctx.builder.SetInsertPoint(cmpBB);
+            std::vector<std::string> names;
+            for (const auto& n : matchingNames(clause.type)) names.push_back(n);
+            for (size_t k = 0; k < names.size(); ++k) {
+                llvm::Value* lit = ctx.builder.CreateGlobalStringPtr(names[k], "catch_type_name");
+                llvm::Value* same = ctx.builder.CreateICmpEQ(
+                    ctx.builder.CreateCall(strcmpFn, {typeTag, lit}, "exc_tag_cmp"),
+                    ctx.builder.getInt32(0), "exc_tag_same");
+                llvm::BasicBlock* more = (k + 1 < names.size())
+                    ? llvm::BasicBlock::Create(ctx.context, "catch_cmp", func) : nextTest;
+                ctx.builder.CreateCondBr(same, handler, more);
+                ctx.builder.SetInsertPoint(more);
+            }
+        }
+
+        ctx.builder.SetInsertPoint(handler);
+        if (clause.body) {
+            if (!clause.var.empty()) {
+                llvm::Value* userExc = ctx.builder.CreateLoad(ptrTy, rawExc, "actual_exc_ptr");
+                IRType* targetTy = ctx.ir_gen->wrapType(ptrTy);
+                IRValue* alloca = ctx.ir_gen->createAlloca(targetTy, clause.var);
+                ctx.builder.CreateStore(userExc, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(alloca)));
+                Symbol sym;
+                sym.ir_alloca_inst = alloca;
+                sym.ir_type = ctx.ir_gen->getPointerTy();
+                sym.ir_element_type = targetTy;
+                sym.typeName = clause.type;
+                sym.excRecordSlot = recSlot;
+                ctx.symbol_table[clause.var] = sym;
+            }
+            visitBlockStmt(clause.body.get());
+        }
+        if (!ctx.builder.GetInsertBlock()->getTerminator()) {
+            emitScopeDrop(ctx, ctx.cleanupStack.back().front());
+            ctx.builder.CreateBr(contBlock);
+        }
+        ctx.builder.SetInsertPoint(nextTest);
     }
-    if (!ctx.builder.GetInsertBlock()->getTerminator()) {
-        emitScopeDrop(ctx, ctx.cleanupStack.back().front());
-        ctx.builder.CreateBr(contBlock);
+
+    // Kein Zweig passt: weiterreichen.  Das Objekt reist mit, also KEIN Drop hier.
+    {
+        llvm::Function* rethrowFn = ctx.getFunction("__cxa_rethrow", ctx.builder.getVoidTy(), {});
+        if (llvm::BasicBlock* ud = unwindDest(true)) {
+            llvm::BasicBlock* gone = llvm::BasicBlock::Create(ctx.context, "rethrow_unreachable", func);
+            ctx.builder.CreateInvoke(rethrowFn, gone, ud, {});
+            ctx.builder.SetInsertPoint(gone);
+        } else {
+            ctx.builder.CreateCall(rethrowFn, {});
+        }
+        ctx.builder.CreateUnreachable();
     }
     ctx.cleanupStack.pop_back();
     ctx.builder.SetInsertPoint(contBlock);
@@ -5717,7 +5791,7 @@ void Compiler::visitThrow(ThrowStmt* throwStmt) {
 
     llvm::Value* excAlloc = ctx.builder.CreateCall(
         ctx.getFunction("__cxa_allocate_exception", ptrTy, {ctx.builder.getInt64Ty()}),
-        {ctx.builder.getInt64(16)}, "exc_alloc");
+        {ctx.builder.getInt64(24)}, "exc_alloc");   // [0]=obj [8]=thunk [16]=Typ-Tag
     ctx.builder.CreateStore(rawObj, excAlloc);
     llvm::Value* thunk;
     if (rethrowRec) {
@@ -5730,6 +5804,20 @@ void Compiler::visitThrow(ThrowStmt* throwStmt) {
         thunk = tf ? static_cast<llvm::Value*>(tf) : llvm::ConstantPointerNull::get(ptrTy);
     }
     ctx.builder.CreateStore(thunk, ctx.builder.CreateConstGEP1_64(ctx.builder.getInt8Ty(), excAlloc, 8));
+
+    // spec/22: der Klassenname reist MIT — ohne ihn kann kein catch nach Typ waehlen
+    // (bis 18.10.2026 bekam __cxa_throw nullptr als Typinfo und jeder Handler fing alles).
+    llvm::Value* typeTag;
+    if (rethrowRec) {
+        llvm::Value* rec = ctx.builder.CreateLoad(ptrTy, rethrowRec, "rethrow_rec2");
+        typeTag = ctx.builder.CreateLoad(ptrTy, ctx.builder.CreateConstGEP1_64(
+                      ctx.builder.getInt8Ty(), rec, 16), "rethrow_tag");
+    } else if (!excClass.empty()) {
+        typeTag = ctx.builder.CreateGlobalStringPtr(excClass, "exc_type_tag");
+    } else {
+        typeTag = llvm::ConstantPointerNull::get(ptrTy);
+    }
+    ctx.builder.CreateStore(typeTag, ctx.builder.CreateConstGEP1_64(ctx.builder.getInt8Ty(), excAlloc, 16));
 
     // Record the exception's `message` (offset 0 of every Exception) for the top-level
     // uncaught handler in jitRun (spec/22).

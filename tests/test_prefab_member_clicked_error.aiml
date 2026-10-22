@@ -1,0 +1,43 @@
+# SPEC: 44_8_prefab_static,44_8_vocab
+# Negativ-Test (Tier 2b, spec/44_8): die LESENDEN Kindmethoden.  Ein Tippfehler
+# in child_clicked ergibt einen stumm toten Knopf (kein Wurf, keine Meldung —
+# ein fehlendes Kind heisst schlicht „nicht geklickt"), einer in text_value ein
+# stumm leeres Eingabefeld.  Genau deshalb muss der Compiler es sagen.
+#
+# Expected exit code: 1
+#
+# Diagnostic-Form:
+#   ...: '<.form'.child_clicked("send_bttn") addresses an unknown child of
+#   prefab 'FormPanel' — ...
+
+- prefab:
+    name: FormPanel
+    width: 100
+    height: 40
+    children:
+      - { name: send_btnx, type: button, x: 0, y: 0, width: 80, height: 20 }
+      - { name: host_input, type: text_input, x: 0, y: 20, width: 80, height: 20 }
+
+- class:
+    name: FormScreen
+    members:
+      - [form, prefab_instance]
+    methods:
+      - def:
+          name: init
+          body:
+            - set: [<.form, { call: [engine.instantiate, "FormPanel"] }]
+      - def:
+          name: poll
+          return: i32
+          body:
+            # Tippfehler: das Kind heisst send_btnx.  Ohne Check: toter Knopf.
+            - if: { condition: { eq: [{ call: [<.form.child_clicked, "send_bttn"] }, 1] }, then: [{ return: 1 }] }
+            - return: 0
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [scr, FormScreen]
+      - return: 0

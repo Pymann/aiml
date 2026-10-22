@@ -1,0 +1,81 @@
+# SPEC: 62_pipelines
+# spec/62 §13.5: Struktur ZUR LAUFZEIT bauen — Stufen in einer Schleife.
+#
+# test_pipeline_types.aiml zeigt die feste Form (ein Schritt, eine Stufe).
+# Hier geht es um die Frage, fuer die es die zusammengesetzte Form ueberhaupt
+# gibt: die Zahl der Stufen steht erst beim Laufen fest.  Genau das kann die
+# deklarierte Form nicht — ihr Gitter klappt beim UEBERSETZEN auf (§13.3).
+#
+# Expected exit code: 0
+
+- def:
+    name: do_work
+    return: i32
+    body:
+      - return: 0
+
+- def:
+    name: expect
+    args: [[what, string], [cond, i32]]
+    return: i32
+    body:
+      - if:
+          condition: { eq: [cond, 1] }
+          then: [{ print: ["  ok   ${what}"] }, { return: 0 }]
+      - print: ["  FAIL ${what}"]
+      - return: 1
+
+- def:
+    name: main
+    static_off: ["str_cmp"]
+    return: i32
+    body:
+      - decl: [fails, i32, 0]
+
+      # Die Namen kommen aus einer Liste — sie koennten ebenso aus einer Datei,
+      # einer Datenbank oder einer RPC-Antwort kommen.  Das ist der Punkt.
+      - decl: [names, list<string>]
+      - call: [names.push, "fetch"]
+      - call: [names.push, "build"]
+      - call: [names.push, "test"]
+
+      - decl: [pipe, pipeline, { call: [pipeline.new] }]
+      - call: [pipe.set_name, "zusammengebaut"]
+      - decl: [modes, list<string>]
+      - call: [modes.push, "debug"]
+      - call: [modes.push, "release"]
+      - call: [pipe.add_param, "mode", modes]
+
+      - decl: [prev, string, ""]
+      - decl: [nix, i32, 0]
+      - while:
+          condition: { lt: [nix, names.len] }
+          body:
+            - decl: [name_txt, string, { at: [names, nix] }]
+            - set: [nix, { +: [nix, 1] }]
+            - decl: [stp, step, { call: [step.new] }]
+            - call: [stp.set_name, name_txt]
+            # Der Rumpf ist ein BUNDLE, kein Text: uebersetzt und geprueft
+            # (F62-85), und sein Inhalt bildet den Cache-Schluessel (§8).
+            # `pure: true` BEWEIST die Reinheit — ohne das gilt `cache: pure`
+            # als unbelegt und die Laufzeit sagt es (F62-103).
+            - call: [stp.set_body, { call: [sys.bundle, "do_work", { context: true, pure: true }] }]
+            - call: [stp.set_cache, CacheClass.pure]
+            - call: [stp.use_arg, "mode"]
+            # Reihenfolge ueber `needs` — nur auf FRUEHERE (F62-9).
+            - if: { condition: { gt: [prev.len, 0] }, then: [{ call: [stp.add_need, prev] }] }
+            - set: [prev, name_txt]
+            - decl: [stg, stage, { call: [stage.new] }]
+            - call: [stg.set_name, name_txt]
+            - call: [stg.add_step, stp]
+            - call: [pipe.add_stage, stg]
+
+      - set: [fails, { +: [fails, { call: [expect, "zwei Lanes aus zwei Werten", { eq: [{ call: [pipe.lane_count] }, 2] }] }] }]
+      - decl: [rc_run, i32, { call: [pipe.run] }]
+      - set: [fails, { +: [fails, { call: [expect, "der zusammengebaute Lauf gelingt (rc=${rc_run})", { eq: [rc_run, 0] }] }] }]
+
+      - if:
+          condition: { neq: [fails, 0] }
+          then: [{ print: ["test_pipeline_compose_loop FAIL (${fails})"] }, { return: 1 }]
+      - print: ["PASS test_pipeline_compose_loop"]
+      - return: 0

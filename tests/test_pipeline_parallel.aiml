@@ -1,0 +1,133 @@
+# SPEC: 62_pipelines
+# spec/62 §6: Lanes laufen parallel, und das darf am ERGEBNIS nichts aendern.
+#
+# Freigegeben ist das erst durch die Messung in
+# tests/test_concurrent_spawn_hazard.aiml (F62-14/F62-101).  Hier wird nicht
+# Geschwindigkeit geprueft — die haengt an der Maschine — sondern die Aussage
+# von F62-98: dieselbe Pipeline mit parallel=1 und parallel=4 muss dieselben
+# Schluessel, dieselben Zaehler und denselben Ausgang liefern.  Waere das
+# anders, waere die Nebenlaeufigkeit selbst eine Eingabe, und ein Treffer
+# haenge davon ab, wie schnell die Maschine gerade war.
+# Expected exit code: 0
+
+- decl: [g_events, i32, 0]
+
+- class:
+    name: StepFailed
+    members: [[message, string]]
+
+- def:
+    name: lane_work
+    return: i32
+    body: [{ return: 0 }]
+
+- def:
+    name: lane_bad
+    return: i32
+    body:
+      - throw: { new: StepFailed, message: "geplatzt" }
+      - return: 0
+
+- def:
+    name: count_events
+    args: [[event, ref<StepRun>]]
+    body:
+      - set: [g_events, { +: [g_events, 1] }]
+
+- def:
+    name: expect
+    args: [[what, string], [cond, i32]]
+    return: i32
+    body:
+      - if:
+          condition: { eq: [cond, 1] }
+          then: [{ print: ["  ok   ${what}"] }, { return: 0 }]
+      - print: ["  FAIL ${what}"]
+      - return: 1
+
+# eight_lanes: 2x2x2 = acht Lanes, ein Schritt, der ALLE Achsen deklariert —
+# damit jede Lane wirklich arbeitet und nichts trifft.
+- def:
+    name: eight_lanes
+    args: [[par, i32], [broken, i32]]
+    return: pipeline
+    body:
+      - decl: [stp, step, { call: [step.new] }]
+      - call: [stp.set_name, "work"]
+      - if:
+          condition: { eq: [broken, 1] }
+          then: [{ call: [stp.set_body, { call: [sys.bundle, "lane_bad", { context: true }] }] }]
+          else: [{ call: [stp.set_body, { call: [sys.bundle, "lane_work", { context: true }] }] }]
+      - call: [stp.set_cache, CacheClass.pure]
+      - call: [stp.use_arg, "arch"]
+      - call: [stp.use_arg, "compiler"]
+      - call: [stp.use_arg, "mode"]
+      - if: { condition: { eq: [broken, 1] }, then: [{ call: [stp.set_on_fail, OnFail.pipeline] }] }
+      - decl: [stg, stage, { call: [stage.new] }]
+      - call: [stg.set_name, "only"]
+      - call: [stg.add_step, stp]
+      - decl: [arch, list<string>]
+      - call: [arch.push, "x86_64"]
+      - call: [arch.push, "arm64"]
+      - decl: [comp, list<string>]
+      - call: [comp.push, "gcc"]
+      - call: [comp.push, "clang"]
+      - decl: [mode, list<string>]
+      - call: [mode.push, "debug"]
+      - call: [mode.push, "release"]
+      - decl: [pipe, pipeline, { call: [pipeline.new] }]
+      - call: [pipe.set_name, "parallel"]
+      - call: [pipe.add_param, "arch", arch]
+      - call: [pipe.add_param, "compiler", comp]
+      - call: [pipe.add_param, "mode", mode]
+      - call: [pipe.add_stage, stg]
+      - call: [pipe.set_parallel, par]
+      - return: pipe
+
+- def:
+    name: main
+    static_off: ["str_cmp"]
+    return: i32
+    body:
+      - decl: [fails, i32, 0]
+
+      # ── seriell: der Bezugswert ─────────────────────────────────────────
+      - set: [g_events, 0]
+      - decl: [serial, pipeline, { call: [eight_lanes, 1, 0] }]
+      - decl: [rc_s, i32, { call: [serial.run, count_events] }]
+      - decl: [ran_s, i32, { call: [serial.ran_count] }]
+      - decl: [ev_s, i32, g_events]
+      - set: [fails, { +: [fails, { call: [expect, "seriell: acht Lanes laufen durch", { eq: [rc_s, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "seriell: acht Ausfuehrungen", { eq: [ran_s, 8] }] }] }]
+
+      # ── parallel: gleiches Ergebnis, gleiche Zaehler ────────────────────
+      - set: [g_events, 0]
+      - decl: [par4, pipeline, { call: [eight_lanes, 4, 0] }]
+      - decl: [rc_p, i32, { call: [par4.run, count_events] }]
+      - set: [fails, { +: [fails, { call: [expect, "parallel: derselbe Ausgang", { eq: [rc_p, rc_s] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "parallel: dieselbe Zahl Ausfuehrungen", { eq: [{ call: [par4.ran_count] }, ran_s] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "parallel: nichts getroffen, nichts doppelt", { eq: [{ call: [par4.reused_count] }, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "parallel: der Beobachter sieht jede Lane genau einmal", { eq: [g_events, ev_s] }] }] }]
+
+      # ── zweiter Lauf trifft auch parallel in allen acht Lanes ──────────
+      - decl: [rc_p2, i32, { call: [par4.run] }]
+      - set: [fails, { +: [fails, { call: [expect, "parallel: der zweite Lauf trifft achtmal", { eq: [{ call: [par4.reused_count] }, 8] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "parallel: die Schluessel sind also dieselben", { eq: [rc_p2, 0] }] }] }]
+
+      # ── auto (parallel = 0): ein Kern je Lane, gleiches Ergebnis ───────
+      - decl: [auto_p, pipeline, { call: [eight_lanes, 0, 0] }]
+      - decl: [rc_a, i32, { call: [auto_p.run] }]
+      - set: [fails, { +: [fails, { call: [expect, "auto: derselbe Ausgang", { eq: [rc_a, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "auto: dieselbe Zahl Ausfuehrungen", { eq: [{ call: [auto_p.ran_count] }, 8] }] }] }]
+
+      # ── on_fail=pipeline bremst auch parallel: nicht alle acht laufen ──
+      - decl: [broke, pipeline, { call: [eight_lanes, 4, 1] }]
+      - decl: [rc_b, i32, { call: [broke.run] }]
+      - set: [fails, { +: [fails, { call: [expect, "parallel: der Fehlschlag kommt an", { neq: [rc_b, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "parallel: on_fail=pipeline stoppt die Vergabe", { lt: [{ call: [broke.attempt_count] }, 8] }] }] }]
+
+      - if:
+          condition: { neq: [fails, 0] }
+          then: [{ print: ["test_pipeline_parallel FAIL (${fails})"] }, { return: 1 }]
+      - print: ["test_pipeline_parallel PASS"]
+      - return: 0

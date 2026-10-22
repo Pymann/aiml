@@ -1,0 +1,149 @@
+# SPEC: 44_0_input
+# spec/44_0 §2.3 + §8.3a: die EREIGNIS-Schicht (pend_*) und ihre Zusicherung.
+#
+# Worum es geht: im Browser-Zweig schreiben die Ereignis-Handler nicht in die
+# frame-sichtbaren Slots, sondern in eine Zwischenschicht, die `update()` am
+# Frame-Anfang uebernimmt.  Die Handler laufen zwischen den Frames UND mitten im
+# Frame — jeder blockierende Netzaufruf gibt per emscripten_sleep an die
+# Ereignisschleife ab.  §2.3 sagt dazu normativ: eine waehrend eines Frames
+# entstandene Kante wird AUFBEWAHRT und im naechsten Frame gemeldet.
+#
+# Der Fall, auf den es ankommt: der Benutzer laesst eine gezogene Karte los,
+# sieht nichts passieren (der Frame haengt im Netzaufruf) und drueckt ungeduldig
+# nochmal.  Release und Druck liegen damit in DERSELBEN Luecke.  Loeschte der
+# Druck die noch nicht ausgelieferte ended-Kante, waere der Drop ersatzlos weg —
+# ununterscheidbar von "die Karte laesst sich nicht ziehen".  Genau dieser
+# Fehler stand bis 2026-10-20 in bin_mousedown, bin_touchstart und im nativen
+# Druckpfad; er blieb unentdeckt, weil die Injektion diese Schicht umging.
+#
+# Zweiter Teil: der bewahrte Rand allein genuegt nicht.  Wird er einen Frame
+# spaeter gemeldet, steht der Cursor woanders — womoeglich auf dem neuen
+# Druckpunkt.  Wer den Drop dann ueber mouse_pos_* aufloest, trifft das falsche
+# Ziel, und das ist schlimmer als ein verlorener Drop.  Darum traegt der Drop
+# seine eigene Position (drag_end_x/y), und der Test bewegt die Maus zwischen
+# Loslassen und zweitem Druck, damit beide Punkte unterscheidbar sind.
+#
+# Grenze dieses Tests: er treibt die *_pending-Hooks, nicht die DOM-Handler
+# selbst (die laufen nur in einem echten Browser).  Beide folgen derselben
+# Regel, und §8.3a schreibt das fest — aber geprueft ist der Hook.
+# Requires: wasm
+#   Die pend_*-Schicht existiert nur im wasm-Build; nativ gibt es sie nicht.
+#   Laeuft ueber run_wasm_tests.sh.
+# Expected exit code: 0
+
+- def:
+    name: main
+    static_off: ["str_cmp"]
+    return: i32
+    body:
+      - call: [input.init, null]
+
+      # ── Druck in der Ereignis-Schicht ist NICHT sofort sichtbar ──────────
+      # Das ist die Gegenprobe, dass hier wirklich die pend-Schicht liegt und
+      # nicht derselbe Pfad wie bei post_mouse_down.
+      - call: [input.post_mouse_move_pending, 100.0, 100.0]
+      - call: [input.post_mouse_down_pending, 0]
+      - if:
+          condition: { neq: [{ call: [input.mouse_pressed, 0] }, 0] }
+          then: [{ call: [log.error, "FAIL pend-Druck war sofort sichtbar — dann ist es die Frame-Schicht, der Test waere wertlos"] }, { return: 1 }]
+      - call: [input.update]
+      - if:
+          condition: { neq: [{ call: [input.mouse_pressed, 0] }, 1] }
+          then: [{ call: [log.error, "FAIL pend-Druck wurde vom update nicht ausgeliefert"] }, { return: 1 }]
+      - if:
+          condition: { neq: [{ call: [input.mouse_button, 0] }, 1] }
+          then: [{ call: [log.error, "FAIL Taste gilt nach dem pend-Druck nicht als gehalten"] }, { return: 1 }]
+
+      # ── Schwelle ueberschreiten → started-Kante, ebenfalls gelatcht ──────
+      # Schwelle ist 5 px (Default), 12 px ueberschreiten sie sicher.
+      - call: [input.post_mouse_move_pending, 100.0, 112.0]
+      - if:
+          condition: { neq: [{ call: [input.drag_started, 0] }, 0] }
+          then: [{ call: [log.error, "FAIL started-Kante war sofort sichtbar statt gelatcht"] }, { return: 1 }]
+      - call: [input.update]
+      - if:
+          condition: { neq: [{ call: [input.drag_started, 0] }, 1] }
+          then: [{ call: [log.error, "FAIL started-Kante wurde nicht ausgeliefert"] }, { return: 1 }]
+      - if:
+          condition: { neq: [{ call: [input.drag_active, 0] }, 1] }
+          then: [{ call: [log.error, "FAIL drag_active=0 waehrend des Drags"] }, { return: 1 }]
+
+      # ── DER KERN: Loslassen, bewegen, nochmal druecken — alles in EINER
+      #    Luecke.  Danach ein einziges update.
+      - call: [input.post_mouse_up_pending, 0]
+      - call: [input.post_mouse_move_pending, 400.0, 400.0]
+      - call: [input.post_mouse_down_pending, 0]
+      - call: [input.update]
+
+      - if:
+          condition: { neq: [{ call: [input.drag_ended, 0] }, 1] }
+          then: [{ call: [log.error, "FAIL der zweite Druck hat die ended-Kante geloescht — der Drop ist ersatzlos weg (spec/44_0 §2.3)"] }, { return: 1 }]
+      - if:
+          condition: { neq: [{ call: [input.drag_cancelled, 0] }, 0] }
+          then: [{ call: [log.error, "FAIL Loslassen wurde als Abbruch gemeldet"] }, { return: 1 }]
+      # Der Drop gehoert an den Loslasspunkt (100/112), NICHT an den neuen
+      # Druckpunkt (400/400) und nicht an den Live-Cursor.
+      - decl: [end_x, f32, { call: [input.drag_end_x, 0] }]
+      - decl: [end_y, f32, { call: [input.drag_end_y, 0] }]
+      - if:
+          condition: { neq: [end_x, 100.0] }
+          then: [{ call: [log.error, "FAIL drag_end_x=${end_x}, losgelassen wurde bei 100 — der Drop wuerde das falsche Ziel treffen"] }, { return: 1 }]
+      - if:
+          condition: { neq: [end_y, 112.0] }
+          then: [{ call: [log.error, "FAIL drag_end_y=${end_y}, losgelassen wurde bei 112"] }, { return: 1 }]
+      # Gegenprobe: der neue Druck ist ebenfalls angekommen, mit SEINEM Punkt.
+      - if:
+          condition: { neq: [{ call: [input.mouse_pressed, 0] }, 1] }
+          then: [{ call: [log.error, "FAIL der zweite Druck wurde nicht ausgeliefert"] }, { return: 1 }]
+      - decl: [org_x, f32, { call: [input.drag_origin_x, 0] }]
+      - if:
+          condition: { neq: [org_x, 400.0] }
+          then: [{ call: [log.error, "FAIL drag_origin_x=${org_x}, der zweite Druck lag bei 400 — Loslass- und Druckpunkt sind nicht getrennt"] }, { return: 1 }]
+
+      # ── Startpunkt gehoert zu SEINER Kante, nicht zum letzten Druck ─────
+      # Die Folge, auf die es ankommt: Druecken A -> ziehen -> loslassen ->
+      # Druecken B, alles in EINER Luecke.  Der naechste Frame meldet dann
+      # started UND ended von Drag A, waehrend drag_origin_* schon auf B zeigt.
+      # Haengt die Aufnahme an origin, greift sie die Karte an B — ein Zug, den
+      # niemand begonnen hat.  Darum wird der Startpunkt mit seiner Kante
+      # gelatcht (spec/44_0 §2.3).
+      - call: [input.post_mouse_up_pending, 0]
+      - call: [input.update]
+
+      - call: [input.post_mouse_move_pending, 10.0, 10.0]
+      - call: [input.post_mouse_down_pending, 0]
+      - call: [input.post_mouse_move_pending, 10.0, 30.0]
+      - call: [input.post_mouse_up_pending, 0]
+      - call: [input.post_mouse_move_pending, 380.0, 380.0]
+      - call: [input.post_mouse_down_pending, 0]
+      - call: [input.update]
+
+      - if:
+          condition: { neq: [{ call: [input.drag_started, 0] }, 1] }
+          then: [{ call: [log.error, "FAIL started-Kante von Drag A fehlt"] }, { return: 1 }]
+      - if:
+          condition: { neq: [{ call: [input.drag_ended, 0] }, 1] }
+          then: [{ call: [log.error, "FAIL ended-Kante von Drag A fehlt"] }, { return: 1 }]
+      - decl: [st_x, f32, { call: [input.drag_start_x, 0] }]
+      - decl: [st_y, f32, { call: [input.drag_start_y, 0] }]
+      - if:
+          condition: { neq: [st_x, 10.0] }
+          then: [{ call: [log.error, "FAIL drag_start_x=${st_x}, Drag A begann bei 10 — die Aufnahme griffe am falschen Punkt"] }, { return: 1 }]
+      - if:
+          condition: { neq: [st_y, 10.0] }
+          then: [{ call: [log.error, "FAIL drag_start_y=${st_y}, Drag A begann bei 10"] }, { return: 1 }]
+      - if:
+          condition: { neq: [{ call: [input.drag_end_x, 0] }, 10.0] }
+          then: [{ call: [log.error, "FAIL drag_end_x gehoert nicht zum Loslassen von Drag A"] }, { return: 1 }]
+      - if:
+          condition: { neq: [{ call: [input.drag_end_y, 0] }, 30.0] }
+          then: [{ call: [log.error, "FAIL drag_end_y gehoert nicht zum Loslassen von Drag A"] }, { return: 1 }]
+      # Gegenprobe: origin IST weitergewandert — sonst waere der Test wertlos,
+      # weil start und origin zufaellig uebereinstimmten.
+      - decl: [og_x, f32, { call: [input.drag_origin_x, 0] }]
+      - if:
+          condition: { neq: [og_x, 380.0] }
+          then: [{ call: [log.error, "FAIL drag_origin_x=${og_x}, der zweite Druck lag bei 380 — start und origin sind nicht getrennt, der Test waere wertlos"] }, { return: 1 }]
+
+      - call: [log.info, "PASS input_pending_layer_wasm"]
+      - return: 0

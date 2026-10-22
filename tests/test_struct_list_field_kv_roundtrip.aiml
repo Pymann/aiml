@@ -50,7 +50,7 @@
     condition: { neq: [direct_n, 3] }
     then:
       - print: ["FAIL direct.len: expected 3, got ${direct_n}"]
-      - exit: [1]
+      - call: [sys.exit, 1]
 
 # Step 3: persist to mmap kv
 - call: [g_actions.set, g_act.var_id, g_act]
@@ -63,13 +63,13 @@
     condition: { neq: [round_n, 3] }
     then:
       - print: ["FAIL roundtrip.len: expected 3, got ${round_n}"]
-      - exit: [1]
+      - call: [sys.exit, 1]
 
 - decl: [var_r0, string, { at: [round_lst, 0] }]
 - if:
     condition: { neq: [var_r0, "alpha"] }
     then:
       - print: ["FAIL roundtrip[0]: expected 'alpha', got '${var_r0}'"]
-      - exit: [1]
+      - call: [sys.exit, 1]
 
 - print: ["PASS test_struct_list_field_kv_roundtrip"]

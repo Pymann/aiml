@@ -12,6 +12,7 @@
 #include "cascade_builder.h"
 #include "cascade_class_builder.h"
 #include "classgroup_builder.h"
+#include "service_builder.h"
 #include "groupmethods_builder.h"
 #include "alias_builder.h"
 #include "namespace_builder.h"
@@ -106,6 +107,10 @@ bool RootState::OnScalar(const std::string& value, const std::string& tag) {
         }
         else if (currentKey == "classgroup") {
              builder->pushState(std::make_unique<ClassGroupBuilder>(builder));
+             return true;
+        }
+        else if (currentKey == "service") {
+             builder->pushState(std::make_unique<ServiceBuilder>(builder));
              return true;
         }
         else if (currentKey == "groupmethods") {

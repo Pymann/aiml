@@ -1,0 +1,52 @@
+# SPEC: 66_services
+# M2: a declared service registers; the body stays an ordinary def; the reflection
+# table (§7) reports verb, path and roles exactly as declared.
+# Expected exit code: 0
+- import: "tests/services/_models.aiml"
+- import: "tests/services/_auth.aiml"
+
+- service:
+    name: LioApi
+    base: "/api/v1"
+    transport: [rpc]
+    auth: TokenAuth
+    endpoints:
+      - def:
+          name: resolve_component
+          http: [post, "/components/resolve"]
+          roles: [viewer]
+          args: [[req, ResolveReq]]
+          return: ResolveResp
+          body:
+            - decl: [out, ResolveResp]
+            - set: [out.spdx, "Apache-2.0"]
+            - set: [out.confidence, 90]
+            - return: out
+
+- def:
+    name: main
+    static_off: ["str_cmp"]
+    return: i32
+    body:
+      # the body is reachable as an ordinary function — same code, every transport
+      - decl: [req, ResolveReq]
+      - set: [req.purl, "pkg:conan/wolfssl@5.6.0"]
+      - decl: [direct, ResolveResp, { call: [LioApi_resolve_component, req] }]
+      - if: { condition: { neq: [direct.spdx, "Apache-2.0"] }, then: [{ print: ["FAIL body not callable"] }, { return: 1 }] }
+
+      # spec/49: der Einstieg komponiert eine Klasse aus einer anderen Datei
+      - decl: [gate, ptr<TokenAuth>, { new: TokenAuth }]
+      - free: gate
+
+      # the reflection table describes what was declared (§7)
+      - decl: [api, ptr<LioApi>, { new: LioApi }]
+      - decl: [endpoints, list<ServiceEndpoint>, { call: [LioApi__describe] }]
+      - if: { condition: { neq: [endpoints.len, 1] }, then: [{ print: ["FAIL describe len=${endpoints.len}"] }, { return: 2 }] }
+      - decl: [first, ServiceEndpoint, { at: [endpoints, 0] }]
+      - if: { condition: { neq: [first.name, "resolve_component"] }, then: [{ print: ["FAIL name=${first.name}"] }, { return: 3 }] }
+      - if: { condition: { neq: [first.verb, "post"] }, then: [{ print: ["FAIL verb=${first.verb}"] }, { return: 4 }] }
+      - if: { condition: { neq: [first.path, "/api/v1/components/resolve"] }, then: [{ print: ["FAIL path=${first.path}"] }, { return: 5 }] }
+      - if: { condition: { neq: [first.request_type, "ResolveReq"] }, then: [{ print: ["FAIL req type=${first.request_type}"] }, { return: 6 }] }
+      - free: api
+      - print: ["test_service_describe PASS"]
+      - return: 0

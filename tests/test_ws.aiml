@@ -9,6 +9,7 @@
 - decl: [var_fd, i32]
 - set: [var_fd, { call: [ws.fd, srv0] }]
 - print: ["ws server var_fd (should be > 0): ${var_fd}"]
+- if: { condition: { lte: [var_fd, 0] }, then: [{ print: ["FAIL ws.server fd=${var_fd}"] }, { call: [sys.exit, 1] }] }
 - call: [ws.close, srv0]
 - print: ["lifecycle done"]
 
@@ -25,6 +26,7 @@
       - decl: [msg, string]
       - set: [msg, { call: [ws.recv, client] }]
       - print: ["ws server got: ${msg}"]
+      - if: { condition: { neq: [msg, "ws_ping"] }, then: [{ print: ["FAIL ws server got '${msg}'"] }, { call: [sys.exit, 1] }] }
       - call: [ws.send, client, "ws_pong"]
       - call: [ws.close, client]
       - call: [ws.close, srv]
@@ -35,10 +37,12 @@
 
 - decl: [var_c, ws_handle]
 - set: [var_c, { call: [ws.connect, "127.0.0.1", 19891, "/chat"] }]
+- if: { condition: { peq: [var_c, null] }, then: [{ print: ["FAIL ws.connect"] }, { call: [sys.exit, 1] }] }
 - call: [ws.send, var_c, "ws_ping"]
 - decl: [resp, string]
 - set: [resp, { call: [ws.recv, var_c] }]
 - print: ["ws client got: ${resp}"]
+- if: { condition: { neq: [resp, "ws_pong"] }, then: [{ print: ["FAIL ws client got '${resp}'"] }, { call: [sys.exit, 1] }] }
 - call: [ws.close, var_c]
 - call: [var_t.join]
 
@@ -59,20 +63,24 @@
       - decl: [msg, string]
       - set: [msg, { call: [ws.recv, client] }]
       - print: ["wss server got: ${msg}"]
+      - if: { condition: { neq: [msg, "wss_ping"] }, then: [{ print: ["FAIL wss server got '${msg}'"] }, { call: [sys.exit, 1] }] }
       - call: [ws.send, client, "wss_pong"]
       - call: [ws.close, client]
       - call: [ws.close, srv]
 
+- call: [mirror.tls_insecure, 1]   # self-signed test cert
 - decl: [var_t2, thread_handle]
 - set: [var_t2, { spawn: [wss_echo_server] }]
 - call: [time.sleep_ms, 200]
 
 - decl: [var_c2, ws_handle]
 - set: [var_c2, { call: [wss.connect, "127.0.0.1", 19892, "/"] }]
+- if: { condition: { peq: [var_c2, null] }, then: [{ print: ["FAIL wss.connect"] }, { call: [sys.exit, 1] }] }
 - call: [ws.send, var_c2, "wss_ping"]
 - decl: [resp2, string]
 - set: [resp2, { call: [ws.recv, var_c2] }]
 - print: ["wss client got: ${resp2}"]
+- if: { condition: { neq: [resp2, "wss_pong"] }, then: [{ print: ["FAIL wss client got '${resp2}'"] }, { call: [sys.exit, 1] }] }
 - call: [ws.close, var_c2]
 - call: [var_t2.join]
 

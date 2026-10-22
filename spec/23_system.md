@@ -64,10 +64,29 @@
 # Exit Progam
 - call: [sys.exit, 1]
 
+### Es gibt kein `exit:`-Statement
+
+Das Programm endet mit `call: [sys.exit, N]` — und **nur** damit.  Ein Statement
+`- exit: [1]` ist KEIN gueltiges aiml; der Compiler weist es seit 2026-10-15 als
+unbekannten Statement-Schluessel ab (spec/49 §49.x).
+
+Das steht hier, weil es teuer war: `- exit: [1]` wurde vom Statement-Builder
+still verworfen (unbekannter Schluessel → `nullptr`, kein Wort).  54 Stellen im
+Testkorpus bauten darauf — jeder FAIL-Zweig endete mit `- exit: [1]`, lief
+durch und lieferte Rueckgabewert **0**.  Die Suite meldete also PASS fuer Tests,
+die „FAIL" druckten.  Ein zweiter Weg zum selben Ziel waere ueberfluessig
+gewesen; was fehlte, war die Fehlermeldung.
+
 # Command Line Arguments
 # Access logic to argv/argc
 - decl: [first_arg, string]
 - set: [first_arg, { call: [sys.get_arg, 1] }]
+#
+# JIT: `sys.get_arg` returns "" for EVERY index. `main(argc, argv)` writes the `__argv`/`__argc`
+# globals (compiler.cpp, AOT path only); in a `aiml -r` run nothing writes them, `__argv` stays
+# null and the safety branch in SysGetArg yields the empty string. A program that reads its own
+# arguments therefore behaves differently under `aiml -r` than as a built binary — measured
+# 16.10.2026, previously undocumented.
 
 # Absolute path of the running executable (Linux: /proc/self/exe), "" when unknown
 # (web, JIT runs report the compiler binary). Runtime-owned like sys.get_arg — for locating
@@ -124,70 +143,174 @@
 - print: ["${size} == ${size2}"]
 
 
-# 5. Process Management
-
-# Process Configuration Model
-# Equivalent to subprocess.run kwargs
-- model:
-    name: sys.model.ProcessOptions
-    fields:
-      - [cwd, string, ""]             # Working directory
-      - [env, map<string:string>, {}] # Environment variables (empty = inherit)
-      - [shell, bool, false]          # Run via shell
-      - [timeout, i32, -1]            # Timeout in ms (-1 = infinite)
-      - [capture_output, bool, false] # Capture stdout/stderr in buffer
-
 # sys.env
+
+> ✅ **Property-Form gefixt (2026-10-21):** `sys.env` ist hier als PROPERTY
+> dokumentiert, kompilierte aber zu einem NULLPOINTER (`ast_compiler_expr.cpp`),
+> waehrend nur die Call-Form `{ call: [sys.env] }` echte Daten lieferte. Folge:
+> `- set: [m, sys.env]` lief durch, der erste Lesezugriff (`.len`/`.contains`/
+> `.get`) dereferenzierte null → SIGSEGV. Beide Formen emittieren jetzt denselben
+> `aiml_sys_env`-Call; `tests/test_sys_env.aiml` prueft beide.
+>
+> ⚠️ **Lebensdauer (2026-10-11):** Ein mit `sys.env` erzeugtes `map<string:string>` ist ein
+> gewöhnliches Local. Ein Wert aus `envm.get(key)` ist **nur so lange gültig, wie die Map
+> lebt** — die in spec/61 zugesagte `incref` für String-Werte findet derzeit nicht statt.
+> Wer den Wert länger braucht (Rückgabe, Modellfeld), muss ihn kopieren, z. B. über
+> Interpolation: `- return: "${raw}"`. Siehe spec/61, Abschnitt Container-Lesezugriff.
 # Access to environment variables as a map
-# Type: map<string, string>
-- decl: [current_env, map<string, string>]
+# Type: map<string:string>  (der Compiler akzeptiert NUR die Doppelpunkt-Form;
+# `map<string, string>` ist ein Uebersetzungsfehler)
+- decl: [current_env, map<string:string>]
 - set: [current_env, sys.env]
-
-# process Type
-# Represents a system process, modeled after Python's subprocess.Popen
-# Members:
-#   args: list<string>      - Command and arguments used to spawn
-#   cwd: string             - Working directory
-#   env: map<string, string>- Environment variables
-#   pid: i64                - Process ID
-#   returncode: i32?        - Exit status; null while still running
-#   stdout_buffer: string   - Captured standard output
-#   stderr_buffer: string   - Captured standard error
-#   shell: bool             - Whether shell execution was used (default false)
-#
-# Methods:
-#   start() -> void         - Starts the process (if not auto-started)
-#   wait() -> i32           - Blocks until process finishes, returns exit code
-#   kill() -> void          - Terminates the process
-#   read_line() -> string   - Reads a line from stdout (blocking)
-#   read_err_line() -> string - Reads a line from stderr (blocking)
-#   eof() -> bool           - Returns true if process has finished and buffers are empty
-
-# sys.exe
-# Spawns a new process
-# Signature: sys.exe(argv: list<string>, options: sys.model.ProcessOptions) -> process
-- def:
-    name: sys.exe
-    args: [[argv, list<string>], [options, sys.model.ProcessOptions]]
-    return: process
-
-# Example Usage
-- decl: [args, list<string>]
-- set: [args, ["ls", "-la"]]
-
-# Option 1: Using Model Instance
-- decl: [opts, sys.model.ProcessOptions]
-- set: [opts, { new: sys.model.ProcessOptions }]
-- set: [opts.cwd, "/tmp"]
-- decl: [proc, process]
-- set: [proc, { call: [sys.exe, args, opts] }]
-
-# Option 2: Using Map (Structural Typing)
-- set: [proc, { call: [sys.exe, args, {cwd: "/var", shell: true}] }]
-
-# Option 3: Default Options (Empty Map)
-- set: [proc, { call: [sys.exe, args, {}] }]
 ```
+
+## 5. Process Management
+
+### 5.1 `sys.exe` — spawning
+
+```yaml
+# Signature: sys.exe(argv: list<string> [, options]) -> process
+- decl: [argv, list<string>, ["ls", "-la"]]
+- decl: [proc, process, { call: [sys.exe, argv] }]
+- decl: [proc2, process, { call: [sys.exe, argv, {cwd: "/tmp", capture: true, timeout: 5000}] }]
+```
+
+**Ein falsch typisiertes erstes Argument ist ein Uebersetzungsfehler** (seit 17.10.2026). Bis
+dahin war es ein **SIGSEGV**: ein String ist in LLVM ebenfalls ein `i8*`, rutschte darum durch
+die Zeiger-Weiche des Builtins und wurde von der Laufzeit als Listenkopf gelesen. Geprueft wird,
+was statisch bekannt ist — ein Literal ist nie eine Liste, und bei einer Variablen steht der
+deklarierte Typ im Symbol; ein zusammengesetzter Ausdruck bleibt ungeprueft (lieber keine
+Diagnose als eine falsche). Negativprobe: `tests/test_sys_exe_argv_type_neg.aiml`.
+
+`argv` is a `list<string>` variable (list literals exist only as `decl` initializers, spec/10).
+`argv[0]` is looked up in `PATH`. The process is started immediately. A spawn that fails
+(program not found, `cwd` missing, unreadable redirect target) returns a `null` process.
+
+`options` is an **option bag** — a map literal written at the call site (like `db.open_kv`),
+not a model. `bool` options must be literals (they are resolved at compile time); all others
+are expressions. Unknown keys are a compile error. All keys are optional:
+
+> **To be changed for `spec/62` F62-27 — `ExeOptions` becomes a built-in model.**  `spec/62`
+> needs these options as a reusable value: a pipeline builds one exec description per lane, hands
+> it around and stores it beside its step.  A map literal that exists only at a call site cannot
+> do that.
+>
+> The literal rule for `shell`/`capture`/`detach` protects nothing.  Measured in the compiler:
+> the three are stored as C++ `bool` in `ctx.exeOpts` (`context.h`) while the other six fields are
+> `llvm::Value*`, and at the call they are emitted as `getInt32(o.shell ? 1 : 0)` — so
+> `aiml_process_spawn` already receives them as ordinary runtime integers.  The restriction is an
+> artefact of the compiler's storage, not of the ABI.
+>
+> Lifting it therefore costs exactly one thing: the `capture: true` + `detach: true`
+> incompatibility is checked at compile time today (`ast_compiler_call.cpp`) and has to move into
+> the runtime, which returns a `null` process and logs the reason.  That is the known price, and it
+> is the usual one for turning a compile-time-only form into a value.
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `cwd` | `string` | `""` | Working directory (`""` = inherit). |
+| `env` | `map<string:string>` | inherit | Complete environment of the child (replaces, does not extend — take `sys.env` and `put` to extend). |
+| `shell` | `bool` | `false` | Run `/bin/sh -c argv[0]`; `argv[1..]` become `$0, $1, …` (as Python `shell=True`). |
+| `timeout` | `i32` | `-1` | Milliseconds from spawn (`-1` = none). See §5.3. |
+| `capture` | `bool` | `false` | stdout/stderr go to pipes → `stdout_buffer`, `stderr_buffer`, `read_line`, `read_err_line`. |
+| `stdout` | `string` | `""` | Redirect stdout to this file (created/truncated). Takes precedence over `capture` for stdout. |
+| `stderr` | `string` | `""` | Redirect stderr to this file (created/truncated). Takes precedence over `capture` for stderr. |
+| `detach` | `bool` | `false` | Durable process, §5.4. |
+| `status_file` | `string` | `""` | Only with `detach`: exit-status file, §5.4. |
+
+Without redirection or capture the child inherits stdin/stdout/stderr. **The child inherits
+no other descriptor:** `sys.exe` closes every descriptor `>= 3` in the child. In addition the
+descriptors the runtime keeps open are close-on-exec — `io.open`/`io.open_binary` files, the
+`log.set_file` target, `net`/`tls`/`ws`/`http`/`mirror` sockets, KV/store/WAL files and capture
+pipes. A child therefore never keeps a parent's network connection or database file open.
+
+### 5.2 The `process` type
+
+`process` is a Class-4 unique resource (spec/61 §2.1): move-only, released at owner drop.
+The drop closes the capture pipes and frees the handle; it neither waits for nor kills the
+child (a running child keeps running; the runtime reaps it later so no zombie accumulates).
+
+| Member (read-only) | Type | Meaning |
+|---|---|---|
+| `pid` | `i64` | Process id (for `detach`: the job's id, not the monitor's). |
+| `returncode` | `i32` | Exit status, **valid once `running()` is `false`**: `0..255` = exit code, `128+N` = killed by signal `N`, `124` = killed by `timeout`, `-1` = unknown (an attached process vanished without status, §5.4). `-1` while running. |
+| `stdout_buffer` | `string` | Captured stdout not consumed by `read_line` (complete after `wait()`). |
+| `stderr_buffer` | `string` | Same for stderr. |
+
+| Method | Returns | Meaning |
+|---|---|---|
+| `running()` | `bool` | Non-blocking status check; reaps a finished child and sets `returncode`. |
+| `wait()` | `i32` | Blocks until the process ends (draining capture pipes), returns `returncode`. |
+| `kill()` | `void` | `SIGKILL` (detached: its whole process group). |
+| `read_line()` | `string` | Next stdout line without the trailing `"\n"` (blocking); `""` at end of stream. |
+| `read_err_line()` | `string` | Same for stderr. |
+| `eof()` | `bool` | `true` when the process has ended and no captured output is left to read. |
+
+All members and methods are null-safe (a `null` process: `running()` false, `returncode -1`,
+`wait()` -1, strings `""`).
+
+### 5.3 Timeout
+
+With `timeout: ms`, a process still running when the deadline (spawn + `ms`) is reached while
+`wait()` or `running()` observes it is sent `SIGTERM`, then `SIGKILL` after 2 s; `returncode`
+becomes `124` (as GNU `timeout`). For a detached process the monitor enforces the deadline
+itself, independent of the parent.
+
+### 5.4 Durable processes — `detach`, `status_file`, `sys.process_attach`
+
+A detached process survives its parent (agent crash, restart, lost connection — the Jenkins
+durable-task pattern):
+
+```yaml
+- decl: [job_argv, list<string>, ["sh", "-c", script]]
+- decl: [job, process, { call: [sys.exe, job_argv,
+          {detach: true, stdout: "ws/job.log", stderr: "ws/job.log", status_file: "ws/job.status"}] }]
+- decl: [job_pid, i64, job.pid]          # persist this together with the status file path
+```
+
+- The runtime forks a **monitor** in a new session; the monitor starts the job as its own
+  process-group leader (`pgid == pid`), waits for it and writes `returncode` (decimal + `"\n"`)
+  **atomically** (temp file + rename) to `status_file`, then exits with the same code.
+- The job's stdin is `/dev/null`; stdout/stderr go to `/dev/null` unless redirected.
+  `capture: true` together with `detach: true` is a compile error.
+- While the parent lives, `running()`/`wait()`/`returncode` work as for any process.
+- After a parent restart, re-acquire the job with
+  `sys.process_attach(pid: i64, status_file: string) -> process`: `running()` is `true` while
+  `status_file` does not exist and `pid` is alive; once the file exists `returncode` is read from
+  it; if `pid` is gone without a status file, `running()` is `false` and `returncode` is `-1`.
+  `wait()` polls; `kill()` kills the job's process group. (PID reuse between restarts is not
+  detected — keep the status file next to the job's workspace.)
+- Without `status_file` the exit status is only observable while the parent lives.
+
+## 5.6 `sys.require_tools` — was die Umgebung mitbringen muss
+
+```aiml
+- decl: [fehlt, string, { call: [sys.require_tools, "git,gcc>=13,lib:yaml-cpp"] }]
+- if: { condition: { gt: [fehlt.len, 0] }, then: [{ print: ["fehlt:${fehlt}"] }] }
+```
+
+Eine Zeile, drei Formen, eine Antwort: `""` heisst „alles da", sonst stehen **alle**
+fehlenden Eintraege darin, durch Leerzeichen getrennt.
+
+| Form | Bedeutung | Pruefung |
+|---|---|---|
+| `git` | ein ausfuehrbares Programm | im `PATH`, ausfuehrbar |
+| `gcc>=13` | Programm mit Mindestversion | `--version`, erste Zahl, numerisch verglichen |
+| `lib:yaml-cpp` | eine Bibliothek | `pkg-config --exists` |
+
+- **F23-40** Die Antwort nennt **alles** Fehlende, nicht das erste.  Eine Pruefung, die beim
+  ersten Fehler aufhoert, erzeugt drei Laeufe statt einem — und einen Nutzer, der nach dem
+  dritten aufgibt.  Genau dafuer gibt es diesen Aufruf und nicht drei `sys.exe`.
+- **F23-41** Fehlt `pkg-config` selbst, gilt jede `lib:`-Anforderung als fehlend und wird
+  mit `(pkg-config fehlt)` genannt.  Still „ja" zu sagen waere die gefaehrliche Richtung:
+  der Bau liefe los und braeche am Linker ab.
+- **F23-42** Die Versionspruefung vergleicht die **erste Zahl** der ersten Ausgabezeile.
+  Das genuegt fuer `gcc 13.3.0` und `cmake 3.28` und ist absichtlich einfach; wer mehr
+  braucht, prueft selbst.  Was NICHT passiert: raten.  Gibt das Programm keine Zahl her,
+  gilt die Anforderung als nicht erfuellt und sagt das (`gcc>=13(hat ?)`).
+- **F23-43** Der Aufruf ist **ein** Ort fuer diese Frage.  aiml `spec/62` §18.2 (`requires:`)
+  und cosmos (doc/spec/110) rufen ihn beide auf — zwei Kopien derselben Pruefung laufen
+  auseinander, und die Haelfte, die schweigt, ist die gefaehrliche.
 
 ## 6. Memory Management
 
@@ -224,6 +347,18 @@
 - `io.open(...)` returns `null` on failure.
 - Callers are expected to check the returned handle before `io.read`, `io.write`
   or `io.close`.
+
+### `io.open` Modes
+
+The mode string is passed through to `fopen`, so the C modes apply: `"r"` read,
+`"w"` truncate/create, `"a"` **append**, each optionally with `+` (read+write)
+and `b` (binary).  `e` (close-on-exec) is added automatically (§5.1), so a
+`sys.exe` child never inherits the descriptor.
+
+- `io.write` is `strlen`-based: it stops at a `0x00` and **does not flush**.  For
+  binary-safe, immediately flushed writes use `buffer.write_string` +
+  `buffer.write_to` (spec/11) — relevant whenever another handle or process reads
+  the file while it is still being appended to.
 
 ## Proposed Binary File I/O Extensions (Not Implemented Yet)
 
@@ -286,8 +421,6 @@ except `io.read_u64_le`. Binary output goes through `buffer.write_to(f)` (spec/1
 
 ## Process State Semantics
 
-- `process.returncode` is nullable (`i32?`).
-- While the process is still running, `returncode == null`.
-- If process creation itself fails in an uncaught way, normal exception
-  propagation rules apply and an unhandled failure exits the program with
-  `sys.exit(2)`.
+- `process.returncode` is an `i32`, valid once `running()` is `false` (§5.2); there is no
+  nullable scalar in aiml.
+- A failed spawn returns a `null` process (§5.1); all process operations are null-safe.

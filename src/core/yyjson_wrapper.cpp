@@ -11,6 +11,7 @@
 #include <cstring>
 #include <cassert>
 #include <string>
+#include <vector>
 
 // ── Internal types ────────────────────────────────────────────────────────────
 
@@ -282,10 +283,112 @@ char* aiml_jw_done(void* wv) {
     return rc;
 }
 
-char* aiml_json_style_format(const char* json, int pretty, const char* indent, const char* newline_str) {
+// spec/29 §5.2a `bare`: `__type` aus dem FERTIGEN Dokument entfernen, auf jeder
+// Ebene.  Nach der Serialisierung statt waehrend ihr, weil der Stil ohnehin ein
+// Nachbearbeitungsschritt ist — damit bleibt der Schreibpfad (und sein IR)
+// unberuehrt, und `bare` kann nichts verfaelschen ausser diesem einen Schluessel.
+static void aiml_strip_type_keys(yyjson_mut_doc* doc, yyjson_mut_val* node) {
+    if (!node) return;
+    if (yyjson_mut_is_obj(node)) {
+        yyjson_mut_obj_remove_key(node, "__type");
+        yyjson_mut_obj_iter it;
+        yyjson_mut_obj_iter_init(node, &it);
+        yyjson_mut_val* key;
+        while ((key = yyjson_mut_obj_iter_next(&it))) {
+            aiml_strip_type_keys(doc, yyjson_mut_obj_iter_get_val(key));
+        }
+    } else if (yyjson_mut_is_arr(node)) {
+        yyjson_mut_val* elem;
+        yyjson_mut_arr_iter ait;
+        yyjson_mut_arr_iter_init(node, &ait);
+        while ((elem = yyjson_mut_arr_iter_next(&ait))) {
+            aiml_strip_type_keys(doc, elem);
+        }
+    }
+}
+
+static std::string aiml_json_bare_cpp(const char* json) {
+    yyjson_doc* in = yyjson_read(json, strlen(json), YYJSON_READ_NOFLAG);
+    if (!in) return std::string(json);                 // unlesbar → unveraendert
+    yyjson_mut_doc* doc = yyjson_doc_mut_copy(in, nullptr);
+    yyjson_doc_free(in);
+    if (!doc) return std::string(json);
+    aiml_strip_type_keys(doc, yyjson_mut_doc_get_root(doc));
+    char* out = yyjson_mut_write(doc, YYJSON_WRITE_NOFLAG, nullptr);
+    std::string res = out ? std::string(out) : std::string(json);
+    if (out) free(out);
+    yyjson_mut_doc_free(doc);
+    return res;
+}
+
+// spec/29 §5.2c `skip_empty`: leere MITGLIEDER entfernen — "" , [] und {}.
+// Nicht 0, nicht false, nicht null: eine Null ist ein Wert, kein Fehlen (F29-18).
+// Von unten nach oben, damit ein Objekt, das durch das Entfernen seiner
+// Mitglieder leer wird, selbst wegfaellt (F29-19).  Array-ELEMENTE bleiben
+// stehen, auch leere — ein entfernter Eintrag verschiebt alle folgenden (F29-20).
+static bool aiml_json_is_empty_val(yyjson_mut_val* v) {
+    if (!v) return false;
+    if (yyjson_mut_is_str(v)) { const char* t = yyjson_mut_get_str(v); return t && *t == 0; }
+    if (yyjson_mut_is_arr(v)) return yyjson_mut_arr_size(v) == 0;
+    if (yyjson_mut_is_obj(v)) return yyjson_mut_obj_size(v) == 0;
+    return false;
+}
+
+static void aiml_strip_empty(yyjson_mut_val* node) {
+    if (!node) return;
+    if (yyjson_mut_is_obj(node)) {
+        // Erst absteigen (unten aufraeumen), dann hier entscheiden.
+        {
+            yyjson_mut_obj_iter it;
+            yyjson_mut_obj_iter_init(node, &it);
+            yyjson_mut_val* key;
+            while ((key = yyjson_mut_obj_iter_next(&it)))
+                aiml_strip_empty(yyjson_mut_obj_iter_get_val(key));
+        }
+        // Entfernen waehrend des Laufs ist nicht erlaubt — Namen sammeln,
+        // danach loeschen.
+        std::vector<std::string> gone;
+        {
+            yyjson_mut_obj_iter it;
+            yyjson_mut_obj_iter_init(node, &it);
+            yyjson_mut_val* key;
+            while ((key = yyjson_mut_obj_iter_next(&it))) {
+                yyjson_mut_val* val = yyjson_mut_obj_iter_get_val(key);
+                const char* name = yyjson_mut_get_str(key);
+                if (name && aiml_json_is_empty_val(val)) gone.push_back(name);
+            }
+        }
+        for (const std::string& name : gone)
+            yyjson_mut_obj_remove_key(node, name.c_str());
+    } else if (yyjson_mut_is_arr(node)) {
+        yyjson_mut_val* elem;
+        yyjson_mut_arr_iter ait;
+        yyjson_mut_arr_iter_init(node, &ait);
+        while ((elem = yyjson_mut_arr_iter_next(&ait))) aiml_strip_empty(elem);
+    }
+}
+
+static std::string aiml_json_lean_cpp(const char* json) {
+    yyjson_doc* in = yyjson_read(json, strlen(json), YYJSON_READ_NOFLAG);
+    if (!in) return std::string(json);
+    yyjson_mut_doc* doc = yyjson_doc_mut_copy(in, nullptr);
+    yyjson_doc_free(in);
+    if (!doc) return std::string(json);
+    aiml_strip_empty(yyjson_mut_doc_get_root(doc));   // die WURZEL bleibt stehen
+    char* out = yyjson_mut_write(doc, YYJSON_WRITE_NOFLAG, nullptr);
+    std::string res = out ? std::string(out) : std::string(json);
+    if (out) free(out);
+    yyjson_mut_doc_free(doc);
+    return res;
+}
+
+char* aiml_json_style_format(const char* json, int pretty, const char* indent,
+                             const char* newline_str, int bare, int skip_empty) {
     if (!json) return aiml_strdup_cpp("");
-    if (!pretty) return aiml_strdup_cpp(json);
-    return aiml_strdup_cpp(aiml_pretty_json_cpp(json, indent, newline_str));
+    std::string work = bare ? aiml_json_bare_cpp(json) : std::string(json);
+    if (skip_empty) work = aiml_json_lean_cpp(work.c_str());
+    if (!pretty) return aiml_strdup_cpp(work.c_str());
+    return aiml_strdup_cpp(aiml_pretty_json_cpp(work.c_str(), indent, newline_str));
 }
 
 // ── Read API ──────────────────────────────────────────────────────────────────

@@ -30,6 +30,28 @@ namespace {
 const char* kUnsupportedStepFields[] = { "outputs" };
 const char* kUnsupportedStageFields[] = { "needs", "per", "runs_on", "outputs" };
 
+// Felder, die eine LAUFZEIT verlangen (spec/62 §18.1 F62-124).  Sie werden
+// nicht „noch nicht abgedeckt" genannt, denn das waere die falsche Auskunft:
+// die Form ist festgelegt, nur ausfuehren kann sie dieser Lauf nicht.  Ein
+// stiller Rueckfall auf das Dateisystem des Entwicklers waere schlimmer als
+// ein Lauf, der gar nicht startet — er hiesse „gegen ubuntu:24.04 gebaut" und
+// waere es nicht.
+struct RuntimeField { const char* name; const char* what; };
+const RuntimeField kRuntimeFields[] = {
+    { "image", "ein Wurzel-Dateisystem" },
+    { "push",  "einen Ort, an den ein Abbild geschrieben wird" },
+};
+
+// Wie ein Feld genannt wird, das eine Laufzeit braucht.
+std::string runtimeFieldMessage(const std::string& where, const std::string& pname,
+                                const char* field, const char* what, const char* level) {
+    return where + ": pipeline '" + pname + "': " + level + "-Feld '" + field +
+           "' verlangt " + what + " — dieser Lauf ist LOKAL und hat keine Laufzeit "
+           "(spec/62 §18.1 F62-124).  Entweder das Feld weglassen (dann laeuft die "
+           "Pipeline gegen diesen Rechner, F62-125), oder den Lauf ueber einen Wirt "
+           "starten, der Container kann (cosmos doc/spec/110).";
+}
+
 std::string indentBlock(const std::string& text, const std::string& pad) {
     std::string out = pad;
     for (char ch : text) {
@@ -111,6 +133,15 @@ bool expandPipelineDeclarations(const std::string& text, const std::string& wher
             ok = false;
             continue;
         }
+        // Auch auf PIPELINE-Ebene (spec/62 §18.1 F62-124): ein `image:` am Kopf
+        // waere sonst still weggefallen, und der Lauf liefe gegen den Wirt,
+        // waehrend der Autor ein anderes Wurzel-Dateisystem gelesen hat.
+        for (const RuntimeField& rf : kRuntimeFields) {
+            if (pl[rf.name]) {
+                LOG_ERROR(runtimeFieldMessage(where, pname, rf.name, rf.what, "pipeline"));
+                ok = false;
+            }
+        }
 
         // ── Achsen ──────────────────────────────────────────────────────────
         std::vector<std::pair<std::string, std::vector<std::string>>> axes;
@@ -182,6 +213,28 @@ bool expandPipelineDeclarations(const std::string& text, const std::string& wher
                                   "' wird noch nicht abgedeckt und darum abgelehnt "
                                   "(spec/62 F62-111)");
                         ok = false;
+                    }
+                }
+                for (const RuntimeField& rf : kRuntimeFields) {
+                    if (stg[rf.name]) {
+                        LOG_ERROR(runtimeFieldMessage(where, pname, rf.name, rf.what, "stage"));
+                        ok = false;
+                    }
+                }
+                // spec/62 §18.2 (F62-126): was die Umgebung mitbringen muss.
+                // Lokal ist das die beste Stelle fuer eine Pruefung — der Lauf
+                // laeuft ja GEGEN diesen Rechner (F62-125).  Geprueft wird vor
+                // dem ersten Schritt, mit `sys.require_tools` (spec/23 §5.6),
+                // damit es EINE Pruefung gibt und nicht zwei (F23-43).
+                std::string stageRequires;
+                if (stg["requires"]) {
+                    if (stg["requires"].IsSequence()) {
+                        for (const auto& r : stg["requires"]) {
+                            if (!stageRequires.empty()) stageRequires += ",";
+                            stageRequires += r.Scalar();
+                        }
+                    } else {
+                        stageRequires = stg["requires"].Scalar();
                     }
                 }
                 const std::string sname = scalarOr(stg["name"], "stage" + std::to_string(stageNo));
@@ -310,6 +363,19 @@ bool expandPipelineDeclarations(const std::string& text, const std::string& wher
                         helpers += "    return: " + retType + "\n";
                         helpers += "    body:\n";
                         helpers += prelude;
+                        // Die Vorbedingungen der Stufe gelten vor ihrem ersten
+                        // Schritt; danach waere die Haelfte der Arbeit schon
+                        // getan, und die Meldung kaeme zu spaet (F62-126).
+                        if (stepNo == 0 && !stageRequires.empty()) {
+                            helpers += "      - decl: [__missing_env, string, { call: [sys.require_tools, \"" +
+                                       stageRequires + "\"] }]\n";
+                            helpers += "      - if:\n";
+                            helpers += "          condition: { gt: [__missing_env.len, 0] }\n";
+                            helpers += "          then:\n";
+                            helpers += "            - call: [log.error, \"Stufe '" + sname +
+                                       "': Umgebung unvollstaendig —${__missing_env} (requires:, spec/62 §18.2)\"]\n";
+                            helpers += "            - throw: \"requires: Umgebung unvollstaendig —${__missing_env}\"\n";
+                        }
                         if (sp["body"] && sp["body"].IsSequence())
                             helpers += bodyBlock(sp["body"], "      ");
                         else

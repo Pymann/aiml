@@ -155,7 +155,7 @@ In the browser (WASM), only `ws://` and `wss://` are available.
 
 | Call | Return | Description |
 |--------|----------|--------------|
-| `mirror.listen(url: string)` | `mirror_session` | Listen for incoming connections; non-blocking |
+| `mirror.listen(url: string)` | `mirror_session` | Listen for incoming connections; non-blocking. **`null` bei Fehlschlag** (belegter Port u.a.) — die Rueckgabe MUSS mit `peq: [sess, null]` geprueft werden, sonst laeuft der Server als Zombie weiter: er loggt und tickt, hat aber keinen Socket und beantwortet nichts. |
 | `mirror.listen_max(url: string, max_peers: i32)` | `mirror_session` | With peer limit |
 | `mirror.listen_tls(url: string, cert: string, key: string)` | `mirror_session` | `wss://` host with a server cert (PEM cert + key paths) |
 
@@ -163,7 +163,9 @@ In the browser (WASM), only `ws://` and `wss://` are available.
 on a `wss://` URL fails, because the WSS server cannot complete a handshake without
 one. Use `mirror.listen_tls(url, cert, key)`; the underlying WSS server applies the
 hardened TLS defaults (min TLS 1.2, no SSLv2/3/TLS1.0/1.1, no compression — see
-chapter 32_4 §3.3). Example:
+chapter 32_4 §3.3). WS/WSS hosts accept asynchronously (chapter 32_4 §5.1):
+`session.update` never waits on a connecting client's handshake, so a stalled client
+cannot block the host tick (`tests/test_mirror_wss_stall.aiml`). Example:
 
 ```aiml
 - decl: [session, mirror_session,
@@ -261,6 +263,22 @@ Both queries are answered from the session thread (no implicit thread safety).
 2. Send changed `sync:` fields of owned objects as delta packets
 3. Execute RPC calls from peers
 4. Enqueue peer events (connect/disconnect)
+
+> **„Once per frame" ist eine Empfehlung, keine Zusicherung — und die
+> blockierenden Komfort-Aufrufe unterlaufen sie.** `session.send_and_await`,
+> `mirror.connect` und `connect_timeout` pumpen die Session **selbst**, in
+> 2-ms-Ticks, bis ihre Antwort da ist (§7, Request/Response). Wird einer davon
+> aus einer Frameloop gerufen, läuft `update()` also dutzende Male **pro Frame**
+> und an einem unvorhersehbaren Punkt — eingehende Snapshots und RPCs werden
+> dann mitten im Render-Durchlauf angewandt, nicht an einer definierten
+> Framegrenze. Die halbe Szene kann den alten, die andere Hälfte den neuen
+> Zustand zeigen.
+>
+> Für Anwendungen mit Frameloop (Spiel, UI) heißt das: **eigene Anfragen über
+> `send_request` + `take_response`** stellen (§7, „For asynchronous clients"),
+> `update()` genau einmal am Framebeginn rufen und die blockierenden Varianten
+> Werkzeugen, Skripten und Tests überlassen. `send_and_await` ist dort richtig,
+> wo es keinen Frame gibt, den es anhalten könnte.
 
 ---
 
@@ -360,6 +378,17 @@ answers (`reply_rpc`) and fan-out (`send_rpc` per receiver, or target `0` = broa
 most 4096 events / 64 MiB may be queued; a peer exceeding this is disconnected with a diagnostic
 (events of other consumers are never dropped to make room).
 
+> **Abandoned responses must be cancelled, not forgotten.** Because nothing is dropped to make
+> room, a queued response that no consumer will ever take counts against that limit forever. This
+> happens whenever an application stops caring about a request — a screen closes, a view changes,
+> a timeout elapses — and simply discards the request id: the response arrives, is queued, and
+> `take_response` can no longer reach it (it checks the id against the outstanding set first). An
+> application that does this often enough eventually gets its own peer disconnected.
+> Therefore: **call `cancel_request(id)` on every request you stop waiting for** — on timeout, on
+> view change, on match exit. It removes the queued response too (§7.2 table). A `poll_rpc` drain
+> loop is the other way out, but only if the application actually runs one; a client that uses
+> `take_response` exclusively has no drain and must cancel.
+
 ### Multi-Client Safety: `peer_id` vs `net_id`
 
 `net_id` in `rpc_event` (and `mirror_event`) is the **object-id** that the
@@ -423,7 +452,7 @@ need to avoid.
 | `session.reply_rpc(ev, method, arg[, model])` | - | Answer the request `ev`: sent to `ev`'s sender peer (from the connection), as a response carrying `ev.request_id`.  If `ev` was not a request, the reply is a plain push to the sender. |
 | `session.send_request(target, method, arg, model)` | `i64` | Async request: returns the request id (`> 0`), or `0` if it could not be sent (no peer with RPC v3 yet). |
 | `session.take_response(id, target_model)` | `i32` | `1` = the response of request `id` was decoded into `target_model`; `0` = not arrived yet; `-1` = protocol error (wrong method/type, undecodable — the request is finished). |
-| `session.cancel_request(id)` | - | Drop interest in request `id`; a late response is then discarded on arrival. |
+| `session.cancel_request(id)` | - | Drop interest in request `id`: a response that has **already arrived and been queued** is removed and freed, and a late one is discarded on arrival. After it, `take_response(id, …)` reports `-1` (the request is finished). Cancelling an unknown or already-finished id does nothing. |
 | `session.send_rpc(target, method, arg, model)` | - | Send RPC with `i32` plus typed model payload (same routing rule as above) |
 | `session.decode_rpc(ev, target_model)` | `i32` | Decode model payload from `ev` into `target_model`, transactionally: `0` = ok (the target's previous heap is released), `-1` = wrong type / decode error (target untouched) |
 | `session.send_and_await(target, method, req_model, out_model, timeout_ms)` | `i32` | Client convenience: send `req_model` as a request and wait up to `timeout_ms` (monotonic clock, including update/decode time) for **its** response — matched by request id and responding peer, then checked for `method=="set_result"` and `out_model`'s type.  `1` = decoded into `out_model`; `0` = timeout, peer without RPC v3, or a correlated but unusable response (finishes the request — no endless rescanning).  A response arriving after the timeout is discarded.  **Unrelated inbound RPCs keep their position.** |
@@ -587,6 +616,13 @@ model:
     - [net_id,  i32]         # affected object ID (for object_*); 0 for peer_* events
     - [peer_id, i32]         # unique per-connection peer id (host-assigned at accept); use this to identify clients in multi-tab/multi-client servers
 ```
+
+**Ordering between the event and RPC queues.** Events and RPCs are separate queues, so their
+relative order is not preserved: RPCs a peer sent just before its connection dropped can still be
+in the RPC queue when `peer_disconnected` is polled — draining events first then hands them out
+*after* the disconnect. A server that keys state by `peer_id` must therefore ignore (or answer
+without effect) RPCs from a `peer_id` it has already seen disconnect; a reconnecting client gets a
+new `peer_id` and re-sends. (`peer_id`s are never reused, so this check is exact.)
 
 ### `type_enum()` — typed event kind
 

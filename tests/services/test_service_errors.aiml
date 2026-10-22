@@ -1,0 +1,76 @@
+# SPEC: 66_services §8 — was der Rumpf wirft, wird zum Status: ServiceNotFound 404,
+# ServiceInvalid 400, alles andere 500 (Meldung geloggt, nicht nach aussen gegeben).
+# Expected exit code: 0
+- import: "tests/services/_models.aiml"
+
+- service:
+    name: ErrApi
+    base: "/api/v1"
+    transport: [rest]
+    auth: none
+    endpoints:
+      - def:
+          name: missing
+          http: [get, "/missing/:release_id"]
+          args: [[req, ResolveReq]]
+          return: ResolveResp
+          body:
+            - if:
+                condition: { gt: [req.release_id.len, 0] }
+                then:
+                  - throw: { new: ServiceNotFound, message: "kein Release ${req.release_id}" }
+            - decl: [out, ResolveResp]
+            - return: out
+      - def:
+          name: broken
+          http: [get, "/broken/:release_id"]
+          args: [[req, ResolveReq]]
+          return: ResolveResp
+          body:
+            - if:
+                condition: { gt: [req.release_id.len, 0] }
+                then:
+                  - throw: { new: ServiceInvalid, message: "so nicht" }
+            - decl: [out, ResolveResp]
+            - return: out
+
+- def:
+    name: status_for
+    static_off: ["str_cmp"]
+    args: [[route, string]]
+    return: i32
+    body:
+      - decl: [ask, url]
+      - set: [ask, { call: [http.parse_url, "http://127.0.0.1:23193/api/v1/${route}/rel-7"] }]
+      - decl: [answer, http_response_handle]
+      - set: [answer, { call: [http.get, ask] }]
+      - decl: [code, i32]
+      - set: [code, { call: [answer.status] }]
+      - call: [answer.free]
+      - return: code
+
+- def:
+    name: main
+    static_off: ["str_cmp"]
+    return: i32
+    body:
+      - decl: [bad, i32, 0]
+      - decl: [srv, http_server_handle]
+      - set: [srv, { call: [http.server, "127.0.0.1", 23193] }]
+      - decl: [api, ptr<ErrApi>, { new: ErrApi }]
+      - call: [api.serve_rest, srv]
+      - decl: [srv_thread, thread_handle]
+      - set: [srv_thread, { call: [srv.start_async] }]
+      - call: [time.sleep_ms, 200]
+
+      - decl: [not_found, i32, { call: [status_for, "missing"] }]
+      - if: { condition: { neq: [not_found, 404] }, then: [{ print: ["FAIL ServiceNotFound -> ${not_found}, erwartet 404"] }, { set: [bad, 1] }] }
+
+      - decl: [invalid, i32, { call: [status_for, "broken"] }]
+      - if: { condition: { neq: [invalid, 400] }, then: [{ print: ["FAIL ServiceInvalid -> ${invalid}, erwartet 400"] }, { set: [bad, 1] }] }
+
+      - call: [srv.stop]
+      - call: [srv_thread.join]
+      - free: api
+      - if: { condition: { eq: [bad, 0] }, then: [{ print: ["test_service_errors PASS"] }] }
+      - return: bad

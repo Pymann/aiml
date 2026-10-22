@@ -1,0 +1,113 @@
+# SPEC: 61_memory_management_DRAFT
+# Ein VIEW-ALIAS aus einem Container, per WERT in eine Methode gereicht — und
+# danach wird der Container wieder gelesen.
+#
+# spec/61 §6.3: `decl: [x, Model, { at: [liste, i] }]` aliast den inneren Heap
+# des Elements.  Reicht man dieses x per Wert weiter, bekommt der Aufgerufene
+# eine Kopie, deren Zeiger auf denselben Heap zeigen — und sein Verwerfen darf
+# den Container NICHT freigeben.
+#
+# Anlass: der WASM-Client stuerzte genau in dieser Lage ab (Alias aus
+# `g_live_cluster.pipelines`, per Wert in eine Methode).  Nativ laeuft so etwas
+# still durch, WASM prueft Grenzen.
+# Expected exit code: 0
+
+- model:
+    name: Inner
+    fields:
+      - [tag,   string]
+      - [items, list<string>]
+
+- model:
+    name: Outer
+    fields:
+      - [title, string]
+      - [parts, list<Inner>]
+
+- class:
+    name: Reader
+    methods:
+      # Nimmt das Modell per WERT — wie render_run es tut.
+      - def:
+          name: describe
+          access: public
+          static_off: ["str_cmp"]
+          args: [[one, Outer]]
+          return: { type: string, lifetime: producer }
+          body:
+            - decl: [out, string, "${one.title}:"]
+            - decl: [pix, i32, 0]
+            - while:
+                condition: { lt: [pix, one.parts.len] }
+                body:
+                  - decl: [part, Inner, { at: [one.parts, pix] }]
+                  - set: [out, "${out} ${part.tag}/${part.items.len}"]
+                  - set: [pix, { +: [pix, 1] }]
+            - return: out
+
+- def:
+    name: expect
+    args: [[what, string], [cond, i32]]
+    return: i32
+    body:
+      - if:
+          condition: { eq: [cond, 1] }
+          then: [{ print: ["  ok   ${what}"] }, { return: 0 }]
+      - print: ["  FAIL ${what}"]
+      - return: 1
+
+- def:
+    name: main
+    static_off: ["str_cmp"]
+    return: i32
+    body:
+      - decl: [fails, i32, 0]
+      - decl: [reader, ptr<Reader>, { new: Reader }]
+
+      - decl: [shelf, list<Outer>]
+      - decl: [fill, i32, 0]
+      - while:
+          condition: { lt: [fill, 4] }
+          body:
+            - decl: [one, Outer]
+            - set: [one.title, "stueck-${fill}"]
+            - decl: [inner_a, Inner]
+            - set: [inner_a.tag, "teil-a-${fill}"]
+            - call: [inner_a.items.push, "erstes element mit laenge"]
+            - call: [inner_a.items.push, "zweites element mit laenge"]
+            - call: [one.parts.push, inner_a]
+            - decl: [inner_b, Inner]
+            - set: [inner_b.tag, "teil-b-${fill}"]
+            - call: [inner_b.items.push, "drittes element"]
+            - call: [one.parts.push, inner_b]
+            - call: [shelf.push, one]
+            - set: [fill, { +: [fill, 1] }]
+
+      # Der Alias, mehrfach per Wert in die Methode gereicht — wie in einer
+      # Bildschleife.
+      - decl: [picked, Outer, { at: [shelf, 1] }]
+      - decl: [round, i32, 0]
+      - while:
+          condition: { lt: [round, 20] }
+          body:
+            - decl: [text, string, { call: [reader.describe, picked] }]
+            - if:
+                condition: { lt: [text.len, 10] }
+                then: [{ print: ["  FAIL zu kurze Beschreibung in Runde ${round}"] }, { set: [fails, { +: [fails, 1] }] }]
+            - set: [round, { +: [round, 1] }]
+
+      # Danach muss der Container unbeschaedigt sein.
+      - set: [fails, { +: [fails, { call: [expect, "der Alias ist noch lesbar", { eq: [picked.title, "stueck-1"] }] }] }]
+      - decl: [again, Outer, { at: [shelf, 1] }]
+      - set: [fails, { +: [fails, { call: [expect, "das Element ist unbeschaedigt", { eq: [again.title, "stueck-1"] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "seine innere Liste auch", { eq: [again.parts.len, 2] }] }] }]
+      - decl: [deep, Inner, { at: [again.parts, 0] }]
+      - set: [fails, { +: [fails, { call: [expect, "und die innerste Liste", { eq: [deep.items.len, 2] }] }] }]
+      - decl: [other, Outer, { at: [shelf, 3] }]
+      - set: [fails, { +: [fails, { call: [expect, "ein anderes Element ebenso", { eq: [other.title, "stueck-3"] }] }] }]
+
+      - if:
+          condition: { neq: [fails, 0] }
+          then: [{ print: ["test_view_alias_into_method FAIL (${fails})"] }, { return: 1 }]
+      - print: ["test_view_alias_into_method PASS"]
+      - return: 0

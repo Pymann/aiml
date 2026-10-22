@@ -8,11 +8,12 @@
 # AIML_LIFETIME_DROPS=1). RED-Ziele werden separat als bekannte offene Befunde gelistet (nicht
 # gatend), bis der jeweilige Fix steht — dann in GREEN verschieben.
 #
-# Nutzung:  bash tests/run_lifetime_leak_gates.sh
+# Nutzung:  bash tests/run_lifetime_leak_gates.sh   (ONLY=<teilstring> = nur passende Probes)
 # CI/Abnahme ruft dieses Skript UND run_memory_sanitizers.sh.
 set -u
 cd "$(dirname "$0")/.."
 AIML="${AIML_BIN:-out/aiml/aiml}"
+ONLY="${ONLY:-}"
 LIB="out/libaiml"
 RPATH="$(pwd)/$LIB"
 VG="valgrind --leak-check=full --show-leak-kinds=definite,indirect --errors-for-leak-kinds=definite,indirect --error-exitcode=99 --num-callers=20"
@@ -138,6 +139,8 @@ GREEN=(
   tests/lifetime/162_ptr_param_move.aiml
   tests/lifetime/163_yaml_doc_scope_release.aiml
   tests/lifetime/164_forward_signature_ownership.aiml
+  tests/lifetime/171_kv_ref_set_self_write.aiml
+  tests/lifetime/172_process_drop.aiml
   tests/lifetime/cascade_params/direct.aiml
   tests/lifetime/cascade_params/dispatch.aiml
   tests/lifetime/cascade_params/indirect.aiml
@@ -178,6 +181,7 @@ echo "── lifetime LEAK gate (hard: 0 definite + 0 indirect) ──"
 fail=0
 for f in "${GREEN[@]}"; do
   [ -f "$f" ] || { echo "  FAIL [GREEN] $f — missing"; fail=$((fail+1)); continue; }
+  [ -n "$ONLY" ] && [[ "$f" != *"$ONLY"* ]] && continue
   out=$(run_probe "$f"); rc=$?
   if [ $rc -eq 0 ]; then printf "  ok   [GREEN] %-55s %s\n" "$(basename "$f")" "$out"
   else printf "  FAIL [GREEN] %-55s rc=%d %s\n" "$(basename "$f")" "$rc" "$out"; fail=$((fail+1)); fi
@@ -187,6 +191,7 @@ source tests/lifetime/call_temporaries/cases.sh
 echo "── call-temporary regressions (required; previously unverified) ──"
 for f in "${CALL_TEMPORARY_PROBES[@]}"; do
   [ -f "$f" ] || { echo "  FAIL [REGRESSION] $f — missing"; fail=$((fail+1)); continue; }
+  [ -n "$ONLY" ] && [[ "$f" != *"$ONLY"* ]] && continue
   out=$(run_probe "$f"); rc=$?
   if [ $rc -eq 0 ]; then printf "  ok   [REGRESSION] %-55s %s\n" "$(basename "$f")" "$out"
   else printf "  FAIL [REGRESSION] %-55s rc=%d %s\n" "$(basename "$f")" "$rc" "$out"; fail=$((fail+1)); fi
@@ -194,6 +199,7 @@ done
 echo "── known RED targets (reported, not gating until fixed) ──"
 for f in "${RED[@]}"; do
   [ -f "$f" ] || { echo "  --   [RED]   $f — missing"; continue; }
+  [ -n "$ONLY" ] && [[ "$f" != *"$ONLY"* ]] && continue
   out=$(run_probe "$f"); rc=$?
   printf "  red? [RED]   %-55s rc=%d %s\n" "$(basename "$f")" "$rc" "$out"
 done

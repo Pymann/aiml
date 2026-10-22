@@ -1,0 +1,115 @@
+# SPEC?: 15_models,18_refs_and_pointers   # aus dem Dateinamen, zu bestaetigen
+# Ein Modell per `ref<>` an eine METHODE — zum Lesen und zum Aendern.
+#
+# Regression: bei einer freien Funktion trug `args: [[m, ref<MeinModell>]]`
+# schon immer, bei einer Methode scheiterte die IR-Pruefung mit "Call parameter
+# type does not match function signature".  Der Aufrufer uebergibt in beiden
+# Faellen einen WERT; die Adresse nimmt der Compiler.
+#
+# Gefunden 2026-10-13 beim Zuteiler in cosmos, dort umgangen ("Liste statt
+# Modell").  Diese Umgehung soll nicht das Muster werden: eine Klasse muss ein
+# Modell entgegennehmen koennen.
+# Expected exit code: 0
+
+- model:
+    name: Counter
+    fields:
+      - [name,  string]
+      - [ticks, i32]
+
+- model:
+    name: Pair
+    fields:
+      - [left,  Counter]
+      - [right, Counter]
+
+# Dasselbe als FREIE Funktion — die ging schon vorher.
+- def:
+    name: bump_free
+    args: [[counter, ref<Counter>], [by_amount, i32]]
+    body:
+      - set: [counter.ticks, { +: [counter.ticks, by_amount] }]
+
+- class:
+    name: Bumper
+    members:
+      - [calls, i32]
+    methods:
+      # Lesen ueber ref<>
+      - def:
+          name: read_ticks
+          access: public
+          args: [[counter, ref<Counter>]]
+          return: i32
+          body:
+            - set: [<.calls, { +: [<.calls, 1] }]
+            - return: counter.ticks
+
+      # AENDERN ueber ref<> — der eigentliche Punkt: sieht der Aufrufer es?
+      - def:
+          name: bump
+          access: public
+          args: [[counter, ref<Counter>], [by_amount, i32]]
+          body:
+            - set: [<.calls, { +: [<.calls, 1] }]
+            - set: [counter.ticks, { +: [counter.ticks, by_amount] }]
+
+      # Auch ein String-Feld, damit nicht nur Zahlen geprueft sind.
+      - def:
+          name: rename
+          access: public
+          args: [[counter, ref<Counter>], [new_name, string]]
+          body:
+            - set: [counter.name, new_name]
+
+- def:
+    name: expect
+    args: [[what, string], [cond, i32]]
+    return: i32
+    body:
+      - if:
+          condition: { eq: [cond, 1] }
+          then: [{ print: ["  ok   ${what}"] }, { return: 0 }]
+      - print: ["  FAIL ${what}"]
+      - return: 1
+
+- def:
+    name: main
+    static_off: ["str_cmp"]
+    return: i32
+    body:
+      - decl: [fails, i32, 0]
+      - decl: [bumper, ptr<Bumper>, { new: Bumper }]
+
+      - decl: [one, Counter]
+      - set: [one.name, "erster"]
+      - set: [one.ticks, 5]
+
+      # Freie Funktion: war schon in Ordnung, steht als Vergleich hier.
+      - call: [bump_free, one, 3]
+      - set: [fails, { +: [fails, { call: [expect, "freie Funktion aendert durch ref<>", { eq: [one.ticks, 8] }] }] }]
+
+      # Methode, lesend — hier scheiterte die IR-Pruefung.
+      - decl: [seen, i32, { call: [bumper.read_ticks, one] }]
+      - set: [fails, { +: [fails, { call: [expect, "Methode liest durch ref<>", { eq: [seen, 8] }] }] }]
+
+      # Methode, aendernd: der Aufrufer MUSS es sehen.
+      - call: [bumper.bump, one, 4]
+      - set: [fails, { +: [fails, { call: [expect, "Methode aendert durch ref<> (Zahl)", { eq: [one.ticks, 12] }] }] }]
+      - call: [bumper.rename, one, "umbenannt"]
+      - set: [fails, { +: [fails, { call: [expect, "Methode aendert durch ref<> (Zeichenkette)", { eq: [one.name, "umbenannt"] }] }] }]
+
+      # Ein Modell IN einem Modell: die Adresse muss auch aus einem Feld kommen.
+      - decl: [pair, Pair]
+      - set: [pair.left.ticks, 100]
+      - call: [bumper.bump, pair.left, 7]
+      - set: [fails, { +: [fails, { call: [expect, "auch ein Feld-Modell wird geaendert", { eq: [pair.left.ticks, 107] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "und das Nachbarfeld bleibt unberuehrt", { eq: [pair.right.ticks, 0] }] }] }]
+
+      - set: [fails, { +: [fails, { call: [expect, "die Methode wurde dreimal gerufen", { eq: [bumper.calls, 3] }] }] }]
+
+      - if:
+          condition: { neq: [fails, 0] }
+          then: [{ print: ["test_ref_model_method_arg FAIL (${fails})"] }, { return: 1 }]
+      - print: ["test_ref_model_method_arg PASS"]
+      - return: 0

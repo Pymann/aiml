@@ -1,0 +1,22 @@
+# SPEC: 61_memory_management_DRAFT,64_closures
+# static-check: off
+# Requires: driver
+# NEGATIVE (spec/64 §4.2 + spec/61 §10): `mode: move` moves the source out — using it
+# afterwards is a use-after-move.
+# EXPECT-ERROR: use-after-move
+- model: { name: Node, fields: [[ident, i32, 0]] }
+- callable: { name: Read, return: i32 }
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [box, ptr<Node>, { new: Node }]
+      - set: [box.ident, 3]
+      - decl:
+          - c
+          - closure<Read>
+          - closure:
+              capture: [[box, { mode: move }]]     # box moves into the environment
+              body:
+                - return: box.ident
+      - return: box.ident                          # ← use-after-move of `box`

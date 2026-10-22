@@ -17,14 +17,14 @@
     condition: { neq: [var_n, 2] }
     then:
       - print: ["FAIL map class-member len: expected 2, got ${var_n}"]
-      - exit: [1]
+      - call: [sys.exit, 1]
 
 - decl: [alice, i32, { call: [box.scores.get, "alice"] }]
 - if:
     condition: { neq: [alice, 7] }
     then:
       - print: ["FAIL map class-member get: expected 7, got ${alice}"]
-      - exit: [1]
+      - call: [sys.exit, 1]
 
 - free: [box]
 - print: ["PASS test_map_class_member_heap_init_repro"]

@@ -1,0 +1,40 @@
+# SPEC: 44_8_prefab_static,44_8_vocab
+# Negativ-Test (Tier 2b, spec/44_8): die Szene liegt in einem KLASSEN-MEMBER,
+# gebunden in `init`, adressiert in `render` — die vorherrschende Schreibweise
+# jedes Bildschirms.  Der Kindname existiert nicht.  Zur Laufzeit wirft
+# find_child; im WASM-Build (Ausnahmen aus) bricht die ganze Anwendung ab.
+# Muss daher ein HARTER Compiler-Fehler sein.
+#
+# Expected exit code: 1
+#
+# Diagnostic-Form:
+#   ...: '<.scene'.set_text("does_not_exist") addresses an unknown child of
+#   prefab 'MenuPanel' — no child with that name is declared ...
+
+- prefab:
+    name: MenuPanel
+    width: 100
+    height: 40
+    children:
+      - { name: title_lbl, type: label, x: 0, y: 0, width: 100, height: 20 }
+
+- class:
+    name: MenuScreen
+    members:
+      - [scene, prefab_instance]
+    methods:
+      - def:
+          name: init
+          body:
+            - set: [<.scene, { call: [engine.instantiate, "MenuPanel"] }]
+      - def:
+          name: render
+          body:
+            - call: [<.scene.set_text, "does_not_exist", "hi"]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [scr, MenuScreen]
+      - return: 0

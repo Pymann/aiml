@@ -367,7 +367,7 @@ void Compiler::checkStringComparisons(Program* prog) {
             scanExpr(th->value.get(), counts);
         } else if (auto* tr = dynamic_cast<TryStmt*>(s)) {
             scanStmt(tr->tryBlock.get(), counts);
-            scanStmt(tr->catchBlock.get(), counts);
+            for (auto* cb : tr->catchBodies()) scanStmt(cb, counts);
         }
     };
     auto checkFn = [&](FunctionDecl* fn) {
@@ -443,6 +443,14 @@ void Compiler::checkPtrIndirection(Program* prog) {
             for (const auto& a : fn->args) ps.push_back(a.second);
             freeSigs[fn->name] = std::move(ps);
         }
+    // spec/21 §6.2 F21-S2: die Gegenleistung fuer `singleton: true`.  Ein so
+    // erklaerter Anker darf GELESEN und benutzt werden, aber nicht an einen
+    // ptr<T>-Parameter gehen: dort besitzt ihn der Aufgerufene, sein Drop gibt
+    // frei, und der Anker zeigt ins Leere (zwei WASM-Abstuerze in cosmos).
+    std::set<std::string> singletonGlobals;
+    for (const auto& d : prog->declarations)
+        if (auto* dec = dynamic_cast<DeclStmt*>(d.get()))
+            if (dec->is_singleton) singletonGlobals.insert(dec->varName);
     // Pass 1: collect declared variable types (params + all decls in the body).
     std::function<void(Stmt*, std::map<std::string, std::string>&)> collectDecls;
     collectDecls = [&](Stmt* s, std::map<std::string, std::string>& vt) {
@@ -458,7 +466,7 @@ void Compiler::checkPtrIndirection(Program* prog) {
             collectDecls(wh->body.get(), vt);
         } else if (auto* tr = dynamic_cast<TryStmt*>(s)) {
             collectDecls(tr->tryBlock.get(), vt);
-            collectDecls(tr->catchBlock.get(), vt);
+            for (auto* cb : tr->catchBodies()) collectDecls(cb, vt);
         }
     };
     // Source pointer-depth of an argument expression, or INT_MIN when it can't be
@@ -496,6 +504,21 @@ void Compiler::checkPtrIndirection(Program* prog) {
         bool haveSig = (!isMethod && sig != freeSigs.end());
         for (size_t i = 0; i < args.size(); ++i) {
             std::string baseVar;
+            // F21-S2 zuerst: ein Anker steht nicht in `vt` (das sind die
+            // LOKALEN Typen), seine Tiefe waere UNKNOWN und die Pruefung
+            // darunter uebersprunge ihn.
+            if (!singletonGlobals.empty() && haveSig && i < sig->second.size()) {
+                if (auto* gvar = dynamic_cast<VariableExpr*>(args[i].get())) {
+                    if (singletonGlobals.count(gvar->name) &&
+                        sig->second[i].rfind("ptr<", 0) == 0) {
+                        LOG_ERROR(ctx.fmtLoc(loc) + "call to '" + fname + "': argument " +
+                            std::to_string(i + 1) + " is the singleton global '" + gvar->name +
+                            "' and the parameter is " + sig->second[i] + " — an owning parameter "
+                            "MOVES it out and the anchor dangles (spec/21 §6.2 F21-S2).  Pass a "
+                            "ref<T>, or drop `singleton: true` and own it somewhere.");
+                    }
+                }
+            }
             int ad = argDepth(args[i].get(), vt, baseVar);
             if (ad == UNKNOWN) continue;
             if (haveSig && i < sig->second.size()) {
@@ -579,7 +602,7 @@ void Compiler::checkPtrIndirection(Program* prog) {
             scanExpr(th->value.get(), vt);
         } else if (auto* tr = dynamic_cast<TryStmt*>(s)) {
             scanStmt(tr->tryBlock.get(), vt);
-            scanStmt(tr->catchBlock.get(), vt);
+            for (auto* cb : tr->catchBodies()) scanStmt(cb, vt);
         }
     };
     auto checkFn = [&](FunctionDecl* fn) {
@@ -695,7 +718,7 @@ void Compiler::checkFrameBlocking(Program* prog) {
         else if (auto* d = dynamic_cast<DeclStmt*>(s)) { if (!d->typeName.empty()) vt[d->varName] = d->typeName; }
         else if (auto* iff = dynamic_cast<IfStmt*>(s)) { collectDecls(iff->thenBranch.get(), vt); collectDecls(iff->elseBranch.get(), vt); }
         else if (auto* wh = dynamic_cast<WhileStmt*>(s)) { collectDecls(wh->body.get(), vt); }
-        else if (auto* tr = dynamic_cast<TryStmt*>(s)) { collectDecls(tr->tryBlock.get(), vt); collectDecls(tr->catchBlock.get(), vt); }
+        else if (auto* tr = dynamic_cast<TryStmt*>(s)) { collectDecls(tr->tryBlock.get(), vt); for (auto* cb : tr->catchBodies()) collectDecls(cb, vt); }
     };
 
     // Walk a function body: gather direct-call edges, blocking-primitive call
@@ -756,7 +779,7 @@ void Compiler::checkFrameBlocking(Program* prog) {
         else if (auto* wh = dynamic_cast<WhileStmt*>(s)) { scanExpr(wh->condition.get(), selfId, encClass, vt); scanStmt(wh->body.get(), selfId, encClass, vt); }
         else if (auto* rs = dynamic_cast<RetStmt*>(s)) { scanExpr(rs->value.get(), selfId, encClass, vt); }
         else if (auto* th = dynamic_cast<ThrowStmt*>(s)) { scanExpr(th->value.get(), selfId, encClass, vt); }
-        else if (auto* tr = dynamic_cast<TryStmt*>(s)) { scanStmt(tr->tryBlock.get(), selfId, encClass, vt); scanStmt(tr->catchBlock.get(), selfId, encClass, vt); }
+        else if (auto* tr = dynamic_cast<TryStmt*>(s)) { scanStmt(tr->tryBlock.get(), selfId, encClass, vt); for (auto* cb : tr->catchBodies()) scanStmt(cb, selfId, encClass, vt); }
     };
 
     auto walkFn = [&](FunctionDecl* fn, const std::string& id, const std::string& encClass) {
@@ -922,7 +945,7 @@ void Compiler::checkPrefabUsage(Program* prog) {
             scanExpr(th->value.get());
         } else if (auto* tr = dynamic_cast<TryStmt*>(s)) {
             scanStmt(tr->tryBlock.get());
-            scanStmt(tr->catchBlock.get());
+            for (auto* cb : tr->catchBodies()) scanStmt(cb);
         }
     };
     auto checkFn = [&](FunctionDecl* fn) {
@@ -1066,7 +1089,7 @@ void Compiler::checkPrefabUsage(Program* prog) {
             t2Expr(th->value.get(), bound);
         } else if (auto* tr = dynamic_cast<TryStmt*>(s)) {
             BoundMap trb = bound; t2Stmt(tr->tryBlock.get(), trb);
-            BoundMap cb = bound;  t2Stmt(tr->catchBlock.get(), cb);
+            for (auto* cbody : tr->catchBodies()) { BoundMap cb = bound; t2Stmt(cbody, cb); }
         }
     };
     auto checkFnT2 = [&](FunctionDecl* fn) {
@@ -1153,7 +1176,7 @@ void Compiler::checkPrefabUsage(Program* prog) {
             walkCallsE(th->value.get(), cb);
         } else if (auto* tr = dynamic_cast<TryStmt*>(s)) {
             walkCallsS(tr->tryBlock.get(), cb);
-            walkCallsS(tr->catchBlock.get(), cb);
+            for (auto* cbody : tr->catchBodies()) walkCallsS(cbody, cb);
         }
     };
     // Collect `set: [<.field, engine.instantiate("X")]` bindings in a stmt tree.
@@ -1176,7 +1199,7 @@ void Compiler::checkPrefabUsage(Program* prog) {
             walkFieldBinds(wh->body.get(), cb);
         } else if (auto* tr = dynamic_cast<TryStmt*>(s)) {
             walkFieldBinds(tr->tryBlock.get(), cb);
-            walkFieldBinds(tr->catchBlock.get(), cb);
+            for (auto* cbody : tr->catchBodies()) walkFieldBinds(cbody, cb);
         }
     };
     for (const auto& d : prog->declarations) {
@@ -1363,7 +1386,7 @@ void Compiler::checkPrefabUsage(Program* prog) {
             } else if (auto* iff = dynamic_cast<IfStmt*>(s)) { collInstE(iff->condition.get(),out); collInstS(iff->thenBranch.get(),out); collInstS(iff->elseBranch.get(),out);
             } else if (auto* wh = dynamic_cast<WhileStmt*>(s)) { collInstE(wh->condition.get(),out); collInstS(wh->body.get(),out);
             } else if (auto* rs = dynamic_cast<RetStmt*>(s)) { collInstE(rs->value.get(),out);
-            } else if (auto* tr = dynamic_cast<TryStmt*>(s)) { collInstS(tr->tryBlock.get(),out); collInstS(tr->catchBlock.get(),out); }
+            } else if (auto* tr = dynamic_cast<TryStmt*>(s)) { collInstS(tr->tryBlock.get(),out); for (auto* cb : tr->catchBodies()) collInstS(cb,out); }
         };
         std::map<std::string, std::string> spawnHelpers;   // fn name -> prefab
         std::set<std::string> listFields;                  // "class\tfield" of type list<prefab_instance>
@@ -1519,7 +1542,7 @@ void Compiler::checkPrefabUsage(Program* prog) {
                 bwExpr(th->value.get());
             } else if (auto* tr = dynamic_cast<TryStmt*>(s)) {
                 bwStmt(tr->tryBlock.get());
-                bwStmt(tr->catchBlock.get());
+                for (auto* cb : tr->catchBodies()) bwStmt(cb);
             }
         };
         for (const auto& d : prog->declarations) {
@@ -1576,6 +1599,11 @@ static void lintModuleGlobal(CompilerContext& ctx, const DeclStmt* decl) {
         "f32","f64","bool","string","char"
     };
     if (decl->is_const && kPrimitive.count(decl->typeName)) return;
+    // spec/21 §6.2 F21-S1: ein erklaerter Anker.  `engine.run` nimmt freie
+    // Funktionen — ohne Modul-Global gaebe es keinen Weg zum Zustand.  Das
+    // Schweigen ist bezahlt: F21-S2 verbietet, ihn an einen ptr<T>-Parameter
+    // zu reichen (geprueft im Ganzprogramm-Durchgang).
+    if (decl->is_singleton) return;
     bool owning = decl->typeName.rfind("ptr<", 0) == 0;
     LOG_WARNING(ctx.fmtLoc() + "module-level global '" + decl->varName + "' ("
         + decl->typeName + ")" + (owning
@@ -1639,6 +1667,10 @@ void Compiler::compile(Program* prog) {
     mergeGroupMethods(prog);
     checkClassGroups(prog);
     synthesizeClassGroups(prog);
+
+    // service (spec/66 §5): validated here, where models and classes are registered.
+    // The synthesis itself already ran before registerTypes (compiler.cpp).
+    checkServices(prog);
 
     if (ctx.libraryMode) {
         // Library mode: top-level DeclStmts become LLVM GlobalVariables (not stack
@@ -2825,6 +2857,606 @@ void Compiler::mergeGroupMethods(Program* prog) {
 // class existence, sees targets resolve to same-group instances (no self, no
 // dup), and no function overrides a base method.  Runs before synthesis so an
 // invalid group is rejected rather than desugared.
+
+// ── spec/66 — services ───────────────────────────────────────────────────────
+
+// The `:name` parameters of an HTTP path, in order.
+static std::vector<std::string> servicePathParams(const std::string& path) {
+    std::vector<std::string> params;
+    size_t pos = 0;
+    while (pos < path.size()) {
+        size_t colon = path.find(':', pos);
+        if (colon == std::string::npos) break;
+        size_t end = path.find('/', colon);
+        if (end == std::string::npos) end = path.size();
+        if (end > colon + 1) params.push_back(path.substr(colon + 1, end - colon - 1));
+        pos = end;
+    }
+    return params;
+}
+
+// spec/66 §5 — what a service declaration must satisfy before anything is
+// synthesized.  Every check here exists because the alternative is a silent
+// hole: an endpoint nobody can reach, a route served twice, or — the expensive
+// one — an endpoint without a role check.
+// spec/66 §3 — desugar a `- service:` into ordinary declarations, and do it BEFORE
+// type registration so the results are known like any hand-written type: each
+// endpoint body becomes the free function `<Service>_<endpoint>` (one body, every
+// transport reaches it), the declared shape becomes the reflection table
+// `<Service>__describe` (§7), and the service name becomes a facade class a program
+// can hold.  The checks run AFTER registration, so the metadata they need is captured
+// here while the endpoint def is still in hand.
+void Compiler::synthesizeServices(Program* prog) {
+    if (!prog) return;
+    std::vector<ServiceDecl*> services;
+    for (auto& d : prog->declarations)
+        if (auto* sv = dynamic_cast<ServiceDecl*>(d.get())) services.push_back(sv);
+    if (services.empty()) return;
+
+    auto q = [](const std::string& t) { return "\"" + t + "\""; };
+    std::vector<std::unique_ptr<Node>> models;     // must be registered before their users
+    std::vector<std::unique_ptr<Node>> toAppend;
+
+    // The description row (§7).  Once per compilation unit — an imported service
+    // may already have brought it.
+    bool haveRow = ctx.classes.count("ServiceEndpoint") > 0;
+    for (auto& d : prog->declarations)
+        if (auto* md = dynamic_cast<ModelDecl*>(d.get()))
+            if (md->name == "ServiceEndpoint") haveRow = true;
+    if (!haveRow) {
+        // `roles` carries NO default: a `[]` default on a container field breaks the
+        // field declared after it.
+        std::string my = "- model:\n    name: ServiceEndpoint\n    fields:\n"
+                         "      - [name, string, \"\"]\n"
+                         "      - [verb, string, \"\"]\n"
+                         "      - [path, string, \"\"]\n"
+                         "      - [request_type, string, \"\"]\n"
+                         "      - [response_type, string, \"\"]\n"
+                         "      - [roles, \"list<string>\"]\n";
+        if (auto m = parseDeclSnippet(my)) models.push_back(std::move(m));
+        else LOG_ERROR("internal: could not synthesize model 'ServiceEndpoint' (spec/66 §7).");
+    }
+
+    // §8 — one error shape for every transport.
+    bool haveErr = ctx.classes.count("ServiceError") > 0;
+    for (auto& d : prog->declarations)
+        if (auto* md = dynamic_cast<ModelDecl*>(d.get()))
+            if (md->name == "ServiceError") haveErr = true;
+    if (!haveErr) {
+        std::string ey = "- model:\n    name: ServiceError\n    fields:\n"
+                         "      - [code, i32, 0]\n"
+                         "      - [message, string, \"\"]\n"
+                         "      - [detail, string, \"\"]\n";
+        if (auto m = parseDeclSnippet(ey)) models.push_back(std::move(m));
+        else LOG_ERROR("internal: could not synthesize model 'ServiceError' (spec/66 §8).");
+    }
+
+    // §8 — die beiden Ausnahmen, die auf 404/400 abgebildet werden.  `Exception` ist in
+    // aiml nicht eingebaut (spec/22), also legen wir die Wurzel an, wenn das Projekt
+    // keine hat; eine vorhandene wird NICHT ersetzt.
+    auto knownType = [&](const std::string& tn) {
+        if (ctx.classes.count(tn)) return true;
+        for (auto& d : prog->declarations) {
+            if (auto* cd = dynamic_cast<ClassDecl*>(d.get())) if (cd->name == tn) return true;
+            if (auto* md = dynamic_cast<ModelDecl*>(d.get())) if (md->name == tn) return true;
+        }
+        return false;
+    };
+    if (!knownType("Exception")) {
+        if (auto m = parseDeclSnippet("- class:\n    name: Exception\n    members:\n"
+                                      "      - [message, string]\n"))
+            models.push_back(std::move(m));
+    }
+    for (const char* ex : {"ServiceNotFound", "ServiceInvalid"}) {
+        if (knownType(ex)) continue;
+        if (auto m = parseDeclSnippet(std::string("- class:\n    name: ") + ex +
+                                      "\n    extends: Exception\n"))
+            models.push_back(std::move(m));
+        else LOG_ERROR(std::string("internal: could not synthesize exception '") + ex + "' (spec/66 §8).");
+    }
+
+    typedef std::vector<std::pair<std::string, std::string>> FieldList;
+    auto modelFields = [&](const std::string& tn) -> FieldList {
+        FieldList fields;
+        for (auto& d : prog->declarations)
+            if (auto* md = dynamic_cast<ModelDecl*>(d.get()))
+                if (md->name == tn) {
+                    for (const auto& fld : md->fields)
+                        fields.emplace_back(fld.name, fld.type);
+                    return fields;
+                }
+        auto it = ctx.classes.find(tn);
+        if (it != ctx.classes.end())
+            for (const auto& mem : it->second.members)
+                fields.emplace_back(mem.first, mem.second.typeName);   // ClassInfo-Member: typeName
+        return fields;
+    };
+
+    for (auto* sv : services) {
+        const bool guarded = !sv->auth.empty() && sv->auth != "none";
+        bool rpcTransport = sv->transports.empty();      // nothing declared = rpc (§4.1)
+        bool restTransport = false;
+        bool cliTransport  = false;
+        for (const auto& t : sv->transports) {
+            if (t == "rpc")  rpcTransport  = true;
+            if (t == "rest") restTransport = true;
+            if (t == "cli")  cliTransport  = true;
+        }
+        // Das Projekt BESITZT das Auth-Objekt; die Fassade leiht es nur (spec/61).
+        const std::string gateType  = "ref<" + sv->auth + ">";
+        const std::string gateGlobal = "service_gate_" + sv->name;
+        std::string dispatchBody;                        // one branch per endpoint
+        std::string clientMethods;                       // §3: one per endpoint
+        std::string restRoutes;                          // §4.2: serve_rest body
+        std::string cliBranches;                         // §4.3: run_cli body
+
+        std::string describe = "- def:\n    name: " + sv->name + "__describe\n"
+                               "    return: \"list<ServiceEndpoint>\"\n"
+                               "    static_off: [\"str_cmp\", \"same_arg\", \"lines\"]\n"
+                               "    body:\n"
+                               "      - decl: [rows, \"list<ServiceEndpoint>\"]\n";
+        int rowNo = 0;
+        for (auto& ep : sv->endpoints) {
+            if (!ep.fn) continue;
+            FunctionDecl* f = ep.fn.get();
+
+            ep.name        = f->name;
+            ep.verb        = f->http.size() > 0 ? f->http[0] : std::string();
+            ep.path        = f->http.size() > 1 ? f->http[1] : std::string();
+            ep.roles       = f->roles;
+            ep.cli         = f->cli;
+            ep.hasRoles    = f->hasRoles;
+            ep.argCount    = (int)f->args.size();
+            ep.requestType = f->args.empty() ? std::string() : f->args[0].second;
+            ep.returnType  = f->returnType;
+            ep.captured    = true;
+
+            const std::string row  = "row" + std::to_string(rowNo++);
+            const std::string full = ep.path.empty() ? std::string() : sv->base + ep.path;
+            describe += "      - decl: [" + row + ", ServiceEndpoint]\n";
+            describe += "      - set: [" + row + ".name, "          + q(ep.name)        + "]\n";
+            describe += "      - set: [" + row + ".verb, "          + q(ep.verb)        + "]\n";
+            describe += "      - set: [" + row + ".path, "          + q(full)           + "]\n";
+            describe += "      - set: [" + row + ".request_type, "  + q(ep.requestType) + "]\n";
+            describe += "      - set: [" + row + ".response_type, " + q(ep.returnType)  + "]\n";
+            for (const auto& r : ep.roles)
+                describe += "      - call: [" + row + ".roles.push, " + q(r) + "]\n";
+            describe += "      - call: [rows.push, " + row + "]\n";
+
+            const std::string bodyName = sv->name + "_" + ep.name;
+            f->name = bodyName;
+            toAppend.push_back(std::unique_ptr<Node>(ep.fn.release()));
+
+            if (rpcTransport) {
+
+                // §4.1 — decode the typed payload, run the gate, call the body, answer.
+                // A payload that does not decode is answered 400, never dropped.
+                const std::string rpcName = bodyName + "_rpc";
+                std::string h = "- def:\n    name: " + rpcName + "\n"
+                    "    args: [[evt, rpc_event], [sess, mirror_session]" +
+                    (guarded ? ", [gate, " + q(gateType) + "]" : std::string()) + "]\n"
+                    "    return: i32\n    static_off: [\"str_cmp\", \"same_arg\", \"lines\"]\n"
+                    "    body:\n";
+                if (guarded) {
+                    // An unset gate must not read as an open door (§6).
+                    h += "      - if:\n          condition: { peq: [gate, null] }\n          then:\n"
+                         "            - decl: [nogate, ServiceError]\n"
+                         "            - set: [nogate.code, 401]\n"
+                         "            - set: [nogate.message, \"service gate not set\"]\n"
+                         "            - call: [sess.reply_rpc, evt, \"set_error\", 401, nogate]\n"
+                         "            - return: 1\n";
+                }
+                h += "      - decl: [req, " + ep.requestType + "]\n"
+                     "      - decl: [dec_rc, i32, { call: [sess.decode_rpc, evt, req] }]\n"
+                     "      - if:\n          condition: { neq: [dec_rc, 0] }\n          then:\n"
+                     "            - decl: [bad, ServiceError]\n"
+                     "            - set: [bad.code, 400]\n"
+                     "            - set: [bad.message, \"payload is not a " + ep.requestType + "\"]\n"
+                     "            - call: [sess.reply_rpc, evt, \"set_error\", 400, bad]\n"
+                     "            - return: 1\n";
+                if (guarded) {
+                    int roleNo = 0;
+                    for (const auto& r : ep.roles) {
+                        const std::string ok = "role_ok_" + std::to_string(roleNo++);
+                        h += "      - decl: [" + ok + ", i32, { call: [gate.has_role, "
+                             "{ call: [gate.principal_of, req.token] }, " + q(r) + "] }]\n"
+                             "      - if:\n          condition: { eq: [" + ok + ", 0] }\n          then:\n"
+                             "            - decl: [denied, ServiceError]\n"
+                             "            - set: [denied.code, 403]\n"
+                             "            - set: [denied.message, \"role " + r + " required\"]\n"
+                             "            - call: [sess.reply_rpc, evt, \"set_error\", 403, denied]\n"
+                             "            - return: 1\n";
+                    }
+                }
+                h += "      - decl: [resp, " + ep.returnType + ", { call: [" + bodyName + ", req] }]\n"
+                     "      - call: [sess.reply_rpc, evt, \"set_result\", 0, resp]\n"
+                     "      - return: 1\n";
+                if (auto hf = parseDefSnippet(h)) { hf->serviceSynth = true; toAppend.push_back(std::move(hf)); }
+                else LOG_ERROR("service '" + sv->name + "': internal — could not synthesize '" +
+                               rpcName + "'.");
+
+                // Einrueckung: der Rumpf sitzt in einer Methode der Fassade.
+                dispatchBody += "            - if:\n                condition: { eq: [evt.method, " + q(ep.name) + "] }\n"
+                                "                then:\n                  - return: { call: [" + rpcName +
+                                ", evt, sess" + (guarded ? std::string(", <.auth") : std::string()) + "] }\n";
+            }
+
+            if (restTransport && !ep.verb.empty()) {
+                // §4.2 — Quellenreihenfolge: JSON-Body, dann Pfadparameter.  Eine
+                // spaetere Quelle ueberschreibt nie eine fruehere, darum fuellt der
+                // Pfad nur, was der Body leer gelassen hat.
+                const std::string httpName = bodyName + "_http";
+                std::string ht = "- def:\n    name: " + httpName + "\n"
+                    "    args: [[htreq, http_request_handle], [htresp, http_response_handle]]\n"
+                    "    static_off: [\"str_cmp\", \"same_arg\", \"lines\"]\n    body:\n"
+                    "      - decl: [plain, JsonStyle]\n"
+                    "      - set: [plain.bare, 1]\n"
+                    "      - call: [htresp.headers.put, \"Content-Type\", \"application/json\"]\n"
+                    "      - decl: [raw_body, string]\n"
+                    "      - set: [raw_body, htreq.body]\n"
+                    "      - decl: [model, " + ep.requestType + "]\n"
+                    "      - if:\n          condition: { gt: [raw_body.len, 0] }\n          then:\n"
+                    "            - set: [model, { call: [sys.deserialize, raw_body, " +
+                    q(ep.requestType) + "] }]\n";
+                const auto params = servicePathParams(ep.path);
+                if (!params.empty()) {
+                    ht += "      - decl: [path_vals, map<string:string>]\n"
+                          "      - set: [path_vals, htreq.params]\n";
+                    for (const auto& pn : params)
+                        ht += "      - if:\n          condition: { eq: [model." + pn + ", \"\"] }\n"
+                              "          then:\n            - set: [model." + pn +
+                              ", { call: [path_vals.get, " + q(pn) + "] }]\n";
+                }
+                // §8 — eine Fehlerantwort ist ein serialisiertes ServiceError, kein
+                // handgeschriebenes JSON: die Meldung wird dadurch korrekt escaped.
+                auto httpFail = [&](const std::string& indent, int code,
+                                    const std::string& msgExpr, const std::string& varName) {
+                    return indent + "- decl: [" + varName + ", ServiceError]\n" +
+                           indent + "- set: [" + varName + ".code, " + std::to_string(code) + "]\n" +
+                           indent + "- set: [" + varName + ".message, " + msgExpr + "]\n" +
+                           indent + "- set: [htresp.status, " + std::to_string(code) + "]\n" +
+                           indent + "- set: [htresp.body, { call: [sys.serialize, " + varName + ", plain] }]\n";
+                };
+                if (guarded) {
+                    // Token: erst das Feld (Body/Pfad), sonst der Authorization-Header.
+                    ht += "      - if:\n          condition: { eq: [model.token, \"\"] }\n          then:\n"
+                          "            - decl: [head_val, string]\n"
+                          "            - set: [head_val, { call: [htreq.header, \"Authorization\"] }]\n"
+                          "            - if:\n                condition: { gt: [head_val.len, 7] }\n"
+                          "                then:\n                  - set: [model.token, "
+                          "{ call: [head_val.substr, 7] }]\n"
+                          "            - if:\n                condition: { eq: [head_val.len, 0] }\n"
+                          "                then:\n" +
+                          httpFail("                  ", 401, "\"no token\"", "no_token") +
+                          "                  - call: [htresp.send]\n"
+                          "                  - { return }\n";
+                    ht += "      - if:\n          condition: { peq: [" + gateGlobal + ", null] }\n          then:\n" +
+                          httpFail("            ", 401, "\"service gate not set\"", "no_gate") +
+                          "            - call: [htresp.send]\n"
+                          "            - { return }\n";
+                    int roleNo = 0;
+                    for (const auto& r : ep.roles) {
+                        const std::string ok = "http_role_ok_" + std::to_string(roleNo++);
+                        ht += "      - decl: [" + ok + ", i32, { call: [" + gateGlobal + ".has_role, "
+                              "{ call: [" + gateGlobal + ".principal_of, model.token] }, " + q(r) + "] }]\n"
+                              "      - if:\n          condition: { eq: [" + ok + ", 0] }\n          then:\n" +
+                              httpFail("            ", 403, q("role " + r + " required"), "denied_" + std::to_string(roleNo)) +
+                              "            - call: [htresp.send]\n"
+                              "            - { return }\n";
+                    }
+                }
+                ht += "      - decl: [answer, " + ep.returnType + "]\n"
+                      "      - try:\n          body:\n"
+                      "            - set: [answer, { call: [" + bodyName + ", model] }]\n"
+                      "            - set: [htresp.status, 200]\n"
+                      "            - set: [htresp.body, { call: [sys.serialize, answer, plain] }]\n"
+                      "          catch:\n"
+                      "            - type: ServiceNotFound\n              var: miss\n              body:\n" +
+                      httpFail("                ", 404, "miss.message", "err_404") +
+                      "            - type: ServiceInvalid\n              var: wrong\n              body:\n" +
+                      httpFail("                ", 400, "wrong.message", "err_400") +
+                      "            - type: Exception\n              var: other\n              body:\n"
+                      "                - call: [log.error, \"service " + sv->name + "." + ep.name +
+                      ": ${other.message}\"]\n" +
+                      httpFail("                ", 500, "\"internal error\"", "err_500") +
+                      "      - call: [htresp.send]\n";
+                if (auto hf = parseDefSnippet(ht)) { hf->serviceSynth = true; toAppend.push_back(std::move(hf)); }
+                else LOG_ERROR("service '" + sv->name + "': internal — could not synthesize '" +
+                               httpName + "'.");
+
+                std::string verb = ep.verb;
+                for (auto& ch : verb) ch = (char)toupper((unsigned char)ch);
+                restRoutes += "            - call: [server.route, " + q(verb) + ", " +
+                              q(sv->base + ep.path) + ", " + httpName + "]\n";
+            }
+
+            if (cliTransport) {
+                // Der Rumpf des Unterkommandos entsteht in synthesizeServiceBodies —
+                // er braucht die FELDER des Request-Modells, und ein importiertes
+                // Modell steht erst nach registerTypes in der Klassentabelle.
+                const std::string sub = ep.cli.empty() ? ep.name : ep.cli.front();
+                cliBranches += "            - if:\n                condition: { eq: [sub, " + q(sub) + "] }\n"
+                               "                then:\n                  - return: { call: [" + bodyName +
+                               "_cli, args] }\n";
+            }
+
+            // §3 Client-Stub: dieselbe Methode, nur ueber send_and_await.  Die
+            // Antwort kommt in einen vom Aufrufer gehaltenen ptr (spec/44_5).
+            clientMethods += "      - def:\n          name: " + ep.name + "\n"
+                "          args: [[sess, mirror_session], [req, " + ep.requestType +
+                "], [out, " + q("ref<" + ep.returnType + ">") + "]]\n"   // Puffer gehoert dem Aufrufer
+                "          return: i32\n"
+                "          static_off: [\"str_cmp\", \"same_arg\", \"lines\"]\n"
+                "          body:\n            - return: { call: [sess.send_and_await, 0, " +
+                q(ep.name) + ", req, out, <.timeout_ms] }\n";
+
+        }
+        describe += "      - return: rows\n";
+        if (auto df = parseDefSnippet(describe)) { df->serviceSynth = true; toAppend.push_back(std::move(df)); }
+        else LOG_ERROR("service '" + sv->name + "': internal — could not synthesize '__describe'.");
+
+        // Facade (§3): the thing a server holds.  It carries the gate the project
+        // hands in and answers `dispatch` with 1 when the method was ours, 0 when it
+        // was not — so generated and hand-written handlers can share one loop.
+        // `serve_rest` arrives with the REST transport (§10 M4).
+        std::string fy = "- class:\n    name: " + sv->name + "\n    members:\n"
+                         "      - [endpoint_count, i32, " + std::to_string(rowNo) + "]\n";
+        if (guarded) fy += "      - [auth, " + q(gateType) + "]\n";
+        if (guarded || rpcTransport || !restRoutes.empty() || !cliBranches.empty()) {
+            fy += "    methods:\n";
+            if (guarded)
+                fy += "      - def:\n          name: set_auth\n"
+                      "          args: [[gate, " + q(gateType) + "]]\n"
+                      "          body:\n            - set: [<.auth, gate]\n";
+            if (!restRoutes.empty() && guarded)
+                restRoutes = "            - set: [" + gateGlobal + ", <.auth]\n" + restRoutes;
+            if (!cliBranches.empty())
+                fy += "      - def:\n          name: run_cli\n"
+                      "          args: [[args, " + q("list<string>") + "]]\n"
+                      "          return: i32\n"
+                      "          static_off: [\"str_cmp\", \"same_arg\", \"lines\"]\n"
+                      "          body:\n"
+                      "            - if: { condition: { eq: [args.len, 0] }, then: [{ return: 1 }] }\n"
+                      "            - decl: [sub, string, { at: [args, 0] }]\n" + cliBranches +
+                      "            - return: 1\n";
+            if (!restRoutes.empty())
+                fy += "      - def:\n          name: serve_rest\n"
+                      "          args: [[server, http_server_handle]]\n"
+                      "          static_off: [\"str_cmp\", \"same_arg\", \"lines\"]\n"
+                      "          body:\n" + restRoutes;
+            if (rpcTransport)
+                fy += "      - def:\n          name: dispatch\n"
+                      "          args: [[sess, mirror_session], [evt, rpc_event]]\n"
+                      "          return: i32\n"
+                      "          static_off: [\"str_cmp\", \"same_arg\", \"lines\"]\n"
+                      "          body:\n" + dispatchBody +
+                      "            - return: 0\n";
+        }
+        if (guarded && !restRoutes.empty()) {
+            // Ein Routen-Handler ist ein Funktionszeiger ohne Zustand; das Gate
+            // liegt deshalb in einem Modul-Global, das serve_rest fuellt (§6).
+            std::string gy = "- decl: [" + gateGlobal + ", " + q(gateType) + ", null]\n";
+            if (auto gd = parseDeclSnippet(gy)) models.push_back(std::move(gd));
+            else LOG_ERROR("service '" + sv->name + "': internal — could not synthesize the gate global.");
+        }
+        if (auto facade = parseDeclSnippet(fy)) {
+            if (auto* fc = dynamic_cast<ClassDecl*>(facade.get()))
+                for (auto& fm : fc->methods) if (fm) fm->serviceSynth = true;
+            toAppend.push_back(std::move(facade));
+        }
+        else LOG_ERROR("service '" + sv->name + "': internal — could not synthesize the facade.");
+
+        // §3 Client-Fassade.  Eigene Klasse, damit ein reiner Client (wasm, §4.4)
+        // sie ohne den Server-Teil halten kann.
+        if (!clientMethods.empty()) {
+            std::string cy = "- class:\n    name: " + sv->name + "Client\n    members:\n"
+                             "      - [timeout_ms, i32, 4000]\n    methods:\n"
+                             "      - def:\n          name: set_timeout\n"
+                             "          args: [[millis, i32]]\n"
+                             "          body:\n            - set: [<.timeout_ms, millis]\n" +
+                             clientMethods;
+            if (auto cc = parseDeclSnippet(cy)) {
+                if (auto* cd = dynamic_cast<ClassDecl*>(cc.get()))
+                    for (auto& cm : cd->methods) if (cm) cm->serviceSynth = true;
+                toAppend.push_back(std::move(cc));
+            } else {
+                LOG_ERROR("service '" + sv->name + "': internal — could not synthesize the client.");
+            }
+        }
+        ctx.serviceDecls[sv->name] = ctx.fmtLoc(sv->sourceNode);   // §5.6
+        LOG_INFO("synthesized service '" + sv->name + "' (" + std::to_string(rowNo) + " endpoints)");
+    }
+
+    for (auto it = models.rbegin(); it != models.rend(); ++it)
+        prog->declarations.insert(prog->declarations.begin(), std::move(*it));
+    for (auto& n : toAppend) prog->declarations.push_back(std::move(n));
+}
+
+// spec/66 §4.3 — zweiter Durchgang, NACH registerTypes: hier sind auch importierte
+// Modelle bekannt, und nur hier laesst sich ein Unterkommando aus den FELDERN des
+// Request-Modells fuellen.  Die Fassade (Durchgang 1) ruft diese Funktionen bereits.
+void Compiler::synthesizeServiceBodies(Program* prog) {
+    if (!prog) return;
+    std::vector<ServiceDecl*> services;
+    for (auto& d : prog->declarations)
+        if (auto* sv = dynamic_cast<ServiceDecl*>(d.get())) services.push_back(sv);
+    if (services.empty()) return;
+
+    auto q = [](const std::string& t) { return "\"" + t + "\""; };
+    typedef std::vector<std::pair<std::string, std::string>> FieldList;
+    auto modelFields = [&](const std::string& tn) -> FieldList {
+        FieldList fields;
+        auto it = ctx.classes.find(tn);
+        if (it == ctx.classes.end()) it = ctx.classes.find(ctx.qualify(tn));
+        if (it != ctx.classes.end())
+            for (const auto& mem : it->second.members)
+                fields.emplace_back(mem.first, mem.second.typeName);
+        return fields;
+    };
+
+    std::vector<std::unique_ptr<Node>> toAppend;
+    for (auto* sv : services) {
+        bool cliTransport = false;
+        for (const auto& t : sv->transports) if (t == "cli") cliTransport = true;
+        if (!cliTransport) continue;
+        for (const auto& ep : sv->endpoints) {
+            if (!ep.captured) continue;
+            const std::string bodyName = sv->name + "_" + ep.name;
+            {
+                // §4.3 — Unterkommando: Flags in das Request-Modell, derselbe Rumpf,
+                // Antwort als JSON auf stdout.  Die Argumentliste wird UEBERGEBEN
+                // (ein JIT-Lauf hat gar kein argv, spec/23).
+                const std::string cliName = bodyName + "_cli";
+                std::string ct = "- def:\n    name: " + cliName + "\n"
+                    "    args: [[args, " + q("list<string>") + "]]\n"
+                    "    return: i32\n    static_off: [\"str_cmp\", \"same_arg\", \"lines\"]\n"
+                    "    body:\n"
+                    "      - decl: [model, " + ep.requestType + "]\n"
+                    "      - decl: [idx, i32, 1]\n"
+                    "      - while:\n          condition: { lt: [idx, args.len] }\n          body:\n"
+                    "            - decl: [flag, string, { at: [args, idx] }]\n"
+                    "            - decl: [val, string, \"\"]\n"
+                    "            - decl: [step, i32, 1]\n"
+                    "            - decl: [nxt, i32, { '+': [idx, 1] }]\n"
+                    "            - if:\n                condition: { lt: [nxt, args.len] }\n                then:\n"
+                    "                  - decl: [peek, string, { at: [args, nxt] }]\n"
+                    "                  - if:\n                      condition: { neq: [{ call: [peek.starts_with, \"-\"] }, 1] }\n"
+                    "                      then:\n                        - set: [val, peek]\n"
+                    "                        - set: [step, 2]\n";
+                for (const auto& fld : modelFields(ep.requestType)) {
+                    std::string dashed = fld.first;
+                    for (auto& ch : dashed) if (ch == '_') ch = '-';
+                    std::string hit = "{ '||': [{ eq: [flag, " + q("--" + fld.first) + "] }, "
+                                      "{ eq: [flag, " + q("--" + dashed) + "] }] }";
+                    if (fld.second == "string") {
+                        ct += "            - if:\n                condition: " + hit + "\n                then:\n"
+                              "                  - set: [model." + fld.first + ", val]\n";
+                    } else if (fld.second == "i32") {
+                        ct += "            - if:\n                condition: " + hit + "\n                then:\n"
+                              "                  - if:\n                      condition: { gt: [val.len, 0] }\n"
+                              "                      then:\n                        - set: [model." + fld.first +
+                              ", { call: [val.parse_i32] }]\n"
+                              "                      else:\n                        - set: [model." + fld.first + ", 1]\n";
+                    }
+                    // andere Typen: V1 fuellt sie nicht (spec/09 kennt nur parse_i32/parse_f32)
+                }
+                ct += "            - set: [idx, { '+': [idx, step] }]\n"
+                      "      - decl: [answer, " + ep.returnType + ", { call: [" + bodyName + ", model] }]\n"
+                      "      - decl: [plain, JsonStyle]\n"
+                      "      - set: [plain.bare, 1]\n"
+                      "      - decl: [out_json, string, { call: [sys.serialize, answer, plain] }]\n"
+                      "      - call: [io.write, io.stdout, out_json]\n"
+                      "      - call: [io.write, io.stdout, \"\\n\"]\n"
+                      "      - return: 0\n";
+                if (auto cf = parseDefSnippet(ct)) { cf->serviceSynth = true; toAppend.push_back(std::move(cf)); }
+                else LOG_ERROR("service '" + sv->name + "': internal — could not synthesize '" +
+                               cliName + "'.");
+            }
+        }
+    }
+    // VORNE einfuegen: die Fassade (Durchgang 1) ruft diese Funktionen, und eine
+    // Deklaration dahinter ist fuer sie nicht sichtbar.
+    for (auto it = toAppend.rbegin(); it != toAppend.rend(); ++it)
+        prog->declarations.insert(prog->declarations.begin(), std::move(*it));
+}
+
+void Compiler::checkServices(Program* prog) {
+    if (!prog) return;
+    std::vector<ServiceDecl*> services;
+    for (const auto& d : prog->declarations)
+        if (auto* sv = dynamic_cast<ServiceDecl*>(d.get())) services.push_back(sv);
+    if (services.empty()) return;
+
+    std::map<std::string, std::string> routeOwner;   // "VERB path" -> "Service.endpoint"
+
+    for (auto* sv : services) {
+        const bool guarded = !sv->auth.empty() && sv->auth != "none";
+
+        // §5.5 — the auth class must exist and answer the §6 contract.
+        if (guarded) {
+            auto ac = ctx.classes.find(sv->auth);
+            if (ac == ctx.classes.end()) {
+                LOG_ERROR(ctx.fmtLoc() + "service '" + sv->name + "': auth class '" + sv->auth +
+                          "' is not declared (spec/66 §6).  Name a class with 'principal_of' and "
+                          "'has_role', or write 'auth: none' to declare the service open.");
+            } else if (!ac->second.methods.empty()) {
+                // Only judge the contract when the method table is actually populated:
+                // a class registered from an IMPORTED file is known by name and members
+                // long before its methods are compiled, and reporting "has no method"
+                // there would be a false accusation (seen 2026-10-18).
+                for (const char* needed : {"principal_of", "has_role"}) {
+                    if (!ac->second.methods.count(needed))
+                        LOG_ERROR(ctx.fmtLoc() + "service '" + sv->name + "': auth class '" + sv->auth +
+                                  "' has no method '" + needed + "' (spec/66 §6).");
+                }
+            }
+        }
+
+        std::set<std::string> endpointNames;
+        for (const auto& ep : sv->endpoints) {
+            if (!ep.captured) continue;      // synthesis has not run on this service
+            const std::string where = "service '" + sv->name + "', endpoint '" + ep.name + "': ";
+
+            // §5.1a — one name per service: it is the RPC method and the operation id.
+            if (!endpointNames.insert(ep.name).second)
+                LOG_ERROR(ctx.fmtLoc() + where + "declared twice in this service (spec/66 §5.1).");
+
+            // §5.4 — exactly one model in, one model out.  That is what makes one
+            // body reachable from RPC, REST and CLI alike.
+            if (ep.argCount != 1) {
+                LOG_ERROR(ctx.fmtLoc() + where + "takes " + std::to_string(ep.argCount) +
+                          " arguments; an endpoint takes exactly one request model (spec/66 §5.4).");
+            } else if (!ctx.classes.count(ep.requestType)) {
+                LOG_ERROR(ctx.fmtLoc() + where + "request type '" + ep.requestType +
+                          "' is not a model; a scalar has no wire shape the transports share "
+                          "(spec/66 §5.4).");
+            }
+            if (ep.returnType.empty() || !ctx.classes.count(ep.returnType))
+                LOG_ERROR(ctx.fmtLoc() + where + "return type '" + ep.returnType +
+                          "' is not a model (spec/66 §5.4).");
+
+            // §6 — the gate reads `req.token`; without the field it could never run.
+            if (guarded) {
+                auto rq = ctx.classes.find(ep.requestType);
+                if (rq != ctx.classes.end() && !rq->second.members.count("token"))
+                    LOG_ERROR(ctx.fmtLoc() + where + "request model '" + ep.requestType +
+                              "' has no 'token: string' field, but the service declares "
+                              "'auth: " + sv->auth + "'.  That is where the RPC gate reads the "
+                              "token from (spec/66 §6).");
+            }
+
+            // §5.3 — with a gate declared, every endpoint states its roles.
+            if (guarded && !ep.hasRoles)
+                LOG_ERROR(ctx.fmtLoc() + where + "has no 'roles:' while the service declares "
+                          "'auth: " + sv->auth + "'.  Write the roles, or 'roles: []' for an endpoint "
+                          "every authenticated caller may use (spec/66 §5.3).");
+
+            if (ep.verb.empty() && ep.path.empty()) continue;
+            std::string verb = ep.verb;
+            for (auto& ch : verb) ch = (char)toupper((unsigned char)ch);
+            const std::string full = sv->base + ep.path;
+
+            // §5.1b — one owner per route, across every service of this build.
+            const std::string routeKey = verb + " " + full;
+            auto owner = routeOwner.find(routeKey);
+            if (owner != routeOwner.end())
+                LOG_ERROR(ctx.fmtLoc() + where + "route '" + routeKey + "' is already served by '" +
+                          owner->second + "' (spec/66 §5.1).");
+            else
+                routeOwner[routeKey] = sv->name + "." + ep.name;
+
+            // §5.2 — a `:param` the request model cannot carry would never be filled.
+            auto reqIt = ctx.classes.find(ep.requestType);
+            if (reqIt != ctx.classes.end())
+                for (const auto& param : servicePathParams(ep.path))
+                    if (!reqIt->second.members.count(param))
+                        LOG_ERROR(ctx.fmtLoc() + where + "path parameter ':" + param +
+                                  "' has no field '" + param + "' in request model '" +
+                                  ep.requestType + "' (spec/66 §5.2).");
+        }
+    }
+}
+
 void Compiler::checkClassGroups(Program* prog) {
     if (!prog) return;
     std::map<std::string, ClassDecl*> classByName;
@@ -4496,6 +5128,7 @@ void Compiler::registerTypeDecl(Node* node) {
             member.type = memberType;
             member.typeName = typeName;
             member.is_collaborator = astMember.is_collaborator;
+            member.alias           = astMember.alias;          // spec/15
             member.version = astMember.version;
             member.initValue = std::shared_ptr<Expr>(const_cast<Expr*>(astMember.initialValue.release()));
             
@@ -4767,6 +5400,7 @@ void Compiler::registerTypeDecl(Node* node) {
             member.db_indexed_mode       = astMember.db_indexed_mode;
             member.db_indexed_unique     = astMember.db_indexed_unique;
             member.db_indexed_skip_empty = astMember.db_indexed_skip_empty;
+            member.alias                 = astMember.alias;   // spec/15: externer Name
 
             classInfo.members[fieldName] = member;
         }
@@ -4834,6 +5468,12 @@ void Compiler::registerTypeDecl(Node* node) {
             auto& declSet = ctx.enumDeclMembers[enumName];
             for (const auto& val : enm->values) declSet.insert(val.first);
             ctx.enumDeclLoc[enumName] = ctx.fmtLoc(enm->sourceNode);
+            // spec/49 §18.2a: `wire: true` zaehlt wie eine reflexive
+            // Ganz-Enum-Nutzung — der andere Build benennt die Mitglieder.
+            if (enm->wire) {
+                auto& useSet = ctx.enumUsedMembers[enumName];
+                for (const auto& val : enm->values) useSet.insert(val.first);
+            }
         }
         LOG_DEBUG("AST Registered Enum: " + enumName +
                   " (" + std::to_string(enumValues.size()) + " values, " +
@@ -5491,10 +6131,11 @@ void Compiler::visitTopLevel(Node* node) {
         llvm::Value* w = llvm::ConstantFP::get(f32, prefab->width);
         llvm::Value* h = llvm::ConstantFP::get(f32, prefab->height);
         llvm::Value* drag = ctx.builder.getInt32(prefab->draggable ? 1 : 0);
+        llvm::Value* itr  = ctx.builder.getInt32(prefab->inputTransparent ? 1 : 0);
 
         ctx.builder.CreateCall(
-            ctx.getFunction("aiml_prefab_register", vd, {i8p, f32, f32, i8p, i32, i8p}),
-            {nameStr, w, h, texStr, drag, childStr});
+            ctx.getFunction("aiml_prefab_register", vd, {i8p, f32, f32, i8p, i32, i8p, i32}),
+            {nameStr, w, h, texStr, drag, childStr, itr});
 
         /* Emit register_callback(name, fn_i8p) for each unique callback referenced
          * by this prefab's children. Forward-declares the function with signature
@@ -5819,7 +6460,8 @@ static void collectLocalsAndReturns(const Stmt* s,
         collectLocalsAndReturns(w->body.get(), locals, returns); return; }
     if (auto* t = dynamic_cast<const TryStmt*>(s)) {
         collectLocalsAndReturns(t->tryBlock.get(), locals, returns);
-        collectLocalsAndReturns(t->catchBlock.get(), locals, returns); return; }
+        for (auto* cb : t->catchBodies()) collectLocalsAndReturns(cb, locals, returns);
+        return; }
 }
 static bool classifyOwnedStringReturn(FunctionDecl* fn, CompilerContext& ctx) {
     if (!fn || fn->returnType != "string" || !fn->body) return false;
@@ -5840,7 +6482,11 @@ static bool stmtRebinds(const Stmt* s, const std::string& name) {
     if (auto* st = dynamic_cast<const SetStmt*>(s)) return st->target == name;
     if (auto* i = dynamic_cast<const IfStmt*>(s)) return bodyRebinds(i->thenBranch.get(), name) || bodyRebinds(i->elseBranch.get(), name);
     if (auto* w = dynamic_cast<const WhileStmt*>(s)) return bodyRebinds(w->body.get(), name);
-    if (auto* t = dynamic_cast<const TryStmt*>(s)) return bodyRebinds(t->tryBlock.get(), name) || bodyRebinds(t->catchBlock.get(), name);
+    if (auto* t = dynamic_cast<const TryStmt*>(s)) {
+        if (bodyRebinds(t->tryBlock.get(), name)) return true;
+        for (auto* cb : t->catchBodies()) if (bodyRebinds(cb, name)) return true;
+        return false;
+    }
     if (auto* b = dynamic_cast<const BlockStmt*>(s)) return bodyRebinds(b, name);
     return false;
 }
@@ -5854,6 +6500,7 @@ void Compiler::visitFunction(FunctionDecl* func) {
     // Basic mapping using our old context structure for now
     std::string mangledName = ctx.qualify(func->name);
     ctx.currentFunctionName = func->name;
+    ctx.inServiceSynthFn = func->serviceSynth;        // spec/66 §5.6
     ctx.traceDeclarationSites.clear();
     // spec/61 §3.2: auto-classify an owned string return so callers ADOPT (see classifyOwnedStringReturn).
     // Idempotent + additive (never clears an explicit annotation); runs in the header-only forward-decl
@@ -6426,6 +7073,7 @@ void Compiler::visitFunction(FunctionDecl* func) {
     ctx.symbol_table = savedSymbols;
     ctx.ir_gen->setInsertPoint(oldBlock);
     ctx.currentFunctionName = "";
+    ctx.inServiceSynthFn = false;
     /* Restore decorator context — see snapshot at the top of visitFunction. */
     ctx.currentFunctionDecorators = std::move(_saved_decorators);
     ctx.currentFunctionReturnType = std::move(_saved_return_type);

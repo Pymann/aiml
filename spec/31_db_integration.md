@@ -589,6 +589,11 @@ Anschliessend wird das `path:` Argument der `open`-Funktion angehangen:
 | relativer Pfad (`"sub/dir/"`) | Root + Sub-Pfad anhaengen |
 | absoluter Pfad (`"/tmp/..."`) | as-is, Root wird ignoriert (backward-compat fuer Tests) |
 
+Das Verzeichnis wird beim `open` **angelegt, einschliesslich aller Zwischenebenen**.  Bis
+2026-10-15 war das ein einstufiges `mkdir`: ein `path: "sub/dir/"` schlug beim ersten
+Oeffnen mit `ENOENT` fehl, der open-Pfad lief weiter, und der Store blieb still leer.  Das
+Beispiel `runs/trajectory.kvwal` zwei Absaetze weiter oben war damit unbelegt.
+
 #### Beispiele
 
 ```bash
@@ -697,7 +702,13 @@ storage class:
 | **Blob / Fixed (persistent)** | mmap'd WAL | `kv.checkpoint` / `kv.clear` / `kv.set` *only if it triggers `mremap`-grow* |
 | **String (persistent)** | mmap'd WAL (with `\0` terminator) | same as above |
 | **Typed (persistent)** | `decoded_cache[key]` | `kv.set(key,_) / kv.delete(key) / kv.evict / kv.clear / kv.checkpoint`, **plus LRU eviction** when cache > 1024 entries |
-| **Any mode (non-persistent)** | `kv->map[key]` | `kv.set(key,_) / kv.delete(key) / kv.clear / kv.evict` |
+| **Any mode (non-persistent)** | `kv->map[key]` (typed: `decoded_cache[key]`) | `kv.set(key,_) / kv.delete(key) / kv.clear / kv.evict` |
+
+**Self-write exception (typed, both storage classes).** `kv.set(key, p)` where `p` is the
+`ref<T>` that `kv.get(key)` returned — i.e. the value **is** the key's own cache slot — does
+**not** invalidate `p`: the slot is encoded and persisted, never released (a self-write is a
+no-op for the slot, spec/61 §5.5 step 0). Only a `kv.set(key, v)` with any other value `v`
+replaces and frees the slot. See §6.7.1.
 
 **Important changes from earlier versions:**
 
@@ -728,7 +739,7 @@ enforced at compile time:
 
 | Pattern | Declaration | Semantics | When to use |
 |---|---|---|---|
-| **Zero-copy view** | `decl: [p, ref<T>, kv.get(k)]` | `p` is a borrow of the decoded_cache slot (spec/61 §5.4). Mutations land directly in the cache. `kv.set(k, p)` encodes the cache and writes WAL; eviction is skipped because the cache IS the canonical state. | Read-only fast access, or in-place updates that persist back to the same key. |
+| **Zero-copy view** | `decl: [p, ref<T>, kv.get(k)]` | `p` is a borrow of the decoded_cache slot (spec/61 §5.4). Mutations land directly in the cache. `kv.set(k, p)` encodes the cache and writes WAL; eviction is skipped because the cache IS the canonical state — the slot stays, so `p` remains valid after the set (self-write, §6.7). | Read-only fast access, or in-place updates that persist back to the same key. |
 | **Deep-copy value** | `decl: [p, T, kv.get_copy(k)]` | `p` has its own malloc'd heap allocations (encode-then-decode roundtrip at decl site). Mutations to `p` do NOT touch the cache. `kv.set(k, p)` encodes `p`, then evicts the cache. | Local mutations that might or might not be persisted; or when you want isolation from cache state. |
 | **— ERROR —** | `decl: [p, T, kv.get(k)]` | Would do shallow memcpy → `p` shares heap pointers with cache → use-after-free on mutate-and-set-same-key (see `doc/issue/kv_get_mutate_set_same_key_crash.md`). | **Compiler rejects** with diagnostic suggesting `ref<T> + kv.get` or `T + kv.get_copy`. |
 | **— ERROR —** | `decl: [p, ref<T>, kv.get_copy(k)]` | Semantically contradictory: deep-copy wasted on a borrow. | **Compiler rejects** with diagnostic suggesting `T + kv.get_copy` or `ref<T> + kv.get`. |
@@ -1323,3 +1334,28 @@ for more ambitious storage-engine work.
 - **Encryption**: Transparent AES encryption at the page level.
 - **Compression**: LZ4 or Zstandard for rarely used pages (cold storage).
 - **Reactive queries**: `db.subscribe(query, callback)` — called when the result set changes.
+
+## Einblick in geöffnete Speicher
+
+Für eine Betriebssicht (cosmos `doc/spec/99` §99.2) gibt `db` Kennzahlen der **geöffneten
+persistenten** Speicher heraus — nie Inhalte.
+
+```yaml
+- decl: [count, i32, { call: [db.open_count] }]
+- decl: [name,  string, { call: [db.open_name, idx] }]
+- decl: [path,  string, { call: [db.open_path, idx] }]
+- decl: [wal,   i64,    { call: [db.open_wal_used, idx] }]
+- decl: [rows,  i64,    { call: [db.open_entries, idx] }]
+- decl: [wrts,  i64,    { call: [db.open_writes, idx] }]
+```
+
+- Gezeigt werden nur **geöffnete** Speicher: ein Speicher, den niemand geöffnet hat, ist kein
+  Betriebszustand, sondern eine Datei.
+- `open_writes` ist ein **Zähler**, kein Zeitstempel.  Ein Zeitstempel kostete je Schreibvorgang
+  einen Uhrzugriff auf dem heißen Pfad; die Sicht vergleicht ohnehin zwei Schnappschüsse, und die
+  Differenz sagt „bewegt sich", während der Schnappschuss-Zeitpunkt sagt, wie alt die Aussage ist.
+- Ein Index außerhalb des Bereichs liefert Leeres bzw. `0` — kein Absturz, keine Ausnahme
+  (`tests/test_kv_introspection.aiml`).
+- **Keine Werte.**  Eine Oberfläche, die KV-Inhalte zeigt, zeigt früher oder später ein Geheimnis,
+  und die Begründung „nur für Diagnose" hält bis zum ersten Bildschirmfoto in einem Ticket.
+

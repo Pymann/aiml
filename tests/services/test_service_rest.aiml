@@ -1,0 +1,81 @@
+# SPEC: 66_services §4.2 — REST: `serve_rest` haengt die Routen an den Server des
+# Projekts; der Request wird aus JSON-Body und Pfadparametern gefuellt, die Antwort
+# geht als JSON mit 200 zurueck.
+# Expected exit code: 0
+- import: "tests/services/_models.aiml"
+
+- service:
+    name: RestApi
+    base: "/api/v1"
+    transport: [rest]
+    auth: none
+    endpoints:
+      - def:
+          name: resolve_component
+          http: [post, "/components/resolve"]
+          args: [[req, ResolveReq]]
+          return: ResolveResp
+          body:
+            - decl: [out, ResolveResp]
+            - set: [out.spdx, req.purl]
+            - set: [out.confidence, 77]
+            - return: out
+      - def:
+          name: release_info
+          http: [get, "/releases/:release_id"]
+          args: [[req, ResolveReq]]
+          return: ResolveResp
+          body:
+            - decl: [out, ResolveResp]
+            - set: [out.spdx, req.release_id]
+            - return: out
+
+- def:
+    name: main
+    static_off: ["str_cmp"]
+    return: i32
+    body:
+      - decl: [bad, i32, 0]
+      - decl: [srv, http_server_handle]
+      - set: [srv, { call: [http.server, "127.0.0.1", 23191] }]
+      - decl: [api, ptr<RestApi>, { new: RestApi }]
+      - call: [api.serve_rest, srv]
+      - decl: [srv_thread, thread_handle]
+      - set: [srv_thread, { call: [srv.start_async] }]
+      - call: [time.sleep_ms, 200]
+
+      # Body-Quelle
+      - decl: [post_url, url]
+      - set: [post_url, { call: [http.parse_url, "http://127.0.0.1:23191/api/v1/components/resolve"] }]
+      - decl: [post_resp, http_response_handle]
+      - set: [post_resp, { call: [http.post, post_url, "{\"purl\":\"pkg:conan/zlib\"}"] }]
+      - decl: [post_status, i32]
+      - set: [post_status, { call: [post_resp.status] }]
+      - decl: [post_body, string]
+      - set: [post_body, { call: [post_resp.body] }]
+      - call: [post_resp.free]
+      - if: { condition: { neq: [post_status, 200] }, then: [{ print: ["FAIL post status=${post_status}"] }, { set: [bad, 1] }] }
+      - decl: [hit_purl, i32]
+      - set: [hit_purl, { call: [post_body.index_of, "pkg:conan/zlib"] }]
+      - if: { condition: { lt: [hit_purl, 0] }, then: [{ print: ["FAIL post body=${post_body}"] }, { set: [bad, 1] }] }
+
+      # Pfadparameter-Quelle
+      - decl: [get_url, url]
+      - set: [get_url, { call: [http.parse_url, "http://127.0.0.1:23191/api/v1/releases/rel-42"] }]
+      - decl: [get_resp, http_response_handle]
+      - set: [get_resp, { call: [http.get, get_url] }]
+      - decl: [get_status, i32]
+      - set: [get_status, { call: [get_resp.status] }]
+      - decl: [get_body, string]
+      - set: [get_body, { call: [get_resp.body] }]
+      - call: [get_resp.free]
+      - if: { condition: { neq: [get_status, 200] }, then: [{ print: ["FAIL get status=${get_status}"] }, { set: [bad, 1] }] }
+      - decl: [hit_rel, i32]
+      - set: [hit_rel, { call: [get_body.index_of, "rel-42"] }]
+      - if: { condition: { lt: [hit_rel, 0] }, then: [{ print: ["FAIL get body=${get_body}"] }, { set: [bad, 1] }] }
+
+      - call: [srv.stop]
+      - call: [srv_thread.join]
+      - free: api
+      - if: { condition: { eq: [bad, 0] }, then: [{ print: ["test_service_rest PASS"] }] }
+      - return: bad

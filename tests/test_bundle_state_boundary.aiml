@@ -1,0 +1,77 @@
+# SPEC: 29_2_sys_exec,29_serialize,62_pipelines
+# spec/29_2 §13 + spec/62 F62-89: WAS genau sieht ein Bundle vom Wirt?
+#
+# Die Frage ist nicht akademisch: laeuft eine Pipeline im Controller, haengt
+# daran, ob ein Schritt-Rumpf an dessen Zustand kommt.  Gepruefte Aussagen:
+#
+#   1. Eine gerufene Funktion des Wirts IST erreichbar — sie wird als QUELLE
+#      mitgebuendelt (spec/29_2 §16) und laeuft damit als KOPIE.
+#   2. Die Kopie hat ihre EIGENEN Globalen, frisch initialisiert.  Der Zaehler
+#      des Wirts bleibt unberuehrt, der im Bundle beginnt bei 0.
+#
+# Daraus folgt die eigentliche Lehre: die Trennung ist LEXIKALISCH (Namen und
+# Zustand), nicht eine Sandbox — Dateien, Netz und Datenbank liegen fuer beide
+# im selben Prozess.
+# Expected exit code: 0
+
+- decl: [g_counter, i32, 0]
+
+- def:
+    name: bump
+    return: i32
+    body:
+      - set: [g_counter, { +: [g_counter, 1] }]
+      - return: g_counter
+
+- def:
+    name: body_calls_host
+    return: i32
+    body:
+      - decl: [seen, i32, { call: [bump] }]
+      - decl: [txt, string, "${seen}"]
+      - call: [io.write_file, "logs/bundle_boundary.txt", txt]
+      - return: 0
+
+- def:
+    name: expect
+    args: [[what, string], [cond, i32]]
+    return: i32
+    body:
+      - if:
+          condition: { eq: [cond, 1] }
+          then: [{ print: ["  ok   ${what}"] }, { return: 0 }]
+      - print: ["  FAIL ${what}"]
+      - return: 1
+
+- def:
+    name: main
+    static_off: ["str_cmp"]
+    return: i32
+    body:
+      - decl: [fails, i32, 0]
+
+      # Der Wirt zaehlt zweimal: sein g_counter steht danach auf 2.
+      - decl: [first, i32, { call: [bump] }]
+      - decl: [second, i32, { call: [bump] }]
+      - set: [fails, { +: [fails, { call: [expect, "der Wirt zaehlt auf 2", { eq: [second, 2] }] }] }]
+
+      - decl: [rc_iso, i32, { call: [sys.exec, { call: [sys.bundle, "body_calls_host", { context: true }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "der Rumpf konnte die Wirts-Funktion rufen", { eq: [rc_iso, 0] }] }] }]
+
+      - decl: [seen_txt, string, { call: [io.read_file, "logs/bundle_boundary.txt"] }]
+      - print: ["  (im Bundle sah bump() den Wert: ${seen_txt})"]
+      # 1 = frische Kopie der Globalen; 3 = geteilter Zustand des Wirts.
+      - set: [fails, { +: [fails, { call: [expect, "im Bundle beginnt der Zaehler bei 0 (frische Kopie)", { eq: [seen_txt, "1"] }] }] }]
+
+      - decl: [after, i32, { call: [bump] }]
+      - set: [fails, { +: [fails, { call: [expect, "der Zaehler des Wirts blieb unberuehrt", { eq: [after, 3] }] }] }]
+
+      # Und die Kehrseite: derselbe Prozess, dieselben Dateien.  Der Rumpf hat
+      # gerade in das Arbeitsverzeichnis des Wirts geschrieben.
+      - set: [fails, { +: [fails, { call: [expect, "aber Dateien teilen beide (keine Sandbox)", { call: [io.exists, "logs/bundle_boundary.txt"] }] }] }]
+
+      - if:
+          condition: { neq: [fails, 0] }
+          then: [{ print: ["test_bundle_state_boundary FAIL (${fails})"] }, { return: 1 }]
+      - print: ["test_bundle_state_boundary PASS"]
+      - return: 0

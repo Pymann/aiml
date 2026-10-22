@@ -37,7 +37,7 @@ static std::string extractTypeName(AIML::AST::Expr* expr) {
 
 // Emit an unconditional __cxa_throw at the current insert point.
 // The current basic block MUST be terminated after this call.
-static void emitThrow(CompilerContext& ctx) {
+static void emitThrow(CompilerContext& ctx, const std::string& excClass) {
     llvm::PointerType* ptrTy = llvm::PointerType::getUnqual(ctx.context);
 
     llvm::Function* allocFn = ctx.module().getFunction("__cxa_allocate_exception");
@@ -53,11 +53,15 @@ static void emitThrow(CompilerContext& ctx) {
             "__cxa_throw", ctx.module());
     }
 
-    // spec/61 §9.3 record layout {object, free thunk}; a runtime throw carries neither.
-    llvm::Value* excAlloc = ctx.builder.CreateCall(allocFn, {ctx.builder.getInt64(16)}, "exc_alloc");
+    // spec/61 §9.3 record layout {object, free thunk, Typ-Tag}; ein Laufzeit-Wurf hat
+    // kein Objekt und keinen Thunk, aber sehr wohl einen NAMEN — spec/22 listet die
+    // eingebauten Ausnahmen, und ohne Tag koennte kein `catch` sie nach Typ waehlen.
+    llvm::Value* excAlloc = ctx.builder.CreateCall(allocFn, {ctx.builder.getInt64(24)}, "exc_alloc");
     ctx.builder.CreateStore(llvm::ConstantPointerNull::get(ptrTy), excAlloc);
     ctx.builder.CreateStore(llvm::ConstantPointerNull::get(ptrTy),
         ctx.builder.CreateConstGEP1_64(ctx.builder.getInt8Ty(), excAlloc, 8));
+    ctx.builder.CreateStore(ctx.builder.CreateGlobalStringPtr(excClass, "builtin_exc_tag"),
+        ctx.builder.CreateConstGEP1_64(ctx.builder.getInt8Ty(), excAlloc, 16));
     llvm::Value* null = llvm::ConstantPointerNull::get(ptrTy);
 
     llvm::BasicBlock* ud = AIML::AST::aimlUnwindDest(ctx, true);
@@ -76,14 +80,15 @@ static void emitThrow(CompilerContext& ctx) {
 // Returns the new insert-point BB (continueBB) with builder already set.
 static llvm::BasicBlock* emitGuard(CompilerContext& ctx, llvm::Value* flag,
                                     const std::string& throwLabel,
-                                    const std::string& continueLabel) {
+                                    const std::string& continueLabel,
+                                    const std::string& excClass) {
     llvm::Function* fn = ctx.builder.GetInsertBlock()->getParent();
     llvm::Value* isSet = ctx.builder.CreateICmpNE(flag, ctx.builder.getInt8(0), throwLabel + "_cmp");
     llvm::BasicBlock* throwBB    = llvm::BasicBlock::Create(ctx.context, throwLabel, fn);
     llvm::BasicBlock* continueBB = llvm::BasicBlock::Create(ctx.context, continueLabel, fn);
     ctx.builder.CreateCondBr(isSet, throwBB, continueBB);
     ctx.builder.SetInsertPoint(throwBB);
-    emitThrow(ctx);
+    emitThrow(ctx, excClass);
     ctx.builder.SetInsertPoint(continueBB);
     return continueBB;
 }
@@ -413,14 +418,14 @@ void registerBuiltins(CompilerContext& ctx) {
 
     // -----------------------------------------------------------------------
     // JsonStyle builtin class for sys.serialize formatting
-    // Layout: { i32 pretty, ptr indent, ptr newline }
+    // Layout: { i32 pretty, ptr indent, ptr newline, i32 bare, i32 skip_empty }
     // -----------------------------------------------------------------------
     {
         llvm::Type* i32 = ctx.builder.getInt32Ty();
         llvm::Type* p   = llvm::PointerType::get(ctx.context, 0);
         llvm::StructType* jsTy = llvm::StructType::getTypeByName(ctx.context, "JsonStyle");
         if (!jsTy) {
-            jsTy = llvm::StructType::create(ctx.context, {i32, p, p}, "JsonStyle");
+            jsTy = llvm::StructType::create(ctx.context, {i32, p, p, i32, i32}, "JsonStyle");
         }
         CompilerContext::ClassInfo jsInfo;
         jsInfo.name = "JsonStyle"; jsInfo.type = jsTy; jsInfo.isBuiltin = false;
@@ -430,6 +435,8 @@ void registerBuiltins(CompilerContext& ctx) {
         jsInfo.members["pretty"]  = mk(i32, 0, "i32");
         jsInfo.members["indent"]  = mk(p,   1, "string");
         jsInfo.members["newline"] = mk(p,   2, "string");
+        jsInfo.members["bare"]    = mk(i32, 3, "i32");   // spec/29 §5.2a: ohne __type
+        jsInfo.members["skip_empty"] = mk(i32, 4, "i32");   // spec/29 §5.2c: Leeres weglassen
         // spec/61 §7/§6.1: JsonStyle was already registered (context.h) and registerTypes built its
         // heap-field RELEASE metadata (hasHeapFields + serNodes) before compile→registerBuiltins runs.
         // Overwriting the ClassInfo wholesale dropped that metadata (new entry defaults
@@ -1040,6 +1047,20 @@ void registerBuiltins(CompilerContext& ctx) {
     sys.builtinFuncs["exe_path"] = [](CompilerContext& ctx, const std::vector<IRValue*>&) -> IRValue* {
         auto* p = llvm::PointerType::get(ctx.context, 0);
         return ctx.ir_gen->wrap(ctx.builder.CreateCall(ctx.getFunction("aiml_sys_exe_path", p, {}), {}));
+    };
+    // spec/23 §5.6: sys.require_tools(csv) → "" oder ALLES Fehlende.  Ein Ort
+    // fuer diese Frage (F23-43): `requires:` (spec/62 §18.2) und der cosmos-
+    // Agent rufen denselben Code, statt zwei Pruefungen zu pflegen.
+    sys.builtinFuncs["require_tools"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+        auto* p = llvm::PointerType::get(ctx.context, 0);
+        llvm::Value* spec = args.empty()
+            ? static_cast<llvm::Value*>(ctx.builder.CreateGlobalStringPtr("", "req_empty"))
+            : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+        llvm::Value* out = ctx.builder.CreateCall(
+            ctx.getFunction("aiml_sys_require_tools", p, {p}), {spec}, "req_tools");
+        if (ctx.lifetimeDropsEnabled && !ctx.stmtTempStack.empty())
+            AIML::AST::aimlTrackStringTemp(ctx, out);
+        return ctx.ir_gen->wrap(out);
     };
     sys.builtinFuncs["get_arg"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
         if (args.empty()) return ctx.ir_gen->createGlobalStringPtr("");
@@ -2021,12 +2042,12 @@ void registerBuiltins(CompilerContext& ctx) {
         // Guard: throw InvalidThreadStateException if already detached
         llvm::Value* detachedGEP = ctx.builder.CreateStructGEP(handleTy, handlePtr, 2, "detached_ptr");
         llvm::Value* detachedVal = ctx.builder.CreateLoad(ctx.builder.getInt8Ty(), detachedGEP, "detached");
-        emitGuard(ctx, detachedVal, "join_detached_throw", "join_check_joined");
+        emitGuard(ctx, detachedVal, "join_detached_throw", "join_check_joined", "InvalidThreadStateException");
 
         // Guard: throw InvalidThreadStateException if already joined
         llvm::Value* joinedGEP = ctx.builder.CreateStructGEP(handleTy, handlePtr, 1, "joined_ptr");
         llvm::Value* joinedVal = ctx.builder.CreateLoad(ctx.builder.getInt8Ty(), joinedGEP, "joined");
-        emitGuard(ctx, joinedVal, "join_already_throw", "join_do");
+        emitGuard(ctx, joinedVal, "join_already_throw", "join_do", "InvalidThreadStateException");
 
         // pthread_join(tid, NULL)
         llvm::Value* tidGEP = ctx.builder.CreateStructGEP(handleTy, handlePtr, 0, "tid_ptr");
@@ -2048,12 +2069,12 @@ void registerBuiltins(CompilerContext& ctx) {
         // Guard: throw InvalidThreadStateException if already joined
         llvm::Value* joinedGEP = ctx.builder.CreateStructGEP(handleTy, handlePtr, 1, "joined_ptr");
         llvm::Value* joinedVal = ctx.builder.CreateLoad(ctx.builder.getInt8Ty(), joinedGEP, "joined");
-        emitGuard(ctx, joinedVal, "detach_joined_throw", "detach_check_detached");
+        emitGuard(ctx, joinedVal, "detach_joined_throw", "detach_check_detached", "InvalidThreadStateException");
 
         // Guard: throw InvalidThreadStateException if already detached
         llvm::Value* detachedGEP = ctx.builder.CreateStructGEP(handleTy, handlePtr, 2, "detached_ptr");
         llvm::Value* detachedVal = ctx.builder.CreateLoad(ctx.builder.getInt8Ty(), detachedGEP, "detached");
-        emitGuard(ctx, detachedVal, "detach_already_throw", "detach_do");
+        emitGuard(ctx, detachedVal, "detach_already_throw", "detach_do", "InvalidThreadStateException");
 
         // pthread_detach(tid)
         llvm::Value* tidGEP = ctx.builder.CreateStructGEP(handleTy, handlePtr, 0, "tid_ptr");
@@ -7247,9 +7268,56 @@ void registerBuiltins(CompilerContext& ctx) {
             gltf.builtinFuncs["load"] = [](CompilerContext& ctx,
                 const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
                 auto* p = llvm::PointerType::get(ctx.context, 0);
+                // spec/44_7: ein String-LITERAL, das im Asset-Bundle liegt, ist
+                // ein Fehler — dieselbe Regel wie bei gl.load_texture.  Ein fester
+                // Pfad bricht, sobald jemand das Arbeitsverzeichnis wechselt oder
+                // nach WASM baut.  Dynamische Pfade (Kommandozeile) bleiben erlaubt.
+                if (!args.empty() && ctx.currentCall && !ctx.currentCall->args.empty()) {
+                    if (auto* lit = dynamic_cast<AIML::AST::LiteralExpr*>(
+                            ctx.currentCall->args[0].get())) {
+                        if (lit->type == "string" &&
+                            AIML::AssetScanner::instance().path_under_root(lit->value)) {
+                            auto dot   = lit->value.find_last_of('.');
+                            auto slash = lit->value.find_last_of('/');
+                            size_t a = (slash == std::string::npos) ? 0 : slash + 1;
+                            size_t b = (dot == std::string::npos || dot < a)
+                                       ? lit->value.size() : dot;
+                            LOG_ERROR(std::string("gltf.load: literal path '") + lit->value +
+                                      "' is in the asset bundle; use gltf.model(\"" +
+                                      lit->value.substr(a, b - a) + "\") instead");
+                        }
+                    }
+                }
                 llvm::Value* pathArg = args.empty()
                     ? llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(p))
                     : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+                llvm::Value* scenePtr = ctx.builder.CreateCall(
+                    ctx.getFunction("aiml_gltf_load", p, {p}), {pathArg});
+                return ctx.ir_gen->wrap(scenePtr);
+            };
+
+            // gltf.model(stem) → gltf_scene (Asset-Register, spec/44_7).  Der Stem
+            // wird im Mesh-Store nachgeschlagen, geladen wird mit demselben Loader.
+            // Literal-Stems werden zur Uebersetzungszeit geprueft (wie gl.tex).
+            gltf.builtinFuncs["model"] = [](CompilerContext& ctx,
+                const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+                auto* p = llvm::PointerType::get(ctx.context, 0);
+                if (!args.empty() && ctx.currentCall && !ctx.currentCall->args.empty()) {
+                    if (auto* lit = dynamic_cast<AIML::AST::LiteralExpr*>(
+                            ctx.currentCall->args[0].get())) {
+                        if (lit->type == "string" &&
+                            !AIML::AssetScanner::instance().has_stem(
+                                AIML::AssetKind::Mesh, lit->value)) {
+                            LOG_ERROR(std::string("gltf.model: stem '") +
+                                      lit->value + "' not in mesh store");
+                        }
+                    }
+                }
+                llvm::Value* stemArg = args.empty()
+                    ? llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(p))
+                    : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+                llvm::Value* pathArg = ctx.builder.CreateCall(
+                    ctx.getFunction("aiml_asset_mesh_path", p, {p}), {stemArg});
                 llvm::Value* scenePtr = ctx.builder.CreateCall(
                     ctx.getFunction("aiml_gltf_load", p, {p}), {pathArg});
                 return ctx.ir_gen->wrap(scenePtr);
@@ -8676,6 +8744,42 @@ void registerBuiltins(CompilerContext& ctx) {
                 ctx.builder.getVoidTy(), {f32, f32, i32, i32}), {mx, my, bd, br});
             return nullptr;
         };
+        // engine.update_drag_gesture(mx, my) -> i32 (spec/44_6)
+        // Nimmt am DRUCKPUNKT auf, sobald die Bewegungsschwelle fällt, statt am
+        // Cursor dieses Frames sobald die Taste gedrückt gefunden wird.
+        // 0 keine, 1 Kandidat, 2 zieht, 3 losgelassen, 4 abgebrochen.
+        eng.builtinFuncs["update_drag_gesture"] = [](CompilerContext& ctx,
+            const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto* f32 = ctx.builder.getFloatTy();
+            auto* i32 = ctx.builder.getInt32Ty();
+            llvm::Value* mx = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            llvm::Value* my = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]));
+            if (mx->getType() != f32) mx = ctx.builder.CreateSIToFP(mx, f32);
+            if (my->getType() != f32) my = ctx.builder.CreateSIToFP(my, f32);
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                ctx.getFunction("aiml_prefab_update_drag_gesture", i32, {f32, f32}),
+                {mx, my}));
+        };
+        // engine.text_width(text) -> f32 (spec/44_6)
+        // Breite in der Prefab-Schrift, inklusive der Inline-Marken-Regeln.
+        // Macht Zentrierung/Umbruch und die Marken ueberhaupt pruefbar.
+        eng.builtinFuncs["text_width"] = [](CompilerContext& ctx,
+            const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            auto* f32 = ctx.builder.getFloatTy();
+            llvm::Value* txt = args.empty()
+                ? static_cast<llvm::Value*>(ctx.builder.CreateGlobalStringPtr(""))
+                : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                ctx.getFunction("aiml_prefab_text_width", f32, {i8p}), {txt}));
+        };
+        // engine.get_drag_source() -> prefab_instance
+        eng.builtinFuncs["get_drag_source"] = [](CompilerContext& ctx,
+            const std::vector<AIML::IRValue*>&) -> AIML::IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                ctx.getFunction("aiml_prefab_get_drag_source", i8p, {}), {}));
+        };
         // engine.prefab_scene_init(w, h)
         eng.builtinFuncs["prefab_scene_init"] = [](CompilerContext& ctx,
             const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
@@ -8827,6 +8931,12 @@ void registerBuiltins(CompilerContext& ctx) {
         PI_I32_SETTER("set_z", "aiml_prefab_set_z")
         PI_I32_SETTER("set_visible", "aiml_prefab_set_visible")
         PI_I32_SETTER("set_draggable", "aiml_prefab_set_draggable")
+        // spec/44_6: durchklickbar — von hit_test/update_hover uebersprungen,
+        // bleibt aber sichtbar (trennt "zeichnet" von "nimmt Eingabe").
+        PI_I32_SETTER("set_input_transparent", "aiml_prefab_set_input_transparent")
+        PI_I32_GETTER("get_input_transparent", "aiml_prefab_get_input_transparent")
+        PI_I32_SETTER("set_input_blocking", "aiml_prefab_set_input_blocking")
+        PI_I32_GETTER("get_input_blocking", "aiml_prefab_get_input_blocking")
         PI_I32_GETTER("is_hovered", "aiml_prefab_is_hovered")
 
         // cancel_drag() — restore position to before drag started, clear dragged state
@@ -9703,6 +9813,21 @@ void registerBuiltins(CompilerContext& ctx) {
                 ctx.builder.getVoidTy(), {f32, f32}), {num(0), num(1)});
             return nullptr;
         };
+        /* spec/44_0 §8.4: dieselbe Signatur, aber in die EREIGNIS-Schicht. */
+        inp.builtinFuncs["post_mouse_move_pending"] = [](CompilerContext& ctx,
+            const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto* f32 = ctx.builder.getFloatTy();
+            auto num = [&](size_t i) -> llvm::Value* {
+                if (args.size() <= i) return llvm::ConstantFP::get(f32, 0.0);
+                llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[i]));
+                if (v->getType()->isIntegerTy()) v = ctx.builder.CreateSIToFP(v, f32);
+                if (v->getType()->isDoubleTy())  v = ctx.builder.CreateFPTrunc(v, f32);
+                return v;
+            };
+            ctx.builder.CreateCall(ctx.getFunction("aiml_input_post_mouse_move_pending",
+                ctx.builder.getVoidTy(), {f32, f32}), {num(0), num(1)});
+            return nullptr;
+        };
         inp.builtinFuncs["post_scroll"] = [](CompilerContext& ctx,
             const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
             auto* f32 = ctx.builder.getFloatTy();
@@ -9730,7 +9855,18 @@ void registerBuiltins(CompilerContext& ctx) {
         };
         INP_POST_BTN("post_mouse_down", "aiml_input_post_mouse_down")
         INP_POST_BTN("post_mouse_up",   "aiml_input_post_mouse_up")
+        INP_POST_BTN("post_mouse_down_pending", "aiml_input_post_mouse_down_pending")
+        INP_POST_BTN("post_mouse_up_pending",   "aiml_input_post_mouse_up_pending")
 #undef INP_POST_BTN
+        // post_touch_cancel() -> void — spec/44_0 §8.2: abort the active press
+        // WITHOUT a release latch, so a scenario can prove that an aborted
+        // gesture produces no drop.
+        inp.builtinFuncs["post_touch_cancel"] = [](CompilerContext& ctx,
+            const std::vector<AIML::IRValue*>&) -> AIML::IRValue* {
+            ctx.builder.CreateCall(ctx.getFunction("aiml_input_post_touch_cancel",
+                ctx.builder.getVoidTy(), {}), {});
+            return nullptr;
+        };
 #define INP_POST_STR(name, cName) \
         inp.builtinFuncs[name] = [](CompilerContext& ctx, \
             const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* { \
@@ -9888,6 +10024,7 @@ void registerBuiltins(CompilerContext& ctx) {
         INP_BTN_FUNC("mouse_button",   "aiml_input_mouse_button")
         INP_BTN_FUNC("mouse_pressed",  "aiml_input_mouse_pressed")
         INP_BTN_FUNC("mouse_released", "aiml_input_mouse_released")
+        INP_BTN_FUNC("mouse_cancelled","aiml_input_mouse_cancelled")
 #undef INP_BTN_FUNC
 
         // input.gamepad_connected(pad) → i32
@@ -10129,8 +10266,13 @@ void registerBuiltins(CompilerContext& ctx) {
         INP_DRAG_I32("drag_active",    "aiml_input_drag_active")
         INP_DRAG_I32("drag_started",   "aiml_input_drag_started")
         INP_DRAG_I32("drag_ended",     "aiml_input_drag_ended")
+        INP_DRAG_I32("drag_cancelled", "aiml_input_drag_cancelled")
         INP_DRAG_F32("drag_origin_x",  "aiml_input_drag_origin_x")
         INP_DRAG_F32("drag_origin_y",  "aiml_input_drag_origin_y")
+        INP_DRAG_F32("drag_start_x",   "aiml_input_drag_start_x")
+        INP_DRAG_F32("drag_start_y",   "aiml_input_drag_start_y")
+        INP_DRAG_F32("drag_end_x",     "aiml_input_drag_end_x")
+        INP_DRAG_F32("drag_end_y",     "aiml_input_drag_end_y")
         INP_DRAG_F32("drag_delta_x",   "aiml_input_drag_delta_x")
         INP_DRAG_F32("drag_delta_y",   "aiml_input_drag_delta_y")
 #undef INP_DRAG_I32

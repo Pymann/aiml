@@ -490,6 +490,96 @@ extern "C" void aiml_process_release(void* handle) {
 }
 
 // spec/23: absolute path of the running executable, "" when unknown; runtime-owned.
+/* ── spec/23 §5.6: sys.require_tools ──────────────────────────────────────────
+ * Was die Umgebung mitbringen muss, in EINER Antwort.  Drei Formen:
+ *   "git"            ein Programm im PATH
+ *   "gcc>=13"        ein Programm mit Mindestversion (erste Zahl der ersten Zeile)
+ *   "lib:yaml-cpp"   eine Bibliothek ueber pkg-config
+ *
+ * Genannt wird ALLES Fehlende (F23-40) — eine Pruefung, die beim ersten Fehler
+ * aufhoert, erzeugt drei Laeufe statt einem.  EIN Ort fuer diese Frage (F23-43):
+ * `requires:` in aiml spec/62 und der cosmos-Agent rufen denselben Code.
+ */
+static bool rt_tool_in_path(const std::string& name) {
+    if (name.find('/') != std::string::npos)
+        return access(name.c_str(), X_OK) == 0;
+    const char* pathEnv = getenv("PATH");
+    if (!pathEnv) return false;
+    std::string paths(pathEnv);
+    size_t from = 0;
+    while (from <= paths.size()) {
+        size_t cut = paths.find(':', from);
+        std::string dir = paths.substr(from, cut == std::string::npos ? std::string::npos : cut - from);
+        if (!dir.empty()) {
+            std::string full = dir + "/" + name;
+            if (access(full.c_str(), X_OK) == 0) return true;
+        }
+        if (cut == std::string::npos) break;
+        from = cut + 1;
+    }
+    return false;
+}
+
+/* Erste Zahl der ersten Ausgabezeile von `<tool> --version`; -1 = keine. */
+static long rt_tool_version(const std::string& tool) {
+    std::string cmd = tool + " --version 2>/dev/null";
+    FILE* pipe = popen(cmd.c_str(), "r");
+    if (!pipe) return -1;
+    char line[512] = {0};
+    char* got = fgets(line, sizeof(line), pipe);
+    pclose(pipe);
+    if (!got) return -1;
+    for (const char* p = line; *p; ++p) {
+        if (*p >= '0' && *p <= '9') return strtol(p, nullptr, 10);
+    }
+    return -1;
+}
+
+extern "C" char* aiml_sys_require_tools(const char* spec) {
+    std::string missing;
+    if (!spec || !*spec) return aiml_str_dup("");
+    std::string all(spec);
+    bool havePkgConfig = rt_tool_in_path("pkg-config");
+    size_t from = 0;
+    while (from <= all.size()) {
+        size_t cut = all.find(',', from);
+        std::string one = all.substr(from, cut == std::string::npos ? std::string::npos : cut - from);
+        if (cut == std::string::npos) from = all.size() + 1; else from = cut + 1;
+        /* trimmen */
+        while (!one.empty() && (one.front() == ' ' || one.front() == '\t')) one.erase(one.begin());
+        while (!one.empty() && (one.back() == ' ' || one.back() == '\t' || one.back() == '\n')) one.pop_back();
+        if (one.empty()) continue;
+
+        if (one.rfind("lib:", 0) == 0) {
+            std::string lib = one.substr(4);
+            if (!havePkgConfig) {
+                missing += " " + one + "(pkg-config fehlt)";   /* F23-41 */
+                continue;
+            }
+            std::string cmd = "pkg-config --exists " + lib + " 2>/dev/null";
+            if (system(cmd.c_str()) != 0) missing += " " + one;
+            continue;
+        }
+
+        size_t ge = one.find(">=");
+        if (ge == std::string::npos) {
+            if (!rt_tool_in_path(one)) missing += " " + one;
+            continue;
+        }
+        std::string tool = one.substr(0, ge);
+        std::string want = one.substr(ge + 2);
+        if (!rt_tool_in_path(tool)) { missing += " " + one; continue; }
+        long have = rt_tool_version(tool);
+        long need = strtol(want.c_str(), nullptr, 10);
+        if (have < 0) {
+            missing += " " + one + "(hat ?)";                  /* F23-42 */
+        } else if (have < need) {
+            missing += " " + one + "(hat " + std::to_string(have) + ")";
+        }
+    }
+    return aiml_str_dup(missing.c_str());
+}
+
 extern "C" const char* aiml_sys_exe_path(void) {
     static char path[4096] = {0};
     static bool done = false;

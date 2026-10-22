@@ -1,0 +1,60 @@
+# SPEC?: 31_db_integration   # aus dem Dateinamen, zu bestaetigen
+# Einblick in die geoeffneten KV-Speicher (cosmos doc/spec/99 §99.2).
+#
+# Die Betriebssicht braucht Kennzahlen, keine Inhalte: Name, Pfad, WAL-Groesse,
+# Eintraege, Schreibzaehler.  Der Zaehler ist bewusst kein Zeitstempel — ein
+# Zeitstempel kostet auf dem Schreibpfad einen Uhrzugriff, und die Sicht
+# vergleicht ohnehin zwei Schnappschuesse.
+# Expected exit code: 0
+
+- def:
+    name: expect
+    args: [[what, string], [cond, i32]]
+    return: i32
+    body:
+      - if:
+          condition: { eq: [cond, 1] }
+          then: [{ print: ["  ok   ${what}"] }, { return: 0 }]
+      - print: ["  FAIL ${what}"]
+      - return: 1
+
+- def:
+    name: main
+    static_off: ["str_cmp"]
+    return: i32
+    body:
+      - decl: [fails, i32, 0]
+      - decl: [before, i32, { call: [db.open_count] }]
+
+      - decl: [db_path, path, "/tmp/aiml_kv_introspect/"]
+      - decl: [store, Kv<string:string>]
+      - set: [store, { call: [db.open_kv, "introspect_demo", { persist: true, path: db_path }] }]
+      - decl: [after_open, i32, { call: [db.open_count] }]
+      - set: [fails, { +: [fails, { call: [expect, "ein geoeffneter Speicher mehr", { gt: [after_open, before] }] }] }]
+
+      - decl: [idx, i32, { -: [after_open, 1] }]
+      - decl: [name_txt, string, { call: [db.open_name, idx] }]
+      - set: [fails, { +: [fails, { call: [expect, "der Speicher nennt seinen Namen", { gt: [name_txt.len, 0] }] }] }]
+      - decl: [path_txt, string, { call: [db.open_path, idx] }]
+      - set: [fails, { +: [fails, { call: [expect, "und seinen Pfad", { gt: [path_txt.len, 0] }] }] }]
+
+      - decl: [writes_before, i64, { call: [db.open_writes, idx] }]
+      - call: [store.set, "alpha", "eins"]
+      - call: [store.set, "beta", "zwei"]
+      - decl: [writes_after, i64, { call: [db.open_writes, idx] }]
+      - set: [fails, { +: [fails, { call: [expect, "der Schreibzaehler bewegt sich", { ge: [{ -: [writes_after, writes_before] }, 2] }] }] }]
+
+      - decl: [entries, i64, { call: [db.open_entries, idx] }]
+      - set: [fails, { +: [fails, { call: [expect, "zwei Eintraege gezaehlt", { ge: [entries, 2] }] }] }]
+      - decl: [wal, i64, { call: [db.open_wal_used, idx] }]
+      - set: [fails, { +: [fails, { call: [expect, "die WAL hat eine Groesse", { gt: [wal, 0] }] }] }]
+
+      # Ein Index ausserhalb liefert Leeres statt abzustuerzen.
+      - decl: [bad_name, string, { call: [db.open_name, 9999] }]
+      - set: [fails, { +: [fails, { call: [expect, "ungueltiger Index ist leer, kein Absturz", { eq: [bad_name.len, 0] }] }] }]
+
+      - if:
+          condition: { neq: [fails, 0] }
+          then: [{ print: ["test_kv_introspection FAIL (${fails})"] }, { return: 1 }]
+      - print: ["test_kv_introspection PASS"]
+      - return: 0

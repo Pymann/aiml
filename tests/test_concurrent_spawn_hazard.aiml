@@ -1,0 +1,114 @@
+# SPEC: 62_pipelines
+# spec/62 §6.1 / F62-14: die Gefahr BEWEISEN, nicht annehmen.
+#
+# fork/exec aus einem Prozess mit mehreren Threads ist eine bekannte Gefahr —
+# das Kind erbt Sperren und Dateideskriptoren eines Prozesses, der an anderer
+# Stelle mitten in einer Operation steckt.  spec/62 erlaubt `parallel > 1`
+# ausdruecklich erst, wenn gleichzeitiger Prozessstart UNTER LAST gemessen ist.
+#
+# Dieser Test ist diese Messung: acht Threads starten je zwoelf Prozesse,
+# also 96 Starts, die sich maximal ueberlappen.  Gepruefte Aussage ist nicht
+# "es ist schnell", sondern: JEDER Start gelingt, JEDER Exit-Code kommt
+# richtig an, und es haengt nichts.  Ein einzelner verlorener Start macht
+# `parallel > 1` unbrauchbar, denn er sieht im Lauf wie ein Schritt-Fehler aus.
+# Expected exit code: 0
+
+- decl: [g_fails,   i32, 0]
+- decl: [g_ok,      i32, 0]
+- decl: [g_crossed, i32, 0]
+- decl: [g_lock, lock]
+
+- def:
+    name: start_many
+    args: [[tag, i32]]
+    body:
+      - decl: [idx, i32, 0]
+      - decl: [local_ok, i32, 0]
+      - decl: [local_bad, i32, 0]
+      - decl: [local_crossed, i32, 0]
+      - decl: [expected, string, "tag${tag}\n"]
+      - while:
+          condition: { lt: [idx, 12] }
+          body:
+            - decl: [argv, list<string>]
+            - call: [argv.push, "/bin/sh"]
+            - call: [argv.push, "-c"]
+            - call: [argv.push, "echo tag${tag}"]
+            # capture: true -> jedes Kind bekommt EIGENE Pipes.  Ohne das
+            # erbt es stdout des Elternprozesses, und der Test prueft nichts.
+            - decl: [proc, process, { call: [sys.exe, argv, { capture: true }] }]
+            - decl: [wait_rc, i32, { call: [proc.wait] }]
+            - if:
+                condition: { eq: [wait_rc, 0] }
+                then: [{ set: [local_ok, { +: [local_ok, 1] }] }]
+                else: [{ set: [local_bad, { +: [local_bad, 1] }] }]
+            # Die zweite Haelfte der Gefahr: Deskriptoren.  Erbt ein Kind die
+            # Pipe eines ANDEREN Threads, landet dessen Ausgabe hier — genau
+            # der Fehler, den cosmos beim geerbten Listener hatte.  Jeder
+            # Thread schickt darum seine eigene Kennung durch und erwartet
+            # NUR sie zurueck.
+            - decl: [out_txt, string, proc.stdout_buffer]
+            - if:
+                condition: { neq: [out_txt, expected] }
+                then: [{ set: [local_crossed, { +: [local_crossed, 1] }] }]
+            - set: [idx, { +: [idx, 1] }]
+      - call: [g_lock.acquire]
+      - set: [g_ok, { +: [g_ok, local_ok] }]
+      - set: [g_fails, { +: [g_fails, local_bad] }]
+      - set: [g_crossed, { +: [g_crossed, local_crossed] }]
+      - call: [g_lock.release]
+
+- def:
+    name: expect
+    args: [[what, string], [cond, i32]]
+    return: i32
+    body:
+      - if:
+          condition: { eq: [cond, 1] }
+          then: [{ print: ["  ok   ${what}"] }, { return: 0 }]
+      - print: ["  FAIL ${what}"]
+      - return: 1
+
+- def:
+    name: main
+    static_off: ["str_cmp"]
+    return: i32
+    body:
+      - decl: [fails, i32, 0]
+      - call: [g_lock.init]
+      - decl: [thr_a, thread_handle]
+      - decl: [thr_b, thread_handle]
+      - decl: [thr_c, thread_handle]
+      - decl: [thr_d, thread_handle]
+      - decl: [thr_e, thread_handle]
+      - decl: [thr_f, thread_handle]
+      - decl: [thr_g, thread_handle]
+      - decl: [thr_h, thread_handle]
+      - decl: [start_ms, i64, { call: [time.now] }]
+      - set: [thr_a, { spawn: [start_many, 1] }]
+      - set: [thr_b, { spawn: [start_many, 2] }]
+      - set: [thr_c, { spawn: [start_many, 3] }]
+      - set: [thr_d, { spawn: [start_many, 4] }]
+      - set: [thr_e, { spawn: [start_many, 5] }]
+      - set: [thr_f, { spawn: [start_many, 6] }]
+      - set: [thr_g, { spawn: [start_many, 7] }]
+      - set: [thr_h, { spawn: [start_many, 8] }]
+      - call: [thr_a.join]
+      - call: [thr_b.join]
+      - call: [thr_c.join]
+      - call: [thr_d.join]
+      - call: [thr_e.join]
+      - call: [thr_f.join]
+      - call: [thr_g.join]
+      - call: [thr_h.join]
+      - decl: [elapsed_ms, i64, { -: [{ call: [time.now] }, start_ms] }]
+      - print: ["  96 Starts aus 8 Threads in ${elapsed_ms} ms, ok=${g_ok} fehlgeschlagen=${g_fails} vertauscht=${g_crossed}"]
+      - set: [fails, { +: [fails, { call: [expect, "jeder Prozessstart gelingt", { eq: [g_fails, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "jeder Exit-Code kommt an", { eq: [g_ok, 96] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "keine Ausgabe wandert in einen fremden Thread", { eq: [g_crossed, 0] }] }] }]
+
+      - if:
+          condition: { neq: [fails, 0] }
+          then: [{ print: ["test_concurrent_spawn_hazard FAIL (${fails})"] }, { return: 1 }]
+      - print: ["test_concurrent_spawn_hazard PASS"]
+      - return: 0

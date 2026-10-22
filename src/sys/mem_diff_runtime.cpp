@@ -12,8 +12,15 @@
 // (symbolized via backtrace_symbols; on the AOT game with debug info that reads as e.g.
 // `CardService_get_base`). Call it every ~30 s from the [mem] tick via `sys.mem_diff()`.
 //
-// Gating is RUNTIME (env AIML_MEM_DIFF truthy), so it needs NO recompile of the app — just rebuild
-// libaiml and launch with AIML_MEM_DIFF=1. Off = one cached bool test per alloc/free (negligible).
+// Gating is COMPILE-TIME, not runtime: g_on is set only by aiml_memdiff_init_baked, and the compiler
+// emits that call only when AIML_MEM_DIFF was set in the project's exodus.json env AT BUILD TIME.
+// There is NO getenv here. So a shipped binary cannot be switched off — it must be rebuilt without
+// the variable. (An earlier version of this comment claimed the opposite, which is how a tracking
+// build reached production: 9rooms shipped both game and client.wasm with tracking baked in.)
+// Off = one cached bool test per alloc/free (negligible). On, the cost is NOT negligible — every
+// AIML string/list/map allocation captures a call stack, and on WASM that means a JS
+// `new Error().stack` per allocation (see aiml_memdiff_record). Keep it in a separate diag build
+// config, never in the one you deploy.
 //
 // Thread-safe (one mutex). Recursion into the tracker's own std allocations is prevented by a
 // thread-local guard (those go through global new/malloc, never aiml_str_alloc, but the guard also

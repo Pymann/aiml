@@ -15,19 +15,19 @@
     condition: { neq: [conf.host, "localhost"] }
     then:
       - print: ["FAIL decl default host: ${conf.host}"]
-      - exit: [1]
+      - call: [sys.exit, 1]
 
 - if:
     condition: { neq: [conf.port, 8080] }
     then:
       - print: ["FAIL decl default port: ${conf.port}"]
-      - exit: [1]
+      - call: [sys.exit, 1]
 
 - if:
     condition: { neq: [conf.ssl, false] }
     then:
       - print: ["FAIL decl default ssl"]
-      - exit: [1]
+      - call: [sys.exit, 1]
 
 - decl: [heap_conf, ptr<ServerConfig>, { new: ServerConfig }]
 
@@ -35,26 +35,26 @@
     condition: { neq: [heap_conf.host, "localhost"] }
     then:
       - print: ["FAIL new default host: ${heap_conf.host}"]
-      - exit: [1]
+      - call: [sys.exit, 1]
 
 - if:
     condition: { neq: [heap_conf.port, 8080] }
     then:
       - print: ["FAIL new default port: ${heap_conf.port}"]
-      - exit: [1]
+      - call: [sys.exit, 1]
 
 - if:
     condition: { neq: [heap_conf.ssl, false] }
     then:
       - print: ["FAIL new default ssl"]
-      - exit: [1]
+      - call: [sys.exit, 1]
 
 - set: [conf.port, 9001]
 - if:
     condition: { neq: [conf.port, 9001] }
     then:
       - print: ["FAIL write after default port: ${conf.port}"]
-      - exit: [1]
+      - call: [sys.exit, 1]
 
 - free: [heap_conf]
 
@@ -70,12 +70,12 @@
     condition: { "||": [{ "<": [var_r.var_lr, 0.0009] }, { ">": [var_r.var_lr, 0.0011] }] }
     then:
       - print: ["FAIL decl default var_lr: ${var_r.var_lr}"]
-      - exit: [1]
+      - call: [sys.exit, 1]
 - if:
     condition: { "||": [{ "<": [var_r.margin, 0.49] }, { ">": [var_r.margin, 0.51] }] }
     then:
       - print: ["FAIL decl default margin: ${var_r.margin}"]
-      - exit: [1]
+      - call: [sys.exit, 1]
 
 # f32 defaults — heap
 - decl: [var_hr, ptr<Rates>, { new: Rates }]
@@ -83,12 +83,12 @@
     condition: { "||": [{ "<": [var_hr.var_lr, 0.0009] }, { ">": [var_hr.var_lr, 0.0011] }] }
     then:
       - print: ["FAIL new default var_lr: ${var_hr.var_lr}"]
-      - exit: [1]
+      - call: [sys.exit, 1]
 - if:
     condition: { "||": [{ "<": [var_hr.margin, 0.49] }, { ">": [var_hr.margin, 0.51] }] }
     then:
       - print: ["FAIL new default margin: ${var_hr.margin}"]
-      - exit: [1]
+      - call: [sys.exit, 1]
 - free: [var_hr]
 
 - print: ["PASS test_model_defaults"]

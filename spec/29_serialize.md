@@ -111,6 +111,99 @@ Data-value serialization (not code bundles). Implemented via **yyjson**.
 | Nested list field | JSON array inline | `{"__type":"Wrapper","nums":[1,2,3]}` |
 | Nested map field | JSON object inline | `{"__type":"Wrapper","scores":{"a":10}}` |
 
+### 5.2 Nachtrag — Maps werden mit Inhalt geschrieben
+
+- **F29-22** Eine `map<K:V>` wird **mit ihren Einträgen** geschrieben, als eigener
+  Wert (Zeile 109) wie als Modellfeld (Zeile 112).  Bis 18.10.2026 schrieb die
+  Implementierung **jede** Map als `{}`: der Schreiber lief über `capacity` und
+  liess nur Plätze durch, deren `occupied`-Byte gesetzt war — doch `MapImpl::put`
+  setzt dieses Byte nie.  Eine aiml-Map ist **dicht** (Einträge `0..size-1`;
+  `get`, `len` und `remove` rechnen genauso, `remove` schiebt per `memmove`
+  nach), und der Serializer war der einzige Leser des `occupied`-Feldes.  Die
+  Spec hatte recht, die Implementierung nicht; gefunden am OCI-Wandler
+  (`cosmos/doc/spec/110` §110.25), wo `annotations` still leer blieb.
+  `tests/test_ser_alias_bare.aiml` hält beide Fälle fest.
+
+### 5.2a `JsonStyle` — shaping the output
+
+`sys.serialize` takes an optional second argument: a `JsonStyle` that shapes the text **after**
+the value has been written.  It was in the implementation long before it was written down;
+this section closes that gap.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `pretty` | `i32` | 1 = indented, multi-line |
+| `indent` | `string` | one indent step (default two spaces) |
+| `newline` | `string` | line separator (default `\n`) |
+| `bare` | `i32` | 1 = **drop every `__type` key** from the result |
+| `skip_empty` | `i32` | 1 = **drop empty members** (`""`, `[]`, `{}`) from the result (§5.2c) |
+
+```aiml
+- decl: [plain, JsonStyle]
+- set:  [plain.bare, 1]
+- set:  [text, { call: [sys.serialize, value, plain] }]           # Kurzform
+- set:  [text, { call: [sys.serialize, nums, "list<i32>", plain] }]  # mit Typnamen
+```
+
+- **F29-17** Beide Formen gelten: der Stil darf als **zweites** Argument stehen oder hinter
+  einem ausdrücklichen Typnamen.  Bis 18.10.2026 nahm die Implementierung nur die lange Form
+  an und verwarf die kurze **still** — kein Fehler, keine Wirkung, auch bei `pretty`.
+  Mehrdeutig ist die Unterscheidung nicht: ein `JsonStyle` ist eine Variable dieses Typs, ein
+  Typname ein Literal.
+
+- **F29-12** `bare` removes `__type` **recursively**, at every nesting depth.  What remains is
+  ordinary JSON that a foreign reader accepts.
+- **F29-13** `bare` does **not** unwrap containers.  A top-level `list<T>` keeps its
+  `{"values":[…]}` shape, because the wrapper carries the structure, not the type claim.  A
+  list *inside* a model is an inline array anyway (§5.2) and is therefore unaffected.
+- **F29-14** A bare document can be read back with `sys.deserialize` — the type is named by the
+  caller, not by the document (§5.2b).
+
+### 5.2b Reading foreign JSON
+
+`sys.deserialize(text, "T")` names the type **in the call**.  A `__type` key in the document is
+therefore not required, and a document that carries a *different* `__type` is not rejected:
+the caller's claim wins.  Fields are matched by name — or by **alias** (`spec/15`), which is
+what makes foreign formats readable whose keys break aiml's three-character rule.
+
+- **F29-15** This tolerance is a **promise**, not an accident of the implementation.  cosmos
+  depends on it to read OCI bundles (`cosmos/doc/spec/110` F110-13); `tests/test_ser_alias_bare.aiml`
+  holds it.
+- **F29-16** Fields the document does not mention keep their default value; keys the model does
+  not know are ignored.  Neither is an error — a format that grows must stay readable.
+
+### 5.2c `skip_empty` — Leeres weglassen
+
+Ein aiml-Modell hat kein „nicht gesetzt": jedes Feld hat einen Vorgabewert, und
+`sys.serialize` schreibt jedes Feld.  Fremde Formate unterscheiden aber
+**fehlend** von **leer**: die OCI-Image-Spec sagt zu `variant` *SHOULD be omitted
+if unknown*, und `"annotations": {}` oder `"Entrypoint": []` sind dort Ballast,
+den strenge Leser bemängeln.  `skip_empty` schließt genau diese Lücke — ohne das
+Modell zu verbiegen (ein `ptr<string>`, nur um „fehlend" ausdrücken zu können,
+wäre die schlechtere Antwort).
+
+```aiml
+- decl: [lean, JsonStyle]
+- set:  [lean.bare, 1]
+- set:  [lean.skip_empty, 1]
+- set:  [text, { call: [sys.serialize, img_cfg, lean] }]
+```
+
+- **F29-18** Entfernt werden **Objekt-Mitglieder**, deren Wert ein leerer String,
+  ein leeres Array oder ein leeres Objekt ist — auf jeder Ebene.  **Nicht**
+  entfernt werden `0`, `false` und `null`: eine Null ist ein Wert, kein Fehlen.
+  Wer `0` weglässt, ändert Daten; wer `""` weglässt, ändert nur die Schreibweise.
+- **F29-19** Die Prüfung läuft **von unten nach oben**: wird ein Objekt durch das
+  Entfernen seiner Mitglieder selbst leer, fällt es ebenfalls weg.  Die **Wurzel**
+  bleibt immer stehen — ein leeres Dokument wäre kein Dokument.
+- **F29-20** **Array-Elemente** werden nie entfernt, auch leere nicht: ein Array
+  trägt seine Bedeutung in der Reihenfolge, und ein entfernter Eintrag verschiebt
+  alle folgenden.
+- **F29-21** `skip_empty` und `bare` sind unabhängig und kombinierbar; beide
+  arbeiten nach dem Schreiben auf dem fertigen Dokument (wie `pretty`), nicht im
+  Schreibpfad.  Zurücklesen bleibt möglich: fehlende Felder behalten ihren
+  Vorgabewert (F29-16) — genau den, der sie hat weglassen lassen.
+
 ### 5.3 ptr\<T\> Semantics
 
 - **serialize**: auto-deref — loads the pointer and serialises the pointed-to value as `T`

@@ -15,6 +15,10 @@
 #   BL = set_text mit LITERALEN (persistente Instanz) — trennt Interp vom set_text-Store
 #   C  = draw_scene einer UNVERÄNDERTEN Szene (Diagnosekontrolle, kein populate)
 #   CF = voller Frame: clear + populate + draw_scene + swap (per-Frame-Last)
+#
+# Requires: manual
+#   Oeffnet ein Fenster und laeuft, bis ein MENSCH es schliesst — in der
+#   Testschleife ist das ein Halt, kein Test (run_all_tests.sh --manual).
 
 - config:
     entry: main

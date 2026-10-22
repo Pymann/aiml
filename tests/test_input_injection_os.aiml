@@ -1,0 +1,130 @@
+# SPEC: 13_cast,44_0_input
+# spec/44_0 §8.5: Eingabe über die OS-Ebene (XTEST), nicht in den eigenen
+# Prozess.  Gegenstück zu test_input_injection_click.aiml (input.post_*).
+#
+# Der Unterschied ist der Prüfumfang: post_* schreibt den eigenen Frame-Zustand
+# und prüft alles AB der Anwendungsgrenze.  Hier geht das Ereignis durch den
+# X-Server, das Fenstersystem und erst dann in die Anwendung — damit sind
+# Fensterposition und Zustellung mit im Spiel.
+#
+# Bewusst KEIN input.post_* in diesem Test: sonst wäre nicht unterscheidbar,
+# welcher Kanal den Klick geliefert hat.
+#
+# Läuft nur, wo XTEST verfügbar ist; sonst meldet der Test das und besteht
+# (ein Wayland-Rechner hat kein XTEST — das ist kein Testfehler).
+# Requires: display
+# Expected exit code: 0
+
+- prefab:
+    name: OsClickScene
+    width: 400
+    height: 300
+    children:
+      - { name: hit_btn, type: button, x: 100, y: 110, width: 200, height: 48,
+          label: "OS", bg_color: 0x334455FF, color: 0xFFFFFFFF, font_size: 14 }
+
+- def:
+    name: main
+    static_off: ["str_cmp"]
+    return: i32
+    body:
+      - decl: [have_os, i32, { call: [input.os_available] }]
+      - if:
+          condition: { neq: [have_os, 1] }
+          then:
+            - print: ["SKIP input_injection_os — XTEST nicht verfuegbar (Wayland? kein DISPLAY?)"]
+            - return: 0
+
+      - decl: [win, window_handle, { call: [engine.create_window, 400, 300, "osclick"] }]
+      - if: { condition: { eq: [win, null] }, then: [{ print: ["FAIL create_window"] }, { return: 1 }] }
+      - call: [gl.init]
+      - call: [ui.init]
+      - call: [engine.prefab_scene_init, 400, 300]
+      - call: [input.init, win]
+      - call: [engine.prefab_trace_hits, 1]
+      - decl: [font, ui_font, { call: [ui.load_font_default, 12.0] }]
+      - if: { condition: { neq: [font, null] }, then: [{ call: [engine.prefab_set_font, font] }] }
+
+      - decl: [scene, prefab_instance, { call: [engine.instantiate, "OsClickScene"] }]
+      - call: [scene.set_pos, 0.0, 0.0]
+
+      # Ein paar Frames, damit das Fenster steht und eine Position hat.
+      - decl: [warm, i32, 0]
+      - while:
+          condition: { lt: [warm, 10] }
+          body:
+            - call: [engine.swap, win]
+            - set: [warm, { +: [warm, 1] }]
+
+      # Widget-Fläche sind FENSTER-Pixel, XTEST will BILDSCHIRM-Koordinaten →
+      # Fensterposition addieren (spec/44_0 §8.5).
+      - decl: [wpos, ivec2, { call: [engine.window_pos, win] }]
+      - decl: [btn_x, f32, { call: [scene.child_rect_x, "hit_btn"] }]
+      - decl: [btn_y, f32, { call: [scene.child_rect_y, "hit_btn"] }]
+      - decl: [btn_w, f32, { call: [scene.child_rect_w, "hit_btn"] }]
+      - decl: [btn_h, f32, { call: [scene.child_rect_h, "hit_btn"] }]
+      - if:
+          condition: { lt: [btn_w, 1.0] }
+          then: [{ print: ["FAIL child_rect_w=${btn_w}"] }, { return: 1 }]
+
+      - decl: [mid_x, f32, { +: [btn_x, { /: [btn_w, 2.0] }] }]
+      - decl: [mid_y, f32, { +: [btn_y, { /: [btn_h, 2.0] }] }]
+      # In f32 gerechnet: int→f32 ist erlaubt, f32→int nicht (spec/13), und
+      # input.os_mouse_move nimmt Fliesskomma und wandelt selbst.
+      - decl: [scr_x, f32, { +: [{ cast: [wpos.x, f32] }, mid_x] }]
+      - decl: [scr_y, f32, { +: [{ cast: [wpos.y, f32] }, mid_y] }]
+      - print: ["[os] Fenster bei (${wpos.x},${wpos.y}), Widget-Mitte (${mid_x},${mid_y}) -> Bildschirm (${scr_x},${scr_y})"]
+
+      # Zeiger setzen und GEGENPRÜFEN, dass er dort steht — sonst wäre ein
+      # späterer Fehlschlag nicht von "Bewegung kam nie an" zu trennen.
+      - call: [input.os_mouse_move, scr_x, scr_y]
+      - call: [engine.swap, win]
+      - decl: [got_xi, i32, { call: [input.os_pointer_x] }]
+      - decl: [got_yi, i32, { call: [input.os_pointer_y] }]
+      - decl: [got_x, f32, { cast: [got_xi, f32] }]
+      - decl: [got_y, f32, { cast: [got_yi, f32] }]
+      - if:
+          condition: { neq: [got_x, scr_x] }
+          then: [{ print: ["FAIL Zeiger steht bei x=${got_x}, erwartet ${scr_x}"] }, { return: 1 }]
+      - if:
+          condition: { neq: [got_y, scr_y] }
+          then: [{ print: ["FAIL Zeiger steht bei y=${got_y}, erwartet ${scr_y}"] }, { return: 1 }]
+
+      # Klick über den X-Server.  Die Anwendung bekommt die Ereignisse über
+      # glfwPollEvents in engine.swap; update_hover fragt die eigene
+      # Cursorposition ab, die daraus folgt.
+      - decl: [tries, i32, 0]
+      - decl: [clicked, i32, 0]
+      - call: [input.os_mouse_down, 0]
+      - while:
+          condition: { '&&': [{ lt: [tries, 60] }, { eq: [clicked, 0] }] }
+          body:
+            - call: [engine.swap, win]
+            - decl: [cur_x, f32, { call: [input.mouse_pos_x] }]
+            - decl: [cur_y, f32, { call: [input.mouse_pos_y] }]
+            - call: [engine.update_hover, cur_x, cur_y]
+            - if:
+                condition: { eq: [tries, 3] }
+                then: [{ call: [input.os_mouse_up, 0] }]
+            - set: [clicked, { call: [scene.child_clicked, "hit_btn"] }]
+            - set: [tries, { +: [tries, 1] }]
+
+      - if:
+          condition: { neq: [clicked, 1] }
+          then:
+            - decl: [dbg, string, { call: [engine.prefab_last_hit] }]
+            - decl: [pos_x, f32, { call: [input.mouse_pos_x] }]
+            - decl: [pos_y, f32, { call: [input.mouse_pos_y] }]
+            - print: ["FAIL OS-Klick erreichte den Button nicht (Spur='${dbg}', App-Cursor=(${pos_x},${pos_y}), Frames=${tries})"]
+            - return: 1
+
+      # Die Spur muss den Button nennen — der Nachweis, dass die Auflösung
+      # wirklich über das Widget lief und nicht zufällig etwas anderes war.
+      - decl: [trace, string, { call: [engine.prefab_last_hit] }]
+      - if:
+          condition: { lt: [{ call: [trace.index_of, "OsClickScene[0]/hit_btn"] }, 0] }
+          then: [{ print: ["FAIL Treffer-Spur nennt den Button nicht: '${trace}'"] }, { return: 1 }]
+
+      - call: [engine.destroy_window, win]
+      - print: ["PASS input_injection_os (Spur: ${trace})"]
+      - return: 0

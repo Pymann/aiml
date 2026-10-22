@@ -1,0 +1,12 @@
+# SPEC: 49_static_analysis,49_static_off
+# Beendet `sys.exit` das Programm wirklich — und mit DIESEM Rueckgabewert?
+#
+# Der ganze Korpus haengt daran: jeder FAIL-Zweig endet so.  Bis 2026-10-15
+# stand dort `- exit: [1]`, ein Schluessel, den der Compiler still verwarf
+# (spec/49 §2a).  Die Zweige liefen durch, lieferten 0, und die Suite meldete
+# PASS fuer Tests, die „FAIL" druckten.  Dieser Test ist die Wache dagegen.
+#
+# Expected exit code: 3
+- print: ["sys.exit wird jetzt aufgerufen"]
+- call: [sys.exit, 3]
+- print: ["FAIL diese Zeile darf nie erscheinen"]

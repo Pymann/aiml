@@ -1,0 +1,57 @@
+# SPEC: 32_2_network_http_s,32_network
+# Expected exit code: 0
+# spec/32_2 §3.10: a client that opens a TCP connection to an HTTPS server and never
+# sends its ClientHello must not block the accept loop — other clients are served —
+# and is closed once the handshake timeout (set_timeout) expires.
+
+- def:
+    name: handle_root
+    args: [[req, http_request_handle], [resp, http_response_handle]]
+    body:
+      - set: [resp.status, 200]
+      - set: [resp.body, "stall-ok"]
+      - call: [resp.send]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [cert, path, "tests/tls_certs/server.crt"]
+      - decl: [key,  path, "tests/tls_certs/server.key"]
+      - decl: [srv, http_server_handle]
+      - set: [srv, { call: [http.server_tls, "127.0.0.1", 23446, cert, key] }]
+      - call: [srv.set_timeout, 2]
+      - call: [srv.route, "GET", "/", handle_root]
+      - decl: [thr, thread_handle, { call: [srv.start_async] }]
+      - call: [time.sleep_ms, 300]
+      - decl: [fail, i32, 0]
+
+      - decl: [silent, socket_handle, { call: [net.socket, "tcp"] }]
+      - call: [net.set_timeout, silent, 6000]
+      - decl: [t_silent, i64, { call: [time.mono_ms] }]
+      - call: [net.connect, silent, "127.0.0.1", 23446]
+      - call: [time.sleep_ms, 200]
+
+      - decl: [t_start, i64, { call: [time.mono_ms] }]
+      - decl: [good, tls_socket_handle, { call: [tls.socket] }]
+      - call: [tls.set_verify, good, "none"]
+      - call: [tls.set_timeout, good, 5000]
+      - decl: [rc_conn, i32, { call: [tls.connect, good, "127.0.0.1", 23446] }]
+      - if: { condition: { neq: [rc_conn, 0] }, then: [{ print: ["FAIL connect blocked by silent client rc_conn=${rc_conn}"] }, { set: [fail, { +: [fail, 1] }] }] }
+      - call: [tls.send_string, good, "GET / HTTP/1.1\r\nHost: x\r\n\r\n"]
+      - decl: [resp_a, string, { call: [tls.recv_string, good, 256] }]
+      - decl: [resp_b, string, { call: [tls.recv_string, good, 256] }]
+      - decl: [all, string, "${resp_a}${resp_b}"]
+      - decl: [elapsed, i64, { -: [{ call: [time.mono_ms] }, t_start] }]
+      - call: [tls.close, good]
+      - if: { condition: { lt: [{ call: [all.index_of, "stall-ok"] }, 0] }, then: [{ print: ["FAIL no response while silent client connected: ${all}"] }, { set: [fail, { +: [fail, 1] }] }] }
+      - if: { condition: { gt: [elapsed, 1500] }, then: [{ print: ["FAIL response took ${elapsed} ms"] }, { set: [fail, { +: [fail, 1] }] }] }
+
+      # stalled handshake is closed after the 2 s timeout
+      - decl: [eof, string, { call: [net.recv_string, silent, 16] }]
+      - decl: [silent_ms, i64, { -: [{ call: [time.mono_ms] }, t_silent] }]
+      - if: { condition: { "||": [{ lt: [silent_ms, 1500] }, { gt: [silent_ms, 4000] }] }, then: [{ print: ["FAIL stalled handshake closed after ${silent_ms} ms"] }, { set: [fail, { +: [fail, 1] }] }] }
+      - call: [net.close, silent]
+      - if: { condition: { neq: [fail, 0] }, then: [{ print: ["FAILED: ${fail}"] }, { call: [sys.exit, 1] }] }
+      - print: ["PASS http_tls_handshake_stall"]
+      - return: 0

@@ -1,0 +1,64 @@
+# SPEC: 11_buffer,23_system
+# spec/11: buffer.write_string appends a string's bytes at writeIndex; -1 if it does not fit.
+# Also covers the append+flush path: write_to flushes, so a second handle sees the bytes
+# while the writing handle is still open (spec/23 io.open modes).
+# Expected exit code: 0
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [target, string, "/tmp/aiml_test_buffer_write_string.log"]
+
+      - decl: [chunk, buffer]
+      - call: [chunk.alloc, 64]
+      - decl: [num_a, i32, { call: [chunk.write_string, "hello"] }]
+      - if: { condition: { neq: [num_a, 5] }, then: [{ print: ["FAIL write_string ${num_a}"] }, { return: 1 }] }
+      - if: { condition: { neq: [chunk.len, 5] }, then: [{ print: ["FAIL len ${chunk.len}"] }, { return: 1 }] }
+
+      - decl: [num_b, i32, { call: [chunk.write_string, " world"] }]
+      - if: { condition: { neq: [num_b, 6] }, then: [{ print: ["FAIL append ${num_b}"] }, { return: 1 }] }
+      - if: { condition: { neq: [chunk.len, 11] }, then: [{ print: ["FAIL len2 ${chunk.len}"] }, { return: 1 }] }
+
+      - decl: [num_empty, i32, { call: [chunk.write_string, ""] }]
+      - if: { condition: { neq: [num_empty, 0] }, then: [{ print: ["FAIL empty ${num_empty}"] }, { return: 1 }] }
+      - if: { condition: { neq: [chunk.len, 11] }, then: [{ print: ["FAIL len3 ${chunk.len}"] }, { return: 1 }] }
+
+      # truncate leftovers, then keep one append-mode writer open for the whole run
+      - decl: [trunc_file, file_handle, { call: [io.open, target, "wb"] }]
+      - call: [io.close, trunc_file]
+      - decl: [log_file, file_handle, { call: [io.open, target, "a"] }]
+      - decl: [wrote_a, i32, { call: [chunk.write_to, log_file] }]
+      - if: { condition: { neq: [wrote_a, 11] }, then: [{ print: ["FAIL write_to ${wrote_a}"] }, { return: 1 }] }
+
+      # write_to flushed -> a fresh reader sees the bytes although log_file is still open
+      - decl: [size_mid, i64, { call: [io.file_size, target] }]
+      - if: { condition: { neq: [size_mid, 11] }, then: [{ print: ["FAIL unflushed ${size_mid}"] }, { return: 1 }] }
+
+      - decl: [read_file, file_handle, { call: [io.open_binary, target] }]
+      - decl: [window, buffer<u8>, { call: [io.read_at, read_file, 6, 5] }]
+      - call: [io.close, read_file]
+      - if: { condition: { neq: [window.len, 5] }, then: [{ print: ["FAIL window ${window.len}"] }, { return: 1 }] }
+      - decl: [byte_w, i32, { call: [window.read, u8] }]
+      - if: { condition: { neq: [byte_w, 119] }, then: [{ print: ["FAIL window byte ${byte_w}"] }, { return: 1 }] }
+
+      # a second chunk appends behind the first on the same open handle
+      - decl: [more, buffer]
+      - call: [more.alloc, 16]
+      - decl: [num_c, i32, { call: [more.write_string, "!"] }]
+      - if: { condition: { neq: [num_c, 1] }, then: [{ print: ["FAIL second ${num_c}"] }, { return: 1 }] }
+      - decl: [wrote_b, i32, { call: [more.write_to, log_file] }]
+      - call: [io.close, log_file]
+      - if: { condition: { neq: [wrote_b, 1] }, then: [{ print: ["FAIL write_to2 ${wrote_b}"] }, { return: 1 }] }
+      - decl: [size_end, i64, { call: [io.file_size, target] }]
+      - if: { condition: { neq: [size_end, 12] }, then: [{ print: ["FAIL appended ${size_end}"] }, { return: 1 }] }
+
+      # does not fit -> -1, buffer untouched (no silent truncation)
+      - decl: [tiny, buffer]
+      - call: [tiny.alloc, 4]
+      - decl: [num_over, i32, { call: [tiny.write_string, "way too long"] }]
+      - if: { condition: { neq: [num_over, -1] }, then: [{ print: ["FAIL overflow ${num_over}"] }, { return: 1 }] }
+      - if: { condition: { neq: [tiny.len, 0] }, then: [{ print: ["FAIL overflow len ${tiny.len}"] }, { return: 1 }] }
+
+      - call: [io.remove, target]
+      - print: ["PASS buffer_write_string"]
+      - return: 0

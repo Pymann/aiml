@@ -1,0 +1,12 @@
+# SPEC: 66_services §5.1 — the same verb+path may not be served twice in one build.
+# Expected exit code: 1
+- import: "tests/services/_models.aiml"
+- service:
+    name: RouteApi
+    base: "/v1"
+    transport: [rest]
+    auth: none
+    endpoints:
+      - def: { name: first,  http: [post, "/components"], roles: [], args: [[req, ResolveReq]], return: ResolveResp, body: [{ decl: [out, ResolveResp] }, { return: out }] }
+      - def: { name: second, http: [post, "/components"], roles: [], args: [[req, ResolveReq]], return: ResolveResp, body: [{ decl: [out, ResolveResp] }, { return: out }] }
+- def: { name: main, return: i32, body: [{ decl: [api, ptr<RouteApi>, { new: RouteApi }] }, { free: api }, { return: 0 }] }

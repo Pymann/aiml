@@ -98,6 +98,9 @@ bool EnumBuilder::OnScalar(const std::string& value, const std::string& tag) {
         return true;
     }
     if (currentKey == "name" && !insideValues) enumNode->name = value;
+    // spec/49 §18.2a: `wire: true` — das Vokabular geht ueber eine Grenze.
+    else if (currentKey == "wire" && !insideValues)
+        enumNode->wire = (value == "true" || value == "1");
     else if (currentKey == "level" && !insideValues) {   // spec/65 F65-19
         int parsed = aiml::clearance::kAbsent;
         if (aiml::clearance::parseLevel(value, "enum " + enumNode->name, parsed))

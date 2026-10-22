@@ -57,11 +57,15 @@ bool ensure_display() {
 
 /* aiml zählt 0=links, 1=mitte, 2=rechts (spec/44_0 §2.2); X11 zählt
  * Button1=links, Button2=mitte, Button3=rechts. */
+/* spec/44_0 §2: die kanonische Reihenfolge ist 0=links, 1=RECHTS, 2=Mitte
+ * (die von GLFW).  X11 nummeriert anders (Button2=Mitte, Button3=rechts), also
+ * muss dieser Adapter umsetzen — vorher reichte er 1 als Button2 durch und ein
+ * `os_mouse_down(1)` erzeugte einen MITTELklick, wo die Spec rechts sagt. */
 unsigned int x_button(int32_t btn) {
     switch (btn) {
-        case 0:  return Button1;
-        case 1:  return Button2;
-        case 2:  return Button3;
+        case 0:  return Button1;   /* links  */
+        case 1:  return Button3;   /* rechts */
+        case 2:  return Button2;   /* Mitte  */
         default: return 0;
     }
 }

@@ -153,6 +153,57 @@ Top-level `decl:` statements in the imported file become **module-level globals*
 3. Module-level globals have **internal linkage** — they are private to their
    compilation unit and do not collide with globals of the same name in other files.
 4. Functions within the same file can freely read and write module-level globals.
+5. **A module-level global is reported as a WARNING** (`AIML_LINT_GLOBALS=0` silences it).
+   State belongs in a class or a classgroup instance; a global has no owner, and an **owning**
+   global (`ptr<T>`) is the worst case of that — nothing says who frees it, and passing it to a
+   function that takes `ptr<T>` moves it out from under every other reader.
+
+   > Measured, not feared: in cosmos the client kept its live snapshots in
+   > `g_live_cluster` / `g_live_agents` / `g_token_list`. Three call sites passed such a global
+   > into an owning `ptr<T>` parameter; the parameter's drop freed the box and the global
+   > dangled. Two of them crashed the WASM client (`RunsScreen_draw_grid`,
+   > `LiveTable_agents`), the third was found by the compiler only after the ownership check
+   > was repaired (2026-10-13/14). The server, which had been migrated to a classgroup
+   > (doc/spec/93), had **two** globals left and neither could produce this failure.
+
+   **A `const` primitive is exempt** (`i8`…`u64`, `f32`, `f64`, `bool`, `string`, `char`): it is
+   never assigned, never passed on and owns nothing — a named literal, which is the opposite of
+   the problem. Warning about it would punish naming a constant and reward a bare number in the
+   code. A **non-const** primitive still warns: a writable global is shared mutable state even
+   when it is only an `i32`.
+
+   The warning is a **smell, not an error**: a global is still legal, and a few are legitimate —
+   the dispatcher's per-request `g_current_peer_id` is the example (doc/spec/93 F93-7). The
+   warning names the file and the variable so the exception is a decision someone made, not a
+   habit nobody noticed.
+
+#### `singleton: true` — der erklärte Anker eines Rückrufs
+
+`engine.run(win, update, render)` nimmt **freie** Funktionen (`fn<f32:void>`,
+spec/44_1 §4.1): ein Rückruf trägt keinen Zustand, und im Browser gehört die
+Schleife ohnehin dem Wirt (`emscripten_set_main_loop`).  Also braucht jedes
+Fenster-Programm **einen** Anker auf Modulebene — in cosmos `g_cosmos_app`, in
+9rooms `g_app`.  Das ist keine Nachlässigkeit, sondern die Form, die die
+Schnittstelle vorschreibt; eine Warnung, die keinen Ausweg nennt, trainiert nur
+das Wegsehen.
+
+```yaml
+- decl: [g_cosmos_app, ptr<CosmosApp>, null, { singleton: true }]
+```
+
+- **F21-S1** `singleton: true` erklärt einen Modul-Global zum **einzigen Anker**
+  des Programms: er wird einmal gesetzt und lebt, solange das Programm lebt.
+  Die Warnung aus §6.2 entfällt für ihn — nur für ihn, nicht für die Datei.
+- **F21-S2** Dafür **prüft** der Compiler genau das, was die Warnung befürchtet:
+  ein so markierter Global darf **nicht als Argument an einen `ptr<T>`-Parameter**
+  gehen.  Das ist ein **Fehler**, kein Hinweis — es ist der Zug, der den
+  WASM-Client zweimal zum Absturz brachte (§6.2).  Lesen, Methoden aufrufen und
+  `set` bleiben erlaubt; der Anker wird benutzt, nicht weitergereicht.
+- **F21-S3** Es ist ein Tausch, kein Schalter: Schweigen gegen eine geprüfte
+  Einschränkung.  `AIML_LINT_GLOBALS=0` schaltet dagegen **alle** Globals stumm,
+  auch die, die man finden will.
+- **F21-S4** Es sagt nichts über Lebenszeit oder Freigabe: wer den Anker
+  freigeben will, tut das selbst (spec/61).
 
 ### 6.3 Variable Shadowing
 

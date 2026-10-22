@@ -1,0 +1,148 @@
+# SPEC: 44_0_input,44_6_prefabs
+# spec/44_0 §8 + spec/44_6: Eingabe-Injektion treibt einen ECHTEN Klick.
+#
+# Das war bisher nicht prüfbar: test_prefab_textbox_selection sagt selbst, die
+# Maus-Auswahl "braucht ein Fenster und echte Klicks".  Hier ist die Kette
+# vollständig — Widget-Geometrie abfragen, Cursor dorthin, drücken, loslassen,
+# und der Button meldet den Klick.
+#
+# Geprüft wird in dieser Reihenfolge:
+#   1. .child_rect_* liefert die Trefferfläche in Bildschirmkoordinaten
+#   2. ein injizierter Klick auf den Mittelpunkt löst child_clicked aus
+#   3. ein Klick DANEBEN löst ihn nicht aus (sonst wäre 2. wertlos)
+#   3b. die Treffer-Spur nennt in beiden Fällen das aufgelöste Ziel bzw. "miss"
+#   4. post_text landet im fokussierten Feld
+#   5. post_key_down/up wirkt auf key_down
+# Requires: display
+# Expected exit code: 0
+
+- prefab:
+    name: ClickScene
+    width: 400
+    height: 300
+    children:
+      - { name: ok_btn, type: button, x: 120, y: 100, width: 160, height: 40,
+          label: "OK", bg_color: 0x2A4A6AFF, color: 0xFFFFFFFF, font_size: 14 }
+      - { name: name_input, type: text_input, x: 20, y: 200, width: 360, height: 28,
+          bg_color: 0x202020FF, color: 0xFFFFFFFF, font_size: 12 }
+
+- def:
+    name: main
+    static_off: ["str_cmp"]
+    return: i32
+    body:
+      - decl: [win, window_handle, { call: [engine.create_window, 400, 300, "click"] }]
+      - if: { condition: { eq: [win, null] }, then: [{ print: ["FAIL create_window"] }, { return: 1 }] }
+      - call: [gl.init]
+      - call: [ui.init]
+      - call: [engine.prefab_scene_init, 400, 300]
+      - call: [input.init, win]
+      - decl: [font, ui_font, { call: [ui.load_font_default, 12.0] }]
+      - if: { condition: { neq: [font, null] }, then: [{ call: [engine.prefab_set_font, font] }] }
+
+      # Treffer-Spur an: sie nennt das Widget, das den Druck WIRKLICH aufgelöst
+      # hat — ohne sie wäre ein Fehlschlag nicht von "Klick kam nie an" zu
+      # unterscheiden (spec/44_6 §5).
+      - call: [engine.prefab_trace_hits, 1]
+
+      - decl: [scene, prefab_instance, { call: [engine.instantiate, "ClickScene"] }]
+      - call: [scene.set_pos, 0.0, 0.0]
+
+      # ── 1. Geometrie ─────────────────────────────────────────────────────
+      - decl: [btn_x, f32, { call: [scene.child_rect_x, "ok_btn"] }]
+      - decl: [btn_y, f32, { call: [scene.child_rect_y, "ok_btn"] }]
+      - decl: [btn_w, f32, { call: [scene.child_rect_w, "ok_btn"] }]
+      - decl: [btn_h, f32, { call: [scene.child_rect_h, "ok_btn"] }]
+      - if:
+          condition: { lt: [btn_w, 1.0] }
+          then: [{ print: ["FAIL child_rect_w=${btn_w} (Widget nicht gefunden?)"] }, { return: 1 }]
+      # Gegenprobe gegen die vorhandene Punkt-Abfrage: der Mittelpunkt der
+      # gelieferten Fläche muss auch laut child_contains drin liegen.
+      - decl: [mid_x, f32, { +: [btn_x, { /: [btn_w, 2.0] }] }]
+      - decl: [mid_y, f32, { +: [btn_y, { /: [btn_h, 2.0] }] }]
+      - decl: [inside, i32, { call: [scene.child_contains, "ok_btn", mid_x, mid_y] }]
+      - if:
+          condition: { neq: [inside, 1] }
+          then: [{ print: ["FAIL Mittelpunkt (${mid_x},${mid_y}) liegt laut child_contains nicht im Widget"] }, { return: 1 }]
+
+      # ── 2. Klick auf den Mittelpunkt ─────────────────────────────────────
+      # Drei Frames (spec/44_0 §8.4): bewegen, drücken, loslassen.  Injiziert
+      # wird NACH engine.swap, weil swap die Latches leert (§8.3).
+      - call: [engine.swap, win]
+      - call: [input.post_mouse_move, mid_x, mid_y]
+      - call: [engine.update_hover, mid_x, mid_y]
+
+      - call: [engine.swap, win]
+      - call: [input.post_mouse_down, 0]
+      - call: [engine.update_hover, mid_x, mid_y]
+
+      - call: [engine.swap, win]
+      - call: [input.post_mouse_up, 0]
+      - call: [engine.update_hover, mid_x, mid_y]
+
+      - decl: [hit, i32, { call: [scene.child_clicked, "ok_btn"] }]
+      - if:
+          condition: { neq: [hit, 1] }
+          then: [{ print: ["FAIL injizierter Klick loeste child_clicked nicht aus (hit=${hit})"] }, { return: 1 }]
+
+      # Die Spur muss den Button NENNEN.  Ohne diese Prüfung wäre oben nicht
+      # unterscheidbar, ob der Button nichts tat oder der Klick nie ankam.
+      - decl: [trace, string, { call: [engine.prefab_last_hit] }]
+      - if:
+          condition: { lt: [{ call: [trace.index_of, "ClickScene[0]/ok_btn"] }, 0] }
+          then: [{ print: ["FAIL Treffer-Spur nennt den Button nicht: '${trace}'"] }, { return: 1 }]
+
+      # ── 3. Klick daneben darf NICHT auslösen ─────────────────────────────
+      - decl: [off_x, f32, 8.0]
+      - decl: [off_y, f32, 8.0]
+      - call: [engine.swap, win]
+      - call: [input.post_mouse_move, off_x, off_y]
+      - call: [engine.update_hover, off_x, off_y]
+
+      - call: [engine.swap, win]
+      - call: [input.post_mouse_down, 0]
+      - call: [engine.update_hover, off_x, off_y]
+
+      - call: [engine.swap, win]
+      - call: [input.post_mouse_up, 0]
+      - call: [engine.update_hover, off_x, off_y]
+
+      - decl: [miss, i32, { call: [scene.child_clicked, "ok_btn"] }]
+      - if:
+          condition: { neq: [miss, 0] }
+          then: [{ print: ["FAIL Klick ausserhalb loeste den Button aus (miss=${miss})"] }, { return: 1 }]
+
+      # ... und die Spur sagt "nichts getroffen" — ein eigener, prüfbarer Ausgang.
+      - decl: [trace2, string, { call: [engine.prefab_last_hit] }]
+      - if:
+          condition: { neq: [trace2.len, 0] }
+          then: [{ print: ["FAIL Klick ins Leere meldet Treffer: '${trace2}'"] }, { return: 1 }]
+
+      # ── 4. Text in das fokussierte Feld ──────────────────────────────────
+      - call: [scene.focus, "name_input"]
+      - call: [engine.swap, win]
+      - call: [input.post_text, "hallo"]
+      - call: [engine.update_hover, off_x, off_y]
+      - call: [engine.swap, win]
+      - decl: [typed, string, { call: [scene.text_value, "name_input"] }]
+      - if:
+          condition: { neq: [typed, "hallo"] }
+          then: [{ print: ["FAIL post_text: Feld enthaelt '${typed}', erwartet 'hallo'"] }, { return: 1 }]
+
+      # ── 5. Taste ─────────────────────────────────────────────────────────
+      - call: [engine.swap, win]
+      - call: [input.post_key_down, "lctrl"]
+      - decl: [ctrl_now, i32, { call: [input.key_down, "lctrl"] }]
+      - if:
+          condition: { neq: [ctrl_now, 1] }
+          then: [{ print: ["FAIL post_key_down: key_down(lctrl)=${ctrl_now}"] }, { return: 1 }]
+      - call: [input.post_key_up, "lctrl"]
+      - call: [engine.swap, win]
+      - decl: [ctrl_after, i32, { call: [input.key_down, "lctrl"] }]
+      - if:
+          condition: { neq: [ctrl_after, 0] }
+          then: [{ print: ["FAIL post_key_up: key_down(lctrl)=${ctrl_after} nach Loslassen"] }, { return: 1 }]
+
+      - call: [engine.destroy_window, win]
+      - print: ["PASS input_injection_click"]
+      - return: 0

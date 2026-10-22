@@ -1,0 +1,13 @@
+# SPEC: 64_closures
+# static-check: off
+# Requires: driver
+# NEGATIVE (spec/64 §6, §9): a closure is never duplicated — no {copy}, no {clone}.
+# EXPECT-ERROR: closure-copy-forbidden
+- callable: { name: Read, return: i32 }
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [c, closure<Read>, { closure: { capture: [[n, i32, 1]], body: [ { return: n } ] } }]
+      - decl: [dup, closure<Read>, { copy: c }]   # ← must be rejected
+      - return: 0

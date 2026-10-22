@@ -613,6 +613,21 @@ static int hs_step(WsHs* h) {
     }
     int fl = fcntl(ws->fd, F_GETFL, 0);
     fcntl(ws->fd, F_SETFL, fl & ~O_NONBLOCK);
+    /* Ein stehengebliebener Sender darf den Server nicht anhalten.
+     *
+     * Der Leseweg ist: `poll(fd, 0)` meldet EIN Byte, danach verlangt
+     * `ws_read_n` den GANZEN Frame mit blockierendem recv.  Kommt der Rest nie
+     * (Gegenstelle getoetet, Leitung steht), wartet ein einfaediger Server
+     * endlos — er liest dann keinen anderen Peer mehr und nimmt nichts mehr an.
+     * Gemessen am cosmos-Controller 18.10.2026: Log bricht mitten im Takt ab,
+     * 13 kB ungelesen in der Warteschlange eines Peers, Send-Q ueberall 0,
+     * `wchan = wait_woken`.
+     *
+     * Dies ist der STOPFEN, nicht die Loesung: er macht aus „fuer immer" ein
+     * „nach 10 s abgebrochen".  Die Loesung ist ein schrittweiser, nicht
+     * blockierender Frame-Leser mit Puffer je Verbindung (spec/32_4 §Lesen). */
+    struct timeval rto; rto.tv_sec = 10; rto.tv_usec = 0;
+    setsockopt(ws->fd, SOL_SOCKET, SO_RCVTIMEO, &rto, sizeof(rto));
     return 1;
 }
 

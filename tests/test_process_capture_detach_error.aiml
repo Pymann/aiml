@@ -1,0 +1,13 @@
+# SPEC: 23_system
+# static-check: off
+# spec/23 §5.4: capture: true together with detach: true is a compile error.
+#
+# Expected exit code: 1
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [job_argv, list<string>, ["true"]]
+      - decl: [job, process, { call: [sys.exe, job_argv, {detach: true, capture: true}] }]
+      - return: 0
