@@ -45,6 +45,18 @@ will keep compiling once borrow-checking lands.
 | Struct field holding a heap object                 | `ptr<T>`    |
 | KV view: `decl: [v, _, { call: [kv.get, k] }]`     | `ptr<T>`    |
 
+
+> ⚠️ **Ein `ptr<T>`-Parameter wird KONSUMIERT — der Aufgerufene gibt ihn beim
+> Verlassen frei.**  Der implizite Class-4-Drop (spec/61) emittiert `free(param)`
+> sowohl auf dem Normal- als auch auf dem Unwind-Pfad.  Wer ein `ptr<T>`
+> uebergibt, das er selbst weiterbenutzt, hat damit ein stilles Use-after-free
+> (und am eigenen Scope-Ende einen Double-Free) — **ohne jede Diagnose**.
+> Belegt durch `tests/test_lock_member_thread_repro.aiml`: mit
+> `args: [[box, ptr<Tally>], …]` gab die Thread-Funktion das Objekt des
+> Aufrufers frei und der naechste Zugriff starb mit `addr=0x8`; mit
+> `ref<Tally>` laeuft derselbe Test durch.  Geborgte Parameter sind also keine
+> Stilfrage, sondern eine Korrektheitsbedingung.
+
 **Rule of thumb**: anything that might outlive the scope it was created in
 must be `ptr<T>`. A `ref<T>` should only ever flow *into* a function (as a
 parameter), never *out of* it (return value, stored field, list element).

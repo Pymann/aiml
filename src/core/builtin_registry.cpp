@@ -932,6 +932,27 @@ void registerBuiltins(CompilerContext& ctx) {
             ctx.builder.getInt64Ty(), {});
         return ctx.ir_gen->wrap(ctx.builder.CreateCall(f));
     };
+    // spec/23 §4.1 — Host-Parallelitaet: drei Fragen, drei Funktionen.  Call-Form
+    // only; eine Property-Form waere genau der sys.env-Fehler (dokumentierte
+    // Property, emittierter Nullpointer) noch einmal.
+    sys.builtinFuncs["core_count"] = [](CompilerContext& ctx, const std::vector<IRValue*>&) -> IRValue* {
+        llvm::Function* f = ctx.getFunction("aiml_sys_core_count",
+            ctx.builder.getInt32Ty(), {});
+        return ctx.ir_gen->wrap(ctx.builder.CreateCall(f));
+    };
+
+    sys.builtinFuncs["logical_thread_count"] = [](CompilerContext& ctx, const std::vector<IRValue*>&) -> IRValue* {
+        llvm::Function* f = ctx.getFunction("aiml_sys_logical_thread_count",
+            ctx.builder.getInt32Ty(), {});
+        return ctx.ir_gen->wrap(ctx.builder.CreateCall(f));
+    };
+
+    sys.builtinFuncs["quota_thread_count"] = [](CompilerContext& ctx, const std::vector<IRValue*>&) -> IRValue* {
+        llvm::Function* f = ctx.getFunction("aiml_sys_quota_thread_count",
+            ctx.builder.getInt32Ty(), {});
+        return ctx.ir_gen->wrap(ctx.builder.CreateCall(f));
+    };
+
 
     sys.builtinFuncs["env"] = [](CompilerContext& ctx, const std::vector<IRValue*>&) -> IRValue* {
         // Delegate to the runtime, which populates a map<string:string> from

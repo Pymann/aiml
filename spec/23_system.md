@@ -164,6 +164,55 @@ gewesen; was fehlte, war die Fehlermeldung.
 - set: [current_env, sys.env]
 ```
 
+
+## 4.1 Host parallelism — `core_count`, `logical_thread_count`, `quota_thread_count`
+
+Three separate questions, three functions. Sizing a thread pool from the wrong
+one either leaves cores idle or over-subscribes a container.
+
+```yaml
+# Signatures (call-form only, all -> i32, all >= 1):
+- decl: [cores,   i32, { call: [sys.core_count] }]            # physical cores, no SMT
+- decl: [threads, i32, { call: [sys.logical_thread_count] }]  # logical processors (SMT included)
+- decl: [budget,  i32, { call: [sys.quota_thread_count] }]    # what a cgroup quota actually allows
+```
+
+| Function | Answers | Source |
+|----------|---------|--------|
+| `sys.core_count` | How many *independent* cores exist? Use for CPU-bound pools where SMT siblings only add contention. | Topology (`core_id`/`package_id` pairs, deduplicated); falls back to `logical_thread_count` when topology is unreadable |
+| `sys.logical_thread_count` | How many threads can run at once? Honours the process **affinity mask**, so `taskset`/`cpuset` is respected. | `sched_getaffinity`, else `std::thread::hardware_concurrency` |
+| `sys.quota_thread_count` | How many threads' worth of CPU time may this process actually consume? | cgroup v2 `cpu.max`, else cgroup v1 `cpu.cfs_quota_us`/`cpu.cfs_period_us`; **unlimited → equals `logical_thread_count`** |
+
+Normative:
+
+- All three are **never** less than `1`. If the OS reports nothing usable they
+  return `1` instead of `0`, so a sizing formula always yields at least one
+  worker and `n / sys.core_count()` can never divide by zero.
+- All three are **call-form only**. There is deliberately no property form — the
+  mistake behind the `sys.env` SIGSEGV above (property documented, null pointer
+  emitted) is not repeated here.
+- `quota_thread_count` rounds **down** to whole threads but never below 1: a
+  `--cpus=0.5` container reports `1`, not `0`.
+- Pure/stateless → Category 2 in chapter 47: callable from any thread without
+  synchronisation. Values are read once and cached per process, so repeated
+  calls are cheap and return the same answer.
+- A CPU quota does not shrink the affinity mask: a container pinned to 2 CPUs'
+  worth of quota on a 16-thread host reports `logical_thread_count == 16` and
+  `quota_thread_count == 2`. **The effective cap for a thread pool is therefore
+  `quota_thread_count`**, which already collapses to the logical count when no
+  quota is set. See chapter 40 (containerization).
+
+Intended use — sizing a worker pool (chapter 26):
+
+```yaml
+# One worker per 4 units of work, capped by what the host really grants:
+- decl: [want, i32, { /: [{ +: [units, 3] }, 4] }]            # ceil(units/4)
+- decl: [cap,  i32, { call: [sys.quota_thread_count] }]
+- decl: [workers, i32, want]
+- if: { condition: { gt: [want, cap] }, then: [{ set: [workers, cap] }] }
+- if: { condition: { lt: [workers, 1] }, then: [{ set: [workers, 1] }] }
+```
+
 ## 5. Process Management
 
 ### 5.1 `sys.exe` — spawning
