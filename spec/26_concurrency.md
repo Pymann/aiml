@@ -14,6 +14,33 @@
 - decl: [t1, thread_handle]
 - set: [t1, { spawn: [worker_function, 10] }]
 
+> ⚠️ **`spawn`-Argumente: keine Container direkt übergeben.** Der Trampolin
+> (`__aiml_spawn_<fn>`) baut seine Argument-Struktur aus dem Typ des
+> AUSGEWERTETEN Ausdrucks, nicht aus der Zielsignatur
+> (`ast_compiler_expr.cpp`, `visitSpawn`). Für `list<T>`/`map<K:V>` packt er
+> deshalb das Struct **by value**, während die Funktion unter memV3 den
+> Handle-Zeiger erwartet → `Function '__aiml_spawn_<fn>' verification FAILED:
+> Call parameter type does not match function signature`. Das bricht den Build
+> (also keine stille Falle), kostet aber Zeit.
+>
+> Tragfähige Form: den geteilten Zustand in eine Klasse legen und `ref<T>`
+> übergeben — belegt durch `tests/test_chan_class_member.aiml` und
+> `tests/test_lock_class_member.aiml`:
+>
+> ```yaml
+> - class: { name: Snapshot, members: [[ids, list<string>]] }
+> - def:
+>     name: worker
+>     args: [[snap, ref<Snapshot>], [shard, i32]]
+>     body: [{ decl: [cnt, i32, snap.ids.len] }]
+> - decl: [job, ptr<Snapshot>, { new: Snapshot }]
+> - decl: [handle, thread_handle, { spawn: [worker, job, 0] }]
+> ```
+>
+> Skalare (`i32`/`i64`/`f32`) und `chan<T>` funktionieren direkt; ein
+> `ptr<T>`-Argument wird vom Thread ÜBERNOMMEN (spec/61 §8, `movePtrArg`) —
+> wer das Objekt weiterbenutzt, übergibt `ref<T>`.
+
 # 2. Thread API
 # join(): Blocks until thread completes.
 # Calling join() on an already-detached thread raises InvalidThreadStateException.

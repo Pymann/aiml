@@ -1,0 +1,27 @@
+# SPEC: 26_concurrency — Repro-Eingrenzung: `lock` als Klassen-Member, aber ueber
+# einen BENANNTEN Empfaenger (box.lock_one.init) statt ueber den Selbstbezug
+# (<.lock_one.init).  Trennt die beiden Member-Zugriffspfade im Compiler.
+# Expected exit code: 0
+
+- class:
+    name: LockBox
+    members:
+      - [lock_one, lock]
+      - [hits, i32]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [box, ptr<LockBox>, { new: LockBox }]
+      - call: [box.lock_one.init]
+      - call: [box.lock_one.acquire]
+      - set: [box.hits, { +: [box.hits, 1] }]
+      - call: [box.lock_one.release]
+      - if:
+          condition: { neq: [box.hits, 1] }
+          then:
+            - print: ["FAIL hits=${box.hits}"]
+            - return: 1
+      - print: ["PASS test_lock_member_extern: box.lock_one.init/acquire/release"]
+      - return: 0

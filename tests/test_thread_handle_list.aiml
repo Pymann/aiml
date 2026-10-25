@@ -1,0 +1,67 @@
+# SPEC: 26_concurrency — kann man eine DYNAMISCHE Anzahl Threads verwalten?
+# Ein Worker-Pool, dessen Groesse zur Laufzeit aus der Last folgt, braucht
+# thread_handles in einem Container (sonst nur fest verdrahtete Variablen).
+#   - list<thread_handle> deklarieren und per push fuellen
+#   - jeden Handle wieder herausholen und joinen
+#   - alle Worker haben wirklich gelaufen (Zaehler unter einem Lock)
+# Expected exit code: 0
+
+- class:
+    name: Counter
+    members:
+      - [guard, lock]
+      - [done, i32]
+    methods:
+      - def:
+          name: prepare
+          body:
+            - call: [<.guard.init]
+            - set: [<.done, 0]
+      - def:
+          name: mark
+          body:
+            - call: [<.guard.acquire]
+            - set: [<.done, { +: [<.done, 1] }]
+            - call: [<.guard.release]
+
+- def:
+    name: worker_body
+    args: [[box, ref<Counter>], [shard, i32]]
+    return: void
+    body:
+      - call: [box.mark]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [box, ptr<Counter>, { new: Counter }]
+      - call: [box.prepare]
+      - decl: [want, i32, 5]
+      - decl: [threads, list<thread_handle>]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, want] }
+          body:
+            - call: [threads.push, { spawn: [worker_body, box, idx] }]
+            - set: [idx, { +: [idx, 1] }]
+      - decl: [jdx, i32, 0]
+      - while:
+          condition: { lt: [jdx, threads.len] }
+          body:
+            - decl: [cur_th, thread_handle, { at: [threads, jdx] }]
+            - call: [cur_th.join]
+            - set: [jdx, { +: [jdx, 1] }]
+      - decl: [fails, i32, 0]
+      - if:
+          condition: { neq: [box.done, want] }
+          then:
+            - print: ["FAIL ${box.done} von ${want} Workern gelaufen"]
+            - set: [fails, { +: [fails, 1] }]
+      - free: [box]
+      - if:
+          condition: { eq: [fails, 0] }
+          then:
+            - print: ["PASS test_thread_handle_list: ${want} Threads via list<thread_handle> gespawnt und gejoint"]
+            - return: 0
+      - return: 1
