@@ -219,6 +219,12 @@ probe "memV3: req.params / url.get_param / cookies are managed map handles, url 
     "$AIML_BIN" -r tests/_mem_sanitize/http_request_maps.aiml
 probe "memV3: chained req.params.get / url.get_param.get / resp.headers.put give managed strings" "hcm" \
     "$AIML_BIN" -r tests/_mem_sanitize/http_chained_maps.aiml
+probe "identity: base64 strings + owned buffers bound, rebound and dropped (spec/67 §2)" "b64" \
+    "$AIML_BIN" -r tests/_mem_sanitize/identity_base64.aiml
+probe "identity: ldap escaping + offline handle (error string, empty lists, double close) (spec/67 §3)" "ldp" \
+    "$AIML_BIN" -r tests/_mem_sanitize/identity_ldap_offline.aiml
+probe "identity: saml.verify_response maps (ok + error) and AuthnRequest URLs (spec/67 §4)" "sml" \
+    "$AIML_BIN" -r tests/_mem_sanitize/identity_saml.aiml
 
 # spec/61 call-temporary matrix: same fixtures as the semantic and AOT leak gates.
 source tests/lifetime/call_temporaries/cases.sh
