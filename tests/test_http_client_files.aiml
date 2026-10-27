@@ -52,6 +52,7 @@
       - call: [srv.set_max_body, 67108864]
       - call: [srv.route, "POST", "/upload", handle_upload]
       - call: [srv.route, "GET", "/download", handle_download]
+      - call: [srv.route, "HEAD", "/download", handle_download]
       - decl: [srv_thread, thread_handle, { call: [srv.start_async] }]
       - call: [time.sleep_ms, 200]
 
