@@ -734,7 +734,7 @@ static void free_request(AimlHttpRequest* req) {
 static void free_response(AimlHttpResponse* resp) {
     if (!resp) return;
     aiml_http_map_free(resp->headers);
-    free(resp->body); free(resp->body_file);
+    free(resp->body); free(resp->body_file); free(resp->req_range);
     for (int i = 0; i < resp->n_set_cookies; ++i) free(resp->set_cookies[i]);
     free(resp->set_cookies);
     free(resp);
@@ -795,9 +795,31 @@ static void send_response(AimlHttpResponse* resp) {
         send_all_fd(fd, ssl, body_ptr, static_cast<int>(body_size));
 }
 
+static void serve_file(AimlHttpResponse* resp,
+                        const std::string& file_path,
+                        const RouteEntry& route,
+                        const char* range_header = nullptr);
+
 // server-side response methods
+// A handler that set `resp.body_file` (and no text body) gets the same
+// streamed, range-aware file delivery as srv.filesystem (spec/32_2: "File as
+// body — streamed during send"). Without this the file was read fully into
+// memory and its length taken with strlen, truncating binary files.
 extern "C" void aiml_http_resp_send(void* resp_ptr) {
-    send_response(static_cast<AimlHttpResponse*>(resp_ptr));
+    AimlHttpResponse* r = static_cast<AimlHttpResponse*>(resp_ptr);
+    if (r && !r->resp_sent && r->conn_fd >= 0 && r->body_file && !r->body) {
+        RouteEntry plain;   // no cache max-age → ETag revalidation
+        serve_file(r, r->body_file, plain, r->req_range);
+        return;
+    }
+    send_response(r);
+}
+
+extern "C" void aiml_http_resp_set_body_file(void* resp_ptr, const char* file_path) {
+    AimlHttpResponse* r = static_cast<AimlHttpResponse*>(resp_ptr);
+    if (!r) return;
+    free(r->body_file);
+    r->body_file = (file_path && file_path[0]) ? xstrdup(file_path) : nullptr;
 }
 
 extern "C" void aiml_http_resp_write(void* resp_ptr, const char* chunk) {
@@ -1012,7 +1034,7 @@ static std::string resolve_under(const std::string& root,
 static void serve_file(AimlHttpResponse* resp,
                         const std::string& file_path,
                         const RouteEntry& route,
-                        const char* range_header = nullptr) {
+                        const char* range_header) {
     // Open + stat the file. We stream via sendfile() rather than reading
     // into a userspace buffer — this avoids per-request 10–100 MB heap
     // allocations and lets the kernel handle TCP back-pressure cleanly,
@@ -1036,7 +1058,10 @@ static void serve_file(AimlHttpResponse* resp,
     }
     size_t total = static_cast<size_t>(st.st_size);
 
-    aiml_http_map_put(resp->headers, "content-type", mime_for_ext(file_path));
+    // A content-type chosen by the handler (resp.body_file path) wins over the
+    // extension guess; srv.filesystem responses start without one.
+    if (!aiml_http_map_get(resp->headers, "content-type"))
+        aiml_http_map_put(resp->headers, "content-type", mime_for_ext(file_path));
     // We don't support keep-alive yet — tell HTTP/1.1 clients explicitly
     // so they don't try to reuse the connection.
     aiml_http_map_put(resp->headers, "connection", "close");
@@ -1343,6 +1368,8 @@ static void* handle_connection(void* arg) {
     resp->headers = aiml_http_map_new();
     resp->conn_fd = fd;
     resp->ssl     = ssl;
+    if (const char* rng = aiml_http_map_get(req->req_headers, "range"))
+        resp->req_range = xstrdup(rng);
 
     // Apply default server headers
     if (srv->default_headers) {

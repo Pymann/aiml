@@ -1,0 +1,65 @@
+# resp.body_file from a route handler (spec/32_2): the file is streamed like
+# srv.filesystem — exact Content-Length, handler-chosen Content-Type kept,
+# Range requests answered with 206.
+#
+# Expected exit code: 0
+
+- def:
+    name: probe
+    args: [[raw, string]]
+    return: string
+    body:
+      - decl: [sock, socket_handle]
+      - set: [sock, { call: [net.socket, "tcp"] }]
+      - call: [net.connect, sock, "127.0.0.1", 23198]
+      - call: [net.send_string, sock, raw]
+      - decl: [rsp, string]
+      - set: [rsp, { call: [net.recv_string, sock, 1024] }]
+      - call: [net.close, sock]
+      - return: rsp
+
+- def:
+    name: handle_download
+    args: [[req, http_request_handle], [resp, http_response_handle]]
+    body:
+      - call: [resp.headers.put, "content-type", "application/octet-stream"]
+      - set: [resp.body_file, "/tmp/aiml_body_file_test/blob.dat"]
+      - call: [resp.send]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [fail, i32, 0]
+      - call: [io.mkdir, "/tmp/aiml_body_file_test"]
+      - decl: [wrc, i32, { call: [io.write_file, "/tmp/aiml_body_file_test/blob.dat",
+                                  "0123456789ABCDEFGHIJ0123456789abcdefghij"] }]
+      - if: { condition: { neq: [wrc, 0] }, then: [{ print: ["FAIL fixture write rc=${wrc}"] }, { call: [sys.exit, 1] }] }
+
+      - decl: [srv, http_server_handle]
+      - set: [srv, { call: [http.server, "127.0.0.1", 23198] }]
+      - call: [srv.route, "GET", "/download", handle_download]
+      - decl: [thr, thread_handle, { call: [srv.start_async] }]
+      - call: [time.sleep_ms, 300]
+
+      - decl: [r_full, string, { call: [probe, "GET /download HTTP/1.1\r\nHost: x\r\n\r\n"] }]
+      - if: { condition: { lt: [{ call: [r_full.index_of, "HTTP/1.1 200"] }, 0] }, then: [{ print: ["FAIL full status: ${r_full}"] }, { set: [fail, { +: [fail, 1] }] }] }
+      - if: { condition: { lt: [{ call: [r_full.index_of, "content-length: 40"] }, 0] }, then: [{ print: ["FAIL full length: ${r_full}"] }, { set: [fail, { +: [fail, 1] }] }] }
+      - if: { condition: { lt: [{ call: [r_full.index_of, "content-type: application/octet-stream"] }, 0] }, then: [{ print: ["FAIL handler content-type lost: ${r_full}"] }, { set: [fail, { +: [fail, 1] }] }] }
+      # Body via the HTTP client: headers and the sendfile body may arrive in
+      # separate TCP segments, so a single raw recv can miss the body.
+      - decl: [dl_url, url, { call: [http.parse_url, "http://127.0.0.1:23198/download"] }]
+      - decl: [dl_resp, http_response_handle, { call: [http.get, dl_url] }]
+      - decl: [dl_body, string, { call: [dl_resp.body] }]
+      - call: [dl_resp.free]
+      - if: { condition: { neq: [dl_body, "0123456789ABCDEFGHIJ0123456789abcdefghij"] }, then: [{ print: ["FAIL full body: ${dl_body}"] }, { set: [fail, { +: [fail, 1] }] }] }
+
+      - decl: [r_mid, string, { call: [probe, "GET /download HTTP/1.1\r\nHost: x\r\nRange: bytes=10-14\r\n\r\n"] }]
+      - if: { condition: { lt: [{ call: [r_mid.index_of, "HTTP/1.1 206"] }, 0] }, then: [{ print: ["FAIL range status: ${r_mid}"] }, { set: [fail, { +: [fail, 1] }] }] }
+      - if: { condition: { lt: [{ call: [r_mid.index_of, "content-range: bytes 10-14/40"] }, 0] }, then: [{ print: ["FAIL range header: ${r_mid}"] }, { set: [fail, { +: [fail, 1] }] }] }
+
+      - call: [srv.stop]
+      - call: [io.remove_all, "/tmp/aiml_body_file_test"]
+      - if: { condition: { gt: [fail, 0] }, then: [{ return: [1] }] }
+      - print: ["PASS http_resp_body_file: streamed 200 with exact length + handler content-type, 206 range"]
+      - return: [0]
