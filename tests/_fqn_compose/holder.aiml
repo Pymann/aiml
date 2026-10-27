@@ -1,0 +1,16 @@
+# Requires: library
+# Composition target for test_static_main_fqn_compose.aiml. Deliberately no
+# `<` access, so the test only depends on the composition rule.
+- namespace: fqncompose.holder
+
+- class:
+    name: Holder
+    members:
+      - [label, string, "holder", { access: public }]
+    methods:
+      - def:
+          name: scale
+          args: [[val, i32]]
+          return: i32
+          body:
+            - return: [{ "*": [val, 2] }]

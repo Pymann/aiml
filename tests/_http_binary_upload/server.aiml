@@ -1,0 +1,34 @@
+# Requires: library
+# Helper server for check.sh: stores each upload binary-safe and reports
+# size + sha256. Usage: aiml server.aiml -- <port> <out_file>
+
+- def:
+    name: handle_upload
+    args: [[req, http_request_handle], [resp, http_response_handle]]
+    body:
+      - decl: [payload, buffer<u8>]
+      - set: [payload, req.body_bytes]
+      - decl: [out_file, string, { call: [sys.get_arg, 2] }]
+      - decl: [wrc, i32, { call: [io.write_file, out_file, payload] }]
+      - decl: [digest, string, { call: [hash.sha256, payload] }]
+      - decl: [nbytes, i32, payload.len]
+      - set: [resp.status, 200]
+      - if:
+          condition: { neq: [wrc, 0] }
+          then:
+            - set: [resp.status, 500]
+      - set: [resp.body, "${nbytes} ${digest}"]
+      - call: [resp.send]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [port, i32, { call: [sys.get_arg, 1] }]
+      - decl: [srv, http_server_handle]
+      - set: [srv, { call: [http.server, "127.0.0.1", port] }]
+      - call: [srv.set_max_body, 67108864]
+      - call: [srv.set_timeout, 30]
+      - call: [srv.route, "PUT", "/upload", handle_upload]
+      - call: [srv.start]
+      - return: [0]

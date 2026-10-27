@@ -416,6 +416,7 @@ null zurueck, und ein korrektes `- set: [body, req.body]` im GET-Handler starb m
 | `secure_headers` | `hsts: i32`                                         | —                   | Add nosniff / X-Frame-Options / Referrer-Policy (+ HSTS if `hsts != 0`) to every response |
 | `require_client_cert` | `ca_path: string`                             | `i32`               | Enable mTLS: require + verify a client cert against the CA bundle PEM; `0` on success, `-1` on error (TLS server only) — see §3.11 |
 | `set_max_connections` | `n: i32`                                      | —                   | Cap concurrent handler threads (`0` = unlimited); excess connections get `503` and close — see §3.12 |
+| `set_max_body` | `bytes: i64` | — | Request body cap in bytes (default 8 MiB, clamped to ~2 GiB); larger bodies get `413` — see §3.10 |
 | `set_rate_limit`      | `max: i32, window_secs: i32`                  | —                   | Per-IP fixed-window limit; excess connections get `429` and close (`max <= 0` disables) — see §3.12 |
 
 **Routing rules:**
@@ -469,7 +470,7 @@ No own listener — `start`/`stop`/`start_async` are not present.
 | `headers`    | `map<string:string>` | Response headers; provides `put`, `get`, `remove` etc. |
 | `body`       | `string`             | Response body as text |
 | `body_bytes` | `buffer<u8>`         | Response body as bytes |
-| `body_file`  | `path`               | File as body — streamed during `send` (range-request-aware) |
+| `body_file`  | `path`               | File as body — streamed during `send` (sendfile, range-request-aware, ETag); a `content-type` set by the handler is kept, otherwise it is derived from the extension |
 
 **Methods** (6):
 
@@ -756,7 +757,7 @@ protocol error and are **not** dispatched to any handler.
 | Too many header lines | 100 | `431 Request Header Fields Too Large` |
 | Total header bytes | 64 KiB | `431 Request Header Fields Too Large` |
 | Malformed / negative `Content-Length` | — | `400 Bad Request` |
-| `Content-Length` over cap | 8 MiB | `413 Payload Too Large` |
+| `Content-Length` over cap | 8 MiB (`srv.set_max_body`) | `413 Payload Too Large` |
 | Slow/stalled request read (slowloris) | `set_timeout`, default **15 s** | `408 Request Timeout` |
 | Stalled TLS handshake (`http.server_tls`) | `set_timeout`, default **15 s** | connection closed |
 
@@ -772,6 +773,14 @@ protocol error and are **not** dispatched to any handler.
 
 ```aiml
 - call: [srv.set_timeout, 20]     # 20s read timeout for public hosting
+```
+
+Services that accept large uploads (artifact repositories, file drops) raise the
+body cap explicitly. The body is stored binary-safe; read it via `req.body_bytes`
+(`buffer<u8>`) — `req.body` is a string view that ends at the first NUL byte.
+
+```aiml
+- call: [srv.set_max_body, 1073741824]   # accept uploads up to 1 GiB
 ```
 
 **Security response headers** (opt-in): `srv.secure_headers(hsts)` adds a conservative

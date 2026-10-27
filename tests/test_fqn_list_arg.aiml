@@ -1,0 +1,35 @@
+# Expected exit code: 0
+# FQN calls into an imported namespace must pass list<T> by reference (same as
+# unqualified calls) and must unwind into an enclosing try/catch.
+- import: "_fqn_list_arg/lib.aiml"
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [fails, i32, 0]
+      - decl: [items, list<string>]
+      - call: [items.push, "alpha"]
+      - call: [fqnlist.lib.add_item, items, "beta"]
+      - decl: [count, i32, { call: [fqnlist.lib.count_items, items] }]
+      - if:
+          condition: { neq: [count, 2] }
+          then:
+            - print: ["[FAIL] expected 2 items (by-reference push), got ${count}"]
+            - set: [fails, { +: [fails, 1] }]
+      - decl: [caught, i32, 0]
+      - try:
+          body:
+            - call: [fqnlist.lib.must_be_positive, 0]
+          catch:
+            - type: Exception
+              var: err
+              body:
+                - set: [caught, 1]
+      - if:
+          condition: { neq: [caught, 1] }
+          then:
+            - print: ["[FAIL] exception from FQN call not caught"]
+            - set: [fails, { +: [fails, 1] }]
+      - print: ["fqn list arg failures: ${fails}"]
+      - return: [fails]

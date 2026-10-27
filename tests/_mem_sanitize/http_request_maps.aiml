@@ -1,0 +1,62 @@
+# memV3 (spec/61 §4/§5): req.params / req.cookies / url.get_param are handed out
+# as managed map<string:string> handles and url parts as managed strings. Binding
+# them to locals and letting them drop must not touch memory outside the parser's
+# tables (valgrind: no invalid read/write/free).
+# Expected exit code: 0
+
+- def:
+    name: handle_item
+    args: [[req, http_request_handle], [resp, http_response_handle]]
+    body:
+      - decl: [params, map<string:string>]
+      - set: [params, req.params]
+      - decl: [item, string, { call: [params.get, "id"] }]
+      - decl: [qurl, url]
+      - set: [qurl, req.url]
+      - decl: [query, map<string:string>]
+      - set: [query, qurl.get_param]
+      - decl: [color, string, { call: [query.get, "color"] }]
+      - decl: [missing, string, { call: [query.get, "nope"] }]
+      - decl: [absent, string, "set"]
+      - if:
+          condition: { eq: [missing, null] }
+          then:
+            - set: [absent, "null"]
+      - decl: [upath, string, qurl.path]
+      - decl: [cookies, map<string:string>]
+      - set: [cookies, req.cookies]
+      - decl: [ncookies, i32, cookies.len]
+      - set: [resp.status, 200]
+      - set: [resp.body, "${item}|${color}|${absent}|${upath}|${ncookies}"]
+      - call: [resp.send]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [srv, http_server_handle, { call: [http.server, "127.0.0.1", 23312] }]
+      - call: [srv.route, "GET", "/items/:id", handle_item]
+      - decl: [srv_thread, thread_handle, { call: [srv.start_async] }]
+      - call: [time.sleep_ms, 300]
+      - decl: [fails, i32, 0]
+      - decl: [round, i32, 0]
+      - while:
+          condition: { lt: [round, 3] }
+          body:
+            - decl: [target, url, { call: [http.parse_url, "http://127.0.0.1:23312/items/42?color=red"] }]
+            - decl: [answer, http_response_handle, { call: [http.get, target] }]
+            - decl: [text, string, { call: [answer.body] }]
+            - call: [answer.free]
+            - if:
+                condition: { neq: [text, "42|red|null|/items/42|0"] }
+                then:
+                  - print: ["[FAIL] got ${text}"]
+                  - set: [fails, { +: [fails, 1] }]
+            - set: [round, { +: [round, 1] }]
+      - call: [srv.stop]
+      - if:
+          condition: { gt: [fails, 0] }
+          then:
+            - return: [1]
+      - print: ["PASS http request maps (managed)"]
+      - return: [0]
