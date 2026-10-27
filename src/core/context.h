@@ -498,6 +498,10 @@ namespace AIML {
     // behavior. Opt OUT for A/B comparison with AIML_MEM_V3=0 (parsed in the ctor). See
     // spec/61_memory_management.
     bool memV3 = true;
+    // Set while a chained builtin call (`req.params.get(k)`, `url.get_param.get(k)`) evaluates
+    // its field accessor: the chain operates on the parser's AimlHttpMap directly, so the
+    // memV3 managed-handle conversion of that field is skipped (see builtin_registry http getters).
+    bool httpMapRawView = false;
     // spec/61 §10 owning-cycle lint: run once per compile (set by the first visitFunction).
     bool ownCycleLintDone = false;
     // spec/61 §5.1 (memV3): stable runtime TYPE-IDs for recursive types referenced by an

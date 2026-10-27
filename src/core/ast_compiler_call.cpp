@@ -1471,7 +1471,11 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                 auto fieldIt = bm.find(fieldName);
                 if (fieldIt != bm.end()) {
                     auto dummyEval = [](AIML::AST::Expr*) -> IRValue* { return nullptr; };
+                    // The chain below works on the raw AimlHttpMap → no memV3 handle copy.
+                    bool prevRawView = ctx.httpMapRawView;
+                    ctx.httpMapRawView = true;
                     IRValue* fieldWrapped = fieldIt->second(ctx, baseForHandler, nullptr, dummyEval);
+                    ctx.httpMapRawView = prevRawView;
                     llvm::Value* fieldVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(fieldWrapped));
 
                     // Evaluate call args eagerly
@@ -1495,7 +1499,12 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                         if (!fn) fn = llvm::Function::Create(
                             llvm::FunctionType::get(i8p, {i8p, i8p}, false),
                             llvm::Function::ExternalLinkage, "aiml_http_map_get", ctx.module());
-                        return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {fieldVal, argRaw[0]}));
+                        llvm::Value* got = ctx.builder.CreateCall(fn, {fieldVal, argRaw[0]});
+                        // memV3: the map stores libc strings; the caller binds the result to a
+                        // managed string → hand out a managed copy (null stays null).
+                        if (ctx.memV3)
+                            got = ctx.builder.CreateCall(ctx.getFunction("aiml_http_str_managed", i8p, {i8p}), {got});
+                        return ctx.ir_gen->wrap(got);
                     } else if (subMethod == "len") {
                         llvm::Function* fn = ctx.module().getFunction("aiml_http_map_len");
                         if (!fn) fn = llvm::Function::Create(
