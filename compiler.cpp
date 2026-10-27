@@ -259,9 +259,15 @@ std::set<std::string> findNewExprClassNames(const std::string& path) {
             size_t i = pos + 4;
             while (i < line.size() && (line[i] == ' ' || line[i] == '\t')) i++;
             std::string name;
-            while (i < line.size() && (std::isalnum((unsigned char)line[i]) || line[i] == '_')) {
+            // Read a (possibly fully qualified) class name: `Holder` or
+            // `demo.lib.Holder`.  Classes are declared by their short name, so
+            // a qualified instantiation is recorded under its last segment.
+            while (i < line.size() && (std::isalnum((unsigned char)line[i]) || line[i] == '_' || line[i] == '.')) {
                 name += line[i++];
             }
+            while (!name.empty() && name.back() == '.') name.pop_back();
+            size_t lastDot = name.rfind('.');
+            if (lastDot != std::string::npos) name = name.substr(lastDot + 1);
             if (!name.empty()) out.insert(name);
             pos += 4;
         }
