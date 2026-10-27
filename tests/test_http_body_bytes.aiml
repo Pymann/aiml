@@ -1,0 +1,73 @@
+# Expected exit code: 0
+# req.body_bytes exposes the raw request body as buffer<u8>; srv.set_max_body
+# configures the request body cap. Binary payloads with embedded NUL bytes and
+# bodies above the 8 MiB default are additionally covered by
+# tests/_http_binary_upload_check.sh (needs curl).
+
+- def:
+    name: handle_upload
+    args: [[req, http_request_handle], [resp, http_response_handle]]
+    body:
+      - decl: [payload, buffer<u8>]
+      - set: [payload, req.body_bytes]
+      - decl: [digest, string]
+      - set: [digest, { call: [hash.sha256, payload] }]
+      - decl: [nbytes, i32]
+      - set: [nbytes, payload.len]
+      - set: [resp.status, 200]
+      - set: [resp.body, "${nbytes}:${digest}"]
+      - call: [resp.send]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [pass, i32, 0]
+      - decl: [fail, i32, 0]
+
+      - decl: [srv, http_server_handle]
+      - set: [srv, { call: [http.server, "127.0.0.1", 23195] }]
+      - call: [srv.set_max_body, 67108864]
+      - call: [srv.route, "POST", "/upload", handle_upload]
+      - decl: [srv_thread, thread_handle]
+      - set: [srv_thread, { call: [srv.start_async] }]
+      - call: [time.sleep_ms, 200]
+
+      - decl: [body_text, string, "museum-artifact-payload"]
+      - decl: [expected_hash, string]
+      - set: [expected_hash, { call: [hash.sha256, body_text] }]
+      - decl: [expected, string, "23:${expected_hash}"]
+
+      - decl: [up_url, url]
+      - set: [up_url, { call: [http.parse_url, "http://127.0.0.1:23195/upload"] }]
+      - decl: [up_resp, http_response_handle]
+      - set: [up_resp, { call: [http.post, up_url, body_text] }]
+      - decl: [up_status, i32]
+      - set: [up_status, { call: [up_resp.status] }]
+      - decl: [up_body, string]
+      - set: [up_body, { call: [up_resp.body] }]
+      - call: [up_resp.free]
+
+      - if:
+          condition: { eq: [up_status, 200] }
+          then:
+            - set: [pass, { +: [pass, 1] }]
+          else:
+            - print: ["[FAIL] POST /upload status expected 200 got ${up_status}"]
+            - set: [fail, { +: [fail, 1] }]
+      - if:
+          condition: { eq: [up_body, expected] }
+          then:
+            - set: [pass, { +: [pass, 1] }]
+          else:
+            - print: ["[FAIL] body_bytes size/hash expected ${expected} got ${up_body}"]
+            - set: [fail, { +: [fail, 1] }]
+
+      - call: [srv.stop]
+      - print: ["Passed: ${pass} / 2"]
+      - print: ["Failed: ${fail}"]
+      - if:
+          condition: { gt: [fail, 0] }
+          then:
+            - return: [1]
+      - return: [0]

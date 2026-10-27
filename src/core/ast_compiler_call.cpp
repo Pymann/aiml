@@ -279,9 +279,25 @@ IRValue* Compiler::visitCall(CallExpr* call) {
         funcName = "this." + funcName.substr(2);
     }
     size_t dotPos = funcName.find('.');
-    
-    // Check for lazy-evaluated method arguments before typical eager evaluation
+
+    // A fully qualified call to a user function (`my.math.add`, from an
+    // imported namespace) is a plain free-function call: route it through the
+    // normal call path below so it gets argument coercion (list/map/model args
+    // passed by reference), the hot-reload fptable, invoke-inside-try and the
+    // spec/61 caller-move handling.  The dotted branch's FQN fallback used to
+    // emit a raw call with none of these, which produced invalid IR for
+    // by-reference arguments (`call @ns.f(%list_string %v)` vs `ptr` param).
+    bool isUserFqnCall = false;
     if (dotPos != std::string::npos) {
+        std::string fqBase = funcName.substr(0, dotPos);
+        if (!ctx.namespaces.count(fqBase) && !resolveVariable(fqBase)) {
+            CompilerContext::FunctionInfo* fqInfo = resolveFunction(funcName);
+            isUserFqnCall = fqInfo && fqInfo->func;
+        }
+    }
+
+    // Check for lazy-evaluated method arguments before typical eager evaluation
+    if (dotPos != std::string::npos && !isUserFqnCall) {
         size_t lastDotPos = funcName.rfind('.');
         std::string baseName = funcName.substr(0, dotPos);
         std::string methodName = funcName.substr(dotPos + 1);
@@ -1471,7 +1487,11 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                 auto fieldIt = bm.find(fieldName);
                 if (fieldIt != bm.end()) {
                     auto dummyEval = [](AIML::AST::Expr*) -> IRValue* { return nullptr; };
+                    // The chain below works on the raw AimlHttpMap → no memV3 handle copy.
+                    bool prevRawView = ctx.httpMapRawView;
+                    ctx.httpMapRawView = true;
                     IRValue* fieldWrapped = fieldIt->second(ctx, baseForHandler, nullptr, dummyEval);
+                    ctx.httpMapRawView = prevRawView;
                     llvm::Value* fieldVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(fieldWrapped));
 
                     // Evaluate call args eagerly
@@ -1495,7 +1515,12 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                         if (!fn) fn = llvm::Function::Create(
                             llvm::FunctionType::get(i8p, {i8p, i8p}, false),
                             llvm::Function::ExternalLinkage, "aiml_http_map_get", ctx.module());
-                        return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {fieldVal, argRaw[0]}));
+                        llvm::Value* got = ctx.builder.CreateCall(fn, {fieldVal, argRaw[0]});
+                        // memV3: the map stores libc strings; the caller binds the result to a
+                        // managed string → hand out a managed copy (null stays null).
+                        if (ctx.memV3)
+                            got = ctx.builder.CreateCall(ctx.getFunction("aiml_http_str_managed", i8p, {i8p}), {got});
+                        return ctx.ir_gen->wrap(got);
                     } else if (subMethod == "len") {
                         llvm::Function* fn = ctx.module().getFunction("aiml_http_map_len");
                         if (!fn) fn = llvm::Function::Create(

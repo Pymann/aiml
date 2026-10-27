@@ -1,0 +1,27 @@
+# Requires: library
+- namespace: nsinst.lib
+
+- class:
+    name: Counter
+    members:
+      - [count, i32, 0, { access: public }]
+      - [labels, list<string>, null, { access: public }]
+    methods:
+      - def:
+          name: bump
+          args: [[step, i32]]
+          body:
+            - set: [<.count, { +: [<.count, step] }]
+      - def:
+          name: bump_twice
+          args: [[step, i32]]
+          body:
+            - call: [<.bump, step]
+            - call: [<.bump, step]
+      - def:
+          name: label
+          args: [[text, string]]
+          return: i32
+          body:
+            - call: [<.labels.push, text]
+            - return: [<.labels.len]

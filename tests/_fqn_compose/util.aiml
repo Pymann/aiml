@@ -1,0 +1,9 @@
+# Requires: library
+- namespace: fqncompose.util
+
+- def:
+    name: twice
+    args: [[val, i32]]
+    return: i32
+    body:
+      - return: [{ "*": [val, 2] }]

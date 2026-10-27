@@ -1,3 +1,1 @@
-[2026-10-21 22:04:21,802][_compile_file][INFO]: compiling tests/bundle_socket/listener.aiml
-[2026-10-21 22:04:22,331][_link][INFO]: linking bs_listener
-[2026-10-21 22:04:26,448][_dispatch][INFO]: build finished with errorlevel 0
+tests/bundle_socket/run.sh: line 9: exodus: command not found

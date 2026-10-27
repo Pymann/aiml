@@ -1,4 +1,5 @@
 #pragma once
+#include <stdint.h>
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -67,6 +68,7 @@ int         aiml_io_is_symlink(const char* p);
 char*       aiml_io_read_link(const char* p);                 /* owned rc-string, "" bei Fehler */
 char*       aiml_io_read_file(const char* p);      // malloc'd content, caller frees
 int         aiml_io_write_file(const char* p, const char* content); // 0=ok, -1=error
+int         aiml_io_write_file_buf(const char* p, const void* data, int32_t len); // binary-safe, 0=ok, -1=error
 // Fill a pre-allocated AimlList {i32 size, i32 capacity, void* data} with interned path entries.
 // list_ptr must point to an already-initialized (malloc'd data) GenericList struct.
 // Returns number of entries added, -1 on error.

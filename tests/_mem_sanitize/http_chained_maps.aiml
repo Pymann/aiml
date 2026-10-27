@@ -1,0 +1,37 @@
+# memV3: chained `req.params.get` / `url.get_param.get` / `resp.headers.put` operate on the
+# parser maps; get results are handed out as managed strings (valgrind-clean).
+# Expected exit code: 0
+- def:
+    name: handle_item
+    args: [[req, http_request_handle], [resp, http_response_handle]]
+    body:
+      - decl: [qurl, url]
+      - set: [qurl, req.url]
+      - decl: [color, string, { call: [qurl.get_param.get, "color"] }]
+      - decl: [item, string, { call: [req.params.get, "id"] }]
+      - decl: [nparams, i32, { call: [req.params.len] }]
+      - call: [resp.headers.put, "x-probe", "yes"]
+      - set: [resp.status, 200]
+      - set: [resp.body, "${item}|${color}|${nparams}"]
+      - call: [resp.send]
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [srv, http_server_handle, { call: [http.server, "127.0.0.1", 23313] }]
+      - call: [srv.route, "GET", "/items/:id", handle_item]
+      - decl: [thr, thread_handle, { call: [srv.start_async] }]
+      - call: [time.sleep_ms, 300]
+      - decl: [target, url, { call: [http.parse_url, "http://127.0.0.1:23313/items/7?color=blue"] }]
+      - decl: [answer, http_response_handle, { call: [http.get, target] }]
+      - decl: [text, string, { call: [answer.body] }]
+      - decl: [probe, string, { call: [answer.headers.get, "x-probe"] }]
+      - call: [answer.free]
+      - call: [srv.stop]
+      - if:
+          condition: { or: [{ neq: [text, "7|blue|1"] }, { neq: [probe, "yes"] }] }
+          then:
+            - print: ["[FAIL] ${text} ${probe}"]
+            - return: [1]
+      - print: ["PASS chained http maps"]
+      - return: [0]
