@@ -4532,20 +4532,28 @@ void registerBuiltins(CompilerContext& ctx) {
             ci.name      = "url";
             ci.isBuiltin = true;
             // preLoadBase = false (default): URL handlers load from alloca internally.
-#define URL_GETTER_STR(mName, cFn) \
+// memV3 (spec/61 §4/§5): url parts are libc strings and get_param an AimlHttpMap;
+// hand out managed copies (string / map<string:string> handle) — see
+// aiml_http_str_managed / aiml_http_map_to_handle.  `managed` is the converter
+// (to_string allocates a fresh libc string → adopted and freed).
+#define URL_GETTER_STR(mName, cFn, managed) \
             ci.builtinMethods[mName] = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr*, auto) -> IRValue* { \
                 llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo(); \
                 llvm::Value* ptr = ctx.builder.CreateLoad(i8p, base, "url_ptr"); \
                 llvm::Function* fn = ctx.module().getFunction(cFn); \
                 if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(i8p, {i8p}, false), llvm::Function::ExternalLinkage, cFn, ctx.module()); \
-                return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {ptr})); \
+                llvm::Value* raw = ctx.builder.CreateCall(fn, {ptr}); \
+                const char* conv = managed; \
+                if (ctx.memV3 && conv) \
+                    raw = ctx.builder.CreateCall(ctx.getFunction(conv, i8p, {i8p}), {raw}); \
+                return ctx.ir_gen->wrap(raw); \
             }
-            URL_GETTER_STR("protocol",  "aiml_url_protocol");
-            URL_GETTER_STR("host",      "aiml_url_host");
-            URL_GETTER_STR("path",      "aiml_url_path");
-            URL_GETTER_STR("fragment",  "aiml_url_fragment");
-            URL_GETTER_STR("get_param", "aiml_url_get_param");
-            URL_GETTER_STR("to_string", "aiml_url_to_string");
+            URL_GETTER_STR("protocol",  "aiml_url_protocol",  "aiml_http_str_managed");
+            URL_GETTER_STR("host",      "aiml_url_host",      "aiml_http_str_managed");
+            URL_GETTER_STR("path",      "aiml_url_path",      "aiml_http_str_managed");
+            URL_GETTER_STR("fragment",  "aiml_url_fragment",  "aiml_http_str_managed");
+            URL_GETTER_STR("get_param", "aiml_url_get_param", "aiml_http_map_to_handle");
+            URL_GETTER_STR("to_string", "aiml_url_to_string", "aiml_http_str_adopt");
 #undef URL_GETTER_STR
             ci.builtinMethods["port"] = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr*, auto) -> IRValue* {
                 llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
@@ -5071,12 +5079,26 @@ void registerBuiltins(CompilerContext& ctx) {
             ci.builtinMethods["params"] = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr*, auto) -> IRValue* {
                 llvm::Function* fn = ctx.module().getFunction("aiml_http_req_params");
                 if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getInt8Ty()->getPointerTo(), {ctx.builder.getInt8Ty()->getPointerTo()}, false), llvm::Function::ExternalLinkage, "aiml_http_req_params", ctx.module());
-                return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {base}));
+                llvm::Value* raw = ctx.builder.CreateCall(fn, {base});
+                // memV3: a map<string:string> is a refcounted handle with managed strings —
+                // hand out a copy in that form, not the parser's AimlHttpMap (spec/61 §5).
+                if (ctx.memV3) {
+                    llvm::Type* i8pc = ctx.builder.getInt8Ty()->getPointerTo();
+                    raw = ctx.builder.CreateCall(ctx.getFunction("aiml_http_map_to_handle", i8pc, {i8pc}), {raw});
+                }
+                return ctx.ir_gen->wrap(raw);
             };
             ci.builtinMethods["cookies"] = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr*, auto) -> IRValue* {
                 llvm::Function* fn = ctx.module().getFunction("aiml_http_req_cookies");
                 if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getInt8Ty()->getPointerTo(), {ctx.builder.getInt8Ty()->getPointerTo()}, false), llvm::Function::ExternalLinkage, "aiml_http_req_cookies", ctx.module());
-                return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {base}));
+                llvm::Value* raw = ctx.builder.CreateCall(fn, {base});
+                // memV3: a map<string:string> is a refcounted handle with managed strings —
+                // hand out a copy in that form, not the parser's AimlHttpMap (spec/61 §5).
+                if (ctx.memV3) {
+                    llvm::Type* i8pc = ctx.builder.getInt8Ty()->getPointerTo();
+                    raw = ctx.builder.CreateCall(ctx.getFunction("aiml_http_map_to_handle", i8pc, {i8pc}), {raw});
+                }
+                return ctx.ir_gen->wrap(raw);
             };
             // req.header(name) — method with arg
             ci.builtinMethods["header"] = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {

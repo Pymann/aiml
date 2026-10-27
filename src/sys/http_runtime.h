@@ -213,6 +213,9 @@ void aiml_http_resp_set_body_bytes(void* resp, void* buf);
 char*  aiml_http_req_method(void* req);
 char*  aiml_http_req_path(void* req);
 char*  aiml_http_req_body(void* req);
+void*  aiml_http_map_to_handle(void* src);      /* memV3 map<string:string> handle copy */
+char*  aiml_http_str_managed(const char* s);    /* memV3 managed string copy, null stays null */
+char*  aiml_http_str_adopt(char* s);            /* memV3 managed copy, frees the malloc'd source */
 void*  aiml_http_req_url(void* req);      /* AimlUrl* */
 void*  aiml_http_req_params(void* req);   /* AimlHttpMap* */
 void*  aiml_http_req_cookies(void* req);  /* AimlHttpMap* */

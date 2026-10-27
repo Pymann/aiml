@@ -2228,6 +2228,9 @@ int AIMLCompiler::jitRun() {
     llvm::sys::DynamicLibrary::AddSymbol("aiml_http_req_method",        (void*)(intptr_t)aiml_http_req_method);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_http_req_path",          (void*)(intptr_t)aiml_http_req_path);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_http_req_body",          (void*)(intptr_t)aiml_http_req_body);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_http_map_to_handle",     (void*)(intptr_t)aiml_http_map_to_handle);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_http_str_managed",       (void*)(intptr_t)aiml_http_str_managed);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_http_str_adopt",         (void*)(intptr_t)aiml_http_str_adopt);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_http_req_url",           (void*)(intptr_t)aiml_http_req_url);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_http_req_params",        (void*)(intptr_t)aiml_http_req_params);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_http_req_cookies",       (void*)(intptr_t)aiml_http_req_cookies);
