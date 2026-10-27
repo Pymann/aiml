@@ -50,6 +50,7 @@ typedef struct AimlHttpResponse {
     int8_t       chunked;      /* 1 while chunked transfer active */
     char**       set_cookies;  /* NULL or malloc'd array of full Set-Cookie header values */
     int          n_set_cookies;/* count in set_cookies (0 → none). calloc-zeroed. */
+    char*        req_range;    /* server-side: the request's Range header (or NULL), for body_file */
 } AimlHttpResponse;
 
 /* ─── http_request_handle ─────────────────────────────────────── */
@@ -216,6 +217,7 @@ char*  aiml_http_req_path(void* req);
 char*  aiml_http_req_body(void* req);
 void*  aiml_http_req_body_bytes(void* req); /* fresh AimlBuffer* copy of the raw body */
 void   aiml_http_server_set_max_body(void* srv, int64_t bytes);
+void   aiml_http_resp_set_body_file(void* resp, const char* file_path);
 void*  aiml_http_req_url(void* req);      /* AimlUrl* */
 void*  aiml_http_req_params(void* req);   /* AimlHttpMap* */
 void*  aiml_http_req_cookies(void* req);  /* AimlHttpMap* */

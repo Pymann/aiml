@@ -470,7 +470,7 @@ No own listener — `start`/`stop`/`start_async` are not present.
 | `headers`    | `map<string:string>` | Response headers; provides `put`, `get`, `remove` etc. |
 | `body`       | `string`             | Response body as text |
 | `body_bytes` | `buffer<u8>`         | Response body as bytes |
-| `body_file`  | `path`               | File as body — streamed during `send` (range-request-aware) |
+| `body_file`  | `path`               | File as body — streamed during `send` (sendfile, range-request-aware, ETag); a `content-type` set by the handler is kept, otherwise it is derived from the extension |
 
 **Methods** (6):
 

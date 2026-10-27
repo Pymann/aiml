@@ -5057,6 +5057,14 @@ void registerBuiltins(CompilerContext& ctx) {
                 if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(), {i8p, i8p}, false), llvm::Function::ExternalLinkage, "aiml_http_resp_set_body", ctx.module());
                 ctx.builder.CreateCall(fn, {base, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(newVal))});
             };
+            // resp.body_file = path — streamed (sendfile, Range-aware) on send
+            ci.builtinSetters["body_file"] = [](CompilerContext& ctx, llvm::Value* base, AIML::IRValue* newVal) {
+                llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Function* fn = ctx.getFunction("aiml_http_resp_set_body_file", ctx.builder.getVoidTy(), {i8p, i8p});
+                llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(newVal));
+                if (v->getType() != i8p) v = ctx.builder.CreateBitCast(v, i8p);
+                ctx.builder.CreateCall(fn, {base, v});
+            };
             ctx.classes["http_response_handle"] = std::move(ci);
         }
 
