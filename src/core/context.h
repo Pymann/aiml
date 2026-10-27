@@ -1348,6 +1348,7 @@ namespace AIML {
         if (typeName == "ssh_session") return llvm::Type::getInt8Ty(context)->getPointerTo();     // AimlSshSession* (spec/32_6)
         if (typeName == "ssh_channel") return llvm::Type::getInt8Ty(context)->getPointerTo();     // AimlSshChannel*
         if (typeName == "ssh_test_server") return llvm::Type::getInt8Ty(context)->getPointerTo(); // AimlSshTestServer* (Testbereich)
+        if (typeName == "ldap_handle") return llvm::Type::getInt8Ty(context)->getPointerTo();     // AimlLdap* (spec/67)
         if (typeName == "audio_handle") return llvm::Type::getInt8Ty(context)->getPointerTo();       // V1 sentinel (asset registry)
         if (typeName == "prefab_instance") return llvm::Type::getInt8Ty(context)->getPointerTo();  // AimlPrefabInstance*
         if (typeName == "connector") return llvm::Type::getInt8Ty(context)->getPointerTo();      // AimlConnector*
