@@ -1,0 +1,27 @@
+# Expected exit code: 1
+# spec/49 §6.7: helpers that take a response plus other args are still grouped
+# (only the exact route-handler signature is exempt).
+
+- def:
+    name: reply_ok
+    args: [[resp, http_response_handle], [text, string]]
+    body:
+      - set: [resp.body, text]
+
+- def:
+    name: reply_err
+    args: [[resp, http_response_handle], [code, i32]]
+    body:
+      - set: [resp.status, code]
+
+- def:
+    name: reply_json
+    args: [[resp, http_response_handle], [payload, string], [code, i32]]
+    body:
+      - set: [resp.body, payload]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - return: [0]
