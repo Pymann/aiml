@@ -51,6 +51,9 @@ typedef struct AimlHttpResponse {
     char**       set_cookies;  /* NULL or malloc'd array of full Set-Cookie header values */
     int          n_set_cookies;/* count in set_cookies (0 → none). calloc-zeroed. */
     char*        req_range;    /* server-side: the request's Range header (or NULL), for body_file */
+    /* client-side: the received body, binary-safe (`body` stops at the first NUL) */
+    char*        raw_body;     /* malloc'd, NULL when empty */
+    int64_t      raw_len;      /* exact byte length of raw_body */
 } AimlHttpResponse;
 
 /* ─── http_request_handle ─────────────────────────────────────── */
@@ -78,6 +81,7 @@ typedef struct AimlHttpClient {
     int8_t       stream;       /* streaming mode */
     char*        method;       /* set internally */
     AimlUrl*     url;          /* set internally */
+    char*        body_file;    /* request body streamed from this file (binary-safe) or NULL */
 } AimlHttpClient;
 
 /* ─── Route handler function pointer ─────────────────────────── */
@@ -150,6 +154,8 @@ int8_t  aiml_http_resp_ok(void* resp);
 void*   aiml_http_resp_headers(void* resp);   /* AimlHttpMap* */
 char*   aiml_http_resp_body(void* resp);
 void    aiml_http_resp_free(void* resp);
+int64_t aiml_http_resp_body_len(void* resp);
+int32_t aiml_http_resp_save_to(void* resp, const char* path);
 
 /* ══════════════════════════════════════════════════════════════
  * http.server / http.server_tls
@@ -229,6 +235,7 @@ void*  aiml_http_req_cookies(void* req);  /* AimlHttpMap* */
  * http_client_handle setters (member writes)
  * ════════════════════════════════════════════════════════════ */
 void aiml_http_client_set_body(void* client, const char* body);
+void aiml_http_client_set_body_file(void* client, const char* path);
 void aiml_http_client_set_timeout(void* client, int32_t timeout_ms);
 void aiml_http_client_set_stream(void* client, int8_t stream);
 void* aiml_http_client_get_headers(void* client);   /* AimlHttpMap* */
