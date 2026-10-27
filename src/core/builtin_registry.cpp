@@ -4544,7 +4544,7 @@ void registerBuiltins(CompilerContext& ctx) {
                 if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(i8p, {i8p}, false), llvm::Function::ExternalLinkage, cFn, ctx.module()); \
                 llvm::Value* raw = ctx.builder.CreateCall(fn, {ptr}); \
                 const char* conv = managed; \
-                if (ctx.memV3 && conv) \
+                if (ctx.memV3 && conv && !ctx.httpMapRawView) \
                     raw = ctx.builder.CreateCall(ctx.getFunction(conv, i8p, {i8p}), {raw}); \
                 return ctx.ir_gen->wrap(raw); \
             }
@@ -5082,7 +5082,7 @@ void registerBuiltins(CompilerContext& ctx) {
                 llvm::Value* raw = ctx.builder.CreateCall(fn, {base});
                 // memV3: a map<string:string> is a refcounted handle with managed strings —
                 // hand out a copy in that form, not the parser's AimlHttpMap (spec/61 §5).
-                if (ctx.memV3) {
+                if (ctx.memV3 && !ctx.httpMapRawView) {
                     llvm::Type* i8pc = ctx.builder.getInt8Ty()->getPointerTo();
                     raw = ctx.builder.CreateCall(ctx.getFunction("aiml_http_map_to_handle", i8pc, {i8pc}), {raw});
                 }
@@ -5094,7 +5094,7 @@ void registerBuiltins(CompilerContext& ctx) {
                 llvm::Value* raw = ctx.builder.CreateCall(fn, {base});
                 // memV3: a map<string:string> is a refcounted handle with managed strings —
                 // hand out a copy in that form, not the parser's AimlHttpMap (spec/61 §5).
-                if (ctx.memV3) {
+                if (ctx.memV3 && !ctx.httpMapRawView) {
                     llvm::Type* i8pc = ctx.builder.getInt8Ty()->getPointerTo();
                     raw = ctx.builder.CreateCall(ctx.getFunction("aiml_http_map_to_handle", i8pc, {i8pc}), {raw});
                 }
