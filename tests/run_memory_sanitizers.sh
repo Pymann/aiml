@@ -225,6 +225,10 @@ probe "identity: ldap escaping + offline handle (error string, empty lists, doub
     "$AIML_BIN" -r tests/_mem_sanitize/identity_ldap_offline.aiml
 probe "identity: saml.verify_response maps (ok + error) and AuthnRequest URLs (spec/67 §4)" "sml" \
     "$AIML_BIN" -r tests/_mem_sanitize/identity_saml.aiml
+probe "http server: chunked request bodies, spooling to temp files, HEAD without body, connection: close, TLS sniff" "hcs" \
+    "$AIML_BIN" -r tests/test_http_chunked_spool.aiml
+probe "io.append_from: streams one file onto another, refuses self-append" "iaf" \
+    "$AIML_BIN" -r tests/test_io_append_from.aiml
 
 # spec/61 call-temporary matrix: same fixtures as the semantic and AOT leak gates.
 source tests/lifetime/call_temporaries/cases.sh

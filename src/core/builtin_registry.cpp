@@ -2924,6 +2924,17 @@ void registerBuiltins(CompilerContext& ctx) {
         // content may be a string (written up to the terminating NUL) or a
         // buffer<u8> (written binary-safe with its exact length), following
         // the generic-entry-point rule used by hash.<algo>.
+        // io.append_from(dst, src) -> i64: append file src to file dst (binary, streamed)
+        io.builtinFuncs["append_from"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Type* i64 = ctx.builder.getInt64Ty();
+            if (args.size() < 2) return ctx.ir_gen->wrap(llvm::ConstantInt::get(i64, -1, true));
+            llvm::Function* f = ctx.getFunction("aiml_io_append_from", i64, {i8p, i8p});
+            llvm::Value* d = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            llvm::Value* src = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]));
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {d, src}));
+        };
+
         io.builtinFuncs["write_file"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
             llvm::Type* i8p  = ctx.builder.getInt8Ty()->getPointerTo();
             llvm::Type* i32  = ctx.builder.getInt32Ty();
@@ -4964,6 +4975,24 @@ void registerBuiltins(CompilerContext& ctx) {
                 ctx.builder.CreateCall(fn, {base, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a0))});
                 return nullptr;
             };
+            // srv.set_spool(dir, threshold, max) — bodies above `threshold` bytes go to a
+            // temp file in `dir` (req.body_path) instead of memory; `max` caps them.
+            ci.builtinMethods["set_spool"] = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+                llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Type* i64 = ctx.builder.getInt64Ty();
+                llvm::Function* fn = ctx.getFunction("aiml_http_server_set_spool", ctx.builder.getVoidTy(), {i8p, i8p, i64, i64});
+                if (!call || call->args.size() < 2) return nullptr;
+                auto argI64 = [&](size_t i) -> llvm::Value* {
+                    if (call->args.size() <= i) return llvm::ConstantInt::get(i64, 0);
+                    llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[i].get())));
+                    if (v->getType()->isIntegerTy() && !v->getType()->isIntegerTy(64)) v = ctx.builder.CreateSExt(v, i64);
+                    return v;
+                };
+                llvm::Value* dir = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+                if (dir->getType() != i8p) dir = ctx.builder.CreateBitCast(dir, i8p);
+                ctx.builder.CreateCall(fn, {base, dir, argI64(1), argI64(2)});
+                return nullptr;
+            };
             // srv.set_max_body(bytes) — request body cap (default 8 MiB, max ~2 GiB)
             ci.builtinMethods["set_max_body"] = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
                 llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
@@ -5403,6 +5432,19 @@ void registerBuiltins(CompilerContext& ctx) {
                 ctx.builder.CreateBr(doneBB);
                 ctx.builder.SetInsertPoint(doneBB);
                 return ctx.ir_gen->wrap(out);
+            };
+            // req.body_path — temp file of a spooled body (srv.set_spool) or null.
+            ci.builtinMethods["body_path"] = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr*, auto) -> IRValue* {
+                llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Value* raw = ctx.builder.CreateCall(ctx.getFunction("aiml_http_req_body_path", i8p, {i8p}), {base});
+                // memV3: a managed string (the runtime returns a malloc'd copy → adopt it).
+                if (ctx.memV3) raw = ctx.builder.CreateCall(ctx.getFunction("aiml_http_str_adopt", i8p, {i8p}), {raw});
+                return ctx.ir_gen->wrap(raw);
+            };
+            // req.body_len — exact body length in bytes (i64; in memory or spooled).
+            ci.builtinMethods["body_len"] = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr*, auto) -> IRValue* {
+                llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(ctx.getFunction("aiml_http_req_body_len", ctx.builder.getInt64Ty(), {i8p}), {base}));
             };
             // req.client_ip() — trusted socket peer IP (ignores X-Forwarded-For)
             ci.builtinMethods["client_ip"] = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr*, auto) -> IRValue* {

@@ -631,6 +631,12 @@ struct AimlHttpServer {
     pthread_mutex_t lock    = PTHREAD_MUTEX_INITIALIZER;
     int          read_timeout_secs = 15; // per-recv + total request-read deadline (slowloris)
     long         max_body_bytes    = 8L * 1024 * 1024; // request body cap (srv.set_max_body)
+    // Body spooling (srv.set_spool): bodies larger than spool_threshold — and
+    // chunked bodies once they grow past it — are written to a temp file in
+    // spool_dir instead of memory; spool_max caps them (0 = max_body_bytes).
+    std::string  spool_dir;
+    long long    spool_threshold   = 0;
+    long long    spool_max         = 0;
 
     // ── Abuse resistance (spec/32_2 §3.12) ────────────────────────────────
     int              max_conns = 0;          // 0 = unlimited concurrent connections
@@ -677,7 +683,61 @@ static bool match_pattern(const std::string& pattern, const std::string& path,
 }
 
 // Parse HTTP/1.1 request from fd/ssl
-static AimlHttpRequest* parse_http_request(int fd, void* ssl, int timeout_secs, long max_body_bytes) {
+// ── Request body sink: memory, spilling to a temp file (srv.set_spool) ─────
+struct BodySink {
+    std::string mem;
+    FILE*       file = nullptr;
+    std::string path;
+    long long   total = 0;
+    const char* spool_dir = nullptr;
+    long long   threshold = 0;     // 0 = never spool
+    bool        failed = false;
+
+    bool spill() {
+        if (file || !spool_dir || !*spool_dir) return file != nullptr;
+        std::string tmpl = std::string(spool_dir) + "/aiml-body-XXXXXX";
+        std::vector<char> buf(tmpl.begin(), tmpl.end()); buf.push_back('\0');
+        int tfd = mkstemp(buf.data());
+        if (tfd < 0) { failed = true; return false; }
+        file = fdopen(tfd, "wb");
+        if (!file) { ::close(tfd); unlink(buf.data()); failed = true; return false; }
+        path = buf.data();
+        if (!mem.empty() && fwrite(mem.data(), 1, mem.size(), file) != mem.size()) { failed = true; return false; }
+        mem.clear(); mem.shrink_to_fit();
+        return true;
+    }
+    bool add(const char* data, size_t n) {
+        if (n == 0) return true;
+        if (!file && threshold > 0 && total + (long long)n > threshold && !spill()) return false;
+        if (file) { if (fwrite(data, 1, n, file) != n) { failed = true; return false; } }
+        else mem.append(data, n);
+        total += (long long)n;
+        return true;
+    }
+    void discard() {
+        if (file) { fclose(file); file = nullptr; }
+        if (!path.empty()) { unlink(path.c_str()); path.clear(); }
+    }
+};
+
+// Read exactly `n` bytes into the sink in bounded pieces (n may exceed INT_MAX).
+static bool recv_into_sink(int fd, void* ssl, BodySink& sink, long long n, time_t deadline) {
+    char buf[64 * 1024];
+    while (n > 0) {
+        if (time(nullptr) > deadline) return false;
+        int want = (int)(n < (long long)sizeof(buf) ? n : (long long)sizeof(buf));
+        int got = recv_n(fd, ssl, buf, want);
+        if (got <= 0) return false;
+        if (!sink.add(buf, (size_t)got)) return false;
+        n -= got;
+        if (got < want) return false;
+    }
+    return true;
+}
+
+static AimlHttpRequest* parse_http_request(int fd, void* ssl, int timeout_secs, long max_body_bytes,
+                                          const char* spool_dir = nullptr, long long spool_threshold = 0,
+                                          long long spool_max = 0) {
     AimlHttpRequest* req = static_cast<AimlHttpRequest*>(calloc(1, sizeof(AimlHttpRequest)));
     req->params      = aiml_http_map_new();
     req->req_headers = aiml_http_map_new();
@@ -687,6 +747,18 @@ static AimlHttpRequest* parse_http_request(int fd, void* ssl, int timeout_secs, 
     const time_t deadline = time(nullptr) + (timeout_secs > 0 ? timeout_secs : 15);
 
     char line[8192];
+    // A TLS ClientHello (record type 0x16) on a plain-HTTP listener: close at
+    // once instead of waiting for a request line that never comes.  Clients
+    // that probe https first (Go: docker, skopeo, podman) then fall back to
+    // http immediately instead of after their 10 s TLS handshake timeout.
+    if (!ssl) {
+        unsigned char first = 0;
+        if (::recv(fd, &first, 1, MSG_PEEK) == 1 && first == 0x16) {
+            req->method = xstrdup("GET"); req->path = xstrdup("/");
+            req->reject_status = -1;                   // close without a response
+            return req;
+        }
+    }
     // Request line
     int n = recv_line(fd, ssl, line, sizeof(line));
     if (n <= 0) {
@@ -742,9 +814,14 @@ static AimlHttpRequest* parse_http_request(int fd, void* ssl, int timeout_secs, 
     constexpr size_t MAX_HEADER_BYTES = 64 * 1024;   // total header bytes
     // Request body cap: server-configurable via srv.set_max_body (default 8 MiB).
     const long       MAX_BODY_BYTES   = max_body_bytes > 0 ? max_body_bytes : 8L * 1024 * 1024;
+    // With spooling the cap is spool_max (bodies leave memory), else the memory cap.
+    const bool       spooling   = spool_dir && *spool_dir && spool_threshold > 0;
+    const long long  BODY_CAP   = (spooling && spool_max > 0) ? spool_max : (long long)MAX_BODY_BYTES;
+    bool             chunked_te = false;
+    bool             have_cl    = false;
 
     // Headers
-    long   content_length = 0;
+    long long content_length = 0;
     int    header_count   = 0;
     size_t header_bytes   = 0;
     while (true) {
@@ -772,17 +849,26 @@ static AimlHttpRequest* parse_http_request(int fd, void* ssl, int timeout_secs, 
                 // Validate: a single, well-formed, non-negative integer within cap.
                 errno = 0;
                 char* endp = nullptr;
-                long cl = strtol(v, &endp, 10);
+                long long cl = strtoll(v, &endp, 10);
                 while (endp && (*endp == ' ' || *endp == '\t')) ++endp;
-                if (errno != 0 || !endp || *endp != '\0' || cl < 0) {
-                    req->reject_status = 400;          // Bad Request (malformed length)
+                if (errno != 0 || !endp || *endp != '\0' || cl < 0 || have_cl) {
+                    req->reject_status = 400;          // Bad Request (malformed / repeated length)
                     return req;
                 }
-                if (cl > MAX_BODY_BYTES) {
+                if (cl > BODY_CAP) {
                     req->reject_status = 413;          // Payload Too Large
                     return req;
                 }
-                content_length = cl;
+                content_length = (long)cl;
+                have_cl = true;
+            }
+            if (lk == "transfer-encoding") {
+                // Only "chunked" (case-insensitive) is understood; anything else
+                // (gzip, chained codings) is refused rather than misread.
+                std::string te = str_tolower(v);
+                while (!te.empty() && (te.back() == ' ' || te.back() == '\t')) te.pop_back();
+                if (te != "chunked") { req->reject_status = 501; return req; }
+                chunked_te = true;
             }
             if (lk == "cookie") {
                 // Parse "key=val; key2=val2"
@@ -802,17 +888,73 @@ static AimlHttpRequest* parse_http_request(int fd, void* ssl, int timeout_secs, 
         }
     }
 
-    // Body (content_length already validated + capped to MAX_BODY_BYTES above).
-    // Stored binary-safe: `body` keeps a trailing NUL for string access, and
-    // `body_len` holds the exact byte count for req.body_bytes.
-    if (content_length > 0) {
-        char* raw = static_cast<char*>(malloc(static_cast<size_t>(content_length) + 1));
+    // Content-Length together with Transfer-Encoding is the classic request-
+    // smuggling ambiguity (RFC 9112 §6.1): refuse instead of picking one.
+    if (chunked_te && have_cl) { req->reject_status = 400; return req; }
+
+    // Body.  Stored binary-safe: in memory `body` keeps a trailing NUL for
+    // string access and `body_len` holds the exact byte count (req.body_bytes);
+    // spooled bodies (srv.set_spool) live in a temp file (`body_path`).
+    BodySink sink;
+    sink.spool_dir = spooling ? spool_dir : nullptr;
+    sink.threshold = spooling ? spool_threshold : 0;
+    if (chunked_te) {
+        // chunk = size [;ext] CRLF data CRLF ; last-chunk = 0 CRLF ; trailers ; CRLF
+        while (true) {
+            if (time(nullptr) > deadline) { sink.discard(); req->reject_status = 408; return req; }
+            n = recv_line(fd, ssl, line, sizeof(line));
+            if (n <= 0) { sink.discard(); req->reject_status = 400; return req; }
+            while (n > 0 && (line[n-1] == '\r' || line[n-1] == '\n')) line[--n] = '\0';
+            char* semi = strchr(line, ';');
+            if (semi) *semi = '\0';
+            if (!line[0]) { sink.discard(); req->reject_status = 400; return req; }
+            long long size = 0;
+            for (const char* q = line; *q; ++q) {
+                int d = (*q >= '0' && *q <= '9') ? *q - '0'
+                      : (*q >= 'a' && *q <= 'f') ? *q - 'a' + 10
+                      : (*q >= 'A' && *q <= 'F') ? *q - 'A' + 10 : -1;
+                if (d < 0 || size > (BODY_CAP >> 4)) { sink.discard(); req->reject_status = d < 0 ? 400 : 413; return req; }
+                size = size * 16 + d;
+            }
+            if (size == 0) break;
+            if (sink.total + size > BODY_CAP) { sink.discard(); req->reject_status = 413; return req; }
+            if (!recv_into_sink(fd, ssl, sink, size, deadline)) {
+                sink.discard(); req->reject_status = sink.failed ? 507 : 400; return req;
+            }
+            char crlf[2];
+            if (recv_n(fd, ssl, crlf, 2) != 2 || crlf[0] != '\r' || crlf[1] != '\n') {
+                sink.discard(); req->reject_status = 400; return req;
+            }
+        }
+        // Trailer section: header lines up to the terminating blank line (ignored).
+        for (int t = 0; ; ++t) {
+            n = recv_line(fd, ssl, line, sizeof(line));
+            if (n <= 0 || t > MAX_HEADER_COUNT) { sink.discard(); req->reject_status = 400; return req; }
+            while (n > 0 && (line[n-1] == '\r' || line[n-1] == '\n')) line[--n] = '\0';
+            if (n == 0) break;
+        }
+    } else if (content_length > 0) {
+        if (spooling && content_length > spool_threshold && !sink.spill()) {
+            sink.discard(); req->reject_status = 507; return req;
+        }
+        if (!recv_into_sink(fd, ssl, sink, content_length, deadline)) {
+            sink.discard(); req->reject_status = sink.failed ? 507 : 400; return req;
+        }
+    }
+
+    if (sink.file) {
+        if (fclose(sink.file) != 0) { sink.file = nullptr; sink.discard(); req->reject_status = 507; return req; }
+        sink.file = nullptr;
+        req->body_path = xstrdup(sink.path.c_str());
+        req->body_len  = sink.total;
+    } else if (sink.total > 0) {
+        if (sink.total > (long long)MAX_BODY_BYTES) { req->reject_status = 413; return req; }
+        char* raw = static_cast<char*>(malloc(static_cast<size_t>(sink.total) + 1));
         if (!raw) { req->reject_status = 413; return req; }
-        int got = recv_n(fd, ssl, raw, static_cast<int>(content_length));
-        if (got < 0) got = 0;
-        raw[got] = '\0';
+        memcpy(raw, sink.mem.data(), static_cast<size_t>(sink.total));
+        raw[sink.total] = '\0';
         req->body     = raw;
-        req->body_len = got;
+        req->body_len = sink.total;
     }
 
     return req;
@@ -835,6 +977,8 @@ static void free_request(AimlHttpRequest* req) {
     aiml_http_map_free(req->req_headers);
     aiml_http_map_free(req->cookies);
     free(req->peer_ip);
+    // A spooled body the handler did not move away is removed with the request.
+    if (req->body_path) { unlink(req->body_path); free(req->body_path); }
     free(req);
 }
 
@@ -845,6 +989,30 @@ static void free_response(AimlHttpResponse* resp) {
     for (int i = 0; i < resp->n_set_cookies; ++i) free(resp->set_cookies[i]);
     free(resp->set_cookies);
     free(resp);
+}
+
+// Standard reason phrase for the status line (RFC 9110 §15); "" for unknown codes.
+static const char* http_reason(int status) {
+    switch (status) {
+        case 200: return "OK";             case 201: return "Created";
+        case 202: return "Accepted";       case 204: return "No Content";
+        case 206: return "Partial Content";
+        case 301: return "Moved Permanently"; case 302: return "Found";
+        case 303: return "See Other";      case 304: return "Not Modified";
+        case 307: return "Temporary Redirect"; case 308: return "Permanent Redirect";
+        case 400: return "Bad Request";    case 401: return "Unauthorized";
+        case 403: return "Forbidden";      case 404: return "Not Found";
+        case 405: return "Method Not Allowed"; case 408: return "Request Timeout";
+        case 409: return "Conflict";       case 411: return "Length Required";
+        case 413: return "Content Too Large"; case 414: return "URI Too Long";
+        case 415: return "Unsupported Media Type"; case 416: return "Range Not Satisfiable";
+        case 422: return "Unprocessable Content"; case 429: return "Too Many Requests";
+        case 431: return "Request Header Fields Too Large";
+        case 500: return "Internal Server Error"; case 501: return "Not Implemented";
+        case 502: return "Bad Gateway";    case 503: return "Service Unavailable";
+        case 507: return "Insufficient Storage";
+        default:  return "";
+    }
 }
 
 // Format and send a full HTTP/1.1 response
@@ -858,7 +1026,9 @@ static void send_response(AimlHttpResponse* resp) {
     // Status line
     std::string out = "HTTP/1.1 ";
     out += std::to_string(resp->status);
-    out += " \r\n";
+    out += " ";
+    out += http_reason(resp->status);
+    out += "\r\n";
 
     // Default headers
     if (!aiml_http_map_get(resp->headers, "content-type"))
@@ -866,7 +1036,7 @@ static void send_response(AimlHttpResponse* resp) {
 
     // body_file: read and serve
     std::string file_body;
-    if (resp->body_file && !resp->body) {
+    if (resp->body_file && !resp->body && !resp->head_only) {
         FILE* f = fopen(resp->body_file, "rb");
         if (f) {
             fseek(f, 0, SEEK_END); long sz = ftell(f); rewind(f);
@@ -882,6 +1052,10 @@ static void send_response(AimlHttpResponse* resp) {
     char cl[32];
     snprintf(cl, sizeof(cl), "%zu", body_size);
     aiml_http_map_put(resp->headers, "content-length", cl);
+    // The server closes every connection after one response (no keep-alive);
+    // say so, or HTTP/1.1 clients (Go's net/http) send the next request on
+    // this connection and read EOF instead of a response.
+    aiml_http_map_put(resp->headers, "connection", "close");
 
     // User headers
     for (int i = 0; i < resp->headers->capacity; ++i) {
@@ -898,7 +1072,8 @@ static void send_response(AimlHttpResponse* resp) {
     out += "\r\n";
 
     send_all_fd(fd, ssl, out.c_str(), static_cast<int>(out.size()));
-    if (body_ptr && body_size > 0)
+    // HEAD (RFC 9110 §9.3.2): same headers, including Content-Length, no body.
+    if (body_ptr && body_size > 0 && !resp->head_only)
         send_all_fd(fd, ssl, body_ptr, static_cast<int>(body_size));
 }
 
@@ -1255,8 +1430,7 @@ static void serve_file(AimlHttpResponse* resp,
     }
 
     // Build + send the status line + headers.
-    const char* reason = resp->status == 206 ? "Partial Content"
-                       : resp->status == 416 ? "Range Not Satisfiable" : "OK";
+    const char* reason = http_reason(resp->status);
     std::string head = "HTTP/1.1 ";
     head += std::to_string(resp->status); head += " "; head += reason; head += "\r\n";
     for (int i = 0; i < resp->headers->capacity; ++i) {
@@ -1269,7 +1443,7 @@ static void serve_file(AimlHttpResponse* resp,
     head += "\r\n";
     send_all_fd(fd, ssl, head.c_str(), static_cast<int>(head.size()));
 
-    if (unsatisfiable) { ::close(ffd); return; }
+    if (unsatisfiable || resp->head_only) { ::close(ffd); return; }
 
     // Stream the (possibly ranged) body. sendfile() needs a non-SSL fd; for
     // TLS routes we fall back to a read+SSL_write loop with a small buffer.
@@ -1418,7 +1592,8 @@ static void* handle_connection(void* arg) {
         }
     }
 
-    AimlHttpRequest* req = parse_http_request(fd, ssl, to_secs, srv->max_body_bytes);
+    AimlHttpRequest* req = parse_http_request(fd, ssl, to_secs, srv->max_body_bytes,
+                                              srv->spool_dir.c_str(), srv->spool_threshold, srv->spool_max);
 
     // Record the trusted socket peer IP (dotted) so req.client_ip() never has to
     // trust a spoofable X-Forwarded-For header. struct in_addr wants network order.
@@ -1427,6 +1602,13 @@ static void* handle_connection(void* arg) {
         req->peer_ip = xstrdup(inet_ntoa(ina));
     }
 
+    // TLS on the plain listener (see parse_http_request): just close.
+    if (req->reject_status == -1) {
+        if (ssl) { SSL_shutdown(ssl); SSL_free(ssl); }
+        ::close(fd);
+        free_request(req);
+        return nullptr;
+    }
     // Parser limit hit → send a clean protocol error and skip dispatch entirely.
     if (req->reject_status != 0) {
         AimlHttpResponse* er = static_cast<AimlHttpResponse*>(calloc(1, sizeof(AimlHttpResponse)));
@@ -1446,6 +1628,8 @@ static void* handle_connection(void* arg) {
                         : req->reject_status == 431 ? "Request Header Fields Too Large"
                         : req->reject_status == 414 ? "URI Too Long"
                         : req->reject_status == 408 ? "Request Timeout"
+                        : req->reject_status == 501 ? "Not Implemented"
+                        : req->reject_status == 507 ? "Insufficient Storage"
                         : "Bad Request";
         er->body = xstrdup(msg);
         send_response(er);
@@ -1477,6 +1661,7 @@ static void* handle_connection(void* arg) {
     resp->ssl     = ssl;
     if (const char* rng = aiml_http_map_get(req->req_headers, "range"))
         resp->req_range = xstrdup(rng);
+    resp->head_only = (req->method && strcmp(req->method, "HEAD") == 0) ? 1 : 0;
 
     // Apply default server headers
     if (srv->default_headers) {
@@ -1719,6 +1904,19 @@ extern "C" void aiml_http_server_set_max_body(void* srv_ptr, int64_t bytes) {
     if (!s || bytes <= 0) return;
     const int64_t cap = static_cast<int64_t>(INT32_MAX) - 1;
     s->max_body_bytes = static_cast<long>(bytes > cap ? cap : bytes);
+}
+
+// Spool request bodies above `threshold` bytes (and chunked bodies once they
+// grow past it) to temp files in `dir`; `max_bytes` caps spooled bodies
+// (<= 0 keeps the memory cap from set_max_body).  threshold <= 0 or an empty
+// dir turns spooling off.
+extern "C" void aiml_http_server_set_spool(void* srv_ptr, const char* dir,
+                                           int64_t threshold, int64_t max_bytes) {
+    AimlHttpServer* s = static_cast<AimlHttpServer*>(srv_ptr);
+    if (!s) return;
+    s->spool_dir       = dir ? dir : "";
+    s->spool_threshold = threshold > 0 ? threshold : 0;
+    s->spool_max       = max_bytes > 0 ? max_bytes : 0;
 }
 
 // Cap concurrent handler threads. n <= 0 → unlimited. Over the cap, new
@@ -1994,6 +2192,20 @@ extern "C" char* aiml_http_req_path(void* req) {
     return aiml_str_dup(v ? v : "");
 }
 
+// req.body_path — temp file of a spooled body (srv.set_spool), or NULL when the
+// body is in memory.  The file is removed after the handler returns unless the
+// handler moved it (io.rename) — that is how a large upload is kept.
+extern "C" char* aiml_http_req_body_path(void* req) {
+    AimlHttpRequest* r = static_cast<AimlHttpRequest*>(req);
+    return (r && r->body_path) ? xstrdup(r->body_path) : nullptr;
+}
+
+// req.body_len — exact body length in bytes (in memory or spooled).
+extern "C" int64_t aiml_http_req_body_len(void* req) {
+    AimlHttpRequest* r = static_cast<AimlHttpRequest*>(req);
+    return r ? r->body_len : 0;
+}
+
 extern "C" char* aiml_http_req_body(void* req) {
     const char* v = req ? static_cast<AimlHttpRequest*>(req)->body : nullptr;
     return aiml_str_dup(v ? v : "");
@@ -2007,12 +2219,24 @@ extern "C" void* aiml_http_req_body_bytes(void* req) {
     struct AimlBuf { int32_t sz, cap, rIdx, wIdx; char* data; };
     AimlHttpRequest* r = static_cast<AimlHttpRequest*>(req);
     int64_t len = (r && r->body) ? r->body_len : 0;
+    // Spooled body: load the file (the caller asked for bytes in memory).
+    std::string spooled;
+    if (r && !r->body && r->body_path && r->body_len > 0 && r->body_len < INT32_MAX - 1) {
+        FILE* f = fopen(r->body_path, "rb");
+        if (f) {
+            spooled.resize(static_cast<size_t>(r->body_len));
+            size_t got = fread(&spooled[0], 1, spooled.size(), f);
+            fclose(f);
+            spooled.resize(got);
+            len = static_cast<int64_t>(got);
+        }
+    }
     if (len < 0 || len > INT32_MAX - 1) len = 0;
     AimlBuf* b = static_cast<AimlBuf*>(calloc(1, sizeof(AimlBuf)));
     if (!b) return nullptr;
     b->data = static_cast<char*>(malloc(static_cast<size_t>(len) + 1));
     if (!b->data) { free(b); return nullptr; }
-    if (len > 0) memcpy(b->data, r->body, static_cast<size_t>(len));
+    if (len > 0) memcpy(b->data, spooled.empty() ? r->body : spooled.data(), static_cast<size_t>(len));
     b->data[len] = '\0';
     b->sz   = static_cast<int32_t>(len);
     b->cap  = static_cast<int32_t>(len);

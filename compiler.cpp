@@ -2083,6 +2083,7 @@ int AIMLCompiler::jitRun(int argc, char** argv) {
     llvm::sys::DynamicLibrary::AddSymbol("aiml_saml_verify_response", (void*)(intptr_t)aiml_saml_verify_response);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_saml_set_clock_skew", (void*)(intptr_t)aiml_saml_set_clock_skew);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_io_write_file_buf", (void*)(intptr_t)aiml_io_write_file_buf);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_io_append_from",    (void*)(intptr_t)aiml_io_append_from);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_io_list_dir_fill",  (void*)(intptr_t)aiml_io_list_dir_fill);
 
     // String builtins (lower, trim, replace, split)
@@ -2269,6 +2270,9 @@ int AIMLCompiler::jitRun(int argc, char** argv) {
     llvm::sys::DynamicLibrary::AddSymbol("aiml_http_req_method",        (void*)(intptr_t)aiml_http_req_method);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_http_req_path",          (void*)(intptr_t)aiml_http_req_path);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_http_req_body",          (void*)(intptr_t)aiml_http_req_body);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_http_req_body_path",     (void*)(intptr_t)aiml_http_req_body_path);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_http_req_body_len",      (void*)(intptr_t)aiml_http_req_body_len);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_http_server_set_spool",  (void*)(intptr_t)aiml_http_server_set_spool);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_http_req_body_bytes",    (void*)(intptr_t)aiml_http_req_body_bytes);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_http_server_set_max_body", (void*)(intptr_t)aiml_http_server_set_max_body);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_http_map_to_handle",     (void*)(intptr_t)aiml_http_map_to_handle);

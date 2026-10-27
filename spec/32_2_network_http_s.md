@@ -417,6 +417,7 @@ null zurueck, und ein korrektes `- set: [body, req.body]` im GET-Handler starb m
 | `require_client_cert` | `ca_path: string`                             | `i32`               | Enable mTLS: require + verify a client cert against the CA bundle PEM; `0` on success, `-1` on error (TLS server only) — see §3.11 |
 | `set_max_connections` | `n: i32`                                      | —                   | Cap concurrent handler threads (`0` = unlimited); excess connections get `503` and close — see §3.12 |
 | `set_max_body` | `bytes: i64` | — | Request body cap in bytes (default 8 MiB, clamped to ~2 GiB); larger bodies get `413` — see §3.10 |
+| `set_spool` | `dir: string, threshold: i64, max: i64` | — | Bodies above `threshold` bytes go to a temp file in `dir` (`req.body_path`) instead of memory; `max` caps them (0 = `set_max_body` cap) — see §3.10a |
 | `set_rate_limit`      | `max: i32, window_secs: i32`                  | —                   | Per-IP fixed-window limit; excess connections get `429` and close (`max <= 0` disables) — see §3.12 |
 
 **Routing rules:**
@@ -450,7 +451,9 @@ No own listener — `start`/`stop`/`start_async` are not present.
 | `method`     | `string`             | `"GET"`, `"POST"`, … |
 | `path`       | `string`             | Path component of the URL, e.g. `"/api/users"` |
 | `body`       | `string`             | Request body as string |
-| `body_bytes` | `buffer<u8>`         | Request body as buffer |
+| `body_bytes` | `buffer<u8>`         | Request body as buffer (a spooled body is loaded from its file) |
+| `body_path`  | `string`             | Temp file of a spooled body (`srv.set_spool`), else null — removed after the handler unless moved (`io.rename`) |
+| `body_len`   | `i64`                | Exact body length in bytes (in memory or spooled) |
 
 **Methods** (with argument):
 
@@ -804,6 +807,37 @@ Opt-in because e.g. `X-Frame-Options: DENY` breaks legitimate framing and HSTS i
 See `tests/test_http_hardening.aiml` (413/400/431/408), `tests/test_http_traversal.aiml`
 (path traversal), `tests/test_http_secure_headers.aiml` (headers on 200 + errors),
 `tests/test_http_tls_handshake_stall.aiml` (silent client does not block HTTPS).
+
+## 3.10a Request bodies: chunked, spooled, HEAD; connection handling
+
+- **Transfer-Encoding: chunked** request bodies are decoded (chunk extensions
+  and trailers ignored) under the same cap and read deadline as Content-Length
+  bodies.  `Content-Length` **and** `Transfer-Encoding` together are refused
+  with `400` (request-smuggling ambiguity, RFC 9112 §6.1); any coding other than
+  `chunked` gets `501`; a malformed chunk size gets `400`.
+- **Spooling** (`srv.set_spool(dir, threshold, max)`): a body larger than
+  `threshold` — or a chunked body once it grows past it — is written to a temp
+  file in `dir` while it is read, never held in memory.  The handler sees
+  `req.body_path` (and `req.body_len`); `req.body` is null.  Keep the upload by
+  moving the file (`io.rename`), otherwise it is deleted when the request ends.
+  `max` caps spooled bodies (`413` above it); a write error gives `507`.
+- **HEAD** requests get the same status and headers as GET — including the
+  `Content-Length` of a `body_file` — but no body (RFC 9110 §9.3.2).
+- The status line carries the standard reason phrase (`HTTP/1.1 202 Accepted`).
+- **One request per connection**: every response carries `connection: close`
+  and the server closes afterwards.  Without the header HTTP/1.1 clients (Go's
+  `net/http`: docker, skopeo, podman) keep the connection and send their next
+  request on it, then read EOF.
+- A **TLS ClientHello** (first byte `0x16`) on a plain `http.server` is closed
+  at once without a response, so clients that try https first fall back to
+  http immediately rather than after their handshake timeout.
+
+```aiml
+- call: [srv.set_max_body, 8388608]                          # in-memory cap
+- call: [srv.set_spool, "/var/tmp/uploads", 1048576, 10737418240]   # >1 MiB → file, ≤10 GiB
+```
+
+See `tests/test_http_chunked_spool.aiml`.
 
 ## 3.11 Mutual TLS — `srv.require_client_cert`
 

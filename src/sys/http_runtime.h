@@ -54,6 +54,7 @@ typedef struct AimlHttpResponse {
     /* client-side: the received body, binary-safe (`body` stops at the first NUL) */
     char*        raw_body;     /* malloc'd, NULL when empty */
     int64_t      raw_len;      /* exact byte length of raw_body */
+    int8_t       head_only;    /* server-side: answering a HEAD request — headers only, no body */
 } AimlHttpResponse;
 
 /* ─── http_request_handle ─────────────────────────────────────── */
@@ -70,6 +71,8 @@ typedef struct AimlHttpRequest {
                                  * dispatching (413/431/414/400) — parser limit hit */
     char*        peer_ip;      /* trusted socket peer IP (dotted), set server-side; NULL client-side */
     int64_t      body_len;     /* exact byte length of body (binary-safe; body may contain NULs) */
+    char*        body_path;    /* spooled body: temp file holding the body (srv.set_spool), else NULL.
+                                * Removed after the handler returns unless the handler moved it. */
 } AimlHttpRequest;
 
 /* ─── http_client_handle ──────────────────────────────────────── */
@@ -221,6 +224,9 @@ void aiml_http_resp_set_body_bytes(void* resp, void* buf);
 char*  aiml_http_req_method(void* req);
 char*  aiml_http_req_path(void* req);
 char*  aiml_http_req_body(void* req);
+char*  aiml_http_req_body_path(void* req);   /* spooled body file or NULL */
+int64_t aiml_http_req_body_len(void* req);   /* exact body length in bytes */
+void   aiml_http_server_set_spool(void* srv, const char* dir, int64_t threshold, int64_t max_bytes);
 void*  aiml_http_req_body_bytes(void* req); /* fresh AimlBuffer* copy of the raw body */
 void   aiml_http_server_set_max_body(void* srv, int64_t bytes);
 void   aiml_http_resp_set_body_file(void* resp, const char* file_path);
