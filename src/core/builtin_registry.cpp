@@ -4757,6 +4757,17 @@ void registerBuiltins(CompilerContext& ctx) {
                 ctx.builder.CreateCall(fn, {base, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a0))});
                 return nullptr;
             };
+            // srv.set_max_body(bytes) — request body cap (default 8 MiB, max ~2 GiB)
+            ci.builtinMethods["set_max_body"] = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+                llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Type* i64 = ctx.builder.getInt64Ty();
+                llvm::Function* fn = ctx.getFunction("aiml_http_server_set_max_body", ctx.builder.getVoidTy(), {i8p, i64});
+                if (!call || call->args.empty()) return nullptr;
+                llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+                if (v->getType()->isIntegerTy() && !v->getType()->isIntegerTy(64)) v = ctx.builder.CreateSExt(v, i64);
+                ctx.builder.CreateCall(fn, {base, v});
+                return nullptr;
+            };
             // srv.secure_headers(hsts) — enable nosniff/X-Frame-Options/Referrer-Policy (+HSTS if hsts!=0)
             ci.builtinMethods["secure_headers"] = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
                 llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
@@ -5104,6 +5115,45 @@ void registerBuiltins(CompilerContext& ctx) {
                 llvm::Value* nameArg = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(i8p));
                 if (call && !call->args.empty()) { IRValue* a = evalExpr(call->args[0].get()); if (a) nameArg = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a)); }
                 return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {base, nameArg}));
+            };
+            // req.body_bytes — raw request body as buffer<u8> (binary-safe, spec/32_2)
+            ci.builtinMethods["body_bytes"] = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr*, auto) -> IRValue* {
+                llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Type* bt  = ctx.getLLVMType("buffer");
+                llvm::Function* fn  = ctx.getFunction("aiml_http_req_body_bytes", i8p, {i8p});
+                llvm::Function* mcf = ctx.getFunction("memcpy", i8p, {i8p, i8p, ctx.getSizeType()});
+                llvm::Function* frf = ctx.getFunction("free", ctx.builder.getVoidTy(), {i8p});
+                llvm::Value* heapHdr = ctx.builder.CreateCall(fn, {base});
+                uint64_t szBytes = ctx.module().getDataLayout().getTypeAllocSize(bt);
+                if (ctx.memV3) {
+                    // spec/61 §5: the runtime's heap header becomes an owned buffer
+                    // handle (data moves along) — same as io.read_bytes.
+                    llvm::Value* h = ctx.builder.CreateCall(ctx.getFunction("aiml_buffer_handle_new", i8p, {}), {}, "req_body_h");
+                    llvm::Function* curFnV3 = ctx.builder.GetInsertBlock()->getParent();
+                    auto* copyV3 = llvm::BasicBlock::Create(ctx.context, "req_body_copy", curFnV3);
+                    auto* doneV3 = llvm::BasicBlock::Create(ctx.context, "req_body_done", curFnV3);
+                    ctx.builder.CreateCondBr(ctx.builder.CreateIsNull(heapHdr), doneV3, copyV3);
+                    ctx.builder.SetInsertPoint(copyV3);
+                    ctx.builder.CreateCall(mcf, {h, heapHdr, ctx.getSizeConst(szBytes)});
+                    ctx.builder.CreateCall(frf, {heapHdr});
+                    ctx.builder.CreateBr(doneV3);
+                    ctx.builder.SetInsertPoint(doneV3);
+                    return ctx.ir_gen->wrap(h);
+                }
+                auto* out = ctx.createEntryAlloca(bt, "req_body_buf");
+                ctx.builder.CreateMemSet(out, ctx.builder.getInt8(0), szBytes, llvm::MaybeAlign());
+                // Copy the header only when the runtime returned one (OOM → zero buffer).
+                llvm::Function* curFn = ctx.builder.GetInsertBlock()->getParent();
+                auto* copyBB = llvm::BasicBlock::Create(ctx.context, "req_body_copy", curFn);
+                auto* doneBB = llvm::BasicBlock::Create(ctx.context, "req_body_done", curFn);
+                llvm::Value* isNull = ctx.builder.CreateIsNull(heapHdr);
+                ctx.builder.CreateCondBr(isNull, doneBB, copyBB);
+                ctx.builder.SetInsertPoint(copyBB);
+                ctx.builder.CreateCall(mcf, {out, heapHdr, ctx.getSizeConst(szBytes)});
+                ctx.builder.CreateCall(frf, {heapHdr});
+                ctx.builder.CreateBr(doneBB);
+                ctx.builder.SetInsertPoint(doneBB);
+                return ctx.ir_gen->wrap(out);
             };
             // req.client_ip() — trusted socket peer IP (ignores X-Forwarded-For)
             ci.builtinMethods["client_ip"] = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr*, auto) -> IRValue* {
