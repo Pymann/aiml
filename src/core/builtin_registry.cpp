@@ -4996,7 +4996,17 @@ void registerBuiltins(CompilerContext& ctx) {
             ci.builtinMethods["headers"] = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr*, auto) -> IRValue* {
                 llvm::Function* fn = ctx.module().getFunction("aiml_http_resp_get_headers");
                 if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getInt8Ty()->getPointerTo(), {ctx.builder.getInt8Ty()->getPointerTo()}, false), llvm::Function::ExternalLinkage, "aiml_http_resp_get_headers", ctx.module());
-                return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {base}));
+                llvm::Value* raw = ctx.builder.CreateCall(fn, {base});
+                // memV3: bound to a map<string:string> variable, the response's own
+                // AimlHttpMap would be adopted by the variable — its drop freed the
+                // map, and resp.free() freed it again (double free).  Outside a
+                // chain (`resp.headers.put/get`, which works on the real map) hand
+                // out a managed copy, as req.params / req.cookies do (spec/61 §5).
+                if (ctx.memV3 && !ctx.httpMapRawView) {
+                    llvm::Type* i8pc = ctx.builder.getInt8Ty()->getPointerTo();
+                    raw = ctx.builder.CreateCall(ctx.getFunction("aiml_http_map_to_handle", i8pc, {i8pc}), {raw});
+                }
+                return ctx.ir_gen->wrap(raw);
             };
             // Client side: exact byte length of the received body (binary-safe).
             ci.builtinMethods["body_len"] = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr*, auto) -> IRValue* {
