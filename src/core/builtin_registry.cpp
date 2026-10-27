@@ -4998,6 +4998,26 @@ void registerBuiltins(CompilerContext& ctx) {
                 if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getInt8Ty()->getPointerTo(), {ctx.builder.getInt8Ty()->getPointerTo()}, false), llvm::Function::ExternalLinkage, "aiml_http_resp_get_headers", ctx.module());
                 return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {base}));
             };
+            // Client side: exact byte length of the received body (binary-safe).
+            ci.builtinMethods["body_len"] = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr*, auto) -> IRValue* {
+                llvm::Function* fn = ctx.module().getFunction("aiml_http_resp_body_len");
+                if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getInt64Ty(), {ctx.builder.getInt8Ty()->getPointerTo()}, false), llvm::Function::ExternalLinkage, "aiml_http_resp_body_len", ctx.module());
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {base}));
+            };
+            // Client side: resp.save_to(path) → i32 (0 ok, -1 error) — the received
+            // body written byte-exact (staged + renamed).  `body` is a text view
+            // and stops at the first NUL; binary downloads go through here.
+            ci.builtinMethods["save_to"] = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+                llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Function* fn = ctx.module().getFunction("aiml_http_resp_save_to");
+                if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getInt32Ty(), {i8p, i8p}, false), llvm::Function::ExternalLinkage, "aiml_http_resp_save_to", ctx.module());
+                if (!call || call->args.empty()) return ctx.ir_gen->wrap(ctx.builder.getInt32(-1));
+                IRValue* a = evalExpr(call->args[0].get());
+                if (!a) return ctx.ir_gen->wrap(ctx.builder.getInt32(-1));
+                llvm::Value* pv = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a));
+                if (!pv->getType()->isPointerTy()) return ctx.ir_gen->wrap(ctx.builder.getInt32(-1));
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {base, pv}));
+            };
             // Methods: send, write, write_bytes, flush, close, free
             ci.builtinMethods["send"] = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr*, auto) -> IRValue* {
                 llvm::Function* fn = ctx.module().getFunction("aiml_http_resp_send");
@@ -5219,6 +5239,14 @@ void registerBuiltins(CompilerContext& ctx) {
                 llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
                 llvm::Function* fn = ctx.module().getFunction("aiml_http_client_set_body");
                 if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(), {i8p, i8p}, false), llvm::Function::ExternalLinkage, "aiml_http_client_set_body", ctx.module());
+                ctx.builder.CreateCall(fn, {base, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(newVal))});
+            };
+            // client.body_file = path — the request body is streamed from this
+            // file at send time (binary-safe, no size limit, no heap copy).
+            ci.builtinSetters["body_file"] = [](CompilerContext& ctx, llvm::Value* base, AIML::IRValue* newVal) {
+                llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Function* fn = ctx.module().getFunction("aiml_http_client_set_body_file");
+                if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(), {i8p, i8p}, false), llvm::Function::ExternalLinkage, "aiml_http_client_set_body_file", ctx.module());
                 ctx.builder.CreateCall(fn, {base, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(newVal))});
             };
             ci.builtinSetters["timeout"] = [](CompilerContext& ctx, llvm::Value* base, AIML::IRValue* newVal) {
