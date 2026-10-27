@@ -1,0 +1,9 @@
+# Requires: library
+- namespace: jitargs.lib
+
+- def:
+    name: greeting
+    args: [[who, string]]
+    return: string
+    body:
+      - return: ["hello ${who}"]
