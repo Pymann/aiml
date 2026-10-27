@@ -79,6 +79,7 @@ This file is the entry point for the `aiml/spec` directory.
 - [33_1_hash.md](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/spec/33_1_hash.md)
 - [33_2_compress.md](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/spec/33_2_compress.md)
 - [33_security.md](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/spec/33_security.md)
+- [67_identity.md](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/spec/67_identity.md) — base64, LDAP, SAML 2.0
 - [34_interop.md](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/spec/34_interop.md)
 - [35_ffi.md](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/spec/35_ffi.md)
 

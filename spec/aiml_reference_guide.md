@@ -317,6 +317,14 @@ Zero-dependency network primitives natively supporting secure environments (`htt
 - **`[ws.connect, u: url] -> ws_handle`**: Starts WS/WSS stream bounds (`[send, str]`, `[recv] -> str`, `[close]`).
 - **`[ws.server, host: string, port: i32] -> ws_server_handle`**: Stateful callback listening sockets (`.on_connect`, `.on_message`).
 
+### 4.9a Identity (`base64`, `ldap`, `saml`) — spec/67
+- **`[base64.encode, x: string|buffer<u8>] -> string`**, **`[base64.url_encode, x]`**: RFC 4648 standard / URL-safe (no padding).
+- **`[base64.decode, s] -> buffer<u8>`**, **`[base64.url_decode, s]`**: binary-safe; empty buffer on invalid input. **`[base64.decode_str, s, url=0] -> string`**: null on invalid input.
+- **`[ldap.open, url] -> ldap_handle`**; methods `set_timeout(ms)`, `start_tls() -> i32`, `bind(dn, pw) -> i32` (1 ok / 0 bad credentials — an empty password is always rejected / -1 error), `search_dns(base, filter) -> list<string>`, `attr_values(dn, attr) -> list<string>`, `error() -> string`, `close()` (explicit; not dropped at scope exit).
+- **`[ldap.escape_filter, s]`** (RFC 4515), **`[ldap.escape_dn, s]`** (RFC 4514): mandatory for user input in filters/DNs.
+- **`[saml.authn_request_url, idp_sso_url, sp_entity_id, acs_url, request_id, relay_state=""] -> string`**: HTTP-Redirect AuthnRequest (unsigned). **`[saml.new_request_id] -> string`**.
+- **`[saml.verify_response, b64, idp_cert_pem, sp_entity_id, acs_url, expected_request_id] -> map<string:string>`**: keys `ok` ("1"/"0"), `error`, `name_id`, `name_id_format`, `issuer`, `session_index`, `request_id`, `not_on_or_after`, `signed`, `attr.<Name>` (multi-values joined by "\n"). Signature with the configured cert only, wrapping/comment/DTD/SHA-1 rejected, audience/destination/time/InResponseTo checked. **`[saml.set_clock_skew, seconds]`** (default 120).
+
 ### 4.10 Game Engine (`engine`)
 Abstracts GLFW/Emscripten/Android into an unified cross-platform window loop automatically configuring the GL-Context. Replaces `extern: "C" glfw...`.
 - **`[engine.create_window, w: i32, h: i32, title: string] -> window_handle`**: Root context initializer handling setup.
