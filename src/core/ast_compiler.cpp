@@ -4052,7 +4052,11 @@ void Compiler::visitTopLevel(Node* node) {
                 if (method->returnType == "string") ctx.stringProducerFns.insert(oldName);
             }
             method->name = cls->name + "_" + method->name;
-            auto it = method->args.insert(method->args.begin(), {"this", "ref<" + cls->name + ">"});
+            // The instance argument behind `<` must carry the class's registered
+            // (namespace-qualified) name — classes are registered as
+            // ctx.qualify(name), so a short name made every `<.member` /
+            // `<.method` lookup fail inside classes declared under `- namespace:`.
+            auto it = method->args.insert(method->args.begin(), {"this", "ref<" + ctx.qualify(cls->name) + ">"});
             // Keep argMods index-synced with args: `this` gets a default (borrow) modifier
             // slot at the front, so argMods[i] still lines up with args[i] (spec/61 §3.1).
             bool insertedMod = false;
