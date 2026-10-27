@@ -46,7 +46,13 @@
       - if: { condition: { lt: [{ call: [r_full.index_of, "HTTP/1.1 200"] }, 0] }, then: [{ print: ["FAIL full status: ${r_full}"] }, { set: [fail, { +: [fail, 1] }] }] }
       - if: { condition: { lt: [{ call: [r_full.index_of, "content-length: 40"] }, 0] }, then: [{ print: ["FAIL full length: ${r_full}"] }, { set: [fail, { +: [fail, 1] }] }] }
       - if: { condition: { lt: [{ call: [r_full.index_of, "content-type: application/octet-stream"] }, 0] }, then: [{ print: ["FAIL handler content-type lost: ${r_full}"] }, { set: [fail, { +: [fail, 1] }] }] }
-      - if: { condition: { lt: [{ call: [r_full.index_of, "abcdefghij"] }, 0] }, then: [{ print: ["FAIL full body: ${r_full}"] }, { set: [fail, { +: [fail, 1] }] }] }
+      # Body via the HTTP client: headers and the sendfile body may arrive in
+      # separate TCP segments, so a single raw recv can miss the body.
+      - decl: [dl_url, url, { call: [http.parse_url, "http://127.0.0.1:23198/download"] }]
+      - decl: [dl_resp, http_response_handle, { call: [http.get, dl_url] }]
+      - decl: [dl_body, string, { call: [dl_resp.body] }]
+      - call: [dl_resp.free]
+      - if: { condition: { neq: [dl_body, "0123456789ABCDEFGHIJ0123456789abcdefghij"] }, then: [{ print: ["FAIL full body: ${dl_body}"] }, { set: [fail, { +: [fail, 1] }] }] }
 
       - decl: [r_mid, string, { call: [probe, "GET /download HTTP/1.1\r\nHost: x\r\nRange: bytes=10-14\r\n\r\n"] }]
       - if: { condition: { lt: [{ call: [r_mid.index_of, "HTTP/1.1 206"] }, 0] }, then: [{ print: ["FAIL range status: ${r_mid}"] }, { set: [fail, { +: [fail, 1] }] }] }
