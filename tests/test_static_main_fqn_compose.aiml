@@ -1,0 +1,21 @@
+# Expected exit code: 0
+# spec/49 §15: a 3-file project whose main instantiates a class from another
+# file by its fully qualified name (`{ new: ns.Class }`) satisfies the
+# external-composition rule.
+- import: "_fqn_compose/holder.aiml"
+- import: "_fqn_compose/util.aiml"
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [hold, ptr<fqncompose.holder.Holder>, { new: fqncompose.holder.Holder }]
+      - decl: [cnt, i32, { call: [hold.scale, 1] }]
+      - decl: [dbl, i32, { call: [fqncompose.util.twice, cnt] }]
+      - if:
+          condition: { neq: [dbl, 4] }
+          then:
+            - print: ["[FAIL] expected 4 got ${dbl}"]
+            - return: [1]
+      - print: ["PASS fqn main composition"]
+      - return: [0]
