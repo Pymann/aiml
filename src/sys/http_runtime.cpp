@@ -332,7 +332,7 @@ static int tcp_connect(const char* host, int port, int timeout_ms) {
 }
 
 // Parse an HTTP/1.1 response from fd/ssl into a new AimlHttpResponse
-static AimlHttpResponse* parse_http_response(int fd, void* ssl) {
+static AimlHttpResponse* parse_http_response(int fd, void* ssl, bool no_body = false) {
     AimlHttpResponse* r = static_cast<AimlHttpResponse*>(calloc(1, sizeof(AimlHttpResponse)));
     r->headers = aiml_http_map_new();
     r->conn_fd = -1;
@@ -368,9 +368,12 @@ static AimlHttpResponse* parse_http_response(int fd, void* ssl) {
         }
     }
 
-    // Body
+    // Body.  A response to HEAD has none, whatever Content-Length says
+    // (RFC 9110 §9.3.2) — reading it would block until the server closes.
     std::string body;
-    if (chunked) {
+    if (no_body) {
+        // nothing to read
+    } else if (chunked) {
         while (true) {
             recv_line(fd, ssl, line, sizeof(line));
             int chunk_size = strtol(line, nullptr, 16);
@@ -498,7 +501,7 @@ static AimlHttpResponse* do_http_request(const char* method, AimlUrl* u,
         std::fclose(body_fp);
     }
 
-    AimlHttpResponse* resp = parse_http_response(fd, ssl);
+    AimlHttpResponse* resp = parse_http_response(fd, ssl, method && strcmp(method, "HEAD") == 0);
 
     if (ssl)     { SSL_shutdown(ssl); SSL_free(ssl); }
     if (ssl_ctx) SSL_CTX_free(ssl_ctx);
