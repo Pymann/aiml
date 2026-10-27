@@ -217,6 +217,8 @@ probe "nested model-list push+index-writeback (9rooms add_buff→buffs.push + id
     "$AIML_BIN" -r tests/_mem_sanitize/nested_model_list_deepcopy.aiml
 probe "memV3: req.params / url.get_param / cookies are managed map handles, url parts managed strings" "hrm" \
     "$AIML_BIN" -r tests/_mem_sanitize/http_request_maps.aiml
+probe "memV3: chained req.params.get / url.get_param.get / resp.headers.put give managed strings" "hcm" \
+    "$AIML_BIN" -r tests/_mem_sanitize/http_chained_maps.aiml
 
 # spec/61 call-temporary matrix: same fixtures as the semantic and AOT leak gates.
 source tests/lifetime/call_temporaries/cases.sh
