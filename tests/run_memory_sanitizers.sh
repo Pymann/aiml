@@ -215,6 +215,8 @@ probe "value-model set from a VIEW deep-copies (spec/61 §4.2): a producer that 
     "$AIML_BIN" -r tests/_mem_sanitize/producer_set_view_return.aiml
 probe "nested model-list push+index-writeback (9rooms add_buff→buffs.push + idx:[zone,i,ent]): a model with list<Buff> (Buff = string + list<i32> + list<Model>) built via extract→build→push→writeback→free must keep the inner string intact and be memory-safe (bounded RSS)" "nml" \
     "$AIML_BIN" -r tests/_mem_sanitize/nested_model_list_deepcopy.aiml
+probe "memV3: req.params / url.get_param / cookies are managed map handles, url parts managed strings" "hrm" \
+    "$AIML_BIN" -r tests/_mem_sanitize/http_request_maps.aiml
 
 # spec/61 call-temporary matrix: same fixtures as the semantic and AOT leak gates.
 source tests/lifetime/call_temporaries/cases.sh
