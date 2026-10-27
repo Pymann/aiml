@@ -1,7 +1,8 @@
 # HTTP server request bodies (spec/32_2 §3.10a): chunked transfer coding,
 # spooling of large bodies to a temp file (srv.set_spool → req.body_path /
 # req.body_len), CL+TE smuggling rejection, unknown codings → 501, and HEAD
-# answered with headers only.  Raw TCP so the exact bytes on the wire are known.
+# answered with headers only, `connection: close` on every response, and a
+# TLS ClientHello on the plain listener closed at once.  Raw TCP so the exact bytes on the wire are known.
 #
 # Expected exit code: 0
 
@@ -83,6 +84,9 @@
       # chunked, small (stays in memory), with a chunk extension and a trailer
       - decl: [r_chunk, string, { call: [probe, "PATCH /up HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n5;ext=1\r\nhello\r\n6\r\n world\r\n0\r\nX-Trailer: t\r\n\r\n"] }]
       - set: [fail, { +: [fail, { call: [expect, "chunked", r_chunk, "11|mem|hello world"] }] }]
+      # every response announces the close (no keep-alive): HTTP/1.1 clients
+      # would otherwise reuse the connection and read EOF
+      - set: [fail, { +: [fail, { call: [expect, "connection close", r_chunk, "connection: close"] }] }]
       # Content-Length above the threshold → spooled to a file
       - decl: [r_spool, string, { call: [probe, "PUT /up HTTP/1.1\r\nHost: x\r\nContent-Length: 26\r\n\r\nabcdefghijklmnopqrstuvwxyz"] }]
       - set: [fail, { +: [fail, { call: [expect, "spooled CL", r_spool, "26|file|abcdefghijklmnopqrstuvwxyz"] }] }]
@@ -109,6 +113,15 @@
           then:
             - print: ["FAIL HEAD sent a body: ${r_head}"]
             - set: [fail, { +: [fail, 1] }]
+      # TLS ClientHello on the plain listener → closed at once, no response
+      - decl: [tls_start, i64, { call: [time.now] }]
+      - decl: [r_tls, string, { call: [probe, "\x16\x03\x01\x02\x00\x01\x01"] }]
+      - decl: [tls_ms, i64, { -: [{ call: [time.now] }, tls_start] }]
+      - if:
+          condition: { or: [{ gt: [r_tls.len, 0] }, { gt: [tls_ms, 2000] }] }
+          then:
+            - print: ["FAIL TLS probe: ${tls_ms} ms, answer '${r_tls}'"]
+            - set: [fail, { +: [fail, 1] }]
       # reason phrase in the status line
       - decl: [r_get, string, { call: [probe, "GET /file HTTP/1.1\r\nHost: x\r\n\r\n"] }]
       - set: [fail, { +: [fail, { call: [expect, "GET body", r_get, "HTTP/1.1 200 OK"] }] }]
@@ -125,5 +138,5 @@
       - call: [srv.stop]
       - call: [io.remove_all, "/tmp/aiml_chunked_spool_test"]
       - if: { condition: { gt: [fail, 0] }, then: [{ return: 1 }] }
-      - print: ["PASS http_chunked_spool: chunked + spool + spill + caps + CL/TE + 501 + HEAD"]
+      - print: ["PASS http_chunked_spool: chunked + spool + spill + caps + CL/TE + 501 + HEAD + close + TLS sniff"]
       - return: 0

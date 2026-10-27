@@ -808,7 +808,7 @@ See `tests/test_http_hardening.aiml` (413/400/431/408), `tests/test_http_travers
 (path traversal), `tests/test_http_secure_headers.aiml` (headers on 200 + errors),
 `tests/test_http_tls_handshake_stall.aiml` (silent client does not block HTTPS).
 
-## 3.10a Request bodies: chunked, spooled, HEAD
+## 3.10a Request bodies: chunked, spooled, HEAD; connection handling
 
 - **Transfer-Encoding: chunked** request bodies are decoded (chunk extensions
   and trailers ignored) under the same cap and read deadline as Content-Length
@@ -824,6 +824,13 @@ See `tests/test_http_hardening.aiml` (413/400/431/408), `tests/test_http_travers
 - **HEAD** requests get the same status and headers as GET — including the
   `Content-Length` of a `body_file` — but no body (RFC 9110 §9.3.2).
 - The status line carries the standard reason phrase (`HTTP/1.1 202 Accepted`).
+- **One request per connection**: every response carries `connection: close`
+  and the server closes afterwards.  Without the header HTTP/1.1 clients (Go's
+  `net/http`: docker, skopeo, podman) keep the connection and send their next
+  request on it, then read EOF.
+- A **TLS ClientHello** (first byte `0x16`) on a plain `http.server` is closed
+  at once without a response, so clients that try https first fall back to
+  http immediately rather than after their handshake timeout.
 
 ```aiml
 - call: [srv.set_max_body, 8388608]                          # in-memory cap
