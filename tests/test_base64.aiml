@@ -1,0 +1,96 @@
+# Expected exit code: 0
+# spec/67 §2: base64 — RFC 4648 §10 vectors, URL-safe alphabet, binary round
+# trip with NUL bytes, invalid input never crashes.
+
+- def:
+    name: check
+    args: [[label, string], [got, string], [want, string]]
+    return: i32
+    body:
+      - if:
+          condition: { eq: [got, want] }
+          then:
+            - return: [0]
+      - print: ["[FAIL] ${label}: got '${got}' want '${want}'"]
+      - return: [1]
+
+- def:
+    name: check_num
+    args: [[label, string], [got, i32], [want, i32]]
+    return: i32
+    body:
+      - if:
+          condition: { eq: [got, want] }
+          then:
+            - return: [0]
+      - print: ["[FAIL] ${label}: got ${got} want ${want}"]
+      - return: [1]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [fails, i32, 0]
+      # RFC 4648 §10
+      - set: [fails, { +: [fails, { call: [check, "enc ''", { call: [base64.encode, ""] }, ""] }] }]
+      - set: [fails, { +: [fails, { call: [check, "enc f", { call: [base64.encode, "f"] }, "Zg=="] }] }]
+      - set: [fails, { +: [fails, { call: [check, "enc fo", { call: [base64.encode, "fo"] }, "Zm8="] }] }]
+      - set: [fails, { +: [fails, { call: [check, "enc foo", { call: [base64.encode, "foo"] }, "Zm9v"] }] }]
+      - set: [fails, { +: [fails, { call: [check, "enc foob", { call: [base64.encode, "foob"] }, "Zm9vYg=="] }] }]
+      - set: [fails, { +: [fails, { call: [check, "enc fooba", { call: [base64.encode, "fooba"] }, "Zm9vYmE="] }] }]
+      - set: [fails, { +: [fails, { call: [check, "enc foobar", { call: [base64.encode, "foobar"] }, "Zm9vYmFy"] }] }]
+      - set: [fails, { +: [fails, { call: [check, "dec foobar", { call: [base64.decode_str, "Zm9vYmFy"] }, "foobar"] }] }]
+      - set: [fails, { +: [fails, { call: [check, "dec fo", { call: [base64.decode_str, "Zm8="] }, "fo"] }] }]
+      - set: [fails, { +: [fails, { call: [check, "dec unpadded", { call: [base64.decode_str, "Zm8"] }, "fo"] }] }]
+      - set: [fails, { +: [fails, { call: [check, "dec whitespace", { call: [base64.decode_str, "Zm9v\nYmFy"] }, "foobar"] }] }]
+      # URL-safe alphabet: bytes 0xfb 0xff -> "-_8" (std: "+/8=")
+      - decl: [raw, buffer<u8>]
+      - call: [raw.alloc, 4]
+      - decl: [byte_fb, u8, 251]
+      - decl: [byte_ff, u8, 255]
+      - call: [raw.write, byte_fb, u8]
+      - call: [raw.write, byte_ff, u8]
+      - set: [fails, { +: [fails, { call: [check, "std alphabet", { call: [base64.encode, raw] }, "+/8="] }] }]
+      - set: [fails, { +: [fails, { call: [check, "url alphabet", { call: [base64.url_encode, raw] }, "-_8"] }] }]
+      - decl: [back_url, buffer<u8>, { call: [base64.url_decode, "-_8"] }]
+      - set: [fails, { +: [fails, { call: [check_num, "url decode len", back_url.len, 2] }] }]
+      - set: [fails, { +: [fails, { call: [check, "url round trip", { call: [hash.sha256, back_url] }, { call: [hash.sha256, raw] }] }] }]
+
+      # Binary round trip with NUL bytes: 'A' 0 'B' 0xff 0 'C'
+      - decl: [bin, buffer<u8>]
+      - call: [bin.alloc, 8]
+      - decl: [byte_a, u8, 65]
+      - decl: [byte_nul, u8, 0]
+      - decl: [byte_b, u8, 66]
+      - decl: [byte_c, u8, 67]
+      - call: [bin.write, byte_a, u8]
+      - call: [bin.write, byte_nul, u8]
+      - call: [bin.write, byte_b, u8]
+      - call: [bin.write, byte_ff, u8]
+      - call: [bin.write, byte_nul, u8]
+      - call: [bin.write, byte_c, u8]
+      - decl: [enc_bin, string, { call: [base64.encode, bin] }]
+      - set: [fails, { +: [fails, { call: [check, "binary encode", enc_bin, "QQBC/wBD"] }] }]
+      - decl: [dec_bin, buffer<u8>, { call: [base64.decode, enc_bin] }]
+      - set: [fails, { +: [fails, { call: [check_num, "binary decode len", dec_bin.len, 6] }] }]
+      - set: [fails, { +: [fails, { call: [check, "binary round trip", { call: [hash.sha256, dec_bin] }, { call: [hash.sha256, bin] }] }] }]
+
+      # Invalid input: decode -> empty buffer, decode_str -> null; never a crash.
+      - decl: [bad_buf, buffer<u8>, { call: [base64.decode, "Zm9v!YmFy"] }]
+      - set: [fails, { +: [fails, { call: [check_num, "invalid char -> empty", bad_buf.len, 0] }] }]
+      - decl: [bad_len, buffer<u8>, { call: [base64.decode, "Zm9vY"] }]
+      - set: [fails, { +: [fails, { call: [check_num, "impossible length -> empty", bad_len.len, 0] }] }]
+      - decl: [bad_pad, buffer<u8>, { call: [base64.decode, "Zg=a"] }]
+      - set: [fails, { +: [fails, { call: [check_num, "data after padding -> empty", bad_pad.len, 0] }] }]
+      - decl: [bad_str, string, { call: [base64.decode_str, "%%%"] }]
+      - decl: [is_null, i32, 0]
+      - if:
+          condition: { eq: [bad_str, null] }
+          then:
+            - set: [is_null, 1]
+      - set: [fails, { +: [fails, { call: [check_num, "decode_str invalid -> null", is_null, 1] }] }]
+      - decl: [url_in_std, buffer<u8>, { call: [base64.decode, "-_8"] }]
+      - set: [fails, { +: [fails, { call: [check_num, "url chars rejected by std decode", url_in_std.len, 0] }] }]
+
+      - print: ["base64 failures: ${fails}"]
+      - return: [fails]
