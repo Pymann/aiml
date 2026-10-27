@@ -358,6 +358,19 @@ extern "C" int aiml_io_write_file(const char* p, const char* content) {
     return 0;
 }
 
+// Binary-safe variant used when io.write_file receives a buffer<u8>:
+// writes exactly `len` bytes (embedded NULs included).
+extern "C" int aiml_io_write_file_buf(const char* p, const void* data, int32_t len) {
+    if (!p || p[0] == '\0' || len < 0) return -1;
+    FILE* f = std::fopen(p, "wb");
+    if (!f) return -1;
+    size_t n = static_cast<size_t>(len);
+    size_t written = (n > 0 && data) ? std::fwrite(data, 1, n, f) : 0;
+    int rc = std::fclose(f);
+    if (n > 0 && !data) return -1;
+    return (written == n && rc == 0) ? 0 : -1;
+}
+
 // ── AimlList layout (must match GenericList in list_impl.cpp) ────────────────
 struct AimlListRaw {
     int32_t size;

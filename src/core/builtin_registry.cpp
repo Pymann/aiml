@@ -2921,13 +2921,22 @@ void registerBuiltins(CompilerContext& ctx) {
         };
 
         // io.write_file(path, content) -> i32  (0=ok, -1=error)
+        // content may be a string (written up to the terminating NUL) or a
+        // buffer<u8> (written binary-safe with its exact length), following
+        // the generic-entry-point rule used by hash.<algo>.
         io.builtinFuncs["write_file"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
             llvm::Type* i8p  = ctx.builder.getInt8Ty()->getPointerTo();
             llvm::Type* i32  = ctx.builder.getInt32Ty();
-            llvm::Function* f = ctx.getFunction("aiml_io_write_file", i32, {i8p, i8p});
             if (args.size() < 2) return ctx.ir_gen->getInt32(-1);
             llvm::Value* p = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
             llvm::Value* c = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]));
+            if (c && c->getType() == ctx.getLLVMType("buffer")) {
+                llvm::Value* dataP = ctx.builder.CreateExtractValue(c, {4}, "wf_buf_data");
+                llvm::Value* lenV  = ctx.builder.CreateExtractValue(c, {0}, "wf_buf_len");
+                llvm::Function* fb = ctx.getFunction("aiml_io_write_file_buf", i32, {i8p, i8p, i32});
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(fb, {p, dataP, lenV}));
+            }
+            llvm::Function* f = ctx.getFunction("aiml_io_write_file", i32, {i8p, i8p});
             return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {p, c}));
         };
 
