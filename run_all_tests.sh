@@ -244,6 +244,9 @@ for TEST in $TEST_FILES; do
         # Negative test: more than 3 top-level model/class/interface
         # declarations in one file — see spec/49 §6.
         EXPECTED_CODE=1
+    elif [[ "$TEST" == *"test_static_same_arg_resp_helpers.aiml" ]]; then
+        # Negative test: response helpers still grouped by same_arg (spec/49 §6.7).
+        EXPECTED_CODE=1
     elif [[ "$TEST" == *"test_static_main_no_external_compose.aiml" ]]; then
         # Negative test: 3+ project files but main() does not instantiate
         # a class from another file — see spec/49 §7.

@@ -452,6 +452,10 @@ It does *not* apply to:
 
 - methods within classes (already grouped by class)
 - class methods' implicit `this` argument
+- HTTP route handlers — functions whose signature is exactly
+  `(http_request_handle, http_response_handle)`. `srv.route` takes a free
+  function of this shape, so they cannot become methods. Helpers that take
+  a request or response together with other arguments are still grouped.
 
 The intent is to push AIML code toward grouping related state and behavior
 in a class — the moment three functions naturally want to operate on the
