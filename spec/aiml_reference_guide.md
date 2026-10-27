@@ -240,6 +240,8 @@ Provides stream semantics over the internal `path` typings.
 - **`[io.read, fd: file_handle, size: i32] -> string`**: Reads raw byte chunks up to size.
 - **`[io.read_all, fd: file_handle] -> string`**: Dumps remaining handle into string.
 - **`[io.write, fd: file_handle, content: string]`**: Appends content to descriptor.
+- **`[io.read_file, p: path] -> string`**: Reads a whole file as string.
+- **`[io.write_file, p: path, content: string|buffer<u8>] -> i32`**: Writes (truncates) a whole file; `0` = ok, `-1` = error. A `string` is written up to its terminating NUL; a `buffer<u8>` is written binary-safe with its exact length (embedded NUL bytes included).
 - **`[io.open, p: path, mode: string] -> file_handle`**: Standard `fopen` abstraction.
 - **`[io.close, fd: file_handle]`**: Standard `fclose` equivalent.
 - **`[io.exists, p: path] -> bool`**, **`[io.is_dir, p: path] -> bool`**, **`[io.is_file, p: path] -> bool`**.
