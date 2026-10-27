@@ -279,9 +279,25 @@ IRValue* Compiler::visitCall(CallExpr* call) {
         funcName = "this." + funcName.substr(2);
     }
     size_t dotPos = funcName.find('.');
-    
-    // Check for lazy-evaluated method arguments before typical eager evaluation
+
+    // A fully qualified call to a user function (`my.math.add`, from an
+    // imported namespace) is a plain free-function call: route it through the
+    // normal call path below so it gets argument coercion (list/map/model args
+    // passed by reference), the hot-reload fptable, invoke-inside-try and the
+    // spec/61 caller-move handling.  The dotted branch's FQN fallback used to
+    // emit a raw call with none of these, which produced invalid IR for
+    // by-reference arguments (`call @ns.f(%list_string %v)` vs `ptr` param).
+    bool isUserFqnCall = false;
     if (dotPos != std::string::npos) {
+        std::string fqBase = funcName.substr(0, dotPos);
+        if (!ctx.namespaces.count(fqBase) && !resolveVariable(fqBase)) {
+            CompilerContext::FunctionInfo* fqInfo = resolveFunction(funcName);
+            isUserFqnCall = fqInfo && fqInfo->func;
+        }
+    }
+
+    // Check for lazy-evaluated method arguments before typical eager evaluation
+    if (dotPos != std::string::npos && !isUserFqnCall) {
         size_t lastDotPos = funcName.rfind('.');
         std::string baseName = funcName.substr(0, dotPos);
         std::string methodName = funcName.substr(dotPos + 1);
