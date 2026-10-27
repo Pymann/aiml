@@ -65,6 +65,7 @@ typedef struct AimlHttpRequest {
     int          reject_status; /* 0 = ok; else an HTTP error to send instead of
                                  * dispatching (413/431/414/400) — parser limit hit */
     char*        peer_ip;      /* trusted socket peer IP (dotted), set server-side; NULL client-side */
+    int64_t      body_len;     /* exact byte length of body (binary-safe; body may contain NULs) */
 } AimlHttpRequest;
 
 /* ─── http_client_handle ──────────────────────────────────────── */
@@ -213,6 +214,8 @@ void aiml_http_resp_set_body_bytes(void* resp, void* buf);
 char*  aiml_http_req_method(void* req);
 char*  aiml_http_req_path(void* req);
 char*  aiml_http_req_body(void* req);
+void*  aiml_http_req_body_bytes(void* req); /* fresh AimlBuffer* copy of the raw body */
+void   aiml_http_server_set_max_body(void* srv, int64_t bytes);
 void*  aiml_http_req_url(void* req);      /* AimlUrl* */
 void*  aiml_http_req_params(void* req);   /* AimlHttpMap* */
 void*  aiml_http_req_cookies(void* req);  /* AimlHttpMap* */

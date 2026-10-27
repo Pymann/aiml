@@ -523,6 +523,7 @@ struct AimlHttpServer {
     pthread_t    accept_tid = 0;
     pthread_mutex_t lock    = PTHREAD_MUTEX_INITIALIZER;
     int          read_timeout_secs = 15; // per-recv + total request-read deadline (slowloris)
+    long         max_body_bytes    = 8L * 1024 * 1024; // request body cap (srv.set_max_body)
 
     // ── Abuse resistance (spec/32_2 §3.12) ────────────────────────────────
     int              max_conns = 0;          // 0 = unlimited concurrent connections
@@ -569,7 +570,7 @@ static bool match_pattern(const std::string& pattern, const std::string& path,
 }
 
 // Parse HTTP/1.1 request from fd/ssl
-static AimlHttpRequest* parse_http_request(int fd, void* ssl, int timeout_secs) {
+static AimlHttpRequest* parse_http_request(int fd, void* ssl, int timeout_secs, long max_body_bytes) {
     AimlHttpRequest* req = static_cast<AimlHttpRequest*>(calloc(1, sizeof(AimlHttpRequest)));
     req->params      = aiml_http_map_new();
     req->req_headers = aiml_http_map_new();
@@ -632,7 +633,8 @@ static AimlHttpRequest* parse_http_request(int fd, void* ssl, int timeout_secs) 
     //   Reject early instead of allocating unbounded memory or looping forever.
     constexpr int    MAX_HEADER_COUNT = 100;         // # of header lines
     constexpr size_t MAX_HEADER_BYTES = 64 * 1024;   // total header bytes
-    constexpr long   MAX_BODY_BYTES   = 8L * 1024 * 1024; // 8 MiB request body
+    // Request body cap: server-configurable via srv.set_max_body (default 8 MiB).
+    const long       MAX_BODY_BYTES   = max_body_bytes > 0 ? max_body_bytes : 8L * 1024 * 1024;
 
     // Headers
     long   content_length = 0;
@@ -694,10 +696,16 @@ static AimlHttpRequest* parse_http_request(int fd, void* ssl, int timeout_secs) 
     }
 
     // Body (content_length already validated + capped to MAX_BODY_BYTES above).
+    // Stored binary-safe: `body` keeps a trailing NUL for string access, and
+    // `body_len` holds the exact byte count for req.body_bytes.
     if (content_length > 0) {
-        std::vector<char> buf(static_cast<size_t>(content_length) + 1, '\0');
-        recv_n(fd, ssl, buf.data(), static_cast<int>(content_length));
-        req->body = xstrdup(buf.data());
+        char* raw = static_cast<char*>(malloc(static_cast<size_t>(content_length) + 1));
+        if (!raw) { req->reject_status = 413; return req; }
+        int got = recv_n(fd, ssl, raw, static_cast<int>(content_length));
+        if (got < 0) got = 0;
+        raw[got] = '\0';
+        req->body     = raw;
+        req->body_len = got;
     }
 
     return req;
@@ -1278,7 +1286,7 @@ static void* handle_connection(void* arg) {
         }
     }
 
-    AimlHttpRequest* req = parse_http_request(fd, ssl, to_secs);
+    AimlHttpRequest* req = parse_http_request(fd, ssl, to_secs, srv->max_body_bytes);
 
     // Record the trusted socket peer IP (dotted) so req.client_ip() never has to
     // trust a spoofable X-Forwarded-For header. struct in_addr wants network order.
@@ -1569,6 +1577,16 @@ extern "C" void aiml_http_server_set_timeout(void* srv_ptr, int32_t secs) {
     s->read_timeout_secs = secs;
 }
 
+// Configure the request body cap in bytes (default 8 MiB). Values above
+// INT32_MAX-1 are clamped because AIML buffers carry an i32 size. <= 0 keeps
+// the current cap.
+extern "C" void aiml_http_server_set_max_body(void* srv_ptr, int64_t bytes) {
+    AimlHttpServer* s = static_cast<AimlHttpServer*>(srv_ptr);
+    if (!s || bytes <= 0) return;
+    const int64_t cap = static_cast<int64_t>(INT32_MAX) - 1;
+    s->max_body_bytes = static_cast<long>(bytes > cap ? cap : bytes);
+}
+
 // Cap concurrent handler threads. n <= 0 → unlimited. Over the cap, new
 // connections are rejected (503 on plain HTTP, immediate close on TLS) without
 // spawning a thread — bounds resource growth under load / connection floods.
@@ -1845,6 +1863,27 @@ extern "C" char* aiml_http_req_path(void* req) {
 extern "C" char* aiml_http_req_body(void* req) {
     const char* v = req ? static_cast<AimlHttpRequest*>(req)->body : nullptr;
     return aiml_str_dup(v ? v : "");
+}
+
+// req.body_bytes — binary-safe copy of the raw request body as a fresh
+// AimlBuffer header { i32 size, i32 cap, i32 rIdx, i32 wIdx, char* data }.
+// The caller copies the header by value and frees it; `data` is owned by the
+// resulting AIML buffer<u8>. An empty body yields a zero-length buffer.
+extern "C" void* aiml_http_req_body_bytes(void* req) {
+    struct AimlBuf { int32_t sz, cap, rIdx, wIdx; char* data; };
+    AimlHttpRequest* r = static_cast<AimlHttpRequest*>(req);
+    int64_t len = (r && r->body) ? r->body_len : 0;
+    if (len < 0 || len > INT32_MAX - 1) len = 0;
+    AimlBuf* b = static_cast<AimlBuf*>(calloc(1, sizeof(AimlBuf)));
+    if (!b) return nullptr;
+    b->data = static_cast<char*>(malloc(static_cast<size_t>(len) + 1));
+    if (!b->data) { free(b); return nullptr; }
+    if (len > 0) memcpy(b->data, r->body, static_cast<size_t>(len));
+    b->data[len] = '\0';
+    b->sz   = static_cast<int32_t>(len);
+    b->cap  = static_cast<int32_t>(len);
+    b->wIdx = static_cast<int32_t>(len);
+    return b;
 }
 
 extern "C" void* aiml_http_req_url(void* req) {
