@@ -688,6 +688,18 @@ static AimlHttpRequest* parse_http_request(int fd, void* ssl, int timeout_secs, 
     const time_t deadline = time(nullptr) + (timeout_secs > 0 ? timeout_secs : 15);
 
     char line[8192];
+    // A TLS ClientHello (record type 0x16) on a plain-HTTP listener: close at
+    // once instead of waiting for a request line that never comes.  Clients
+    // that probe https first (Go: docker, skopeo, podman) then fall back to
+    // http immediately instead of after their 10 s TLS handshake timeout.
+    if (!ssl) {
+        unsigned char first = 0;
+        if (::recv(fd, &first, 1, MSG_PEEK) == 1 && first == 0x16) {
+            req->method = xstrdup("GET"); req->path = xstrdup("/");
+            req->reject_status = -1;                   // close without a response
+            return req;
+        }
+    }
     // Request line
     int n = recv_line(fd, ssl, line, sizeof(line));
     if (n <= 0) {
@@ -981,6 +993,10 @@ static void send_response(AimlHttpResponse* resp) {
     char cl[32];
     snprintf(cl, sizeof(cl), "%zu", body_size);
     aiml_http_map_put(resp->headers, "content-length", cl);
+    // The server closes every connection after one response (no keep-alive);
+    // say so, or HTTP/1.1 clients (Go's net/http) send the next request on
+    // this connection and read EOF instead of a response.
+    aiml_http_map_put(resp->headers, "connection", "close");
 
     // User headers
     for (int i = 0; i < resp->headers->capacity; ++i) {
@@ -1527,6 +1543,13 @@ static void* handle_connection(void* arg) {
         req->peer_ip = xstrdup(inet_ntoa(ina));
     }
 
+    // TLS on the plain listener (see parse_http_request): just close.
+    if (req->reject_status == -1) {
+        if (ssl) { SSL_shutdown(ssl); SSL_free(ssl); }
+        ::close(fd);
+        free_request(req);
+        return nullptr;
+    }
     // Parser limit hit → send a clean protocol error and skip dispatch entirely.
     if (req->reject_status != 0) {
         AimlHttpResponse* er = static_cast<AimlHttpResponse*>(calloc(1, sizeof(AimlHttpResponse)));
