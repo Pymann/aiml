@@ -3,6 +3,7 @@
 #   client.body_file = path   request body streamed from a file (NULs survive)
 #   resp.save_to(path)        received body written byte-exact → 0 / -1
 #   resp.body_len             exact byte length of the received body
+#   resp.headers in a variable   a managed copy under memV3 (no double free)
 #   HEAD                      no body is read (Content-Length notwithstanding)
 # The fixture is /usr/bin/true: an ELF binary, i.e. full of NUL bytes — exactly the
 # case where the text `body` stops early.
@@ -81,6 +82,10 @@
           then: [{ print: ["FAIL download: no response"] }, { set: [fail, { +: [fail, 1] }] }]
           else:
             - decl: [got_len, i64, { call: [dl_resp.body_len] }]
+            # headers bound to a variable: a copy (memV3) — no double free at resp.free
+            - decl: [heads, map<string:string>, dl_resp.headers]
+            - decl: [ctype, string, { call: [heads.get, "content-type"] }]
+            - if: { condition: { neq: [ctype, "application/octet-stream"] }, then: [{ print: ["FAIL headers copy: ${ctype}"] }, { set: [fail, { +: [fail, 1] }] }] }
             - decl: [save_rc, i32, { call: [dl_resp.save_to, "/tmp/aiml_http_client_files.bin"] }]
             - decl: [bad_rc, i32, { call: [dl_resp.save_to, "/nonexistent-dir/x.bin"] }]
             - call: [dl_resp.free]
