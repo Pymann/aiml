@@ -242,6 +242,54 @@ extern "C" char*    aiml_url_fragment(AimlUrl* u)    { return u ? u->fragment : 
 extern "C" int32_t  aiml_url_port(AimlUrl* u)        { return u ? u->port : 0; }
 extern "C" void*    aiml_url_get_param(AimlUrl* u)   { return u ? u->get_param : nullptr; }
 extern "C" void*    aiml_url_credential(AimlUrl* u)  { return u ? u->credential : nullptr; }
+
+// ── memV3 (spec/61 §4/§5) views of the request/url string tables ────────────
+// The parser keeps params/query/cookies in an AimlHttpMap (open addressing,
+// libc-strdup'd strings, no [rc][pad] header) and url parts as libc strings.
+// Under memV3 an AIML map<string:string> is a refcounted HANDLE with
+// aiml-managed strings, and a string local is managed too: handing out the raw
+// table makes the caller's incref/drop touch 8 bytes before the block (heap
+// corruption, valgrind "Invalid write"). These helpers build the managed form —
+// same approach as sys.env (mem_runtime.cpp).
+extern "C" void* aiml_map_handle_new(void);
+
+// Fresh map<string:string> handle (rc=1, dense store) copying an AimlHttpMap.
+extern "C" void* aiml_http_map_to_handle(void* src_ptr) {
+    void* handle = aiml_map_handle_new();
+    if (!handle) return handle;
+    AimlHttpMap* dst = static_cast<AimlHttpMap*>(handle);   // AimlHttpMap == AimlMapRaw layout
+    AimlHttpMap* src = static_cast<AimlHttpMap*>(src_ptr);
+    if (!src || src->size <= 0 || !src->keys) return handle;
+    int32_t n = src->size;
+    dst->keys     = static_cast<char**>(calloc((size_t)n, sizeof(char*)));
+    dst->values   = static_cast<char**>(calloc((size_t)n, sizeof(char*)));
+    dst->occupied = nullptr;                                 // dense store
+    dst->capacity = n;
+    if (!dst->keys || !dst->values) { dst->size = 0; return handle; }
+    int32_t idx = 0;
+    for (int32_t i = 0; i < src->capacity && idx < n; ++i) {
+        bool used = src->occupied ? src->occupied[i] != 0 : i < src->size;
+        if (!used || !src->keys[i]) continue;
+        dst->keys[idx]   = aiml_str_dup(src->keys[i]);
+        dst->values[idx] = aiml_str_dup(src->values[i] ? src->values[i] : "");
+        ++idx;
+    }
+    dst->size = idx;
+    return handle;
+}
+
+// Managed copy of a libc string; nullptr stays nullptr (absent stays null).
+extern "C" char* aiml_http_str_managed(const char* s) {
+    return s ? aiml_str_dup(s) : nullptr;
+}
+
+// Managed copy of a freshly malloc'd libc string, which is freed (adopted).
+extern "C" char* aiml_http_str_adopt(char* s) {
+    if (!s) return nullptr;
+    char* managed = aiml_str_dup(s);
+    free(s);
+    return managed;
+}
 extern "C" char*    aiml_url_cred_user(AimlUrlCredential* c) { return c ? c->user : nullptr; }
 extern "C" char*    aiml_url_cred_pass(AimlUrlCredential* c) { return c ? c->pass : nullptr; }
 
