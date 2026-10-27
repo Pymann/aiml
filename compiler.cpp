@@ -2223,6 +2223,7 @@ int AIMLCompiler::jitRun() {
     llvm::sys::DynamicLibrary::AddSymbol("aiml_http_resp_close",        (void*)(intptr_t)aiml_http_resp_close);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_http_resp_set_status",   (void*)(intptr_t)aiml_http_resp_set_status);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_http_resp_set_body",     (void*)(intptr_t)aiml_http_resp_set_body);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_http_resp_set_body_file", (void*)(intptr_t)aiml_http_resp_set_body_file);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_http_resp_set_body_bytes",(void*)(intptr_t)aiml_http_resp_set_body_bytes);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_http_resp_get_headers",  (void*)(intptr_t)aiml_http_resp_get_headers);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_http_req_method",        (void*)(intptr_t)aiml_http_req_method);
