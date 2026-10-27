@@ -2249,6 +2249,9 @@ int AIMLCompiler::jitRun(int argc, char** argv) {
     llvm::sys::DynamicLibrary::AddSymbol("aiml_http_req_method",        (void*)(intptr_t)aiml_http_req_method);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_http_req_path",          (void*)(intptr_t)aiml_http_req_path);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_http_req_body",          (void*)(intptr_t)aiml_http_req_body);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_http_req_body_path",     (void*)(intptr_t)aiml_http_req_body_path);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_http_req_body_len",      (void*)(intptr_t)aiml_http_req_body_len);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_http_server_set_spool",  (void*)(intptr_t)aiml_http_server_set_spool);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_http_req_body_bytes",    (void*)(intptr_t)aiml_http_req_body_bytes);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_http_server_set_max_body", (void*)(intptr_t)aiml_http_server_set_max_body);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_http_map_to_handle",     (void*)(intptr_t)aiml_http_map_to_handle);

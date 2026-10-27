@@ -1,0 +1,129 @@
+# HTTP server request bodies (spec/32_2 §3.10a): chunked transfer coding,
+# spooling of large bodies to a temp file (srv.set_spool → req.body_path /
+# req.body_len), CL+TE smuggling rejection, unknown codings → 501, and HEAD
+# answered with headers only.  Raw TCP so the exact bytes on the wire are known.
+#
+# Expected exit code: 0
+
+- def:
+    name: probe
+    args: [[raw, string]]
+    return: string
+    body:
+      - decl: [sock, socket_handle]
+      - set: [sock, { call: [net.socket, "tcp"] }]
+      - call: [net.connect, sock, "127.0.0.1", 23402]
+      - call: [net.send_string, sock, raw]
+      # Read until the server closes (it answers with connection: close):
+      # headers and body may arrive in separate segments.
+      - decl: [rsp, string, ""]
+      - decl: [rounds, i32, 0]
+      - while:
+          condition: { lt: [rounds, 50] }
+          body:
+            - decl: [part, string, { call: [net.recv_string, sock, 4096] }]
+            - if: { condition: { eq: [part, null] }, then: [{ set: [rounds, 50] }] }
+            - if:
+                condition: { lt: [rounds, 50] }
+                then:
+                  - if: { condition: { eq: [part.len, 0] }, then: [{ set: [rounds, 50] }], else: [{ set: [rsp, "${rsp}${part}"] }] }
+            - set: [rounds, { +: [rounds, 1] }]
+      - call: [net.close, sock]
+      - return: rsp
+
+- def:
+    name: on_up
+    args: [[req, http_request_handle], [resp, http_response_handle]]
+    body:
+      - decl: [nbytes, i64, req.body_len]
+      - decl: [spool, string, req.body_path]
+      - decl: [where, string, "mem"]
+      - decl: [text, string, ""]
+      - if:
+          condition: { neq: [spool, null] }
+          then:
+            - set: [where, "file"]
+            - set: [text, { call: [io.read_file, spool] }]
+          else:
+            - set: [text, req.body]
+      - set: [resp.status, 201]
+      - set: [resp.body, "${nbytes}|${where}|${text}"]
+      - call: [resp.send]
+
+- def:
+    name: on_file
+    args: [[req, http_request_handle], [resp, http_response_handle]]
+    body:
+      - set: [resp.body_file, "/tmp/aiml_chunked_spool_test/blob.txt"]
+      - call: [resp.send]
+
+- def:
+    name: expect
+    args: [[label, string], [got, string], [needle, string]]
+    return: i32
+    body:
+      - if: { condition: { ge: [{ call: [got.index_of, needle] }, 0] }, then: [{ return: 0 }] }
+      - print: ["FAIL ${label}: want '${needle}' in: ${got}"]
+      - return: 1
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [fail, i32, 0]
+      - call: [io.mkdir_all, "/tmp/aiml_chunked_spool_test/spool"]
+      - call: [io.write_file, "/tmp/aiml_chunked_spool_test/blob.txt", "0123456789ABCDEFGHIJ"]
+      - decl: [srv, http_server_handle, { call: [http.server, "127.0.0.1", 23402] }]
+      - call: [srv.set_spool, "/tmp/aiml_chunked_spool_test/spool", 16, 4096]
+      - call: [srv.route, "*", "/up", on_up]
+      - call: [srv.route, "*", "/file", on_file]
+      - decl: [thr, thread_handle, { call: [srv.start_async] }]
+      - call: [time.sleep_ms, 300]
+
+      # chunked, small (stays in memory), with a chunk extension and a trailer
+      - decl: [r_chunk, string, { call: [probe, "PATCH /up HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n5;ext=1\r\nhello\r\n6\r\n world\r\n0\r\nX-Trailer: t\r\n\r\n"] }]
+      - set: [fail, { +: [fail, { call: [expect, "chunked", r_chunk, "11|mem|hello world"] }] }]
+      # Content-Length above the threshold → spooled to a file
+      - decl: [r_spool, string, { call: [probe, "PUT /up HTTP/1.1\r\nHost: x\r\nContent-Length: 26\r\n\r\nabcdefghijklmnopqrstuvwxyz"] }]
+      - set: [fail, { +: [fail, { call: [expect, "spooled CL", r_spool, "26|file|abcdefghijklmnopqrstuvwxyz"] }] }]
+      # chunked growing past the threshold → spills to a file mid-body
+      - decl: [r_spill, string, { call: [probe, "PATCH /up HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\na\r\n0123456789\r\na\r\nabcdefghij\r\n0\r\n\r\n"] }]
+      - set: [fail, { +: [fail, { call: [expect, "spilled chunked", r_spill, "20|file|0123456789abcdefghij"] }] }]
+      # over the spool cap → 413
+      - decl: [r_big, string, { call: [probe, "PUT /up HTTP/1.1\r\nHost: x\r\nContent-Length: 999999\r\n\r\n"] }]
+      - set: [fail, { +: [fail, { call: [expect, "spool cap", r_big, "HTTP/1.1 413"] }] }]
+      # Content-Length + Transfer-Encoding → 400 (request smuggling ambiguity)
+      - decl: [r_both, string, { call: [probe, "PATCH /up HTTP/1.1\r\nHost: x\r\nContent-Length: 4\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n"] }]
+      - set: [fail, { +: [fail, { call: [expect, "CL+TE", r_both, "HTTP/1.1 400"] }] }]
+      # unknown transfer coding → 501
+      - decl: [r_gzip, string, { call: [probe, "PATCH /up HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: gzip\r\n\r\n"] }]
+      - set: [fail, { +: [fail, { call: [expect, "TE gzip", r_gzip, "HTTP/1.1 501"] }] }]
+      # malformed chunk size → 400
+      - decl: [r_hex, string, { call: [probe, "PATCH /up HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\nzz\r\nab\r\n0\r\n\r\n"] }]
+      - set: [fail, { +: [fail, { call: [expect, "bad chunk size", r_hex, "HTTP/1.1 400"] }] }]
+      # HEAD: Content-Length of the file, but no body
+      - decl: [r_head, string, { call: [probe, "HEAD /file HTTP/1.1\r\nHost: x\r\n\r\n"] }]
+      - set: [fail, { +: [fail, { call: [expect, "HEAD length", r_head, "content-length: 20"] }] }]
+      - if:
+          condition: { ge: [{ call: [r_head.index_of, "0123456789"] }, 0] }
+          then:
+            - print: ["FAIL HEAD sent a body: ${r_head}"]
+            - set: [fail, { +: [fail, 1] }]
+      # reason phrase in the status line
+      - decl: [r_get, string, { call: [probe, "GET /file HTTP/1.1\r\nHost: x\r\n\r\n"] }]
+      - set: [fail, { +: [fail, { call: [expect, "GET body", r_get, "HTTP/1.1 200 OK"] }] }]
+      - set: [fail, { +: [fail, { call: [expect, "GET body", r_get, "0123456789ABCDEFGHIJ"] }] }]
+
+      # spooled files the handler did not keep are gone
+      - decl: [left, list<path>, { call: [io.list_dir, "/tmp/aiml_chunked_spool_test/spool"] }]
+      - if:
+          condition: { neq: [left.len, 0] }
+          then:
+            - print: ["FAIL spool dir not cleaned: ${left.len} file(s)"]
+            - set: [fail, { +: [fail, 1] }]
+
+      - call: [srv.stop]
+      - call: [io.remove_all, "/tmp/aiml_chunked_spool_test"]
+      - if: { condition: { gt: [fail, 0] }, then: [{ return: 1 }] }
+      - print: ["PASS http_chunked_spool: chunked + spool + spill + caps + CL/TE + 501 + HEAD"]
+      - return: 0
