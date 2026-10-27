@@ -1,0 +1,102 @@
+# Requires: driver
+# spec/67 §3: ldap_handle against the slapd started by tests/ldap/run.sh.
+#   aiml tests/ldap/ldap_login.aiml -- ldap://127.0.0.1:<port>
+
+- def:
+    name: check
+    args: [[label, string], [got, i32], [want, i32]]
+    return: i32
+    body:
+      - if:
+          condition: { eq: [got, want] }
+          then:
+            - print: ["  ok   ${label}"]
+            - return: [0]
+      - print: ["  FAIL ${label}: got ${got} want ${want}"]
+      - return: [1]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [url, string, { call: [sys.get_arg, 1] }]
+      - decl: [fails, i32, 0]
+      - decl: [base, string, "dc=example,dc=org"]
+      - decl: [alice, string, "uid=alice,ou=people,dc=example,dc=org"]
+
+      - decl: [conn, ldap_handle, { call: [ldap.open, url] }]
+      - decl: [opened, i32, 0]
+      - if:
+          condition: { neq: [conn, null] }
+          then:
+            - set: [opened, 1]
+      - set: [fails, { +: [fails, { call: [check, "open", opened, 1] }] }]
+      - call: [conn.set_timeout, 3000]
+
+      - set: [fails, { +: [fails, { call: [check, "bind ok", { call: [conn.bind, alice, "alice-pw"] }, 1] }] }]
+      - set: [fails, { +: [fails, { call: [check, "bind wrong password", { call: [conn.bind, alice, "nope"] }, 0] }] }]
+      - set: [fails, { +: [fails, { call: [check, "bind empty password rejected", { call: [conn.bind, alice, ""] }, 0] }] }]
+      - decl: [why, string, { call: [conn.error] }]
+      - decl: [why_hit, i32, 0]
+      - if:
+          condition: { ge: [{ call: [why.index_of, "empty password"] }, 0] }
+          then:
+            - set: [why_hit, 1]
+      - set: [fails, { +: [fails, { call: [check, "empty password reason", why_hit, 1] }] }]
+      - set: [fails, { +: [fails, { call: [check, "bind unknown user", { call: [conn.bind, "uid=mallory,ou=people,dc=example,dc=org", "x"] }, 0] }] }]
+
+      # search-then-bind, the usual login shape
+      - decl: [login, string, "alice"]
+      - decl: [login_esc, string, { call: [ldap.escape_filter, login] }]
+      - decl: [filter, string, "(uid=${login_esc})"]
+      - decl: [dns, list<string>, { call: [conn.search_dns, base, filter] }]
+      - set: [fails, { +: [fails, { call: [check, "search one user", dns.len, 1] }] }]
+      - decl: [first_dn, string, { call: [dns.get, 0] }]
+      - set: [fails, { +: [fails, { call: [check, "search finds alice", { call: [first_dn.index_of, "uid=alice"] }, 0] }] }]
+
+      # filter injection: a '*' login must not match everyone
+      - decl: [star_esc, string, { call: [ldap.escape_filter, "*"] }]
+      - decl: [star_filter, string, "(uid=${star_esc})"]
+      - decl: [star_dns, list<string>, { call: [conn.search_dns, base, star_filter] }]
+      - set: [fails, { +: [fails, { call: [check, "escaped wildcard matches nobody", star_dns.len, 0] }] }]
+      - decl: [all_dns, list<string>, { call: [conn.search_dns, "ou=people,dc=example,dc=org", "(uid=*)"] }]
+      - set: [fails, { +: [fails, { call: [check, "unescaped wildcard (control)", all_dns.len, 2] }] }]
+
+      # attributes: group membership and mail
+      - decl: [members, list<string>, { call: [conn.attr_values, "cn=devs,ou=groups,dc=example,dc=org", "member"] }]
+      - set: [fails, { +: [fails, { call: [check, "group has one member", members.len, 1] }] }]
+      - set: [fails, { +: [fails, { call: [check, "alice is in devs", { call: [members.contains, alice] }, 1] }] }]
+      - decl: [mails, list<string>, { call: [conn.attr_values, alice, "mail"] }]
+      - decl: [mail, string, { call: [mails.get, 0] }]
+      - decl: [mail_ok, i32, 0]
+      - if:
+          condition: { eq: [mail, "alice@example.org"] }
+          then:
+            - set: [mail_ok, 1]
+      - set: [fails, { +: [fails, { call: [check, "alice mail", mail_ok, 1] }] }]
+
+      # DN with special characters, built with escape_dn
+      - decl: [bob_cn, string, { call: [ldap.escape_dn, "Bob (Ops), Example"] }]
+      - decl: [bob_esc, string, { call: [ldap.escape_filter, "Bob (Ops), Example"] }]
+      - decl: [bob_dns, list<string>, { call: [conn.search_dns, "ou=people,dc=example,dc=org", "(cn=${bob_esc})"] }]
+      - set: [fails, { +: [fails, { call: [check, "escaped filter with parens", bob_dns.len, 1] }] }]
+      - set: [fails, { +: [fails, { call: [check, "escape_dn comma", { call: [bob_cn.index_of, "\\,"] }, 9] }] }]
+
+      # a missing entry is an error (-1 inside, empty list outside), not a crash
+      - decl: [none, list<string>, { call: [conn.attr_values, "uid=ghost,ou=people,dc=example,dc=org", "mail"] }]
+      - set: [fails, { +: [fails, { call: [check, "missing entry -> empty", none.len, 0] }] }]
+      - call: [conn.close]
+
+      # nothing listens there: bind reports an error (-1), not a crash
+      - decl: [dead, ldap_handle, { call: [ldap.open, "ldap://127.0.0.1:1"] }]
+      - call: [dead.set_timeout, 1000]
+      - set: [fails, { +: [fails, { call: [check, "unreachable server -> -1", { call: [dead.bind, alice, "alice-pw"] }, -1] }] }]
+      - call: [dead.close]
+
+      - if:
+          condition: { gt: [fails, 0] }
+          then:
+            - print: ["FAIL ldap_login: ${fails}"]
+            - return: [1]
+      - print: ["PASS ldap_login"]
+      - return: [0]
