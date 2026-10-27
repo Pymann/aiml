@@ -3,6 +3,7 @@
 #   client.body_file = path   request body streamed from a file (NULs survive)
 #   resp.save_to(path)        received body written byte-exact → 0 / -1
 #   resp.body_len             exact byte length of the received body
+#   HEAD                      no body is read (Content-Length notwithstanding)
 # The fixture is /usr/bin/true: an ELF binary, i.e. full of NUL bytes — exactly the
 # case where the text `body` stops early.
 
@@ -90,7 +91,20 @@
             - if: { condition: { neq: [saved_hash, want_hash] }, then: [{ print: ["FAIL saved file differs"] }, { set: [fail, { +: [fail, 1] }] }] }
             - call: [io.remove, "/tmp/aiml_http_client_files.bin"]
 
-      # 3. a body_file that does not exist: no request, null response
+      # 3. HEAD: Content-Length is announced, but there is no body to read
+      - decl: [hd_req, http_client_handle, { call: [http.new_request, "HEAD", dl_url] }]
+      - decl: [hd_resp, http_response_handle, { call: [hd_req.send] }]
+      - if:
+          condition: { eq: [hd_resp, null] }
+          then: [{ print: ["FAIL head: no response"] }, { set: [fail, { +: [fail, 1] }] }]
+          else:
+            - decl: [hd_code, i32, { call: [hd_resp.status] }]
+            - decl: [hd_len, i64, { call: [hd_resp.body_len] }]
+            - call: [hd_resp.free]
+            - if: { condition: { neq: [hd_code, 200] }, then: [{ print: ["FAIL head status ${hd_code}"] }, { set: [fail, { +: [fail, 1] }] }] }
+            - if: { condition: { neq: [hd_len, 0] }, then: [{ print: ["FAIL head body_len ${hd_len}"] }, { set: [fail, { +: [fail, 1] }] }] }
+
+      # 4. a body_file that does not exist: no request, null response
       - decl: [miss_req, http_client_handle, { call: [http.new_request, "POST", up_url] }]
       - set: [miss_req.body_file, "/nonexistent-dir/none.bin"]
       - decl: [miss_resp, http_response_handle, { call: [miss_req.send] }]
