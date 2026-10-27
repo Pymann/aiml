@@ -1,3 +1,4 @@
+#include <vector>
 #include "path_runtime.h"
 #include "../sys/string_runtime.h"
 #include <filesystem>
@@ -369,6 +370,35 @@ extern "C" int aiml_io_write_file_buf(const char* p, const void* data, int32_t l
     int rc = std::fclose(f);
     if (n > 0 && !data) return -1;
     return (written == n && rc == 0) ? 0 : -1;
+}
+
+// io.append_from(dst, src): appends the bytes of file `src` to file `dst`
+// (created if missing), streaming in 1 MiB blocks — binary-safe and
+// independent of the file size.  Returns the number of bytes appended, or -1.
+extern "C" int64_t aiml_io_append_from(const char* dst, const char* src) {
+    if (!dst || !src || dst[0] == '\0' || src[0] == '\0') return -1;
+    if (std::strcmp(dst, src) == 0) return -1;      // would read what it writes
+    FILE* in = std::fopen(src, "rb");
+    if (!in) return -1;
+    FILE* out = std::fopen(dst, "ab");
+    if (!out) { std::fclose(in); return -1; }
+    struct stat in_st {}, out_st {};
+    if (::fstat(::fileno(in), &in_st) == 0 && ::fstat(::fileno(out), &out_st) == 0 &&
+        in_st.st_dev == out_st.st_dev && in_st.st_ino == out_st.st_ino) {
+        std::fclose(in); std::fclose(out); return -1;  // same file via another path
+    }
+    std::vector<char> buf(1 << 20);
+    int64_t total = 0;
+    bool ok = true;
+    while (true) {
+        size_t got = std::fread(buf.data(), 1, buf.size(), in);
+        if (got > 0 && std::fwrite(buf.data(), 1, got, out) != got) { ok = false; break; }
+        total += static_cast<int64_t>(got);
+        if (got < buf.size()) { if (std::ferror(in)) ok = false; break; }
+    }
+    std::fclose(in);
+    if (std::fclose(out) != 0) ok = false;
+    return ok ? total : -1;
 }
 
 // ── AimlList layout (must match GenericList in list_impl.cpp) ────────────────

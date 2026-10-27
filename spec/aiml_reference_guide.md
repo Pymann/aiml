@@ -249,6 +249,7 @@ Provides stream semantics over the internal `path` typings.
 - **`[io.list_dir, p: path] -> list<path>`**: Returns contained non-recursive entities as paths.
 - **`[io.mkdir, p: path]`**, **`[io.mkdir_all, p: path]`**: Creates directory nodes.
 - **`[io.rename, src: path, dest: path]`**: Renames file pathing natively.
+- **`[io.append_from, dst: path, src: path] -> i64`**: Appends the bytes of file `src` to file `dst` (created if missing), streamed in 1 MiB blocks, binary-safe. Returns the bytes appended, `-1` on error (unreadable `src`, unwritable `dst`, or `dst` and `src` naming the same file). Used to grow upload files from spooled request bodies (`req.body_path`) without loading them into memory.
 - **`[io.remove, p: path]`**, **`[io.remove_all, p: path]`**: Deletes entities or trees.
 - **`[io.can_read, p: path] -> bool`**, **`[io.can_write, p: path] -> bool`**, **`[io.can_exec, p: path] -> bool`**: Returns POSIX permissions bounds.
 

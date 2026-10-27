@@ -2063,6 +2063,7 @@ int AIMLCompiler::jitRun(int argc, char** argv) {
     llvm::sys::DynamicLibrary::AddSymbol("aiml_io_read_file",      (void*)(intptr_t)aiml_io_read_file);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_io_write_file",     (void*)(intptr_t)aiml_io_write_file);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_io_write_file_buf", (void*)(intptr_t)aiml_io_write_file_buf);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_io_append_from",    (void*)(intptr_t)aiml_io_append_from);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_io_list_dir_fill",  (void*)(intptr_t)aiml_io_list_dir_fill);
 
     // String builtins (lower, trim, replace, split)

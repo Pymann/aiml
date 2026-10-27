@@ -2924,6 +2924,17 @@ void registerBuiltins(CompilerContext& ctx) {
         // content may be a string (written up to the terminating NUL) or a
         // buffer<u8> (written binary-safe with its exact length), following
         // the generic-entry-point rule used by hash.<algo>.
+        // io.append_from(dst, src) -> i64: append file src to file dst (binary, streamed)
+        io.builtinFuncs["append_from"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Type* i64 = ctx.builder.getInt64Ty();
+            if (args.size() < 2) return ctx.ir_gen->wrap(llvm::ConstantInt::get(i64, -1, true));
+            llvm::Function* f = ctx.getFunction("aiml_io_append_from", i64, {i8p, i8p});
+            llvm::Value* d = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            llvm::Value* src = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]));
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {d, src}));
+        };
+
         io.builtinFuncs["write_file"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
             llvm::Type* i8p  = ctx.builder.getInt8Ty()->getPointerTo();
             llvm::Type* i32  = ctx.builder.getInt32Ty();
