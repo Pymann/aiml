@@ -1,0 +1,19 @@
+# SPEC: 58_classgroups
+# spec/58 §12.5 — contract, implementation and user in three files.  The user
+# module imports only the contract; the composition root (this file) builds the
+# concrete group and hands it over as the contract.
+# Expected exit code: 0
+
+- import: "tests/_cross/giface_impl.aiml"
+- import: "tests/_cross/giface_user.aiml"
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [kit, ptr<GreetKit>, { new: LoudKit }]
+      - decl: [usr, ptr<KitUser>, { new: KitUser }]
+      - decl: [got, i32, { call: [usr.use, kit] }]
+      - if: { condition: { neq: [got, 7] }, then: [{ print: ["FAIL cross-unit got=${got} want 7"] }, { return: 1 }] }
+      - print: ["PASS classgroup_giface_cross_unit"]
+      - return: 0

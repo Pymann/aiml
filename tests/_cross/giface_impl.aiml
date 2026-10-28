@@ -1,0 +1,14 @@
+# Implementation module of the cross-unit test (spec/58 §12.5).
+- import: "giface_api.aiml"
+
+- class:
+    name: LoudGreeter
+    implements: [Greeter]
+    methods:
+      - def: { name: greet, args: [[who, string]], return: i32, body: [{ return: { call: [who.len] } }] }
+
+- classgroup:
+    name: LoudKit
+    implements: [GreetKit]
+    instances:
+      - { class: LoudGreeter, instance: greeter }

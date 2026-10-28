@@ -1,0 +1,61 @@
+# SPEC: 58_classgroups
+# static-check: relaxed
+# spec/58 §12.3 — an export satisfied by an INSTANCE-level `implements:` (§5.2):
+# the interface method is a group method on the synthesized subclass and uses a
+# sees collaborator.  The accessor must upcast through the subclass (its vtable),
+# not through the base class (which does not implement the interface).
+# Expected exit code: 0
+
+- interface:
+    name: Counter
+    methods:
+      - [next, i32, []]
+
+- groupinterface:
+    name: Ticker
+    exports:
+      - [clock, Counter]
+
+- class:
+    name: Store
+    members:
+      - [base, i32, 40]
+    methods:
+      - def: { name: value, return: i32, body: [{ return: <.base }] }
+
+- class:
+    name: Clock
+    members:
+      - [ticks, i32, 0]
+    methods:
+      - def: { name: bump, return: i32, body: [{ set: [<.ticks, { +: [<.ticks, 1] }] }, { return: <.ticks }] }
+
+- classgroup:
+    name: ClockGroup
+    implements: [Ticker]
+    instances:
+      - { class: Store, instance: store }
+      - class: Clock
+        instance: clock
+        sees: [store]
+        implements: [Counter]
+        methods:
+          - def: { name: next, return: i32, body: [{ return: { +: [{ call: [<.bump] }, { call: [<.store.value] }] } }] }
+
+- def:
+    name: drive
+    args: [[tk, ref<Ticker>]]
+    return: i32
+    body:
+      - call: [tk.clock.next]
+      - return: { call: [tk.clock.next] }
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [grp, ptr<Ticker>, { new: ClockGroup }]
+      - decl: [got, i32, { call: [drive, grp] }]
+      - if: { condition: { neq: [got, 42] }, then: [{ print: ["FAIL instance-level export got=${got} want 42"] }, { return: 1 }] }
+      - print: ["PASS classgroup_giface_instance_impl"]
+      - return: 0

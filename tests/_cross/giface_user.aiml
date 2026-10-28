@@ -1,0 +1,12 @@
+# User module of the cross-unit test: knows ONLY the contract (spec/58 §12.5).
+- import: "giface_api.aiml"
+
+- class:
+    name: KitUser
+    methods:
+      - def:
+          name: use
+          args: [[kit, ref<GreetKit>]]
+          return: i32
+          body:
+            - return: { call: [kit.greeter.greet, "seven!!"] }
