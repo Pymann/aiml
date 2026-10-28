@@ -1,0 +1,31 @@
+# Expected exit code: 0
+# An i32 argument for an i64 parameter keeps its value: -1 stays -1 (sign
+# extension); u8 / bool arguments zero-extend.  Zero-extending everything made
+# every negative offset/sentinel 4294967295.
+
+- def:
+    name: widen
+    args: [[val, i64]]
+    return: i64
+    body:
+      - return: [val]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [fails, i32, 0]
+      - if: { condition: { neq: [{ call: [widen, -1] }, -1] }, then: [{ print: ["FAIL literal -1"] }, { set: [fails, 1] }] }
+      - decl: [small, i32, -5]
+      - decl: [got_small, i64, { call: [widen, small] }]
+      - if: { condition: { neq: [got_small, -5] }, then: [{ print: ["FAIL i32 -5: ${got_small}"] }, { set: [fails, 1] }] }
+      - decl: [wide, i64, -7]
+      - if: { condition: { neq: [{ call: [widen, wide] }, -7] }, then: [{ print: ["FAIL i64 -7"] }, { set: [fails, 1] }] }
+      - decl: [byte, u8, 200]
+      - decl: [got_byte, i64, { call: [widen, byte] }]
+      - if: { condition: { neq: [got_byte, 200] }, then: [{ print: ["FAIL u8 200: ${got_byte}"] }, { set: [fails, 1] }] }
+      - decl: [big, i32, 2000000000]
+      - if: { condition: { neq: [{ call: [widen, big] }, 2000000000] }, then: [{ print: ["FAIL i32 2e9"] }, { set: [fails, 1] }] }
+      - if: { condition: { gt: [fails, 0] }, then: [{ return: [1] }] }
+      - print: ["PASS int_arg_sext: i32 → i64 sign-extends, u8 zero-extends"]
+      - return: [0]
