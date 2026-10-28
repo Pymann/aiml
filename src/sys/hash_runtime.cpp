@@ -310,6 +310,7 @@ char* aiml_hash_sha3_256  (const char* s) { return evp_hex(EVP_sha3_256(),  s); 
 char* aiml_hash_blake2b   (const char* s) { return evp_hex(EVP_blake2b512(), s); }
 char* aiml_hash_blake2s   (const char* s) { return evp_hex(EVP_blake2s256(), s); }
 char* aiml_hash_md5       (const char* s) { return evp_hex(EVP_md5(),        s); }
+char* aiml_hash_sha1      (const char* s) { return evp_hex(EVP_sha1(),       s); }
 
 // Length-aware hex digest over RAW bytes (binary-safe — no strlen).  Used when a
 // hash function is handed a buffer<u8> instead of a string, so the same
@@ -323,6 +324,7 @@ char* aiml_hash_hex_buf(const char* algo, const void* data, int32_t len) {
     else if (strcmp(algo, "blake2b")  == 0) md = EVP_blake2b512();
     else if (strcmp(algo, "blake2s")  == 0) md = EVP_blake2s256();
     else if (strcmp(algo, "md5")      == 0) md = EVP_md5();
+    else if (strcmp(algo, "sha1")     == 0) md = EVP_sha1();
     EVP_MD_CTX* ctx = EVP_MD_CTX_new();
     EVP_DigestInit_ex(ctx, md, nullptr);
     if (data && len > 0) EVP_DigestUpdate(ctx, data, (size_t)len);
