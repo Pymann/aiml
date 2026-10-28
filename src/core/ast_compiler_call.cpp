@@ -649,7 +649,14 @@ IRValue* Compiler::visitCall(CallExpr* call) {
                                 std::string field;
                                 if (ve->name.rfind("<.", 0) == 0) field = ve->name.substr(2);
                                 else if (ve->name.rfind("this.", 0) == 0) field = ve->name.substr(5);
-                                auto cit = ctx.classes.find(ctx.currentClassName);
+                                // the instance behind `<` is the `this` argument (namespace-qualified type)
+                                std::string cls = ctx.currentClassName;
+                                if (Symbol* th = resolveVariable("this")) {
+                                    cls = th->typeName;
+                                    if ((cls.rfind("ref<", 0) == 0 || cls.rfind("ptr<", 0) == 0) && cls.back() == '>')
+                                        cls = cls.substr(4, cls.size() - 5);
+                                }
+                                auto cit = ctx.classes.find(cls);
                                 if (!field.empty() && field.find('.') == std::string::npos && cit != ctx.classes.end()) {
                                     auto mit = cit->second.members.find(field);
                                     if (mit != cit->second.members.end()) argTy = mit->second.typeName;
