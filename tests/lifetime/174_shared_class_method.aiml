@@ -1,0 +1,32 @@
+# SPEC: 61_memory_management_DRAFT
+# Expected exit code: 0
+# spec/61 §6.2: methods dispatch on a shared<Class> handle as on ptr<Class> —
+# a local shared, a shared member of another object (co-owner), both reach
+# the same object; the rc keeps it alive until the last owner drops.
+- class:
+    name: Counter
+    members:
+      - [hits, i32, 0, { access: public }]
+    methods:
+      - def: { name: bump, return: i32, body: [{ set: [<.hits, { +: [<.hits, 1] }] }, { return: [<.hits] }] }
+
+- class:
+    name: CoOwner
+    members:
+      - [counter, shared<Counter>, null, { access: public }]
+    methods:
+      - def: { name: poke, return: i32, body: [{ return: [{ call: [<.counter.bump] }] }] }
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [mine, shared<Counter>, { share: { new: Counter } }]
+      - call: [mine.bump]
+      - decl: [other, ptr<CoOwner>, { new: CoOwner }]
+      - set: [other.counter, mine]
+      - decl: [seen, i32, { call: [other.poke] }]
+      - if: { condition: { neq: [seen, 2] }, then: [{ print: ["FAIL co-owner saw ${seen}"] }, { return: 1 }] }
+      - if: { condition: { neq: [mine.hits, 2] }, then: [{ print: ["FAIL local saw ${mine.hits}"] }, { return: 1 }] }
+      - print: ["PASS 174 shared_class_method"]
+      - return: 0
