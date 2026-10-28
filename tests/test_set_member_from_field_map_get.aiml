@@ -1,0 +1,36 @@
+# SPEC: 61_ownership
+# spec/61 §5.4: `map.get` is a borrow read also when the map is a FIELD
+# (`bag.notes.get`): stored into a string member it must take its own
+# reference.  It used to be adopted as if it were an owned temp — the member
+# dangled as soon as the decoded model was released (garbage / use after free).
+# Expected exit code: 0
+
+- model:
+    name: NoteBag
+    fields:
+      - [notes, map<string:string>]
+
+- class:
+    name: Keeper
+    members:
+      - [kept, string, "", { access: public }]
+    methods:
+      - def:
+          name: take
+          args: [[raw, string]]
+          body:
+            - decl: [bag, NoteBag, { call: [sys.deserialize, raw, "NoteBag"] }]
+            - if: { condition: { eq: [{ call: [bag.notes.contains, "key"] }, 1] }, then: [{ set: [<.kept, { call: [bag.notes.get, "key"] }] }] }
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [keeper, ptr<Keeper>, { new: Keeper }]
+      - call: [keeper.take, "{\"notes\":{\"key\":\"some-value-long-enough-to-notice\"}}"]
+      # reuse the freed blocks
+      - decl: [filler, string, { call: [math.random_hex, 40] }]
+      - decl: [other, string, { call: [math.random_hex, 16] }]
+      - if: { condition: { neq: [keeper.kept, "some-value-long-enough-to-notice"] }, then: [{ print: ["FAIL kept '${keeper.kept}'"] }, { return: 1 }] }
+      - print: ["PASS set_member_from_field_map_get (${filler.len} ${other.len})"]
+      - return: 0

@@ -1,0 +1,53 @@
+# A class under `- namespace:` that implements an interface of its namespace
+# and calls its own buffer-returning methods nested in builtin arguments.
+- namespace: demo.ns
+
+- interface:
+    name: Sink
+    methods:
+      - [take, i32, [[item, ref<demo.ns.Item>]]]
+
+- class:
+    name: Item
+    members:
+      - [width, i64, 0, { access: public }]
+
+- class:
+    name: Packer
+    implements: [demo.ns.Sink]
+    members:
+      - [seen, i64, 0, { access: public }]
+      - [blank, buffer<u8>]
+    methods:
+      - def:
+          name: pad
+          args: [[count, i64]]
+          return: buffer<u8>
+          body:
+            - if: { condition: { eq: [<.blank.len, 0] }, then: [{ set: [<.blank, { call: [bytes.from_hex, "0000000000000000"] }] }] }
+            - return: [{ call: [bytes.slice, <.blank, 0, count] }]
+      - def:
+          name: framed
+          args: [[item, ref<demo.ns.Item>]]
+          return: buffer<u8>
+          body:
+            - decl: [acc, buffer<u8>, { call: [bytes.from_string, "<"] }]
+            - set: [acc, { call: [bytes.concat, acc, { call: [<.pad, item.width] }] }]
+            - set: [acc, { call: [bytes.concat, acc, { call: [<.pad, 2] }] }]
+            - return: [{ call: [bytes.concat, acc, { call: [bytes.from_string, ">"] }] }]
+      - def:
+          name: take
+          args: [[item, ref<demo.ns.Item>]]
+          return: i32
+          body:
+            - decl: [out, buffer<u8>, { call: [<.framed, item] }]
+            - set: [<.seen, { +: [<.seen, out.len] }]
+            - return: [0]
+
+# Hands `item` to any sink — the call goes through the vtable.
+- def:
+    name: feed
+    args: [[sink, ref<demo.ns.Sink>], [item, ref<demo.ns.Item>]]
+    return: i32
+    body:
+      - return: [{ call: [sink.take, item] }]

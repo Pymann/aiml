@@ -225,6 +225,10 @@ probe "classgroup interfaces: ptr<G>/ref<G>, export borrows, member contract, dr
     "$AIML_BIN" -r tests/test_classgroup_giface.aiml
 probe "classgroup interfaces: export satisfied by an instance-level implements (spec/58 §12.3)" "gii" \
     "$AIML_BIN" -r tests/test_classgroup_giface_instance_impl.aiml
+probe "namespaced class: implements + vtable + nested <.method buffer results (spec/61)" "nsi" \
+    "$AIML_BIN" -r tests/test_namespace_class_iface.aiml
+probe "bytes file streaming: append_file / file_slice / copy_range / gzip_file / gunzip_file" "bst" \
+    "$AIML_BIN" -r tests/test_bytes_stream.aiml
 probe "memV3: chained req.params.get / url.get_param.get / resp.headers.put give managed strings" "hcm" \
     "$AIML_BIN" -r tests/_mem_sanitize/http_chained_maps.aiml
 probe "identity: base64 strings + owned buffers bound, rebound and dropped (spec/67 §2)" "b64" \
