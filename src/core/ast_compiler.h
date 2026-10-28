@@ -69,6 +69,16 @@ private:
     void synthesizeCascadeClasses(Program* prog);   // M3: emit each pool's render class
     void mergeGroupMethods(Program* prog);          // spec/58: fold external `groupmethods:` into groups
     void checkClassGroups(Program* prog);           // spec/58: validate group wiring
+    // spec/58 §12 group interfaces
+    void checkGroupInterfaces(Program* prog);                  // GI-1..4
+    void checkGroupImplements(ClassGroupDecl* g);              // GI-5..10
+    std::string resolveIfaceName(const std::string& raw, const std::string& ns);
+    std::string groupInterfaceOf(const std::string& typeName); // "" unless ptr/ref<GroupIface>
+    bool classImplementsIface(const std::string& cls, const std::string& ifaceQ);
+    // x.<export> on a group-interface value (§12.2): the export as a ref<Iface>
+    // value.  `slot` holds the group-interface fat pointer.  GI-11 on a non-export.
+    IRValue* emitGroupExport(Symbol* giSym, const std::string& gq, const std::string& exportName,
+                             CallExpr* site, std::string& ifaceTypeOut);
     void checkServices(Program* prog);              // spec/66 §5: validate service declarations
     void synthesizeClassGroups(Program* prog);      // spec/58: emit subclasses + container
     void visitExternBlock(ExternBlock* ext);

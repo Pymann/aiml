@@ -1,0 +1,23 @@
+# SPEC: 58_classgroups
+# static-check: relaxed
+# spec/58 §12.4 GI-4 — must be a hard compile error with exactly this message.
+# Runner expects exit code 1 (test_classgroup_neg_ pattern); tests/classgroup_giface/run.sh
+# checks the text.
+# EXPECT-ERROR: groupinterface 'Store' exports nothing.
+
+- interface:
+    name: Reg
+    methods:
+      - [push, i32, [[blob, string]]]
+- interface:
+    name: Other
+    methods:
+      - [ping, i32, []]
+- groupinterface:
+    name: Store
+    exports: []
+- def:
+    name: main
+    return: i32
+    body:
+      - return: 0

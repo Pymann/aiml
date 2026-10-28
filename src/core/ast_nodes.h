@@ -452,6 +452,11 @@ public:
     int level = -1;   // spec/65 F65-19: Typform traegt `level:`.  -1 = absent.
     std::string name;
     std::vector<MethodSignature> methods;
+    // spec/58 §12: a `groupinterface:` parses to an interface whose methods are the
+    // export accessors `__gi_<inst>` (returning ref<Iface>).  `groupExports` keeps
+    // the declared [instance, interface] pairs (duplicates included, for GI-3).
+    bool groupInterface = false;
+    std::vector<std::pair<std::string, std::string>> groupExports;
 
     std::string toString() const override { return "InterfaceDecl(" + name + ")"; }
 };
@@ -567,6 +572,9 @@ public:
     // all instances exported (backwards-compatible with M1).
     std::vector<std::string> exports;
     std::vector<ClassGroupInstance> instances;
+    // Group interfaces this group implements (spec/58 §12, group-level
+    // `implements:`).  Distinct from an instance's `implements:` (§5.2).
+    std::vector<std::string> implementsGroups;
 
     std::string toString() const override { return "ClassGroupDecl(" + name + ")"; }
 };
