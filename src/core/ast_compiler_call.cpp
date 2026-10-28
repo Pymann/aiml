@@ -972,10 +972,21 @@ IRValue* Compiler::visitCall(CallExpr* call) {
             // list<T>/map<T> field access returns ptr to struct; load by value when callee expects struct
             if (expectedTy->isStructTy() && actualTy->isPointerTy())
                 argVals[i] = ctx.ir_gen->wrap(ctx.builder.CreateLoad(expectedTy, actualVal, "struct_arg_load"));
-            // Integer width promotion: e.g. i32 literal passed to a function expecting i64
+            // Integer width promotion: e.g. i32 literal passed to a function expecting i64.
+            // Signed sources sign-extend (-1 stays -1); bool and unsigned sources
+            // (u8/u16/u32) zero-extend.  Zero-extending everything turned -1 into
+            // 4294967295 for every i64 parameter.
             if (expectedTy->isIntegerTy() && actualTy->isIntegerTy() &&
-                expectedTy->getIntegerBitWidth() > actualTy->getIntegerBitWidth())
-                argVals[i] = ctx.ir_gen->wrap(ctx.builder.CreateZExt(actualVal, expectedTy, "arg_zext"));
+                expectedTy->getIntegerBitWidth() > actualTy->getIntegerBitWidth()) {
+                bool unsignedSrc = actualTy->isIntegerTy(1);
+                if (!unsignedSrc) {
+                    const std::string srcTy = declaredTypeOfExpr(call->args[i].get());
+                    unsignedSrc = srcTy == "u8" || srcTy == "u16" || srcTy == "u32" || srcTy == "bool";
+                }
+                argVals[i] = ctx.ir_gen->wrap(unsignedSrc
+                    ? ctx.builder.CreateZExt(actualVal, expectedTy, "arg_zext")
+                    : ctx.builder.CreateSExt(actualVal, expectedTy, "arg_sext"));
+            }
             // Float promotion: f32 → f64
             if (expectedTy->isDoubleTy() && actualTy->isFloatTy())
                 argVals[i] = ctx.ir_gen->wrap(ctx.builder.CreateFPExt(actualVal, expectedTy, "arg_fpext"));
