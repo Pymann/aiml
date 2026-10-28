@@ -44,6 +44,7 @@
 #include "src/sys/tensor_runtime.h"
 #include "src/sys/arg_dump_runtime.h"
 #include "src/sys/binary_io_runtime.h"
+#include "src/core/package_table.h"
 
 // LLVM includes
 #include <llvm/IR/LLVMContext.h>
@@ -828,55 +829,17 @@ static void printPrefabReport(const std::vector<std::string>& rawLines,
     std::cout << os.str() << std::endl;
 }
 
-void AIMLCompiler::compile(const std::string& filename, const std::string& outputFilename) {
-    LOG_DEBUG("Compiling " + filename);
-    // Asset Registry: scan roots once at the top of the compile.  Stored in
-    // a singleton so builtin_registry can validate string-literal lookups and
-    // the JIT-runtime can resolve stems via the same in-memory tables.
-    AIML::AssetScanner::instance().scan(assetRootsStr);
-    YAML::Node config;
-    try {
-        config = YAML::LoadFile(filename);
-    } catch (const YAML::Exception& e) {
-        LOG_ERROR(filename + ": YAML parse error: " + std::string(e.what()));
-        return;
-    }
-    auto seenFileSizeDiagnostics = std::make_shared<std::unordered_set<std::string>>();
-    logAimlFileSizeDiagnostic(filename, seenFileSizeDiagnostics.get());
-    logAimlDeclCountDiagnostic(filename);
-
-    // 1. (Legacy __aiml_init creation removed. AST::Compiler now handles it)
-
-    // 2. Initialize Compiler Context — heap-allocated so it survives into jitRun()
-    //    allowing aiml_exec_code to access the symbol table during JIT execution.
-    delete static_cast<CompilerContext*>(compiler_ctx_);
-    compiler_ctx_ = nullptr;
-    delete static_cast<llvm::IRBuilder<>*>(builder_inst_);
-    builder_inst_ = nullptr;
-
-    builder_inst_ = new llvm::IRBuilder<>(*context_);
-    auto& builder  = *static_cast<llvm::IRBuilder<>*>(builder_inst_);
-
-    compiler_ctx_ = new CompilerContext(*context_, *module_, builder);
-    CompilerContext& ctx = *static_cast<CompilerContext*>(compiler_ctx_);
-
-    ctx.compilerPath = compilerPath;
-    ctx.libraryMode = libraryMode;
-    ctx.reportPrefabs = reportPrefabsMode;   // --prefab-report: collect wiring facts
-    ctx.ir_gen = AIML::createLLVMGenerator(ctx);
-
-    // Register builtins (classes, interfaces, namespace fns) BEFORE the
-    // header-scan phase parses any user code.  Otherwise a
-    // class header that says `implements: [mirror.RpcHandler]` fires
-    // "unknown interface" during import registration — that early visit
-    // runs registerTypes but never reaches the AST::Compiler::compile()
-    // call that normally seeds builtins.
-    registerBuiltins(ctx);
-
-    // 3. Setup Globals: __argc, __argv for sys commands
-    module_->getOrInsertGlobal("__argc", builder.getInt32Ty());
-    module_->getOrInsertGlobal("__argv", builder.getInt8Ty()->getPointerTo()->getPointerTo());
-
+// ── installImportResolver ────────────────────────────────────────────────────
+// The import callback for one compile: resolves the path (project-relative,
+// upward from the importing file, or `@package/…` via the package table —
+// spec/21 §3.1), parses the import's signatures into `ctx` and records it for
+// the deferred .o compilation.  `memorySource`: the unit is in-memory source
+// (compileFromString — sys.exec, ctx.load/exec); there only package imports are
+// allowed at the top level.  Returns the list of imports to compile.
+std::shared_ptr<std::vector<std::string>> AIMLCompiler::installImportResolver(
+        CompilerContext& ctx,
+        std::shared_ptr<std::unordered_set<std::string>> seenFileSizeDiagnostics,
+        bool memorySource) {
     // Per-instance set: each compiler gets its own header-propagation guard.
     // Shared via shared_ptr so the lambda can capture by value.
     auto headerDone = std::make_shared<std::unordered_set<std::string>>();
@@ -891,13 +854,33 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
     // re-parsing of diamond imports — the prior code used a process-wide
     // static set; this is the same idea but scoped to one compile root).
     auto parsedPaths = this->parsedPathsShared;
-    ctx.resolveImportCallback = [this, &ctx, headerDone, deferredImports, parsedPaths, seenFileSizeDiagnostics](const std::string& rawPath) {
+    ctx.resolveImportCallback = [this, &ctx, headerDone, deferredImports, parsedPaths, seenFileSizeDiagnostics, memorySource](const std::string& rawPath) {
         // Resolve relative imports: try cwd first (legacy behaviour),
         // then walk up from the importing file's directory looking for a
         // base where <base>/<rawPath> exists.  This makes "models/enums.aiml"
         // work whether the build is run from project root or from elsewhere.
         std::string path = rawPath;
-        if (!std::filesystem::exists(path) && !ctx.currentSourceFile.empty()) {
+        const bool fromMemory = ctx.currentSourceFile.empty() || ctx.currentSourceFile == "<memory>";
+        if (aiml::packages::isPackageImport(rawPath)) {
+            // spec/21 §3.1: `@name/…` — where the package lives says the package table.
+            std::string err;
+            if (!aiml::packages::resolve(rawPath, ctx.currentSourceFile, packageTable_, path, err)) {
+                LOG_ERROR((fromMemory ? std::string("<memory>") : ctx.currentSourceFile) + ": " + err);
+                return;
+            }
+            // Same relative spelling as a project file when the package lies under the
+            // working directory (exodus derives side-object names from it).
+            try {
+                std::filesystem::path rel = std::filesystem::path(path).lexically_relative(std::filesystem::current_path());
+                if (!rel.empty() && *rel.begin() != "..") path = rel.string();
+            } catch (...) {}
+        } else if (memorySource && fromMemory) {
+            // In-memory source has no place to be relative to — and in a host it is
+            // often someone else's text (a submitted pipeline): a path import would
+            // read any file of the host.  Only installed packages are reachable.
+            LOG_ERROR("<memory>: import '" + rawPath + "': imports from in-memory source must name a package (@name/...) — spec/21 §3.1");
+            return;
+        } else if (!std::filesystem::exists(path) && !ctx.currentSourceFile.empty()) {
             try {
                 std::filesystem::path cur =
                     std::filesystem::path(ctx.currentSourceFile).parent_path();
@@ -940,7 +923,10 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
             for (char c : path)
                 sanitized += (std::isalnum(c) ? c : '_');
             std::string libInitName = "__aiml_lib_init_" + sanitized;
-            if (std::find(ctx.libInitFuncNames.begin(), ctx.libInitFuncNames.end(), libInitName)
+            // A context (spec/29_2 §14a) initialises an import once, in the bundle that
+            // first brought it — later bundles reach its symbols through the process.
+            bool alreadyInContext = memorySource && ctx_imported_paths_.count(path) > 0;
+            if (!alreadyInContext && std::find(ctx.libInitFuncNames.begin(), ctx.libInitFuncNames.end(), libInitName)
                 == ctx.libInitFuncNames.end()) {
                 ctx.libInitFuncNames.push_back(libInitName);
             }
@@ -1066,6 +1052,60 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
         ctx.headerOnlyMode = prevHeaderOnly;
         ctx.currentSourceFile = prevSrcFile;
     };
+    return deferredImports;
+}
+
+void AIMLCompiler::compile(const std::string& filename, const std::string& outputFilename) {
+    LOG_DEBUG("Compiling " + filename);
+    // Asset Registry: scan roots once at the top of the compile.  Stored in
+    // a singleton so builtin_registry can validate string-literal lookups and
+    // the JIT-runtime can resolve stems via the same in-memory tables.
+    AIML::AssetScanner::instance().scan(assetRootsStr);
+    YAML::Node config;
+    try {
+        config = YAML::LoadFile(filename);
+    } catch (const YAML::Exception& e) {
+        LOG_ERROR(filename + ": YAML parse error: " + std::string(e.what()));
+        return;
+    }
+    auto seenFileSizeDiagnostics = std::make_shared<std::unordered_set<std::string>>();
+    logAimlFileSizeDiagnostic(filename, seenFileSizeDiagnostics.get());
+    logAimlDeclCountDiagnostic(filename);
+
+    // 1. (Legacy __aiml_init creation removed. AST::Compiler now handles it)
+
+    // 2. Initialize Compiler Context — heap-allocated so it survives into jitRun()
+    //    allowing aiml_exec_code to access the symbol table during JIT execution.
+    delete static_cast<CompilerContext*>(compiler_ctx_);
+    compiler_ctx_ = nullptr;
+    delete static_cast<llvm::IRBuilder<>*>(builder_inst_);
+    builder_inst_ = nullptr;
+
+    builder_inst_ = new llvm::IRBuilder<>(*context_);
+    auto& builder  = *static_cast<llvm::IRBuilder<>*>(builder_inst_);
+
+    compiler_ctx_ = new CompilerContext(*context_, *module_, builder);
+    CompilerContext& ctx = *static_cast<CompilerContext*>(compiler_ctx_);
+
+    ctx.compilerPath = compilerPath;
+    ctx.libraryMode = libraryMode;
+    ctx.reportPrefabs = reportPrefabsMode;   // --prefab-report: collect wiring facts
+    ctx.ir_gen = AIML::createLLVMGenerator(ctx);
+
+    // Register builtins (classes, interfaces, namespace fns) BEFORE the
+    // header-scan phase parses any user code.  Otherwise a
+    // class header that says `implements: [mirror.RpcHandler]` fires
+    // "unknown interface" during import registration — that early visit
+    // runs registerTypes but never reaches the AST::Compiler::compile()
+    // call that normally seeds builtins.
+    registerBuiltins(ctx);
+
+    // 3. Setup Globals: __argc, __argv for sys commands
+    module_->getOrInsertGlobal("__argc", builder.getInt32Ty());
+    module_->getOrInsertGlobal("__argv", builder.getInt8Ty()->getPointerTo()->getPointerTo());
+
+    // Import resolution (spec/21 §2.1, packages §3.1) — shared with compileFromString.
+    auto deferredImports = installImportResolver(ctx, seenFileSizeDiagnostics, /*memorySource=*/false);
 
     // 4. Parse YAML to AST & Compile (Two-Pass)
     AIML::AST::Builder astBuilder;
@@ -1349,6 +1389,11 @@ void AIMLCompiler::compileFromString(const std::string& yaml_source_in) {
     ctx.currentSourceFile = "<memory>";
     // Der Wunsch des Aufrufers gilt fuer DIESEN frischen Kontext (§15).
     ctx.headerOnlyMode = headerOnlyNext_;
+    // Builtins before the header scan of imports (same order as compile()):
+    // an imported class that implements a builtin interface needs it known.
+    registerBuiltins(ctx);
+    auto memSeen = std::make_shared<std::unordered_set<std::string>>();
+    auto deferredImports = installImportResolver(ctx, memSeen, /*memorySource=*/true);
 
     module_->getOrInsertGlobal("__argc", builder.getInt32Ty());
     module_->getOrInsertGlobal("__argv", builder.getInt8Ty()->getPointerTo()->getPointerTo());
@@ -1376,6 +1421,12 @@ void AIMLCompiler::compileFromString(const std::string& yaml_source_in) {
             astCompiler.synthesizeServices(programAST.get());        // spec/66 §3
             astCompiler.registerTypes(programAST.get());
             astCompiler.synthesizeServiceBodies(programAST.get());   // spec/66 §4.3
+            // Imports to .o, now that all their types are known (as compile() Pass 1.5).
+            for (const auto& importPath : *deferredImports) this->resolveImport(importPath);
+            for (const auto& obj : this->linkedObjects)
+                if (std::find(ctx.objectFilesToLink.begin(), ctx.objectFilesToLink.end(), obj)
+                    == ctx.objectFilesToLink.end())
+                    ctx.objectFilesToLink.push_back(obj);
             astCompiler.compile(programAST.get());
             // spec/65 F65-9 (opt-in, F65-17): Privilegienfluss ueber die Aufrufkanten.
             // Laeuft je uebersetzter Datei; datei-UEBERGREIFENDE Kanten deckt das noch
@@ -1445,6 +1496,7 @@ int AIMLCompiler::compileLibraryAndRegister(const std::string& yaml_source) {
         LOG_ERROR("compileLibraryAndRegister: engine creation failed: " + errStr);
         return -1;
     }
+    addImportObjects(eng);
     eng->finalizeObject();
 
     CompilerContext* c = static_cast<CompilerContext*>(compiler_ctx_);
@@ -1497,6 +1549,34 @@ void AIMLCompiler::compileDeclarationsOnly(const std::string& yaml_source) {
 //      ungueltige IR — das ist der Grund fuer den Umweg, nicht Vorsicht.
 //   3. Die Engine behalten.  Gibt man sie frei, zeigen die eben registrierten
 //      Adressen ins Leere (dieselbe Lehre wie bei `sys.lib_load`, §15).
+// ── addImportObjects ─────────────────────────────────────────────────────────
+// The .o of this bundle's imports into its engine — each once per compiler: a
+// later bundle of the same context reaches them through the symbols the first
+// one published (DynamicLibrary), and a second copy would be a duplicate.
+void AIMLCompiler::addImportObjects(llvm::ExecutionEngine* eng) {
+    for (const auto& objPath : linkedObjects) {
+        if (ctx_loaded_objects_.count(objPath)) continue;
+        auto bufferOrErr = llvm::MemoryBuffer::getFile(objPath);
+        if (std::error_code EC = bufferOrErr.getError()) {
+            LOG_ERROR("import object " + objPath + ": " + EC.message());
+            continue;
+        }
+        std::unique_ptr<llvm::MemoryBuffer> buf = std::move(bufferOrErr.get());
+        auto objOrErr = llvm::object::ObjectFile::createObjectFile(buf->getMemBufferRef());
+        if (!objOrErr) {
+            llvm::consumeError(objOrErr.takeError());
+            LOG_ERROR("import object " + objPath + ": not an object file");
+            continue;
+        }
+        eng->addObjectFile(std::move(objOrErr.get()));
+        ctx_obj_buffers_.push_back(std::move(buf));
+        ctx_loaded_objects_.insert(objPath);
+    }
+    for (const auto& p : importedSourceFiles) ctx_imported_paths_.insert(p);
+}
+
+void AIMLCompiler::setPackageTable(const std::string& path) { packageTable_ = path; }
+
 int AIMLCompiler::execInContext(const std::string& yaml_source) {
     return compileInContext(yaml_source, /*run_entry=*/true);
 }
@@ -1562,6 +1642,7 @@ int AIMLCompiler::compileInContext(const std::string& yaml_source, bool run_entr
         LOG_ERROR("execInContext: Engine nicht baubar: " + errStr);
         return -1;
     }
+    addImportObjects(eng);
     eng->finalizeObject();
     ctx_engines_.push_back(eng);
 

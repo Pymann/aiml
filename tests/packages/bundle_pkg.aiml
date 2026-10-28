@@ -1,0 +1,7 @@
+# Requires: driver
+- import: "@demo/lib/greet.aiml"
+- def:
+    name: main
+    return: i32
+    body:
+      - return: { call: [demo_greet, "ctx"] }
