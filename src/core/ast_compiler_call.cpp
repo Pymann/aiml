@@ -323,6 +323,64 @@ IRValue* Compiler::visitCall(CallExpr* call) {
                 }
 
                 std::string receiverPath = receiverExpr.substr(recvSep + 1);
+                // spec/58 §12.2: `x.<export>.<method>` where x (or a member on the way)
+                // is a group-interface value — reach the export through its accessor.
+                if (receiverExpr[recvSep] == '.') {
+                    std::vector<std::string> segs;
+                    { size_t st = 0, dp; while ((dp = receiverPath.find('.', st)) != std::string::npos) { segs.push_back(receiverPath.substr(st, dp - st)); st = dp + 1; } segs.push_back(receiverPath.substr(st)); }
+                    // Static walk: which segment's value is a group interface?
+                    std::string ty = receiverSym->typeName;
+                    int giAt = groupInterfaceOf(ty).empty() ? -2 : -1;   // -1 = the base itself
+                    for (int k = 0; giAt == -2 && k + 1 < (int)segs.size(); ++k) {
+                        std::string cls = ty;
+                        if ((cls.rfind("ptr<", 0) == 0 || cls.rfind("ref<", 0) == 0) && cls.back() == '>') cls = cls.substr(4, cls.size() - 5);
+                        std::string key = ctx.classes.count(cls) ? cls : ctx.qualify(cls);
+                        auto cit = ctx.classes.find(key);
+                        if (cit == ctx.classes.end() || !cit->second.members.count(segs[k])) break;
+                        ty = cit->second.members[segs[k]].typeName;
+                        if (!groupInterfaceOf(ty).empty()) giAt = k;
+                    }
+                    if (giAt != -2) {
+                        std::string gq = groupInterfaceOf(ty);
+                        Symbol giSym;
+                        if (giAt == -1) giSym = *receiverSym;
+                        else {
+                            std::string prefix = segs[0];
+                            for (int k = 1; k <= giAt; ++k) prefix += "." + segs[k];
+                            std::string ptyName;
+                            IRValue* slot = resolvePropertyWritePtr(receiverSym, prefix, ptyName);
+                            if (!slot) return nullptr;
+                            giSym.typeName = ptyName;
+                            giSym.ir_alloca_inst = slot;
+                            if (llvm::Type* pt = ctx.getLLVMType(ptyName)) {
+                                giSym.ir_element_type = ctx.ir_gen->wrapType(pt);
+                                giSym.element_type = pt;
+                            }
+                        }
+                        const std::string& exp = segs[giAt + 1];
+                        if (giAt + 2 < (int)segs.size()) {
+                            std::string iface;
+                            for (const auto& e : ctx.groupInterfaces[gq].exports) if (e.first == exp) iface = e.second;
+                            if (!iface.empty()) {
+                                LOG_ERROR(ctx.fmtLoc(call->sourceNode) + "'" + exp + "' of group interface '" + gq +
+                                          "' is an interface ('" + iface + "'): call one of its methods, x." + exp + ".<method>.");
+                                return nullptr;
+                            }
+                        }
+                        std::string ifaceType;
+                        IRValue* ev = emitGroupExport(&giSym, gq, exp, call, ifaceType);
+                        if (!ev) return nullptr;
+                        llvm::Value* evRaw = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(ev));
+                        llvm::Value* tmp = ctx.createEntryAlloca(evRaw->getType(), "gi_export");
+                        ctx.builder.CreateStore(evRaw, tmp);
+                        Symbol exSym;
+                        exSym.typeName = ifaceType;
+                        exSym.ir_alloca_inst = ctx.ir_gen->wrap(tmp);
+                        exSym.ir_element_type = ctx.ir_gen->wrapType(evRaw->getType());
+                        exSym.element_type = evRaw->getType();
+                        return visitObjectMethodCall("gi_export", finalMethod, &exSym, call);
+                    }
+                }
                 std::string recvTypeName;
                 IRValue* receiverPtr = resolvePropertyWritePtr(receiverSym, receiverPath, recvTypeName);
                 if (receiverPtr) {
@@ -1270,6 +1328,15 @@ IRValue* Compiler::visitCall(CallExpr* call) {
     return callRes;
 }
 IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std::string& methodName, Symbol* sym, CallExpr* call) {
+    // spec/58 §12.2: on a group-interface value only the exports exist —
+    // `call: [x.export]` yields the export; anything else is GI-11.
+    {
+        std::string gq = groupInterfaceOf(sym->typeName);
+        if (!gq.empty() && methodName.rfind("__gi_", 0) != 0 && methodName.find('.') == std::string::npos) {
+            std::string ifaceType;
+            return emitGroupExport(sym, gq, methodName, call, ifaceType);
+        }
+    }
     // ── dyn_array<T>.free ─────────────────────────────────────────────────────
     if (sym->typeName.rfind("dyn_array<", 0) == 0 && sym->typeName.back() == '>' && methodName == "free") {
         llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
@@ -5149,5 +5216,31 @@ IRValue* Compiler::visitSysCodeFromCall(CallExpr* call) {
     return ctx.ir_gen->wrap(codePtr);
 }
 
+// spec/58 §12.2: the export `exportName` of the group-interface value held by
+// `giSym` — through the accessor `__gi_<export>` the lowered interface declares
+// (§12.3).  The result is a ref<Iface> fat pointer: a borrow, never an owner.
+IRValue* Compiler::emitGroupExport(Symbol* giSym, const std::string& gq, const std::string& exportName,
+                                   CallExpr* site, std::string& ifaceTypeOut) {
+    auto git = ctx.groupInterfaces.find(gq);
+    if (git == ctx.groupInterfaces.end()) return nullptr;
+    bool known = false;
+    std::set<std::string> names;
+    for (const auto& e : git->second.exports) { names.insert(e.first); if (e.first == exportName) known = true; }
+    if (!known) {
+        std::string list;
+        for (const auto& n : names) list += (list.empty() ? "" : ", ") + n;
+        LOG_ERROR((site ? ctx.fmtLoc(site->sourceNode) : ctx.fmtLoc()) + "'" + exportName +
+                  "' is not part of group interface '" + gq + "' (exports: " + list + ").");
+        return nullptr;
+    }
+    ifaceTypeOut.clear();
+    for (const auto& m : ctx.interfaces[gq].methods)
+        if (m.name == "__gi_" + exportName) ifaceTypeOut = m.returnType;
+    CallExpr acc("gi_group.__gi_" + exportName);
+    if (site) acc.sourceNode = site->sourceNode;
+    return visitObjectMethodCall("gi_group", "__gi_" + exportName, giSym, &acc);
+}
+
 } // namespace AST
 } // namespace AIML
+

@@ -1,0 +1,38 @@
+# SPEC: 58_classgroups,61_memory_management_DRAFT
+# `free: <group>` with a sees edge: the instance's sees member is a BORROW of a
+# sibling the container owns (spec/58 §9).  Until 2026-10-28 the instance's own
+# free descriptor listed it as an owned ptr, so the __dtor freed the sibling and the
+# instance's deep free freed it again (double free, valgrind "Invalid free").
+# Every drop of a group behind a group interface (§12) goes this way.
+# Expected exit code: 0
+- class:
+    name: Store
+    members:
+      - [base, i32, 40]
+    methods:
+      - def: { name: value, return: i32, body: [{ return: <.base }] }
+- class:
+    name: Clock
+    members:
+      - [ticks, i32, 0]
+    methods:
+      - def: { name: bump, return: i32, body: [{ set: [<.ticks, { +: [<.ticks, 1] }] }, { return: <.ticks }] }
+- classgroup:
+    name: ClockGroup
+    instances:
+      - { class: Store, instance: store }
+      - class: Clock
+        instance: clock
+        sees: [store]
+        methods:
+          - def: { name: next, return: i32, body: [{ return: { +: [{ call: [<.bump] }, { call: [<.store.value] }] } }] }
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [grp, ptr<ClockGroup>, { new: ClockGroup }]
+      - decl: [got, i32, { call: [grp.clock.next] }]
+      - if: { condition: { neq: [got, 41] }, then: [{ print: ["FAIL got=${got}"] }, { return: 1 }] }
+      - free: grp
+      - print: ["PASS classgroup_free_sees"]
+      - return: 0

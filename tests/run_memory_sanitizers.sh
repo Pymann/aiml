@@ -217,6 +217,10 @@ probe "nested model-list push+index-writeback (9rooms add_buff→buffs.push + id
     "$AIML_BIN" -r tests/_mem_sanitize/nested_model_list_deepcopy.aiml
 probe "memV3: req.params / url.get_param / cookies are managed map handles, url parts managed strings" "hrm" \
     "$AIML_BIN" -r tests/_mem_sanitize/http_request_maps.aiml
+probe "classgroup free with a sees edge: the borrowed sibling is freed once (spec/58 §9)" "gfs" \
+    "$AIML_BIN" -r tests/test_classgroup_free_sees.aiml
+probe "interface-typed member from {new:}: upcast on set, released with its owner (spec/61)" "ims" \
+    "$AIML_BIN" -r tests/test_iface_member_set_new.aiml
 probe "classgroup interfaces: ptr<G>/ref<G>, export borrows, member contract, drop frees the group (spec/58 §12)" "gif" \
     "$AIML_BIN" -r tests/test_classgroup_giface.aiml
 probe "classgroup interfaces: export satisfied by an instance-level implements (spec/58 §12.3)" "gii" \

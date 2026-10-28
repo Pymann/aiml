@@ -44,11 +44,11 @@
 
 - def:
     name: drive
-    args: [[tk, ref<Ticker>]]
+    args: [[tick, ref<Ticker>]]
     return: i32
     body:
-      - call: [tk.clock.next]
-      - return: { call: [tk.clock.next] }
+      - call: [tick.clock.next]
+      - return: { call: [tick.clock.next] }
 
 - def:
     name: main
