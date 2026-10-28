@@ -57,8 +57,8 @@
       - set: [fails, { +: [fails, { call: [expect, "hex round trip", { call: [bytes.to_hex, raw] }, "00ff7fa0"] }] }]
       - set: [fails, { +: [fails, { call: [expect, "hex range", { call: [bytes.to_hex, raw, 1, 2] }, "ff7f"] }] }]
       - set: [fails, { +: [fails, { call: [expect_num, "be32", { call: [bytes.be32, raw, 0] }, 16744352] }] }]
-      - decl: [be, buffer<u8>, { call: [bytes.from_be32, 4278190081] }]
-      - set: [fails, { +: [fails, { call: [expect, "from_be32", { call: [bytes.to_hex, be] }, "ff000001"] }] }]
+      - decl: [be_bytes, buffer<u8>, { call: [bytes.from_be32, 4278190081] }]
+      - set: [fails, { +: [fails, { call: [expect, "from_be32", { call: [bytes.to_hex, be_bytes] }, "ff000001"] }] }]
       - decl: [odd, buffer<u8>, { call: [bytes.from_hex, "abc"] }]
       - set: [fails, { +: [fails, { call: [expect_num, "odd hex", odd.len, 0] }] }]
       # zlib: two streams back to back, read one at a time
