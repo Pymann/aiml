@@ -623,10 +623,40 @@ IRValue* Compiler::visitCall(CallExpr* call) {
                               "dann `call: [sys.exe, argv]`.");
                 }
             }
+            // spec/68: under memV3 a call that returns buffer<u8> yields a buffer
+            // HANDLE (pointer), a buffer variable a loaded buffer VALUE.  The bytes/
+            // hash builtins read (data, len) from a value — a handle would be taken
+            // for a C string.  Load the value here and release the temporary handle
+            // after the call (the builtins copy what they keep).
+            std::vector<llvm::Value*> bufTempHandles;
+            if (ctx.memV3 && (baseName == "bytes" || baseName == "hash")) {
+                static const std::set<std::string> bufReturners = {
+                    "bytes.slice", "bytes.concat", "bytes.from_be32", "bytes.from_u8", "bytes.from_hex",
+                    "bytes.from_string", "bytes.read_file", "bytes.zlib", "bytes.zlib_at",
+                    "bytes.delta_apply", "base64.decode", "base64.url_decode" };
+                for (size_t ai = 0; ai < call->args.size() && ai < argVals.size(); ++ai) {
+                    auto* inner = dynamic_cast<AIML::AST::CallExpr*>(call->args[ai].get());
+                    if (!inner || !argVals[ai]) continue;
+                    llvm::Value* hv = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[ai]));
+                    if (!hv->getType()->isPointerTy()) continue;
+                    bool isBuf = bufReturners.count(inner->functionName) > 0;
+                    if (!isBuf) {
+                        auto sig = resolveCallSignature(inner->functionName);
+                        isBuf = sig.valid && sig.returnType.rfind("buffer", 0) == 0;
+                    }
+                    if (!isBuf) continue;
+                    argVals[ai] = ctx.ir_gen->wrap(ctx.builder.CreateLoad(ctx.getLLVMType("buffer"), hv, "buf_arg_val"));
+                    bufTempHandles.push_back(hv);
+                }
+            }
             AIML::AST::CallExpr* prevCall = ctx.currentCall;
             ctx.currentCall = call;
             IRValue* sysResult = visitSysNamespaceCall(baseName, methodName, argVals);
             ctx.currentCall = prevCall;
+            for (llvm::Value* hv : bufTempHandles) {
+                llvm::Type* i8pt = ctx.builder.getInt8Ty()->getPointerTo();
+                ctx.builder.CreateCall(ctx.getFunction("aiml_buffer_handle_release", ctx.builder.getVoidTy(), {i8pt}), {hv});
+            }
             if (baseName == "gl" && (methodName == "draw_elements_instanced"
                 || methodName == "create_buffer" || methodName == "create_buffer_dynamic"
                 || methodName == "create_index_buffer")) finishCallArguments(call, argVals);

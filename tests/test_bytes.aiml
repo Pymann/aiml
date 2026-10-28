@@ -28,6 +28,15 @@
       - return: [1]
 
 - def:
+    name: make_blob
+    args: [[text, string]]
+    return: buffer<u8>
+    body:
+      - decl: [head, buffer<u8>, { call: [bytes.from_string, "blob 5"] }]
+      - decl: [with_nul, buffer<u8>, { call: [bytes.concat, head, { call: [bytes.from_u8, 0] }] }]
+      - return: [{ call: [bytes.concat, with_nul, text] }]
+
+- def:
     name: main
     return: i32
     body:
@@ -86,6 +95,9 @@
       - set: [fails, { +: [fails, { call: [expect_num, "compare equal", { call: [bytes.compare, obj, 7, "hello", 0, 5] }, 0] }] }]
       - set: [fails, { +: [fails, { call: [expect_num, "compare less", { call: [bytes.compare, raw, 0, raw, 1, 1] }, -1] }] }]
       - set: [fails, { +: [fails, { call: [expect_num, "compare outside", { call: [bytes.compare, raw, 3, raw, 0, 2] }, 2] }] }]
+      # buffers straight from calls (memV3 handles), builtin and user function
+      - set: [fails, { +: [fails, { call: [expect, "nested builtin", { call: [bytes.to_hex, { call: [bytes.concat, { call: [bytes.from_u8, 1] }, { call: [bytes.from_u8, 2] }] }] }, "0102"] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "nested user call", { call: [hash.sha1, { call: [make_blob, "hello"] }] }, "b6fc4c620b67d95f953a5c1c1230aaab5db5a1b0"] }] }]
       # read_file + write back
       - decl: [disk, string, "/tmp/aiml_test_bytes.bin"]
       - call: [io.write_file, disk, obj]
