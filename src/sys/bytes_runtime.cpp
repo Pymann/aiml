@@ -11,6 +11,7 @@
 //   slice / concat / u8 / find / be32 / from_be32 / hex / text — byte access
 //   read_file                                                  — whole file
 //   zlib / zlib_at + zlib_consumed                             — zlib streams
+//   crc32 / compare                                            — pack index work
 //   delta_apply                                                — git pack delta
 //   sha1 is a hash.<algo> (hash_runtime.cpp).
 //
@@ -238,6 +239,23 @@ void* aiml_bytes_zlib_at(const uint8_t* data, int32_t size, int64_t off) {
 }
 
 int64_t aiml_bytes_zlib_consumed() { return g_zlib_consumed; }
+
+// bytes.crc32(buf, off, len) → CRC-32 (zlib) of the range as an unsigned value; -1 outside.
+int64_t aiml_bytes_crc32(const uint8_t* data, int32_t size, int64_t off, int64_t n) {
+    if (n < 0) n = static_cast<int64_t>(size) - off;
+    if (!in_range(size, off, n)) return -1;
+    uLong c = crc32(0L, Z_NULL, 0);
+    if (n > 0 && data) c = crc32(c, data + off, static_cast<uInt>(n));
+    return static_cast<int64_t>(c);
+}
+
+// bytes.compare(a, a_off, b, b_off, len) → -1 / 0 / 1 (memcmp order); 2 when a range is outside.
+int32_t aiml_bytes_compare(const uint8_t* a, int32_t alen, int64_t aoff,
+                           const uint8_t* b, int32_t blen, int64_t boff, int64_t n) {
+    if (!in_range(alen, aoff, n) || !in_range(blen, boff, n) || (n > 0 && (!a || !b))) return 2;
+    int r = n > 0 ? memcmp(a + aoff, b + boff, static_cast<size_t>(n)) : 0;
+    return r < 0 ? -1 : (r > 0 ? 1 : 0);
+}
 
 // bytes.delta_apply(base, delta) — git pack delta (pack-format.txt
 // "Deltified representation"): two size varints, then copy (MSB set) and

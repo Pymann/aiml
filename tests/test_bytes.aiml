@@ -81,6 +81,11 @@
       - set: [fails, { +: [fails, { call: [expect, "delta_apply", { call: [bytes.text, patched] }, "hello!!"] }] }]
       - decl: [wrong_base, buffer<u8>, { call: [bytes.delta_apply, "short", delta] }]
       - set: [fails, { +: [fails, { call: [expect_num, "delta on wrong base", wrong_base.len, 0] }] }]
+      # crc32 / compare
+      - set: [fails, { +: [fails, { call: [expect_num, "crc32", { call: [bytes.crc32, { call: [bytes.from_string, "123456789"] }] }, 3421780262] }] }]
+      - set: [fails, { +: [fails, { call: [expect_num, "compare equal", { call: [bytes.compare, obj, 7, "hello", 0, 5] }, 0] }] }]
+      - set: [fails, { +: [fails, { call: [expect_num, "compare less", { call: [bytes.compare, raw, 0, raw, 1, 1] }, -1] }] }]
+      - set: [fails, { +: [fails, { call: [expect_num, "compare outside", { call: [bytes.compare, raw, 3, raw, 0, 2] }, 2] }] }]
       # read_file + write back
       - decl: [disk, string, "/tmp/aiml_test_bytes.bin"]
       - call: [io.write_file, disk, obj]
