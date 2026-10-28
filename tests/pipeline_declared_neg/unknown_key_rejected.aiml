@@ -1,0 +1,13 @@
+# SPEC: 62_pipelines §20.5
+# Was der Uebersetzer nicht kennt, ist ein Fehler — keine stille
+# Requires: driver
+# Wirkungslosigkeit.  Genau das macht eine zweite Pruefung im Kontroller
+# entbehrlich.
+- pipeline:
+    name: fremder_schluessel
+    bildnis: ubuntu-base
+    steps:
+      - stage:
+          name: eins
+          steps:
+            - step: { name: erster, return: i32, body: [{ return: 0 }] }

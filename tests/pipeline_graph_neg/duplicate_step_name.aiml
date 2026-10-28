@@ -4,8 +4,9 @@
 # entscheidbar, welchen Schritt ein `needs` meint.
 - pipeline:
     name: dup_names
-    params: { arch: [x86_64] }
-    stages:
+    params:
+      - [arch, string, [x86_64]]
+    steps:
       - stage:
           name: one
           steps:

@@ -4,8 +4,9 @@
 # Ergebnis fuer die ganze Matrix, also kann es nicht von einer Achse haengen.
 - pipeline:
     name: once_axis
-    params: { arch: [x86_64, arm64] }
-    stages:
+    params:
+      - [arch, string, [x86_64, arm64]]
+    steps:
       - stage:
           name: one
           steps:

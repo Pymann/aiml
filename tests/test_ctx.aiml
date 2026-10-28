@@ -1,0 +1,133 @@
+# SPEC: 29_2_sys_exec
+# spec/29_2 §14a: `ctx` — der Kontext als eigener Namensraum.
+#
+# Geprueft wird, was die Spec zusagt:
+#   1. `ctx.new` gibt einen Kontext, der laenger lebt als ein Aufruf.
+#   2. Ein zweites Bundle SIEHT, was das erste im selben Kontext definiert hat
+#      (F29_2-…f: sichtbar ist die Reihenfolge der Aufrufe).
+#   3. `kontext.symbol(name, typ)` gibt das Symbol, wenn der Typ stimmt.
+#   4. Stimmt er NICHT, wird geworfen (F29_2-…d) — und nur dann.
+#   5. Ein unbekannter Name wirft ebenfalls, aber eine ANDERE Ausnahme (…d2).
+#   6. Funktionen brauchen die VOLLE Signatur (…d3): `fn(i32,i32) -> i32`.
+#      Ein blankes `"fn"` ist zu wenig, eine falsche Stelligkeit auch.
+#
+# Der Gewinn, um den es geht, ist die Grundlast: ein frischer Kontext kostet
+# ~96 ms (§15), ein wiederverwendeter nicht.  Darum werden hier ZWEI Bundles
+# in EINEM Kontext gefahren.
+# Expected exit code: 0
+
+- def:
+    name: lib_sieben
+    return: i32
+    body:
+      - return: 7
+
+- def:
+    name: lib_summe
+    args: [[zahl, i32], [mehr, i32]]
+    return: i32
+    body:
+      - return: { +: [zahl, mehr] }
+
+- def:
+    name: nutzt_lib
+    return: i32
+    body:
+      # Sieht die Funktion aus dem ERSTEN Bundle desselben Kontexts.
+      - decl: [got, i32, { call: [lib_sieben] }]
+      - print: ["nutzt_lib sah ${got}"]
+      - return: { -: [got, 7] }
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [fails, i32, 0]
+
+      - decl: [kontext, ctx_handle, { call: [ctx.new] }]
+      - decl: [lib, Code, { call: [sys.bundle, "lib_sieben"] }]
+      - decl: [rc_lib, i32, { call: [kontext.exec, lib] }]
+      - if:
+          condition: { neq: [rc_lib, 0] }
+          then: [{ print: ["  FAIL Bibliothek lief nicht (rc=${rc_lib})"] }, { set: [fails, { +: [fails, 1] }] }]
+          else: [{ print: ["  ok   Bibliothek im Kontext"] }]
+
+      # Zweite Funktion, eigenes Bundle — sie hat ARGUMENTE, damit die
+      # Signatur etwas zu sagen hat.
+      - decl: [sum, Code, { call: [sys.bundle, "lib_summe"] }]
+      - decl: [rc_sum, i32, { call: [kontext.exec, sum] }]
+      - if:
+          condition: { neq: [rc_sum, 0] }
+          then: [{ print: ["  FAIL lib_summe lief nicht (rc=${rc_sum})"] }, { set: [fails, { +: [fails, 1] }] }]
+
+      # Drittes Bundle, SELBER Kontext: es ruft, was das erste definiert hat.
+      - decl: [use, Code, { call: [sys.bundle, "nutzt_lib"] }]
+      - decl: [rc_use, i32, { call: [kontext.exec, use] }]
+      - if:
+          condition: { neq: [rc_use, 0] }
+          then: [{ print: ["  FAIL zweites Bundle sah die Bibliothek nicht (rc=${rc_use})"] }, { set: [fails, { +: [fails, 1] }] }]
+          else: [{ print: ["  ok   zweites Bundle sieht das erste"] }]
+
+      # Symbol mit RICHTIGER Signatur: kommt wortlos zurueck.
+      - decl: [adr, i64, { call: [kontext.symbol, "lib_sieben", "fn() -> i32"] }]
+      - if:
+          condition: { le: [adr, 0] }
+          then: [{ print: ["  FAIL Adresse von lib_sieben fehlt"] }, { set: [fails, { +: [fails, 1] }] }]
+          else: [{ print: ["  ok   Symbol mit passender Signatur"] }]
+
+      # Leerzeichen zaehlen nicht: dieselbe Signatur, anders geschrieben.
+      - decl: [adr2, i64, { call: [kontext.symbol, "lib_summe", "fn(i32,i32)->i32"] }]
+      - if:
+          condition: { le: [adr2, 0] }
+          then: [{ print: ["  FAIL Adresse von lib_summe fehlt"] }, { set: [fails, { +: [fails, 1] }] }]
+          else: [{ print: ["  ok   Argumenttypen in der Signatur"] }]
+
+      # Ein blankes "fn" ist zu wenig (…d3).
+      - try:
+          body:
+            - decl: [blank, i64, { call: [kontext.symbol, "lib_summe", "fn"] }]
+            - print: ["  FAIL blankes 'fn' wurde angenommen"]
+            - set: [fails, { +: [fails, 1] }]
+          catch:
+            - type: Exception
+              var: ex0
+              body: [{ print: ["  ok   blankes 'fn' wirft: ${ex0.message}"] }]
+
+      # Falsche Stelligkeit: wirft, obwohl der Name eine Funktion ist.
+      - try:
+          body:
+            - decl: [eng, i64, { call: [kontext.symbol, "lib_summe", "fn(i32) -> i32"] }]
+            - print: ["  FAIL falsche Stelligkeit wurde angenommen"]
+            - set: [fails, { +: [fails, 1] }]
+          catch:
+            - type: Exception
+              var: ex3
+              body: [{ print: ["  ok   falsche Stelligkeit wirft: ${ex3.message}"] }]
+
+      # FALSCHER Typ: wirft.
+      - try:
+          body:
+            - decl: [falsch, i64, { call: [kontext.symbol, "lib_sieben", "i32"] }]
+            - print: ["  FAIL falscher Typ wurde NICHT geworfen"]
+            - set: [fails, { +: [fails, 1] }]
+          catch:
+            - type: Exception
+              var: ex
+              body: [{ print: ["  ok   falscher Typ wirft: ${ex.message}"] }]
+
+      # UNBEKANNTER Name: wirft ebenfalls.
+      - try:
+          body:
+            - decl: [nix, i64, { call: [kontext.symbol, "gibtesnicht", "fn() -> i32"] }]
+            - print: ["  FAIL unbekanntes Symbol wurde NICHT geworfen"]
+            - set: [fails, { +: [fails, 1] }]
+          catch:
+            - type: Exception
+              var: ex2
+              body: [{ print: ["  ok   unbekanntes Symbol wirft: ${ex2.message}"] }]
+
+      - if:
+          condition: { neq: [fails, 0] }
+          then: [{ print: ["test_ctx FAIL (${fails})"] }, { return: 1 }]
+      - print: ["test_ctx PASS"]
+      - return: 0

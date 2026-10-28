@@ -1,0 +1,79 @@
+# SPEC: 29_2_sys_exec, 62_pipelines
+# spec/62 §20.1 + spec/29_2 §14b: der WEG eines Kontrollers.  Quelltext
+# hinein, Pipeline heraus — ohne eine Zeile YAML im Kontroller.
+#
+#   1. `ctx.new` + `cx.exec(sys.code_from(text))` uebersetzt die Einreichung.
+#   2. `cx.names("fn() -> pipeline")` sagt, wie sie heisst (F29_2-…i) — der
+#      Kontroller muss den Namen NICHT aus der Quelle lesen.
+#   3. `cx.call(name, "fn() -> pipeline")` baut sie (F29_2-…j).
+#   4. gelesen wird der WERT (spec/62 §20.4).
+#   5. ist die Einreichung kaputt, nennt `cx.errors` den Grund (F29_2-…l) —
+#      sonst hat der Kontroller nur „ging nicht" fuer den Einreicher.
+# Expected exit code: 0
+
+- def:
+    name: expect
+    args: [[what, string], [cond, i32]]
+    return: i32
+    body:
+      - if:
+          condition: { eq: [cond, 1] }
+          then: [{ print: ["  ok   ${what}"] }, { return: 0 }]
+      - print: ["  FAIL ${what}"]
+      - return: 1
+
+- def:
+    name: lies_fremde_pipeline
+    static_off: ["str_cmp"]
+    args: [[kontext, ref<ctx_handle>], [quelle, string]]
+    return: i32
+    body:
+      - decl: [bad, i32, 0]
+      - decl: [code, Code, { call: [sys.code_from, quelle] }]
+      - decl: [rcx, i32, { call: [kontext.exec, code] }]
+      - set: [bad, { +: [bad, { call: [expect, "die Einreichung uebersetzt", { eq: [rcx, 0] }] }] }]
+      - decl: [namen, list<string>, { call: [kontext.names, "fn() -> pipeline"] }]
+      - set: [bad, { +: [bad, { call: [expect, "der Kontext kennt genau eine Pipeline", { eq: [namen.len, 1] }] }] }]
+      - if: { condition: { eq: [namen.len, 0] }, then: [{ return: { +: [bad, 1] } }] }
+      - decl: [pname, string, { at: [namen, 0] }]
+      - set: [bad, { +: [bad, { call: [expect, "und ihren Namen", { eq: [pname, "ctx_demo"] }] }] }]
+      - decl: [pipe, pipeline, { call: [kontext.call, pname, "fn() -> pipeline"] }]
+      - set: [bad, { +: [bad, { call: [expect, "zwei Lanes", { eq: [{ call: [pipe.lane_count] }, 2] }] }] }]
+      - set: [bad, { +: [bad, { call: [expect, "zwei Stufen", { eq: [{ call: [pipe.stage_count] }, 2] }] }] }]
+      - decl: [one, stage, { call: [pipe.stage_at, 0] }]
+      - set: [bad, { +: [bad, { call: [expect, "Stufe 1 hat ihren Befehl", { eq: [{ call: [one.command] }, "make -j4"] }] }] }]
+      - set: [bad, { +: [bad, { call: [expect, "Stufe 1 erbt den Agenten", { eq: [{ call: [one.agent] }, "x86_64"] }] }] }]
+      - decl: [two, stage, { call: [pipe.stage_at, 1] }]
+      - set: [bad, { +: [bad, { call: [expect, "Stufe 2 hat ihren eigenen", { eq: [{ call: [two.agent] }, "arm64"] }] }] }]
+      - return: bad
+
+- def:
+    name: main
+    static_off: ["str_cmp"]
+    return: i32
+    body:
+      - decl: [fails, i32, 0]
+      - decl: [kontext, ctx_handle, { call: [ctx.new] }]
+      - decl: [quelle, string, { call: [io.read_file, "tests/_pipe/ctx_demo.aiml"] }]
+      - set: [fails, { +: [fails, { call: [lies_fremde_pipeline, kontext, quelle] }] }]
+
+      # Die kaputte Einreichung: EIGENER Kontext, damit die Meldungen nicht
+      # die der ersten sind (F29_2-…l).
+      - decl: [zweit, ctx_handle, { call: [ctx.new] }]
+      - decl: [schlecht, string, { call: [io.read_file, "tests/_pipe/ctx_kaputt.aiml"] }]
+      - decl: [rcb, i32, { call: [zweit.exec, { call: [sys.code_from, schlecht] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "die kaputte Einreichung geht NICHT durch", { lt: [rcb, 0] }] }] }]
+      - decl: [why, list<string>, { call: [zweit.errors] }]
+      - set: [fails, { +: [fails, { call: [expect, "und der Kontext sagt, warum", { gt: [why.len, 0] }] }] }]
+      - if:
+          condition: { gt: [why.len, 0] }
+          then:
+            - decl: [first, string, { at: [why, 0] }]
+            - print: ["  Grund: ${first}"]
+            - set: [fails, { +: [fails, { call: [expect, "die Meldung nennt den Schluessel", { ge: [{ call: [first.index_of, "steplayer"] }, 0] }] }] }]
+
+      - if:
+          condition: { neq: [fails, 0] }
+          then: [{ print: ["test_ctx_pipeline FAIL (${fails})"] }, { return: 1 }]
+      - print: ["test_ctx_pipeline PASS"]
+      - return: 0
