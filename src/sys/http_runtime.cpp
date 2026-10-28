@@ -332,7 +332,7 @@ static int tcp_connect(const char* host, int port, int timeout_ms) {
 }
 
 // Parse an HTTP/1.1 response from fd/ssl into a new AimlHttpResponse
-static AimlHttpResponse* parse_http_response(int fd, void* ssl) {
+static AimlHttpResponse* parse_http_response(int fd, void* ssl, bool no_body = false) {
     AimlHttpResponse* r = static_cast<AimlHttpResponse*>(calloc(1, sizeof(AimlHttpResponse)));
     r->headers = aiml_http_map_new();
     r->conn_fd = -1;
@@ -368,9 +368,12 @@ static AimlHttpResponse* parse_http_response(int fd, void* ssl) {
         }
     }
 
-    // Body
+    // Body.  A response to HEAD has none, whatever Content-Length says
+    // (RFC 9110 §9.3.2) — reading it would block until the server closes.
     std::string body;
-    if (chunked) {
+    if (no_body) {
+        // nothing to read
+    } else if (chunked) {
         while (true) {
             recv_line(fd, ssl, line, sizeof(line));
             int chunk_size = strtol(line, nullptr, 16);
@@ -381,18 +384,25 @@ static AimlHttpResponse* parse_http_response(int fd, void* ssl) {
         }
     } else if (content_length > 0) {
         std::vector<char> buf(content_length + 1, '\0');
-        recv_n(fd, ssl, buf.data(), content_length);
-        body = buf.data();
+        int got = recv_n(fd, ssl, buf.data(), content_length);
+        if (got > 0) body.assign(buf.data(), static_cast<size_t>(got));
     }
 
-    if (!body.empty()) r->body = xstrdup(body.c_str());
+    if (!body.empty()) {
+        r->body = xstrdup(body.c_str());          // text view (stops at a NUL)
+        r->raw_len = static_cast<int64_t>(body.size());
+        r->raw_body = static_cast<char*>(malloc(body.size()));
+        if (r->raw_body) memcpy(r->raw_body, body.data(), body.size());
+        else r->raw_len = 0;
+    }
     return r;
 }
 
 static AimlHttpResponse* do_http_request(const char* method, AimlUrl* u,
                                           AimlHttpMap* extra_headers,
                                           const char* body_str,
-                                          int timeout_ms) {
+                                          int timeout_ms,
+                                          const char* body_file = nullptr) {
     if (!u || !u->host) return nullptr;
 
     bool use_ssl = u->protocol && strcmp(u->protocol, "https") == 0;
@@ -455,16 +465,43 @@ static AimlHttpResponse* do_http_request(const char* method, AimlUrl* u,
         }
     }
 
+    // client.body_file: the body is streamed from a file (binary-safe, any size).
+    FILE* body_fp = nullptr;
+    long long file_len = -1;
+    if (body_file && *body_file) {
+        body_fp = std::fopen(body_file, "rb");
+        if (!body_fp) {
+            if (ssl)     { SSL_free(ssl); }
+            if (ssl_ctx) SSL_CTX_free(ssl_ctx);
+            ::close(fd);
+            return nullptr;
+        }
+        std::fseek(body_fp, 0, SEEK_END);
+        file_len = std::ftell(body_fp);
+        std::fseek(body_fp, 0, SEEK_SET);
+    }
+
     size_t body_len = body_str ? strlen(body_str) : 0;
-    if (body_len > 0) {
+    if (body_fp) {
+        req += "Content-Length: "; req += std::to_string(file_len); req += "\r\n";
+    } else if (body_len > 0) {
         req += "Content-Length: "; req += std::to_string(body_len); req += "\r\n";
     }
     req += "\r\n";
-    if (body_len > 0) req += body_str;
+    if (!body_fp && body_len > 0) req += body_str;
 
     send_all_fd(fd, ssl, req.c_str(), static_cast<int>(req.size()));
+    if (body_fp) {
+        std::vector<char> chunk(1 << 20);
+        while (true) {
+            size_t got = std::fread(chunk.data(), 1, chunk.size(), body_fp);
+            if (got > 0) send_all_fd(fd, ssl, chunk.data(), static_cast<int>(got));
+            if (got < chunk.size()) break;
+        }
+        std::fclose(body_fp);
+    }
 
-    AimlHttpResponse* resp = parse_http_response(fd, ssl);
+    AimlHttpResponse* resp = parse_http_response(fd, ssl, method && strcmp(method, "HEAD") == 0);
 
     if (ssl)     { SSL_shutdown(ssl); SSL_free(ssl); }
     if (ssl_ctx) SSL_CTX_free(ssl_ctx);
@@ -514,7 +551,8 @@ extern "C" void* aiml_http_client_send(void* client_ptr) {
     if (!c) return nullptr;
     return do_http_request(c->method ? c->method : "GET",
                            c->url, c->headers, c->body,
-                           c->timeout > 0 ? c->timeout : 0);
+                           c->timeout > 0 ? c->timeout : 0,
+                           c->body_file);
 }
 
 extern "C" int32_t aiml_http_resp_status(void* resp) {
@@ -539,7 +577,31 @@ extern "C" void aiml_http_resp_free(void* resp) {
     AimlHttpResponse* r = static_cast<AimlHttpResponse*>(resp);
     aiml_http_map_free(r->headers);
     free(r->body);
+    free(r->raw_body);
     free(r);
+}
+
+// resp.body_len — exact byte length of a received body (binary-safe).
+extern "C" int64_t aiml_http_resp_body_len(void* resp) {
+    return resp ? static_cast<AimlHttpResponse*>(resp)->raw_len : 0;
+}
+
+// resp.save_to(path) — writes the received body byte-exact to `path`
+// (staged as <path>.part, then renamed).  0 on success, -1 on error.
+// An empty body creates an empty file.
+extern "C" int32_t aiml_http_resp_save_to(void* resp, const char* path) {
+    if (!resp || !path || !*path) return -1;
+    AimlHttpResponse* r = static_cast<AimlHttpResponse*>(resp);
+    std::string stage = std::string(path) + ".part";
+    FILE* fp = std::fopen(stage.c_str(), "wb");
+    if (!fp) return -1;
+    bool ok = true;
+    if (r->raw_body && r->raw_len > 0)
+        ok = std::fwrite(r->raw_body, 1, static_cast<size_t>(r->raw_len), fp) == static_cast<size_t>(r->raw_len);
+    if (std::fclose(fp) != 0) ok = false;
+    if (!ok) { std::remove(stage.c_str()); return -1; }
+    if (std::rename(stage.c_str(), path) != 0) { std::remove(stage.c_str()); return -1; }
+    return 0;
 }
 
 /* ────────────────────────────────────────────────────────────────
@@ -2206,6 +2268,14 @@ extern "C" void aiml_http_client_set_body(void* client, const char* body) {
     AimlHttpClient* c = static_cast<AimlHttpClient*>(client);
     free(c->body);
     c->body = xstrdup(body);
+}
+
+// client.body_file = path — stream the request body from a file (binary-safe).
+extern "C" void aiml_http_client_set_body_file(void* client, const char* path) {
+    if (!client) return;
+    AimlHttpClient* c = static_cast<AimlHttpClient*>(client);
+    free(c->body_file);
+    c->body_file = (path && *path) ? xstrdup(path) : nullptr;
 }
 
 extern "C" void aiml_http_client_set_timeout(void* client, int32_t timeout_ms) {

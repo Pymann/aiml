@@ -1,0 +1,122 @@
+# Expected exit code: 0
+# http client, binary-safe both ways (spec/32_2 §2.3/§2.4):
+#   client.body_file = path   request body streamed from a file (NULs survive)
+#   resp.save_to(path)        received body written byte-exact → 0 / -1
+#   resp.body_len             exact byte length of the received body
+#   resp.headers in a variable   a managed copy under memV3 (no double free)
+#   HEAD                      no body is read (Content-Length notwithstanding)
+# The fixture is /usr/bin/true: an ELF binary, i.e. full of NUL bytes — exactly the
+# case where the text `body` stops early.
+
+- def:
+    name: handle_upload
+    args: [[req, http_request_handle], [resp, http_response_handle]]
+    body:
+      - decl: [payload, buffer<u8>]
+      - set: [payload, req.body_bytes]
+      - decl: [digest, string, { call: [hash.sha256, payload] }]
+      - decl: [nbytes, i32, payload.len]
+      - set: [resp.status, 201]
+      - set: [resp.body, "${nbytes}:${digest}"]
+      - call: [resp.send]
+
+- def:
+    name: handle_download
+    args: [[req, http_request_handle], [resp, http_response_handle]]
+    body:
+      - call: [resp.headers.put, "content-type", "application/octet-stream"]
+      - set: [resp.body_file, "/usr/bin/true"]
+      - call: [resp.send]
+
+- def:
+    name: slurp
+    args: [[src, string]]
+    return: buffer<u8>
+    body:
+      - decl: [total, i64, { call: [io.file_size, src] }]
+      - decl: [inp, file_handle, { call: [io.open_binary, src] }]
+      - decl: [data, buffer<u8>, { call: [io.read_bytes, inp, total] }]
+      - call: [io.close, inp]
+      - return: [data]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [fail, i32, 0]
+      - decl: [fixture, buffer<u8>, { call: [slurp, "/usr/bin/true"] }]
+      - decl: [want_len, i32, fixture.len]
+      - decl: [want_hash, string, { call: [hash.sha256, fixture] }]
+
+      - decl: [srv, http_server_handle]
+      - set: [srv, { call: [http.server, "127.0.0.1", 23201] }]
+      - call: [srv.set_max_body, 67108864]
+      - call: [srv.route, "POST", "/upload", handle_upload]
+      - call: [srv.route, "GET", "/download", handle_download]
+      - call: [srv.route, "HEAD", "/download", handle_download]
+      - decl: [srv_thread, thread_handle, { call: [srv.start_async] }]
+      - call: [time.sleep_ms, 200]
+
+      # 1. upload from a file
+      - decl: [up_url, url, { call: [http.parse_url, "http://127.0.0.1:23201/upload"] }]
+      - decl: [up_req, http_client_handle, { call: [http.new_request, "POST", up_url] }]
+      - call: [up_req.headers.put, "Content-Type", "application/octet-stream"]
+      - set: [up_req.body_file, "/usr/bin/true"]
+      - decl: [up_resp, http_response_handle, { call: [up_req.send] }]
+      - if:
+          condition: { eq: [up_resp, null] }
+          then: [{ print: ["FAIL upload: no response"] }, { set: [fail, { +: [fail, 1] }] }]
+          else:
+            - decl: [up_body, string, { call: [up_resp.body] }]
+            - decl: [up_code, i32, { call: [up_resp.status] }]
+            - call: [up_resp.free]
+            - if: { condition: { neq: [up_code, 201] }, then: [{ print: ["FAIL upload status ${up_code}"] }, { set: [fail, { +: [fail, 1] }] }] }
+            - if: { condition: { neq: [up_body, "${want_len}:${want_hash}"] }, then: [{ print: ["FAIL upload body ${up_body}, want ${want_len}:${want_hash}"] }, { set: [fail, { +: [fail, 1] }] }] }
+
+      # 2. download to a file
+      - decl: [dl_url, url, { call: [http.parse_url, "http://127.0.0.1:23201/download"] }]
+      - decl: [dl_req, http_client_handle, { call: [http.new_request, "GET", dl_url] }]
+      - decl: [dl_resp, http_response_handle, { call: [dl_req.send] }]
+      - if:
+          condition: { eq: [dl_resp, null] }
+          then: [{ print: ["FAIL download: no response"] }, { set: [fail, { +: [fail, 1] }] }]
+          else:
+            - decl: [got_len, i64, { call: [dl_resp.body_len] }]
+            # headers bound to a variable: a copy (memV3) — no double free at resp.free
+            - decl: [heads, map<string:string>, dl_resp.headers]
+            - decl: [ctype, string, { call: [heads.get, "content-type"] }]
+            - if: { condition: { neq: [ctype, "application/octet-stream"] }, then: [{ print: ["FAIL headers copy: ${ctype}"] }, { set: [fail, { +: [fail, 1] }] }] }
+            - decl: [save_rc, i32, { call: [dl_resp.save_to, "/tmp/aiml_http_client_files.bin"] }]
+            - decl: [bad_rc, i32, { call: [dl_resp.save_to, "/nonexistent-dir/x.bin"] }]
+            - call: [dl_resp.free]
+            - if: { condition: { neq: [got_len, want_len] }, then: [{ print: ["FAIL body_len ${got_len}, want ${want_len}"] }, { set: [fail, { +: [fail, 1] }] }] }
+            - if: { condition: { neq: [save_rc, 0] }, then: [{ print: ["FAIL save_to rc ${save_rc}"] }, { set: [fail, { +: [fail, 1] }] }] }
+            - if: { condition: { neq: [bad_rc, -1] }, then: [{ print: ["FAIL save_to into missing dir rc ${bad_rc}"] }, { set: [fail, { +: [fail, 1] }] }] }
+            - decl: [saved, buffer<u8>, { call: [slurp, "/tmp/aiml_http_client_files.bin"] }]
+            - decl: [saved_hash, string, { call: [hash.sha256, saved] }]
+            - if: { condition: { neq: [saved_hash, want_hash] }, then: [{ print: ["FAIL saved file differs"] }, { set: [fail, { +: [fail, 1] }] }] }
+            - call: [io.remove, "/tmp/aiml_http_client_files.bin"]
+
+      # 3. HEAD: Content-Length is announced, but there is no body to read
+      - decl: [hd_req, http_client_handle, { call: [http.new_request, "HEAD", dl_url] }]
+      - decl: [hd_resp, http_response_handle, { call: [hd_req.send] }]
+      - if:
+          condition: { eq: [hd_resp, null] }
+          then: [{ print: ["FAIL head: no response"] }, { set: [fail, { +: [fail, 1] }] }]
+          else:
+            - decl: [hd_code, i32, { call: [hd_resp.status] }]
+            - decl: [hd_len, i64, { call: [hd_resp.body_len] }]
+            - call: [hd_resp.free]
+            - if: { condition: { neq: [hd_code, 200] }, then: [{ print: ["FAIL head status ${hd_code}"] }, { set: [fail, { +: [fail, 1] }] }] }
+            - if: { condition: { neq: [hd_len, 0] }, then: [{ print: ["FAIL head body_len ${hd_len}"] }, { set: [fail, { +: [fail, 1] }] }] }
+
+      # 4. a body_file that does not exist: no request, null response
+      - decl: [miss_req, http_client_handle, { call: [http.new_request, "POST", up_url] }]
+      - set: [miss_req.body_file, "/nonexistent-dir/none.bin"]
+      - decl: [miss_resp, http_response_handle, { call: [miss_req.send] }]
+      - if: { condition: { neq: [miss_resp, null] }, then: [{ print: ["FAIL missing body_file still sent"] }, { call: [miss_resp.free] }, { set: [fail, { +: [fail, 1] }] }] }
+
+      - call: [srv.stop]
+      - if: { condition: { gt: [fail, 0] }, then: [{ return: [1] }] }
+      - print: ["PASS http_client_files: body_file upload, save_to + body_len download (binary, ${want_len} bytes)"]
+      - return: [0]
