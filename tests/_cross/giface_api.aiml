@@ -1,0 +1,10 @@
+# Contract module of the cross-unit test (spec/58 §12.5): interfaces + group interface only.
+- interface:
+    name: Greeter
+    methods:
+      - [greet, i32, [[who, string]]]
+
+- groupinterface:
+    name: GreetKit
+    exports:
+      - [greeter, Greeter]
