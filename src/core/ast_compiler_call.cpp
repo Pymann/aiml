@@ -635,10 +635,17 @@ IRValue* Compiler::visitCall(CallExpr* call) {
                     "bytes.from_string", "bytes.read_file", "bytes.zlib", "bytes.zlib_at",
                     "bytes.delta_apply", "base64.decode", "base64.url_decode" };
                 for (size_t ai = 0; ai < call->args.size() && ai < argVals.size(); ++ai) {
-                    auto* inner = dynamic_cast<AIML::AST::CallExpr*>(call->args[ai].get());
-                    if (!inner || !argVals[ai]) continue;
+                    if (!argVals[ai]) continue;
                     llvm::Value* hv = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[ai]));
                     if (!hv->getType()->isPointerTy()) continue;
+                    auto* inner = dynamic_cast<AIML::AST::CallExpr*>(call->args[ai].get());
+                    if (!inner) {
+                        // A buffer member (`<.data`) or field reaches here as its handle too:
+                        // borrow it — load the value, nothing to release.
+                        if (declaredTypeOfExpr(call->args[ai].get()).rfind("buffer", 0) == 0)
+                            argVals[ai] = ctx.ir_gen->wrap(ctx.builder.CreateLoad(ctx.getLLVMType("buffer"), hv, "buf_member_val"));
+                        continue;
+                    }
                     bool isBuf = bufReturners.count(inner->functionName) > 0;
                     if (!isBuf) {
                         auto sig = resolveCallSignature(inner->functionName);
