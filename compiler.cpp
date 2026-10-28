@@ -259,9 +259,15 @@ std::set<std::string> findNewExprClassNames(const std::string& path) {
             size_t i = pos + 4;
             while (i < line.size() && (line[i] == ' ' || line[i] == '\t')) i++;
             std::string name;
-            while (i < line.size() && (std::isalnum((unsigned char)line[i]) || line[i] == '_')) {
+            // Read a (possibly fully qualified) class name: `Holder` or
+            // `demo.lib.Holder`.  Classes are declared by their short name, so
+            // a qualified instantiation is recorded under its last segment.
+            while (i < line.size() && (std::isalnum((unsigned char)line[i]) || line[i] == '_' || line[i] == '.')) {
                 name += line[i++];
             }
+            while (!name.empty() && name.back() == '.') name.pop_back();
+            size_t lastDot = name.rfind('.');
+            if (lastDot != std::string::npos) name = name.substr(lastDot + 1);
             if (!name.empty()) out.insert(name);
             pos += 4;
         }
@@ -2011,6 +2017,19 @@ extern "C" void aiml_note_thrown_message(const char* msg) {
 }
 
 int AIMLCompiler::jitRun() {
+    // No program arguments: argv[0] only.
+    static char* dummyArgv[] = { (char*)"aiml_jit", nullptr };
+    return jitRun(1, dummyArgv);
+}
+
+// JIT execution. Both entry points share this path so a program started with
+// arguments (`aiml prog.aiml -- a b`) gets the same environment as one without:
+// host symbols, exodus.json libraries, runtime symbols and — crucially — the
+// object files of imported modules. The argv overload used to skip all of that
+// and call main directly, so any imported function was an unresolved (null)
+// address and multi-file programs crashed as soon as they received arguments.
+// argc/argv must remain valid for the entire duration of execution.
+int AIMLCompiler::jitRun(int argc, char** argv) {
     // EXTREMELY IMPORTANT: Load host process symbols so JIT can find malloc, printf, etc.
     LOG_DEBUG("LoadLibraryPermanently...");
     bool loadFailed = llvm::sys::DynamicLibrary::LoadLibraryPermanently(nullptr);
@@ -2182,6 +2201,7 @@ int AIMLCompiler::jitRun() {
     llvm::sys::DynamicLibrary::AddSymbol("aiml_io_rename",     (void*)(intptr_t)aiml_io_rename);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_io_read_file",      (void*)(intptr_t)aiml_io_read_file);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_io_write_file",     (void*)(intptr_t)aiml_io_write_file);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_io_write_file_buf", (void*)(intptr_t)aiml_io_write_file_buf);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_io_list_dir_fill",  (void*)(intptr_t)aiml_io_list_dir_fill);
 
     // String builtins (lower, trim, replace, split)
@@ -2362,11 +2382,17 @@ int AIMLCompiler::jitRun() {
     llvm::sys::DynamicLibrary::AddSymbol("aiml_http_resp_close",        (void*)(intptr_t)aiml_http_resp_close);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_http_resp_set_status",   (void*)(intptr_t)aiml_http_resp_set_status);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_http_resp_set_body",     (void*)(intptr_t)aiml_http_resp_set_body);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_http_resp_set_body_file", (void*)(intptr_t)aiml_http_resp_set_body_file);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_http_resp_set_body_bytes",(void*)(intptr_t)aiml_http_resp_set_body_bytes);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_http_resp_get_headers",  (void*)(intptr_t)aiml_http_resp_get_headers);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_http_req_method",        (void*)(intptr_t)aiml_http_req_method);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_http_req_path",          (void*)(intptr_t)aiml_http_req_path);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_http_req_body",          (void*)(intptr_t)aiml_http_req_body);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_http_req_body_bytes",    (void*)(intptr_t)aiml_http_req_body_bytes);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_http_server_set_max_body", (void*)(intptr_t)aiml_http_server_set_max_body);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_http_map_to_handle",     (void*)(intptr_t)aiml_http_map_to_handle);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_http_str_managed",       (void*)(intptr_t)aiml_http_str_managed);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_http_str_adopt",         (void*)(intptr_t)aiml_http_str_adopt);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_http_req_url",           (void*)(intptr_t)aiml_http_req_url);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_http_req_params",        (void*)(intptr_t)aiml_http_req_params);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_http_req_cookies",       (void*)(intptr_t)aiml_http_req_cookies);
@@ -3203,20 +3229,24 @@ int AIMLCompiler::jitRun() {
     // Explicitly add printf
     llvm::sys::DynamicLibrary::AddSymbol("printf", (void*)(intptr_t)printf);
 
-    LOG_DEBUG("Running main with fixed argv...");
-
-    // Create dummy argv for JIT safety
-    // We need to keep the memory alive during execution
-    static char* dummyArgv[] = { (char*)"aiml_jit", nullptr };
+    LOG_DEBUG("Running main...");
 
     std::vector<llvm::GenericValue> args;
     args.push_back(llvm::GenericValue()); // argc
-    args[0].IntVal = llvm::APInt(32, 1);
+    args[0].IntVal = llvm::APInt(32, argc);
     args.push_back(llvm::GenericValue()); // argv
-    args[1].PointerVal = dummyArgv;
+    args[1].PointerVal = argv;
 
     // Expose CompilerContext + engine to aiml_exec_code (called from JIT)
     aiml_set_active_context(compiler_ctx_, engine);
+    // Link (relocate) before running: an unresolved or duplicate symbol makes RuntimeDyld zero the
+    // whole relocation batch and main would jump to address 0. Report it instead.
+    engine->getPointerToFunction(mainFunc);
+    if (engine->hasError()) {
+        aiml_set_active_context(nullptr, nullptr);
+        LOG_ERROR("JIT link failed: " + engine->getErrorMessage());
+        return 1;
+    }
     // Top-level guard: an unhandled AIML exception (thrown deep in any function,
     // no matching catch) unwinds out of runFunction.  Catch it here so the
     // process reports the message and exits cleanly (code 2) instead of
@@ -3233,56 +3263,6 @@ int AIMLCompiler::jitRun() {
     aiml_set_active_context(nullptr, nullptr);
 
     LOG_DEBUG("Main finished. Result: " + std::to_string(result.IntVal.getSExtValue()));
-
-    return result.IntVal.getSExtValue();
-}
-
-int AIMLCompiler::jitRun(int argc, char** argv) {
-    // Same as jitRun() but passes real argc/argv to the AIML program's main().
-    // argc/argv must remain valid for the entire duration of execution.
-    llvm::Function* mainFunc = module_->getFunction("main");
-    if (!mainFunc) {
-        LOG_ERROR("No main function found in module.");
-        return -1;
-    }
-    std::string errStr;
-    llvm::EngineBuilder builder(std::move(module_));
-    builder.setErrorStr(&errStr);
-    builder.setEngineKind(llvm::EngineKind::JIT);
-    llvm::ExecutionEngine* engine = builder.create();
-    if (!engine) {
-        LOG_ERROR("Failed to create ExecutionEngine: " + errStr);
-        return -1;
-    }
-    llvm::sys::DynamicLibrary::LoadLibraryPermanently(nullptr);
-    llvm::sys::DynamicLibrary::AddSymbol("printf", (void*)(intptr_t)printf);
-
-    std::vector<llvm::GenericValue> gvArgs;
-    gvArgs.push_back(llvm::GenericValue());
-    gvArgs[0].IntVal = llvm::APInt(32, argc);
-    gvArgs.push_back(llvm::GenericValue());
-    gvArgs[1].PointerVal = argv;
-
-    aiml_set_active_context(compiler_ctx_, engine);
-    // Link (relocate) before running: an unresolved or duplicate symbol makes RuntimeDyld zero the
-    // whole relocation batch and main would jump to address 0. Report it instead.
-    engine->getPointerToFunction(mainFunc);
-    if (engine->hasError()) {
-        aiml_set_active_context(nullptr, nullptr);
-        LOG_ERROR("JIT link failed: " + engine->getErrorMessage());
-        return 1;
-    }
-    // Top-level guard — see the no-arg jitRun() above.
-    llvm::GenericValue result;
-    try {
-        result = engine->runFunction(mainFunc, gvArgs);
-    } catch (...) {
-        aiml_set_active_context(nullptr, nullptr);
-        std::fprintf(stderr, "Unhandled AIML exception: %s\n",
-                     g_aiml_last_thrown_msg.empty() ? "(no message)" : g_aiml_last_thrown_msg.c_str());
-        return 2;
-    }
-    aiml_set_active_context(nullptr, nullptr);
 
     return result.IntVal.getSExtValue();
 }

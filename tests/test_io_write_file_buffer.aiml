@@ -1,0 +1,84 @@
+# Expected exit code: 0
+# io.write_file with a buffer<u8> must write binary-safe (embedded NUL bytes),
+# while the string form keeps its existing behaviour.
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [pass, i32, 0]
+      - decl: [fail, i32, 0]
+
+      # 6 bytes: 'A' 0x00 'B' 0xFF 0x00 'C'
+      - decl: [buf, buffer<u8>]
+      - call: [buf.alloc, 16]
+      - decl: [byte_a, u8, 65]
+      - decl: [byte_nul, u8, 0]
+      - decl: [byte_b, u8, 66]
+      - decl: [byte_ff, u8, 255]
+      - decl: [byte_c, u8, 67]
+      - call: [buf.write, byte_a, u8]
+      - call: [buf.write, byte_nul, u8]
+      - call: [buf.write, byte_b, u8]
+      - call: [buf.write, byte_ff, u8]
+      - call: [buf.write, byte_nul, u8]
+      - call: [buf.write, byte_c, u8]
+
+      - decl: [out_path, string, "/tmp/aiml_io_write_file_buffer_test.bin"]
+      - decl: [wrc, i32]
+      - set: [wrc, { call: [io.write_file, out_path, buf] }]
+      - if:
+          condition: { eq: [wrc, 0] }
+          then:
+            - set: [pass, { +: [pass, 1] }]
+          else:
+            - print: ["[FAIL] write_file(buffer) wrc=${wrc}"]
+            - set: [fail, { +: [fail, 1] }]
+
+      - decl: [fsize, i64]
+      - set: [fsize, { call: [io.file_size, out_path] }]
+      - if:
+          condition: { eq: [fsize, 6] }
+          then:
+            - set: [pass, { +: [pass, 1] }]
+          else:
+            - print: ["[FAIL] expected 6 bytes on disk, got ${fsize}"]
+            - set: [fail, { +: [fail, 1] }]
+
+      # Round-trip: bytes read back hash identically to the source buffer.
+      - decl: [fhd, file_handle]
+      - set: [fhd, { call: [io.open_binary, out_path] }]
+      - decl: [back, buffer<u8>]
+      - set: [back, { call: [io.read_bytes, fhd, 6] }]
+      - call: [io.close, fhd]
+      - decl: [h_src, string]
+      - set: [h_src, { call: [hash.sha256, buf] }]
+      - decl: [h_back, string]
+      - set: [h_back, { call: [hash.sha256, back] }]
+      - if:
+          condition: { eq: [h_src, h_back] }
+          then:
+            - set: [pass, { +: [pass, 1] }]
+          else:
+            - print: ["[FAIL] round-trip hash mismatch ${h_src} vs ${h_back}"]
+            - set: [fail, { +: [fail, 1] }]
+
+      # String form is unchanged.
+      - set: [wrc, { call: [io.write_file, out_path, "hello"] }]
+      - set: [fsize, { call: [io.file_size, out_path] }]
+      - if:
+          condition: { eq: [fsize, 5] }
+          then:
+            - set: [pass, { +: [pass, 1] }]
+          else:
+            - print: ["[FAIL] string write expected 5 bytes, got ${fsize}"]
+            - set: [fail, { +: [fail, 1] }]
+
+      - call: [io.remove, out_path]
+      - print: ["Passed: ${pass} / 4"]
+      - print: ["Failed: ${fail}"]
+      - if:
+          condition: { gt: [fail, 0] }
+          then:
+            - return: [1]
+      - return: [0]

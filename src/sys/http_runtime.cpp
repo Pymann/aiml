@@ -242,6 +242,54 @@ extern "C" char*    aiml_url_fragment(AimlUrl* u)    { return u ? u->fragment : 
 extern "C" int32_t  aiml_url_port(AimlUrl* u)        { return u ? u->port : 0; }
 extern "C" void*    aiml_url_get_param(AimlUrl* u)   { return u ? u->get_param : nullptr; }
 extern "C" void*    aiml_url_credential(AimlUrl* u)  { return u ? u->credential : nullptr; }
+
+// ── memV3 (spec/61 §4/§5) views of the request/url string tables ────────────
+// The parser keeps params/query/cookies in an AimlHttpMap (open addressing,
+// libc-strdup'd strings, no [rc][pad] header) and url parts as libc strings.
+// Under memV3 an AIML map<string:string> is a refcounted HANDLE with
+// aiml-managed strings, and a string local is managed too: handing out the raw
+// table makes the caller's incref/drop touch 8 bytes before the block (heap
+// corruption, valgrind "Invalid write"). These helpers build the managed form —
+// same approach as sys.env (mem_runtime.cpp).
+extern "C" void* aiml_map_handle_new(void);
+
+// Fresh map<string:string> handle (rc=1, dense store) copying an AimlHttpMap.
+extern "C" void* aiml_http_map_to_handle(void* src_ptr) {
+    void* handle = aiml_map_handle_new();
+    if (!handle) return handle;
+    AimlHttpMap* dst = static_cast<AimlHttpMap*>(handle);   // AimlHttpMap == AimlMapRaw layout
+    AimlHttpMap* src = static_cast<AimlHttpMap*>(src_ptr);
+    if (!src || src->size <= 0 || !src->keys) return handle;
+    int32_t n = src->size;
+    dst->keys     = static_cast<char**>(calloc((size_t)n, sizeof(char*)));
+    dst->values   = static_cast<char**>(calloc((size_t)n, sizeof(char*)));
+    dst->occupied = nullptr;                                 // dense store
+    dst->capacity = n;
+    if (!dst->keys || !dst->values) { dst->size = 0; return handle; }
+    int32_t idx = 0;
+    for (int32_t i = 0; i < src->capacity && idx < n; ++i) {
+        bool used = src->occupied ? src->occupied[i] != 0 : i < src->size;
+        if (!used || !src->keys[i]) continue;
+        dst->keys[idx]   = aiml_str_dup(src->keys[i]);
+        dst->values[idx] = aiml_str_dup(src->values[i] ? src->values[i] : "");
+        ++idx;
+    }
+    dst->size = idx;
+    return handle;
+}
+
+// Managed copy of a libc string; nullptr stays nullptr (absent stays null).
+extern "C" char* aiml_http_str_managed(const char* s) {
+    return s ? aiml_str_dup(s) : nullptr;
+}
+
+// Managed copy of a freshly malloc'd libc string, which is freed (adopted).
+extern "C" char* aiml_http_str_adopt(char* s) {
+    if (!s) return nullptr;
+    char* managed = aiml_str_dup(s);
+    free(s);
+    return managed;
+}
 extern "C" char*    aiml_url_cred_user(AimlUrlCredential* c) { return c ? c->user : nullptr; }
 extern "C" char*    aiml_url_cred_pass(AimlUrlCredential* c) { return c ? c->pass : nullptr; }
 
@@ -523,6 +571,7 @@ struct AimlHttpServer {
     pthread_t    accept_tid = 0;
     pthread_mutex_t lock    = PTHREAD_MUTEX_INITIALIZER;
     int          read_timeout_secs = 15; // per-recv + total request-read deadline (slowloris)
+    long         max_body_bytes    = 8L * 1024 * 1024; // request body cap (srv.set_max_body)
 
     // ── Abuse resistance (spec/32_2 §3.12) ────────────────────────────────
     int              max_conns = 0;          // 0 = unlimited concurrent connections
@@ -569,7 +618,7 @@ static bool match_pattern(const std::string& pattern, const std::string& path,
 }
 
 // Parse HTTP/1.1 request from fd/ssl
-static AimlHttpRequest* parse_http_request(int fd, void* ssl, int timeout_secs) {
+static AimlHttpRequest* parse_http_request(int fd, void* ssl, int timeout_secs, long max_body_bytes) {
     AimlHttpRequest* req = static_cast<AimlHttpRequest*>(calloc(1, sizeof(AimlHttpRequest)));
     req->params      = aiml_http_map_new();
     req->req_headers = aiml_http_map_new();
@@ -632,7 +681,8 @@ static AimlHttpRequest* parse_http_request(int fd, void* ssl, int timeout_secs) 
     //   Reject early instead of allocating unbounded memory or looping forever.
     constexpr int    MAX_HEADER_COUNT = 100;         // # of header lines
     constexpr size_t MAX_HEADER_BYTES = 64 * 1024;   // total header bytes
-    constexpr long   MAX_BODY_BYTES   = 8L * 1024 * 1024; // 8 MiB request body
+    // Request body cap: server-configurable via srv.set_max_body (default 8 MiB).
+    const long       MAX_BODY_BYTES   = max_body_bytes > 0 ? max_body_bytes : 8L * 1024 * 1024;
 
     // Headers
     long   content_length = 0;
@@ -694,10 +744,16 @@ static AimlHttpRequest* parse_http_request(int fd, void* ssl, int timeout_secs) 
     }
 
     // Body (content_length already validated + capped to MAX_BODY_BYTES above).
+    // Stored binary-safe: `body` keeps a trailing NUL for string access, and
+    // `body_len` holds the exact byte count for req.body_bytes.
     if (content_length > 0) {
-        std::vector<char> buf(static_cast<size_t>(content_length) + 1, '\0');
-        recv_n(fd, ssl, buf.data(), static_cast<int>(content_length));
-        req->body = xstrdup(buf.data());
+        char* raw = static_cast<char*>(malloc(static_cast<size_t>(content_length) + 1));
+        if (!raw) { req->reject_status = 413; return req; }
+        int got = recv_n(fd, ssl, raw, static_cast<int>(content_length));
+        if (got < 0) got = 0;
+        raw[got] = '\0';
+        req->body     = raw;
+        req->body_len = got;
     }
 
     return req;
@@ -726,7 +782,7 @@ static void free_request(AimlHttpRequest* req) {
 static void free_response(AimlHttpResponse* resp) {
     if (!resp) return;
     aiml_http_map_free(resp->headers);
-    free(resp->body); free(resp->body_file);
+    free(resp->body); free(resp->body_file); free(resp->req_range);
     for (int i = 0; i < resp->n_set_cookies; ++i) free(resp->set_cookies[i]);
     free(resp->set_cookies);
     free(resp);
@@ -787,9 +843,31 @@ static void send_response(AimlHttpResponse* resp) {
         send_all_fd(fd, ssl, body_ptr, static_cast<int>(body_size));
 }
 
+static void serve_file(AimlHttpResponse* resp,
+                        const std::string& file_path,
+                        const RouteEntry& route,
+                        const char* range_header = nullptr);
+
 // server-side response methods
+// A handler that set `resp.body_file` (and no text body) gets the same
+// streamed, range-aware file delivery as srv.filesystem (spec/32_2: "File as
+// body — streamed during send"). Without this the file was read fully into
+// memory and its length taken with strlen, truncating binary files.
 extern "C" void aiml_http_resp_send(void* resp_ptr) {
-    send_response(static_cast<AimlHttpResponse*>(resp_ptr));
+    AimlHttpResponse* r = static_cast<AimlHttpResponse*>(resp_ptr);
+    if (r && !r->resp_sent && r->conn_fd >= 0 && r->body_file && !r->body) {
+        RouteEntry plain;   // no cache max-age → ETag revalidation
+        serve_file(r, r->body_file, plain, r->req_range);
+        return;
+    }
+    send_response(r);
+}
+
+extern "C" void aiml_http_resp_set_body_file(void* resp_ptr, const char* file_path) {
+    AimlHttpResponse* r = static_cast<AimlHttpResponse*>(resp_ptr);
+    if (!r) return;
+    free(r->body_file);
+    r->body_file = (file_path && file_path[0]) ? xstrdup(file_path) : nullptr;
 }
 
 extern "C" void aiml_http_resp_write(void* resp_ptr, const char* chunk) {
@@ -1004,7 +1082,7 @@ static std::string resolve_under(const std::string& root,
 static void serve_file(AimlHttpResponse* resp,
                         const std::string& file_path,
                         const RouteEntry& route,
-                        const char* range_header = nullptr) {
+                        const char* range_header) {
     // Open + stat the file. We stream via sendfile() rather than reading
     // into a userspace buffer — this avoids per-request 10–100 MB heap
     // allocations and lets the kernel handle TCP back-pressure cleanly,
@@ -1028,7 +1106,10 @@ static void serve_file(AimlHttpResponse* resp,
     }
     size_t total = static_cast<size_t>(st.st_size);
 
-    aiml_http_map_put(resp->headers, "content-type", mime_for_ext(file_path));
+    // A content-type chosen by the handler (resp.body_file path) wins over the
+    // extension guess; srv.filesystem responses start without one.
+    if (!aiml_http_map_get(resp->headers, "content-type"))
+        aiml_http_map_put(resp->headers, "content-type", mime_for_ext(file_path));
     // We don't support keep-alive yet — tell HTTP/1.1 clients explicitly
     // so they don't try to reuse the connection.
     aiml_http_map_put(resp->headers, "connection", "close");
@@ -1278,7 +1359,7 @@ static void* handle_connection(void* arg) {
         }
     }
 
-    AimlHttpRequest* req = parse_http_request(fd, ssl, to_secs);
+    AimlHttpRequest* req = parse_http_request(fd, ssl, to_secs, srv->max_body_bytes);
 
     // Record the trusted socket peer IP (dotted) so req.client_ip() never has to
     // trust a spoofable X-Forwarded-For header. struct in_addr wants network order.
@@ -1335,6 +1416,8 @@ static void* handle_connection(void* arg) {
     resp->headers = aiml_http_map_new();
     resp->conn_fd = fd;
     resp->ssl     = ssl;
+    if (const char* rng = aiml_http_map_get(req->req_headers, "range"))
+        resp->req_range = xstrdup(rng);
 
     // Apply default server headers
     if (srv->default_headers) {
@@ -1567,6 +1650,16 @@ extern "C" void aiml_http_server_set_timeout(void* srv_ptr, int32_t secs) {
     AimlHttpServer* s = static_cast<AimlHttpServer*>(srv_ptr);
     if (!s || secs <= 0) return;
     s->read_timeout_secs = secs;
+}
+
+// Configure the request body cap in bytes (default 8 MiB). Values above
+// INT32_MAX-1 are clamped because AIML buffers carry an i32 size. <= 0 keeps
+// the current cap.
+extern "C" void aiml_http_server_set_max_body(void* srv_ptr, int64_t bytes) {
+    AimlHttpServer* s = static_cast<AimlHttpServer*>(srv_ptr);
+    if (!s || bytes <= 0) return;
+    const int64_t cap = static_cast<int64_t>(INT32_MAX) - 1;
+    s->max_body_bytes = static_cast<long>(bytes > cap ? cap : bytes);
 }
 
 // Cap concurrent handler threads. n <= 0 → unlimited. Over the cap, new
@@ -1845,6 +1938,27 @@ extern "C" char* aiml_http_req_path(void* req) {
 extern "C" char* aiml_http_req_body(void* req) {
     const char* v = req ? static_cast<AimlHttpRequest*>(req)->body : nullptr;
     return aiml_str_dup(v ? v : "");
+}
+
+// req.body_bytes — binary-safe copy of the raw request body as a fresh
+// AimlBuffer header { i32 size, i32 cap, i32 rIdx, i32 wIdx, char* data }.
+// The caller copies the header by value and frees it; `data` is owned by the
+// resulting AIML buffer<u8>. An empty body yields a zero-length buffer.
+extern "C" void* aiml_http_req_body_bytes(void* req) {
+    struct AimlBuf { int32_t sz, cap, rIdx, wIdx; char* data; };
+    AimlHttpRequest* r = static_cast<AimlHttpRequest*>(req);
+    int64_t len = (r && r->body) ? r->body_len : 0;
+    if (len < 0 || len > INT32_MAX - 1) len = 0;
+    AimlBuf* b = static_cast<AimlBuf*>(calloc(1, sizeof(AimlBuf)));
+    if (!b) return nullptr;
+    b->data = static_cast<char*>(malloc(static_cast<size_t>(len) + 1));
+    if (!b->data) { free(b); return nullptr; }
+    if (len > 0) memcpy(b->data, r->body, static_cast<size_t>(len));
+    b->data[len] = '\0';
+    b->sz   = static_cast<int32_t>(len);
+    b->cap  = static_cast<int32_t>(len);
+    b->wIdx = static_cast<int32_t>(len);
+    return b;
 }
 
 extern "C" void* aiml_http_req_url(void* req) {
