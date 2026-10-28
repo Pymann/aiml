@@ -27,6 +27,21 @@
       - print: ["FAIL ${what}: got ${got}, want ${want}"]
       - return: [1]
 
+- class:
+    name: Holder
+    members:
+      - [data, buffer<u8>]
+    methods:
+      - def:
+          name: fill
+          body:
+            - set: [<.data, { call: [bytes.from_string, "member bytes"] }]
+      - def:
+          name: probe
+          return: string
+          body:
+            - return: [{ call: [bytes.text, <.data, 0, 6] }]
+
 - def:
     name: make_blob
     args: [[text, string]]
@@ -98,6 +113,9 @@
       # buffers straight from calls (memV3 handles), builtin and user function
       - set: [fails, { +: [fails, { call: [expect, "nested builtin", { call: [bytes.to_hex, { call: [bytes.concat, { call: [bytes.from_u8, 1] }, { call: [bytes.from_u8, 2] }] }] }, "0102"] }] }]
       - set: [fails, { +: [fails, { call: [expect, "nested user call", { call: [hash.sha1, { call: [make_blob, "hello"] }] }, "b6fc4c620b67d95f953a5c1c1230aaab5db5a1b0"] }] }]
+      - decl: [holder, ptr<Holder>, { new: Holder }]
+      - call: [holder.fill]
+      - set: [fails, { +: [fails, { call: [expect, "buffer member", { call: [holder.probe] }, "member"] }] }]
       # read_file + write back
       - decl: [disk, string, "/tmp/aiml_test_bytes.bin"]
       - call: [io.write_file, disk, obj]
