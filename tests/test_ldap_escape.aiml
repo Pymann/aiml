@@ -1,0 +1,37 @@
+# Expected exit code: 0
+# spec/67 §3: ldap.escape_filter (RFC 4515) and ldap.escape_dn (RFC 4514) —
+# the offline part of the LDAP builtins (the online part is tests/ldap/run.sh).
+
+- def:
+    name: check
+    args: [[label, string], [got, string], [want, string]]
+    return: i32
+    body:
+      - if:
+          condition: { eq: [got, want] }
+          then:
+            - return: [0]
+      - print: ["[FAIL] ${label}: got '${got}' want '${want}'"]
+      - return: [1]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [fails, i32, 0]
+      - set: [fails, { +: [fails, { call: [check, "plain", { call: [ldap.escape_filter, "alice"] }, "alice"] }] }]
+      - set: [fails, { +: [fails, { call: [check, "star", { call: [ldap.escape_filter, "*"] }, "\\2a"] }] }]
+      - set: [fails, { +: [fails, { call: [check, "parens", { call: [ldap.escape_filter, "a(b)c"] }, "a\\28b\\29c"] }] }]
+      - set: [fails, { +: [fails, { call: [check, "backslash", { call: [ldap.escape_filter, "a\\b"] }, "a\\5cb"] }] }]
+      - set: [fails, { +: [fails, { call: [check, "injection", { call: [ldap.escape_filter, "x)(uid=*"] }, "x\\29\\28uid=\\2a"] }] }]
+      - set: [fails, { +: [fails, { call: [check, "utf8 kept", { call: [ldap.escape_filter, "Jürgen"] }, "Jürgen"] }] }]
+
+      - set: [fails, { +: [fails, { call: [check, "dn plain", { call: [ldap.escape_dn, "alice"] }, "alice"] }] }]
+      - set: [fails, { +: [fails, { call: [check, "dn comma (RFC 4514 example)", { call: [ldap.escape_dn, "Sue, Grabbit and Runn"] }, "Sue\\, Grabbit and Runn"] }] }]
+      - set: [fails, { +: [fails, { call: [check, "dn specials", { call: [ldap.escape_dn, "a+b\"c<d>e;f=g\\h"] }, "a\\+b\\\"c\\<d\\>e\\;f\\=g\\\\h"] }] }]
+      - set: [fails, { +: [fails, { call: [check, "dn leading hash", { call: [ldap.escape_dn, "#admin"] }, "\\#admin"] }] }]
+      - set: [fails, { +: [fails, { call: [check, "dn leading/trailing space", { call: [ldap.escape_dn, " x "] }, "\\ x\\ "] }] }]
+      - set: [fails, { +: [fails, { call: [check, "dn empty", { call: [ldap.escape_dn, ""] }, ""] }] }]
+
+      - print: ["ldap escape failures: ${fails}"]
+      - return: [fails]

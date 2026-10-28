@@ -1,0 +1,40 @@
+# spec/67 §2 under memV3: base64 results (managed strings, owned buffer handles)
+# bound, rebound, passed transiently and dropped — valgrind: no invalid access.
+# Expected exit code: 0
+
+- def:
+    name: round
+    args: [[text, string]]
+    return: i32
+    body:
+      - decl: [enc, string, { call: [base64.encode, text] }]
+      - decl: [back, buffer<u8>, { call: [base64.decode, enc] }]
+      - decl: [again, string, { call: [base64.encode, back] }]
+      - set: [enc, { call: [base64.url_encode, again] }]
+      - decl: [ubuf, buffer<u8>, { call: [base64.url_decode, enc] }]
+      - decl: [txt, string, { call: [base64.decode_str, again] }]
+      - if:
+          condition: { neq: [txt, text] }
+          then:
+            - return: [1]
+      - decl: [bad, string, { call: [base64.decode_str, "%%"] }]
+      - decl: [bad_buf, buffer<u8>, { call: [base64.decode, "%%"] }]
+      - return: [0]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [fails, i32, 0]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 50] }
+          body:
+            - set: [fails, { +: [fails, { call: [round, "payload-${idx}-with some length"] }] }]
+            - set: [idx, { +: [idx, 1] }]
+      - if:
+          condition: { gt: [fails, 0] }
+          then:
+            - return: [1]
+      - print: ["PASS identity base64"]
+      - return: [0]

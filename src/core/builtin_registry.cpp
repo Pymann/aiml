@@ -4299,6 +4299,205 @@ void registerBuiltins(CompilerContext& ctx) {
         };
     }
 
+    // ── Identity (spec/67): base64 / ldap / saml ──────────────────────────────
+    // Runtime: src/sys/{base64,ldap,saml}_runtime.cpp.  Every returned string is
+    // an aiml-managed string (tracked as a statement temp under lifetime drops,
+    // like hash.<algo>); lists are real memV3 handles filled by the runtime;
+    // saml.verify_response returns a map<string:string> handle (sys.env layout).
+    {
+        auto trackStr = [](CompilerContext& ctx, llvm::Value* v) -> IRValue* {
+            if (ctx.lifetimeDropsEnabled && !ctx.stmtTempStack.empty())
+                AIML::AST::aimlTrackStringTemp(ctx, v);
+            return ctx.ir_gen->wrap(v);
+        };
+        // A fresh list<string> (memV3 handle, else stack alloca) for a *_fill runtime call.
+        auto newStrList = [](CompilerContext& ctx, const char* nm) -> llvm::Value* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Value* lst;
+            if (ctx.memV3)
+                lst = ctx.builder.CreateCall(ctx.getFunction("aiml_list_handle_new", i8p, {}), {}, nm);
+            else
+                lst = ctx.createEntryAlloca(ListImpl::getListStructType(ctx), nm);
+            ListImpl::initList(ctx, lst, i8p, 8);
+            return lst;
+        };
+
+        // ── base64 namespace ─────────────────────────────────────────────────
+        auto& b64 = ctx.namespaces["base64"];
+        auto regEncode = [&](const char* aimlName, int url) {
+            b64.builtinFuncs[aimlName] = [url, trackStr](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+                llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Type* i32 = ctx.builder.getInt32Ty();
+                if (args.empty()) return trackStr(ctx, ctx.builder.CreateCall(ctx.getFunction("aiml_str_dup", i8p, {i8p}), {ctx.builder.CreateGlobalStringPtr("")}));
+                llvm::Value* a = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+                if (a && a->getType() == ctx.getLLVMType("buffer")) {
+                    // generic entry (style guideline §1): buffer<u8> → pointer + length
+                    llvm::Value* dataP = ctx.builder.CreateExtractValue(a, {4}, "b64_buf_data");
+                    llvm::Value* lenV  = ctx.builder.CreateExtractValue(a, {0}, "b64_buf_len");
+                    return trackStr(ctx, ctx.builder.CreateCall(
+                        ctx.getFunction("aiml_b64_encode", i8p, {i8p, i32, i32}),
+                        {dataP, lenV, ctx.builder.getInt32(url)}));
+                }
+                return trackStr(ctx, ctx.builder.CreateCall(
+                    ctx.getFunction("aiml_b64_encode_str", i8p, {i8p, i32}), {a, ctx.builder.getInt32(url)}));
+            };
+        };
+        regEncode("encode", 0);
+        regEncode("url_encode", 1);
+        auto regDecodeBuf = [&](const char* aimlName, int url) {
+            b64.builtinFuncs[aimlName] = [url](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+                llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Type* i32 = ctx.builder.getInt32Ty();
+                llvm::Type* bt  = ctx.getLLVMType("buffer");
+                llvm::Value* s = args.empty() ? static_cast<llvm::Value*>(ctx.builder.CreateGlobalStringPtr(""))
+                                              : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+                llvm::Value* hdr = ctx.builder.CreateCall(
+                    ctx.getFunction("aiml_b64_decode_buf", i8p, {i8p, i32}), {s, ctx.builder.getInt32(url)});
+                llvm::Function* mcf = ctx.getFunction("memcpy", i8p, {i8p, i8p, ctx.getSizeType()});
+                llvm::Function* frf = ctx.getFunction("free", ctx.builder.getVoidTy(), {i8p});
+                uint64_t szBytes = ctx.module().getDataLayout().getTypeAllocSize(bt);
+                // Same ownership move as io.read_bytes: the heap header becomes the buffer
+                // (memV3: an owned buffer handle; otherwise a stack buffer value).
+                llvm::Value* out;
+                if (ctx.memV3)
+                    out = ctx.builder.CreateCall(ctx.getFunction("aiml_buffer_handle_new", i8p, {}), {}, "b64_buf_h");
+                else
+                    out = ctx.createEntryAlloca(bt, "b64_buf");
+                ctx.builder.CreateCall(mcf, {out, hdr, ctx.getSizeConst(szBytes)});
+                ctx.builder.CreateCall(frf, {hdr});
+                return ctx.ir_gen->wrap(out);
+            };
+        };
+        regDecodeBuf("decode", 0);
+        regDecodeBuf("url_decode", 1);
+        b64.builtinFuncs["decode_str"] = [trackStr](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Type* i32 = ctx.builder.getInt32Ty();
+            llvm::Value* s = args.empty() ? static_cast<llvm::Value*>(ctx.builder.CreateGlobalStringPtr(""))
+                                          : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            llvm::Value* url = ctx.builder.getInt32(0);
+            if (args.size() > 1) url = ctx.builder.CreateZExtOrTrunc(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1])), i32);
+            return trackStr(ctx, ctx.builder.CreateCall(ctx.getFunction("aiml_b64_decode_str", i8p, {i8p, i32}), {s, url}));
+        };
+
+        // ── ldap_handle ──────────────────────────────────────────────────────
+        CompilerContext::ClassInfo lh;
+        lh.name = "ldap_handle";
+        lh.isBuiltin = true;
+        auto argStr = [](CompilerContext& ctx, AIML::AST::CallExpr* call, size_t i,
+                         const std::function<IRValue*(AIML::AST::Expr*)>& evalExpr) -> llvm::Value* {
+            if (!call || call->args.size() <= i) return ctx.builder.CreateGlobalStringPtr("");
+            return static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[i].get())));
+        };
+        lh.builtinMethods["start_tls"] = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr*, std::function<IRValue*(AIML::AST::Expr*)>) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Value* h = ctx.builder.CreateLoad(i8p, base);
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(ctx.getFunction("aiml_ldap_start_tls", ctx.builder.getInt32Ty(), {i8p}), {h}));
+        };
+        lh.builtinMethods["bind"] = [argStr](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr* call, std::function<IRValue*(AIML::AST::Expr*)> evalExpr) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Value* h = ctx.builder.CreateLoad(i8p, base);
+            llvm::Value* dn = argStr(ctx, call, 0, evalExpr);
+            llvm::Value* pw = argStr(ctx, call, 1, evalExpr);
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(ctx.getFunction("aiml_ldap_bind", ctx.builder.getInt32Ty(), {i8p, i8p, i8p}), {h, dn, pw}));
+        };
+        auto regFill = [&](const char* mName, const char* cName) {
+            lh.builtinMethods[mName] = [argStr, newStrList, cName](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr* call, std::function<IRValue*(AIML::AST::Expr*)> evalExpr) -> IRValue* {
+                llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
+                llvm::Value* h = ctx.builder.CreateLoad(i8p, base);
+                llvm::Value* a0 = argStr(ctx, call, 0, evalExpr);
+                llvm::Value* a1 = argStr(ctx, call, 1, evalExpr);
+                llvm::Value* lst = newStrList(ctx, "ldap_list");
+                ctx.builder.CreateCall(ctx.getFunction(cName, ctx.builder.getInt32Ty(), {i8p, i8p, i8p, ptrTy}), {h, a0, a1, lst});
+                return ctx.ir_gen->wrap(lst);
+            };
+        };
+        regFill("search_dns", "aiml_ldap_search_dns_fill");
+        regFill("attr_values", "aiml_ldap_attr_values_fill");
+        lh.builtinMethods["error"] = [trackStr](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr*, std::function<IRValue*(AIML::AST::Expr*)>) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Value* h = ctx.builder.CreateLoad(i8p, base);
+            return trackStr(ctx, ctx.builder.CreateCall(ctx.getFunction("aiml_ldap_error", i8p, {i8p}), {h}));
+        };
+        lh.builtinMethods["set_timeout"] = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr* call, std::function<IRValue*(AIML::AST::Expr*)> evalExpr) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Type* i32 = ctx.builder.getInt32Ty();
+            llvm::Value* h = ctx.builder.CreateLoad(i8p, base);
+            llvm::Value* ms = (call && !call->args.empty())
+                ? ctx.builder.CreateZExtOrTrunc(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get()))), i32)
+                : ctx.builder.getInt32(10000);
+            ctx.builder.CreateCall(ctx.getFunction("aiml_ldap_set_timeout", ctx.builder.getVoidTy(), {i8p, i32}), {h, ms});
+            return nullptr;
+        };
+        lh.builtinMethods["close"] = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr*, std::function<IRValue*(AIML::AST::Expr*)>) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Value* h = ctx.builder.CreateLoad(i8p, base);
+            ctx.builder.CreateCall(ctx.getFunction("aiml_ldap_close", ctx.builder.getVoidTy(), {i8p}), {h});
+            // closed: the slot no longer owns a handle (a second close is a no-op)
+            ctx.builder.CreateStore(llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(i8p)), base);
+            return nullptr;
+        };
+        ctx.classes["ldap_handle"] = std::move(lh);
+
+        // ── ldap namespace ───────────────────────────────────────────────────
+        auto& ldapns = ctx.namespaces["ldap"];
+        ldapns.builtinFuncs["open"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Value* u = args.empty() ? static_cast<llvm::Value*>(ctx.builder.CreateGlobalStringPtr(""))
+                                          : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(ctx.getFunction("aiml_ldap_open", i8p, {i8p}), {u}));
+        };
+        auto regStr1 = [&](CompilerContext::Namespace& ns, const char* aimlName, const char* cName) {
+            ns.builtinFuncs[aimlName] = [cName, trackStr](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+                llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Value* a = args.empty() ? static_cast<llvm::Value*>(ctx.builder.CreateGlobalStringPtr(""))
+                                              : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+                return trackStr(ctx, ctx.builder.CreateCall(ctx.getFunction(cName, i8p, {i8p}), {a}));
+            };
+        };
+        regStr1(ldapns, "escape_filter", "aiml_ldap_escape_filter");
+        regStr1(ldapns, "escape_dn", "aiml_ldap_escape_dn");
+
+        // ── saml namespace ───────────────────────────────────────────────────
+        auto& samlns = ctx.namespaces["saml"];
+        samlns.builtinFuncs["authn_request_url"] = [trackStr](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            auto s = [&](size_t i) -> llvm::Value* {
+                return args.size() > i ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[i]))
+                                       : static_cast<llvm::Value*>(ctx.builder.CreateGlobalStringPtr(""));
+            };
+            return trackStr(ctx, ctx.builder.CreateCall(
+                ctx.getFunction("aiml_saml_authn_request_url", i8p, {i8p, i8p, i8p, i8p, i8p}),
+                {s(0), s(1), s(2), s(3), s(4)}));
+        };
+        samlns.builtinFuncs["new_request_id"] = [trackStr](CompilerContext& ctx, const std::vector<IRValue*>&) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            return trackStr(ctx, ctx.builder.CreateCall(ctx.getFunction("aiml_saml_new_request_id", i8p, {}), {}));
+        };
+        samlns.builtinFuncs["set_clock_skew"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            llvm::Type* i32 = ctx.builder.getInt32Ty();
+            llvm::Value* v = args.empty() ? ctx.builder.getInt32(120)
+                : ctx.builder.CreateZExtOrTrunc(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])), i32);
+            ctx.builder.CreateCall(ctx.getFunction("aiml_saml_set_clock_skew", ctx.builder.getVoidTy(), {i32}), {v});
+            return nullptr;
+        };
+        // verify_response(...) → map<string:string> handle (same layout/ownership as sys.env).
+        samlns.builtinFuncs["verify_response"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            auto s = [&](size_t i) -> llvm::Value* {
+                return args.size() > i ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[i]))
+                                       : static_cast<llvm::Value*>(ctx.builder.CreateGlobalStringPtr(""));
+            };
+            llvm::StructType* mapTy = llvm::StructType::get(ctx.context, {
+                ctx.builder.getInt32Ty(), ctx.builder.getInt32Ty(), i8p, i8p->getPointerTo(), i8p->getPointerTo() });
+            llvm::Value* raw = ctx.builder.CreateCall(
+                ctx.getFunction("aiml_saml_verify_response", i8p, {i8p, i8p, i8p, i8p, i8p}),
+                {s(0), s(1), s(2), s(3), s(4)});
+            return ctx.ir_gen->wrap(ctx.builder.CreateBitCast(raw, mapTy->getPointerTo(), "saml_result_map"));
+        };
+    }
+
     // ── ws namespace ──────────────────────────────────────────────────────────
     {
         auto& ws = ctx.namespaces["ws"];
