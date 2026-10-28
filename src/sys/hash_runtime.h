@@ -27,6 +27,7 @@ char*   aiml_hash_ripemd160 (const char* s);
 char*   aiml_hash_blake2b   (const char* s);   /* BLAKE2b-512, 128 hex chars */
 char*   aiml_hash_blake2s   (const char* s);   /* BLAKE2s-256, 64 hex chars  */
 char*   aiml_hash_md5       (const char* s);
+char*   aiml_hash_sha1      (const char* s);
 
 int32_t aiml_hash_crc32     (const char* s);
 
