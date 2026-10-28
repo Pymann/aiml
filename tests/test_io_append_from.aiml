@@ -1,0 +1,45 @@
+# io.append_from(dst, src) -> i64: appends file src to file dst (streamed, fread/fwrite).
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [fails, i32, 0]
+      - decl: [base, string, "/tmp/aiml_append_from_test"]
+      - call: [io.mkdir_all, base]
+      - call: [io.write_file, "${base}/dst.bin", "abc"]
+      - call: [io.write_file, "${base}/src.bin", "xyz"]
+      - decl: [added, i64, { call: [io.append_from, "${base}/dst.bin", "${base}/src.bin"] }]
+      - if:
+          condition: { neq: [added, 3] }
+          then:
+            - print: ["FAIL appended bytes: ${added}"]
+            - set: [fails, { +: [fails, 1] }]
+      - if:
+          condition: { neq: [{ call: [io.file_size, "${base}/dst.bin"] }, 6] }
+          then:
+            - print: ["FAIL size after append"]
+            - set: [fails, { +: [fails, 1] }]
+      - decl: [again, i64, { call: [io.append_from, "${base}/new.bin", "${base}/src.bin"] }]
+      - if:
+          condition: { or: [{ neq: [again, 3] }, { neq: [{ call: [io.read_file, "${base}/new.bin"] }, "xyz"] }] }
+          then:
+            - print: ["FAIL append to missing dst"]
+            - set: [fails, { +: [fails, 1] }]
+      - if:
+          condition: { neq: [{ call: [io.append_from, "${base}/dst.bin", "${base}/missing.bin"] }, -1] }
+          then:
+            - print: ["FAIL missing src must return -1"]
+            - set: [fails, { +: [fails, 1] }]
+      - if:
+          condition: { neq: [{ call: [io.append_from, "${base}/dst.bin", "${base}/dst.bin"] }, -1] }
+          then:
+            - print: ["FAIL self-append must return -1"]
+            - set: [fails, { +: [fails, 1] }]
+      - call: [io.remove, "${base}/dst.bin"]
+      - call: [io.remove, "${base}/src.bin"]
+      - call: [io.remove, "${base}/new.bin"]
+      - if:
+          condition: { eq: [fails, 0] }
+          then:
+            - print: ["io.append_from: all checks passed"]
+      - return: [fails]
