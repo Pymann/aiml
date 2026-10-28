@@ -1293,6 +1293,10 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
     std::string className = sym->typeName;
     if ((className.rfind("ptr<", 0) == 0 || className.rfind("ref<", 0) == 0) && className.back() == '>') {
          className = className.substr(4, className.length() - 5);
+    } else if (className.rfind("shared<", 0) == 0 && className.back() == '>') {
+         // spec/61 §6.2: a shared<Class> handle points at the fields like ptr<Class>
+         // (the rc sits in front of them), so methods dispatch the same way.
+         className = className.substr(7, className.length() - 8);
     }
 
     // meta: [deprecated] on a class/interface method → warn at this call site.
