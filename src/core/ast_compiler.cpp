@@ -121,6 +121,14 @@ static llvm::Function* getOrCreateClassFree(CompilerContext& ctx, const std::str
             static_cast<llvm::Value*>(ci->second.serNodesVar),
             ctx.builder.getInt32(ci->second.serNodesCount) });
     }
+    // spec/58 §12: a classgroup container behind an interface (a group interface)
+    // owns its instances — release them through its synthesized __dtor, exactly
+    // like `free: <group>` does (ast_compiler_call.cpp), before the shell free.
+    if (ctx.classGroupContainers.count(className)) {
+        llvm::FunctionCallee dtor = ctx.module().getOrInsertFunction(
+            className + "___dtor", llvm::FunctionType::get(llvm::Type::getVoidTy(ctx.context), {i8p}, false));
+        ctx.builder.CreateCall(dtor, { obj });
+    }
     auto* freeFn = ctx.getFunction("free", ctx.builder.getVoidTy(), {i8p});
     ctx.builder.CreateCall(freeFn, { obj });
     ctx.builder.CreateRetVoid();
@@ -1665,6 +1673,7 @@ void Compiler::compile(Program* prog) {
     // first (synthesis moves the function defs), synthesize before visitTopLevel
     // so {new: <group>} resolves the container + its __ctor.
     mergeGroupMethods(prog);
+    checkGroupInterfaces(prog);   // spec/58 §12.4 GI-1..4
     checkClassGroups(prog);
     synthesizeClassGroups(prog);
 
@@ -3467,6 +3476,119 @@ void Compiler::checkServices(Program* prog) {
     }
 }
 
+// ── spec/58 §12 group interfaces: name resolution helpers ───────────────────
+// An interface / group-interface name as written, resolved against the
+// registered tables: exact, then qualified in the current namespace, then in
+// the namespace `ns` the referring declaration lives in.  "" = unknown.
+std::string Compiler::resolveIfaceName(const std::string& raw, const std::string& ns) {
+    if (ctx.interfaces.count(raw)) return raw;
+    std::string q = ctx.qualify(raw);
+    if (ctx.interfaces.count(q)) return q;
+    if (!ns.empty() && ctx.interfaces.count(ns + "." + raw)) return ns + "." + raw;
+    return "";
+}
+
+std::string Compiler::groupInterfaceOf(const std::string& typeName) {
+    std::string t = typeName;
+    if ((t.rfind("ptr<", 0) == 0 || t.rfind("ref<", 0) == 0) && t.back() == '>') t = t.substr(4, t.size() - 5);
+    if (ctx.groupInterfaces.count(t)) return t;
+    std::string q = ctx.qualify(t);
+    if (ctx.groupInterfaces.count(q)) return q;
+    return "";
+}
+
+// Does class `cls` (or a parent) implement interface `ifaceQ` (qualified)?
+bool Compiler::classImplementsIface(const std::string& cls0, const std::string& ifaceQ) {
+    std::string cls = cls0;
+    std::set<std::string> seen;
+    while (!cls.empty() && seen.insert(cls).second) {
+        std::string key = ctx.classes.count(cls) ? cls : ctx.qualify(cls);
+        auto it = ctx.classes.find(key);
+        if (it == ctx.classes.end()) return false;
+        for (const auto& raw : it->second.interfaces)
+            if (raw == ifaceQ || ctx.qualify(raw) == ifaceQ || resolveIfaceName(raw, "") == ifaceQ) return true;
+        cls = it->second.parentName;
+    }
+    return false;
+}
+
+// GI-1..4: the group interface declarations of this unit.
+void Compiler::checkGroupInterfaces(Program* prog) {
+    for (const auto& d : prog->declarations) {
+        auto* gi = dynamic_cast<InterfaceDecl*>(d.get());
+        if (!gi || !gi->groupInterface) continue;
+        if (gi->groupExports.empty()) {
+            LOG_ERROR(ctx.fmtLoc(gi->sourceNode) + "groupinterface '" + gi->name + "' exports nothing.");
+            continue;
+        }
+        std::set<std::string> seen;
+        for (const auto& ex : gi->groupExports) {
+            if (!seen.insert(ex.first).second) {
+                LOG_ERROR(ctx.fmtLoc(gi->sourceNode) + "groupinterface '" + gi->name + "': export '" +
+                          ex.first + "' is listed twice.");
+                continue;
+            }
+            if (!resolveIfaceName(ex.second, ctx.currentNamespace).empty()) continue;
+            if (ctx.classes.count(ex.second) || ctx.classes.count(ctx.qualify(ex.second)))
+                LOG_ERROR(ctx.fmtLoc(gi->sourceNode) + "groupinterface '" + gi->name + "': export '" +
+                          ex.first + "' must be typed by an interface, '" + ex.second + "' is a class.");
+            else
+                LOG_ERROR(ctx.fmtLoc(gi->sourceNode) + "groupinterface '" + gi->name + "': export '" +
+                          ex.first + "' names unknown interface '" + ex.second + "'.");
+        }
+    }
+}
+
+// GI-5..10: a classgroup's group-level `implements:`.
+void Compiler::checkGroupImplements(ClassGroupDecl* g) {
+    std::map<std::string, std::pair<std::string, std::string>> claimed;   // export → (iface, group iface)
+    for (const auto& gname : g->implementsGroups) {
+        std::string gq = groupInterfaceOf(gname);
+        if (gq.empty()) {
+            if (!resolveIfaceName(gname, "").empty())
+                LOG_ERROR(ctx.fmtLoc() + "classgroup '" + g->name + "': '" + gname +
+                          "' is an interface, not a group interface — instance interfaces go on the instance (spec/58 §5.2).");
+            else
+                LOG_ERROR(ctx.fmtLoc() + "classgroup '" + g->name + "': implements unknown group interface '" + gname + "'.");
+            continue;
+        }
+        const auto& info = ctx.groupInterfaces[gq];
+        std::set<std::string> once;
+        for (const auto& ex : info.exports) {
+            if (!once.insert(ex.first).second) continue;
+            std::string iq = resolveIfaceName(ex.second, info.ns);
+            if (iq.empty()) continue;   // GI-1/2, reported at the declaration
+            auto cl = claimed.find(ex.first);
+            if (cl != claimed.end()) {
+                if (cl->second.first != iq)
+                    LOG_ERROR(ctx.fmtLoc() + "classgroup '" + g->name + "' implements '" + cl->second.second +
+                              "' and '" + gname + "', which export '" + ex.first + "' as different interfaces ('" +
+                              cl->second.first + "' vs '" + iq + "').");
+                continue;
+            }
+            claimed[ex.first] = {iq, gname};
+            const ClassGroupInstance* inst = nullptr;
+            for (const auto& i : g->instances) if (i.instanceName == ex.first) inst = &i;
+            if (!inst) {
+                LOG_ERROR(ctx.fmtLoc() + "classgroup '" + g->name + "' implements '" + gname +
+                          "' but has no instance '" + ex.first + "' (" + gname + " exports " + ex.first + ": " +
+                          ex.second + ").");
+                continue;
+            }
+            if (!g->exports.empty() &&
+                std::find(g->exports.begin(), g->exports.end(), ex.first) == g->exports.end())
+                LOG_ERROR(ctx.fmtLoc() + "classgroup '" + g->name + "' implements '" + gname +
+                          "' but does not export '" + ex.first + "'.");
+            bool viaInstance = false;
+            for (const auto& ii : inst->implements)
+                if (ii == ex.second || resolveIfaceName(ii, "") == iq) viaInstance = true;
+            if (!viaInstance && !classImplementsIface(inst->className, iq))
+                LOG_ERROR(ctx.fmtLoc() + "classgroup '" + g->name + "' implements '" + gname + "': instance '" +
+                          ex.first + "' (class " + inst->className + ") does not implement '" + ex.second + "'.");
+        }
+    }
+}
+
 void Compiler::checkClassGroups(Program* prog) {
     if (!prog) return;
     std::map<std::string, ClassDecl*> classByName;
@@ -3525,6 +3647,7 @@ void Compiler::checkClassGroups(Program* prog) {
                 LOG_ERROR(ctx.fmtLoc() + "classgroup '" + g->name + "': subgroup '" +
                           sg.first + "' names unknown group '" + sg.second + "'.");
         }
+        checkGroupImplements(g);   // spec/58 §12.4 GI-5..10
         // exports must name real instances of THIS group.
         for (auto& e : g->exports)
             if (!instNames.count(e))
@@ -3856,6 +3979,43 @@ void Compiler::synthesizeClassGroups(Program* prog) {
             m.name = inst.instanceName;
             m.type = "ptr<" + subName(inst.instanceName) + ">";
             cont->members.push_back(std::move(m));
+        }
+
+        // spec/58 §12.3: group interfaces — the container implements each one and
+        // gets one accessor per export (a ref<Iface> borrow of the instance).
+        {
+            std::set<std::string> madeAccessor;
+            for (const auto& gname : g->implementsGroups) {
+                std::string gq = groupInterfaceOf(gname);
+                if (gq.empty()) continue;                  // GI-5/6, reported
+                cont->interfaces.push_back(gq);
+                const auto& ii = ctx.interfaces[gq];
+                for (const auto& m : ii.methods) {
+                    if (m.name.rfind("__gi_", 0) != 0 || !madeAccessor.insert(m.name).second) continue;
+                    std::string exp = m.name.substr(5);
+                    std::string ifaceQ = m.returnType.substr(4, m.returnType.size() - 5);
+                    if (!baseOf.count(exp)) continue;      // GI-7, reported
+                    // Through the subclass when the INSTANCE declares the interface (its
+                    // vtable lives there, §5.2), else view as the base class first.
+                    bool onSub = false;
+                    for (auto& inst : g->instances)
+                        if (inst.instanceName == exp)
+                            for (auto& im : inst.implements)
+                                if (im == ifaceQ || resolveIfaceName(im, "") == ifaceQ) onSub = true;
+                    std::string acc = "- def:\n    name: " + m.name + "\n    return: " + m.returnType +
+                                      "\n    body:\n";
+                    acc += "      - decl: [gi_view, ref<" + subName(exp) + ">, <." + exp + "]\n";
+                    if (onSub) {
+                        acc += "      - decl: [gi_up, ref<" + ifaceQ + ">, gi_view]\n";
+                    } else {
+                        acc += "      - decl: [gi_base, ref<" + baseOf[exp] + ">, gi_view]\n";
+                        acc += "      - decl: [gi_up, ref<" + ifaceQ + ">, gi_base]\n";
+                    }
+                    acc += "      - return: gi_up\n";
+                    if (auto fn = parseDefSnippet(acc)) cont->methods.push_back(std::move(fn));
+                    else LOG_ERROR("classgroup '" + g->name + "': internal — failed to synthesize " + m.name + ".");
+                }
+            }
         }
 
         // __ctor body.  Phase 0: allocate each instance, grab a local ptr, and run
@@ -4356,6 +4516,16 @@ static std::vector<AimlTypeNode> serBuildSubtree(
         if (purpose == DescriptorPurpose::Clone
             && typeName.rfind("ref<", 0) == 0 && typeName.back() == '>')
             { res.push_back({AIML_TD_WEAK_REF, 0,0,offset,0,0}); return res; }
+        // An OWNING ptr<Iface> field (spec/61, spec/58 §12): freed with its owner through the
+        // vtable's free slot.  ref<Iface> stays a non-owning pointer pair (not freed).
+        if (typeName.rfind("ptr<", 0) == 0 && typeName.back() == '>') {
+            std::string inner = typeName.substr(4, typeName.size() - 5);
+            auto iit = ctx.interfaces.find(inner);
+            if (iit == ctx.interfaces.end()) iit = ctx.interfaces.find(ctx.qualify(inner));
+            if (iit != ctx.interfaces.end())
+                { res.push_back({AIML_TD_IFACE, (int32_t)iit->second.methods.size(), 0, offset,
+                                 (int32_t)(2 * dl.getPointerSize()), 0}); return res; }
+        }
     }
 
     // ── Primitive scalars ─────────────────────────────────────────────────────
@@ -5198,18 +5368,25 @@ void Compiler::registerTypeDecl(Node* node) {
         // behaviour models have.  hasHeapFields is still tracked for the
         // kv.get/kv.get_copy diagnostic (see ast_compiler_stmt.cpp).
         {
+            // classgroup sees-members (is_collaborator) are wired BORROWS of sibling
+            // instances the container owns (spec/58 §9): not owned data, so neither
+            // freed nor serialized with this instance.  Including them here made the
+            // deep free of an instance free its collaborator a second time (`free: <group>`
+            // with any sees edge — and every drop of a group behind a group interface, §12).
             bool anyHeap = false;
             for (auto& [mn, mem] : classInfo.members)
-                if (serHasHeap(mem.typeName, ctx)) { anyHeap = true; break; }
+                if (!mem.is_collaborator && serHasHeap(mem.typeName, ctx)) { anyHeap = true; break; }
             classInfo.hasHeapFields = anyHeap;
             const llvm::DataLayout& dl = ctx.module().getDataLayout();
             const llvm::StructLayout* sl = dl.getStructLayout(structType);
             int32_t sz = (int32_t)dl.getTypeAllocSize(structType);
             bool onPathC = g_serActivePath.insert(className).second;  // seed cycle guard
             std::vector<std::vector<AimlTypeNode>> fsubs;
-            for (auto& [mn, mem] : orderedMembers)
+            for (auto& [mn, mem] : orderedMembers) {
+                if (mem.is_collaborator) continue;
                 fsubs.push_back(serFieldSubtree(mem.typeName,
                     (int32_t)sl->getElementOffset(mem.index), ctx, dl));
+            }
             if (onPathC) g_serActivePath.erase(className);
             auto nodes = serBuildStructNodes(fsubs, 0, sz);
             serEmitGlobal(className, nodes, ctx, classInfo);
@@ -5675,7 +5852,24 @@ void Compiler::registerTypeDecl(Node* node) {
                 m.argLifetimes = sig.argLifetimes;  // spec/61 §3.1
                 info.methods.push_back(std::move(m));
             }
+            // spec/58 §12.3: the accessors of a group interface return the export's
+            // interface — qualified here, so a container in another namespace/unit
+            // implements exactly the same signature.
+            if (iface->groupInterface) {
+                for (auto& m : info.methods) {
+                    std::string raw = m.returnType.substr(4, m.returnType.size() - 5);   // ref<…>
+                    std::string q = ctx.interfaces.count(raw) ? raw
+                                  : (ctx.interfaces.count(ctx.qualify(raw)) ? ctx.qualify(raw) : raw);
+                    m.returnType = "ref<" + q + ">";
+                }
+            }
             ctx.interfaces[ifaceName] = std::move(info);
+        }
+        if (iface->groupInterface && !ctx.groupInterfaces.count(ifaceName)) {
+            CompilerContext::GroupInterfaceInfo gi;
+            gi.ns = ctx.currentNamespace;
+            gi.exports = iface->groupExports;
+            ctx.groupInterfaces[ifaceName] = std::move(gi);
         }
         LOG_DEBUG("AST Registered Interface: " + ifaceName + " (" + std::to_string(ctx.interfaces[ifaceName].methods.size()) + " methods)");
     } else if (auto prefab = dynamic_cast<PrefabDecl*>(node)) {
@@ -7163,6 +7357,24 @@ IRValue* Compiler::resolveEnum(const std::string& baseName, const std::string& p
     return nullptr;
 }
 IRValue* Compiler::resolveProperty(Symbol* baseSym, const std::string& propName) {
+    // spec/58 §12.2: `x.<export>` on a group-interface value is the export (a
+    // ref<Iface> borrow); reaching past it is GI-12, a non-export GI-11.
+    {
+        std::string gq = groupInterfaceOf(baseSym->typeName);
+        if (!gq.empty()) {
+            std::string exp = propName.substr(0, propName.find('.'));
+            if (exp.size() < propName.size()) {
+                for (const auto& e : ctx.groupInterfaces[gq].exports)
+                    if (e.first == exp) {
+                        LOG_ERROR(ctx.fmtLoc() + "'" + exp + "' of group interface '" + gq + "' is an interface ('" +
+                                  e.second + "'): call one of its methods, x." + exp + ".<method>.");
+                        return nullptr;
+                    }
+            }
+            std::string ifaceType;
+            return emitGroupExport(baseSym, gq, exp, nullptr, ifaceType);
+        }
+    }
     std::string className = baseSym->typeName;
     if ((className.rfind("ptr<", 0) == 0 || className.rfind("ref<", 0) == 0) && className.back() == '>') {
          className = className.substr(4, className.length() - 5);

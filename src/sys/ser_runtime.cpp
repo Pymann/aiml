@@ -356,6 +356,7 @@ static void enc(std::vector<uint8_t>& buf,
     case AIML_TD_GLBUFFER:
     case AIML_TD_GLVAO:
     case AIML_TD_PROCESS:
+    case AIML_TD_IFACE:
         break;
     // in-process only (chan models are not wire-serialisable): the pointer, retained by dec
     case AIML_TD_CHAN:
@@ -536,6 +537,7 @@ static void dec_node(const uint8_t* blob, int& pos, int end,
     case AIML_TD_GLBUFFER:
     case AIML_TD_GLVAO:
     case AIML_TD_PROCESS:
+    case AIML_TD_IFACE:
         break;
     case AIML_TD_CHAN:
         if (end - pos >= (int)sizeof(void*)) {
@@ -999,6 +1001,22 @@ static void fre(int idx, const AimlTypeNode* ns, int nn, uint8_t* data) {
         aiml_process_release(p);
 #endif
         p = nullptr; memcpy(data, &p, sizeof(p));
+        break;
+    }
+    case AIML_TD_IFACE: {
+        // An owning interface box: the concrete type frees itself through the free slot
+        // its vtable carries (a classgroup container runs its __dtor there).
+        void* obj = nullptr; void* vtbl = nullptr;
+        memcpy(&obj, data, sizeof(obj));
+        memcpy(&vtbl, data + sizeof(void*), sizeof(vtbl));
+        if (obj && vtbl) {
+            typedef void (*FreeSlot)(void*);
+            FreeSlot fn = ((FreeSlot*)vtbl)[n.param1];
+            if (fn) fn(obj);
+        }
+        obj = nullptr; vtbl = nullptr;
+        memcpy(data, &obj, sizeof(obj));
+        memcpy(data + sizeof(void*), &vtbl, sizeof(vtbl));
         break;
     }
     case AIML_TD_GLBUFFER:
@@ -1488,6 +1506,12 @@ static void clw(int idx, const AimlTypeNode* ns, int nn,
     case AIML_TD_THREAD: {   // Class 4, move-only: the clone has no thread
         void* t = nullptr;
         memcpy(dst, &t, sizeof(t));
+        break;
+    }
+    case AIML_TD_IFACE: {    // move-only owning interface box: the clone holds none
+        void* t = nullptr;
+        memcpy(dst, &t, sizeof(t));
+        memcpy(dst + sizeof(void*), &t, sizeof(t));
         break;
     }
     case AIML_TD_TENSOR: {

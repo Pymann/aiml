@@ -71,6 +71,12 @@ typedef enum {
     AIML_TD_GLVAO      = 24, // spec/61 Class 4: unique vertex array.
     AIML_TD_PROCESS    = 25, // spec/23 §5.2 Class 4: a process handle slot. Leaf; free =
                              //   aiml_process_release, move-only (a copy leaves it null).
+    AIML_TD_IFACE      = 26, // spec/61 + spec/58 §12 (memV3): an OWNING ptr<Iface> fat-pointer
+                             //   slot {obj, vtbl}.  param1 = index of the vtable's free slot
+                             //   (= the interface's method count, see getOrCreateClassFree).
+                             //   Leaf; free = vtbl[param1](obj) — releases the concrete object
+                             //   (a classgroup container through its __dtor); enc/dec skip it
+                             //   (a live object is not wire data); move-only (a copy is null).
 } AimlTDKind;
 
 // spec/61 Class 5 / Class 4 resource handles (ser_runtime.cpp).

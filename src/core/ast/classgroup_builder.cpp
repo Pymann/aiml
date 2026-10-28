@@ -62,6 +62,8 @@ bool ClassGroupBuilder::OnSequenceStart() {
     if (!inInstanceMap && currentKey == "subgroups") { inSubgroups = true; subgDepth = 1; return true; }
     // Group-level `export: [inst, ...]` — a flat string list.
     if (!inInstanceMap && currentKey == "export") { inExports = true; return true; }
+    // Group-level `implements: [GroupIface, ...]` (spec/58 §12) — a flat list.
+    if (!inInstanceMap && !inInstances && currentKey == "implements") { inGroupImplements = true; return true; }
 
     if (!inInstanceMap && currentKey == "instances") inInstances = true;
     else if (inInstanceMap && currentKey == "sees")        inSees = true;
@@ -85,6 +87,7 @@ bool ClassGroupBuilder::OnSequenceEnd() {
     if (inSubgroups && subgDepth == 2) { node_->subgroups.push_back(curSubg); subgDepth = 1; return true; }
     if (inSubgroups && subgDepth == 1) { inSubgroups = false; subgDepth = 0; expectingKey = true; return true; }
     if (inExports) { inExports = false; expectingKey = true; return true; }
+    if (inGroupImplements) { inGroupImplements = false; expectingKey = true; return true; }
     // Innermost-first: sees/functions/constructor live inside an instance map;
     // instances wraps them.  Only the innermost flag is set at a given level.
     if (inSees)            inSees = false;
@@ -124,6 +127,7 @@ bool ClassGroupBuilder::OnScalar(const std::string& value, const std::string& /*
     }
     // `export: [inst, ...]` — bare scalars.
     if (inExports) { node_->exports.push_back(value); return true; }
+    if (inGroupImplements) { node_->implementsGroups.push_back(value); return true; }
     // `sees: [a, b]` — bare scalars inside the sees sequence.
     if (inSees) {
         cur_.sees.push_back(value);

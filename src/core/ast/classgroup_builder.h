@@ -46,6 +46,7 @@ private:
     bool inInstanceMap = false;     // inside one instance's map
     bool inSees       = false;      // inside an instance's `sees:` sequence
     bool inImplements = false;      // inside an instance's `implements:` list
+    bool inGroupImplements = false; // inside the GROUP-level `implements:` list (spec/58 §12)
     bool inFunctions  = false;      // inside an instance's `functions:` sequence
     bool inCtor       = false;      // inside an instance's `constructor:` list
     bool inParams     = false;      // inside the group-level `params:` sequence

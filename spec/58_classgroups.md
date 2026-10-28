@@ -612,7 +612,19 @@ member is synthesized on the subclass (§5.1) and reached through
 
 ## 12. Group interfaces — `groupinterface:` (2026-10-28)
 
-Status: **specified; tests in place (RED until implemented).**
+Status: **implemented 2026-10-28.**  `tests/classgroup_giface/run.sh`: 3 positive + 12 negative
+tests green, valgrind (the usual procedure, `VALGRIND=1`) without memory errors and without leaks
+from generated code.  Three fixes the feature needed, each with its own regression test:
+
+- **An interface-typed member assigned from `{new:}`** stored the bare object pointer instead of
+  the fat pointer; the first call through it jumped to address 0 (any interface, not only group
+  interfaces).  Now upcast like the decl site — `tests/test_iface_member_set_new.aiml`.
+- **An owning `ptr<Iface>` member was not released with its owner** (any interface): the class
+  descriptor had no kind for it.  New descriptor kind `AIML_TD_IFACE` frees through the vtable's
+  free slot; a classgroup container behind an interface runs its `__dtor` there.
+- **`free: <group>` with a sees edge freed the sibling twice**: the instance class's own free
+  descriptor listed its sees member (a borrow, §9) as owned.  Collaborators are now skipped there
+  as in the other descriptor paths — `tests/test_classgroup_free_sees.aiml`.
 
 A classgroup is a concrete type.  Whoever embeds it, or holds it, names the
 implementation — and so depends on all of it.  A **group interface** is the
@@ -792,4 +804,4 @@ the group (its composition root).
 | `tests/test_classgroup_giface_instance_impl.aiml` | the export is satisfied by an instance-level `implements:` (group function implements the interface method) |
 | `tests/test_classgroup_giface_cross_unit.aiml` (+ `tests/_cross/giface_api.aiml`, `giface_impl.aiml`) | contract, implementation and user in three files |
 | `tests/test_classgroup_neg_giface_*.aiml` | GI-1 … GI-12, one file each; `tests/classgroup_giface/run.sh` checks every `# EXPECT-ERROR:` text |
-| valgrind | `test_classgroup_giface*` without definite/indirect leaks or invalid accesses |
+| valgrind | `test_classgroup_giface*` without invalid accesses; no leak from generated code (`VALGRIND=1 bash tests/classgroup_giface/run.sh`, probes in `tests/run_memory_sanitizers.sh`) |
