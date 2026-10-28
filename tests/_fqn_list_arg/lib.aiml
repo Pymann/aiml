@@ -1,0 +1,26 @@
+# Requires: library
+- namespace: fqnlist.lib
+
+- def:
+    name: count_items
+    args: [[items, list<string>]]
+    return: i32
+    body:
+      - return: [items.len]
+
+- def:
+    name: add_item
+    args: [[items, list<string>], [item, string]]
+    body:
+      - call: [items.push, item]
+
+- def:
+    name: must_be_positive
+    args: [[val, i32]]
+    return: i32
+    body:
+      - if:
+          condition: { le: [val, 0] }
+          then:
+            - throw: { new: Exception, message: "not positive" }
+      - return: [val]

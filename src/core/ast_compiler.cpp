@@ -2161,6 +2161,16 @@ void Compiler::compile(Program* prog) {
             for (const auto& d : prog->declarations) {
                 auto* fn = dynamic_cast<FunctionDecl*>(d.get());
                 if (!fn) continue;
+                // HTTP route handlers have a shape fixed by srv.route —
+                // (http_request_handle, http_response_handle) — and must be
+                // free functions (route takes a function, not a method), so
+                // "make them methods" is not actionable.  Every server with
+                // 3+ routes would otherwise need static_off.  Only the exact
+                // handler signature is exempt; helpers that take a request or
+                // response plus other args are still grouped.
+                if (fn->args.size() == 2 &&
+                    fn->args[0].second == "http_request_handle" &&
+                    fn->args[1].second == "http_response_handle") continue;
                 // Pro Arg-Pärchen in dieser Funktion einen Eintrag.  Dedup über
                 // Funktion: wenn dieselbe Funktion das Pärchen mehrfach hat
                 // (was eigentlich nicht vorkommt), nur einmal zählen.
@@ -5844,7 +5854,11 @@ void Compiler::visitTopLevel(Node* node) {
                 if (method->returnType == "string") ctx.stringProducerFns.insert(oldName);
             }
             method->name = cls->name + "_" + method->name;
-            auto it = method->args.insert(method->args.begin(), {"this", "ref<" + cls->name + ">"});
+            // The instance argument behind `<` must carry the class's registered
+            // (namespace-qualified) name — classes are registered as
+            // ctx.qualify(name), so a short name made every `<.member` /
+            // `<.method` lookup fail inside classes declared under `- namespace:`.
+            auto it = method->args.insert(method->args.begin(), {"this", "ref<" + ctx.qualify(cls->name) + ">"});
             // Keep argMods index-synced with args: `this` gets a default (borrow) modifier
             // slot at the front, so argMods[i] still lines up with args[i] (spec/61 §3.1).
             bool insertedMod = false;

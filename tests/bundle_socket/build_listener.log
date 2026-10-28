@@ -1,3 +1,0 @@
-[2026-10-25 16:52:54,107][_compile_file][INFO]: compiling tests/bundle_socket/listener.aiml
-[2026-10-25 16:52:54,176][_link][INFO]: linking bs_listener
-[2026-10-25 16:52:54,908][_dispatch][INFO]: build finished with errorlevel 0

@@ -1,0 +1,39 @@
+# Expected exit code: 0
+# spec/49 §6.7: route handlers (exact http_request_handle/http_response_handle
+# signature) are exempt from same_arg — srv.route requires free functions.
+
+- def:
+    name: handle_one
+    args: [[req, http_request_handle], [resp, http_response_handle]]
+    body:
+      - set: [resp.status, 200]
+      - set: [resp.body, "one"]
+      - call: [resp.send]
+
+- def:
+    name: handle_two
+    args: [[req, http_request_handle], [resp, http_response_handle]]
+    body:
+      - set: [resp.status, 200]
+      - set: [resp.body, "two"]
+      - call: [resp.send]
+
+- def:
+    name: handle_three
+    args: [[req, http_request_handle], [resp, http_response_handle]]
+    body:
+      - set: [resp.status, 200]
+      - set: [resp.body, "three"]
+      - call: [resp.send]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [srv, http_server_handle]
+      - set: [srv, { call: [http.server, "127.0.0.1", 23199] }]
+      - call: [srv.route, "GET", "/one", handle_one]
+      - call: [srv.route, "GET", "/two", handle_two]
+      - call: [srv.route, "GET", "/three", handle_three]
+      - print: ["PASS same_arg route handler exemption"]
+      - return: [0]

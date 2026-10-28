@@ -3234,13 +3234,22 @@ void registerBuiltins(CompilerContext& ctx) {
         };
 
         // io.write_file(path, content) -> i32  (0=ok, -1=error)
+        // content may be a string (written up to the terminating NUL) or a
+        // buffer<u8> (written binary-safe with its exact length), following
+        // the generic-entry-point rule used by hash.<algo>.
         io.builtinFuncs["write_file"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
             llvm::Type* i8p  = ctx.builder.getInt8Ty()->getPointerTo();
             llvm::Type* i32  = ctx.builder.getInt32Ty();
-            llvm::Function* f = ctx.getFunction("aiml_io_write_file", i32, {i8p, i8p});
             if (args.size() < 2) return ctx.ir_gen->getInt32(-1);
             llvm::Value* p = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
             llvm::Value* c = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]));
+            if (c && c->getType() == ctx.getLLVMType("buffer")) {
+                llvm::Value* dataP = ctx.builder.CreateExtractValue(c, {4}, "wf_buf_data");
+                llvm::Value* lenV  = ctx.builder.CreateExtractValue(c, {0}, "wf_buf_len");
+                llvm::Function* fb = ctx.getFunction("aiml_io_write_file_buf", i32, {i8p, i8p, i32});
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(fb, {p, dataP, lenV}));
+            }
+            llvm::Function* f = ctx.getFunction("aiml_io_write_file", i32, {i8p, i8p});
             return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {p, c}));
         };
 
@@ -5090,20 +5099,28 @@ void registerBuiltins(CompilerContext& ctx) {
             ci.name      = "url";
             ci.isBuiltin = true;
             // preLoadBase = false (default): URL handlers load from alloca internally.
-#define URL_GETTER_STR(mName, cFn) \
+// memV3 (spec/61 §4/§5): url parts are libc strings and get_param an AimlHttpMap;
+// hand out managed copies (string / map<string:string> handle) — see
+// aiml_http_str_managed / aiml_http_map_to_handle.  `managed` is the converter
+// (to_string allocates a fresh libc string → adopted and freed).
+#define URL_GETTER_STR(mName, cFn, managed) \
             ci.builtinMethods[mName] = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr*, auto) -> IRValue* { \
                 llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo(); \
                 llvm::Value* ptr = ctx.builder.CreateLoad(i8p, base, "url_ptr"); \
                 llvm::Function* fn = ctx.module().getFunction(cFn); \
                 if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(i8p, {i8p}, false), llvm::Function::ExternalLinkage, cFn, ctx.module()); \
-                return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {ptr})); \
+                llvm::Value* raw = ctx.builder.CreateCall(fn, {ptr}); \
+                const char* conv = managed; \
+                if (ctx.memV3 && conv && !ctx.httpMapRawView) \
+                    raw = ctx.builder.CreateCall(ctx.getFunction(conv, i8p, {i8p}), {raw}); \
+                return ctx.ir_gen->wrap(raw); \
             }
-            URL_GETTER_STR("protocol",  "aiml_url_protocol");
-            URL_GETTER_STR("host",      "aiml_url_host");
-            URL_GETTER_STR("path",      "aiml_url_path");
-            URL_GETTER_STR("fragment",  "aiml_url_fragment");
-            URL_GETTER_STR("get_param", "aiml_url_get_param");
-            URL_GETTER_STR("to_string", "aiml_url_to_string");
+            URL_GETTER_STR("protocol",  "aiml_url_protocol",  "aiml_http_str_managed");
+            URL_GETTER_STR("host",      "aiml_url_host",      "aiml_http_str_managed");
+            URL_GETTER_STR("path",      "aiml_url_path",      "aiml_http_str_managed");
+            URL_GETTER_STR("fragment",  "aiml_url_fragment",  "aiml_http_str_managed");
+            URL_GETTER_STR("get_param", "aiml_url_get_param", "aiml_http_map_to_handle");
+            URL_GETTER_STR("to_string", "aiml_url_to_string", "aiml_http_str_adopt");
 #undef URL_GETTER_STR
             ci.builtinMethods["port"] = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr*, auto) -> IRValue* {
                 llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
@@ -5304,6 +5321,17 @@ void registerBuiltins(CompilerContext& ctx) {
                 if (!call || call->args.empty()) return nullptr;
                 IRValue* a0 = evalExpr(call->args[0].get());
                 ctx.builder.CreateCall(fn, {base, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a0))});
+                return nullptr;
+            };
+            // srv.set_max_body(bytes) — request body cap (default 8 MiB, max ~2 GiB)
+            ci.builtinMethods["set_max_body"] = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+                llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Type* i64 = ctx.builder.getInt64Ty();
+                llvm::Function* fn = ctx.getFunction("aiml_http_server_set_max_body", ctx.builder.getVoidTy(), {i8p, i64});
+                if (!call || call->args.empty()) return nullptr;
+                llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+                if (v->getType()->isIntegerTy() && !v->getType()->isIntegerTy(64)) v = ctx.builder.CreateSExt(v, i64);
+                ctx.builder.CreateCall(fn, {base, v});
                 return nullptr;
             };
             // srv.secure_headers(hsts) — enable nosniff/X-Frame-Options/Referrer-Policy (+HSTS if hsts!=0)
@@ -5595,6 +5623,14 @@ void registerBuiltins(CompilerContext& ctx) {
                 if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(), {i8p, i8p}, false), llvm::Function::ExternalLinkage, "aiml_http_resp_set_body", ctx.module());
                 ctx.builder.CreateCall(fn, {base, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(newVal))});
             };
+            // resp.body_file = path — streamed (sendfile, Range-aware) on send
+            ci.builtinSetters["body_file"] = [](CompilerContext& ctx, llvm::Value* base, AIML::IRValue* newVal) {
+                llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Function* fn = ctx.getFunction("aiml_http_resp_set_body_file", ctx.builder.getVoidTy(), {i8p, i8p});
+                llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(newVal));
+                if (v->getType() != i8p) v = ctx.builder.CreateBitCast(v, i8p);
+                ctx.builder.CreateCall(fn, {base, v});
+            };
             ctx.classes["http_response_handle"] = std::move(ci);
         }
 
@@ -5629,12 +5665,26 @@ void registerBuiltins(CompilerContext& ctx) {
             ci.builtinMethods["params"] = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr*, auto) -> IRValue* {
                 llvm::Function* fn = ctx.module().getFunction("aiml_http_req_params");
                 if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getInt8Ty()->getPointerTo(), {ctx.builder.getInt8Ty()->getPointerTo()}, false), llvm::Function::ExternalLinkage, "aiml_http_req_params", ctx.module());
-                return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {base}));
+                llvm::Value* raw = ctx.builder.CreateCall(fn, {base});
+                // memV3: a map<string:string> is a refcounted handle with managed strings —
+                // hand out a copy in that form, not the parser's AimlHttpMap (spec/61 §5).
+                if (ctx.memV3 && !ctx.httpMapRawView) {
+                    llvm::Type* i8pc = ctx.builder.getInt8Ty()->getPointerTo();
+                    raw = ctx.builder.CreateCall(ctx.getFunction("aiml_http_map_to_handle", i8pc, {i8pc}), {raw});
+                }
+                return ctx.ir_gen->wrap(raw);
             };
             ci.builtinMethods["cookies"] = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr*, auto) -> IRValue* {
                 llvm::Function* fn = ctx.module().getFunction("aiml_http_req_cookies");
                 if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getInt8Ty()->getPointerTo(), {ctx.builder.getInt8Ty()->getPointerTo()}, false), llvm::Function::ExternalLinkage, "aiml_http_req_cookies", ctx.module());
-                return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {base}));
+                llvm::Value* raw = ctx.builder.CreateCall(fn, {base});
+                // memV3: a map<string:string> is a refcounted handle with managed strings —
+                // hand out a copy in that form, not the parser's AimlHttpMap (spec/61 §5).
+                if (ctx.memV3 && !ctx.httpMapRawView) {
+                    llvm::Type* i8pc = ctx.builder.getInt8Ty()->getPointerTo();
+                    raw = ctx.builder.CreateCall(ctx.getFunction("aiml_http_map_to_handle", i8pc, {i8pc}), {raw});
+                }
+                return ctx.ir_gen->wrap(raw);
             };
             // req.header(name) — method with arg
             ci.builtinMethods["header"] = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
@@ -5653,6 +5703,45 @@ void registerBuiltins(CompilerContext& ctx) {
                 llvm::Value* nameArg = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(i8p));
                 if (call && !call->args.empty()) { IRValue* a = evalExpr(call->args[0].get()); if (a) nameArg = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a)); }
                 return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {base, nameArg}));
+            };
+            // req.body_bytes — raw request body as buffer<u8> (binary-safe, spec/32_2)
+            ci.builtinMethods["body_bytes"] = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr*, auto) -> IRValue* {
+                llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Type* bt  = ctx.getLLVMType("buffer");
+                llvm::Function* fn  = ctx.getFunction("aiml_http_req_body_bytes", i8p, {i8p});
+                llvm::Function* mcf = ctx.getFunction("memcpy", i8p, {i8p, i8p, ctx.getSizeType()});
+                llvm::Function* frf = ctx.getFunction("free", ctx.builder.getVoidTy(), {i8p});
+                llvm::Value* heapHdr = ctx.builder.CreateCall(fn, {base});
+                uint64_t szBytes = ctx.module().getDataLayout().getTypeAllocSize(bt);
+                if (ctx.memV3) {
+                    // spec/61 §5: the runtime's heap header becomes an owned buffer
+                    // handle (data moves along) — same as io.read_bytes.
+                    llvm::Value* h = ctx.builder.CreateCall(ctx.getFunction("aiml_buffer_handle_new", i8p, {}), {}, "req_body_h");
+                    llvm::Function* curFnV3 = ctx.builder.GetInsertBlock()->getParent();
+                    auto* copyV3 = llvm::BasicBlock::Create(ctx.context, "req_body_copy", curFnV3);
+                    auto* doneV3 = llvm::BasicBlock::Create(ctx.context, "req_body_done", curFnV3);
+                    ctx.builder.CreateCondBr(ctx.builder.CreateIsNull(heapHdr), doneV3, copyV3);
+                    ctx.builder.SetInsertPoint(copyV3);
+                    ctx.builder.CreateCall(mcf, {h, heapHdr, ctx.getSizeConst(szBytes)});
+                    ctx.builder.CreateCall(frf, {heapHdr});
+                    ctx.builder.CreateBr(doneV3);
+                    ctx.builder.SetInsertPoint(doneV3);
+                    return ctx.ir_gen->wrap(h);
+                }
+                auto* out = ctx.createEntryAlloca(bt, "req_body_buf");
+                ctx.builder.CreateMemSet(out, ctx.builder.getInt8(0), szBytes, llvm::MaybeAlign());
+                // Copy the header only when the runtime returned one (OOM → zero buffer).
+                llvm::Function* curFn = ctx.builder.GetInsertBlock()->getParent();
+                auto* copyBB = llvm::BasicBlock::Create(ctx.context, "req_body_copy", curFn);
+                auto* doneBB = llvm::BasicBlock::Create(ctx.context, "req_body_done", curFn);
+                llvm::Value* isNull = ctx.builder.CreateIsNull(heapHdr);
+                ctx.builder.CreateCondBr(isNull, doneBB, copyBB);
+                ctx.builder.SetInsertPoint(copyBB);
+                ctx.builder.CreateCall(mcf, {out, heapHdr, ctx.getSizeConst(szBytes)});
+                ctx.builder.CreateCall(frf, {heapHdr});
+                ctx.builder.CreateBr(doneBB);
+                ctx.builder.SetInsertPoint(doneBB);
+                return ctx.ir_gen->wrap(out);
             };
             // req.client_ip() — trusted socket peer IP (ignores X-Forwarded-For)
             ci.builtinMethods["client_ip"] = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr*, auto) -> IRValue* {

@@ -1,0 +1,12 @@
+# Requires: library
+# Entry for tests/_jit_args/check.sh (needs a program argument).
+- import: "greet.aiml"
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [who, string, { call: [sys.get_arg, 1] }]
+      - decl: [line, string, { call: [jitargs.lib.greeting, who] }]
+      - print: ["${line}"]
+      - return: [0]

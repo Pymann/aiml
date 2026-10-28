@@ -1,0 +1,20 @@
+# Expected exit code: 0
+# Methods of a class declared under `- namespace:` can assign members and call
+# sibling methods through `<.`.
+- import: "_ns_class_instance/counter.aiml"
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [ctr, ptr<nsinst.lib.Counter>, { new: nsinst.lib.Counter }]
+      - call: [ctr.bump_twice, 3]
+      - decl: [nlabels, i32, { call: [ctr.label, "x"] }]
+      - decl: [total, i32, { +: [ctr.count, 100] }]
+      - if:
+          condition: { or: [{ neq: [total, 106] }, { neq: [nlabels, 1] }] }
+          then:
+            - print: ["[FAIL] total=${total} labels=${nlabels}"]
+            - return: [1]
+      - print: ["PASS namespaced class <. access"]
+      - return: [0]
