@@ -642,7 +642,21 @@ IRValue* Compiler::visitCall(CallExpr* call) {
                     if (!inner) {
                         // A buffer member (`<.data`) or field reaches here as its handle too:
                         // borrow it — load the value, nothing to release.
-                        if (declaredTypeOfExpr(call->args[ai].get()).rfind("buffer", 0) == 0)
+                        std::string argTy = declaredTypeOfExpr(call->args[ai].get());
+                        if (argTy.empty()) {
+                            // `<.field` / `this.field`: the member's declared type in the current class
+                            if (auto* ve = dynamic_cast<AIML::AST::VariableExpr*>(call->args[ai].get())) {
+                                std::string field;
+                                if (ve->name.rfind("<.", 0) == 0) field = ve->name.substr(2);
+                                else if (ve->name.rfind("this.", 0) == 0) field = ve->name.substr(5);
+                                auto cit = ctx.classes.find(ctx.currentClassName);
+                                if (!field.empty() && field.find('.') == std::string::npos && cit != ctx.classes.end()) {
+                                    auto mit = cit->second.members.find(field);
+                                    if (mit != cit->second.members.end()) argTy = mit->second.typeName;
+                                }
+                            }
+                        }
+                        if (argTy.rfind("buffer", 0) == 0)
                             argVals[ai] = ctx.ir_gen->wrap(ctx.builder.CreateLoad(ctx.getLLVMType("buffer"), hv, "buf_member_val"));
                         continue;
                     }
