@@ -234,6 +234,14 @@ int32_t aiml_ctx_names_fill(void* handle, const char* want_type, void* list_ptr)
 }
 
 // spec/29_2 §14b (F29_2-…l): die Meldungen des LETZTEN `exec`.
+// spec/21 §3.1: the package table for this context's `@name/…` imports.
+int32_t aiml_ctx_use_packages(void* handle, const char* path) {
+    CtxSlot* slot = slot_of(handle);
+    if (!slot || !slot->comp) return -1;
+    slot->comp->setPackageTable(path ? path : "");
+    return 0;
+}
+
 int32_t aiml_ctx_errors_fill(void* handle, void* list_ptr) {
     CtxSlot* slot = slot_of(handle);
     auto* list = static_cast<AimlListRaw*>(list_ptr);

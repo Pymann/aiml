@@ -19,7 +19,10 @@ namespace YAML {
     class Node;
 }
 
+class CompilerContext;
+
 namespace llvm {
+    class MemoryBuffer;
     class Function;
     class Value;
     class Type;
@@ -84,6 +87,9 @@ public:
     // Fehler nicht vermischen, sonst erklaert die eine Einreichung den Fehler
     // der anderen.
     const std::vector<std::string>& ctxErrors() const { return ctx_errors_; }
+    // spec/21 §3.1: the package table for `@name/…` imports of this compiler
+    // ("" = AIML_PACKAGES, then aiml.packages.json); a host sets it per context.
+    void setPackageTable(const std::string& path);
     // Der Symboltabellen-Zustand dieses Kontexts.  `void*`, weil context.h
     // hier nicht eingebunden werden kann (Zyklus) — der Leser castet auf
     // CompilerContext*.  Nur lesen: wer ihn veraendert, veraendert den
@@ -217,4 +223,17 @@ private:
     // bis 25.10.2026 ins Leere.
     bool headerOnlyNext_ = false;
     std::vector<std::string> ctx_errors_;   // §14b F29_2-…l
+
+    // spec/21 §3.1 packages: the host's table ("" = default lookup), and per
+    // context which import objects / sources are already in an engine.
+    std::string packageTable_;
+    std::set<std::string> ctx_loaded_objects_;
+    std::set<std::string> ctx_imported_paths_;
+    std::vector<std::unique_ptr<llvm::MemoryBuffer>> ctx_obj_buffers_;
+
+    std::shared_ptr<std::vector<std::string>> installImportResolver(
+        CompilerContext& ctx,
+        std::shared_ptr<std::unordered_set<std::string>> seenFileSizeDiagnostics,
+        bool memorySource);
+    void addImportObjects(llvm::ExecutionEngine* eng);
 };

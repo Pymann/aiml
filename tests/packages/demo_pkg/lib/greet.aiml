@@ -1,0 +1,20 @@
+# Requires: driver
+- import: "util.aiml"
+
+- def:
+    name: demo_greet
+    args: [[who, string]]
+    return: i32
+    body:
+      - print: ["demo greets ${who}"]
+      - return: { call: [demo_twice, 21] }
+
+- class:
+    name: DemoGreeter
+    methods:
+      - def:
+          name: greet
+          args: [[who, string]]
+          return: i32
+          body:
+            - return: { call: [demo_greet, who] }

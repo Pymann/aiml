@@ -42,6 +42,7 @@ void    aiml_ctx_record_symbols(void* handle);
 // fuellen eine aiml-Liste, die der Aufrufer angelegt hat.
 int32_t aiml_ctx_names_fill(void* handle, const char* want_type, void* list_ptr);
 int32_t aiml_ctx_errors_fill(void* handle, void* list_ptr);
+int32_t aiml_ctx_use_packages(void* handle, const char* path);
 
 // Ein Symbol abgreifen — MIT genanntem Typ (F29_2-…d).
 //   0 = gefunden, `out_addr` traegt Adresse bzw. Wert

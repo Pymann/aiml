@@ -4254,6 +4254,21 @@ void registerBuiltins(CompilerContext& ctx) {
             // cx.close(): ausdrueckliches Schliessen.  Danach sind alle
             // Adressen aus diesem Kontext ungueltig — deshalb ist es eine
             // Handlung und kein Nebeneffekt.
+            // cx.use_packages(path) → i32: the package table for `@name/…` imports
+            // of THIS context (spec/21 §3.1); "" = default lookup.  0 = set.
+            cxi.builtinMethods["use_packages"] = [](CompilerContext& ctx, llvm::Value* baseAlloca,
+                AIML::AST::CallExpr* call,
+                std::function<AIML::IRValue*(AIML::AST::Expr*)> evalExpr) -> AIML::IRValue* {
+                llvm::Type* i8p  = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Type* i32t = ctx.builder.getInt32Ty();
+                llvm::Value* self = ctx.builder.CreateLoad(i8p, baseAlloca, "cx");
+                llvm::Value* path = call->args.empty()
+                    ? ctx.builder.CreateGlobalStringPtr("")
+                    : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                    ctx.getFunction("aiml_ctx_use_packages", i32t, {i8p, i8p}), {self, path}));
+            };
+
             cxi.builtinMethods["close"] = [](CompilerContext& ctx, llvm::Value* baseAlloca,
                 AIML::AST::CallExpr*,
                 std::function<AIML::IRValue*(AIML::AST::Expr*)>) -> AIML::IRValue* {

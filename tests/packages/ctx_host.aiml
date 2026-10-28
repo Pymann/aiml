@@ -1,0 +1,75 @@
+# Requires: driver
+# spec/21 §3.1 in a context (spec/29_2 §14a): in-memory source imports a package;
+# a plain path import is refused; the host picks the table (use_packages).
+- def:
+    name: expect
+    args: [[what, string], [cond, i32]]
+    return: i32
+    body:
+      - if: { condition: { eq: [cond, 1] }, then: [{ print: ["  ok   ${what}"] }, { return: 0 }] }
+      - print: ["  FAIL ${what}"]
+      - return: 1
+
+- def:
+    name: has_error
+    static_off: ["str_cmp"]
+    args: [[errs, list<string>], [part, string]]
+    return: i32
+    body:
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, errs.len] }
+          body:
+            - decl: [one, string, { call: [errs.get, idx] }]
+            - if: { condition: { ge: [{ call: [one.index_of, part] }, 0] }, then: [{ return: 1 }] }
+            - set: [idx, { +: [idx, 1] }]
+      - return: 0
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [fails, i32, 0]
+      - decl: [table, string, { call: [io.read_file, "table_path.txt"] }]
+      - set: [table, { call: [table.trim] }]
+
+      # 1. package import in a context: compiled, loaded, callable
+      - decl: [one, ctx_handle, { call: [ctx.new] }]
+      - call: [one.use_packages, table]
+      - decl: [src, string, { call: [io.read_file, "bundle_pkg.aiml"] }]
+      - decl: [rc1, i32, { call: [one.exec, { call: [sys.code_from, src] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "context runs a bundle that imports @demo (rc ${rc1})", { eq: [rc1, 42] }] }] }]
+      # a second bundle in the same context imports it again: no second copy, still works
+      - decl: [rc1b, i32, { call: [one.exec, { call: [sys.code_from, src] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "second bundle, same import, same context (rc ${rc1b})", { eq: [rc1b, 42] }] }] }]
+
+      # 2. a plain path import from memory is refused, with the reason
+      - decl: [two, ctx_handle, { call: [ctx.new] }]
+      - call: [two.use_packages, table]
+      - decl: [plain, string, { call: [io.read_file, "bundle_plain.aiml"] }]
+      - decl: [rc2, i32, { call: [two.load, { call: [sys.code_from, plain] }] }]
+      - decl: [errs2, list<string>, { call: [two.errors] }]
+      - set: [fails, { +: [fails, { call: [expect, "plain import from memory refused", { lt: [rc2, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "and the message says why", { call: [has_error, errs2, "must name a package"] }] }] }]
+
+      # 3. unknown package / leaving the package
+      - decl: [three, ctx_handle, { call: [ctx.new] }]
+      - call: [three.use_packages, table]
+      - decl: [rc3, i32, { call: [three.load, { call: [sys.code_from, "- import: \"@nope/lib/x.aiml\"\n"] }] }]
+      - decl: [errs3, list<string>, { call: [three.errors] }]
+      - set: [fails, { +: [fails, { call: [expect, "unknown package refused", { and: [{ lt: [rc3, 0] }, { eq: [{ call: [has_error, errs3, "not in"] }, 1] }] }] }] }]
+      - decl: [four, ctx_handle, { call: [ctx.new] }]
+      - call: [four.use_packages, table]
+      - decl: [rc4, i32, { call: [four.load, { call: [sys.code_from, "- import: \"@demo/../main_file.aiml\"\n"] }] }]
+      - decl: [errs4, list<string>, { call: [four.errors] }]
+      - set: [fails, { +: [fails, { call: [expect, "leaving the package refused", { and: [{ lt: [rc4, 0] }, { eq: [{ call: [has_error, errs4, "leaves the package"] }, 1] }] }] }] }]
+
+      # 4. a context without a table knows no packages
+      - decl: [five, ctx_handle, { call: [ctx.new] }]
+      - call: [five.use_packages, "/nonexistent/aiml.packages.json"]
+      - decl: [rc5, i32, { call: [five.load, { call: [sys.code_from, src] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "another table, no demo", { lt: [rc5, 0] }] }] }]
+
+      - if: { condition: { gt: [fails, 0] }, then: [{ print: ["FAIL ctx package imports (${fails})"] }, { return: 1 }] }
+      - print: ["PASS package imports in a context"]
+      - return: 0
