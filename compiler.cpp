@@ -27,6 +27,7 @@
 #include "src/sys/http_runtime.h"
 #include "src/sys/math_runtime.h"
 #include "src/sys/hash_runtime.h"
+#include "src/sys/identity_runtime.h"
 #include "src/sys/storage_runtime.h"
 #include "src/sys/compress_runtime.h"
 #include "src/sys/gltf_runtime.h"
@@ -2201,6 +2202,25 @@ int AIMLCompiler::jitRun(int argc, char** argv) {
     llvm::sys::DynamicLibrary::AddSymbol("aiml_io_rename",     (void*)(intptr_t)aiml_io_rename);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_io_read_file",      (void*)(intptr_t)aiml_io_read_file);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_io_write_file",     (void*)(intptr_t)aiml_io_write_file);
+    // identity builtins (spec/67)
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_b64_encode", (void*)(intptr_t)aiml_b64_encode);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_b64_encode_str", (void*)(intptr_t)aiml_b64_encode_str);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_b64_decode_buf", (void*)(intptr_t)aiml_b64_decode_buf);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_b64_decode_str", (void*)(intptr_t)aiml_b64_decode_str);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ldap_open", (void*)(intptr_t)aiml_ldap_open);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ldap_start_tls", (void*)(intptr_t)aiml_ldap_start_tls);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ldap_bind", (void*)(intptr_t)aiml_ldap_bind);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ldap_search_dns_fill", (void*)(intptr_t)aiml_ldap_search_dns_fill);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ldap_attr_values_fill", (void*)(intptr_t)aiml_ldap_attr_values_fill);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ldap_error", (void*)(intptr_t)aiml_ldap_error);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ldap_set_timeout", (void*)(intptr_t)aiml_ldap_set_timeout);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ldap_close", (void*)(intptr_t)aiml_ldap_close);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ldap_escape_filter", (void*)(intptr_t)aiml_ldap_escape_filter);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ldap_escape_dn", (void*)(intptr_t)aiml_ldap_escape_dn);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_saml_authn_request_url", (void*)(intptr_t)aiml_saml_authn_request_url);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_saml_new_request_id", (void*)(intptr_t)aiml_saml_new_request_id);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_saml_verify_response", (void*)(intptr_t)aiml_saml_verify_response);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_saml_set_clock_skew", (void*)(intptr_t)aiml_saml_set_clock_skew);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_io_write_file_buf", (void*)(intptr_t)aiml_io_write_file_buf);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_io_list_dir_fill",  (void*)(intptr_t)aiml_io_list_dir_fill);
 

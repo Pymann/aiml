@@ -1,0 +1,32 @@
+# spec/67 §3 under memV3, without a server: escaping results, a handle that
+# cannot connect (error string, empty result lists), close twice.
+# Expected exit code: 0
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 20] }
+          body:
+            - decl: [fil, string, { call: [ldap.escape_filter, "x)(uid=*${idx}"] }]
+            - decl: [dnv, string, { call: [ldap.escape_dn, " #a,b+c=${idx} "] }]
+            - set: [fil, { call: [ldap.escape_filter, dnv] }]
+            - set: [idx, { +: [idx, 1] }]
+      - decl: [conn, ldap_handle, { call: [ldap.open, "ldap://127.0.0.1:1"] }]
+      - call: [conn.set_timeout, 500]
+      - decl: [bind_rc, i32, { call: [conn.bind, "uid=a,dc=x", "pw"] }]
+      - decl: [why, string, { call: [conn.error] }]
+      - decl: [dns, list<string>, { call: [conn.search_dns, "dc=x", "(uid=a)"] }]
+      - decl: [vals, list<string>, { call: [conn.attr_values, "uid=a,dc=x", "mail"] }]
+      - decl: [empty_rc, i32, { call: [conn.bind, "uid=a,dc=x", ""] }]
+      - set: [why, { call: [conn.error] }]
+      - call: [conn.close]
+      - call: [conn.close]
+      - if:
+          condition: { or: [{ neq: [bind_rc, -1] }, { neq: [empty_rc, 0] }] }
+          then:
+            - return: [1]
+      - print: ["PASS identity ldap offline (${dns.len} ${vals.len})"]
+      - return: [0]

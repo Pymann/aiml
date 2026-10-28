@@ -1,0 +1,33 @@
+# spec/67 §4 under memV3: verify_response maps (ok and error), their strings
+# bound and dropped, repeated; AuthnRequest URLs.  Run from the project root.
+# Expected exit code: 0
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [cert, string, { call: [io.read_file, "tests/_saml/idp_cert.pem"] }]
+      - decl: [good, string, { call: [io.read_file, "tests/_saml/both_signed.b64"] }]
+      - decl: [evil, string, { call: [io.read_file, "tests/_saml/wrapping.b64"] }]
+      - decl: [oks, i32, 0]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 10] }
+          body:
+            - decl: [res, map<string:string>, { call: [saml.verify_response, good, cert, "https://sp.example/metadata", "https://sp.example/acs", "_req123"] }]
+            - decl: [who, string, { call: [res.get, "name_id"] }]
+            - decl: [groups, string, { call: [res.get, "attr.groups"] }]
+            - if:
+                condition: { eq: [{ call: [res.get, "ok"] }, "1"] }
+                then:
+                  - set: [oks, { +: [oks, 1] }]
+            - set: [res, { call: [saml.verify_response, evil, cert, "https://sp.example/metadata", "https://sp.example/acs", "_req123"] }]
+            - decl: [why, string, { call: [res.get, "error"] }]
+            - decl: [login, string, { call: [saml.authn_request_url, "https://idp.example/sso", "sp", "https://sp.example/acs", { call: [saml.new_request_id] }, "/r"] }]
+            - set: [idx, { +: [idx, 1] }]
+      - if:
+          condition: { neq: [oks, 10] }
+          then:
+            - return: [1]
+      - print: ["PASS identity saml"]
+      - return: [0]
