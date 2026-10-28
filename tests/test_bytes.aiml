@@ -1,0 +1,97 @@
+# Expected exit code: 0
+# bytes.* (spec/68) and hash.sha1 — binary helpers on buffer<u8>.
+# The git checks use values from real git:
+#   printf hello | git hash-object --stdin  → b6fc4c620b67d95f953a5c1c1230aaab5db5a1b0
+
+- def:
+    name: expect
+    args: [[what, string], [got, string], [want, string]]
+    return: i32
+    body:
+      - if:
+          condition: { eq: [got, want] }
+          then:
+            - return: [0]
+      - print: ["FAIL ${what}: got '${got}', want '${want}'"]
+      - return: [1]
+
+- def:
+    name: expect_num
+    args: [[what, string], [got, i64], [want, i64]]
+    return: i32
+    body:
+      - if:
+          condition: { eq: [got, want] }
+          then:
+            - return: [0]
+      - print: ["FAIL ${what}: got ${got}, want ${want}"]
+      - return: [1]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [fails, i32, 0]
+      # building a git object: "blob 5\0hello"
+      - decl: [head, buffer<u8>, { call: [bytes.from_string, "blob 5"] }]
+      - decl: [nul, buffer<u8>, { call: [bytes.from_u8, 0] }]
+      - decl: [with_nul, buffer<u8>, { call: [bytes.concat, head, nul] }]
+      - decl: [obj, buffer<u8>, { call: [bytes.concat, with_nul, "hello"] }]
+      - set: [fails, { +: [fails, { call: [expect_num, "object length", obj.len, 12] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "git blob id", { call: [hash.sha1, obj] }, "b6fc4c620b67d95f953a5c1c1230aaab5db5a1b0"] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "sha1 of a string", { call: [hash.sha1, "abc"] }, "a9993e364706816aba3e25717850c26c9cd0d89d"] }] }]
+      # find / text / slice
+      - set: [fails, { +: [fails, { call: [expect_num, "find NUL", { call: [bytes.find, obj, 0, 0] }, 6] }] }]
+      - set: [fails, { +: [fails, { call: [expect_num, "find missing", { call: [bytes.find, obj, 120, 0] }, -1] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "text header", { call: [bytes.text, obj, 0, 6] }, "blob 5"] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "text stops at NUL", { call: [bytes.text, obj] }, "blob 5"] }] }]
+      - decl: [body, buffer<u8>, { call: [bytes.slice, obj, 7] }]
+      - set: [fails, { +: [fails, { call: [expect, "slice to end", { call: [bytes.text, body] }, "hello"] }] }]
+      - decl: [bad_slice, buffer<u8>, { call: [bytes.slice, obj, 10, 5] }]
+      - set: [fails, { +: [fails, { call: [expect_num, "slice out of range", bad_slice.len, 0] }] }]
+      # u8 / hex / be32
+      - set: [fails, { +: [fails, { call: [expect_num, "u8 NUL", { call: [bytes.u8, obj, 6] }, 0] }] }]
+      - decl: [raw, buffer<u8>, { call: [bytes.from_hex, "00ff7fa0"] }]
+      - set: [fails, { +: [fails, { call: [expect_num, "u8 255", { call: [bytes.u8, raw, 1] }, 255] }] }]
+      - set: [fails, { +: [fails, { call: [expect_num, "u8 outside", { call: [bytes.u8, raw, 4] }, -1] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "hex round trip", { call: [bytes.to_hex, raw] }, "00ff7fa0"] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "hex range", { call: [bytes.to_hex, raw, 1, 2] }, "ff7f"] }] }]
+      - set: [fails, { +: [fails, { call: [expect_num, "be32", { call: [bytes.be32, raw, 0] }, 16744352] }] }]
+      - decl: [be, buffer<u8>, { call: [bytes.from_be32, 4278190081] }]
+      - set: [fails, { +: [fails, { call: [expect, "from_be32", { call: [bytes.to_hex, be] }, "ff000001"] }] }]
+      - decl: [odd, buffer<u8>, { call: [bytes.from_hex, "abc"] }]
+      - set: [fails, { +: [fails, { call: [expect_num, "odd hex", odd.len, 0] }] }]
+      # zlib: two streams back to back, read one at a time
+      - decl: [zone, buffer<u8>, { call: [bytes.zlib, obj] }]
+      - decl: [ztwo, buffer<u8>, { call: [bytes.zlib, "second"] }]
+      - decl: [both, buffer<u8>, { call: [bytes.concat, zone, ztwo] }]
+      - decl: [first, buffer<u8>, { call: [bytes.zlib_at, both, 0] }]
+      - decl: [used, i64, { call: [bytes.zlib_consumed] }]
+      - set: [fails, { +: [fails, { call: [expect, "zlib_at first", { call: [hash.sha1, first] }, "b6fc4c620b67d95f953a5c1c1230aaab5db5a1b0"] }] }]
+      - set: [fails, { +: [fails, { call: [expect_num, "consumed", used, zone.len] }] }]
+      - decl: [second, buffer<u8>, { call: [bytes.zlib_at, both, used] }]
+      - set: [fails, { +: [fails, { call: [expect, "zlib_at second", { call: [bytes.text, second] }, "second"] }] }]
+      - decl: [garbage, buffer<u8>, { call: [bytes.zlib_at, raw, 0] }]
+      - set: [fails, { +: [fails, { call: [expect_num, "zlib_at garbage", garbage.len, 0] }] }]
+      - set: [fails, { +: [fails, { call: [expect_num, "consumed after error", { call: [bytes.zlib_consumed] }, -1] }] }]
+      # delta: base "hello world", copy 0..5, insert "!!" → "hello!!"
+      - decl: [base, buffer<u8>, { call: [bytes.from_string, "hello world"] }]
+      - decl: [delta, buffer<u8>, { call: [bytes.from_hex, "0b07910005022121"] }]
+      - decl: [patched, buffer<u8>, { call: [bytes.delta_apply, base, delta] }]
+      - set: [fails, { +: [fails, { call: [expect, "delta_apply", { call: [bytes.text, patched] }, "hello!!"] }] }]
+      - decl: [wrong_base, buffer<u8>, { call: [bytes.delta_apply, "short", delta] }]
+      - set: [fails, { +: [fails, { call: [expect_num, "delta on wrong base", wrong_base.len, 0] }] }]
+      # read_file + write back
+      - decl: [disk, string, "/tmp/aiml_test_bytes.bin"]
+      - call: [io.write_file, disk, obj]
+      - decl: [loaded, buffer<u8>, { call: [bytes.read_file, disk] }]
+      - set: [fails, { +: [fails, { call: [expect, "read_file", { call: [hash.sha1, loaded] }, "b6fc4c620b67d95f953a5c1c1230aaab5db5a1b0"] }] }]
+      - call: [io.remove, disk]
+      - decl: [missing, buffer<u8>, { call: [bytes.read_file, "/nonexistent/x"] }]
+      - set: [fails, { +: [fails, { call: [expect_num, "read_file missing", missing.len, 0] }] }]
+      - if:
+          condition: { gt: [fails, 0] }
+          then:
+            - return: [1]
+      - print: ["PASS bytes: concat/slice/find/text/u8/hex/be32, sha1 = git ids, zlib streams back to back, pack delta, read_file"]
+      - return: [0]
