@@ -194,7 +194,8 @@ Natively it wraps `http.get`. Pair it with `sys.deserialize` to parse a served m
 
 | Method | Arguments | Return                 | Description |
 |--------|-----------|------------------------|-------------|
-| `send` | —         | `http_response_handle` | Sends request, returns response |
+| `send` | —         | `http_response_handle` | Sends request, returns response; **null** when there is no answer (connection refused / unreachable, TLS failure, no HTTP status line) |
+| `free` | —         | —                      | Releases the request handle (headers, body, method, body_file); the `url` and the response are separate.  Call it once, after `send`. |
 
 ### 2.4 `http_response_handle` — Members and Methods (Client — Reading)
 

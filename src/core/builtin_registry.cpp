@@ -6058,6 +6058,15 @@ void registerBuiltins(CompilerContext& ctx) {
                 if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(i8p, {i8p}, false), llvm::Function::ExternalLinkage, "aiml_http_client_send", ctx.module());
                 return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {base}));
             };
+            // client.free() — release the request handle (after send; the response is
+            // separate and freed with resp.free).  A second free is the caller's bug.
+            ci.builtinMethods["free"] = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr*, auto) -> IRValue* {
+                llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Function* fn = ctx.module().getFunction("aiml_http_client_free");
+                if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(), {i8p}, false), llvm::Function::ExternalLinkage, "aiml_http_client_free", ctx.module());
+                ctx.builder.CreateCall(fn, {base});
+                return ctx.ir_gen->getInt32(0);
+            };
             // Property setters
             ci.builtinSetters["body"] = [](CompilerContext& ctx, llvm::Value* base, AIML::IRValue* newVal) {
                 llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();

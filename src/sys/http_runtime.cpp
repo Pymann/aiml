@@ -2282,6 +2282,18 @@ extern "C" void aiml_http_client_set_body(void* client, const char* body) {
     c->body = xstrdup(body);
 }
 
+// client.free() — releases a request handle (headers, body, method, body_file).
+// The url belongs to the caller's `url` value and is not touched.  Null-safe.
+extern "C" void aiml_http_client_free(void* client) {
+    if (!client) return;
+    AimlHttpClient* c = static_cast<AimlHttpClient*>(client);
+    aiml_http_map_free(c->headers);
+    free(c->body);
+    free(c->method);
+    free(c->body_file);
+    free(c);
+}
+
 // client.body_file = path — stream the request body from a file (binary-safe).
 extern "C" void aiml_http_client_set_body_file(void* client, const char* path) {
     if (!client) return;
