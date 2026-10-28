@@ -47,6 +47,7 @@ The `import` command loads another AIML file.
 - Circular imports are therefore **allowed**. The cache prevents infinite loops.
 - Import paths are **relative to the importing file's directory**. `../` is supported.
 - **Absolute paths in import statements are forbidden.**
+- `@name/…` imports from an installed package (§3.1).
 - Imported symbols must be accessed via their **Fully Qualified Name (FQN)**.
 
 ```yaml
@@ -57,6 +58,47 @@ The `import` command loads another AIML file.
     body:
       - call: [my.math.calc]
 ```
+
+### 3.1 Package imports — `@name/…` (2026-10-28)
+
+A file can import from an installed **package** by name instead of by place:
+
+```yaml
+- import: "@ufo/lib/registry.aiml"
+```
+
+- **Where the package lives says the package table**, not the source.  exodus writes it
+  (`exodus deps install`, from the `dependencies` of `exodus.json`): `aiml.packages.json` in the
+  project root, not committed —
+
+  ```json
+  { "packages": { "ufo": { "path": "__exodus_cache/deps/ufo/<sha256>", "version": "0.2.0", "sha256": "<hex>" } } }
+  ```
+
+  A relative `path` is relative to the table's directory.  The table that applies, in this order:
+  1. the one a host set for a context: `kontext.use_packages(path)` (spec/29_2 §14a);
+  2. `$AIML_PACKAGES`;
+  3. `aiml.packages.json` in the working directory, then upward from the importing file's
+     directory (a build started from elsewhere still finds the project's table).
+  The table is reread when it changes, so a long-running host sees a later `deps install`.
+- **Inside a package, imports stay ordinary**: `- import: "util.aiml"` in a package file resolves
+  relative to that file like any other — a package is just a directory somebody else wrote.
+- **A package import never leaves the package directory.**  `@ufo/../x` is an error.
+- **In-memory source may only import packages.**  Source without a file — `sys.code_from`,
+  `ctx.load` / `ctx.exec` — has no directory to be relative to, and in a host it is often someone
+  else's text (a submitted pipeline in cosmos).  A path import there would read any file of the
+  host; a package import reaches exactly what the host installed.  So:
+  `import 'x.aiml': imports from in-memory source must name a package (@name/...)`.
+- A context compiles an imported package file to its `.o` once and adds it to its engine once;
+  a later bundle of the same context that imports it again uses the first copy (no second lib
+  init).
+- **Errors name the fix**: no table → "package 'ufo' is not installed (no aiml.packages.json;
+  run exodus deps install or set AIML_PACKAGES)"; not in the table → "… is not in <table> (add it
+  to dependencies and run exodus deps install)"; a missing file → "package 'ufo' has no file …".
+
+Tests: `tests/packages/run.sh` (file import, table lookup from another directory,
+`AIML_PACKAGES`, missing table; in a context: package import, same import twice, plain import
+refused, unknown package, leaving the package, a host-chosen table).
 
 ## 4. Execution vs Compilation
 

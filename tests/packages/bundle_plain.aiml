@@ -1,0 +1,7 @@
+# Requires: driver
+- import: "demo_pkg/lib/util.aiml"
+- def:
+    name: main
+    return: i32
+    body:
+      - return: 0
