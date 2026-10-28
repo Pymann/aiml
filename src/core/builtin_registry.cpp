@@ -6853,6 +6853,68 @@ void registerBuiltins(CompilerContext& ctx) {
             return BytesHelp::buf(ctx, ctx.builder.CreateCall(ctx.getFunction("aiml_bytes_delta_apply", i8p, {i8p, i32, i8p, i32}),
                 {b.first, b.second, d.first, d.second}));
         };
+
+        // ── fsmeta namespace: lstat fields, chmod/chown/mknod, mtimes, xattrs ──
+        // (bytes_runtime.cpp; nothing follows symlinks).
+        auto& fns = ctx.namespaces["fsmeta"];
+        struct FsHelp {
+            static llvm::Value* cstr(CompilerContext& ctx, const std::vector<IRValue*>& args, size_t i) {
+                if (args.size() > i && args[i]) {
+                    llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[i]));
+                    if (v->getType()->isPointerTy()) return v;
+                }
+                return ctx.builder.CreateGlobalStringPtr("");
+            }
+        };
+        // fsmeta.stat(path, field) → i64
+        fns.builtinFuncs["stat"] = [](CompilerContext& ctx, const BF& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo(); llvm::Type* i32 = ctx.builder.getInt32Ty(); llvm::Type* i64 = ctx.builder.getInt64Ty();
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(ctx.getFunction("aiml_fsmeta_stat", i64, {i8p, i32}),
+                {FsHelp::cstr(ctx, args, 0), BytesHelp::i32arg(ctx, args, 1, 0)}));
+        };
+        // fsmeta.chmod(path, mode) → i32
+        fns.builtinFuncs["chmod"] = [](CompilerContext& ctx, const BF& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo(); llvm::Type* i32 = ctx.builder.getInt32Ty(); llvm::Type* i64 = ctx.builder.getInt64Ty();
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(ctx.getFunction("aiml_fsmeta_chmod", i32, {i8p, i64}),
+                {FsHelp::cstr(ctx, args, 0), BytesHelp::i64arg(ctx, args, 1, 0644)}));
+        };
+        // fsmeta.chown(path, uid, gid) → i32
+        fns.builtinFuncs["chown"] = [](CompilerContext& ctx, const BF& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo(); llvm::Type* i32 = ctx.builder.getInt32Ty(); llvm::Type* i64 = ctx.builder.getInt64Ty();
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(ctx.getFunction("aiml_fsmeta_chown", i32, {i8p, i64, i64}),
+                {FsHelp::cstr(ctx, args, 0), BytesHelp::i64arg(ctx, args, 1, -1), BytesHelp::i64arg(ctx, args, 2, -1)}));
+        };
+        // fsmeta.mknod(path, mode, major, minor) → i32
+        fns.builtinFuncs["mknod"] = [](CompilerContext& ctx, const BF& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo(); llvm::Type* i32 = ctx.builder.getInt32Ty(); llvm::Type* i64 = ctx.builder.getInt64Ty();
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(ctx.getFunction("aiml_fsmeta_mknod", i32, {i8p, i64, i64, i64}),
+                {FsHelp::cstr(ctx, args, 0), BytesHelp::i64arg(ctx, args, 1, 0), BytesHelp::i64arg(ctx, args, 2, 0), BytesHelp::i64arg(ctx, args, 3, 0)}));
+        };
+        // fsmeta.set_mtime(path, sec, nsec = 0) → i32
+        fns.builtinFuncs["set_mtime"] = [](CompilerContext& ctx, const BF& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo(); llvm::Type* i32 = ctx.builder.getInt32Ty(); llvm::Type* i64 = ctx.builder.getInt64Ty();
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(ctx.getFunction("aiml_fsmeta_set_mtime", i32, {i8p, i64, i64}),
+                {FsHelp::cstr(ctx, args, 0), BytesHelp::i64arg(ctx, args, 1, 0), BytesHelp::i64arg(ctx, args, 2, 0)}));
+        };
+        // fsmeta.xattrs(path) → string (names, one per line)
+        fns.builtinFuncs["xattrs"] = [](CompilerContext& ctx, const BF& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            return BytesHelp::str(ctx, ctx.builder.CreateCall(ctx.getFunction("aiml_fsmeta_xattrs", i8p, {i8p}),
+                {FsHelp::cstr(ctx, args, 0)}));
+        };
+        // fsmeta.xattr_get(path, name) → buffer<u8>
+        fns.builtinFuncs["xattr_get"] = [](CompilerContext& ctx, const BF& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            return BytesHelp::buf(ctx, ctx.builder.CreateCall(ctx.getFunction("aiml_fsmeta_xattr_get", i8p, {i8p, i8p}),
+                {FsHelp::cstr(ctx, args, 0), FsHelp::cstr(ctx, args, 1)}));
+        };
+        // fsmeta.xattr_set(path, name, value) → i32
+        fns.builtinFuncs["xattr_set"] = [](CompilerContext& ctx, const BF& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo(); llvm::Type* i32 = ctx.builder.getInt32Ty();
+            auto v = BytesHelp::view(ctx, args, 2);
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(ctx.getFunction("aiml_fsmeta_xattr_set", i32, {i8p, i8p, i8p, i32}),
+                {FsHelp::cstr(ctx, args, 0), FsHelp::cstr(ctx, args, 1), v.first, v.second}));
+        };
     }
 
     // ── compress namespace ────────────────────────────────────────────────

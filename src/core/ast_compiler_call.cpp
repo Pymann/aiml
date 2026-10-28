@@ -629,11 +629,11 @@ IRValue* Compiler::visitCall(CallExpr* call) {
             // for a C string.  Load the value here and release the temporary handle
             // after the call (the builtins copy what they keep).
             std::vector<llvm::Value*> bufTempHandles;
-            if (ctx.memV3 && (baseName == "bytes" || baseName == "hash")) {
+            if (ctx.memV3 && (baseName == "bytes" || baseName == "hash" || baseName == "fsmeta")) {
                 static const std::set<std::string> bufReturners = {
                     "bytes.slice", "bytes.concat", "bytes.from_be32", "bytes.from_u8", "bytes.from_hex",
                     "bytes.from_string", "bytes.read_file", "bytes.zlib", "bytes.zlib_at",
-                    "bytes.delta_apply", "base64.decode", "base64.url_decode" };
+                    "bytes.delta_apply", "fsmeta.xattr_get", "base64.decode", "base64.url_decode" };
                 for (size_t ai = 0; ai < call->args.size() && ai < argVals.size(); ++ai) {
                     if (!argVals[ai]) continue;
                     llvm::Value* hv = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[ai]));
