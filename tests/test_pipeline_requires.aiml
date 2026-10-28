@@ -15,7 +15,7 @@
 
 - pipeline:
     name: req_demo
-    stages:
+    steps:
       - stage:
           name: bauen
           requires: [sh, python3]

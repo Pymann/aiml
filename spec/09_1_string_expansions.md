@@ -47,6 +47,35 @@ You can call functions within a string. The return value of the function is conv
 # Output: Result: 30
 ```
 
+### 3.1a Ein gepunkteter Name ohne Argumente (Nachtrag 25.10.2026)
+
+Steht in einer Einsetzung ein Name MIT Punkt, der keine Variable ist, aber eine **Funktion ohne
+Argumente** benennt, wird sie gerufen und ihr Wert eingesetzt:
+
+```yaml
+- namespace: prm
+- def: { name: branch, return: string, body: [{ return: "main" }] }
+
+# in einer anderen Datei / einem anderen Bundle:
+- print: ["git checkout ${prm.branch}"]      # git checkout main
+```
+
+Das ist derselbe Vorgang wie `${ { call: [prm.branch] } }`, nur lesbar.  Der Anlass ist ein
+Namensraum voller Konstanten (cosmos `doc/spec/106` §106.6: die Parameter eines Jobs), und dort
+steht die Einsetzung mitten in einer Shell-Zeile — die Klammerform macht sie unleserlich.
+
+Die Regeln sind eng gezogen, damit nichts Bestehendes sich ändert:
+
+- **nur mit Punkt.**  Ein nackter Funktionsname bleibt ein **Funktionszeiger** (so werden
+  Rückrufe übergeben, z. B. `pipe.run(beobachter)`).
+- **nur ohne Argumente** und **nur mit Rückgabewert**.  Eine Funktion mit Parametern lässt sich
+  so nicht rufen, und `void` hätte nichts einzusetzen.
+- **eine Variable gewinnt immer.**  `${a.b}` ist weiter das Feld `b` der Variablen `a`, wenn es
+  eine Variable `a` gibt; erst wenn keine da ist, wird nach der Funktion gesucht.
+- Eine bloß **deklarierte** Funktion zählt mit: in einem Compiler-Kontext (spec/29_2 §14a) steht
+  ein früheres Bundle nur noch als Deklaration im Modul.  Ohne diesen Zweig wurde `${prm.branch}`
+  zum Funktionszeiger und als Zeichenkette gedruckt — gemessen als Datenmüll in einem Befehl.
+
 ### 3.2 Method Calls
 
 Object methods (on lists, maps, or custom classes) can also be called.

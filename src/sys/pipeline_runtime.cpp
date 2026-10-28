@@ -97,8 +97,28 @@ struct PStep {
 
 struct PStage {
     std::string        name;
-    std::string        runs_on;
+    std::string        runs_on;      // `agent:` — WER nimmt den Schritt (F110-127)
+    // spec/62 §20.3: hier stehen die AUFGELOESTEN Werte — die Umschreibung hat
+    // den Vorrang (Stufe schlaegt Pipeline, F62-151) schon angewandt.  Ein
+    // Leser rechnet nichts nach, sonst ist er ein zweiter Parser (§20.1).
+    std::string        steplayer;    // `own` | `none` (§18.5, F110-124/125)
+    std::string        image;        // WORIN (F62-66)
+    std::string        base;         // WORAUF: run:<lauf> | job:<kennung> (F62-144)
+    std::string        requires_on;  // "git,gcc>=13" (§18.2, F62-126)
+    std::string        shares;       // "name:/ziel:modus,…" (§18.1b, F62-136)
+    std::string        command;      // `run:` — Befehl der Scheibe 1
+    int32_t            cpu_cores = 0;   // 0 = Vorgabe des Wirts, NICHT unbegrenzt
+    int32_t            mem_mb    = 0;
+    int32_t            pids_max  = 0;
+    int32_t            timeout_ms = 0;  // 0 = Vorgabe des Ausfuehrenden (F62-40)
     std::vector<PStep> steps;
+};
+
+// `push:` — wohin ein Abbild geht (§18, F62-69/71).  `from` nennt die STUFE.
+struct PPush {
+    std::string from;
+    std::string to;
+    std::string tag;
 };
 
 struct PPipeline {
@@ -106,6 +126,11 @@ struct PPipeline {
     std::vector<std::map<std::string, std::string>>   excludes;   // Teilbindungen (§4.2)
     std::vector<std::pair<std::string, std::vector<std::string>>> params;  // Achse -> Werte
     std::vector<PStage>                               stages;
+    std::vector<PPush>                                pushes;
+    // spec/62 §4.1 (F62-1): der TYP einer Achse.  Er zaehlt im Rumpf (`jobs`
+    // ist ein i32, kein Umgebungs-String) und gehoert damit zur Gestalt des
+    // Laufs, die ein Wirt liest (§20.4).
+    std::map<std::string, std::string>                param_types;
     // Ergebniszaehler des letzten Laufs
     int32_t reused   = 0;
     int32_t ran      = 0;
@@ -135,6 +160,19 @@ void expand(const std::vector<std::pair<std::string, std::vector<std::string>>>&
         current[params[idx].first] = v;
         expand(params, idx + 1, current, out);
     }
+}
+
+// Bindungen als lesbarer Text, stabil sortiert (map ist geordnet).  EIN
+// Format fuer Lane-Text, Beobachter-`bindings`, Arbeitsbereichsname und den
+// Datensatz des Kontrollers (spec/62 F62-152) — zwei Formate fuer denselben
+// Begriff heissen, dass irgendwo Anzeigetext geparst wird.
+std::string bind_text(const Bindings& b) {
+    std::string out;
+    for (const auto& kv : b) {
+        if (!out.empty()) out += ",";
+        out += kv.first + "=" + kv.second;
+    }
+    return out;
 }
 
 // Schluessel eines (Schritt, Lane): Bundle-Adresse + DEKLARIERTE Bindungen,
@@ -187,8 +225,9 @@ void  aiml_stage_add_step(void* g, void* s) {
 void* aiml_pipeline_new(void) { return new PPipeline(); }
 void  aiml_pipeline_set_name(void* p, const char* n) { if (p && n) static_cast<PPipeline*>(p)->name = n; }
 
-void aiml_pipeline_add_param(void* p, const char* axis, const void* values) {
+void aiml_pipeline_add_param(void* p, const char* axis, const char* type, const void* values) {
     if (!p || !axis || !values) return;
+    if (type && *type) static_cast<PPipeline*>(p)->param_types[axis] = type;
     const auto* lst = static_cast<const AimlStringList*>(values);
     std::vector<std::string> vals;
     for (int32_t i = 0; i < lst->size; ++i)
@@ -395,6 +434,9 @@ int32_t aiml_pipeline_run_observed(void* p, void* observer_raw) {
     auto observer = reinterpret_cast<AimlStepObserver>(observer_raw);
     if (!p) return -2;
     auto* pp = static_cast<PPipeline*>(p);
+    // spec/62 F62-124a: verteilte Schluessel UEBERSETZEN, aber lokal nicht
+    // LAUFEN — hier, vor dem ersten Schritt, mit Begruendung und Weg.
+    if (int32_t refused = aiml_pipeline_local_refusal(p)) return refused;
     pp->reused   = 0;
     pp->ran      = 0;
     pp->attempts = 0;
@@ -526,16 +568,6 @@ int32_t aiml_pipeline_run_observed(void* p, void* observer_raw) {
         LOG_ERROR("pipeline '" + pp->name + "': exclude schliesst JEDE Lane aus — nichts zu tun");
         return -1;
     }
-
-    // Bindungen als lesbarer Text, stabil sortiert (map ist geordnet).
-    auto bind_text = [](const Bindings& b) {
-        std::string out;
-        for (const auto& kv : b) {
-            if (!out.empty()) out += ",";
-            out += kv.first + "=" + kv.second;
-        }
-        return out;
-    };
 
     // ── §6: Lanes sind nach Konstruktion parallel ───────────────────────
     //
@@ -925,6 +957,225 @@ int32_t aiml_pipeline_run_observed(void* p, void* observer_raw) {
 
     pp->lifecycle = state.paused ? 2 : 3;
     return (state.stop_rc != 0) ? state.stop_rc : state.worst_rc;
+}
+
+// ── spec/62 §20: die uebersetzte Pipeline LESEN ─────────────────────────────
+//
+// Geschrieben wird von der Umschreibung (pipeline_expand), gelesen vom Wirt.
+// Beides geht ueber EINEN Schluesselnamen je Feld, damit die Namen in Spec,
+// Umschreibung und Leser nicht auseinanderlaufen koennen.
+
+static std::string* stage_text(PStage* g, const std::string& key) {
+    if (key == "name")       return &g->name;
+    if (key == "agent")      return &g->runs_on;
+    if (key == "steplayer")  return &g->steplayer;
+    if (key == "image")      return &g->image;
+    if (key == "base")       return &g->base;
+    if (key == "requires")   return &g->requires_on;
+    if (key == "shares")     return &g->shares;
+    if (key == "command")    return &g->command;
+    return nullptr;
+}
+
+static int32_t* stage_num(PStage* g, const std::string& key) {
+    if (key == "cpu")     return &g->cpu_cores;
+    if (key == "mem")     return &g->mem_mb;
+    if (key == "pids")    return &g->pids_max;
+    if (key == "timeout") return &g->timeout_ms;
+    return nullptr;
+}
+
+static char* str_out(const std::string& val) {
+    char* out = aiml_str_alloc(val.size());
+    if (!val.empty()) memcpy(out, val.data(), val.size());
+    return out;
+}
+
+// Lanes dieser Pipeline, `exclude` schon abgezogen (§4.3).
+static std::vector<Bindings> live_lanes(PPipeline* pp) {
+    std::vector<Bindings> all;
+    expand(pp->params, 0, Bindings{}, all);
+    std::vector<Bindings> out;
+    for (const auto& b : all) if (!excluded(pp->excludes, b)) out.push_back(b);
+    return out;
+}
+
+void aiml_stage_set_attr(void* g, const char* key, const char* val) {
+    if (!g || !key || !val) return;
+    if (std::string* slot = stage_text(static_cast<PStage*>(g), key)) *slot = val;
+    else LOG_ERROR(std::string("stage.set_attr: unbekannter Schluessel '") + key + "'");
+}
+
+void aiml_stage_set_limit(void* g, const char* key, int32_t value) {
+    if (!g || !key) return;
+    if (int32_t* slot = stage_num(static_cast<PStage*>(g), key)) *slot = value;
+    else LOG_ERROR(std::string("stage.set_limit: unbekannter Schluessel '") + key + "'");
+}
+
+char* aiml_stage_attr(void* g, const char* key) {
+    if (!g || !key) return aiml_str_alloc(0);
+    std::string* slot = stage_text(static_cast<PStage*>(g), key);
+    return str_out(slot ? *slot : std::string());
+}
+
+int32_t aiml_stage_limit(void* g, const char* key) {
+    if (!g || !key) return 0;
+    int32_t* slot = stage_num(static_cast<PStage*>(g), key);
+    return slot ? *slot : 0;
+}
+
+int32_t aiml_stage_step_count(void* g) {
+    return g ? (int32_t)static_cast<PStage*>(g)->steps.size() : 0;
+}
+
+// nullptr bei schiefem Index: der Aufrufer (builtin_registry) wirft daraufhin.
+void* aiml_stage_step_at(void* g, int32_t idx) {
+    if (!g) return nullptr;
+    auto* st = static_cast<PStage*>(g);
+    if (idx < 0 || idx >= (int32_t)st->steps.size()) return nullptr;
+    return &st->steps[(size_t)idx];
+}
+
+char* aiml_step_attr(void* s, const char* key) {
+    if (!s || !key) return aiml_str_alloc(0);
+    auto* st = static_cast<PStep*>(s);
+    const std::string k(key);
+    if (k == "name")    return str_out(st->name);
+    if (k == "cache")   return str_out(st->cache == 2 ? "pure" : (st->cache == 1 ? "resolved" : "opaque"));
+    if (k == "per")     return str_out(st->per == 1 ? "once" : "lane");
+    return str_out(std::string());
+}
+
+int32_t aiml_step_needs_count(void* s) {
+    return s ? (int32_t)static_cast<PStep*>(s)->needs.size() : 0;
+}
+
+char* aiml_step_need_at(void* s, int32_t idx) {
+    if (!s) return aiml_str_alloc(0);
+    auto* st = static_cast<PStep*>(s);
+    if (idx < 0 || idx >= (int32_t)st->needs.size()) {
+        LOG_ERROR("step.need_at: Index " + std::to_string(idx) + " liegt ausserhalb");
+        return aiml_str_alloc(0);
+    }
+    return str_out(st->needs[(size_t)idx]);
+}
+
+void aiml_pipeline_add_push(void* p, const char* from, const char* to, const char* tag) {
+    if (!p || !from || !to) return;
+    PPush push;
+    push.from = from;
+    push.to   = to;
+    push.tag  = tag ? tag : "";
+    static_cast<PPipeline*>(p)->pushes.push_back(push);
+}
+
+char* aiml_pipeline_name_of(void* p) {
+    return p ? str_out(static_cast<PPipeline*>(p)->name) : aiml_str_alloc(0);
+}
+
+int32_t aiml_pipeline_stage_count(void* p) {
+    return p ? (int32_t)static_cast<PPipeline*>(p)->stages.size() : 0;
+}
+
+void* aiml_pipeline_stage_at(void* p, int32_t idx) {
+    if (!p) return nullptr;
+    auto* pp = static_cast<PPipeline*>(p);
+    if (idx < 0 || idx >= (int32_t)pp->stages.size()) return nullptr;
+    return &pp->stages[(size_t)idx];
+}
+
+// Der Bindungstext der i-ten Lane — dieselbe Form wie im Beobachter (F62-152).
+char* aiml_pipeline_lane_bindings(void* p, int32_t idx) {
+    if (!p) return aiml_str_alloc(0);
+    std::vector<Bindings> lanes = live_lanes(static_cast<PPipeline*>(p));
+    if (idx < 0 || idx >= (int32_t)lanes.size()) {
+        LOG_ERROR("pipeline.lane_bindings: Index " + std::to_string(idx) + " liegt ausserhalb");
+        return aiml_str_alloc(0);
+    }
+    return str_out(bind_text(lanes[(size_t)idx]));
+}
+
+int32_t aiml_pipeline_axis_count(void* p) {
+    return p ? (int32_t)static_cast<PPipeline*>(p)->params.size() : 0;
+}
+
+char* aiml_pipeline_axis_name(void* p, int32_t idx) {
+    if (!p) return aiml_str_alloc(0);
+    auto* pp = static_cast<PPipeline*>(p);
+    if (idx < 0 || idx >= (int32_t)pp->params.size()) {
+        LOG_ERROR("pipeline.axis_name: Index " + std::to_string(idx) + " liegt ausserhalb");
+        return aiml_str_alloc(0);
+    }
+    return str_out(pp->params[(size_t)idx].first);
+}
+
+char* aiml_pipeline_axis_type(void* p, int32_t idx) {
+    if (!p) return aiml_str_alloc(0);
+    auto* pp = static_cast<PPipeline*>(p);
+    if (idx < 0 || idx >= (int32_t)pp->params.size()) return aiml_str_alloc(0);
+    auto it = pp->param_types.find(pp->params[(size_t)idx].first);
+    return str_out(it == pp->param_types.end() ? std::string("string") : it->second);
+}
+
+int32_t aiml_pipeline_axis_value_count(void* p, int32_t idx) {
+    if (!p) return 0;
+    auto* pp = static_cast<PPipeline*>(p);
+    if (idx < 0 || idx >= (int32_t)pp->params.size()) return 0;
+    return (int32_t)pp->params[(size_t)idx].second.size();
+}
+
+char* aiml_pipeline_axis_value(void* p, int32_t axis, int32_t vix) {
+    if (!p) return aiml_str_alloc(0);
+    auto* pp = static_cast<PPipeline*>(p);
+    if (axis < 0 || axis >= (int32_t)pp->params.size()) return aiml_str_alloc(0);
+    const auto& vals = pp->params[(size_t)axis].second;
+    if (vix < 0 || vix >= (int32_t)vals.size()) {
+        LOG_ERROR("pipeline.axis_value: Index " + std::to_string(vix) + " liegt ausserhalb");
+        return aiml_str_alloc(0);
+    }
+    return str_out(vals[(size_t)vix]);
+}
+
+int32_t aiml_pipeline_push_count(void* p) {
+    return p ? (int32_t)static_cast<PPipeline*>(p)->pushes.size() : 0;
+}
+
+char* aiml_pipeline_push_field(void* p, int32_t idx, const char* which) {
+    if (!p || !which) return aiml_str_alloc(0);
+    auto* pp = static_cast<PPipeline*>(p);
+    if (idx < 0 || idx >= (int32_t)pp->pushes.size()) {
+        LOG_ERROR("pipeline.push_*: Index " + std::to_string(idx) + " liegt ausserhalb");
+        return aiml_str_alloc(0);
+    }
+    const PPush& push = pp->pushes[(size_t)idx];
+    const std::string key(which);
+    if (key == "from") return str_out(push.from);
+    if (key == "to")   return str_out(push.to);
+    return str_out(push.tag);
+}
+
+// spec/62 F62-124a: hier faellt die Ablehnung — beim LAUF, nicht beim
+// Uebersetzen.  Die Meldung nennt drei Dinge: was verlangt wird, dass hier
+// keine Laufzeit da ist, und den Weg dorthin (F62-124).
+int32_t aiml_pipeline_local_refusal(void* p) {
+    if (!p) return 0;
+    auto* pp = static_cast<PPipeline*>(p);
+    for (const auto& stg : pp->stages) {
+        if (!stg.image.empty()) {
+            LOG_ERROR("pipeline '" + pp->name + "': Stufe '" + stg.name + "' verlangt das Abbild '"
+                      + stg.image + "' (spec/62 §18.1) — ein lokaler Lauf hat keine Laufzeit, "
+                      "die eine Wurzel bereitstellt.  Weg: ueber einen Wirt fahren, der Container "
+                      "kann (cosmos doc/spec/110).");
+            return -4;
+        }
+    }
+    if (!pp->pushes.empty()) {
+        LOG_ERROR("pipeline '" + pp->name + "': `push:` verlangt einen Ort, an den ein Abbild "
+                  "geschrieben wird (spec/62 §18.1) — ein lokaler Lauf hat keinen.  Weg: ueber "
+                  "einen Wirt fahren, der Container kann (cosmos doc/spec/110).");
+        return -4;
+    }
+    return 0;
 }
 
 } // extern "C"

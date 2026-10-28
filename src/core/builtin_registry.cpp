@@ -76,6 +76,85 @@ static void emitThrow(CompilerContext& ctx, const std::string& excClass) {
     ctx.builder.CreateUnreachable();
 }
 
+// Wie emitThrow, aber mit BEGRUENDUNG: der Wurf traegt ein echtes Objekt,
+// dessen Feld `message` auf den uebergebenen Text zeigt.  Ohne das steht an
+// Stelle [0] ein Nullzeiger — und ein `catch`, das `ex.message` liest, faellt
+// um (gemessen 25.10.2026 beim Bau von `ctx`, spec/29_2 §14a).
+static void emitThrowMsg(CompilerContext& ctx, const std::string& excClass,
+                         llvm::Value* msgPtr) {
+    llvm::PointerType* ptrTy = llvm::PointerType::getUnqual(ctx.context);
+
+    llvm::Function* allocFn = ctx.module().getFunction("__cxa_allocate_exception");
+    if (!allocFn) {
+        auto* fty = llvm::FunctionType::get(ptrTy, {ctx.builder.getInt64Ty()}, false);
+        allocFn = llvm::Function::Create(fty, llvm::Function::ExternalLinkage,
+            "__cxa_allocate_exception", ctx.module());
+    }
+    llvm::Function* throwFn = ctx.module().getFunction("__cxa_throw");
+    if (!throwFn) {
+        auto* fty = llvm::FunctionType::get(ctx.builder.getVoidTy(), {ptrTy, ptrTy, ptrTy}, false);
+        throwFn = llvm::Function::Create(fty, llvm::Function::ExternalLinkage,
+            "__cxa_throw", ctx.module());
+    }
+
+    // Das Objekt: die eingebaute Ausnahmeklasse traegt genau ein Feld
+    // (`message`, ein String) — siehe die Registrierung in ast_compiler.cpp.
+    llvm::Value* obj = llvm::ConstantPointerNull::get(ptrTy);
+    auto it = ctx.classes.find(excClass);
+    if (msgPtr && it != ctx.classes.end()) {
+        if (auto* st = llvm::dyn_cast_or_null<llvm::StructType>(it->second.type)) {
+            uint64_t sz = ctx.module().getDataLayout().getTypeAllocSize(st);
+            llvm::Function* mallocFn = ctx.getFunction("malloc", ptrTy, {ctx.builder.getInt64Ty()});
+            obj = ctx.builder.CreateCall(mallocFn, {ctx.builder.getInt64(sz)}, "exc_obj");
+            ctx.builder.CreateStore(msgPtr,
+                ctx.builder.CreateStructGEP(st, obj, 0, "exc_msg_slot"));
+        }
+    }
+
+    // Dieselbe Notiz, die `throw` in aiml macht (ast_compiler_stmt.cpp): faengt
+    // niemand, berichtet die oberste Ebene die BEGRUENDUNG statt
+    // „(no message)" (compiler.cpp jitRun).
+    if (msgPtr)
+        ctx.builder.CreateCall(ctx.getFunction("aiml_note_thrown_message",
+                                               ctx.builder.getVoidTy(), {ptrTy}), {msgPtr});
+
+    llvm::Value* excAlloc = ctx.builder.CreateCall(allocFn, {ctx.builder.getInt64(24)}, "exc_alloc");
+    ctx.builder.CreateStore(obj, excAlloc);
+    ctx.builder.CreateStore(llvm::ConstantPointerNull::get(ptrTy),
+        ctx.builder.CreateConstGEP1_64(ctx.builder.getInt8Ty(), excAlloc, 8));
+    ctx.builder.CreateStore(ctx.builder.CreateGlobalStringPtr(excClass, "builtin_exc_tag"),
+        ctx.builder.CreateConstGEP1_64(ctx.builder.getInt8Ty(), excAlloc, 16));
+    llvm::Value* null = llvm::ConstantPointerNull::get(ptrTy);
+
+    llvm::BasicBlock* ud = AIML::AST::aimlUnwindDest(ctx, true);
+    if (ud) {
+        llvm::Function* fn = ctx.builder.GetInsertBlock()->getParent();
+        llvm::BasicBlock* unreachBB = llvm::BasicBlock::Create(ctx.context, "throw_unreach", fn);
+        ctx.builder.CreateInvoke(throwFn, unreachBB, ud, {excAlloc, null, null});
+        ctx.builder.SetInsertPoint(unreachBB);
+    } else {
+        ctx.builder.CreateCall(throwFn, {excAlloc, null, null});
+    }
+    ctx.builder.CreateUnreachable();
+}
+
+// Wie emitGuard, nur mit Begruendung.
+static llvm::BasicBlock* emitGuardMsg(CompilerContext& ctx, llvm::Value* flag,
+                                      const std::string& throwLabel,
+                                      const std::string& continueLabel,
+                                      const std::string& excClass,
+                                      llvm::Value* msgPtr) {
+    llvm::Function* fn = ctx.builder.GetInsertBlock()->getParent();
+    llvm::Value* isSet = ctx.builder.CreateICmpNE(flag, ctx.builder.getInt8(0), throwLabel + "_cmp");
+    llvm::BasicBlock* throwBB    = llvm::BasicBlock::Create(ctx.context, throwLabel, fn);
+    llvm::BasicBlock* continueBB = llvm::BasicBlock::Create(ctx.context, continueLabel, fn);
+    ctx.builder.CreateCondBr(isSet, throwBB, continueBB);
+    ctx.builder.SetInsertPoint(throwBB);
+    emitThrowMsg(ctx, excClass, msgPtr);
+    ctx.builder.SetInsertPoint(continueBB);
+    return continueBB;
+}
+
 // Emit a conditional check: if `flag` (i8) != 0, throw; else continue in `continueBB`.
 // Returns the new insert-point BB (continueBB) with builder already set.
 static llvm::BasicBlock* emitGuard(CompilerContext& ctx, llvm::Value* flag,
@@ -932,6 +1011,27 @@ void registerBuiltins(CompilerContext& ctx) {
             ctx.builder.getInt64Ty(), {});
         return ctx.ir_gen->wrap(ctx.builder.CreateCall(f));
     };
+    // spec/23 §4.1 — Host-Parallelitaet: drei Fragen, drei Funktionen.  Call-Form
+    // only; eine Property-Form waere genau der sys.env-Fehler (dokumentierte
+    // Property, emittierter Nullpointer) noch einmal.
+    sys.builtinFuncs["core_count"] = [](CompilerContext& ctx, const std::vector<IRValue*>&) -> IRValue* {
+        llvm::Function* f = ctx.getFunction("aiml_sys_core_count",
+            ctx.builder.getInt32Ty(), {});
+        return ctx.ir_gen->wrap(ctx.builder.CreateCall(f));
+    };
+
+    sys.builtinFuncs["logical_thread_count"] = [](CompilerContext& ctx, const std::vector<IRValue*>&) -> IRValue* {
+        llvm::Function* f = ctx.getFunction("aiml_sys_logical_thread_count",
+            ctx.builder.getInt32Ty(), {});
+        return ctx.ir_gen->wrap(ctx.builder.CreateCall(f));
+    };
+
+    sys.builtinFuncs["quota_thread_count"] = [](CompilerContext& ctx, const std::vector<IRValue*>&) -> IRValue* {
+        llvm::Function* f = ctx.getFunction("aiml_sys_quota_thread_count",
+            ctx.builder.getInt32Ty(), {});
+        return ctx.ir_gen->wrap(ctx.builder.CreateCall(f));
+    };
+
 
     sys.builtinFuncs["env"] = [](CompilerContext& ctx, const std::vector<IRValue*>&) -> IRValue* {
         // Delegate to the runtime, which populates a map<string:string> from
@@ -2191,37 +2291,51 @@ void registerBuiltins(CompilerContext& ctx) {
         auto* vd  = ctx.builder.getVoidTy();
 
         // Hilfslambdas: Methode mit (string) / (i32) / (handle) / () Signatur.
-        auto mkStr = [](const char* cfn) {
-            return [cfn](CompilerContext& ctx, llvm::Value* base,
+        // Ein Argument, das sich nicht uebersetzen liess, ist nullptr — der
+        // Fehler steht dann schon im Protokoll.  Weiterzurechnen hiesse,
+        // `getType()` auf nullptr zu rufen: der Uebersetzer stirbt an der
+        // Eingabe, die er gerade bemaengelt hat (gemessen 25.10.2026 mit
+        // `cache: haeufig`).  Also: hier anhalten.
+        auto argOrNull = [](CompilerContext& ctx, AIML::IRValue* rv,
+                            const char* what) -> llvm::Value* {
+            llvm::Value* got = rv ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(rv)) : nullptr;
+            if (!got) LOG_ERROR(std::string(what) + ": das Argument liess sich nicht uebersetzen");
+            return got;
+        };
+        auto mkStr = [argOrNull](const char* cfn) {
+            return [cfn, argOrNull](CompilerContext& ctx, llvm::Value* base,
                          AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
                 auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
                 if (call->args.empty()) return nullptr;
+                llvm::Value* arg = argOrNull(ctx, evalExpr(call->args[0].get()), cfn);
+                if (!arg) return nullptr;
                 llvm::Value* self = ctx.builder.CreateLoad(i8p, base, "self");
-                llvm::Value* arg  = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
                 ctx.builder.CreateCall(ctx.getFunction(cfn, ctx.builder.getVoidTy(), {i8p, i8p}), {self, arg});
                 return nullptr;
             };
         };
-        auto mkI32 = [](const char* cfn) {
-            return [cfn](CompilerContext& ctx, llvm::Value* base,
+        auto mkI32 = [argOrNull](const char* cfn) {
+            return [cfn, argOrNull](CompilerContext& ctx, llvm::Value* base,
                          AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
                 auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
                 auto* i32 = ctx.builder.getInt32Ty();
                 if (call->args.empty()) return nullptr;
+                llvm::Value* arg = argOrNull(ctx, evalExpr(call->args[0].get()), cfn);
+                if (!arg) return nullptr;
                 llvm::Value* self = ctx.builder.CreateLoad(i8p, base, "self");
-                llvm::Value* arg  = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
                 if (arg->getType() != i32) arg = ctx.builder.CreateZExtOrTrunc(arg, i32);
                 ctx.builder.CreateCall(ctx.getFunction(cfn, ctx.builder.getVoidTy(), {i8p, i32}), {self, arg});
                 return nullptr;
             };
         };
-        auto mkHandle = [](const char* cfn) {
-            return [cfn](CompilerContext& ctx, llvm::Value* base,
+        auto mkHandle = [argOrNull](const char* cfn) {
+            return [cfn, argOrNull](CompilerContext& ctx, llvm::Value* base,
                          AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
                 auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
                 if (call->args.empty()) return nullptr;
+                llvm::Value* arg = argOrNull(ctx, evalExpr(call->args[0].get()), cfn);
+                if (!arg) return nullptr;
                 llvm::Value* self = ctx.builder.CreateLoad(i8p, base, "self");
-                llvm::Value* arg  = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
                 ctx.builder.CreateCall(ctx.getFunction(cfn, ctx.builder.getVoidTy(), {i8p, i8p}), {self, arg});
                 return nullptr;
             };
@@ -2235,6 +2349,124 @@ void registerBuiltins(CompilerContext& ctx) {
                 llvm::Value* self = ctx.builder.CreateLoad(i8p, base, "self");
                 return ctx.ir_gen->wrap(ctx.builder.CreateCall(
                     ctx.getFunction(cfn, i32, {i8p}), {self}));
+            };
+        };
+
+        // ── spec/62 §20.4: die LESER ────────────────────────────────────────
+        //
+        // Je Feld ein benannter Leser, der den Schluesselnamen mitbringt — so
+        // steht der Name EINMAL in der Spec, einmal in der Umschreibung und
+        // einmal hier, und ein Tippfehler ist ein Uebersetzungsfehler statt
+        // einer leeren Zeichenkette.
+        auto mkGetStr = [](const char* cfn) {
+            return [cfn](CompilerContext& ctx, llvm::Value* base,
+                         AIML::AST::CallExpr*, auto) -> IRValue* {
+                auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Value* self = ctx.builder.CreateLoad(i8p, base, "self");
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                    ctx.getFunction(cfn, i8p, {i8p}), {self}));
+            };
+        };
+        // Leser mit festem Schluessel: `stg.agent` ruft attr(self, "agent").
+        auto mkAttrStr = [](const char* cfn, const char* key) {
+            return [cfn, key](CompilerContext& ctx, llvm::Value* base,
+                              AIML::AST::CallExpr*, auto) -> IRValue* {
+                auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Value* self = ctx.builder.CreateLoad(i8p, base, "self");
+                llvm::Value* kv = ctx.builder.CreateGlobalStringPtr(key, "attr_key");
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                    ctx.getFunction(cfn, i8p, {i8p, i8p}), {self, kv}));
+            };
+        };
+        auto mkAttrI32 = [](const char* cfn, const char* key) {
+            return [cfn, key](CompilerContext& ctx, llvm::Value* base,
+                              AIML::AST::CallExpr*, auto) -> IRValue* {
+                auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                auto* i32 = ctx.builder.getInt32Ty();
+                llvm::Value* self = ctx.builder.CreateLoad(i8p, base, "self");
+                llvm::Value* kv = ctx.builder.CreateGlobalStringPtr(key, "limit_key");
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                    ctx.getFunction(cfn, i32, {i8p, i8p}), {self, kv}));
+            };
+        };
+        // (i32) -> string, z.B. pipe.lane_bindings(2)
+        auto mkIdxStr = [](const char* cfn) {
+            return [cfn](CompilerContext& ctx, llvm::Value* base,
+                         AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+                auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                auto* i32 = ctx.builder.getInt32Ty();
+                if (call->args.empty()) return nullptr;
+                llvm::Value* self = ctx.builder.CreateLoad(i8p, base, "self");
+                llvm::Value* idx = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+                if (idx->getType() != i32) idx = ctx.builder.CreateZExtOrTrunc(idx, i32);
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                    ctx.getFunction(cfn, i8p, {i8p, i32}), {self, idx}));
+            };
+        };
+        auto mkIdxI32 = [](const char* cfn) {
+            return [cfn](CompilerContext& ctx, llvm::Value* base,
+                         AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+                auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                auto* i32 = ctx.builder.getInt32Ty();
+                if (call->args.empty()) return nullptr;
+                llvm::Value* self = ctx.builder.CreateLoad(i8p, base, "self");
+                llvm::Value* idx = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+                if (idx->getType() != i32) idx = ctx.builder.CreateZExtOrTrunc(idx, i32);
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                    ctx.getFunction(cfn, i32, {i8p, i32}), {self, idx}));
+            };
+        };
+        // (i32, i32) -> string, z.B. pipe.axis_value(0, 1)
+        auto mkIdx2Str = [](const char* cfn) {
+            return [cfn](CompilerContext& ctx, llvm::Value* base,
+                         AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+                auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                auto* i32 = ctx.builder.getInt32Ty();
+                if (call->args.size() < 2) return nullptr;
+                llvm::Value* self = ctx.builder.CreateLoad(i8p, base, "self");
+                llvm::Value* one = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+                llvm::Value* two = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[1].get())));
+                if (one->getType() != i32) one = ctx.builder.CreateZExtOrTrunc(one, i32);
+                if (two->getType() != i32) two = ctx.builder.CreateZExtOrTrunc(two, i32);
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                    ctx.getFunction(cfn, i8p, {i8p, i32, i32}), {self, one, two}));
+            };
+        };
+        // (i32) -> string mit festem Zweitschluessel: pipe.push_from(0).
+        auto mkIdxKeyStr = [](const char* cfn, const char* key) {
+            return [cfn, key](CompilerContext& ctx, llvm::Value* base,
+                              AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+                auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                auto* i32 = ctx.builder.getInt32Ty();
+                if (call->args.empty()) return nullptr;
+                llvm::Value* self = ctx.builder.CreateLoad(i8p, base, "self");
+                llvm::Value* idx = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+                if (idx->getType() != i32) idx = ctx.builder.CreateZExtOrTrunc(idx, i32);
+                llvm::Value* kv = ctx.builder.CreateGlobalStringPtr(key, "push_key");
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                    ctx.getFunction(cfn, i8p, {i8p, i32, i8p}), {self, idx, kv}));
+            };
+        };
+        // (i32) -> Griff (stage/step).  nullptr heisst: Index schief — und das
+        // ist ein Programmfehler des Lesers, also wird geworfen (F62-154).
+        auto mkIdxHandle = [](const char* cfn, const char* what) {
+            return [cfn, what](CompilerContext& ctx, llvm::Value* base,
+                               AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+                auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                auto* i32 = ctx.builder.getInt32Ty();
+                if (call->args.empty()) return nullptr;
+                llvm::Value* self = ctx.builder.CreateLoad(i8p, base, "self");
+                llvm::Value* idx = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+                if (idx->getType() != i32) idx = ctx.builder.CreateZExtOrTrunc(idx, i32);
+                llvm::Value* got = ctx.builder.CreateCall(
+                    ctx.getFunction(cfn, i8p, {i8p, i32}), {self, idx});
+                llvm::Value* isNull = ctx.builder.CreateICmpEQ(
+                    got, llvm::ConstantPointerNull::get(llvm::PointerType::getUnqual(ctx.context)));
+                llvm::Value* flag = ctx.builder.CreateZExt(isNull, ctx.builder.getInt8Ty());
+                llvm::Value* msg = ctx.builder.CreateGlobalStringPtr(
+                    std::string(what) + ": Index liegt ausserhalb (spec/62 F62-154)", "idx_msg");
+                emitGuardMsg(ctx, flag, "idx_bad", "idx_ok", "IndexOutOfBoundsException", msg);
+                return ctx.ir_gen->wrap(got);
             };
         };
 
@@ -2277,6 +2509,12 @@ void registerBuiltins(CompilerContext& ctx) {
                 ctx.builder.getVoidTy(), {i8p, i8p}), {self, fnPtr});
             return nullptr;
         };
+        // spec/62 §20.4
+        stepInfo.builtinMethods["name"]        = mkAttrStr("aiml_step_attr", "name");
+        stepInfo.builtinMethods["cache"]       = mkAttrStr("aiml_step_attr", "cache");
+        stepInfo.builtinMethods["per"]         = mkAttrStr("aiml_step_attr", "per");
+        stepInfo.builtinMethods["needs_count"] = mkGetI32("aiml_step_needs_count");
+        stepInfo.builtinMethods["need_at"]     = mkIdxStr("aiml_step_need_at");
         ctx.classes["step"] = std::move(stepInfo);
 
         CompilerContext::ClassInfo stageInfo;
@@ -2284,14 +2522,80 @@ void registerBuiltins(CompilerContext& ctx) {
         stageInfo.builtinMethods["set_name"]    = mkStr("aiml_stage_set_name");
         stageInfo.builtinMethods["set_runs_on"] = mkStr("aiml_stage_set_runs_on");
         stageInfo.builtinMethods["add_step"]    = mkHandle("aiml_stage_add_step");
+        // Die verteilten Schluessel (spec/62 §18): geschrieben von der
+        // Umschreibung, gelesen vom Wirt (§20.4).
+        stageInfo.builtinMethods["set_attr"]  = [](CompilerContext& ctx, llvm::Value* base,
+            AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            if (call->args.size() < 2) return nullptr;
+            llvm::Value* self = ctx.builder.CreateLoad(i8p, base, "self");
+            llvm::Value* key  = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+            llvm::Value* val  = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[1].get())));
+            ctx.builder.CreateCall(ctx.getFunction("aiml_stage_set_attr",
+                ctx.builder.getVoidTy(), {i8p, i8p, i8p}), {self, key, val});
+            return nullptr;
+        };
+        stageInfo.builtinMethods["set_limit"] = [](CompilerContext& ctx, llvm::Value* base,
+            AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            auto* i32 = ctx.builder.getInt32Ty();
+            if (call->args.size() < 2) return nullptr;
+            llvm::Value* self = ctx.builder.CreateLoad(i8p, base, "self");
+            llvm::Value* key  = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+            llvm::Value* val  = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[1].get())));
+            if (val->getType() != i32) val = ctx.builder.CreateZExtOrTrunc(val, i32);
+            ctx.builder.CreateCall(ctx.getFunction("aiml_stage_set_limit",
+                ctx.builder.getVoidTy(), {i8p, i8p, i32}), {self, key, val});
+            return nullptr;
+        };
+        stageInfo.builtinMethods["name"]       = mkAttrStr("aiml_stage_attr", "name");
+        stageInfo.builtinMethods["agent"]      = mkAttrStr("aiml_stage_attr", "agent");
+        stageInfo.builtinMethods["steplayer"]  = mkAttrStr("aiml_stage_attr", "steplayer");
+        stageInfo.builtinMethods["image"]      = mkAttrStr("aiml_stage_attr", "image");
+        stageInfo.builtinMethods["base"]       = mkAttrStr("aiml_stage_attr", "base");
+        stageInfo.builtinMethods["requires"]   = mkAttrStr("aiml_stage_attr", "requires");
+        stageInfo.builtinMethods["shares"]     = mkAttrStr("aiml_stage_attr", "shares");
+        stageInfo.builtinMethods["command"]    = mkAttrStr("aiml_stage_attr", "command");
+        stageInfo.builtinMethods["cpu_cores"]  = mkAttrI32("aiml_stage_limit", "cpu");
+        stageInfo.builtinMethods["mem_mb"]     = mkAttrI32("aiml_stage_limit", "mem");
+        stageInfo.builtinMethods["pids_max"]   = mkAttrI32("aiml_stage_limit", "pids");
+        stageInfo.builtinMethods["timeout_ms"] = mkAttrI32("aiml_stage_limit", "timeout");
+        stageInfo.builtinMethods["step_count"] = mkGetI32("aiml_stage_step_count");
+        stageInfo.builtinMethods["step_at"]    = mkIdxHandle("aiml_stage_step_at", "stage.step_at");
         ctx.classes["stage"] = std::move(stageInfo);
 
         CompilerContext::ClassInfo pipeInfo;
         pipeInfo.name = "pipeline"; pipeInfo.isBuiltin = true;
         pipeInfo.builtinMethods["set_name"]  = mkStr("aiml_pipeline_set_name");
         pipeInfo.builtinMethods["add_stage"]   = mkHandle("aiml_pipeline_add_stage");
+        pipeInfo.builtinMethods["axis_type"] = mkIdxStr("aiml_pipeline_axis_type");
         pipeInfo.builtinMethods["add_exclude"] = mkStr("aiml_pipeline_add_exclude");
         pipeInfo.builtinMethods["lane_count"]   = mkGetI32("aiml_pipeline_lane_count");
+        pipeInfo.builtinMethods["add_push"] = [](CompilerContext& ctx, llvm::Value* base,
+            AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            if (call->args.size() < 3) return nullptr;
+            llvm::Value* self = ctx.builder.CreateLoad(i8p, base, "self");
+            llvm::Value* from = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+            llvm::Value* to   = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[1].get())));
+            llvm::Value* tag  = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[2].get())));
+            ctx.builder.CreateCall(ctx.getFunction("aiml_pipeline_add_push",
+                ctx.builder.getVoidTy(), {i8p, i8p, i8p, i8p}), {self, from, to, tag});
+            return nullptr;
+        };
+        // spec/62 §20.4
+        pipeInfo.builtinMethods["name"]             = mkGetStr("aiml_pipeline_name_of");
+        pipeInfo.builtinMethods["stage_count"]      = mkGetI32("aiml_pipeline_stage_count");
+        pipeInfo.builtinMethods["stage_at"]         = mkIdxHandle("aiml_pipeline_stage_at", "pipeline.stage_at");
+        pipeInfo.builtinMethods["lane_bindings"]    = mkIdxStr("aiml_pipeline_lane_bindings");
+        pipeInfo.builtinMethods["axis_count"]       = mkGetI32("aiml_pipeline_axis_count");
+        pipeInfo.builtinMethods["axis_name"]        = mkIdxStr("aiml_pipeline_axis_name");
+        pipeInfo.builtinMethods["axis_value_count"] = mkIdxI32("aiml_pipeline_axis_value_count");
+        pipeInfo.builtinMethods["axis_value"]       = mkIdx2Str("aiml_pipeline_axis_value");
+        pipeInfo.builtinMethods["push_count"]       = mkGetI32("aiml_pipeline_push_count");
+        pipeInfo.builtinMethods["push_from"]        = mkIdxKeyStr("aiml_pipeline_push_field", "from");
+        pipeInfo.builtinMethods["push_to"]          = mkIdxKeyStr("aiml_pipeline_push_field", "to");
+        pipeInfo.builtinMethods["push_tag"]         = mkIdxKeyStr("aiml_pipeline_push_field", "tag");
         // run() oder run(beobachter) — spec/62 §13.2.  Der Beobachter ist eine
         // Funktion (StepRun) -> void; ohne ihn laeuft es ebenso (F62-79).
         pipeInfo.builtinMethods["run"] = [](CompilerContext& ctx, llvm::Value* base,
@@ -2346,23 +2650,32 @@ void registerBuiltins(CompilerContext& ctx) {
                 llvm::Type::getVoidTy(ctx.context), {i8p}), {self});
             return nullptr;
         };
-        // add_param(axis, list<string>) — zwei Argumente, eigener Aufbau.
+        // add_param(axis, list<string>) oder add_param(axis, typ, list<string>).
+        //
+        // spec/62 §4.1: eine Achse HAT einen Typ (F62-1) — die deklarierte Form
+        // erzeugt die dreistellige Fassung.  Zusammengesetzt (§13.5) bleibt die
+        // zweistellige: dort liest der Rumpf `step.arg` selbst, also ist der Typ
+        // `string`.  Ein Zusatzargument, kein zweites Format.
         pipeInfo.builtinMethods["add_param"] = [](CompilerContext& ctx, llvm::Value* base,
             AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
             auto* i8p   = ctx.builder.getInt8Ty()->getPointerTo();
             auto* ptrTy = llvm::PointerType::get(ctx.context, 0);
             if (call->args.size() < 2) return nullptr;
-            llvm::StructType* listTy = ListImpl::getListStructType(ctx);
+            const bool typed = call->args.size() >= 3;
             llvm::Value* self = ctx.builder.CreateLoad(i8p, base, "self");
             llvm::Value* axis = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
-            llvm::Value* lst  = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[1].get())));
+            llvm::Value* type = typed
+                ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[1].get())))
+                : ctx.builder.CreateGlobalStringPtr("string", "axis_type");
+            llvm::Value* lst  = static_cast<llvm::Value*>(
+                ctx.ir_gen->unwrap(evalExpr(call->args[typed ? 2 : 1].get())));
             if (!lst->getType()->isPointerTy()) {
                 llvm::AllocaInst* spill = ctx.createEntryAlloca(lst->getType(), "param_spill");
                 ctx.builder.CreateStore(lst, spill);
                 lst = spill;
             }
             ctx.builder.CreateCall(ctx.getFunction("aiml_pipeline_add_param",
-                ctx.builder.getVoidTy(), {i8p, i8p, ptrTy}), {self, axis, lst});
+                ctx.builder.getVoidTy(), {i8p, i8p, i8p, ptrTy}), {self, axis, type, lst});
             return nullptr;
         };
         // spec/62 §13.1: StepRun — was der Beobachter bekommt.
@@ -3715,6 +4028,251 @@ void registerBuiltins(CompilerContext& ctx) {
 #undef SSH_M0_VOID
 #undef SSH_M1STR_I32
 #undef SSH_M1I32_STR
+
+        // ── ctx: der Kontext als eigener Namensraum (spec/29_2 §14a) ────────
+        //
+        // `ctx.new` gibt eine lebende Compiler-Instanz; `cx.exec` faehrt
+        // Bundles darin, und spaetere sehen, was fruehere definiert haben.
+        // Der Grund ist die Grundlast: ein frischer Kontext kostet ~96 ms,
+        // unabhaengig davon, wie wenig er tut (§15).
+        //
+        // KEINE Sicherheitsgrenze (F29_2-…e): Prozess, Adressraum und die
+        // dynamische Symboltabelle sind geteilt.
+        {
+            CompilerContext::ClassInfo cxi;
+            cxi.name      = "ctx_handle";
+            cxi.isBuiltin = true;
+
+            // cx.exec(bundle) → i32
+            cxi.builtinMethods["exec"] = [](CompilerContext& ctx, llvm::Value* baseAlloca,
+                AIML::AST::CallExpr* call,
+                std::function<AIML::IRValue*(AIML::AST::Expr*)> evalExpr) -> AIML::IRValue* {
+                llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Type* i32 = ctx.builder.getInt32Ty();
+                llvm::Value* self = ctx.builder.CreateLoad(i8p, baseAlloca, "cx");
+                if (call->args.empty()) {
+                    LOG_ERROR("cx.exec: ohne Bundle gibt es nichts auszufuehren");
+                    return ctx.ir_gen->getInt32(-2);
+                }
+                llvm::Value* code = static_cast<llvm::Value*>(
+                    ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                    ctx.getFunction("aiml_ctx_exec_code", i32, {i8p, i8p}),
+                    {self, code}, "ctx_rc"));
+            };
+
+            // cx.load(bundle) → i32: uebersetzen und einhaengen, OHNE zu
+            // laufen (F29_2-…n).  Fuer einen Wirt, der fremden Quelltext
+            // pruefen und LESEN will — ausfuehren tut ihn der Agent.
+            cxi.builtinMethods["load"] = [](CompilerContext& ctx, llvm::Value* baseAlloca,
+                AIML::AST::CallExpr* call,
+                std::function<AIML::IRValue*(AIML::AST::Expr*)> evalExpr) -> AIML::IRValue* {
+                llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Type* i32 = ctx.builder.getInt32Ty();
+                llvm::Value* self = ctx.builder.CreateLoad(i8p, baseAlloca, "cx");
+                if (call->args.empty()) {
+                    LOG_ERROR("cx.load: ohne Bundle gibt es nichts zu uebersetzen");
+                    return ctx.ir_gen->getInt32(-2);
+                }
+                llvm::Value* code = static_cast<llvm::Value*>(
+                    ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                    ctx.getFunction("aiml_ctx_load_code", i32, {i8p, i8p}),
+                    {self, code}, "ctx_load_rc"));
+            };
+
+            // cx.symbol(name, typ) → i64.  Der Typ wird GENANNT und zur
+            // Laufzeit geprueft (F29_2-…d); passt er nicht, wird geworfen —
+            // und nur dann.  Zwei Fehler, zwei Ausnahmen (F29_2-…d2).
+            cxi.builtinMethods["symbol"] = [](CompilerContext& ctx, llvm::Value* baseAlloca,
+                AIML::AST::CallExpr* call,
+                std::function<AIML::IRValue*(AIML::AST::Expr*)> evalExpr) -> AIML::IRValue* {
+                llvm::Type* i8p  = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Type* i32t = ctx.builder.getInt32Ty();
+                llvm::Type* i64t = ctx.builder.getInt64Ty();
+                llvm::Value* self = ctx.builder.CreateLoad(i8p, baseAlloca, "cx");
+                auto strArg = [&](size_t i) -> llvm::Value* {
+                    if (call->args.size() <= i) return ctx.builder.CreateGlobalStringPtr("");
+                    return static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[i].get())));
+                };
+                llvm::Value* nameV = strArg(0);
+                llvm::Value* typeV = strArg(1);
+                llvm::Value* addrSlot  = ctx.builder.CreateAlloca(i64t, nullptr, "sym_addr");
+                llvm::Value* msgSlot   = ctx.builder.CreateAlloca(i8p,  nullptr, "sym_msg");
+                llvm::Value* st = ctx.builder.CreateCall(
+                    ctx.getFunction("aiml_ctx_symbol", i32t,
+                        {i8p, i8p, i8p, i64t->getPointerTo(), i8p->getPointerTo()}),
+                    {self, nameV, typeV, addrSlot, msgSlot}, "sym_st");
+                llvm::Value* msgV = ctx.builder.CreateLoad(i8p, msgSlot, "sym_msg_v");
+                llvm::Value* missing = ctx.builder.CreateZExt(
+                    ctx.builder.CreateICmpEQ(st, ctx.builder.getInt32(1)),
+                    ctx.builder.getInt8Ty(), "sym_missing");
+                emitGuardMsg(ctx, missing, "ctx_sym_missing_throw", "ctx_sym_known",
+                             "SymbolMissingException", msgV);
+                llvm::Value* wrong = ctx.builder.CreateZExt(
+                    ctx.builder.CreateICmpEQ(st, ctx.builder.getInt32(2)),
+                    ctx.builder.getInt8Ty(), "sym_wrong");
+                emitGuardMsg(ctx, wrong, "ctx_sym_type_throw", "ctx_sym_ok",
+                             "SymbolTypeException", msgV);
+                return ctx.ir_gen->wrap(ctx.builder.CreateLoad(i64t, addrSlot, "sym"));
+            };
+
+            // cx.names(typ) → list<string>.  spec/29_2 §14b (F29_2-…i).
+            cxi.builtinMethods["names"] = [](CompilerContext& ctx, llvm::Value* baseAlloca,
+                AIML::AST::CallExpr* call,
+                std::function<AIML::IRValue*(AIML::AST::Expr*)> evalExpr) -> AIML::IRValue* {
+                llvm::Type* i8p   = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Type* i32t  = ctx.builder.getInt32Ty();
+                llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
+                llvm::Value* self = ctx.builder.CreateLoad(i8p, baseAlloca, "cx");
+                llvm::Value* want = call->args.empty()
+                    ? ctx.builder.CreateGlobalStringPtr("")
+                    : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+                // spec/61 §5: ein eigener Listen-GRIFF, kein Stack-Alloca —
+                // der Scope-Drop wuerde sonst Stapelspeicher freigeben.
+                llvm::Value* lst = ctx.memV3
+                    ? static_cast<llvm::Value*>(ctx.builder.CreateCall(
+                          ctx.getFunction("aiml_list_handle_new", i8p, {}), {}, "ctx_names_h"))
+                    : static_cast<llvm::Value*>(ctx.createEntryAlloca(
+                          ListImpl::getListStructType(ctx), "ctx_names"));
+                ListImpl::initList(ctx, lst, i8p, 8);
+                ctx.builder.CreateCall(
+                    ctx.getFunction("aiml_ctx_names_fill", i32t, {i8p, i8p, ptrTy}),
+                    {self, want, lst});
+                return ctx.ir_gen->wrap(lst);
+            };
+
+            // cx.errors() → list<string>.  spec/29_2 §14b (F29_2-…l): `-3`
+            // heisst „ging nicht" und ist fuer einen Wirt wertlos, der einem
+            // Menschen sagen muss, WAS falsch war.
+            cxi.builtinMethods["errors"] = [](CompilerContext& ctx, llvm::Value* baseAlloca,
+                AIML::AST::CallExpr*,
+                std::function<AIML::IRValue*(AIML::AST::Expr*)>) -> AIML::IRValue* {
+                llvm::Type* i8p   = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Type* i32t  = ctx.builder.getInt32Ty();
+                llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
+                llvm::Value* self = ctx.builder.CreateLoad(i8p, baseAlloca, "cx");
+                llvm::Value* lst = ctx.memV3
+                    ? static_cast<llvm::Value*>(ctx.builder.CreateCall(
+                          ctx.getFunction("aiml_list_handle_new", i8p, {}), {}, "ctx_errs_h"))
+                    : static_cast<llvm::Value*>(ctx.createEntryAlloca(
+                          ListImpl::getListStructType(ctx), "ctx_errs"));
+                ListImpl::initList(ctx, lst, i8p, 8);
+                ctx.builder.CreateCall(
+                    ctx.getFunction("aiml_ctx_errors_fill", i32t, {i8p, ptrTy}), {self, lst});
+                return ctx.ir_gen->wrap(lst);
+            };
+
+            // cx.call(name, "fn() -> T") — rufen, was der Kontext uebersetzt
+            // hat (F29_2-…j).  Die SIGNATUR muss ein Literal sein: aus ihr
+            // entsteht der Aufruftyp, und der steht zur Uebersetzungszeit fest.
+            // Der NAME darf berechnet sein — ihn kennt erst der Lauf.
+            cxi.builtinMethods["call"] = [](CompilerContext& ctx, llvm::Value* baseAlloca,
+                AIML::AST::CallExpr* call,
+                std::function<AIML::IRValue*(AIML::AST::Expr*)> evalExpr) -> AIML::IRValue* {
+                llvm::Type* i8p  = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Type* i32t = ctx.builder.getInt32Ty();
+                llvm::Type* i64t = ctx.builder.getInt64Ty();
+                if (call->args.size() < 2) {
+                    LOG_ERROR("cx.call: Name und volle Signatur, z.B. "
+                              "cx.call(\"demo\", \"fn() -> pipeline\") (spec/29_2 F29_2-…j)");
+                    return nullptr;
+                }
+                auto* sigLit = dynamic_cast<AIML::AST::LiteralExpr*>(call->args[1].get());
+                if (!sigLit) {
+                    LOG_ERROR("cx.call: die Signatur muss hier woertlich stehen — aus ihr "
+                              "entsteht der Aufruftyp (spec/29_2 F29_2-…j)");
+                    return nullptr;
+                }
+                // "fn(<argtypen>) -> <rueckgabe>", Leerzeichen zaehlen nicht.
+                std::string sig;
+                for (char ch : sigLit->value) if (ch != ' ' && ch != '\t') sig += ch;
+                size_t open_at = sig.find('('), close_at = sig.find(')');
+                size_t arrow_at = sig.find("->");
+                if (sig.compare(0, 3, "fn(") != 0 || close_at == std::string::npos ||
+                    arrow_at == std::string::npos || arrow_at < close_at) {
+                    LOG_ERROR("cx.call: '" + sigLit->value + "' ist keine Signatur — erwartet "
+                              "wird 'fn(<argtypen>) -> <rueckgabe>' (spec/29_2 F29_2-…d3)");
+                    return nullptr;
+                }
+                const std::string argPart = sig.substr(open_at + 1, close_at - open_at - 1);
+                const std::string retName = sig.substr(arrow_at + 2);
+                if (!argPart.empty()) {
+                    LOG_ERROR("cx.call: Argumente sind noch nicht umgesetzt — heute nur "
+                              "'fn() -> T' (spec/29_2 F29_2-…j)");
+                    return nullptr;
+                }
+                llvm::Type* retTy = nullptr;
+                if      (retName == "void")   retTy = ctx.builder.getVoidTy();
+                else if (retName == "i32")    retTy = i32t;
+                else if (retName == "i64")    retTy = i64t;
+                else if (retName == "string") retTy = i8p;
+                else {
+                    auto cls = ctx.classes.find(retName);
+                    if (cls != ctx.classes.end() && cls->second.isBuiltin) retTy = i8p;
+                }
+                if (!retTy) {
+                    LOG_ERROR("cx.call: Rueckgabetyp '" + retName + "' kann hier nicht "
+                              "entgegengenommen werden — void, i32, i64, string oder eine "
+                              "eingebaute Griffklasse (spec/29_2 F29_2-…j)");
+                    return nullptr;
+                }
+
+                llvm::Value* self = ctx.builder.CreateLoad(i8p, baseAlloca, "cx");
+                llvm::Value* nameV = static_cast<llvm::Value*>(
+                    ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+                llvm::Value* sigV = ctx.builder.CreateGlobalStringPtr(sigLit->value, "ctx_sig");
+                // Erst pruefen, dann rufen — dieselbe Pruefung wie cx.symbol.
+                llvm::Value* addrSlot = ctx.builder.CreateAlloca(i64t, nullptr, "call_addr");
+                llvm::Value* msgSlot  = ctx.builder.CreateAlloca(i8p,  nullptr, "call_msg");
+                llvm::Value* st = ctx.builder.CreateCall(
+                    ctx.getFunction("aiml_ctx_symbol", i32t,
+                        {i8p, i8p, i8p, i64t->getPointerTo(), i8p->getPointerTo()}),
+                    {self, nameV, sigV, addrSlot, msgSlot}, "call_st");
+                llvm::Value* msgV = ctx.builder.CreateLoad(i8p, msgSlot, "call_msg_v");
+                llvm::Value* missing = ctx.builder.CreateZExt(
+                    ctx.builder.CreateICmpEQ(st, ctx.builder.getInt32(1)),
+                    ctx.builder.getInt8Ty(), "call_missing");
+                emitGuardMsg(ctx, missing, "ctx_call_missing_throw", "ctx_call_known",
+                             "SymbolMissingException", msgV);
+                llvm::Value* wrong = ctx.builder.CreateZExt(
+                    ctx.builder.CreateICmpEQ(st, ctx.builder.getInt32(2)),
+                    ctx.builder.getInt8Ty(), "call_wrong");
+                emitGuardMsg(ctx, wrong, "ctx_call_type_throw", "ctx_call_ok",
+                             "SymbolTypeException", msgV);
+
+                llvm::Value* addr = ctx.builder.CreateLoad(i64t, addrSlot, "call_sym");
+                llvm::FunctionType* fnTy = llvm::FunctionType::get(retTy, {}, false);
+                llvm::Value* fnPtr = ctx.builder.CreateIntToPtr(
+                    addr, llvm::PointerType::getUnqual(ctx.context), "call_fn");
+                llvm::Value* got = ctx.builder.CreateCall(fnTy, fnPtr, {}, 
+                    retTy->isVoidTy() ? "" : "ctx_called");
+                if (retTy->isVoidTy()) return ctx.ir_gen->getInt32(0);
+                return ctx.ir_gen->wrap(got);
+            };
+
+            // cx.close(): ausdrueckliches Schliessen.  Danach sind alle
+            // Adressen aus diesem Kontext ungueltig — deshalb ist es eine
+            // Handlung und kein Nebeneffekt.
+            cxi.builtinMethods["close"] = [](CompilerContext& ctx, llvm::Value* baseAlloca,
+                AIML::AST::CallExpr*,
+                std::function<AIML::IRValue*(AIML::AST::Expr*)>) -> AIML::IRValue* {
+                llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Value* self = ctx.builder.CreateLoad(i8p, baseAlloca, "cx");
+                ctx.builder.CreateCall(
+                    ctx.getFunction("aiml_ctx_free", ctx.builder.getVoidTy(), {i8p}), {self});
+                return ctx.ir_gen->getInt32(0);
+            };
+            ctx.classes["ctx_handle"] = std::move(cxi);
+
+            auto& cxns = ctx.namespaces["ctx"];
+            cxns.builtinFuncs["new"] = [](CompilerContext& ctx,
+                const std::vector<AIML::IRValue*>&) -> AIML::IRValue* {
+                llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                    ctx.getFunction("aiml_ctx_new", i8p, {}), {}, "ctx_new"));
+            };
+        }
 
         // ── ssh namespace ────────────────────────────────────────────────────
         auto& sshns = ctx.namespaces["ssh"];
@@ -9929,6 +10487,15 @@ void registerBuiltins(CompilerContext& ctx) {
         PREFAB_RECT_METHOD("child_rect_y", "aiml_prefab_child_rect_y")
         PREFAB_RECT_METHOD("child_rect_w", "aiml_prefab_child_rect_w")
         PREFAB_RECT_METHOD("child_rect_h", "aiml_prefab_child_rect_h")
+        // child_design_x/y/w/h(child_name) → f32: dasselbe Rechteck in DESIGN-
+        // Koordinaten (1280x720).  child_rect_* ist SCREEN-Raum; set_pos/x/y
+        // erwarten Design-Raum.  Wer eine Instanz neben ein Kind stellt
+        // (Tooltip, Sprechblase), braucht diese Variante — sonst verschiebt
+        // die Fenster-Skalierung das Ergebnis.
+        PREFAB_RECT_METHOD("child_design_x", "aiml_prefab_child_design_x")
+        PREFAB_RECT_METHOD("child_design_y", "aiml_prefab_child_design_y")
+        PREFAB_RECT_METHOD("child_design_w", "aiml_prefab_child_design_w")
+        PREFAB_RECT_METHOD("child_design_h", "aiml_prefab_child_design_h")
 #undef PREFAB_RECT_METHOD
 
         // child_focused(child_name) → i32 (1 if text_input child has focus)

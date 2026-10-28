@@ -5,8 +5,10 @@
 # aus der Umschreibung heraus.
 - pipeline:
     name: blind_key
-    params: { arch: [x86_64], mode: [debug] }
-    stages:
+    params:
+      - [arch, string, [x86_64]]
+      - [mode, string, [debug]]
+    steps:
       - stage:
           name: one
           steps:

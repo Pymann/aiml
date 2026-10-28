@@ -61,7 +61,10 @@ void    aiml_stage_add_step(void* stage, void* step);
 
 void*   aiml_pipeline_new(void);
 void    aiml_pipeline_set_name(void* pipe, const char* name);
-void    aiml_pipeline_add_param(void* pipe, const char* axis, const void* values); // list<string>
+// spec/62 §4.1: Achse MIT Typ ([name, typ, [werte]]).  Der Typ zaehlt im
+// Rumpf (F62-1) und ist darum Teil der Gestalt, die ein Wirt liest.
+void    aiml_pipeline_add_param(void* pipe, const char* axis, const char* type,
+                                const void* values); // values: list<string>
 void    aiml_pipeline_add_stage(void* pipe, void* stage);
 // spec/62 §4.2: Teilbindung als Text, "achse=wert[,achse=wert...]".
 // Textform, weil eine Teilbindung dasselbe Format hat wie die `bindings` des
@@ -98,6 +101,48 @@ void    aiml_pipeline_set_parallel(void* pipe, int32_t n);
 // spec/62 §4.3: ein Arbeitsbereich je (Lane, Stufe).  Kein Schluesselmaterial
 // (F62-107) — sonst ueberlebte kein Treffer einen Umzug des Projekts.
 void    aiml_pipeline_set_workspace_root(void* pipe, const char* root);
+
+// ── spec/62 §20: lesen, was uebersetzt wurde ────────────────────────────────
+//
+// Geschrieben von der Umschreibung (`pipeline_expand`), gelesen von einem
+// Wirt.  Je Feld EIN Schluesselname, damit Spec, Umschreibung und Leser nicht
+// auseinanderlaufen: "name", "agent", "steplayer", "image", "base",
+// "requires", "shares", "command" als Text; "cpu", "mem", "pids", "timeout"
+// als Zahl (0 = Vorgabe des Wirts, NICHT unbegrenzt).
+//
+// Die Werte sind AUFGELOEST (F62-151): den Vorrang Stufe-vor-Pipeline hat die
+// Umschreibung schon angewandt.  Ein Leser, der nachrechnet, ist ein zweiter
+// Parser (§20.1).
+void    aiml_stage_set_attr(void* stage, const char* key, const char* value);
+void    aiml_stage_set_limit(void* stage, const char* key, int32_t value);
+char*   aiml_stage_attr(void* stage, const char* key);
+int32_t aiml_stage_limit(void* stage, const char* key);
+int32_t aiml_stage_step_count(void* stage);
+// nullptr bei schiefem Index — der Aufrufer wirft dann (F62-154).
+void*   aiml_stage_step_at(void* stage, int32_t idx);
+
+char*   aiml_step_attr(void* step, const char* key);   // name | cache | per
+int32_t aiml_step_needs_count(void* step);
+char*   aiml_step_need_at(void* step, int32_t idx);
+
+void    aiml_pipeline_add_push(void* pipe, const char* from, const char* to, const char* tag);
+char*   aiml_pipeline_name_of(void* pipe);
+int32_t aiml_pipeline_stage_count(void* pipe);
+void*   aiml_pipeline_stage_at(void* pipe, int32_t idx);
+// Bindungstext der i-ten Lane, `exclude` schon abgezogen — dieselbe Form wie
+// im Beobachter und im Arbeitsbereichsnamen (F62-152).
+char*   aiml_pipeline_lane_bindings(void* pipe, int32_t idx);
+int32_t aiml_pipeline_axis_count(void* pipe);
+char*   aiml_pipeline_axis_name(void* pipe, int32_t idx);
+char*   aiml_pipeline_axis_type(void* pipe, int32_t idx);
+int32_t aiml_pipeline_axis_value_count(void* pipe, int32_t idx);
+char*   aiml_pipeline_axis_value(void* pipe, int32_t axis, int32_t vix);
+int32_t aiml_pipeline_push_count(void* pipe);
+char*   aiml_pipeline_push_field(void* pipe, int32_t idx, const char* which); // from|to|tag
+
+// spec/62 F62-124a: 0 = lokal laufbar, -4 = abgelehnt (die Meldung steht im
+// Protokoll und nennt drei Dinge).  `aiml_pipeline_run` ruft es selbst.
+int32_t aiml_pipeline_local_refusal(void* pipe);
 
 } // extern "C"
 #endif

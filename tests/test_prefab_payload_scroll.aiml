@@ -1,0 +1,106 @@
+# SPEC: 44_6_prefabs §5h
+# Requires: display
+# Regression fuer `payload_scroll` + `cascade_flow` (spec/44_6 §5h).
+#
+# Was dieser Test BELEGT:
+#   1. Beide Schluessel kommen DEKLARATIV durch — sie waren nur im JSON-Loader
+#      des Runtimes verdrahtet, deklariert also ein "unknown attribute"-Fehler.
+#      Genau die Luecke, vor der §4 warnt (min/scrollable/tail hatten sie schon).
+#   2. Eine tiefe Kaskade (4 Felder, 130 breit → 200+4*134 = 736 > Zeilenbreite
+#      520) laeuft mit payload_scroll NICHT mehr aus der Zeile: die Zeile wird
+#      zum Clip-Viewport, der Balken wird gezeichnet, nichts stuerzt ab.
+#   3. `cascade_flow: vertical` wird akzeptiert und gezeichnet.
+#
+# NICHT interaktiv: endlich viele Frames, dann Fenster zu (eine blockierende
+# Schleife haelt die ganze Suite auf).
+
+- config:
+    entry: main
+
+- enum: { name: OwnerType,     values: [player, opponent, ally] }
+- enum: { name: AttributeType, values: [lp, atk, def], labels: {1: "LP", 2: "ATK", 3: "DEF"} }
+- enum: { name: TargetType,    values: [card, soulmage] }
+- alias: { name: VALUE, type: i32, label: "Value", min: 0 }
+
+- cascade:
+    name: ValueType
+    nodes:
+      - fixed: [1, VALUE]
+
+# deal_damage hat 4 Felder (Owner, Target, Value-Kaskade, Value) → die Kette ist
+# breiter als die Zeile, genau der Fall, den §5h beschneiden soll.
+- cascade:
+    name: DmgCode
+    nodes:
+      - deal_damage: [10, OwnerType, TargetType, ValueType, AttributeType]
+      - nothing:     [48]
+
+- prefab:
+    name: PsFieldChip
+    width: 130
+    height: 22
+    texture: ""
+    children:
+      - { name: control, type: label, x: 0, y: 0, width: 130, height: 22,
+          font_size: 10, color: 0xFFCC44FF, bg_color: 0x223040FF,
+          border_color: 0x88AACCFF, border_width: 1.0, corner_radius: 3.0,
+          options: "---", label: "?" }
+
+# Zeile 520 breit: 200 Dropdown + 6 Abstand lassen 314 fuer die Kette (4*134=536)
+# → ueberhaengt, der Balken muss erscheinen.  34 hoch: unten 6 px fuer den Balken.
+- prefab:
+    name: PsRow
+    width: 520
+    height: 34
+    texture: ""
+    children:
+      - { name: dmg_dd, type: dropdown, x: 0, y: 2, width: 200, height: 22,
+          cascade_type: DmgCode, payload_spawn: PsFieldChip, payload_scroll: true,
+          bg_color: 0x223040FF, border_color: 0x88AACCFF, border_width: 1.0,
+          corner_radius: 3.0, color: 0xFFFFFFFF, font_size: 10 }
+
+# Gegenprobe: dieselbe Kaskade mit senkrechtem Fluss — payload_scroll ist dort
+# wirkungslos und darf nichts kaputt machen.
+- prefab:
+    name: PsRowVertical
+    width: 520
+    height: 34
+    texture: ""
+    children:
+      - { name: dmg_dd, type: dropdown, x: 0, y: 2, width: 200, height: 22,
+          cascade_type: DmgCode, payload_spawn: PsFieldChip,
+          cascade_flow: vertical, payload_scroll: true,
+          bg_color: 0x223040FF, border_color: 0x88AACCFF, border_width: 1.0,
+          corner_radius: 3.0, color: 0xFFFFFFFF, font_size: 10 }
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [win, window_handle, { call: [engine.create_window, 640, 240, "payload_scroll"] }]
+      - decl: [row_h, prefab_instance, { call: [engine.instantiate, "PsRow"] }]
+      - call: [row_h.set_pos, 20.0, 20.0]
+      - decl: [row_v, prefab_instance, { call: [engine.instantiate, "PsRowVertical"] }]
+      - call: [row_v.set_pos, 20.0, 120.0]
+      # Beide auf deal_damage stellen → 4 Payload-Felder, Kette ueberhaengt.
+      - call: [row_h.set_dropdown_index, "dmg_dd", 0]
+      - call: [row_v.set_dropdown_index, "dmg_dd", 0]
+      - decl: [frames, i32, 0]
+      - while:
+          condition: { lt: [frames, 12] }
+          body:
+            - call: [gl.clear_all, 0.05, 0.05, 0.08, 1.0]
+            - call: [engine.update_hover, 300.0, 44.0]
+            - call: [engine.draw_scene]
+            - call: [engine.swap, win]
+            - set: [frames, { +: [frames, 1] }]
+      - decl: [sel_h, i32, { call: [row_h.dropdown_index, "dmg_dd"] }]
+      - decl: [sel_v, i32, { call: [row_v.dropdown_index, "dmg_dd"] }]
+      - call: [engine.destroy_window, win]
+      - if:
+          condition: { '||': [{ neq: [sel_h, 0] }, { neq: [sel_v, 0] }] }
+          then:
+            - print: ["FAIL Auswahl verloren: h=${sel_h} v=${sel_v}"]
+            - return: 1
+      - print: ["PASS payload_scroll: deklarativ akzeptiert, 12 Frames ohne Absturz"]
+      - return: 0

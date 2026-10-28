@@ -5,8 +5,9 @@
 # Reihenfolge laeuft und dabei gruen meldet.
 - pipeline:
     name: with_needs
-    params: { arch: [x86_64] }
-    stages:
+    params:
+      - [arch, string, [x86_64]]
+    steps:
       - stage:
           name: one
           steps:

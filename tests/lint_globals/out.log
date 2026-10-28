@@ -1,3 +1,0 @@
-[WARNING]  [/home/claude/aiml-v3dev/src/core/ast_compiler.cpp:1608] tests/lint_globals/probe.aiml: module-level global 'g_counter' (i32) has no owner — state belongs in a class or a classgroup instance (spec/21 §6.2); set AIML_LINT_GLOBALS=0 to silence
-[WARNING]  [/home/claude/aiml-v3dev/src/core/ast_compiler.cpp:1608] tests/lint_globals/probe.aiml: module-level global 'g_box' (ptr<LintBox>) OWNS its value: passing it to a ptr<T> parameter moves it out and every other reader is left with a dangling pointer — state belongs in a class or a classgroup instance (spec/21 §6.2); set AIML_LINT_GLOBALS=0 to silence
-2026-10-27 13:25:30 [INFO      ] hallo 5  (tests/lint_globals/probe.aiml:?)

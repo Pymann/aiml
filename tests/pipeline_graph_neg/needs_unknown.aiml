@@ -4,8 +4,9 @@
 # ein Fehler und nicht eine Kante, die stillschweigend entfaellt.
 - pipeline:
     name: bad_need
-    params: { arch: [x86_64] }
-    stages:
+    params:
+      - [arch, string, [x86_64]]
+    steps:
       - stage:
           name: one
           steps:

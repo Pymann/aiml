@@ -1345,6 +1345,9 @@ namespace AIML {
         if (typeName == "socket_handle") return llvm::Type::getInt8Ty(context)->getPointerTo(); // AimlSocket*
         if (typeName == "tls_socket_handle") return llvm::Type::getInt8Ty(context)->getPointerTo(); // AimlTlsSocket*
         if (typeName == "ws_handle") return llvm::Type::getInt8Ty(context)->getPointerTo();          // AimlWs*
+        // spec/29_2 §14a: der Kontext als Wert — ein Griff auf eine lebende
+        // Compiler-Instanz (AIMLCompiler*), undurchsichtig wie ssh_session.
+        if (typeName == "ctx_handle")  return llvm::Type::getInt8Ty(context)->getPointerTo();     // AIMLCompiler*
         if (typeName == "ssh_session") return llvm::Type::getInt8Ty(context)->getPointerTo();     // AimlSshSession* (spec/32_6)
         if (typeName == "ssh_channel") return llvm::Type::getInt8Ty(context)->getPointerTo();     // AimlSshChannel*
         if (typeName == "ssh_test_server") return llvm::Type::getInt8Ty(context)->getPointerTo(); // AimlSshTestServer* (Testbereich)
@@ -1469,6 +1472,12 @@ namespace AIML {
         // spec/62 §13.5: zusammensetzbare Pipelines — ebenfalls opake Handles.
         // Die Struktur waechst (Schritte, Achsen), also traegt sie kein Struct.
         if (typeName == "step" || typeName == "stage" || typeName == "pipeline")
+            return llvm::Type::getInt8Ty(context)->getPointerTo();
+
+        // spec/29_2 §14a: der Kontext als Wert — ein Griff auf eine lebende
+        // Compiler-Instanz.  Opak aus demselben Grund: was dahinter liegt,
+        // gehoert dem Compiler, nicht dem Programm, das ihn benutzt.
+        if (typeName == "ctx_handle")
             return llvm::Type::getInt8Ty(context)->getPointerTo();
 
         // Nur EINMAL je Name melden: derselbe unbekannte Typ taucht in einer

@@ -4121,7 +4121,12 @@ void Compiler::registerTypes(Program* prog) {
         "Exception", "NullPointerException", "TypeMismatchException", "IndexOutOfBoundsException",
         "DivisionByZeroException", "StackOverflowException", "OutOfMemoryException", "TimeoutException",
         "SerializationException", "DeserializationException", "BufferOverflowException", "BufferUnderflowException",
-        "InvalidThreadStateException"
+        "InvalidThreadStateException",
+        // spec/29_2 §14a (F29_2-…d2): zwei Fehler beim Abgreifen eines Symbols
+        // aus einem Kontext — der Name ist unbekannt, oder der genannte Typ
+        // passt nicht.  Zwei Namen, damit ein `catch` sie unterscheiden kann;
+        // ohne Eintrag hier traegt der Wurf ein Tag, das kein `catch` kennt.
+        "SymbolMissingException", "SymbolTypeException"
     };
 
     for (const auto& excName : builtinExceptions) {
@@ -6093,6 +6098,7 @@ void Compiler::visitTopLevel(Node* node) {
                 "\"visible\":" + std::string(c.is_visible ? "1" : "0") + ","
                 "\"scrollable\":" + std::string(c.scrollable ? "1" : "0") + ","
                 "\"tail\":" + std::string(c.tail ? "1" : "0") + ","
+                "\"wrap\":" + std::string(c.wrap ? "1" : "0") + ","
                 "\"color\":" + std::to_string(c.color) + ","
                 "\"texture\":\"" + escape_json(c.texture) + "\","
                 "\"anchor\":\"" + escape_json(c.anchor) + "\","
@@ -6135,6 +6141,8 @@ void Compiler::visitTopLevel(Node* node) {
                 "\"compact\":" + std::string(c.compact ? "1" : "0") + ","
                 "\"cascade_type\":\"" + escape_json(c.cascade_type) + "\","
                 "\"payload_spawn\":\"" + escape_json(c.payload_spawn) + "\","
+                "\"cascade_flow\":\"" + escape_json(c.cascade_flow) + "\","
+                "\"payload_scroll\":" + std::string(c.payload_scroll ? "1" : "0") + ","
                 "\"enum\":\"" + escape_json(c.enum_type) + "\"}";
         }
         childrenJson += "]";

@@ -14,13 +14,13 @@
 - pipeline:
     name: declared_demo
     params:
-      arch: [x86_64, arm64]
-      mode: [debug, release]
+      - [arch, string, [x86_64, arm64]]
+      - [mode, string, [debug, release]]
     exclude:
       - { arch: arm64, mode: release }
     parallel: 2
     workspace_root: logs/declared_ws
-    stages:
+    steps:
       - stage:
           name: mark
           steps:

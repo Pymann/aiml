@@ -1,0 +1,9 @@
+# Auch keine Testdatei: eine Einreichung mit einem FORMFEHLER (spec/62 §20.2).
+# `steplayer: own` braucht eine Wurzel, und die steht hier nicht.
+- pipeline:
+    name: ctx_kaputt
+    steplayer: own
+    steps:
+      - stage:
+          name: bauen
+          run: "true"

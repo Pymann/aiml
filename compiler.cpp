@@ -1315,8 +1315,23 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
 // ── compileFromString ─────────────────────────────────────────────────────────
 // Like compile() but parses from an in-memory YAML string instead of a file.
 // No IR file is written; the compiled module stays in module_ for jitRun().
-void AIMLCompiler::compileFromString(const std::string& yaml_source) {
-    LOG_DEBUG("compileFromString: " + std::to_string(yaml_source.size()) + " bytes");
+void AIMLCompiler::compileFromString(const std::string& yaml_source_in) {
+    LOG_DEBUG("compileFromString: " + std::to_string(yaml_source_in.size()) + " bytes");
+
+    // spec/62 §13.5f: eine deklarierte Pipeline wird VOR dem Uebersetzen in
+    // die zusammengesetzte Form umgeschrieben — aus einer Zeichenkette genauso
+    // wie aus einer Datei.  Ohne das kannte ein Bundle (`sys.code_from`, ein
+    // `ctx`-Lauf) den Schluessel `pipeline:` nicht, und eine eingereichte
+    // Pipeline war nur ueber eine Datei uebersetzbar (spec/62 §20.1).
+    std::string yaml_expanded;
+    const std::string* use_source = &yaml_source_in;
+    if (aiml::sourceHasPipelineDecl(yaml_source_in)) {
+        if (aiml::expandPipelineDeclarations(yaml_source_in, "<memory>", yaml_expanded))
+            use_source = &yaml_expanded;
+        else
+            return;   // die Umschreibung hat schon gesagt, was falsch war
+    }
+    const std::string& yaml_source = *use_source;
 
     delete static_cast<CompilerContext*>(compiler_ctx_);
     compiler_ctx_ = nullptr;
@@ -1332,6 +1347,8 @@ void AIMLCompiler::compileFromString(const std::string& yaml_source) {
     ctx.compilerPath = compilerPath;
     ctx.ir_gen = AIML::createLLVMGenerator(ctx);
     ctx.currentSourceFile = "<memory>";
+    // Der Wunsch des Aufrufers gilt fuer DIESEN frischen Kontext (§15).
+    ctx.headerOnlyMode = headerOnlyNext_;
 
     module_->getOrInsertGlobal("__argc", builder.getInt32Ty());
     module_->getOrInsertGlobal("__argv", builder.getInt8Ty()->getPointerTo()->getPointerTo());
@@ -1456,11 +1473,133 @@ int AIMLCompiler::compileLibraryAndRegister(const std::string& yaml_source) {
 // Signaturen uebernehmen, Rumpfe NICHT erzeugen.  Billig, weil die teure
 // Codeerzeugung entfaellt; die Aufrufe landen als externe Symbole im Modul.
 void AIMLCompiler::compileDeclarationsOnly(const std::string& yaml_source) {
-    CompilerContext* c = static_cast<CompilerContext*>(compiler_ctx_);
-    bool prev = c ? c->headerOnlyMode : false;
-    if (c) c->headerOnlyMode = true;
+    // Das Flag gehoert an den Compiler, nicht an den Kontext: compileFromString
+    // legt den Kontext NEU an, und was man vorher im alten gesetzt hat, ist
+    // danach weg (gefunden 25.10.2026 beim Bau von `ctx`, spec/29_2 §14a).
+    bool prev = headerOnlyNext_;
+    headerOnlyNext_ = true;
     compileFromString(yaml_source);
-    if (c) c->headerOnlyMode = prev;
+    headerOnlyNext_ = prev;
+}
+
+// ── execInContext (spec/29_2 §14a) ──────────────────────────────────────────
+//
+// Ein Compiler, viele Bundles.  Der Unterschied zu `compileAndRun` ist nur
+// einer, aber er ist der Punkt der ganzen Uebung: die Instanz bleibt stehen.
+//
+// Drei Dinge muessen dafuer je Aufruf passieren:
+//   1. Ein FRISCHES Modul — das vorige ist beim Bau seiner Engine per
+//      std::move uebergegangen und existiert hier nicht mehr.
+//   2. Die Deklarationen der frueheren Bundles im neuen Modul wiederholen.
+//      Ihre Rumpfe liegen in den alten Engines; `DynamicLibrary::AddSymbol`
+//      macht sie auffindbar, und MCJIT loest den Aufruf darueber auf.  Ein
+//      `llvm::Function*` aus einem anderen Modul direkt zu benutzen waere
+//      ungueltige IR — das ist der Grund fuer den Umweg, nicht Vorsicht.
+//   3. Die Engine behalten.  Gibt man sie frei, zeigen die eben registrierten
+//      Adressen ins Leere (dieselbe Lehre wie bei `sys.lib_load`, §15).
+int AIMLCompiler::execInContext(const std::string& yaml_source) {
+    return compileInContext(yaml_source, /*run_entry=*/true);
+}
+
+// spec/29_2 §14b (F29_2-…n): uebersetzen UND einhaengen, ohne den
+// Einstiegspunkt zu rufen.  Ein Kontroller, der fremden Quelltext annimmt,
+// will ihn pruefen und lesen — nicht laufen lassen (cosmos F96-28).
+int AIMLCompiler::loadInContext(const std::string& yaml_source) {
+    return compileInContext(yaml_source, /*run_entry=*/false);
+}
+
+int AIMLCompiler::compileInContext(const std::string& yaml_source, bool run_entry) {
+    // Ein frisches Modul, wenn das vorige an seine Engine uebergegangen ist.
+    // Der KONTEXT wird von compileFromString ohnehin neu angelegt — deshalb
+    // werden die frueheren Bundles hier erneut DEKLARIERT: ihre Signaturen
+    // muessen im neuen Modul stehen, ihre Rumpfe liegen in den alten Engines.
+    if (!module_) {
+        module_ = std::make_unique<llvm::Module>("aiml_ctx", *context_);
+        module_->setTargetTriple(llvm::sys::getDefaultTargetTriple());
+        for (const auto& earlier : ctx_sources_) compileDeclarationsOnly(earlier);
+    }
+
+    // spec/29_2 §14b (F29_2-…l): die Meldungen DIESES Bundles mitschneiden.
+    // `-3` heisst „ging nicht" und ist fuer einen Wirt wertlos, der einem
+    // Menschen sagen muss, WAS falsch war.  Zurueckgesetzt wird bei jedem
+    // Lauf, sonst berichtet der dritte die Fehler des ersten.
+    Logger& logger = Logger::instance();
+    const bool wasCollecting = logger.isCollecting();
+    const size_t diagsBefore = logger.diags().size();
+    logger.setCollect(true);
+    ctx_errors_.clear();
+
+    int errsBefore = logger.errorCount();
+    compileFromString(yaml_source);
+    generateEntryPoint();
+
+    const std::vector<Logger::Diag>& diags = logger.diags();
+    for (size_t i = diagsBefore; i < diags.size(); ++i)
+        if (diags[i].sev && std::string(diags[i].sev) == "error")
+            ctx_errors_.push_back(diags[i].text);
+    logger.setCollect(wasCollecting);
+
+    if (logger.errorCount() > errsBefore) {
+        LOG_ERROR("execInContext: Bundle hat Uebersetzungsfehler — wird nicht ausgefuehrt");
+        return -3;
+    }
+
+    llvm::Function* mainFunc = module_->getFunction("main");
+    if (!mainFunc && run_entry) {
+        LOG_ERROR("execInContext: kein Einstiegspunkt im Bundle");
+        return -1;
+    }
+
+    llvm::sys::DynamicLibrary::LoadLibraryPermanently(nullptr);
+    module_->setTargetTriple(llvm::sys::getDefaultTargetTriple());
+
+    std::string errStr;
+    llvm::EngineBuilder eb(std::move(module_));
+    eb.setErrorStr(&errStr);
+    eb.setEngineKind(llvm::EngineKind::JIT);
+    llvm::ExecutionEngine* eng = eb.create();
+    if (!eng) {
+        LOG_ERROR("execInContext: Engine nicht baubar: " + errStr);
+        return -1;
+    }
+    eng->finalizeObject();
+    ctx_engines_.push_back(eng);
+
+    // Was dieses Bundle definiert hat, bekannt machen — fuer das naechste.
+    // Der Kontext ist der, den compileFromString eben angelegt hat.
+    CompilerContext* c = static_cast<CompilerContext*>(compiler_ctx_);
+    if (!c) return -2;
+    for (const auto& fn : c->functions) {
+        if (fn.first.empty()) continue;
+        uint64_t addr = eng->getFunctionAddress(fn.first);
+        if (addr) llvm::sys::DynamicLibrary::AddSymbol(fn.first, (void*)addr);
+    }
+
+    ctx_sources_.push_back(yaml_source);
+
+    if (!run_entry) {
+        // Der Kontext bleibt gesetzt, damit ein spaeteres `cx.call` in dieser
+        // Engine landet — gelaufen ist nichts.
+        return 0;
+    }
+
+    aiml_set_active_context(compiler_ctx_, eng);
+    std::vector<llvm::GenericValue> noArgs;
+    llvm::GenericValue rv = eng->runFunction(mainFunc, noArgs);
+    aiml_set_active_context(nullptr, nullptr);
+
+    return (int)rv.IntVal.getSExtValue();
+}
+
+// symbolAddress: wo liegt das Symbol?  Gesucht wird in den Engines dieses
+// Kontexts, juengste zuerst — ein spaeteres Bundle darf ein frueheres
+// ueberschreiben, und wer fragt, meint den Stand von jetzt.
+uint64_t AIMLCompiler::symbolAddress(const std::string& name) const {
+    for (auto it = ctx_engines_.rbegin(); it != ctx_engines_.rend(); ++it) {
+        uint64_t addr = (*it)->getFunctionAddress(name);
+        if (addr) return addr;
+    }
+    return 0;
 }
 
 uint64_t AIMLCompiler::compileChunkAndGetAddress(const std::string& yaml_source,

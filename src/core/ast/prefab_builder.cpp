@@ -118,6 +118,7 @@ bool PrefabBuilder::OnScalar(const std::string& value, const std::string& tag) {
             else if (childKey == "visible")            currentChild.is_visible = (value == "true" || value == "1");
             else if (childKey == "scrollable")         currentChild.scrollable = (value == "true" || value == "1");
             else if (childKey == "tail")               currentChild.tail = (value == "true" || value == "1");
+            else if (childKey == "wrap")               currentChild.wrap = (value == "true" || value == "1");
             else if (childKey == "label")         currentChild.label = value;
             else if (childKey == "secret")        currentChild.is_secret = (value == "true" || value == "1");
             else if (childKey == "value")         currentChild.bar_value = strtof(value.c_str(), nullptr);
@@ -137,6 +138,13 @@ bool PrefabBuilder::OnScalar(const std::string& value, const std::string& tag) {
             else if (childKey == "compact")       currentChild.compact = (value == "true" || value == "1");
             else if (childKey == "cascade_type")  currentChild.cascade_type = value;
             else if (childKey == "payload_spawn") currentChild.payload_spawn = value;
+            /* spec/44_6 §5h: cascade_flow und payload_scroll waren nur im
+             * JSON-Loader des Runtimes verdrahtet — deklariert waren sie ein
+             * "unknown attribute"-Fehler.  Genau die Luecke, die die Tabelle in
+             * §4 beschreibt (ein dokumentierter Schluessel MUSS beide Pfade
+             * erreichen, sonst faellt er still weg wie damals min/scrollable/tail). */
+            else if (childKey == "cascade_flow")  currentChild.cascade_flow = value;
+            else if (childKey == "payload_scroll") currentChild.payload_scroll = (value == "true" || value == "1");
             else if (childKey == "enum")          currentChild.enum_type = value;
             /* spec/44_6 §4: an unknown child attribute is a compile ERROR, never a
              * silently dropped key.  A dropped key is invisible: `password: true`

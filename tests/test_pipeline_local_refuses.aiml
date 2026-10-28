@@ -1,0 +1,61 @@
+# SPEC: 62_pipelines
+# spec/62 §18.1 F62-124 + F62-124a: `image:`/`push:` verlangen eine Laufzeit.
+# Der lokale Lauf hat keine — er LEHNT AB, und zwar beim LAUF, nicht beim
+# Uebersetzen: dieselbe Datei ist fuer einen Cluster gueltig und muss
+# uebersetzen (§20.1), sonst muesste ein Kontroller sie selbst lesen.
+#
+# Geprueft wird deshalb beides: die Ablehnung UND dass sie eng ist (eine
+# Pipeline ohne `image:` laeuft weiter wie bisher).
+# Expected exit code: 0
+
+- pipeline:
+    name: braucht_wurzel
+    image: ubuntu-base
+    steps:
+      - stage:
+          name: eins
+          steps:
+            - step: { name: erster, return: i32, body: [{ return: 0 }] }
+
+- pipeline:
+    name: lokal_genug
+    workspace_root: logs/refuse_ws
+    steps:
+      - stage:
+          name: eins
+          steps:
+            - step: { name: erster, return: i32, body: [{ return: 0 }] }
+
+- def:
+    name: expect
+    args: [[what, string], [cond, i32]]
+    return: i32
+    body:
+      - if:
+          condition: { eq: [cond, 1] }
+          then: [{ print: ["  ok   ${what}"] }, { return: 0 }]
+      - print: ["  FAIL ${what}"]
+      - return: 1
+
+- def:
+    name: main
+    static_off: ["str_cmp"]
+    return: i32
+    body:
+      - decl: [fails, i32, 0]
+      # Uebersetzen ging — sonst waere diese Datei nicht hier (F62-124a).
+      - decl: [mit, pipeline, { call: [braucht_wurzel] }]
+      - decl: [eins, stage, { call: [mit.stage_at, 0] }]
+      - set: [fails, { +: [fails, { call: [expect, "die Stufe traegt das Abbild", { eq: [{ call: [eins.image] }, "ubuntu-base"] }] }] }]
+      - decl: [rc_mit, i32, { call: [mit.run] }]
+      - set: [fails, { +: [fails, { call: [expect, "der lokale Lauf lehnt ab", { eq: [rc_mit, -4] }] }] }]
+
+      - decl: [ohne, pipeline, { call: [lokal_genug] }]
+      - decl: [rc_ohne, i32, { call: [ohne.run] }]
+      - set: [fails, { +: [fails, { call: [expect, "ohne Abbild laeuft es weiter", { eq: [rc_ohne, 0] }] }] }]
+
+      - if:
+          condition: { neq: [fails, 0] }
+          then: [{ print: ["test_pipeline_local_refuses FAIL (${fails})"] }, { return: 1 }]
+      - print: ["test_pipeline_local_refuses PASS"]
+      - return: 0
