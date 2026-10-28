@@ -442,6 +442,30 @@ IRValue* Compiler::visitVariable(VariableExpr* var) {
             return ctx.ir_gen->wrap(ctx.builder.CreateCall(stdFn, {ctx.builder.getInt32(fd)}));
         }
 
+        // `${ns.name}` — ein Name mit Punkt, der keine Variable ist, aber eine
+        // FUNKTION OHNE Argumente: dann ist er gemeint wie ein Wert und wird
+        // gerufen.  Das ist der Lesezugang zu einem Namensraum voller
+        // Konstanten (cosmos: die Job-Parameter in `prm`, doc/spec/106
+        // §106.5): `${prm.branch}` statt `${ { call: [prm.branch] } }`.
+        //
+        // Nur bei PUNKT und nur bei Stelligkeit 0: ein nackter Funktionsname
+        // bleibt ein Funktionszeiger (siehe unten), und eine Funktion mit
+        // Argumenten laesst sich ohne Argumente nicht rufen.  Eine Variable
+        // gewinnt immer, denn sie wurde oben schon gefunden.
+        if (dotPos != std::string::npos) {
+            llvm::Function* zero = nullptr;
+            auto fit = ctx.functions.find(varName);
+            if (fit != ctx.functions.end() && fit->second.func) zero = fit->second.func;
+            // Auch eine bloss DEKLARIERTE Funktion zaehlt: in einem
+            // Compiler-Kontext (spec/29_2 §14a) steht ein frueheres Bundle nur
+            // noch als Deklaration im Modul — seine Tabelle ist weg.  Ohne
+            // diesen Zweig wurde `${prm.branch}` zum Funktionszeiger und als
+            // Zeichenkette gedruckt (gemessen: Datenmuell im Befehl).
+            if (!zero) zero = ctx.module().getFunction(varName);
+            if (zero && zero->arg_size() == 0 && !zero->getReturnType()->isVoidTy())
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(zero, {}, varName + "_val"));
+        }
+
         // Check if varName is an AIML function used as a function pointer / callback.
         // Must come BEFORE getLLVMType so function names don't trigger "Unknown Type" errors.
         {

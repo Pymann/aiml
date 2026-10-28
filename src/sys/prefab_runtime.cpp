@@ -239,6 +239,7 @@ struct PrefabChildDef {
     /* "horizontal" (default) or "vertical" — controls how the cascade's
      * spawned payload prefabs are laid out relative to the dropdown.       */
     std::string cascade_flow;
+    bool        payload_scroll = false;  /* spec/44_6 §5h */
     /* `enum: TypeName` on a dropdown/radio — options come from the enum's
      * labels and the value accessor returns the true member value. */
     std::string enum_type;
@@ -252,6 +253,11 @@ struct PrefabChildDef {
     bool        visible = true;
     bool        scrollable = false;  /* container: engine-managed row window + visible scrollbar (track+thumb, wheel+drag) */
     bool        tail = false;         /* textbox: stick to bottom as content grows (chat) */
+    /* spec/44_6 §5f: `wrap: false` laesst eine Zeile eine Zeile bleiben, wie
+     * lang sie auch ist — die Box scrollt dann SEITWAERTS.  Das braucht ein
+     * Bau-Protokoll oder ein YAML: Umbruch macht aus 200-Zeichen-Zeilen Brei
+     * und nimmt dem Auge die Struktur, die der Autor hineingeschrieben hat. */
+    bool        wrap = true;
     int32_t     tb_prev_max = -1;     /* textbox: last max scroll offset (for tail-follow detection) */
     int32_t     tb_total = 0;         /* textbox render cache: wrapped line count (read by input) */
     int32_t     tb_visible = 0;       /* textbox render cache: visible line count (read by input) */
@@ -376,6 +382,7 @@ struct PrefabChild {
     bool        sb_dragging    = false; /* Popup-Scrollbar-Drag */
     bool        tb_drag        = false; /* textbox: body drag-to-scroll active (touch/maus) */
     int32_t     tb_drag_off    = 0;     /* textbox: scroll_offset bei Drag-Beginn */
+    bool        sb_dragging_x  = false;  /* textbox: der UNTERE Balken wird gezogen */
 
     /* ── Bar/gauge runtime state + slider state ─────────────────────────── */
     float    bar_value     = 0.0f;
@@ -421,6 +428,20 @@ struct PrefabChild {
     std::string cascade_type;
     std::string payload_spawn;
     std::string cascade_flow;  /* "horizontal" (default) or "vertical" */
+    /* spec/44_6 §5h: waagerechtes Rollen der Payload-Kette.  GEFENSTERT WIRD
+     * UEBER SICHTBARKEIT (pi->visible), genau wie der scrollable-Container seine
+     * Zeilen fenstert — NICHT ueber den GL-Scissor-Clip aus §6c.  Der erste
+     * Versuch hing den Clip an die Zeile und liess den WASM-Client in
+     * render_instance abstuerzen ("index out of bounds", Firefox = ungueltiger
+     * Tabellen-Zugriff); das Sichtbarkeits-Fenstern laeuft im Client dagegen
+     * nachweislich (Spieler-/Duell-Listen).  Der Versatz rastet auf die
+     * Payload-Teilung — bei ganzen Feldern ist Fenstern == Beschneiden. */
+    bool        payload_scroll   = false;
+    bool        payload_sb_drag  = false;
+    float       payload_scroll_x = 0.0f;
+    float       payload_span     = 0.0f;  /* Gesamtbreite der Kette */
+    float       payload_start    = 0.0f;  /* linke Kante der Payload-Zone (lokal) */
+    float       payload_pitch    = 0.0f;  /* Breite eines Payloads + Luecke */
     /* `enum: TypeName` — dropdown/radio bound to an enum; drives options and
      * lets aiml_prefab_dropdown_enum_value return the true member value. */
     std::string enum_type;
@@ -429,11 +450,21 @@ struct PrefabChild {
     bool        compact = false;
     bool        scrollable = false;  /* container: engine-managed row window + visible scrollbar (track+thumb, wheel+drag) */
     bool        tail = false;         /* textbox: stick to bottom as content grows (chat) */
+    bool        wrap = true;          /* spec/44_6 §5f: false = seitwaerts scrollen statt umbrechen */
+    float       tb_off_x = 0.0f;      /* waagerechter Versatz in Pixeln (nur ohne Umbruch) */
+    float       tb_content_w = 0.0f;  /* Breite der laengsten Zeile (Render-Zwischenstand) */
+    float       tb_inner_w = 0.0f;    /* nutzbare Breite — der Eingabe-Pass rechnet damit */
+    AimlUIFont* tb_font = nullptr;    /* dieselbe Schrift wie beim Zeichnen */
     int32_t     tb_prev_max = -1;     /* textbox: last max scroll offset (for tail-follow detection) */
     /* text_input: mehrzeilig?  Entschieden wird das beim ZEICHNEN (Hoehe gegen
      * Zeilenhoehe, spec/44_6 §5g) — der Eingabe-Pass liest dasselbe Ergebnis,
      * statt die Entscheidung ein zweites Mal zu treffen. */
     bool        ti_multiline = false;
+    /* Der Leser hat selbst gerollt — dann NICHT mehr dem Cursor folgen, bis er
+     * sich wirklich bewegt (spec/44_6 §5f).  Ohne das zog jeder Rahmen die
+     * Ansicht zum Cursor zurueck, und Rollen war unmoeglich. */
+    bool        ti_free_scroll = false;
+    int32_t     ti_caret_seen  = -1;
     int32_t     tb_total = 0;         /* textbox render cache: wrapped line count (read by input) */
     int32_t     tb_visible = 0;       /* textbox render cache: visible line count (read by input) */
     /* textbox selection (read-only text, spec/44_6 §5f).  Caret stops are
@@ -1487,9 +1518,11 @@ static std::vector<PrefabChildDef> parse_children_json(const char* json) {
             else if (key == "visible")       cd.visible = (parse_json_number(p) != 0);
             else if (key == "scrollable")    cd.scrollable = (parse_json_number(p) != 0);
             else if (key == "tail")          cd.tail = (parse_json_number(p) != 0);
+            else if (key == "wrap")          cd.wrap = (parse_json_number(p) != 0);
             else if (key == "cascade_type")  cd.cascade_type = parse_json_string(p);
             else if (key == "payload_spawn") cd.payload_spawn = parse_json_string(p);
             else if (key == "cascade_flow")  cd.cascade_flow = parse_json_string(p);
+            else if (key == "payload_scroll") cd.payload_scroll = (parse_json_number(p) != 0);
             else {
                 /* skip unknown value */
                 if (*p == '"') parse_json_string(p);
@@ -2026,12 +2059,59 @@ static void cascade_payload_sync(AimlPrefabInstance* inst) {
                 }
                 return b;
             };
+            /* spec/44_6 §5h: waagerechtes Rollen.  Begrenzt und gerastert wird mit
+             * den Werten des VORIGEN Frames (Spannweite/Teilung stehen erst nach dem
+             * Setzen fest) — ein Frame Verzug, den niemand sieht. */
+            const float pay_start = pos_x;
+            const float row_w     = inst->def ? inst->def->width : 0.0f;
+            float viewport = row_w - pay_start;
+            if (viewport < 0.0f) viewport = 0.0f;
+            if (ch.payload_scroll && !vertical) {
+                float max_off = ch.payload_span - viewport;
+                if (max_off < 0.0f) max_off = 0.0f;
+                if (ch.payload_scroll_x > max_off) ch.payload_scroll_x = max_off;
+                if (ch.payload_scroll_x < 0.0f)    ch.payload_scroll_x = 0.0f;
+                if (ch.payload_pitch > 0.0f) {
+                    float snapped = roundf(ch.payload_scroll_x / ch.payload_pitch) * ch.payload_pitch;
+                    if (snapped > max_off) snapped = max_off;
+                    if (snapped < 0.0f)    snapped = 0.0f;
+                    ch.payload_scroll_x = snapped;
+                }
+                pos_x -= ch.payload_scroll_x;
+            }
+            float pay_pitch = 0.0f;
             for (auto* pi : ch.spawned_payload) {
                 if (!pi || pi->pending_delete) continue;
                 pi->x = pos_x;
                 pi->y = pos_y;
                 if (vertical) pos_y += bottom_edge(pi) + gap;
-                else          pos_x += right_edge(pi)  + gap;
+                else {
+                    float step = right_edge(pi) + gap;
+                    if (step > pay_pitch) pay_pitch = step;
+                    pos_x += step;
+                }
+            }
+            if (ch.payload_scroll && !vertical) {
+                ch.payload_start = pay_start;
+                ch.payload_pitch = pay_pitch;
+                ch.payload_span  = (pos_x + ch.payload_scroll_x) - pay_start;
+                /* Fenstern ueber SICHTBARKEIT (wie der scrollable-Container seine
+                 * Zeilen): ein Payload, das nicht ganz in die Zone passt, wird nicht
+                 * gezeichnet.  Kein Scissor, kein Eingriff in render_instance. */
+                const float left  = pay_start;
+                const float right = pay_start + viewport;
+                for (auto* pi : ch.spawned_payload) {
+                    if (!pi || pi->pending_delete) continue;
+                    float pw = pi->width_override > 0.0f
+                                 ? pi->width_override
+                                 : (pi->def ? pi->def->width : 0.0f);
+                    pi->visible = (pi->x >= left - 0.5f && pi->x + pw <= right + 0.5f);
+                }
+            } else {
+                /* Ohne Rollen (oder senkrecht) gehoert die Sichtbarkeit uns nicht
+                 * mehr — sonst bliebe ein einmal gefenstertes Payload unsichtbar. */
+                for (auto* pi : ch.spawned_payload)
+                    if (pi && !pi->pending_delete) pi->visible = true;
             }
         }
         ch.needs_relayout = false;
@@ -2806,7 +2886,13 @@ static void render_instance(AimlPrefabInstance* inst) {
                          * „wild hin und her hoppsenden" Cursor. */
                         std::vector<std::pair<int32_t,int32_t>> cspans;
                         std::vector<std::string> clines =
-                            wrap_text_lines(lf, display.c_str(), inner_w, &cspans);
+                            wrap_text_lines(lf, display.c_str(), ch.wrap ? inner_w : 0.0f, &cspans);
+                        /* Was der Tasten-Pass braucht, um dieselbe Rechnung zu
+                         * machen (spec/44_6 §5f): Schrift, Breite, Fensterhoehe. */
+                        ch.tb_font    = lf;
+                        ch.tb_inner_w = inner_w;
+                        ch.tb_visible = visible_lines;
+                        ch.tb_total   = (int32_t)clines.size();
                         /* Breite der Nummernspalte.  Sie haengt an der ZEILENZAHL
                          * ("9 " vs "16 ") und aendert sich damit beim Tippen —
                          * wer sie beim Cursor weglaesst, laesst ihn springen. */
@@ -2853,13 +2939,24 @@ static void render_instance(AimlPrefabInstance* inst) {
                                          : text_width_font(lf, pre_lines.back().c_str());
                         }
                         int scroll_line = (int)ch.text_scroll_y;
-                        if (!ch.focused) {
-                            scroll_line = 0;
-                        } else {
+                        /* Dem Cursor folgen, wenn er sich BEWEGT hat (tippen,
+                         * Pfeiltasten) — sonst bleibt stehen, wo der Leser
+                         * hingerollt hat.  Vorher wurde jeder Rahmen zum
+                         * Cursor zurueckgezogen und ein unfokussiertes Feld
+                         * sprang auf Zeile 0: beides machte den Rollbalken
+                         * wirkungslos (gemeldet 22.10.2026). */
+                        if (ch.cursor_pos != ch.ti_caret_seen) {
+                            ch.ti_caret_seen = ch.cursor_pos;
+                            ch.ti_free_scroll = false;
+                        }
+                        if (!ch.ti_free_scroll && ch.focused) {
                             if (caret_line < scroll_line) scroll_line = caret_line;
                             if (caret_line >= scroll_line + visible_lines) scroll_line = caret_line - visible_lines + 1;
-                            if (scroll_line < 0) scroll_line = 0;
                         }
+                        int max_line = (int)clines.size() - visible_lines;
+                        if (max_line < 0) max_line = 0;
+                        if (scroll_line > max_line) scroll_line = max_line;
+                        if (scroll_line < 0) scroll_line = 0;
                         ch.text_scroll_y = (float)scroll_line;
                         /* spec/44_6: Klick-Positionierung im MEHRZEILIGEN Feld.
                          * Hier stand bis 2026-10-15 genau EIN Halt (Byte 0): jeder
@@ -2988,6 +3085,31 @@ static void render_instance(AimlPrefabInstance* inst) {
 
                     if (prev_sc) glScissor(prev_box[0], prev_box[1], prev_box[2], prev_box[3]);
                     else         glDisable(GL_SCISSOR_TEST);
+
+                    /* Rollbalken auch hier (spec/44_6 §5f): ein mehrzeiliges
+                     * Feld ohne Balken verschweigt, dass es weitergeht — und
+                     * man sieht nicht, WO man im Text steht.  Senkrecht immer,
+                     * waagerecht nur ohne Umbruch. */
+                    if (multiline && ch.tb_total > ch.tb_visible && ch.tb_visible > 0) {
+                        float sb_w    = 6.0f * sx;
+                        float sb_x    = cx + cw - sb_w - 2.0f * sx;
+                        float track_y = cy + 2.0f * sy;
+                        float track_h = ch_h - 4.0f * sy;
+                        { DrawBatch tk; tk.tex = s->white_tex; tk.mode = 0;
+                          push_quad(tk, sb_x, track_y, sb_w, track_h, 0,0,1,1,
+                                    rgba32_to_gl(0x101828A0, alpha));
+                          rotate_batch_verts(tk, 0, rot_cx, rot_cy, rot); flush_batch(tk); }
+                        int max_l = ch.tb_total - ch.tb_visible;
+                        float thumb_h = track_h * (float)ch.tb_visible / (float)ch.tb_total;
+                        if (thumb_h < 16.0f * sy) thumb_h = 16.0f * sy;
+                        float frac = max_l > 0 ? ch.text_scroll_y / (float)max_l : 0.0f;
+                        if (frac < 0.0f) frac = 0.0f;
+                        if (frac > 1.0f) frac = 1.0f;
+                        DrawBatch th; th.tex = s->white_tex; th.mode = 0;
+                        push_quad(th, sb_x, track_y + (track_h - thumb_h) * frac, sb_w, thumb_h,
+                                  0,0,1,1, rgba32_to_gl(0x3A5578F0, alpha));
+                        rotate_batch_verts(th, 0, rot_cx, rot_cy, rot); flush_batch(th);
+                    }
                 }
             }
             break;
@@ -3012,10 +3134,32 @@ static void render_instance(AimlPrefabInstance* inst) {
             float pad     = 6.0f * sx;
             float inner_w = cw - 2.0f * pad - 8.0f * sx;     /* leave room for the scrollbar */
             std::vector<std::pair<int32_t,int32_t>> spans;
-            std::vector<std::string> lines = wrap_text_lines(lf, ch.text.c_str(), inner_w, &spans);
+            /* spec/44_6 §5f: ohne Umbruch bleibt eine Zeile eine Zeile — dafuer
+             * genuegt eine Breite von 0, dann bricht `wrap_text_lines` nur an
+             * '\n'/'|'.  Die Box scrollt stattdessen seitwaerts. */
+            std::vector<std::string> lines = wrap_text_lines(lf, ch.text.c_str(),
+                                                             ch.wrap ? inner_w : 0.0f, &spans);
+            ch.tb_inner_w = inner_w;
+            ch.tb_font    = lf;
+            if (!ch.wrap) {
+                float widest = 0.0f;
+                for (const std::string& ln : lines) {
+                    float w = text_width_font(lf, ln.c_str());
+                    if (w > widest) widest = w;
+                }
+                ch.tb_content_w = widest;
+                float max_x = widest - inner_w;
+                if (max_x < 0.0f) max_x = 0.0f;
+                if (ch.tb_off_x > max_x) ch.tb_off_x = max_x;
+                if (ch.tb_off_x < 0.0f)  ch.tb_off_x = 0.0f;
+            } else {
+                ch.tb_content_w = inner_w;
+                ch.tb_off_x = 0.0f;
+            }
             int   total   = (int)lines.size();
             float line_h  = lf->line_height;
-            int   visible = (line_h > 0.0f) ? (int)((ch_h - 2.0f * pad) / line_h) : total;
+            float bar_room = (!ch.wrap) ? (8.0f * sy) : 0.0f;   /* Platz fuer den unteren Balken */
+            int   visible = (line_h > 0.0f) ? (int)((ch_h - 2.0f * pad - bar_room) / line_h) : total;
             if (visible < 1) visible = 1;
             int   max_off = total > visible ? total - visible : 0;
             ch.tb_total = total; ch.tb_visible = visible;    /* cache for the input pass */
@@ -3042,10 +3186,31 @@ static void render_instance(AimlPrefabInstance* inst) {
                     int32_t sb = (li < (int)spans.size()) ? spans[(size_t)li].first  : 0;
                     int32_t se = (li < (int)spans.size()) ? spans[(size_t)li].second : 0;
                     tb_build_caret_stops(lf, ch.text, sb, se, lines[(size_t)li],
-                                         cx + pad, ch.tb_caret_x, ch.tb_caret_byte);
+                                         cx + pad - ch.tb_off_x, ch.tb_caret_x, ch.tb_caret_byte);
                     ty0 += line_h;
                 }
                 ch.tb_row_start.push_back((int32_t)ch.tb_caret_x.size());   /* Endmarke */
+            }
+            /* SCHERE um den Textbereich: ohne Umbruch ragt eine lange Zeile
+             * sonst ueber den Rahmen hinaus und ueberschreibt, was daneben
+             * liegt.  Mit Umbruch aendert sie nichts (dort passt alles). */
+            GLboolean tb_prev_sc = glIsEnabled(GL_SCISSOR_TEST);
+            GLint tb_prev_box[4] = {0,0,0,0};
+            glGetIntegerv(GL_SCISSOR_BOX, tb_prev_box);
+            {
+                /* Der INNENraum, nicht der ganze Rahmen: sonst laeuft die
+                 * Schrift genau auf die Rahmenlinie (gemeldet 22.10.2026).
+                 * Rechts bleibt der senkrechte Balken frei, unten der
+                 * waagerechte, wenn es ihn gibt. */
+                float bar_b = (!ch.wrap && ch.tb_content_w > inner_w) ? (8.0f * sy) : 0.0f;
+                int sxp = (int)ceilf(cx + 1.0f * sx);
+                int syp = (int)ceilf((float)g_scene->screen_h - (cy + ch_h - bar_b));
+                int swp = (int)floorf(cw - 2.0f * sx - 8.0f * sx);
+                int shp = (int)floorf(ch_h - 2.0f * sy - bar_b);
+                if (swp < 0) swp = 0;
+                if (shp < 0) shp = 0;
+                glEnable(GL_SCISSOR_TEST);
+                glScissor(sxp, syp, swp, shp);
             }
             /* Markierung ZUERST (hinter dem Text), eine Fläche je sichtbarer Zeile. */
             if (ch.focused && ch.sel_anchor != ch.cursor_pos) {
@@ -3079,7 +3244,10 @@ static void render_instance(AimlPrefabInstance* inst) {
                 if (ch.color_runs.empty()) {
                     DrawBatch tbx; tbx.tex = lf->atlas_tex; tbx.mode = 2;
                     for (int li = ch.scroll_offset; li < ch.scroll_offset + visible && li < total; ++li) {
-                        push_text_batch(tbx, lf, lines[li].c_str(), cx + pad, ty, inner_w, col, "left");
+                        /* Ohne Umbruch darf die Zeile ueber den Rand hinausgehen —
+                         * die Schere unten schneidet sie ab. */
+                        push_text_batch(tbx, lf, lines[li].c_str(), cx + pad - ch.tb_off_x, ty,
+                                        ch.wrap ? inner_w : 1.0e9f, col, "left");
                         ty += line_h;
                     }
                     rotate_batch_verts(tbx, 0, rot_cx, rot_cy, rot);
@@ -3123,6 +3291,8 @@ static void render_instance(AimlPrefabInstance* inst) {
                     }
                 }
             }
+            if (tb_prev_sc) glScissor(tb_prev_box[0], tb_prev_box[1], tb_prev_box[2], tb_prev_box[3]);
+            else            glDisable(GL_SCISSOR_TEST);
             if (total > visible) {
                 float sb_w    = 6.0f * sx;
                 float sb_x    = cx + cw - sb_w - 2.0f * sx;
@@ -3136,6 +3306,26 @@ static void render_instance(AimlPrefabInstance* inst) {
                 float thumb_y = track_y + (track_h - thumb_h) * (float)ch.scroll_offset / (float)std::max(1, max_off);
                 DrawBatch th; th.tex = s->white_tex; th.mode = 0;
                 push_quad(th, sb_x, thumb_y, sb_w, thumb_h, 0,0,1,1, rgba32_to_gl(0x3A5578F0, alpha));
+                rotate_batch_verts(th, 0, rot_cx, rot_cy, rot); flush_batch(th);
+            }
+            /* Der ZWEITE Balken, unten (spec/44_6 §5f): nur ohne Umbruch, und
+             * nur wenn der Inhalt wirklich breiter ist.  Ein Balken, der nichts
+             * zu rollen hat, ist eine Behauptung. */
+            if (!ch.wrap && ch.tb_content_w > inner_w) {
+                float sb_h    = 6.0f * sy;
+                float sb_y    = cy + ch_h - sb_h - 2.0f * sy;
+                float track_x = cx + 2.0f * sx;
+                float track_w = cw - 4.0f * sx - 8.0f * sx;   /* Platz fuer den senkrechten */
+                { DrawBatch tk; tk.tex = s->white_tex; tk.mode = 0;
+                  push_quad(tk, track_x, sb_y, track_w, sb_h, 0,0,1,1, rgba32_to_gl(0x101828A0, alpha));
+                  rotate_batch_verts(tk, 0, rot_cx, rot_cy, rot); flush_batch(tk); }
+                float frac    = inner_w / ch.tb_content_w;
+                float thumb_w = track_w * frac;
+                if (thumb_w < 16.0f * sx) thumb_w = 16.0f * sx;
+                float max_x   = ch.tb_content_w - inner_w;
+                float thumb_x = track_x + (track_w - thumb_w) * (max_x > 0.0f ? ch.tb_off_x / max_x : 0.0f);
+                DrawBatch th; th.tex = s->white_tex; th.mode = 0;
+                push_quad(th, thumb_x, sb_y, thumb_w, sb_h, 0,0,1,1, rgba32_to_gl(0x3A5578F0, alpha));
                 rotate_batch_verts(th, 0, rot_cx, rot_cy, rot); flush_batch(th);
             }
             break;
@@ -3353,6 +3543,30 @@ static void render_instance(AimlPrefabInstance* inst) {
                         rotate_batch_verts(ab, 0, rot_cx, rot_cy, rot);
                         flush_batch(ab);
                     }
+                }
+            }
+            /* spec/44_6 §5h: waagerechter Balken fuer die gerollte Payload-Kette —
+             * Spur + Daumen am unteren Rand der ZEILE ueber der Payload-Zone.  Nur
+             * wenn wirklich etwas zu rollen ist (ein Balken ohne Ueberhang ist eine
+             * Behauptung — dieselbe Regel wie beim Textbox-Balken). */
+            if (ch.payload_scroll && ch.payload_pitch > 0.0f && inst->def) {
+                float viewport = inst->def->width - ch.payload_start;
+                if (viewport > 0.0f && ch.payload_span > viewport + 0.5f) {
+                    float sb_h    = 6.0f * sy;
+                    float sb_y    = oy + (inst->def->height - 7.0f) * sy;
+                    float track_x = ox + ch.payload_start * sx;
+                    float track_w = viewport * sx;
+                    { DrawBatch tk; tk.tex = s->white_tex; tk.mode = 0;
+                      push_quad(tk, track_x, sb_y, track_w, sb_h, 0,0,1,1, rgba32_to_gl(0x101828A0, alpha));
+                      rotate_batch_verts(tk, 0, rot_cx, rot_cy, rot); flush_batch(tk); }
+                    float thumb_w = track_w * (viewport / ch.payload_span);
+                    if (thumb_w < 16.0f * sx) thumb_w = 16.0f * sx;
+                    float max_off = ch.payload_span - viewport;
+                    float frac    = max_off > 0.0f ? ch.payload_scroll_x / max_off : 0.0f;
+                    float thumb_x = track_x + (track_w - thumb_w) * frac;
+                    DrawBatch th; th.tex = s->white_tex; th.mode = 0;
+                    push_quad(th, thumb_x, sb_y, thumb_w, sb_h, 0,0,1,1, rgba32_to_gl(0x3A5578F0, alpha));
+                    rotate_batch_verts(th, 0, rot_cx, rot_cy, rot); flush_batch(th);
                 }
             }
             break;
@@ -3814,9 +4028,11 @@ void* aiml_prefab_instantiate(const char* prefab_name) {
         child.compact       = cd.compact;
         child.scrollable    = cd.scrollable;
         child.tail          = cd.tail;
+        child.wrap          = cd.wrap;
         child.cascade_type  = cd.cascade_type;
         child.payload_spawn = cd.payload_spawn;
         child.cascade_flow  = cd.cascade_flow;
+        child.payload_scroll = cd.payload_scroll;
         child.enum_type     = cd.enum_type;
         /* `enum: TypeName` on a dropdown/radio — pull the display labels from
          * the enum registry (snake_case already derived to "Title Case" by the
@@ -5638,6 +5854,75 @@ static void prefab_web_kbd_sync() {
 }
 #endif
 
+/* tb_follow_x: den waagerechten Ausschnitt der Schreibmarke nachfuehren
+ * (spec/44_6 §5f).  Ohne Umbruch kann die Marke links oder rechts aus dem
+ * Fenster wandern; dann wandert das Fenster mit.  Mit Umbruch gibt es nichts
+ * zu tun — dort ist jede Zeile so breit wie die Box. */
+static void tb_follow_x(PrefabChild& ch) {
+    if (ch.wrap || !ch.tb_font || ch.tb_inner_w <= 0.0f) return;
+    /* Zeilenanfang suchen und die Breite bis zur Marke messen. */
+    int32_t b = ch.cursor_pos;
+    if (b > (int32_t)ch.text.size()) b = (int32_t)ch.text.size();
+    while (b > 0 && ch.text[(size_t)b - 1] != '\n') --b;
+    std::string prefix = ch.text.substr((size_t)b, (size_t)(ch.cursor_pos - b));
+    float caret = text_width_font(ch.tb_font, prefix.c_str());
+    if (caret - ch.tb_off_x > ch.tb_inner_w) ch.tb_off_x = caret - ch.tb_inner_w;
+    if (caret - ch.tb_off_x < 0.0f)          ch.tb_off_x = caret;
+    if (ch.tb_off_x < 0.0f)                  ch.tb_off_x = 0.0f;
+}
+
+/* tb_move_rows: die Schreibmarke um Zeilen bewegen (spec/44_6 §5f) — fuer
+ * `textbox` UND fuer ein mehrzeiliges `text_input`.  Die Zeilenstruktur kommt
+ * aus DERSELBEN Funktion wie beim Zeichnen; zwei Herleitungen waeren zwei
+ * Gelegenheiten, sie auseinander laufen zu lassen.
+ *
+ * Spalte heisst hier der Byte-Abstand im Zeilenanfang — fuer eine Mono-Schrift
+ * (Protokoll, Quelltext) ist das genau die Spalte, und beide Felder, um die es
+ * geht, sind mono. */
+static void tb_move_rows(PrefabChild& ch, const char* key, bool shift_h, int32_t tlen) {
+    if (!ch.tb_font) return;
+    std::vector<std::pair<int32_t,int32_t>> ksp;
+    std::vector<std::string> klines =
+        wrap_text_lines(ch.tb_font, ch.text.c_str(), ch.wrap ? ch.tb_inner_w : 0.0f, &ksp);
+    if (klines.empty()) return;
+    int rows = (int)ksp.size();
+    int cur_row = 0;
+    for (int r = 0; r < rows; ++r)
+        if (ch.cursor_pos >= ksp[(size_t)r].first) cur_row = r;
+    int32_t col = ch.cursor_pos - ksp[(size_t)cur_row].first;
+    if (col < 0) col = 0;
+    int vis  = ch.tb_visible > 0 ? ch.tb_visible : 1;
+    int step = (strcmp(key, "Up") == 0) ? -1
+             : (strcmp(key, "Down") == 0) ? 1
+             : (strcmp(key, "PageUp") == 0) ? -vis : vis;
+    int want = cur_row + step;
+    if (want < 0) want = 0;
+    if (want > rows - 1) want = rows - 1;
+    int32_t beg = ksp[(size_t)want].first;
+    int32_t end = ksp[(size_t)want].second;
+    int32_t tgt = beg + col;
+    if (tgt > end) tgt = end;
+    if (tgt > tlen) tgt = tlen;
+    ch.cursor_pos = tgt;
+    if (!shift_h) ch.sel_anchor = ch.cursor_pos;
+    /* Der Blick FOLGT der Marke — eine Taste, die sie aus dem Fenster bewegt,
+     * bewegt das Fenster.  Die Textbox fuehrt ihr Fenster in `scroll_offset`,
+     * das Eingabefeld in `text_scroll_y`. */
+    if (ch.type == CHILD_TEXTBOX) {
+        if (want < ch.scroll_offset)        ch.scroll_offset = want;
+        if (want >= ch.scroll_offset + vis) ch.scroll_offset = want - vis + 1;
+        if (ch.scroll_offset < 0)           ch.scroll_offset = 0;
+        if (ch.tail) ch.tb_prev_max = -1;   /* wer blaettert, will bleiben */
+    } else {
+        int sl = (int)ch.text_scroll_y;
+        if (want < sl)        sl = want;
+        if (want >= sl + vis) sl = want - vis + 1;
+        if (sl < 0) sl = 0;
+        ch.text_scroll_y = (float)sl;
+    }
+    tb_follow_x(ch);
+}
+
 /* Apply text/key events from the input event queue to the currently focused
  * text_input child. Mirrors ui_runtime's focus behaviour. */
 static void apply_text_events_to_focus() {
@@ -5677,14 +5962,38 @@ static void apply_text_events_to_focus() {
                 if (!shift_h && lo != hi) ch.cursor_pos = lo;
                 else                      ch.cursor_pos = utf8_prev(ch.text, ch.cursor_pos);
                 if (!shift_h) ch.sel_anchor = ch.cursor_pos;
+                tb_follow_x(ch);
             } else if (strcmp(key, "Right") == 0) {
                 if (!shift_h && lo != hi) ch.cursor_pos = hi;
                 else                      ch.cursor_pos = utf8_next(ch.text, ch.cursor_pos);
                 if (!shift_h) ch.sel_anchor = ch.cursor_pos;
+                tb_follow_x(ch);
+            } else if (strcmp(key, "Up") == 0 || strcmp(key, "Down") == 0 ||
+                       strcmp(key, "PageUp") == 0 || strcmp(key, "PageDown") == 0) {
+                /* spec/44_6 §5f: alle vier Richtungen.  Die Zeilenstruktur
+                 * kommt aus DERSELBEN Funktion wie beim Zeichnen — zwei
+                 * Herleitungen waeren zwei Gelegenheiten, sie auseinander
+                 * laufen zu lassen.  Spalte heisst hier: Byte-Abstand im
+                 * Zeilenanfang; fuer eine Mono-Schrift ist das die Spalte. */
+                tb_move_rows(ch, key, shift_h, tlen);
             } else if (strcmp(key, "Home") == 0) {
-                ch.cursor_pos = 0; if (!shift_h) ch.sel_anchor = 0;
+                /* Zeilenanfang; mit Strg der Anfang des GANZEN Textes. */
+                if (ctrl_h) { ch.cursor_pos = 0; }
+                else {
+                    int32_t b = ch.cursor_pos;
+                    while (b > 0 && ch.text[(size_t)b - 1] != '\n') --b;
+                    ch.cursor_pos = b;
+                    ch.tb_off_x = 0.0f;
+                }
+                if (!shift_h) ch.sel_anchor = ch.cursor_pos;
             } else if (strcmp(key, "End") == 0) {
-                ch.cursor_pos = tlen; if (!shift_h) ch.sel_anchor = tlen;
+                if (ctrl_h) { ch.cursor_pos = tlen; }
+                else {
+                    int32_t e = ch.cursor_pos;
+                    while (e < tlen && ch.text[(size_t)e] != '\n') ++e;
+                    ch.cursor_pos = e;
+                }
+                if (!shift_h) ch.sel_anchor = ch.cursor_pos;
             } else if (strcmp(key, "Escape") == 0) {
                 ch.focused = false;
                 ch.sel_anchor = ch.cursor_pos;
@@ -5767,10 +6076,30 @@ static void apply_text_events_to_focus() {
                 if (!shift && has_sel()) ch.cursor_pos = sel_hi();
                 else                     ch.cursor_pos = utf8_next(ch.text, ch.cursor_pos);
                 if (!shift) ch.sel_anchor = ch.cursor_pos;
+            } else if (ch.ti_multiline &&
+                       (strcmp(key, "Up") == 0 || strcmp(key, "Down") == 0 ||
+                        strcmp(key, "PageUp") == 0 || strcmp(key, "PageDown") == 0)) {
+                /* spec/44_6 §5f: auch im mehrzeiligen Feld alle vier
+                 * Richtungen.  Vorher gab es Hoch/Runter gar nicht — die Marke
+                 * konnte Zeile eins per Tastatur nicht verlassen. */
+                tb_move_rows(ch, key, shift, len);
             } else if (strcmp(key, "Home") == 0) {
-                ch.cursor_pos = 0; if (!shift) ch.sel_anchor = 0;
+                /* Zeilenanfang; mit Strg der Anfang des GANZEN Textes. */
+                if (ctrl || !ch.ti_multiline) { ch.cursor_pos = 0; }
+                else {
+                    int32_t b = ch.cursor_pos;
+                    while (b > 0 && ch.text[(size_t)b - 1] != '\n') --b;
+                    ch.cursor_pos = b;
+                }
+                if (!shift) ch.sel_anchor = ch.cursor_pos;
             } else if (strcmp(key, "End") == 0) {
-                ch.cursor_pos = len; if (!shift) ch.sel_anchor = len;
+                if (ctrl || !ch.ti_multiline) { ch.cursor_pos = len; }
+                else {
+                    int32_t e = ch.cursor_pos;
+                    while (e < len && ch.text[(size_t)e] != '\n') ++e;
+                    ch.cursor_pos = e;
+                }
+                if (!shift) ch.sel_anchor = ch.cursor_pos;
             } else if (strcmp(key, "Backspace") == 0) {
                 if (has_sel()) del_sel();
                 else if (ch.cursor_pos > 0) {
@@ -6051,6 +6380,45 @@ void aiml_prefab_update_hover(float mx, float my) {
                     ch.pressed_now = false;
                 }
             } else if (ch.type == CHILD_DROPDOWN) {
+                /* spec/44_6 §5h: Payload-Balken bedienen.  Er liegt am unteren Rand
+                 * der ZEILE ueber der Payload-Zone, also ausserhalb der Dropdown-Box
+                 * — ein Zug daran toggelt das Popup nicht.  Das Rad rollt feldweise
+                 * (eine Teilung je Raste): gefenstert wird in ganzen Payloads, ein
+                 * Teilversatz liesse ein Feld verschwinden statt es halb zu zeigen. */
+                if (ch.payload_scroll && ch.payload_pitch > 0.0f && inst->def
+                    && ch.width > 0.0f && ch.height > 0.0f) {
+                    float scx2 = bw / ch.width;
+                    float scy2 = bh / ch.height;
+                    float viewport = inst->def->width - ch.payload_start;
+                    float max_off  = ch.payload_span - viewport;
+                    if (viewport > 0.0f && max_off > 0.5f) {
+                        float zone_x = bx + (ch.payload_start - ch.x) * scx2;
+                        float zone_w = viewport * scx2;
+                        float row_y0 = by - ch.y * scy2;
+                        float bar_y  = row_y0 + (inst->def->height - 7.0f) * scy2;
+                        bool on_zone = (mx >= zone_x && mx < zone_x + zone_w
+                                     && my >= row_y0 && my < row_y0 + inst->def->height * scy2);
+                        bool on_bar  = (mx >= zone_x && mx < zone_x + zone_w
+                                     && my >= bar_y - 2.0f * scy2
+                                     && my <= bar_y + 8.0f * scy2);
+                        if (mb_pressed && on_bar) ch.payload_sb_drag = true;
+                        if (ch.payload_sb_drag && aiml_input_mouse_button(0) && zone_w > 0.0f) {
+                            float f = (mx - zone_x) / zone_w;
+                            if (f < 0.0f) f = 0.0f;
+                            if (f > 1.0f) f = 1.0f;
+                            ch.payload_scroll_x = f * max_off;
+                            ch.needs_relayout = true;
+                        }
+                        if (on_zone && !ch.payload_sb_drag) {
+                            float wy = aiml_input_mouse_scroll_y();
+                            if (wy != 0.0f) {
+                                ch.payload_scroll_x -= wy * ch.payload_pitch;
+                                ch.needs_relayout = true;
+                            }
+                        }
+                    }
+                }
+                if (mb_released) ch.payload_sb_drag = false;
                 /* Dropdown: click on box toggles popup (dropdown_open).  Popup-
                  * Handling (Row-Click, Scroll, Click-Outside) läuft in einer
                  * separaten Loop nach dieser (siehe unten). */
@@ -6144,7 +6512,60 @@ void aiml_prefab_update_hover(float mx, float my) {
                     }
                     return best;
                 };
-                if (mb_pressed && over) {
+                /* Mehrzeilig: Rad und Rollbalken wie bei der Textbox
+                 * (spec/44_6 §5f).  Ohne das hier war der Balken ein BILD:
+                 * gezeichnet, aber nichts bewegte ihn, und das Feld sprang in
+                 * jedem Rahmen zum Cursor zurueck (gemeldet 22.10.2026). */
+                bool on_bar = false;
+                if (ch.ti_multiline) {
+                    float scx = (ch.width  > 0.0f) ? bw / ch.width  : 1.0f;
+                    float scy = (ch.height > 0.0f) ? bh / ch.height : 1.0f;
+                    int   max_l = ch.tb_total > ch.tb_visible ? ch.tb_total - ch.tb_visible : 0;
+                    if (max_l > 0) {
+                        float sb_w    = 6.0f * scx;
+                        float sb_x    = bx + bw - sb_w - 2.0f * scx;
+                        float track_y = by + 2.0f * scy;
+                        float track_h = bh - 4.0f * scy;
+                        float thumb_h = track_h * (float)ch.tb_visible / (float)ch.tb_total;
+                        if (thumb_h < 16.0f * scy) thumb_h = 16.0f * scy;
+                        float denom   = track_h - thumb_h;
+                        float frac    = ch.text_scroll_y / (float)max_l;
+                        if (frac < 0.0f) frac = 0.0f;
+                        if (frac > 1.0f) frac = 1.0f;
+                        float thumb_y = track_y + denom * frac;
+                        if (mx >= sb_x - 2.0f * scx && mx <= sb_x + sb_w + 2.0f * scx
+                            && my >= track_y && my <= track_y + track_h) on_bar = true;
+                        bool over_thumb = (on_bar && my >= thumb_y && my <= thumb_y + thumb_h);
+                        if (mb_pressed && (over_thumb || on_bar)) ch.sb_dragging = true;
+                        if (ch.sb_dragging && aiml_input_mouse_button(0) && denom > 0.0f) {
+                            float f2 = (my - track_y - thumb_h * 0.5f) / denom;
+                            if (f2 < 0.0f) f2 = 0.0f;
+                            if (f2 > 1.0f) f2 = 1.0f;
+                            ch.text_scroll_y = f2 * (float)max_l;
+                            ch.ti_free_scroll = true;
+                        }
+                        if (over && !ch.sb_dragging) {
+                            float wy = aiml_input_mouse_scroll_y();
+                            if (wy != 0.0f) {
+                                /* Shift+Rad rollt waagerecht — dieselbe Geste
+                                 * wie in der Textbox. */
+                                if (aiml_input_key_down("lshift") || aiml_input_key_down("rshift")) {
+                                    ch.tb_off_x -= wy * 48.0f * scx;
+                                    if (ch.tb_off_x < 0.0f) ch.tb_off_x = 0.0f;
+                                } else {
+                                    ch.text_scroll_y -= wy * 3.0f;
+                                    if (ch.text_scroll_y < 0.0f) ch.text_scroll_y = 0.0f;
+                                    if (ch.text_scroll_y > (float)max_l) ch.text_scroll_y = (float)max_l;
+                                }
+                                ch.ti_free_scroll = true;
+                            }
+                        }
+                    }
+                }
+                if (mb_released) ch.sb_dragging = false;
+                /* Ein Klick AUF den Balken setzt keinen Cursor und markiert
+                 * nichts — sonst zieht jedes Rollen Text mit (F44_6-…). */
+                if (mb_pressed && over && !on_bar && !ch.sb_dragging) {
                     new_focus_inst = inst;
                     new_focus_idx  = (int32_t)i;
                     int32_t ci = idx_from_xy(mx, my);
@@ -6220,10 +6641,18 @@ void aiml_prefab_update_hover(float mx, float my) {
                     return best;
                 };
                 bool on_scrollbar = false;
-                {   /* Klicks auf den Scrollbalken bleiben Scrollen, nicht Auswahl. */
-                    float scx2 = (ch.width > 0.0f) ? bw / ch.width : 1.0f;
+                {   /* Klicks auf einen Scrollbalken bleiben Scrollen, nicht Auswahl —
+                     * auf BEIDEN.  Der untere fehlte: ein Zug am waagerechten
+                     * Griff markierte Text, statt zu rollen (gemeldet
+                     * 22.10.2026). */
+                    float scx2 = (ch.width  > 0.0f) ? bw / ch.width  : 1.0f;
+                    float scy2 = (ch.height > 0.0f) ? bh / ch.height : 1.0f;
                     float sb_w = 6.0f * scx2 + 4.0f * scx2;
                     if (mx >= bx + bw - sb_w) on_scrollbar = true;
+                    if (!ch.wrap && ch.tb_content_w > ch.tb_inner_w) {
+                        float sb_h = 6.0f * scy2 + 4.0f * scy2;
+                        if (my >= by + bh - sb_h) on_scrollbar = true;
+                    }
                 }
                 if (mb_pressed && over && !on_scrollbar) {
                     new_focus_inst = inst;
@@ -6232,7 +6661,8 @@ void aiml_prefab_update_hover(float mx, float my) {
                     ch.cursor_pos = ci;
                     ch.sel_anchor = ci;
                     ch.tb_sel_dragging = true;
-                } else if (ch.tb_sel_dragging && ch.focused && aiml_input_mouse_button(0)) {
+                } else if (ch.tb_sel_dragging && ch.focused && aiml_input_mouse_button(0) &&
+                           !ch.sb_dragging && !ch.sb_dragging_x) {
                     ch.cursor_pos = tb_idx_from_xy(mx, my);
                     /* Ziehen über den Rand hinaus scrollt mit. */
                     int max_off_sel = ch.tb_total > ch.tb_visible ? ch.tb_total - ch.tb_visible : 0;
@@ -6292,7 +6722,49 @@ void aiml_prefab_update_hover(float mx, float my) {
                         ch.tb_drag = false;
                     }
                 }
-                if (mb_released) ch.sb_dragging = false;
+                /* Waagerecht (spec/44_6 §5f): Shift+Rad schiebt den Ausschnitt,
+                 * und der UNTERE Balken laesst sich ziehen.  Ohne das waere er
+                 * ein Zeichen ohne Griff — man sieht, dass es weitergeht, und
+                 * kommt nicht hin. */
+                if (!ch.wrap && ch.tb_content_w > ch.tb_inner_w && ch.tb_inner_w > 0.0f) {
+                    float scx = (ch.width  > 0.0f) ? bw / ch.width  : 1.0f;
+                    float scy = (ch.height > 0.0f) ? bh / ch.height : 1.0f;
+                    float max_x = ch.tb_content_w - ch.tb_inner_w;
+                    bool shift_held = aiml_input_key_down("lshift") || aiml_input_key_down("rshift");
+                    if (over && shift_held) {
+                        float wy = aiml_input_mouse_scroll_y();
+                        if (wy != 0.0f) {
+                            ch.tb_off_x -= wy * 48.0f * scx;
+                            if (ch.tb_off_x < 0.0f)  ch.tb_off_x = 0.0f;
+                            if (ch.tb_off_x > max_x) ch.tb_off_x = max_x;
+                        }
+                    }
+                    float sb_h    = 6.0f * scy;
+                    float sb_y    = by + bh - sb_h - 2.0f * scy;
+                    float track_x = bx + 2.0f * scx;
+                    float track_w = bw - 4.0f * scx - 8.0f * scx;
+                    float thumb_w = track_w * (ch.tb_inner_w / ch.tb_content_w);
+                    if (thumb_w < 16.0f * scx) thumb_w = 16.0f * scx;
+                    float denom_x = track_w - thumb_w;
+                    float thumb_x = track_x + (denom_x > 0.0f && max_x > 0.0f
+                                               ? denom_x * (ch.tb_off_x / max_x) : 0.0f);
+                    bool over_tx = (my >= sb_y && my <= sb_y + sb_h &&
+                                    mx >= thumb_x && mx <= thumb_x + thumb_w);
+                    /* Auch ein Klick NEBEN den Griff greift: er springt dorthin
+                     * und zieht weiter — sonst muss man den schmalen Griff
+                     * treffen, und genau das ist der Grund, warum ein Balken
+                     * „sich nicht bewegen laesst". */
+                    bool over_track = (my >= sb_y - 2.0f * scy && my <= sb_y + sb_h + 2.0f * scy &&
+                                       mx >= track_x && mx <= track_x + track_w);
+                    if (mb_pressed && (over_tx || over_track)) ch.sb_dragging_x = true;
+                    if (ch.sb_dragging_x && aiml_input_mouse_button(0) && denom_x > 0.0f) {
+                        float frac = (mx - track_x - thumb_w * 0.5f) / denom_x;
+                        if (frac < 0.0f) frac = 0.0f;
+                        if (frac > 1.0f) frac = 1.0f;
+                        ch.tb_off_x = frac * max_x;
+                    }
+                }
+                if (mb_released) { ch.sb_dragging = false; ch.sb_dragging_x = false; }
             }
         }
     }
@@ -6850,6 +7322,31 @@ PREFAB_RECT_GETTER(aiml_prefab_child_rect_y, by)
 PREFAB_RECT_GETTER(aiml_prefab_child_rect_w, bw)
 PREFAB_RECT_GETTER(aiml_prefab_child_rect_h, bh)
 #undef PREFAB_RECT_GETTER
+
+/* child_design_x/y/w/h — dasselbe Rechteck wie child_rect_*, aber in DESIGN-
+ * Koordinaten (1280x720), also geteilt durch die Fenster-Skalierung.
+ *
+ * Warum beides: child_rect_* liefert SCREEN-Pixel (fuer Treffertests und
+ * Cursor-Positionen), set_pos/x/y eines Prefabs erwarten aber DESIGN-Pixel.
+ * Wer eine Instanz neben ein Kind stellen will (Tooltip, Sprechblase), mischte
+ * bisher zwangslaeufig zwei Raeume: bei einem Fenster != 1280x720 landete die
+ * Instanz daneben, und zwar um den Skalierungsfaktor verschoben.  Genau so ist
+ * die Tour-Sprechblase in 9rooms aufgefallen (2026-10-25).
+ * -1 heisst wie bei child_rect_* "Kind existiert nicht". */
+#define PREFAB_DESIGN_GETTER(fn, field)                                        \
+    extern "C" float fn(void* inst_p, const char* child_name) {                \
+        float bx, by, bw, bh;                                                  \
+        if (!child_bbox_or_fail(inst_p, child_name, bx, by, bw, bh)) return -1.f; \
+        float rsx, rsy; get_rel_scale(rsx, rsy);                               \
+        if (rsx <= 0.0f) rsx = 1.0f;                                           \
+        if (rsy <= 0.0f) rsy = 1.0f;                                           \
+        return field;                                                          \
+    }
+PREFAB_DESIGN_GETTER(aiml_prefab_child_design_x, bx / rsx)
+PREFAB_DESIGN_GETTER(aiml_prefab_child_design_y, by / rsy)
+PREFAB_DESIGN_GETTER(aiml_prefab_child_design_w, bw / rsx)
+PREFAB_DESIGN_GETTER(aiml_prefab_child_design_h, bh / rsy)
+#undef PREFAB_DESIGN_GETTER
 
 extern "C" void aiml_prefab_trace_hits(int32_t on) { g_trace_hits = (on != 0); }
 /* spec/44_6: die aufgeloesten Treffer des letzten Drucks, "|"-getrennt.

@@ -4178,10 +4178,20 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                 // reference" assumption is wrong for it: the container keeps the only ownership.
                 // Without an incref the field dangles as soon as the source container is released
                 // (aidoc: `set: [entry.name, { call: [methods.get, last] }]` printed a chart id
-                // out of the reused block).  An owned temp is never incref'd — it is in the
-                // statement-temp list, which the borrow read is not.
+                // out of the reused block).  An owned temp is never incref'd — it would leak the
+                // transferred reference.
+                //
+                // Ask `rhsWasOwnedStringTemp` (captured right after the RHS was evaluated), NOT the
+                // statement-temp list: `consumeStringTemp` emptied that list ~900 lines above, so a
+                // query here always said "not a temp" and the incref fired on top of an already
+                // owned value.  `{ at: [names, i] }` on a `list<string>` is BOTH a borrow read (so
+                // borrowReadInfo matches) AND an owned temp (visitAtExpr increfs the element and
+                // registers it) → it got a second reference that nobody released: 1 string leaked
+                // per `set: [model.field, { at: [list, i] }]` (9rooms Starter-Seeding, probes in
+                // 9rooms_v2/leak_probes/starter_seed_20261025).  `map.get`/`kv.get` register no
+                // temp, so they keep their incref and 322e0a0 stays intact.
                 bool borrowReadSrc = isContainerBorrowRead(setStmt->value.get())
-                    && !inStringTempStack(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val)));
+                    && !rhsWasOwnedStringTemp;
                 if (finalTypeName == "string"
                     && ((dynamic_cast<VariableExpr*>(setStmt->value.get())
                          && (memberDeepCopy || srcIsManagedString || ctx.isRefcountModel(sym->typeName)))

@@ -12,6 +12,7 @@
 #include "exec_impl.h"
 #include "src/core/yaml_dump.h"
 #include "compiler.h"                  // AIMLCompiler (for aiml_isolated_exec)
+#include "src/sys/ctx_runtime.h"      // spec/29_2 §14a: Kontext-Griffe
 #include "src/core/clearance.h"         // spec/65 F65-36: Freigabe je Sitzung
 #include "src/core/context.h"
 #include "src/core/fptable.h"          // AIML_MAX_VERSIONS
@@ -293,42 +294,11 @@ extern "C" int aiml_isolated_exec(void* raw) {
     if (!raw) return -2;
     ExecCode* code = static_cast<ExecCode*>(raw);
 
-    // ── Build YAML sequence from code_chunks ──────────────────────────────────
-    std::string yaml_source;
-    ExecList* cc = code->code_chunks;
-    if (!cc || cc->size == 0) {
+    // ── Quelltext aus den code_chunks (eine Stelle: exec_chunks_to_yaml)
+    std::string yaml_source = exec_chunks_to_yaml(code);
+    if (yaml_source.empty()) {
         LOG_WARNING("aiml_isolated_exec: no code_chunks — nothing to compile");
         return 0;
-    }
-
-    try {
-        YAML::Node seq(YAML::NodeType::Sequence);
-
-        for (int i = 0; i < cc->size; i++) {
-            if (!cc->data[i]) continue;
-            YAML::Node chunk = YAML::Load(std::string(cc->data[i]));
-            if (chunk.IsDefined() && !chunk.IsNull())
-                seq.push_back(chunk);
-        }
-
-        // Append start_call as a top-level call node (becomes a stmt in __aiml_init)
-        if (code->start_call && code->start_call[0] != '\0') {
-            try {
-                YAML::Node sc = YAML::Load(std::string(code->start_call));
-                if (sc.IsDefined() && !sc.IsNull())
-                    seq.push_back(sc);
-            } catch (...) {
-                LOG_WARNING("aiml_isolated_exec: could not parse start_call — appending raw");
-                // Fallback: wrap as inline YAML
-                std::string raw_sc = std::string(code->start_call);
-                seq.push_back(YAML::Load("call: " + raw_sc));
-            }
-        }
-
-        yaml_source = aiml::dumpPreservingQuotes(seq);
-    } catch (const std::exception& e) {
-        LOG_ERROR("aiml_isolated_exec: failed to build YAML source: " + std::string(e.what()));
-        return -1;
     }
 
     LOG_INFO("aiml_isolated_exec: compiled source (" +
@@ -364,6 +334,60 @@ extern "C" int aiml_isolated_exec(void* raw) {
     g_func_count       = 0;
 
     LOG_INFO("aiml_isolated_exec: finished with rc=" + std::to_string(rc));
+    return rc;
+}
+
+// ── aiml_ctx_exec_code (spec/29_2 §14a) ─────────────────────────────────────
+//
+// Dasselbe Bundle, derselbe Weg zum Quelltext wie bei `aiml_isolated_exec` —
+// nur laeuft es in einem Kontext, der WEITERLEBT.  Deshalb steht es hier und
+// nicht in ctx_runtime.cpp: der Weg vom Code-Objekt zum YAML ist schon da,
+// und zwei Fassungen davon waeren zwei, die auseinanderlaufen.
+static int32_t aiml_ctx_exec_or_load(void* handle, void* raw, int run_entry);
+
+// spec/29_2 §14b (F29_2-…n): dasselbe, aber der Einstiegspunkt wird NICHT
+// gerufen — ein Kontroller prueft und liest fremden Quelltext, er laesst ihn
+// nicht laufen (cosmos F96-28).
+extern "C" int32_t aiml_ctx_load_code(void* handle, void* raw) {
+    return aiml_ctx_exec_or_load(handle, raw, /*run_entry=*/0);
+}
+
+extern "C" int32_t aiml_ctx_exec_code(void* handle, void* raw) {
+    return aiml_ctx_exec_or_load(handle, raw, /*run_entry=*/1);
+}
+
+static int32_t aiml_ctx_exec_or_load(void* handle, void* raw, int run_entry) {
+    if (!handle || !raw) return -2;
+    ExecCode* code = static_cast<ExecCode*>(raw);
+    std::string yaml_source = exec_chunks_to_yaml(code);
+    if (yaml_source.empty()) {
+        LOG_WARNING("aiml_ctx_exec_code: leeres Bundle — nichts zu uebersetzen");
+        return 0;
+    }
+
+    auto* saved_ctx     = g_active_context;
+    auto* saved_ee      = g_active_ee;
+    auto* saved_fptable = g_fptable_current;
+
+    // Der Griff ist ein Tabelleneintrag; die Instanz holt die Tabelle.
+    auto* comp = static_cast<AIMLCompiler*>(aiml_ctx_compiler(handle));
+    if (!comp) {
+        LOG_ERROR("aiml_ctx_exec_code: unbekannter Kontext-Griff");
+        return -2;
+    }
+    int rc = run_entry ? comp->execInContext(yaml_source)
+                       : comp->loadInContext(yaml_source);
+    // Was dieses Bundle definiert hat, merkt sich der Kontext (F29_2-…f):
+    // der CompilerContext selbst wird beim naechsten Bundle verworfen.
+    aiml_ctx_record_symbols(handle);
+
+    g_active_context   = saved_ctx;
+    g_active_ee        = saved_ee;
+    g_fptable_current  = saved_fptable;
+    g_fptable          = nullptr;
+    g_fptable_versions = nullptr;
+    g_func_names       = nullptr;
+    g_func_count       = 0;
     return rc;
 }
 

@@ -696,6 +696,9 @@ struct PrefabChildInfo {
     bool  scrollable  = false;
     // textbox: keep the view pinned to the newest line (spec/44_6 §5f).
     bool  tail        = false;
+    /* spec/44_6 §5f: `wrap: false` = eine Zeile bleibt eine Zeile, die Box
+     * scrollt seitwaerts (Bau-Protokoll, Quelltext). */
+    bool  wrap        = true;
     std::string label;        // button label / static label text
     bool     is_secret     = false; // text_input password mode
 
@@ -750,6 +753,15 @@ struct PrefabChildInfo {
     // prefab per field of the newly-selected cascade node.  Each spawned
     // instance can bind to the corresponding row slot via bound_index.
     std::string payload_spawn;
+
+    // `cascade_flow: horizontal|vertical` (spec/44_6 §5h) — wohin die Payload-
+    // Widgets gehen: in eine Zeile rechts des Dropdowns (Default) oder darunter.
+    std::string cascade_flow;
+
+    // `payload_scroll: <bool>` (spec/44_6 §5h) — die Payload-Zeile auf die
+    // Prefab-Breite BESCHNEIDEN und mit waagerechtem Scrollbalken versehen,
+    // statt eine tiefe Kaskade aus dem Prefab herauslaufen zu lassen.
+    bool payload_scroll = false;
 
     // `enum: <EnumName>` — for type=dropdown/radio widgets: populate options
     // from the registered enum's labels and let `dropdown_enum` return the true

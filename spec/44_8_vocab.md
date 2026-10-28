@@ -61,8 +61,14 @@ identically (missing entries fall back).
 
 ```yaml
 # Startup — load JSON bytes via the asset registry, feed vocab runtime.
-- decl: [langs_bytes, string, { call: [sys.asset_text, "vocab/languages.json"] }]
-- decl: [vocab_bytes, string, { call: [sys.asset_text, "vocab/vocab.json"] }]
+#
+# ⚠️ Korrigiert 2026-10-25: hier stand `sys.asset_text("vocab/languages.json")`.
+# Das gibt es NICHT (kein `asset_text` im Runtime) — der Aufruf heisst
+# `io.read_asset(<stem>)` und nimmt den ASSET-STEM, also ohne Pfad und ohne
+# Endung.  Belegt durch 9rooms_v2/client/main_menu_app.aiml:63-65 (der einzige
+# echte Aufrufer) und tests in 9rooms_v2/test/unit/test_tour_steps.aiml.
+- decl: [langs_bytes, string, { call: [io.read_asset, "languages"] }]
+- decl: [vocab_bytes, string, { call: [io.read_asset, "vocab"] }]
 - decl: [rc, i32, { call: [vocab.load, langs_bytes, vocab_bytes] }]
 - if: { condition: { neq: [rc, 0] }, then: [{ call: [log.warn, "vocab load failed: ${rc}"] }] }
 

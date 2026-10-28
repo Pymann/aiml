@@ -1799,6 +1799,14 @@ Mangel — es ist der schnelle Weg, und er soll bleiben.  Aber es ist auch nicht
   ist schlimmer als ein Lauf, der gar nicht startet.  Die Meldung nennt **drei** Dinge — das
   verlangte Abbild, dass hier keine Laufzeit da ist, und den Weg dorthin (ein Lauf über einen
   Wirt, der Container kann).
+- **F62-124a (Nachtrag 25.10.2026): abgelehnt wird beim LAUF, nicht beim Übersetzen.**  Die
+  Begründung von F62-124 ist ein **Lauf**, der behauptet, woanders gelaufen zu sein — nicht eine
+  Datei, die ein Abbild nennt.  Bis hierher lehnte die Umschreibung schon das Übersetzen ab; damit
+  konnte eine Pipeline, die für einen Cluster gedacht ist, `--check` **nie** bestehen, und ein
+  Kontroller musste sie selbst lesen (§20.1 — genau die Doppelung, die weg soll).  Also: `image:`,
+  `push:`, `agent:`, `steplayer:`, `base:` übersetzen und stehen als Daten in `pipeline`/`stage`
+  (§20.4); **`pipe.run` lokal** gibt **-4** und lehnt mit derselben Meldung ab, die F62-124 verlangt — drei Dinge,
+  samt Weg.  Die Zusage bleibt wörtlich erhalten, sie fällt nur an der Stelle, an der sie gilt.
 - **F62-125** Ohne `image:` läuft eine Pipeline **gegen den Rechner**, und das ist die Vorgabe.
   Der lokale Lauf braucht dafür kein Container-Konzept (§12) und soll keines bekommen.
 - **F62-132** Geprüft wird auf **beiden Ebenen** — am Kopf der Pipeline und an jeder Stufe.
@@ -1806,6 +1814,151 @@ Mangel — es ist der schnelle Weg, und er soll bleiben.  Aber es ist auch nicht
   ein stilles Weglassen am teuersten: der Autor liest „ubuntu-base", der Lauf nimmt den Wirt,
   und niemand sieht den Unterschied am Ergebnis.  Negativproben:
   `tests/pipeline_declared_neg/image_rejected.aiml` (Kopf) und `push_rejected.aiml`.
+
+### 18.1a `resources:` — was die Stufe an Maschine braucht
+
+```yaml
+- pipeline:
+    name: aiml_bauen
+    image: ubuntu-base
+    resources: { cpu: 4, mem: "8G", pids: 2048 }    # gilt fuer alle Stufen
+    steps:
+      - stage:
+          name: bauen
+          resources: { cpu: 8, mem: "12G" }          # ueberschreibt sie
+```
+
+- **F62-133** `resources:` nennt **Grenzen**, keine Wünsche: `cpu` in ganzen Kernen, `mem` mit
+  Einheit (`512M`, `8G`), `pids` als Zahl.  Der Wirt setzt sie als cgroup-Grenzen des
+  Containers (cosmos `doc/spec/110` §110.34).  Ohne Angabe gilt, was der Wirt vorgibt — eine
+  Pipeline, die nichts sagt, bekommt die Vorgabe und nicht „unbegrenzt".
+- **F62-134** `resources:` ist **kein Schlüsselmaterial** (F62-64, Fall 3), und das ist eine
+  Aussage über *Ergebnisse*, nicht über Bequemlichkeit: mehr Kerne machen denselben Bau
+  schneller, nicht anders.  Eine zu knappe **Speichergrenze** kann einen Schritt allerdings
+  töten — aber dann **scheitert** er, und ein Fehlschlag wird nicht aufgezeichnet (F62-92).  Eine
+  Grenze kann also einen Erfolg in einen Fehlschlag verwandeln, nie in einen *anderen Erfolg*;
+  darum bleibt der Schlüssel sauber, und ein Cache-Treffer bleibt richtig.
+- **F62-135** Die Grenze gehört in die **Pipeline**, nicht in den Wirt, sobald eine Stufe etwas
+  Besonderes braucht.  `COSMOS_RT_LIMIT_MB` galt für jeden Container gleich — das heißt entweder
+  jede Stufe bekommt, was die teuerste braucht (und ein Knoten trägt nur eine), oder die teuerste
+  stirbt.  Beides ist falsch, und keines davon steht in der Pipeline, wo es jemand nachlesen
+  könnte.
+
+### 18.1b `shares:` — ein Netzlaufwerk im Container
+
+Kerne und Speicher sind das eine; manche Stufe braucht aber **Platz, der den Lauf überlebt**:
+ein Netzlaufwerk mit Quellen, ein Ablage-Verzeichnis für Artefakte, ein Paket-Cache, der nicht
+bei jedem Lauf neu aus dem Netz gezogen wird.
+
+```yaml
+- pipeline:
+    name: aiml_bauen
+    image: ubuntu-base
+    shares:
+      - { name: quellen, to: /mnt/quellen }              # lesen (Vorgabe)
+      - { name: artefakte, to: /mnt/out, mode: rw }      # schreiben
+    steps:
+      - stage:
+          name: bauen
+          shares:
+            - { name: ccache, to: /root/.ccache, mode: rw }   # zusaetzlich, nur hier
+          run: "ls /mnt/quellen && make -j8"
+```
+
+- **F62-136** `shares:` nennt einen **NAMEN**, nie einen Pfad.  Wo die Ablage liegt — eine
+  NFS-Einhängung, eine SMB-Freigabe, ein Verzeichnis auf der Platte — weiß der **Wirt**, genau
+  wie bei `image:` (F62-66/67; cosmos `doc/spec/110` §110.35).  Der Grund ist nicht Geschmack:
+  eine Pipeline ist Nutzereingabe.  Dürfte sie `/srv/...` oder `/` hinschreiben, könnte jede
+  eingereichte Pipeline jedes Verzeichnis des Wirts in ihren Container holen — und bei `mode: rw`
+  auch beschreiben.  Ein Name, den der Betreiber vorher zugeordnet hat, kann das nicht.
+- **F62-137** Die Vorgabe ist **`ro`**.  Schreiben muss dastehen.  Eine Freigabe, die ein Lauf
+  versehentlich beschreibt, beschädigt die Läufe aller anderen; das ist der teuerste Fehler in
+  dieser Ecke und darum der, der Absicht verlangt.
+- **F62-138** `shares:` der Pipeline und der Stufe **addieren** sich; gleicher `to:` an beiden
+  Stellen heißt, die Stufe gewinnt.  Dieselbe Regel wie bei `resources:` — eine Stufe darf etwas
+  Besonderes brauchen, ohne dass die Pipeline für alle umgeschrieben wird.
+- **F62-139** `shares:` **ist** Schlüsselmaterial (F62-64, Fall 1), aber nur mit `name` und `to`
+  — nicht mit dem Inhalt.  Was ein Schritt an `/mnt/quellen` sieht, kann sich zwischen zwei
+  Läufen ändern, ohne dass irgendjemand es merkt; der Schlüssel kann das nicht abbilden, und
+  eine Aufzeichnung, die so tut, wäre eine Lüge über die Reproduzierbarkeit.  Die ehrliche Folge
+  steht schon in §7: die Vorgabe ist `cache: opaque`.  Wer eine Stufe mit `shares:` trotzdem als
+  `pure` erklärt, behauptet, dass der Inhalt der Freigabe zum Schlüssel gehört — und muss dafür
+  selbst sorgen (etwa, indem die Freigabe unveränderlich ist).
+
+### 18.4 `base:` — auf den Schichten eines anderen Laufs aufsetzen
+
+`image:` sagt, **worin** ein Lauf arbeitet.  `base:` sagt, **worauf** er aufsetzt:
+
+```yaml
+- pipeline:
+    name: 9rooms_bauen
+    base: "job:aiml_bauen"               # der juengste ERFOLGREICHE Lauf dieses Jobs
+    # base: "run:aiml-vom-Base-Image-5"  # oder: genau dieser Lauf
+    steps:
+      - stage: { name: bauen, run: "exodus build -c exodus-game.json" }
+```
+
+- **F62-140** `base:` nimmt den **Schichtstapel** eines früheren Laufs als Unterbau.  Gelesen
+  wird aus ihm, **geschrieben immer in die eigene Schicht** — der andere Lauf bleibt unberührt,
+  und zwei Läufe können denselben Unterbau gleichzeitig benutzen.  Die Form ist heute
+  `run:<lauf>`; ein Name, den der Betreiber zuordnet, kann folgen, ändert aber nichts an der
+  Bedeutung.
+- **F62-141** `base:` gilt für den **ganzen Lauf**, nicht für eine Stufe.  Ein Stapel ist der
+  Boden, auf dem alle stehen; eine Stufe, die auf einem anderen Boden stünde als ihre Vorgängerin,
+  wäre kein Lauf mehr, sondern zwei.
+- **F62-142** `base:` ist **kein Ersatz für `image:`**, sondern die andere Richtung.  Ein Abbild
+  ist der Weg nach **draußen**: es trägt alles in sich, lässt sich wegkopieren und anderswo
+  auslegen.  Ein Stapel ist der Weg **nebenan**: er kostet nichts, setzt aber voraus, dass beide
+  Läufe auf demselben Wirt und demselben Grundabbild stehen (cosmos `doc/spec/110` F110-114).
+  Wer das eine für das andere hält, baut ein Abbild, das nur zu Hause funktioniert.
+- **F62-144** `base:` kennt zwei Formen.  `run:<lauf>` nennt **genau diesen** Lauf;
+  `job:<kennung>` nimmt den **jüngsten erfolgreichen** Lauf dieses Jobs.  „Letzter Lauf"
+  ohne „erfolgreich" gibt es bewusst **nicht**: ein fehlgeschlagener Lauf hat eine halbe
+  Schicht hinterlassen, und darauf zu bauen hieße, auf einem Zustand zu bauen, den nie jemand
+  gesehen hat.  Wer genau das will (eine kaputte Stufe untersuchen), nennt den Lauf beim Namen
+  — dann steht die Absicht in der Pipeline und ist nicht die stille Vorgabe.
+- **F62-145** `job:…` wird **bei der Anlage des Laufs** aufgelöst, nicht bei jeder Zuteilung.
+  Danach steht `run:<lauf>` im Datensatz, und das Protokoll nennt beides
+  (`'job:aiml-vom-Base-Image' → run:aiml-vom-Base-Image-5`).  Ein Unterbau, der sich mitten im
+  Lauf ändert, wäre ein Lauf auf zwei verschiedenen Böden; und ein Lauf, dessen Grundlage man
+  hinterher nicht mehr benennen kann, ist nicht nachvollziehbar.
+- **F62-143** Was weitergegeben werden soll, gehört in die **Wurzel**, nicht in den
+  Arbeitsplatz.  `/ws` ist der Arbeitsplatz des Laufs und wandert nicht mit; ein editierbarer
+  Einbau dorthin (`pip install -e`) hinterlässt im Stapel einen Verweis ins Leere
+  (`doc/spec/110` F110-115).  Fest einbauen, dann liegt es in der Schicht.
+
+### 18.5 `agent:` und `steplayer:` — wer nimmt den Schritt, und entsteht dabei eine Schicht?
+
+Zwei Fragen, die vorher in einem Wort steckten (`runs_on:`) oder gar nicht gestellt wurden:
+
+```yaml
+- pipeline:
+    name: pruefen
+    steps:
+      - stage: { name: schnell, agent: x86_64, steplayer: none, run: "make -j8 test" }
+      - stage: { name: sauber, steplayer: own, image: ubuntu-base, run: "./von_vorn.sh" }
+```
+
+- **F62-146** `agent:` sagt, **WER** den Schritt nimmt — ein **Etikett** (jeder Agent mit dieser
+  Marke) oder eine **Agenten-Kennung** (genau dieser).  Der Name ist bewusst nicht `node:`: ein
+  Container-Agent ist kein Knoten, er wohnt auf einem.  Was ausführt, ist in beiden Fällen ein
+  Agent.  (Hieß bis 25.10.2026 `runs_on:`, davor `label:`; beide alten Namen werden abgewiesen
+  und nennen den neuen.)
+- **F62-147** `steplayer:` sagt, **OB** jede Stufe in ihre **eigene Schicht** schreibt: `own`
+  (eigene Wurzel aus einem Abbild, Schicht je Stufe, eigener Arbeitsbereich — cosmos
+  `doc/spec/110` F110-93) oder `none` (kein Schichtenbau; der Schritt arbeitet auf dem
+  Dateisystem des Agenten, eingesperrt mit bwrap).  Ohne Angabe entscheidet `image:`: steht eines
+  da, ist `own` gemeint, sonst `none`.  Die Angabe ist nie nötig und immer erlaubt — und
+  `steplayer: none` **zusammen mit** `image:` ist ein Widerspruch, den die Einreichung abweist,
+  statt eines von beiden gewinnen zu lassen.
+- **F62-148** `steplayer:` ist **Schlüsselmaterial** (F62-64, Fall 1).  Derselbe Befehl
+  auf dem Dateisystem eines Agenten und in einer frischen Wurzel sieht Verschiedenes — ein
+  gemeinsamer Cache-Eintrag wäre ein falscher Treffer.  Sie gehört damit in den Schritt-Schlüssel
+  wie `image:` selbst.
+- **F62-149** Der Zuteiler **wählt nicht**.  Er weicht nicht auf einen Knoten aus, weil kein
+  Container frei ist, und startet keinen Container, weil die Knoten beschäftigt sind.  Wer
+  Ausweichen will, schreibt zwei Stufen und sagt, welche wann gilt — dann steht die Absicht in
+  der Pipeline und nicht in der Laune des Servers (cosmos `doc/spec/110` F110-124).
 
 ### 18.2 `requires:` — was die Umgebung mitbringen muss
 
@@ -1888,7 +2041,7 @@ aussieht.
 | Rumpf ueber die Leitung (§5.8, Teil) | `sys.bundle`/`sys.exec` | `tests/bundle_socket/run.sh` |
 | `requires:` lokal geprüft (§18.2) | `pipeline_expand` + `sys.require_tools` | `tests/test_pipeline_requires.aiml` |
 | `sys.require_tools` (spec/23 §5.6) | `process_runtime.cpp` | `tests/test_sys_require_tools.aiml` |
-| `image:`/`push:` lokal abgelehnt, mit Weg (§18.1 F62-124/132) | `pipeline_expand` (Kopf + Stufe) | `tests/pipeline_declared_neg/{image,push}_rejected.aiml` |
+| `image:`/`push:` lokal abgelehnt, mit Weg (§18.1 F62-124/132) | **beim LAUF** (F62-124a), nicht beim Übersetzen | `tests/test_pipeline_local_refuses.aiml` |
 | `image:` als Zuteilungskriterium (§18, F62-66/67) | cosmos `step_scheduler`, `rt_launcher` | cosmos `test/test_step_dispatch.aiml` |
 | `push: oci:<pfad>` + hergeleitete Reihenfolge (F62-122/129) | cosmos `push_worker`, `cluster_bootstrap` | cosmos `test/test_step_dispatch.aiml` + `doc/spec/110` §110.30 (Messung) |
 
@@ -1918,3 +2071,162 @@ aussieht.
 - **Die Bedeutung der sechs Farben (§16 Punkt 6).**  Bewusst offen; die Praezedenzordnung steht
   als vorlaeufige Tabelle an einer Stelle (F62-93).
 
+## 20. Die übersetzte Pipeline LESEN — ein Kontroller ist ein Leser, kein Parser
+
+**Vorgabe des Nutzers (25.10.2026):** *„Die Idee war, dass der Pipeline-Code durch den Compiler
+geschoben wird.  Cosmos selber löst also keine aiml-Knoten auf."*
+
+### 20.1 Warum
+
+Heute lesen **zwei** Programme dieselbe Sprache: der Übersetzer (`pipeline_expand.cpp`, §5) und
+der Kontroller (cosmos `sources/server/pipeline_submit.aiml`, 180 `yaml.*`-Aufrufe).  Beide
+kennen `params`, `exclude`, `stages`, `steps`, beide bilden Lanes, beide prüfen Formen — und sie
+kennen **verschiedene Teile**: der Übersetzer die Reinheit und den Schlüssel, der Kontroller
+`agent:`, `steplayer:`, `image:`, `base:`, `shares:`, die Grenzen.  Zwei Leser derselben Sprache
+laufen auseinander, und zwar leise: ein Schlüssel, den der eine kennt und der andere nicht, ist
+entweder eine stille Wirkungslosigkeit oder eine Ablehnung ohne Grund.
+
+Die Richtung ist deshalb nicht „der Kontroller lernt die restlichen Schlüssel", sondern **der
+Kontroller liest überhaupt nicht mehr**: er gibt den Quelltext in einen Kontext (spec/29_2 §14a/§14b),
+lässt ihn übersetzen und **liest die entstandene Pipeline als Wert**.
+
+```yaml
+# Der ganze Weg, ohne eine Zeile YAML im Kontroller:
+- decl: [kontext, ctx_handle, { call: [ctx.new] }]
+- decl: [rcx, i32, { call: [kontext.exec, { call: [sys.code_from, eingereicht] }] }]
+- if: { condition: { lt: [rcx, 0] }, then: [ ... kontext.errors an den Einreicher ... ] }
+- decl: [namen, list<string>, { call: [kontext.names, "fn() -> pipeline"] }]
+- decl: [pipe, pipeline, { call: [kontext.call, { at: [namen, 0] }, "fn() -> pipeline"] }]
+- decl: [lanes, i32, { call: [pipe.lane_count] }]
+- decl: [stufen, i32, { call: [pipe.stage_count] }]
+```
+
+### 20.2 Wer prüft was
+
+| | prüft | Beispiel |
+|---|---|---|
+| **Übersetzer** | die **Form**: Schlüssel, Typen, Achsen, Verweise, Reinheit, Widersprüche | `steplayer: own` ohne `image:`; `needs: [gibtesnicht]`; unbekannter Schlüssel; `exclude` auf eine Achse, die es nicht gibt |
+| **Kontroller** | die **Lage**: was es hier gibt und wer darf | kennt dieser Cluster das Abbild `aiml-build`?  ist das Etikett `x86_64` an einem Agenten?  darf dieser Nutzer so viele Lanes? |
+
+- **F62-150 Formfehler gehören dem Übersetzer, Lagefehler dem Kontroller.**  Die Trennlinie ist,
+  ob die Antwort im Quelltext steht: „`steplayer: own` ohne `image:`" ist im Quelltext
+  entscheidbar und daher ein **Übersetzungsfehler** — überall gleich, auch beim lokalen Lauf, und
+  nur **einmal** geschrieben.  „Dieses Abbild gibt es hier nicht" ist von der Maschine abhängig
+  und daher Sache des Kontrollers; ein Übersetzer, der sie behauptet, lügt auf jedem zweiten
+  Cluster.  Die alten Namen (`runs_on:`, `label:`, `runs_in:`) sind damit ebenfalls Formfehler:
+  **der Übersetzer** nennt den neuen Namen, nicht jeder Wirt für sich.
+
+### 20.3 Was der Übersetzer vor dem Lesen schon getan hat
+
+- **Lanes gebildet**, `exclude` abgezogen (§4) — der Leser bekommt die Zahl und je Lane ihren
+  **Bindungstext** in der kanonischen Form `achse=wert,achse=wert` (sortiert, §8).  Genau die
+  Form, die auch der Beobachter (§13.1) und der Arbeitsbereichspfad (§4.3) tragen.
+- **Vorrang aufgelöst** (§18, F62-133/F62-138): `image:`, `timeout:`, `requires:`, `agent:`,
+  `steplayer:` und die Grenzen stehen an der Stufe mit dem Wert, der **gilt** — Stufe schlägt
+  Pipeline; `shares:` addieren sich.
+- **Vorgaben hergeleitet** (F110-125): `steplayer` ist `own`, wenn ein `image:` gilt, sonst `none`.
+
+- **F62-151 Vorrang wird EINMAL aufgelöst, im Übersetzer.**  Sonst rechnet jeder Wirt die
+  Regeln nach, und zwei Wirte sind irgendwann uneins darüber, was `timeout:` an der Pipeline für
+  eine Stufe mit eigenem `timeout:` bedeutet.  Ein Leser, der nachrechnen muss, ist ein zweiter
+  Parser mit anderem Namen.
+- **F62-152 Der Bindungstext ist EIN Format.**  Lane-Text, Beobachter-`bindings`,
+  Arbeitsbereichsname und der Datensatz des Kontrollers (cosmos F96-34) tragen dieselbe
+  Zeichenkette.  Zwei Formate für denselben Begriff heissen: irgendwo wird Anzeigetext geparst.
+
+### 20.4 Die Leser
+
+Alles **nur lesend**; ein gelesener Wert ändert die Pipeline nicht.
+
+| Pipeline | gibt | Bedeutung |
+|---|---|---|
+| `pipe.name` | string | Name aus der Deklaration |
+| `pipe.lane_count` | i32 | Lanes nach `exclude` (§4.3) |
+| `pipe.lane_bindings(i)` | string | `arch=x86_64,mode=debug` (F62-152) |
+| `pipe.stage_count` | i32 | Stufen je Lane |
+| `pipe.stage_at(i)` | stage | die i-te Stufe |
+| `pipe.axis_count` / `pipe.axis_name(i)` | i32 / string | die Achsen in Deklarationsreihenfolge |
+| `pipe.axis_value_count(i)` / `pipe.axis_value(i, j)` | i32 / string | ihre Domäne (§4.1) — Anzahl und Wert, **keine Liste**: ein `list<string>` aus der Laufzeit zurückzugeben kostet eine Füll-Schnittstelle je Leser, und zwei Zahlenleser sagen dasselbe |
+| `pipe.push_count` / `pipe.push_from(i)` / `pipe.push_to(i)` / `pipe.push_tag(i)` | i32 / string | `push:` (§18, F62-69/71) |
+
+| Stufe | gibt | Bedeutung |
+|---|---|---|
+| `stg.name` | string | |
+| `stg.agent` | string | **WER** — Etikett oder Agenten-Kennung (F110-127) |
+| `stg.steplayer` | string | **OB** — `own` \| `none` (§18.5, F110-124) |
+| `stg.image` | string | **WORIN** — Abbild oder `oci:<pfad>` (F62-66) |
+| `stg.base` | string | **WORAUF** — `run:<lauf>` \| `job:<kennung>` |
+| `stg.requires` | string | `git,gcc>=13,lib:yaml-cpp` (§18.2, F62-126) |
+| `stg.shares` | string | `name:/ziel:modus,…` (§18.1b, F62-136) |
+| `stg.cpu_cores` / `stg.mem_mb` / `stg.pids_max` | i32 | Grenzen, 0 = Vorgabe des Wirts (§18.1a) |
+| `stg.timeout_ms` | i32 | 0 = Vorgabe des Ausführenden (F62-40) |
+| `stg.command` | string | `run:` — der Befehl der Scheibe 1 (cosmos F103-1) |
+| `stg.step_count` / `stg.step_at(i)` | i32 / step | die Schritte der Stufe (§5) |
+
+| Schritt | gibt | Bedeutung |
+|---|---|---|
+| `stp.name` | string | |
+| `stp.needs_count` / `stp.need_at(i)` | i32 / string | `needs:` (§5.1) |
+| `stp.cache` | string | Wiederverwendungsklasse (§7) |
+| `stp.per` | string | `lane` \| `once` (§5.5) |
+| `stp.command` | string | `run:` am Schritt, sonst leer |
+
+- **F62-153 Ein Leser gibt Werte, keine Zeiger in den Übersetzer.**  `stage` und `step` sind die
+  Werte aus §13.5 — dieselben, die man zusammensetzen kann.  Es gibt keinen Weg vom gelesenen
+  Wert zum AST, zum LLVM-Typ oder zur Symboltabelle (spec/29_2 F29_2-…m): sonst hängt der
+  Kontroller am Innenbau des Übersetzers.
+- **F62-154 Fehlt etwas, ist es leer bzw. 0 — nicht „unbekannt".**  Ein Leser wirft nicht, weil
+  ein Schlüssel nicht geschrieben wurde; `0` heisst bei den Grenzen ausdrücklich „die Vorgabe des
+  Wirts" und nicht „unbegrenzt" (§18.1a).  Ein Index ausserhalb des Bereichs ist dagegen ein
+  Programmfehler des Lesers und **wirft** (spec/22).
+- **F62-155 Die Stufen sind lane-UNabhängig, die Bindungen lane-abhängig.**  Darum `stage_at(i)`
+  ohne Lane und `lane_bindings(i)` ohne Stufe: das Kreuzprodukt baut der Leser, weil nur er weiss,
+  ob er eine Zeile je (Lane, Stufe) braucht (cosmos) oder je Stufe (eine Übersicht).  Eine
+  Leserfunktion, die beides mischt, müsste `(lane, stufe)` nehmen und für jede Abfrage dieselbe
+  Stufe neu beschreiben.
+
+### 20.4a Was beim Umbau noch aufgefallen ist (25.10.2026)
+
+Drei Stellen, an denen Spec und Umsetzung auseinander waren — gefunden, weil der Kontroller
+seitdem **denselben** Leser benutzt wie der Übersetzer.  Jede ist hier festgehalten, damit sie
+nicht ein zweites Mal auseinanderlaufen:
+
+- **F62-156 `steps:` auf beiden Ebenen, wie F62-57 es sagt.**  Die Umschreibung las `stages:`,
+  die Spec schrieb `steps:` — und cosmos' 15 Pipelines waren die ganze Zeit spec-konform, der
+  Übersetzer der Ausreißer.  Jetzt gilt `steps:`; `stages:` wird abgewiesen und nennt den
+  richtigen Schlüssel.  Dasselbe für `params:`: die Umschreibung nahm die Abbildung
+  `arch: [...]`, §4.1 verlangt die **typisierte Liste** `[name, typ, [werte]]`, und cosmos'
+  Tests benutzten die Liste.  Der Typ wirkt jetzt: im Rumpf ist eine `i32`-Achse ein `i32`
+  (F62-1), gewandelt an **einer** Stelle im erzeugten Vorspann.
+- **F62-157 Der Name ist Text, die Funktion braucht einen Bezeichner.**  `name: 9rooms_vom_stapel`
+  fängt mit einer Ziffer an und war damit gar nicht übersetzbar — obwohl der Name völlig in
+  Ordnung ist.  Ist der Name ein Bezeichner, heißt die Funktion genau so (F62-108 bleibt, man
+  ruft sie lokal); sonst entsteht ein abgeleiteter Funktionsname, und der **Wert** trägt weiter
+  den echten Namen (`pipe.name`).  Ein Wirt findet die Funktion über `cx.names`
+  (spec/29_2 F29_2-…i) und braucht den Namen nicht zu raten.
+- **F62-158 Ein Übersetzer MELDET, er fällt nicht um.**  `cache: haeufig` ließ den erzeugten
+  Aufruf `set_cache(CacheClass.haeufig)` entstehen; die Enum-Auflösung gab `nullptr`, und die
+  Builtin-Methode rechnete damit weiter — Absturz im Übersetzer, bei genau der Eingabe, die er
+  gerade bemängelte.  Zwei Lehren, beide umgesetzt: `cache:` wird in der Umschreibung geprüft
+  (§7), und ein Argument, das sich nicht übersetzen ließ, hält die Builtin-Methode an.  Bei
+  einer **eingereichten** Pipeline ist das kein Schönheitsfehler: ein Absturz des Kontrollers
+  ist eine Einreichung, die den Dienst beendet.
+
+### 20.5 Was damit NICHT gemeint ist
+
+- **Kein Lauf.**  Lesen führt nichts aus; `pipe.run` bleibt der lokale Lauf (§12).  Ein
+  Kontroller liest und teilt **selbst** zu — die verteilte Ausführung ist seine Aufgabe, nicht die
+  der Sprache (§14, F62-49).
+- **Keine Freigabe.**  Der Kontext ist keine Sicherheitsgrenze (spec/29_2 F29_2-…e).  Wer fremden
+  Quelltext übersetzt, übersetzt ihn **im eigenen Prozess**; die Grenze für fremden Code bleibt
+  ein eigener Prozess (spec/65 F65-15).  Für cosmos heisst das: die Einreichung wird geprüft, der
+  **Rumpf** läuft beim Agenten, nicht im Controller.
+- **Kein Schutz vor feindlichem Quelltext.**  Werte, die als Literal in erzeugten Quelltext
+  gehen, werden **maskiert** (`"` → `\"`, Zeilenumbruch → `\n`) — ohne das endete das Literal
+  mitten im Wert und der Rest wäre aiml, also eingeschleuster Code.  Maskiert und nicht
+  abgewiesen, weil ein `run:` legitim Anführungszeichen trägt.  Das macht die Umschreibung
+  **robust**, nicht sicher: für feindliche Einreichungen bleibt die Grenze ein eigener Prozess
+  (spec/65 F65-15), und ein Kontroller lässt eingereichten Quelltext nicht laufen
+  (`cx.load`, spec/29_2 F29_2-…n).
+- **Kein zweites Format.**  Es gibt keinen „Controller-Dialekt" der Pipeline-Sprache.  Was der
+  Übersetzer nicht kennt, ist ein Fehler — auch wenn ein Wirt damit umgehen könnte.

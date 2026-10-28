@@ -596,10 +596,132 @@ gedacht wäre, ist nach §9 zurückgestellt.
 Folge: ein Agent, der 500 Schritte gegen dieselbe Bibliothek fährt, übersetzt sie **500-mal mit**.
 Funktional richtig, aber bei einer großen Bibliothek der dominierende Posten.
 
-### Offen: wiederverwendbarer Kontext als aiml-Wert
+### 14a `ctx` — der Kontext als eigener Namensraum (Entscheid 25.10.2026)
 
-Der Ausweg wäre, die Compiler-Instanz nicht mehr lokal zu halten, sondern als **eindeutige
-Ressource** sichtbar zu machen — derselbe Typ Wert wie `process` oder `thread_handle` (spec/61
+Vorgabe des Nutzers: *„Wir legen lieber einen neuen Namensraum an, den wir `ctx` nennen.  Und aus
+diesem Raum können wir quasi eine Compiler-Instanz beziehen, darin Code ausführen und auch auf
+die Symbole dieser Ausführung zugreifen."*
+
+```yaml
+- decl: [cx, ctx_handle, { call: [ctx.new] }]          # eine Compiler-Instanz
+- decl: [n_lib, i32, { call: [cx.exec, lib_bundle] }]  # Bibliothek EINMAL
+- decl: [r_a,   i32, { call: [cx.exec, pipe_a] }]      # sieht die Bibliothek
+- decl: [r_b,   i32, { call: [cx.exec, pipe_b] }]      # auch
+- decl: [zahl,  i32, { call: [cx.symbol, "zaehler", "i32"] }]       # Wert, MIT Typ
+- decl: [adr,   i64, { call: [cx.symbol, "lib_greet", "fn(string) -> i32"] }]  # Funktion: MIT Signatur
+```
+
+- **F29_2-…a: `ctx` ist ein NAMENSRAUM, kein zweites `sys`.**  `sys.exec` bleibt, was es ist: ein
+  Bundle einmal ausführen.  `ctx.*` ist der Fall, in dem der Kontext **länger lebt als der
+  Aufruf** — und das ist ein anderer Umstand, kein Zusatzargument.  Wer beides in `sys` legt,
+  bekommt eine Funktion mit einem Schalter, der die Lebensdauer ändert; das ist die Art Schalter,
+  die man später nicht mehr los wird.
+- **F29_2-…b: Der Kontext ist eine EINDEUTIGE RESSOURCE.**  Derselbe Typ Wert wie `process` oder
+  `thread_handle` (spec/61 §2.1): move-only, und beim Drop des Besitzers wird die Engine
+  freigegeben.  Nicht kopierbar — zwei Besitzer einer JIT-Engine wären zwei, die sie freigeben.
+- **F29_2-…c: Der Grund ist die Grundlast, nicht die Eleganz.**  Gemessen (§15): **~96 ms** je
+  isoliertem Lauf — LLVMContext, Modul, Einstiegspunkt, Engine —, unabhängig davon, wie wenig er
+  tut.  Für einen Agenten mit 500 Schritten sind das ~50 Sekunden, bevor ein einziger Befehl
+  läuft.  `ctx` macht daraus **einmal** Aufbau und 500-mal Ausführen.  Das ist der ganze Zweck;
+  wäre die Grundlast 1 ms, bräuchte es `ctx` nicht.
+- **F29_2-…d: Beim Abgreifen wird der Typ GENANNT — und zur Laufzeit geprüft.**
+  (Vorgabe des Nutzers, 25.10.2026.)  `cx.symbol(name, typ)` nimmt den erwarteten Typ als
+  zweites Argument: `"i32"`, `"string"`, ein Modellname, oder — bei einer Funktion — ihre
+  **volle Signatur** (F29_2-…d3).  Geprüft wird **immer zur Laufzeit**: der Kontext hat das Symbol selbst
+  übersetzt und kennt seinen Typ; stimmt er nicht mit dem genannten überein, **wird geworfen**
+  (spec/22).  Nur dann — ein passendes Symbol kommt wortlos zurück.
+  Damit fällt die frühere Einschränkung „Werte nicht": ein Wert hinter einer Adresse hat ohne
+  Typ keine Bedeutung, aber mit genanntem **und geprüftem** Typ hat er eine.  Der Leser sagt,
+  was er erwartet, und erfährt es, wenn er sich irrt — statt Bytes falsch zu deuten.
+- **F29_2-…d4: Wo der Übersetzer es SCHON WEISS, sagt er es sofort.**  (Nachtrag des Nutzers:
+  *„der Compiler müsste ja den Datentyp kennen und kann vergleichen, ob das, was programmiert
+  wurde, und das, was gerade kompiliert wurde, übereinstimmt."*)  Richtig — aber nur in einem
+  der beiden Fälle, und der Unterschied ist, WANN übersetzt wird:
+
+  | Wer liest das Symbol | Was der Übersetzer in dem Moment weiß | Prüfung |
+  |---|---|---|
+  | Ein **Bundle im selben Kontext**, übersetzt **nachdem** das definierende Bundle lief | beides: den genannten Typ und den des Symbols in seiner Tabelle | **zur Übersetzungszeit** — Fehler sofort, kein Lauf |
+  | Das **Wirtsprogramm** (AOT gebaut, z. B. cosmosd) | nur den genannten Typ; der Kontext existiert zu diesem Zeitpunkt noch nicht | **erst zur Laufzeit** |
+
+  Also: der Kontext prüft beim Übersetzen eines Bundles, was er prüfen kann, und wirft sonst
+  beim Zugriff.  Die Laufzeitprüfung bleibt **Pflicht** — sie ist die einzige, die es in beiden
+  Fällen gibt; die frühe ist der Gewinn und nicht der Ersatz.  Eine Zusage, die nur manchmal
+  greift, darf nicht die sein, auf die man sich verlässt.
+- **F29_2-…d2: Zwei Fehler, zwei Ausnahmen.**  `SymbolMissingException` — der Kontext kennt
+  diesen Namen nicht (nichts hat ihn definiert, oder ein Tippfehler).  `SymbolTypeException` —
+  der Name ist da, der Typ passt nicht; die Meldung nennt **beide** Typen (erwartet / gefunden),
+  denn ein „Typfehler" ohne die zwei Namen zwingt zum Suchen.  Beide erben von `Exception` und
+  sind mit `catch` fangbar wie jede andere.
+- **F29_2-…d3: Bei einer Funktion wird die VOLLE SIGNATUR genannt.**  (Vorgabe des Nutzers,
+  25.10.2026: *„Auch wenn man Funktionssymbole abruft, muss man bitte die vollständige Signatur
+  angeben."*)  Nicht `"fn"`, sondern `"fn(i32,string) -> i32"`: die Argumenttypen in ihrer
+  Reihenfolge, dann der Rückgabetyp — `void`, wenn es keinen gibt, `fn() -> i32` ohne Argumente.
+  Der Kontext hat die Funktion selbst übersetzt und kennt beides (`FunctionInfo::argTypeNames`
+  und `returnTypeName`), also wird beides verglichen; Leerzeichen zählen dabei nicht, so dass
+  `"fn(i32, string) -> i32"` und `"fn(i32,string)->i32"` dasselbe sagen.
+
+  Der Grund ist, dass hier das Gegenteil der sonstigen Lage gilt: ein Wert mit falsch genanntem
+  Typ wird falsch gedeutet, aber eine **Adresse** mit falscher Signatur zu rufen gibt überhaupt
+  keinen Fehler — sie gibt einen kaputten Stapel, und zwar irgendwo später.  Ein Typname, der
+  genau an der gefährlichsten Stelle nichts prüft, ist schlimmer als keiner, weil er beruhigt.
+  Ein blankes `"fn"` ist deshalb ein Typfehler wie jeder andere (`SymbolTypeException`), und
+  die Meldung sagt ausdrücklich, dass die Signatur fehlt.
+
+  Was die Signatur **nicht** nennt: die Lebensdauer-Qualifizierer der Argumente
+  (`consumed`/`persistent`, spec/61 §3.1).  Sie stehen in derselben Tabelle und wären
+  prüfbar, gehören aber zum Aufruf-**Vertrag** und nicht zum Typ; da fast jedes Argument das
+  stillschweigende `scope` trägt, würde jede Nennung einer Signatur um Rauschen wachsen, das
+  in fast allen Fällen nichts unterscheidet.  Wird ein `consumed`-Argument über eine
+  `ctx`-Adresse gerufen, bleibt der Besitz-Übergang also Sache des Aufrufers.
+- **F29_2-…e: `ctx` ist KEINE Sicherheitsgrenze.**  Der Kontext teilt Prozess, Adressraum und die
+  dynamische Symboltabelle mit seinem Wirt; `DynamicLibrary::AddSymbol` hat keine Sicht je
+  Kontext.  Für fremden Code bleibt die Grenze ein **eigener Prozess** (spec/65 F65-15,
+  `doc/analysis/symbol_clearance_2026-10-16.md`).  `ctx` trennt **Namen**, nicht **Rechte** — wer
+  das verwechselt, hält eine Bequemlichkeit für einen Schutz.
+- **F29_2-…f: Was der Kontext sieht, ist die Reihenfolge seiner Aufrufe.**  Bundle 2 sieht, was
+  Bundle 1 definiert hat; mehr nicht.  Keine Rückwärts-Sicht, kein impliziter Neuaufbau.  Damit
+  ist `ctx.exec` nachvollziehbar wie eine Liste von Anweisungen — und nicht wie ein Zustand, der
+  irgendwann irgendwie entstanden ist.
+
+- **F29_2-…g: Der Kontext führt seine EIGENE Typtabelle — weil der Übersetzer seine wegwirft.**
+  `compileFromString` zerstört und baut den `CompilerContext` bei **jedem** Aufruf neu; die lebende
+  Tabelle kennt also nur, was das **letzte** Bundle übersetzt oder deklariert hat.  Gemessen
+  (25.10.2026): nach drei Bundles war `lib_summe` „kennt dieser Kontext nicht", obwohl sein Bundle
+  mit 0 gelaufen war — sichtbar blieb nur, was das dritte Bundle zufällig mitdeklarierte.  Das
+  widerspricht F29_2-…f, und zwar nicht sichtbar, sondern **zufällig**: dieselbe Abfrage trägt
+  oder trägt nicht, je nachdem, was danach lief.  Deshalb schreibt `aiml_ctx_record_symbols` nach
+  **jedem** `ctx.exec` Namen → Typ in eine Tabelle AM KONTEXT fort (später definiert gewinnt,
+  §4 Neuladen), und `cx.symbol` liest zuerst dort.  Die Adresse holt weiterhin die Engine
+  (`symbolAddress`, neueste zuerst) — ein Name in der Tabelle ohne Adresse heißt „deklariert, nie
+  definiert" und wird als **fehlendes** Symbol gemeldet, nicht als Typfehler.
+- **F29_2-…h: Ein vom Übersetzer gelegter Wurf notiert seine Meldung wie ein `throw` in aiml.**
+  Die oberste Ebene (`jitRun`) berichtet die Begründung einer ungefangenen Ausnahme aus
+  `aiml_note_thrown_message`; `emitThrowMsg` rief das nicht, also stand dort „(no message)" —
+  für **jede** eingebaute Ausnahme, nicht nur die von `ctx`.  Behoben; `tests/test_ctx_unhandled.aiml`
+  hält es fest (Lauf endet mit 2 **und** nennt erwartet/gefunden).
+
+**Stand der Umsetzung** (25.10.2026 — umgesetzt und durch `tests/test_ctx.aiml` belegt):
+
+| Stück | Lage |
+|---|---|
+| `AIMLCompiler` mehrfach benutzbar | **da** — `execInContext` (`compiler.cpp`): Modul neu binden, frühere Quellen als Deklarationen voranstellen, Engine behalten (`ctx_engines_`), Funktionsadressen per `AddSymbol` veröffentlichen |
+| Kontext-Registry + Wert-Typ | **da** — `src/sys/ctx_runtime.cpp` hält die Instanzen, `ctx_handle` ist der Griff |
+| `ctx.*` im Builtin-Register | **da** — `ctx.new`, `cx.exec`, `cx.symbol`, `cx.close` (`src/core/builtin_registry.cpp`) |
+| `cx.symbol` | **da** — Typtabelle je Kontext (F29_2-…g), Prüfung samt `SymbolMissingException`/`SymbolTypeException`, Funktionen mit **voller Signatur** (F29_2-…d3) |
+| `ctx_handle` als eindeutige Ressource | **offen** — move-only und Freigabe beim Drop des Besitzers (F29_2-…b) fehlen noch; heute gibt nur `cx.close` die Engine frei |
+| Frühe Prüfung beim Übersetzen (F29_2-…d4) | **offen** — heute prüft nur die Laufzeit.  Das ist die Pflichtprüfung und deckt beide Fälle; die frühe bleibt der Gewinn, nicht der Ersatz, und wird hier als fehlend geführt statt als zugesagt |
+| Aufruf einer `fn`-Adresse aus aiml | **offen** — `cx.symbol` liefert die Adresse, aiml hat noch keinen Weg, sie zu rufen; mit F29_2-…d3 ist die Signatur dafür jetzt geprüft vorhanden |
+
+**Wie cosmos es benutzen würde:** ein Kontext **je Agent**, beim Start die Bibliothek hinein,
+danach jeder Schritt als Bundle dagegen.  Das ist genau der Satz, der heute schon als Kommentar
+in `exec_impl.cpp` steht — „ein Agent lädt beim Start seine Bibliothek und fährt danach Schritte"
+— nur dass es dafür bisher keinen Wert gibt, an dem der Kontext hängt.
+
+### Offen: wiederverwendbarer Kontext als aiml-Wert  *(überholt durch §14a)*
+
+Der Entwurf, aus dem §14a wurde — hier belassen, weil er die Begründung trägt.  Der Ausweg wäre,
+die Compiler-Instanz nicht mehr lokal zu halten, sondern als **eindeutige Ressource**
+sichtbar zu machen — derselbe Typ Wert wie `process` oder `thread_handle` (spec/61
 §2.1): move-only, beim Besitzer-Drop freigegeben.
 
 ```yaml
@@ -650,6 +772,69 @@ ORCs Faulheit ist eine **eigene Schicht**, keine Eigenschaft: `CompileOnDemandLa
 und ein `lookup()` direkt nach dem Hinzufügen erzwingt das sofort.  "Erst beim ersten Aufruf" ist
 also wählbar, nicht aufgezwungen — und MCJIT, das immer alles sofort übersetzt und nichts behält,
 ist für wiederholte Läufe die teurere Variante.
+
+### 14b Was ein Wirt mit einem Kontext tun kann: nennen, rufen, Fehler lesen (25.10.2026)
+
+§14a gibt einem Wirt einen Kontext, einen Weg Code hineinzugeben und eine geprüfte Adresse heraus.
+Für den Fall, um den es geht — ein **Kontroller** nimmt fremden Quelltext an, lässt ihn übersetzen
+und arbeitet mit dem Ergebnis (cosmos `doc/spec/96`) — fehlen drei Stücke, und jedes fehlende
+zwingt den Wirt zurück zum Selberlesen des Quelltexts:
+
+```yaml
+- decl: [kontext, ctx_handle, { call: [ctx.new] }]
+- decl: [code, Code, { call: [sys.code_from, eingereicht] }]
+- decl: [rcx, i32, { call: [kontext.exec, code] }]
+- if:                                         # ging nicht: WAS war falsch?
+    condition: { lt: [rcx, 0] }
+    then:
+      - decl: [why, list<string>, { call: [kontext.errors] }]
+      - return: { at: [why, 0] }
+# Wie heisst die Pipeline darin?  Der Kontext weiss es — der Wirt muss nicht suchen.
+- decl: [found, list<string>, { call: [kontext.names, "fn() -> pipeline"] }]
+- decl: [pipe, pipeline, { call: [kontext.call, { at: [found, 0] }, "fn() -> pipeline"] }]
+```
+
+- **F29_2-…i: `cx.names(typ)` — nach Typ fragen, nicht nach Namen raten.**  Gibt die Namen, die
+  dieser Kontext mit genau diesem Typ bzw. dieser Signatur trägt, in der Reihenfolge der Tabelle
+  (Leerzeichen zählen nicht, §14a F29_2-…d3); keiner passt → leere Liste, kein Fehler.  Der Grund
+  ist der Kontroller: er nimmt eine **eingereichte** Pipeline an und kennt ihren Namen nicht.  Ihn
+  aus dem Quelltext zu lesen heisst, den Quelltext zu lesen — also genau das, was der Kontext
+  übernehmen sollte.  Ein Wirt, der nur `cx.symbol` hat, muss raten oder parsen; mit `cx.names`
+  fragt er.
+- **F29_2-…j: `cx.call(name, signatur)` ruft, was der Kontext übersetzt hat.**  Erst wird die
+  Signatur geprüft (dieselbe Prüfung wie `cx.symbol`, F29_2-…d3), dann gerufen; der Rückgabewert
+  hat den Typ, der in der Signatur steht.  **Heute ohne Argumente** (`fn() -> T`) mit
+  `T ∈ {void, i32, i64, string, eingebaute Griffklasse}`: das ist der Fall, der gebraucht wird —
+  eine deklarierte Pipeline ist `fn() -> pipeline` (spec/62 F62-108) —, und jeder weitere
+  Parameter braucht die Argumentumwandlung, die ohne Nutzer nur Gewicht wäre.  Mehr Argumente
+  kommen, wenn ein Fall sie verlangt; die Signatur steht dann schon da.
+- **F29_2-…k: `cx.symbol` gibt den WERT, wenn der genannte Typ ein Wert ist.**  `i32`, `i64`,
+  `string` und die eingebauten Griffklassen kommen als Wert zurück, eine Funktion als Adresse
+  (`i64`).  Der genannte Typ entscheidet also nicht nur, ob der Zugriff erlaubt ist, sondern auch,
+  was man in der Hand hält — anders herum müsste der Leser aus einer Adresse selbst einen Wert
+  machen, und das kann er in aiml nicht, ohne das Typsystem zu umgehen.
+- **F29_2-…l: `cx.errors` gehört dem KONTEXT, nicht dem Prozess.**  Die Meldungen des **letzten**
+  `cx.exec`, in ihrer Reihenfolge; ein neues `cx.exec` setzt sie zurück.  Zwei Gründe: `-3` heisst
+  „ging nicht" und ist für einen Wirt wertlos, der einem Menschen sagen muss, was falsch war —
+  und zwei Kontexte dürfen ihre Meldungen nicht vermischen, sonst erklärt die eine Einreichung
+  den Fehler der anderen.  Zurückgesetzt wird, weil sonst der dritte Lauf die Fehler des ersten
+  als seine eigenen berichtet.
+- **F29_2-…n: `cx.load` übersetzt und hängt ein, OHNE zu laufen.**  `cx.exec` ruft den
+  Einstiegspunkt des Bundles — bei **eingereichtem** Quelltext wäre das fremder Code im
+  Controller-Prozess, und genau das verbietet cosmos F96-28.  `cx.load` tut alles außer dem
+  Aufruf: übersetzen, Meldungen sammeln, Symbole bekannt machen.  Danach ruft der Wirt **genau
+  die eine** Funktion, die er wollte (`cx.call`), und nichts sonst.  Der Unterschied ist nicht
+  Vorsicht, sondern Zuständigkeit: ein Rumpf gehört zum Agenten, nicht zum Kontroller.
+- **F29_2-…m: Was ein Wirt NICHT bekommt.**  Keine AST-Knoten, keine LLVM-Typen, keinen Zeiger in
+  die Tabellen des Übersetzers — nur Namen, Werte, Adressen und Meldungen.  Alles andere bindet
+  den Kontroller an den Innenbau des Übersetzers, und dann ist jede Änderung am Übersetzer eine
+  Änderung am Kontroller.  Die Grenze ist absichtlich eng: `ctx` ist eine **Schnittstelle**, kein
+  Fenster.
+
+**Wofür das zusammen reicht:** ein Kontroller kann eine eingereichte Pipeline übersetzen lassen,
+die Meldungen des Übersetzers weitergeben, die Pipeline bauen und sie lesen (spec/62 §20) — ohne
+eine einzige Zeile YAML selbst anzufassen.  Das ist der Punkt: die Sprache hat **einen** Leser,
+und der steht im Übersetzer.
 
 ## 15. `sys.lib_load` — eine Bibliothek einmal übersetzen
 
