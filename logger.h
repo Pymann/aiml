@@ -49,6 +49,7 @@ public:
     // einzige stabile Kennung eines Checks (siehe spec/49, offener Punkt Codes).
     struct Diag { const char* sev; std::string text; std::string origin; };
     void setCollect(bool c) { collect_ = c; }
+    bool isCollecting() const { return collect_; }
     const std::vector<Diag>& diags() const { return diags_; }
 
     template<typename T>

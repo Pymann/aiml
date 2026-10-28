@@ -93,6 +93,10 @@ All UI-widget children (`rect`, `button`, `text_input`) accept the following sty
 | `min` | float | `0.0` | (slider) Lower bound. `bar` always treats `0` as the lower bound and ignores this field. |
 | `max` | float | `1.0` | (bar / slider) Upper bound. For `bar`: fill width = `value/max`. For `slider`: handle position = `(value - min) / (max - min)`. |
 | `fill_color` | `0xRRGGBBAA` | `0` | (bar / slider) Colour of the filled portion of the track. For `slider` it also colours the handle (modulated by `hover_color` / `active_color`). |
+| `cascade_type` | string | `""` | (dropdown) Drive the options from a registered **function cascade** (spec/57) instead of `options`: the widget lists that cascade's nodes, and selecting one spawns a typed payload widget per field. See §5h. |
+| `payload_spawn` | string (prefab) | `""` | (dropdown, with `cascade_type`) Prefab instantiated once per field of the selected node; the runtime rewrites its `control` child to match the field type (enum → dropdown, i32/alias → numeric, nested cascade → sub-dropdown). See §5h. |
+| `cascade_flow` | `"horizontal"` \| `"vertical"` | `"horizontal"` | (dropdown, with `cascade_type`) Where the payload widgets go: in a row to the right of the dropdown, or stacked underneath it. See §5h. |
+| `payload_scroll` | bool | `false` | (dropdown, with `cascade_type`, horizontal flow) Clip the payload row to the widget's own prefab width and give it a **horizontal scrollbar** (wheel + draggable thumb), instead of letting a deep cascade run out of the prefab. See §5h. |
 
 **An unknown child attribute is a compile error.** The attribute names above are
 the complete set; anything else is rejected at build time, naming the child, its
@@ -201,6 +205,7 @@ Opaque handle (`i8*`) to a live prefab instance.
 | `.child_focused(child)` | `(string) -> i32` | (text_input) `1` if input has keyboard focus, else `0` |
 | `.child_rect_x(child)` / `.child_rect_y(child)` | `(string) -> f32` | Top-left of the child's hit rect in SCREEN coordinates, window scaling applied — the inverse of `child_contains`, which only tests a point you already have. `-1` if the child does not exist. |
 | `.child_rect_w(child)` / `.child_rect_h(child)` | `(string) -> f32` | Width / height of the hit rect in screen coordinates. `-1` if the child does not exist. |
+| `.child_design_x(child)` / `.child_design_y(child)` / `.child_design_w(child)` / `.child_design_h(child)` | `(string) -> f32` | Dasselbe Rechteck in **DESIGN**-Koordinaten (1280×720), also durch die Fenster-Skalierung geteilt. `-1` wenn das Kind nicht existiert. |
 | `.is_checked(child)` | `(string) -> i32` | (checkbox) `1` if box is currently checked, else `0` |
 | `.set_checked(child, v)` | `(string, i32) -> void` | (checkbox) Programmatically set state (no callbacks fired) |
 | `.set_bar_value(child, value)` | `(string, f32) -> void` | (bar) Set current value. |
@@ -391,6 +396,58 @@ Jump to the last row with `scroll_to_end(child)`.
 
 ---
 
+## 5h. Cascade widgets (`cascade_type` + `payload_spawn`)
+
+A `dropdown` with `cascade_type:` takes its options from a registered **function
+cascade** (spec/57) rather than from `options:`. Picking a node makes the runtime
+spawn one `payload_spawn:` instance per field of that node and rewrite each one's
+`control` child to match the field's type — enum → dropdown, i32/alias → numeric
+input, nested cascade → another cascade dropdown. Changing a node higher up
+destroys the payloads below it and spawns the new ones, which is what makes the
+chain visibly collapse and re-expand.
+
+```yaml
+- { name: effect, type: dropdown, x: 0, y: 2, width: 200, height: 22,
+    cascade_type: Effect, payload_spawn: AAFieldChip, payload_scroll: true }
+```
+
+The payload instances are **nested children** of the enclosing prefab instance
+(§6b), positioned by the runtime from the *actual* rendered extent of the
+previous sibling — so a field never lands on top of the expanded payload of the
+field before it.
+
+### `cascade_flow` — where the payloads go
+
+`horizontal` (the default) lays the payloads in a row to the right of the
+dropdown; `vertical` stacks them underneath it. Vertical trades width for height:
+the row grows downward, which an enclosing `scrollable` container does **not**
+account for — it packs rows by the row prefab's declared height (§5c), so
+vertically-flowed rows inside a scrollable container overlap. Use `vertical`
+only outside a row-packed container.
+
+### `payload_scroll` — horizontal scrollbar for a deep chain
+
+A cascade with many fields outgrows its prefab: `200` for the dropdown plus one
+payload width per field, which quickly passes the prefab's own `width` and then
+draws over whatever sits to the right of it. `payload_scroll: true` bounds it:
+
+- the payload row is **clipped** to the widget's prefab width (the clip box starts
+  right of the dropdown, so panned payloads never slide under it);
+- a horizontal **track + thumb** is drawn along the bottom `6 px` of the prefab
+  whenever the chain is wider than the clipped box — leave that much room below
+  the dropdown (a `26 px` row with a `22 px` dropdown needs to become `34 px`);
+- the **mouse wheel** over the payload row and dragging the thumb both pan it.
+
+Panning snaps to the payload pitch (payload width + gap) because clipping is
+whole-child (§6c): a payload that straddles the clip edge is not drawn at all, so
+a sub-pitch offset would blank a field instead of half-showing it. Stepping by a
+whole pitch swaps fields cleanly.
+
+`payload_scroll` is for `horizontal` flow; with `cascade_flow: vertical` there is
+nothing to pan sideways and the key is ignored.
+
+---
+
 ## 5d. Model-Bound Widgets (scalar fields)
 
 Where §5c binds a *container* to a `list<T>`, a prefab can bind its **scalar
@@ -532,6 +589,36 @@ accepts the usual style fields (`font_size`, `color`, optional `bg_color` +
 # on each poll: hand the full log to the box; windowing + tail are automatic
 - call: [<.scene.set_text, "chat_log", { call: [join_pipe, clog.lines] }]
 ```
+
+- **`wrap: false`** turns the wrapping off: a line stays one line, however long, and the box
+  scrolls **sideways**.  That is what a build log or a YAML source needs — wrapping turns a
+  column of 200-character lines into porridge, and the eye loses the structure the author put
+  there.  With `wrap: false` the box draws a **second scrollbar along the bottom**, and the
+  horizontal window follows the caret like the vertical one does.  Default is `true`
+  (wrapping), because a chat log wants it.
+
+**Keys — all four directions** (spec/44_6 §5f, 2026-10-22)
+
+| Key | Effect |
+|---|---|
+| `↑` / `↓` | one line up/down (the view follows the caret) |
+| `←` / `→` | one character; at the line's edge it steps to the previous/next line |
+| `PageUp` / `PageDown` | one window height |
+| `Home` / `End` | start/end of the **line** |
+| `Ctrl+Home` / `Ctrl+End` | start/end of the **text** |
+| `Shift`+any of them | extends the selection instead of collapsing it |
+
+The caret is always scrolled **into view**: a key that moves it out of the window moves the
+window.  Before this, `textbox` knew only `←/→/Home/End` — in a 2000-line log that is not
+navigation, and a multi-line `text_input` (the pipeline source) had **no** vertical arrows at
+all: the caret could not leave line one by keyboard.
+
+**The horizontal bar has a grip** (2026-10-22): `Shift`+wheel moves the window sideways, the
+thumb can be dragged, and a click **next to** it jumps there and keeps dragging.  A bar you can
+see but not move is worse than none — it shows that there is more and refuses to go.  The same
+applies to the inset: the text is clipped to the **inner** area, not the frame, otherwise the
+last glyphs sit exactly on the border line; and when the bottom bar is shown it takes a line's
+worth of room instead of covering the last line.
 
 **Selection & copy** (read-only — the text can be marked and copied, never typed into)
 
@@ -1508,3 +1595,36 @@ gesetzte Lauf, gleichfarbige Nachbarn werden in einem Zug gezeichnet, und die By
 sich auf den **Quelltext** der Box, nicht auf die umgebrochene Zeile.  Ohne Läufe bleibt der
 schnelle Pfad (eine Charge für alle sichtbaren Zeilen) unverändert.
 
+
+- **F44_6-…: Ein Rollbalken, den nichts bewegt, ist ein Bild.**  Das mehrzeilige `text_input`
+  ZEICHNETE seit jeher einen senkrechten Balken, hatte aber keinerlei Eingabe dafür: kein Rad,
+  kein Ziehen am Griff.  Schlimmer, der Versatz wurde in **jedem** Rahmen zum Cursor
+  zurückgezogen (und bei fehlendem Fokus auf Zeile 0 gesetzt) — selbst wer ihn bewegt hätte,
+  wäre sofort zurückgerissen worden.  Gemeldet am 22.10.2026 am Quelltext-Feld einer Pipeline.
+  Jetzt gilt dieselbe Regel wie in der Textbox: dem Cursor folgt die Ansicht nur, wenn der
+  Cursor sich **bewegt hat**; danach gehört sie dem Leser (`ti_free_scroll`).  Rad, Shift+Rad
+  (waagerecht) und das Ziehen am Griff wirken, und ein Klick auf den Balken setzt **keinen**
+  Cursor und markiert nichts — sonst zieht jedes Rollen Text mit.
+
+### Screen- vs Design-Koordinaten bei Kind-Rechtecken
+
+`child_rect_*` liefert **Screen**-Pixel (Fenster-Skalierung eingerechnet) — richtig
+für Treffertests und Cursor-Positionen. `set_pos`/`x`/`y` einer Instanz erwarten
+aber **Design**-Pixel (1280×720). Wer eine Instanz neben ein Kind stellen will
+(Tooltip, Sprechblase, Hinweis-Pfeil), mischte damit zwangsläufig zwei Räume:
+bei einem Fenster ≠ 1280×720 landet die Instanz um den Skalierungsfaktor
+verschoben — und zwar umso weiter, je weiter rechts/unten das Ziel liegt.
+
+Dafür gibt es `child_design_*`. Regel: **Treffer/Cursor → `child_rect_*`,
+Platzieren → `child_design_*`.**
+
+```yaml
+# Sprechblase rechts neben ein Eingabefeld stellen:
+- decl: [rect_x, f32, { call: [<.scene.child_design_x, "name_input"] }]
+- decl: [rect_w, f32, { call: [<.scene.child_design_w, "name_input"] }]
+- call: [<.bubble.set_pos, { +: [{ +: [rect_x, rect_w] }, 16.0] }, 100.0]
+```
+
+Aufgefallen 2026-10-25 an der Tour-Sprechblase in 9rooms: sie stand bei
+skaliertem Fenster weit neben dem Namensfeld, weil `child_rect_*` Screen- und
+`set_pos` Design-Koordinaten sind.

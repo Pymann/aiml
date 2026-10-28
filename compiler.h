@@ -59,6 +59,37 @@ public:
     // Used by aiml_isolated_exec to run Code objects in a fresh LLVM context.
     void compileFromString(const std::string& yaml_source);
 
+    // spec/29_2 §14a: EIN Compiler, VIELE Bundles — der wiederverwendbare
+    // Kontext.  Jeder Aufruf uebersetzt in ein FRISCHES Modul (das vorige ist
+    // an seine Engine uebergegangen) und laesst es laufen; die Engines bleiben
+    // am Leben, damit die Adressen gueltig bleiben.  Was frueher definiert
+    // wurde, wird im neuen Modul nur DEKLARIERT und ueber DynamicLibrary
+    // aufgeloest — derselbe Weg wie bei `sys.lib_load` (§15).
+    //
+    // Der Grund ist die Grundlast: ein frischer Kontext kostet ~96 ms,
+    // unabhaengig davon, wie wenig er tut (§15).
+    int execInContext(const std::string& yaml_source);
+    // spec/29_2 §14b (F29_2-…n): uebersetzen und einhaengen, OHNE den
+    // Einstiegspunkt zu rufen — fuer einen Wirt, der fremden Quelltext
+    // pruefen und lesen will, ohne ihn laufen zu lassen (cosmos F96-28).
+    int loadInContext(const std::string& yaml_source);
+  private:
+    int compileInContext(const std::string& yaml_source, bool run_entry);
+  public:
+    // Adresse eines im Kontext definierten Symbols, 0 wenn unbekannt.
+    uint64_t symbolAddress(const std::string& name) const;
+
+    // spec/29_2 §14b (F29_2-…l): die Meldungen des LETZTEN `execInContext`.
+    // Sie gehoeren dem Kontext, nicht dem Prozess — zwei Kontexte duerfen ihre
+    // Fehler nicht vermischen, sonst erklaert die eine Einreichung den Fehler
+    // der anderen.
+    const std::vector<std::string>& ctxErrors() const { return ctx_errors_; }
+    // Der Symboltabellen-Zustand dieses Kontexts.  `void*`, weil context.h
+    // hier nicht eingebunden werden kann (Zyklus) — der Leser castet auf
+    // CompilerContext*.  Nur lesen: wer ihn veraendert, veraendert den
+    // Kontext hinter dem Ruecken seines Besitzers.
+    void* contextState() const { return compiler_ctx_; }
+
     // Convenience: compileFromString + generateEntryPoint + jitRun.
     int compileAndRun(const std::string& yaml_source);
 
@@ -171,4 +202,19 @@ private:
     // JIT engine kept alive for compileChunkAndGetAddress (hot-reload chunks).
     // Null for normal compile/jitRun flows (engine is local there).
     llvm::ExecutionEngine* engine_ = nullptr;
+
+    // spec/29_2 §14a: je `execInContext` eine Engine (sie besitzt ihr Modul)
+    // und der Quelltext, um seine Deklarationen im naechsten Modul zu
+    // wiederholen.  Beide Listen wachsen mit der Zahl der Bundles; freigegeben
+    // wird alles mit dem Compiler.
+    std::vector<llvm::ExecutionEngine*> ctx_engines_;
+    std::vector<std::string>            ctx_sources_;
+
+    // Gilt fuer den NAECHSTEN compileFromString: nur Deklarationen, keine
+    // Rumpfe (spec/29_2 §15).  Als Member und nicht im Kontext, weil
+    // compileFromString den Kontext NEU anlegt — ein Flag, das man vorher im
+    // alten setzt, ist danach weg.  Genau daran lief `compileDeclarationsOnly`
+    // bis 25.10.2026 ins Leere.
+    bool headerOnlyNext_ = false;
+    std::vector<std::string> ctx_errors_;   // §14b F29_2-…l
 };
