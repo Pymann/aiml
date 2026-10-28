@@ -1,0 +1,13 @@
+# Requires: driver
+# spec/21 §3.1: a FILE imports from a package by name.
+- import: "@demo/lib/greet.aiml"
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [greeter, ptr<DemoGreeter>, { new: DemoGreeter }]
+      - decl: [got, i32, { call: [greeter.greet, "file"] }]
+      - if: { condition: { neq: [got, 42] }, then: [{ print: ["FAIL file import: ${got}"] }, { return: 1 }] }
+      - print: ["PASS package import from a file"]
+      - return: 0

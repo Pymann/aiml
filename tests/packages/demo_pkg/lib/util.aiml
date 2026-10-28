@@ -1,0 +1,9 @@
+# Requires: driver
+# Part of the demo package: imported RELATIVELY from greet.aiml — inside a
+# package, imports stay ordinary file imports (spec/21 §3.1).
+- def:
+    name: demo_twice
+    args: [[val, i32]]
+    return: i32
+    body:
+      - return: { '*': [val, 2] }
