@@ -63,7 +63,7 @@ the sees edge showing through).
 
 Not yet: interface-typed edges combined with cross-group (`subgroup.inst:Iface`);
 using a group type **itself** as a function-signature parameter/return (same
-synthesis-timing limit as cascade_class pools) — the interface type works.
+synthesis-timing limit as cascade_class pools) — the interface type works.  A **group interface** (§12) is the way to pass a group as a value.
 
 A `classgroup` is a purely declarative description of one architecture cluster:
 which classes participate, which named instances exist, which sibling instances
@@ -105,7 +105,7 @@ import cycles between mutually-referencing subsystems.
 ```
 
 Group-level keys: `name` (required), `params:` (§4), `subgroups:` (§6),
-`export:` (§6), `instances:`.
+`export:` (§6), `implements:` (group interfaces, §12), `instances:`.
 
 Each `instances[]` entry names:
 
@@ -609,3 +609,199 @@ Each coordinator now needs neither its own `g_*` global, its aliasing line in
 `init`, nor a `members:` declaration for what `sees` already grants — the sees
 member is synthesized on the subclass (§5.1) and reached through
 `g_runtime.<instance>`.
+
+## 12. Group interfaces — `groupinterface:` (2026-10-28)
+
+Status: **implemented 2026-10-28.**  `tests/classgroup_giface/run.sh`: 3 positive + 12 negative
+tests green, valgrind (the usual procedure, `VALGRIND=1`) without memory errors and without leaks
+from generated code.  Three fixes the feature needed, each with its own regression test:
+
+- **An interface-typed member assigned from `{new:}`** stored the bare object pointer instead of
+  the fat pointer; the first call through it jumped to address 0 (any interface, not only group
+  interfaces).  Now upcast like the decl site — `tests/test_iface_member_set_new.aiml`.
+- **An owning `ptr<Iface>` member was not released with its owner** (any interface): the class
+  descriptor had no kind for it.  New descriptor kind `AIML_TD_IFACE` frees through the vtable's
+  free slot; a classgroup container behind an interface runs its `__dtor` there.
+- **`free: <group>` with a sees edge freed the sibling twice**: the instance class's own free
+  descriptor listed its sees member (a borrow, §9) as owned.  Collaborators are now skipped there
+  as in the other descriptor paths — `tests/test_classgroup_free_sees.aiml`.
+
+A classgroup is a concrete type.  Whoever embeds it, or holds it, names the
+implementation — and so depends on all of it.  A **group interface** is the
+contract for a group's *outside*: which instances it exposes and which interface
+each of them satisfies.  Code written against the contract works with every group
+that implements it.
+
+Three uses drive the design:
+
+- **A stable package API.**  A package (e.g. `ufo`, imported as `@ufo/…`, spec/21
+  §3.1) publishes a group interface; its users depend on that, not on the
+  package's classes.  The package can rebuild its inside freely.
+- **Swapping a whole subsystem.**  §5.2 swaps one collaborator by group config
+  (real vs. mock logger).  A group interface does the same for a subsystem: a
+  museum-backed layer store, a local one, a mock — chosen in one place.
+- **Groups as values.**  A group type cannot be a parameter or return type (§1,
+  "Not yet").  A group *interface* can: it has a fixed layout (an interface fat
+  pointer) independent of the synthesized container.
+
+### 12.1 Syntax
+
+```yaml
+- interface: { name: Registry, methods: [[push, i32, [[ref_name, string]]]] }
+- interface: { name: Codec,    methods: [[encode, string, [[data, string]]]] }
+
+- groupinterface:
+    name: LayerStore
+    exports:                     # [instance name, interface it must satisfy]
+      - [registry, Registry]
+      - [codec, Codec]
+
+- classgroup:
+    name: MuseumStore
+    implements: [LayerStore]     # group level — instances keep their own `implements:`
+    instances:
+      - { class: HttpRegistry, instance: registry }      # HttpRegistry implements Registry
+      - { class: TarCodec,     instance: codec }
+      - { class: Cache,        instance: cache }         # not in the contract: still fine
+    export: [registry, codec, cache]
+```
+
+- `groupinterface:` keys: `name` (required), `exports` (required, non-empty): a list
+  of `[instance, Interface]` pairs.  `level:` (spec/65) is accepted as on any type.
+- An export is typed by an **interface**, never a class: the contract names an
+  abstraction (that is the point), and an interface edge is what §5.2 already
+  wires and dispatches.
+- `classgroup` gains a group-level `implements: [GroupIface, …]`.  It is distinct
+  from the instance-level `implements:` (§5.2), which stays as it is.
+
+### 12.2 Using a group interface
+
+A group interface is a type like an interface: `ptr<G>` owns, `ref<G>` borrows
+(spec/61 §2).  It may be a local, a class member, a parameter, a return type, a
+list/map element.
+
+```yaml
+- def:
+    name: publish
+    args: [[store, ref<LayerStore>], [what, string]]
+    return: i32
+    body:
+      - decl: [packed, string, { call: [store.codec.encode, what] }]   # through the contract
+      - return: { call: [store.registry.push, packed] }
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [store, ptr<LayerStore>, { new: MuseumStore }]   # build, then view as the contract
+      - decl: [rc, i32, { call: [publish, store, "layer"] }]
+      - decl: [reg, ref<Registry>, store.registry]             # an export as a value: a borrow
+      - return: rc                                             # dropping `store` frees the group
+```
+
+- **`{new: Impl}` and a variable of an implementing group convert to `ptr<G>` /
+  `ref<G>`** wherever an interface conversion happens today (decl, argument,
+  member store, return) — the container *is* an implementer of `G`.
+- **`x.<export>.<method>(…)`** calls the export's interface method;
+  **`x.<export>`** alone is a `ref<Iface>` — a borrow of the instance the group
+  owns, never an owner.  Both work on locals, parameters and members
+  (`<.store.registry.push`).
+- Only the contract is reachable: `x.cache` is an error even though the concrete
+  group has it.  Code that needs the full API holds the concrete type
+  (`ptr<MuseumStore>`), where everything is as before (§5.1).
+- **Ownership**: `ptr<G>` owns the group exactly as `ptr<MuseumStore>` would;
+  dropping it runs the container's `__dtor` (all instances, subgroups).  `ref<G>`
+  borrows.
+
+### 12.3 Lowering
+
+`groupinterface: G` desugars, at parse time, to an ordinary interface:
+
+```yaml
+- interface:
+    name: LayerStore
+    methods:
+      - [__gi_registry, ref<Registry>, []]
+      - [__gi_codec,    ref<Codec>,    []]
+```
+
+A group with `implements: [G]` adds `G` to its **container's** interfaces and
+synthesizes one accessor per export:
+
+```yaml
+- def:                                    # on the container class MuseumStore
+    name: __gi_registry
+    return: ref<Registry>
+    body:
+      - decl: [gi_view, ref<MuseumStore_registry>, <.registry]
+      - decl: [gi_up,   ref<Registry>, gi_view]          # upcast (base or instance vtable, §5.2)
+      - return: gi_up
+```
+
+and the consumer's `x.registry…` compiles as `x.__gi_registry()…`.  Everything
+else — registration, the vtable, the upcast at decl/argument/return, ownership of
+`ptr<G>`, cross-unit headers (§11) — is the existing interface machinery.  The
+upcast in the accessor goes through the instance's subclass when the *instance*
+declares `implements: [Iface]` (the vtable lives there, §5.2), else through its
+base class.
+
+### 12.4 Static checks (exact messages)
+
+On the group interface:
+
+- **GI-1** an export names no interface:
+  `groupinterface 'G': export 'r' names unknown interface 'X'.`
+- **GI-2** an export is typed by a class:
+  `groupinterface 'G': export 'r' must be typed by an interface, 'X' is a class.`
+- **GI-3** an export is listed twice: `groupinterface 'G': export 'r' is listed twice.`
+- **GI-4** no exports: `groupinterface 'G' exports nothing.`
+
+On a classgroup that implements one:
+
+- **GI-5** unknown name: `classgroup 'X': implements unknown group interface 'G'.`
+- **GI-6** an ordinary interface named at group level:
+  `classgroup 'X': 'G' is an interface, not a group interface — instance interfaces go on the instance (spec/58 §5.2).`
+- **GI-7** the export is missing:
+  `classgroup 'X' implements 'G' but has no instance 'r' (G exports r: Iface).`
+- **GI-8** it exists but is not exported (an explicit `export:` list without it):
+  `classgroup 'X' implements 'G' but does not export 'r'.`
+- **GI-9** the instance does not satisfy the interface:
+  `classgroup 'X' implements 'G': instance 'r' (class C) does not implement 'Iface'.`
+- **GI-10** two implemented group interfaces disagree:
+  `classgroup 'X' implements 'G' and 'H', which export 'r' as different interfaces ('A' vs 'B').`
+
+On a use:
+
+- **GI-11** not part of the contract:
+  `'c' is not part of group interface 'G' (exports: codec, registry).`
+- **GI-12** reaching past an export (an interface has methods, no fields):
+  `'r' of group interface 'G' is an interface ('Iface'): call one of its methods, x.r.<method>.`
+
+### 12.5 Cross-unit and packages
+
+The lowered interface is registered like any other interface, so a group interface
+declared in one file is usable in every file that imports it (§11): the package
+declares `G` (and the interfaces it names) in one module, an implementation in
+another; a user imports the first everywhere and the second only where it builds
+the group (its composition root).
+
+### 12.6 Not in this version
+
+- **Ports and params in the contract.**  Whoever *builds* a group names the
+  concrete type (`{new: MuseumStore, …}`, a `subgroups:` entry) and binds its
+  params/ports there; a holder of `ptr<G>` never does.  They join the contract
+  together with the next item.
+- **Generic subgroup slots** (`subgroups: [[store, LayerStore]]`, the
+  implementation chosen by the embedding parent) and `sees: [store.registry]`
+  through a group interface — that is `subgroup.inst:Iface` (§5.2, not yet).
+- Group-interface inheritance (`extends:`), group-level methods in the contract.
+
+### 12.7 Tests
+
+| test | checks |
+|---|---|
+| `tests/test_classgroup_giface.aiml` | a real and a mock group behind one contract; free function on `ref<G>`; `ptr<G>` from `{new:}`; member `ptr<G>` (`<.store.registry.push`); `x.export` as a value; the concrete type still has its full API |
+| `tests/test_classgroup_giface_instance_impl.aiml` | the export is satisfied by an instance-level `implements:` (group function implements the interface method) |
+| `tests/test_classgroup_giface_cross_unit.aiml` (+ `tests/_cross/giface_api.aiml`, `giface_impl.aiml`) | contract, implementation and user in three files |
+| `tests/test_classgroup_neg_giface_*.aiml` | GI-1 … GI-12, one file each; `tests/classgroup_giface/run.sh` checks every `# EXPECT-ERROR:` text |
+| valgrind | `test_classgroup_giface*` without invalid accesses; no leak from generated code (`VALGRIND=1 bash tests/classgroup_giface/run.sh`, probes in `tests/run_memory_sanitizers.sh`) |

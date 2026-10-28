@@ -3800,6 +3800,30 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
             std::string finalTypeName;
             IRValue* targetGep = resolvePropertyWritePtr(&tmpBaseSym, propName, finalTypeName);
             if (targetGep) {
+                // Interface-typed member from a fresh box: `set: [obj.iface, {new: Concrete}]`
+                // (spec/58 §12.2, and any interface).  The slot is a fat pointer
+                // {obj, vtable}; storing the bare object pointer made the first call
+                // through it jump to address 0.  Upcast exactly as the decl site does.
+                if ((finalTypeName.rfind("ptr<", 0) == 0 || finalTypeName.rfind("ref<", 0) == 0) &&
+                    finalTypeName.back() == '>') {
+                    std::string ifq = finalTypeName.substr(4, finalTypeName.size() - 5);
+                    auto* ne = dynamic_cast<NewExpr*>(setStmt->value.get());
+                    llvm::Value* raw = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val));
+                    if (ne && raw && raw->getType()->isPointerTy() &&
+                        (ctx.interfaces.count(ifq) || ctx.interfaces.count(ctx.qualify(ifq)))) {
+                        std::string cls = ctx.classes.count(ne->typeName) ? ne->typeName : ctx.qualify(ne->typeName);
+                        llvm::Type* fty = ctx.getLLVMType(finalTypeName);
+                        if (ctx.classes.count(cls) && fty && fty->isStructTy()) {
+                            llvm::Value* fat = buildInterfaceUpcast(raw, "ptr<" + cls + ">", llvm::cast<llvm::StructType>(fty));
+                            if (fat) {
+                                ctx.builder.CreateStore(fat, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(targetGep)));
+                                return;
+                            }
+                            LOG_ERROR(ctx.fmtLoc() + "class '" + cls + "' does not implement interface '" + ifq + "'");
+                            return;
+                        }
+                    }
+                }
                 // Enum-typed member must not receive a string (see top-level path).
                 if (!finalTypeName.empty() && ctx.enums.count(finalTypeName)) {
                     llvm::Value* sv = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val));

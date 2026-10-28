@@ -1,0 +1,35 @@
+# SPEC: 61_memory_management_DRAFT
+# An interface-typed MEMBER assigned from a fresh box — `set: [obj.member, {new: Impl}]`
+# — must be upcast to the fat pointer {obj, vtable}, as the decl site does.  Before
+# 2026-10-28 the bare object pointer was stored and the first call through the member
+# jumped to address 0 (found with spec/58 §12, where a member holds a group interface).
+# Expected exit code: 0
+- interface:
+    name: Greeter
+    methods:
+      - [greet, i32, []]
+- class:
+    name: Impl
+    implements: [Greeter]
+    methods:
+      - def: { name: greet, return: i32, body: [{ return: 5 }] }
+- class:
+    name: Holder
+    members:
+      - [grt, ptr<Greeter>]
+    methods:
+      - def: { name: run, return: i32, body: [{ return: { call: [<.grt.greet] } }] }
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [hld, ptr<Holder>, { new: Holder }]
+      - set: [hld.grt, { new: Impl }]
+      - decl: [got, i32, { call: [hld.run] }]
+      - if: { condition: { neq: [got, 5] }, then: [{ print: ["FAIL member from new: ${got}"] }, { return: 1 }] }
+      - decl: [loc, ptr<Greeter>, { new: Impl }]
+      - set: [hld.grt, loc]
+      - decl: [again, i32, { call: [hld.run] }]
+      - if: { condition: { neq: [again, 5] }, then: [{ print: ["FAIL member from local: ${again}"] }, { return: 1 }] }
+      - print: ["PASS iface_member_set_new"]
+      - return: 0

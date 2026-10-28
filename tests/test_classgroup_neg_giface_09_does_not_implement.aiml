@@ -1,0 +1,33 @@
+# SPEC: 58_classgroups
+# static-check: relaxed
+# spec/58 §12.4 GI-9 — must be a hard compile error with exactly this message.
+# Runner expects exit code 1 (test_classgroup_neg_ pattern); tests/classgroup_giface/run.sh
+# checks the text.
+# EXPECT-ERROR: classgroup 'Impl' implements 'Store': instance 'reg' (class Plain) does not implement 'Reg'.
+
+- interface:
+    name: Reg
+    methods:
+      - [push, i32, [[blob, string]]]
+- interface:
+    name: Other
+    methods:
+      - [ping, i32, []]
+- class:
+    name: Plain
+    methods:
+      - def: { name: noop, return: i32, body: [{ return: 0 }] }
+- groupinterface:
+    name: Store
+    exports:
+      - [reg, Reg]
+- classgroup:
+    name: Impl
+    implements: [Store]
+    instances:
+      - { class: Plain, instance: reg }
+- def:
+    name: main
+    return: i32
+    body:
+      - return: 0

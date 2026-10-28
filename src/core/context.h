@@ -720,6 +720,13 @@ namespace AIML {
         llvm::StructType* fatPtrType = nullptr;      // {i8* obj, i8* vtbl}, cached
     };
     std::map<std::string, InterfaceInfo> interfaces;
+    // spec/58 §12 group interfaces: qualified name → the namespace it was declared
+    // in + its [instance, interface] exports as written (duplicates kept, GI-3).
+    struct GroupInterfaceInfo {
+        std::string ns;
+        std::vector<std::pair<std::string, std::string>> exports;
+    };
+    std::map<std::string, GroupInterfaceInfo> groupInterfaces;
 
     // Namespace & Import State
     std::string currentNamespace;
