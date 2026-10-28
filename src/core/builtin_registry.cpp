@@ -7182,6 +7182,7 @@ void registerBuiltins(CompilerContext& ctx) {
         REG_HASH1B("blake2b",      "aiml_hash_blake2b")
         REG_HASH1B("blake2s",      "aiml_hash_blake2s")
         REG_HASH1B("md5",          "aiml_hash_md5")
+        REG_HASH1B("sha1",         "aiml_hash_sha1")   /* git object ids (spec/68) */
         REG_HASH1("sha256_raw",    "aiml_hash_sha256_raw")
         REG_HASH1("sha512_raw",    "aiml_hash_sha512_raw")
         REG_HASH1("sha3_256_raw",  "aiml_hash_sha3_256_raw")
@@ -7238,6 +7239,241 @@ void registerBuiltins(CompilerContext& ctx) {
             return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {a}));
         };
     } // end hash namespace
+
+    // ── bytes namespace (spec/68) ─────────────────────────────────────────
+    // Binary helpers on buffer<u8>.  Runtime: src/sys/bytes_runtime.cpp.
+    // A buffer argument is passed as (data, len) taken from the buffer value; a
+    // string argument as (chars, strlen).  A returned buffer is a malloc'd
+    // header moved into a buffer value (memV3: a fresh handle), exactly like
+    // base64.decode / io.read_bytes.  Returned strings are managed (tracked as
+    // statement temps under lifetime drops, like hash.<algo>).
+    {
+        auto& bns = ctx.namespaces["bytes"];
+        struct BytesHelp {
+            // (data ptr, i32 len) of argument i — buffer or string.
+            static std::pair<llvm::Value*, llvm::Value*> view(CompilerContext& ctx, const std::vector<IRValue*>& args, size_t i) {
+                llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Type* i32 = ctx.builder.getInt32Ty();
+                if (args.size() <= i || !args[i])
+                    return { llvm::Constant::getNullValue(i8p), ctx.builder.getInt32(0) };
+                llvm::Value* a = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[i]));
+                if (a->getType() == ctx.getLLVMType("buffer"))
+                    return { ctx.builder.CreateExtractValue(a, {4}, "bytes_data"),
+                             ctx.builder.CreateExtractValue(a, {0}, "bytes_len") };
+                if (a->getType()->isPointerTy()) {
+                    llvm::Value* n = ctx.builder.CreateCall(ctx.getFunction("strlen", ctx.getSizeType(), {i8p}), {a});
+                    return { a, ctx.builder.CreateTrunc(n, i32, "str_len") };
+                }
+                return { llvm::Constant::getNullValue(i8p), ctx.builder.getInt32(0) };
+            }
+            static llvm::Value* i64arg(CompilerContext& ctx, const std::vector<IRValue*>& args, size_t i, int64_t dflt) {
+                llvm::Type* i64 = ctx.builder.getInt64Ty();
+                if (args.size() <= i || !args[i]) return ctx.builder.getInt64(dflt);
+                llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[i]));
+                if (v->getType()->isIntegerTy()) return ctx.builder.CreateSExtOrTrunc(v, i64);
+                if (v->getType()->isFloatingPointTy()) return ctx.builder.CreateFPToSI(v, i64);
+                return ctx.builder.getInt64(dflt);
+            }
+            static llvm::Value* i32arg(CompilerContext& ctx, const std::vector<IRValue*>& args, size_t i, int32_t dflt) {
+                return ctx.builder.CreateTrunc(i64arg(ctx, args, i, dflt), ctx.builder.getInt32Ty());
+            }
+            // Moves a runtime header into a buffer value (memV3: owned handle).
+            static IRValue* buf(CompilerContext& ctx, llvm::Value* hdr) {
+                llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Type* bt  = ctx.getLLVMType("buffer");
+                llvm::Function* mcf = ctx.getFunction("memcpy", i8p, {i8p, i8p, ctx.getSizeType()});
+                llvm::Function* frf = ctx.getFunction("free", ctx.builder.getVoidTy(), {i8p});
+                uint64_t szBytes = ctx.module().getDataLayout().getTypeAllocSize(bt);
+                llvm::Value* out;
+                if (ctx.memV3)
+                    out = ctx.builder.CreateCall(ctx.getFunction("aiml_buffer_handle_new", i8p, {}), {}, "bytes_buf_h");
+                else
+                    out = ctx.createEntryAlloca(bt, "bytes_buf");
+                ctx.builder.CreateCall(mcf, {out, hdr, ctx.getSizeConst(szBytes)});
+                ctx.builder.CreateCall(frf, {hdr});
+                return ctx.ir_gen->wrap(out);
+            }
+            static IRValue* str(CompilerContext& ctx, llvm::Value* s) {
+                if (ctx.lifetimeDropsEnabled && !ctx.stmtTempStack.empty())
+                    AIML::AST::aimlTrackStringTemp(ctx, s);
+                return ctx.ir_gen->wrap(s);
+            }
+        };
+        using BF = std::vector<IRValue*>;
+        // bytes.slice(buf, off, len = -1) → buffer<u8>
+        bns.builtinFuncs["slice"] = [](CompilerContext& ctx, const BF& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo(); llvm::Type* i32 = ctx.builder.getInt32Ty(); llvm::Type* i64 = ctx.builder.getInt64Ty();
+            auto v = BytesHelp::view(ctx, args, 0);
+            return BytesHelp::buf(ctx, ctx.builder.CreateCall(ctx.getFunction("aiml_bytes_slice", i8p, {i8p, i32, i64, i64}),
+                {v.first, v.second, BytesHelp::i64arg(ctx, args, 1, 0), BytesHelp::i64arg(ctx, args, 2, -1)}));
+        };
+        // bytes.concat(a, b) → buffer<u8>
+        bns.builtinFuncs["concat"] = [](CompilerContext& ctx, const BF& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo(); llvm::Type* i32 = ctx.builder.getInt32Ty();
+            auto a = BytesHelp::view(ctx, args, 0); auto b = BytesHelp::view(ctx, args, 1);
+            return BytesHelp::buf(ctx, ctx.builder.CreateCall(ctx.getFunction("aiml_bytes_concat", i8p, {i8p, i32, i8p, i32}),
+                {a.first, a.second, b.first, b.second}));
+        };
+        // bytes.u8(buf, idx) → i32 (0..255, -1 outside)
+        bns.builtinFuncs["u8"] = [](CompilerContext& ctx, const BF& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo(); llvm::Type* i32 = ctx.builder.getInt32Ty(); llvm::Type* i64 = ctx.builder.getInt64Ty();
+            auto v = BytesHelp::view(ctx, args, 0);
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(ctx.getFunction("aiml_bytes_u8", i32, {i8p, i32, i64}),
+                {v.first, v.second, BytesHelp::i64arg(ctx, args, 1, 0)}));
+        };
+        // bytes.find(buf, byte, from = 0) → i64 (-1 = none)
+        bns.builtinFuncs["find"] = [](CompilerContext& ctx, const BF& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo(); llvm::Type* i32 = ctx.builder.getInt32Ty(); llvm::Type* i64 = ctx.builder.getInt64Ty();
+            auto v = BytesHelp::view(ctx, args, 0);
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(ctx.getFunction("aiml_bytes_find", i64, {i8p, i32, i32, i64}),
+                {v.first, v.second, BytesHelp::i32arg(ctx, args, 1, 0), BytesHelp::i64arg(ctx, args, 2, 0)}));
+        };
+        // bytes.be32(buf, off) → i64 (unsigned big-endian, -1 outside)
+        bns.builtinFuncs["be32"] = [](CompilerContext& ctx, const BF& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo(); llvm::Type* i32 = ctx.builder.getInt32Ty(); llvm::Type* i64 = ctx.builder.getInt64Ty();
+            auto v = BytesHelp::view(ctx, args, 0);
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(ctx.getFunction("aiml_bytes_be32", i64, {i8p, i32, i64}),
+                {v.first, v.second, BytesHelp::i64arg(ctx, args, 1, 0)}));
+        };
+        // bytes.from_be32(value) / bytes.from_u8(value) → buffer<u8>
+        bns.builtinFuncs["from_be32"] = [](CompilerContext& ctx, const BF& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo(); llvm::Type* i64 = ctx.builder.getInt64Ty();
+            return BytesHelp::buf(ctx, ctx.builder.CreateCall(ctx.getFunction("aiml_bytes_from_be32", i8p, {i64}), {BytesHelp::i64arg(ctx, args, 0, 0)}));
+        };
+        bns.builtinFuncs["from_u8"] = [](CompilerContext& ctx, const BF& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo(); llvm::Type* i32 = ctx.builder.getInt32Ty();
+            return BytesHelp::buf(ctx, ctx.builder.CreateCall(ctx.getFunction("aiml_bytes_from_u8", i8p, {i32}), {BytesHelp::i32arg(ctx, args, 0, 0)}));
+        };
+        // bytes.to_hex(buf, off = 0, len = -1) → string
+        bns.builtinFuncs["to_hex"] = [](CompilerContext& ctx, const BF& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo(); llvm::Type* i32 = ctx.builder.getInt32Ty(); llvm::Type* i64 = ctx.builder.getInt64Ty();
+            auto v = BytesHelp::view(ctx, args, 0);
+            return BytesHelp::str(ctx, ctx.builder.CreateCall(ctx.getFunction("aiml_bytes_to_hex", i8p, {i8p, i32, i64, i64}),
+                {v.first, v.second, BytesHelp::i64arg(ctx, args, 1, 0), BytesHelp::i64arg(ctx, args, 2, -1)}));
+        };
+        // bytes.text(buf, off = 0, len = -1) → string (stops at a NUL)
+        bns.builtinFuncs["text"] = [](CompilerContext& ctx, const BF& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo(); llvm::Type* i32 = ctx.builder.getInt32Ty(); llvm::Type* i64 = ctx.builder.getInt64Ty();
+            auto v = BytesHelp::view(ctx, args, 0);
+            return BytesHelp::str(ctx, ctx.builder.CreateCall(ctx.getFunction("aiml_bytes_text", i8p, {i8p, i32, i64, i64}),
+                {v.first, v.second, BytesHelp::i64arg(ctx, args, 1, 0), BytesHelp::i64arg(ctx, args, 2, -1)}));
+        };
+        // bytes.from_hex(text) / bytes.from_string(text) / bytes.read_file(path) → buffer<u8>
+        auto regStrToBuf = [](const char* aimlName, const char* cName) {
+            return [cName](CompilerContext& ctx, const BF& args) -> IRValue* {
+                llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Value* s = args.empty() ? static_cast<llvm::Value*>(ctx.builder.CreateGlobalStringPtr(""))
+                                              : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+                if (!s->getType()->isPointerTy()) s = ctx.builder.CreateGlobalStringPtr("");
+                return BytesHelp::buf(ctx, ctx.builder.CreateCall(ctx.getFunction(cName, i8p, {i8p}), {s}));
+            };
+            (void)aimlName;
+        };
+        bns.builtinFuncs["from_hex"]    = regStrToBuf("from_hex", "aiml_bytes_from_hex");
+        bns.builtinFuncs["from_string"] = regStrToBuf("from_string", "aiml_bytes_from_string");
+        bns.builtinFuncs["read_file"]   = regStrToBuf("read_file", "aiml_bytes_read_file");
+        // bytes.zlib(buf, level = 0) → buffer<u8> (zlib stream of exactly these bytes)
+        bns.builtinFuncs["zlib"] = [](CompilerContext& ctx, const BF& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo(); llvm::Type* i32 = ctx.builder.getInt32Ty();
+            auto v = BytesHelp::view(ctx, args, 0);
+            return BytesHelp::buf(ctx, ctx.builder.CreateCall(ctx.getFunction("aiml_bytes_zlib", i8p, {i8p, i32, i32}),
+                {v.first, v.second, BytesHelp::i32arg(ctx, args, 1, 0)}));
+        };
+        // bytes.zlib_at(buf, off) → buffer<u8>: inflate the ONE stream at off;
+        // bytes.zlib_consumed() → i64 input bytes it took (-1 after an error).
+        bns.builtinFuncs["zlib_at"] = [](CompilerContext& ctx, const BF& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo(); llvm::Type* i32 = ctx.builder.getInt32Ty(); llvm::Type* i64 = ctx.builder.getInt64Ty();
+            auto v = BytesHelp::view(ctx, args, 0);
+            return BytesHelp::buf(ctx, ctx.builder.CreateCall(ctx.getFunction("aiml_bytes_zlib_at", i8p, {i8p, i32, i64}),
+                {v.first, v.second, BytesHelp::i64arg(ctx, args, 1, 0)}));
+        };
+        bns.builtinFuncs["zlib_consumed"] = [](CompilerContext& ctx, const BF&) -> IRValue* {
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(ctx.getFunction("aiml_bytes_zlib_consumed", ctx.builder.getInt64Ty(), {}), {}));
+        };
+        // bytes.crc32(buf, off = 0, len = -1) → i64 (unsigned CRC-32, -1 outside)
+        bns.builtinFuncs["crc32"] = [](CompilerContext& ctx, const BF& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo(); llvm::Type* i32 = ctx.builder.getInt32Ty(); llvm::Type* i64 = ctx.builder.getInt64Ty();
+            auto v = BytesHelp::view(ctx, args, 0);
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(ctx.getFunction("aiml_bytes_crc32", i64, {i8p, i32, i64, i64}),
+                {v.first, v.second, BytesHelp::i64arg(ctx, args, 1, 0), BytesHelp::i64arg(ctx, args, 2, -1)}));
+        };
+        // bytes.compare(a, a_off, b, b_off, len) → i32 (-1/0/1, 2 = range outside)
+        bns.builtinFuncs["compare"] = [](CompilerContext& ctx, const BF& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo(); llvm::Type* i32 = ctx.builder.getInt32Ty(); llvm::Type* i64 = ctx.builder.getInt64Ty();
+            auto a = BytesHelp::view(ctx, args, 0); auto b = BytesHelp::view(ctx, args, 2);
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(ctx.getFunction("aiml_bytes_compare", i32, {i8p, i32, i64, i8p, i32, i64, i64}),
+                {a.first, a.second, BytesHelp::i64arg(ctx, args, 1, 0), b.first, b.second, BytesHelp::i64arg(ctx, args, 3, 0), BytesHelp::i64arg(ctx, args, 4, 0)}));
+        };
+        // bytes.delta_apply(base, delta) → buffer<u8> (git pack delta; empty = malformed)
+        bns.builtinFuncs["delta_apply"] = [](CompilerContext& ctx, const BF& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo(); llvm::Type* i32 = ctx.builder.getInt32Ty();
+            auto b = BytesHelp::view(ctx, args, 0); auto d = BytesHelp::view(ctx, args, 1);
+            return BytesHelp::buf(ctx, ctx.builder.CreateCall(ctx.getFunction("aiml_bytes_delta_apply", i8p, {i8p, i32, i8p, i32}),
+                {b.first, b.second, d.first, d.second}));
+        };
+
+        // ── fsmeta namespace: lstat fields, chmod/chown/mknod, mtimes, xattrs ──
+        // (bytes_runtime.cpp; nothing follows symlinks).
+        auto& fns = ctx.namespaces["fsmeta"];
+        struct FsHelp {
+            static llvm::Value* cstr(CompilerContext& ctx, const std::vector<IRValue*>& args, size_t i) {
+                if (args.size() > i && args[i]) {
+                    llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[i]));
+                    if (v->getType()->isPointerTy()) return v;
+                }
+                return ctx.builder.CreateGlobalStringPtr("");
+            }
+        };
+        // fsmeta.stat(path, field) → i64
+        fns.builtinFuncs["stat"] = [](CompilerContext& ctx, const BF& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo(); llvm::Type* i32 = ctx.builder.getInt32Ty(); llvm::Type* i64 = ctx.builder.getInt64Ty();
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(ctx.getFunction("aiml_fsmeta_stat", i64, {i8p, i32}),
+                {FsHelp::cstr(ctx, args, 0), BytesHelp::i32arg(ctx, args, 1, 0)}));
+        };
+        // fsmeta.chmod(path, mode) → i32
+        fns.builtinFuncs["chmod"] = [](CompilerContext& ctx, const BF& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo(); llvm::Type* i32 = ctx.builder.getInt32Ty(); llvm::Type* i64 = ctx.builder.getInt64Ty();
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(ctx.getFunction("aiml_fsmeta_chmod", i32, {i8p, i64}),
+                {FsHelp::cstr(ctx, args, 0), BytesHelp::i64arg(ctx, args, 1, 0644)}));
+        };
+        // fsmeta.chown(path, uid, gid) → i32
+        fns.builtinFuncs["chown"] = [](CompilerContext& ctx, const BF& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo(); llvm::Type* i32 = ctx.builder.getInt32Ty(); llvm::Type* i64 = ctx.builder.getInt64Ty();
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(ctx.getFunction("aiml_fsmeta_chown", i32, {i8p, i64, i64}),
+                {FsHelp::cstr(ctx, args, 0), BytesHelp::i64arg(ctx, args, 1, -1), BytesHelp::i64arg(ctx, args, 2, -1)}));
+        };
+        // fsmeta.mknod(path, mode, major, minor) → i32
+        fns.builtinFuncs["mknod"] = [](CompilerContext& ctx, const BF& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo(); llvm::Type* i32 = ctx.builder.getInt32Ty(); llvm::Type* i64 = ctx.builder.getInt64Ty();
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(ctx.getFunction("aiml_fsmeta_mknod", i32, {i8p, i64, i64, i64}),
+                {FsHelp::cstr(ctx, args, 0), BytesHelp::i64arg(ctx, args, 1, 0), BytesHelp::i64arg(ctx, args, 2, 0), BytesHelp::i64arg(ctx, args, 3, 0)}));
+        };
+        // fsmeta.set_mtime(path, sec, nsec = 0) → i32
+        fns.builtinFuncs["set_mtime"] = [](CompilerContext& ctx, const BF& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo(); llvm::Type* i32 = ctx.builder.getInt32Ty(); llvm::Type* i64 = ctx.builder.getInt64Ty();
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(ctx.getFunction("aiml_fsmeta_set_mtime", i32, {i8p, i64, i64}),
+                {FsHelp::cstr(ctx, args, 0), BytesHelp::i64arg(ctx, args, 1, 0), BytesHelp::i64arg(ctx, args, 2, 0)}));
+        };
+        // fsmeta.xattrs(path) → string (names, one per line)
+        fns.builtinFuncs["xattrs"] = [](CompilerContext& ctx, const BF& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            return BytesHelp::str(ctx, ctx.builder.CreateCall(ctx.getFunction("aiml_fsmeta_xattrs", i8p, {i8p}),
+                {FsHelp::cstr(ctx, args, 0)}));
+        };
+        // fsmeta.xattr_get(path, name) → buffer<u8>
+        fns.builtinFuncs["xattr_get"] = [](CompilerContext& ctx, const BF& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            return BytesHelp::buf(ctx, ctx.builder.CreateCall(ctx.getFunction("aiml_fsmeta_xattr_get", i8p, {i8p, i8p}),
+                {FsHelp::cstr(ctx, args, 0), FsHelp::cstr(ctx, args, 1)}));
+        };
+        // fsmeta.xattr_set(path, name, value) → i32
+        fns.builtinFuncs["xattr_set"] = [](CompilerContext& ctx, const BF& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo(); llvm::Type* i32 = ctx.builder.getInt32Ty();
+            auto v = BytesHelp::view(ctx, args, 2);
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(ctx.getFunction("aiml_fsmeta_xattr_set", i32, {i8p, i8p, i8p, i32}),
+                {FsHelp::cstr(ctx, args, 0), FsHelp::cstr(ctx, args, 1), v.first, v.second}));
+        };
+    }
 
     // ── compress namespace ────────────────────────────────────────────────
     // NOTE: Handler lambdas must NOT capture local variables by reference —
