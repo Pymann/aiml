@@ -309,3 +309,113 @@ bad:
 }
 
 }  // extern "C"
+
+// ---------------------------------------------------------------------------
+// fsmeta.* — file metadata a byte-level snapshot of a filesystem needs
+// (layer tooling: ownership, mode bits, device nodes, xattrs, mtimes).
+// Nothing follows symlinks: every call acts on the link itself.
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <sys/sysmacros.h>
+#include <sys/types.h>
+#include <sys/xattr.h>
+#include <unistd.h>
+#include <vector>
+
+extern "C" {
+
+// fsmeta.stat(path, field) → i64 from lstat; -1 when the path is missing.
+//   0 st_mode (type + permission bits)  1 uid  2 gid  3 rdev major  4 rdev minor
+//   5 mtime s  6 mtime ns  7 size  8 nlink  9 inode  10 device
+int64_t aiml_fsmeta_stat(const char* p, int32_t field) {
+    if (!p) return -1;
+    struct stat st;
+    if (lstat(p, &st) != 0) return -1;
+    switch (field) {
+        case 0: return static_cast<int64_t>(st.st_mode);
+        case 1: return static_cast<int64_t>(st.st_uid);
+        case 2: return static_cast<int64_t>(st.st_gid);
+        case 3: return static_cast<int64_t>(major(st.st_rdev));
+        case 4: return static_cast<int64_t>(minor(st.st_rdev));
+        case 5: return static_cast<int64_t>(st.st_mtim.tv_sec);
+        case 6: return static_cast<int64_t>(st.st_mtim.tv_nsec);
+        case 7: return static_cast<int64_t>(st.st_size);
+        case 8: return static_cast<int64_t>(st.st_nlink);
+        case 9: return static_cast<int64_t>(st.st_ino);
+        case 10: return static_cast<int64_t>(st.st_dev);
+        default: return -1;
+    }
+}
+
+// fsmeta.chmod(path, mode) → 0 / -1 (permission bits incl. setuid/setgid/sticky;
+// a symlink has none — 0 without touching it).
+int32_t aiml_fsmeta_chmod(const char* p, int64_t mode) {
+    if (!p) return -1;
+    struct stat st;
+    if (lstat(p, &st) != 0) return -1;
+    if (S_ISLNK(st.st_mode)) return 0;
+    return chmod(p, static_cast<mode_t>(mode & 07777)) == 0 ? 0 : -1;
+}
+
+// fsmeta.chown(path, uid, gid) → 0 / -1 (lchown; -1 keeps that id).
+int32_t aiml_fsmeta_chown(const char* p, int64_t uid, int64_t gid) {
+    if (!p) return -1;
+    return lchown(p, static_cast<uid_t>(uid), static_cast<gid_t>(gid)) == 0 ? 0 : -1;
+}
+
+// fsmeta.mknod(path, mode, major, minor) → 0 / -1; mode carries the type
+// (S_IFCHR 0020000, S_IFBLK 0060000, S_IFIFO 0010000, S_IFSOCK 0140000).
+int32_t aiml_fsmeta_mknod(const char* p, int64_t mode, int64_t maj, int64_t min) {
+    if (!p) return -1;
+    return mknod(p, static_cast<mode_t>(mode), makedev(static_cast<unsigned>(maj), static_cast<unsigned>(min))) == 0 ? 0 : -1;
+}
+
+// fsmeta.set_mtime(path, sec, nsec) → 0 / -1 (atime set to the same).
+int32_t aiml_fsmeta_set_mtime(const char* p, int64_t sec, int64_t nsec) {
+    if (!p) return -1;
+    struct timespec ts[2];
+    ts[0].tv_sec = ts[1].tv_sec = static_cast<time_t>(sec);
+    ts[0].tv_nsec = ts[1].tv_nsec = static_cast<long>(nsec);
+    return utimensat(AT_FDCWD, p, ts, AT_SYMLINK_NOFOLLOW) == 0 ? 0 : -1;
+}
+
+// fsmeta.xattrs(path) → string: the attribute names, sorted, one per line
+// ("" for none or when the filesystem has no xattrs).
+char* aiml_fsmeta_xattrs(const char* p) {
+    if (!p) return managed_str("", 0);
+    ssize_t n = llistxattr(p, nullptr, 0);
+    if (n <= 0) return managed_str("", 0);
+    std::vector<char> raw(static_cast<size_t>(n) + 1, 0);
+    n = llistxattr(p, raw.data(), raw.size());
+    if (n <= 0) return managed_str("", 0);
+    std::vector<std::string> names;
+    for (ssize_t i = 0; i < n;) {
+        std::string nm(raw.data() + i);
+        i += static_cast<ssize_t>(nm.size()) + 1;
+        if (!nm.empty()) names.push_back(nm);
+    }
+    for (size_t a = 1; a < names.size(); ++a)
+        for (size_t b = a; b > 0 && names[b] < names[b - 1]; --b) names[b].swap(names[b - 1]);
+    std::string out;
+    for (size_t k = 0; k < names.size(); ++k) { if (k) out += '\n'; out += names[k]; }
+    return managed_str(out.data(), out.size());
+}
+
+// fsmeta.xattr_get(path, name) → buffer<u8> (empty when missing).
+void* aiml_fsmeta_xattr_get(const char* p, const char* name) {
+    if (!p || !name) return make_hdr(nullptr, 0);
+    ssize_t n = lgetxattr(p, name, nullptr, 0);
+    if (n <= 0) return make_hdr(nullptr, 0);
+    std::vector<uint8_t> raw(static_cast<size_t>(n));
+    n = lgetxattr(p, name, raw.data(), raw.size());
+    if (n <= 0) return make_hdr(nullptr, 0);
+    return make_hdr(raw.data(), n);
+}
+
+// fsmeta.xattr_set(path, name, value) → 0 / -1.
+int32_t aiml_fsmeta_xattr_set(const char* p, const char* name, const uint8_t* data, int32_t len) {
+    if (!p || !name || len < 0) return -1;
+    return lsetxattr(p, name, data ? data : reinterpret_cast<const uint8_t*>(""), static_cast<size_t>(len), 0) == 0 ? 0 : -1;
+}
+
+}  // extern "C"
