@@ -1,0 +1,26 @@
+# SPEC: 29_2_sys_exec
+# spec/29_2 §14a + spec/22: faengt NIEMAND den Signatur-Fehler, endet das
+# Programm mit 2 — und nennt dabei die BEGRUENDUNG.
+#
+# Das zweite ist der Punkt dieses Tests: die vom Uebersetzer gelegten Wuerfe
+# (`emitThrowMsg`) notieren ihre Meldung wie ein `throw` in aiml, sonst steht
+# auf der obersten Ebene nur „(no message)" (gemessen 25.10.2026).
+# Expected exit code: 2
+
+- def:
+    name: lib_acht
+    return: i32
+    body:
+      - return: 8
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [kontext, ctx_handle, { call: [ctx.new] }]
+      - decl: [lib, Code, { call: [sys.bundle, "lib_acht"] }]
+      - decl: [rcl, i32, { call: [kontext.exec, lib] }]
+      # Eine Funktion, aber mit falschem Rueckgabetyp genannt: wirft.
+      - decl: [adr, i64, { call: [kontext.symbol, "lib_acht", "fn() -> string"] }]
+      - print: ["  FAIL nicht geworfen (${adr})"]
+      - return: 0

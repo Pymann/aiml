@@ -1,0 +1,19 @@
+# Keine Testdatei, sondern die QUELLE fuer tests/test_ctx_pipeline.aiml:
+# so sieht eine eingereichte Pipeline aus (cosmos doc/spec/96) — sie nennt
+# die verteilten Schluessel und wird NICHT lokal gelaufen, sondern gelesen
+# (spec/62 §20).
+- pipeline:
+    name: ctx_demo
+    agent: x86_64
+    image: ubuntu-base
+    timeout: 30000
+    params:
+      - [mode, string, [debug, release]]
+    steps:
+      - stage:
+          name: bauen
+          run: "make -j4"
+      - stage:
+          name: pruefen
+          agent: arm64
+          run: "ctest"

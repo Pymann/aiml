@@ -4,8 +4,9 @@
 # ein Geheimnis im Quelltext.
 - pipeline:
     name: with_host_value
-    params: { arch: [x86_64] }
-    stages:
+    params:
+      - [arch, string, [x86_64]]
+    steps:
       - stage:
           name: one
           steps:

@@ -1,0 +1,13 @@
+# SPEC: 62_pipelines §18.5
+# F110-127: alte Schluesselnamen werden ABGEWIESEN und nennen den neuen.  Zwei
+# Requires: driver
+# Schreibweisen fuer dieselbe Sache loest spaeter niemand mehr auf — und der
+# UEBERSETZER sagt es, nicht jeder Wirt fuer sich (§20.2 F62-150).
+- pipeline:
+    name: alte_namen
+    runs_on: x86_64
+    steps:
+      - stage:
+          name: eins
+          steps:
+            - step: { name: erster, return: i32, body: [{ return: 0 }] }

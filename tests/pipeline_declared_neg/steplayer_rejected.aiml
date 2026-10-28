@@ -1,0 +1,14 @@
+# SPEC: 62_pipelines §18.5
+# F110-125: die Vorgabe ERGIBT sich aus `image:` und wird nicht geraten;
+# Requires: driver
+# widersprueechliche Angaben werden abgewiesen, statt eine davon gewinnen zu
+# lassen.
+- pipeline:
+    name: widerspruch
+    image: ubuntu-base
+    steps:
+      - stage:
+          name: eins
+          steplayer: none
+          steps:
+            - step: { name: erster, return: i32, body: [{ return: 0 }] }

@@ -20,8 +20,15 @@ want() {
 want needs_rejected.aiml      "needs"
 want host_value_rejected.aiml "host"
 want undeclared_axis.aiml     "mode"
-# spec/62 §18.1 (F62-124): Laufzeit-Felder lokal abgelehnt, mit Weg.
-want image_rejected.aiml      "spec/62 §18.1"
-want push_rejected.aiml       "spec/62 §18.1"
+# spec/62 §18.1: `image:`/`push:` werden UEBERSETZT und erst beim LAUF
+# abgelehnt (F62-124a) — dieselbe Datei ist fuer einen Cluster gueltig, und
+# ein Kontroller soll sie lesen koennen (§20.1).  Die Ablehnung haelt
+# tests/test_pipeline_local_refuses.aiml.
+#
+# Was hier bleibt: Formfehler, die der Uebersetzer besitzt (§20.2 F62-150).
+want old_name_rejected.aiml   "agent:"
+want unknown_key_rejected.aiml "unbekannter Schluessel"
+want stages_key_rejected.aiml "steps:"
+want steplayer_rejected.aiml  "steplayer"
 if [ $fails -ne 0 ]; then echo "pipeline_declared_neg FAIL ($fails)"; exit 1; fi
 echo "pipeline_declared_neg PASS"

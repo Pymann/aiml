@@ -1,0 +1,74 @@
+# static-check: off
+# spec/61 §5.4/§7 regression: `set: [model.field, { at: [list<string>, i] }]` must NOT leak.
+# BUG (gefunden 2026-10-25 via 9rooms-Starter-Deckset, Proben in
+# 9rooms_v2/leak_probes/starter_seed_20261025): der Feld-Store gated seinen Borrow-Read-incref
+# (322e0a0) auf `!inStringTempStack(val)` — aber `consumeStringTemp` hatte den Temp direkt nach
+# der RHS-Auswertung schon aus der Liste entfernt, ~900 Zeilen vorher. Die Abfrage sagte also
+# immer "kein Temp". `{ at: [names, i] }` auf einer list<string> ist BEIDES: Borrow-Read UND
+# owned temp (visitAtExpr increft das Element und registriert es) → zweite Referenz, die
+# niemand freigibt: 1 String pro Zuweisung (~36 B hier, 16 Strings pro 9rooms-Registrierung).
+# FIX: `rhsWasOwnedStringTemp` fragen (direkt nach der Auswertung festgehalten) statt der
+# geleerten Liste. map.get/kv.get registrieren keinen Temp → ihr incref bleibt (322e0a0 intakt).
+#
+# Deckt die vier Senken ab, die 54_at_field_string_no_leak NICHT hat: Feld-Store, Feld-Rebind,
+# Liste-in-Modellfeld (dotted receiver), und das Weiterreichen des Modells per ref.
+- model: { name: Row,    fields: [[nam, string], [kind, i32]] }
+- model: { name: Holder, fields: [[names, list<string>]] }
+
+- def:
+    name: consume_row
+    args: [[rowp, ref<Row>]]
+    return: i32
+    body:
+      - decl: [cpy, Row, rowp]
+      - return: cpy.nam.len
+
+- def:
+    name: fill_names
+    args: [[dst, list<string>]]
+    body:
+      # Literale werden beim push geduppt → echte Heap-Strings, rc=1 in der Liste.
+      - call: [dst.push, "ember snare aaaaaaaaaaaaaaaaaa"]
+      - call: [dst.push, "ash pit bbbbbbbbbbbbbbbbbbbbbb"]
+      - call: [dst.push, "sudden blaze cccccccccccccccc"]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [tot, i32, 0]
+      - decl: [reps, i32, 0]
+      - while:
+          condition: { lt: [reps, 200] }
+          body:
+            - decl: [names, list<string>]
+            - call: [fill_names, names]
+            - decl: [idx, i32, 0]
+            - while:
+                condition: { lt: [idx, names.len] }
+                body:
+                  # (a) at-Element direkt in ein Modellfeld (der geleakte Pfad)
+                  - decl: [row, Row]
+                  - set: [row.nam, { at: [names, idx] }]
+                  - set: [row.kind, idx]
+                  - set: [tot, { +: [tot, row.nam.len] }]
+                  # (b) Modell per ref weitergeben, Callee kopiert es
+                  - set: [tot, { +: [tot, { call: [consume_row, {'&': [row]}] }] }]
+                  # (c) Feld neu belegen → der alte at-Wert muss freigegeben werden
+                  - set: [row.nam, { at: [names, 0] }]
+                  - set: [tot, { +: [tot, row.nam.len] }]
+                  - set: [idx, { +: [idx, 1] }]
+            # (d) dieselbe Senke, aber die Liste liegt in einem Modellfeld
+            - decl: [hld, Holder]
+            - call: [fill_names, hld.names]
+            - decl: [row2, Row]
+            - set: [row2.nam, { at: [hld.names, 1] }]
+            - set: [tot, { +: [tot, row2.nam.len] }]
+            - set: [reps, { +: [reps, 1] }]
+      - if:
+          condition: { lt: [tot, 1] }
+          then:
+            - print: ["FAIL kein Lesezugriff gezaehlt"]
+            - return: 1
+      - print: ["PASS 57_at_elem_into_field tot=${tot}"]
+      - return: 0

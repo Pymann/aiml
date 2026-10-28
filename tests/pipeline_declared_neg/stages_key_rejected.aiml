@@ -1,0 +1,12 @@
+# SPEC: 62_pipelines §5.0
+# F62-57: eine Pipeline listet unter `steps:` ihre Stufen, eine Stufe darunter
+# Requires: driver
+# ihre Schritte.  `stages:` las die Umschreibung bis zum 25.10.2026 — die Spec
+# sagt `steps:`, also sagt es die Umschreibung.
+- pipeline:
+    name: falscher_listenname
+    stages:
+      - stage:
+          name: eins
+          steps:
+            - step: { name: erster, return: i32, body: [{ return: 0 }] }

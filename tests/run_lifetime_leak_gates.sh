@@ -157,6 +157,7 @@ GREEN=(
   tests/_inline_model_red/54_at_field_string_no_leak.aiml
   tests/_inline_model_red/55_jsonstyle_field_no_leak.aiml
   tests/_inline_model_red/56_list_share_alias_no_leak.aiml
+  tests/_inline_model_red/57_at_elem_into_field_no_leak.aiml
 )
 # RED: known open findings (documented) — run + report, but do NOT fail the gate yet.
 RED=(
