@@ -6553,6 +6553,20 @@ void registerBuiltins(CompilerContext& ctx) {
         bns.builtinFuncs["zlib_consumed"] = [](CompilerContext& ctx, const BF&) -> IRValue* {
             return ctx.ir_gen->wrap(ctx.builder.CreateCall(ctx.getFunction("aiml_bytes_zlib_consumed", ctx.builder.getInt64Ty(), {}), {}));
         };
+        // bytes.crc32(buf, off = 0, len = -1) → i64 (unsigned CRC-32, -1 outside)
+        bns.builtinFuncs["crc32"] = [](CompilerContext& ctx, const BF& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo(); llvm::Type* i32 = ctx.builder.getInt32Ty(); llvm::Type* i64 = ctx.builder.getInt64Ty();
+            auto v = BytesHelp::view(ctx, args, 0);
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(ctx.getFunction("aiml_bytes_crc32", i64, {i8p, i32, i64, i64}),
+                {v.first, v.second, BytesHelp::i64arg(ctx, args, 1, 0), BytesHelp::i64arg(ctx, args, 2, -1)}));
+        };
+        // bytes.compare(a, a_off, b, b_off, len) → i32 (-1/0/1, 2 = range outside)
+        bns.builtinFuncs["compare"] = [](CompilerContext& ctx, const BF& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo(); llvm::Type* i32 = ctx.builder.getInt32Ty(); llvm::Type* i64 = ctx.builder.getInt64Ty();
+            auto a = BytesHelp::view(ctx, args, 0); auto b = BytesHelp::view(ctx, args, 2);
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(ctx.getFunction("aiml_bytes_compare", i32, {i8p, i32, i64, i8p, i32, i64, i64}),
+                {a.first, a.second, BytesHelp::i64arg(ctx, args, 1, 0), b.first, b.second, BytesHelp::i64arg(ctx, args, 3, 0), BytesHelp::i64arg(ctx, args, 4, 0)}));
+        };
         // bytes.delta_apply(base, delta) → buffer<u8> (git pack delta; empty = malformed)
         bns.builtinFuncs["delta_apply"] = [](CompilerContext& ctx, const BF& args) -> IRValue* {
             llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo(); llvm::Type* i32 = ctx.builder.getInt32Ty();
