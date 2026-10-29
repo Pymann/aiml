@@ -182,20 +182,72 @@ Natively it wraps `http.get`. Pair it with `sys.deserialize` to parse a served m
 
 **Members** (directly settable via `set`):
 
-| Member       | Type                 | Description |
-|--------------|----------------------|-------------|
-| `headers`    | `map<string:string>` | Request headers; provides `put`, `get`, `remove` etc. |
-| `body`       | `string`             | Request body (text) |
-| `body_bytes` | `buffer<u8>`         | Request body (binary) |
-| `timeout`    | `i32`                | Timeout in ms (0 = no timeout) |
-| `stream`     | `bool`               | Streaming mode: response is not buffered; use `pipe`/`save_to` |
+| Member          | Type                 | Description |
+|-----------------|----------------------|-------------|
+| `headers`       | `map<string:string>` | Request headers; provides `put`, `get`, `remove` etc. |
+| `body`          | `string`             | Request body (text) |
+| `body_bytes`    | `buffer<u8>`         | Request body (binary) |
+| `body_file`     | `string`             | Request body streamed from this file at `send` (binary-safe, any size) |
+| `timeout`       | `i32`                | Timeout in ms for the connect and for every read/write (0 = 10 s connect, no read limit) |
+| `download_to`   | `string`             | A **2xx** body is streamed into this file (§2.3a); other answers stay in memory |
+| `proxy`         | `string`             | `""` (default) = from the environment, `"direct"` = no proxy, otherwise a proxy URL `http://[user:pass@]host[:port]` (§2.3a) |
+| `max_redirects` | `i32`                | Redirects followed (default **10**; `0` = a 3xx is the answer) |
+| `stream`        | `bool`               | Streaming mode: response is not buffered; use `pipe`/`save_to` |
 
 **Method**:
 
 | Method | Arguments | Return                 | Description |
 |--------|-----------|------------------------|-------------|
-| `send` | —         | `http_response_handle` | Sends request, returns response; **null** when there is no answer (connection refused / unreachable, TLS failure, no HTTP status line) |
-| `free` | —         | —                      | Releases the request handle (headers, body, method, body_file); the `url` and the response are separate.  Call it once, after `send`. |
+| `send` | —         | `http_response_handle` | Sends request, returns response; **null** when there is no answer (connection refused / unreachable, TLS failure, proxy refused, no HTTP status line, body cut off, too many redirects) — `http.last_error()` says which |
+| `free` | —         | —                      | Releases the request handle (headers, body, method, body_file, download_to, proxy); the `url` and the response are separate.  Call it once, after `send`. |
+
+**`http.last_error() → string`** — why the last request on this thread got no
+answer; `""` after an answered one (an HTTP error status *is* an answer).  It names
+host and port, never a proxy setting or a header value, so it is safe to log.
+
+### 2.3a Proxy, redirects, downloads (F32-2-30 … F32-2-39)
+
+All client requests (`http.get` … `http.head`, `client.send`) go through one path:
+
+1. **Proxy (F32-2-30).**  With `client.proxy` unset or `""`: `HTTPS_PROXY` for
+   `https://`, `HTTP_PROXY` for `http://` (each also lower-case), else `ALL_PROXY`.
+   `NO_PROXY` exempts a host: `*`, `example.com` (and its subdomains),
+   `.example.com`, `*.example.com`, an IP, an IPv4 CIDR `10.0.0.0/8`, each
+   optionally `:port`.  `"direct"` never uses a proxy; any other text is exactly that proxy
+   (NO_PROXY is not consulted).  A proxy URL without a port uses 1080; `user:pass@`
+   becomes `Proxy-Authorization: Basic …` (percent-decoded).  An `https://` proxy is
+   not supported (spec/32_5 §3.5) — the request gets no answer.
+2. **Connection (F32-2-31).**  `https://` through a proxy: `CONNECT host:port`,
+   then TLS with SNI and the usual verification inside the tunnel — a non-2xx
+   CONNECT answer is "no answer".  `http://` through a proxy: the request line
+   carries the absolute URL.  Direct otherwise.
+3. **Redirects (F32-2-32).**  301/302/303/307/308 with a `Location` are followed up
+   to `max_redirects` times; one more is "no answer".  A relative `Location` is
+   resolved against the URL that answered.  303 — and 301/302 after a `POST` —
+   continue as `GET` without a body (`HEAD` stays `HEAD`); 307/308 keep method and
+   body.  **`Authorization` is dropped** once the redirect leaves the original
+   origin (scheme + host + port) and stays dropped.  With `max_redirects` 0 the 3xx
+   itself is the answer (with its body).
+4. **`resp.url` (F32-2-33)** is the URL that gave the answer (after redirects).
+5. **Body framing (F32-2-34).**  `Transfer-Encoding: chunked`, else
+   `Content-Length` (64-bit), else the body runs until the server closes.  A body
+   that ends before its length / last chunk is **no answer** (not a short body).
+   HEAD, 1xx, 204 and 304 have no body.
+6. **`download_to` (F32-2-35).**  A 2xx body is written to `<file>.part` while it
+   arrives and renamed to `<file>` once complete — no heap copy, any size; the
+   file is untouched when the transfer breaks off (the `.part` is removed).
+   `resp.body` is then empty and `resp.body_len` is the byte count written.  A
+   non-2xx body stays in memory (it is the error text), the file is not created.
+
+```aiml
+- decl: [src, url, "https://kontor.example/blobs/sha256:ab12"]
+- decl: [req, http_client_handle, { call: [http.new_request, "GET", src] }]
+- call: [req.headers.put, "Authorization", "Bearer ${token}"]   # dropped if redirected elsewhere
+- set: [req.download_to, "/tmp/blob.tar"]
+- decl: [resp, http_response_handle, { call: [req.send] }]
+- call: [req.free]
+- if: { condition: { eq: [resp, null] }, then: [{ call: [log.error, { call: [http.last_error] }] }] }
+```
 
 ### 2.4 `http_response_handle` — Members and Methods (Client — Reading)
 
@@ -208,12 +260,14 @@ Natively it wraps `http.get`. Pair it with `sys.deserialize` to parse a served m
 | `headers`    | `map<string:string>` | Response headers; always initialized (never null) |
 | `body`       | `string`             | Response body fully buffered; null when streaming |
 | `body_bytes` | `buffer<u8>`         | Response body as buffer; null when streaming |
+| `body_len`   | `i64`                | Exact byte count of the body (in memory, or written by `download_to`) |
+| `url`        | `string`             | The URL that answered, after redirects (§2.3a) |
 
 **Methods** (streaming — no in-memory buffer):
 
 | Method    | Arguments  | Description |
 |-----------|------------|-------------|
-| `save_to` | `p: path`  | Streams body directly to file — no heap buffer (`splice`/write-loop) |
+| `save_to` | `p: path`  | Writes the received body byte-exact to the file (staged as `.part`, renamed); 0 ok, -1 error.  For bodies too big for memory use `client.download_to` (§2.3a) |
 | `pipe`    | `fn`       | Calls `fn(chunk: buffer<u8>)` for each received chunk |
 
 ```aiml

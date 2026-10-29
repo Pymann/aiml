@@ -55,6 +55,7 @@ typedef struct AimlHttpResponse {
     char*        raw_body;     /* malloc'd, NULL when empty */
     int64_t      raw_len;      /* exact byte length of raw_body */
     int8_t       head_only;    /* server-side: answering a HEAD request — headers only, no body */
+    char*        final_url;    /* client-side: the URL that answered (after redirects), malloc'd */
 } AimlHttpResponse;
 
 /* ─── http_request_handle ─────────────────────────────────────── */
@@ -85,6 +86,9 @@ typedef struct AimlHttpClient {
     char*        method;       /* set internally */
     AimlUrl*     url;          /* set internally */
     char*        body_file;    /* request body streamed from this file (binary-safe) or NULL */
+    char*        download_to;  /* 2xx response body streamed into this file, or NULL (spec/32_2 §2.3a) */
+    char*        proxy;        /* NULL/"" = from the environment, "direct" = none, else a proxy URL */
+    int32_t      max_redirects;/* redirects followed (default 10, 0 = none) */
 } AimlHttpClient;
 
 /* ─── Route handler function pointer ─────────────────────────── */
@@ -158,6 +162,8 @@ void*   aiml_http_resp_headers(void* resp);   /* AimlHttpMap* */
 char*   aiml_http_resp_body(void* resp);
 void    aiml_http_resp_free(void* resp);
 int64_t aiml_http_resp_body_len(void* resp);
+char*   aiml_http_resp_url(void* resp);        /* final URL after redirects */
+char*   aiml_http_last_error(void);            /* why the last request got no answer */
 int32_t aiml_http_resp_save_to(void* resp, const char* path);
 
 /* ══════════════════════════════════════════════════════════════
@@ -243,6 +249,9 @@ void*  aiml_http_req_cookies(void* req);  /* AimlHttpMap* */
 void aiml_http_client_set_body(void* client, const char* body);
 void aiml_http_client_set_body_file(void* client, const char* path);
 void aiml_http_client_set_timeout(void* client, int32_t timeout_ms);
+void aiml_http_client_set_download_to(void* client, const char* path);
+void aiml_http_client_set_proxy(void* client, const char* proxy);
+void aiml_http_client_set_max_redirects(void* client, int32_t count);
 void aiml_http_client_set_stream(void* client, int8_t stream);
 void* aiml_http_client_get_headers(void* client);   /* AimlHttpMap* */
 
