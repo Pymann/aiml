@@ -1,0 +1,94 @@
+# SPEC: 23_system
+# spec/23 §5 — running many processes:
+#   F23-50 sys.exe option stdin: read from a file; a missing file → null process
+#   F23-51 proc.signal(sig)
+#   F23-52 sys.wait_any: the index of an ended process, -1 on timeout; capture
+#          pipes keep draining (a child writing 300 KB does not block)
+#   F23-53 sys.catch_signals / sys.caught_signal; a caught signal ends wait_any early
+# Expected exit code: 0
+
+- import: "tests/_cross/check.aiml"
+
+- def:
+    name: start
+    args: [[script, string]]
+    return: process
+    body:
+      - decl: [argv, list<string>, ["sh", "-c"]]
+      - call: [argv.push, script]
+      - decl: [proc, process, { call: [sys.exe, argv, { capture: true }] }]
+      - return: [proc]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [chk, ptr<Checker>, { new: Checker }]
+
+      # ── a pool of four, each reported once, output kept ──
+      - decl: [jobs, list<process>]
+      - call: [jobs.push, { call: [start, "sleep 0.3; echo one"] }]
+      - call: [jobs.push, { call: [start, "sleep 0.1; echo two; echo warn >&2"] }]
+      - call: [jobs.push, { call: [start, "sleep 0.2; exit 3"] }]
+      - call: [jobs.push, { call: [start, "head -c 300000 /dev/zero | tr '\\0' x"] }]
+      - decl: [order, string, ""]
+      - decl: [rounds, i32, 0]
+      - while:
+          condition: { and: [{ gt: [jobs.len, 0] }, { lt: [rounds, 10] }] }
+          body:
+            - set: [rounds, { +: [rounds, 1] }]
+            - decl: [done_at, i32, { call: [sys.wait_any, jobs, 5000] }]
+            - if:
+                condition: { lt: [done_at, 0] }
+                then: [{ call: [chk.expect_i, "wait_any timed out", done_at, 0] }, { set: [rounds, 10] }]
+                else:
+                  - decl: [job, ref<process>, { at: [jobs, done_at] }]
+                  - decl: [out, string, job.stdout_buffer]
+                  - decl: [err, string, job.stderr_buffer]
+                  - set: [order, "${order}${job.returncode}:${out.len}:${err.len} "]
+                  - call: [jobs.remove, done_at]
+      - call: [chk.expect_s, "every job once, in the order they ended", order, "0:300000:0 0:4:5 3:0:0 0:4:0 "]
+
+      # ── a timeout and a signal ──
+      - decl: [slow, list<process>]
+      - call: [slow.push, { call: [start, "sleep 5"] }]
+      - decl: [start_ms, i64, { call: [time.mono_ms] }]
+      - call: [chk.expect_i, "nothing ended within 100 ms", { call: [sys.wait_any, slow, 100] }, -1]
+      - decl: [waited, i64, { -: [{ call: [time.mono_ms] }, start_ms] }]
+      - if: { condition: { gt: [waited, 1000] }, then: [{ call: [chk.expect_i, "the timeout was kept", waited, 100] }] }
+      - decl: [sleeper, ref<process>, { at: [slow, 0] }]
+      - call: [chk.expect_i, "signal sent", { call: [sleeper.signal, 15] }, 0]
+      - call: [chk.expect_i, "ended by SIGTERM", { call: [sleeper.wait] }, 143]
+      - call: [chk.expect_i, "no signal to a finished process", { call: [sleeper.signal, 15] }, -1]
+
+      # ── a caught signal ends the wait early ──
+      - call: [chk.expect_i, "unknown signal name", { call: [sys.catch_signals, "INT,BOGUS"] }, -1]
+      - call: [chk.expect_i, "catch USR1", { call: [sys.catch_signals, "USR1"] }, 0]
+      - decl: [idle, list<process>]
+      - call: [idle.push, { call: [start, "sleep 5"] }]
+      - decl: [kicker, process, { call: [start, "sleep 0.2; kill -USR1 $PPID"] }]
+      - decl: [kick_ms, i64, { call: [time.mono_ms] }]
+      - call: [chk.expect_i, "a caught signal ends wait_any", { call: [sys.wait_any, idle, 5000] }, -1]
+      - decl: [early, i64, { -: [{ call: [time.mono_ms] }, kick_ms] }]
+      - if: { condition: { gt: [early, 3000] }, then: [{ call: [chk.expect_i, "ended early", early, 200] }] }
+      - call: [chk.expect_i, "the caught signal", { call: [sys.caught_signal] }, 10]
+      - call: [chk.expect_i, "reading clears it", { call: [sys.caught_signal] }, 0]
+      - call: [kicker.wait]
+      - decl: [idler, ref<process>, { at: [idle, 0] }]
+      - call: [idler.kill]
+      - call: [idler.wait]
+
+      # ── stdin from a file ──
+      - call: [io.write_file, "/tmp/aiml_process_pool_in.txt", "one\ntwo\n"]
+      - decl: [count_argv, list<string>, ["wc", "-l"]]
+      - decl: [counter, process, { call: [sys.exe, count_argv, { capture: true, stdin: "/tmp/aiml_process_pool_in.txt" }] }]
+      - call: [counter.wait]
+      - decl: [counted, string, counter.stdout_buffer]
+      - call: [chk.expect_s, "stdin read from the file", { call: [counted.trim] }, "2"]
+      - decl: [missing, process, { call: [sys.exe, count_argv, { stdin: "/nonexistent-aiml/in.txt" }] }]
+      - call: [chk.expect_i, "a missing stdin file fails the spawn", { call: [missing.pid] }, -1]
+      - call: [io.remove, "/tmp/aiml_process_pool_in.txt"]
+
+      - if: { condition: { gt: [chk.fails, 0] }, then: [{ print: ["FAIL process_pool (${chk.fails})"] }, { return: 1 }] }
+      - print: ["PASS process_pool"]
+      - return: 0

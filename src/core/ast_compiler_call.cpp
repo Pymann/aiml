@@ -520,13 +520,13 @@ IRValue* Compiler::visitCall(CallExpr* call) {
 
         // spec/23 §5.1: sys.exe option bag — bools are compile-time literals, the rest expressions.
         static const std::set<std::string> kExeOpts = {
-            "cwd","env","shell","timeout","capture","stdout","stderr","detach","status_file"};
+            "cwd","env","shell","timeout","capture","stdin","stdout","stderr","detach","status_file"};
         ctx.exeOpts = CompilerContext::ExeOptions();
         if (baseName == "sys" && methodName == "exe") {
             auto applyExeOpt = [&](const std::string& key, Expr* valExpr, const std::string& raw) {
                 if (!kExeOpts.count(key)) {
                     LOG_ERROR(ctx.fmtLoc(call->sourceNode) + "sys.exe: unknown option '" + key
-                        + "' (cwd, env, shell, timeout, capture, stdout, stderr, detach, status_file — spec/23 §5.1)");
+                        + "' (cwd, env, shell, timeout, capture, stdin, stdout, stderr, detach, status_file — spec/23 §5.1)");
                     return;
                 }
                 if (key == "shell" || key == "capture" || key == "detach") {
@@ -570,6 +570,7 @@ IRValue* Compiler::visitCall(CallExpr* call) {
                 if (key == "cwd") ctx.exeOpts.cwd = v;
                 else if (key == "env") ctx.exeOpts.env = v;
                 else if (key == "timeout") ctx.exeOpts.timeout = v;
+                else if (key == "stdin") ctx.exeOpts.stdinPath = v;
                 else if (key == "stdout") ctx.exeOpts.stdoutPath = v;
                 else if (key == "stderr") ctx.exeOpts.stderrPath = v;
                 else ctx.exeOpts.statusFile = v;
@@ -2571,6 +2572,20 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                          {i8p, ctx.builder.getInt32Ty()}), { slot, ctx.builder.getInt32(mc) });
                  }
                  ListImpl::remove(ctx, listP, idxV, fatTy ? fatTy : i8p, /*elemIsString=*/false);
+                 return nullptr;
+             }
+             // spec/23 §5.5: a list<process> element is an owned handle → remove releases it.
+             if (listElemName == "process") {
+                 auto* i8p = llvm::PointerType::get(ctx.context, 0);
+                 llvm::Value* listP = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca));
+                 llvm::Value* idxV  = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
+                 llvm::StructType* lstTy = ListImpl::getListStructType(ctx);
+                 llvm::Value* dataP = ctx.builder.CreateLoad(i8p,
+                     ctx.builder.CreateStructGEP(lstTy, listP, 2, "rm_dataPtr"), "rm_dataBase");
+                 llvm::Value* gone = ctx.builder.CreateLoad(i8p,
+                     ctx.builder.CreateInBoundsGEP(i8p, dataP, idxV, "rm_slot"), "rm_proc");
+                 ctx.builder.CreateCall(ctx.getFunction("aiml_process_release", ctx.builder.getVoidTy(), {i8p}), { gone });
+                 ListImpl::remove(ctx, listP, idxV, i8p, /*elemIsString=*/false);
                  return nullptr;
              }
              // spec/61 §5.5 (memV3): list<ptr<T>> element = an OWNING box → remove RELEASES it

@@ -12,6 +12,9 @@
 #include <errno.h>
 #include <sys/wait.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
+#include <atomic>
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
@@ -39,6 +42,7 @@ struct ProcessHandle {
     int fds[2] = {-1, -1};   // capture pipes (stdout, stderr), read ends
     std::string bufs[2];     // captured, not yet consumed
     char* cached[2] = {nullptr, nullptr};   // rc strings handed out by stdout_buffer/stderr_buffer
+    int pidfd = -1;          // readable once `child` ends (sys.wait_any); -1 = not opened / unsupported
     int64_t deadline = -1;   // monotonic ms, parent-enforced timeout (non-detached)
     int64_t term_sent = -1;
     bool timed_out = false;
@@ -301,7 +305,7 @@ ProcessHandle* spawn_detached(std::vector<std::string>& argv, const std::string&
 
 ProcessHandle* spawn_attached(std::vector<std::string>& argv, const std::string& cwd,
                               std::vector<std::string>& envv, bool has_env, int32_t timeout, bool capture,
-                              const std::string& out_path, const std::string& err_path) {
+                              const std::string& in_path, const std::string& out_path, const std::string& err_path) {
     posix_spawn_file_actions_t fa;
     posix_spawn_file_actions_init(&fa);
     posix_spawnattr_t attr;
@@ -321,6 +325,16 @@ ProcessHandle* spawn_attached(std::vector<std::string>& argv, const std::string&
         posix_spawn_file_actions_adddup2(&fa, pipes[i][1], i + 1);
     }
     // redirect paths are relative to the parent's cwd: open before the chdir
+    // stdin: checked here, not only in the child — a posix_spawn that falls back to
+    // fork+exec (e.g. under valgrind) cannot report a failed file action
+    if (!in_path.empty()) {
+        if (access(in_path.c_str(), R_OK) != 0) {
+            posix_spawn_file_actions_destroy(&fa);
+            posix_spawnattr_destroy(&attr);
+            return nullptr;
+        }
+        posix_spawn_file_actions_addopen(&fa, 0, in_path.c_str(), O_RDONLY, 0);
+    }
     if (redirect[0]) posix_spawn_file_actions_addopen(&fa, 1, out_path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (redirect[1]) {
         if (redirect[0] && err_path == out_path) posix_spawn_file_actions_adddup2(&fa, 1, 2);
@@ -352,8 +366,9 @@ ProcessHandle* spawn_attached(std::vector<std::string>& argv, const std::string&
 }  // namespace
 
 extern "C" void* aiml_process_spawn(void* argvList, const char* cwd, void* env, int32_t shell,
-                                    int32_t timeout, int32_t capture, const char* stdout_path,
-                                    const char* stderr_path, int32_t detach, const char* status_file) {
+                                    int32_t timeout, int32_t capture, const char* stdin_path,
+                                    const char* stdout_path, const char* stderr_path, int32_t detach,
+                                    const char* status_file) {
     reap_orphans();
     std::vector<std::string> argv = list_strings(argvList);
     if (argv.empty()) return nullptr;
@@ -364,18 +379,19 @@ extern "C" void* aiml_process_spawn(void* argvList, const char* cwd, void* env, 
     }
     bool has_env = false;
     std::vector<std::string> envv = env_strings(env, has_env);
-    std::string cwd_s = cwd ? cwd : "", out_s = stdout_path ? stdout_path : "",
+    std::string cwd_s = cwd ? cwd : "", in_s = stdin_path ? stdin_path : "",
+                out_s = stdout_path ? stdout_path : "",
                 err_s = stderr_path ? stderr_path : "", st_s = status_file ? status_file : "";
     ProcessHandle* h = detach
         ? spawn_detached(argv, cwd_s, envv, has_env, timeout, out_s, err_s, st_s)
-        : spawn_attached(argv, cwd_s, envv, has_env, timeout, capture != 0, out_s, err_s);
+        : spawn_attached(argv, cwd_s, envv, has_env, timeout, capture != 0, in_s, out_s, err_s);
     if (!h) LOG_DEBUG("[Runtime] sys.exe: spawn failed for " + argv[0]);
     return h;
 }
 
 // Legacy entry (pre spec/23 §5 option bag).
 extern "C" void* sys_exe_runtime(void* argvList, char* cwd, void*, bool, int32_t, bool) {
-    return aiml_process_spawn(argvList, cwd, nullptr, 0, -1, 0, nullptr, nullptr, 0, nullptr);
+    return aiml_process_spawn(argvList, cwd, nullptr, 0, -1, 0, nullptr, nullptr, nullptr, 0, nullptr);
 }
 
 extern "C" void* aiml_process_attach(int64_t pid, const char* status_file) {
@@ -418,6 +434,13 @@ extern "C" void process_kill(void* handle) {
     auto* h = static_cast<ProcessHandle*>(handle);
     if (!h || h->finished || h->pid <= 0) return;
     kill(h->detached || h->attached ? -h->pid : h->pid, SIGKILL);
+}
+
+// process.signal(sig): 0 sent, -1 not (finished, unknown process or signal).
+extern "C" int32_t aiml_process_signal(void* handle, int32_t sig) {
+    auto* h = static_cast<ProcessHandle*>(handle);
+    if (!h || h->finished || h->pid <= 0 || sig <= 0 || sig >= NSIG) return -1;
+    return kill(h->detached || h->attached ? -h->pid : h->pid, sig) == 0 ? 0 : -1;
 }
 
 extern "C" int64_t aiml_process_pid(void* handle) {
@@ -479,6 +502,7 @@ extern "C" void aiml_process_release(void* handle) {
         if (h->fds[i] >= 0) close(h->fds[i]);
         if (h->cached[i]) aiml_str_decref(h->cached[i]);
     }
+    if (h->pidfd >= 0) close(h->pidfd);
     if (!h->finished && h->child > 0) {
         int st;
         if (waitpid(h->child, &st, WNOHANG) != h->child) {
@@ -487,6 +511,98 @@ extern "C" void aiml_process_release(void* handle) {
         }
     }
     delete h;
+}
+
+/* ── spec/23 §5.7: caught signals ──────────────────────────────────────────── */
+
+namespace {
+
+std::atomic<int> g_caught_signal{0};     // last caught, cleared by sys.caught_signal
+std::atomic<unsigned> g_signal_count{0}; // every caught signal, for sys.wait_any
+
+void record_signal(int sig) {            // async-signal-safe: two lock-free stores
+    g_caught_signal.store(sig);
+    g_signal_count.fetch_add(1);
+}
+
+int signal_number(const std::string& name) {
+    static const struct { const char* name; int sig; } kKnown[] = {
+        {"INT", SIGINT}, {"TERM", SIGTERM}, {"HUP", SIGHUP}, {"QUIT", SIGQUIT},
+        {"USR1", SIGUSR1}, {"USR2", SIGUSR2}, {"PIPE", SIGPIPE}};
+    for (const auto& k : kKnown) if (name == k.name) return k.sig;
+    return 0;
+}
+
+}  // namespace
+
+extern "C" int32_t aiml_sys_catch_signals(const char* names) {
+    std::vector<int> sigs;
+    std::string list = names ? names : "";
+    size_t start = 0;
+    while (start <= list.size()) {
+        size_t comma = list.find(',', start);
+        std::string one = list.substr(start, comma == std::string::npos ? std::string::npos : comma - start);
+        size_t a = one.find_first_not_of(" \t"), b = one.find_last_not_of(" \t");
+        one = a == std::string::npos ? "" : one.substr(a, b - a + 1);
+        if (one.rfind("SIG", 0) == 0) one = one.substr(3);
+        if (!one.empty()) {
+            int sig = signal_number(one);
+            if (!sig) return -1;
+            sigs.push_back(sig);
+        }
+        if (comma == std::string::npos) break;
+        start = comma + 1;
+    }
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = record_signal;
+    sa.sa_flags = SA_RESTART;          // blocking reads go on; poll(2) still returns EINTR
+    sigemptyset(&sa.sa_mask);
+    for (int sig : sigs) sigaction(sig, &sa, nullptr);
+    return 0;
+}
+
+extern "C" int32_t aiml_sys_caught_signal(void) {
+    return g_caught_signal.exchange(0);
+}
+
+/* ── spec/23 §5.5: sys.wait_any ────────────────────────────────────────────── */
+
+// The index of an ended process in a list<process> (lowest index), -1 on
+// timeout, an empty list or a caught signal.  Capture pipes are drained and
+// timeouts enforced while waiting; the wait itself is poll(2) on pidfds.
+extern "C" int32_t aiml_sys_wait_any(void* listPtr, int32_t timeout_ms) {
+    auto* list = static_cast<AimlList*>(listPtr);
+    if (!list || list->size <= 0) return -1;
+    auto** procs = static_cast<ProcessHandle**>(list->data);
+    const unsigned signals_before = g_signal_count.load();
+    const int64_t deadline = timeout_ms < 0 ? -1 : mono_ms() + timeout_ms;
+    std::vector<struct pollfd> fds;
+    for (;;) {
+        bool need_ticks = false;          // something no descriptor reports (timeouts, attached jobs)
+        fds.clear();
+        for (int32_t i = 0; i < list->size; ++i) {
+            ProcessHandle* h = procs[i];
+            if (!h) continue;
+            drain(h, 0);
+            if (!step(h)) { reap_orphans(); return i; }
+            if (h->attached || h->deadline >= 0) need_ticks = true;
+            if (h->child > 0 && h->pidfd < 0) h->pidfd = (int)syscall(SYS_pidfd_open, h->child, 0);
+            if (h->pidfd >= 0) fds.push_back({h->pidfd, POLLIN, 0});
+            else need_ticks = true;
+            for (int k = 0; k < 2; ++k) if (h->fds[k] >= 0) fds.push_back({h->fds[k], POLLIN, 0});
+        }
+        if (g_signal_count.load() != signals_before) return -1;
+        int wait = -1;
+        if (deadline >= 0) {
+            int64_t left = deadline - mono_ms();
+            if (left <= 0) return -1;
+            wait = (int)std::min<int64_t>(left, 1 << 30);
+        }
+        if (need_ticks && (wait < 0 || wait > 20)) wait = 20;
+        if (poll(fds.data(), (nfds_t)fds.size(), wait) < 0 && errno == EINTR
+            && g_signal_count.load() != signals_before) return -1;
+    }
 }
 
 // spec/23: absolute path of the running executable, "" when unknown; runtime-owned.
