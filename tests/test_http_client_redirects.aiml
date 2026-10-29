@@ -1,0 +1,102 @@
+# SPEC: 32_2_http
+# spec/32_2 §2.3a — the client follows redirects and streams downloads:
+#   F32-2-32  301/302/303/307/308 followed up to max_redirects (relative and
+#             absolute Location); one more → null + http.last_error;
+#             max_redirects 0 → the 3xx is the answer
+#   F32-2-32  303 (and 302 after POST) → GET without body; 307 keeps POST + body
+#   F32-2-32  Authorization dropped when the redirect leaves the origin
+#   F32-2-33  resp.url is the URL that answered
+#   F32-2-35  download_to: a 2xx body streamed into the file (byte-exact, no
+#             .part left), a 404 body stays in memory and creates no file
+# The download fixture is a 4 MiB file the test writes first.
+# Expected exit code: 0
+
+- import: "tests/_cross/http_redirect_routes.aiml"
+- import: "tests/_cross/http_client_check.aiml"
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [asrt, ptr<Checker>, { new: Checker }]
+      - decl: [chk, ptr<HttpCheck>, { new: HttpCheck }]
+      - set: [chk.check, asrt]
+      - decl: [srv, http_server_handle, { call: [http.server, "127.0.0.1", 23211] }]
+      - call: [install_redirect_routes, srv]
+      - decl: [fixture, string, { call: [write_blob_fixture] }]
+      - decl: [srv_thread, thread_handle, { call: [srv.start_async] }]
+      - call: [time.sleep_ms, 200]
+      - decl: [base, string, "http://127.0.0.1:23211"]
+
+      # ── a chain of three: relative, relative, absolute ──
+      - decl: [chain, http_response_handle, { call: [chk.fetch, "GET", "${base}/r3", 10] }]
+      - call: [chk.expect_answer, "chain", chain, 200, "end"]
+      - if:
+          condition: { neq: [chain, null] }
+          then:
+            - decl: [final, string, { call: [chain.url] }]
+            - call: [chk.check.expect_s, "resp.url after redirects", final, "${base}/r0"]
+            - call: [chain.free]
+
+      # ── too many: max_redirects 2 for a chain of 3 ──
+      - decl: [short_req, http_client_handle, { call: [chk.request, "GET", "${base}/r3"] }]
+      - set: [short_req.max_redirects, 2]
+      - decl: [too_many, http_response_handle, { call: [short_req.send] }]
+      - call: [short_req.free]
+      - call: [chk.expect_null, "more redirects than allowed", too_many]
+      - call: [chk.check.expect_has, "last_error names it", { call: [http.last_error] }, "more than 2 redirects"]
+
+      # ── max_redirects 0: the 3xx is the answer ──
+      - decl: [raw, http_response_handle, { call: [chk.fetch, "GET", "${base}/r3", 0] }]
+      - call: [chk.expect_answer, "no redirects followed", raw, 302, ""]
+      - if:
+          condition: { neq: [raw, null] }
+          then:
+            - decl: [where, string, { call: [raw.headers.get, "location"] }]
+            - call: [chk.check.expect_s, "Location kept", where, "/r2"]
+            - call: [raw.free]
+      - call: [chk.check.expect_s, "answered: no error", { call: [http.last_error] }, ""]
+
+      # ── Authorization: kept on the same origin, dropped elsewhere ──
+      - decl: [near, http_response_handle, { call: [chk.fetch, "GET", "${base}/near", 10] }]
+      - call: [chk.expect_answer, "same-origin redirect keeps Authorization", near, 200, "Bearer t0k"]
+      - if: { condition: { neq: [near, null] }, then: [{ call: [near.free] }] }
+      - decl: [away, http_response_handle, { call: [chk.fetch, "GET", "${base}/away", 10] }]
+      - call: [chk.expect_answer, "cross-origin redirect drops Authorization", away, 200, "none"]
+      - if: { condition: { neq: [away, null] }, then: [{ call: [away.free] }] }
+
+      # ── methods across redirects ──
+      - decl: [seen, http_response_handle, { call: [chk.fetch, "POST", "${base}/see-other", 10] }]
+      - call: [chk.expect_answer, "303 continues as GET without body", seen, 200, "GET:0"]
+      - if: { condition: { neq: [seen, null] }, then: [{ call: [seen.free] }] }
+      - decl: [found, http_response_handle, { call: [chk.fetch, "POST", "${base}/found", 10] }]
+      - call: [chk.expect_answer, "302 after POST continues as GET", found, 200, "GET:0"]
+      - if: { condition: { neq: [found, null] }, then: [{ call: [found.free] }] }
+      - decl: [kept, http_response_handle, { call: [chk.fetch, "POST", "${base}/temp", 10] }]
+      - call: [chk.expect_answer, "307 keeps POST and body", kept, 200, "POST:5"]
+      - if: { condition: { neq: [kept, null] }, then: [{ call: [kept.free] }] }
+
+      # ── download_to ──
+      - decl: [blob_path, string, "/tmp/aiml_http_redirects_blob.bin"]
+      - call: [io.remove, blob_path]
+      - decl: [blob_req, http_client_handle, { call: [chk.request, "GET", "${base}/blob-moved"] }]
+      - set: [blob_req.download_to, blob_path]
+      - decl: [blob, http_response_handle, { call: [blob_req.send] }]
+      - call: [blob_req.free]
+      - call: [chk.expect_download, "download_to after a redirect", blob, blob_path, fixture]
+
+      - decl: [gone_path, string, "/tmp/aiml_http_redirects_gone.bin"]
+      - call: [io.remove, gone_path]
+      - decl: [gone_req, http_client_handle, { call: [chk.request, "GET", "${base}/gone"] }]
+      - set: [gone_req.download_to, gone_path]
+      - decl: [gone, http_response_handle, { call: [gone_req.send] }]
+      - call: [gone_req.free]
+      - call: [chk.expect_answer, "a 404 body stays in memory", gone, 404, "nope"]
+      - if: { condition: { neq: [gone, null] }, then: [{ call: [gone.free] }] }
+      - call: [chk.check.expect_i, "no file for a 404", { call: [io.exists, gone_path] }, 0]
+
+      - call: [io.remove, fixture]
+      - call: [srv.stop]
+      - if: { condition: { gt: [chk.check.fails, 0] }, then: [{ print: ["FAIL http_client_redirects (${chk.check.fails})"] }, { return: 1 }] }
+      - print: ["PASS http_client_redirects"]
+      - return: 0

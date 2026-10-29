@@ -1,0 +1,82 @@
+# SPEC: 32_2_http
+# spec/32_2 §2.3a — proxies and body framing, all against local fixtures:
+#   F32-2-30  client.proxy: a proxy URL with user:pass → Proxy-Authorization Basic;
+#             "direct" → no proxy; an https:// proxy → null + http.last_error
+#   F32-2-31  http:// through a proxy: absolute-form request line (no DNS here);
+#             https:// through a proxy: CONNECT, then TLS inside the tunnel —
+#             verified by default (self-signed → null), insecure toggle → answer;
+#             a refused CONNECT → null + last_error
+#   F32-2-34  a body without Content-Length runs until close; a body shorter than
+#             its Content-Length is no answer
+# Expected exit code: 0
+
+- import: "tests/_cross/http_fake_proxy.aiml"
+- import: "tests/_cross/http_client_check.aiml"
+
+- def:
+    name: handle_secure
+    args: [[req, http_request_handle], [resp, http_response_handle]]
+    body:
+      - set: [resp.body, "tls-ok"]
+      - call: [resp.send]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [asrt, ptr<Checker>, { new: Checker }]
+      - decl: [web, ptr<HttpCheck>, { new: HttpCheck }]
+      - set: [web.check, asrt]
+
+      - decl: [tls_srv, http_server_handle, { call: [http.server_tls, "127.0.0.1", 23222, "tests/tls_certs/server.crt", "tests/tls_certs/server.key"] }]
+      - call: [tls_srv.set_timeout, 2]
+      - call: [tls_srv.route, "GET", "/secure", handle_secure]
+      - decl: [tls_thread, thread_handle, { call: [tls_srv.start_async] }]
+      - decl: [proxy_sock, socket_handle, { call: [listen_on, 23221] }]
+      - decl: [proxy_thread, thread_handle, { spawn: [proxy_serve, proxy_sock, 4] }]
+      - decl: [origin_sock, socket_handle, { call: [listen_on, 23223] }]
+      - decl: [origin_thread, thread_handle, { spawn: [origin_serve, origin_sock, 2] }]
+      - call: [time.sleep_ms, 300]
+      - decl: [proxy_url, string, "http://user:p%40ss@127.0.0.1:23221"]
+
+      # ── forward mode: absolute-form target, Basic auth from the proxy URL ──
+      - decl: [fwd, http_response_handle, { call: [web.via, "http://origin.test:8080/plain?x=1", proxy_url] }]
+      - call: [web.expect_answer, "forward proxy", fwd, 200, "fwd GET http://origin.test:8080/plain?x=1 HTTP/1.1|Basic dXNlcjpwQHNz"]
+      - if: { condition: { neq: [fwd, null] }, then: [{ call: [fwd.free] }] }
+
+      # ── CONNECT: the certificate is verified inside the tunnel ──
+      - decl: [strict, http_response_handle, { call: [web.via, "https://localhost:23222/secure", proxy_url] }]
+      - call: [web.expect_null, "self-signed through the tunnel", strict]
+      - call: [web.check.expect_has, "TLS failure named", { call: [http.last_error] }, "localhost: TLS"]
+      - call: [mirror.tls_insecure, 1]
+      - decl: [tunneled, http_response_handle, { call: [web.via, "https://localhost:23222/secure", proxy_url] }]
+      - call: [web.expect_answer, "https through CONNECT", tunneled, 200, "tls-ok"]
+      - if: { condition: { neq: [tunneled, null] }, then: [{ call: [tunneled.free] }] }
+      - call: [mirror.tls_insecure, 0]
+      - decl: [refused, http_response_handle, { call: [web.via, "https://127.0.0.1:1/x", proxy_url] }]
+      - call: [web.expect_null, "CONNECT refused", refused]
+      - call: [web.check.expect_has, "refusal named", { call: [http.last_error] }, "refused CONNECT 127.0.0.1:1 (HTTP 403)"]
+
+      # ── the proxy URL's credentials never reach the error text ──
+      - decl: [tls_proxy, http_response_handle, { call: [web.via, "http://origin.test/", "https://user:secret@127.0.0.1:23221"] }]
+      - call: [web.expect_null, "https:// proxy", tls_proxy]
+      - decl: [why, string, { call: [http.last_error] }]
+      - call: [web.check.expect_has, "https proxy named", why, "https:// proxy is not supported"]
+      - call: [web.check.expect_i, "no secret in the error", { call: [why.index_of, "secret"] }, -1]
+
+      # ── direct, framing ──
+      - decl: [closing, http_response_handle, { call: [web.via, "http://127.0.0.1:23223/until-close", "direct"] }]
+      - call: [web.expect_answer, "body until close", closing, 200, "hello until close"]
+      - if: { condition: { neq: [closing, null] }, then: [{ call: [closing.free] }] }
+      - decl: [short, http_response_handle, { call: [web.via, "http://127.0.0.1:23223/short", "direct"] }]
+      - call: [web.expect_null, "body shorter than Content-Length", short]
+      - call: [web.check.expect_has, "cut-off named", { call: [http.last_error] }, "broke off"]
+
+      - call: [proxy_thread.join]
+      - call: [origin_thread.join]
+      - call: [net.close, proxy_sock]
+      - call: [net.close, origin_sock]
+      - call: [tls_srv.stop]
+      - if: { condition: { gt: [web.check.fails, 0] }, then: [{ print: ["FAIL http_client_proxy (${web.check.fails})"] }, { return: 1 }] }
+      - print: ["PASS http_client_proxy"]
+      - return: 0
