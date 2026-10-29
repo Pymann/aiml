@@ -1,0 +1,94 @@
+# HTTP client test helpers: requests with a known Authorization and body,
+# assertions on answers.  Failures are counted by the shared Checker.
+
+- import: "tests/_cross/check.aiml"
+
+- class:
+    name: HttpCheck
+    members:
+      - [check, ptr<Checker>, null, { access: public }]
+    methods:
+      # A request with "Authorization: Bearer t0k" and, for POST, the body "hello".
+      - def:
+          name: request
+          args: [[method, string], [target, string]]
+          return: http_client_handle
+          body:
+            - decl: [dest, url, { call: [http.parse_url, target] }]
+            - decl: [req, http_client_handle, { call: [http.new_request, method, dest] }]
+            - call: [req.headers.put, "Authorization", "Bearer t0k"]
+            - set: [req.timeout, 5000]
+            - if: { condition: { eq: [method, "POST"] }, then: [{ set: [req.body, "hello"] }] }
+            - return: [req]
+
+      - def:
+          name: fetch
+          args: [[method, string], [target, string], [hops, i32]]
+          return: http_response_handle
+          body:
+            - decl: [req, http_client_handle, { call: [<.request, method, target] }]
+            - set: [req.max_redirects, hops]
+            - decl: [resp, http_response_handle, { call: [req.send] }]
+            - call: [req.free]
+            - return: [resp]
+
+      # A GET through `proxy` ("" = environment, "direct", or a proxy URL).
+      - def:
+          name: via
+          args: [[target, string], [proxy, string]]
+          return: http_response_handle
+          body:
+            - decl: [req, http_client_handle, { call: [<.request, "GET", target] }]
+            - set: [req.proxy, proxy]
+            - decl: [resp, http_response_handle, { call: [req.send] }]
+            - call: [req.free]
+            - return: [resp]
+
+      - def:
+          name: expect_answer
+          args: [[label, string], [resp, http_response_handle], [status, i32], [body, string]]
+          body:
+            - if:
+                condition: { eq: [resp, null] }
+                then:
+                  - decl: [why, string, { call: [http.last_error] }]
+                  - call: [<.check.expect_s, "${label}: no answer", why, "an answer"]
+                  - return: []
+            - call: [<.check.expect_i, "${label}: status", { call: [resp.status] }, status]
+            - call: [<.check.expect_s, "${label}: body", { call: [resp.body] }, body]
+
+      - def:
+          name: expect_null
+          args: [[label, string], [resp, http_response_handle]]
+          body:
+            - if:
+                condition: { neq: [resp, null] }
+                then:
+                  - call: [<.check.expect_i, "${label}: expected no answer, status", { call: [resp.status] }, 0]
+                  - call: [resp.free]
+
+      # A 2xx streamed into `dest`: the file is `source` byte for byte, the
+      # in-memory body is empty, body_len is the size, no .part is left.
+      - def:
+          name: expect_download
+          args: [[label, string], [resp, http_response_handle], [dest, string], [source, string]]
+          body:
+            - call: [<.expect_answer, label, resp, 200, ""]
+            - if: { condition: { eq: [resp, null] }, then: [{ return: [] }] }
+            - decl: [want, i64, { call: [io.file_size, source] }]
+            - call: [<.check.expect_i, "${label}: body_len", { call: [resp.body_len] }, want]
+            - call: [resp.free]
+            - call: [<.check.expect_s, "${label}: content", { call: [<.digest, dest] }, { call: [<.digest, source] }]
+            - call: [<.check.expect_i, "${label}: no .part left", { call: [io.exists, "${dest}.part"] }, 0]
+            - call: [io.remove, dest]
+
+      - def:
+          name: digest
+          args: [[src, string]]
+          return: string
+          body:
+            - decl: [total, i64, { call: [io.file_size, src] }]
+            - decl: [inp, file_handle, { call: [io.open_binary, src] }]
+            - decl: [data, buffer<u8>, { call: [io.read_bytes, inp, total] }]
+            - call: [io.close, inp]
+            - return: [{ call: [hash.sha256, data] }]
