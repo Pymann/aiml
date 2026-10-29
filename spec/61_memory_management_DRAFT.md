@@ -1163,6 +1163,11 @@ a refcount.
   assign/pass/push is a **move** (source dies). Freed by its owner (scope-default §9). The
   default and cheapest; use it for entities that live in one place and **move** between places
   (a card travels deck → hand → field). This is C++ `unique_ptr`.
+  Every binding site moves alike (F61-80): `decl`, `set`, an argument, `return`, `push`, `put`
+  **and a member initialiser** `{ new: T, field: p }` — after it `p` is moved-out (a later use is
+  a compile error) and only `T` frees the box.  A fresh `{ new: Concrete }` may stand wherever a
+  `ptr<Interface>` is expected (decl, `return`, an argument, `push`, `put`): it is upcast to the
+  interface fat pointer there, as a named `ptr<Concrete>` is.
 - **`shared<T>` — co-owned (opt-in).** Object layout `[ rc | fields ]`. **Many** owners;
   assign/pass/push **increfs**; freed automatically at **rc 0**. Use it only where an object is
   genuinely co-owned with no single primary owner. Costs the refcount + incref/decref work,

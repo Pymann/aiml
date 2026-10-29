@@ -2319,7 +2319,12 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
              if (llvmListElemType && llvmListElemType->isStructTy() &&
                  llvm::cast<llvm::StructType>(llvmListElemType)->hasName() &&
                  llvm::cast<llvm::StructType>(llvmListElemType)->getName().startswith("AimlFatPtr_")) {
-                 if (auto* varExpr = dynamic_cast<VariableExpr*>(call->args[0].get())) {
+                 if (dynamic_cast<NewExpr*>(call->args[0].get())) {
+                     // a fresh `{ new: Concrete }` box: upcast it directly (the list owns it)
+                     llvm::Value* fat = buildInterfaceUpcast(pushVal, declaredTypeOfExpr(call->args[0].get()),
+                                                             llvm::cast<llvm::StructType>(llvmListElemType));
+                     if (fat) pushVal = fat;
+                 } else if (auto* varExpr = dynamic_cast<VariableExpr*>(call->args[0].get())) {
                      if (Symbol* srcSym = resolveVariable(varExpr->name)) {
                          std::string srcTy = srcSym->typeName;
                          bool srcIsFat = srcTy.rfind("ptr<", 0) == 0 && srcTy.back() == '>'
@@ -2968,12 +2973,11 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
              // Zentralisiert in Compiler::buildInterfaceUpcast.
              if (vTy->isStructTy() && llvm::cast<llvm::StructType>(vTy)->hasName() &&
                  llvm::cast<llvm::StructType>(vTy)->getName().startswith("AimlFatPtr_")) {
-                 if (auto* varExpr = dynamic_cast<VariableExpr*>(call->args[1].get())) {
-                     if (Symbol* srcSym = resolveVariable(varExpr->name)) {
-                         llvm::Value* fat = buildInterfaceUpcast(valVal, srcSym->typeName,
-                                                                  llvm::cast<llvm::StructType>(vTy));
-                         if (fat) valVal = fat;
-                     }
+                 // a variable, a member or a fresh `{ new: Concrete }` (declaredTypeOfExpr)
+                 const std::string srcTy = declaredTypeOfExpr(call->args[1].get());
+                 if (!srcTy.empty()) {
+                     llvm::Value* fat = buildInterfaceUpcast(valVal, srcTy, llvm::cast<llvm::StructType>(vTy));
+                     if (fat) valVal = fat;
                  }
              }
              if (vTy->isPointerTy() && valVal->getType()->isStructTy()) {
