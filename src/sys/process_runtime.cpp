@@ -325,7 +325,16 @@ ProcessHandle* spawn_attached(std::vector<std::string>& argv, const std::string&
         posix_spawn_file_actions_adddup2(&fa, pipes[i][1], i + 1);
     }
     // redirect paths are relative to the parent's cwd: open before the chdir
-    if (!in_path.empty()) posix_spawn_file_actions_addopen(&fa, 0, in_path.c_str(), O_RDONLY, 0);
+    // stdin: checked here, not only in the child — a posix_spawn that falls back to
+    // fork+exec (e.g. under valgrind) cannot report a failed file action
+    if (!in_path.empty()) {
+        if (access(in_path.c_str(), R_OK) != 0) {
+            posix_spawn_file_actions_destroy(&fa);
+            posix_spawnattr_destroy(&attr);
+            return nullptr;
+        }
+        posix_spawn_file_actions_addopen(&fa, 0, in_path.c_str(), O_RDONLY, 0);
+    }
     if (redirect[0]) posix_spawn_file_actions_addopen(&fa, 1, out_path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (redirect[1]) {
         if (redirect[0] && err_path == out_path) posix_spawn_file_actions_adddup2(&fa, 1, 2);

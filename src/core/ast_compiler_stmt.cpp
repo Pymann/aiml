@@ -458,6 +458,8 @@ void Compiler::classifyListElem(const std::string& elemName, int& elemKind, int6
     elemKind = 0; elemSize = ctx.ptrStride(); serNodes = nullptr; serNodesCount = 0;
     if (elemName == "string") {
         elemKind = 1; elemSize = ctx.ptrStride();
+    } else if (elemName == "process") {
+        elemKind = 7; elemSize = ctx.ptrStride();   // spec/23 §5.5: owned process handles
     } else if (ctx.isRefcountModel(elemName)) {
         elemKind = 3; elemSize = ctx.ptrStride();
         std::string bareElem = elemName;
@@ -728,6 +730,9 @@ void Compiler::emitListHandleDecl(DeclStmt* decl, bool isCascade) {
     llvm::Type* elemTy;
     if (elemName == "string") {
         elemKind = 1; elemSize = ctx.ptrStride();     // spec/61 §5.7
+        elemTy = i8p;
+    } else if (elemName == "process") {
+        elemKind = 7; elemSize = ctx.ptrStride();     // spec/23 §5.5: owned process handles
         elemTy = i8p;
     } else if (ctx.isRefcountModel(elemName)) {
         elemKind = 3; elemSize = ctx.ptrStride();

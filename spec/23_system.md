@@ -342,10 +342,13 @@ durable-task pattern):
     condition: { gt: [jobs.len, 0] }
     body:
       - decl: [done_at, i32, { call: [sys.wait_any, jobs, -1] }]
-      - if: { condition: { lt: [done_at, 0] }, then: [{ break: [] }] }   # timeout or a caught signal
-      - decl: [job, ref<process>, { at: [jobs, done_at] }]
-      - print: ["rc=${job.returncode}: ${job.stderr_buffer}"]
-      - call: [jobs.remove_at, done_at]
+      - if:
+          condition: { lt: [done_at, 0] }      # timeout or a caught signal
+          then: [{ call: [stop_all, jobs] }]
+          else:
+            - decl: [job, ref<process>, { at: [jobs, done_at] }]
+            - print: ["rc=${job.returncode}: ${job.stderr_buffer}"]
+            - call: [jobs.remove, done_at]
 ```
 
 `sys.wait_any(procs: list<process>, timeout_ms: i32) -> i32` returns the index of a
@@ -355,6 +358,9 @@ empty, or when a signal caught with `sys.catch_signals` arrived meanwhile.  Whil
 waits it keeps reading every process's capture pipes — a child writing more than a
 pipe holds can not block the pool — and enforces their `timeout`s.  It sleeps in
 `poll(2)` on process descriptors (`pidfd`), not in a polling loop.
+
+A `list<process>` owns its processes: `remove(i)` and the list's drop release them like
+a `process` variable's drop (pipes closed, the child reaped later, never killed).
 
 ## 5.6 `sys.require_tools` — was die Umgebung mitbringen muss
 

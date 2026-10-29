@@ -38,20 +38,23 @@
           body:
             - set: [rounds, { +: [rounds, 1] }]
             - decl: [done_at, i32, { call: [sys.wait_any, jobs, 5000] }]
-            - if: { condition: { lt: [done_at, 0] }, then: [{ call: [chk.expect_i, "wait_any timed out", done_at, 0] }, { break: [] }] }
-            - decl: [job, ref<process>, { at: [jobs, done_at] }]
-            - decl: [out, string, job.stdout_buffer]
-            - decl: [err, string, job.stderr_buffer]
-            - set: [order, "${order}${job.returncode}:${out.len}:${err.len} "]
-            - call: [jobs.remove, done_at]
+            - if:
+                condition: { lt: [done_at, 0] }
+                then: [{ call: [chk.expect_i, "wait_any timed out", done_at, 0] }, { set: [rounds, 10] }]
+                else:
+                  - decl: [job, ref<process>, { at: [jobs, done_at] }]
+                  - decl: [out, string, job.stdout_buffer]
+                  - decl: [err, string, job.stderr_buffer]
+                  - set: [order, "${order}${job.returncode}:${out.len}:${err.len} "]
+                  - call: [jobs.remove, done_at]
       - call: [chk.expect_s, "every job once, in the order they ended", order, "0:300000:0 0:4:5 3:0:0 0:4:0 "]
 
       # ── a timeout and a signal ──
       - decl: [slow, list<process>]
       - call: [slow.push, { call: [start, "sleep 5"] }]
-      - decl: [t0, i64, { call: [time.mono_ms] }]
+      - decl: [start_ms, i64, { call: [time.mono_ms] }]
       - call: [chk.expect_i, "nothing ended within 100 ms", { call: [sys.wait_any, slow, 100] }, -1]
-      - decl: [waited, i64, { -: [{ call: [time.mono_ms] }, t0] }]
+      - decl: [waited, i64, { -: [{ call: [time.mono_ms] }, start_ms] }]
       - if: { condition: { gt: [waited, 1000] }, then: [{ call: [chk.expect_i, "the timeout was kept", waited, 100] }] }
       - decl: [sleeper, ref<process>, { at: [slow, 0] }]
       - call: [chk.expect_i, "signal sent", { call: [sleeper.signal, 15] }, 0]
@@ -64,9 +67,9 @@
       - decl: [idle, list<process>]
       - call: [idle.push, { call: [start, "sleep 5"] }]
       - decl: [kicker, process, { call: [start, "sleep 0.2; kill -USR1 $PPID"] }]
-      - decl: [t1, i64, { call: [time.mono_ms] }]
+      - decl: [kick_ms, i64, { call: [time.mono_ms] }]
       - call: [chk.expect_i, "a caught signal ends wait_any", { call: [sys.wait_any, idle, 5000] }, -1]
-      - decl: [early, i64, { -: [{ call: [time.mono_ms] }, t1] }]
+      - decl: [early, i64, { -: [{ call: [time.mono_ms] }, kick_ms] }]
       - if: { condition: { gt: [early, 3000] }, then: [{ call: [chk.expect_i, "ended early", early, 200] }] }
       - call: [chk.expect_i, "the caught signal", { call: [sys.caught_signal] }, 10]
       - call: [chk.expect_i, "reading clears it", { call: [sys.caught_signal] }, 0]
