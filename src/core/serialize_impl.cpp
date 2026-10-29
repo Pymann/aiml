@@ -8,12 +8,14 @@
 //   ptr<T>              → handled by caller (auto-deref on serialize, auto-malloc on deser)
 //   any/chan/lock/...   → caller must call isSerializable() and emit a compiler error
 #include "serialize_impl.h"
+#include "ast_nodes.h"
 #include "string_utils.h"
 #include "list_impl.h"
 #include "map_impl.h"
 #include <llvm/IR/IRBuilder.h>
 #include <set>
 #include <algorithm>
+#include <cstdlib>
 
 namespace SerializeImpl {
 
@@ -114,6 +116,13 @@ static llvm::Function* gJrMapValF32(CompilerContext& c){return c.getFunction("ai
 static llvm::Function* gJrMapValF64(CompilerContext& c){return c.getFunction("aiml_jr_map_val_f64",f64T(c),{ptrT(c),i8pT(c),i32T(c)});}
 static llvm::Function* gJrMapValStr(CompilerContext& c){return c.getFunction("aiml_jr_map_val_str",i8pT(c),{ptrT(c),i8pT(c),i32T(c)});}
 static llvm::Function* gJrArrSub   (CompilerContext& c){return c.getFunction("aiml_jr_arr_sub",ptrT(c),{ptrT(c),i8pT(c),i32T(c)});}
+// keyed scalars with the field's declared default (spec/29 §5.2d)
+static llvm::Function* gJrI32d     (CompilerContext& c){return c.getFunction("aiml_jr_i32d",i32T(c),{ptrT(c),i8pT(c),i32T(c)});}
+static llvm::Function* gJrI64d     (CompilerContext& c){return c.getFunction("aiml_jr_i64d",i64T(c),{ptrT(c),i8pT(c),i64T(c)});}
+static llvm::Function* gJrF32d     (CompilerContext& c){return c.getFunction("aiml_jr_f32d",f32T(c),{ptrT(c),i8pT(c),f32T(c)});}
+static llvm::Function* gJrF64d     (CompilerContext& c){return c.getFunction("aiml_jr_f64d",f64T(c),{ptrT(c),i8pT(c),f64T(c)});}
+static llvm::Function* gJrBoold    (CompilerContext& c){return c.getFunction("aiml_jr_boold",i32T(c),{ptrT(c),i8pT(c),i32T(c)});}
+static llvm::Function* gJrStrd     (CompilerContext& c){return c.getFunction("aiml_jr_strd",i8pT(c),{ptrT(c),i8pT(c),i8pT(c)});}
 static llvm::Function* gJwArrObjBgn(CompilerContext& c){return c.getFunction("aiml_jw_arr_obj_begin",voidT(c),{ptrT(c)});}
 static llvm::Function* gJwArrObjEnd(CompilerContext& c){return c.getFunction("aiml_jw_arr_obj_end",voidT(c),{ptrT(c)});}
 static llvm::Function* gJwArrArrBgn(CompilerContext& c){return c.getFunction("aiml_jw_arr_arr_begin",voidT(c),{ptrT(c)});}
@@ -635,23 +644,61 @@ static llvm::Function* emitSerializeMap(CompilerContext& ctx,
 }
 
 // ─── helper: read scalar from reader into ptr ───────────────────────────────
+// The declared default of a scalar field as a constant, if it is a literal
+// (`[jobs, i32, 4]`, `[name, string, "app"]`, `[on, bool, true]`).  Anything
+// else (an enum member, an expression) → nullptr: the field reads as zero /
+// "" when the document lacks it, as before (spec/29 F29-16).
+static const AIML::AST::LiteralExpr* literalDefault(const CompilerContext::StructMember& fm){
+    if(!fm.initValue) return nullptr;
+    auto* lit = dynamic_cast<const AIML::AST::LiteralExpr*>(fm.initValue.get());
+    if(!lit || lit->type=="null") return nullptr;
+    return lit;
+}
+
+static bool parseLiteralNumber(const std::string& text, double& out){
+    if(text.empty()) return false;
+    char* end=nullptr;
+    if(text.size()>2 && text[0]=='0' && (text[1]=='x'||text[1]=='X')){
+        out = (double)std::strtoull(text.c_str(), &end, 16);
+        return end && *end==0;
+    }
+    out = std::strtod(text.c_str(), &end);
+    return end && *end==0;
+}
+
 static void emitReadScalar(CompilerContext& ctx, llvm::Value* reader, llvm::Value* fkey,
-                           llvm::Value* dst, const std::string& tn, llvm::Type* fmType){
+                           llvm::Value* dst, const std::string& tn, llvm::Type* fmType,
+                           const AIML::AST::LiteralExpr* dflt){
+    double num = 0.0;
+    bool haveNum = false;
+    if(dflt && dflt->type!="string"){
+        if(dflt->value=="true"){ num=1.0; haveNum=true; }
+        else if(dflt->value=="false"){ num=0.0; haveNum=true; }
+        else haveNum = parseLiteralNumber(dflt->value, num);
+    }
+    const std::string strDef = (dflt && dflt->type=="string") ? dflt->value : std::string();
     llvm::Value* v;
-    if(tn=="string")        v=ctx.builder.CreateCall(gJrStr(ctx),{reader,fkey},"sv");
+    if(tn=="string"){
+        llvm::Value* def = ctx.builder.CreateGlobalStringPtr(strDef, "sdef");
+        v=ctx.builder.CreateCall(gJrStrd(ctx),{reader,fkey,def},"sv");
+    }
     else if(tn=="path"){    // spec/42: read the text, store the interned path, drop the reader's dup
-        llvm::Value* text=ctx.builder.CreateCall(gJrStr(ctx),{reader,fkey},"ptext");
+        llvm::Value* def = ctx.builder.CreateGlobalStringPtr(strDef, "pdef");
+        llvm::Value* text=ctx.builder.CreateCall(gJrStrd(ctx),{reader,fkey,def},"ptext");
         v=ctx.builder.CreateCall(ctx.getFunction("aiml_path_intern",i8pT(ctx),{i8pT(ctx)}),{text},"pv");
         ctx.builder.CreateCall(ctx.getFunction("aiml_str_decref",ctx.builder.getVoidTy(),{i8pT(ctx)}),{text});
     }
-    else if(tn=="i64"||tn=="u64") v=ctx.builder.CreateCall(gJrI64(ctx),{reader,fkey},"sv");
-    else if(tn=="f32")      v=ctx.builder.CreateCall(gJrF32(ctx),{reader,fkey},"sv");
-    else if(tn=="f64")      v=ctx.builder.CreateCall(gJrF64(ctx),{reader,fkey},"sv");
+    else if(tn=="i64"||tn=="u64")
+        v=ctx.builder.CreateCall(gJrI64d(ctx),{reader,fkey,ctx.builder.getInt64(haveNum?(int64_t)num:0)},"sv");
+    else if(tn=="f32")
+        v=ctx.builder.CreateCall(gJrF32d(ctx),{reader,fkey,llvm::ConstantFP::get(f32T(ctx),haveNum?num:0.0)},"sv");
+    else if(tn=="f64")
+        v=ctx.builder.CreateCall(gJrF64d(ctx),{reader,fkey,llvm::ConstantFP::get(f64T(ctx),haveNum?num:0.0)},"sv");
     else if(tn=="bool"){
-        llvm::Value* bv=ctx.builder.CreateCall(gJrBool(ctx),{reader,fkey},"bv");
+        llvm::Value* bv=ctx.builder.CreateCall(gJrBoold(ctx),{reader,fkey,ctx.builder.getInt32((haveNum && num!=0.0)?1:0)},"bv");
         v=ctx.builder.CreateTrunc(bv,i8T(ctx));
     } else {
-        v=ctx.builder.CreateCall(gJrI32(ctx),{reader,fkey},"sv");
+        v=ctx.builder.CreateCall(gJrI32d(ctx),{reader,fkey,ctx.builder.getInt32(haveNum?(int32_t)(int64_t)num:0)},"sv");
         if(fmType && !fmType->isIntegerTy(32))
             v=ctx.builder.CreateIntCast(v,fmType,true,"sc");
     }
@@ -1035,21 +1082,16 @@ static void emitDeserStructFields(CompilerContext& ctx, llvm::Value* reader,
             ctx.builder.CreateBr(lc);
             ctx.builder.SetInsertPoint(le);
         } else if(ctx.classes.count(tn) && ctx.classes[tn].type){
-            // nested struct: sub-reader, recursive
+            // nested struct.  A missing sub-object reads through a NULL reader:
+            // every read is null-safe and yields the field's default, so the
+            // struct gets its declared defaults, "" strings and empty
+            // containers — before, it stayed zero (null strings and handles).
             llvm::Value* sr = ctx.builder.CreateCall(gJrSub(ctx),{reader,fkey},"sr");
-            // null-safe: if sub-reader null, zero-init the field
-            llvm::BasicBlock* srOk = llvm::BasicBlock::Create(ctx.context,fname+"_nsrok",parentFn);
-            llvm::BasicBlock* srDone = llvm::BasicBlock::Create(ctx.context,fname+"_nsrdone",parentFn);
-            ctx.builder.CreateCondBr(
-                ctx.builder.CreateICmpNE(sr,llvm::Constant::getNullValue(ptrT(ctx))),srOk,srDone);
-            ctx.builder.SetInsertPoint(srOk);
             emitDeserStructFields(ctx,sr,fieldPtr,tn,parentFn);
             ctx.builder.CreateCall(gJrFree(ctx),{sr});
-            ctx.builder.CreateBr(srDone);
-            ctx.builder.SetInsertPoint(srDone);
         } else {
-            // scalar
-            emitReadScalar(ctx,reader,fkey,fieldPtr,tn,fm.type);
+            // scalar, with its declared default for a missing key / null
+            emitReadScalar(ctx,reader,fkey,fieldPtr,tn,fm.type,literalDefault(fm));
         }
     }
 }
@@ -1105,9 +1147,18 @@ static llvm::Function* emitDeserializeList(CompilerContext& ctx,
     ctx.builder.SetInsertPoint(entry);
 
     llvm::Value* reader = ctx.builder.CreateCall(gJrParse(ctx),{fn->getArg(0)},"r");
-    llvm::Function* mallocFn = ctx.getFunction("malloc",ptrT(ctx),{i64T(ctx)});
-    uint64_t lsz = ctx.module().getDataLayout().getTypeAllocSize(listTy);
-    llvm::Value* heap = ctx.builder.CreateCall(mallocFn,{ctx.builder.getInt64(lsz)},"hp");
+    // spec/61 §5 (memV3): a list value is a refcounted HANDLE — the caller's
+    // `decl` adopts and later releases it, so it must come from the handle
+    // allocator (a bare malloc'd struct made that release read the missing
+    // header in front of it).
+    llvm::Value* heap;
+    if(ctx.memV3 && ctx.isMemV3ContainerHandle(listTn)){
+        heap = ctx.builder.CreateCall(ctx.getFunction("aiml_list_handle_new",ptrT(ctx),{}),{},"hp");
+    } else {
+        llvm::Function* mallocFn = ctx.getFunction("malloc",ptrT(ctx),{i64T(ctx)});
+        uint64_t lsz = ctx.module().getDataLayout().getTypeAllocSize(listTy);
+        heap = ctx.builder.CreateCall(mallocFn,{ctx.builder.getInt64(lsz)},"hp");
+    }
     ListImpl::initList(ctx,heap,elemTy,4);
 
     llvm::Value* vk  = ctx.builder.CreateGlobalStringPtr("values","vk");
@@ -1214,9 +1265,15 @@ static llvm::Function* emitDeserializeMap(CompilerContext& ctx,
     ctx.builder.SetInsertPoint(entry);
 
     llvm::Value* reader = ctx.builder.CreateCall(gJrParse(ctx),{fn->getArg(0)},"r");
-    llvm::Function* mallocFn = ctx.getFunction("malloc",ptrT(ctx),{i64T(ctx)});
-    uint64_t msz = ctx.module().getDataLayout().getTypeAllocSize(mapTy);
-    llvm::Value* heap = ctx.builder.CreateCall(mallocFn,{ctx.builder.getInt64(msz)},"hp");
+    // spec/61 §5 (memV3): a map value is a refcounted HANDLE (see the list case).
+    llvm::Value* heap;
+    if(ctx.memV3 && ctx.isMemV3ContainerHandle(mapTn)){
+        heap = ctx.builder.CreateCall(ctx.getFunction("aiml_map_handle_new",ptrT(ctx),{}),{},"hp");
+    } else {
+        llvm::Function* mallocFn = ctx.getFunction("malloc",ptrT(ctx),{i64T(ctx)});
+        uint64_t msz = ctx.module().getDataLayout().getTypeAllocSize(mapTy);
+        heap = ctx.builder.CreateCall(mallocFn,{ctx.builder.getInt64(msz)},"hp");
+    }
     MapImpl::initMap(ctx,heap,keyTy,valTy,8);
 
     llvm::Value* ek  = ctx.builder.CreateGlobalStringPtr("entries","ek");

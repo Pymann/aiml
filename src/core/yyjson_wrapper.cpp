@@ -31,6 +31,7 @@ struct aiml_jr_t {
     yyjson_doc* doc;     // non-null only for root; sub-readers borrow parent's doc
     yyjson_val* val;     // current object/array value
     bool owns_doc;
+    std::string path;    // where this reader is in the document ("" = root) — for errors
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -392,88 +393,205 @@ char* aiml_json_style_format(const char* json, int pretty, const char* indent,
 }
 
 // ── Read API ──────────────────────────────────────────────────────────────────
+//
+// spec/29 §5.2d: reading is TOLERANT (a document that grows stays readable,
+// F29-15/16) but no longer SILENT.  A missing key or a JSON `null` yields the
+// caller's default; a syntax error or a value of the wrong JSON type is
+// recorded in a per-thread error text (`sys.json_error`), reset by every
+// top-level parse.  Numbers convert between integer and real (an `f32` field
+// reads `10`, an `i32` field reads `3.0`) — before, the "wrong" kind read as 0.
+
+static thread_local std::string g_jr_error;
+static thread_local int g_jr_error_count = 0;
+static const int kJrMaxErrors = 20;
+
+static void jr_error(const std::string& msg) {
+    if (g_jr_error_count < kJrMaxErrors) {
+        if (!g_jr_error.empty()) g_jr_error += "\n";
+        g_jr_error += msg;
+    } else if (g_jr_error_count == kJrMaxErrors) {
+        g_jr_error += "\n…";
+    }
+    ++g_jr_error_count;
+}
+
+static const char* jr_kind(yyjson_val* v) {
+    if (!v) return "nothing";
+    switch (yyjson_get_type(v)) {
+        case YYJSON_TYPE_NULL: return "null";
+        case YYJSON_TYPE_BOOL: return "a boolean";
+        case YYJSON_TYPE_NUM:  return "a number";
+        case YYJSON_TYPE_STR:  return "a string";
+        case YYJSON_TYPE_ARR:  return "an array";
+        case YYJSON_TYPE_OBJ:  return "an object";
+        default:               return "a value";
+    }
+}
+
+static std::string jr_join(const aiml_jr_t* r, const char* key) {
+    if (!key) return r ? r->path : std::string();
+    if (!r || r->path.empty()) return key;
+    return r->path + "." + key;
+}
+
+static std::string jr_index(const std::string& base, int idx) {
+    return (base.empty() ? std::string("$") : base) + "[" + std::to_string(idx) + "]";
+}
+
+static void jr_type_error(const std::string& where, const char* expected, yyjson_val* got) {
+    jr_error((where.empty() ? std::string("$") : where) + ": expected " + expected + ", got " + jr_kind(got));
+}
+
+static aiml_jr_t* jr_new(yyjson_val* v, std::string path) {
+    auto* s = new aiml_jr_t;
+    s->owns_doc = false;
+    s->doc = nullptr;
+    s->val = v;
+    s->path = std::move(path);
+    return s;
+}
+
+// The member `key` of the reader's object.  A ROOT reader also accepts the
+// unwrapped forms of its container (F29-23): `[…]` stands for {"values":[…]}
+// and a plain object for {"entries":{…}} (unless it carries __type/entries).
+static yyjson_val* jr_get(aiml_jr_t* r, const char* key) {
+    if (!r || !r->val || !key) return nullptr;
+    if (r->owns_doc) {
+        if (yyjson_is_arr(r->val) && strcmp(key, "values") == 0) return r->val;
+        if (yyjson_is_obj(r->val) && strcmp(key, "entries") == 0
+            && !yyjson_obj_get(r->val, "entries") && !yyjson_obj_get(r->val, "__type"))
+            return r->val;
+    }
+    if (!yyjson_is_obj(r->val)) return nullptr;
+    return yyjson_obj_get(r->val, key);
+}
+
+// Number conversions with type check: `where` names the value for the error.
+static bool jr_absent(yyjson_val* v) { return !v || yyjson_is_null(v); }
+
+static int64_t jr_as_i64(yyjson_val* v, int64_t def, const std::string& where) {
+    if (jr_absent(v)) return def;
+    if (yyjson_is_int(v)) return yyjson_get_sint(v);
+    if (yyjson_is_real(v)) return (int64_t)yyjson_get_real(v);
+    if (yyjson_is_bool(v)) return yyjson_get_bool(v) ? 1 : 0;
+    jr_type_error(where, "a number", v);
+    return def;
+}
+
+static double jr_as_f64(yyjson_val* v, double def, const std::string& where) {
+    if (jr_absent(v)) return def;
+    if (yyjson_is_num(v)) return yyjson_get_num(v);
+    jr_type_error(where, "a number", v);
+    return def;
+}
+
+static int jr_as_bool(yyjson_val* v, int def, const std::string& where) {
+    if (jr_absent(v)) return def;
+    if (yyjson_is_bool(v)) return yyjson_get_bool(v) ? 1 : 0;
+    jr_type_error(where, "true or false", v);
+    return def;
+}
+
+static char* jr_as_str(yyjson_val* v, const char* def, const std::string& where) {
+    if (jr_absent(v)) return aiml_str_dup(def ? def : "");
+    if (yyjson_is_str(v)) return aiml_str_dup(yyjson_get_str(v));
+    jr_type_error(where, "a string", v);
+    return aiml_str_dup(def ? def : "");
+}
 
 void* aiml_jr_parse(const char* json) {
-    if (!json) return nullptr;
-    auto* r = (aiml_jr_t*)malloc(sizeof(aiml_jr_t));
+    g_jr_error.clear();
+    g_jr_error_count = 0;
+    if (!json) { jr_error("no document"); return nullptr; }
+    auto* r = new aiml_jr_t;
     r->owns_doc = true;
-    r->doc = yyjson_read(json, strlen(json), YYJSON_READ_NOFLAG);
+    yyjson_read_err err;
+    r->doc = yyjson_read_opts(const_cast<char*>(json), strlen(json), YYJSON_READ_NOFLAG, nullptr, &err);
     r->val = r->doc ? yyjson_doc_get_root(r->doc) : nullptr;
+    if (!r->doc) {
+        // line/column of the byte yyjson stopped at (1-based)
+        size_t line = 1, col = 1;
+        for (size_t i = 0; i < err.pos && json[i]; ++i) {
+            if (json[i] == '\n') { ++line; col = 1; } else { ++col; }
+        }
+        jr_error("line " + std::to_string(line) + " column " + std::to_string(col) + ": "
+                 + (err.msg ? err.msg : "invalid JSON"));
+    }
     return r;
+}
+
+const char* aiml_jr_error(void) { return g_jr_error.c_str(); }
+
+// sys.json_error(): an owned copy of the per-thread error text.
+char* aiml_sys_json_error(void) { return aiml_str_dup(g_jr_error.c_str()); }
+
+int aiml_jr_has(void* rv, const char* key) {
+    return jr_absent(jr_get((aiml_jr_t*)rv, key)) ? 0 : 1;
 }
 
 void* aiml_jr_sub(void* rv, const char* key) {
     auto* r = (aiml_jr_t*)rv;
-    if (!r || !r->val) return nullptr;
-    yyjson_val* sub = yyjson_obj_get(r->val, key);
-    if (!sub || !yyjson_is_obj(sub)) return nullptr;
-    auto* s = (aiml_jr_t*)malloc(sizeof(aiml_jr_t));
-    s->owns_doc = false;
-    s->doc = nullptr;
-    s->val = sub;
-    return s;
+    yyjson_val* sub = jr_get(r, key);
+    if (jr_absent(sub)) return nullptr;
+    if (!yyjson_is_obj(sub)) { jr_type_error(jr_join(r, key), "an object", sub); return nullptr; }
+    return jr_new(sub, jr_join(r, key));
 }
 
 void aiml_jr_free(void* rv) {
     auto* r = (aiml_jr_t*)rv;
     if (!r) return;
     if (r->owns_doc && r->doc) yyjson_doc_free(r->doc);
-    free(r);
+    delete r;
 }
 
-int32_t aiml_jr_i32(void* rv, const char* key) {
+// Keyed scalars, with the caller's default for a missing key / null.
+int32_t aiml_jr_i32d(void* rv, const char* key, int32_t def) {
     auto* r = (aiml_jr_t*)rv;
-    if (!r || !r->val) return 0;
-    yyjson_val* v = yyjson_obj_get(r->val, key);
-    return v ? (int32_t)yyjson_get_int(v) : 0;
+    return (int32_t)jr_as_i64(jr_get(r, key), def, jr_join(r, key));
+}
+int64_t aiml_jr_i64d(void* rv, const char* key, int64_t def) {
+    auto* r = (aiml_jr_t*)rv;
+    return jr_as_i64(jr_get(r, key), def, jr_join(r, key));
+}
+float aiml_jr_f32d(void* rv, const char* key, float def) {
+    auto* r = (aiml_jr_t*)rv;
+    return (float)jr_as_f64(jr_get(r, key), def, jr_join(r, key));
+}
+double aiml_jr_f64d(void* rv, const char* key, double def) {
+    auto* r = (aiml_jr_t*)rv;
+    return jr_as_f64(jr_get(r, key), def, jr_join(r, key));
+}
+int aiml_jr_boold(void* rv, const char* key, int def) {
+    auto* r = (aiml_jr_t*)rv;
+    return jr_as_bool(jr_get(r, key), def, jr_join(r, key));
+}
+char* aiml_jr_strd(void* rv, const char* key, const char* def) {
+    auto* r = (aiml_jr_t*)rv;
+    return jr_as_str(jr_get(r, key), def, jr_join(r, key));
 }
 
-// yyjson_get_sint, NICHT yyjson_get_int: letzteres liefert ein 32-Bit `int`
-// und schnitt jeden i64-Wert ab — ein Zeitstempel kam als Unsinn zurueck, ohne
-// dass irgendetwas scheiterte (gemessen 2026-10-13:
-// 1760000000000 -> -936591360).  Ein stiller Zahlenfehler ueber die Leitung ist
-// die unangenehmste Sorte: nichts stuerzt ab, alles sieht aus wie Daten.
-int64_t aiml_jr_i64(void* rv, const char* key) {
-    auto* r = (aiml_jr_t*)rv;
-    if (!r || !r->val) return 0;
-    yyjson_val* v = yyjson_obj_get(r->val, key);
-    return v ? yyjson_get_sint(v) : 0;
-}
-
-float aiml_jr_f32(void* rv, const char* key) {
-    auto* r = (aiml_jr_t*)rv;
-    if (!r || !r->val) return 0.0f;
-    yyjson_val* v = yyjson_obj_get(r->val, key);
-    return v ? (float)yyjson_get_real(v) : 0.0f;
-}
-
-double aiml_jr_f64(void* rv, const char* key) {
-    auto* r = (aiml_jr_t*)rv;
-    if (!r || !r->val) return 0.0;
-    yyjson_val* v = yyjson_obj_get(r->val, key);
-    return v ? yyjson_get_real(v) : 0.0;
-}
-
-int aiml_jr_bool(void* rv, const char* key) {
-    auto* r = (aiml_jr_t*)rv;
-    if (!r || !r->val) return 0;
-    yyjson_val* v = yyjson_obj_get(r->val, key);
-    return (v && yyjson_get_bool(v)) ? 1 : 0;
-}
-
-char* aiml_jr_str(void* rv, const char* key) {
-    auto* r = (aiml_jr_t*)rv;
-    if (!r || !r->val) return aiml_str_dup("");
-    yyjson_val* v = yyjson_obj_get(r->val, key);
-    const char* s = v ? yyjson_get_str(v) : nullptr;
-    return s ? aiml_str_dup(s) : aiml_str_dup("");
-}
+int32_t aiml_jr_i32(void* rv, const char* key)  { return aiml_jr_i32d(rv, key, 0); }
+// i64 through yyjson's signed 64-bit read (an `int` read truncated timestamps,
+// measured 2026-10-13: 1760000000000 -> -936591360).
+int64_t aiml_jr_i64(void* rv, const char* key)  { return aiml_jr_i64d(rv, key, 0); }
+float   aiml_jr_f32(void* rv, const char* key)  { return aiml_jr_f32d(rv, key, 0.0f); }
+double  aiml_jr_f64(void* rv, const char* key)  { return aiml_jr_f64d(rv, key, 0.0); }
+int     aiml_jr_bool(void* rv, const char* key) { return aiml_jr_boold(rv, key, 0); }
+char*   aiml_jr_str(void* rv, const char* key)  { return aiml_jr_strd(rv, key, ""); }
 
 // ── Array reads ───────────────────────────────────────────────────────────────
 
 static yyjson_val* jr_arr(aiml_jr_t* r, const char* key) {
-    if (!r || !r->val) return nullptr;
-    yyjson_val* v = yyjson_obj_get(r->val, key);
+    yyjson_val* v = jr_get(r, key);
+    if (jr_absent(v)) return nullptr;
+    if (!yyjson_is_arr(v)) { jr_type_error(jr_join(r, key), "an array", v); return nullptr; }
+    return v;
+}
+
+// Element access does not repeat the "not an array" error of jr_arr: the
+// length read (always first) reports it once.
+static yyjson_val* jr_arr_quiet(aiml_jr_t* r, const char* key) {
+    yyjson_val* v = jr_get(r, key);
     return (v && yyjson_is_arr(v)) ? v : nullptr;
 }
 
@@ -485,50 +603,36 @@ int aiml_jr_arr_len(void* rv, const char* key) {
 
 int32_t aiml_jr_arr_i32(void* rv, const char* key, int idx) {
     auto* r = (aiml_jr_t*)rv;
-    yyjson_val* v = yyjson_arr_get(jr_arr(r, key), (size_t)idx);
-    return v ? (int32_t)yyjson_get_int(v) : 0;
+    return (int32_t)jr_as_i64(yyjson_arr_get(jr_arr_quiet(r, key), (size_t)idx), 0, jr_index(jr_join(r, key), idx));
 }
-
 int64_t aiml_jr_arr_i64(void* rv, const char* key, int idx) {
     auto* r = (aiml_jr_t*)rv;
-    yyjson_val* v = yyjson_arr_get(jr_arr(r, key), (size_t)idx);
-    return v ? yyjson_get_sint(v) : 0;
+    return jr_as_i64(yyjson_arr_get(jr_arr_quiet(r, key), (size_t)idx), 0, jr_index(jr_join(r, key), idx));
 }
-
 float aiml_jr_arr_f32(void* rv, const char* key, int idx) {
     auto* r = (aiml_jr_t*)rv;
-    yyjson_val* v = yyjson_arr_get(jr_arr(r, key), (size_t)idx);
-    return v ? (float)yyjson_get_real(v) : 0.0f;
+    return (float)jr_as_f64(yyjson_arr_get(jr_arr_quiet(r, key), (size_t)idx), 0.0, jr_index(jr_join(r, key), idx));
 }
-
 double aiml_jr_arr_f64(void* rv, const char* key, int idx) {
     auto* r = (aiml_jr_t*)rv;
-    yyjson_val* v = yyjson_arr_get(jr_arr(r, key), (size_t)idx);
-    return v ? yyjson_get_real(v) : 0.0;
+    return jr_as_f64(yyjson_arr_get(jr_arr_quiet(r, key), (size_t)idx), 0.0, jr_index(jr_join(r, key), idx));
 }
-
 int aiml_jr_arr_bool(void* rv, const char* key, int idx) {
     auto* r = (aiml_jr_t*)rv;
-    yyjson_val* v = yyjson_arr_get(jr_arr(r, key), (size_t)idx);
-    return (v && yyjson_get_bool(v)) ? 1 : 0;
+    return jr_as_bool(yyjson_arr_get(jr_arr_quiet(r, key), (size_t)idx), 0, jr_index(jr_join(r, key), idx));
 }
-
 char* aiml_jr_arr_str(void* rv, const char* key, int idx) {
     auto* r = (aiml_jr_t*)rv;
-    yyjson_val* v = yyjson_arr_get(jr_arr(r, key), (size_t)idx);
-    const char* s = v ? yyjson_get_str(v) : nullptr;
-    return s ? aiml_str_dup(s) : aiml_str_dup("");
+    return jr_as_str(yyjson_arr_get(jr_arr_quiet(r, key), (size_t)idx), "", jr_index(jr_join(r, key), idx));
 }
 
 void* aiml_jr_arr_sub(void* rv, const char* key, int idx) {
     auto* r = (aiml_jr_t*)rv;
-    yyjson_val* v = yyjson_arr_get(jr_arr(r, key), (size_t)idx);
-    if (!v) return nullptr;
-    auto* s = (aiml_jr_t*)malloc(sizeof(aiml_jr_t));
-    s->owns_doc = false;
-    s->doc = nullptr;
-    s->val = v;
-    return s;
+    yyjson_val* v = yyjson_arr_get(jr_arr_quiet(r, key), (size_t)idx);
+    if (jr_absent(v)) return nullptr;
+    std::string where = jr_index(jr_join(r, key), idx);
+    if (!yyjson_is_obj(v) && !yyjson_is_arr(v)) { jr_type_error(where, "an object or array", v); return nullptr; }
+    return jr_new(v, where);
 }
 
 // ── Map reads ─────────────────────────────────────────────────────────────────
@@ -536,8 +640,7 @@ void* aiml_jr_arr_sub(void* rv, const char* key, int idx) {
 // We iterate by index using yyjson_obj_iter.
 
 static yyjson_val* jr_map_obj(aiml_jr_t* r, const char* key) {
-    if (!r || !r->val) return nullptr;
-    yyjson_val* v = yyjson_obj_get(r->val, key);
+    yyjson_val* v = jr_get(r, key);
     return (v && yyjson_is_obj(v)) ? v : nullptr;
 }
 
@@ -557,55 +660,50 @@ static yyjson_val* jr_map_nth_val(yyjson_val* obj, int idx) {
     return k ? yyjson_obj_iter_get_val(k) : nullptr;
 }
 
+static std::string jr_map_where(aiml_jr_t* r, const char* key, int idx) {
+    yyjson_val* k = jr_map_nth_key(jr_map_obj(r, key), idx);
+    const char* name = k ? yyjson_get_str(k) : nullptr;
+    return jr_join(r, key) + "." + (name ? name : "?");
+}
+
 int aiml_jr_map_count(void* rv, const char* key) {
     auto* r = (aiml_jr_t*)rv;
-    yyjson_val* obj = jr_map_obj(r, key);
-    return obj ? (int)yyjson_obj_size(obj) : 0;
+    yyjson_val* v = jr_get(r, key);
+    if (jr_absent(v)) return 0;
+    if (!yyjson_is_obj(v)) { jr_type_error(jr_join(r, key), "an object", v); return 0; }
+    return (int)yyjson_obj_size(v);
 }
 
 char* aiml_jr_map_key(void* rv, const char* key, int idx) {
     auto* r = (aiml_jr_t*)rv;
-    yyjson_val* obj = jr_map_obj(r, key);
-    yyjson_val* k = jr_map_nth_key(obj, idx);
+    yyjson_val* k = jr_map_nth_key(jr_map_obj(r, key), idx);
     const char* s = k ? yyjson_get_str(k) : nullptr;
     return s ? aiml_str_dup(s) : aiml_str_dup("");
 }
 
 int32_t aiml_jr_map_val_i32(void* rv, const char* key, int idx) {
     auto* r = (aiml_jr_t*)rv;
-    yyjson_val* v = jr_map_nth_val(jr_map_obj(r, key), idx);
-    return v ? (int32_t)yyjson_get_int(v) : 0;
+    return (int32_t)jr_as_i64(jr_map_nth_val(jr_map_obj(r, key), idx), 0, jr_map_where(r, key, idx));
 }
-
 int64_t aiml_jr_map_val_i64(void* rv, const char* key, int idx) {
     auto* r = (aiml_jr_t*)rv;
-    yyjson_val* v = jr_map_nth_val(jr_map_obj(r, key), idx);
-    return v ? yyjson_get_sint(v) : 0;
+    return jr_as_i64(jr_map_nth_val(jr_map_obj(r, key), idx), 0, jr_map_where(r, key, idx));
 }
-
 float aiml_jr_map_val_f32(void* rv, const char* key, int idx) {
     auto* r = (aiml_jr_t*)rv;
-    yyjson_val* v = jr_map_nth_val(jr_map_obj(r, key), idx);
-    return v ? (float)yyjson_get_real(v) : 0.0f;
+    return (float)jr_as_f64(jr_map_nth_val(jr_map_obj(r, key), idx), 0.0, jr_map_where(r, key, idx));
 }
-
 double aiml_jr_map_val_f64(void* rv, const char* key, int idx) {
     auto* r = (aiml_jr_t*)rv;
-    yyjson_val* v = jr_map_nth_val(jr_map_obj(r, key), idx);
-    return v ? yyjson_get_real(v) : 0.0;
+    return jr_as_f64(jr_map_nth_val(jr_map_obj(r, key), idx), 0.0, jr_map_where(r, key, idx));
 }
-
 int aiml_jr_map_val_bool(void* rv, const char* key, int idx) {
     auto* r = (aiml_jr_t*)rv;
-    yyjson_val* v = jr_map_nth_val(jr_map_obj(r, key), idx);
-    return (v && yyjson_get_bool(v)) ? 1 : 0;
+    return jr_as_bool(jr_map_nth_val(jr_map_obj(r, key), idx), 0, jr_map_where(r, key, idx));
 }
-
 char* aiml_jr_map_val_str(void* rv, const char* key, int idx) {
     auto* r = (aiml_jr_t*)rv;
-    yyjson_val* v = jr_map_nth_val(jr_map_obj(r, key), idx);
-    const char* s = v ? yyjson_get_str(v) : nullptr;
-    return s ? aiml_str_dup(s) : aiml_str_dup("");
+    return jr_as_str(jr_map_nth_val(jr_map_obj(r, key), idx), "", jr_map_where(r, key, idx));
 }
 
 // ── Value-level (keyless) array access ────────────────────────────────────────
@@ -613,63 +711,47 @@ char* aiml_jr_map_val_str(void* rv, const char* key, int idx) {
 
 int aiml_jr_val_len(void* rv) {
     auto* r = (aiml_jr_t*)rv;
-    if (!r || !r->val || !yyjson_is_arr(r->val)) return 0;
+    if (!r || !r->val) return 0;
+    if (!yyjson_is_arr(r->val)) { jr_type_error(r->path, "an array", r->val); return 0; }
     return (int)yyjson_arr_size(r->val);
+}
+
+static yyjson_val* jr_val_at(aiml_jr_t* r, int idx) {
+    return (r && r->val && yyjson_is_arr(r->val)) ? yyjson_arr_get(r->val, (size_t)idx) : nullptr;
 }
 
 int32_t aiml_jr_val_i32(void* rv, int idx) {
     auto* r = (aiml_jr_t*)rv;
-    if (!r || !r->val) return 0;
-    yyjson_val* v = yyjson_arr_get(r->val, (size_t)idx);
-    return v ? (int32_t)yyjson_get_int(v) : 0;
+    return (int32_t)jr_as_i64(jr_val_at(r, idx), 0, jr_index(r ? r->path : "", idx));
 }
-
 int64_t aiml_jr_val_i64(void* rv, int idx) {
     auto* r = (aiml_jr_t*)rv;
-    if (!r || !r->val) return 0;
-    yyjson_val* v = yyjson_arr_get(r->val, (size_t)idx);
-    return v ? yyjson_get_sint(v) : 0;
+    return jr_as_i64(jr_val_at(r, idx), 0, jr_index(r ? r->path : "", idx));
 }
-
 float aiml_jr_val_f32(void* rv, int idx) {
     auto* r = (aiml_jr_t*)rv;
-    if (!r || !r->val) return 0.0f;
-    yyjson_val* v = yyjson_arr_get(r->val, (size_t)idx);
-    return v ? (float)yyjson_get_real(v) : 0.0f;
+    return (float)jr_as_f64(jr_val_at(r, idx), 0.0, jr_index(r ? r->path : "", idx));
 }
-
 double aiml_jr_val_f64(void* rv, int idx) {
     auto* r = (aiml_jr_t*)rv;
-    if (!r || !r->val) return 0.0;
-    yyjson_val* v = yyjson_arr_get(r->val, (size_t)idx);
-    return v ? yyjson_get_real(v) : 0.0;
+    return jr_as_f64(jr_val_at(r, idx), 0.0, jr_index(r ? r->path : "", idx));
 }
-
 int aiml_jr_val_bool(void* rv, int idx) {
     auto* r = (aiml_jr_t*)rv;
-    if (!r || !r->val) return 0;
-    yyjson_val* v = yyjson_arr_get(r->val, (size_t)idx);
-    return (v && yyjson_get_bool(v)) ? 1 : 0;
+    return jr_as_bool(jr_val_at(r, idx), 0, jr_index(r ? r->path : "", idx));
 }
-
 char* aiml_jr_val_str(void* rv, int idx) {
     auto* r = (aiml_jr_t*)rv;
-    if (!r || !r->val) return aiml_str_dup("");
-    yyjson_val* v = yyjson_arr_get(r->val, (size_t)idx);
-    const char* s = v ? yyjson_get_str(v) : nullptr;
-    return s ? aiml_str_dup(s) : aiml_str_dup("");
+    return jr_as_str(jr_val_at(r, idx), "", jr_index(r ? r->path : "", idx));
 }
 
 void* aiml_jr_val_sub(void* rv, int idx) {
     auto* r = (aiml_jr_t*)rv;
-    if (!r || !r->val) return nullptr;
-    yyjson_val* v = yyjson_arr_get(r->val, (size_t)idx);
-    if (!v) return nullptr;
-    auto* s = (aiml_jr_t*)malloc(sizeof(aiml_jr_t));
-    s->owns_doc = false;
-    s->doc = nullptr;
-    s->val = v;
-    return s;
+    yyjson_val* v = jr_val_at(r, idx);
+    if (jr_absent(v)) return nullptr;
+    std::string where = jr_index(r ? r->path : "", idx);
+    if (!yyjson_is_obj(v) && !yyjson_is_arr(v)) { jr_type_error(where, "an object or array", v); return nullptr; }
+    return jr_new(v, where);
 }
 
 } // extern "C"

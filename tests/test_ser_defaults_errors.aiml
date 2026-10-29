@@ -1,0 +1,126 @@
+# SPEC: 29_serialize
+# spec/29 §5.2d — reading is tolerant but no longer silent:
+#   F29-16  missing key / null → the declared default (top level, nested, list elements)
+#   F29-23  a missing nested object is built with its defaults and empty containers
+#   F29-24  numbers convert between integer and real
+#   F29-25  sys.json_error: syntax (line/column) and wrong types (with the path)
+#   F29-27  bare top-level array / object for list<T> / map<string:V>
+#   F29-28  the error text is per thread
+# Expected exit code: 0
+
+- import: "tests/_cross/ser_defaults_models.aiml"
+- import: "tests/_cross/ser_check.aiml"
+
+# F29-28: thread A reads a broken document, waits until main has read a clean
+# one, then its own error text must still be there.
+- def:
+    name: reader_thread
+    args: [[ready, chan<i32>], [resume, chan<i32>], [result, chan<i32>]]
+    body:
+      - decl: [bad, ProjCfg, { call: [sys.deserialize, "{\"jobs\": [", "ProjCfg"] }]
+      - call: [ready.send, 1]
+      - decl: [go_on, i32, { call: [resume.recv] }]
+      - decl: [mine, string, { call: [sys.json_error] }]
+      - decl: [seen, i32, 0]
+      - if: { condition: { gt: [mine.len, 0] }, then: [{ set: [seen, 1] }] }
+      - call: [result.send, { +: [seen, { "*": [go_on, 0] }] }]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [chk, ptr<Checker>, { new: Checker }]
+      # ── F29-16: defaults for missing keys and null ──
+      - decl: [one, ProjCfg, { call: [sys.deserialize, "{\"name\":\"demo\",\"stamp\":null,\"tool\":{\"level\":3}}", "ProjCfg"] }]
+      - call: [chk.expect_s, "name read", one.name, "demo"]
+      - call: [chk.expect_i, "jobs default", one.jobs, 4]
+      - call: [chk.expect_i, "stamp null -> default", one.stamp, 7]
+      - decl: [ratio_x10, i32, { call: [math.round, { "*": [one.ratio, 10.0] }] }]
+      - call: [chk.expect_i, "ratio default x10", ratio_x10, 15]
+      - call: [chk.expect_i, "werror default", one.werror, 1]
+      - call: [chk.expect_i, "verbose default", one.verbose, 0]
+      - call: [chk.expect_s, "nested default", one.tool.cmd, "g++"]
+      - call: [chk.expect_i, "nested read", one.tool.level, 3]
+      - call: [chk.expect_s, "clean document", { call: [sys.json_error] }, ""]
+
+      # ── F29-23: a missing nested object is complete ──
+      - decl: [two, ProjCfg, { call: [sys.deserialize, "{}", "ProjCfg"] }]
+      - call: [chk.expect_s, "absent nested string default", two.tool.cmd, "g++"]
+      - call: [chk.expect_i, "absent nested i32 default", two.tool.level, 2]
+      - call: [chk.expect_i, "absent nested list is empty", two.tool.tags.len, 0]
+      - call: [chk.expect_i, "absent list is empty", two.deps.len, 0]
+      - call: [chk.expect_i, "absent map is empty", { call: [two.env.len] }, 0]
+      - call: [chk.expect_s, "top-level default", two.name, "unnamed"]
+
+      # ── F29-16 in list elements ──
+      - decl: [three, ProjCfg, { call: [sys.deserialize, "{\"deps\":[{\"name\":\"zlib\"},{\"name\":\"ssl\",\"version\":\"3.0\",\"required\":false}]}", "ProjCfg"] }]
+      - call: [chk.expect_i, "two deps", three.deps.len, 2]
+      - decl: [dep0, DepCfg, { at: [three.deps, 0] }]
+      - decl: [dep1, DepCfg, { at: [three.deps, 1] }]
+      - call: [chk.expect_s, "element default", dep0.version, "latest"]
+      - call: [chk.expect_i, "element bool default", dep0.required, 1]
+      - call: [chk.expect_s, "element read", dep1.version, "3.0"]
+      - call: [chk.expect_i, "element bool read", dep1.required, 0]
+
+      # ── F29-24: numbers convert ──
+      - decl: [four, ProjCfg, { call: [sys.deserialize, "{\"jobs\":8.0,\"ratio\":3,\"scale\":4,\"verbose\":true}", "ProjCfg"] }]
+      - call: [chk.expect_i, "real into i32", four.jobs, 8]
+      - decl: [ratio_int, i32, { call: [math.round, four.ratio] }]
+      - call: [chk.expect_i, "int into f32", ratio_int, 3]
+      - decl: [scale_int, i32, { call: [math.round, four.scale] }]
+      - call: [chk.expect_i, "int into f64", scale_int, 4]
+      - call: [chk.expect_i, "bool read", four.verbose, 1]
+      - call: [chk.expect_s, "conversions are clean", { call: [sys.json_error] }, ""]
+
+      # ── F29-25: syntax error with line/column ──
+      - decl: [five, ProjCfg, { call: [sys.deserialize, "{\n  \"name\": \"x\",\n  \"jobs\": oops\n}", "ProjCfg"] }]
+      - decl: [syntax, string, { call: [sys.json_error] }]
+      - call: [chk.expect_has, "syntax error line", syntax, "line 3 column"]
+      - call: [chk.expect_i, "broken document still has defaults", five.jobs, 4]
+
+      # ── F29-25: wrong types with the path, value takes the default ──
+      - decl: [six, ProjCfg, { call: [sys.deserialize, "{\"jobs\":\"many\",\"tool\":{\"cmd\":5},\"deps\":[{\"name\":\"a\"},{\"name\":\"b\",\"version\":3}],\"env\":[]}", "ProjCfg"] }]
+      - decl: [typed, string, { call: [sys.json_error] }]
+      - call: [chk.expect_has, "wrong type top", typed, "jobs: expected a number, got a string"]
+      - call: [chk.expect_has, "wrong type nested", typed, "tool.cmd: expected a string, got a number"]
+      - call: [chk.expect_has, "wrong type in element", typed, "deps[1].version: expected a string, got a number"]
+      - call: [chk.expect_has, "map given as array", typed, "env: expected an object, got an array"]
+      - call: [chk.expect_i, "wrong type -> default", six.jobs, 4]
+      - call: [chk.expect_s, "wrong nested type -> default", six.tool.cmd, "g++"]
+
+      # ── the next call resets the error ──
+      - decl: [seven, ProjCfg, { call: [sys.deserialize, "{\"name\":\"ok\"}", "ProjCfg"] }]
+      - call: [chk.expect_s, "reset by the next read", { call: [sys.json_error] }, ""]
+      - call: [chk.expect_s, "unknown keys are fine", seven.name, "ok"]
+
+      # ── F29-27: bare array and object ──
+      - decl: [nums, list<i32>, { call: [sys.deserialize, "[1,2,3]", "list<i32>"] }]
+      - call: [chk.expect_i, "bare array len", nums.len, 3]
+      - call: [chk.expect_i, "bare array value", { at: [nums, 2] }, 3]
+      - decl: [wrapped, list<i32>, { call: [sys.deserialize, "{\"values\":[4,5]}", "list<i32>"] }]
+      - call: [chk.expect_i, "wrapped array still works", wrapped.len, 2]
+      - decl: [bare_map, map<string:string>, { call: [sys.deserialize, "{\"CC\":\"gcc\",\"AR\":\"ar\"}", "map<string:string>"] }]
+      - call: [chk.expect_i, "bare object len", { call: [bare_map.len] }, 2]
+      - call: [chk.expect_s, "bare object value", { call: [bare_map.get, "AR"] }, "ar"]
+      - decl: [wrapped_map, map<string:string>, { call: [sys.deserialize, "{\"__type\":\"map<string:string>\",\"entries\":{\"k\":\"v\"}}", "map<string:string>"] }]
+      - call: [chk.expect_s, "wrapped object still works", { call: [wrapped_map.get, "k"] }, "v"]
+
+      # ── F29-28: per thread ──
+      - decl: [ready, chan<i32>]
+      - decl: [resume, chan<i32>]
+      - decl: [result, chan<i32>]
+      - call: [ready.init, 1]
+      - call: [resume.init, 1]
+      - call: [result.init, 1]
+      - decl: [worker, thread_handle, { spawn: [reader_thread, ready, resume, result] }]
+      - decl: [got_ready, i32, { call: [ready.recv] }]
+      - decl: [clean, ProjCfg, { call: [sys.deserialize, "{}", "ProjCfg"] }]
+      - call: [chk.expect_s, "main thread clean", { call: [sys.json_error] }, ""]
+      - call: [resume.send, got_ready]
+      - decl: [thread_saw, i32, { call: [result.recv] }]
+      - call: [worker.join]
+      - call: [chk.expect_i, "worker keeps its own error", thread_saw, 1]
+
+      - if: { condition: { gt: [chk.fails, 0] }, then: [{ print: ["FAIL ser_defaults_errors (${chk.fails})"] }, { return: 1 }] }
+      - print: ["PASS ser_defaults_errors"]
+      - return: 0
