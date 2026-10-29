@@ -233,6 +233,8 @@ probe "sys.deserialize: defaults, null, number conversion, errors with paths, ba
     "$AIML_BIN" -r tests/test_ser_defaults_errors.aiml
 probe "os helpers: chdir, setenv/unsetenv, isatty, realpath, mkdtemp, copy, lock/unlock (spec/23 §5.8)" "osh" \
     "$AIML_BIN" -r tests/test_os_helpers.aiml
+probe "lists: out-of-range at/get/idx/remove/insert throw IndexOutOfBoundsException, catchable (spec/10 F10-23)" "lbd" \
+    "$AIML_BIN" -r tests/test_list_bounds.aiml
 probe "ptr moves in member initialisers + inline new upcast in put/push/return (spec/61 F61-80)" "nmu" \
     "$AIML_BIN" -r tests/test_new_move_upcast.aiml
 probe "processes: sys.wait_any pool with captured output, signal, caught signals, stdin, list<process> release (spec/23 §5)" "ppl" \
