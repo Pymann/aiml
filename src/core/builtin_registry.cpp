@@ -1148,6 +1148,12 @@ void registerBuiltins(CompilerContext& ctx) {
         auto* p = llvm::PointerType::get(ctx.context, 0);
         return ctx.ir_gen->wrap(ctx.builder.CreateCall(ctx.getFunction("aiml_sys_exe_path", p, {}), {}));
     };
+    // spec/29 §5.2d: sys.json_error() → what the last sys.deserialize on this thread
+    // found wrong (syntax with line/column, wrong types with the field path), "" = clean.
+    sys.builtinFuncs["json_error"] = [](CompilerContext& ctx, const std::vector<IRValue*>&) -> IRValue* {
+        auto* p = llvm::PointerType::get(ctx.context, 0);
+        return ctx.ir_gen->wrap(ctx.builder.CreateCall(ctx.getFunction("aiml_sys_json_error", p, {}), {}));
+    };
     // spec/23 §5.6: sys.require_tools(csv) → "" oder ALLES Fehlende.  Ein Ort
     // fuer diese Frage (F23-43): `requires:` (spec/62 §18.2) und der cosmos-
     // Agent rufen denselben Code, statt zwei Pruefungen zu pflegen.
