@@ -97,6 +97,25 @@ Ggf. eine Kettenform (`{ call: [f], then: len }`) oder ein `pipe`.
 
 Wird nicht beanstandet (nur lokal), führt aber zu doppeltem Besitz.  cai nutzt deshalb `shared<T>`.
 
+### 13. Listenliteral an ein Member zuweisen: Absturz
+
+```yaml
+- class:
+    name: Holder
+    members:
+      - [names, list<string>, null, { access: public }]
+    methods:
+      - def:
+          name: fill
+          args: []
+          body:
+            - set: [<.names, ["Knoten", "Text"]]
+```
+
+`holder.fill` stürzt ab (SIGSEGV in `aiml_list_handle_incref`).  Gefunden in cai (`AimlGraphLearner.setup`).
+Umgehung: eine lokale Liste anlegen (`decl: [names, list<string>, ["Knoten", "Text"]]`) bzw. eine
+Funktion, die den Eintrag liefert.  Verwandt mit Punkt 3.
+
 ## Testsuite (zur Kenntnis)
 
 Auf mem-v3-compiler schlagen 12–13 Tests unabhängig von diesen Punkten fehl, u. a.
