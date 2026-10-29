@@ -6,10 +6,14 @@
 #include "compiler.h"
 #include "src/core/asset_scanner.h"   // AssetScanner::all_stores() → Asset-Deps in die .d schreiben
 #include "logger.h"
+#include "src/core/venv.h"
 #include <filesystem>
 
 
 int main(int argc, char** argv) {
+    // `aiml venv <dir>` (spec/68) — a subcommand, not an input file.
+    if (argc > 1 && std::string(argv[1]) == "venv") return aiml::venv::command(argc - 2, argv + 2);
+
     std::string inputFile;
     std::string outputFile;
     LogLevel logLevel = LogLevel::WARNING;
@@ -77,7 +81,7 @@ int main(int argc, char** argv) {
     }
 
     if (inputFile.empty()) {
-        std::cerr << "Usage: aiml <input.aiml> [-o output.o|output.ll] [--log-level DEBUG|INFO|WARN|ERROR] [-r]" << std::endl;
+        std::cerr << "Usage: aiml <input.aiml> [-o output.o|output.ll] [--log-level DEBUG|INFO|WARN|ERROR] [-r]\n       aiml venv <dir> [--runtime <libaiml.so>]" << std::endl;
         return 1;
     }
 
@@ -101,27 +105,14 @@ int main(int argc, char** argv) {
     if (!targetTriple.empty()) compiler.setTargetTriple(targetTriple);
     if (!assetRoots.empty()) compiler.setAssetRoots(assetRoots);
     
-    // Resolve compiler path (argv[0]) to absolute path for recursive calls
-    try {
-        if (argc > 0) {
-            std::string argv0 = argv[0];
-            if (std::filesystem::exists(argv0)) {
-                std::filesystem::path exePath = std::filesystem::absolute(argv0);
-                compiler.compilerPath = exePath.string();
-            } else {
-                // Not a local path, assume in PATH
-                // check if "which argv0" or similar?
-                // For now, just use argv0 as is, hoping system() finds it.
-                // Or try to resolve using 'which'?
-                compiler.compilerPath = argv0; 
-            }
-            LOG_DEBUG("Compiler Path: " + compiler.compilerPath);
-        }
-    } catch (const std::exception& e) {
-        LOG_ERROR("Failed to resolve compiler path: " + std::string(e.what()));
+    // The running binary itself, also when it was started via PATH (spec/68 F68-21).
+    {
+        std::error_code ec;
+        std::filesystem::path self = std::filesystem::canonical("/proc/self/exe", ec);
+        compiler.compilerPath = ec ? std::string(argc > 0 ? argv[0] : "") : self.string();
+        LOG_DEBUG("Compiler Path: " + compiler.compilerPath);
     }
 
-    
     // Check if output is object file
     LOG_DEBUG("inputFile=" + inputFile);
     LOG_DEBUG("outputFile=" + outputFile);

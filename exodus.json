@@ -1170,6 +1170,7 @@
         "map_file": null,
         "flags": [
             "-rdynamic",
+            "-Wl,-rpath,$ORIGIN/../lib",
             "-Wl,-rpath,__exodus_cache/apt/libzip4t64/amd64/1.7.3-1.1ubuntu2/payload/usr/lib/x86_64-linux-gnu",
             "-Wl,-rpath,__exodus_cache/apt/libassimp5/amd64/5.3.1+ds-2build1/payload/usr/lib/x86_64-linux-gnu",
             "-Wl,-rpath,__exodus_cache/apt/libglfw3/amd64/3.3.10-1build1/payload/usr/lib/x86_64-linux-gnu",
