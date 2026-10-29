@@ -1,0 +1,17 @@
+# Requires: driver
+# Importiert die Bibliothek über "../" — aus app/ aufgelöst wird das zu ../lib/sub/../shared.aiml.
+- namespace: nrm.user
+- import: "../shared.aiml"
+
+- class:
+    name: User
+    members:
+      - [counter, ptr<nrm.shared.Counter>, null, { access: public }]
+    methods:
+      - def:
+          name: read
+          args: []
+          return: i32
+          body:
+            - set: [<.counter, { new: nrm.shared.Counter }]
+            - return: { call: [<.counter.value] }
