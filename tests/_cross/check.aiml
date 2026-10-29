@@ -1,4 +1,4 @@
-# A small assertion helper for tests/test_ser_defaults_errors.aiml.
+# Small assertion helpers for tests: count failures, print what differed.
 
 - class:
     name: Checker

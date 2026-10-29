@@ -1,0 +1,96 @@
+# SPEC: 09_2_regex
+# spec/09_2 — the regex namespace:
+#   F09-2-1 match (whole text)       F09-2-2 search (index / -1)
+#   F09-2-3 find (match + groups)    F09-2-4 find_all (non-overlapping)
+#   F09-2-5 replace ($n, $$)         F09-2-6 split
+#   F09-2-7 regex.error              F09-2-8 syntax: classes, anchors, flags,
+#   lazy and counted repetition, leftmost-first, linear time
+# Expected exit code: 0
+
+- import: "tests/_cross/check.aiml"
+
+- def:
+    name: shown
+    args: [[parts, list<string>]]
+    return: string
+    body:
+      - decl: [text, string, "["]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, parts.len] }
+          body:
+            - decl: [part, string, { call: [parts.get, idx] }]
+            - if: { condition: { gt: [idx, 0] }, then: [{ set: [text, "${text}|"] }] }
+            - set: [text, "${text}${part}"]
+            - set: [idx, { +: [idx, 1] }]
+      - return: ["${text}]"]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [chk, ptr<Checker>, { new: Checker }]
+
+      # ── match / search ──
+      - call: [chk.expect_i, "match whole", { call: [regex.match, "a+b", "aaab"] }, 1]
+      - call: [chk.expect_i, "match is anchored", { call: [regex.match, "a+b", "aaabx"] }, 0]
+      - call: [chk.expect_i, "match via a later alternative", { call: [regex.match, "(a|ab)(c|bcd)", "abcd"] }, 1]
+      - call: [chk.expect_i, "search index", { call: [regex.search, "\\d+", "abc 123"] }, 4]
+      - call: [chk.expect_i, "search miss", { call: [regex.search, "x", "abc"] }, -1]
+      - call: [chk.expect_i, "case-insensitive flag", { call: [regex.match, "(?i)lib.*\\.so(\\.\\d+)*", "LIBssl.so.3"] }, 1]
+      - call: [chk.expect_i, "dot stops at newline", { call: [regex.match, "a.b", "a\nb"] }, 0]
+      - call: [chk.expect_i, "flag s: dot takes newline", { call: [regex.match, "(?s)a.b", "a\nb"] }, 1]
+
+      # ── find: groups, unmatched group, leftmost-first, lazy, counted ──
+      - decl: [ver, list<string>, { call: [regex.find, "^(\\d+)\\.(\\d+)(?:\\.(\\d+))?", "18.1.3-1ubuntu1"] }]
+      - call: [chk.expect_s, "version groups", { call: [shown, ver] }, "[18.1.3|18|1|3]"]
+      - decl: [short_ver, list<string>, { call: [regex.find, "^(\\d+)\\.(\\d+)(?:\\.(\\d+))?", "18.1-x"] }]
+      - call: [chk.expect_s, "group that did not take part", { call: [shown, short_ver] }, "[18.1|18|1|]"]
+      - decl: [first, list<string>, { call: [regex.find, "(a|ab)(c|bcd)(d*)", "abcd"] }]
+      - call: [chk.expect_s, "leftmost-first", { call: [shown, first] }, "[abcd|a|bcd|]"]
+      - decl: [lazy, list<string>, { call: [regex.find, "<(.+?)>", "<a><b>"] }]
+      - call: [chk.expect_s, "lazy", { call: [shown, lazy] }, "[<a>|a]"]
+      - decl: [greedy, list<string>, { call: [regex.find, "<(.+)>", "<a><b>"] }]
+      - call: [chk.expect_s, "greedy", { call: [shown, greedy] }, "[<a><b>|a><b]"]
+      - decl: [counted, list<string>, { call: [regex.find, "a{2,3}", "aaaa"] }]
+      - call: [chk.expect_s, "counted", { call: [shown, counted] }, "[aaa]"]
+      - decl: [classy, list<string>, { call: [regex.find, "[\\d.]+", "v1.2.3!"] }]
+      - call: [chk.expect_s, "class with shorthand", { call: [shown, classy] }, "[1.2.3]"]
+      - decl: [umlaut, list<string>, { call: [regex.find, "^.(.)$", "äö"] }]
+      - call: [chk.expect_s, "UTF-8 by code point", { call: [shown, umlaut] }, "[äö|ö]"]
+      - decl: [none, list<string>, { call: [regex.find, "z", "abc"] }]
+      - call: [chk.expect_i, "no match: empty list", none.len, 0]
+
+      # ── find_all / replace / split ──
+      - decl: [nums, list<string>, { call: [regex.find_all, "\\d+", "a1b22c333"] }]
+      - call: [chk.expect_s, "find_all", { call: [shown, nums] }, "[1|22|333]"]
+      - decl: [words, list<string>, { call: [regex.find_all, "\\bfoo\\b", "foo foobar barfoo foo"] }]
+      - call: [chk.expect_i, "word boundaries", words.len, 2]
+      - decl: [lines, list<string>, { call: [regex.find_all, "(?m)^\\w+", "one\ntwo\nthree"] }]
+      - call: [chk.expect_s, "multi-line anchors", { call: [shown, lines] }, "[one|two|three]"]
+      - decl: [swapped, string, { call: [regex.replace, "(\\w+)@(\\w+)", "joe@host and ann@box", "$2:$1 $$"] }]
+      - call: [chk.expect_s, "replace with groups", swapped, "host:joe $ and box:ann $"]
+      - decl: [squeezed, string, { call: [regex.replace, "\\s+", "  a   b  ", " "] }]
+      - call: [chk.expect_s, "replace runs", squeezed, " a b "]
+      - decl: [parts, list<string>, { call: [regex.split, "\\s*,\\s*", "a , b,c"] }]
+      - call: [chk.expect_s, "split", { call: [shown, parts] }, "[a|b|c]"]
+
+      # ── errors ──
+      - call: [chk.expect_i, "invalid pattern does not match", { call: [regex.match, "(a", "a"] }, 0]
+      - call: [chk.expect_s, "error text", { call: [regex.error] }, "pattern column 3: missing )"]
+      - call: [chk.expect_i, "back-reference refused", { call: [regex.search, "(a)\\1", "aa"] }, -1]
+      - call: [chk.expect_has, "back-reference named", { call: [regex.error] }, "back-references are not supported"]
+      - decl: [kept, string, { call: [regex.replace, "[a-", "text", "x"] }]
+      - call: [chk.expect_s, "invalid replace keeps the text", kept, "text"]
+      - call: [chk.expect_i, "valid again", { call: [regex.match, "ok", "ok"] }, 1]
+      - call: [chk.expect_s, "error cleared", { call: [regex.error] }, ""]
+
+      # ── linear time: a classic catastrophic pattern for backtrackers ──
+      - decl: [many, string, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]
+      - set: [many, "${many}${many}${many}${many}"]
+      - set: [many, "${many}${many}${many}${many}"]
+      - call: [chk.expect_i, "(a*)*b on 512 a's", { call: [regex.match, "(a*)*b", many] }, 0]
+
+      - if: { condition: { gt: [chk.fails, 0] }, then: [{ print: ["FAIL regex (${chk.fails})"] }, { return: 1 }] }
+      - print: ["PASS regex"]
+      - return: 0

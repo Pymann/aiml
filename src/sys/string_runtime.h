@@ -23,6 +23,9 @@ char* aiml_str_empty(void);
 int   aiml_dbg_strcmp(const char* a, const char* b);
 char* aiml_str_dup(const char* s);
 char* aiml_str_ndup(const char* s, size_t len);
+// Appends an owned copy of s[0..len) to a list<string> (the {size,cap,data} list a
+// runtime fill function receives).  0 = ok, -1 = out of memory.
+int32_t aiml_list_push_str_copy(void* list_ptr, const char* s, size_t len);
 void  aiml_str_incref(char* s);
 void  aiml_str_decref(char* s);
 

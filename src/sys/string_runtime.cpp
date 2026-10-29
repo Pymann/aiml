@@ -631,6 +631,24 @@ extern "C" char* aiml_str_replace(const char* s, const char* old_str, const char
     return out;
 }
 
+// ── runtime-built list<string> ───────────────────────────────────────────────
+// One growth path for fill functions (regex, glob): an owned copy per element.
+extern "C" int32_t aiml_list_push_str_copy(void* list_ptr, const char* s, size_t len) {
+    AimlListRaw* list = static_cast<AimlListRaw*>(list_ptr);
+    if (!list) return -1;
+    if (list->size >= list->capacity) {
+        int32_t cap = list->capacity > 0 ? list->capacity * 2 : 8;
+        void** data = static_cast<void**>(std::realloc(list->data, (size_t)cap * sizeof(void*)));
+        if (!data) return -1;
+        list->data = data;
+        list->capacity = cap;
+    }
+    char* copy = aiml_str_ndup(s ? s : "", s ? len : 0);
+    if (!copy) return -1;
+    list->data[list->size++] = copy;
+    return 0;
+}
+
 // ── string.split ─────────────────────────────────────────────────────────────
 // Fills an AimlListRaw (same layout as GenericList) with refcounted parts.
 extern "C" int aiml_str_split_fill(const char* s, const char* delim, void* list_ptr) {
