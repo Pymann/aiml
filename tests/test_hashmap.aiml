@@ -1,0 +1,152 @@
+# SPEC: 68_hashmap
+# hashmap<K:V>: Hashtabelle (O(1) pro Zugriff) mit string/int-Schlüsseln und int/bool/float/string-Werten.
+
+- def:
+    name: main
+    return: i32
+    static_off: ["str_cmp"]
+    body:
+
+      - decl: [var_ok, i32, 1]
+
+      # ── A: string -> i32 ─────────────────────────────────────────────────────────
+      - decl: [hm_a, "hashmap<string:i32>"]
+      - call: [hm_a.put, "alpha", 1]
+      - call: [hm_a.put, "beta", 2]
+      - call: [hm_a.put, "alpha", 11]
+      - decl: [got_a, i32, { call: [hm_a.get, "alpha"] }]
+      - if: [{ neq: [got_a, 11] }, true]
+        then:
+          - print: ["FAIL A1: get alpha = ${got_a}, erwartet 11"]
+          - set: [var_ok, 0]
+      - decl: [miss_a, i32, { call: [hm_a.get, "gamma"] }]
+      - if: [{ neq: [miss_a, 0] }, true]
+        then:
+          - print: ["FAIL A2: fehlender Schlüssel = ${miss_a}, erwartet 0"]
+          - set: [var_ok, 0]
+      - decl: [len_a, i32, { call: [hm_a.len] }]
+      - if: [{ neq: [len_a, 2] }, true]
+        then:
+          - print: ["FAIL A3: len = ${len_a}, erwartet 2"]
+          - set: [var_ok, 0]
+      - if: [{ call: [hm_a.contains, "beta"] }, true]
+        then:
+          - print: ["OK A4: contains beta"]
+        else:
+          - print: ["FAIL A4: contains beta"]
+          - set: [var_ok, 0]
+      - call: [hm_a.remove, "beta"]
+      - if: [{ call: [hm_a.contains, "beta"] }, true]
+        then:
+          - print: ["FAIL A5: beta nach remove noch da"]
+          - set: [var_ok, 0]
+
+      # ── B: add (Zähler) ──────────────────────────────────────────────────────────
+      - decl: [hm_b, "hashmap<string:i64>"]
+      - decl: [idx, i32, 0]
+      - while: [{ lt: [idx, 1000] }]
+        body:
+          - call: [hm_b.add, "w${idx}", 1]
+          - call: [hm_b.add, "w${idx}", 2]
+          - set: [idx, { "+": [idx, 1] }]
+      - decl: [got_b, i64, { call: [hm_b.get, "w500"] }]
+      - decl: [len_b, i32, { call: [hm_b.len] }]
+      - if: [{ or: [{ neq: [got_b, 3] }, { neq: [len_b, 1000] }] }, true]
+        then:
+          - print: ["FAIL B1: w500 = ${got_b} (3), len = ${len_b} (1000)"]
+          - set: [var_ok, 0]
+
+      # ── C: i32 -> string ─────────────────────────────────────────────────────────
+      - decl: [hm_c, "hashmap<i32:string>"]
+      - call: [hm_c.put, 7, "sieben"]
+      - call: [hm_c.put, -3, "minus drei"]
+      - decl: [got_c, string, { call: [hm_c.get, -3] }]
+      - if: [{ eq: [got_c, "minus drei"] }, true]
+        then:
+          - print: ["OK C1: ${got_c}"]
+        else:
+          - print: ["FAIL C1: get -3 = '${got_c}'"]
+          - set: [var_ok, 0]
+      - call: [hm_c.put, -3, "neu"]
+      - if: [{ eq: [got_c, "minus drei"] }, true]
+        then:
+          - print: ["OK C2: gebundener Wert bleibt nach Überschreiben gültig"]
+        else:
+          - print: ["FAIL C2: gebundener Wert verändert: '${got_c}'"]
+          - set: [var_ok, 0]
+      - decl: [miss_c, string, { call: [hm_c.get, 99] }]
+      - if: [{ neq: [miss_c, ""] }, true]
+        then:
+          - print: ["FAIL C3: fehlender Schlüssel liefert '${miss_c}'"]
+          - set: [var_ok, 0]
+
+      # ── D: f64 und bool ──────────────────────────────────────────────────────────
+      - decl: [hm_d, "hashmap<string:f64>"]
+      - call: [hm_d.put, "pi", 3.25]
+      - decl: [got_d, f64, { call: [hm_d.get, "pi"] }]
+      - if: [{ neq: [got_d, 3.25] }, true]
+        then:
+          - print: ["FAIL D1: pi = ${got_d}"]
+          - set: [var_ok, 0]
+      - decl: [hm_e, "hashmap<i64:bool>"]
+      - call: [hm_e.put, 5, true]
+      - if: [{ call: [hm_e.get, 5] }, true]
+        then:
+          - print: ["OK D2: bool true"]
+        else:
+          - print: ["FAIL D2: bool"]
+          - set: [var_ok, 0]
+      - if: [{ call: [hm_e.get, 6] }, true]
+        then:
+          - print: ["FAIL D3: fehlender bool ist true"]
+          - set: [var_ok, 0]
+
+      # ── E: keys sortiert, clear ──────────────────────────────────────────────────
+      - decl: [hm_f, "hashmap<string:i32>"]
+      - call: [hm_f.put, "zeta", 1]
+      - call: [hm_f.put, "alpha", 2]
+      - call: [hm_f.put, "mu", 3]
+      - decl: [key_list, list<string>, { call: [hm_f.keys] }]
+      - decl: [first_key, string, { call: [key_list.get, 0] }]
+      - decl: [last_key, string, { call: [key_list.get, 2] }]
+      - if: [{ and: [{ eq: [first_key, "alpha"] }, { eq: [last_key, "zeta"] }] }, true]
+        then:
+          - print: ["OK E1: keys sortiert"]
+        else:
+          - print: ["FAIL E1: keys = ${first_key} .. ${last_key}"]
+          - set: [var_ok, 0]
+      - call: [hm_f.clear]
+      - decl: [len_f, i32, { call: [hm_f.len] }]
+      - if: [{ neq: [len_f, 0] }, true]
+        then:
+          - print: ["FAIL E2: len nach clear = ${len_f}"]
+          - set: [var_ok, 0]
+
+      # ── F: Literal ───────────────────────────────────────────────────────────────
+      - decl: [hm_g, "hashmap<string:i32>", { eins: 1, zwei: 2, drei: 3 }]
+      - decl: [got_g, i32, { call: [hm_g.get, "zwei"] }]
+      - decl: [len_g, i32, { call: [hm_g.len] }]
+      - if: [{ or: [{ neq: [got_g, 2] }, { neq: [len_g, 3] }] }, true]
+        then:
+          - print: ["FAIL F1: literal zwei = ${got_g}, len = ${len_g}"]
+          - set: [var_ok, 0]
+
+      # ── G: Kopie teilt die Tabelle (Griff, wie chan) ─────────────────────────────
+      - decl: [hm_h, "hashmap<string:i32>", hm_a]
+      - call: [hm_h.put, "delta", 4]
+      - decl: [got_h, i32, { call: [hm_a.get, "delta"] }]
+      - if: [{ neq: [got_h, 4] }, true]
+        then:
+          - print: ["FAIL G1: Kopie teilt nicht, delta = ${got_h}"]
+          - set: [var_ok, 0]
+
+      - if:
+          condition: { eq: [var_ok, 1] }
+          then:
+            - print: ["PASS test_hashmap"]
+            - call: [sys.exit, 0]
+          else:
+            - print: ["FAIL test_hashmap"]
+            - call: [sys.exit, 1]
+
+      - return: 0

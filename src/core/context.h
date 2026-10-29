@@ -1477,6 +1477,9 @@ namespace AIML {
         // chan<T>: pointer to heap-allocated channel struct (opaque i8*)
         if (typeName.rfind("chan<", 0) == 0 && typeName.back() == '>')
             return llvm::Type::getInt8Ty(context)->getPointerTo();
+        // hashmap<K:V>: pointer to a refcounted runtime hash table (spec/68, hashmap_runtime.cpp)
+        if (typeName.size() > 9 && typeName.rfind("hashmap<", 0) == 0 && typeName.back() == '>')
+            return llvm::Type::getInt8Ty(context)->getPointerTo();
 
         // db types: all opaque i8* pointers to heap-allocated C++ structs
         if (typeName.rfind("Store<", 0) == 0 && typeName.back() == '>')

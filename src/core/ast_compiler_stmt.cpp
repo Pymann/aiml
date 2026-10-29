@@ -4,6 +4,7 @@
 #include "map_impl.h"
 #include "buffer_impl.h"
 #include "chan_impl.h"
+#include "hashmap_impl.h"
 #include "string_utils.h"
 #include <algorithm>
 #include <iostream>
@@ -589,7 +590,10 @@ void Compiler::moveIteratorArg(Expr* arg) {
 // slot nulled). dst == nullptr (return): only a non-local chan source is retained — a returned local
 // moves via consumeLocalDrop.
 void Compiler::emitResourceBindTransfer(const std::string& typeName, Expr* rhs, llvm::Value* dst) {
-    bool isChan = typeName.rfind("chan<", 0) == 0 && typeName.back() == '>';
+    // spec/68: hashmap<K:V> follows the chan<T> co-ownership rules with its own retain/release.
+    bool isHashmap = HashmapImpl::isHashmapType(typeName);
+    bool isChan = isHashmap || (typeName.rfind("chan<", 0) == 0 && typeName.back() == '>');
+    const char* retainFn = isHashmap ? "aiml_hashmap_retain" : "aiml_chan_retain";
     if ((!isChan && typeName != "thread_handle" && typeName != "gl_texture" && typeName != "gl_cubemap" && typeName != "gl_timer_query" && typeName != "gl_buffer" && typeName != "gl_vao" && typeName != "process") || !rhs) return;
     if (dynamic_cast<CallExpr*>(rhs) || dynamic_cast<SpawnExpr*>(rhs) || dynamic_cast<LiteralExpr*>(rhs)) return;
     auto* var = dynamic_cast<VariableExpr*>(rhs);
@@ -610,7 +614,7 @@ void Compiler::emitResourceBindTransfer(const std::string& typeName, Expr* rhs, 
             if (!a) return;
             ch = ctx.builder.CreateLoad(i8p, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a)), "chan_ret");
         }
-        ctx.builder.CreateCall(ctx.getFunction("aiml_chan_retain", ctx.builder.getVoidTy(), {i8p}), { ch });
+        ctx.builder.CreateCall(ctx.getFunction(retainFn, ctx.builder.getVoidTy(), {i8p}), { ch });
         return;
     }
     if (!dst || !var || (plain && (plain->is_param || plain->is_global))) return;
@@ -621,12 +625,14 @@ void Compiler::emitResourceBindTransfer(const std::string& typeName, Expr* rhs, 
 // spec/61 Class 5/4 rebind of a chan / thread_handle slot: secure the new value (retain a shared chan
 // source / null a moved thread_handle source), release the old one, store.
 bool Compiler::emitResourceStore(const std::string& typeName, Expr* rhs, llvm::Value* newV, llvm::Value* slot) {
-    bool isChan = typeName.rfind("chan<", 0) == 0 && typeName.back() == '>';
+    bool isHashmap = HashmapImpl::isHashmapType(typeName);
+    bool isChan = isHashmap || (typeName.rfind("chan<", 0) == 0 && typeName.back() == '>');
     if ((!isChan && typeName != "thread_handle" && typeName != "gl_texture" && typeName != "gl_cubemap" && typeName != "gl_timer_query" && typeName != "gl_buffer" && typeName != "gl_vao" && typeName != "process") || !newV || !slot || !newV->getType()->isPointerTy()) return false;
     auto* i8p = llvm::PointerType::get(ctx.context, 0);
     if (isChan) {
         if (!dynamic_cast<CallExpr*>(rhs) && !dynamic_cast<LiteralExpr*>(rhs))
-            ctx.builder.CreateCall(ctx.getFunction("aiml_chan_retain", ctx.builder.getVoidTy(), {i8p}), { newV });
+            ctx.builder.CreateCall(ctx.getFunction(isHashmap ? "aiml_hashmap_retain" : "aiml_chan_retain",
+                ctx.builder.getVoidTy(), {i8p}), { newV });
     } else {
         emitResourceBindTransfer(typeName, rhs, slot);   // moved source slot → null
     }
@@ -636,7 +642,7 @@ bool Compiler::emitResourceStore(const std::string& typeName, Expr* rhs, llvm::V
         oldV = ctx.builder.CreateSelect(ctx.builder.CreateICmpEQ(oldV, newV),
             llvm::ConstantPointerNull::get(i8p), oldV);
     }
-    ctx.builder.CreateCall(ctx.getFunction(isChan ? "aiml_chan_release"
+    ctx.builder.CreateCall(ctx.getFunction(isHashmap ? "aiml_hashmap_release" : isChan ? "aiml_chan_release"
         : typeName == "gl_texture" ? "aiml_gl_texture_release"
         : typeName == "gl_cubemap" ? "aiml_gl_cubemap_release"
         : typeName == "process" ? "aiml_process_release"
@@ -1767,6 +1773,11 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
             llvm::Type* vTy = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(vName)));
             if (kTy && vTy) MapImpl::initMap(ctx, unwrappedAlloca, kTy, vTy, 4);
         }
+    } else if (HashmapImpl::isHashmapType(tName)) {
+        // spec/68: a fresh table unless initialised from another hashmap (shared, retained) or a
+        // map literal (filled below by the literal's put calls on the fresh table).
+        bool isLiteral = decl->initialValue && dynamic_cast<DictLiteralExpr*>(decl->initialValue.get());
+        if (!decl->initialValue || isLiteral) HashmapImpl::initSlot(ctx, unwrappedAlloca, tName);
     } else if (tName.find("chan<") == 0 && tName.back() == '>') {
         // Auto-init with capacity=0 (true rendezvous). Use chan.init(N) for buffered.
         if (!decl->initialValue) ChanImpl::init(ctx, unwrappedAlloca, ctx.builder.getInt64(0));
@@ -1983,6 +1994,17 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
                     ctx.cleanupStack.back().push_back(sd);
                 }
             }
+        }
+        // spec/68 hashmap<K:V> (kind 23, Class 5 like chan): refcounted table, released at owner drop
+        // on every exit; null-safe.  A copy from a named hashmap is retained (emitResourceBindTransfer).
+        if (HashmapImpl::isHashmapType(decl->typeName)
+            && ctx.memV3 && ctx.lifetimeDropsEnabled && decl->lifetime != "persistent" && !decl->is_extern
+            && !ctx.cleanupStack.empty() && !sym.is_global) {
+            CompilerContext::ScopeDrop sd;
+            sd.addr = unwrappedAlloca;
+            sd.kind = 23;
+            sd.debugName = decl->varName; sd.debugType = decl->typeName;
+            ctx.cleanupStack.back().push_back(sd);
         }
         // spec/61 Class 5 chan<T> (kind 15, atomic release) / Class 4 thread_handle (kind 14, detach if
         // unjoined + free): released at owner drop on every exit; null-safe.
@@ -2243,7 +2265,8 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
                     bool isContainerField = (mtn.rfind("list<", 0) == 0 && mtn.back() == '>')
                         || (mtn.rfind("map<", 0) == 0 && mtn.back() == '>')
                         || mtn == "buffer" || (mtn.rfind("buffer<", 0) == 0 && mtn.back() == '>')
-                        || (mtn.rfind("chan<", 0) == 0 && mtn.back() == '>');
+                        || (mtn.rfind("chan<", 0) == 0 && mtn.back() == '>')
+                        || HashmapImpl::isHashmapType(mtn);
                     if (ctx.memV3 && isContainerField) continue;
                 }
                 IRValue* fieldInitV = visitExpression(member.initValue.get());
@@ -2341,6 +2364,40 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
                         }
                     }
                 }
+            }
+        }
+        // hashmap literal: decl: [name, hashmap<K:V>, {k1: v1, ...}] — table created above, one put per entry.
+        if (HashmapImpl::isHashmapType(tName)) {
+            if (auto* dictLit = dynamic_cast<DictLiteralExpr*>(decl->initialValue.get())) {
+                HashmapImpl::Kinds hk = HashmapImpl::kinds(ctx, tName, false);
+                for (auto& [keyStr, valExpr] : dictLit->entriesExpr) {
+                    llvm::Value* kVal = nullptr;
+                    if (hk.key == 0) {
+                        kVal = ctx.builder.CreateGlobalStringPtr(keyStr, "hlit_k");
+                    } else if (ctx.enums.count(hk.keyName) || ctx.enums.count(ctx.qualify(hk.keyName))) {
+                        const auto& enumVals = ctx.enums.count(hk.keyName) ? ctx.enums[hk.keyName]
+                                                                            : ctx.enums[ctx.qualify(hk.keyName)];
+                        auto it = enumVals.find(keyStr);
+                        if (it == enumVals.end()) {
+                            LOG_ERROR(ctx.fmtLoc(decl->sourceNode) + "hashmap literal: enum '" + hk.keyName +
+                                      "' has no value named '" + keyStr + "'");
+                            continue;
+                        }
+                        kVal = ctx.builder.getInt64(it->second);
+                    } else {
+                        try { kVal = ctx.builder.getInt64(std::stoll(keyStr)); }
+                        catch (...) {
+                            LOG_ERROR(ctx.fmtLoc(decl->sourceNode) + "hashmap literal: key '" + keyStr + "' is not an integer");
+                            continue;
+                        }
+                    }
+                    IRValue* vv = visitExpression(valExpr.get());
+                    if (!vv) continue;
+                    bool known = true;
+                    HashmapImpl::method(ctx, tName, unwrappedAlloca, "put",
+                                        {kVal, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(vv))}, known);
+                }
+                return; // done — skip normal expression init
             }
         }
         // Buffer literal: decl: [name, buffer<T>, [v1, v2, ...]]
@@ -2878,6 +2935,7 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
         && setStmt->target.find('<') == std::string::npos) {
         Symbol* rs = resolveVariable(setStmt->target);
         if (rs && !rs->is_byref_arg && (rs->typeName == "thread_handle" || rs->typeName == "process"
+                   || HashmapImpl::isHashmapType(rs->typeName)
                    || (rs->typeName.rfind("chan<", 0) == 0 && rs->typeName.back() == '>'))) {
             llvm::Value* slot = rs->ir_alloca_inst ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(rs->ir_alloca_inst))
                                                    : static_cast<llvm::Value*>(rs->alloca_inst);
@@ -3240,6 +3298,7 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
             if (sv->name.find('.') == std::string::npos && sv->name.find('<') == std::string::npos)
                 if (Symbol* ss = resolveVariable(sv->name))
                     srcIsResource = ss->typeName == "thread_handle"
+                        || HashmapImpl::isHashmapType(ss->typeName)
                         || (ss->typeName.rfind("chan<", 0) == 0 && ss->typeName.back() == '>');
     if (setStmt->value && !memberDeepCopy && !memberHandleSource && !srcIsManagedString && !targetIsRefBorrow
         && !targetIsRcShare && !srcIsSharedHandle && !srcIsResource)
@@ -4417,7 +4476,8 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
     // the value is loaded, so a managed string return uses ERASE mode (nullManagedStringSlot=false):
     // the value is captured afterwards and the returned value's owner is exempted from cleanup.
     if (retStmt->value && ctx.memV3 && ctx.lifetimeDropsEnabled
-        && ctx.currentFunctionReturnType.rfind("chan<", 0) == 0)
+        && (ctx.currentFunctionReturnType.rfind("chan<", 0) == 0
+            || HashmapImpl::isHashmapType(ctx.currentFunctionReturnType)))
         emitResourceBindTransfer(ctx.currentFunctionReturnType, retStmt->value.get(), nullptr);
     if (retStmt->value) consumeLocalDrop(retStmt->value.get(), /*nullManagedStringSlot=*/false);
     llvm::Function* currentFunc = ctx.builder.GetInsertBlock()->getParent();
@@ -4658,7 +4718,7 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
                     emitScopeDrop(ctx, *it);
                     continue;
                 }
-                if (it->kind == 10 || it->kind == 11 || it->kind == 13 || it->kind == 14 || it->kind == 15 || it->kind == 16 || it->kind == 17 || it->kind == 18 || it->kind == 19 || it->kind == 20 || it->kind == 21 || it->kind == 22) { emitScopeDrop(ctx, *it); continue; }   // null-safe single release
+                if (it->kind == 10 || it->kind == 11 || it->kind == 13 || it->kind == 14 || it->kind == 15 || it->kind == 16 || it->kind == 17 || it->kind == 18 || it->kind == 19 || it->kind == 20 || it->kind == 21 || it->kind == 22 || it->kind == 23) { emitScopeDrop(ctx, *it); continue; }   // null-safe single release
                 // spec/61 §8: a parameter's own call reference (the returned container slot is moved above)
                 if ((it->paramRef || it->ownedParamBox) && !(retContainerSlot && it->addr == retContainerSlot)) { emitScopeDrop(ctx, *it); continue; }
                 // spec/61 §5 (memV3): the returned container handle is MOVED to the caller → skip its
@@ -5397,6 +5457,11 @@ static void emitScopeDrop(CompilerContext& ctx, const CompilerContext::ScopeDrop
         llvm::Value* tex = ctx.builder.CreateLoad(i8p, it.addr, "drop_gl_texture");
         ctx.builder.CreateCall(ctx.getFunction("aiml_gl_texture_release", ctx.builder.getVoidTy(), {i8p}), { tex });
         ctx.builder.CreateStore(llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p)), it.addr);
+    } else if (it.kind == 23) {
+        // spec/68 hashmap: release the refcounted table (null-safe); null the slot (single release).
+        llvm::Value* h = ctx.builder.CreateLoad(i8p, it.addr, "drop_hashmap");
+        ctx.builder.CreateCall(ctx.getFunction("aiml_hashmap_release", ctx.builder.getVoidTy(), {i8p}), { h });
+        ctx.builder.CreateStore(llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p)), it.addr);
     } else if (it.kind == 14 || it.kind == 15) {
         // spec/61 Class 4 thread_handle (detach if unjoined + free) / Class 5 chan (atomic release);
         // both null-safe; null the slot (single release).
@@ -5417,7 +5482,7 @@ static void emitScopeDrop(CompilerContext& ctx, const CompilerContext::ScopeDrop
 }
 // spec/61 §9.3: drops released on every exit regardless of the ownership plan (order-independent).
 static bool unconditionalDrop(const CompilerContext::ScopeDrop& d) {
-    return d.paramRef || d.ownedParamBox || d.kind == 7 || d.kind == 13 || d.kind == 14 || d.kind == 15 || d.kind == 16 || d.kind == 17 || d.kind == 18 || d.kind == 19 || d.kind == 20 || d.kind == 21 || d.kind == 22 || d.kind == 10 || d.kind == 11 || d.kind == 12
+    return d.paramRef || d.ownedParamBox || d.kind == 7 || d.kind == 13 || d.kind == 14 || d.kind == 15 || d.kind == 16 || d.kind == 17 || d.kind == 18 || d.kind == 19 || d.kind == 20 || d.kind == 21 || d.kind == 22 || d.kind == 23 || d.kind == 10 || d.kind == 11 || d.kind == 12
         || (d.isListHandle && (d.kind == 2 || d.kind == 3 || d.kind == 8));
 }
 
