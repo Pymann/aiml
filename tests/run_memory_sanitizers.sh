@@ -235,6 +235,10 @@ probe "regex: match/search/find/find_all/replace/split, error text, linear time 
     "$AIML_BIN" -r tests/test_regex.aiml
 probe "glob: io.glob, io.globber batches, io.glob_match (spec/42_1)" "glb" \
     "$AIML_BIN" -r tests/test_glob.aiml
+probe "http client: redirects (method/body rules, Authorization drop), resp.url, download_to streaming, http.last_error (spec/32_2 §2.3a)" "hcr" \
+    "$AIML_BIN" -r tests/test_http_client_redirects.aiml
+probe "http client: forward proxy + CONNECT tunnel with TLS, refused CONNECT, body until close, cut-off body (spec/32_2 §2.3a)" "hcp" \
+    "$AIML_BIN" -r tests/test_http_client_proxy.aiml
 probe "memV3: chained req.params.get / url.get_param.get / resp.headers.put give managed strings" "hcm" \
     "$AIML_BIN" -r tests/_mem_sanitize/http_chained_maps.aiml
 probe "identity: base64 strings + owned buffers bound, rebound and dropped (spec/67 §2)" "b64" \
