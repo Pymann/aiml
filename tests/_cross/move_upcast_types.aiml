@@ -1,0 +1,23 @@
+# Types for tests/test_new_move_upcast.aiml and its negative test.
+
+- interface:
+    name: Shape
+    methods:
+      - [area, i32, []]
+
+- class:
+    name: Square
+    implements: [Shape]
+    members:
+      - [side, i32, 2, { access: public }]
+    methods:
+      - def:
+          name: area
+          return: i32
+          body:
+            - return: [{ "*": [<.side, <.side] }]
+
+- class:
+    name: Holder
+    members:
+      - [part, ptr<Square>, null, { access: public }]
