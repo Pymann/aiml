@@ -889,6 +889,7 @@ namespace AIML {
         llvm::Value* cwd = nullptr;
         llvm::Value* env = nullptr;
         llvm::Value* timeout = nullptr;
+        llvm::Value* stdinPath = nullptr;
         llvm::Value* stdoutPath = nullptr;
         llvm::Value* stderrPath = nullptr;
         llvm::Value* statusFile = nullptr;

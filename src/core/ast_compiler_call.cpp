@@ -520,13 +520,13 @@ IRValue* Compiler::visitCall(CallExpr* call) {
 
         // spec/23 §5.1: sys.exe option bag — bools are compile-time literals, the rest expressions.
         static const std::set<std::string> kExeOpts = {
-            "cwd","env","shell","timeout","capture","stdout","stderr","detach","status_file"};
+            "cwd","env","shell","timeout","capture","stdin","stdout","stderr","detach","status_file"};
         ctx.exeOpts = CompilerContext::ExeOptions();
         if (baseName == "sys" && methodName == "exe") {
             auto applyExeOpt = [&](const std::string& key, Expr* valExpr, const std::string& raw) {
                 if (!kExeOpts.count(key)) {
                     LOG_ERROR(ctx.fmtLoc(call->sourceNode) + "sys.exe: unknown option '" + key
-                        + "' (cwd, env, shell, timeout, capture, stdout, stderr, detach, status_file — spec/23 §5.1)");
+                        + "' (cwd, env, shell, timeout, capture, stdin, stdout, stderr, detach, status_file — spec/23 §5.1)");
                     return;
                 }
                 if (key == "shell" || key == "capture" || key == "detach") {
@@ -570,6 +570,7 @@ IRValue* Compiler::visitCall(CallExpr* call) {
                 if (key == "cwd") ctx.exeOpts.cwd = v;
                 else if (key == "env") ctx.exeOpts.env = v;
                 else if (key == "timeout") ctx.exeOpts.timeout = v;
+                else if (key == "stdin") ctx.exeOpts.stdinPath = v;
                 else if (key == "stdout") ctx.exeOpts.stdoutPath = v;
                 else if (key == "stderr") ctx.exeOpts.stderrPath = v;
                 else ctx.exeOpts.statusFile = v;
