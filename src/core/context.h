@@ -1533,5 +1533,9 @@ namespace AIML { namespace AST {
 // spec/61 §9.3: unwind destination for a call/throw at the current point (defined in ast_compiler_stmt.cpp).
 llvm::BasicBlock* aimlUnwindDest(CompilerContext& ctx, bool userCallee);
 void aimlTrackStringTemp(CompilerContext& ctx, llvm::Value* value);
+// Throw a builtin exception `excClass` with message `msgPtr` when `cond` (i1) holds;
+// the builder continues in the not-taken path (builtin_registry.cpp).
+void aimlEmitThrowIf(CompilerContext& ctx, llvm::Value* cond, const std::string& excClass,
+                     llvm::Value* msgPtr);
 bool aimlModelIsMoveOnly(CompilerContext& ctx, const std::string& className);
 } }

@@ -661,6 +661,13 @@ extern "C" int32_t aiml_list_push_str_copy(void* list_ptr, const char* s, size_t
     return 0;
 }
 
+// spec/10: the message of an IndexOutOfBoundsException ("index 5 of 1"), managed.
+extern "C" char* aiml_index_message(int32_t index, int32_t len) {
+    char buf[64];
+    snprintf(buf, sizeof(buf), "index %d of %d", index, len);
+    return aiml_str_dup(buf);
+}
+
 // ── string.split ─────────────────────────────────────────────────────────────
 // Fills an AimlListRaw (same layout as GenericList) with refcounted parts.
 extern "C" int aiml_str_split_fill(const char* s, const char* delim, void* list_ptr) {
