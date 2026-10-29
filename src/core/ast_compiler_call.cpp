@@ -2574,6 +2574,20 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                  ListImpl::remove(ctx, listP, idxV, fatTy ? fatTy : i8p, /*elemIsString=*/false);
                  return nullptr;
              }
+             // spec/23 §5.5: a list<process> element is an owned handle → remove releases it.
+             if (listElemName == "process") {
+                 auto* i8p = llvm::PointerType::get(ctx.context, 0);
+                 llvm::Value* listP = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca));
+                 llvm::Value* idxV  = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
+                 llvm::StructType* lstTy = ListImpl::getListStructType(ctx);
+                 llvm::Value* dataP = ctx.builder.CreateLoad(i8p,
+                     ctx.builder.CreateStructGEP(lstTy, listP, 2, "rm_dataPtr"), "rm_dataBase");
+                 llvm::Value* gone = ctx.builder.CreateLoad(i8p,
+                     ctx.builder.CreateInBoundsGEP(i8p, dataP, idxV, "rm_slot"), "rm_proc");
+                 ctx.builder.CreateCall(ctx.getFunction("aiml_process_release", ctx.builder.getVoidTy(), {i8p}), { gone });
+                 ListImpl::remove(ctx, listP, idxV, i8p, /*elemIsString=*/false);
+                 return nullptr;
+             }
              // spec/61 §5.5 (memV3): list<ptr<T>> element = an OWNING box → remove RELEASES it
              // (deep-free fields + free shell) before the memmove shifts the pointer slots. Without
              // this the removed box + its heap leaked (probe 05). Pointer stride (i8p) for the shift.
