@@ -6,6 +6,10 @@
 #include <cctype>
 #include <cstdint>
 #include <cstdio>
+#if !defined(__wasm__)
+#include <sys/mman.h>   // mincore: is the page before a string mapped?
+#include <unistd.h>
+#endif
 
 // Must match GenericList layout (list_impl.cpp / path_runtime.cpp)
 struct AimlListRaw {
@@ -102,8 +106,26 @@ extern "C" char* aiml_str_ndup(const char* s, size_t len) {
     return dst;
 }
 
+// May the 8 bytes before `s` be read?  Within s's own page always (s is readable).  When the
+// header would lie on the previous page and `s` is an unmanaged literal at the very start of a
+// mapping (JIT rodata), that page may be unmapped — reading it faulted (seen in
+// tests/lifetime/173: a "" literal landed at a page start once the code layout shifted).
+// Rare (1 string in 512), so the syscall in that case costs nothing measurable.
+static inline bool header_readable(const char* s) {
+#if defined(__wasm__)
+    (void)s;
+    return true;                     // linear memory: no unmapped pages below the data
+#else
+    static const uintptr_t page = (uintptr_t)sysconf(_SC_PAGESIZE);
+    uintptr_t p = (uintptr_t)s;
+    if ((p & (page - 1)) >= sizeof(AimlStrHeader)) return true;
+    unsigned char resident;
+    return mincore((void*)((p - sizeof(AimlStrHeader)) & ~(page - 1)), 1, &resident) == 0;
+#endif
+}
+
 extern "C" void aiml_str_incref(char* s) {
-    if (!s || (uintptr_t)s < sizeof(AimlStrHeader)) return;
+    if (!s || (uintptr_t)s < sizeof(AimlStrHeader) || !header_readable(s)) return;
     AimlStrHeader* hdr = (AimlStrHeader*)((char*)s - sizeof(AimlStrHeader));
     if (hdr->magic != AIML_STR_MAGIC) return;
     if (hdr->refcount == AIML_STR_IMMORTAL) return;   // immortal "" default — never counted
@@ -111,7 +133,7 @@ extern "C" void aiml_str_incref(char* s) {
 }
 
 extern "C" void aiml_str_decref(char* s) {
-    if (!s || (uintptr_t)s < sizeof(AimlStrHeader)) return;
+    if (!s || (uintptr_t)s < sizeof(AimlStrHeader) || !header_readable(s)) return;
     AimlStrHeader* hdr = (AimlStrHeader*)((char*)s - sizeof(AimlStrHeader));
     if (hdr->magic != AIML_STR_MAGIC) return;
     if (hdr->refcount == AIML_STR_IMMORTAL) return;   // immortal "" default — never freed
@@ -659,6 +681,13 @@ extern "C" int32_t aiml_list_push_str_copy(void* list_ptr, const char* s, size_t
     if (!copy) return -1;
     list->data[list->size++] = copy;
     return 0;
+}
+
+// spec/10: the message of an IndexOutOfBoundsException ("index 5 of 1"), managed.
+extern "C" char* aiml_index_message(int32_t index, int32_t len) {
+    char buf[64];
+    snprintf(buf, sizeof(buf), "index %d of %d", index, len);
+    return aiml_str_dup(buf);
 }
 
 // ── string.split ─────────────────────────────────────────────────────────────
