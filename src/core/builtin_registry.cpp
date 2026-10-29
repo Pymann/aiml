@@ -1240,6 +1240,12 @@ void registerBuiltins(CompilerContext& ctx) {
             AIML::AST::aimlTrackStringTemp(ctx, out);
         return ctx.ir_gen->wrap(out);
     };
+    // spec/23 §3 F23-60: sys.arg_count() → argc (argv[0] included); 0 when unknown.
+    sys.builtinFuncs["arg_count"] = [](CompilerContext& ctx, const std::vector<IRValue*>&) -> IRValue* {
+        llvm::GlobalVariable* argcVar = ctx.module().getGlobalVariable("__argc", true);
+        if (!argcVar) return ctx.ir_gen->getInt32(0);
+        return ctx.ir_gen->wrap(ctx.builder.CreateLoad(ctx.builder.getInt32Ty(), argcVar, "argc"));
+    };
     sys.builtinFuncs["get_arg"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
         if (args.empty()) return ctx.ir_gen->createGlobalStringPtr("");
         llvm::Value* indexVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));

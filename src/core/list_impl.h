@@ -57,7 +57,7 @@ namespace ListImpl {
     void extend(CompilerContext& ctx, llvm::Value* dstPtr, llvm::Value* srcPtr, llvm::Type* elemType,
                 const char* retainFnName = nullptr, llvm::Value* serNodes = nullptr,
                 int32_t serNodesCount = 0);
-    // M2: in-place ordering.  sortList = stable insertion sort (ascending or
+    // M2: in-place ordering.  sortList = stable O(n log n) sort in the runtime (ascending or
     // descending); shuffle = Fisher-Yates via aiml_math_random_int.
     void reverse(CompilerContext& ctx, llvm::Value* listPtr, llvm::Type* elemType);
     void sortList(CompilerContext& ctx, llvm::Value* listPtr, llvm::Type* elemType,

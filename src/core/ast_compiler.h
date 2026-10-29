@@ -174,6 +174,11 @@ private:
     // Declared type of an expression WITHOUT emitting IR (variable, dotted
     // member access incl. classgroup instances, `{new: C}`).  "" = unresolvable.
     std::string declaredTypeOfExpr(Expr* e);
+    // spec/13 §6: a numeric argument converted to its parameter's type (integer resize,
+    // integer→float, float↔float).  A real for an integer parameter is a compile error
+    // (no implicit float→integer); the value is returned unchanged then.
+    llvm::Value* convertNumericArg(llvm::Value* v, llvm::Type* expected, Expr* src,
+                                   const std::string& callee, size_t argNo);
 
     // Build a fat-pointer struct {obj_ptr, vtable_ptr} for interface upcasts.    // Build a fat-pointer struct {obj_ptr, vtable_ptr} for interface upcasts.
     // Returns the loaded fat-pointer value, or nullptr if the upcast is invalid
