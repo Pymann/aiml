@@ -1,0 +1,61 @@
+# SPEC: 10_collections
+# spec/10 F10-23 — every list index is checked: at, get, idx writes, remove and
+# insert outside their range raise IndexOutOfBoundsException ("index 5 of 2");
+# in-range access is unchanged.
+# Expected exit code: 0
+
+- import: "tests/_cross/check.aiml"
+
+- def:
+    name: caught_at
+    args: [[items, list<i32>], [where, i32]]
+    return: string
+    body:
+      - try:
+          body:
+            - decl: [got, i32, { at: [items, where] }]
+            - return: ["read ${got}"]
+          catch:
+            - type: IndexOutOfBoundsException
+              var: err
+              body:
+                - return: ["${err.message}"]
+      - return: ["unreachable"]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [chk, ptr<Checker>, { new: Checker }]
+      - decl: [items, list<i32>, [10, 20]]
+      - call: [chk.expect_s, "in range", { call: [caught_at, items, 1] }, "read 20"]
+      - call: [chk.expect_s, "past the end", { call: [caught_at, items, 2] }, "index 2 of 2"]
+      - call: [chk.expect_s, "negative", { call: [caught_at, items, -1] }, "index -1 of 2"]
+
+      - decl: [failures, i32, 0]
+      - try:
+          body: [{ decl: [via_get, i32, { call: [items.get, 7] }] }]
+          catch: [{ type: IndexOutOfBoundsException, var: err, body: [{ set: [failures, { +: [failures, 1] }] }] }]
+      - try:
+          body: [{ idx: [items, 9, 1] }]
+          catch: [{ type: IndexOutOfBoundsException, var: err, body: [{ set: [failures, { +: [failures, 1] }] }] }]
+      - try:
+          body: [{ call: [items.remove, 2] }]
+          catch: [{ type: IndexOutOfBoundsException, var: err, body: [{ set: [failures, { +: [failures, 1] }] }] }]
+      - try:
+          body: [{ call: [items.insert, 3, 5] }]
+          catch: [{ type: IndexOutOfBoundsException, var: err, body: [{ set: [failures, { +: [failures, 1] }] }] }]
+      - call: [chk.expect_i, "get, idx, remove, insert out of range all throw", failures, 4]
+
+      - call: [items.insert, 2, 30]
+      - call: [chk.expect_i, "insert at the end is allowed", items.len, 3]
+      - decl: [words, list<string>, ["a"]]
+      - decl: [bad_word, string, ""]
+      - try:
+          body: [{ set: [bad_word, { at: [words, 1] }] }]
+          catch: [{ type: IndexOutOfBoundsException, var: err, body: [{ set: [bad_word, "thrown"] }] }]
+      - call: [chk.expect_s, "string list", bad_word, "thrown"]
+
+      - if: { condition: { gt: [chk.fails, 0] }, then: [{ print: ["FAIL list_bounds (${chk.fails})"] }, { return: 1 }] }
+      - print: ["PASS list_bounds"]
+      - return: 0
