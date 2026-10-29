@@ -15,6 +15,7 @@
 #include "map_impl.h"
 #include "buffer_impl.h"
 #include "chan_impl.h"
+#include "hashmap_impl.h"
 #include "string_utils.h"
 #include <algorithm>
 #include <functional>
@@ -190,6 +191,8 @@ void Compiler::initClassContainerMembers(llvm::Value* basePtr,
             }
         } else if (mt.rfind("chan<", 0) == 0 && mt.back() == '>') {
             ChanImpl::init(ctx, fieldPtr, ctx.builder.getInt64(0));
+        } else if (HashmapImpl::isHashmapType(mt)) {
+            HashmapImpl::initSlot(ctx, fieldPtr, mt);
         } else if (mt == "buffer" || (mt.rfind("buffer<", 0) == 0 && mt.back() == '>')) {
             // Bare `buffer` (untyped) as well as `buffer<T>` — both share one
             // struct layout and need alloc.  (visitNewExpr's heap path matched
@@ -1797,6 +1800,7 @@ void Compiler::compile(Program* prog) {
             bool isContainer = (tn.rfind("list<",   0) == 0 ||
                                 tn.rfind("map<",    0) == 0 ||
                                 tn.rfind("chan<",   0) == 0 ||
+                                HashmapImpl::isHashmapType(tn) ||
                                 tn == "buffer" ||   // bare buffer is a Class-3 handle too (§5)
                                 tn.rfind("buffer<", 0) == 0);
             bool isClassInstance = ctx.classes.count(tn) &&
@@ -1849,6 +1853,8 @@ void Compiler::compile(Program* prog) {
                 }
             } else if (tn.rfind("chan<", 0) == 0) {
                 ChanImpl::init(ctx, gv, ctx.builder.getInt64(0));
+            } else if (HashmapImpl::isHashmapType(tn)) {
+                HashmapImpl::initSlot(ctx, gv, tn);
             } else if (tn == "buffer" || tn.rfind("buffer<", 0) == 0) {
                 // A memV3 buffer global (bare `buffer` OR `buffer<T>`) needs its handle allocated so
                 // the pointer slot is non-null before any .alloc/.write. The bare `buffer` had no
@@ -1985,6 +1991,7 @@ void Compiler::compile(Program* prog) {
             bool isContainer = (tn.rfind("list<",   0) == 0 ||
                                 tn.rfind("map<",    0) == 0 ||
                                 tn.rfind("chan<",   0) == 0 ||
+                                HashmapImpl::isHashmapType(tn) ||
                                 tn == "buffer" ||   // bare buffer is a Class-3 handle too (§5)
                                 tn.rfind("buffer<", 0) == 0);
             bool isClassInstance = ctx.classes.count(tn) &&
@@ -2042,6 +2049,8 @@ void Compiler::compile(Program* prog) {
                 }
             } else if (tn.rfind("chan<", 0) == 0) {
                 ChanImpl::init(ctx, gv, ctx.builder.getInt64(0));
+            } else if (HashmapImpl::isHashmapType(tn)) {
+                HashmapImpl::initSlot(ctx, gv, tn);
             } else if (tn == "buffer" || tn.rfind("buffer<", 0) == 0) {
                 // A memV3 buffer global (bare `buffer` OR `buffer<T>`) needs its handle allocated so
                 // the pointer slot is non-null before any .alloc/.write. The bare `buffer` had no
@@ -4413,7 +4422,8 @@ static bool serHasHeap(const std::string& typeName, CompilerContext& ctx) {
     // spec/61 Class 5 chan<T> / Class 4 thread_handle field: released with the owning model.
     if (ctx.memV3 && (typeName == "thread_handle" || typeName == "gl_texture" || typeName == "gl_cubemap"
                       || typeName == "gl_timer_query" || typeName == "gl_buffer" || typeName == "gl_vao" || typeName == "process"
-                      || (typeName.rfind("chan<", 0) == 0 && typeName.back() == '>'))) return true;
+                      || (typeName.rfind("chan<", 0) == 0 && typeName.back() == '>')
+                      || HashmapImpl::isHashmapType(typeName))) return true;
     // spec/61 §6.2 (memV3): a `shared<T>` (refcounted co-owned) or `ptr<T>` (unique owner) FIELD owns
     // heap → the model must decref/free it at scope drop. Without this a model whose ONLY heap-bearing
     // fields are shared/ptr (no string/list/tensor) got hasHeapFields=false → no drop → leak (probe
@@ -4526,6 +4536,8 @@ static std::vector<AimlTypeNode> serBuildSubtree(
             { res.push_back({AIML_TD_TENSOR, 0,0,offset,0,0}); return res; }
         if (typeName.rfind("chan<", 0) == 0 && typeName.back() == '>')
             { res.push_back({AIML_TD_CHAN, 0,0,offset,0,0}); return res; }
+        if (HashmapImpl::isHashmapType(typeName))
+            { res.push_back({AIML_TD_HASHMAP, 0,0,offset,0,0}); return res; }
         if (typeName == "thread_handle")
             { res.push_back({AIML_TD_THREAD, 0,0,offset,0,0}); return res; }
         if (typeName == "gl_texture")
@@ -7433,6 +7445,15 @@ IRValue* Compiler::resolveProperty(Symbol* baseSym, const std::string& propName)
         baseAlloca = ctx.ir_gen->wrap(loaded);
     }
 
+    // spec/68: hashmap<K:V>.len / .empty
+    if (HashmapImpl::isHashmapType(className) && (propName == "len" || propName == "empty")) {
+        bool known = true;
+        llvm::Value* n = HashmapImpl::method(ctx, className, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)),
+                                             "len", {}, known);
+        if (propName == "len") return ctx.ir_gen->wrap(n);
+        return ctx.ir_gen->wrap(ctx.builder.CreateZExt(ctx.builder.CreateICmpEQ(n, ctx.builder.getInt32(0)),
+                                                       ctx.builder.getInt32Ty(), "hm_empty"));
+    }
     if (className.find("list<") == 0) {
         if (propName == "len") return ctx.ir_gen->wrap(ListImpl::getSize(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca))));
         if (propName == "empty") {
