@@ -7,6 +7,7 @@
 #include "map_impl.h"
 #include "buffer_impl.h"
 #include "chan_impl.h"
+#include "hashmap_impl.h"
 #include "code_impl.h"
 #include "string_utils.h"
 #include "serialize_impl.h"
@@ -3051,6 +3052,16 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
          }
          LOG_ERROR("Unknown map method: " + methodName + " on " + className);
          return ctx.ir_gen->getInt32(0);
+    }
+    // hashmap<K:V> methods (spec/68): put/get/add/contains/remove/len/clear/keys
+    else if (HashmapImpl::isHashmapType(className)) {
+        std::vector<llvm::Value*> raw;
+        for (auto* a : argVals) raw.push_back(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a)));
+        bool known = true;
+        llvm::Value* res = HashmapImpl::method(ctx, className,
+            static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), methodName, raw, known);
+        if (!known) return ctx.ir_gen->getInt32(0);
+        return res ? ctx.ir_gen->wrap(res) : nullptr;
     }
     // Channel Methods: chan<T>.send / chan<T>.recv / chan<T>.init
     else if (className.rfind("chan<", 0) == 0 && className.back() == '>') {

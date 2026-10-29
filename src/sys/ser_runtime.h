@@ -77,6 +77,10 @@ typedef enum {
                              //   Leaf; free = vtbl[param1](obj) — releases the concrete object
                              //   (a classgroup container through its __dtor); enc/dec skip it
                              //   (a live object is not wire data); move-only (a copy is null).
+    AIML_TD_HASHMAP    = 27, // spec/68 (memV3): a hashmap<K:V> pointer slot (refcounted, Class 5 like
+                             //   chan). Leaf; free = aiml_hashmap_release; share = retain;
+                             //   clone = aiml_hashmap_clone (independent deep copy); enc = in-process
+                             //   pointer (retained by dec), not wire data.
 } AimlTDKind;
 
 // spec/61 Class 5 / Class 4 resource handles (ser_runtime.cpp).
