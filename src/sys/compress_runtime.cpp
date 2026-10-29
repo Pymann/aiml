@@ -1,5 +1,6 @@
 #include "compress_runtime.h"
 #include "string_runtime.h"
+#include "untar_runtime.h"
 
 #include <zlib.h>
 #include <brotli/encode.h>
@@ -498,69 +499,11 @@ int32_t aiml_compress_tar_gz(const char* src, const char* dst) {
     return 0;
 }
 
+// compress.untar_gz is compress.untar (spec/33_2 §3.7a): any compression, safe paths,
+// links, long names and pax — the earlier ustar-only reader wrote "../" entries outside
+// dst_dir and dropped names longer than 100 bytes.
 int32_t aiml_compress_untar_gz(const char* src, const char* dst_dir) {
-    if (!src || !dst_dir) return -1;
-
-    gzFile gz = gzopen(src, "rb");
-    if (!gz) return -2;
-
-    char hdr[USTAR_BLOCK];
-    int zero_count = 0;
-
-    for (;;) {
-        if (gzread(gz, hdr, USTAR_BLOCK) != USTAR_BLOCK) break;
-
-        /* End-of-archive: two consecutive zero blocks */
-        bool all_zero = true;
-        for (int i = 0; i < USTAR_BLOCK; i++) {
-            if (hdr[i]) { all_zero = false; break; }
-        }
-        if (all_zero) { if (++zero_count >= 2) break; continue; }
-        zero_count = 0;
-
-        /* Parse entry */
-        char name[101] = {};
-        memcpy(name, hdr, 100);
-        uint64_t size = (uint64_t)strtoull(hdr + 124, nullptr, 8);
-        char type = hdr[156];
-        uint64_t data_blocks = (size + USTAR_BLOCK - 1) / USTAR_BLOCK;
-
-        /* Sanitise path: strip leading /, ./ */
-        const char* rel = name;
-        while (*rel == '/') rel++;
-        if (rel[0] == '.' && rel[1] == '/') rel += 2;
-
-        char out_path[4096];
-        snprintf(out_path, sizeof(out_path), "%s/%s", dst_dir, rel);
-
-        if (type == '5') {
-            mkdir_p(out_path);
-        } else if (type == '0' || type == '\0' || type == ' ') {
-            /* Create parent dirs */
-            char parent[4096];
-            snprintf(parent, sizeof(parent), "%s", out_path);
-            char* sl = strrchr(parent, '/');
-            if (sl) { *sl = '\0'; mkdir_p(parent); }
-
-            FILE* f = fopen(out_path, "wb");
-            uint64_t remaining = size;
-            char buf[USTAR_BLOCK];
-            for (uint64_t i = 0; i < data_blocks; i++) {
-                if (gzread(gz, buf, USTAR_BLOCK) != USTAR_BLOCK) break;
-                size_t wn = (remaining >= USTAR_BLOCK) ? USTAR_BLOCK : (size_t)remaining;
-                if (f) fwrite(buf, 1, wn, f);
-                remaining = (remaining > USTAR_BLOCK) ? remaining - USTAR_BLOCK : 0;
-            }
-            if (f) fclose(f);
-        } else {
-            /* Skip data for other entry types */
-            char skip[USTAR_BLOCK];
-            for (uint64_t i = 0; i < data_blocks; i++) gzread(gz, skip, USTAR_BLOCK);
-        }
-    }
-
-    gzclose(gz);
-    return 0;
+    return aiml_compress_untar(src, dst_dir);
 }
 
 /* ══════════════════════════════════════════════════════════════════════════

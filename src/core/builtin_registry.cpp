@@ -7738,10 +7738,23 @@ void registerBuiltins(CompilerContext& ctx) {
             auto* _p   = llvm::PointerType::get(ctx.context, 0); \
             auto* _i64 = ctx.builder.getInt64Ty(); \
             auto* _bt  = ctx.getLLVMType("buffer"); \
-            auto* _out = ctx.createEntryAlloca(_bt, "comp_alloca"); \
+            /* memV3: an owned buffer HANDLE (a stack buffer would be "released" by the */ \
+            /* local's drop → free() of stack memory), as io.read_bytes / base64.decode. */ \
+            llvm::Value* _out = ctx.memV3 \
+                ? static_cast<llvm::Value*>(ctx.builder.CreateCall(ctx.getFunction("aiml_buffer_handle_new", _p, {}), {}, "comp_buf_h")) \
+                : static_cast<llvm::Value*>(ctx.createEntryAlloca(_bt, "comp_alloca")); \
             uint64_t _sz = ctx.module().getDataLayout().getTypeAllocSize(_bt); \
             llvm::Function* _mcf = ctx.getFunction("memcpy", _p, {_p, _p, _i64}); \
-            ctx.builder.CreateCall(_mcf, {_out, (heapPtr), ctx.getSizeConst(_sz)}); \
+            llvm::Value* _hp = (heapPtr); \
+            llvm::Function* _cur = ctx.builder.GetInsertBlock()->getParent(); \
+            auto* _copy = llvm::BasicBlock::Create(ctx.context, "comp_copy", _cur); \
+            auto* _done = llvm::BasicBlock::Create(ctx.context, "comp_done", _cur); \
+            ctx.builder.CreateCondBr(ctx.builder.CreateIsNull(_hp), _done, _copy); \
+            ctx.builder.SetInsertPoint(_copy); \
+            ctx.builder.CreateCall(_mcf, {_out, _hp, ctx.getSizeConst(_sz)}); \
+            ctx.builder.CreateCall(ctx.getFunction("free", ctx.builder.getVoidTy(), {_p}), {_hp}); \
+            ctx.builder.CreateBr(_done); \
+            ctx.builder.SetInsertPoint(_done); \
             return _out; \
         }())
 
@@ -7768,7 +7781,9 @@ void registerBuiltins(CompilerContext& ctx) {
                                                  : llvm::Constant::getNullValue(p); \
             llvm::Value* level = args.size() > 1 ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1])) \
                                                  : ctx.builder.getInt32(0); \
-            llvm::Value* heapPtr = ctx.builder.CreateCall(fn, {data, ctx.builder.getInt32(-1), level}); \
+            llvm::Value* dataLen = ctx.builder.getInt32(-1);   /* -1: a string, up to its NUL */ \
+            if (data->getType()->isStructTy()) bufferArgDataLen(ctx, data, data, dataLen);   /* buffer<u8> */ \
+            llvm::Value* heapPtr = ctx.builder.CreateCall(fn, {data, dataLen, level}); \
             return ctx.ir_gen->wrap(COMP_HEAP_TO_ALLOCA(heapPtr)); \
         };
 
@@ -7853,6 +7868,8 @@ void registerBuiltins(CompilerContext& ctx) {
 
         REG_ARCHIVE("tar_gz",   "aiml_compress_tar_gz")
         REG_ARCHIVE("untar_gz", "aiml_compress_untar_gz")
+        REG_ARCHIVE("untar",    "aiml_compress_untar")    // spec/33_2 §3.7a: any tar
+        REG_ARCHIVE("unar",     "aiml_compress_unar")     // ar members (.deb)
         REG_ARCHIVE("zip",      "aiml_compress_zip")
         REG_ARCHIVE("unzip",    "aiml_compress_unzip")
 

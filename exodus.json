@@ -1188,6 +1188,7 @@
             "brotlidec",
             "brotlicommon",
             "zstd",
+            "lzma",
             "lz4",
             "zip",
             "assimp",
