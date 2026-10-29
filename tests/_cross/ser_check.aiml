@@ -1,0 +1,22 @@
+# A small assertion helper for tests/test_ser_defaults_errors.aiml.
+
+- class:
+    name: Checker
+    members:
+      - [fails, i32, 0, { access: public }]
+    methods:
+      - def:
+          name: expect_i
+          args: [[label, string], [got, i64], [want, i64]]
+          body:
+            - if: { condition: { neq: [got, want] }, then: [{ print: ["FAIL ${label}: got ${got} want ${want}"] }, { set: [<.fails, { +: [<.fails, 1] }] }] }
+      - def:
+          name: expect_s
+          args: [[label, string], [got, string], [want, string]]
+          body:
+            - if: { condition: { neq: [got, want] }, then: [{ print: ["FAIL ${label}: got '${got}' want '${want}'"] }, { set: [<.fails, { +: [<.fails, 1] }] }] }
+      - def:
+          name: expect_has
+          args: [[label, string], [text, string], [part, string]]
+          body:
+            - if: { condition: { lt: [{ call: [text.index_of, part] }, 0] }, then: [{ print: ["FAIL ${label}: '${text}' lacks '${part}'"] }, { set: [<.fails, { +: [<.fails, 1] }] }] }

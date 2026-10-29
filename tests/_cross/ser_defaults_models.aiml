@@ -1,0 +1,29 @@
+# Models for tests/test_ser_defaults_errors.aiml (spec/29 §5.2d).
+
+- model:
+    name: ToolCfg
+    fields:
+      - [cmd, string, "g++"]
+      - [level, i32, 2]
+      - [tags, list<string>]
+
+- model:
+    name: DepCfg
+    fields:
+      - [name, string, ""]
+      - [version, string, "latest"]
+      - [required, bool, true]
+
+- model:
+    name: ProjCfg
+    fields:
+      - [name, string, "unnamed"]
+      - [jobs, i32, 4]
+      - [stamp, i64, 7]
+      - [ratio, f32, 1.5]
+      - [scale, f64, 2.25]
+      - [verbose, bool, false]
+      - [werror, bool, true]
+      - [tool, ToolCfg]
+      - [deps, list<DepCfg>]
+      - [env, map<string:string>]

@@ -69,7 +69,9 @@ char*  aiml_jw_done(void* w);
 //   aiml_jr_free(r);                         // free root (frees the doc)
 // ---------------------------------------------------------------------------
 
-void*    aiml_jr_parse  (const char* json);
+void*    aiml_jr_parse  (const char* json);           // resets the per-thread error text
+const char* aiml_jr_error(void);                       // "" = the last parse/read was clean (spec/29 §5.2d)
+int      aiml_jr_has    (void* r, const char* key);    // 1 = key present and not null
 void*    aiml_jr_sub    (void* r, const char* key);  // returns sub-reader (non-owning doc)
 void     aiml_jr_free   (void* r);
 
@@ -79,6 +81,13 @@ float    aiml_jr_f32    (void* r, const char* key);
 double   aiml_jr_f64    (void* r, const char* key);
 int      aiml_jr_bool   (void* r, const char* key);
 char*    aiml_jr_str    (void* r, const char* key);   // heap copy, caller frees
+// with the caller's default for a missing key / null
+int32_t  aiml_jr_i32d   (void* r, const char* key, int32_t def);
+int64_t  aiml_jr_i64d   (void* r, const char* key, int64_t def);
+float    aiml_jr_f32d   (void* r, const char* key, float def);
+double   aiml_jr_f64d   (void* r, const char* key, double def);
+int      aiml_jr_boold  (void* r, const char* key, int def);
+char*    aiml_jr_strd   (void* r, const char* key, const char* def);  // heap copy
 
 // Arrays
 int      aiml_jr_arr_len (void* r, const char* key);
