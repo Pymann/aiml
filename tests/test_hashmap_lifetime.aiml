@@ -1,0 +1,100 @@
+# SPEC: 68_hashmap
+# hashmap<K:V> als Klassenfeld, Parameter, Rückgabewert und in Schleifen (Scope-Drop, retain/release).
+
+- class:
+    name: WordIndex
+    members:
+      - [counts, "hashmap<string:i32>"]
+      - [names, "hashmap<i32:string>"]
+    methods:
+      - def:
+          name: note
+          args: [[word, string]]
+          return: i32
+          body:
+            - decl: [now, i32, { call: [<.counts.add, word, 1] }]
+            - return: now
+
+- def:
+    name: fill_table
+    args: [[count, i32]]
+    return: "hashmap<i32:i32>"
+    body:
+      - decl: [table, "hashmap<i32:i32>"]
+      - decl: [idx, i32, 0]
+      - while: [{ lt: [idx, count] }]
+        body:
+          - call: [table.put, idx, { "*": [idx, idx] }]
+          - set: [idx, { "+": [idx, 1] }]
+      - return: table
+
+- def:
+    name: sum_table
+    args: [[table, "hashmap<i32:i32>"], [count, i32]]
+    return: i64
+    body:
+      - decl: [total, i64, 0]
+      - decl: [idx, i32, 0]
+      - while: [{ lt: [idx, count] }]
+        body:
+          - set: [total, { "+": [total, { call: [table.get, idx] }] }]
+          - set: [idx, { "+": [idx, 1] }]
+      - return: total
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [var_ok, i32, 1]
+      - decl: [index, ptr<WordIndex>, { new: WordIndex }]
+      - call: [index.note, "golf"]
+      - call: [index.note, "ball"]
+      - decl: [third, i32, { call: [index.note, "golf"] }]
+      - call: [index.names.put, 1, "eins"]
+      - decl: [count_len, i32, index.counts.len]
+      - if: [{ or: [{ neq: [third, 2] }, { neq: [count_len, 2] }] }, true]
+        then:
+          - print: ["FAIL 1: golf = ${third} (2), len = ${count_len} (2)"]
+          - set: [var_ok, 0]
+      - free: [index]
+
+      # Rückgabe + Parameter
+      - decl: [squares, "hashmap<i32:i32>", { call: [fill_table, 100] }]
+      - decl: [total, i64, { call: [sum_table, squares, 100] }]
+      - if: [{ neq: [total, 328350] }, true]
+        then:
+          - print: ["FAIL 2: Summe = ${total}, erwartet 328350"]
+          - set: [var_ok, 0]
+
+      # Viele kurzlebige Tabellen (Scope-Drop in der Schleife)
+      - decl: [round, i32, 0]
+      - decl: [acc, i64, 0]
+      - while: [{ lt: [round, 2000] }]
+        body:
+          - decl: [tmp, "hashmap<string:string>"]
+          - call: [tmp.put, "k${round}", "wert ${round}"]
+          - call: [tmp.put, "fix", "x"]
+          - decl: [tmp_len, i32, tmp.len]
+          - set: [acc, { "+": [acc, tmp_len] }]
+          - set: [round, { "+": [round, 1] }]
+      - if: [{ neq: [acc, 4000] }, true]
+        then:
+          - print: ["FAIL 3: acc = ${acc}"]
+          - set: [var_ok, 0]
+
+      # Zuweisung ersetzt die Tabelle (alte wird freigegeben)
+      - decl: [swap, "hashmap<i32:i32>"]
+      - call: [swap.put, 1, 1]
+      - set: [swap, squares]
+      - decl: [via_swap, i32, { call: [swap.get, 9] }]
+      - if: [{ neq: [via_swap, 81] }, true]
+        then:
+          - print: ["FAIL 4: swap.get 9 = ${via_swap}"]
+          - set: [var_ok, 0]
+
+      - if: [{ eq: [var_ok, 1] }, true]
+        then:
+          - print: ["PASS test_hashmap_lifetime"]
+          - return: 0
+      - print: ["FAIL test_hashmap_lifetime"]
+      - return: 1
