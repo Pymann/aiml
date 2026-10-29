@@ -639,7 +639,7 @@ Three uses drive the design:
   package's classes.  The package can rebuild its inside freely.
 - **Swapping a whole subsystem.**  §5.2 swaps one collaborator by group config
   (real vs. mock logger).  A group interface does the same for a subsystem: a
-  museum-backed layer store, a local one, a mock — chosen in one place.
+  kontor-backed layer store, a local one, a mock — chosen in one place.
 - **Groups as values.**  A group type cannot be a parameter or return type (§1,
   "Not yet").  A group *interface* can: it has a fixed layout (an interface fat
   pointer) independent of the synthesized container.
@@ -657,7 +657,7 @@ Three uses drive the design:
       - [codec, Codec]
 
 - classgroup:
-    name: MuseumStore
+    name: KontorStore
     implements: [LayerStore]     # group level — instances keep their own `implements:`
     instances:
       - { class: HttpRegistry, instance: registry }      # HttpRegistry implements Registry
@@ -693,7 +693,7 @@ list/map element.
     name: main
     return: i32
     body:
-      - decl: [store, ptr<LayerStore>, { new: MuseumStore }]   # build, then view as the contract
+      - decl: [store, ptr<LayerStore>, { new: KontorStore }]   # build, then view as the contract
       - decl: [rc, i32, { call: [publish, store, "layer"] }]
       - decl: [reg, ref<Registry>, store.registry]             # an export as a value: a borrow
       - return: rc                                             # dropping `store` frees the group
@@ -708,8 +708,8 @@ list/map element.
   (`<.store.registry.push`).
 - Only the contract is reachable: `x.cache` is an error even though the concrete
   group has it.  Code that needs the full API holds the concrete type
-  (`ptr<MuseumStore>`), where everything is as before (§5.1).
-- **Ownership**: `ptr<G>` owns the group exactly as `ptr<MuseumStore>` would;
+  (`ptr<KontorStore>`), where everything is as before (§5.1).
+- **Ownership**: `ptr<G>` owns the group exactly as `ptr<KontorStore>` would;
   dropping it runs the container's `__dtor` (all instances, subgroups).  `ref<G>`
   borrows.
 
@@ -729,11 +729,11 @@ A group with `implements: [G]` adds `G` to its **container's** interfaces and
 synthesizes one accessor per export:
 
 ```yaml
-- def:                                    # on the container class MuseumStore
+- def:                                    # on the container class KontorStore
     name: __gi_registry
     return: ref<Registry>
     body:
-      - decl: [gi_view, ref<MuseumStore_registry>, <.registry]
+      - decl: [gi_view, ref<KontorStore_registry>, <.registry]
       - decl: [gi_up,   ref<Registry>, gi_view]          # upcast (base or instance vtable, §5.2)
       - return: gi_up
 ```
@@ -788,7 +788,7 @@ the group (its composition root).
 ### 12.6 Not in this version
 
 - **Ports and params in the contract.**  Whoever *builds* a group names the
-  concrete type (`{new: MuseumStore, …}`, a `subgroups:` entry) and binds its
+  concrete type (`{new: KontorStore, …}`, a `subgroups:` entry) and binds its
   params/ports there; a holder of `ptr<G>` never does.  They join the contract
   together with the next item.
 - **Generic subgroup slots** (`subgroups: [[store, LayerStore]]`, the
