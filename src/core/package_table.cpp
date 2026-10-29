@@ -81,7 +81,7 @@ std::string findTable(const std::string& importer, const std::string& explicitTa
             cur = cur.parent_path();
         }
     }
-    // spec/68 F68-30: last, the table of the venv this compiler belongs to.
+    // spec/69 F69-30: last, the table of the venv this compiler belongs to.
     std::string venvRoot = venv::ownRoot();
     if (!venvRoot.empty()) {
         fs::path venvTable = fs::path(venvRoot) / "lib" / "aiml" / "aiml.packages.json";

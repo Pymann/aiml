@@ -11,7 +11,7 @@
 
 
 int main(int argc, char** argv) {
-    // `aiml venv <dir>` (spec/68) — a subcommand, not an input file.
+    // `aiml venv <dir>` (spec/69) — a subcommand, not an input file.
     if (argc > 1 && std::string(argv[1]) == "venv") return aiml::venv::command(argc - 2, argv + 2);
 
     std::string inputFile;
@@ -105,7 +105,7 @@ int main(int argc, char** argv) {
     if (!targetTriple.empty()) compiler.setTargetTriple(targetTriple);
     if (!assetRoots.empty()) compiler.setAssetRoots(assetRoots);
     
-    // The running binary itself, also when it was started via PATH (spec/68 F68-21).
+    // The running binary itself, also when it was started via PATH (spec/69 F69-21).
     {
         std::error_code ec;
         std::filesystem::path self = std::filesystem::canonical("/proc/self/exe", ec);
