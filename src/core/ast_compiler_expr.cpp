@@ -1603,6 +1603,7 @@ IRValue* Compiler::visitAtExpr(AtExpr* at) {
             listPtr = ctx.builder.CreateLoad(i8p, listPtr, "byref_deref_at");
         }
         if (indexVals.empty()) { LOG_ERROR("at: list requires at least one index"); return nullptr; }
+        ListImpl::checkIndex(ctx, listPtr, indexVals[0]);   // spec/10: out of range throws
         // Trailing member path: { at: [list, i, "field", ...] } = element[i].field... — the dash-free
         // form of `list-i.field`. Get a pointer to the element (a %M* for a refcount model, else the
         // inline struct slot), then resolve the member path on it and load the final field.

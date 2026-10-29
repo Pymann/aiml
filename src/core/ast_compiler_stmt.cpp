@@ -6051,6 +6051,7 @@ void Compiler::visitIdxStmt(IdxStmt* idx) {
             listPtr = ctx.builder.CreateLoad(ptrTy, listPtr, "byref_list_deref");
         }
         if (indexVals.empty()) { LOG_ERROR("idx: list requires at least one index"); return; }
+        ListImpl::checkIndex(ctx, listPtr, indexVals[0]);   // spec/10: out of range throws
 
         // Trailing member path: idx: [list, i, .field, value] writes element[i].field = value. Get a
         // pointer to the element (a %M* for a refcount model, else the inline struct slot), resolve

@@ -155,6 +155,14 @@ static llvm::BasicBlock* emitGuardMsg(CompilerContext& ctx, llvm::Value* flag,
     return continueBB;
 }
 
+namespace AIML { namespace AST {
+void aimlEmitThrowIf(CompilerContext& ctx, llvm::Value* cond, const std::string& excClass,
+                     llvm::Value* msgPtr) {
+    emitGuardMsg(ctx, ctx.builder.CreateZExt(cond, ctx.builder.getInt8Ty()), "guard_throw", "guard_ok",
+                 excClass, msgPtr);
+}
+}}
+
 // Emit a conditional check: if `flag` (i8) != 0, throw; else continue in `continueBB`.
 // Returns the new insert-point BB (continueBB) with builder already set.
 static llvm::BasicBlock* emitGuard(CompilerContext& ctx, llvm::Value* flag,
