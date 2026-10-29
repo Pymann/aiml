@@ -6058,6 +6058,15 @@ void registerBuiltins(CompilerContext& ctx) {
                 if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(i8p, {i8p}, false), llvm::Function::ExternalLinkage, "aiml_http_client_send", ctx.module());
                 return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {base}));
             };
+            // client.free() — release the request handle (after send; the response is
+            // separate and freed with resp.free).  A second free is the caller's bug.
+            ci.builtinMethods["free"] = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr*, auto) -> IRValue* {
+                llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Function* fn = ctx.module().getFunction("aiml_http_client_free");
+                if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(), {i8p}, false), llvm::Function::ExternalLinkage, "aiml_http_client_free", ctx.module());
+                ctx.builder.CreateCall(fn, {base});
+                return ctx.ir_gen->getInt32(0);
+            };
             // Property setters
             ci.builtinSetters["body"] = [](CompilerContext& ctx, llvm::Value* base, AIML::IRValue* newVal) {
                 llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
@@ -7401,6 +7410,45 @@ void registerBuiltins(CompilerContext& ctx) {
             auto v = BytesHelp::view(ctx, args, 0);
             return BytesHelp::buf(ctx, ctx.builder.CreateCall(ctx.getFunction("aiml_bytes_zlib_at", i8p, {i8p, i32, i64}),
                 {v.first, v.second, BytesHelp::i64arg(ctx, args, 1, 0)}));
+        };
+        // ── file streaming (spec/68 addendum): large archives without loading them ──
+        auto cstrArg = [](CompilerContext& ctx, const BF& args, size_t i) -> llvm::Value* {
+            if (args.size() > i && args[i]) {
+                llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[i]));
+                if (v->getType()->isPointerTy()) return v;
+            }
+            return ctx.builder.CreateGlobalStringPtr("");
+        };
+        // bytes.append_file(path, buf) → i64
+        bns.builtinFuncs["append_file"] = [cstrArg](CompilerContext& ctx, const BF& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo(); llvm::Type* i32 = ctx.builder.getInt32Ty(); llvm::Type* i64 = ctx.builder.getInt64Ty();
+            auto v = BytesHelp::view(ctx, args, 1);
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(ctx.getFunction("aiml_bytes_append_file", i64, {i8p, i8p, i32}),
+                {cstrArg(ctx, args, 0), v.first, v.second}));
+        };
+        // bytes.file_slice(path, off, len) → buffer<u8>
+        bns.builtinFuncs["file_slice"] = [cstrArg](CompilerContext& ctx, const BF& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo(); llvm::Type* i64 = ctx.builder.getInt64Ty();
+            return BytesHelp::buf(ctx, ctx.builder.CreateCall(ctx.getFunction("aiml_bytes_file_slice", i8p, {i8p, i64, i64}),
+                {cstrArg(ctx, args, 0), BytesHelp::i64arg(ctx, args, 1, 0), BytesHelp::i64arg(ctx, args, 2, 0)}));
+        };
+        // bytes.copy_range(src, off, len, dst) → i64
+        bns.builtinFuncs["copy_range"] = [cstrArg](CompilerContext& ctx, const BF& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo(); llvm::Type* i64 = ctx.builder.getInt64Ty();
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(ctx.getFunction("aiml_bytes_copy_range", i64, {i8p, i64, i64, i8p}),
+                {cstrArg(ctx, args, 0), BytesHelp::i64arg(ctx, args, 1, 0), BytesHelp::i64arg(ctx, args, 2, -1), cstrArg(ctx, args, 3)}));
+        };
+        // bytes.gzip_file(src, dst, level = 6) → i64
+        bns.builtinFuncs["gzip_file"] = [cstrArg](CompilerContext& ctx, const BF& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo(); llvm::Type* i32 = ctx.builder.getInt32Ty(); llvm::Type* i64 = ctx.builder.getInt64Ty();
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(ctx.getFunction("aiml_bytes_gzip_file", i64, {i8p, i8p, i32}),
+                {cstrArg(ctx, args, 0), cstrArg(ctx, args, 1), BytesHelp::i32arg(ctx, args, 2, 6)}));
+        };
+        // bytes.gunzip_file(src, dst) → i64
+        bns.builtinFuncs["gunzip_file"] = [cstrArg](CompilerContext& ctx, const BF& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo(); llvm::Type* i64 = ctx.builder.getInt64Ty();
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(ctx.getFunction("aiml_bytes_gunzip_file", i64, {i8p, i8p}),
+                {cstrArg(ctx, args, 0), cstrArg(ctx, args, 1)}));
         };
         bns.builtinFuncs["zlib_consumed"] = [](CompilerContext& ctx, const BF&) -> IRValue* {
             return ctx.ir_gen->wrap(ctx.builder.CreateCall(ctx.getFunction("aiml_bytes_zlib_consumed", ctx.builder.getInt64Ty(), {}), {}));

@@ -1,0 +1,24 @@
+# SPEC: 61_interfaces
+# A class declared under `- namespace:` (tests/_cross/ns_class_lib.aiml):
+#   - `implements:` finds its methods (they are registered namespace-qualified)
+#     and the vtable the upcast looks up exists under the qualified class name;
+#   - `<.method` calls nested in builtin arguments keep their declared return
+#     type (a buffer<u8> result used to arrive as one byte).
+# Expected exit code: 0
+
+- import: "tests/_cross/ns_class_lib.aiml"
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [packer, ptr<demo.ns.Packer>, { new: demo.ns.Packer }]
+      - decl: [item, ptr<demo.ns.Item>, { new: demo.ns.Item }]
+      - set: [item.width, 5]
+      - decl: [direct, buffer<u8>, { call: [packer.framed, item] }]
+      - if: { condition: { neq: [direct.len, 9] }, then: [{ print: ["FAIL framed: ${direct.len} bytes, expected 9"] }, { return: 1 }] }
+      - decl: [res, i32, { call: [demo.ns.feed, packer, item] }]
+      - if: { condition: { neq: [res, 0] }, then: [{ print: ["FAIL feed returned ${res}"] }, { return: 1 }] }
+      - if: { condition: { neq: [packer.seen, 9] }, then: [{ print: ["FAIL through the interface: ${packer.seen} bytes, expected 9"] }, { return: 1 }] }
+      - print: ["PASS namespace_class_iface"]
+      - return: 0

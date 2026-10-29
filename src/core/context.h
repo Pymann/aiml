@@ -962,6 +962,26 @@ namespace AIML {
         return currentNamespace + "." + name;
     }
 
+    // Builtins whose buffer<u8> result is a NEW buffer (never one of their arguments): as a
+    // call argument it is a temporary to release, as a `return` value it cannot alias a local.
+    static bool isFreshBufferBuiltin(const std::string& fn) {
+        static const std::set<std::string> fresh = {
+            "bytes.slice", "bytes.concat", "bytes.from_be32", "bytes.from_u8", "bytes.from_hex",
+            "bytes.from_string", "bytes.read_file", "bytes.zlib", "bytes.zlib_at",
+            "bytes.delta_apply", "bytes.file_slice", "fsmeta.xattr_get", "base64.decode", "base64.url_decode" };
+        return fresh.count(fn) > 0;
+    }
+
+    // The `classes` key of the class whose methods are being compiled.  The class
+    // walk sets currentClassName to the declared (short) name, but a class under
+    // `- namespace:` is registered as ctx.qualify(name) — every lookup of the
+    // enclosing class (signatures, member types) goes through this.
+    std::string currentClassKey() {
+        if (currentClassName.empty() || classes.count(currentClassName)) return currentClassName;
+        std::string q = qualify(currentClassName);
+        return classes.count(q) ? q : currentClassName;
+    }
+
     // AIML v2 (doc/aiml_v2_impl_plan.md): is `typeName` a model that uses reference semantics —
     // i.e. a refcounted heap object (aiml_model_alloc, %M* everywhere)? True only when the
     // AIML_MODEL_REFCOUNT flag is ON and the type is a user MODEL with heap fields. A scalar-only

@@ -142,7 +142,7 @@ Compiler::ResolvedCallSignature Compiler::resolveCallSignature(const std::string
     };
     size_t dot = name.find('.');
     std::string root = name.substr(0, dot), type;
-    if (root == "<" || root == "this") type = ctx.currentClassName;
+    if (root == "<" || root == "this") type = ctx.currentClassKey();
     else if (auto* sym = resolveVariable(root)) type = sym->typeName;
     if (dot == std::string::npos) {
         if (type.rfind("fn<", 0) == 0 && type.back() == '>') {
@@ -210,16 +210,22 @@ std::string Compiler::glOperandType(Expr* expression) {
     }
     auto* variable = dynamic_cast<VariableExpr*>(expression);
     if (!variable) return "";
+    return dottedPathType(variable->name);
+}
+
+// The declared type of `a`, `a.b.c`, `<.b` / `this.b`: the root symbol's type, then each
+// member's declared type through the classes/models (inherited members included).  "" when
+// a step is unknown.
+std::string Compiler::dottedPathType(const std::string& name) {
     auto unwrap = [](std::string type) {
         if (type.rfind("ref<", 0) == 0 || type.rfind("ptr<", 0) == 0)
             return type.substr(4, type.size() - 5);
         if (type.rfind("shared<", 0) == 0) return type.substr(7, type.size() - 8);
         return type;
     };
-    const std::string& name = variable->name;
     size_t dot = name.find('.');
     std::string root = name.substr(0, dot), type;
-    if (root == "<" || root == "this") type = ctx.currentClassName;
+    if (root == "<" || root == "this") type = ctx.currentClassKey();
     else if (auto* symbol = resolveVariable(root)) type = symbol->typeName;
     while (dot != std::string::npos) {
         size_t next = name.find('.', dot + 1);
@@ -688,10 +694,6 @@ IRValue* Compiler::visitCall(CallExpr* call) {
             // after the call (the builtins copy what they keep).
             std::vector<llvm::Value*> bufTempHandles;
             if (ctx.memV3 && (baseName == "bytes" || baseName == "hash" || baseName == "fsmeta")) {
-                static const std::set<std::string> bufReturners = {
-                    "bytes.slice", "bytes.concat", "bytes.from_be32", "bytes.from_u8", "bytes.from_hex",
-                    "bytes.from_string", "bytes.read_file", "bytes.zlib", "bytes.zlib_at",
-                    "bytes.delta_apply", "fsmeta.xattr_get", "base64.decode", "base64.url_decode" };
                 for (size_t ai = 0; ai < call->args.size() && ai < argVals.size(); ++ai) {
                     if (!argVals[ai]) continue;
                     llvm::Value* hv = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[ai]));
@@ -725,7 +727,7 @@ IRValue* Compiler::visitCall(CallExpr* call) {
                             argVals[ai] = ctx.ir_gen->wrap(ctx.builder.CreateLoad(ctx.getLLVMType("buffer"), hv, "buf_member_val"));
                         continue;
                     }
-                    bool isBuf = bufReturners.count(inner->functionName) > 0;
+                    bool isBuf = CompilerContext::isFreshBufferBuiltin(inner->functionName);
                     if (!isBuf) {
                         auto sig = resolveCallSignature(inner->functionName);
                         isBuf = sig.valid && sig.returnType.rfind("buffer", 0) == 0;
@@ -917,7 +919,7 @@ IRValue* Compiler::visitCall(CallExpr* call) {
                  } else {
                      std::string base = nm.substr(0, dp), field = nm.substr(dp + 1);
                      std::string cls;
-                     if (base == "this" || base == "<") cls = ctx.currentClassName;
+                     if (base == "this" || base == "<") cls = ctx.currentClassKey();
                      else if (Symbol* bs = resolveVariable(base)) {
                          cls = bs->typeName;
                          if (cls.rfind("ptr<", 0) == 0 || cls.rfind("ref<", 0) == 0 || cls.rfind("shared<", 0) == 0) {
