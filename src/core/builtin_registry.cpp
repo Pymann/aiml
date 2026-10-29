@@ -1240,6 +1240,12 @@ void registerBuiltins(CompilerContext& ctx) {
             AIML::AST::aimlTrackStringTemp(ctx, out);
         return ctx.ir_gen->wrap(out);
     };
+    // spec/23 §3 F23-60: sys.arg_count() → argc (argv[0] included); 0 when unknown.
+    sys.builtinFuncs["arg_count"] = [](CompilerContext& ctx, const std::vector<IRValue*>&) -> IRValue* {
+        llvm::GlobalVariable* argcVar = ctx.module().getGlobalVariable("__argc", true);
+        if (!argcVar) return ctx.ir_gen->getInt32(0);
+        return ctx.ir_gen->wrap(ctx.builder.CreateLoad(ctx.builder.getInt32Ty(), argcVar, "argc"));
+    };
     sys.builtinFuncs["get_arg"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
         if (args.empty()) return ctx.ir_gen->createGlobalStringPtr("");
         llvm::Value* indexVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
@@ -4601,6 +4607,47 @@ void registerBuiltins(CompilerContext& ctx) {
         };
     }
 
+    // ── spec/23 §5.8: working directory, environment, files (src/sys/os_runtime.cpp) ──
+    {
+        auto& sysNs = ctx.namespaces["sys"];
+        auto& ioNs  = ctx.namespaces["io"];
+        // name(text...) → i32
+        auto textToI32 = [](const char* sym, size_t arity) {
+            return [sym, arity](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+                llvm::Type* p = ctx.builder.getInt8Ty()->getPointerTo();
+                std::vector<llvm::Type*> params(arity, p);
+                std::vector<llvm::Value*> vals;
+                for (size_t i = 0; i < arity; ++i) vals.push_back(argOrEmpty(ctx, args, i));
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(ctx.getFunction(sym, ctx.builder.getInt32Ty(), params), vals));
+            };
+        };
+        // name(text) → string (managed)
+        auto textToText = [](const char* sym) {
+            return [sym](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+                llvm::Type* p = ctx.builder.getInt8Ty()->getPointerTo();
+                return ownedStringResult(ctx, ctx.builder.CreateCall(ctx.getFunction(sym, p, {p}), {argOrEmpty(ctx, args, 0)}));
+            };
+        };
+        // name(i32) → i32
+        auto intToI32 = [](const char* sym) {
+            return [sym](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+                llvm::Type* i32 = ctx.builder.getInt32Ty();
+                llvm::Value* v = args.empty() ? ctx.builder.getInt32(-1) : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+                if (v->getType()->isIntegerTy() && v->getType() != i32) v = ctx.builder.CreateIntCast(v, i32, true);
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(ctx.getFunction(sym, i32, {i32}), {v}));
+            };
+        };
+        sysNs.builtinFuncs["chdir"]    = textToI32("aiml_sys_chdir", 1);
+        sysNs.builtinFuncs["setenv"]   = textToI32("aiml_sys_setenv", 2);
+        sysNs.builtinFuncs["unsetenv"] = textToI32("aiml_sys_unsetenv", 1);
+        sysNs.builtinFuncs["isatty"]   = intToI32("aiml_sys_isatty");
+        ioNs.builtinFuncs["realpath"]  = textToText("aiml_io_realpath");
+        ioNs.builtinFuncs["mkdtemp"]   = textToText("aiml_io_mkdtemp");
+        ioNs.builtinFuncs["copy"]      = textToI32("aiml_io_copy", 2);
+        ioNs.builtinFuncs["lock"]      = textToI32("aiml_io_lock", 1);
+        ioNs.builtinFuncs["unlock"]    = intToI32("aiml_io_unlock");
+    }
+
     // ── regex namespace (spec/09_2) and globbing (spec/42_1) ──────────────────
     // Runtime: src/sys/regex_runtime.cpp, src/sys/glob_runtime.cpp.  Strings come
     // back as managed references (statement temps), lists as list<string> filled
@@ -7746,10 +7793,23 @@ void registerBuiltins(CompilerContext& ctx) {
             auto* _p   = llvm::PointerType::get(ctx.context, 0); \
             auto* _i64 = ctx.builder.getInt64Ty(); \
             auto* _bt  = ctx.getLLVMType("buffer"); \
-            auto* _out = ctx.createEntryAlloca(_bt, "comp_alloca"); \
+            /* memV3: an owned buffer HANDLE (a stack buffer would be "released" by the */ \
+            /* local's drop → free() of stack memory), as io.read_bytes / base64.decode. */ \
+            llvm::Value* _out = ctx.memV3 \
+                ? static_cast<llvm::Value*>(ctx.builder.CreateCall(ctx.getFunction("aiml_buffer_handle_new", _p, {}), {}, "comp_buf_h")) \
+                : static_cast<llvm::Value*>(ctx.createEntryAlloca(_bt, "comp_alloca")); \
             uint64_t _sz = ctx.module().getDataLayout().getTypeAllocSize(_bt); \
             llvm::Function* _mcf = ctx.getFunction("memcpy", _p, {_p, _p, _i64}); \
-            ctx.builder.CreateCall(_mcf, {_out, (heapPtr), ctx.getSizeConst(_sz)}); \
+            llvm::Value* _hp = (heapPtr); \
+            llvm::Function* _cur = ctx.builder.GetInsertBlock()->getParent(); \
+            auto* _copy = llvm::BasicBlock::Create(ctx.context, "comp_copy", _cur); \
+            auto* _done = llvm::BasicBlock::Create(ctx.context, "comp_done", _cur); \
+            ctx.builder.CreateCondBr(ctx.builder.CreateIsNull(_hp), _done, _copy); \
+            ctx.builder.SetInsertPoint(_copy); \
+            ctx.builder.CreateCall(_mcf, {_out, _hp, ctx.getSizeConst(_sz)}); \
+            ctx.builder.CreateCall(ctx.getFunction("free", ctx.builder.getVoidTy(), {_p}), {_hp}); \
+            ctx.builder.CreateBr(_done); \
+            ctx.builder.SetInsertPoint(_done); \
             return _out; \
         }())
 
@@ -7776,7 +7836,9 @@ void registerBuiltins(CompilerContext& ctx) {
                                                  : llvm::Constant::getNullValue(p); \
             llvm::Value* level = args.size() > 1 ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1])) \
                                                  : ctx.builder.getInt32(0); \
-            llvm::Value* heapPtr = ctx.builder.CreateCall(fn, {data, ctx.builder.getInt32(-1), level}); \
+            llvm::Value* dataLen = ctx.builder.getInt32(-1);   /* -1: a string, up to its NUL */ \
+            if (data->getType()->isStructTy()) bufferArgDataLen(ctx, data, data, dataLen);   /* buffer<u8> */ \
+            llvm::Value* heapPtr = ctx.builder.CreateCall(fn, {data, dataLen, level}); \
             return ctx.ir_gen->wrap(COMP_HEAP_TO_ALLOCA(heapPtr)); \
         };
 
@@ -7861,6 +7923,8 @@ void registerBuiltins(CompilerContext& ctx) {
 
         REG_ARCHIVE("tar_gz",   "aiml_compress_tar_gz")
         REG_ARCHIVE("untar_gz", "aiml_compress_untar_gz")
+        REG_ARCHIVE("untar",    "aiml_compress_untar")    // spec/33_2 §3.7a: any tar
+        REG_ARCHIVE("unar",     "aiml_compress_unar")     // ar members (.deb)
         REG_ARCHIVE("zip",      "aiml_compress_zip")
         REG_ARCHIVE("unzip",    "aiml_compress_unzip")
 

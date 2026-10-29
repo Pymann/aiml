@@ -38,6 +38,7 @@ bool ModelBuilder::OnMapEnd() {
 }
 
 bool ModelBuilder::OnScalar(const std::string& value, const std::string& tag) {
+    if (defaultSeqDepth > 0) { defaultSeqItems = true; return true; }
     if (insideModifier) {
         if (modifierExpectingKey) {
             modifierKey = value;
@@ -124,6 +125,10 @@ bool ModelBuilder::OnScalar(const std::string& value, const std::string& tag) {
 }
 
 bool ModelBuilder::OnSequenceStart() {
+    if (defaultSeqDepth > 0 || (insideFields && memberAttrIndex == 2 && !currentField.empty())) {
+        ++defaultSeqDepth;               // a list literal as the field's default
+        return true;
+    }
     if (currentKey == "fields") {
         insideFields = true;
         currentKey = "";
@@ -144,6 +149,17 @@ bool ModelBuilder::OnSequenceStart() {
 }
 
 bool ModelBuilder::OnSequenceEnd() {
+    if (defaultSeqDepth > 0) {
+        if (--defaultSeqDepth == 0) {
+            // `[]` is what a list field starts as anyway; a filled default is not supported
+            if (defaultSeqItems)
+                LOG_ERROR("model " + modelNode->name + ": field '" + currentField +
+                          "' has a non-empty list default — fill the list in code (spec/15)");
+            defaultSeqItems = false;
+            memberAttrIndex++;
+        }
+        return true;
+    }
     if (insideSync) {
         insideSync = false;
         expectingKey = true;

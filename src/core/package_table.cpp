@@ -1,5 +1,6 @@
 // package_table.cpp — see package_table.h (spec/21 §3.1).
 #include "package_table.h"
+#include "venv.h"
 
 #include <cstdlib>
 #include <filesystem>
@@ -79,6 +80,12 @@ std::string findTable(const std::string& importer, const std::string& explicitTa
             if (cur == cur.root_path()) break;
             cur = cur.parent_path();
         }
+    }
+    // spec/68 F68-30: last, the table of the venv this compiler belongs to.
+    std::string venvRoot = venv::ownRoot();
+    if (!venvRoot.empty()) {
+        fs::path venvTable = fs::path(venvRoot) / "lib" / "aiml" / "aiml.packages.json";
+        if (fs::exists(venvTable, ec)) return venvTable.string();
     }
     return "";
 }

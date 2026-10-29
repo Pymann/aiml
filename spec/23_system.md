@@ -82,11 +82,9 @@ gewesen; was fehlte, war die Fehlermeldung.
 - decl: [first_arg, string]
 - set: [first_arg, { call: [sys.get_arg, 1] }]
 #
-# JIT: `sys.get_arg` returns "" for EVERY index. `main(argc, argv)` writes the `__argv`/`__argc`
-# globals (compiler.cpp, AOT path only); in a `aiml -r` run nothing writes them, `__argv` stays
-# null and the safety branch in SysGetArg yields the empty string. A program that reads its own
-# arguments therefore behaves differently under `aiml -r` than as a built binary — measured
-# 16.10.2026, previously undocumented.
+# Arguments after `--` reach the program in both modes: `aiml -r prog.aiml -- a b` and
+# `./prog a b` give `sys.get_arg(1) == "a"` (argv[0] is the program / script).
+- decl: [count, i32, { call: [sys.arg_count] }]   # argc: argv[0] included (F23-60)
 
 # Absolute path of the running executable (Linux: /proc/self/exe), "" when unknown
 # (web, JIT runs report the compiler binary). Runtime-owned like sys.get_arg — for locating
@@ -97,20 +95,24 @@ gewesen; was fehlte, war die Fehlermeldung.
 # Parses CLI flags directly into an existing struct/model variable.
 # Signature: sys.arg_dump(target: ModelOrStruct) -> void
 #
-# Supported field types in the current implementation:
-#   i32     - consumes next token as atoi(value)
-#             if omitted or followed by another flag, sets field to 1
-#   f32     - consumes next token as atof(value)
-#   string  - consumes next token as strdup(value)
-#   i64     - consumes next token as atoll(value)
+# Field types (F23-61):
+#   bool    - a switch: `--verbose` sets 1 and consumes no token; `--verbose=0` sets 0
+#   i8, i16, i32 (and u-) - the next token as an integer; a flag followed by
+#             another flag or by nothing sets the field to 1
+#   i64, u64 - the next token as an integer
+#   f32, f64 - the next token as a real (each into its own width)
+#   string  - the next token
+#   list<string> named `positional` - collects every token that is not a flag
 #
-# Flag-name mapping:
-#   --foo-bar  -> foo_bar
-#   --foo      -> foo
+# Flag syntax:
+#   --foo-bar v | --foo-bar=v | -foo v  -> field foo_bar / foo
+#   --                                  -> every later token is positional
+#   a token starting with '-' and a digit ("-3") is a value, not a flag
 #
 # Notes:
 # - argv[0] is ignored; parsing starts at argv[1].
-# - Positional arguments (tokens not starting with '-') are silently ignored.
+# - Positional tokens go to a `positional: list<string>` field, in order; without
+#   such a field they are ignored.
 # - Unknown flags print an error and terminate the process with exit code 1.
 # - The target must be a named struct/model variable, not an arbitrary expression.
 #
@@ -411,6 +413,25 @@ with every signal at its default, whatever the parent caught.  `sys.wait_any` re
 `-1` early when a caught signal arrives, so a pool loop can stop promptly.
 
 
+### 5.8 Working directory, environment, files (F23-70 … F23-77)
+
+What a build tool needs around its processes:
+
+| Call | Returns | Meaning |
+|---|---|---|
+| `sys.chdir(dir)` | `i32` | Changes the process's working directory; `0` ok, `-1` not (F23-70). Relative paths and children started afterwards see the new one (`path.cwd` reads it). |
+| `sys.setenv(name, value)` | `i32` | Sets a variable for this process and every child started afterwards (`sys.env` shows it); `0` / `-1` (F23-71). |
+| `sys.unsetenv(name)` | `i32` | Removes it; `0` / `-1` (F23-71). |
+| `sys.isatty(fd)` | `i32` | `1` if `fd` (0 stdin, 1 stdout, 2 stderr) is a terminal — colour or progress output only then (F23-72). |
+| `io.realpath(p)` | `string` | The absolute path with every symlink, `.` and `..` resolved; `""` if `p` does not exist (F23-73). |
+| `io.mkdtemp(prefix)` | `string` | Creates a new, private (`0700`) directory `<prefix>XXXXXX` and returns its path; `""` on failure. `prefix` may include a directory: `"/tmp/build-"` (F23-74). |
+| `io.copy(src, dst)` | `i32` | Copies a regular file byte-exact (any size, streamed) and keeps its permission bits; `dst` is replaced atomically (written as `dst.part`, renamed). `0` / `-1` (F23-75). |
+| `io.lock(p)` | `i32` | An exclusive advisory lock (`flock`) on file `p` (created if missing): blocks until it is free, returns a lock id `>= 0` or `-1`. Two processes locking the same file run one after the other — a cache that two builds share (F23-76). |
+| `io.unlock(id)` | `i32` | Releases it; `0` / `-1`. The lock is also released when the process ends. |
+
+`sys.chdir` and `sys.setenv` change process-wide state: under threads, do it before
+starting them.  A process environment change is visible to `sys.exe` children that are
+started without an `env:` option (with `env:` they get exactly that map).
 ## 6. Memory Management
 
 ```yaml

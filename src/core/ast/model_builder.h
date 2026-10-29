@@ -26,6 +26,10 @@ class ModelBuilder : public StateHandler {
     int memberAttrIndex = 0; // [name, type, default, {modifiers}]
     std::unique_ptr<Expr> currentInitValue;
     std::string currentAccess = "public";
+    // A `[..]` default in the value position (`[tags, list<string>, []]`): its events
+    // belong to the default, not to the field list.  Only the empty list is accepted.
+    int  defaultSeqDepth = 0;
+    bool defaultSeqItems = false;
 
     // State for parsing the 4th-position modifier dict (db_indexed etc.)
     bool insideModifier = false;

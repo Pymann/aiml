@@ -1,0 +1,23 @@
+# SPEC: 13_cast
+# Expected exit code: 1
+# static-check: off
+#
+# Negative (spec/13 §6): a real number for an integer parameter is a compile
+# error with the call's location — no implicit float→integer.  It used to reach
+# the LLVM verifier ("Call parameter type does not match function signature").
+
+- def:
+    name: double_it
+    args: [[count, i64]]
+    return: i64
+    body:
+      - return: [{ "*": [count, 2] }]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [ratio, f64, 2.5]
+      - decl: [twice, i64, { call: [double_it, ratio] }]
+      - print: ["${twice}"]
+      - return: 0
