@@ -282,6 +282,11 @@ Implemented via `libgssapi_krb5` (`-lgssapi_krb5`).
 - call: [tls.connect, sock, "api.example.com", 443]
 ```
 
+> **Status — the HTTP client.**  `http.get` … `http.head` and `client.send` read these
+> variables themselves (Basic auth from the proxy URL, CONNECT for `https://`,
+> absolute-URI forwarding for `http://`), overridable per request with
+> `client.proxy` — spec/32_2 §2.3a.  No `proxy_config_handle` is needed for them.
+
 ### 6.2 PAC Files (Proxy Auto-Config)
 
 PAC files are JavaScript files that decide, based on URL and host, which proxy
