@@ -16,7 +16,7 @@
 //   2. $AIML_PACKAGES
 //   3. aiml.packages.json in the working directory, then upward from the
 //      importing file's directory (a build started elsewhere still finds it)
-//   4. the table of the venv the compiler belongs to (spec/69 F69-30)
+//   4. the table of the venv the compiler belongs to (spec/68 F68-30)
 //
 // A resolved path never leaves the package directory ("@ufo/../x" is an
 // error), so a package import reaches exactly what was installed.

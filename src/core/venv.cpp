@@ -1,4 +1,4 @@
-// venv.cpp — see venv.h (spec/69).
+// venv.cpp — see venv.h (spec/68).
 #include "venv.h"
 
 #include <dlfcn.h>
@@ -42,7 +42,7 @@ fs::path runningBinary() {
     return ec ? fs::path() : p;
 }
 
-// F69-11: --runtime, else next to a venv compiler, else next to a build-tree compiler.
+// F68-11: --runtime, else next to a venv compiler, else next to a build-tree compiler.
 fs::path findRuntime(const fs::path& exe, const std::string& given) {
     if (!given.empty()) return fs::is_regular_file(given) ? fs::absolute(given) : fs::path();
     fs::path dir = exe.parent_path();
@@ -58,7 +58,7 @@ bool sameFile(const fs::path& lhs, const fs::path& rhs) {
     return fs::exists(rhs, ec) && fs::equivalent(lhs, rhs, ec);
 }
 
-// F69-12: write next to the target, then rename over it.
+// F68-12: write next to the target, then rename over it.
 bool installFile(const fs::path& src, const fs::path& dst, fs::perms mode, std::string& err) {
     if (sameFile(src, dst)) return true;
     fs::path tmp = dst;
@@ -137,7 +137,7 @@ int command(int argc, char** argv) {
     if (ec) return fail("cannot resolve " + dirArg + ": " + ec.message());
     if (root.string().find('\'') != std::string::npos)
         return fail("a venv path must not contain a single quote: " + root.string());
-    // F69-13: missing, empty or a venv already.
+    // F68-13: missing, empty or a venv already.
     if (fs::exists(root, ec) && !(fs::is_directory(root, ec) && fs::is_empty(root, ec)) && !isVenv(root))
         return fail(root.string() + " exists and is not a venv (no " + kMarker + " in env); "
                     "choose a new or empty directory");
