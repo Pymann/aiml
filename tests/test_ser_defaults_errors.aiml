@@ -9,7 +9,7 @@
 # Expected exit code: 0
 
 - import: "tests/_cross/ser_defaults_models.aiml"
-- import: "tests/_cross/ser_check.aiml"
+- import: "tests/_cross/check.aiml"
 
 # F29-28: thread A reads a broken document, waits until main has read a clean
 # one, then its own error text must still be there.
