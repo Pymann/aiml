@@ -4858,12 +4858,8 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
                     llvm::Value* fat = nullptr;
                     auto* st = llvm::cast<llvm::StructType>(retTy);
                     if (st->hasName() && st->getName().startswith("AimlFatPtr_")) {
-                        std::string srcType;
-                        if (auto* varExpr =
-                                dynamic_cast<VariableExpr*>(retStmt->value.get())) {
-                            if (Symbol* srcSym = resolveVariable(varExpr->name))
-                                srcType = srcSym->typeName;
-                        }
+                        // a variable or a fresh `{ new: Concrete }` (declaredTypeOfExpr)
+                        std::string srcType = declaredTypeOfExpr(retStmt->value.get());
                         // Upcast only from a concrete-class ptr; a source that is
                         // already the interface fat pointer falls through to load.
                         if (srcType.rfind("ptr<", 0) == 0 && srcType.back() == '>') {
