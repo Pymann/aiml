@@ -2794,6 +2794,9 @@ bool Compiler::borrowReadInfo(Expr* value, std::string& meth, std::string& recv)
     std::string rt;
     if (recv == "yaml") rt = "yaml";   // builtin namespace: yaml.get → node view (borrow)
     else if (Symbol* rs = resolveVariable(recv)) rt = rs->typeName;
+    // A field path (`bag.notes.get`, `<.index.get`): the container is a member — the
+    // read is just as much a borrow (the owning model/instance keeps the only reference).
+    else if (recv.find('.') != std::string::npos) rt = dottedPathType(recv);
     // Scoped to KNOWN borrow-returning receivers so a user method happening to be named
     // `get` is not caught.
     bool borrowSource = rt == "yaml"
@@ -2965,7 +2968,7 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                 // Look up the direct member's declared type; skip the warning for a ref<T> member.
                 bool targetIsWeakRef = false;
                 if (propName.find('.') == std::string::npos) {
-                    auto cit = ctx.classes.find(ctx.currentClassName);
+                    auto cit = ctx.classes.find(ctx.currentClassKey());
                     if (cit != ctx.classes.end()) {
                         auto mit = cit->second.members.find(propName);
                         if (mit != cit->second.members.end()
@@ -3247,7 +3250,7 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
     } else if (baseName == "this" && !propName.empty()) {
         // Resolve field type from enclosing class
         if (!ctx.currentClassName.empty()) {
-            auto cit = ctx.classes.find(ctx.currentClassName);
+            auto cit = ctx.classes.find(ctx.currentClassKey());
             if (cit != ctx.classes.end()) {
                 auto mit = cit->second.members.find(propName);
                 if (mit != cit->second.members.end()) {
@@ -4486,6 +4489,11 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
             || shortName == "split" || shortName == "slice";
         if (builtinFresh || ctx.stringProducerFns.count(shortName)
             || ctx.ownsReturnMatches(shortName, ctx.currentFunctionReturnType))
+            retFreshOwned = true;
+        // `return: [{ call: [bytes.concat, head, tail] }]`: a new buffer — the locals it was
+        // built from are not part of it and must be released on this path (they leaked).
+        if (ctx.memV3 && ctx.currentFunctionReturnType.rfind("buffer", 0) == 0
+            && CompilerContext::isFreshBufferBuiltin(fn))
             retFreshOwned = true;
     }
     // spec/61 §6.2: `return "..${x}.."` — a string INTERPOLATION allocates a FRESH str_concat buffer

@@ -3813,11 +3813,23 @@ void Compiler::synthesizeClassGroups(Program* prog) {
     for (auto& d : prog->declarations)
         if (auto* gg = dynamic_cast<ClassGroupDecl*>(d.get())) groupByName[gg->name] = gg;
 
+    // A group under `- namespace:` synthesizes its classes in that namespace: they
+    // are registered (registerTypeDecl qualifies with ctx.currentNamespace) and
+    // later compiled right after the group, not at the end of the program where
+    // another namespace — or none — is in effect.
+    const std::string savedNamespace = ctx.currentNamespace;
+    ctx.currentNamespace.clear();
+    std::map<ClassGroupDecl*, std::vector<std::unique_ptr<Node>>> placedAfter;
     for (auto& d : prog->declarations) {
+        if (auto* ns = dynamic_cast<NamespaceDecl*>(d.get())) { ctx.currentNamespace = ns->name; continue; }
         auto* g = dynamic_cast<ClassGroupDecl*>(d.get());
         if (!g) continue;
+        size_t firstOfGroup = toAppend.size();
 
         auto subName = [&](const std::string& inst) { return g->name + "_" + inst; };
+        // How generated code names an instance subclass: registered under the
+        // group's namespace, and `{new:}` / type lookups take the qualified name.
+        auto subType = [&](const std::string& inst) { return ctx.qualify(subName(inst)); };
         // instance → its base class (for base-typed sees members).
         std::map<std::string, std::string> baseOf;
         std::map<std::string, std::set<std::string>> implementsOf;   // instance → its interfaces
@@ -3929,8 +3941,9 @@ void Compiler::synthesizeClassGroups(Program* prog) {
                     auto sc = sStrip.find(':'); if (sc != std::string::npos) sStrip = sStrip.substr(0, sc);
                     auto sd = sStrip.find('.');
                     std::string subT = (sd == std::string::npos)
-                        ? subName(mName)                                   // same-group instance
-                        : (subgTypeOf(sStrip.substr(0, sd)) + "_" + mName); // subgroup.instance
+                        ? subType(mName)                                   // same-group instance
+                        : [&] { std::string sgT = subgTypeOf(sStrip.substr(0, sd));          // subgroup.instance
+                              return (sgT.find('.') == std::string::npos ? ctx.qualify(sgT) : sgT) + "_" + mName; }();
                     m.type = "ptr<" + subT + ">";
                 }
                 m.is_collaborator = true;   // wired collaborator — not serialized (spec/58 §9)
@@ -3977,7 +3990,7 @@ void Compiler::synthesizeClassGroups(Program* prog) {
         for (auto& inst : g->instances) {
             StructMember m;
             m.name = inst.instanceName;
-            m.type = "ptr<" + subName(inst.instanceName) + ">";
+            m.type = "ptr<" + subType(inst.instanceName) + ">";
             cont->members.push_back(std::move(m));
         }
 
@@ -4004,7 +4017,7 @@ void Compiler::synthesizeClassGroups(Program* prog) {
                                 if (im == ifaceQ || resolveIfaceName(im, "") == ifaceQ) onSub = true;
                     std::string acc = "- def:\n    name: " + m.name + "\n    return: " + m.returnType +
                                       "\n    body:\n";
-                    acc += "      - decl: [gi_view, ref<" + subName(exp) + ">, <." + exp + "]\n";
+                    acc += "      - decl: [gi_view, ref<" + subType(exp) + ">, <." + exp + "]\n";
                     if (onSub) {
                         acc += "      - decl: [gi_up, ref<" + ifaceQ + ">, gi_view]\n";
                     } else {
@@ -4029,7 +4042,7 @@ void Compiler::synthesizeClassGroups(Program* prog) {
             body += "      - set: [<." + sg.first + ", { new: " + sg.second + " }]\n";
         for (auto& inst : g->instances) {
             body += "      - set: [<." + inst.instanceName + ", { new: " +
-                    subName(inst.instanceName) + " }]\n";
+                    subType(inst.instanceName) + " }]\n";
             // A __ctor local is needed only if this instance is wired here (a
             // sibling / cross-group sees), constructed, or runs on_wired here.
             // Pure-port sees are wired in __wire_ports, so they don't count.
@@ -4043,7 +4056,7 @@ void Compiler::synthesizeClassGroups(Program* prog) {
                              (postHookInsts.count(inst.instanceName) && !hasPorts);
             if (needLocal)
                 body += "      - decl: [w_" + inst.instanceName + ", ptr<" +
-                        subName(inst.instanceName) + ">, <." + inst.instanceName + "]\n";
+                        subType(inst.instanceName) + ">, <." + inst.instanceName + "]\n";
             if (!inst.constructor.empty()) {
                 std::string line = "      - call: [w_" + inst.instanceName + "." +
                                    inst.constructor[0];
@@ -4128,7 +4141,7 @@ void Compiler::synthesizeClassGroups(Program* prog) {
                         // Route through a plain local: the decl-upcast only fires for
                         // a VariableExpr source, not a `<.member` access.
                         std::string sv = "s_" + inst.instanceName + "_" + mName;
-                        body += "      - decl: [" + sv + ", ptr<" + subName(tpart) + ">, " + srcExpr + "]\n";
+                        body += "      - decl: [" + sv + ", ptr<" + subType(tpart) + ">, " + srcExpr + "]\n";
                         body += "      - decl: [" + up + ", ptr<" + iface + ">, " + sv + "]\n";
                     } else {
                         std::string bl = "b_" + inst.instanceName + "_" + mName;
@@ -4193,7 +4206,7 @@ void Compiler::synthesizeClassGroups(Program* prog) {
             for (auto& inst : g->instances)
                 if (seesPort(inst) || postHookInsts.count(inst.instanceName))
                     wire += "      - decl: [w_" + inst.instanceName + ", ptr<" +
-                            subName(inst.instanceName) + ">, <." + inst.instanceName + "]\n";
+                            subType(inst.instanceName) + ">, <." + inst.instanceName + "]\n";
             for (auto& inst : g->instances)
                 for (auto& s : inst.sees) {
                     std::string t = s; auto c = t.find(':'); if (c != std::string::npos) t = t.substr(0, c);
@@ -4211,12 +4224,26 @@ void Compiler::synthesizeClassGroups(Program* prog) {
         }
 
         registerTypeDecl(cont.get());
-        ctx.classGroupContainers.insert(g->name);
+        ctx.classGroupContainers.insert(ctx.qualify(g->name));
         toAppend.push_back(std::move(cont));
         LOG_INFO("synthesized classgroup '" + g->name + "' (" +
                  std::to_string(g->instances.size()) + " instances)");
+        for (size_t i = firstOfGroup; i < toAppend.size(); ++i)
+            placedAfter[g].push_back(std::move(toAppend[i]));
     }
-    for (auto& n : toAppend) prog->declarations.push_back(std::move(n));
+    ctx.currentNamespace = savedNamespace;
+    if (!placedAfter.empty()) {
+        std::vector<std::unique_ptr<Node>> merged;
+        merged.reserve(prog->declarations.size() + toAppend.size());
+        for (auto& d : prog->declarations) {
+            auto* g = dynamic_cast<ClassGroupDecl*>(d.get());
+            merged.push_back(std::move(d));
+            auto it = g ? placedAfter.find(g) : placedAfter.end();
+            if (it != placedAfter.end())
+                for (auto& n : it->second) merged.push_back(std::move(n));
+        }
+        prog->declarations = std::move(merged);
+    }
 }
 
 void Compiler::registerTypes(Program* prog) {
@@ -6090,7 +6117,9 @@ void Compiler::visitTopLevel(Node* node) {
             std::vector<llvm::Constant*> slots;
             bool anyError = false;   // collect, then skip vtable emission on error
             for (const auto& m : iface.methods) {
-                std::string mangled = cls->name + "_" + m.name;
+                // Methods were defined under ctx.qualify(cls->name + "_" + m) (visitFunction
+                // qualifies), so a class declared under `- namespace:` needs the same here.
+                std::string mangled = ctx.qualify(cls->name + "_" + m.name);
                 llvm::Function* fn = ctx.module().getFunction(mangled);
                 if (!fn) {
                     LOG_ERROR(ctx.fmtLoc(cls->sourceNode) +
@@ -6171,7 +6200,8 @@ void Compiler::visitTopLevel(Node* node) {
                 getOrCreateClassFree(ctx, cls->name), i8p));
             auto* arrTy = llvm::ArrayType::get(i8p, slots.size());
             auto* init = llvm::ConstantArray::get(arrTy, slots);
-            std::string vtableName = "__vtable_" + cls->name + "_" + ifaceName;
+            // Qualified like the upcast site's lookup (it names the class by its type).
+            std::string vtableName = "__vtable_" + ctx.qualify(cls->name) + "_" + ifaceName;
             // LinkOnceODR statt Private: vtables müssen über .o-Grenzen sichtbar
             // sein, weil buildInterfaceUpcast aus einem ANDEREN compilation unit
             // (z.B. Factory) sie referenziert.  ODR-Dedup vermeidet Linker-
@@ -6959,7 +6989,7 @@ void Compiler::visitFunction(FunctionDecl* func) {
                         std::string prefix = cls + "_";
                         std::string um = (func->name.rfind(prefix, 0) == 0)
                                          ? func->name.substr(prefix.size()) : func->name;
-                        auto cit = ctx.classes.find(cls);
+                        auto cit = ctx.classes.find(ctx.currentClassKey());
                         if (cit != ctx.classes.end()) {
                             for (const auto& ifn : cit->second.interfaces) {
                                 auto iit = ctx.interfaces.find(ifn);

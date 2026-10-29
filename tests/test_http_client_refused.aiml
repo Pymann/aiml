@@ -1,0 +1,23 @@
+# SPEC: 32_2_http
+# A connection that is refused is no answer: client.send gives null — it used
+# to give an empty response that read as HTTP 200 (the non-blocking connect
+# was taken as established without checking SO_ERROR).  Port 9 (discard) has
+# no listener here; the test also accepts "connected" when something does
+# listen there and answers with a real status line.
+# Expected exit code: 0
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [dest, url, { call: [http.parse_url, "http://127.0.0.1:9/v2/"] }]
+      - decl: [client, http_client_handle, { call: [http.new_request, "HEAD", dest] }]
+      - set: [client.timeout, 3000]
+      - decl: [answer, http_response_handle, { call: [client.send] }]
+      - call: [client.free]
+      - if: { condition: { eq: [answer, null] }, then: [{ print: ["PASS http_client_refused: no answer is null"] }, { return: 0 }] }
+      - decl: [code, i32, { call: [answer.status] }]
+      - call: [answer.free]
+      - if: { condition: { eq: [code, 200] }, then: [{ print: ["FAIL a refused connection answered 200"] }, { return: 1 }] }
+      - print: ["PASS http_client_refused: something listens on :9 and answered ${code}"]
+      - return: 0

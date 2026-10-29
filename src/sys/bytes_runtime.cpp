@@ -419,3 +419,142 @@ int32_t aiml_fsmeta_xattr_set(const char* p, const char* name, const uint8_t* da
 }
 
 }  // extern "C"
+
+// ---------------------------------------------------------------------------
+// File streaming (spec/68 addendum, 2026-10-28): what a tool that writes and
+// reads large archives needs without holding a file in memory — the OCI layer
+// code of ufo (layers of many GB).  All return -1 on any error.
+#include <cerrno>
+
+extern "C" {
+
+// bytes.append_file(path, buf) → bytes written: append binary data (NULs included).
+int64_t aiml_bytes_append_file(const char* path, const uint8_t* data, int32_t len) {
+    if (!path || len < 0) return -1;
+    FILE* f = fopen(path, "ab");
+    if (!f) return -1;
+    size_t w = len > 0 ? fwrite(data, 1, static_cast<size_t>(len), f) : 0;
+    int bad = ferror(f);
+    if (fclose(f) != 0) bad = 1;
+    return (bad || w != static_cast<size_t>(len)) ? -1 : static_cast<int64_t>(w);
+}
+
+// bytes.file_slice(path, off, len) → buffer<u8>: len bytes from off (shorter at EOF).
+void* aiml_bytes_file_slice(const char* path, int64_t off, int64_t len) {
+    if (!path || off < 0 || len < 0 || len > INT32_MAX) return make_hdr(nullptr, 0);
+    FILE* f = fopen(path, "rb");
+    if (!f) return make_hdr(nullptr, 0);
+    if (fseeko(f, static_cast<off_t>(off), SEEK_SET) != 0) { fclose(f); return make_hdr(nullptr, 0); }
+    uint8_t* out = static_cast<uint8_t*>(malloc(len ? static_cast<size_t>(len) : 1));
+    if (!out) { fclose(f); return make_hdr(nullptr, 0); }
+    size_t got = len ? fread(out, 1, static_cast<size_t>(len), f) : 0;
+    fclose(f);
+    return adopt_hdr(out, static_cast<int64_t>(got));
+}
+
+// bytes.copy_range(src, off, len, dst) → bytes appended to dst (len = -1: to EOF).
+int64_t aiml_bytes_copy_range(const char* src, int64_t off, int64_t len, const char* dst) {
+    if (!src || !dst || off < 0) return -1;
+    FILE* in = fopen(src, "rb");
+    if (!in) return -1;
+    if (fseeko(in, static_cast<off_t>(off), SEEK_SET) != 0) { fclose(in); return -1; }
+    FILE* out = fopen(dst, "ab");
+    if (!out) { fclose(in); return -1; }
+    static thread_local std::vector<uint8_t> chunk(1 << 16);
+    int64_t done = 0;
+    bool bad = false;
+    while (len < 0 || done < len) {
+        size_t want = chunk.size();
+        if (len >= 0 && static_cast<int64_t>(want) > len - done) want = static_cast<size_t>(len - done);
+        size_t got = fread(chunk.data(), 1, want, in);
+        if (got == 0) { if (ferror(in) || len >= 0) bad = (len >= 0 && done < len) || ferror(in); break; }
+        if (fwrite(chunk.data(), 1, got, out) != got) { bad = true; break; }
+        done += static_cast<int64_t>(got);
+    }
+    fclose(in);
+    if (fclose(out) != 0) bad = true;
+    return bad ? -1 : done;
+}
+
+// bytes.gzip_file(src, dst, level) → compressed size.  Deterministic like
+// `gzip -n`: no name, mtime 0, OS byte 3 (Unix) — same input, same bytes.
+int64_t aiml_bytes_gzip_file(const char* src, const char* dst, int32_t level) {
+    if (!src || !dst) return -1;
+    FILE* in = fopen(src, "rb");
+    if (!in) return -1;
+    FILE* out = fopen(dst, "wb");
+    if (!out) { fclose(in); return -1; }
+    z_stream zs{};
+    if (level < 0 || level > 9) level = 6;
+    if (deflateInit2(&zs, level, Z_DEFLATED, 15 + 16, 8, Z_DEFAULT_STRATEGY) != Z_OK) { fclose(in); fclose(out); return -1; }
+    gz_header hdr{};
+    hdr.os = 3;   // Unix, independent of the host
+    deflateSetHeader(&zs, &hdr);
+    std::vector<uint8_t> ibuf(1 << 16), obuf(1 << 16);
+    int64_t total = 0;
+    bool bad = false;
+    int flush = Z_NO_FLUSH;
+    do {
+        size_t got = fread(ibuf.data(), 1, ibuf.size(), in);
+        if (ferror(in)) { bad = true; break; }
+        flush = feof(in) ? Z_FINISH : Z_NO_FLUSH;
+        zs.next_in = ibuf.data();
+        zs.avail_in = static_cast<uInt>(got);
+        do {
+            zs.next_out = obuf.data();
+            zs.avail_out = static_cast<uInt>(obuf.size());
+            if (deflate(&zs, flush) == Z_STREAM_ERROR) { bad = true; break; }
+            size_t have = obuf.size() - zs.avail_out;
+            if (have && fwrite(obuf.data(), 1, have, out) != have) { bad = true; break; }
+            total += static_cast<int64_t>(have);
+        } while (zs.avail_out == 0);
+    } while (!bad && flush != Z_FINISH);
+    deflateEnd(&zs);
+    fclose(in);
+    if (fclose(out) != 0) bad = true;
+    return bad ? -1 : total;
+}
+
+// bytes.gunzip_file(src, dst) → uncompressed size (concatenated members too).
+int64_t aiml_bytes_gunzip_file(const char* src, const char* dst) {
+    if (!src || !dst) return -1;
+    FILE* in = fopen(src, "rb");
+    if (!in) return -1;
+    FILE* out = fopen(dst, "wb");
+    if (!out) { fclose(in); return -1; }
+    z_stream zs{};
+    if (inflateInit2(&zs, 15 + 32) != Z_OK) { fclose(in); fclose(out); return -1; }
+    std::vector<uint8_t> ibuf(1 << 16), obuf(1 << 16);
+    int64_t total = 0;
+    bool bad = false, done = false;
+    while (!done && !bad) {
+        size_t got = fread(ibuf.data(), 1, ibuf.size(), in);
+        if (ferror(in)) { bad = true; break; }
+        if (got == 0) { bad = true; break; }   // ended inside a stream
+        zs.next_in = ibuf.data();
+        zs.avail_in = static_cast<uInt>(got);
+        while (zs.avail_in > 0 && !bad) {
+            zs.next_out = obuf.data();
+            zs.avail_out = static_cast<uInt>(obuf.size());
+            int rc = inflate(&zs, Z_NO_FLUSH);
+            if (rc != Z_OK && rc != Z_STREAM_END) { bad = true; break; }
+            size_t have = obuf.size() - zs.avail_out;
+            if (have && fwrite(obuf.data(), 1, have, out) != have) { bad = true; break; }
+            total += static_cast<int64_t>(have);
+            if (rc == Z_STREAM_END) {
+                if (zs.avail_in == 0) {
+                    int c = fgetc(in);
+                    if (c == EOF) { done = true; break; }
+                    ungetc(c, in);
+                }
+                inflateReset(&zs);   // another member follows
+            }
+        }
+    }
+    inflateEnd(&zs);
+    fclose(in);
+    if (fclose(out) != 0) bad = true;
+    return bad ? -1 : total;
+}
+
+}  // extern "C"

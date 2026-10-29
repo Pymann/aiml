@@ -319,6 +319,13 @@ static int tcp_connect(const char* host, int port, int timeout_ms) {
             if (select(fd + 1, nullptr, &fds, nullptr, &tv) <= 0) {
                 ::close(fd); fd = -1; continue;
             }
+            // Writable also means "the connect FAILED" (refused, unreachable):
+            // only SO_ERROR == 0 is a connection.  Without this check a refused
+            // port produced an empty answer that read as HTTP 200.
+            int soerr = 0; socklen_t soerr_len = sizeof(soerr);
+            if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &soerr, &soerr_len) != 0 || soerr != 0) {
+                ::close(fd); fd = -1; continue;
+            }
             fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) & ~O_NONBLOCK);
         } else {
             if (::connect(fd, p->ai_addr, p->ai_addrlen) < 0) {
@@ -341,9 +348,11 @@ static AimlHttpResponse* parse_http_response(int fd, void* ssl, bool no_body = f
     char line[4096];
     recv_line(fd, ssl, line, sizeof(line));
     // "HTTP/1.1 200 OK\r\n"
-    int status = 200;
+    // No status line (peer closed, not HTTP) → status 0; do_http_request
+    // turns that into "no answer" (null) instead of inventing a 200.
+    int status = 0;
     if (sscanf(line, "HTTP/%*s %d", &status) == 1) r->status = status;
-    else r->status = 200;
+    else r->status = 0;
     r->ok = (r->status >= 200 && r->status < 300) ? 1 : 0;
 
     // Headers
@@ -397,6 +406,8 @@ static AimlHttpResponse* parse_http_response(int fd, void* ssl, bool no_body = f
     }
     return r;
 }
+
+extern "C" void aiml_http_resp_free(void* resp);
 
 static AimlHttpResponse* do_http_request(const char* method, AimlUrl* u,
                                           AimlHttpMap* extra_headers,
@@ -502,6 +513,7 @@ static AimlHttpResponse* do_http_request(const char* method, AimlUrl* u,
     }
 
     AimlHttpResponse* resp = parse_http_response(fd, ssl, method && strcmp(method, "HEAD") == 0);
+    if (resp && resp->status == 0) { aiml_http_resp_free(resp); resp = nullptr; }
 
     if (ssl)     { SSL_shutdown(ssl); SSL_free(ssl); }
     if (ssl_ctx) SSL_CTX_free(ssl_ctx);
@@ -2268,6 +2280,18 @@ extern "C" void aiml_http_client_set_body(void* client, const char* body) {
     AimlHttpClient* c = static_cast<AimlHttpClient*>(client);
     free(c->body);
     c->body = xstrdup(body);
+}
+
+// client.free() — releases a request handle (headers, body, method, body_file).
+// The url belongs to the caller's `url` value and is not touched.  Null-safe.
+extern "C" void aiml_http_client_free(void* client) {
+    if (!client) return;
+    AimlHttpClient* c = static_cast<AimlHttpClient*>(client);
+    aiml_http_map_free(c->headers);
+    free(c->body);
+    free(c->method);
+    free(c->body_file);
+    free(c);
 }
 
 // client.body_file = path — stream the request body from a file (binary-safe).

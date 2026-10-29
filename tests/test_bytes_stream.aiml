@@ -1,0 +1,65 @@
+# SPEC: 68_bytes
+# spec/68 addendum: file streaming — append_file / file_slice / copy_range /
+# gzip_file / gunzip_file.  Binary-safe (NULs), reproducible gzip (`gzip -n`:
+# same input → same bytes), multi-member gunzip, -1 on errors.
+# Expected exit code: 0
+
+- def:
+    name: expect
+    args: [[what, string], [cond, i32]]
+    return: i32
+    body:
+      - if: { condition: { eq: [cond, 1] }, then: [{ return: 0 }] }
+      - print: ["  FAIL ${what}"]
+      - return: 1
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [dir, string, "logs/bytes_stream"]
+      - call: [io.remove_all, dir]
+      - call: [io.mkdir_all, dir]
+      - decl: [fails, i32, 0]
+      - decl: [bin, buffer<u8>, { call: [bytes.from_hex, "00ff00410042"] }]
+      - decl: [wr_one, i64, { call: [bytes.append_file, "${dir}/a.bin", bin] }]
+      - decl: [wr_two, i64, { call: [bytes.append_file, "${dir}/a.bin", bin] }]
+      - set: [fails, { +: [fails, { call: [expect, "append writes 6 + 6", { and: [{ eq: [wr_one, 6] }, { eq: [wr_two, 6] }] }] }] }]
+      - decl: [whole, buffer<u8>, { call: [bytes.read_file, "${dir}/a.bin"] }]
+      - set: [fails, { +: [fails, { call: [expect, "binary-safe, 12 bytes", { eq: [{ call: [bytes.to_hex, whole] }, "00ff0041004200ff00410042"] }] }] }]
+      - decl: [mid, buffer<u8>, { call: [bytes.file_slice, "${dir}/a.bin", 3, 5] }]
+      - set: [fails, { +: [fails, { call: [expect, "file_slice", { eq: [{ call: [bytes.to_hex, mid] }, "41004200ff"] }] }] }]
+      - decl: [tail, buffer<u8>, { call: [bytes.file_slice, "${dir}/a.bin", 10, 99] }]
+      - set: [fails, { +: [fails, { call: [expect, "file_slice short at EOF", { eq: [tail.len, 2] }] }] }]
+      - decl: [cp1, i64, { call: [bytes.copy_range, "${dir}/a.bin", 2, 4, "${dir}/b.bin"] }]
+      - decl: [cp2, i64, { call: [bytes.copy_range, "${dir}/a.bin", 8, -1, "${dir}/b.bin"] }]
+      - decl: [both, buffer<u8>, { call: [bytes.read_file, "${dir}/b.bin"] }]
+      - set: [fails, { +: [fails, { call: [expect, "copy_range appends", { and: [{ eq: [{ +: [cp1, cp2] }, 8] }, { eq: [{ call: [bytes.to_hex, both] }, "0041004200410042"] }] }] }] }]
+      - decl: [big, string, ""]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 5000] }
+          body:
+            - set: [big, "${big}line ${idx}\n"]
+            - set: [idx, { +: [idx, 1] }]
+      - call: [io.write_file, "${dir}/big.txt", big]
+      - decl: [gz1, i64, { call: [bytes.gzip_file, "${dir}/big.txt", "${dir}/big1.gz", 6] }]
+      - decl: [gz2, i64, { call: [bytes.gzip_file, "${dir}/big.txt", "${dir}/big2.gz", 6] }]
+      - set: [fails, { +: [fails, { call: [expect, "gzip_file compresses", { and: [{ gt: [gz1, 0] }, { lt: [gz1, big.len] }] }] }] }]
+      - decl: [sha_one, string, { call: [hash.sha256_file, "${dir}/big1.gz"] }]
+      - decl: [sha_two, string, { call: [hash.sha256_file, "${dir}/big2.gz"] }]
+      - set: [fails, { +: [fails, { call: [expect, "gzip_file is reproducible", { eq: [sha_one, sha_two] }] }] }]
+      - decl: [head, buffer<u8>, { call: [bytes.file_slice, "${dir}/big1.gz", 0, 10] }]
+      - set: [fails, { +: [fails, { call: [expect, "gzip header: no name, mtime 0, OS unix", { eq: [{ call: [bytes.to_hex, head] }, "1f8b0800000000000003"] }] }] }]
+      - decl: [unz, i64, { call: [bytes.gunzip_file, "${dir}/big1.gz", "${dir}/back.txt"] }]
+      - set: [fails, { +: [fails, { call: [expect, "gunzip_file restores", { and: [{ eq: [unz, big.len] }, { eq: [{ call: [io.read_file, "${dir}/back.txt"] }, big] }] }] }] }]
+      # two members back to back (cat a.gz b.gz) decompress as one stream
+      - call: [bytes.copy_range, "${dir}/big1.gz", 0, -1, "${dir}/two.gz"]
+      - call: [bytes.copy_range, "${dir}/big2.gz", 0, -1, "${dir}/two.gz"]
+      - decl: [un2, i64, { call: [bytes.gunzip_file, "${dir}/two.gz", "${dir}/two.txt"] }]
+      - set: [fails, { +: [fails, { call: [expect, "multi-member gunzip", { eq: [un2, { '*': [big.len, 2] }] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "errors are -1", { and: [{ eq: [{ call: [bytes.gunzip_file, "${dir}/a.bin", "${dir}/x"] }, -1] }, { eq: [{ call: [bytes.copy_range, "${dir}/none", 0, -1, "${dir}/x"] }, -1] }] }] }] }]
+      - call: [io.remove_all, dir]
+      - if: { condition: { gt: [fails, 0] }, then: [{ print: ["test_bytes_stream FAIL (${fails})"] }, { return: 1 }] }
+      - print: ["PASS bytes_stream: append/slice/copy_range/gzip_file/gunzip_file"]
+      - return: 0

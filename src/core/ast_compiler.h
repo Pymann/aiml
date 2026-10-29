@@ -111,6 +111,7 @@ private:
     ResolvedCallSignature resolveCallSignature(const std::string& name);
     bool isCoownedArgument(const std::string& type);
     std::string glOperandType(Expr* expression);
+    std::string dottedPathType(const std::string& name);
     bool containsVfxResource(const std::string& type);
     void trackCallArgument(Expr* expression, IRValue* value);
     void transferCallArgumentTemps(const ResolvedCallSignature& signature, const std::vector<IRValue*>& values);
