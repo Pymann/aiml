@@ -1,0 +1,15 @@
+# Requires: driver
+# Gemeinsame Bibliothek, wird unter zwei Schreibweisen importiert (siehe ../run.sh).
+- namespace: nrm.shared
+
+- class:
+    name: Counter
+    members:
+      - [start, i32, 41, { access: public }]
+    methods:
+      - def:
+          name: value
+          args: []
+          return: i32
+          body:
+            - return: { +: [<.start, 1] }

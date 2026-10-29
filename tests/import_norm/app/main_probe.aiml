@@ -1,0 +1,20 @@
+# Requires: driver
+# Dieselbe Datei auf zwei Wegen: direkt als ../lib/shared.aiml und über ../lib/sub/user.aiml.
+# Vor der Normalisierung: JIT-Absturz (Aufruf über null), AOT: undefiniertes __aiml_lib_init_….
+- import: "../lib/sub/user.aiml"
+- import: "../lib/shared.aiml"
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [user, ptr<nrm.user.User>, { new: nrm.user.User }]
+      - decl: [direct, ptr<nrm.shared.Counter>, { new: nrm.shared.Counter }]
+      - decl: [via_user, i32, { call: [user.read] }]
+      - decl: [via_direct, i32, { call: [direct.value] }]
+      - if: [{ and: [{ eq: [via_user, 42] }, { eq: [via_direct, 42] }] }, true]
+        then:
+          - print: ["PASS import_norm"]
+          - return: 0
+      - print: ["FAIL import_norm: ${via_user} / ${via_direct}"]
+      - return: 1
