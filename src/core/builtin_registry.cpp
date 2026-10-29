@@ -1076,12 +1076,39 @@ void registerBuiltins(CompilerContext& ctx) {
         const auto& o = ctx.exeOpts;
         auto ptrOr = [&](llvm::Value* v) { return v ? ctx.builder.CreateBitCast(v, i8p) : nul; };
         llvm::Function* f = ctx.getFunction("aiml_process_spawn", i8p,
-            {i8p, i8p, i8p, i32, i32, i32, i8p, i8p, i32, i8p});
+            {i8p, i8p, i8p, i32, i32, i32, i8p, i8p, i8p, i32, i8p});
         return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {
             argvList, ptrOr(o.cwd), ptrOr(o.env), ctx.builder.getInt32(o.shell ? 1 : 0),
             o.timeout ? o.timeout : ctx.builder.getInt32(-1), ctx.builder.getInt32(o.capture ? 1 : 0),
-            ptrOr(o.stdoutPath), ptrOr(o.stderrPath), ctx.builder.getInt32(o.detach ? 1 : 0),
+            ptrOr(o.stdinPath), ptrOr(o.stdoutPath), ptrOr(o.stderrPath), ctx.builder.getInt32(o.detach ? 1 : 0),
             ptrOr(o.statusFile)}));
+    };
+
+    // spec/23 §5.5: sys.wait_any(procs: list<process>, timeout_ms) → index of an ended process, -1
+    sys.builtinFuncs["wait_any"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+        llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+        llvm::Type* i32 = ctx.builder.getInt32Ty();
+        if (args.empty()) return ctx.ir_gen->getInt32(-1);
+        llvm::Value* procs = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+        if (procs->getType()->isStructTy()) {                 // a stack list value: pass its address
+            llvm::AllocaInst* tmp = ctx.createEntryAlloca(procs->getType());
+            ctx.builder.CreateStore(procs, tmp);
+            procs = tmp;
+        }
+        llvm::Value* wait = args.size() > 1 ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1])) : ctx.builder.getInt32(-1);
+        if (wait->getType()->isIntegerTy() && wait->getType() != i32) wait = ctx.builder.CreateIntCast(wait, i32, true);
+        return ctx.ir_gen->wrap(ctx.builder.CreateCall(ctx.getFunction("aiml_sys_wait_any", i32, {i8p, i32}),
+                                                       {ctx.builder.CreateBitCast(procs, i8p), wait}));
+    };
+    // spec/23 §5.7: sys.catch_signals("INT,TERM") → 0 / -1;  sys.caught_signal() → last caught, cleared
+    sys.builtinFuncs["catch_signals"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+        llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+        llvm::Value* names = args.empty() ? static_cast<llvm::Value*>(ctx.builder.CreateGlobalStringPtr(""))
+                                          : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+        return ctx.ir_gen->wrap(ctx.builder.CreateCall(ctx.getFunction("aiml_sys_catch_signals", ctx.builder.getInt32Ty(), {i8p}), {names}));
+    };
+    sys.builtinFuncs["caught_signal"] = [](CompilerContext& ctx, const std::vector<IRValue*>&) -> IRValue* {
+        return ctx.ir_gen->wrap(ctx.builder.CreateCall(ctx.getFunction("aiml_sys_caught_signal", ctx.builder.getInt32Ty(), {}), {}));
     };
 
     // spec/23 §5.4: sys.process_attach(pid, status_file) → process (re-acquire a detached job)
@@ -2106,6 +2133,19 @@ void registerBuiltins(CompilerContext& ctx) {
     procInfo.builtinMethods["wait"]          = procCall("process_wait", rI32, -1);
     procInfo.builtinMethods["kill"]          = procCall("process_kill", rVoid, -1);
     procInfo.builtinMethods["running"]       = procCall("aiml_process_running", rBool, -1);
+    // spec/23 §5.2: proc.signal(sig) → i32 (0 sent, -1 not)
+    procInfo.builtinMethods["signal"] = [](CompilerContext& ctx, llvm::Value* baseAlloca,
+        AIML::AST::CallExpr* call, std::function<IRValue*(AIML::AST::Expr*)> evalExpr) -> IRValue* {
+        llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+        llvm::Type* i32 = ctx.builder.getInt32Ty();
+        llvm::Value* sig = ctx.builder.getInt32(15);
+        if (call && !call->args.empty())
+            if (IRValue* a = evalExpr(call->args[0].get())) sig = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a));
+        if (sig->getType()->isIntegerTy() && sig->getType() != i32) sig = ctx.builder.CreateIntCast(sig, i32, true);
+        llvm::Value* procPtr = ctx.builder.CreateLoad(i8p, baseAlloca);
+        return ctx.ir_gen->wrap(ctx.builder.CreateCall(ctx.getFunction("aiml_process_signal", i32, {i8p, i32}), {procPtr, sig}));
+    };
+
     procInfo.builtinMethods["eof"]           = procCall("aiml_process_eof", rBool, -1);
     procInfo.builtinMethods["pid"]           = procCall("aiml_process_pid", rI64, -1);
     procInfo.builtinMethods["returncode"]    = procCall("aiml_process_returncode", rI32, -1);
