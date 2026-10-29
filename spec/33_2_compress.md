@@ -22,6 +22,8 @@ Archives:
 | Format   | Create                   | Extract                   | Dep |
 |----------|--------------------------|---------------------------|-----|
 | tar.gz   | `compress.tar_gz`        | `compress.untar_gz`       | zlib + POSIX tar |
+| tar, tar.gz, tar.xz, tar.zst | — | `compress.untar` (§3.7a) | zlib, liblzma, libzstd |
+| ar (`.deb`) | — | `compress.unar` (§3.7a) | — |
 | zip      | `compress.zip`           | `compress.unzip`          | libzip or minizip |
 
 ---
@@ -36,7 +38,9 @@ compress.<algo>(data, level)         → buffer<u8>   Optional: compression leve
 
 # Archive functions (filesystem)
 compress.tar_gz(src, dst)            → i32          0 = ok; src: path (directory or file), dst: path (.tar.gz)
-compress.untar_gz(src, dst_dir)      → i32          0 = ok; src: .tar.gz, dst_dir: target directory
+compress.untar_gz(src, dst_dir)      → i32          0 = ok; the same as compress.untar
+compress.untar(src, dst_dir)         → i32          0 = ok; any tar, plain or gz/xz/zstd (§3.7a)
+compress.unar(src, dst_dir)          → i32          0 = ok; members of an ar archive (§3.7a)
 compress.zip(src, dst)               → i32          0 = ok; src: path, dst: .zip
 compress.unzip(src, dst_dir)         → i32          0 = ok
 ```
@@ -146,6 +150,38 @@ compress.unzip(src, dst_dir)         → i32          0 = ok
 - decl: [rc2, i32, { call: [compress.untar_gz, dst, out_dir] }]
 - print: ["untar rc: ${rc2}"]
 ```
+
+### 3.7a Extracting any tar, and ar archives (F33-2-10 … F33-2-16)
+
+`compress.untar(src, dst_dir)` reads a tar archive — uncompressed, gzip, xz or zstd,
+recognised by the first bytes, not by the file name — and writes it below `dst_dir`
+(created if missing).  It is what unpacks a Debian package's `data.tar.xz`:
+
+```aiml
+- decl: [rc, i32, { call: [compress.unar, "zlib1g_1.3.deb", "/tmp/deb"] }]   # debian-binary, control.tar.zst, data.tar.xz
+- decl: [rc2, i32, { call: [compress.untar, "/tmp/deb/data.tar.xz", "/tmp/root"] }]
+```
+
+- **Formats (F33-2-10):** ustar (with the 155-byte name prefix), GNU long names and
+  long link targets (`L` / `K`), pax headers (`x`; `path`, `linkpath`, `size`; global
+  `g` headers are skipped), base-256 sizes.
+- **Entries (F33-2-11):** files, directories, symbolic links, hard links (to an entry
+  already extracted).  Character/block devices and FIFOs are skipped (they need root and
+  mean nothing in a build tree).
+- **Metadata (F33-2-12):** permission bits (`0777`, no setuid/setgid) and the
+  modification time are restored; owners are not.
+- **Safety (F33-2-13):** an entry whose path is absolute, contains `..` that leaves
+  `dst_dir`, or passes through a symbolic link is refused; so is a hard link to outside.
+  A refused entry stops the extraction with `-4` — an archive that tries is not trusted
+  for its other entries either.
+- **Result (F33-2-14):** `0` ok; `-1` bad arguments, `-2` the archive cannot be opened,
+  `-3` corrupt / truncated / unsupported compression, `-4` an unsafe entry, `-5` a file
+  could not be written.
+- `compress.untar_gz` is the same function (kept for existing code).
+
+`compress.unar(src, dst_dir)` extracts the members of a `!<arch>` archive (the `.deb`
+container): GNU and BSD name forms, each member as a plain file directly in `dst_dir`;
+a member name with `/` or `..` is refused (`-4`).  Same result codes (F33-2-15).
 
 ### 3.8 zip
 
