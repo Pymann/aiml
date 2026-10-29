@@ -80,7 +80,7 @@ deviation, not as contract: new code writes the `cast` explicitly.
 
 | Site | Implicit conversions performed |
 |---|---|
-| Function / method arguments (`ast_compiler_call.cpp` ~870) | integer widening, `f32`→`f64`, integer→float, `f64`→`f32` |
+| Function / method arguments (`Compiler::convertNumericArg`) | integer resize, integer→float, float↔float; a **real for an integer parameter is a compile error** (since 2026-10-29) |
 | `return` value (`ast_compiler_stmt.cpp` ~4904) | integer→float |
 | Default-value stores and member stores (`ast_compiler_stmt.cpp` ~158, ~2636, ~3571, ~3915, ~4207) | integer↔integer, `bool`→integer, integer→float, float↔float, **float→integer** |
 | List / map / array literal elements (`ast_compiler_stmt.cpp` ~909, ~1197, ~1327, ~2286, ~2317) | integer resize, integer→float |

@@ -1,0 +1,29 @@
+# Child program of tests/test_lang_basics.aiml: prints what sys.arg_dump made of
+# its command line, one field per line.
+
+- model:
+    name: ChildOpts
+    fields:
+      - [verbose, bool, false]
+      - [jobs, i32, 1]
+      - [level, i8, 0]
+      - [seed, i64, 0]
+      - [ratio, f64, 0.0]
+      - [name, string, "none"]
+      - [positional, list<string>, []]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [opts, ChildOpts]
+      - call: [sys.arg_dump, opts]
+      - decl: [ratio_x100, i32, { call: [math.round, { "*": [opts.ratio, 100.0] }] }]
+      - print: ["argc=${{ call: [sys.arg_count] }}"]
+      - decl: [verbose, i32, { cast: [opts.verbose, i32] }]
+      - decl: [level, i32, { cast: [opts.level, i32] }]
+      - decl: [words, list<string>, opts.positional]
+      - decl: [rest, string, { call: [words.join, ","] }]
+      - print: ["verbose=${verbose} jobs=${opts.jobs} level=${level} seed=${opts.seed} ratio=${ratio_x100} name=${opts.name}"]
+      - print: ["positional=${rest}"]
+      - return: 0

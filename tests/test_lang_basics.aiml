@@ -1,0 +1,77 @@
+# SPEC: 10_collections
+# Small building blocks for command-line tools:
+#   spec/09 F09-30 string.contains        spec/10 F10-20 sort O(n log n), stable
+#   spec/10 F10-21 list<string>.join      spec/10 F10-22 map<string:V>.keys
+#   spec/23 F23-60 sys.arg_count          spec/23 F23-61 sys.arg_dump: every field
+#   width, --name=value, switches, --, positional
+# Expected exit code: 0
+
+- import: "tests/_cross/check.aiml"
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [chk, ptr<Checker>, { new: Checker }]
+
+      # ── string.contains ──
+      - decl: [flags, string, "-O2 -Wall"]
+      - call: [chk.expect_i, "contains", { call: [flags.contains, "-Wall"] }, 1]
+      - call: [chk.expect_i, "does not contain", { call: [flags.contains, "-g"] }, 0]
+      - call: [chk.expect_i, "empty needle", { call: [flags.contains, ""] }, 1]
+
+      # ── join / keys ──
+      - decl: [parts, list<string>, ["a", "b", "c"]]
+      - call: [chk.expect_s, "join", { call: [parts.join, ", "] }, "a, b, c"]
+      - decl: [nothing, list<string>]
+      - call: [chk.expect_s, "join of nothing", { call: [nothing.join, "-"] }, ""]
+      - decl: [ages, map<string:i32>, {zoe: 3, adam: 1, mia: 2}]
+      - decl: [names, list<string>, { call: [ages.keys] }]
+      - call: [chk.expect_s, "keys in byte order", { call: [names.join, " "] }, "adam mia zoe"]
+
+      # ── sort: many elements, stable, descending, strings, floats ──
+      - decl: [many, list<i32>]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 20000] }
+          body:
+            - call: [many.push, { "%": [{ "*": [idx, 7919] }, 20011] }]
+            - set: [idx, { +: [idx, 1] }]
+      - call: [many.sort]
+      - decl: [ordered, i32, 1]
+      - set: [idx, 1]
+      - while:
+          condition: { lt: [idx, many.len] }
+          body:
+            - if: { condition: { gt: [{ at: [many, { -: [idx, 1] }] }, { at: [many, idx] }] }, then: [{ set: [ordered, 0] }] }
+            - set: [idx, { +: [idx, 1] }]
+      - call: [chk.expect_i, "20000 ints sorted", ordered, 1]
+      - decl: [words, list<string>, ["pear", "Apple", "fig", "apple"]]
+      - call: [words.sort]
+      - call: [chk.expect_s, "strings by byte order", { call: [words.join, " "] }, "Apple apple fig pear"]
+      - call: [words.sort_desc]
+      - call: [chk.expect_s, "descending", { call: [words.join, " "] }, "pear fig apple Apple"]
+      - decl: [reals, list<f64>, [2.5, -1.0, 0.5]]
+      - call: [reals.sort]
+      - decl: [smallest, f64, { at: [reals, 0] }]
+      - call: [chk.expect_i, "f64 sorted", { cast: [{ call: [math.round, smallest] }, i64] }, -1]
+      - decl: [bytes, list<u8>, [200, 3, 100]]
+      - call: [bytes.sort]
+      - decl: [biggest, u8, { at: [bytes, 2] }]
+      - call: [chk.expect_i, "u8 compares unsigned", biggest, 200]
+
+      # ── command line, in a child: arg_count + arg_dump ──
+      - decl: [argv, list<string>]
+      - call: [argv.push, { call: [sys.exe_path] }]
+      - decl: [rest, list<string>, ["-r", "tests/_cross/argdump_child.aiml", "--", "--verbose", "build", "--jobs", "8", "--level=3", "--seed", "-5", "--ratio", "0.25", "--name=demo", "src", "--", "--not-a-flag"]]
+      - call: [argv.extend, rest]
+      - decl: [child, process, { call: [sys.exe, argv, { capture: true }] }]
+      - call: [chk.expect_i, "child ran", { call: [child.wait] }, 0]
+      - decl: [said, string, child.stdout_buffer]
+      - call: [chk.expect_has, "arg_count", said, "argc=14"]
+      - call: [chk.expect_has, "every field in its width", said, "verbose=1 jobs=8 level=3 seed=-5 ratio=25 name=demo"]
+      - call: [chk.expect_has, "positional and --", said, "positional=build,src,--not-a-flag"]
+
+      - if: { condition: { gt: [chk.fails, 0] }, then: [{ print: ["FAIL lang_basics (${chk.fails})"] }, { return: 1 }] }
+      - print: ["PASS lang_basics"]
+      - return: 0

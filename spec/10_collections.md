@@ -48,11 +48,13 @@
                                  # Sonst haelt das Ziel freigegebene Zeiger, sobald die
                                  # Quelle stirbt.
 - call: [scores.reverse]         # in-place reverse
-- call: [scores.sort]            # in-place ascending, stable insertion sort
+- call: [scores.sort]            # in-place ascending, stable, O(n log n) (F10-20)
 - call: [scores.sort_desc]       # in-place descending
 - call: [scores.shuffle]         # in-place Fisher-Yates (uses math.random_int;
                                  # order is non-deterministic — not replay-safe)
-# sort/sort_desc support only int, enum, float and string element types.
+# sort/sort_desc support only int, enum, float, bool and string element types.
+# Strings sort by byte order (strcmp); unsigned element types compare unsigned.
+- decl: [line, string, { call: [kinds.join, ", "] }]   # list<string> only: "beast, wraith, construct" (F10-21)
 # Floats: ascending puts NaN toward the end.  shuffle/reverse/extend work for
 # any element type (whole values are moved, no comparison needed).
 
@@ -88,6 +90,7 @@
 - call: [users.remove, "alice"]                # raises MissingKeyError if key not found
 - call: [users.clear]
 - set: [len, users.len]
+- decl: [names, list<string>, { call: [users.keys] }]   # map<string:V> only: every key, byte order (F10-22)
 
 # Existence check via get() + null comparison:
 - set: [maybe_alice, { call: [users.get, "alice"] }]

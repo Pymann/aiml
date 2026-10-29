@@ -1,4 +1,5 @@
 #include "list_impl.h"
+#include "../sys/collection_runtime.h"   // AIML_SORT_* kinds
 #include <iostream>
 
 namespace ListImpl {
@@ -568,60 +569,28 @@ namespace ListImpl {
         ctx.builder.SetInsertPoint(exit);
     }
 
-    // Stable insertion sort in IR.  ascending: shift while data[j] > key
-    // (key < data[j]); descending: shift while data[j] < key.
+    // spec/10 F10-20: a stable O(n log n) sort in the runtime (aiml_list_sort).
     void sortList(CompilerContext& ctx, llvm::Value* listPtr, llvm::Type* elemType,
                   const std::string& elemTypeName, bool descending) {
-        llvm::Function* pf = ctx.builder.GetInsertBlock()->getParent();
-        llvm::Value* size = getSize(ctx, listPtr);
-        llvm::Value* iVar = ctx.createEntryAlloca(ctx.builder.getInt32Ty(), "lsrt_i");
-        llvm::Value* jVar = ctx.createEntryAlloca(ctx.builder.getInt32Ty(), "lsrt_j");
-        llvm::Value* keyVar = ctx.createEntryAlloca(elemType, "lsrt_key");
-        ctx.builder.CreateStore(ctx.builder.getInt32(1), iVar);
-        auto* oHead = llvm::BasicBlock::Create(ctx.context, "lsrt_ohead", pf);
-        auto* oBody = llvm::BasicBlock::Create(ctx.context, "lsrt_obody", pf);
-        auto* iHead = llvm::BasicBlock::Create(ctx.context, "lsrt_ihead", pf);
-        auto* iCmp  = llvm::BasicBlock::Create(ctx.context, "lsrt_icmp", pf);
-        auto* iBody = llvm::BasicBlock::Create(ctx.context, "lsrt_ibody", pf);
-        auto* iDone = llvm::BasicBlock::Create(ctx.context, "lsrt_idone", pf);
-        auto* exit  = llvm::BasicBlock::Create(ctx.context, "lsrt_exit", pf);
-        ctx.builder.CreateBr(oHead);
-        // outer: for i = 1; i < size; i++
-        ctx.builder.SetInsertPoint(oHead);
-        llvm::Value* iVal = ctx.builder.CreateLoad(ctx.builder.getInt32Ty(), iVar, "i");
-        ctx.builder.CreateCondBr(ctx.builder.CreateICmpSLT(iVal, size), oBody, exit);
-        ctx.builder.SetInsertPoint(oBody);
-        llvm::Value* key = ctx.builder.CreateLoad(elemType, slotPtr(ctx, listPtr, iVal, elemType), "key");
-        ctx.builder.CreateStore(key, keyVar);
-        ctx.builder.CreateStore(ctx.builder.CreateSub(iVal, ctx.builder.getInt32(1)), jVar);
-        ctx.builder.CreateBr(iHead);
-        // inner head: check j >= 0 FIRST (no OOB element load when j == -1).
-        ctx.builder.SetInsertPoint(iHead);
-        llvm::Value* jVal = ctx.builder.CreateLoad(ctx.builder.getInt32Ty(), jVar, "j");
-        ctx.builder.CreateCondBr(ctx.builder.CreateICmpSGE(jVal, ctx.builder.getInt32(0)), iCmp, iDone);
-        // inner cmp: j >= 0 guaranteed → safe to load data[j] and compare.
-        ctx.builder.SetInsertPoint(iCmp);
-        llvm::Value* keyV = ctx.builder.CreateLoad(elemType, keyVar, "keyv");
-        llvm::Value* atJ  = ctx.builder.CreateLoad(elemType, slotPtr(ctx, listPtr, jVal, elemType), "atj");
-        llvm::Value* shift = descending
-            ? emitElemLt(ctx, atJ, keyV, elemType, elemTypeName)   // data[j] < key
-            : emitElemLt(ctx, keyV, atJ, elemType, elemTypeName);  // key < data[j]
-        ctx.builder.CreateCondBr(shift, iBody, iDone);
-        ctx.builder.SetInsertPoint(iBody);
-        // data[j+1] = data[j]
-        llvm::Value* jp1 = ctx.builder.CreateAdd(jVal, ctx.builder.getInt32(1));
-        ctx.builder.CreateStore(atJ, slotPtr(ctx, listPtr, jp1, elemType));
-        ctx.builder.CreateStore(ctx.builder.CreateSub(jVal, ctx.builder.getInt32(1)), jVar);
-        ctx.builder.CreateBr(iHead);
-        ctx.builder.SetInsertPoint(iDone);
-        // data[j+1] = key
-        llvm::Value* jDone = ctx.builder.CreateLoad(ctx.builder.getInt32Ty(), jVar, "jd");
-        llvm::Value* keyF  = ctx.builder.CreateLoad(elemType, keyVar, "keyf");
-        ctx.builder.CreateStore(keyF, slotPtr(ctx, listPtr,
-            ctx.builder.CreateAdd(jDone, ctx.builder.getInt32(1)), elemType));
-        ctx.builder.CreateStore(ctx.builder.CreateAdd(iVal, ctx.builder.getInt32(1)), iVar);
-        ctx.builder.CreateBr(oHead);
-        ctx.builder.SetInsertPoint(exit);
+        int kind = 0;
+        if (elemTypeName == "string") kind = AIML_SORT_STRING;
+        else if (elemType->isFloatTy()) kind = AIML_SORT_F32;
+        else if (elemType->isDoubleTy()) kind = AIML_SORT_F64;
+        else if (elemType->isIntegerTy()) {
+            const bool isUnsigned = !elemTypeName.empty() && elemTypeName[0] == 'u';
+            switch (elemType->getIntegerBitWidth()) {
+                case 8:  kind = isUnsigned || elemTypeName == "bool" ? AIML_SORT_U8 : AIML_SORT_I8; break;
+                case 16: kind = isUnsigned ? AIML_SORT_U16 : AIML_SORT_I16; break;
+                case 32: kind = isUnsigned ? AIML_SORT_U32 : AIML_SORT_I32; break;
+                case 64: kind = isUnsigned ? AIML_SORT_U64 : AIML_SORT_I64; break;
+                default: break;
+            }
+        }
+        if (!kind) return;
+        llvm::Type* p = llvm::PointerType::get(ctx.context, 0);
+        llvm::Type* i32 = ctx.builder.getInt32Ty();
+        ctx.builder.CreateCall(ctx.getFunction("aiml_list_sort", ctx.builder.getVoidTy(), {p, i32, i32}),
+                               {listPtr, ctx.builder.getInt32(kind), ctx.builder.getInt32(descending ? 1 : 0)});
     }
 
     void shuffle(CompilerContext& ctx, llvm::Value* listPtr, llvm::Type* elemType) {

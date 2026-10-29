@@ -87,6 +87,14 @@ Returns `1` if the string ends with `suffix`, `0` otherwise. Returns `0` if the 
 
 ---
 
+### `string.contains(needle)` → `i32`
+
+`1` if `needle` occurs in the string (an empty needle always does), else `0` (F09-30).
+
+```yaml
+- if: { condition: { eq: [{ call: [flags.contains, "-O2"] }, 1] }, then: [...] }
+```
+
 ### `string.index_of(needle)` → `i32`
 
 Returns the byte offset of the **first** occurrence of `needle`, or `-1` if not found.
