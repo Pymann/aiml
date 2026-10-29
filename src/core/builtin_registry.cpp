@@ -4607,6 +4607,47 @@ void registerBuiltins(CompilerContext& ctx) {
         };
     }
 
+    // ── spec/23 §5.8: working directory, environment, files (src/sys/os_runtime.cpp) ──
+    {
+        auto& sysNs = ctx.namespaces["sys"];
+        auto& ioNs  = ctx.namespaces["io"];
+        // name(text...) → i32
+        auto textToI32 = [](const char* sym, size_t arity) {
+            return [sym, arity](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+                llvm::Type* p = ctx.builder.getInt8Ty()->getPointerTo();
+                std::vector<llvm::Type*> params(arity, p);
+                std::vector<llvm::Value*> vals;
+                for (size_t i = 0; i < arity; ++i) vals.push_back(argOrEmpty(ctx, args, i));
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(ctx.getFunction(sym, ctx.builder.getInt32Ty(), params), vals));
+            };
+        };
+        // name(text) → string (managed)
+        auto textToText = [](const char* sym) {
+            return [sym](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+                llvm::Type* p = ctx.builder.getInt8Ty()->getPointerTo();
+                return ownedStringResult(ctx, ctx.builder.CreateCall(ctx.getFunction(sym, p, {p}), {argOrEmpty(ctx, args, 0)}));
+            };
+        };
+        // name(i32) → i32
+        auto intToI32 = [](const char* sym) {
+            return [sym](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+                llvm::Type* i32 = ctx.builder.getInt32Ty();
+                llvm::Value* v = args.empty() ? ctx.builder.getInt32(-1) : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+                if (v->getType()->isIntegerTy() && v->getType() != i32) v = ctx.builder.CreateIntCast(v, i32, true);
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(ctx.getFunction(sym, i32, {i32}), {v}));
+            };
+        };
+        sysNs.builtinFuncs["chdir"]    = textToI32("aiml_sys_chdir", 1);
+        sysNs.builtinFuncs["setenv"]   = textToI32("aiml_sys_setenv", 2);
+        sysNs.builtinFuncs["unsetenv"] = textToI32("aiml_sys_unsetenv", 1);
+        sysNs.builtinFuncs["isatty"]   = intToI32("aiml_sys_isatty");
+        ioNs.builtinFuncs["realpath"]  = textToText("aiml_io_realpath");
+        ioNs.builtinFuncs["mkdtemp"]   = textToText("aiml_io_mkdtemp");
+        ioNs.builtinFuncs["copy"]      = textToI32("aiml_io_copy", 2);
+        ioNs.builtinFuncs["lock"]      = textToI32("aiml_io_lock", 1);
+        ioNs.builtinFuncs["unlock"]    = intToI32("aiml_io_unlock");
+    }
+
     // ── regex namespace (spec/09_2) and globbing (spec/42_1) ──────────────────
     // Runtime: src/sys/regex_runtime.cpp, src/sys/glob_runtime.cpp.  Strings come
     // back as managed references (statement temps), lists as list<string> filled
