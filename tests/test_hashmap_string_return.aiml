@@ -1,0 +1,113 @@
+# SPEC: 69_hashmap
+# Regression: hashmap<string:string>.get aus einer Methode zurückgeben und im Aufrufer binden.
+# Auslöser: IRGENDEINE Funktion mit Kurznamen `get`, die einen string liefert (hier Notebook.get).
+# Der Compiler erkannte `return: { call: [x.get, k] }` dann nicht mehr als geliehenen Zugriff.
+# Vorher war get ein geliehener Zeiger: die aufrufende Methode übernahm ihn als eigenen Wert und
+# gab ihn am Ende frei, während die Tabelle ihn noch hielt -> danach Müll (gefunden von cai,
+# AimlStructureLearner.role / main_program).
+
+- class:
+    name: Notebook
+    members:
+      - [text, string, "notiz"]
+    methods:
+      - def:
+          name: get
+          args: []
+          return: string
+          body:
+            - return: "${<.text}!"
+
+- class:
+    name: RoleTable
+    members:
+      - [roles, "hashmap<string:string>"]
+      - [names, list<string>, null]
+    methods:
+      - def:
+          name: role
+          args: [[name, string]]
+          return: string
+          body:
+            - return: { call: [<.roles.get, name] }
+      - def:
+          name: keep
+          args: [[name, string], [value, string]]
+          body:
+            - call: [<.roles.put, name, value]
+      - def:
+          name: name_at
+          args: [[index, i32]]
+          return: string
+          body:
+            - return: { call: [<.names.get, index] }
+      - def:
+          name: render_list
+          args: []
+          return: string
+          body:
+            - decl: [first, string, { call: [<.name_at, 0] }]
+            - return: "${first}"
+      # wie main_program in cai: mehrere Rollen lesen, zu einem Text zusammensetzen
+      - def:
+          name: render
+          args: []
+          return: string
+          body:
+            - decl: [block, string, { call: [<.role, "programm"] }]
+            - decl: [named, string, { call: [<.role, "programm.name"] }]
+            - return: "${block}:${named}"
+
+- def:
+    name: main
+    return: i32
+    static_off: ["str_cmp"]
+    body:
+      - decl: [table, ptr<RoleTable>, { new: RoleTable }]
+      - decl: [found, list<string>, ["def", "name"]]
+      - decl: [slot, i32, 0]
+      - while: [{ lt: [slot, 1] }]
+        body:
+          - decl: [first, string, { call: [found.get, 0] }]
+          - decl: [second, string, { call: [found.get, 1] }]
+          - call: [table.keep, "programm", first]
+          - call: [table.keep, "programm.name", second]
+          - set: [slot, { +: [slot, 1] }]
+      - decl: [round, i32, 0]
+      - decl: [bad, i32, 0]
+      - while: [{ lt: [round, 20] }]
+        body:
+          - decl: [text, string, { call: [table.render] }]
+          - if: [{ neq: [text, "def:name"] }, true]
+            then:
+              - set: [bad, { +: [bad, 1] }]
+          - set: [round, { +: [round, 1] }]
+      - call: [table.names.push, "alpha"]
+      - decl: [list_bad, i32, 0]
+      - set: [round, 0]
+      - while: [{ lt: [round, 20] }]
+        body:
+          - decl: [item, string, { call: [table.render_list] }]
+          - if: [{ neq: [item, "alpha"] }, true]
+            then:
+              - set: [list_bad, { +: [list_bad, 1] }]
+          - set: [round, { +: [round, 1] }]
+      - decl: [book, ptr<Notebook>, { new: Notebook }]
+      - decl: [note, string, { call: [book.get] }]
+      - free: [book]
+      - if: [{ gt: [list_bad, 0] }, true]
+        then:
+          - print: ["FAIL list<string>.get return: ${list_bad}/20 falsche Texte"]
+          - return: 1
+      - decl: [missing, string, { call: [table.role, "fehlt"] }]
+      - if: [{ gt: [bad, 0] }, true]
+        then:
+          - print: ["FAIL hashmap string return: ${bad}/20 falsche Texte"]
+          - return: 1
+      - if: [{ neq: [missing, ""] }, true]
+        then:
+          - print: ["FAIL fehlender Schlüssel: '${missing}'"]
+          - return: 1
+      - free: [table]
+      - print: ["PASS test_hashmap_string_return"]
+      - return: 0

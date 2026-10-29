@@ -53,9 +53,12 @@ Quote the type in YAML (`"hashmap<string:i32>"`), as with `map`.
 | `clear()` | — | removes all entries |
 | `keys()` | `list<K>` | sorted, so the result is deterministic whatever the hash order |
 
-String values: `put` stores its own RC copy. `get` returns a **borrow**, and a local bound to it
-(`decl: [s, string, { call: [t.get, k] }]`) increfs it, so `s` stays valid after a later
-`put` or `remove` (spec/61 §7).
+String values: `put` stores its own RC copy. `get` returns a **borrow** (like `list.get` and
+`map.get`), and a local bound to it (`decl: [s, string, { call: [t.get, k] }]`) increfs it, so `s`
+stays valid after a later `put` or `remove` (spec/61 §7).  `return: { call: [<.t.get, k] }` from a
+method hands the caller its own copy: a `get` on a container receiver is a borrowing accessor even
+if some user function with the short name `get` returns a string (fixed 29.10.2026,
+tests/test_hashmap_string_return.aiml).
 
 ## 4. Lifetime (spec/61, Class 5 like `chan<T>`)
 

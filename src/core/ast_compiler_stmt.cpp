@@ -713,6 +713,49 @@ void Compiler::releaseContainerCopyTemp(llvm::Value* tempSlot, bool tempOwned, c
                {i8p, i8p, ctx.builder.getInt32Ty()}), { tempSlot, d, ctx.builder.getInt32(nc) });
 }
 
+// Typ des Empfängers von `a.b.c.method` (Pfad vor dem letzten Punkt) über Symboltabelle und
+// Klassenmitglieder; "" wenn unbekannt (z. B. Namespace-Funktion).
+static std::string receiverTypeName(const CompilerContext& ctx, const std::string& functionName) {
+    size_t last = functionName.rfind('.');
+    if (last == std::string::npos) return "";
+    std::string path = functionName.substr(0, last);
+    if (path.rfind("<.", 0) == 0) path = "this." + path.substr(2);
+    size_t dot = path.find('.');
+    auto it = ctx.symbol_table.find(path.substr(0, dot));
+    if (it == ctx.symbol_table.end()) return "";
+    std::string tn = it->second.typeName;
+    while (dot != std::string::npos) {
+        if (tn.rfind("ptr<", 0) == 0 || tn.rfind("ref<", 0) == 0) tn = tn.substr(4, tn.size() - 5);
+        else if (tn.rfind("shared<", 0) == 0) tn = tn.substr(7, tn.size() - 8);
+        auto cls = ctx.classes.find(tn);
+        if (cls == ctx.classes.end()) return "";
+        size_t next = path.find('.', dot + 1);
+        auto member = cls->second.members.find(path.substr(dot + 1, next == std::string::npos ? next : next - dot - 1));
+        if (member == cls->second.members.end()) return "";
+        tn = member->second.typeName;
+        dot = next;
+    }
+    return tn;
+}
+
+static bool isContainerTypeName(const std::string& tn) {
+    return tn.rfind("list<", 0) == 0 || tn.rfind("map<", 0) == 0 || tn.rfind("hashmap<", 0) == 0
+        || tn.rfind("cascade<", 0) == 0 || tn.rfind("array<", 0) == 0;
+}
+
+// `.get/.at/.first/.last` (Kurzname sn) ist ein geliehener Elementzugriff, wenn der Empfänger ein
+// Container ist — unabhängig davon, ob irgendeine Funktion mit demselben Kurznamen ein Producer ist.
+// Vorher entschied nur ownsReturnMatches(sn): gab es irgendwo eine Methode `get` mit string-Rückgabe
+// (z. B. KnowledgeStore.get), galt `return: { call: [<.liste.get, i] }` als frische eigene Referenz;
+// der Aufrufer gab den geliehenen String frei, die Liste las danach Müll
+// (tests/test_hashmap_string_return.aiml, gefunden von cai am 29.10.2026).
+static bool isBorrowingAccessor(const CompilerContext& ctx, const std::string& functionName,
+                                const std::string& sn, const std::string& type) {
+    if (!(sn == "get" || sn == "at" || sn == "first" || sn == "last")) return false;
+    if (isContainerTypeName(receiverTypeName(ctx, functionName))) return true;
+    return !ctx.ownsReturnMatches(sn, type);
+}
+
 // spec/61 §5.7/§8: `.get/.at/.first/.last` on a container yields a BORROWED element handle; every
 // other container-returning call hands the caller an owning reference (producer or not).
 static bool isContainerAccessorCall(const CompilerContext& ctx, const Expr* e, const std::string& type) {
@@ -721,7 +764,7 @@ static bool isContainerAccessorCall(const CompilerContext& ctx, const Expr* e, c
     size_t dp = ce->functionName.rfind('.');
     if (dp == std::string::npos) return false;
     std::string sn = ce->functionName.substr(dp + 1);
-    return (sn == "get" || sn == "at" || sn == "first" || sn == "last") && !ctx.ownsReturnMatches(sn, type);
+    return isBorrowingAccessor(ctx, ce->functionName, sn, type);
 }
 
 void Compiler::emitListHandleDecl(DeclStmt* decl, bool isCascade) {
@@ -4649,9 +4692,7 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
         const std::string& fn = rc->functionName;
         size_t dp = fn.rfind('.');
         std::string sn = (dp == std::string::npos) ? fn : fn.substr(dp + 1);
-        retAccessorBorrow = dp != std::string::npos
-            && (sn == "get" || sn == "at" || sn == "first" || sn == "last")
-            && !ctx.ownsReturnMatches(sn, "string");
+        retAccessorBorrow = dp != std::string::npos && isBorrowingAccessor(ctx, fn, sn, "string");
     }
     bool retProducerBorrowedString =
         ctx.currentFunctionOwnsReturn && ctx.currentFunctionReturnType == "string"
