@@ -155,6 +155,14 @@ static llvm::BasicBlock* emitGuardMsg(CompilerContext& ctx, llvm::Value* flag,
     return continueBB;
 }
 
+namespace AIML { namespace AST {
+void aimlEmitThrowIf(CompilerContext& ctx, llvm::Value* cond, const std::string& excClass,
+                     llvm::Value* msgPtr) {
+    emitGuardMsg(ctx, ctx.builder.CreateZExt(cond, ctx.builder.getInt8Ty()), "guard_throw", "guard_ok",
+                 excClass, msgPtr);
+}
+}}
+
 // Emit a conditional check: if `flag` (i8) != 0, throw; else continue in `continueBB`.
 // Returns the new insert-point BB (continueBB) with builder already set.
 static llvm::BasicBlock* emitGuard(CompilerContext& ctx, llvm::Value* flag,
@@ -5960,7 +5968,7 @@ void registerBuiltins(CompilerContext& ctx) {
             ci.builtinMethods["body"]    = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr*, auto) -> IRValue* {
                 llvm::Function* fn = ctx.module().getFunction("aiml_http_resp_body");
                 if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getInt8Ty()->getPointerTo(), {ctx.builder.getInt8Ty()->getPointerTo()}, false), llvm::Function::ExternalLinkage, "aiml_http_resp_body", ctx.module());
-                return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {base}));
+                return ownedStringResult(ctx, ctx.builder.CreateCall(fn, {base}));   // a fresh copy (aiml_str_dup)
             };
             // headers field (returns AimlHttpMap* for chained dispatch)
             ci.builtinMethods["headers"] = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr*, auto) -> IRValue* {

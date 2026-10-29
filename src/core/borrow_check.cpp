@@ -129,9 +129,26 @@ struct BorrowChecker {
         if (auto* s = dynamic_cast<const SpawnExpr*>(e)) { for (auto& a : s->args) scanUses(a.get(), line); return; }
         if (auto* at = dynamic_cast<const AtExpr*>(e)) { scanUses(at->container.get(), line); for (auto& i : at->indices) scanUses(i.get(), line); return; }
         if (auto* si = dynamic_cast<const StringInterpolationExpr*>(e)) { for (auto& p : si->parts) scanUses(p.get(), line); return; }
-        if (auto* ne = dynamic_cast<const NewExpr*>(e)) { for (auto& kv : ne->initValues) scanUses(kv.second.get(), line); return; }
+        if (auto* ne = dynamic_cast<const NewExpr*>(e)) {
+            for (auto& kv : ne->initValues) {
+                scanUses(kv.second.get(), line);
+                // `{ new: T, field: p }` into an owning ptr<> member moves p (§6.2), like `set`.
+                std::string src = asPtrVar(kv.second.get());
+                if (!src.empty() && memberIsOwningPtr(ne->typeName, kv.first)) markMoved(src, line);
+            }
+            return;
+        }
         if (auto* na = dynamic_cast<const NewArrayExpr*>(e)) { scanUses(na->countExpr.get(), line); return; }
         if (auto* dl = dynamic_cast<const DictLiteralExpr*>(e)) { for (auto& kv : dl->entriesExpr) scanUses(kv.second.get(), line); return; }
+    }
+
+    bool memberIsOwningPtr(const std::string& cls, const std::string& field) {
+        auto ci = ctx.classes.find(cls);
+        if (ci == ctx.classes.end()) return false;
+        auto mi = ci->second.members.find(field);
+        if (mi == ci->second.members.end()) return false;
+        const std::string& t = mi->second.typeName;
+        return t.rfind("ptr<", 0) == 0 && t.back() == '>';
     }
 
     // Declared type of a dotted member target (`a.b.c`), "" when unknown.

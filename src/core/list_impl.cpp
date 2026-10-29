@@ -153,6 +153,26 @@ namespace ListImpl {
         return ctx.builder.CreateLoad(elemType, slotPtr, "getVal");
     }
 
+    void checkIndex(CompilerContext& ctx, llvm::Value* listPtr, llvm::Value* indexVal, bool allowEnd) {
+        llvm::Type* i32 = ctx.builder.getInt32Ty();
+        llvm::Value* idx = indexVal->getType() == i32 ? indexVal : ctx.builder.CreateSExtOrTrunc(indexVal, i32);
+        llvm::Value* size = getSize(ctx, listPtr);
+        llvm::Value* below = ctx.builder.CreateICmpSLT(idx, ctx.builder.getInt32(0), "idx_neg");
+        llvm::Value* above = allowEnd ? ctx.builder.CreateICmpSGT(idx, size, "idx_past")
+                                      : ctx.builder.CreateICmpSGE(idx, size, "idx_past");
+        llvm::Type* p = llvm::PointerType::get(ctx.context, 0);
+        llvm::Value* bad = ctx.builder.CreateOr(below, above, "idx_bad");
+        llvm::Function* pf = ctx.builder.GetInsertBlock()->getParent();
+        auto* msgBB = llvm::BasicBlock::Create(ctx.context, "idx_msg", pf);
+        auto* okBB  = llvm::BasicBlock::Create(ctx.context, "idx_fine", pf);
+        ctx.builder.CreateCondBr(bad, msgBB, okBB);
+        ctx.builder.SetInsertPoint(msgBB);       // the message is built only on the failing path
+        llvm::Value* msg = ctx.builder.CreateCall(ctx.getFunction("aiml_index_message", p, {i32, i32}), {idx, size});
+        AIML::AST::aimlEmitThrowIf(ctx, ctx.builder.getTrue(), "IndexOutOfBoundsException", msg);
+        ctx.builder.CreateBr(okBB);
+        ctx.builder.SetInsertPoint(okBB);
+    }
+
     llvm::Value* getElementPtr(CompilerContext& ctx, llvm::Value* listPtr, llvm::Value* indexVal, llvm::Type* elemType) {
          llvm::StructType* structType = getListStructType(ctx);
          

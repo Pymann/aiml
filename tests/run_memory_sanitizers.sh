@@ -231,6 +231,10 @@ probe "bytes file streaming: append_file / file_slice / copy_range / gzip_file /
     "$AIML_BIN" -r tests/test_bytes_stream.aiml
 probe "sys.deserialize: defaults, null, number conversion, errors with paths, bare containers, per-thread error (spec/29 §5.2d)" "sde" \
     "$AIML_BIN" -r tests/test_ser_defaults_errors.aiml
+probe "lists: out-of-range at/get/idx/remove/insert throw IndexOutOfBoundsException, catchable (spec/10 F10-23)" "lbd" \
+    "$AIML_BIN" -r tests/test_list_bounds.aiml
+probe "ptr moves in member initialisers + inline new upcast in put/push/return (spec/61 F61-80)" "nmu" \
+    "$AIML_BIN" -r tests/test_new_move_upcast.aiml
 probe "processes: sys.wait_any pool with captured output, signal, caught signals, stdin, list<process> release (spec/23 §5)" "ppl" \
     "$AIML_BIN" -r tests/test_process_pool.aiml
 probe "regex: match/search/find/find_all/replace/split, error text, linear time (spec/09_2)" "rgx" \

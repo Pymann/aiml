@@ -10,7 +10,9 @@
 
 # 2. Dynamic List (Strongly Typed)
 # Syntax: list<T>
-# Out-of-bounds access raises IndexOutOfBoundsException.
+# Out-of-bounds access raises IndexOutOfBoundsException (F10-23): `at`, `get`, `idx` writes,
+# `remove` (index in [0, len)) and `insert` (index in [0, len]); the message is "index 5 of 2".
+# Until 2026-10-29 `at`/`get` read past the end silently (garbage or 0).
 - decl: [scores, list<i32>]
 
 # List-Literal-Init: [v1, v2, ...] als 3. Element des decl. Der Compiler emittiert einen push
