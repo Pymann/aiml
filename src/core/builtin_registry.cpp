@@ -5954,7 +5954,7 @@ void registerBuiltins(CompilerContext& ctx) {
             ci.builtinMethods["body"]    = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr*, auto) -> IRValue* {
                 llvm::Function* fn = ctx.module().getFunction("aiml_http_resp_body");
                 if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getInt8Ty()->getPointerTo(), {ctx.builder.getInt8Ty()->getPointerTo()}, false), llvm::Function::ExternalLinkage, "aiml_http_resp_body", ctx.module());
-                return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {base}));
+                return ownedStringResult(ctx, ctx.builder.CreateCall(fn, {base}));   // a fresh copy (aiml_str_dup)
             };
             // headers field (returns AimlHttpMap* for chained dispatch)
             ci.builtinMethods["headers"] = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr*, auto) -> IRValue* {
