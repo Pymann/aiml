@@ -196,7 +196,7 @@ fields:
 
       # Jump
       - decl: [jumped, bool, { call: [input.action_pressed, "jump"] }]
-      - if: [{ ==: [jumped, true] }, true]
+      - if: [{ eq: [jumped, true] }, true]
         then:
           - call: [player_body.apply_impulse, { call: [math.vec3, 0.0, 500.0, 0.0] }]
 
@@ -222,7 +222,7 @@ fields:
     args: [[ray_origin, vec3], [ray_dir, vec3]]
     body:
       - decl: [hit, physics_hit, { call: [physics.raycast, world, ray_origin, ray_dir, 100.0] }]
-      - if: [{ ==: [hit.hit, true] }, true]
+      - if: [{ eq: [hit.hit, true] }, true]
         then:
           - print: ["Hit at distance: ", hit.distance]
           - call: [hit.body.apply_impulse, { call: [math.vec3, 0.0, 200.0, 0.0] }]

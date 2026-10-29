@@ -1215,14 +1215,14 @@ as it sets the hover state and mouse button snapshot for the current frame.
 
 # Check deck click
 - if:
-    condition: { "!=": [{ call: [deck_wesen.was_clicked, 0] }, 0] }
+    condition: { neq: [{ call: [deck_wesen.was_clicked, 0] }, 0] }
     then:
       - call: [log.info, "Card drawn from creature deck"]
 
 # Show hover preview
 - decl: [hov, prefab_instance, { call: [engine.get_hovered] }]
 - if:
-    condition: { "!=": [hov, 0] }
+    condition: { neq: [hov, 0] }
     then:
       - call: [preview_card.set_visible, 1]
   else:

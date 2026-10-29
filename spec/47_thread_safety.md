@@ -40,7 +40,7 @@ writes a mutex around `logging.info()`, no Go developer locks `sql.DB.Query()`.
 # NOT atomic — between has and set, another thread could delete the key:
 - set: [exists, { call: [kv.has, key] }]
 - if:
-    condition: { "==": [exists, 0] }
+    condition: { eq: [exists, 0] }
     then:
       - call: [kv.set, key, val]
 

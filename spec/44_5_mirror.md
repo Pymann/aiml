@@ -510,7 +510,7 @@ The wire payload for `PKT_RPC` is:
     then:
       - call: [handle_draw, rpc.arg]
 - if:
-    condition: { "==": [done, 0] }
+    condition: { eq: [done, 0] }
     then:
       - call: [time.sleep_ms, 16]
 
@@ -681,7 +681,7 @@ a simple poll loop works well:
 - decl: [found_nid, i32, -1]
 - decl: [ticks, i32, 0]
 - while:
-    condition: { "&&": [{ "==": [found_nid, -1] }, { "<": [ticks, 300] }] }
+    condition: { "&&": [{ eq: [found_nid, -1] }, { "<": [ticks, 300] }] }
     body:
       - call: [sess.update]
       - decl: [ev, mirror_event, { call: [sess.poll_event] }]
@@ -765,7 +765,7 @@ a simple poll loop works well:
 
       # RPC: take damage → forwarded to server
       - decl: [hit, bool, { call: [check_hit] }]
-      - if: [{ ==: [hit, true] }, true]
+      - if: [{ eq: [hit, true] }, true]
         then:
           - call: [my_player.take_damage, 10]   # → RPC to owner (server)
 ```
