@@ -1,4 +1,4 @@
-# SPEC: 68_hashmap
+# SPEC: 69_hashmap
 # hashmap<K:V> als Klassenfeld, Parameter, Rückgabewert und in Schleifen (Scope-Drop, retain/release).
 
 - class:

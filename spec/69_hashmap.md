@@ -1,4 +1,4 @@
-# 68 — `hashmap<K:V>`: hash table
+# 69 — `hashmap<K:V>`: hash table
 
 Status: implemented (native targets, JIT and AOT; the runtime is also listed in the WASM runtime).
 Compiler: `src/core/hashmap_impl.{h,cpp}`. Runtime: `src/sys/hashmap_runtime.cpp`.

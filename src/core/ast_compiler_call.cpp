@@ -3063,7 +3063,7 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
          LOG_ERROR("Unknown map method: " + methodName + " on " + className);
          return ctx.ir_gen->getInt32(0);
     }
-    // hashmap<K:V> methods (spec/68): put/get/add/contains/remove/len/clear/keys
+    // hashmap<K:V> methods (spec/69): put/get/add/contains/remove/len/clear/keys
     else if (HashmapImpl::isHashmapType(className)) {
         std::vector<llvm::Value*> raw;
         for (auto* a : argVals) raw.push_back(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a)));
