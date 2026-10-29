@@ -1332,6 +1332,7 @@ namespace AIML {
         if (typeName == "http_client_handle")   return llvm::Type::getInt8Ty(context)->getPointerTo();
         if (typeName == "http_session_handle")  return llvm::Type::getInt8Ty(context)->getPointerTo();
         if (typeName == "fs_options")           return llvm::Type::getInt8Ty(context)->getPointerTo();
+        if (typeName == "Globber")              return llvm::Type::getInt8Ty(context)->getPointerTo();   // spec/42_1
         
         // Unsigned aliases (LLVM types are sign-agnostic)
         if (typeName == "u8") return llvm::Type::getInt8Ty(context);

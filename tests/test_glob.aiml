@@ -1,0 +1,111 @@
+# SPEC: 42_1_globber
+# spec/42_1 — filesystem globbing:
+#   F42-1-1 io.globber: batches per directory, at most max_per_step, empty = done
+#   F42-1-2 io.glob: every match, sorted
+#   F42-1-3 io.glob_match: a path against a pattern, no filesystem
+#   F42-1-4 * ? [..] **, no leading-dot matches unless spelled out, trailing **
+#   F42-1-5 result paths keep the pattern's prefix
+#   F42-1-6 a missing base directory matches nothing
+# Expected exit code: 0
+
+- import: "tests/_cross/check.aiml"
+
+- def:
+    name: shown
+    args: [[parts, list<string>], [prefix, string]]
+    return: string
+    body:
+      - decl: [text, string, ""]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, parts.len] }
+          body:
+            - decl: [part, string, { call: [parts.get, idx] }]
+            - if: { condition: { gt: [idx, 0] }, then: [{ set: [text, "${text}|"] }] }
+            - set: [text, "${text}${{ call: [part.substr, prefix.len] }}"]
+            - set: [idx, { +: [idx, 1] }]
+      - return: [text]
+
+- def:
+    name: plant
+    args: [[root, string]]
+    body:
+      - call: [io.remove_all, root]
+      - call: [io.mkdir_all, "${root}/src/core/deep"]
+      - call: [io.mkdir_all, "${root}/src/.hidden"]
+      - call: [io.mkdir_all, "${root}/src/many"]
+      - call: [io.mkdir_all, "${root}/docs/sub"]
+      - decl: [names, list<string>, ["src/a.cpp", "src/b.h", "src/core/x.cpp", "src/core/deep/y.cpp", "src/.hidden/z.cpp", "src/.dot.cpp", "docs/r.md", "docs/sub/s.md", "src/many/f0.cpp", "src/many/f1.cpp", "src/many/f2.cpp", "src/many/f3.cpp", "src/many/f4.cpp", "src/lib7.so", "src/libx.so"]]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, names.len] }
+          body:
+            - decl: [name, string, { call: [names.get, idx] }]
+            - call: [io.write_file, "${root}/${name}", "x"]
+            - set: [idx, { +: [idx, 1] }]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [chk, ptr<Checker>, { new: Checker }]
+      - decl: [root, string, "/tmp/aiml_glob_test"]
+      - call: [plant, root]
+      - decl: [pre, string, "${root}/"]
+
+      # ── io.glob ──
+      - decl: [cpps, list<string>, { call: [io.glob, "${root}/src/**/*.cpp"] }]
+      - call: [chk.expect_s, "recursive, sorted, no hidden", { call: [shown, cpps, pre] }, "src/a.cpp|src/core/deep/y.cpp|src/core/x.cpp|src/many/f0.cpp|src/many/f1.cpp|src/many/f2.cpp|src/many/f3.cpp|src/many/f4.cpp"]
+      - decl: [dots, list<string>, { call: [io.glob, "${root}/src/.*"] }]
+      - call: [chk.expect_s, "a leading dot spelled out", { call: [shown, dots, pre] }, "src/.dot.cpp|src/.hidden"]
+      - decl: [libs, list<string>, { call: [io.glob, "${root}/src/lib[0-9].so"] }]
+      - call: [chk.expect_s, "character class", { call: [shown, libs, pre] }, "src/lib7.so"]
+      - decl: [below, list<string>, { call: [io.glob, "${root}/docs/**"] }]
+      - call: [chk.expect_s, "trailing ** lists everything below", { call: [shown, below, pre] }, "docs/r.md|docs/sub|docs/sub/s.md"]
+      - decl: [direct, list<string>, { call: [io.glob, "${root}/src/*/x.cpp"] }]
+      - call: [chk.expect_s, "wildcard directory segment", { call: [shown, direct, pre] }, "src/core/x.cpp"]
+      - decl: [missing, list<string>, { call: [io.glob, "/nonexistent-aiml-dir/*.x"] }]
+      - call: [chk.expect_i, "missing base: nothing", missing.len, 0]
+
+      # ── io.globber: one directory per batch, bounded ──
+      - decl: [walker, Globber, { call: [io.globber, "${root}/src/many/*.cpp", 2] }]
+      - decl: [sizes, string, ""]
+      - decl: [batch, list<string>, { call: [walker.next] }]
+      - while:
+          condition: { gt: [batch.len, 0] }
+          body:
+            - set: [sizes, "${sizes}${batch.len}@${{ call: [walker.location] }} "]
+            - set: [batch, { call: [walker.next] }]
+      - call: [chk.expect_s, "bounded batches, stable location", sizes, "2@${root}/src/many 2@${root}/src/many 1@${root}/src/many "]
+      - call: [chk.expect_i, "done after the empty batch", { call: [walker.done] }, 1]
+      - call: [chk.expect_s, "pattern kept", { call: [walker.pattern] }, "${root}/src/many/*.cpp"]
+      - call: [walker.free]
+
+      - decl: [tree, Globber, { call: [io.globber, "${root}/src/**/*.cpp", 100] }]
+      - decl: [seen, string, ""]
+      - decl: [total, i32, 0]
+      - decl: [step, list<string>, { call: [tree.next] }]
+      - while:
+          condition: { gt: [step.len, 0] }
+          body:
+            - decl: [where, string, { call: [tree.location] }]
+            - set: [seen, "${seen}${{ call: [where.substr, pre.len] }}:${step.len} "]
+            - set: [total, { +: [total, step.len] }]
+            - set: [step, { call: [tree.next] }]
+      - call: [chk.expect_s, "directory by directory, depth-first", seen, "src:1 src/core:1 src/core/deep:1 src/many:5 "]
+      - call: [chk.expect_i, "walker finds what io.glob finds", total, cpps.len]
+      - call: [tree.free]
+
+      # ── io.glob_match ──
+      - call: [chk.expect_i, "** = zero levels", { call: [io.glob_match, "src/**/*.cpp", "src/a.cpp"] }, 1]
+      - call: [chk.expect_i, "** = several levels", { call: [io.glob_match, "src/**/*.cpp", "src/x/y/a.cpp"] }, 1]
+      - call: [chk.expect_i, "** skips hidden levels", { call: [io.glob_match, "src/**/*.cpp", "src/.git/a.cpp"] }, 0]
+      - call: [chk.expect_i, "* not across /", { call: [io.glob_match, "*", "a/b"] }, 0]
+      - call: [chk.expect_i, "? is one character", { call: [io.glob_match, "test_?.json", "test_ab.json"] }, 0]
+      - call: [chk.expect_i, "negated class", { call: [io.glob_match, "lib[!0-9].so", "libx.so"] }, 1]
+      - call: [chk.expect_i, "escaped wildcard", { call: [io.glob_match, "a\\*b", "a*b"] }, 1]
+
+      - call: [io.remove_all, root]
+      - if: { condition: { gt: [chk.fails, 0] }, then: [{ print: ["FAIL glob (${chk.fails})"] }, { return: 1 }] }
+      - print: ["PASS glob"]
+      - return: 0
