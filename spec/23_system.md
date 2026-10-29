@@ -411,6 +411,25 @@ with every signal at its default, whatever the parent caught.  `sys.wait_any` re
 `-1` early when a caught signal arrives, so a pool loop can stop promptly.
 
 
+### 5.8 Working directory, environment, files (F23-70 … F23-77)
+
+What a build tool needs around its processes:
+
+| Call | Returns | Meaning |
+|---|---|---|
+| `sys.chdir(dir)` | `i32` | Changes the process's working directory; `0` ok, `-1` not (F23-70). Relative paths and children started afterwards see the new one (`path.cwd` reads it). |
+| `sys.setenv(name, value)` | `i32` | Sets a variable for this process and every child started afterwards (`sys.env` shows it); `0` / `-1` (F23-71). |
+| `sys.unsetenv(name)` | `i32` | Removes it; `0` / `-1` (F23-71). |
+| `sys.isatty(fd)` | `i32` | `1` if `fd` (0 stdin, 1 stdout, 2 stderr) is a terminal — colour or progress output only then (F23-72). |
+| `io.realpath(p)` | `string` | The absolute path with every symlink, `.` and `..` resolved; `""` if `p` does not exist (F23-73). |
+| `io.mkdtemp(prefix)` | `string` | Creates a new, private (`0700`) directory `<prefix>XXXXXX` and returns its path; `""` on failure. `prefix` may include a directory: `"/tmp/build-"` (F23-74). |
+| `io.copy(src, dst)` | `i32` | Copies a regular file byte-exact (any size, streamed) and keeps its permission bits; `dst` is replaced atomically (written as `dst.part`, renamed). `0` / `-1` (F23-75). |
+| `io.lock(p)` | `i32` | An exclusive advisory lock (`flock`) on file `p` (created if missing): blocks until it is free, returns a lock id `>= 0` or `-1`. Two processes locking the same file run one after the other — a cache that two builds share (F23-76). |
+| `io.unlock(id)` | `i32` | Releases it; `0` / `-1`. The lock is also released when the process ends. |
+
+`sys.chdir` and `sys.setenv` change process-wide state: under threads, do it before
+starting them.  A process environment change is visible to `sys.exe` children that are
+started without an `env:` option (with `env:` they get exactly that map).
 ## 6. Memory Management
 
 ```yaml
