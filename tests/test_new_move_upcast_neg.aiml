@@ -1,0 +1,18 @@
+# SPEC: 61_memory_management
+# Expected exit code: 1
+# static-check: off
+#
+# Negative (spec/61 §6.2 F61-80): `{ new: Holder, part: piece }` moves piece,
+# so reading piece afterwards is a use-after-move — a compile error, not a
+# double free at the end of main.
+
+- import: "tests/_cross/move_upcast_types.aiml"
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [piece, ptr<Square>, { new: Square, side: 5 }]
+      - decl: [whole, ptr<Holder>, { new: Holder, part: piece }]
+      - print: ["${piece.side} ${whole.part.side}"]
+      - return: 0

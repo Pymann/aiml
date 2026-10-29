@@ -218,6 +218,10 @@ IRValue* Compiler::visitNewExpr(NewExpr* newExpr) {
                           {llvm::PointerType::get(ctx.context, 0)}), { initVal });
              }
              ctx.builder.CreateStore(initVal, fieldPtr);
+             // spec/61 §6.2: an owning ptr<T> member takes the box over — the local it came
+             // from must not free it too (as for `set: [obj.field, p]`).
+             if (member.typeName.rfind("ptr<", 0) == 0 && member.typeName.back() == '>')
+                 consumeLocalDrop(newExpr->initValues[name].get());
         }
 
         // classgroup container (spec/58): run the synthesized wiring ctor so the

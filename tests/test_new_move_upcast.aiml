@@ -1,0 +1,55 @@
+# SPEC: 61_memory_management
+# spec/61 §6.2 F61-80 — every binding site moves a ptr<T> alike, and a fresh
+# { new: Concrete } is upcast wherever a ptr<Interface> is expected:
+#   - { new: Holder, part: piece } moves piece (it used to be freed twice)
+#   - put / push / return / argument of an inline { new: Square } as ptr<Shape>
+#     (put and return used to crash: the box was stored without its vtable)
+# Expected exit code: 0
+
+- import: "tests/_cross/move_upcast_types.aiml"
+- import: "tests/_cross/check.aiml"
+
+- def:
+    name: make_square
+    args: [[side, i32]]
+    return: ptr<Shape>
+    body:
+      - return: [{ new: Square, side: side }]
+
+- def:
+    name: measure
+    args: [[shape, ref<Shape>]]
+    return: i32
+    body:
+      - return: [{ call: [shape.area] }]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [chk, ptr<Checker>, { new: Checker }]
+
+      - decl: [piece, ptr<Square>, { new: Square, side: 5 }]
+      - decl: [whole, ptr<Holder>, { new: Holder, part: piece }]
+      - call: [chk.expect_i, "member took the box", whole.part.side, 5]
+
+      - decl: [shapes, map<string:ptr<Shape>>]
+      - call: [shapes.put, "three", { new: Square, side: 3 }]
+      - decl: [three, ref<Shape>, { call: [shapes.get, "three"] }]
+      - call: [chk.expect_i, "put of an inline new", { call: [three.area] }, 9]
+
+      - decl: [row, list<ptr<Shape>>]
+      - call: [row.push, { new: Square, side: 4 }]
+      - decl: [four, ref<Shape>, { at: [row, 0] }]
+      - call: [chk.expect_i, "push of an inline new", { call: [four.area] }, 16]
+
+      - decl: [made, ptr<Shape>, { call: [make_square, 6] }]
+      - call: [chk.expect_i, "return of an inline new", { call: [made.area] }, 36]
+
+      - decl: [maker, fn<i32:ptr<Shape>>, make_square]
+      - decl: [built, ptr<Shape>, { call: [maker, 7] }]
+      - call: [chk.expect_i, "through a function pointer", { call: [measure, built] }, 49]
+
+      - if: { condition: { gt: [chk.fails, 0] }, then: [{ print: ["FAIL new_move_upcast (${chk.fails})"] }, { return: 1 }] }
+      - print: ["PASS new_move_upcast"]
+      - return: 0
