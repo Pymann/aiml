@@ -204,6 +204,64 @@ wäre die schlechtere Antwort).
   Schreibpfad.  Zurücklesen bleibt möglich: fehlende Felder behalten ihren
   Vorgabewert (F29-16) — genau den, der sie hat weglassen lassen.
 
+### 5.2d Lesen: Vorgaben, `null`, Fehler
+
+`sys.deserialize` bleibt **duldsam** (F29-15): ein Dokument, das wächst, bleibt
+lesbar, und ein Fehler bricht das Lesen nicht ab — es entsteht immer ein Wert.
+Duldsam heißt aber nicht **still**.  Ein Werkzeug, dessen ganze Eingabe eine
+Konfigurationsdatei ist (exodus: `exodus.json`), muss erfahren, dass `"jobs":
+"viele"` kein Wert war und dass `{"name": kaputt` kein Dokument ist.  Bis
+29.10.2026 bekam es in beiden Fällen nur Nullen.
+
+- **F29-16 (präzisiert)** Ein Feld, das das Dokument nicht nennt **oder mit
+  `null` belegt**, erhält seinen **deklarierten Vorgabewert**: `[jobs, i32, 4]`
+  liest sich als 4, `[name, string, "app"]` als `"app"`, `[on, bool, true]` als
+  `true`.  Das gilt auf jeder Ebene — in verschachtelten Modellen und in den
+  Elementen einer `list<Modell>`.  Bis 29.10.2026 wurde der Vorgabewert
+  ignoriert (gelesen wurde 0 bzw. `""`), obwohl F29-16 ihn versprach.
+  Vorgabewerte werden übernommen, wenn sie **Literale** sind (Zahl, Wahrheits-
+  wert, Zeichenkette) — das ist der gewöhnliche Fall; ein Ausdruck oder ein
+  Enum-Mitglied als Vorgabe liest sich bei fehlendem Schlüssel weiter als
+  Null-/Leerwert.
+- **F29-23** Fehlt ein **verschachteltes Objekt** ganz, entsteht es trotzdem
+  vollständig: mit den Vorgaben seiner Felder, leeren Zeichenketten und leeren
+  Listen/Maps.  (Vorher blieben seine Zeichenketten und Container Nullzeiger —
+  ein `.len` darauf stürzte ab.)
+- **F29-24** Zahlen werden **zwischen Ganz- und Gleitkommazahl umgewandelt**:
+  ein `f32`-Feld liest `10` als 10.0, ein `i32`-Feld liest `3.0` als 3 (in
+  Richtung null abgeschnitten).  Vorher las die „falsche“ Zahlenart still 0.
+  Ein `true`/`false` in einem Zahlenfeld liest sich als 1/0.
+- **F29-25** `sys.json_error() → string` sagt, was der **letzte**
+  `sys.deserialize` **dieses Threads** falsch fand; `""` heißt sauber.  Jeder
+  Aufruf von `sys.deserialize` setzt die Meldung zurück.  Gemeldet werden
+  - ein **Syntaxfehler** mit Zeile und Spalte (1-basiert):
+    `line 3 column 12: unexpected character`;
+  - ein Wert der **falschen JSON-Art** mit seinem Pfad:
+    `deps[2].version: expected a string, got a number`,
+    `jobs: expected a number, got a string`.  Der Wert erhält dann den
+    Vorgabewert, als fehlte er.
+  Mehrere Funde stehen zeilenweise (höchstens 20, dann `…`).  Ein unbekannter
+  Schlüssel ist **kein** Fehler (F29-16).
+- **F29-26** Die Prüfung gehört dem Aufrufer: wer streng sein will, prüft nach
+  dem Lesen.
+
+  ```aiml
+  - decl: [cfg, ProjectConfig, { call: [sys.deserialize, text, "ProjectConfig"] }]
+  - decl: [problem, string, { call: [sys.json_error] }]
+  - if: { condition: { gt: [problem.len, 0] }, then: [{ call: [log.error, "exodus.json: ${problem}"] }, { return: 1 }] }
+  ```
+- **F29-27** Eine `list<T>` darf als **nacktes Array** vorliegen
+  (`[1,2,3]`), eine `map<string:V>` als **nacktes Objekt** (`{"a":1}`) —
+  so, wie fremde Werkzeuge sie schreiben.  Die Hülle (`{"values":[…]}`,
+  `{"entries":{…}}`, §5.2) wird weiter gelesen; als Hülle gilt ein Objekt, das
+  den Schlüssel `entries` oder `__type` trägt.  Geschrieben wird unverändert
+  mit Hülle (F29-13).
+- **F29-28** Der Fehlertext ist **pro Thread**: zwei Threads, die gleichzeitig
+  lesen, sehen jeweils ihre eigenen Funde.
+
+`tests/test_ser_defaults_errors.aiml` hält F29-16 (präzisiert) und
+F29-23 bis F29-28 fest.
+
 ### 5.3 ptr\<T\> Semantics
 
 - **serialize**: auto-deref — loads the pointer and serialises the pointed-to value as `T`
