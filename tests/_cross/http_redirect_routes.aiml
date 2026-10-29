@@ -1,0 +1,145 @@
+# Routes for tests/test_http_client_redirects.aiml (server on 127.0.0.1:23211).
+#   /r3 → /r2 → r1 (relative) → http://127.0.0.1:23211/r0 (absolute) → "end"
+#   /near → 307 /auth (same origin);  /away → 302 http://localhost:23211/auth
+#   /auth → the Authorization header it got, or "none"
+#   /see-other 303, /found 302, /temp 307 → /method → "<method>:<body length>"
+#   /blob-moved → 301 /blob → the fixture written by write_blob_fixture;  /gone → 404 "nope"
+
+- def:
+    name: moved
+    args: [[resp, http_response_handle], [status, i32], [where, string]]
+    body:
+      - set: [resp.status, status]
+      - call: [resp.headers.put, "location", where]
+      - call: [resp.send]
+
+- def:
+    name: to_r2
+    args: [[req, http_request_handle], [resp, http_response_handle]]
+    body:
+      - call: [moved, resp, 302, "/r2"]
+
+- def:
+    name: to_r1
+    args: [[req, http_request_handle], [resp, http_response_handle]]
+    body:
+      - call: [moved, resp, 302, "r1"]
+
+- def:
+    name: to_r0
+    args: [[req, http_request_handle], [resp, http_response_handle]]
+    body:
+      - call: [moved, resp, 301, "http://127.0.0.1:23211/r0"]
+
+- def:
+    name: at_end
+    args: [[req, http_request_handle], [resp, http_response_handle]]
+    body:
+      - set: [resp.body, "end"]
+      - call: [resp.send]
+
+- def:
+    name: to_auth_near
+    args: [[req, http_request_handle], [resp, http_response_handle]]
+    body:
+      - call: [moved, resp, 307, "/auth"]
+
+- def:
+    name: to_auth_away
+    args: [[req, http_request_handle], [resp, http_response_handle]]
+    body:
+      - call: [moved, resp, 302, "http://localhost:23211/auth"]
+
+- def:
+    name: show_auth
+    args: [[req, http_request_handle], [resp, http_response_handle]]
+    body:
+      - decl: [given, string, { call: [req.header, "authorization"] }]
+      - if: { condition: { or: [{ eq: [given, null] }, { eq: [given.len, 0] }] }, then: [{ set: [given, "none"] }] }
+      - set: [resp.body, given]
+      - call: [resp.send]
+
+- def:
+    name: to_method_303
+    args: [[req, http_request_handle], [resp, http_response_handle]]
+    body:
+      - call: [moved, resp, 303, "/method"]
+
+- def:
+    name: to_method_302
+    args: [[req, http_request_handle], [resp, http_response_handle]]
+    body:
+      - call: [moved, resp, 302, "/method"]
+
+- def:
+    name: to_method_307
+    args: [[req, http_request_handle], [resp, http_response_handle]]
+    body:
+      - call: [moved, resp, 307, "/method"]
+
+- def:
+    name: show_method
+    args: [[req, http_request_handle], [resp, http_response_handle]]
+    body:
+      - decl: [verb, string, { call: [req.method] }]
+      - decl: [size, i64, { call: [req.body_len] }]
+      - set: [resp.body, "${verb}:${size}"]
+      - call: [resp.send]
+
+- def:
+    name: to_blob
+    args: [[req, http_request_handle], [resp, http_response_handle]]
+    body:
+      - call: [moved, resp, 301, "/blob"]
+
+- def:
+    name: send_blob
+    args: [[req, http_request_handle], [resp, http_response_handle]]
+    body:
+      - call: [resp.headers.put, "content-type", "application/octet-stream"]
+      - set: [resp.body_file, "/tmp/aiml_http_redirects_src.bin"]
+      - call: [resp.send]
+
+- def:
+    name: send_gone
+    args: [[req, http_request_handle], [resp, http_response_handle]]
+    body:
+      - set: [resp.status, 404]
+      - set: [resp.body, "nope"]
+      - call: [resp.send]
+
+- def:
+    name: install_redirect_routes
+    args: [[srv, http_server_handle]]
+    body:
+      - call: [srv.route, "GET", "/r3", to_r2]
+      - call: [srv.route, "GET", "/r2", to_r1]
+      - call: [srv.route, "GET", "/r1", to_r0]
+      - call: [srv.route, "GET", "/r0", at_end]
+      - call: [srv.route, "GET", "/near", to_auth_near]
+      - call: [srv.route, "GET", "/away", to_auth_away]
+      - call: [srv.route, "GET", "/auth", show_auth]
+      - call: [srv.route, "POST", "/see-other", to_method_303]
+      - call: [srv.route, "POST", "/found", to_method_302]
+      - call: [srv.route, "POST", "/temp", to_method_307]
+      - call: [srv.route, "GET", "/method", show_method]
+      - call: [srv.route, "POST", "/method", show_method]
+      - call: [srv.route, "GET", "/blob-moved", to_blob]
+      - call: [srv.route, "GET", "/blob", send_blob]
+      - call: [srv.route, "GET", "/gone", send_gone]
+
+# The download fixture: 4 MiB, i.e. many 64 KiB reads on the client side.
+- def:
+    name: write_blob_fixture
+    return: string
+    body:
+      - decl: [where, string, "/tmp/aiml_http_redirects_src.bin"]
+      - decl: [text, string, "0123456789abcdef"]
+      - decl: [rounds, i32, 0]
+      - while:
+          condition: { lt: [rounds, 18] }
+          body:
+            - set: [text, "${text}${text}"]
+            - set: [rounds, { +: [rounds, 1] }]
+      - call: [io.write_file, where, text]
+      - return: [where]

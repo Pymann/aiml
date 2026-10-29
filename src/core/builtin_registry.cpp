@@ -316,6 +316,43 @@ static void bufferArgDataLen(CompilerContext& ctx, llvm::Value* v, llvm::Value*&
     }
 }
 
+// A string the runtime returned as a new managed reference: tracked as a
+// statement temp under lifetime drops, so it is freed after the statement unless
+// a variable or a container adopts it (e.g. used directly as a call argument).
+static IRValue* ownedStringResult(CompilerContext& ctx, llvm::Value* v) {
+    if (ctx.lifetimeDropsEnabled && !ctx.stmtTempStack.empty())
+        AIML::AST::aimlTrackStringTemp(ctx, v);
+    return ctx.ir_gen->wrap(v);
+}
+
+// A fresh list<string> (memV3 handle, else a stack list) for a *_fill runtime call.
+static llvm::Value* freshStringList(CompilerContext& ctx, const char* name) {
+    llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+    llvm::Value* lst = ctx.memV3
+        ? static_cast<llvm::Value*>(ctx.builder.CreateCall(ctx.getFunction("aiml_list_handle_new", i8p, {}), {}, name))
+        : static_cast<llvm::Value*>(ctx.createEntryAlloca(ListImpl::getListStructType(ctx), name));
+    ListImpl::initList(ctx, lst, i8p, 8);
+    return lst;
+}
+
+// Argument `i` as a value, or "" when the call has fewer arguments.
+static llvm::Value* argOrEmpty(CompilerContext& ctx, const std::vector<IRValue*>& args, size_t i) {
+    return args.size() > i ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[i]))
+                           : static_cast<llvm::Value*>(ctx.builder.CreateGlobalStringPtr(""));
+}
+
+// The address of a buffer argument, for runtime calls that read or fill the
+// buffer in place (net.recv sets size/writeIndex).  A local arrives as a load of
+// its storage: the load's own address is the variable.  Anything else (a
+// computed buffer value) is spilled to a temporary — fine for reads only.
+static llvm::Value* bufferArgAddress(CompilerContext& ctx, llvm::Value* v) {
+    if (v->getType()->isPointerTy()) return v;
+    if (auto* load = llvm::dyn_cast<llvm::LoadInst>(v)) return load->getPointerOperand();
+    auto* tmp = ctx.createEntryAlloca(ctx.getLLVMType("buffer"), "buf_arg_tmp");
+    ctx.builder.CreateStore(v, tmp);
+    return tmp;
+}
+
 // spec/43_5 call lowering. sig chars: i=i32 (bool too), f=f32, p=pointer/string/handle,
 // b=buffer (address). ret: v=void, i=i32, p=pointer, B=owned heap buffer -> buffer value.
 static llvm::Value* gl43Arg(CompilerContext& ctx, llvm::Value* v, char k) {
@@ -1179,7 +1216,7 @@ void registerBuiltins(CompilerContext& ctx) {
     // found wrong (syntax with line/column, wrong types with the field path), "" = clean.
     sys.builtinFuncs["json_error"] = [](CompilerContext& ctx, const std::vector<IRValue*>&) -> IRValue* {
         auto* p = llvm::PointerType::get(ctx.context, 0);
-        return ctx.ir_gen->wrap(ctx.builder.CreateCall(ctx.getFunction("aiml_sys_json_error", p, {}), {}));
+        return ownedStringResult(ctx, ctx.builder.CreateCall(ctx.getFunction("aiml_sys_json_error", p, {}), {}));
     };
     // spec/23 §5.6: sys.require_tools(csv) → "" oder ALLES Fehlende.  Ein Ort
     // fuer diese Frage (F23-43): `requires:` (spec/62 §18.2) und der cosmos-
@@ -3501,7 +3538,7 @@ void registerBuiltins(CompilerContext& ctx) {
             if (args.size() < 2) return ctx.ir_gen->getInt32(-1);
             return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {
                 static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])),
-                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]))
+                bufferArgAddress(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1])))
             }));
         };
 
@@ -3514,7 +3551,7 @@ void registerBuiltins(CompilerContext& ctx) {
             if (args.size() < 2) return ctx.ir_gen->getInt32(-1);
             return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {
                 static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])),
-                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]))
+                bufferArgAddress(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1])))
             }));
         };
 
@@ -4377,22 +4414,8 @@ void registerBuiltins(CompilerContext& ctx) {
     // like hash.<algo>); lists are real memV3 handles filled by the runtime;
     // saml.verify_response returns a map<string:string> handle (sys.env layout).
     {
-        auto trackStr = [](CompilerContext& ctx, llvm::Value* v) -> IRValue* {
-            if (ctx.lifetimeDropsEnabled && !ctx.stmtTempStack.empty())
-                AIML::AST::aimlTrackStringTemp(ctx, v);
-            return ctx.ir_gen->wrap(v);
-        };
-        // A fresh list<string> (memV3 handle, else stack alloca) for a *_fill runtime call.
-        auto newStrList = [](CompilerContext& ctx, const char* nm) -> llvm::Value* {
-            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
-            llvm::Value* lst;
-            if (ctx.memV3)
-                lst = ctx.builder.CreateCall(ctx.getFunction("aiml_list_handle_new", i8p, {}), {}, nm);
-            else
-                lst = ctx.createEntryAlloca(ListImpl::getListStructType(ctx), nm);
-            ListImpl::initList(ctx, lst, i8p, 8);
-            return lst;
-        };
+        auto trackStr = ownedStringResult;
+        auto newStrList = freshStringList;
 
         // ── base64 namespace ─────────────────────────────────────────────────
         auto& b64 = ctx.namespaces["base64"];
@@ -4568,6 +4591,94 @@ void registerBuiltins(CompilerContext& ctx) {
                 {s(0), s(1), s(2), s(3), s(4)});
             return ctx.ir_gen->wrap(ctx.builder.CreateBitCast(raw, mapTy->getPointerTo(), "saml_result_map"));
         };
+    }
+
+    // ── regex namespace (spec/09_2) and globbing (spec/42_1) ──────────────────
+    // Runtime: src/sys/regex_runtime.cpp, src/sys/glob_runtime.cpp.  Strings come
+    // back as managed references (statement temps), lists as list<string> filled
+    // by the runtime.
+    {
+        auto& rx = ctx.namespaces["regex"];
+        // text → i32: match (whole text), search (index or -1)
+        for (const char* name : {"match", "search"}) {
+            const std::string sym = std::string("aiml_regex_") + name;
+            rx.builtinFuncs[name] = [sym](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+                llvm::Type* p = ctx.builder.getInt8Ty()->getPointerTo();
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(ctx.getFunction(sym, ctx.builder.getInt32Ty(), {p, p}),
+                                                               {argOrEmpty(ctx, args, 0), argOrEmpty(ctx, args, 1)}));
+            };
+        }
+        // text → list<string>: find (match + groups), find_all, split
+        for (const char* name : {"find", "find_all", "split"}) {
+            const std::string sym = std::string("aiml_regex_") + name + "_fill";
+            rx.builtinFuncs[name] = [sym](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+                llvm::Type* p = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Value* out = freshStringList(ctx, "regex_list");
+                ctx.builder.CreateCall(ctx.getFunction(sym, ctx.builder.getInt32Ty(), {p, p, p}),
+                                       {argOrEmpty(ctx, args, 0), argOrEmpty(ctx, args, 1), out});
+                return ctx.ir_gen->wrap(out);
+            };
+        }
+        rx.builtinFuncs["replace"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            llvm::Type* p = ctx.builder.getInt8Ty()->getPointerTo();
+            return ownedStringResult(ctx, ctx.builder.CreateCall(ctx.getFunction("aiml_regex_replace", p, {p, p, p}),
+                {argOrEmpty(ctx, args, 0), argOrEmpty(ctx, args, 1), argOrEmpty(ctx, args, 2)}));
+        };
+        rx.builtinFuncs["error"] = [](CompilerContext& ctx, const std::vector<IRValue*>&) -> IRValue* {
+            llvm::Type* p = ctx.builder.getInt8Ty()->getPointerTo();
+            return ownedStringResult(ctx, ctx.builder.CreateCall(ctx.getFunction("aiml_regex_error", p, {}), {}));
+        };
+
+        auto& io = ctx.namespaces["io"];
+        io.builtinFuncs["glob"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            llvm::Type* p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Value* out = freshStringList(ctx, "glob_list");
+            ctx.builder.CreateCall(ctx.getFunction("aiml_glob_all_fill", ctx.builder.getInt32Ty(), {p, p}),
+                                   {argOrEmpty(ctx, args, 0), out});
+            return ctx.ir_gen->wrap(out);
+        };
+        io.builtinFuncs["glob_match"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            llvm::Type* p = ctx.builder.getInt8Ty()->getPointerTo();
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(ctx.getFunction("aiml_glob_match", ctx.builder.getInt32Ty(), {p, p}),
+                                                           {argOrEmpty(ctx, args, 0), argOrEmpty(ctx, args, 1)}));
+        };
+        // io.globber(pattern, max_per_step) → Globber
+        io.builtinFuncs["globber"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            llvm::Type* p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Type* i32 = ctx.builder.getInt32Ty();
+            llvm::Value* most = args.size() > 1 ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1])) : ctx.builder.getInt32(256);
+            if (most->getType()->isIntegerTy() && most->getType() != i32) most = ctx.builder.CreateIntCast(most, i32, true);
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(ctx.getFunction("aiml_glob_new", p, {p, i32}),
+                                                           {argOrEmpty(ctx, args, 0), most}));
+        };
+
+        CompilerContext::ClassInfo ci;
+        ci.name = "Globber";
+        ci.isBuiltin = true;
+        ci.preLoadBase = true;
+        ci.builtinMethods["next"] = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr*, auto) -> IRValue* {
+            llvm::Type* p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Value* out = freshStringList(ctx, "glob_batch");
+            ctx.builder.CreateCall(ctx.getFunction("aiml_glob_next_fill", ctx.builder.getInt32Ty(), {p, p}), {base, out});
+            return ctx.ir_gen->wrap(out);
+        };
+        for (const char* name : {"location", "pattern"}) {
+            const std::string sym = std::string("aiml_glob_") + name;
+            ci.builtinMethods[name] = [sym](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr*, auto) -> IRValue* {
+                llvm::Type* p = ctx.builder.getInt8Ty()->getPointerTo();
+                return ownedStringResult(ctx, ctx.builder.CreateCall(ctx.getFunction(sym, p, {p}), {base}));
+            };
+        }
+        ci.builtinMethods["done"] = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr*, auto) -> IRValue* {
+            llvm::Type* p = ctx.builder.getInt8Ty()->getPointerTo();
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(ctx.getFunction("aiml_glob_done", ctx.builder.getInt32Ty(), {p}), {base}));
+        };
+        ci.builtinMethods["free"] = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr*, auto) -> IRValue* {
+            llvm::Type* p = ctx.builder.getInt8Ty()->getPointerTo();
+            ctx.builder.CreateCall(ctx.getFunction("aiml_glob_free", ctx.builder.getVoidTy(), {p}), {base});
+            return ctx.ir_gen->getInt32(0);
+        };
+        ctx.classes["Globber"] = std::move(ci);
     }
 
     // ── ws namespace ──────────────────────────────────────────────────────────
@@ -5463,6 +5574,12 @@ void registerBuiltins(CompilerContext& ctx) {
                 if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(i8p, {i8p}, false), llvm::Function::ExternalLinkage, "aiml_http_head", ctx.module());
                 return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]))}));
             };
+            // http.last_error() → string: why the last request on this thread got
+            // no answer (a null response); "" after an answered one (spec/32_2 §2.3a).
+            http.builtinFuncs["last_error"] = [](CompilerContext& ctx, const std::vector<IRValue*>&) -> IRValue* {
+                llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                return ownedStringResult(ctx, ctx.builder.CreateCall(ctx.getFunction("aiml_http_last_error", i8p, {}), {}));
+            };
             // http.new_request(method, url) → http_client_handle
             http.builtinFuncs["new_request"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
                 if (args.size() < 2) return ctx.ir_gen->getInt32(0);
@@ -5855,6 +5972,11 @@ void registerBuiltins(CompilerContext& ctx) {
                 }
                 return ctx.ir_gen->wrap(raw);
             };
+            // Client side: the URL that answered, after redirects (spec/32_2 §2.3a).
+            ci.builtinMethods["url"] = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr*, auto) -> IRValue* {
+                llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                return ownedStringResult(ctx, ctx.builder.CreateCall(ctx.getFunction("aiml_http_resp_url", i8p, {i8p}), {base}));
+            };
             // Client side: exact byte length of the received body (binary-safe).
             ci.builtinMethods["body_len"] = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr*, auto) -> IRValue* {
                 llvm::Function* fn = ctx.module().getFunction("aiml_http_resp_body_len");
@@ -6135,6 +6257,24 @@ void registerBuiltins(CompilerContext& ctx) {
                 llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(newVal));
                 if (v->getType()->isPointerTy()) v = ctx.builder.CreatePtrToInt(v, ctx.builder.getInt32Ty());
                 ctx.builder.CreateCall(fn, {base, v});
+            };
+            // spec/32_2 §2.3a: client.download_to / client.proxy (text) and
+            // client.max_redirects (i32) — the runtime copies the text.
+            for (const char* textSetter : {"download_to", "proxy"}) {
+                const std::string sym = std::string("aiml_http_client_set_") + textSetter;
+                ci.builtinSetters[textSetter] = [sym](CompilerContext& ctx, llvm::Value* base, AIML::IRValue* newVal) {
+                    llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                    llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(newVal));
+                    if (v->getType() != i8p) v = ctx.builder.CreateBitCast(v, i8p);
+                    ctx.builder.CreateCall(ctx.getFunction(sym, ctx.builder.getVoidTy(), {i8p, i8p}), {base, v});
+                };
+            }
+            ci.builtinSetters["max_redirects"] = [](CompilerContext& ctx, llvm::Value* base, AIML::IRValue* newVal) {
+                llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Type* i32 = ctx.builder.getInt32Ty();
+                llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(newVal));
+                if (v->getType()->isIntegerTy() && v->getType() != i32) v = ctx.builder.CreateIntCast(v, i32, true);
+                ctx.builder.CreateCall(ctx.getFunction("aiml_http_client_set_max_redirects", ctx.builder.getVoidTy(), {i8p, i32}), {base, v});
             };
             ctx.classes["http_client_handle"] = std::move(ci);
         }

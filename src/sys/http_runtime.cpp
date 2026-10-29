@@ -338,188 +338,538 @@ static int tcp_connect(const char* host, int port, int timeout_ms) {
     return fd;
 }
 
-// Parse an HTTP/1.1 response from fd/ssl into a new AimlHttpResponse
-static AimlHttpResponse* parse_http_response(int fd, void* ssl, bool no_body = false) {
-    AimlHttpResponse* r = static_cast<AimlHttpResponse*>(calloc(1, sizeof(AimlHttpResponse)));
-    r->headers = aiml_http_map_new();
-    r->conn_fd = -1;
-
-    // Status line
-    char line[4096];
-    recv_line(fd, ssl, line, sizeof(line));
-    // "HTTP/1.1 200 OK\r\n"
-    // No status line (peer closed, not HTTP) → status 0; do_http_request
-    // turns that into "no answer" (null) instead of inventing a 200.
-    int status = 0;
-    if (sscanf(line, "HTTP/%*s %d", &status) == 1) r->status = status;
-    else r->status = 0;
-    r->ok = (r->status >= 200 && r->status < 300) ? 1 : 0;
-
-    // Headers
-    int content_length = -1;
-    bool chunked = false;
-    while (true) {
-        int n = recv_line(fd, ssl, line, sizeof(line));
-        if (n <= 0) break;
-        // strip \r\n
-        while (n > 0 && (line[n-1] == '\r' || line[n-1] == '\n')) line[--n] = '\0';
-        if (n == 0) break; // blank line = end of headers
-        char* colon = strchr(line, ':');
-        if (colon) {
-            *colon = '\0';
-            const char* k = line;
-            const char* v = colon + 1;
-            while (*v == ' ') ++v;
-            std::string lk = str_tolower(k);
-            aiml_http_map_put(r->headers, lk.c_str(), v);
-            if (lk == "content-length") content_length = atoi(v);
-            if (lk == "transfer-encoding" && strstr(v, "chunked")) chunked = true;
-        }
-    }
-
-    // Body.  A response to HEAD has none, whatever Content-Length says
-    // (RFC 9110 §9.3.2) — reading it would block until the server closes.
-    std::string body;
-    if (no_body) {
-        // nothing to read
-    } else if (chunked) {
-        while (true) {
-            recv_line(fd, ssl, line, sizeof(line));
-            int chunk_size = strtol(line, nullptr, 16);
-            if (chunk_size <= 0) break;
-            std::vector<char> chunk(chunk_size + 2);
-            recv_n(fd, ssl, chunk.data(), chunk_size + 2);
-            body.append(chunk.data(), chunk_size);
-        }
-    } else if (content_length > 0) {
-        std::vector<char> buf(content_length + 1, '\0');
-        int got = recv_n(fd, ssl, buf.data(), content_length);
-        if (got > 0) body.assign(buf.data(), static_cast<size_t>(got));
-    }
-
-    if (!body.empty()) {
-        r->body = xstrdup(body.c_str());          // text view (stops at a NUL)
-        r->raw_len = static_cast<int64_t>(body.size());
-        r->raw_body = static_cast<char*>(malloc(body.size()));
-        if (r->raw_body) memcpy(r->raw_body, body.data(), body.size());
-        else r->raw_len = 0;
-    }
-    return r;
-}
+/* ────────────────────────────────────────────────────────────────
+ * HTTP/1.1 client (spec/32_2 §2.3a): proxy from the environment, redirects,
+ * a 2xx body streamed into a file.  One exchange per connection
+ * (`Connection: close`).
+ * ──────────────────────────────────────────────────────────────── */
 
 extern "C" void aiml_http_resp_free(void* resp);
 
-static AimlHttpResponse* do_http_request(const char* method, AimlUrl* u,
-                                          AimlHttpMap* extra_headers,
-                                          const char* body_str,
-                                          int timeout_ms,
-                                          const char* body_file = nullptr) {
-    if (!u || !u->host) return nullptr;
+// Why the last client request on this thread got no answer ("" = it did).
+static thread_local std::string g_http_client_error;
 
-    bool use_ssl = u->protocol && strcmp(u->protocol, "https") == 0;
-    int port = u->port ? u->port : (use_ssl ? 443 : 80);
+static void client_fail(const std::string& why) { g_http_client_error = why; }
 
-    int fd = tcp_connect(u->host, port, timeout_ms > 0 ? timeout_ms : 10000);
-    if (fd < 0) return nullptr;
+// Where one request goes.
+struct HttpTarget {
+    bool        tls = false;
+    std::string host;
+    int         port = 80;
+    bool        explicit_port = false;
+    std::string target = "/";      // origin-form: path + query
+    std::string user, pass;        // userinfo (used for proxy URLs only)
+};
 
-    SSL_CTX* ssl_ctx = nullptr;
-    SSL*     ssl     = nullptr;
-    if (use_ssl) {
-        SSL_library_init();
-        ssl_ctx = SSL_CTX_new(TLS_client_method());
-        SSL_CTX_set_min_proto_version(ssl_ctx, TLS1_2_VERSION);
-        SSL_CTX_set_default_verify_paths(ssl_ctx);
-        const char* https_ca = getenv("AIML_WSS_CA");   // shared client-TLS CA bundle
-        if (https_ca && *https_ca) SSL_CTX_load_verify_locations(ssl_ctx, https_ca, nullptr);
-        // Verify the server cert (chain + hostname) by default → defeats active MITM.
-        // Shares the client-TLS insecure toggle with the wss client
-        // (mirror.tls_insecure(1) / AIML_WSS_INSECURE=1) for local dev.
-        bool https_insecure = aiml_ws_client_insecure() != 0;
-        SSL_CTX_set_verify(ssl_ctx, https_insecure ? SSL_VERIFY_NONE : SSL_VERIFY_PEER, nullptr);
-        ssl = SSL_new(ssl_ctx);
-        SSL_set_fd(ssl, fd);
-        SSL_set_tlsext_host_name(ssl, u->host);
-        if (!https_insecure) {
-            SSL_set_hostflags(ssl, X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS);
-            SSL_set1_host(ssl, u->host);
-        }
-        if (SSL_connect(ssl) <= 0) {
-            SSL_free(ssl); SSL_CTX_free(ssl_ctx); ::close(fd);
-            return nullptr;
-        }
-    }
-
-    // Build request
-    std::string req;
-    req += method; req += " ";
-    req += (u->path ? u->path : "/");
+static HttpTarget target_of(const AimlUrl* u) {
+    HttpTarget t;
+    t.tls  = u->protocol && strcmp(u->protocol, "https") == 0;
+    t.host = u->host ? u->host : "";
+    t.explicit_port = u->port != 0;
+    t.port = u->port ? u->port : (t.tls ? 443 : 80);
+    t.target = (u->path && *u->path) ? u->path : "/";
     if (u->get_param && u->get_param->size > 0) {
         bool first = true;
         for (int i = 0; i < u->get_param->capacity; ++i) {
             if (!u->get_param->occupied[i]) continue;
-            req += first ? '?' : '&';
+            t.target += first ? '?' : '&';
             first = false;
-            req += u->get_param->keys[i];
-            req += '=';
-            req += u->get_param->values[i];
+            t.target += u->get_param->keys[i];
+            t.target += '=';
+            t.target += u->get_param->values[i];
         }
     }
-    req += " HTTP/1.1\r\nHost: ";
-    req += u->host;
-    req += "\r\nConnection: close\r\n";
+    return t;
+}
 
-    if (extra_headers) {
-        for (int i = 0; i < extra_headers->capacity; ++i) {
-            if (!extra_headers->occupied[i]) continue;
-            req += extra_headers->keys[i]; req += ": ";
-            req += extra_headers->values[i]; req += "\r\n";
+static std::string host_header(const HttpTarget& t) {
+    bool dflt = (t.tls && t.port == 443) || (!t.tls && t.port == 80);
+    return dflt ? t.host : t.host + ":" + std::to_string(t.port);
+}
+
+static std::string origin_of(const HttpTarget& t) {
+    return std::string(t.tls ? "https://" : "http://") + host_header(t);
+}
+
+// "scheme://[user[:pass]@]host[:port][/path[?query]]" → t.  false = not an absolute http(s) URL.
+static bool parse_absolute(const std::string& text, HttpTarget& t) {
+    size_t sep = text.find("://");
+    if (sep == std::string::npos) return false;
+    std::string scheme = str_tolower(text.substr(0, sep));
+    if (scheme != "http" && scheme != "https") return false;
+    t = HttpTarget();
+    t.tls = scheme == "https";
+    std::string rest = text.substr(sep + 3);
+    size_t slash = rest.find_first_of("/?#");
+    std::string auth = rest.substr(0, slash);
+    std::string tail = slash == std::string::npos ? "/" : rest.substr(slash);
+    tail = tail.substr(0, tail.find('#'));
+    if (tail.empty() || tail[0] == '?') tail = "/" + tail;
+    t.target = tail;
+    size_t at = auth.rfind('@');
+    if (at != std::string::npos) {
+        std::string info = auth.substr(0, at);
+        auth = auth.substr(at + 1);
+        size_t colon = info.find(':');
+        t.user = url_decode(info.substr(0, colon));
+        t.pass = colon == std::string::npos ? "" : url_decode(info.substr(colon + 1));
+    }
+    t.port = t.tls ? 443 : 80;
+    std::string port_text;
+    if (!auth.empty() && auth[0] == '[') {                 // [v6]:port
+        size_t close = auth.find(']');
+        if (close == std::string::npos) return false;
+        t.host = auth.substr(1, close - 1);
+        if (close + 1 < auth.size() && auth[close + 1] == ':') port_text = auth.substr(close + 2);
+    } else {
+        size_t colon = auth.rfind(':');
+        t.host = auth.substr(0, colon);
+        if (colon != std::string::npos) port_text = auth.substr(colon + 1);
+    }
+    if (!port_text.empty()) {
+        t.port = atoi(port_text.c_str());
+        t.explicit_port = true;
+    }
+    return !t.host.empty() && t.port > 0 && t.port < 65536;
+}
+
+/* ── proxy selection (spec/32_5 §6.1, the environment part) ────────────── */
+
+struct ProxyChoice {
+    bool        use = false;
+    std::string host;
+    int         port = 0;
+    std::string auth;      // "Basic …" or ""
+};
+
+static std::string env_first(const char* upper, const char* lower) {
+    const char* v = getenv(upper);
+    if (!v || !*v) v = getenv(lower);
+    return v ? std::string(v) : std::string();
+}
+
+static std::string base64_of(const std::string& in) {
+    static const char* tbl = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string out;
+    size_t i = 0;
+    for (; i + 2 < in.size(); i += 3) {
+        uint32_t n = ((uint8_t)in[i] << 16) | ((uint8_t)in[i + 1] << 8) | (uint8_t)in[i + 2];
+        out += tbl[(n >> 18) & 63]; out += tbl[(n >> 12) & 63];
+        out += tbl[(n >> 6) & 63];  out += tbl[n & 63];
+    }
+    size_t left = in.size() - i;
+    if (left > 0) {
+        uint32_t n = (uint8_t)in[i] << 16;
+        if (left == 2) n |= (uint8_t)in[i + 1] << 8;
+        out += tbl[(n >> 18) & 63]; out += tbl[(n >> 12) & 63];
+        out += left == 2 ? tbl[(n >> 6) & 63] : '=';
+        out += '=';
+    }
+    return out;
+}
+
+static std::string trimmed(const std::string& s) {
+    size_t a = s.find_first_not_of(" \t");
+    if (a == std::string::npos) return "";
+    size_t b = s.find_last_not_of(" \t");
+    return s.substr(a, b - a + 1);
+}
+
+// One NO_PROXY entry: "*", "example.com" (also its subdomains), ".example.com",
+// "*.example.com", an IP, an IPv4 CIDR "10.0.0.0/8", each optionally ":port".
+static bool no_proxy_entry_matches(const std::string& raw, const std::string& host, int port) {
+    std::string e = str_tolower(trimmed(raw));
+    if (e.empty()) return false;
+    if (e == "*") return true;
+    if (e[0] == '[') {                                      // [v6] or [v6]:port
+        size_t close = e.find(']');
+        if (close == std::string::npos) return false;
+        if (close + 1 < e.size() && e[close + 1] == ':' && atoi(e.c_str() + close + 2) != port) return false;
+        e = e.substr(1, close - 1);
+    } else if (std::count(e.begin(), e.end(), ':') == 1) {  // host:port (a bare v6 has more colons)
+        size_t colon = e.find(':');
+        if (atoi(e.c_str() + colon + 1) != port) return false;
+        e = e.substr(0, colon);
+    }
+    std::string h = str_tolower(host);
+    size_t slash = e.find('/');
+    if (slash != std::string::npos) {                       // IPv4 CIDR
+        struct in_addr net{}, ip{};
+        if (inet_pton(AF_INET, e.substr(0, slash).c_str(), &net) != 1) return false;
+        if (inet_pton(AF_INET, h.c_str(), &ip) != 1) return false;
+        int bits = std::min(32, std::max(0, atoi(e.c_str() + slash + 1)));
+        uint32_t mask = bits == 0 ? 0u : ~0u << (32 - bits);
+        return (ntohl(net.s_addr) & mask) == (ntohl(ip.s_addr) & mask);
+    }
+    if (e.rfind("*.", 0) == 0) e = e.substr(1);             // "*.x" → ".x"
+    bool suffix = h.size() > e.size() && h.compare(h.size() - e.size(), e.size(), e) == 0;
+    if (e[0] == '.') return suffix;
+    return h == e || (suffix && h[h.size() - e.size() - 1] == '.');
+}
+
+static bool no_proxy_matches(const std::string& list, const std::string& host, int port) {
+    std::stringstream ss(list);
+    std::string entry;
+    while (std::getline(ss, entry, ','))
+        if (no_proxy_entry_matches(entry, host, port)) return true;
+    return false;
+}
+
+// The proxy for `t` from the client's setting:
+//   NULL/"" → HTTPS_PROXY / HTTP_PROXY (by scheme), else ALL_PROXY; NO_PROXY exempts
+//   "direct" → none;  any other text → exactly that proxy (the caller chose it)
+// false = the setting is unusable (g_http_client_error says why).
+static bool choose_proxy(const HttpTarget& t, const char* setting, ProxyChoice& out) {
+    out = ProxyChoice();
+    std::string spec = setting ? setting : "";
+    if (spec == "direct") return true;
+    if (spec.empty()) {
+        spec = t.tls ? env_first("HTTPS_PROXY", "https_proxy") : env_first("HTTP_PROXY", "http_proxy");
+        if (spec.empty()) spec = env_first("ALL_PROXY", "all_proxy");
+        if (spec.empty() || no_proxy_matches(env_first("NO_PROXY", "no_proxy"), t.host, t.port)) return true;
+    }
+    if (spec.find("://") == std::string::npos) spec = "http://" + spec;
+    HttpTarget p;
+    // the setting may carry credentials: never quote it in an error
+    if (!parse_absolute(spec, p)) { client_fail("unusable proxy setting"); return false; }
+    if (p.tls) { client_fail("an https:// proxy is not supported (spec/32_5 §3.5)"); return false; }
+    out.use  = true;
+    out.host = p.host;
+    out.port = p.explicit_port ? p.port : 1080;             // curl's default proxy port
+    if (!p.user.empty()) out.auth = "Basic " + base64_of(p.user + ":" + p.pass);
+    return true;
+}
+
+/* ── one connection ──────────────────────────────────────────────────── */
+
+struct HttpConn {
+    int      fd = -1;
+    SSL_CTX* ctx = nullptr;
+    SSL*     ssl = nullptr;
+    bool     forward = false;      // plain http through a proxy: absolute-form target
+    std::string proxy_auth;
+    HttpConn() = default;
+    HttpConn(const HttpConn&) = delete;
+    HttpConn& operator=(const HttpConn&) = delete;
+    ~HttpConn() {
+        if (ssl) { SSL_shutdown(ssl); SSL_free(ssl); }
+        if (ctx) SSL_CTX_free(ctx);
+        if (fd >= 0) ::close(fd);
+    }
+};
+
+// Status line and headers (lower-cased keys into `headers`, if given).  0 = no HTTP answer.
+static int read_head(int fd, SSL* ssl, AimlHttpMap* headers) {
+    char line[8192];
+    recv_line(fd, ssl, line, sizeof(line));
+    int status = 0;
+    if (sscanf(line, "HTTP/%*s %d", &status) != 1) status = 0;
+    while (true) {
+        int n = recv_line(fd, ssl, line, sizeof(line));
+        if (n <= 0) break;
+        while (n > 0 && (line[n - 1] == '\r' || line[n - 1] == '\n')) line[--n] = '\0';
+        if (n == 0) break;                                  // blank line: end of the head
+        char* colon = strchr(line, ':');
+        if (!colon || !headers) continue;
+        *colon = '\0';
+        const char* v = colon + 1;
+        while (*v == ' ' || *v == '\t') ++v;
+        aiml_http_map_put(headers, str_tolower(line).c_str(), v);
+    }
+    return status;
+}
+
+static bool start_tls(const HttpTarget& t, HttpConn& c) {
+    SSL_library_init();
+    c.ctx = SSL_CTX_new(TLS_client_method());
+    SSL_CTX_set_min_proto_version(c.ctx, TLS1_2_VERSION);
+    SSL_CTX_set_default_verify_paths(c.ctx);
+    const char* https_ca = getenv("AIML_WSS_CA");           // shared client-TLS CA bundle
+    if (https_ca && *https_ca) SSL_CTX_load_verify_locations(c.ctx, https_ca, nullptr);
+    // Verify the server cert (chain + hostname) by default → defeats active MITM.
+    // Shares the client-TLS insecure toggle with the wss client
+    // (mirror.tls_insecure(1) / AIML_WSS_INSECURE=1) for local dev.
+    bool insecure = aiml_ws_client_insecure() != 0;
+    SSL_CTX_set_verify(c.ctx, insecure ? SSL_VERIFY_NONE : SSL_VERIFY_PEER, nullptr);
+    c.ssl = SSL_new(c.ctx);
+    SSL_set_fd(c.ssl, c.fd);
+    SSL_set_tlsext_host_name(c.ssl, t.host.c_str());
+    if (!insecure) {
+        SSL_set_hostflags(c.ssl, X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS);
+        SSL_set1_host(c.ssl, t.host.c_str());
+    }
+    if (SSL_connect(c.ssl) > 0) return true;
+    long vr = SSL_get_verify_result(c.ssl);
+    client_fail(t.host + ": TLS: " + (vr != X509_V_OK ? X509_verify_cert_error_string(vr) : "handshake failed"));
+    return false;
+}
+
+// Connect to `t` directly, through a CONNECT tunnel (https) or a forward proxy (http).
+static bool open_conn(const HttpTarget& t, const ProxyChoice& px, int timeout_ms, HttpConn& c) {
+    const std::string& dial_host = px.use ? px.host : t.host;
+    int dial_port = px.use ? px.port : t.port;
+    c.fd = tcp_connect(dial_host.c_str(), dial_port, timeout_ms > 0 ? timeout_ms : 10000);
+    if (c.fd < 0) {
+        client_fail(std::string(px.use ? "proxy " : "") + dial_host + ":" + std::to_string(dial_port)
+                    + ": cannot connect");
+        return false;
+    }
+    if (timeout_ms > 0) {                                   // the same limit for every read/write
+        struct timeval tv;
+        tv.tv_sec = timeout_ms / 1000;
+        tv.tv_usec = (timeout_ms % 1000) * 1000;
+        setsockopt(c.fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+        setsockopt(c.fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+    }
+    if (px.use && !t.tls) {
+        c.forward = true;
+        c.proxy_auth = px.auth;
+        return true;
+    }
+    if (px.use) {
+        std::string hp = t.host + ":" + std::to_string(t.port);
+        std::string req = "CONNECT " + hp + " HTTP/1.1\r\nHost: " + hp + "\r\n";
+        if (!px.auth.empty()) req += "Proxy-Authorization: " + px.auth + "\r\n";
+        req += "\r\n";
+        int st = send_all_fd(c.fd, nullptr, req.c_str(), (int)req.size()) < 0
+                 ? 0 : read_head(c.fd, nullptr, nullptr);
+        if (st < 200 || st >= 300) {
+            client_fail("proxy " + px.host + ":" + std::to_string(px.port) + " refused CONNECT " + hp
+                        + (st ? " (HTTP " + std::to_string(st) + ")" : " (no answer)"));
+            return false;
         }
     }
+    return !t.tls || start_tls(t, c);
+}
 
-    // client.body_file: the body is streamed from a file (binary-safe, any size).
+// Where a response body goes: memory, or a file (download_to, 2xx only).
+struct ClientBody {
+    std::string mem;
+    FILE*       fp = nullptr;
+    int64_t     written = 0;
+    bool put(const char* data, size_t n) {
+        if (!fp) { mem.append(data, n); return true; }
+        if (fwrite(data, 1, n, fp) != n) return false;
+        written += (int64_t)n;
+        return true;
+    }
+};
+
+// The body: chunked, Content-Length, or until the server closes.
+// false = it ended early or the sink failed.
+static bool read_body(HttpConn& c, AimlHttpMap* headers, ClientBody& sink) {
+    const char* te = aiml_http_map_get(headers, "transfer-encoding");
+    const char* cl = aiml_http_map_get(headers, "content-length");
+    std::vector<char> buf(1 << 16);
+    if (te && str_tolower(te).find("chunked") != std::string::npos) {
+        char line[1024];
+        while (true) {
+            if (recv_line(c.fd, c.ssl, line, sizeof(line)) <= 0) return false;
+            long long size = strtoll(line, nullptr, 16);
+            if (size <= 0) {
+                while (recv_line(c.fd, c.ssl, line, sizeof(line)) > 2) {}   // trailers
+                return true;
+            }
+            while (size > 0) {
+                int want = (int)std::min<long long>(size, (long long)buf.size());
+                int got = recv_n(c.fd, c.ssl, buf.data(), want);
+                if (got > 0 && !sink.put(buf.data(), (size_t)got)) return false;
+                if (got < want) return false;
+                size -= got;
+            }
+            char crlf[2];
+            if (recv_n(c.fd, c.ssl, crlf, 2) != 2) return false;
+        }
+    }
+    if (cl) {
+        long long left = strtoll(cl, nullptr, 10);
+        while (left > 0) {
+            int want = (int)std::min<long long>(left, (long long)buf.size());
+            int got = recv_n(c.fd, c.ssl, buf.data(), want);
+            if (got > 0 && !sink.put(buf.data(), (size_t)got)) return false;
+            if (got < want) return false;
+            left -= got;
+        }
+        return true;
+    }
+    while (true) {                                          // neither: until the peer closes
+        int got = c.ssl ? SSL_read(c.ssl, buf.data(), (int)buf.size())
+                        : (int)::recv(c.fd, buf.data(), buf.size(), 0);
+        if (got <= 0) return true;
+        if (!sink.put(buf.data(), (size_t)got)) return false;
+    }
+}
+
+struct RequestSpec {
+    std::string  method = "GET";
+    AimlHttpMap* headers = nullptr;
+    const char*  body_str = nullptr;
+    const char*  body_file = nullptr;
+    int          timeout_ms = 0;
+    const char*  download_to = nullptr;
+    const char*  proxy = nullptr;
+    int          max_redirects = 0;
+};
+
+static bool is_redirect(int status) {
+    return status == 301 || status == 302 || status == 303 || status == 307 || status == 308;
+}
+
+static bool send_request(HttpConn& c, const HttpTarget& t, const RequestSpec& rq, bool send_auth) {
     FILE* body_fp = nullptr;
     long long file_len = -1;
-    if (body_file && *body_file) {
-        body_fp = std::fopen(body_file, "rb");
-        if (!body_fp) {
-            if (ssl)     { SSL_free(ssl); }
-            if (ssl_ctx) SSL_CTX_free(ssl_ctx);
-            ::close(fd);
-            return nullptr;
-        }
+    if (rq.body_file && *rq.body_file) {
+        body_fp = std::fopen(rq.body_file, "rb");
+        if (!body_fp) { client_fail(std::string("cannot read the body file ") + rq.body_file); return false; }
         std::fseek(body_fp, 0, SEEK_END);
         file_len = std::ftell(body_fp);
         std::fseek(body_fp, 0, SEEK_SET);
     }
-
-    size_t body_len = body_str ? strlen(body_str) : 0;
-    if (body_fp) {
-        req += "Content-Length: "; req += std::to_string(file_len); req += "\r\n";
-    } else if (body_len > 0) {
-        req += "Content-Length: "; req += std::to_string(body_len); req += "\r\n";
+    std::string req = rq.method + " " + (c.forward ? origin_of(t) + t.target : t.target) + " HTTP/1.1\r\n";
+    req += "Host: " + host_header(t) + "\r\nConnection: close\r\n";
+    if (c.forward && !c.proxy_auth.empty()) req += "Proxy-Authorization: " + c.proxy_auth + "\r\n";
+    if (rq.headers) {
+        for (int i = 0; i < rq.headers->capacity; ++i) {
+            if (!rq.headers->occupied[i]) continue;
+            const char* k = rq.headers->keys[i];
+            if (!send_auth && str_tolower(k) == "authorization") continue;
+            req += k; req += ": "; req += rq.headers->values[i]; req += "\r\n";
+        }
     }
+    size_t body_len = rq.body_str ? strlen(rq.body_str) : 0;
+    if (body_fp)           req += "Content-Length: " + std::to_string(file_len) + "\r\n";
+    else if (body_len > 0) req += "Content-Length: " + std::to_string(body_len) + "\r\n";
     req += "\r\n";
-    if (!body_fp && body_len > 0) req += body_str;
-
-    send_all_fd(fd, ssl, req.c_str(), static_cast<int>(req.size()));
+    if (!body_fp && body_len > 0) req += rq.body_str;
+    bool sent = send_all_fd(c.fd, c.ssl, req.c_str(), (int)req.size()) >= 0;
     if (body_fp) {
         std::vector<char> chunk(1 << 20);
-        while (true) {
+        while (sent) {
             size_t got = std::fread(chunk.data(), 1, chunk.size(), body_fp);
-            if (got > 0) send_all_fd(fd, ssl, chunk.data(), static_cast<int>(got));
+            if (got > 0) sent = send_all_fd(c.fd, c.ssl, chunk.data(), (int)got) >= 0;
             if (got < chunk.size()) break;
         }
         std::fclose(body_fp);
     }
+    if (!sent) client_fail(host_header(t) + ": the request could not be sent");
+    return sent;
+}
 
-    AimlHttpResponse* resp = parse_http_response(fd, ssl, method && strcmp(method, "HEAD") == 0);
-    if (resp && resp->status == 0) { aiml_http_resp_free(resp); resp = nullptr; }
+// The body of `r` into memory or the download file.  false = no usable answer.
+static bool receive_body(HttpConn& c, const HttpTarget& t, const RequestSpec& rq, AimlHttpResponse* r) {
+    ClientBody sink;
+    std::string part;
+    if (r->ok && rq.download_to && *rq.download_to) {
+        part = std::string(rq.download_to) + ".part";
+        sink.fp = std::fopen(part.c_str(), "wb");
+        if (!sink.fp) { client_fail("cannot write " + part); return false; }
+    }
+    bool complete = read_body(c, r->headers, sink);
+    if (sink.fp) {
+        bool closed = std::fclose(sink.fp) == 0;
+        if (complete && closed && std::rename(part.c_str(), rq.download_to) == 0) {
+            r->raw_len = sink.written;
+            return true;
+        }
+        std::remove(part.c_str());
+        client_fail(host_header(t) + ": the download into " + rq.download_to + " broke off");
+        return false;
+    }
+    if (!complete) { client_fail(host_header(t) + ": the answer broke off"); return false; }
+    if (!sink.mem.empty()) {
+        r->body = xstrdup(sink.mem.c_str());               // text view (stops at a NUL)
+        r->raw_len = (int64_t)sink.mem.size();
+        r->raw_body = static_cast<char*>(malloc(sink.mem.size()));
+        if (r->raw_body) memcpy(r->raw_body, sink.mem.data(), sink.mem.size());
+        else r->raw_len = 0;
+    }
+    return true;
+}
 
-    if (ssl)     { SSL_shutdown(ssl); SSL_free(ssl); }
-    if (ssl_ctx) SSL_CTX_free(ssl_ctx);
-    ::close(fd);
+// One request on one connection.  nullptr = no answer (g_http_client_error says why).
+static AimlHttpResponse* exchange(const HttpTarget& t, const RequestSpec& rq, bool send_auth) {
+    ProxyChoice px;
+    if (!choose_proxy(t, rq.proxy, px)) return nullptr;
+    HttpConn c;
+    if (!open_conn(t, px, rq.timeout_ms, c)) return nullptr;
+    if (!send_request(c, t, rq, send_auth)) return nullptr;
 
-    return resp;
+    AimlHttpResponse* r = static_cast<AimlHttpResponse*>(calloc(1, sizeof(AimlHttpResponse)));
+    r->headers = aiml_http_map_new();
+    r->conn_fd = -1;
+    r->status = read_head(c.fd, c.ssl, r->headers);
+    if (r->status == 0) {
+        aiml_http_resp_free(r);
+        client_fail(host_header(t) + ": no HTTP answer");
+        return nullptr;
+    }
+    r->ok = (r->status >= 200 && r->status < 300) ? 1 : 0;
+    r->final_url = xstrdup((origin_of(t) + t.target).c_str());
+    // A response to HEAD has no body whatever Content-Length says (RFC 9110
+    // §9.3.2), nor do 1xx/204/304.  A redirect that will be followed is not
+    // read: the connection closes anyway.
+    bool followed = is_redirect(r->status) && rq.max_redirects > 0
+                    && aiml_http_map_get(r->headers, "location");
+    bool bodiless = rq.method == "HEAD" || r->status < 200 || r->status == 204 || r->status == 304;
+    if (!followed && !bodiless && !receive_body(c, t, rq, r)) {
+        aiml_http_resp_free(r);
+        return nullptr;
+    }
+    return r;
+}
+
+// The Location of a redirect, resolved against the URL that answered.
+static HttpTarget resolve_location(const HttpTarget& from, const std::string& loc) {
+    HttpTarget next;
+    if (parse_absolute(loc, next)) return next;
+    if (loc.rfind("//", 0) == 0 && parse_absolute((from.tls ? "https:" : "http:") + loc, next))
+        return next;                                        // scheme-relative
+    next = from;
+    std::string path = loc.substr(0, loc.find('#'));
+    std::string dir = from.target.substr(0, from.target.find('?'));
+    if (!path.empty() && path[0] == '/')      next.target = path;
+    else if (!path.empty() && path[0] == '?') next.target = dir + path;
+    else                                      next.target = dir.substr(0, dir.rfind('/') + 1) + path;
+    return next;
+}
+
+// The request and its redirects (spec/32_2 §2.3a).
+static AimlHttpResponse* http_request(const AimlUrl* u, RequestSpec rq) {
+    g_http_client_error.clear();
+    if (!u || !u->host) { client_fail("no URL"); return nullptr; }
+    HttpTarget t = target_of(u);
+    const std::string first_origin = origin_of(t);
+    bool send_auth = true;
+    for (int hop = 0;; ++hop) {
+        AimlHttpResponse* r = exchange(t, rq, send_auth);
+        if (!r) return nullptr;
+        const char* loc = aiml_http_map_get(r->headers, "location");
+        if (!is_redirect(r->status) || !loc || rq.max_redirects <= 0) return r;
+        if (hop >= rq.max_redirects) {
+            aiml_http_resp_free(r);
+            client_fail("more than " + std::to_string(rq.max_redirects) + " redirects");
+            return nullptr;
+        }
+        HttpTarget next = resolve_location(t, loc);
+        // 303, and 301/302 after a POST: continue with GET and without the body
+        if (r->status == 303 || ((r->status == 301 || r->status == 302) && rq.method == "POST")) {
+            if (rq.method != "HEAD") rq.method = "GET";
+            rq.body_str = nullptr;
+            rq.body_file = nullptr;
+        }
+        // credentials stay with the origin they were given for
+        if (origin_of(next) != first_origin) send_auth = false;
+        aiml_http_resp_free(r);
+        t = next;
+    }
+}
+
+static AimlHttpResponse* do_http_request(const char* method, AimlUrl* u, const char* body_str) {
+    RequestSpec rq;
+    rq.method = method;
+    rq.body_str = body_str;
+    rq.max_redirects = 10;
+    return http_request(u, rq);
 }
 
 /* ────────────────────────────────────────────────────────────────
@@ -527,19 +877,19 @@ static AimlHttpResponse* do_http_request(const char* method, AimlUrl* u,
  * ──────────────────────────────────────────────────────────────── */
 
 extern "C" void* aiml_http_get(void* url) {
-    return do_http_request("GET", static_cast<AimlUrl*>(url), nullptr, nullptr, 0);
+    return do_http_request("GET", static_cast<AimlUrl*>(url), nullptr);
 }
 extern "C" void* aiml_http_post(void* url, const char* body) {
-    return do_http_request("POST", static_cast<AimlUrl*>(url), nullptr, body, 0);
+    return do_http_request("POST", static_cast<AimlUrl*>(url), body);
 }
 extern "C" void* aiml_http_put(void* url, const char* body) {
-    return do_http_request("PUT", static_cast<AimlUrl*>(url), nullptr, body, 0);
+    return do_http_request("PUT", static_cast<AimlUrl*>(url), body);
 }
 extern "C" void* aiml_http_delete(void* url) {
-    return do_http_request("DELETE", static_cast<AimlUrl*>(url), nullptr, nullptr, 0);
+    return do_http_request("DELETE", static_cast<AimlUrl*>(url), nullptr);
 }
 extern "C" void* aiml_http_head(void* url) {
-    return do_http_request("HEAD", static_cast<AimlUrl*>(url), nullptr, nullptr, 0);
+    return do_http_request("HEAD", static_cast<AimlUrl*>(url), nullptr);
 }
 
 /* ────────────────────────────────────────────────────────────────
@@ -551,6 +901,7 @@ extern "C" void* aiml_http_new_request(const char* method, void* url) {
     c->headers = aiml_http_map_new();
     c->method  = xstrdup(method ? method : "GET");
     c->url     = static_cast<AimlUrl*>(url);
+    c->max_redirects = 10;
     return c;
 }
 
@@ -560,11 +911,29 @@ extern "C" void* aiml_http_client_new(const char* method, void* url) {
 
 extern "C" void* aiml_http_client_send(void* client_ptr) {
     AimlHttpClient* c = static_cast<AimlHttpClient*>(client_ptr);
-    if (!c) return nullptr;
-    return do_http_request(c->method ? c->method : "GET",
-                           c->url, c->headers, c->body,
-                           c->timeout > 0 ? c->timeout : 0,
-                           c->body_file);
+    if (!c) { client_fail("no request"); return nullptr; }
+    RequestSpec rq;
+    rq.method        = c->method ? c->method : "GET";
+    rq.headers       = c->headers;
+    rq.body_str      = c->body;
+    rq.body_file     = c->body_file;
+    rq.timeout_ms    = c->timeout > 0 ? c->timeout : 0;
+    rq.download_to   = c->download_to;
+    rq.proxy         = c->proxy;
+    rq.max_redirects = c->max_redirects;
+    return http_request(c->url, rq);
+}
+
+// http.last_error() — why the last request on this thread got no answer
+// (null response); "" after one that was answered.  Never contains credentials.
+extern "C" char* aiml_http_last_error(void) {
+    return aiml_str_dup(g_http_client_error.c_str());
+}
+
+// resp.url — the URL that gave this answer (after redirects); "" server-side.
+extern "C" char* aiml_http_resp_url(void* resp) {
+    char* u = resp ? static_cast<AimlHttpResponse*>(resp)->final_url : nullptr;
+    return aiml_str_dup(u ? u : "");
 }
 
 extern "C" int32_t aiml_http_resp_status(void* resp) {
@@ -590,6 +959,7 @@ extern "C" void aiml_http_resp_free(void* resp) {
     aiml_http_map_free(r->headers);
     free(r->body);
     free(r->raw_body);
+    free(r->final_url);
     free(r);
 }
 
@@ -2291,15 +2661,35 @@ extern "C" void aiml_http_client_free(void* client) {
     free(c->body);
     free(c->method);
     free(c->body_file);
+    free(c->download_to);
+    free(c->proxy);
     free(c);
+}
+
+static void replace_text(char*& slot, const char* text) {
+    free(slot);
+    slot = (text && *text) ? xstrdup(text) : nullptr;
+}
+
+// client.download_to = path — a 2xx body is streamed into `path` (staged as
+// <path>.part, renamed when complete); other answers stay in memory.
+extern "C" void aiml_http_client_set_download_to(void* client, const char* path) {
+    if (client) replace_text(static_cast<AimlHttpClient*>(client)->download_to, path);
+}
+
+// client.proxy = "" (environment) | "direct" | "http://[user:pass@]host:port"
+extern "C" void aiml_http_client_set_proxy(void* client, const char* proxy) {
+    if (client) replace_text(static_cast<AimlHttpClient*>(client)->proxy, proxy);
+}
+
+// client.max_redirects = n — redirects followed (0 = the 3xx is the answer).
+extern "C" void aiml_http_client_set_max_redirects(void* client, int32_t count) {
+    if (client) static_cast<AimlHttpClient*>(client)->max_redirects = count < 0 ? 0 : count;
 }
 
 // client.body_file = path — stream the request body from a file (binary-safe).
 extern "C" void aiml_http_client_set_body_file(void* client, const char* path) {
-    if (!client) return;
-    AimlHttpClient* c = static_cast<AimlHttpClient*>(client);
-    free(c->body_file);
-    c->body_file = (path && *path) ? xstrdup(path) : nullptr;
+    if (client) replace_text(static_cast<AimlHttpClient*>(client)->body_file, path);
 }
 
 extern "C" void aiml_http_client_set_timeout(void* client, int32_t timeout_ms) {

@@ -1,0 +1,117 @@
+# Raw-socket fixtures for tests/test_http_client_proxy.aiml.
+#
+# proxy_serve: a tiny HTTP proxy on its listener, one connection per round.
+#   CONNECT localhost:23222 / 127.0.0.1:23222 → 200, then bytes relayed both ways
+#                                            to the TLS server on 127.0.0.1:23222
+#   any other CONNECT                       → 403
+#   anything else (forward mode)            → 200 "fwd <request line>|<Proxy-Authorization or none>"
+# origin_serve: a raw origin server, one connection per round.
+#   GET /until-close → 200 without Content-Length, the body ends at close
+#   anything else    → Content-Length 100, but only "short" before the close
+
+# The request head (up to the blank line) of a connection.
+- def:
+    name: read_head
+    args: [[conn, socket_handle]]
+    return: string
+    body:
+      - decl: [head, string, ""]
+      - while:
+          condition: { lt: [{ call: [head.index_of, "\r\n\r\n"] }, 0] }
+          body:
+            - decl: [part, string, { call: [net.recv_string, conn, 4096] }]
+            - if: { condition: { or: [{ eq: [part, null] }, { eq: [part.len, 0] }] }, then: [{ return: [head] }] }
+            - set: [head, "${head}${part}"]
+      - return: [head]
+
+# Bytes from one socket to the other until the sender closes.
+- def:
+    name: relay
+    args: [[from_sock, socket_handle], [to_sock, socket_handle]]
+    body:
+      - decl: [chunk, buffer<u8>]
+      - call: [chunk.alloc, 65536]
+      - decl: [going, i32, 1]
+      - while:
+          condition: { eq: [going, 1] }
+          body:
+            - decl: [got, i32, { call: [net.recv, from_sock, chunk] }]
+            - if: { condition: { le: [got, 0] }, then: [{ set: [going, 0] }], else: [{ call: [net.send, to_sock, chunk] }] }
+
+- def:
+    name: header_value
+    args: [[head, string], [name, string]]
+    return: string
+    body:
+      - decl: [spot, i32, { call: [head.index_of, "\r\n${name}: "] }]
+      - if: { condition: { lt: [spot, 0] }, then: [{ return: ["none"] }] }
+      - decl: [rest, string, { call: [head.substr, { +: [spot, { +: [name.len, 4] }] }] }]
+      - return: [{ call: [rest.substr, 0, { call: [rest.index_of, "\r\n"] }] }]
+
+- def:
+    name: tunnel
+    args: [[client_sock, socket_handle]]
+    body:
+      - decl: [upstream, socket_handle, { call: [net.socket, "tcp"] }]
+      - call: [net.set_timeout, upstream, 5000]
+      - call: [net.connect, upstream, "127.0.0.1", 23222]
+      - call: [net.send_string, client_sock, "HTTP/1.1 200 Connection established\r\n\r\n"]
+      - decl: [back, thread_handle, { spawn: [relay, upstream, client_sock] }]
+      - call: [relay, client_sock, upstream]
+      - call: [back.join]
+      - call: [net.close, upstream]
+
+- def:
+    name: proxy_serve
+    args: [[listener, socket_handle], [rounds, i32]]
+    body:
+      - decl: [done, i32, 0]
+      - while:
+          condition: { lt: [done, rounds] }
+          body:
+            - set: [done, { +: [done, 1] }]
+            - decl: [conn, socket_handle, { call: [net.accept, listener] }]
+            - call: [net.set_timeout, conn, 5000]
+            - decl: [head, string, { call: [read_head, conn] }]
+            - decl: [line, string, { call: [head.substr, 0, { call: [head.index_of, "\r\n"] }] }]
+            - decl: [to_tls, i32, { or: [{ call: [line.starts_with, "CONNECT localhost:23222 "] }, { call: [line.starts_with, "CONNECT 127.0.0.1:23222 "] }] }]
+            - if:
+                condition: { eq: [to_tls, 1] }
+                then: [{ call: [tunnel, conn] }]
+                else:
+                  - if:
+                      condition: { eq: [{ call: [line.starts_with, "CONNECT "] }, 1] }
+                      then: [{ call: [net.send_string, conn, "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n"] }]
+                      else:
+                        - decl: [auth, string, { call: [header_value, head, "Proxy-Authorization"] }]
+                        - decl: [answer, string, "fwd ${line}|${auth}"]
+                        - call: [net.send_string, conn, "HTTP/1.1 200 OK\r\nContent-Length: ${answer.len}\r\nConnection: close\r\n\r\n${answer}"]
+            - call: [net.close, conn]
+
+- def:
+    name: origin_serve
+    args: [[listener, socket_handle], [rounds, i32]]
+    body:
+      - decl: [done, i32, 0]
+      - while:
+          condition: { lt: [done, rounds] }
+          body:
+            - set: [done, { +: [done, 1] }]
+            - decl: [conn, socket_handle, { call: [net.accept, listener] }]
+            - call: [net.set_timeout, conn, 5000]
+            - decl: [head, string, { call: [read_head, conn] }]
+            - if:
+                condition: { ge: [{ call: [head.index_of, "GET /until-close "] }, 0] }
+                then: [{ call: [net.send_string, conn, "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\nhello until close"] }]
+                else: [{ call: [net.send_string, conn, "HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\nshort"] }]
+            - call: [net.close, conn]
+
+- def:
+    name: listen_on
+    args: [[port, i32]]
+    return: socket_handle
+    body:
+      - decl: [sock, socket_handle, { call: [net.socket, "tcp"] }]
+      - call: [net.bind, sock, "127.0.0.1", port]
+      - call: [net.listen, sock, 8]
+      - return: [sock]
