@@ -197,6 +197,13 @@ extern "C" void aiml_iface_elem_free(void* slot, int32_t methodCount) {
 // AIML v2: decref a %M* reference element/value (frees inner heap + shell at refcount 0).
 extern "C" void aiml_model_decref(void* obj, const void* nodes, int32_t n_nodes);
 extern "C" void aiml_model_incref(void* obj);
+// A list<process> element (spec/23 §5.5).  Weak: runtimes without processes
+// (WASM) link this file without process_runtime.
+extern "C" void aiml_process_release(void* handle) __attribute__((weak));
+static void release_process_elem(void* handle) {
+    if (handle && aiml_process_release) aiml_process_release(handle);
+}
+
 extern "C" void aiml_list_free(void* list_ptr, int32_t elemKind,
                                int64_t elemSize, void* serNodes, int32_t serNodesCount) {
     if (!list_ptr) return;
@@ -234,6 +241,10 @@ extern "C" void aiml_list_free(void* list_ptr, int32_t elemKind,
         char* base = reinterpret_cast<char*>(lst->data);
         for (int32_t i = 0; i < lst->size; ++i)
             aiml_ser_free_decoded(base + (int64_t)i * elemSize, serNodes, serNodesCount);
+    } else if (elemKind == 7) {
+        // spec/23 §5.5: list<process> elements are owned process handles.
+        void** elems = reinterpret_cast<void**>(lst->data);
+        for (int32_t i = 0; i < lst->size; ++i) release_process_elem(elems[i]);
     } else if (elemKind == 6 && elemSize > 0) {
         // interface polymorphism: list<ptr<Interface>> elements are 16-byte fat pointers
         // {obj, vtable} (elemSize = sizeof(AimlFatPtr_<Iface>)). Stride by elemSize and free ONLY the
@@ -271,6 +282,7 @@ static void free_list_elem_at(char* slot, int32_t elemKind, int64_t /*elemSize*/
         case 5: { if (serNodes) aiml_ser_free_decoded(slot, serNodes, serNodesCount); break; }  // nested handle (slot-rooted)
         case 6: { aiml_free_iface_elem(slot, serNodesCount); break; }                          // iface fat pointer
         case 2: { if (serNodes) aiml_ser_free_decoded(slot, serNodes, serNodesCount); break; }
+        case 7: { release_process_elem(*reinterpret_cast<void**>(slot)); break; }
         default: break;  // elemKind 0: scalar/POD, nothing to free
     }
 }

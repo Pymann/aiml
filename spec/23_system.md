@@ -264,6 +264,7 @@ are expressions. Unknown keys are a compile error. All keys are optional:
 | `capture` | `bool` | `false` | stdout/stderr go to pipes → `stdout_buffer`, `stderr_buffer`, `read_line`, `read_err_line`. |
 | `stdout` | `string` | `""` | Redirect stdout to this file (created/truncated). Takes precedence over `capture` for stdout. |
 | `stderr` | `string` | `""` | Redirect stderr to this file (created/truncated). Takes precedence over `capture` for stderr. |
+| `stdin` | `string` | `""` | Read stdin from this file (F23-50; `""` = inherit, a detached job always reads `/dev/null`). A file that cannot be opened makes the spawn fail (`null`). |
 | `detach` | `bool` | `false` | Durable process, §5.4. |
 | `status_file` | `string` | `""` | Only with `detach`: exit-status file, §5.4. |
 
@@ -291,6 +292,7 @@ child (a running child keeps running; the runtime reaps it later so no zombie ac
 | `running()` | `bool` | Non-blocking status check; reaps a finished child and sets `returncode`. |
 | `wait()` | `i32` | Blocks until the process ends (draining capture pipes), returns `returncode`. |
 | `kill()` | `void` | `SIGKILL` (detached: its whole process group). |
+| `signal(sig)` | `i32` | Sends signal number `sig` (e.g. 15 = SIGTERM, 2 = SIGINT) — to the process group for a detached / attached job; `0` sent, `-1` not (finished, no such signal) (F23-51). |
 | `read_line()` | `string` | Next stdout line without the trailing `"\n"` (blocking); `""` at end of stream. |
 | `read_err_line()` | `string` | Same for stderr. |
 | `eof()` | `bool` | `true` when the process has ended and no captured output is left to read. |
@@ -331,6 +333,35 @@ durable-task pattern):
   detected — keep the status file next to the job's workspace.)
 - Without `status_file` the exit status is only observable while the parent lives.
 
+### 5.5 Many processes at once — `sys.wait_any` (F23-52)
+
+```aiml
+- decl: [jobs, list<process>]
+# … push up to N compiler processes (capture: true) …
+- while:
+    condition: { gt: [jobs.len, 0] }
+    body:
+      - decl: [done_at, i32, { call: [sys.wait_any, jobs, -1] }]
+      - if:
+          condition: { lt: [done_at, 0] }      # timeout or a caught signal
+          then: [{ call: [stop_all, jobs] }]
+          else:
+            - decl: [job, ref<process>, { at: [jobs, done_at] }]
+            - print: ["rc=${job.returncode}: ${job.stderr_buffer}"]
+            - call: [jobs.remove, done_at]
+```
+
+`sys.wait_any(procs: list<process>, timeout_ms: i32) -> i32` returns the index of a
+process in `procs` that has ended (the lowest such index, `returncode` is set), or `-1`
+when none ended within `timeout_ms` (`-1` = no limit, `0` = just look), when the list is
+empty, or when a signal caught with `sys.catch_signals` arrived meanwhile.  While it
+waits it keeps reading every process's capture pipes — a child writing more than a
+pipe holds can not block the pool — and enforces their `timeout`s.  It sleeps in
+`poll(2)` on process descriptors (`pidfd`), not in a polling loop.
+
+A `list<process>` owns its processes: `remove(i)` and the list's drop release them like
+a `process` variable's drop (pipes closed, the child reaped later, never killed).
+
 ## 5.6 `sys.require_tools` — was die Umgebung mitbringen muss
 
 ```aiml
@@ -360,6 +391,25 @@ fehlenden Eintraege darin, durch Leerzeichen getrennt.
 - **F23-43** Der Aufruf ist **ein** Ort fuer diese Frage.  aiml `spec/62` §18.2 (`requires:`)
   und cosmos (doc/spec/110) rufen ihn beide auf — zwei Kopien derselben Pruefung laufen
   auseinander, und die Haelfte, die schweigt, ist die gefaehrliche.
+
+### 5.7 Signals — `sys.catch_signals`, `sys.caught_signal` (F23-53)
+
+```aiml
+- call: [sys.catch_signals, "INT,TERM"]
+# … long work, checking now and then …
+- if: { condition: { neq: [{ call: [sys.caught_signal] }, 0] }, then: [{ call: [cleanup] }] }
+```
+
+| Call | Returns | Meaning |
+|---|---|---|
+| `sys.catch_signals(names)` | `i32` | From now on the listed signals (`INT`, `TERM`, `HUP`, `QUIT`, `USR1`, `USR2`, `PIPE`, comma-separated) no longer end the program; they are recorded instead. `0` ok, `-1` an unknown name (nothing changed). |
+| `sys.caught_signal()` | `i32` | The number of the last caught signal since the previous call (`2` INT, `15` TERM, …), `0` if none; reading clears it. |
+
+There is no callback: a handler only sets a flag (all a signal handler may safely do),
+the program decides at a point of its choosing.  Children started by `sys.exe` begin
+with every signal at its default, whatever the parent caught.  `sys.wait_any` returns
+`-1` early when a caught signal arrives, so a pool loop can stop promptly.
+
 
 ## 6. Memory Management
 

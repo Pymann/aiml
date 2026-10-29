@@ -231,6 +231,8 @@ probe "bytes file streaming: append_file / file_slice / copy_range / gzip_file /
     "$AIML_BIN" -r tests/test_bytes_stream.aiml
 probe "sys.deserialize: defaults, null, number conversion, errors with paths, bare containers, per-thread error (spec/29 §5.2d)" "sde" \
     "$AIML_BIN" -r tests/test_ser_defaults_errors.aiml
+probe "processes: sys.wait_any pool with captured output, signal, caught signals, stdin, list<process> release (spec/23 §5)" "ppl" \
+    "$AIML_BIN" -r tests/test_process_pool.aiml
 probe "regex: match/search/find/find_all/replace/split, error text, linear time (spec/09_2)" "rgx" \
     "$AIML_BIN" -r tests/test_regex.aiml
 probe "glob: io.glob, io.globber batches, io.glob_match (spec/42_1)" "glb" \
