@@ -17,10 +17,16 @@ cd "$APP"
 out=$("$AIML" main_probe.aiml -r 2>&1); rc=$?
 if [ $rc -eq 0 ] && echo "$out" | grep -q "PASS import_norm"; then echo "  ok   JIT"; else echo "  FAIL JIT (rc=$rc)"; echo "$out" | grep -v WARNING | tail -3; fail=1; fi
 
-if "$AIML" main_probe.aiml -o "$WORK/probe.o" > "$WORK/build.log" 2>&1 \
-   && g++ -o "$WORK/probe" "$WORK"/*.o -L"$(dirname "$AIML")/../lib" -L"$ROOT/out/libaiml" ${LIBAIML_DIR:+-L"$LIBAIML_DIR"} -laiml \
-          -Wl,-rpath,"${LIBAIML_DIR:-$ROOT/out/libaiml}" > "$WORK/link.log" 2>&1; then
-    out=$(LD_LIBRARY_PATH="${LIBAIML_DIR:-$ROOT/out/libaiml}:${LD_LIBRARY_PATH:-}" "$WORK/probe" 2>&1); rc=$?
+# libaiml.so: $LIBAIML_DIR, sonst neben dem Compiler (../lib, ../libaiml), sonst out/libaiml.
+LIBDIR=""
+for cand in "${LIBAIML_DIR:-}" "$(dirname "$AIML")/lib" "$(dirname "$AIML")/../lib" "$(dirname "$AIML")/../libaiml" "$ROOT/out/libaiml"; do
+    [ -n "$cand" ] && [ -f "$cand/libaiml.so" ] && { LIBDIR="$(cd "$cand" && pwd)"; break; }
+done
+if [ -z "$LIBDIR" ]; then
+    echo "  SKIP AOT (keine libaiml.so gefunden; LIBAIML_DIR setzen)"
+elif "$AIML" main_probe.aiml -o "$WORK/probe.o" > "$WORK/build.log" 2>&1 \
+   && g++ -o "$WORK/probe" "$WORK"/*.o -L"$LIBDIR" -laiml -Wl,-rpath,"$LIBDIR" > "$WORK/link.log" 2>&1; then
+    out=$("$WORK/probe" 2>&1); rc=$?
     if [ $rc -eq 0 ] && echo "$out" | grep -q "PASS import_norm"; then echo "  ok   AOT"; else echo "  FAIL AOT (rc=$rc)"; fail=1; fi
 else
     echo "  FAIL AOT build/link"; grep -h -E "undefined|ERROR" "$WORK/build.log" "$WORK/link.log" | head -3; fail=1

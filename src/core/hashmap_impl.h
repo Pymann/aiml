@@ -1,5 +1,5 @@
 #pragma once
-// hashmap<K:V> — Hashtabelle als opaker, referenzgezählter Laufzeit-Griff (spec/68_hashmap.md).
+// hashmap<K:V> — Hashtabelle als opaker, referenzgezählter Laufzeit-Griff (spec/69_hashmap.md).
 // Laufzeit: src/sys/hashmap_runtime.cpp.  Lebensdauer wie chan<T> (spec/61 Class 5):
 // Binden aus einer benannten Quelle = retain, Drop/Überschreiben = release.
 #include "context.h"

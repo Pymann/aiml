@@ -1,4 +1,4 @@
-// hashmap<K:V> runtime (spec/68_hashmap.md).
+// hashmap<K:V> runtime (spec/69_hashmap.md).
 //
 // A hashmap is an opaque, refcounted heap object (spec/61 Class 5, like chan<T>): copies of the
 // handle co-own it (retain), the last owner's drop frees it (release).  Lookup is a real hash

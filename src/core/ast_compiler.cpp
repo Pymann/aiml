@@ -7445,7 +7445,7 @@ IRValue* Compiler::resolveProperty(Symbol* baseSym, const std::string& propName)
         baseAlloca = ctx.ir_gen->wrap(loaded);
     }
 
-    // spec/68: hashmap<K:V>.len / .empty
+    // spec/69: hashmap<K:V>.len / .empty
     if (HashmapImpl::isHashmapType(className) && (propName == "len" || propName == "empty")) {
         bool known = true;
         llvm::Value* n = HashmapImpl::method(ctx, className, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)),

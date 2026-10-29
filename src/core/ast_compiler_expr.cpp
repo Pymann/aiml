@@ -1322,7 +1322,7 @@ IRValue* Compiler::visitSpawn(SpawnExpr* spawn) {
 
     // spec/61 Class 5: the thread co-owns each chan argument (retained here, released by the trampoline)
     std::vector<bool> chanArg(argVals.size(), false);
-    std::vector<bool> hashmapArg(argVals.size(), false);   // spec/68: hashmap args co-owned the same way
+    std::vector<bool> hashmapArg(argVals.size(), false);   // spec/69: hashmap args co-owned the same way
     if (ctx.memV3 && ctx.lifetimeDropsEnabled)
         for (size_t ai = 0; ai < argVals.size() && ai < fi->argTypeNames.size(); ++ai) {
             const std::string& at = fi->argTypeNames[ai];

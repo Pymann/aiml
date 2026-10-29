@@ -590,7 +590,7 @@ void Compiler::moveIteratorArg(Expr* arg) {
 // slot nulled). dst == nullptr (return): only a non-local chan source is retained — a returned local
 // moves via consumeLocalDrop.
 void Compiler::emitResourceBindTransfer(const std::string& typeName, Expr* rhs, llvm::Value* dst) {
-    // spec/68: hashmap<K:V> follows the chan<T> co-ownership rules with its own retain/release.
+    // spec/69: hashmap<K:V> follows the chan<T> co-ownership rules with its own retain/release.
     bool isHashmap = HashmapImpl::isHashmapType(typeName);
     bool isChan = isHashmap || (typeName.rfind("chan<", 0) == 0 && typeName.back() == '>');
     const char* retainFn = isHashmap ? "aiml_hashmap_retain" : "aiml_chan_retain";
@@ -1774,7 +1774,7 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
             if (kTy && vTy) MapImpl::initMap(ctx, unwrappedAlloca, kTy, vTy, 4);
         }
     } else if (HashmapImpl::isHashmapType(tName)) {
-        // spec/68: a fresh table unless initialised from another hashmap (shared, retained) or a
+        // spec/69: a fresh table unless initialised from another hashmap (shared, retained) or a
         // map literal (filled below by the literal's put calls on the fresh table).
         bool isLiteral = decl->initialValue && dynamic_cast<DictLiteralExpr*>(decl->initialValue.get());
         if (!decl->initialValue || isLiteral) HashmapImpl::initSlot(ctx, unwrappedAlloca, tName);
@@ -1995,7 +1995,7 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
                 }
             }
         }
-        // spec/68 hashmap<K:V> (kind 23, Class 5 like chan): refcounted table, released at owner drop
+        // spec/69 hashmap<K:V> (kind 23, Class 5 like chan): refcounted table, released at owner drop
         // on every exit; null-safe.  A copy from a named hashmap is retained (emitResourceBindTransfer).
         if (HashmapImpl::isHashmapType(decl->typeName)
             && ctx.memV3 && ctx.lifetimeDropsEnabled && decl->lifetime != "persistent" && !decl->is_extern
@@ -5458,7 +5458,7 @@ static void emitScopeDrop(CompilerContext& ctx, const CompilerContext::ScopeDrop
         ctx.builder.CreateCall(ctx.getFunction("aiml_gl_texture_release", ctx.builder.getVoidTy(), {i8p}), { tex });
         ctx.builder.CreateStore(llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p)), it.addr);
     } else if (it.kind == 23) {
-        // spec/68 hashmap: release the refcounted table (null-safe); null the slot (single release).
+        // spec/69 hashmap: release the refcounted table (null-safe); null the slot (single release).
         llvm::Value* h = ctx.builder.CreateLoad(i8p, it.addr, "drop_hashmap");
         ctx.builder.CreateCall(ctx.getFunction("aiml_hashmap_release", ctx.builder.getVoidTy(), {i8p}), { h });
         ctx.builder.CreateStore(llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p)), it.addr);

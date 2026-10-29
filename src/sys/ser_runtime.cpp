@@ -1520,7 +1520,7 @@ static void clw(int idx, const AimlTypeNode* ns, int nn,
         memcpy(dst, &c, sizeof(c));
         break;
     }
-    case AIML_TD_HASHMAP: {   // spec/68: a clone gets its own independent table
+    case AIML_TD_HASHMAP: {   // spec/69: a clone gets its own independent table
         void* h = nullptr; memcpy(&h, src, sizeof(h));
         void* cp = aiml_hashmap_clone(h);
         memcpy(dst, &cp, sizeof(cp));
