@@ -68,7 +68,7 @@ A file can import from an installed **package** by name instead of by place:
 ```
 
 - **Where the package lives says the package table**, not the source.  exodus writes it
-  (`exodus deps install`, from the `dependencies` of `exodus.json`): `aiml.packages.json` in the
+  (`exodus pkg install`, from the `dependencies` of `exodus.json`): `aiml.packages.json` in the
   project root, not committed —
 
   ```json
@@ -82,7 +82,9 @@ A file can import from an installed **package** by name instead of by place:
      directory (a build started from elsewhere still finds the project's table);
   4. the table of the venv the compiler belongs to, `<venv>/lib/aiml/aiml.packages.json`
      (spec/68 F68-30).
-  The table is reread when it changes, so a long-running host sees a later `deps install`.
+  The table is reread when it changes, so a long-running host sees a later `pkg install`.
+- **A venv's table is written by `aiml venv <dir> install`** (spec/68 §6 F68-54): a tool whose
+  manifest names a `package` becomes `@<name>/…` for everything built with that venv.
 - **Inside a package, imports stay ordinary**: `- import: "util.aiml"` in a package file resolves
   relative to that file like any other — a package is just a directory somebody else wrote.
 - **A package import never leaves the package directory.**  `@ufo/../x` is an error.
@@ -95,8 +97,8 @@ A file can import from an installed **package** by name instead of by place:
   a later bundle of the same context that imports it again uses the first copy (no second lib
   init).
 - **Errors name the fix**: no table → "package 'ufo' is not installed (no aiml.packages.json;
-  run exodus deps install or set AIML_PACKAGES)"; not in the table → "… is not in <table> (add it
-  to dependencies and run exodus deps install)"; a missing file → "package 'ufo' has no file …".
+  run exodus pkg install or set AIML_PACKAGES)"; not in the table → "… is not in <table> (add it
+  to dependencies and run exodus pkg install)"; a missing file → "package 'ufo' has no file …".
 
 Tests: `tests/packages/run.sh` (file import, table lookup from another directory,
 `AIML_PACKAGES`, missing table; in a context: package import, same import twice, plain import

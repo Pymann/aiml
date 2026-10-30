@@ -27,7 +27,7 @@ std::mutex g_mutex;
 std::map<std::string, Table> g_cache;          // table file → parsed
 
 // Cached per file and reread when it changed: a long-running host (cosmosd)
-// sees what a later `exodus deps install` wrote.
+// sees what a later `exodus pkg install` wrote.
 const Table& load(const std::string& file) {
     std::error_code ec;
     fs::file_time_type now = fs::last_write_time(file, ec);
@@ -109,7 +109,7 @@ bool resolve(const std::string& raw, const std::string& importer,
     std::lock_guard<std::mutex> lock(g_mutex);
     std::string file = findTable(importer, explicitTable);
     if (file.empty()) {
-        err = "package '" + name + "' is not installed (no aiml.packages.json; run exodus deps install or set AIML_PACKAGES)";
+        err = "package '" + name + "' is not installed (no aiml.packages.json; run exodus pkg install or set AIML_PACKAGES)";
         return false;
     }
     const Table& t = load(file);
@@ -119,7 +119,7 @@ bool resolve(const std::string& raw, const std::string& importer,
     }
     auto it = t.dirs.find(name);
     if (it == t.dirs.end()) {
-        err = "package '" + name + "' is not in " + file + " (add it to dependencies and run exodus deps install)";
+        err = "package '" + name + "' is not in " + file + " (add it to dependencies and run exodus pkg install)";
         return false;
     }
     std::error_code ec;

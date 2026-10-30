@@ -5,7 +5,7 @@
 //   - import: "@ufo/lib/registry.aiml"
 //
 // The package table says where `ufo` lives.  exodus writes it
-// (`exodus deps install`): `aiml.packages.json` in the project root,
+// (`exodus pkg install`): `aiml.packages.json` in the project root,
 //
 //   { "packages": { "ufo": { "path": "__exodus_cache/deps/ufo/<sha256>",
 //                            "version": "0.2.0", "sha256": "<hex>" } } }

@@ -57,7 +57,7 @@ check "the project's own table wins over the venv's" '[ $rc -eq 0 ] && echo "$ou
 rm -f "$PROJ/aiml.packages.json"
 out=$(cd "$PROJ" && env AIML_MEM_V3=1 AIML_CACHE="$WORK/cache" "$AIML" main_file.aiml 2>&1); rc=$?
 check "the build-tree compiler (no venv) does not see it: error names the fix" \
-  '[ $rc -ne 0 ] && echo "$out" | grep -q "exodus deps install"'
+  '[ $rc -ne 0 ] && echo "$out" | grep -q "exodus pkg install"'
 out=$(cd "$PROJ" && env AIML_MEM_V3=1 AIML_CACHE="$WORK/cache" AIML_VENV="$VENV" "$AIML" main_file.aiml 2>&1); rc=$?
 check "AIML_VENV does not make a foreign compiler read the venv (F68-31)" '[ $rc -ne 0 ]'
 

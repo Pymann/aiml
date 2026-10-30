@@ -11,8 +11,11 @@ out again (`ufo layer apply`), so a venv is built once and then only moved aroun
 ```
 <venv>/
   bin/aiml                       the compiler (JIT runner and object compiler)
+  bin/<tool>                     installed tools: cosmos · kontor · ufo (§6)
   lib/libaiml.so                 the runtime library AOT programs link against
   lib/aiml/aiml.packages.json    the venv's package table (spec/21 §3.1)
+  lib/aiml/aiml.installed.json   what `install` placed, and where it came from (§6; only
+                                 once something is installed)
   lib/aiml/<package>/…           installed packages, one directory each
   env                            the environment, for `. <venv>/env`
 ```
@@ -88,3 +91,88 @@ export PATH='/opt/aiml/bin'"${PATH:+:$PATH}"
 Tests: `tests/venv/run.sh` (layout, RUNPATHs, `env` and `AIML`/`PATH`, a JIT run from `PATH`,
 an AOT program in `bin/` against the venv's runtime, the venv's package table and its precedence,
 refusing a foreign directory, update from inside the venv, a moved venv).
+
+## 6. Installing tools — `aiml venv <dir> install <name> <source>`
+
+§1–§5 give a venv the compiler, the runtime and importable packages.  §6 adds the **tools** that
+are written in aiml and built with it — cosmos, kontor, ufo — so that a machine with a venv has
+them without anybody cloning a repository by hand.
+
+```
+aiml venv <dir> install <name> --git <url> [--ref <tag|branch|commit>]
+aiml venv <dir> install <name> --path <dir>
+aiml venv <dir> install <name> --kontor <url> [--version <v>]      (§6.1, not yet)
+aiml venv <dir> list
+aiml venv <dir> remove <name>
+```
+
+- **F68-50** **Sources.**  `--git` is the normal one: the ref is resolved to a commit with
+  `git ls-remote <url> <ref>` **before** the clone, so what was built is written down (`HEAD` is
+  the default).  `--path <dir>` installs a local tree — for a tool that has no repository yet, and
+  for testing; its origin is recorded as `path:<absolute>` and `list` marks it **unreproducible**,
+  because nobody can say later what was in that directory.
+- **F68-51** The fetcher is `git` from `PATH`.  Missing → exit 1, and the message names it.  ufo
+  is the git client of this ecosystem, but a venv must be able to install **ufo itself**, so the
+  first fetch cannot depend on it; `--vcs ufo` (later) chooses the venv's own `bin/ufo` instead.
+- **F68-52** **Nothing is fetched or built inside the venv** (F68-2): the clone and the build live
+  under `$AIML_CACHE/venv_tools/<name>/<commit>/`, else `./__aiml_cache/venv_tools/…`.  A
+  directory that already holds that commit is reused, so a second install does not clone again.
+  The venv receives **results only** — it stays what §5 can cut as a layer.
+- **F68-53** **The build is the tool's own.**  In the fetched tree, `install` runs
+  `$EXODUS build --all` (else `exodus` from `PATH`, F68-21), with `AIML_VENV`, `AIML` and `PATH`
+  pointing at the **target venv**: a tool is built by the compiler it will live next to, and links
+  against that venv's runtime (F68-22).  A failed build installs nothing (exit 1, the build's
+  output is passed through).
+  A tool whose build configuration names a **build tree** instead (ufo's `exodus.json` has
+  `"name": "../aiml/out/aiml/aiml"` and `-L../aiml/out/libaiml`) is refused with exactly that
+  reason: it would be built by a foreign compiler and link against a library that is not in the
+  venv.  Taking the compiler from `$AIML` and the runtime from `$AIML_VENV/lib` (F68-21, F68-22)
+  is therefore the entry ticket for a tool, not a detail of its project.
+- **F68-54** **The repository says what to install**, in `aiml.tool.json` at its root:
+
+  ```json
+  { "name": "ufo", "version": "0.2.0",
+    "programs":  ["out/ufo/ufo", "out/ufo-layer/ufo-layer"],
+    "libraries": ["out/libufo/libufo.so"],
+    "package":   "lib" }
+  ```
+
+  `programs` go to `<venv>/bin/`, `libraries` to `<venv>/lib/`, and `package` names the directory
+  of the source tree that becomes the importable package `lib/aiml/<name>/` (spec/21 §3.1), copied
+  in and entered in the table with a path relative to `lib/aiml/` (F68-32).  Every key is optional
+  except `name`; a tool may be only programs (cosmos) or only a package.  **No file → exit 1**
+  („the repository has no aiml.tool.json"), and nothing is guessed: a venv that installed by
+  guessing would not be the same venv as the next one.  The `name` must match the install's
+  `<name>`.
+- **F68-55** **The copies are relocatable.**  A program placed in `bin/` gets
+  `RUNPATH $ORIGIN/../lib`, a library in `lib/` gets `RUNPATH $ORIGIN` — as F68-1 does for the
+  compiler, and for the same reason: `. <venv>/env` is for people, a binary must run without it.
+  Paths of the build host that the build left behind stay **after** `$ORIGIN`.
+- **F68-56** **The record.**  `lib/aiml/aiml.installed.json` holds, per name: `source`
+  (`git:<url>` / `path:<dir>` / `kontor:<url>`), `commit`, `version`, and the list of files placed
+  (relative to the venv).  `list` prints it; `remove <name>` deletes exactly those files, its
+  package directory and its table entry — and nothing else.  Written with the rename of F68-12.
+  The file **comes into being with the first install**: a venv that installed nothing has the
+  layout of §1 unchanged, down to the file count — ufo's `tests/venv_layer.sh` checks a venv layer
+  against exactly four paths, and §6 must not add a fifth to every venv.
+- **F68-57** **Installing again is the update.**  The same name at the same commit with the same
+  file list is a no-op (it says so and exits 0).  A different commit replaces: the old files are
+  removed first, so a renamed program leaves nothing behind.
+- **F68-58** `install` **does not touch the system.**  No apt, no `/etc`, no `sudo`.  A tool that
+  needs system libraries (cosmos needs libldap and xmlsec1) says so in its own project; the venv
+  layer sits on a base image that has them (cosmos doc/spec/111 §111.10).
+- **F68-59** The installed tools travel **with the venv**: `push:` of the venv stage (F68-40) and
+  `ufo layer apply` (F68-41) carry `bin/`, `lib/` and the two tables, so a venv layer is a
+  toolbox, not just a compiler.
+
+### 6.1 kontor as a source (planned)
+
+kontor keeps `/exodus/<name>/<version>/` (exodus.json plus the package) and is where these tools
+are published (cosmos doc/spec/111 §111.9).  `--kontor <url> --version <v>` fetches that instead
+of cloning, which makes an install reproducible without a git server and without a build when
+kontor carries binaries.  Until then `--git` is the way, and `--kontor` exits 1 naming §6.1.
+
+Tests: `tests/venv/run.sh` (install from a local path and from a git repository made on the fly;
+the manifest's three kinds; RUNPATHs of the copies; the record, `list` and `remove`; installing
+the same commit twice; a different commit replacing; a missing manifest, a wrong `name`, a failing
+build, a missing `git`; nothing fetched into the venv).

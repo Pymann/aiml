@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # run.sh — package imports `@name/…` (spec/21 §3.1), from a file and from a
 # context (spec/29_2 §14a).  Builds a throwaway project with aiml.packages.json
-# pointing at tests/packages/demo_pkg, the way `exodus deps install` would.
+# pointing at tests/packages/demo_pkg, the way `exodus pkg install` would.
 set -uo pipefail
 cd "$(dirname "$0")/../.."
 ROOT="$PWD"
@@ -26,7 +26,7 @@ if [ $rc -eq 0 ]; then echo "  ok   table found upward from the importing file (
 out=$(cd "$WORK" && mv aiml.packages.json t.json && env AIML_MEM_V3=1 AIML_PACKAGES="$WORK/t.json" "$AIML" main_file.aiml 2>&1); rc=$?; mv "$WORK/t.json" "$WORK/aiml.packages.json"
 if [ $rc -eq 0 ]; then echo "  ok   AIML_PACKAGES names the table"; else echo "  FAIL AIML_PACKAGES (rc=$rc)"; fail=1; fi
 out=$(cd "$WORK" && mv aiml.packages.json t.json && env AIML_MEM_V3=1 "$AIML" main_file.aiml 2>&1); rc=$?; mv "$WORK/t.json" "$WORK/aiml.packages.json"
-if [ $rc -ne 0 ] && echo "$out" | grep -q "exodus deps install"; then echo "  ok   no table → error names the fix"; else echo "  FAIL missing table (rc=$rc)"; fail=1; fi
+if [ $rc -ne 0 ] && echo "$out" | grep -q "exodus pkg install"; then echo "  ok   no table → error names the fix"; else echo "  FAIL missing table (rc=$rc)"; fail=1; fi
 out=$(run ctx_host.aiml); rc=$?
 echo "$out" | grep -E "^  (ok|FAIL)"
 if [ $rc -ne 0 ]; then echo "  FAIL ctx_host (rc=$rc)"; echo "$out" | grep -E "CRASH|ERROR" | head -5; fail=1; fi
