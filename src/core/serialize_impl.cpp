@@ -791,12 +791,12 @@ static void emitReadValListElements(CompilerContext& ctx, llvm::Value* subReader
             llvm::Function* callocFn = ctx.module().getFunction("calloc");
             if(!callocFn){
                 llvm::FunctionType* ct = llvm::FunctionType::get(
-                    ptrT(ctx), {ctx.builder.getInt64Ty(), ctx.builder.getInt64Ty()}, false);
+                    ptrT(ctx), {szT(ctx), szT(ctx)}, false);
                 callocFn = llvm::Function::Create(ct, llvm::Function::ExternalLinkage,
                     "calloc", ctx.module());
             }
             llvm::Value* heap = ctx.builder.CreateCall(callocFn,
-                {ctx.builder.getInt64(1), ctx.builder.getInt64(subSz)}, "rheap");
+                {ctx.getSizeConst(1), ctx.getSizeConst(subSz)}, "rheap");
             emitDeserStructFields(ctx, sr, heap, innerTn, parentFn);
             ListImpl::push(ctx, listAlloca, heap);
             ctx.builder.CreateCall(gJrFree(ctx), {sr});
@@ -964,12 +964,12 @@ static void emitDeserStructFields(CompilerContext& ctx, llvm::Value* reader,
                     llvm::Function* callocFn = ctx.module().getFunction("calloc");
                     if(!callocFn){
                         llvm::FunctionType* ct = llvm::FunctionType::get(
-                            ptrT(ctx), {ctx.builder.getInt64Ty(), ctx.builder.getInt64Ty()}, false);
+                            ptrT(ctx), {szT(ctx), szT(ctx)}, false);
                         callocFn = llvm::Function::Create(ct, llvm::Function::ExternalLinkage,
                             "calloc", ctx.module());
                     }
                     llvm::Value* heap = ctx.builder.CreateCall(callocFn,
-                        {ctx.builder.getInt64(1), ctx.builder.getInt64(subSz)}, "rheap");
+                        {ctx.getSizeConst(1), ctx.getSizeConst(subSz)}, "rheap");
                     emitDeserStructFields(ctx,sr,heap,innerTn,parentFn);
                     ListImpl::push(ctx,listTgt,heap);
                     ctx.builder.CreateCall(gJrFree(ctx),{sr});
@@ -1155,9 +1155,9 @@ static llvm::Function* emitDeserializeList(CompilerContext& ctx,
     if(ctx.memV3 && ctx.isMemV3ContainerHandle(listTn)){
         heap = ctx.builder.CreateCall(ctx.getFunction("aiml_list_handle_new",ptrT(ctx),{}),{},"hp");
     } else {
-        llvm::Function* mallocFn = ctx.getFunction("malloc",ptrT(ctx),{i64T(ctx)});
+        llvm::Function* mallocFn = ctx.getFunction("malloc",ptrT(ctx),{szT(ctx)});
         uint64_t lsz = ctx.module().getDataLayout().getTypeAllocSize(listTy);
-        heap = ctx.builder.CreateCall(mallocFn,{ctx.builder.getInt64(lsz)},"hp");
+        heap = ctx.builder.CreateCall(mallocFn,{ctx.getSizeConst(lsz)},"hp");
     }
     ListImpl::initList(ctx,heap,elemTy,4);
 
@@ -1270,9 +1270,9 @@ static llvm::Function* emitDeserializeMap(CompilerContext& ctx,
     if(ctx.memV3 && ctx.isMemV3ContainerHandle(mapTn)){
         heap = ctx.builder.CreateCall(ctx.getFunction("aiml_map_handle_new",ptrT(ctx),{}),{},"hp");
     } else {
-        llvm::Function* mallocFn = ctx.getFunction("malloc",ptrT(ctx),{i64T(ctx)});
+        llvm::Function* mallocFn = ctx.getFunction("malloc",ptrT(ctx),{szT(ctx)});
         uint64_t msz = ctx.module().getDataLayout().getTypeAllocSize(mapTy);
-        heap = ctx.builder.CreateCall(mallocFn,{ctx.builder.getInt64(msz)},"hp");
+        heap = ctx.builder.CreateCall(mallocFn,{ctx.getSizeConst(msz)},"hp");
     }
     MapImpl::initMap(ctx,heap,keyTy,valTy,8);
 

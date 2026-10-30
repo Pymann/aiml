@@ -35,7 +35,15 @@
         "__exodus_cache/apt/libopenblas-serial-dev/amd64/0.3.26+ds-1/payload/usr/include",
         "__exodus_cache/apt/libopenblas-serial-dev/amd64/0.3.26+ds-1/payload/usr/include/x86_64-linux-gnu/openblas-serial",
         "__exodus_cache/apt/libxtst-dev/amd64/2:1.2.3-1.1build1/payload/usr/include",
-        "__exodus_cache/apt/libssh-dev/amd64/0.10.6-2ubuntu0.5/payload/usr/include"
+        "__exodus_cache/apt/libssh-dev/amd64/0.10.6-2ubuntu0.5/payload/usr/include",
+        "__exodus_cache/apt/libldap-dev/amd64/2.6.10+dfsg-0ubuntu0.24.04.1/payload/usr/include",
+        "__exodus_cache/apt/libxml2-dev/amd64/2.9.14+dfsg-1.3ubuntu3.10/payload/usr/include/libxml2",
+        "__exodus_cache/apt/libxmlsec1-dev/amd64/1.2.39-5build2/payload/usr/include/xmlsec1",
+        "__exodus_cache/apt/libxmlsec1-dev/amd64/1.2.39-5build2/payload/usr/include",
+        "__exodus_cache/apt/libxml2-dev/amd64/2.9.14+dfsg-1.3ubuntu3.10/payload/usr/include",
+        "__exodus_cache/apt/libxslt1-dev/amd64/1.1.39-0exp1ubuntu0.24.04.3/payload/usr/include",
+        "__exodus_cache/apt/libgnutls28-dev/amd64/3.8.3-1.1ubuntu3.6/payload/usr/include",
+        "__exodus_cache/apt/libsasl2-dev/amd64/2.1.28+dfsg1-5ubuntu3.1/payload/usr/include"
     ],
     "sources": [
         "compiler.cpp",
@@ -95,7 +103,15 @@
             "openblas",
             "Xtst",
             "X11",
-            ":libssh.so.4"
+            ":libssh.so.4",
+            "ldap",
+            "lber",
+            "gnutls",
+            "sasl2",
+            "xmlsec1-openssl",
+            "xmlsec1",
+            "xml2",
+            "xslt"
         ],
         "library_paths": [
             "__exodus_cache/apt/libwebp7/amd64/1.3.2-0.4build3/payload/usr/lib/x86_64-linux-gnu",
@@ -146,7 +162,32 @@
             "__exodus_cache/apt/libgssapi-krb5-2/amd64/1.20.1-6ubuntu2.7/payload/usr/lib/x86_64-linux-gnu",
             "__exodus_cache/apt/zlib1g/amd64/1:1.3.dfsg-3.1ubuntu2.2/payload/usr/lib/x86_64-linux-gnu",
             "__exodus_cache/apt/libssh-4/amd64/0.10.6-2ubuntu0.5/payload/usr/lib/x86_64-linux-gnu",
-            "__exodus_cache/apt/libssh-dev/amd64/0.10.6-2ubuntu0.5/payload/usr/lib/x86_64-linux-gnu"
+            "__exodus_cache/apt/libssh-dev/amd64/0.10.6-2ubuntu0.5/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libxml2/amd64/2.9.14+dfsg-1.3ubuntu3.7/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libunistring5/amd64/1.1-2build1.1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libidn2-0/amd64/2.3.7-2build1.1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libgmp10/amd64/2:6.3.0+dfsg-2ubuntu6.1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libldap-dev/amd64/2.6.10+dfsg-0ubuntu0.24.04.1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libldap2/amd64/2.6.10+dfsg-0ubuntu0.24.04.1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libxmlsec1-dev/amd64/1.2.39-5build2/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libxmlsec1t64/amd64/1.2.39-5build2/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libxmlsec1t64-openssl/amd64/1.2.39-5build2/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libxml2-dev/amd64/2.9.14+dfsg-1.3ubuntu3.10/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libxml2/amd64/2.9.14+dfsg-1.3ubuntu3.10/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libxslt1-dev/amd64/1.1.39-0exp1ubuntu0.24.04.3/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libxslt1.1/amd64/1.1.39-0exp1ubuntu0.24.04.3/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libnspr4/amd64/2:4.35-1.1build1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libnss3/amd64/2:3.98-1ubuntu0.3/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libxmlsec1t64-nss/amd64/1.2.39-5build2/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libnettle8t64/amd64/3.9.1-2.2build1.1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libhogweed6t64/amd64/3.9.1-2.2build1.1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libp11-kit0/amd64/0.25.3-4ubuntu2.2/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libtasn1-6/amd64/4.19.0-3ubuntu0.24.04.2/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libgnutls30t64/amd64/3.8.3-1.1ubuntu3.6/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libgnutls28-dev/amd64/3.8.3-1.1ubuntu3.6/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libsasl2-modules-db/amd64/2.1.28+dfsg1-5ubuntu3.1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libsasl2-2/amd64/2.1.28+dfsg1-5ubuntu3.1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libsasl2-dev/amd64/2.1.28+dfsg1-5ubuntu3.1/payload/usr/lib/x86_64-linux-gnu"
         ]
     },
     "apt_packages": [
@@ -296,6 +337,174 @@
             "arch": "amd64",
             "required": true,
             "digest": "84b9cf5752b29c9f92c27cd4c4ba9bbcc70b5ccf9b1b515421a28ae23212e273"
+        },
+        {
+            "name": "libldap-dev",
+            "version": "2.6.10+dfsg-0ubuntu0.24.04.1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "c82e02edc0045a9e3af102fd688edee6fcefa4bf4198b0997c284bca5526d2b5"
+        },
+        {
+            "name": "libldap2",
+            "version": "2.6.7+dfsg-1~exp1ubuntu8.2",
+            "arch": "amd64",
+            "required": true,
+            "digest": null
+        },
+        {
+            "name": "libxmlsec1-dev",
+            "version": "1.2.39-5build2",
+            "arch": "amd64",
+            "required": true,
+            "digest": "b5fcbc9fa392f7e3c768f3ad62bba469604d8282a60fe4629977d66f86a5cab3"
+        },
+        {
+            "name": "libxmlsec1t64",
+            "version": "1.2.39-5build2",
+            "arch": "amd64",
+            "required": true,
+            "digest": "a1125b307f582fc583bb14c0fc3d903d8afbf0a6d1bb3e41ac5f30751faadebb"
+        },
+        {
+            "name": "libxmlsec1t64-openssl",
+            "version": "1.2.39-5build2",
+            "arch": "amd64",
+            "required": true,
+            "digest": "31cb22b906df019515fb39a317db54759877cb17fec9542115b58db8aa495222"
+        },
+        {
+            "name": "libxmlsec1t64-nss",
+            "version": "1.2.39-5build2",
+            "arch": "amd64",
+            "required": true,
+            "digest": "233651eb2d56a207934efa740c05af77db0ebbab4b1fc55c81400d0638b89fda"
+        },
+        {
+            "name": "libnspr4",
+            "version": "2:4.35-1.1build1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "e579e72d091f6c7a13f5a756c31065b15aae5b81840d61b069355aa2283c07b4"
+        },
+        {
+            "name": "libnss3",
+            "version": "2:3.98-1ubuntu0.3",
+            "arch": "amd64",
+            "required": true,
+            "digest": "e11fdf8c09a068d0f0c3fd90ed971253dfed7227cc20d3d487fd615d4771f1bb"
+        },
+        {
+            "name": "libxml2-dev",
+            "version": "2.9.14+dfsg-1.3ubuntu3.10",
+            "arch": "amd64",
+            "required": true,
+            "digest": "4cf2446fb0d658e26791f308effc29f8c21befa6460003550f4fa9996d28d3ee"
+        },
+        {
+            "name": "libxml2",
+            "version": "2.9.14+dfsg-1.3ubuntu3.7",
+            "arch": "amd64",
+            "required": true,
+            "digest": "74ab8be7aa487e5cc7d9d228212f538ff96658afcb080335c02fe0f3e384ff7c"
+        },
+        {
+            "name": "libxslt1-dev",
+            "version": "1.1.39-0exp1ubuntu0.24.04.3",
+            "arch": "amd64",
+            "required": true,
+            "digest": "95ad7745ce92854b43b86b4c17463456055c9581836ff67c80577c802e293084"
+        },
+        {
+            "name": "libxslt1.1",
+            "version": "1.1.39-0exp1ubuntu0.24.04.3",
+            "arch": "amd64",
+            "required": true,
+            "digest": "e716daf96ea2526cab92e5cc4708739d5f2f4b89fb76782dfda7f49283eeeb40"
+        },
+        {
+            "name": "libgnutls28-dev",
+            "version": "3.8.3-1.1ubuntu3.6",
+            "arch": "amd64",
+            "required": true,
+            "digest": "b13e52a43f18e8fdb49e37150cd20c14ec79b42aead1facc5006cb217122a777"
+        },
+        {
+            "name": "libgnutls30t64",
+            "version": "3.8.3-1.1ubuntu3.6",
+            "arch": "amd64",
+            "required": true,
+            "digest": "b8944756260c5ea6b7fac019745f931f905aa7a4df0763676b1b25c911b692e2"
+        },
+        {
+            "name": "libhogweed6t64",
+            "version": "3.9.1-2.2build1.1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "a9b5f7e9d49ba9060e1c933567046fbc6feab6096799cbf550b7214dc9b0f49b"
+        },
+        {
+            "name": "libnettle8t64",
+            "version": "3.9.1-2.2build1.1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "6d97fbc1972633083f08f51ccab433606c97bbceb897c631c66495117ca3406f"
+        },
+        {
+            "name": "libp11-kit0",
+            "version": "0.25.3-4ubuntu2.2",
+            "arch": "amd64",
+            "required": true,
+            "digest": "e7c58aeac19d89f5f1492dfaa52b8623bcd56edc40983f5243ad56d94f477bf2"
+        },
+        {
+            "name": "libtasn1-6",
+            "version": "4.19.0-3ubuntu0.24.04.2",
+            "arch": "amd64",
+            "required": true,
+            "digest": "f82c9ad142f952ea523bda5bfca7bb0802af3a50b8c0f0dd9ec18cdfa104bde7"
+        },
+        {
+            "name": "libidn2-0",
+            "version": "2.3.7-2build1.1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "46bfd10df095a23b65f58115de47a547c9a2d14627749bd0423ae78c14be77d3"
+        },
+        {
+            "name": "libunistring5",
+            "version": "1.1-2build1.1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "203d7657b5f54633fba1a9c9b784d556ef83c9f6787b3185ba55a88e07b865a3"
+        },
+        {
+            "name": "libgmp10",
+            "version": "2:6.3.0+dfsg-2ubuntu6.1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "285f8a505dfa8e1b33f357a9d8d3477ad35bf18c0b34771a6df4c25923f3ae0d"
+        },
+        {
+            "name": "libsasl2-dev",
+            "version": "2.1.28+dfsg1-5ubuntu3.1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "bd55f7445f2d895831d876f8d74de9bd4f1f547718b1eb66a3b854dcce07bbf6"
+        },
+        {
+            "name": "libsasl2-2",
+            "version": "2.1.28+dfsg1-5ubuntu3.1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "eda097f98dcb3a08b9ce157d6191d140e4885c1cba47b683c94b8ca45e88f458"
+        },
+        {
+            "name": "libsasl2-modules-db",
+            "version": "2.1.28+dfsg1-5ubuntu3.1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "1f13548b1774cd9c70c50b8c3267204a101334a4d2f979338896ba5a4c6f81b8"
         }
     ]
 }

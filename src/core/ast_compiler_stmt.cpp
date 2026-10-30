@@ -5350,7 +5350,7 @@ static void emitScopeDrop(CompilerContext& ctx, const CompilerContext::ScopeDrop
         llvm::BasicBlock* doneBB = llvm::BasicBlock::Create(ctx.context, "exc_done", fn);
         ctx.builder.CreateCondBr(ctx.builder.CreateIsNotNull(rec), relBB, doneBB);
         ctx.builder.SetInsertPoint(relBB);
-        llvm::Value* thunkSlot = ctx.builder.CreateConstGEP1_64(ctx.builder.getInt8Ty(), rec, 8);
+        llvm::Value* thunkSlot = ctx.excRecordField(rec, 1, "exc_thunk_slot");
         llvm::Value* thunk = ctx.builder.CreateLoad(i8p, thunkSlot, "exc_thunk");
         ctx.builder.CreateCondBr(ctx.builder.CreateIsNotNull(thunk), freeBB, endBB);
         ctx.builder.SetInsertPoint(freeBB);
@@ -5682,7 +5682,7 @@ void Compiler::visitTry(TryStmt* tryStmt) {
     // erste, dessen Typ der geworfene erfuellt (gleicher Typ oder Abkoemmling).  Passt
     // keiner, laeuft die Ausnahme weiter, als gaebe es dieses `try` nicht.
     llvm::Value* typeTag = ctx.builder.CreateLoad(
-        ptrTy, ctx.builder.CreateConstGEP1_64(ctx.builder.getInt8Ty(), rawExc, 16), "exc_type_tag");
+        ptrTy, ctx.excRecordField(rawExc, 2, "exc_tag_slot"), "exc_type_tag");
     llvm::Value* nullTag = llvm::ConstantPointerNull::get(ptrTy);
 
     // "dieser Typ und alles, was von ihm erbt" — statisch aus der Klassentabelle.
@@ -5832,35 +5832,37 @@ void Compiler::visitThrow(ThrowStmt* throwStmt) {
     llvm::Value* rawObj = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(excVal));
     if (thrownLocal) consumeLocalDrop(thrownLocal);
 
+    // Record {Objekt, Free-Thunk, Typ-Tag}; Abstaende aus dem Datenlayout (context.h),
+    // damit wasm32 mit seinen 4-Byte-Zeigern nicht ins Leere schreibt.
     llvm::Value* excAlloc = ctx.builder.CreateCall(
-        ctx.getFunction("__cxa_allocate_exception", ptrTy, {ctx.builder.getInt64Ty()}),
-        {ctx.builder.getInt64(24)}, "exc_alloc");   // [0]=obj [8]=thunk [16]=Typ-Tag
-    ctx.builder.CreateStore(rawObj, excAlloc);
+        ctx.getFunction("__cxa_allocate_exception", ptrTy, {ctx.getSizeType()}),
+        {ctx.getSizeConst(ctx.getExcRecordSize())}, "exc_alloc");
+    ctx.builder.CreateStore(rawObj, ctx.excRecordField(excAlloc, 0, "exc_obj_slot"));
     llvm::Value* thunk;
     if (rethrowRec) {
         llvm::Value* rec = ctx.builder.CreateLoad(ptrTy, rethrowRec, "rethrow_rec");
-        llvm::Value* oldThunkSlot = ctx.builder.CreateConstGEP1_64(ctx.builder.getInt8Ty(), rec, 8);
+        llvm::Value* oldThunkSlot = ctx.excRecordField(rec, 1, "exc_thunk_slot");
         thunk = ctx.builder.CreateLoad(ptrTy, oldThunkSlot, "rethrow_thunk");
         ctx.builder.CreateStore(llvm::ConstantPointerNull::get(ptrTy), oldThunkSlot);
     } else {
         llvm::Function* tf = excFreeThunk(excClass);
         thunk = tf ? static_cast<llvm::Value*>(tf) : llvm::ConstantPointerNull::get(ptrTy);
     }
-    ctx.builder.CreateStore(thunk, ctx.builder.CreateConstGEP1_64(ctx.builder.getInt8Ty(), excAlloc, 8));
+    ctx.builder.CreateStore(thunk, ctx.excRecordField(excAlloc, 1, "exc_thunk_slot"));
 
     // spec/22: der Klassenname reist MIT — ohne ihn kann kein catch nach Typ waehlen
     // (bis 18.10.2026 bekam __cxa_throw nullptr als Typinfo und jeder Handler fing alles).
     llvm::Value* typeTag;
     if (rethrowRec) {
         llvm::Value* rec = ctx.builder.CreateLoad(ptrTy, rethrowRec, "rethrow_rec2");
-        typeTag = ctx.builder.CreateLoad(ptrTy, ctx.builder.CreateConstGEP1_64(
-                      ctx.builder.getInt8Ty(), rec, 16), "rethrow_tag");
+        typeTag = ctx.builder.CreateLoad(ptrTy, ctx.excRecordField(rec, 2, "exc_tag_slot"),
+                                         "rethrow_tag");
     } else if (!excClass.empty()) {
         typeTag = ctx.builder.CreateGlobalStringPtr(excClass, "exc_type_tag");
     } else {
         typeTag = llvm::ConstantPointerNull::get(ptrTy);
     }
-    ctx.builder.CreateStore(typeTag, ctx.builder.CreateConstGEP1_64(ctx.builder.getInt8Ty(), excAlloc, 16));
+    ctx.builder.CreateStore(typeTag, ctx.excRecordField(excAlloc, 2, "exc_tag_slot"));
 
     // Record the exception's `message` (offset 0 of every Exception) for the top-level
     // uncaught handler in jitRun (spec/22).
@@ -5870,13 +5872,17 @@ void Compiler::visitThrow(ThrowStmt* throwStmt) {
     decrefCurrentStmtTemps(ctx);
     llvm::Function* throwFunc = ctx.getFunction("__cxa_throw", ctx.builder.getVoidTy(), {ptrTy, ptrTy, ptrTy});
     llvm::Value* nullp = llvm::ConstantPointerNull::get(ptrTy);
+    // Typinfo (context.h): der Handler wird weiter ueber den Typ-Tag gewaehlt, aber ein
+    // null-type_info bringt Emscriptens __cxa_throw zum Absturz.  `rethrow` ohne eigene
+    // Klasse behaelt den Tag und meldet hier den Basistyp.
+    llvm::Constant* tinfo = ctx.getExcTypeInfo(excClass.empty() ? "Exception" : excClass);
     llvm::Function* currentFunc = ctx.builder.GetInsertBlock()->getParent();
     if (llvm::BasicBlock* ud = unwindDest(true)) {
         llvm::BasicBlock* unreachableBB = llvm::BasicBlock::Create(ctx.context, "throw_unreachable", currentFunc);
-        ctx.builder.CreateInvoke(throwFunc, unreachableBB, ud, {excAlloc, nullp, nullp});
+        ctx.builder.CreateInvoke(throwFunc, unreachableBB, ud, {excAlloc, tinfo, nullp});
         ctx.builder.SetInsertPoint(unreachableBB);
     } else {
-        ctx.builder.CreateCall(throwFunc, {excAlloc, nullp, nullp});
+        ctx.builder.CreateCall(throwFunc, {excAlloc, tinfo, nullp});
     }
     ctx.builder.CreateUnreachable();
     // a dead block keeps later statements of this scope off the terminated block

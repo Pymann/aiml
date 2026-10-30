@@ -87,7 +87,7 @@ public:
         llvm::Function* strlenFunc = ctx.module().getFunction("strlen");
         if (!strlenFunc) {
             std::vector<llvm::Type*> strArgs = { ctx.builder.getInt8Ty()->getPointerTo() };
-            llvm::FunctionType* strType = llvm::FunctionType::get(ctx.builder.getInt64Ty(), strArgs, false);
+            llvm::FunctionType* strType = llvm::FunctionType::get(ctx.getSizeType(), strArgs, false);
             strlenFunc = llvm::Function::Create(strType, llvm::Function::ExternalLinkage, "strlen", ctx.module());
         }
         llvm::Value* len = ctx.builder.CreateCall(strlenFunc, {text});
@@ -97,15 +97,15 @@ public:
         if (!fwriteFunc) {
             std::vector<llvm::Type*> fwArgs = { 
                 ctx.builder.getInt8Ty()->getPointerTo(), 
-                ctx.builder.getInt64Ty(),
-                ctx.builder.getInt64Ty(),
+                ctx.getSizeType(),
+                ctx.getSizeType(),
                 getFilePtrTy(ctx)
             };
-            llvm::FunctionType* fwType = llvm::FunctionType::get(ctx.builder.getInt64Ty(), fwArgs, false);
+            llvm::FunctionType* fwType = llvm::FunctionType::get(ctx.getSizeType(), fwArgs, false);
             fwriteFunc = llvm::Function::Create(fwType, llvm::Function::ExternalLinkage, "fwrite", ctx.module());
         }
 
-        return ctx.builder.CreateCall(fwriteFunc, {text, ctx.builder.getInt64(1), len, handle});
+        return ctx.builder.CreateCall(fwriteFunc, {text, ctx.getSizeConst(1), len, handle});
     }
 };
 
@@ -142,11 +142,12 @@ public:
         // Allocate buffer: malloc(size + 1)
         llvm::Function* mallocFunc = ctx.module().getFunction("malloc");
         if (!mallocFunc) {
-            llvm::FunctionType* mallocType = llvm::FunctionType::get(ctx.builder.getInt8Ty()->getPointerTo(), {ctx.builder.getInt64Ty()}, false);
+            llvm::FunctionType* mallocType = llvm::FunctionType::get(ctx.builder.getInt8Ty()->getPointerTo(), {ctx.getSizeType()}, false);
             mallocFunc = llvm::Function::Create(mallocType, llvm::Function::ExternalLinkage, "malloc", ctx.module());
         }
-        
-        llvm::Value* sizePlus1 = ctx.builder.CreateAdd(size, ctx.builder.getInt64(1));
+
+        size = ctx.toSizeType(size);
+        llvm::Value* sizePlus1 = ctx.builder.CreateAdd(size, ctx.getSizeConst(1));
         llvm::Value* buffer = ctx.builder.CreateCall(mallocFunc, {sizePlus1});
 
         // fread(buffer, 1, size, handle)
@@ -154,15 +155,15 @@ public:
         if (!freadFunc) {
             std::vector<llvm::Type*> frArgs = { 
                 ctx.builder.getInt8Ty()->getPointerTo(), 
-                ctx.builder.getInt64Ty(),
-                ctx.builder.getInt64Ty(),
+                ctx.getSizeType(),
+                ctx.getSizeType(),
                 getFilePtrTy(ctx)
             };
-            llvm::FunctionType* frType = llvm::FunctionType::get(ctx.builder.getInt64Ty(), frArgs, false);
+            llvm::FunctionType* frType = llvm::FunctionType::get(ctx.getSizeType(), frArgs, false);
             freadFunc = llvm::Function::Create(frType, llvm::Function::ExternalLinkage, "fread", ctx.module());
         }
         
-        llvm::Value* readBytes = ctx.builder.CreateCall(freadFunc, {buffer, ctx.builder.getInt64(1), size, handle});
+        llvm::Value* readBytes = ctx.builder.CreateCall(freadFunc, {buffer, ctx.getSizeConst(1), size, handle});
         
         // Null terminate: buffer[readBytes] = 0
         llvm::Value* endPtr = ctx.builder.CreateInBoundsGEP(ctx.builder.getInt8Ty(), buffer, readBytes);
@@ -181,18 +182,20 @@ public:
         llvm::Value* handle = resolveValue(ctx, args[1]);
 
         llvm::Type* filePtrTy = getFilePtrTy(ctx);
-        llvm::Type* i64Ty = ctx.builder.getInt64Ty();
+        // fseek/ftell nehmen `long`, malloc/fread `size_t` — beide sind
+        // zeigerbreit: i64 nativ, i32 auf wasm32.
+        llvm::Type* szTy = ctx.getSizeType();
         llvm::Type* i32Ty = ctx.builder.getInt32Ty();
 
         // fseek
         llvm::Function* fseekFunc = ctx.module().getFunction("fseek");
         if (!fseekFunc) {
-             fseekFunc = llvm::Function::Create(llvm::FunctionType::get(i32Ty, {filePtrTy, i64Ty, i32Ty}, false), llvm::Function::ExternalLinkage, "fseek", ctx.module());
+             fseekFunc = llvm::Function::Create(llvm::FunctionType::get(i32Ty, {filePtrTy, szTy, i32Ty}, false), llvm::Function::ExternalLinkage, "fseek", ctx.module());
         }
         // ftell
         llvm::Function* ftellFunc = ctx.module().getFunction("ftell");
         if (!ftellFunc) {
-             ftellFunc = llvm::Function::Create(llvm::FunctionType::get(i64Ty, {filePtrTy}, false), llvm::Function::ExternalLinkage, "ftell", ctx.module());
+             ftellFunc = llvm::Function::Create(llvm::FunctionType::get(szTy, {filePtrTy}, false), llvm::Function::ExternalLinkage, "ftell", ctx.module());
         }
         // rewind
         llvm::Function* rewindFunc = ctx.module().getFunction("rewind");
@@ -201,7 +204,7 @@ public:
         }
 
         // fseek(f, 0, SEEK_END (2))
-        ctx.builder.CreateCall(fseekFunc, {handle, ctx.builder.getInt64(0), ctx.builder.getInt32(2)});
+        ctx.builder.CreateCall(fseekFunc, {handle, ctx.getSizeConst(0), ctx.builder.getInt32(2)});
         
         // size = ftell(f)
         llvm::Value* size = ctx.builder.CreateCall(ftellFunc, {handle});
@@ -212,20 +215,20 @@ public:
         // malloc(size + 1)
         llvm::Function* mallocFunc = ctx.module().getFunction("malloc");
          if (!mallocFunc) {
-            llvm::FunctionType* mallocType = llvm::FunctionType::get(ctx.builder.getInt8Ty()->getPointerTo(), {i64Ty}, false);
+            llvm::FunctionType* mallocType = llvm::FunctionType::get(ctx.builder.getInt8Ty()->getPointerTo(), {szTy}, false);
             mallocFunc = llvm::Function::Create(mallocType, llvm::Function::ExternalLinkage, "malloc", ctx.module());
         }
-        llvm::Value* sizePlus1 = ctx.builder.CreateAdd(size, ctx.builder.getInt64(1));
+        llvm::Value* sizePlus1 = ctx.builder.CreateAdd(size, ctx.getSizeConst(1));
         llvm::Value* buffer = ctx.builder.CreateCall(mallocFunc, {sizePlus1});
 
         // fread(buffer, 1, size, f)
         llvm::Function* freadFunc = ctx.module().getFunction("fread");
          if (!freadFunc) {
-            std::vector<llvm::Type*> frArgs = { ctx.builder.getInt8Ty()->getPointerTo(), i64Ty, i64Ty, filePtrTy };
-            llvm::FunctionType* frType = llvm::FunctionType::get(i64Ty, frArgs, false);
+            std::vector<llvm::Type*> frArgs = { ctx.builder.getInt8Ty()->getPointerTo(), szTy, szTy, filePtrTy };
+            llvm::FunctionType* frType = llvm::FunctionType::get(szTy, frArgs, false);
             freadFunc = llvm::Function::Create(frType, llvm::Function::ExternalLinkage, "fread", ctx.module());
         }
-        llvm::Value* readBytes = ctx.builder.CreateCall(freadFunc, {buffer, ctx.builder.getInt64(1), size, handle});
+        llvm::Value* readBytes = ctx.builder.CreateCall(freadFunc, {buffer, ctx.getSizeConst(1), size, handle});
         
         // buffer[readBytes] = 0
          llvm::Value* endPtr = ctx.builder.CreateInBoundsGEP(ctx.builder.getInt8Ty(), buffer, readBytes);

@@ -39,7 +39,7 @@ llvm::StructType* getStructType(CompilerContext& ctx) {
 static llvm::Function* getMalloc(CompilerContext& ctx) {
     if (auto* f = ctx.module().getFunction("malloc")) return f;
     auto* ty = llvm::FunctionType::get(ctx.builder.getInt8Ty()->getPointerTo(),
-                                       {ctx.builder.getInt64Ty()}, false);
+                                       {ctx.getSizeType()}, false);
     return llvm::Function::Create(ty, llvm::Function::ExternalLinkage, "malloc", ctx.module());
 }
 static llvm::Function* getMutexInit(CompilerContext& ctx) {
@@ -338,7 +338,7 @@ void init(CompilerContext& ctx, llvm::Value* chanAlloca, llvm::Value* capacity) 
     auto* null8p   = llvm::ConstantPointerNull::get(i8p);
 
     uint64_t structSize = ctx.module().getDataLayout().getTypeAllocSize(structTy);
-    auto* rawPtr    = builder.CreateCall(getMalloc(ctx), {builder.getInt64(structSize)}, "chan_raw");
+    auto* rawPtr    = builder.CreateCall(getMalloc(ctx), {ctx.getSizeConst(structSize)}, "chan_raw");
     auto* structPtr = builder.CreateBitCast(rawPtr, structTy->getPointerTo(), "chan_struct");
     builder.CreateStore(rawPtr, chanAlloca);
 
@@ -362,7 +362,7 @@ void init(CompilerContext& ctx, llvm::Value* chanAlloca, llvm::Value* capacity) 
     auto* isRv  = builder.CreateICmpEQ(capacity, builder.getInt64(0), "is_rv");
     auto* slots = builder.CreateSelect(isRv, builder.getInt64(1), capacity, "slots");
     auto* bufSz = builder.CreateMul(slots, builder.getInt64(8), "buf_size");
-    builder.CreateStore(builder.CreateCall(getMalloc(ctx), {bufSz}, "buf"), gep(7));
+    builder.CreateStore(builder.CreateCall(getMalloc(ctx), {ctx.toSizeType(bufSz)}, "buf"), gep(7));
 }
 
 void send(CompilerContext& ctx, llvm::Value* chanAlloca, llvm::Value* val, llvm::Type* elemType) {

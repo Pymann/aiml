@@ -1,0 +1,67 @@
+# SPEC: 10_collections
+# spec/10 F10-23 + spec/22: ein Index ausserhalb der Grenzen wirft eine FANGBARE
+# IndexOutOfBoundsException mit der Begruendung "index 5 of 2".  Dieser Test ist
+# der wasm32-Waechter dafuer, denn dort ging beides schief:
+#   * das Exception-Objekt wurde mit fester i64-Breite allokiert, obwohl der
+#     uebrige Code `malloc` mit size_t (i32 auf wasm32) deklariert — das machte
+#     JEDE Funktion mit `at`/`get` unuebersetzbar (220 im 9rooms-Client),
+#   * der Ausnahme-Record {Objekt, Thunk, Typ-Tag} wurde mit festen Abstaenden
+#     8/16 bei 24 Byte geschrieben — bei 4-Byte-Zeigern landen Thunk und Tag im
+#     Leeren, und kein `catch` findet seinen Typ,
+#   * und der emcc-Link fuehrte libc++-noexcept, womit __cxa_throw trappte.
+# Der Index bleibt dynamisch (ueber .len), damit der Check nicht wegfaltet.
+# Kein Import: der wasm-Runner linkt nur diese Datei.
+# Expected exit code: 0
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [items, list<i32>, [10, 20]]
+      - decl: [last, i32, { -: [items.len, 1] }]
+      - decl: [sum, i32, 0]
+      - decl: [caught, i32, 0]
+      - decl: [reason, string, ""]
+
+      # Gueltiger Zugriff: der Pruefcode darf nicht in den Weg laufen.
+      - try:
+          body:
+            - decl: [got, i32, { at: [items, last] }]
+            - set: [sum, { +: [sum, got] }]
+          catch:
+            - type: IndexOutOfBoundsException
+              var: err
+              body:
+                - call: [log.info, "FAIL: gueltiger Index warf: ${err.message}"]
+                - set: [sum, -1]
+      - if:
+          condition: { neq: [sum, 20] }
+          then:
+            - call: [log.info, "FAIL: sum=${sum} erwartet 20"]
+            - return: 1
+
+      # Ausserhalb der Grenzen: muss werfen UND hier gefangen werden.
+      - decl: [far, i32, { +: [items.len, 3] }]
+      - try:
+          body:
+            - decl: [bad, i32, { at: [items, far] }]
+            - call: [log.info, "FAIL: kein Wurf, las ${bad}"]
+          catch:
+            - type: IndexOutOfBoundsException
+              var: err
+              body:
+                - set: [caught, 1]
+                - set: [reason, err.message]
+      - if:
+          condition: { neq: [caught, 1] }
+          then:
+            - call: [log.info, "FAIL: IndexOutOfBoundsException nicht gefangen"]
+            - return: 1
+      - if:
+          condition: { neq: [reason, "index 5 of 2"] }
+          then:
+            - call: [log.info, "FAIL: Begruendung '${reason}' erwartet 'index 5 of 2'"]
+            - return: 1
+
+      - call: [log.info, "OK: gefangen mit '${reason}'"]
+      - return: 0

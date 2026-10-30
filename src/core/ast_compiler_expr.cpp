@@ -100,16 +100,15 @@ IRValue* Compiler::visitNewArrayExpr(NewArrayExpr* na) {
     IRValue* countIR = visitExpression(na->countExpr.get());
     if (!countIR) { LOG_ERROR("new_array: could not evaluate count"); return ctx.ir_gen->getInt32(0); }
     llvm::Value* count = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(countIR));
-    if (count->getType()->isIntegerTy(32))
-        count = ctx.builder.CreateZExt(count, ctx.builder.getInt64Ty(), "darr_count64");
+    count = ctx.toSizeType(count);
 
     llvm::Function* mallocFn = ctx.module().getFunction("malloc");
     if (!mallocFn) {
         llvm::FunctionType* ft = llvm::FunctionType::get(
-            ctx.builder.getInt8Ty()->getPointerTo(), {ctx.builder.getInt64Ty()}, false);
+            ctx.builder.getInt8Ty()->getPointerTo(), {ctx.getSizeType()}, false);
         mallocFn = llvm::Function::Create(ft, llvm::Function::ExternalLinkage, "malloc", ctx.module());
     }
-    llvm::Value* bytes = ctx.builder.CreateMul(count, ctx.builder.getInt64(elemSize), "darr_bytes");
+    llvm::Value* bytes = ctx.builder.CreateMul(count, ctx.getSizeConst(elemSize), "darr_bytes");
     llvm::Value* ptr   = ctx.builder.CreateCall(mallocFn, {bytes}, "darr_ptr");
     return ctx.ir_gen->wrap(ptr);
 }
@@ -1418,9 +1417,9 @@ IRValue* Compiler::visitSpawn(SpawnExpr* spawn) {
         llvm::DataLayout dl(&ctx.module());
         uint64_t argStructSize = dl.getTypeAllocSize(argStructTy);
 
-        llvm::Function* mallocFn = ctx.getFunction("malloc", i8p, {ctx.builder.getInt64Ty()});
+        llvm::Function* mallocFn = ctx.getFunction("malloc", i8p, {ctx.getSizeType()});
         llvm::Value* rawArgsPtr  = ctx.builder.CreateCall(mallocFn,
-            {ctx.builder.getInt64(argStructSize)}, "args_raw");
+            {ctx.getSizeConst(argStructSize)}, "args_raw");
         llvm::Value* argsPtr = ctx.builder.CreateBitCast(
             rawArgsPtr, argStructTy->getPointerTo(), "args_ptr");
         for (size_t i = 0; i < argVals.size(); ++i) {
@@ -1437,9 +1436,9 @@ IRValue* Compiler::visitSpawn(SpawnExpr* spawn) {
         return nullptr;
     }
     llvm::DataLayout dl(&ctx.module());
-    llvm::Function* mallocFn = ctx.getFunction("malloc", i8p, {ctx.builder.getInt64Ty()});
+    llvm::Function* mallocFn = ctx.getFunction("malloc", i8p, {ctx.getSizeType()});
     llvm::Value* rawHandle = ctx.builder.CreateCall(mallocFn,
-        {ctx.builder.getInt64(dl.getTypeAllocSize(handleTy))}, "handle_raw");
+        {ctx.getSizeConst(dl.getTypeAllocSize(handleTy))}, "handle_raw");
     llvm::Value* handlePtr = ctx.builder.CreateBitCast(rawHandle, handleTy->getPointerTo(), "handle_ptr");
     ctx.builder.CreateStore(ctx.builder.getInt8(0),
         ctx.builder.CreateStructGEP(handleTy, handlePtr, 1, "joined_ptr"));
@@ -1447,18 +1446,26 @@ IRValue* Compiler::visitSpawn(SpawnExpr* spawn) {
         ctx.builder.CreateStructGEP(handleTy, handlePtr, 2, "detached_ptr"));
 
     // 6. pthread_create(&handle->tid, NULL, trampoline, args)
-    llvm::Type* i64p = ctx.builder.getInt64Ty()->getPointerTo();
-    llvm::Value* tidGEP = ctx.builder.CreateBitCast(
-        ctx.builder.CreateStructGEP(handleTy, handlePtr, 0, "tid_gep"), i64p);
+    // `pthread_t` ist zeigerbreit (i64 nativ, i32 auf wasm32), der Handle-Slot
+    // dagegen ueberall i64 — `thread.id` soll pro Ziel nicht den Typ wechseln.
+    // Also schreibt pthread_create in ein passend breites Zwischenfeld, und das
+    // wandert von dort in den Slot; sonst bliebe dessen obere Haelfte Muell.
+    llvm::Type* tidTy = ctx.getSizeType();
+    llvm::Value* tidTmp = ctx.createEntryAlloca(tidTy, "tid_tmp");
+    ctx.builder.CreateStore(llvm::ConstantInt::get(tidTy, 0), tidTmp);
     llvm::Value* trampolinePtr = ctx.builder.CreateBitCast(trampoline, i8p);
     llvm::Function* pthreadCreate = ctx.getFunction("pthread_create",
-        ctx.builder.getInt32Ty(), {i64p, i8p, i8p, i8p});
+        ctx.builder.getInt32Ty(), {tidTy->getPointerTo(), i8p, i8p, i8p});
     ctx.builder.CreateCall(pthreadCreate, {
-        tidGEP,
+        tidTmp,
         llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p)),
         trampolinePtr,
         argsVoidPtr
     });
+    ctx.builder.CreateStore(
+        ctx.builder.CreateZExtOrTrunc(ctx.builder.CreateLoad(tidTy, tidTmp, "tid_raw"),
+                                      ctx.builder.getInt64Ty(), "tid_i64"),
+        ctx.builder.CreateStructGEP(handleTy, handlePtr, 0, "tid_gep"));
 
     // 7. Return the handle pointer (stored into the thread_handle* alloca by visitSetStmt)
     return ctx.ir_gen->wrap(handlePtr);

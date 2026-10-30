@@ -21,3 +21,7 @@ tests/test_input_injection_wasm.aiml
 # spec/44_0 §2.3 + §8.3a: Ereignis-Schicht, Kante ueberlebt einen neuen Druck
 tests/test_input_pending_layer_wasm.aiml
 tests/test_wasm_list_clear_stride.aiml
+
+# spec/10 F10-23 — der Bounds-Check traegt die Wurfstelle in jede Funktion mit
+# `at`/`get`; sie muss auf wasm32 uebersetzbar und linkbar bleiben.
+tests/test_builtin_throw_after_list_alloc.aiml

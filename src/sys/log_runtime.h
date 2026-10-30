@@ -17,6 +17,13 @@ void aiml_log_system(const char* msg, const char* loc);
 void aiml_log_set_level(const char* level);   /* verbose/debug/info/warn/error/fatal */
 void aiml_log_set_file(const char* path);     /* NULL or "" to disable file mirror   */
 
+/* ── spec/22: Nachricht des letzten Wurfs ─────────────────────────────────────
+ * Jede `throw`-Stelle hinterlegt hier ihre `message`, damit die oberste Ebene
+ * sie melden kann, wenn niemand faengt. Gehoert in die Runtime, nicht in den
+ * JIT-Host: AOT- und wasm32-Ziele linken denselben Wurfpfad. */
+void        aiml_note_thrown_message(const char* msg);
+const char* aiml_last_thrown_message(void);
+
 /* ── Diagnostic trace ring (env AIML_MODEL_TRACE) ─────────────────────────────
  * A lock-protected fixed-size ring of the most recent lifetime events for heap
  * objects, kept so that when a corruption is finally detected we can print the

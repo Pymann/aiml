@@ -2088,15 +2088,14 @@ void AIMLCompiler::compileToObject(const std::string& /*filename*/, const std::s
 }
 
 // ── Uncaught-exception message capture ───────────────────────────────────────
-// AIML `throw` records its exception's `message` here right before __cxa_throw,
-// so the top-level try/catch in jitRun can report it when nothing catches the
+// AIML `throw` records its exception's `message` right before __cxa_throw, so
+// the top-level try/catch in jitRun can report it when nothing catches the
 // exception (spec/22: unhandled → print message to stderr + sys.exit(2)).
 // Without this the exception would unwind out of runFunction() and std::terminate
-// the process (core dump, no diagnostic).
-static thread_local std::string g_aiml_last_thrown_msg;
-extern "C" void aiml_note_thrown_message(const char* msg) {
-    g_aiml_last_thrown_msg = msg ? msg : "";
-}
+// the process (core dump, no diagnostic). Die Ablage liegt in der Runtime
+// (src/sys/log_runtime.cpp), damit AOT- und wasm32-Ziele sie mitlinken.
+extern "C" void        aiml_note_thrown_message(const char* msg);
+extern "C" const char* aiml_last_thrown_message(void);
 
 int AIMLCompiler::jitRun() {
     // No program arguments: argv[0] only.
@@ -3361,8 +3360,9 @@ int AIMLCompiler::jitRun(int argc, char** argv) {
         result = engine->runFunction(mainFunc, args);
     } catch (...) {
         aiml_set_active_context(nullptr, nullptr);
+        const char* thrown = aiml_last_thrown_message();
         std::fprintf(stderr, "Unhandled AIML exception: %s\n",
-                     g_aiml_last_thrown_msg.empty() ? "(no message)" : g_aiml_last_thrown_msg.c_str());
+                     thrown ? thrown : "(no message)");
         return 2;
     }
     aiml_set_active_context(nullptr, nullptr);

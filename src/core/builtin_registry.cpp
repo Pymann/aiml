@@ -42,7 +42,7 @@ static void emitThrow(CompilerContext& ctx, const std::string& excClass) {
 
     llvm::Function* allocFn = ctx.module().getFunction("__cxa_allocate_exception");
     if (!allocFn) {
-        auto* fty = llvm::FunctionType::get(ptrTy, {ctx.builder.getInt64Ty()}, false);
+        auto* fty = llvm::FunctionType::get(ptrTy, {ctx.getSizeType()}, false);
         allocFn = llvm::Function::Create(fty, llvm::Function::ExternalLinkage,
             "__cxa_allocate_exception", ctx.module());
     }
@@ -56,22 +56,25 @@ static void emitThrow(CompilerContext& ctx, const std::string& excClass) {
     // spec/61 §9.3 record layout {object, free thunk, Typ-Tag}; ein Laufzeit-Wurf hat
     // kein Objekt und keinen Thunk, aber sehr wohl einen NAMEN — spec/22 listet die
     // eingebauten Ausnahmen, und ohne Tag koennte kein `catch` sie nach Typ waehlen.
-    llvm::Value* excAlloc = ctx.builder.CreateCall(allocFn, {ctx.builder.getInt64(24)}, "exc_alloc");
-    ctx.builder.CreateStore(llvm::ConstantPointerNull::get(ptrTy), excAlloc);
+    llvm::Value* excAlloc = ctx.builder.CreateCall(allocFn,
+        {ctx.getSizeConst(ctx.getExcRecordSize())}, "exc_alloc");
     ctx.builder.CreateStore(llvm::ConstantPointerNull::get(ptrTy),
-        ctx.builder.CreateConstGEP1_64(ctx.builder.getInt8Ty(), excAlloc, 8));
+        ctx.excRecordField(excAlloc, 0, "exc_obj_slot"));
+    ctx.builder.CreateStore(llvm::ConstantPointerNull::get(ptrTy),
+        ctx.excRecordField(excAlloc, 1, "exc_thunk_slot"));
     ctx.builder.CreateStore(ctx.builder.CreateGlobalStringPtr(excClass, "builtin_exc_tag"),
-        ctx.builder.CreateConstGEP1_64(ctx.builder.getInt8Ty(), excAlloc, 16));
+        ctx.excRecordField(excAlloc, 2, "exc_tag_slot"));
     llvm::Value* null = llvm::ConstantPointerNull::get(ptrTy);
+    llvm::Constant* tinfo = ctx.getExcTypeInfo(excClass);
 
     llvm::BasicBlock* ud = AIML::AST::aimlUnwindDest(ctx, true);
     if (ud) {
         llvm::Function* fn = ctx.builder.GetInsertBlock()->getParent();
         llvm::BasicBlock* unreachBB = llvm::BasicBlock::Create(ctx.context, "throw_unreach", fn);
-        ctx.builder.CreateInvoke(throwFn, unreachBB, ud, {excAlloc, null, null});
+        ctx.builder.CreateInvoke(throwFn, unreachBB, ud, {excAlloc, tinfo, null});
         ctx.builder.SetInsertPoint(unreachBB);
     } else {
-        ctx.builder.CreateCall(throwFn, {excAlloc, null, null});
+        ctx.builder.CreateCall(throwFn, {excAlloc, tinfo, null});
     }
     ctx.builder.CreateUnreachable();
 }
@@ -86,7 +89,7 @@ static void emitThrowMsg(CompilerContext& ctx, const std::string& excClass,
 
     llvm::Function* allocFn = ctx.module().getFunction("__cxa_allocate_exception");
     if (!allocFn) {
-        auto* fty = llvm::FunctionType::get(ptrTy, {ctx.builder.getInt64Ty()}, false);
+        auto* fty = llvm::FunctionType::get(ptrTy, {ctx.getSizeType()}, false);
         allocFn = llvm::Function::Create(fty, llvm::Function::ExternalLinkage,
             "__cxa_allocate_exception", ctx.module());
     }
@@ -104,8 +107,11 @@ static void emitThrowMsg(CompilerContext& ctx, const std::string& excClass,
     if (msgPtr && it != ctx.classes.end()) {
         if (auto* st = llvm::dyn_cast_or_null<llvm::StructType>(it->second.type)) {
             uint64_t sz = ctx.module().getDataLayout().getTypeAllocSize(st);
-            llvm::Function* mallocFn = ctx.getFunction("malloc", ptrTy, {ctx.builder.getInt64Ty()});
-            obj = ctx.builder.CreateCall(mallocFn, {ctx.builder.getInt64(sz)}, "exc_obj");
+            // size_t, nicht fest i64: auf wasm32 deklariert der uebrige Code
+            // `malloc(i32)` (ctx.getSizeType()), und eine abweichende Breite
+            // macht das ganze Modul ungueltig.
+            llvm::Function* mallocFn = ctx.getFunction("malloc", ptrTy, {ctx.getSizeType()});
+            obj = ctx.builder.CreateCall(mallocFn, {ctx.getSizeConst(sz)}, "exc_obj");
             ctx.builder.CreateStore(msgPtr,
                 ctx.builder.CreateStructGEP(st, obj, 0, "exc_msg_slot"));
         }
@@ -118,22 +124,24 @@ static void emitThrowMsg(CompilerContext& ctx, const std::string& excClass,
         ctx.builder.CreateCall(ctx.getFunction("aiml_note_thrown_message",
                                                ctx.builder.getVoidTy(), {ptrTy}), {msgPtr});
 
-    llvm::Value* excAlloc = ctx.builder.CreateCall(allocFn, {ctx.builder.getInt64(24)}, "exc_alloc");
-    ctx.builder.CreateStore(obj, excAlloc);
+    llvm::Value* excAlloc = ctx.builder.CreateCall(allocFn,
+        {ctx.getSizeConst(ctx.getExcRecordSize())}, "exc_alloc");
+    ctx.builder.CreateStore(obj, ctx.excRecordField(excAlloc, 0, "exc_obj_slot"));
     ctx.builder.CreateStore(llvm::ConstantPointerNull::get(ptrTy),
-        ctx.builder.CreateConstGEP1_64(ctx.builder.getInt8Ty(), excAlloc, 8));
+        ctx.excRecordField(excAlloc, 1, "exc_thunk_slot"));
     ctx.builder.CreateStore(ctx.builder.CreateGlobalStringPtr(excClass, "builtin_exc_tag"),
-        ctx.builder.CreateConstGEP1_64(ctx.builder.getInt8Ty(), excAlloc, 16));
+        ctx.excRecordField(excAlloc, 2, "exc_tag_slot"));
     llvm::Value* null = llvm::ConstantPointerNull::get(ptrTy);
+    llvm::Constant* tinfo = ctx.getExcTypeInfo(excClass);
 
     llvm::BasicBlock* ud = AIML::AST::aimlUnwindDest(ctx, true);
     if (ud) {
         llvm::Function* fn = ctx.builder.GetInsertBlock()->getParent();
         llvm::BasicBlock* unreachBB = llvm::BasicBlock::Create(ctx.context, "throw_unreach", fn);
-        ctx.builder.CreateInvoke(throwFn, unreachBB, ud, {excAlloc, null, null});
+        ctx.builder.CreateInvoke(throwFn, unreachBB, ud, {excAlloc, tinfo, null});
         ctx.builder.SetInsertPoint(unreachBB);
     } else {
-        ctx.builder.CreateCall(throwFn, {excAlloc, null, null});
+        ctx.builder.CreateCall(throwFn, {excAlloc, tinfo, null});
     }
     ctx.builder.CreateUnreachable();
 }
@@ -409,8 +417,8 @@ static IRValue* gl43Emit(CompilerContext& ctx, const char* cName, const std::str
         llvm::Value* out = ctx.memV3
             ? static_cast<llvm::Value*>(ctx.builder.CreateCall(ctx.getFunction("aiml_buffer_handle_new", p, {}), {}, "gl43_buf_h"))
             : static_cast<llvm::Value*>(ctx.createEntryAlloca(bt, "gl43_buf"));
-        ctx.builder.CreateCall(ctx.getFunction("memcpy", p, {p, p, ctx.builder.getInt64Ty()}),
-            {out, r, ctx.builder.getInt64(sz)});
+        ctx.builder.CreateCall(ctx.getFunction("memcpy", p, {p, p, ctx.getSizeType()}),
+            {out, r, ctx.getSizeConst(sz)});
         ctx.builder.CreateCall(ctx.getFunction("free", ctx.builder.getVoidTy(), {p}), {r});
         return ctx.ir_gen->wrap(out);
     }
@@ -1386,15 +1394,15 @@ void registerBuiltins(CompilerContext& ctx) {
         ctx.builder.CreateBr(mergeBB);
         ctx.builder.SetInsertPoint(validBB);
         llvm::Value* size = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]));
-        if (size->getType()->isIntegerTy(32)) size = ctx.builder.CreateZExt(size, ctx.builder.getInt64Ty());
+        size = ctx.toSizeType(size);
         llvm::BasicBlock* doReadBB = llvm::BasicBlock::Create(ctx.context, "do_read", parentFunc);
-        ctx.builder.CreateCondBr(ctx.builder.CreateICmpSGT(size, ctx.builder.getInt64(0)), doReadBB, invalidBB);
+        ctx.builder.CreateCondBr(ctx.builder.CreateICmpSGT(size, ctx.getSizeConst(0)), doReadBB, invalidBB);
         ctx.builder.SetInsertPoint(doReadBB);
-        llvm::Function* mallocF = ctx.getFunction("malloc", i8p, {ctx.builder.getInt64Ty()});
-        llvm::Value* buf = ctx.builder.CreateCall(mallocF, {ctx.builder.CreateAdd(size, ctx.builder.getInt64(1))});
-        llvm::Function* freadF = ctx.getFunction("fread", ctx.builder.getInt64Ty(),
-            {i8p, ctx.builder.getInt64Ty(), ctx.builder.getInt64Ty(), i8p});
-        llvm::Value* nread = ctx.builder.CreateCall(freadF, {buf, ctx.builder.getInt64(1), size, handle});
+        llvm::Function* mallocF = ctx.getFunction("malloc", i8p, {ctx.getSizeType()});
+        llvm::Value* buf = ctx.builder.CreateCall(mallocF, {ctx.builder.CreateAdd(size, ctx.getSizeConst(1))});
+        llvm::Function* freadF = ctx.getFunction("fread", ctx.getSizeType(),
+            {i8p, ctx.getSizeType(), ctx.getSizeType(), i8p});
+        llvm::Value* nread = ctx.builder.CreateCall(freadF, {buf, ctx.getSizeConst(1), size, handle});
         ctx.builder.CreateStore(ctx.builder.getInt8(0),
             ctx.builder.CreateInBoundsGEP(ctx.builder.getInt8Ty(), buf, nread));
         ctx.builder.CreateBr(mergeBB);
@@ -1420,20 +1428,20 @@ void registerBuiltins(CompilerContext& ctx) {
         ctx.builder.CreateBr(mergeBB);
         ctx.builder.SetInsertPoint(validBB);
         llvm::Function* fseekF = ctx.getFunction("fseek", ctx.builder.getInt32Ty(),
-            {i8p, ctx.builder.getInt64Ty(), ctx.builder.getInt32Ty()});
-        llvm::Function* ftellF = ctx.getFunction("ftell", ctx.builder.getInt64Ty(), {i8p});
+            {i8p, ctx.getSizeType(), ctx.builder.getInt32Ty()});
+        llvm::Function* ftellF = ctx.getFunction("ftell", ctx.getSizeType(), {i8p});
         llvm::Function* rewindF = ctx.getFunction("rewind", ctx.builder.getVoidTy(), {i8p});
-        ctx.builder.CreateCall(fseekF, {handle, ctx.builder.getInt64(0), ctx.builder.getInt32(2)});
+        ctx.builder.CreateCall(fseekF, {handle, ctx.getSizeConst(0), ctx.builder.getInt32(2)});
         llvm::Value* size = ctx.builder.CreateCall(ftellF, {handle});
         ctx.builder.CreateCall(rewindF, {handle});
         llvm::BasicBlock* doReadBB = llvm::BasicBlock::Create(ctx.context, "do_read_all", parentFunc);
-        ctx.builder.CreateCondBr(ctx.builder.CreateICmpSGT(size, ctx.builder.getInt64(0)), doReadBB, invalidBB);
+        ctx.builder.CreateCondBr(ctx.builder.CreateICmpSGT(size, ctx.getSizeConst(0)), doReadBB, invalidBB);
         ctx.builder.SetInsertPoint(doReadBB);
-        llvm::Function* mallocF = ctx.getFunction("malloc", i8p, {ctx.builder.getInt64Ty()});
-        llvm::Value* buf = ctx.builder.CreateCall(mallocF, {ctx.builder.CreateAdd(size, ctx.builder.getInt64(1))});
-        llvm::Function* freadF = ctx.getFunction("fread", ctx.builder.getInt64Ty(),
-            {i8p, ctx.builder.getInt64Ty(), ctx.builder.getInt64Ty(), i8p});
-        llvm::Value* nread = ctx.builder.CreateCall(freadF, {buf, ctx.builder.getInt64(1), size, handle});
+        llvm::Function* mallocF = ctx.getFunction("malloc", i8p, {ctx.getSizeType()});
+        llvm::Value* buf = ctx.builder.CreateCall(mallocF, {ctx.builder.CreateAdd(size, ctx.getSizeConst(1))});
+        llvm::Function* freadF = ctx.getFunction("fread", ctx.getSizeType(),
+            {i8p, ctx.getSizeType(), ctx.getSizeType(), i8p});
+        llvm::Value* nread = ctx.builder.CreateCall(freadF, {buf, ctx.getSizeConst(1), size, handle});
         ctx.builder.CreateStore(ctx.builder.getInt8(0),
             ctx.builder.CreateInBoundsGEP(ctx.builder.getInt8Ty(), buf, nread));
         // spec/61 §4: return an aiml-MANAGED string (with an AimlStrHeader), not a bare malloc buffer —
@@ -1875,9 +1883,9 @@ void registerBuiltins(CompilerContext& ctx) {
         // memset(data, 0, capacity)
         auto* memsetFn = ctx.getFunction("memset",
             ctx.builder.getInt8Ty()->getPointerTo(),
-            {ctx.builder.getInt8Ty()->getPointerTo(), ctx.builder.getInt32Ty(), ctx.builder.getInt64Ty()});
-        auto* cap64 = ctx.builder.CreateZExt(cap, ctx.builder.getInt64Ty());
-        ctx.builder.CreateCall(memsetFn, {data, ctx.builder.getInt32(0), cap64});
+            {ctx.builder.getInt8Ty()->getPointerTo(), ctx.builder.getInt32Ty(), ctx.getSizeType()});
+        auto* capSz = ctx.toSizeType(cap);
+        ctx.builder.CreateCall(memsetFn, {data, ctx.builder.getInt32(0), capSz});
         // size = capacity, writeIndex = capacity
         auto* sizePtr = ctx.builder.CreateStructGEP(bufType, baseAlloca, 0);
         ctx.builder.CreateStore(cap, sizePtr);
@@ -2245,8 +2253,8 @@ void registerBuiltins(CompilerContext& ctx) {
         llvm::Value* tid    = ctx.builder.CreateLoad(ctx.builder.getInt64Ty(), tidGEP, "tid");
         llvm::Type* i8pp = ctx.builder.getInt8Ty()->getPointerTo()->getPointerTo();
         llvm::Function* f = ctx.getFunction("pthread_join",
-            ctx.builder.getInt32Ty(), {ctx.builder.getInt64Ty(), i8pp});
-        ctx.builder.CreateCall(f, {tid,
+            ctx.builder.getInt32Ty(), {ctx.getSizeType(), i8pp});
+        ctx.builder.CreateCall(f, {ctx.toSizeType(tid),
             llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8pp))});
         ctx.builder.CreateStore(ctx.builder.getInt8(1), joinedGEP);
         return ctx.ir_gen->getInt32(0);
@@ -2272,7 +2280,7 @@ void registerBuiltins(CompilerContext& ctx) {
         llvm::Value* tid    = ctx.builder.CreateLoad(ctx.builder.getInt64Ty(), tidGEP, "tid");
         llvm::Function* f = ctx.getFunction("pthread_detach",
             ctx.builder.getInt32Ty(), {ctx.getSizeType()});
-        ctx.builder.CreateCall(f, {tid});
+        ctx.builder.CreateCall(f, {ctx.toSizeType(tid)});
         ctx.builder.CreateStore(ctx.builder.getInt8(1), detachedGEP);
         return ctx.ir_gen->getInt32(0);
     };
@@ -2290,9 +2298,9 @@ void registerBuiltins(CompilerContext& ctx) {
     lockInfo.builtinMethods["init"] = [](CompilerContext& ctx, llvm::Value* baseAlloca,
         AIML::AST::CallExpr*, std::function<IRValue*(AIML::AST::Expr*)>) -> IRValue* {
         llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
-        llvm::Function* mallocFn = ctx.getFunction("malloc", i8p, {ctx.builder.getInt64Ty()});
+        llvm::Function* mallocFn = ctx.getFunction("malloc", i8p, {ctx.getSizeType()});
         llvm::Value* mutexMem = ctx.builder.CreateCall(mallocFn,
-            {ctx.builder.getInt64(40)}, "mutex_mem");
+            {ctx.getSizeConst(40)}, "mutex_mem");
         ctx.builder.CreateStore(mutexMem, baseAlloca);
         llvm::Function* initFn = ctx.getFunction("pthread_mutex_init",
             ctx.builder.getInt32Ty(), {i8p, i8p});
@@ -7744,11 +7752,11 @@ void registerBuiltins(CompilerContext& ctx) {
 #define COMP_HEAP_TO_ALLOCA(heapPtr) \
         ([&]() -> llvm::Value* { \
             auto* _p   = llvm::PointerType::get(ctx.context, 0); \
-            auto* _i64 = ctx.builder.getInt64Ty(); \
+            auto* _szt = ctx.getSizeType(); \
             auto* _bt  = ctx.getLLVMType("buffer"); \
             auto* _out = ctx.createEntryAlloca(_bt, "comp_alloca"); \
             uint64_t _sz = ctx.module().getDataLayout().getTypeAllocSize(_bt); \
-            llvm::Function* _mcf = ctx.getFunction("memcpy", _p, {_p, _p, _i64}); \
+            llvm::Function* _mcf = ctx.getFunction("memcpy", _p, {_p, _p, _szt}); \
             ctx.builder.CreateCall(_mcf, {_out, (heapPtr), ctx.getSizeConst(_sz)}); \
             return _out; \
         }())
@@ -7939,7 +7947,6 @@ void registerBuiltins(CompilerContext& ctx) {
             if (args.size() < 3) return nullptr;
             llvm::Type* i8p   = ctx.builder.getInt8Ty()->getPointerTo();
             llvm::Type* i32ty = ctx.builder.getInt32Ty();
-            llvm::Type* i64ty = ctx.builder.getInt64Ty();
             llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
 
             llvm::Value* bufVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
@@ -7956,9 +7963,9 @@ void registerBuiltins(CompilerContext& ctx) {
             ctx.builder.CreateStore(dim, ctx.builder.CreateStructGEP(listTy, listAlloca, 0));
             ctx.builder.CreateStore(dim, ctx.builder.CreateStructGEP(listTy, listAlloca, 1));
             llvm::Value* totalBytes = ctx.builder.CreateMul(
-                ctx.builder.CreateZExt(dim, i64ty), ctx.builder.getInt64(4));
+                ctx.toSizeType(dim), ctx.getSizeConst(4));
             llvm::Value* dataPtr = ctx.builder.CreateCall(
-                ctx.getFunction("malloc", ptrTy, {i64ty}), {totalBytes}, "emb_data");
+                ctx.getFunction("malloc", ptrTy, {ctx.getSizeType()}), {totalBytes}, "emb_data");
             ctx.builder.CreateStore(dataPtr, ctx.builder.CreateStructGEP(listTy, listAlloca, 2));
 
             llvm::Function* lookupFn = ctx.getFunction("aiml_ai_embedding_lookup",
@@ -8090,7 +8097,6 @@ void registerBuiltins(CompilerContext& ctx) {
         ai.builtinFuncs["encode_dense"] = [getBufferData, getListField](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
             if (args.size() < 3) return nullptr;
             llvm::Type* i32ty = ctx.builder.getInt32Ty();
-            llvm::Type* i64ty = ctx.builder.getInt64Ty();
             llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
             llvm::Type* i8p   = ctx.builder.getInt8Ty()->getPointerTo();
 
@@ -8113,9 +8119,9 @@ void registerBuiltins(CompilerContext& ctx) {
             ctx.builder.CreateStore(dim, ctx.builder.CreateStructGEP(listTy, listAlloca, 0));
             ctx.builder.CreateStore(dim, ctx.builder.CreateStructGEP(listTy, listAlloca, 1));
             llvm::Value* totalBytes = ctx.builder.CreateMul(
-                ctx.builder.CreateZExt(dim, i64ty), ctx.builder.getInt64(4));
+                ctx.toSizeType(dim), ctx.getSizeConst(4));
             llvm::Value* dataPtr = ctx.builder.CreateCall(
-                ctx.getFunction("malloc", ptrTy, {i64ty}), {totalBytes}, "enc_data");
+                ctx.getFunction("malloc", ptrTy, {ctx.getSizeType()}), {totalBytes}, "enc_data");
             ctx.builder.CreateStore(dataPtr, ctx.builder.CreateStructGEP(listTy, listAlloca, 2));
 
             llvm::Function* fn = ctx.getFunction("aiml_ai_encode_dense",
@@ -8131,7 +8137,6 @@ void registerBuiltins(CompilerContext& ctx) {
         ai.builtinFuncs["encode_dense_weighted"] = [getBufferData, getListField](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
             if (args.size() < 3) return nullptr;
             llvm::Type* i32ty = ctx.builder.getInt32Ty();
-            llvm::Type* i64ty = ctx.builder.getInt64Ty();
             llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
             llvm::Type* i8p   = ctx.builder.getInt8Ty()->getPointerTo();
 
@@ -8152,9 +8157,9 @@ void registerBuiltins(CompilerContext& ctx) {
             ctx.builder.CreateStore(dim, ctx.builder.CreateStructGEP(listTy, listAlloca, 0));
             ctx.builder.CreateStore(dim, ctx.builder.CreateStructGEP(listTy, listAlloca, 1));
             llvm::Value* totalBytes = ctx.builder.CreateMul(
-                ctx.builder.CreateZExt(dim, i64ty), ctx.builder.getInt64(4));
+                ctx.toSizeType(dim), ctx.getSizeConst(4));
             llvm::Value* dataPtr = ctx.builder.CreateCall(
-                ctx.getFunction("malloc", ptrTy, {i64ty}), {totalBytes}, "encw_data");
+                ctx.getFunction("malloc", ptrTy, {ctx.getSizeType()}), {totalBytes}, "encw_data");
             ctx.builder.CreateStore(dataPtr, ctx.builder.CreateStructGEP(listTy, listAlloca, 2));
 
             llvm::Function* fn = ctx.getFunction("aiml_ai_encode_dense_weighted",
@@ -8200,7 +8205,6 @@ void registerBuiltins(CompilerContext& ctx) {
             if (args.size() < 5) return nullptr;
             llvm::Type* f32ty = ctx.builder.getFloatTy();
             llvm::Type* i32ty = ctx.builder.getInt32Ty();
-            llvm::Type* i64ty = ctx.builder.getInt64Ty();
             llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
 
             llvm::Value* qVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
@@ -8229,9 +8233,9 @@ void registerBuiltins(CompilerContext& ctx) {
             ctx.builder.CreateStore(dim, ctx.builder.CreateStructGEP(listTy, listAlloca, 0));
             ctx.builder.CreateStore(dim, ctx.builder.CreateStructGEP(listTy, listAlloca, 1));
             llvm::Value* totalBytes = ctx.builder.CreateMul(
-                ctx.builder.CreateZExt(dim, i64ty), ctx.builder.getInt64(4));
+                ctx.toSizeType(dim), ctx.getSizeConst(4));
             llvm::Value* dataPtr = ctx.builder.CreateCall(
-                ctx.getFunction("malloc", ptrTy, {i64ty}), {totalBytes}, "tg_data");
+                ctx.getFunction("malloc", ptrTy, {ctx.getSizeType()}), {totalBytes}, "tg_data");
             ctx.builder.CreateStore(dataPtr, ctx.builder.CreateStructGEP(listTy, listAlloca, 2));
 
             llvm::Function* fn = ctx.getFunction("aiml_ai_triplet_grad",
@@ -8278,15 +8282,15 @@ void registerBuiltins(CompilerContext& ctx) {
 #define GLTF_HEAP_TO_ALLOCA(heapPtr) \
         ([&]() -> llvm::Value* { \
             auto* _p  = llvm::PointerType::get(ctx.context, 0); \
-            auto* _i64= ctx.builder.getInt64Ty(); \
+            auto* _szt= ctx.getSizeType(); \
             auto* _bt = ctx.getLLVMType("buffer"); \
             uint64_t _sz = ctx.module().getDataLayout().getTypeAllocSize(_bt); \
             llvm::Value* _hp = (heapPtr); \
             llvm::Value* _out = ctx.memV3 \
                 ? static_cast<llvm::Value*>(ctx.builder.CreateCall(ctx.getFunction("aiml_buffer_handle_new", _p, {}), {}, "gltf_buf_h")) \
                 : static_cast<llvm::Value*>(ctx.createEntryAlloca(_bt, "gltf_buf")); \
-            ctx.builder.CreateCall(ctx.getFunction("memcpy", _p, {_p, _p, _i64}), \
-                {_out, _hp, ctx.builder.getInt64(_sz)}); \
+            ctx.builder.CreateCall(ctx.getFunction("memcpy", _p, {_p, _p, _szt}), \
+                {_out, _hp, ctx.getSizeConst(_sz)}); \
             if (ctx.memV3) \
                 ctx.builder.CreateCall(ctx.getFunction("free", ctx.builder.getVoidTy(), {_p}), {_hp}); \
             return _out; \

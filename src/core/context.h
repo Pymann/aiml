@@ -369,6 +369,57 @@ namespace AIML {
     // call signature matches the target's libc.
     llvm::Type*  getSizeType()              { return builder.getIntNTy(module().getDataLayout().getPointerSizeInBits()); }
     llvm::Value* getSizeConst(uint64_t v)   { return llvm::ConstantInt::get(getSizeType(), v); }
+    // Einen Integer auf die size_t-Breite des Ziels bringen: breiter abschneiden,
+    // schmaler vorzeichenlos erweitern.  Ein i64 aus dem Frontend passt sonst
+    // nicht in ein wasm32-`malloc(i32)`.
+    llvm::Value* toSizeType(llvm::Value* v) {
+        llvm::Type* st = getSizeType();
+        return v->getType() == st ? v : builder.CreateZExtOrTrunc(v, st, "as_size");
+    }
+
+    // spec/22 + spec/61 §9.3: der Ausnahme-Record ist {Objekt, Free-Thunk, Typ-Tag}
+    // — drei Zeiger.  Groesse und Feldabstaende kommen aus dem Datenlayout, nie
+    // fest 24/8/16: auf wasm32 ist ein Zeiger 4 Byte, feste Abstaende schreiben
+    // Thunk und Tag dort ins Leere.
+    llvm::StructType* getExcRecordType() {
+        llvm::PointerType* p = llvm::PointerType::getUnqual(context);
+        return llvm::StructType::get(context, {p, p, p});
+    }
+    uint64_t getExcRecordSize() {
+        return module().getDataLayout().getTypeAllocSize(getExcRecordType());
+    }
+    // Feld des Ausnahme-Records: 0 = Objekt, 1 = Free-Thunk, 2 = Typ-Tag.
+    llvm::Value* excRecordField(llvm::Value* rec, unsigned idx, const char* name = "") {
+        return builder.CreateStructGEP(getExcRecordType(), rec, idx, name);
+    }
+
+    // spec/22: `__cxa_throw` nimmt an Stelle 2 ein std::type_info.  aiml waehlt den
+    // Handler selbst (Typ-Tag im Record, catch-all-Klausel), aber der Zeiger darf
+    // nicht null sein: Emscriptens JS-`__cxa_throw` liest ihn sofort, um die Meldung
+    // zu bauen, und griff bei null aus dem Speicher ("memory access out of bounds").
+    // Erzeugt dasselbe __class_type_info-Paar {vtable+2, Typname} wie clang.
+    llvm::Constant* getExcTypeInfo(const std::string& className) {
+        llvm::PointerType* p = llvm::PointerType::getUnqual(context);
+        const std::string mangled = std::to_string(className.size()) + className;
+        const std::string tiName  = "_ZTI" + mangled;
+        if (llvm::GlobalVariable* hit = module().getNamedGlobal(tiName)) return hit;
+
+        llvm::Constant* nameInit = llvm::ConstantDataArray::getString(context, mangled, true);
+        auto* nameGV = new llvm::GlobalVariable(module(), nameInit->getType(), true,
+            llvm::GlobalValue::LinkOnceODRLinkage, nameInit, "_ZTS" + mangled);
+
+        // Der type_info-Zeiger steht zwei Slots hinter dem Vtable-Anfang (Itanium-ABI).
+        llvm::Constant* vtable = llvm::cast<llvm::Constant>(
+            module().getOrInsertGlobal("_ZTVN10__cxxabiv117__class_type_infoE", p));
+        llvm::Constant* vptr = llvm::ConstantExpr::getGetElementPtr(
+            p, vtable, llvm::ConstantInt::get(getSizeType(), 2));
+
+        llvm::StructType* tiTy = llvm::StructType::get(context, {p, p});
+        auto* tiGV = new llvm::GlobalVariable(module(), tiTy, true,
+            llvm::GlobalValue::LinkOnceODRLinkage,
+            llvm::ConstantStruct::get(tiTy, {vptr, nameGV}), tiName);
+        return tiGV;
+    }
 
     // Helper: alloca in function entry block (prevents stack growth in loops)
     llvm::AllocaInst* createEntryAlloca(llvm::Type* ty, const std::string& name = "") {

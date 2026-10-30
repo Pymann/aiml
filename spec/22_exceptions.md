@@ -106,3 +106,19 @@ built AOT via `exodus-aot-repro.json` — must be checked in AOT, not only JIT.
 | `InvalidThreadStateException` | e.g. `join()` on a detached thread |
 | `MissingKeyError` | `map.remove()` on a non-existent key |
 | `NamespaceCollisionError` | Two imports define the same FQN |
+
+## wasm32
+
+Werfen und Fangen gilt auf wasm32 unverändert. Der Link muss die Ausnahmen aber
+mitnehmen: emcc übersetzt ohne `-fexceptions` gegen `libc++-noexcept`, und
+`__cxa_throw` endet dann in `RuntimeError: unreachable` statt zu werfen. Das Flag
+steht in `tools/run_wasm_test.sh` und in den wasm-Configs der Projekte.
+
+Im Codegen ist dabei zweierlei zeigerbreitenabhängig (`CompilerContext`,
+`src/core/context.h`): die `size_t`-Argumente der libc-Aufrufe
+(`getSizeType`/`getSizeConst`/`toSizeType`) und der Ausnahme-Record
+`{Objekt, Free-Thunk, Typ-Tag}` (`getExcRecordType`/`excRecordField`) — auf wasm32
+ist ein Zeiger 4 Byte, feste Abstände 8/16 schreiben dort ins Leere. `__cxa_throw`
+bekommt ein echtes `__class_type_info` (`getExcTypeInfo`); mit `null` greift
+Emscriptens `__cxa_throw` beim Bauen der Meldung aus dem Speicher. Wächter:
+`tests/test_builtin_throw_after_list_alloc.aiml` (in `tests/wasm_tests.list`).

@@ -8,6 +8,7 @@
 #include <ctime>
 #include <atomic>
 #include <mutex>
+#include <string>
 #include <unistd.h>   /* isatty */
 
 /* ── Internal state ──────────────────────────────────────────────────────── */
@@ -201,4 +202,16 @@ extern "C" void aiml_trace_dump(const void* ptr, const char* reason) {
     }
     fprintf(stderr, "==== end dump ====\n\n");
     if (g_log_file) { fprintf(g_log_file, "==== end dump ====\n\n"); fflush(g_log_file); }
+}
+
+/* ── spec/22: Nachricht des letzten Wurfs ────────────────────────────────── */
+
+static thread_local std::string g_last_thrown_msg;
+
+extern "C" void aiml_note_thrown_message(const char* msg) {
+    g_last_thrown_msg = msg ? msg : "";
+}
+
+extern "C" const char* aiml_last_thrown_message(void) {
+    return g_last_thrown_msg.empty() ? nullptr : g_last_thrown_msg.c_str();
 }
