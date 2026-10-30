@@ -36,7 +36,7 @@
 
 # Error checking
 - decl: [ok, i8, { call: [scene.valid] }]
-- if: [{ ==: [ok, 0] }, true]
+- if: [{ eq: [ok, 0] }, true]
   then:
     - decl: [err, string, { call: [scene.error] }]
     - print: ["glTF load error: ${err}"]

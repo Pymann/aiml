@@ -904,6 +904,16 @@ std::shared_ptr<std::vector<std::string>> AIMLCompiler::installImportResolver(
             } catch (...) {}
         }
 
+        // One file, one spelling: collapse "dir/../" and "./" lexically.  Without this a file
+        // reached as "../src/exec/../format/f.aiml" and as "../src/format/f.aiml" was parsed once
+        // (dedup below is canonical) but registered TWO lib-init names — the second never
+        // defined: an undefined symbol at AOT link time, a call through null in the JIT.
+        // lexically_normal keeps relative paths relative (exodus side-object names below).
+        try {
+            std::filesystem::path normal = std::filesystem::path(path).lexically_normal();
+            if (!normal.empty()) path = normal.string();
+        } catch (...) {}
+
         // Normalize ONLY for dedup. Keep the original (resolved-but-not-canonical)
         // path string when pushing to deferredImports / using as the import path,
         // because exodus's directory scan derives the .o filename from the

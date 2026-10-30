@@ -1,0 +1,86 @@
+# SPEC: 23_system
+# spec/23 §5.8 — working directory, environment, files:
+#   F23-70 sys.chdir  F23-71 sys.setenv / sys.unsetenv (children see it)
+#   F23-72 sys.isatty  F23-73 io.realpath  F23-74 io.mkdtemp
+#   F23-75 io.copy (byte-exact, keeps the mode, atomic)  F23-76 io.lock / io.unlock
+# Expected exit code: 0
+
+- import: "tests/_cross/check.aiml"
+
+- def:
+    name: run_sh
+    args: [[script, string]]
+    return: string
+    body:
+      - decl: [argv, list<string>, ["sh", "-c"]]
+      - call: [argv.push, script]
+      - decl: [child, process, { call: [sys.exe, argv, { capture: true }] }]
+      - decl: [code, i32, { call: [child.wait] }]
+      - decl: [out, string, child.stdout_buffer]
+      - decl: [said, string, { call: [out.trim] }]
+      - return: ["${code}:${said}"]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [chk, ptr<Checker>, { new: Checker }]
+
+      # ── mkdtemp, realpath ──
+      - decl: [dir, string, { call: [io.mkdtemp, "/tmp/aiml-os-"] }]
+      - call: [chk.expect_i, "mkdtemp made a directory", { call: [io.is_dir, dir] }, 1]
+      - call: [chk.expect_i, "with the prefix", { call: [dir.starts_with, "/tmp/aiml-os-"] }, 1]
+      - decl: [other, string, { call: [io.mkdtemp, "/tmp/aiml-os-"] }]
+      - decl: [distinct, i32, 0]
+      - if: { condition: { neq: [dir, other] }, then: [{ set: [distinct, 1] }] }
+      - call: [chk.expect_i, "a new one each time", distinct, 1]
+      - call: [io.write_file, "${dir}/a.txt", "payload\n"]
+      - decl: [resolved, string, { call: [io.realpath, "${dir}/./sub/../a.txt"] }]
+      - call: [chk.expect_s, "missing intermediate dir: no path", resolved, ""]
+      - call: [io.mkdir, "${dir}/sub"]
+      - set: [resolved, { call: [io.realpath, "${dir}/./sub/../a.txt"] }]
+      - call: [chk.expect_s, "dots resolved", resolved, "${dir}/a.txt"]
+      - call: [chk.expect_s, "missing file", { call: [io.realpath, "${dir}/none"] }, ""]
+
+      # ── copy keeps bytes and mode, leaves no .part ──
+      - call: [io.set_exec, "${dir}/a.txt"]
+      - call: [chk.expect_i, "copy", { call: [io.copy, "${dir}/a.txt", "${dir}/b.txt"] }, 0]
+      - call: [chk.expect_s, "same bytes", { call: [io.read_file, "${dir}/b.txt"] }, "payload\n"]
+      - call: [chk.expect_i, "mode kept", { call: [io.can_exec, "${dir}/b.txt"] }, 1]
+      - call: [chk.expect_i, "no .part", { call: [io.exists, "${dir}/b.txt.part"] }, 0]
+      - call: [chk.expect_i, "copy of a directory refused", { call: [io.copy, dir, "${dir}/c"] }, -1]
+
+      # ── chdir ──
+      - call: [chk.expect_i, "chdir", { call: [sys.chdir, dir] }, 0]
+      - call: [chk.expect_s, "relative paths follow", { call: [io.read_file, "a.txt"] }, "payload\n"]
+      - call: [chk.expect_s, "children start there", { call: [run_sh, "pwd -P"] }, "0:${dir}"]
+      - call: [chk.expect_i, "chdir to nowhere", { call: [sys.chdir, "/nonexistent-aiml"] }, -1]
+
+      # ── setenv / unsetenv ──
+      - call: [chk.expect_i, "setenv", { call: [sys.setenv, "AIML_OS_TEST", "hello"] }, 0]
+      - decl: [envm, map<string:string>, { call: [sys.env] }]
+      - call: [chk.expect_s, "sys.env sees it", { call: [envm.get, "AIML_OS_TEST"] }, "hello"]
+      - call: [chk.expect_s, "a child sees it", { call: [run_sh, "echo $AIML_OS_TEST"] }, "0:hello"]
+      - call: [chk.expect_i, "unsetenv", { call: [sys.unsetenv, "AIML_OS_TEST"] }, 0]
+      - call: [chk.expect_s, "gone for the next child", { call: [run_sh, "echo x$AIML_OS_TEST"] }, "0:x"]
+      - call: [chk.expect_i, "a name with = is refused", { call: [sys.setenv, "A=B", "c"] }, -1]
+
+      # ── isatty ──
+      - call: [chk.expect_i, "no such descriptor", { call: [sys.isatty, 99] }, 0]
+
+      # ── lock: a second process cannot take it until it is released ──
+      - decl: [lock_id, i32, { call: [io.lock, "${dir}/lockfile"] }]
+      - decl: [locked, i32, 0]
+      - if: { condition: { ge: [lock_id, 0] }, then: [{ set: [locked, 1] }] }
+      - call: [chk.expect_i, "locked", locked, 1]
+      - call: [chk.expect_s, "held against another process", { call: [run_sh, "flock -n lockfile true; echo $?"] }, "0:1"]
+      - call: [chk.expect_i, "unlock", { call: [io.unlock, lock_id] }, 0]
+      - call: [chk.expect_s, "free again", { call: [run_sh, "flock -n lockfile true; echo $?"] }, "0:0"]
+      - call: [chk.expect_i, "unknown lock id", { call: [io.unlock, 12345] }, -1]
+
+      - call: [sys.chdir, "/"]
+      - call: [io.remove_all, dir]
+      - call: [io.remove_all, other]
+      - if: { condition: { gt: [chk.fails, 0] }, then: [{ print: ["FAIL os_helpers (${chk.fails})"] }, { return: 1 }] }
+      - print: ["PASS os_helpers"]
+      - return: 0

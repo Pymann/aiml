@@ -49,10 +49,12 @@ precedence level (for mental model and documentation purposes).
 - Operands: `i32 | i64 | f32 | f64`
 - Result: same type as operands
 
-### `neg` — Unary Negation
+### `-` — Unary Negation
 ```yaml
-- set: [res, { neg: [a] }]
+- set: [res, { -: [a] }]
 ```
+- `neg` is **not** an operator name: the compiler reports `Unknown unary operator: neg`
+  (measured 29.10.2026).  Unary negation is `-` with one operand.
 - Operands: `i32 | i64 | f32 | f64`
 - Result: same type as operand
 
@@ -292,8 +294,13 @@ of the implicit-conversion set listed in `/spec/13_cast.md` §6 and kept for now
 - Only the selected branch is evaluated (short-circuit)
 
 ```yaml
-- set: [abs_x, { select: [{ ge: [x, 0] }, x, { neg: [x] }] }]
+- set: [abs_x, { select: [{ ge: [x, 0] }, x, { -: [x] }] }]
 ```
+
+> **Not implemented yet (measured 29.10.2026).**  The compiler has no `select`; worse, the
+> expression is accepted without a diagnostic and evaluates to `0` — `{ select: [false, 10, 20] }`
+> yields `0`, the example above yields `0` for `x = -3`.  Until it exists, write the branch as
+> an `if` with two `set`s.  (The silent `0` is a compiler bug to fix, not a feature.)
 
 ---
 

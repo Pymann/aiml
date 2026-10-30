@@ -251,6 +251,7 @@
     "src/sys/model_runtime.cpp",
     "src/sys/tensor_stub_wasm.cpp",
     "src/sys/ser_runtime.cpp",
+    "src/sys/hashmap_runtime.cpp",
     "src/sys/mirror_runtime.cpp",
     "src/sys/log_runtime.cpp",
     "src/sys/time_runtime.cpp",

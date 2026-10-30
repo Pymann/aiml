@@ -161,7 +161,7 @@ C libraries that expect callbacks receive AIML functions as `fn`:
     name: on_key
     args: [[window, ptr], [key, i32], [scancode, i32], [action, i32], [mods, i32]]
     body:
-      - if: [{ ==: [key, 256] }, true]   # GLFW_KEY_ESCAPE
+      - if: [{ eq: [key, 256] }, true]   # GLFW_KEY_ESCAPE
         then:
           - call: [glfwSetWindowShouldClose, window, 1]
 

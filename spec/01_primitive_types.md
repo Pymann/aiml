@@ -63,3 +63,4 @@
 | :--- | :--- | :--- |
 | `list<T>` | Dynamic list of type `T` | `list<i32>` |
 | `map<K:V>` | Key-Value Map. Note the colon `:` separator. | `map<string:i32>` |
+| `hashmap<K:V>` | Hash table, O(1) per access, refcounted handle (spec/69). | `hashmap<string:i32>` |

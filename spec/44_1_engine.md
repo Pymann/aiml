@@ -171,7 +171,7 @@ This code runs **unchanged** on desktop, browser, and Android:
       - decl: [side, f32,  { call: [input.axis,           "strafe"]  }]
       - decl: [fire, bool, { call: [input.action_pressed, "fire"]    }]
       - call: [player_move, dt, fwd, side]
-      - if: [{ ==: [fire, true] }, true]
+      - if: [{ eq: [fire, true] }, true]
         then:
           - call: [player_shoot]
 

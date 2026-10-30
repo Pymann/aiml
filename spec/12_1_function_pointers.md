@@ -87,7 +87,7 @@ Calling a `null` pointer raises a `NullPointerException`.
 - decl: [cb, fn<>]
 # cb is null
 
-- if: [{ !=: [cb, null] }, true]
+- if: [{ neq: [cb, null] }, true]
   then:
     - call: [cb]
 ```

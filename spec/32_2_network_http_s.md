@@ -98,7 +98,7 @@ when an HTTP request is received, and can also be created independently from a s
 - print: ["limit: ${limit}"]
 
 # Null check for optional fields
-- if: [{ ==: [u.fragment, null] }, true]
+- if: [{ eq: [u.fragment, null] }, true]
   then:
     - print: ["no fragment"]
 ```
@@ -643,7 +643,7 @@ Once middleware calls `resp.send()`, the first `resp.write()`, or `resp.close()`
     body:
       - decl: [session, string]
       - set: [session, { call: [req.cookie, "session_token"] }]
-      - if: [{ ==: [session, null] }, true]
+      - if: [{ eq: [session, null] }, true]
         then:
           - decl: [login, url]
           - set: [login, "/auth/login"]

@@ -263,7 +263,7 @@ copied member-wise, a returned string is owning. Neither kind introduces a secon
 convention.
 
 An uninitialised `closure<Sig>` is **null**; calling it raises `NullPointerException` (spec/22),
-as for `fn<…>`. `{ !=: [c, null] }` tests it. A `block` cannot be null — it has no uninitialised
+as for `fn<…>`. `{ neq: [c, null] }` tests it. A `block` cannot be null — it has no uninitialised
 form (it may only come from a `block:` expression or a `block` parameter, §3.2).
 
 ## 6. Ownership and lifetime

@@ -538,7 +538,7 @@ Usage:
 - decl: [running, i8, 1]
 - decl: [angle, f32, 0.0]
 
-- while: [{ ==: [running, 1] }]
+- while: [{ eq: [running, 1] }]
   body:
     # Events (SDL_PollEvent returns 0 when queue is empty)
     - decl: [ev_buf, ptr]   # SDL_Event (52 bytes, opaque)

@@ -409,7 +409,7 @@ no parser, direct IR:
       - decl: [alive, i32]
       - set: [alive, { >: [e.hp, 0] }]
       - decl: [enemy, i32]
-      - set: [enemy, { ==: [e.ai_state, 2] }]
+      - set: [enemy, { eq: [e.ai_state, 2] }]
       - return: { and: [alive, enemy] }
 
 # All living entities, sorted by pos_x, at most 100:

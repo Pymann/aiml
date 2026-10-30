@@ -260,11 +260,11 @@ For middleware that applies only to specific paths, use `srv.group`
 - decl: [status, i32]
 - set: [status, { call: [resp.status] }]
 
-- if: [{ ==: [status, 404] }, true]
+- if: [{ eq: [status, 404] }, true]
   then:
     - print: ["User not found"]
 
-- if: [{ ==: [status, 401] }, true]
+- if: [{ eq: [status, 401] }, true]
   then:
     - print: ["Unauthorized — check token"]
 

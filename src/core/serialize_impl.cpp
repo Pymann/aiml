@@ -1335,6 +1335,7 @@ bool isSerializable(CompilerContext& ctx, const std::string& typeName){
     if(typeName=="any"||typeName=="Code"||
        typeName=="lock"||typeName=="thread_handle") return false;
     if(typeName.rfind("chan<",0)==0) return false;
+    if(typeName.rfind("hashmap<",0)==0) return false;
     if(typeName=="file_handle"||typeName=="process") return false;
     if(isPtrType(typeName)) return isSerializable(ctx,ptrInner(typeName));
     if(isRefType(typeName)) return isSerializable(ctx,refInner(typeName));

@@ -1,6 +1,7 @@
 # SPEC: 32_2_http
 # spec/32_2 §2.3a — proxies and body framing, all against local fixtures:
-#   F32-2-30  client.proxy: a proxy URL with user:pass → Proxy-Authorization Basic;
+#   F32-2-30  HTTP_PROXY from the environment, NO_PROXY exempts (via sys.setenv);
+#             client.proxy: a proxy URL with user:pass → Proxy-Authorization Basic;
 #             "direct" → no proxy; an https:// proxy → null + http.last_error
 #   F32-2-31  http:// through a proxy: absolute-form request line (no DNS here);
 #             https:// through a proxy: CONNECT, then TLS inside the tunnel —
@@ -33,7 +34,7 @@
       - call: [tls_srv.route, "GET", "/secure", handle_secure]
       - decl: [tls_thread, thread_handle, { call: [tls_srv.start_async] }]
       - decl: [proxy_sock, socket_handle, { call: [listen_on, 23221] }]
-      - decl: [proxy_thread, thread_handle, { spawn: [proxy_serve, proxy_sock, 4] }]
+      - decl: [proxy_thread, thread_handle, { spawn: [proxy_serve, proxy_sock, 5] }]
       - decl: [origin_sock, socket_handle, { call: [listen_on, 23223] }]
       - decl: [origin_thread, thread_handle, { spawn: [origin_serve, origin_sock, 2] }]
       - call: [time.sleep_ms, 300]
@@ -43,6 +44,19 @@
       - decl: [fwd, http_response_handle, { call: [web.via, "http://origin.test:8080/plain?x=1", proxy_url] }]
       - call: [web.expect_answer, "forward proxy", fwd, 200, "fwd GET http://origin.test:8080/plain?x=1 HTTP/1.1|Basic dXNlcjpwQHNz"]
       - if: { condition: { neq: [fwd, null] }, then: [{ call: [fwd.free] }] }
+
+      # ── the proxy from the environment, NO_PROXY exempts (F32-2-30) ──
+      - call: [sys.setenv, "HTTP_PROXY", proxy_url]
+      - call: [sys.setenv, "NO_PROXY", ""]
+      - decl: [from_env, http_response_handle, { call: [web.via, "http://origin.test:8080/env", ""] }]
+      - call: [web.expect_answer, "HTTP_PROXY from the environment", from_env, 200, "fwd GET http://origin.test:8080/env HTTP/1.1|Basic dXNlcjpwQHNz"]
+      - if: { condition: { neq: [from_env, null] }, then: [{ call: [from_env.free] }] }
+      - call: [sys.setenv, "NO_PROXY", "localhost,.test"]
+      - decl: [exempt, http_response_handle, { call: [web.via, "http://origin.test:8080/env", ""] }]
+      - call: [web.expect_null, "NO_PROXY: direct, and origin.test does not resolve", exempt]
+      - call: [web.check.expect_has, "the direct attempt is named", { call: [http.last_error] }, "origin.test:8080: cannot connect"]
+      - call: [sys.unsetenv, "HTTP_PROXY"]
+      - call: [sys.unsetenv, "NO_PROXY"]
 
       # ── CONNECT: the certificate is verified inside the tunnel ──
       - decl: [strict, http_response_handle, { call: [web.via, "https://localhost:23222/secure", proxy_url] }]

@@ -172,11 +172,11 @@ Typically called once per frame with camera data.
       - decl: [jumped, bool, { call: [input.action_pressed, "jump"] }]
       - decl: [fired,  bool, { call: [input.action_pressed, "fire"] }]
 
-      - if: [{ ==: [jumped, true] }, true]
+      - if: [{ eq: [jumped, true] }, true]
         then:
           - call: [snd_jump.play]
 
-      - if: [{ ==: [fired, true] }, true]
+      - if: [{ eq: [fired, true] }, true]
         then:
           - call: [snd_shoot.play]
 

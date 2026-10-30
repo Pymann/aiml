@@ -79,7 +79,9 @@ A file can import from an installed **package** by name instead of by place:
   1. the one a host set for a context: `kontext.use_packages(path)` (spec/29_2 §14a);
   2. `$AIML_PACKAGES`;
   3. `aiml.packages.json` in the working directory, then upward from the importing file's
-     directory (a build started from elsewhere still finds the project's table).
+     directory (a build started from elsewhere still finds the project's table);
+  4. the table of the venv the compiler belongs to, `<venv>/lib/aiml/aiml.packages.json`
+     (spec/68 F68-30).
   The table is reread when it changes, so a long-running host sees a later `deps install`.
 - **Inside a package, imports stay ordinary**: `- import: "util.aiml"` in a package file resolves
   relative to that file like any other — a package is just a directory somebody else wrote.

@@ -7,10 +7,12 @@
 #include "map_impl.h"
 #include "buffer_impl.h"
 #include "chan_impl.h"
+#include "hashmap_impl.h"
 #include "code_impl.h"
 #include "string_utils.h"
 #include "serialize_impl.h"
 #include "../../src/sys/db_runtime.h"
+#include "../../src/sys/arg_dump_runtime.h"   // ARG_* field codes
 #include <iostream>
 #include <queue>
 #include <set>
@@ -1091,29 +1093,9 @@ IRValue* Compiler::visitCall(CallExpr* call) {
             // list<T>/map<T> field access returns ptr to struct; load by value when callee expects struct
             if (expectedTy->isStructTy() && actualTy->isPointerTy())
                 argVals[i] = ctx.ir_gen->wrap(ctx.builder.CreateLoad(expectedTy, actualVal, "struct_arg_load"));
-            // Integer width promotion: e.g. i32 literal passed to a function expecting i64.
-            // Signed sources sign-extend (-1 stays -1); bool and unsigned sources
-            // (u8/u16/u32) zero-extend.  Zero-extending everything turned -1 into
-            // 4294967295 for every i64 parameter.
-            if (expectedTy->isIntegerTy() && actualTy->isIntegerTy() &&
-                expectedTy->getIntegerBitWidth() > actualTy->getIntegerBitWidth()) {
-                bool unsignedSrc = actualTy->isIntegerTy(1);
-                if (!unsignedSrc) {
-                    const std::string srcTy = declaredTypeOfExpr(call->args[i].get());
-                    unsignedSrc = srcTy == "u8" || srcTy == "u16" || srcTy == "u32" || srcTy == "bool";
-                }
-                argVals[i] = ctx.ir_gen->wrap(unsignedSrc
-                    ? ctx.builder.CreateZExt(actualVal, expectedTy, "arg_zext")
-                    : ctx.builder.CreateSExt(actualVal, expectedTy, "arg_sext"));
-            }
-            // Float promotion: f32 → f64
-            if (expectedTy->isDoubleTy() && actualTy->isFloatTy())
-                argVals[i] = ctx.ir_gen->wrap(ctx.builder.CreateFPExt(actualVal, expectedTy, "arg_fpext"));
-            // spec/13 §6: an integer argument for a float parameter converts its value
-            if (expectedTy->isFloatingPointTy() && actualTy->isIntegerTy() && !actualTy->isIntegerTy(1))
-                argVals[i] = ctx.ir_gen->wrap(ctx.builder.CreateSIToFP(actualVal, expectedTy, "arg_i2f"));
-            if (expectedTy->isFloatTy() && actualTy->isDoubleTy())
-                argVals[i] = ctx.ir_gen->wrap(ctx.builder.CreateFPTrunc(actualVal, expectedTy, "arg_fptrunc"));
+            argVals[i] = ctx.ir_gen->wrap(convertNumericArg(
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[i])), expectedTy,
+                i < call->args.size() ? call->args[i].get() : nullptr, funcName, i));
 
             // Hard type-mismatch guard: after all coercions, a numeric parameter
             // (i32/enum/bool/float) that receives a pointer value (e.g. a string
@@ -1984,8 +1966,8 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
             llvm::Value* match = ctx.builder.CreateZExt(eq, ctx.builder.getInt32Ty());
             llvm::Value* result = ctx.builder.CreateSelect(tooLong, ctx.builder.getInt32(0), match);
             return ctx.ir_gen->wrap(result);
-        } else if (methodName == "index_of") {
-            // index_of(needle) → i32 (-1 if not found)
+        } else if (methodName == "index_of" || methodName == "contains") {
+            // index_of(needle) → i32 (-1 if not found); contains(needle) → i32 1/0 (spec/09 F09-30)
             llvm::Function* strstrFn = ctx.module().getFunction("strstr");
             if (!strstrFn) strstrFn = llvm::Function::Create(
                 llvm::FunctionType::get(ctx.builder.getInt8Ty()->getPointerTo(),
@@ -1994,6 +1976,8 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
             llvm::Value* needle = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
             llvm::Value* found = ctx.builder.CreateCall(strstrFn, {strPtr, needle});
             llvm::Value* isNull = ctx.builder.CreateICmpEQ(found, llvm::ConstantPointerNull::get(ctx.builder.getInt8Ty()->getPointerTo()));
+            if (methodName == "contains")
+                return ctx.ir_gen->wrap(ctx.builder.CreateZExt(ctx.builder.CreateNot(isNull), ctx.builder.getInt32Ty()));
             llvm::Value* offset = ctx.builder.CreatePtrDiff(ctx.builder.getInt8Ty(), found, strPtr);
             // ptrdiff_t is platform-width — SExtOrTrunc handles both i32 (WASM) and i64 (x86_64).
             llvm::Value* offset32 = ctx.builder.CreateSExtOrTrunc(offset, ctx.builder.getInt32Ty());
@@ -2817,6 +2801,18 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
              else                          ListImpl::shuffle(ctx, listPtr, llvmListElemType);
              return nullptr;
          }
+         else if (methodName == "join") {
+             // spec/10 F10-21: list<string>.join(sep) → string
+             if (listElemName != "string" || argVals.size() != 1) {
+                 LOG_ERROR(ctx.fmtLoc(call->sourceNode) + "list<" + listElemName + ">.join: only list<string>.join(separator)");
+                 return ctx.ir_gen->getInt32(0);
+             }
+             auto* i8p = llvm::PointerType::get(ctx.context, 0);
+             llvm::Value* joined = ctx.builder.CreateCall(ctx.getFunction("aiml_list_join", i8p, {i8p, i8p}),
+                 {static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]))}, "joined");
+             if (ctx.lifetimeDropsEnabled && !ctx.stmtTempStack.empty()) AIML::AST::aimlTrackStringTemp(ctx, joined);
+             return ctx.ir_gen->wrap(joined);
+         }
          else if (methodName == "sort" || methodName == "sort_desc") {
              if (!argVals.empty()) {
                  LOG_ERROR(ctx.fmtLoc(call->sourceNode) + "list<" + listElemName + ">." + methodName +
@@ -2841,6 +2837,21 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
     }
     // Map Methods
     else if (className.find("map<") == 0) {
+         // spec/10 F10-22: map<string:V>.keys() → list<string> (copies, byte order)
+         if (methodName == "keys") {
+             if (className.rfind("map<string:", 0) != 0 || !argVals.empty()) {
+                 LOG_ERROR(ctx.fmtLoc(call->sourceNode) + className + ".keys: only map<string:V>.keys()");
+                 return ctx.ir_gen->getInt32(0);
+             }
+             auto* i8p = llvm::PointerType::get(ctx.context, 0);
+             llvm::Value* out = ctx.memV3
+                 ? static_cast<llvm::Value*>(ctx.builder.CreateCall(ctx.getFunction("aiml_list_handle_new", i8p, {}), {}, "keys_list"))
+                 : static_cast<llvm::Value*>(ctx.createEntryAlloca(ListImpl::getListStructType(ctx), "keys_list"));
+             ListImpl::initList(ctx, out, i8p, 8);
+             ctx.builder.CreateCall(ctx.getFunction("aiml_map_keys_fill", ctx.builder.getInt32Ty(), {i8p, i8p}),
+                                    {static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), out});
+             return ctx.ir_gen->wrap(out);
+         }
          llvm::StructType* mapStructTy = static_cast<llvm::StructType*>(ctx.ir_gen->unwrapType(baseElemTy));
          llvm::Type* vTy = nullptr;
          std::string vName;
@@ -3051,6 +3062,16 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
          }
          LOG_ERROR("Unknown map method: " + methodName + " on " + className);
          return ctx.ir_gen->getInt32(0);
+    }
+    // hashmap<K:V> methods (spec/69): put/get/add/contains/remove/len/clear/keys
+    else if (HashmapImpl::isHashmapType(className)) {
+        std::vector<llvm::Value*> raw;
+        for (auto* a : argVals) raw.push_back(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a)));
+        bool known = true;
+        llvm::Value* res = HashmapImpl::method(ctx, className,
+            static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), methodName, raw, known);
+        if (!known) return ctx.ir_gen->getInt32(0);
+        return res ? ctx.ir_gen->wrap(res) : nullptr;
     }
     // Channel Methods: chan<T>.send / chan<T>.recv / chan<T>.init
     else if (className.rfind("chan<", 0) == 0 && className.back() == '>') {
@@ -4196,23 +4217,11 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                  if (tmp && tmp->getAllocatedType() == expected)
                      a = ctx.ir_gen->wrap(ctx.builder.CreateLoad(expected, tmp, "struct_arg_val"));
              }
-             // Ganzzahl-BREITE angleichen, wie coerceArgs() es fuer freie
-             // Funktionen tut.  Ohne das kommt ein Literal als i32 an einem
-             // i64-Parameter an, und die IR-Pruefung scheitert mit "Call
-             // parameter type does not match function signature" — der Aufruf
-             // sieht im Quelltext voellig richtig aus (gemessen 2026-10-13 an
-             // StepScheduler.claim(…, 30000, …); tests/test_int_width_method_arg.aiml).
-             if (expected && expected->isIntegerTy()) {
-                 llvm::Value* rawA = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a));
-                 if (rawA && rawA->getType()->isIntegerTy() &&
-                     rawA->getType()->getIntegerBitWidth() != expected->getIntegerBitWidth()) {
-                     llvm::Value* fitted =
-                         (expected->getIntegerBitWidth() > rawA->getType()->getIntegerBitWidth())
-                             ? ctx.builder.CreateSExt(rawA, expected, "arg_sext")
-                             : ctx.builder.CreateTrunc(rawA, expected, "arg_trunc");
-                     a = ctx.ir_gen->wrap(fitted);
-                 }
-             }
+             // the same numeric conversion as for free functions (spec/13 §6)
+             if (expected && (expected->isIntegerTy() || expected->isFloatingPointTy()))
+                 a = ctx.ir_gen->wrap(convertNumericArg(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a)), expected,
+                                                        i < call->args.size() ? call->args[i].get() : nullptr,
+                                                        call->functionName, i));
              // Hard type-mismatch guard (mirrors coerceArgs() for free functions):
              // a numeric parameter (i32/enum/bool/float) receiving a pointer value
              // (e.g. a string literal) is never valid — report it HERE with a
@@ -4981,14 +4990,19 @@ IRValue* Compiler::visitSysArgDumpCall(CallExpr* call) {
     const auto& dl = ctx.module().getDataLayout();
     const auto* sl = dl.getStructLayout(ci.type);
 
-    // Determine type codes: 0=i32, 1=f32, 2=string(i8*), 3=i64
-    auto typeCode = [](const std::string& tn) -> int {
-        if (tn == "i32" || tn == "u32" || tn == "i8" || tn == "u8" || tn == "i16" || tn == "u16") return 0;
-        if (tn == "f32") return 1;
-        if (tn == "string") return 2;
-        if (tn == "i64" || tn == "u64") return 3;
-        if (tn == "f64") return 1;  // downcast to f32 parse
-        return 0;  // default: treat as i32
+    // Field codes of arg_dump_runtime.h — each type into its own width (F23-61).
+    const bool listHandles = ctx.memV3;
+    auto typeCode = [listHandles](const std::string& tn) -> int {
+        if (tn == "bool") return ARG_BOOL;
+        if (tn == "i8" || tn == "u8") return ARG_I8;
+        if (tn == "i16" || tn == "u16") return ARG_I16;
+        if (tn == "i32" || tn == "u32") return ARG_I32;
+        if (tn == "i64" || tn == "u64") return ARG_I64;
+        if (tn == "f32") return ARG_F32;
+        if (tn == "f64") return ARG_F64;
+        if (tn == "string") return ARG_STRING;
+        if (tn == "list<string>") return listHandles ? ARG_LIST_HANDLE : ARG_LIST_INLINE;
+        return ARG_SKIP;
     };
 
     Type* i8p  = ctx.builder.getInt8Ty()->getPointerTo();
@@ -5268,6 +5282,36 @@ IRValue* Compiler::emitGroupExport(Symbol* giSym, const std::string& gq, const s
     return visitObjectMethodCall("gi_group", "__gi_" + exportName, giSym, &acc);
 }
 
+
+llvm::Value* Compiler::convertNumericArg(llvm::Value* v, llvm::Type* expected, Expr* src,
+                                         const std::string& callee, size_t argNo) {
+    if (!v || !expected) return v;
+    llvm::Type* actual = v->getType();
+    if (actual == expected) return v;
+    if (expected->isIntegerTy() && actual->isIntegerTy()) {
+        unsigned want = expected->getIntegerBitWidth(), have = actual->getIntegerBitWidth();
+        if (want < have) return ctx.builder.CreateTrunc(v, expected, "arg_trunc");
+        // signed sources sign-extend (-1 stays -1); bool and unsigned sources zero-extend
+        bool unsignedSrc = actual->isIntegerTy(1);
+        if (!unsignedSrc && src) {
+            const std::string srcTy = declaredTypeOfExpr(src);
+            unsignedSrc = srcTy == "u8" || srcTy == "u16" || srcTy == "u32" || srcTy == "bool";
+        }
+        return unsignedSrc ? ctx.builder.CreateZExt(v, expected, "arg_zext")
+                           : ctx.builder.CreateSExt(v, expected, "arg_sext");
+    }
+    if (expected->isFloatingPointTy() && actual->isIntegerTy() && !actual->isIntegerTy(1))
+        return ctx.builder.CreateSIToFP(v, expected, "arg_i2f");
+    if (expected->isFloatingPointTy() && actual->isFloatingPointTy())
+        return ctx.builder.CreateFPCast(v, expected, "arg_fpcast");
+    if (expected->isIntegerTy() && actual->isFloatingPointTy()) {
+        LOG_ERROR((src ? ctx.fmtLoc(src->sourceNode) : ctx.fmtLoc()) + "'" + callee + "': argument " +
+                  std::to_string(argNo + 1) + " is a real number but the parameter is an integer — "
+                  "write { cast: [value, i" + std::to_string(expected->getIntegerBitWidth()) +
+                  "] } (no implicit float→integer, spec/13 §6)");
+    }
+    return v;
+}
+
 } // namespace AST
 } // namespace AIML
-

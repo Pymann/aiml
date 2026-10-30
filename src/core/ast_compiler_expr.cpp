@@ -1321,18 +1321,23 @@ IRValue* Compiler::visitSpawn(SpawnExpr* spawn) {
 
     // spec/61 Class 5: the thread co-owns each chan argument (retained here, released by the trampoline)
     std::vector<bool> chanArg(argVals.size(), false);
+    std::vector<bool> hashmapArg(argVals.size(), false);   // spec/69: hashmap args co-owned the same way
     if (ctx.memV3 && ctx.lifetimeDropsEnabled)
         for (size_t ai = 0; ai < argVals.size() && ai < fi->argTypeNames.size(); ++ai) {
             const std::string& at = fi->argTypeNames[ai];
-            if (at.rfind("chan<", 0) == 0 && at.back() == '>' && argVals[ai]->getType()->isPointerTy()) {
+            bool hm = at.size() > 9 && at.rfind("hashmap<", 0) == 0 && at.back() == '>';
+            if (((at.rfind("chan<", 0) == 0 && at.back() == '>') || hm) && argVals[ai]->getType()->isPointerTy()) {
                 chanArg[ai] = true;
-                ctx.builder.CreateCall(ctx.getFunction("aiml_chan_retain", ctx.builder.getVoidTy(), {i8p}), { argVals[ai] });
+                hashmapArg[ai] = hm;
+                ctx.builder.CreateCall(ctx.getFunction(hm ? "aiml_hashmap_retain" : "aiml_chan_retain",
+                    ctx.builder.getVoidTy(), {i8p}), { argVals[ai] });
             }
         }
     auto releaseChanArgs = [&](const std::vector<llvm::Value*>& vals) {
         for (size_t i = 0; i < vals.size() && i < chanArg.size(); ++i)
             if (chanArg[i])
-                ctx.builder.CreateCall(ctx.getFunction("aiml_chan_release", ctx.builder.getVoidTy(), {i8p}), { vals[i] });
+                ctx.builder.CreateCall(ctx.getFunction(hashmapArg[i] ? "aiml_hashmap_release" : "aiml_chan_release",
+                    ctx.builder.getVoidTy(), {i8p}), { vals[i] });
     };
 
     // 3. Build or reuse a trampoline: void*(void*) that unpacks args and calls targetFn

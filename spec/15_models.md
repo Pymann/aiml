@@ -194,6 +194,10 @@ uninitialized/null field:
   so unset string fields default to `""` — mirroring the empty-container rule.
 - numeric (`i32`/`f32`/…) / `bool` → `0`.
 - a field with an explicit default (`- [name, type, default]`) → that default.
+  For a `list<T>` field the only default is `[]` (the empty list it gets anyway);
+  a non-empty list default is a compile error — fill the list in code (F15-40).
+  Before 2026-10-29 a `[]` default silently ended the field list: every later
+  field was missing.
 
 This holds for both stack decls and `{ new: Model }` heap allocations, and for
 fields of nested models. Both paths route through the same field-init routine

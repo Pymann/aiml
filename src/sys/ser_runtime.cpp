@@ -26,6 +26,10 @@ struct AimlChanBlock {
     char    cond_taken[48];
     int64_t rc;
 };
+extern "C" void  aiml_hashmap_retain(void* h);
+extern "C" void  aiml_hashmap_release(void* h);
+extern "C" void* aiml_hashmap_clone(void* h);
+
 extern "C" void aiml_chan_retain(void* ch) {
     if (ch) __atomic_fetch_add(&static_cast<AimlChanBlock*>(ch)->rc, 1, __ATOMIC_RELAXED);
 }
@@ -360,6 +364,7 @@ static void enc(std::vector<uint8_t>& buf,
         break;
     // in-process only (chan models are not wire-serialisable): the pointer, retained by dec
     case AIML_TD_CHAN:
+    case AIML_TD_HASHMAP:
         w_raw(buf, data, sizeof(void*));
         break;
 
@@ -544,6 +549,13 @@ static void dec_node(const uint8_t* blob, int& pos, int end,
             void* ch = nullptr; memcpy(&ch, blob + pos, sizeof(ch)); pos += sizeof(ch);
             aiml_chan_retain(ch);
             memcpy(out, &ch, sizeof(ch));
+        } else { g_dec_error = true; }
+        break;
+    case AIML_TD_HASHMAP:
+        if (end - pos >= (int)sizeof(void*)) {
+            void* hm = nullptr; memcpy(&hm, blob + pos, sizeof(hm)); pos += sizeof(hm);
+            aiml_hashmap_retain(hm);
+            memcpy(out, &hm, sizeof(hm));
         } else { g_dec_error = true; }
         break;
 
@@ -983,6 +995,12 @@ static void fre(int idx, const AimlTypeNode* ns, int nn, uint8_t* data) {
         c = nullptr; memcpy(data, &c, sizeof(c));
         break;
     }
+    case AIML_TD_HASHMAP: {
+        void* h = nullptr; memcpy(&h, data, sizeof(h));
+        aiml_hashmap_release(h);
+        h = nullptr; memcpy(data, &h, sizeof(h));
+        break;
+    }
     case AIML_TD_THREAD: {
         void* t = nullptr; memcpy(&t, data, sizeof(t));
         aiml_thread_handle_drop(t);
@@ -1084,6 +1102,11 @@ static void ret(int idx, const AimlTypeNode* ns, int nn, uint8_t* data) {
     case AIML_TD_CHAN: {
         void* c = nullptr; memcpy(&c, data, sizeof(c));
         aiml_chan_retain(c);
+        break;
+    }
+    case AIML_TD_HASHMAP: {
+        void* h = nullptr; memcpy(&h, data, sizeof(h));
+        aiml_hashmap_retain(h);
         break;
     }
     // AIML_TD_PTR_STRUCT (unique box) / AIML_TD_TENSOR (resource) are move-only (§7) → not shared.
@@ -1495,6 +1518,12 @@ static void clw(int idx, const AimlTypeNode* ns, int nn,
         void* c = nullptr; memcpy(&c, src, sizeof(c));
         aiml_chan_retain(c);
         memcpy(dst, &c, sizeof(c));
+        break;
+    }
+    case AIML_TD_HASHMAP: {   // spec/69: a clone gets its own independent table
+        void* h = nullptr; memcpy(&h, src, sizeof(h));
+        void* cp = aiml_hashmap_clone(h);
+        memcpy(dst, &cp, sizeof(cp));
         break;
     }
     case AIML_TD_GLTEX:      // Class 4, move-only: the clone has no texture

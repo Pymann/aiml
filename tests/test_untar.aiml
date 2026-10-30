@@ -1,0 +1,84 @@
+# SPEC: 33_2_compress
+# spec/33_2 §3.7a — compress.untar / compress.unar:
+#   F33-2-10 gzip, xz, zstd, plain by magic; GNU long names, pax
+#   F33-2-11 files, directories, symlinks, hard links
+#   F33-2-12 permission bits and mtimes
+#   F33-2-13 "../" entries and writes through a symlink are refused (-4)
+#   F33-2-15 ar members (a .deb from dpkg-deb)
+# Fixtures come from GNU tar / xz / dpkg-deb; zstd via compress.zstd.
+# Expected exit code: 0
+
+- import: "tests/_cross/check.aiml"
+
+- def:
+    name: shell
+    args: [[script, string]]
+    return: i32
+    body:
+      - decl: [argv, list<string>, ["sh", "-c"]]
+      - call: [argv.push, script]
+      - decl: [child, process, { call: [sys.exe, argv] }]
+      - return: [{ call: [child.wait] }]
+
+- def:
+    name: tree_ok
+    args: [[chk, ref<Checker>], [root, string], [label, string]]
+    body:
+      - call: [chk.expect_s, "${label}: file", { call: [io.read_file, "${root}/src/a.txt"] }, "alpha\n"]
+      - call: [chk.expect_i, "${label}: exec bit", { call: [io.can_exec, "${root}/src/run.sh"] }, 1]
+      - call: [chk.expect_i, "${label}: symlink", { call: [io.is_symlink, "${root}/src/link"] }, 1]
+      - call: [chk.expect_s, "${label}: symlink target", { call: [io.read_link, "${root}/src/link"] }, "a.txt"]
+      - call: [chk.expect_s, "${label}: hard link", { call: [io.read_file, "${root}/src/hard.txt"] }, "alpha\n"]
+      - call: [chk.expect_i, "${label}: same inode", { call: [fsmeta.stat, "${root}/src/hard.txt", 9] }, { call: [fsmeta.stat, "${root}/src/a.txt", 9] }]
+      - call: [chk.expect_s, "${label}: long name", { call: [io.read_file, "${root}/src/deep/a_rather_long_directory_name_that_is_well_beyond_the_ustar_limit_of_one_hundred_bytes/file.txt"] }, "deep\n"]
+      - call: [chk.expect_i, "${label}: mtime", { call: [fsmeta.stat, "${root}/src/a.txt", 5] }, 1000000000]
+      - call: [chk.expect_i, "${label}: empty dir", { call: [io.is_dir, "${root}/src/empty"] }, 1]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [chk, ptr<Checker>, { new: Checker }]
+      - decl: [work, string, "/tmp/aiml_untar_test"]
+      - call: [io.remove_all, work]
+      - call: [io.mkdir_all, work]
+      - decl: [built, i32, { call: [shell, "cd ${work} && mkdir -p src/empty src/deep/a_rather_long_directory_name_that_is_well_beyond_the_ustar_limit_of_one_hundred_bytes && printf 'alpha\\n' > src/a.txt && printf 'deep\\n' > src/deep/a_rather_long_directory_name_that_is_well_beyond_the_ustar_limit_of_one_hundred_bytes/file.txt && printf '#!/bin/sh\\n' > src/run.sh && chmod 755 src/run.sh && ln -s a.txt src/link && ln src/a.txt src/hard.txt && touch -d @1000000000 src/a.txt && tar --format=gnu -cf gnu.tar src && tar --format=pax -cf pax.tar src && gzip -k gnu.tar && xz -k pax.tar"] }]
+      - call: [chk.expect_i, "fixtures built", built, 0]
+
+      - call: [chk.expect_i, "untar plain gnu", { call: [compress.untar, "${work}/gnu.tar", "${work}/out_plain"] }, 0]
+      - call: [tree_ok, chk, "${work}/out_plain", "plain gnu"]
+      - call: [chk.expect_i, "untar gzip", { call: [compress.untar, "${work}/gnu.tar.gz", "${work}/out_gz"] }, 0]
+      - call: [tree_ok, chk, "${work}/out_gz", "gzip"]
+      - call: [chk.expect_i, "untar_gz is untar", { call: [compress.untar_gz, "${work}/pax.tar.xz", "${work}/out_alias"] }, 0]
+      - call: [chk.expect_i, "untar pax xz", { call: [compress.untar, "${work}/pax.tar.xz", "${work}/out_xz"] }, 0]
+      - call: [tree_ok, chk, "${work}/out_xz", "pax xz"]
+      - decl: [plain, buffer<u8>, { call: [bytes.read_file, "${work}/pax.tar"] }]
+      - decl: [packed, buffer<u8>, { call: [compress.zstd, plain] }]
+      - call: [io.write_file, "${work}/pax.tar.zst", packed]
+      - call: [chk.expect_i, "untar zstd", { call: [compress.untar, "${work}/pax.tar.zst", "${work}/out_zst"] }, 0]
+      - call: [tree_ok, chk, "${work}/out_zst", "zstd"]
+
+      # ── hostile archives ──
+      - decl: [hostile, i32, { call: [shell, "cd ${work} && mkdir -p h/real && echo x > h/real/pwned && ln -s /tmp h/link && tar -cf dotdot.tar -P --transform 's,^h/real/pwned,../escaped,' h/real/pwned && tar -cf through.tar -C h link real/pwned --transform 's,^real/,link/,'"] }]
+      - call: [chk.expect_i, "hostile fixtures built", hostile, 0]
+      - call: [chk.expect_i, "../ refused", { call: [compress.untar, "${work}/dotdot.tar", "${work}/out_dd"] }, -4]
+      - call: [chk.expect_i, "nothing escaped", { call: [io.exists, "${work}/escaped"] }, 0]
+      - call: [chk.expect_i, "write through a symlink refused", { call: [compress.untar, "${work}/through.tar", "${work}/out_th"] }, -4]
+      - call: [chk.expect_i, "nothing written through it", { call: [io.exists, "/tmp/pwned"] }, 0]
+      - call: [io.write_file, "${work}/junk.tar", "not a tar archive at all, just text that is longer than nothing"]
+      - call: [chk.expect_i, "corrupt", { call: [compress.untar, "${work}/junk.tar", "${work}/out_junk"] }, -3]
+      - call: [chk.expect_i, "missing", { call: [compress.untar, "${work}/none.tar", "${work}/out_none"] }, -2]
+
+      # ── ar: a real .deb ──
+      - decl: [deb, i32, { call: [shell, "cd ${work} && mkdir -p pkg/DEBIAN pkg/usr/share/demo && printf 'Package: demo\\nVersion: 1.0\\nArchitecture: all\\nMaintainer: t <t@t>\\nDescription: d\\n' > pkg/DEBIAN/control && echo hi > pkg/usr/share/demo/hello.txt && dpkg-deb -Zxz --build pkg demo.deb > /dev/null"] }]
+      - call: [chk.expect_i, "deb built", deb, 0]
+      - call: [chk.expect_i, "unar", { call: [compress.unar, "${work}/demo.deb", "${work}/deb"] }, 0]
+      - call: [chk.expect_s, "debian-binary", { call: [io.read_file, "${work}/deb/debian-binary"] }, "2.0\n"]
+      - call: [chk.expect_i, "data member", { call: [compress.untar, "${work}/deb/data.tar.xz", "${work}/deb_root"] }, 0]
+      - call: [chk.expect_s, "file from the package", { call: [io.read_file, "${work}/deb_root/usr/share/demo/hello.txt"] }, "hi\n"]
+      - call: [chk.expect_i, "not an ar archive", { call: [compress.unar, "${work}/junk.tar", "${work}/deb2"] }, -3]
+
+      - call: [io.remove_all, work]
+      - if: { condition: { gt: [chk.fails, 0] }, then: [{ print: ["FAIL untar (${chk.fails})"] }, { return: 1 }] }
+      - print: ["PASS untar"]
+      - return: 0
