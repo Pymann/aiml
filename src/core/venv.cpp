@@ -2,14 +2,42 @@
 #include "venv.h"
 
 #include <dlfcn.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
+#include <cerrno>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <map>
 #include <sstream>
+#include <vector>
+
+#include <yaml-cpp/yaml.h>
 
 namespace fs = std::filesystem;
+
+// §6.1 borrows the runtime the compiler already links: the HTTP client of
+// spec/32_2 (binary-safe download, headers, redirects, TLS) and the untar of
+// spec/33_2 §3.7a.  A second HTTP client in the compiler, or a dependency on
+// curl, would be two ways of doing one thing.
+extern "C" {
+void*   aiml_url_parse(const char* raw);
+void*   aiml_http_new_request(const char* method, void* url);
+void*   aiml_http_client_get_headers(void* client);
+void    aiml_http_map_put(void* map, const char* key, const char* val);
+void    aiml_http_client_set_download_to(void* client, const char* path);
+void    aiml_http_client_set_timeout(void* client, int32_t timeout_ms);
+void*   aiml_http_client_send(void* client);
+void    aiml_http_client_free(void* client);
+int32_t aiml_http_resp_status(void* resp);
+char*   aiml_http_resp_body(void* resp);
+void    aiml_http_resp_free(void* resp);
+char*   aiml_http_last_error(void);
+int32_t aiml_compress_untar(const char* src, const char* dst_dir);
+char*   aiml_sha256_file(const char* path);
+}
 
 namespace aiml {
 namespace venv {
@@ -99,13 +127,755 @@ std::string envText(const std::string& root) {
 }
 
 int usage() {
-    std::cerr << "usage: aiml venv <dir> [--runtime <libaiml.so>]" << std::endl;
+    std::cerr << "usage: aiml venv <dir> [--runtime <libaiml.so>]\n"
+                 "       aiml venv <dir> install <name> (--git <url> [--ref <r>] | --path <dir>\n"
+                 "                                       | --kontor <url> [--version <v>])\n"
+                 "       aiml venv <dir> install --all --kontor <url>\n"
+                 "       aiml venv <dir> list | remove <name>" << std::endl;
     return 1;
+}
+
+// ── §6: installing tools ──────────────────────────────────────────────────
+//
+// A tool is fetched, built WITH THIS VENV and only its results are placed.
+// What gets placed is the repository's own business (`aiml.tool.json`,
+// F68-54); the venv keeps a record of it (`aiml.installed.json`, F68-56) so
+// that `list` and `remove` know exactly what they are talking about.
+
+// What a repository declares (F68-54).
+struct Manifest {
+    std::string name, version, package;
+    std::vector<std::string> programs, libraries;
+    std::vector<std::string> configs;   // empty: `build --all` (F68-53)
+};
+
+// What the venv remembers per installed tool (F68-56).
+struct Record {
+    std::string source, commit, version;
+    std::vector<std::string> files;   // relative to the venv
+};
+
+// The object cache (spec/29_2 §12): $AIML_CACHE, else ./__aiml_cache.  A venv
+// holds no cache (F68-2), so this is where a clone and its build live.
+fs::path cacheRoot() {
+    const char* env = std::getenv("AIML_CACHE");
+    if (env && *env) return fs::absolute(env);
+    std::error_code ec;
+    fs::path cwd = fs::current_path(ec);
+    return (ec ? fs::path(".") : cwd) / "__aiml_cache";
+}
+
+// Run a program — no shell, so nothing in a URL or a name is ever
+// interpreted.  `out` captures stdout when given; otherwise the child keeps
+// this process's stdout, and the build's output is simply passed through
+// (F68-53).  Returns the exit code, 127 when the program was not found.
+int runProg(const std::vector<std::string>& args, const fs::path& cwd,
+            const std::vector<std::string>& envAdd, std::string* out) {
+    int fds[2] = {-1, -1};
+    if (out && pipe(fds) != 0) return -1;
+    pid_t pid = fork();
+    if (pid < 0) {
+        if (out) { close(fds[0]); close(fds[1]); }
+        return -1;
+    }
+    if (pid == 0) {
+        if (out) { dup2(fds[1], 1); close(fds[0]); close(fds[1]); }
+        if (!cwd.empty() && chdir(cwd.c_str()) != 0) _exit(127);
+        for (const std::string& kv : envAdd) {
+            size_t eq = kv.find('=');
+            if (eq != std::string::npos)
+                setenv(kv.substr(0, eq).c_str(), kv.substr(eq + 1).c_str(), 1);
+        }
+        std::vector<char*> argv;
+        argv.reserve(args.size() + 1);
+        for (const std::string& a : args) argv.push_back(const_cast<char*>(a.c_str()));
+        argv.push_back(nullptr);
+        execvp(argv[0], argv.data());
+        _exit(127);
+    }
+    if (out) {
+        close(fds[1]);
+        char buf[4096];
+        ssize_t n;
+        while ((n = read(fds[0], buf, sizeof buf)) > 0) out->append(buf, static_cast<size_t>(n));
+        close(fds[0]);
+    }
+    int status = 0;
+    while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
+    return WIFEXITED(status) ? WEXITSTATUS(status) : 128;
+}
+
+bool allHex(const std::string& s) {
+    for (char c : s)
+        if (!std::isxdigit(static_cast<unsigned char>(c))) return false;
+    return !s.empty();
+}
+
+// F68-50: the ref becomes a commit BEFORE the clone, so what was built is
+// written down.  A 40-hex ref is already one.
+bool gitCommit(const std::string& url, const std::string& ref, std::string& sha, std::string& err) {
+    std::string want = ref.empty() ? "HEAD" : ref;
+    if (want.size() == 40 && allHex(want)) { sha = want; return true; }
+    std::string out;
+    int rc = runProg({"git", "ls-remote", url, want}, {}, {}, &out);
+    if (rc == 127) { err = "git is not on PATH (F68-51)"; return false; }
+    if (rc != 0) { err = "git ls-remote " + url + " failed (exit " + std::to_string(rc) + ")"; return false; }
+    std::istringstream in(out);
+    std::string line;
+    while (std::getline(in, line)) {
+        std::istringstream ls(line);
+        std::string hex;
+        if (ls >> hex && hex.size() == 40 && allHex(hex)) { sha = hex; return true; }
+    }
+    err = url + " has no ref '" + want + "'";
+    return false;
+}
+
+// F68-50/52: fetch exactly that commit into the cache.  A directory that
+// already holds it is reused — a second install does not clone again.
+bool gitFetch(const std::string& url, const std::string& ref, const std::string& sha,
+              const fs::path& dir, std::string& err) {
+    std::error_code ec;
+    if (fs::exists(dir / ".git", ec)) return true;          // already there
+    fs::create_directories(dir, ec);
+    if (ec) { err = "cannot create " + dir.string() + ": " + ec.message(); return false; }
+    if (runProg({"git", "init", "-q", dir.string()}, {}, {}, nullptr) != 0) {
+        err = "git init failed in " + dir.string();
+        return false;
+    }
+    std::string want = ref.empty() ? "HEAD" : ref;
+    if (runProg({"git", "-C", dir.string(), "fetch", "-q", "--depth", "1", url, want},
+                {}, {}, nullptr) != 0) {
+        err = "git fetch " + url + " " + want + " failed";
+        return false;
+    }
+    std::string head;
+    if (runProg({"git", "-C", dir.string(), "rev-parse", "FETCH_HEAD"}, {}, {}, &head) != 0) {
+        err = "cannot read FETCH_HEAD in " + dir.string();
+        return false;
+    }
+    while (!head.empty() && (head.back() == '\n' || head.back() == '\r')) head.pop_back();
+    if (head != sha) {
+        // Between resolving and fetching, the ref moved.  Saying so is better
+        // than recording a commit that is not what was built.
+        err = "'" + want + "' moved while installing (" + sha + " → " + head + "); try again";
+        return false;
+    }
+    if (runProg({"git", "-C", dir.string(), "checkout", "-q", "--detach", "FETCH_HEAD"},
+                {}, {}, nullptr) != 0) {
+        err = "git checkout failed in " + dir.string();
+        return false;
+    }
+    return true;
+}
+
+std::vector<std::string> strList(const YAML::Node& node) {
+    std::vector<std::string> out;
+    if (node && node.IsSequence())
+        for (const auto& item : node)
+            if (item.IsScalar()) out.push_back(item.as<std::string>());
+    return out;
+}
+
+// F68-54: the repository says what to install.  No file, no guessing.
+bool readManifest(const fs::path& root, Manifest& man, std::string& err) {
+    fs::path file = root / "aiml.tool.json";
+    std::error_code ec;
+    if (!fs::is_regular_file(file, ec)) {
+        err = root.string() + " has no aiml.tool.json — a venv cannot guess what to install "
+              "(spec/68 F68-54)";
+        return false;
+    }
+    try {
+        YAML::Node doc = YAML::LoadFile(file.string());   // JSON is YAML
+        if (doc["name"]) man.name = doc["name"].as<std::string>();
+        if (doc["version"]) man.version = doc["version"].as<std::string>();
+        if (doc["package"]) man.package = doc["package"].as<std::string>();
+        man.programs = strList(doc["programs"]);
+        man.libraries = strList(doc["libraries"]);
+        man.configs = strList(doc["configs"]);
+    } catch (const std::exception& e) {
+        err = file.string() + ": " + e.what();
+        return false;
+    }
+    if (man.name.empty()) { err = file.string() + " has no \"name\""; return false; }
+    return true;
+}
+
+// F68-53: a tool whose build configuration names somebody's build tree would
+// be built by a foreign compiler.  Refused, with the way out.
+bool configsUseVenv(const fs::path& root, std::string& err) {
+    std::error_code ec;
+    for (const auto& ent : fs::directory_iterator(root, ec)) {
+        if (ec) break;
+        const fs::path& file = ent.path();
+        if (file.extension() != ".json") continue;
+        std::string base = file.filename().string();
+        if (base.rfind("exodus", 0) != 0) continue;
+        try {
+            YAML::Node doc = YAML::LoadFile(file.string());
+            YAML::Node comp = doc["compiler"];
+            if (!comp || !comp["name"]) continue;
+            std::string name = comp["name"].as<std::string>();
+            if (name.find("$AIML") != std::string::npos) continue;
+            if (name.find('/') == std::string::npos) continue;   // a bare name: PATH decides
+            err = base + " names the compiler as '" + name + "' — a path into a build tree. "
+                  "A tool is built with the venv it will live in: write \"$AIML\" and "
+                  "\"$AIML_VENV/lib\" (spec/68 F68-23)";
+            return false;
+        } catch (const std::exception&) {
+            continue;   // not our file to judge
+        }
+    }
+    return true;
+}
+
+std::string jsonEscape(const std::string& in) {
+    std::string out;
+    for (char c : in) {
+        if (c == '\\' || c == '"') out += '\\';
+        out += c;
+    }
+    return out;
+}
+
+// ── the two tables of a venv ──────────────────────────────────────────────
+
+// aiml.packages.json: read every entry with all its scalar fields, so that
+// rewriting it keeps what somebody else put there (a sha256 pin, say).
+using Table = std::map<std::string, std::map<std::string, std::string>>;
+
+Table readTable(const fs::path& file) {
+    Table t;
+    std::error_code ec;
+    if (!fs::is_regular_file(file, ec)) return t;
+    try {
+        YAML::Node doc = YAML::LoadFile(file.string());
+        YAML::Node pkgs = doc["packages"];
+        if (!pkgs || !pkgs.IsMap()) return t;
+        for (const auto& kv : pkgs) {
+            std::string name = kv.first.as<std::string>();
+            if (kv.second.IsScalar()) { t[name]["path"] = kv.second.as<std::string>(); continue; }
+            if (!kv.second.IsMap()) continue;
+            for (const auto& field : kv.second)
+                if (field.second.IsScalar())
+                    t[name][field.first.as<std::string>()] = field.second.as<std::string>();
+        }
+    } catch (const std::exception&) {}
+    return t;
+}
+
+bool writeTable(const fs::path& file, const Table& t, std::string& err) {
+    std::ostringstream ss;
+    ss << "{\"packages\": {";
+    bool firstPkg = true;
+    for (const auto& pkg : t) {
+        ss << (firstPkg ? "\n  " : ",\n  ") << "\"" << jsonEscape(pkg.first) << "\": {";
+        firstPkg = false;
+        bool firstField = true;
+        for (const auto& field : pkg.second) {
+            ss << (firstField ? "" : ", ") << "\"" << jsonEscape(field.first) << "\": \""
+               << jsonEscape(field.second) << "\"";
+            firstField = false;
+        }
+        ss << "}";
+    }
+    ss << (firstPkg ? "}}\n" : "\n}}\n");
+    return writeText(file, ss.str(), err);
+}
+
+using Records = std::map<std::string, Record>;
+
+Records readRecords(const fs::path& file) {
+    Records r;
+    std::error_code ec;
+    if (!fs::is_regular_file(file, ec)) return r;
+    try {
+        YAML::Node doc = YAML::LoadFile(file.string());
+        YAML::Node tools = doc["tools"];
+        if (!tools || !tools.IsMap()) return r;
+        for (const auto& kv : tools) {
+            Record rec;
+            const YAML::Node& v = kv.second;
+            if (v["source"]) rec.source = v["source"].as<std::string>();
+            if (v["commit"]) rec.commit = v["commit"].as<std::string>();
+            if (v["version"]) rec.version = v["version"].as<std::string>();
+            rec.files = strList(v["files"]);
+            r[kv.first.as<std::string>()] = rec;
+        }
+    } catch (const std::exception&) {}
+    return r;
+}
+
+bool writeRecords(const fs::path& file, const Records& r, std::string& err) {
+    std::ostringstream ss;
+    ss << "{\"tools\": {";
+    bool first = true;
+    for (const auto& kv : r) {
+        ss << (first ? "\n  " : ",\n  ") << "\"" << jsonEscape(kv.first) << "\": {"
+           << "\"source\": \"" << jsonEscape(kv.second.source) << "\", "
+           << "\"commit\": \"" << jsonEscape(kv.second.commit) << "\", "
+           << "\"version\": \"" << jsonEscape(kv.second.version) << "\", "
+           << "\"files\": [";
+        first = false;
+        bool firstFile = true;
+        for (const std::string& f : kv.second.files) {
+            ss << (firstFile ? "\"" : ", \"") << jsonEscape(f) << "\"";
+            firstFile = false;
+        }
+        ss << "]}";
+    }
+    ss << (first ? "}}\n" : "\n}}\n");
+    return writeText(file, ss.str(), err);
+}
+
+// F68-54: the package directory may be the repository root ("."), and a
+// repository root also holds what the BUILD left there.  Those are not part
+// of the package, and a venv is a layer: copying `out/` and the caches in
+// would make it bigger than the tool and different on every machine.
+bool skipInPackage(const std::string& name) {
+    static const char* const kSkip[] = {".git", "out", "build", "__aiml_cache", "__exodus_cache"};
+    for (const char* s : kSkip)
+        if (name == s) return true;
+    return name.size() > 2 && name.compare(name.size() - 2, 2, ".o") == 0;
+}
+
+// `skipPaths` are the build outputs this install places itself: a program
+// already in `bin/` has no business being shipped a second time inside the
+// package.
+bool copyPackage(const fs::path& from, const fs::path& to,
+                 const std::vector<fs::path>& skipPaths, std::string& err) {
+    std::error_code ec;
+    fs::create_directories(to, ec);
+    if (ec) { err = "cannot create " + to.string() + ": " + ec.message(); return false; }
+    for (const auto& ent : fs::directory_iterator(from, ec)) {
+        if (ec) { err = "cannot read " + from.string() + ": " + ec.message(); return false; }
+        std::string name = ent.path().filename().string();
+        if (skipInPackage(name)) continue;
+        bool isOutput = false;
+        for (const fs::path& skip : skipPaths) {
+            std::error_code same;
+            if (fs::equivalent(ent.path(), skip, same) && !same) isOutput = true;
+        }
+        if (isOutput) continue;
+        if (ent.is_directory()) {
+            if (!copyPackage(ent.path(), to / name, skipPaths, err)) return false;
+            continue;
+        }
+        fs::copy_file(ent.path(), to / name, fs::copy_options::overwrite_existing, ec);
+        if (ec) { err = "cannot copy " + ent.path().string() + ": " + ec.message(); return false; }
+    }
+    return true;
+}
+
+// F68-55: the copy keeps the RUNPATH its build gave it.  Checked, not
+// patched: whoever installs must not quietly rewrite a binary.
+bool hasOriginRunpath(const fs::path& file) {
+    std::ifstream in(file, std::ios::binary);
+    if (!in) return false;
+    std::string blob((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    return blob.find("$ORIGIN") != std::string::npos;
 }
 
 int fail(const std::string& msg) {
     std::cerr << "aiml venv: " << msg << std::endl;
     return 1;
+}
+
+// ── §6 verbs ──────────────────────────────────────────────────────────────
+
+fs::path tableFile(const fs::path& root) { return root / "lib" / "aiml" / "aiml.packages.json"; }
+fs::path recordFile(const fs::path& root) { return root / "lib" / "aiml" / "aiml.installed.json"; }
+
+// F68-56: remove exactly what was placed — a directory as a whole, a file as
+// a file, and nothing that is not in the record.
+void dropFiles(const fs::path& root, const Record& rec) {
+    std::error_code ec;
+    for (const std::string& rel : rec.files) {
+        fs::path at = root / rel;
+        if (fs::is_directory(at, ec)) fs::remove_all(at, ec);
+        else fs::remove(at, ec);
+    }
+}
+
+int cmdList(const fs::path& root) {
+    Records recs = readRecords(recordFile(root));
+    if (recs.empty()) {
+        std::cout << "no tools installed in " << root.string() << std::endl;
+        return 0;
+    }
+    for (const auto& kv : recs) {
+        const Record& r = kv.second;
+        std::cout << kv.first;
+        if (!r.version.empty()) std::cout << " " << r.version;
+        std::cout << "  " << r.source;
+        if (!r.commit.empty()) std::cout << " @ " << r.commit;
+        else std::cout << "  (unreproducible: a local tree, F68-50)";
+        std::cout << "  " << r.files.size() << " file(s)" << std::endl;
+    }
+    return 0;
+}
+
+int cmdRemove(const fs::path& root, const std::string& name) {
+    fs::path recAt = recordFile(root);
+    Records recs = readRecords(recAt);
+    auto it = recs.find(name);
+    if (it == recs.end())
+        return fail("'" + name + "' is not installed in " + root.string());
+    dropFiles(root, it->second);
+    recs.erase(it);
+    Table table = readTable(tableFile(root));
+    table.erase(name);
+    std::string err;
+    if (!writeTable(tableFile(root), table, err)) return fail(err);
+    if (!writeRecords(recAt, recs, err)) return fail(err);
+    std::cout << "removed " << name << " from " << root.string() << std::endl;
+    return 0;
+}
+
+// ── §6.1: kontor as a source ──────────────────────────────────────────────
+
+// One GET.  `toFile` empty: the body comes back in `body` (a manifest, the
+// graph); otherwise it is streamed into that file (the package, binary).
+// F68-63: a token goes into the request, never onto a command line.
+bool httpGet(const std::string& url, const fs::path& toFile, std::string& body,
+             std::string& err) {
+    void* u = aiml_url_parse(url.c_str());
+    if (!u) { err = "not a URL: " + url; return false; }
+    void* req = aiml_http_new_request("GET", u);
+    if (!req) { err = "cannot build a request for " + url; return false; }
+    const char* token = std::getenv("KONTOR_TOKEN");
+    if (token && *token)
+        aiml_http_map_put(aiml_http_client_get_headers(req), "Authorization",
+                          (std::string("Bearer ") + token).c_str());
+    if (!toFile.empty()) aiml_http_client_set_download_to(req, toFile.string().c_str());
+    aiml_http_client_set_timeout(req, 120000);
+    void* resp = aiml_http_client_send(req);
+    if (!resp) {
+        char* why = aiml_http_last_error();
+        err = url + ": " + (why && *why ? why : "no answer");
+        aiml_http_client_free(req);
+        return false;
+    }
+    int32_t status = aiml_http_resp_status(resp);
+    if (status != 200) {
+        err = url + ": HTTP " + std::to_string(status);
+        aiml_http_resp_free(resp);
+        aiml_http_client_free(req);
+        return false;
+    }
+    if (toFile.empty()) {
+        char* text = aiml_http_resp_body(resp);
+        body = text ? text : "";
+    }
+    aiml_http_resp_free(resp);
+    aiml_http_client_free(req);
+    return true;
+}
+
+std::string kontorBase(const std::string& url) {
+    std::string base = url;
+    while (!base.empty() && base.back() == '/') base.pop_back();
+    return base;
+}
+
+// F68-61: which version is the newest — the answer kontor gives its own graph.
+// `want` empty: every project (F68-66).
+bool kontorGraph(const std::string& base, const std::string& want,
+                 std::vector<std::pair<std::string, std::string>>& out, std::string& err) {
+    std::string body;
+    if (!httpGet(base + "/api/v1/graph", {}, body, err)) return false;
+    try {
+        YAML::Node doc = YAML::Load(body);           // JSON is YAML
+        YAML::Node projects = doc["projects"];
+        if (!projects || !projects.IsSequence()) {
+            err = base + "/api/v1/graph: no \"projects\" in the answer";
+            return false;
+        }
+        for (const auto& p : projects) {
+            if (!p["name"] || !p["version"]) continue;
+            std::string pn = p["name"].as<std::string>();
+            std::string pv = p["version"].as<std::string>();
+            if (want.empty() || pn == want) out.emplace_back(pn, pv);
+        }
+    } catch (const std::exception& e) {
+        err = base + "/api/v1/graph: " + e.what();
+        return false;
+    }
+    if (!want.empty() && out.empty()) {
+        err = "kontor at " + base + " does not know a project '" + want + "'";
+        return false;
+    }
+    return true;
+}
+
+// F68-62: manifest, then the package into the cache, unpacked to the one tree
+// it contains.  `digest` is what was built (F68-65).
+bool kontorFetch(const std::string& base, const std::string& name, const std::string& version,
+                 fs::path& srcDir, std::string& digest, std::string& err) {
+    std::string prefix = base + "/exodus/" + name + "/" + version;
+    std::string manifest;
+    if (!httpGet(prefix + "/exodus.json", {}, manifest, err)) return false;
+
+    std::error_code ec;
+    fs::path at = cacheRoot() / "venv_tools" / name / ("kontor-" + version);
+    fs::create_directories(at, ec);
+    if (ec) { err = "cannot make " + at.string() + ": " + ec.message(); return false; }
+    fs::path archive = at / "package.tar.gz";
+    std::string unused;
+    if (!httpGet(prefix + "/package", archive, unused, err)) return false;
+
+    char* hex = aiml_sha256_file(archive.string().c_str());
+    digest = hex && *hex ? std::string("sha256:") + hex : std::string();
+    if (digest.empty()) { err = "cannot read back " + archive.string(); return false; }
+
+    fs::path tree = at / "tree";
+    fs::remove_all(tree, ec);
+    fs::create_directories(tree, ec);
+    int32_t rc = aiml_compress_untar(archive.string().c_str(), tree.string().c_str());
+    if (rc != 0) {
+        err = archive.string() + ": not a readable tar.gz (compress.untar " +
+              std::to_string(rc) + ")";
+        return false;
+    }
+    // F68-62: exactly one directory, and that is the tree.
+    std::vector<fs::path> top;
+    for (const auto& ent : fs::directory_iterator(tree, ec)) top.push_back(ent.path());
+    if (top.size() != 1 || !fs::is_directory(top[0], ec)) {
+        err = "the package of " + name + "@" + version + " unpacks to " +
+              std::to_string(top.size()) + " entries — one directory is expected";
+        return false;
+    }
+    srcDir = top[0];
+    return true;
+}
+
+int cmdInstall(const fs::path& root, const std::string& name, const std::string& gitUrl,
+               const std::string& ref, const std::string& localPath, const std::string& kontorUrl,
+               const std::string& wantVersion);
+
+// F68-66: every project kontor has, at its newest version.  What is no aiml
+// tool is skipped, not failed — kontor is a repository for exodus projects.
+int cmdInstallAll(const fs::path& root, const std::string& kontorUrl) {
+    if (kontorUrl.empty())
+        return fail("install --all needs a source: --kontor <url> (spec/68 F68-66)");
+    std::string base = kontorBase(kontorUrl), err;
+    std::vector<std::pair<std::string, std::string>> projects;
+    if (!kontorGraph(base, "", projects, err)) return fail(err);
+    if (projects.empty()) {
+        std::cout << "kontor at " << base << " holds no project" << std::endl;
+        return 0;
+    }
+    int installed = 0, skipped = 0, failed = 0;
+    for (const auto& p : projects) {
+        // Looked at before installing, which fetches the archive a second
+        // time: kontor may serve other bytes under the same version, so a
+        // cached archive is no answer to "what is there now".
+        fs::path probe;
+        std::string digest;
+        if (!kontorFetch(base, p.first, p.second, probe, digest, err)) {
+            std::cout << "  ! " << p.first << " " << p.second << ": " << err << std::endl;
+            ++failed;
+            continue;
+        }
+        std::error_code ec;
+        if (!fs::is_regular_file(probe / "aiml.tool.json", ec)) {
+            std::cout << "  - " << p.first << " " << p.second
+                      << ": no aiml.tool.json — not an aiml tool" << std::endl;
+            ++skipped;
+            continue;
+        }
+        if (cmdInstall(root, p.first, "", "", "", base, p.second) == 0) ++installed;
+        else ++failed;
+    }
+    std::cout << installed << " installed, " << skipped << " skipped, " << failed << " failed"
+              << std::endl;
+    return failed == 0 ? 0 : 1;
+}
+
+// F68-50…57: fetch, build with this venv, place the results.
+int cmdInstall(const fs::path& root, const std::string& name, const std::string& gitUrl,
+               const std::string& ref, const std::string& localPath, const std::string& kontorUrl,
+               const std::string& wantVersion) {
+    int sources = (!gitUrl.empty() ? 1 : 0) + (!localPath.empty() ? 1 : 0) +
+                  (!kontorUrl.empty() ? 1 : 0);
+    if (name.empty() || sources != 1) return usage();
+
+    fs::path recAt = recordFile(root);
+    Records recs = readRecords(recAt);
+
+    std::string source, commit;
+    fs::path srcDir;
+    std::error_code ec;
+    if (!gitUrl.empty()) {
+        std::string err;
+        if (!gitCommit(gitUrl, ref, commit, err)) return fail(err);
+        source = "git:" + gitUrl;
+        // F68-57: the same commit with its files in place is a no-op — and a
+        // real one: nothing is fetched and nothing is built.
+        auto have = recs.find(name);
+        if (have != recs.end() && have->second.commit == commit) {
+            bool complete = !have->second.files.empty();
+            for (const std::string& rel : have->second.files)
+                if (!fs::exists(root / rel, ec)) complete = false;
+            if (complete) {
+                std::cout << name << " is already installed at " << commit << " — nothing to do"
+                          << std::endl;
+                return 0;
+            }
+        }
+        srcDir = cacheRoot() / "venv_tools" / name / commit;
+        if (!gitFetch(gitUrl, ref, commit, srcDir, err)) return fail(err);
+    } else if (!kontorUrl.empty()) {
+        // F68-60…65.  The digest is only known once the bytes are here, so the
+        // no-op of F68-57 comes after the fetch — it saves the build, which is
+        // what costs.
+        std::string base = kontorBase(kontorUrl), err, version = wantVersion;
+        if (version.empty()) {
+            std::vector<std::pair<std::string, std::string>> found;
+            if (!kontorGraph(base, name, found, err)) return fail(err);
+            version = found.front().second;
+        }
+        source = "kontor:" + base;
+        if (!kontorFetch(base, name, version, srcDir, commit, err)) return fail(err);
+        auto have = recs.find(name);
+        if (have != recs.end() && have->second.commit == commit) {
+            bool complete = !have->second.files.empty();
+            for (const std::string& rel : have->second.files)
+                if (!fs::exists(root / rel, ec)) complete = false;
+            if (complete) {
+                std::cout << name << " is already installed at " << commit << " — nothing to do"
+                          << std::endl;
+                return 0;
+            }
+        }
+    } else {
+        srcDir = fs::weakly_canonical(fs::absolute(localPath), ec);
+        if (ec || !fs::is_directory(srcDir, ec))
+            return fail("--path " + localPath + ": not a directory");
+        // No commit: a working tree is not a version, so this install is
+        // rebuilt every time and `list` says it cannot be reproduced.
+        source = "path:" + srcDir.string();
+    }
+
+    Manifest man;
+    std::string err;
+    if (!readManifest(srcDir, man, err)) return fail(err);
+    if (man.name != name)
+        return fail("aiml.tool.json in " + srcDir.string() + " is for '" + man.name +
+                    "', not '" + name + "'");
+    if (!configsUseVenv(srcDir, err)) return fail(err);
+    if (man.programs.empty() && man.libraries.empty() && man.package.empty())
+        return fail("aiml.tool.json in " + srcDir.string() +
+                    " declares neither programs, libraries nor a package — nothing to install");
+
+    // F68-53: built by the compiler it will live next to.
+    if (!man.programs.empty() || !man.libraries.empty()) {
+        const char* exoEnv = std::getenv("EXODUS");
+        std::string exodus = (exoEnv && *exoEnv) ? exoEnv : "exodus";
+        const char* oldPath = std::getenv("PATH");
+        std::vector<std::string> env = {
+            "AIML_VENV=" + root.string(),
+            "AIML=" + (root / "bin" / "aiml").string(),
+            "PATH=" + (root / "bin").string() + (oldPath && *oldPath ? ":" + std::string(oldPath) : ""),
+        };
+        std::cout << "building " << name << " in " << srcDir.string() << std::endl;
+        // Either the whole project, or exactly the configurations the manifest
+        // names — a repository whose `--all` also builds its tests and its wasm
+        // targets would never install (F68-53).
+        std::vector<std::vector<std::string>> builds;
+        if (man.configs.empty()) {
+            builds.push_back({exodus, "build", "--all"});
+        } else {
+            for (const std::string& cfg : man.configs) {
+                if (!fs::is_regular_file(srcDir / cfg, ec))
+                    return fail("aiml.tool.json names the configuration '" + cfg +
+                                "', but " + (srcDir / cfg).string() + " is not there");
+                builds.push_back({exodus, "build", "-c", cfg});
+            }
+        }
+        for (const auto& cmd : builds) {
+            int rc = runProg(cmd, srcDir, env, nullptr);
+            if (rc == 127)
+                return fail("exodus is not on PATH — a tool is built by its own project (F68-53)");
+            if (rc != 0) {
+                std::string what = man.configs.empty() ? std::string("--all") : cmd.back();
+                return fail("building " + name + " (" + what + ") failed (exit " +
+                            std::to_string(rc) + ")");
+            }
+        }
+    }
+
+    // Collect what will be placed before touching the venv, so a missing
+    // build output is found before the old copy is gone.
+    std::vector<std::pair<fs::path, fs::path>> copies;   // from → to
+    std::vector<std::string> placed;
+    for (const std::string& rel : man.programs) {
+        fs::path from = srcDir / rel;
+        if (!fs::is_regular_file(from, ec))
+            return fail("aiml.tool.json names the program '" + rel + "', but the build left no " +
+                        from.string());
+        copies.emplace_back(from, root / "bin" / from.filename());
+        placed.push_back("bin/" + from.filename().string());
+    }
+    for (const std::string& rel : man.libraries) {
+        fs::path from = srcDir / rel;
+        if (!fs::is_regular_file(from, ec))
+            return fail("aiml.tool.json names the library '" + rel + "', but the build left no " +
+                        from.string());
+        copies.emplace_back(from, root / "lib" / from.filename());
+        placed.push_back("lib/" + from.filename().string());
+    }
+    fs::path pkgFrom;
+    if (!man.package.empty()) {
+        pkgFrom = (srcDir / man.package).lexically_normal();
+        if (!fs::is_directory(pkgFrom, ec))
+            return fail("aiml.tool.json names the package directory '" + man.package +
+                        "', but there is no " + pkgFrom.string());
+        placed.push_back("lib/aiml/" + name);
+    }
+
+    // The old copy goes only now, after the build worked (F68-57).
+    auto old = recs.find(name);
+    if (old != recs.end()) dropFiles(root, old->second);
+
+    using fs::perms;
+    const perms exec = perms::owner_all | perms::group_read | perms::group_exec
+                     | perms::others_read | perms::others_exec;
+    const perms data = perms::owner_read | perms::owner_write | perms::group_read | perms::others_read;
+    for (const auto& cp : copies) {
+        bool isProgram = cp.second.parent_path().filename() == "bin";
+        if (!installFile(cp.first, cp.second, isProgram ? exec : data, err)) return fail(err);
+        // F68-55: checked, not patched.
+        if (!hasOriginRunpath(cp.second))
+            std::cerr << "aiml venv: warning: " << cp.second.filename().string()
+                      << " has no $ORIGIN-relative RUNPATH — it will only run where its build "
+                         "tree is (spec/68 F68-23)" << std::endl;
+    }
+    if (!pkgFrom.empty()) {
+        fs::path pkgTo = root / "lib" / "aiml" / name;
+        std::vector<fs::path> outputs;
+        for (const auto& cp : copies) outputs.push_back(cp.first);
+        fs::remove_all(pkgTo, ec);
+        if (!copyPackage(pkgFrom, pkgTo, outputs, err)) return fail(err);
+        Table table = readTable(tableFile(root));
+        table[name]["path"] = name;                       // relative to lib/aiml (F68-32)
+        if (!man.version.empty()) table[name]["version"] = man.version;
+        if (!writeTable(tableFile(root), table, err)) return fail(err);
+    }
+
+    Record rec;
+    rec.source = source;
+    rec.commit = commit;
+    rec.version = man.version;
+    rec.files = placed;
+    recs[name] = rec;
+    if (!writeRecords(recAt, recs, err)) return fail(err);
+
+    std::cout << "installed " << name;
+    if (!man.version.empty()) std::cout << " " << man.version;
+    std::cout << " into " << root.string() << " (" << placed.size() << " entries)" << std::endl;
+    return 0;
 }
 
 }  // namespace
@@ -122,21 +892,11 @@ std::string ownRoot() {
     return root;
 }
 
-int command(int argc, char** argv) {
-    std::string dirArg, runtimeArg;
-    for (int i = 0; i < argc; ++i) {
-        std::string arg = argv[i];
-        if (arg == "--runtime" && i + 1 < argc) runtimeArg = argv[++i];
-        else if (!arg.empty() && arg[0] != '-' && dirArg.empty()) dirArg = arg;
-        else return usage();
-    }
-    if (dirArg.empty()) return usage();
+namespace {
 
+// §2: create or update (F68-10…14).
+int createVenv(const fs::path& root, const std::string& runtimeArg) {
     std::error_code ec;
-    fs::path root = fs::weakly_canonical(fs::absolute(dirArg), ec);
-    if (ec) return fail("cannot resolve " + dirArg + ": " + ec.message());
-    if (root.string().find('\'') != std::string::npos)
-        return fail("a venv path must not contain a single quote: " + root.string());
     // F68-13: missing, empty or a venv already.
     if (fs::exists(root, ec) && !(fs::is_directory(root, ec) && fs::is_empty(root, ec)) && !isVenv(root))
         return fail(root.string() + " exists and is not a venv (no " + kMarker + " in env); "
@@ -161,13 +921,58 @@ int command(int argc, char** argv) {
     std::string err;
     if (!installFile(exe, root / "bin" / "aiml", exec, err)) return fail(err);
     if (!installFile(runtime, root / "lib" / "libaiml.so", data, err)) return fail(err);
-    fs::path table = root / "lib" / "aiml" / "aiml.packages.json";
+    fs::path table = tableFile(root);
     if (!fs::exists(table, ec) && !writeText(table, "{\"packages\": {}}\n", err)) return fail(err);
     if (!writeText(root / "env", envText(root.string()), err)) return fail(err);
 
     std::cout << "venv " << root.string() << "\n  use it with: . " << root.string() << "/env"
               << std::endl;
     return 0;
+}
+
+}  // namespace
+
+int command(int argc, char** argv) {
+    std::string dirArg, runtimeArg, verb, name;
+    std::string gitUrl, ref, pathArg, kontorUrl, versionArg;
+    bool all = false;
+    for (int i = 0; i < argc; ++i) {
+        std::string arg = argv[i];
+        if (arg == "--runtime" && i + 1 < argc) runtimeArg = argv[++i];
+        else if (arg == "--git" && i + 1 < argc) gitUrl = argv[++i];
+        else if (arg == "--ref" && i + 1 < argc) ref = argv[++i];
+        else if (arg == "--path" && i + 1 < argc) pathArg = argv[++i];
+        else if (arg == "--kontor" && i + 1 < argc) kontorUrl = argv[++i];
+        else if (arg == "--version" && i + 1 < argc) versionArg = argv[++i];
+        else if (arg == "--all") all = true;
+        else if (!arg.empty() && arg[0] != '-') {
+            if (dirArg.empty()) dirArg = arg;
+            else if (verb.empty()) verb = arg;
+            else if (name.empty()) name = arg;
+            else return usage();
+        }
+        else return usage();
+    }
+    if (dirArg.empty()) return usage();
+
+    std::error_code ec;
+    fs::path root = fs::weakly_canonical(fs::absolute(dirArg), ec);
+    if (ec) return fail("cannot resolve " + dirArg + ": " + ec.message());
+    if (root.string().find('\'') != std::string::npos)
+        return fail("a venv path must not contain a single quote: " + root.string());
+
+    if (verb.empty()) return createVenv(root, runtimeArg);
+
+    // §6 works ON a venv, so there has to be one.
+    if (!isVenv(root))
+        return fail(root.string() + " is not a venv — create it with `aiml venv " + dirArg + "`");
+    if (verb == "install") {
+        if (all) return name.empty() ? cmdInstallAll(root, kontorUrl) : usage();
+        return cmdInstall(root, name, gitUrl, ref, pathArg, kontorUrl, versionArg);
+    }
+    if (verb == "list")    return name.empty() ? cmdList(root) : usage();
+    if (verb == "remove")  return name.empty() ? usage() : cmdRemove(root, name);
+    return usage();
 }
 
 }  // namespace venv

@@ -1,0 +1,49 @@
+# kontor's read side, served from a directory — so that tests/venv/run.sh can
+# test `install --kontor` (spec/68 §6.1) without a kontor.
+#
+#   KONTOR_STUB_DIR=<dir> aiml kontor_stub.aiml -- <port>
+#
+# A request for /p is answered with <dir>/p, so the fixture is a tree in
+# kontor's own shape: exodus/<name>/<version>/{exodus.json,package} and
+# api/v1/graph.  Whoever writes the fixture decides what kontor "says".
+
+- def:
+    name: stub_dir
+    return: string
+    body:
+      - decl: [vars, map<string:string>, { call: [sys.env] }]
+      - return: [{ call: [vars.get, "KONTOR_STUB_DIR"] }]
+
+- def:
+    name: on_get
+    args: [[req, http_request_handle], [resp, http_response_handle]]
+    body:
+      - decl: [root, string, { call: [stub_dir] }]
+      - decl: [file, string, "${root}${req.path}"]
+      - if:
+          condition: { not: [{ call: [io.exists, file] }] }
+          then:
+            - set: [resp.status, 404]
+            - set: [resp.body, "not found"]
+            - call: [resp.send]
+            - return: []
+      - call: [resp.headers.put, "content-type", "application/octet-stream"]
+      - set: [resp.body_file, file]
+      - call: [resp.send]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [port, i32, 18599]
+      - decl: [arg, string, { call: [sys.get_arg, 1] }]
+      - if:
+          condition: { gt: [arg.len, 0] }
+          then:
+            - set: [port, arg]
+      - decl: [srv, http_server_handle, { call: [http.server, "127.0.0.1", port] }]
+      - call: [srv.route, "GET", "/*", on_get]
+      - decl: [root, string, { call: [stub_dir] }]
+      - print: ["kontor-stub ${port} ${root}"]
+      - call: [srv.start]
+      - return: 0

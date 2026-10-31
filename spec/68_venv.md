@@ -60,11 +60,30 @@ export PATH='/opt/aiml/bin'"${PATH:+:$PATH}"
   only these three variables.  A path is single-quoted; a path with a single quote is refused
   (exit 1), so the file cannot be made to run anything.
 - **F68-21** `AIML` names the compiler.  A tool that runs the compiler (exodus, test drivers)
-  takes `$AIML`, else `aiml` from `PATH` — never a path of its own.
+  takes `$AIML`, then `$AIML_VENV/bin/aiml` when a venv is named, then `aiml` from `PATH` —
+  never a path of its own.  The venv comes before `PATH`: a build that links against one venv
+  must not be compiled by another venv's compiler that happens to be first on the path.
 - **F68-22** A program built against the venv links `-L$AIML_VENV/lib -laiml`.  If it is
   installed into `<venv>/bin`, it gets `RUNPATH $ORIGIN/../lib`; elsewhere it gets
   `RUNPATH $AIML_VENV/lib`.  `env` sets neither `LIBRARY_PATH` nor `LD_LIBRARY_PATH`: what a
   binary needs is in the binary, so it runs without the venv's environment too.
+- **F68-23** **How a project says that** — in an `exodus.json`, two placeholders are expanded, next
+  to the existing `__exodus_cache`:
+
+  ```json
+  "compiler": { "name": "$AIML" },
+  "linker":   { "library_paths": ["$AIML_VENV/lib"],
+                "flags": ["-Wl,-rpath,$ORIGIN/../lib"] }
+  ```
+
+  `$AIML` becomes the compiler of F68-21 (`$AIML` from the environment, else `aiml` from `PATH`),
+  `$AIML_VENV` the venv root (`$AIML_VENV`, else the venv the resolved compiler belongs to,
+  F68-31).  `$AIML_VENV` is substituted before `$AIML`, since one is a prefix of the other.
+  **Nothing else is expanded**: `$ORIGIN` in a RUNPATH must reach the linker as those seven
+  characters, so a general variable expansion would be wrong here.  A placeholder that cannot be
+  resolved is an error naming `. <venv>/env` — not an empty string, which would silently build
+  against whatever the host happens to have.  A project that writes a path into somebody's build
+  tree instead (`../aiml/out/aiml/aiml`) keeps working; it just only builds where that tree is.
 
 ## 4. Packages of a venv
 
@@ -101,7 +120,8 @@ them without anybody cloning a repository by hand.
 ```
 aiml venv <dir> install <name> --git <url> [--ref <tag|branch|commit>]
 aiml venv <dir> install <name> --path <dir>
-aiml venv <dir> install <name> --kontor <url> [--version <v>]      (§6.1, not yet)
+aiml venv <dir> install <name> --kontor <url> [--version <v>]      (§6.1)
+aiml venv <dir> install --all --kontor <url>                       (§6.1, F68-66)
 aiml venv <dir> list
 aiml venv <dir> remove <name>
 ```
@@ -123,6 +143,12 @@ aiml venv <dir> remove <name>
   pointing at the **target venv**: a tool is built by the compiler it will live next to, and links
   against that venv's runtime (F68-22).  A failed build installs nothing (exit 1, the build's
   output is passed through).
+  **`configs` names them instead** when `--all` is not what makes the tool: then each named
+  configuration is built on its own (`$EXODUS build -c <file>`), in the order given, and the first
+  failure ends the install.  cosmos is the reason the field exists — its `--all` is 62
+  configurations, among them every test binary and five wasm builds that need an emsdk clone, so a
+  tool that waited for `--all` to be green would never install.  A repository with one
+  configuration says nothing and gets `--all`.
   A tool whose build configuration names a **build tree** instead (ufo's `exodus.json` has
   `"name": "../aiml/out/aiml/aiml"` and `-L../aiml/out/libaiml`) is refused with exactly that
   reason: it would be built by a foreign compiler and link against a library that is not in the
@@ -131,16 +157,23 @@ aiml venv <dir> remove <name>
 - **F68-54** **The repository says what to install**, in `aiml.tool.json` at its root:
 
   ```json
-  { "name": "ufo", "version": "0.2.0",
-    "programs":  ["out/ufo/ufo", "out/ufo-layer/ufo-layer"],
-    "libraries": ["out/libufo/libufo.so"],
-    "package":   "lib" }
+  { "name": "cosmos", "version": "0.1.0",
+    "configs":   ["exodus-cosmosd.json", "exodus-api.json"],
+    "programs":  ["cosmosd", "cosmos-api"],
+    "libraries": ["libcosmos_console_offer.so"],
+    "package":   "." }
   ```
 
-  `programs` go to `<venv>/bin/`, `libraries` to `<venv>/lib/`, and `package` names the directory
+  `configs` is F68-53, `programs` go to `<venv>/bin/`, `libraries` to `<venv>/lib/`, and `package` names the directory
   of the source tree that becomes the importable package `lib/aiml/<name>/` (spec/21 §3.1), copied
   in and entered in the table with a path relative to `lib/aiml/` (F68-32).  Every key is optional
-  except `name`; a tool may be only programs (cosmos) or only a package.  **No file → exit 1**
+  except `name`; a tool may be only programs (cosmos) or only a package.  `package` is usually
+  `"."` — the repository root, so that `@ufo/lib/registry.aiml` (spec/21 §3.1) means what it says.
+  Copying it in **skips what the build left there** — `.git`, `out`, `build`, `__aiml_cache`,
+  `__exodus_cache` and `*.o`: those are not part of the package, and a venv is a layer that must
+  not grow by a build tree or differ per machine.  The `programs` and `libraries` of this install
+  are skipped too — they are in `bin/` and `lib/` already, and a second copy inside the package
+  would be the same bytes under a name nobody loads.  **No file → exit 1**
   („the repository has no aiml.tool.json"), and nothing is guessed: a venv that installed by
   guessing would not be the same venv as the next one.  The `name` must match the install's
   `<name>`.
@@ -165,14 +198,77 @@ aiml venv <dir> remove <name>
   `ufo layer apply` (F68-41) carry `bin/`, `lib/` and the two tables, so a venv layer is a
   toolbox, not just a compiler.
 
-### 6.1 kontor as a source (planned)
+### 6.1 kontor as a source
 
-kontor keeps `/exodus/<name>/<version>/` (exodus.json plus the package) and is where these tools
-are published (cosmos doc/spec/111 §111.9).  `--kontor <url> --version <v>` fetches that instead
-of cloning, which makes an install reproducible without a git server and without a build when
-kontor carries binaries.  Until then `--git` is the way, and `--kontor` exits 1 naming §6.1.
+kontor keeps `/exodus/<name>/<version>/` — the `exodus.json` manifest and one `package` blob —
+and that is where these tools are published (cosmos `doc/spec/111` §111.9).  `--kontor <url>`
+fetches from there instead of cloning, so a machine needs no git server and no account to get the
+toolbox: the venv, and a URL.
+
+- **F68-60** **What kontor carries is source** (decided 2026-10-31).  The `package` blob is a
+  reproducible source archive — ufo's `scripts/package.sh` writes one, the same bytes for the same
+  sources — and the install builds it exactly as `--git` would (F68-53).  Not binaries: kontor's
+  path has `<name>/<version>` and no place for an architecture, and a venv that can build is the
+  whole point of F68-22.  A binary channel would need a word for the architecture first, and
+  nothing here invents one.
+- **F68-61** **The version.**  `--version <v>` names it.  Without it, `GET <url>/api/v1/graph`
+  says which version of that project is the newest and that one is taken — the same answer kontor
+  gives its own dependency graph, so nobody has to keep a list of versions by hand.
+- **F68-62** **The fetch is the runtime's own HTTP client**, not a second one and not an external
+  program: `GET <url>/exodus/<name>/<version>/exodus.json`, then the `package` blob streamed into
+  `$AIML_CACHE/venv_tools/<name>/kontor-<version>/package.tar.gz` (F68-52 — nothing lands in the
+  venv).  The manifest is asked for because it says whether that version is there at all; what it
+  contains is not read here — what gets built is the archive, and what gets installed is said by
+  the archive's `aiml.tool.json` (F68-54).  kontor keeps whatever the publisher PUT under that
+  name, and for a repository with many configurations and no `exodus.json` (cosmos) that is its
+  `aiml.tool.json`.  Anything but `200` ends the install naming the URL and the status.  The archive must
+  unpack to **exactly one directory**; that directory is the tree that gets built.  An archive
+  that unpacks into several top-level entries is refused rather than guessed at.
+- **F68-63** **A token when the instance wants one.**  kontor's `anonymous` role is `reader` by
+  default, so reading usually needs nothing.  Where it does, `$KONTOR_TOKEN` becomes an
+  `Authorization: Bearer …` header — set in the request, never as an argument, because arguments
+  are readable in `/proc` for anyone on the machine.
+- **F68-64** **From there it is §6.**  The unpacked tree needs its `aiml.tool.json` like any other
+  (F68-54), is built with `configs` or `--all` (F68-53), and places the same files in the same
+  places.  A kontor install and a git install of the same version differ in where the tree came
+  from, in nothing else.
+- **F68-65** **The record** says `source: kontor:<url>` and, as the commit, `sha256:<digest>` over
+  the package bytes: that digest is to kontor what a commit is to git — the one thing that says
+  *which* bytes were built.  Installing the same digest again is the no-op of F68-57; `list` shows
+  it and does **not** call it unreproducible, because those bytes can be fetched again.
+- **F68-66** **`install --all --kontor <url>` installs the whole toolbox.**  Every project in
+  kontor's graph, each at its newest version.  A project whose archive has no `aiml.tool.json` is
+  **skipped with a line** — kontor is a repository for exodus projects, not a list of aiml tools,
+  and a 9rooms in there must not stop the install of cosmos.  A build that fails is a failure, and
+  the command ends non-zero after reporting; the closing line counts installed, skipped and
+  failed.
+- **F68-67** **What this is not.**  No signature is checked: whoever may write to that kontor
+  decides what its name serves, and TLS is what protects the way there.  No mirror list, no
+  downgrade protection, no "latest" that moves — `list` records the digest that was installed, and
+  that is how you can tell afterwards what you have.
+
+### 6.2 Every tool is built, none is interpreted (decided 2026-10-31)
+
+- **A tool that was only ever run by the compiler gets an `exodus.json`.**  kontor had none; it
+  was started as `aiml kontor.aiml -- 8081 ./data`, so there was no program to place and §6 could
+  have installed it as a package only.  The owner's decision is the simple one: kontor becomes an
+  ordinary project and is built ahead of time, like ufo and cosmos.  A manifest therefore has no
+  `entry:` and `install` writes **no launchers** — `bin/` holds programs, not scripts that start a
+  compiler.  Nothing in a venv is interpreted at run time.
+- **The three repositories say what they install, and are built out of a venv.**  cosmos, kontor
+  and ufo each carry an `aiml.tool.json`, and each `exodus.json` takes its compiler from `$AIML`
+  and its runtime from `$AIML_VENV/lib` (F68-23) — cosmos too, with the consequence the owner
+  accepted on 2026-10-31: **cosmos no longer builds without an active venv** (`. <venv>/env`),
+  because an absolute path into somebody's build tree is exactly what F68-23 exists to end.
+  Before that, installing ufo straight from its remote refused, naming the missing manifest
+  (proved by hand on 2026-10-31 against `github.com/Pymann/ufo`: the clone works, the manifest was
+  what was missing).
 
 Tests: `tests/venv/run.sh` (install from a local path and from a git repository made on the fly;
-the manifest's three kinds; RUNPATHs of the copies; the record, `list` and `remove`; installing
-the same commit twice; a different commit replacing; a missing manifest, a wrong `name`, a failing
-build, a missing `git`; nothing fetched into the venv).
+the manifest's three kinds and its `configs`; RUNPATHs of the copies; the record, `list` and
+`remove`; installing the same commit twice; a different commit replacing; a missing manifest, a
+wrong `name`, a failing build, a missing `git`; nothing fetched into the venv).  §6.1 against
+`tests/venv/kontor_stub.aiml` — kontor's three routes served by aiml itself, so the test needs no
+kontor: a version named and a version found through the graph, the digest in the record, the
+no-op on the same digest, `--all` with a project that is no tool, a 404 and an archive with two
+top-level entries.

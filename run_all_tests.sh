@@ -24,7 +24,9 @@ for arg in "$@"; do
     fi
 done
 
-source ../../exvenv/bin/activate
+# exodus kommt aus der Python-venv, wo es eine gibt (in einem Container liegt
+# es woanders und steht schon auf PATH).
+[ -f ../../exvenv/bin/activate ] && source ../../exvenv/bin/activate
 if [ $SKIP_BUILD -eq 0 ]; then
     exodus build
     if [ $? -ne 0 ]; then

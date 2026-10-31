@@ -99,5 +99,251 @@ check "the moved venv still finds its packages (F68-32)" '[ $rc -eq 0 ] && echo 
 out=$(env -i "$MOVED/bin/demo_prog" 2>&1); rc=$?
 check "and its AOT program still runs (relocatable, F68-1)" '[ $rc -eq 0 ]'
 
+echo "── installing tools (§6) ──"
+# The cache the install must use (F68-52) — and must not put in the venv.
+export AIML_CACHE="$WORK/cache"
+# A tool: a program plus an importable package, built with the venv's own compiler.
+TOOL="$WORK/tool"; mkdir -p "$TOOL/lib"
+cat > "$TOOL/hallo.aiml" <<'EOT'
+- def:
+    name: main
+    return: i32
+    body:
+      - print: ["werkzeug laeuft"]
+      - return: 0
+EOT
+cat > "$TOOL/lib/greet.aiml" <<'EOT'
+- def:
+    name: greet
+    return: i32
+    body:
+      - print: ["werkzeug-paket"]
+      - return: 0
+EOT
+cat > "$TOOL/exodus.json" <<'EOT'
+{
+    "$schema": "exodus.project.config-1.0",
+    "name": "werkzeug", "version": "0.3.0",
+    "output_type": "executable",
+    "sources": ["hallo.aiml"],
+    "compiler": { "name": "$AIML", "lang_standard": "17", "flags": [] },
+    "linker": { "name": "g++", "flags": ["-Wl,-rpath,$ORIGIN/../lib"],
+                "libraries": ["aiml", "pthread", "dl"],
+                "library_paths": ["$AIML_VENV/lib"] },
+    "artifact_in_cwd": true, "optimization": "0", "debug": false,
+    "env": { "AIML_MEM_V3": "1" }
+}
+EOT
+cat > "$TOOL/aiml.tool.json" <<'EOT'
+{ "name": "werkzeug", "version": "0.3.0",
+  "programs": ["werkzeug"], "package": "lib" }
+EOT
+# The program the build is expected to produce (artifact_in_cwd + name).
+V2="$WORK/v2"
+"$AIML" venv "$V2" > /dev/null 2>&1
+out=$("$AIML" venv "$V2" install werkzeug --path "$TOOL" 2>&1); rc=$?
+check "install --path builds and places the program (F68-50/53/54)" \
+  '[ $rc -eq 0 ] && [ -x "$V2/bin/werkzeug" ]'
+[ $rc -eq 0 ] || echo "$out" | tail -4
+check "the program runs out of the venv" \
+  'out2=$(env -i "$V2/bin/werkzeug" 2>&1); echo "$out2" | grep -q "werkzeug laeuft"'
+check "the package landed in lib/aiml and in the table (F68-54)" \
+  '[ -f "$V2/lib/aiml/werkzeug/greet.aiml" ] && grep -q "\"werkzeug\"" "$V2/lib/aiml/aiml.packages.json"'
+check "the record names source, commit and files (F68-56)" \
+  '[ -f "$V2/lib/aiml/aiml.installed.json" ] && grep -q "path:" "$V2/lib/aiml/aiml.installed.json"'
+check "list prints it and marks a path install unreproducible" \
+  'lout=$("$AIML" venv "$V2" list 2>&1); echo "$lout" | grep -q werkzeug && echo "$lout" | grep -qi "unreprod"'
+check "nothing was fetched or built inside the venv (F68-52)" \
+  '[ ! -e "$V2/lib/aiml/werkzeug/exodus.json" ] && [ -z "$(find "$V2" -name "*.o")" ]'
+# package ".": the repository root, so that @name/<dir>/x.aiml means what it says — but
+# without what the build left there (F68-54).
+V3="$WORK/v3b"; "$AIML" venv "$V3" > /dev/null 2>&1
+printf '{ "name": "werkzeug", "version": "0.3.0", "programs": ["werkzeug"], "package": "." }\n' \
+  > "$TOOL/aiml.tool.json"
+out=$("$AIML" venv "$V3" install werkzeug --path "$TOOL" 2>&1); rc=$?
+check "package '.' puts the tree in, @werkzeug/lib/greet.aiml resolves" \
+  '[ $rc -eq 0 ] && [ -f "$V3/lib/aiml/werkzeug/lib/greet.aiml" ]'
+check "and the build leftovers stay out (out/, __aiml_cache, *.o)" \
+  '[ ! -e "$V3/lib/aiml/werkzeug/out" ] && [ ! -e "$V3/lib/aiml/werkzeug/__aiml_cache" ] && [ -z "$(find "$V3/lib/aiml" -name "*.o")" ]'
+check "and the program is not shipped twice (bin/ only)" \
+  '[ -x "$V3/bin/werkzeug" ] && [ ! -e "$V3/lib/aiml/werkzeug/werkzeug" ]'
+printf '{ "name": "werkzeug", "version": "0.3.0", "programs": ["werkzeug"], "package": "lib" }\n' \
+  > "$TOOL/aiml.tool.json"
+# A working tree is no version: --path rebuilds every time (F68-50/57).
+out=$("$AIML" venv "$V2" install werkzeug --path "$TOOL" 2>&1); rc=$?
+check "a second --path install rebuilds and stays green" \
+  '[ $rc -eq 0 ] && [ -x "$V2/bin/werkzeug" ]'
+out=$("$AIML" venv "$V2" remove werkzeug 2>&1); rc=$?
+check "remove deletes exactly what was placed (F68-56)" \
+  '[ $rc -eq 0 ] && [ ! -e "$V2/bin/werkzeug" ] && [ ! -d "$V2/lib/aiml/werkzeug" ] && ! grep -q "\"werkzeug\"" "$V2/lib/aiml/aiml.packages.json"'
+check "and leaves the venv itself alone" '[ -x "$V2/bin/aiml" ] && [ -f "$V2/env" ]'
+
+echo "── configs: which configurations make the tool (F68-53) ──"
+MANY="$WORK/many"; mkdir -p "$MANY"; cp "$TOOL/hallo.aiml" "$MANY/"
+cp "$TOOL/exodus.json" "$MANY/exodus-gut.json"
+# A source that does not compile.  A source that is MISSING would not do: exodus
+# reports errorlevel 0 for a configuration whose sources resolve to nothing and
+# writes no artifact (gemeldet 2026-10-31).
+printf -- '- def:\n    name: main\n    return: i32\n    body:\n      - das ist kein aiml\n' > "$MANY/kaputt.aiml"
+sed 's|"sources": \["hallo.aiml"\]|"sources": ["kaputt.aiml"]|; s|"name": "werkzeug"|"name": "kaputt"|' \
+  "$TOOL/exodus.json" > "$MANY/exodus-kaputt.json"
+V5="$WORK/v5"; "$AIML" venv "$V5" > /dev/null 2>&1
+printf '{ "name": "werkzeug", "version": "0.3.0", "programs": ["werkzeug"] }\n' > "$MANY/aiml.tool.json"
+out=$("$AIML" venv "$V5" install werkzeug --path "$MANY" 2>&1); rc=$?
+check "without configs a broken configuration fails the install (--all)" '[ $rc -ne 0 ]'
+printf '{ "name": "werkzeug", "version": "0.3.0", "configs": ["exodus-gut.json"], "programs": ["werkzeug"] }\n' \
+  > "$MANY/aiml.tool.json"
+out=$("$AIML" venv "$V5" install werkzeug --path "$MANY" 2>&1); rc=$?
+check "configs builds exactly those; the broken one is left alone (F68-53)" \
+  '[ $rc -eq 0 ] && [ -x "$V5/bin/werkzeug" ]'
+check "the named configuration shows up in the build output" 'echo "$out" | grep -q "exodus-gut.json"'
+printf '{ "name": "werkzeug", "version": "0.3.0", "configs": ["exodus-weg.json"], "programs": ["werkzeug"] }\n' \
+  > "$MANY/aiml.tool.json"
+out=$("$AIML" venv "$V5" install werkzeug --path "$MANY" 2>&1); rc=$?
+check "a configs entry that is not there is refused, named (F68-53)" \
+  '[ $rc -ne 0 ] && echo "$out" | grep -q "exodus-weg.json"'
+
+echo "── refusing (F68-54/53/51/6.1) ──"
+NOMAN="$WORK/noman"; mkdir -p "$NOMAN"; cp "$TOOL/exodus.json" "$TOOL/hallo.aiml" "$NOMAN/"
+out=$("$AIML" venv "$V2" install nomanifest --path "$NOMAN" 2>&1); rc=$?
+check "a tree without aiml.tool.json is refused, named (F68-54)" \
+  '[ $rc -ne 0 ] && echo "$out" | grep -q "aiml.tool.json"'
+WRONGNAME="$WORK/wrongname"; mkdir -p "$WRONGNAME"
+cp "$TOOL/exodus.json" "$TOOL/hallo.aiml" "$WRONGNAME/"
+printf '{ "name": "anders", "programs": ["werkzeug"] }\n' > "$WRONGNAME/aiml.tool.json"
+out=$("$AIML" venv "$V2" install werkzeug --path "$WRONGNAME" 2>&1); rc=$?
+check "a manifest whose name disagrees is refused (F68-54)" \
+  '[ $rc -ne 0 ] && echo "$out" | grep -q "anders"'
+HARDWIRED="$WORK/hardwired"; mkdir -p "$HARDWIRED"
+cp "$TOOL/hallo.aiml" "$TOOL/aiml.tool.json" "$HARDWIRED/"
+sed 's|"\$AIML"|"../aiml/out/aiml/aiml"|' "$TOOL/exodus.json" > "$HARDWIRED/exodus.json"
+out=$("$AIML" venv "$V2" install werkzeug --path "$HARDWIRED" 2>&1); rc=$?
+check "a config naming a build tree is refused with F68-23 (F68-53)" \
+  '[ $rc -ne 0 ] && echo "$out" | grep -q "F68-23"'
+out=$("$AIML" venv "$V2" install kon --kontor http://127.0.0.1:1 2>&1); rc=$?
+check "a kontor that gives no answer is refused, named (F68-62)" \
+  '[ $rc -ne 0 ] && echo "$out" | grep -q "127.0.0.1:1"'
+out=$("$AIML" venv "$V2" install --all 2>&1); rc=$?
+check "install --all without a source is refused (F68-66)" \
+  '[ $rc -ne 0 ] && echo "$out" | grep -q -- "--kontor"'
+out=$("$AIML" venv "$V2" remove gibtsnicht 2>&1); rc=$?
+check "removing something that is not installed is refused" '[ $rc -ne 0 ]'
+
+echo "── install from a git repository (F68-50/51/52) ──"
+if command -v git > /dev/null 2>&1; then
+  REPO="$WORK/repo.git"
+  git init -q --bare "$REPO"
+  SRC="$WORK/src"; cp -r "$TOOL" "$SRC"; rm -rf "$SRC/out" "$SRC/__aiml_cache" "$SRC/werkzeug"
+  (cd "$SRC" && git init -q && git add -A \
+     && git -c user.email=t@e -c user.name=t commit -qm one \
+     && git push -q "$REPO" HEAD:refs/heads/main) > /dev/null 2>&1
+  SHA=$(git -C "$SRC" rev-parse HEAD)
+  V4="$WORK/v4"; "$AIML" venv "$V4" > /dev/null 2>&1
+  out=$("$AIML" venv "$V4" install werkzeug --git "$REPO" --ref main 2>&1); rc=$?
+  check "install --git clones, builds and places it" '[ $rc -eq 0 ] && [ -x "$V4/bin/werkzeug" ]'
+  [ $rc -eq 0 ] || echo "$out" | tail -4
+  check "the record pins the resolved commit (F68-50)" \
+    'grep -q "$SHA" "$V4/lib/aiml/aiml.installed.json"'
+  check "the clone lives in the cache, not in the venv (F68-52)" \
+    '[ -d "$WORK/cache/venv_tools/werkzeug/$SHA" ] && [ ! -e "$V4/src" ]'
+  out=$("$AIML" venv "$V4" install werkzeug --git "$REPO" --ref main 2>&1); rc=$?
+  check "the same commit again is a real no-op (F68-57)" \
+    '[ $rc -eq 0 ] && echo "$out" | grep -qi "already"'
+  out=$("$AIML" venv "$V4" install werkzeug --git "$REPO" --ref gibtsnicht 2>&1); rc=$?
+  check "an unknown ref is refused, named" '[ $rc -ne 0 ] && echo "$out" | grep -q gibtsnicht'
+  out=$("$AIML" venv "$V4" list 2>&1)
+  check "list shows the commit for a git install" 'echo "$out" | grep -q "$SHA"'
+else
+  echo "  skip git install (no git)"
+fi
+
+echo "── §6.1: kontor as a source ──"
+# kontor's read side is served by kontor_stub.aiml out of a tree in kontor's
+# shape, so this needs no kontor — and tests against the real routes.
+SRC="$WORK/src"; mkdir -p "$SRC/werkzeug-0.2.0/lib"
+cp "$TOOL/hallo.aiml" "$TOOL/exodus.json" "$SRC/werkzeug-0.2.0/"
+cp "$TOOL/lib/greet.aiml" "$SRC/werkzeug-0.2.0/lib/"
+printf '{ "name": "werkzeug", "version": "0.2.0", "programs": ["werkzeug"], "package": "lib" }\n' \
+  > "$SRC/werkzeug-0.2.0/aiml.tool.json"
+cp -r "$SRC/werkzeug-0.2.0" "$SRC/werkzeug-0.1.0"
+sed -i 's/0\.2\.0/0.1.0/' "$SRC/werkzeug-0.1.0/aiml.tool.json"
+pack() { tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner -C "$1" -czf "$2" "$3"; }
+
+SRV="$WORK/kontor"
+for v in 0.1.0 0.2.0; do
+    mkdir -p "$SRV/exodus/werkzeug/$v"
+    cp "$TOOL/exodus.json" "$SRV/exodus/werkzeug/$v/exodus.json"
+    pack "$SRC" "$SRV/exodus/werkzeug/$v/package" "werkzeug-$v"
+done
+# a project in kontor that is no aiml tool: no aiml.tool.json in its archive
+mkdir -p "$SRV/exodus/fremd/1.0.0" "$SRC/fremd-1.0.0"
+printf 'nur Text\n' > "$SRC/fremd-1.0.0/README"
+cp "$TOOL/exodus.json" "$SRV/exodus/fremd/1.0.0/exodus.json"
+pack "$SRC" "$SRV/exodus/fremd/1.0.0/package" "fremd-1.0.0"
+# an archive that is no single tree
+mkdir -p "$SRV/exodus/zweibaum/1.0.0" "$SRC/zwei/a" "$SRC/zwei/b"
+cp "$TOOL/exodus.json" "$SRV/exodus/zweibaum/1.0.0/exodus.json"
+tar --sort=name --mtime=@0 -C "$SRC/zwei" -czf "$SRV/exodus/zweibaum/1.0.0/package" a b
+mkdir -p "$SRV/api/v1"
+cat > "$SRV/api/v1/graph" <<'EOT'
+{"projects":[{"name":"werkzeug","version":"0.2.0","dependencies":[],"apt_packages":[]},
+             {"name":"fremd","version":"1.0.0","dependencies":[],"apt_packages":[]}]}
+EOT
+
+PORT=$((18600 + RANDOM % 300))
+KONTOR_STUB_DIR="$SRV" AIML_MEM_V3=1 "$AIML" tests/venv/kontor_stub.aiml -- "$PORT" \
+  > "$WORK/stub.log" 2>&1 &
+STUB=$!
+trap 'kill $STUB 2>/dev/null; rm -rf "$WORK"' EXIT
+URL="http://127.0.0.1:$PORT"
+up=0
+for _ in $(seq 100); do
+    curl -fs -o /dev/null "$URL/api/v1/graph" && { up=1; break; }
+    sleep 0.2
+done
+if [ "$up" -ne 1 ]; then
+    bad "the kontor stub comes up"
+    head -5 "$WORK/stub.log"
+else
+    ok "the kontor stub comes up"
+    V6="$WORK/v6"; "$AIML" venv "$V6" > /dev/null 2>&1
+    out=$("$AIML" venv "$V6" install werkzeug --kontor "$URL" 2>&1); rc=$?
+    check "install --kontor takes the newest version from the graph (F68-61)" \
+      '[ $rc -eq 0 ] && [ -x "$V6/bin/werkzeug" ] && grep -q "\"version\": \"0.2.0\"" "$V6/lib/aiml/aiml.installed.json"'
+    check "the package landed and the program runs out of the venv" \
+      '[ -f "$V6/lib/aiml/werkzeug/greet.aiml" ] && env -i "$V6/bin/werkzeug" 2>&1 | grep -q "werkzeug laeuft"'
+    check "the record says kontor and the digest of the bytes (F68-65)" \
+      'grep -q "\"source\": \"kontor:$URL\"" "$V6/lib/aiml/aiml.installed.json" && grep -q "sha256:" "$V6/lib/aiml/aiml.installed.json"'
+    out=$("$AIML" venv "$V6" list 2>&1)
+    check "list shows the digest and does not call it unreproducible (F68-65)" \
+      'echo "$out" | grep -q "sha256:" && ! echo "$out" | grep -qi "unreprod"'
+    check "nothing was fetched into the venv (F68-52)" \
+      '[ -f "$WORK/cache/venv_tools/werkzeug/kontor-0.2.0/package.tar.gz" ] && [ -z "$(find "$V6" -name "*.tar.gz")" ]'
+    out=$("$AIML" venv "$V6" install werkzeug --kontor "$URL" 2>&1); rc=$?
+    check "the same digest again is a no-op (F68-57/65)" \
+      '[ $rc -eq 0 ] && echo "$out" | grep -qi "already"'
+    out=$("$AIML" venv "$V6" install werkzeug --kontor "$URL" --version 0.1.0 2>&1); rc=$?
+    check "--version names one, and it replaces (F68-61/57)" \
+      '[ $rc -eq 0 ] && grep -q "\"version\": \"0.1.0\"" "$V6/lib/aiml/aiml.installed.json"'
+    out=$("$AIML" venv "$V6" install werkzeug --kontor "$URL" --version 9.9.9 2>&1); rc=$?
+    check "a version kontor does not have is refused with its status (F68-62)" \
+      '[ $rc -ne 0 ] && echo "$out" | grep -q "404"'
+    out=$("$AIML" venv "$V6" install zweibaum --kontor "$URL" --version 1.0.0 2>&1); rc=$?
+    check "an archive with two top-level entries is refused (F68-62)" \
+      '[ $rc -ne 0 ] && echo "$out" | grep -q "one directory"'
+    out=$("$AIML" venv "$V6" install nixda --kontor "$URL" 2>&1); rc=$?
+    check "a project kontor does not know is refused, named (F68-61)" \
+      '[ $rc -ne 0 ] && echo "$out" | grep -q "nixda"'
+
+    V7="$WORK/v7"; "$AIML" venv "$V7" > /dev/null 2>&1
+    out=$("$AIML" venv "$V7" install --all --kontor "$URL" 2>&1); rc=$?
+    check "install --all installs the tools (F68-66)" \
+      '[ $rc -eq 0 ] && [ -x "$V7/bin/werkzeug" ]'
+    check "and skips what is no aiml tool, with a line (F68-66)" \
+      'echo "$out" | grep -q "fremd" && echo "$out" | grep -q "aiml.tool.json"'
+    check "and counts what it did" 'echo "$out" | grep -q "1 installed, 1 skipped, 0 failed"'
+    kill $STUB 2>/dev/null
+fi
+
 [ $fail -eq 0 ] && echo "venv: PASS" || echo "venv: FAIL"
 exit $fail
