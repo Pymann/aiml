@@ -180,7 +180,11 @@ aiml venv <dir> remove <name>
 - **F68-55** **The copies are relocatable.**  A program placed in `bin/` gets
   `RUNPATH $ORIGIN/../lib`, a library in `lib/` gets `RUNPATH $ORIGIN` — as F68-1 does for the
   compiler, and for the same reason: `. <venv>/env` is for people, a binary must run without it.
-  Paths of the build host that the build left behind stay **after** `$ORIGIN`.
+  Paths of the build host that the build left behind stay **after** `$ORIGIN`.  The install
+  **checks and does not patch** — rewriting somebody's binary behind their back is not an
+  install's business — and it checks only a copy that **needs the venv's runtime**: cosmos'
+  `librt_shim.so` needs libc and nothing else, and a warning about that would teach people to
+  ignore warnings.
 - **F68-56** **The record.**  `lib/aiml/aiml.installed.json` holds, per name: `source`
   (`git:<url>` / `path:<dir>` / `kontor:<url>`), `commit`, `version`, and the list of files placed
   (relative to the venv).  `list` prints it; `remove <name>` deletes exactly those files, its

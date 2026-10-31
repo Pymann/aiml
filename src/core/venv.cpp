@@ -470,10 +470,16 @@ bool copyPackage(const fs::path& from, const fs::path& to,
 
 // F68-55: the copy keeps the RUNPATH its build gave it.  Checked, not
 // patched: whoever installs must not quietly rewrite a binary.
-bool hasOriginRunpath(const fs::path& file) {
+//
+// Asked only of a file that needs the venv's runtime.  A file that needs
+// nothing of ours is relocatable without any RUNPATH — cosmos' librt_shim.so
+// needs libc and nothing else, and warning about that would be noise that
+// teaches people to ignore warnings.
+bool runpathOk(const fs::path& file) {
     std::ifstream in(file, std::ios::binary);
-    if (!in) return false;
+    if (!in) return true;
     std::string blob((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    if (blob.find("libaiml.so") == std::string::npos) return true;
     return blob.find("$ORIGIN") != std::string::npos;
 }
 
@@ -847,7 +853,7 @@ int cmdInstall(const fs::path& root, const std::string& name, const std::string&
         bool isProgram = cp.second.parent_path().filename() == "bin";
         if (!installFile(cp.first, cp.second, isProgram ? exec : data, err)) return fail(err);
         // F68-55: checked, not patched.
-        if (!hasOriginRunpath(cp.second))
+        if (!runpathOk(cp.second))
             std::cerr << "aiml venv: warning: " << cp.second.filename().string()
                       << " has no $ORIGIN-relative RUNPATH — it will only run where its build "
                          "tree is (spec/68 F68-23)" << std::endl;
