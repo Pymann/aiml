@@ -40,15 +40,42 @@ when an HTTP request is received, and can also be created independently from a s
 
 ### Creation
 
-```aiml
-# Parse from string
-- decl: [u, url]
-- set: [u, { call: [url.parse, "https://api.example.com:8443/v1/users?page=2&limit=10#top"] }]
+A `url` is built **only** by `http.parse_url`, either at declaration or by assignment:
 
-# Direct assignment (auto-parse, like the path type)
-- decl: [u, url]
-- set: [u, "https://api.example.com/v1/users"]
+```aiml
+- decl: [u, url, { call: [http.parse_url, "https://api.example.com/v1/users"] }]
+
+- decl: [v, url]
+- set: [v, { call: [http.parse_url, "https://api.example.com:8443/v1/users?page=2&limit=10#top"] }]
 ```
+
+> **No auto-parse from a string.**  Assigning a string to a `url` — `set: [u, "https://…"]` —
+> compiles, but produces an object whose fields are not initialised: `u == null` is **false**,
+> while reading `u.host` or passing `u` to `http.get` crashes (SIGSEGV in
+> `aiml_http_str_managed` / `aiml_http_get`).  Until the runtime either implements the
+> conversion or rejects it at compile time, every `url` must come from `http.parse_url`.
+> The function also parses `ws://` and `wss://` (verified), so WebSocket URLs use it as well.
+> (Found 01.11.2026 while building cai's crawler; this section previously showed both a
+> non-existent `url.parse` and the auto-parse form, and 21 examples across chapters 32.2–32.5
+> used the crashing form.)
+
+> **Percent-encoding in the query is lost.**  `http.parse_url` decodes `%XX` in the query and
+> the client then writes those raw bytes into the request line, which RFC 7230 restricts to
+> US-ASCII.  `…?titles=Fu%C3%9Fball` goes out as `…?titles=Fu<C3><9F>ball`, and a strict server
+> answers **400 Invalid HTTP Request** — Wikimedia does, while `curl` with the same URL and
+> User-Agent gets 200.  Verified by reading the raw request off a local listener.
+> Until the client re-encodes, put non-ASCII parameters in a **POST body** instead:
+>
+> ```aiml
+> - decl: [api, url, { call: [http.parse_url, "https://de.wikipedia.org/w/api.php"] }]
+> - decl: [req, http_client_handle, { call: [http.new_request, "POST", api] }]
+> - call: [req.headers.put, "Content-Type", "application/x-www-form-urlencoded"]
+> - set: [req.body, "action=query&format=json&titles=Fu%C3%9Fball"]
+> - decl: [resp, http_response_handle, { call: [req.send] }]   # 200
+> ```
+>
+> A request **without a User-Agent** is also rejected by Wikimedia (403, pointing at their robot
+> policy); reading their API needs no account, only that header.
 
 ### Members and Methods of the `url` Type
 
@@ -81,8 +108,7 @@ when an HTTP request is received, and can also be created independently from a s
 ### Example
 
 ```aiml
-- decl: [u, url]
-- set: [u, "https://api.example.com/v1/users?page=2&limit=10"]
+- decl: [u, url, { call: [http.parse_url, "https://api.example.com/v1/users?page=2&limit=10"] }]
 
 # Read members directly
 - print: ["host: ${u.host}"]
@@ -111,8 +137,7 @@ when an HTTP request is received, and can also be created independently from a s
 
 ```aiml
 # GET
-- decl: [status_url, url]
-- set: [status_url, "https://api.example.com/status"]
+- decl: [status_url, url, { call: [http.parse_url, "https://api.example.com/status"] }]
 - decl: [resp, http_response_handle]
 - set: [resp, { call: [http.get, status_url] }]
 
@@ -120,14 +145,12 @@ when an HTTP request is received, and can also be created independently from a s
 - print: ["Body: ${resp.body}"]
 
 # POST with JSON body
-- decl: [items_url, url]
-- set: [items_url, "https://api.example.com/items"]
+- decl: [items_url, url, { call: [http.parse_url, "https://api.example.com/items"] }]
 - decl: [resp2, http_response_handle]
 - set: [resp2, { call: [http.post, items_url, "{\"name\": \"test\"}"] }]
 
 # additional methods
-- decl: [item1_url, url]
-- set: [item1_url, "https://api.example.com/items/1"]
+- decl: [item1_url, url, { call: [http.parse_url, "https://api.example.com/items/1"] }]
 - set: [resp, { call: [http.put,    item1_url, "{\"name\": \"new\"}"] }]
 - set: [resp, { call: [http.delete, item1_url] }]
 - set: [resp, { call: [http.patch,  item1_url, "{\"x\": 1}"] }]
@@ -157,8 +180,7 @@ Natively it wraps `http.get`. Pair it with `sys.deserialize` to parse a served m
 ### 2.2 Request Builder (with headers, timeout, etc.)
 
 ```aiml
-- decl: [chat_url, url]
-- set: [chat_url, "https://api.example.com/v1/chat"]
+- decl: [chat_url, url, { call: [http.parse_url, "https://api.example.com/v1/chat"] }]
 - decl: [client, http_client_handle]
 - set: [client, { call: [http.new_request, "POST", chat_url] }]
 
@@ -313,14 +335,12 @@ TCP connection reuse (keep-alive) across multiple requests.
 - set: [s.timeout, 30000]
 
 # Login — Set-Cookie from server is automatically stored in cookie jar
-- decl: [login_url, url]
-- set: [login_url, "https://app.example.com/login"]
+- decl: [login_url, url, { call: [http.parse_url, "https://app.example.com/login"] }]
 - decl: [resp, http_response_handle]
 - set: [resp, { call: [s.post, login_url, "{\"user\":\"alice\",\"pass\":\"secret\"}"] }]
 
 # Follow-up request — session cookie is automatically sent
-- decl: [data_url, url]
-- set: [data_url, "https://app.example.com/api/data"]
+- decl: [data_url, url, { call: [http.parse_url, "https://app.example.com/api/data"] }]
 - set: [resp, { call: [s.get, data_url] }]
 
 - print: ["${resp.body}"]
@@ -645,8 +665,7 @@ Once middleware calls `resp.send()`, the first `resp.write()`, or `resp.close()`
       - set: [session, { call: [req.cookie, "session_token"] }]
       - if: [{ eq: [session, null] }, true]
         then:
-          - decl: [login, url]
-          - set: [login, "/auth/login"]
+          - decl: [login, url, { call: [http.parse_url, "/auth/login"] }]
           - decl: [loc, string]
           - set: [loc, { call: [login.to_string] }]
           - call: [resp.headers.put, "Location", loc]
@@ -677,8 +696,7 @@ Public routes directly on `srv` (no guard):
     name: handle_login
     args: [[req, http_request_handle], [resp, http_response_handle]]
     body:
-      - decl: [auth_url, url]
-      - set: [auth_url, "https://accounts.google.com/o/oauth2/auth?client_id=CLIENT_ID&redirect_uri=https://myapp.com/auth/callback&scope=openid%20email&response_type=code"]
+      - decl: [auth_url, url, { call: [http.parse_url, "https://accounts.google.com/o/oauth2/auth?client_id=CLIENT_ID&redirect_uri=https://myapp.com/auth/callback&scope=openid%20email&response_type=code"] }]
       - decl: [loc, string]
       - set: [loc, { call: [auth_url.to_string] }]
       - call: [resp.headers.put, "Location", loc]
@@ -695,8 +713,7 @@ Public routes directly on `srv` (no guard):
       - decl: [code, string]
       - set: [code, { call: [u.get_param.get, "code"] }]
 
-      - decl: [token_url, url]
-      - set: [token_url, "https://oauth2.googleapis.com/token"]
+      - decl: [token_url, url, { call: [http.parse_url, "https://oauth2.googleapis.com/token"] }]
       - decl: [client, http_client_handle]
       - set: [client, { call: [http.new_request, "POST", token_url] }]
       - call: [client.headers.put, "Content-Type", "application/x-www-form-urlencoded"]
@@ -709,8 +726,7 @@ Public routes directly on `srv` (no guard):
 
       # Set session cookie, redirect back to app
       - call: [resp.headers.put, "Set-Cookie", "session_token=${token_json}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=3600"]
-      - decl: [home, url]
-      - set: [home, "/dashboard"]
+      - decl: [home, url, { call: [http.parse_url, "/dashboard"] }]
       - decl: [home_loc, string]
       - set: [home_loc, { call: [home.to_string] }]
       - call: [resp.headers.put, "Location", home_loc]
@@ -1043,7 +1059,7 @@ so the two transports never drift apart. For client-certificate authentication, 
 
 | Call | Return | Description |
 |------|--------|-------------|
-| `{ call: [url.parse, s] }` | `url` | Parses and validates URL string |
+| `{ call: [http.parse_url, s] }` | `url` | Parses and validates URL string |
 
 ### `http` Namespace
 

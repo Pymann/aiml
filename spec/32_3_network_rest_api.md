@@ -14,18 +14,15 @@
 
 ```aiml
 # Without client handle: direct convenience functions (url type required)
-- decl: [users_url, url]
-- set: [users_url, "https://api.example.com/users/42"]
+- decl: [users_url, url, { call: [http.parse_url, "https://api.example.com/users/42"] }]
 
 - decl: [resp, http_response_handle]
 - set: [resp, { call: [rest.get, users_url] }]
 
-- decl: [new_url, url]
-- set: [new_url, "https://api.example.com/users"]
+- decl: [new_url, url, { call: [http.parse_url, "https://api.example.com/users"] }]
 - set: [resp, { call: [rest.post,   new_url, "{\"name\":\"Alice\"}"] }]
 
-- decl: [u42, url]
-- set: [u42, "https://api.example.com/users/42"]
+- decl: [u42, url, { call: [http.parse_url, "https://api.example.com/users/42"] }]
 - set: [resp, { call: [rest.put,    u42, "{\"name\":\"Bob\"}"] }]
 - set: [resp, { call: [rest.delete, u42] }]
 - set: [resp, { call: [rest.patch,  u42, "{\"active\":false}"] }]
@@ -38,8 +35,7 @@
 
 ```aiml
 # Configure client once
-- decl: [base, url]
-- set: [base, "https://api.example.com/v1"]
+- decl: [base, url, { call: [http.parse_url, "https://api.example.com/v1"] }]
 - decl: [api, rest_client_handle]
 - set: [api, { call: [rest.new, base] }]
 
@@ -102,8 +98,7 @@
 ### 1.5 Complete Example: GitHub API
 
 ```aiml
-- decl: [gh_base, url]
-- set: [gh_base, "https://api.github.com"]
+- decl: [gh_base, url, { call: [http.parse_url, "https://api.github.com"] }]
 - decl: [gh, rest_client_handle]
 - set: [gh, { call: [rest.new, gh_base] }]
 - call: [gh.set_header, "Accept",     "application/vnd.github.v3+json"]

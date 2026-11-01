@@ -294,8 +294,7 @@ to use (`FindProxyForURL` function). Widely used in enterprises.
 
 ```aiml
 # Load PAC from URL (typical enterprise case: WPAD)
-- decl: [wpad_url, url]
-- set: [wpad_url, "http://wpad.corp.com/wpad.dat"]
+- decl: [wpad_url, url, { call: [http.parse_url, "http://wpad.corp.com/wpad.dat"] }]
 - decl: [px, proxy_config_handle]
 - set: [px, { call: [proxy.from_pac, wpad_url] }]
 

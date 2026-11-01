@@ -23,8 +23,7 @@
 
 ```aiml
 # WS client (unencrypted)
-- decl: [ws_url, url]
-- set: [ws_url, "ws://echo.websocket.org/"]
+- decl: [ws_url, url, { call: [http.parse_url, "ws://echo.websocket.org/"] }]
 - decl: [ws, ws_handle]
 - set: [ws, { call: [ws.connect, ws_url] }]
 
@@ -43,8 +42,7 @@
 
 ```aiml
 # URL scheme "wss://" → TLS transport automatically
-- decl: [stream_url, url]
-- set: [stream_url, "wss://stream.example.com/live"]
+- decl: [stream_url, url, { call: [http.parse_url, "wss://stream.example.com/live"] }]
 - decl: [ws, ws_handle]
 - set: [ws, { call: [ws.connect, stream_url] }]
 
@@ -63,8 +61,7 @@
 ### 2.3 Binary Messages
 
 ```aiml
-- decl: [bin_url, url]
-- set: [bin_url, "ws://localhost:9001/binary"]
+- decl: [bin_url, url, { call: [http.parse_url, "ws://localhost:9001/binary"] }]
 - decl: [ws, ws_handle]
 - set: [ws, { call: [ws.connect, bin_url] }]
 

@@ -310,7 +310,7 @@ OS threading scaling linearly on multi-core variants.
 
 ### 4.9 Network & HTTP (`http`, `ws`)
 Zero-dependency network primitives natively supporting secure environments (`https://`, `wss://`) transparently.
-- **`[url.parse, s: string] -> url`**: Validated HTTP URL struct (`u.protocol`, `u.host`, `u.path`, `u.get_param`).
+- **`[http.parse_url, s: string] -> url`**: Validated HTTP URL struct (`u.protocol`, `u.host`, `u.path`, `u.get_param`).
 - **`[http.session] -> http_session_handle`**: Stateful headers, keep-alive loops, and automated Cookie-Jars.
 - **`[http.get, u: url] -> http_response_handle`**, **`[http.post, u: url, body: string]`**: Fire-and-forget REST requests.
 - **`[http.server, host: string, port: i32] -> http_server_handle`**: Server framework natively supporting named parameters (`/users/:id`), middleware (`srv.use()`), and fast routing.
