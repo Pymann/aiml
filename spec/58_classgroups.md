@@ -250,27 +250,27 @@ inheritance.  This means a coordination `methods:` method can drive a
 sibling's coordination method across the edge **without** an interface-typed
 edge (§5.2) and **without** the sibling declaring `implements:`.
 
-> **Eine sees-Instanz ist vollwertig — auch ihre ATTRIBUTE.**  Die Kante gibt
-> nicht nur Methoden frei: `<.dep.val` ist **lesbar und schreibbar** wie ein
-> eigenes Member.  Das ist der Unterschied zwischen „Zusammenarbeit" und
-> „Durchreichen": ohne diese Eigenschaft bräuchte jede Nachbar-Nutzung entweder
-> ein Getter/Setter-Paar oder einen zusätzlichen Parameter in **jeder** Signatur
-> auf dem Weg dorthin.
+> **A sees instance is a first-class collaborator — including its ATTRIBUTES.**
+> The edge does not only expose methods: `<.dep.val` is **readable and writable**
+> like a member of your own.  That is the difference between "collaboration" and
+> "pass-through": without this property, every use of a neighbour would need
+> either a getter/setter pair or an extra parameter in **every** signature along
+> the way there.
 >
 > ```yaml
 > - def: { name: peek_attr, return: i32,            body: [{ return: <.dep.val }] }
 > - def: { name: poke_attr, args: [[nval, i32]],    body: [{ set: [<.dep.val, nval] }] }
 > ```
 >
-> **Beleg:** `tests/test_classgroup_sees_base_member.aiml` liest `<.dep.val` über
-> die Kante, schreibt es und prüft die Änderung anschließend **an der
-> Nachbar-Instanz selbst** (`rtg.dep.get_v` → 7).  Lesen allein würde nicht
-> genügen: eine Kopie liesse sich lesen, ohne dass das Schreiben ankommt.
+> **Evidence:** `tests/test_classgroup_sees_base_member.aiml` reads `<.dep.val`
+> across the edge, writes it, and then verifies the change **on the neighbouring
+> instance itself** (`rtg.dep.get_v` → 7).  Reading alone would not be enough: a
+> copy can be read without the write ever arriving.
 >
-> Praktische Folge (User-Hinweis 2026-10-14): wer Zustand in Instanzen legt,
-> muss ihn **nicht** durch Signaturen fädeln.  Ein Bildschirm, der `session` und
-> `live` sieht, greift direkt auf `<.session.token` und `<.live.view` zu — das
-> ersetzt eine `ref<T>`-Leihgabe in jeder Methode der Aufrufkette.
+> Practical consequence (user note 2026-10-14): whoever puts state into instances
+> does **not** have to thread it through signatures.  A screen that sees `session`
+> and `live` reaches `<.session.token` and `<.live.view` directly — that replaces
+> a `ref<T>` borrow in every method of the call chain.
 
 The subclass type is often not yet synthesized when the seeing subclass is built
 (any `sees` cycle, e.g. `A sees B` and `B sees A`), so this relies on two

@@ -47,34 +47,34 @@ You can call functions within a string. The return value of the function is conv
 # Output: Result: 30
 ```
 
-### 3.1a Ein gepunkteter Name ohne Argumente (Nachtrag 25.10.2026)
+### 3.1a A dotted name without arguments (addendum 25.10.2026)
 
-Steht in einer Einsetzung ein Name MIT Punkt, der keine Variable ist, aber eine **Funktion ohne
-Argumente** benennt, wird sie gerufen und ihr Wert eingesetzt:
+If an expansion contains a name WITH a dot that is not a variable but names a **function without
+arguments**, it is called and its value is substituted:
 
 ```yaml
 - namespace: prm
 - def: { name: branch, return: string, body: [{ return: "main" }] }
 
-# in einer anderen Datei / einem anderen Bundle:
+# in another file / another bundle:
 - print: ["git checkout ${prm.branch}"]      # git checkout main
 ```
 
-Das ist derselbe Vorgang wie `${ { call: [prm.branch] } }`, nur lesbar.  Der Anlass ist ein
-Namensraum voller Konstanten (cosmos `doc/spec/106` §106.6: die Parameter eines Jobs), und dort
-steht die Einsetzung mitten in einer Shell-Zeile — die Klammerform macht sie unleserlich.
+This is the same operation as `${ { call: [prm.branch] } }`, only readable.  The motivation is a
+namespace full of constants (cosmos `doc/spec/106` §106.6: a job's parameters), where the
+expansion sits in the middle of a shell line — the braced form makes it unreadable.
 
-Die Regeln sind eng gezogen, damit nichts Bestehendes sich ändert:
+The rules are drawn tightly so that nothing existing changes:
 
-- **nur mit Punkt.**  Ein nackter Funktionsname bleibt ein **Funktionszeiger** (so werden
-  Rückrufe übergeben, z. B. `pipe.run(beobachter)`).
-- **nur ohne Argumente** und **nur mit Rückgabewert**.  Eine Funktion mit Parametern lässt sich
-  so nicht rufen, und `void` hätte nichts einzusetzen.
-- **eine Variable gewinnt immer.**  `${a.b}` ist weiter das Feld `b` der Variablen `a`, wenn es
-  eine Variable `a` gibt; erst wenn keine da ist, wird nach der Funktion gesucht.
-- Eine bloß **deklarierte** Funktion zählt mit: in einem Compiler-Kontext (spec/29_2 §14a) steht
-  ein früheres Bundle nur noch als Deklaration im Modul.  Ohne diesen Zweig wurde `${prm.branch}`
-  zum Funktionszeiger und als Zeichenkette gedruckt — gemessen als Datenmüll in einem Befehl.
+- **only with a dot.**  A bare function name remains a **function pointer** (that is how
+  callbacks are passed, e.g. `pipe.run(observer)`).
+- **only without arguments** and **only with a return value**.  A function with parameters
+  cannot be called this way, and `void` would have nothing to substitute.
+- **a variable always wins.**  `${a.b}` is still the field `b` of the variable `a` if a variable
+  `a` exists; only when there is none is a function looked up.
+- A merely **declared** function counts too: in a compiler context (spec/29_2 §14a) an earlier
+  bundle is present in the module only as a declaration.  Without that branch `${prm.branch}`
+  became a function pointer and was printed as a string — measured as garbage inside a command.
 
 ### 3.2 Method Calls
 

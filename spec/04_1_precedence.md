@@ -22,12 +22,12 @@ precedence level (for mental model and documentation purposes).
 | 9 | Comparison | `eq`, `neq`, `lt`, `gt`, `le`, `ge` | 2 | None |
 | 10 | Logical AND | `and` | 2+ | Left |
 | 11 | Logical OR | `or` | 2+ | Left |
-| 12 | Conditional | `select` *(nicht umgesetzt, §8)* | 3 | Right |
+| 12 | Conditional | `select` *(not implemented, §8)* | 3 | Right |
 | 13 | Assignment | `set` | — | — |
 
-`-` steht absichtlich zweimal in der Tabelle: mit EINEM Operanden ist es die Negation
-(Stufe 1), mit ZWEI die Subtraktion (Stufe 4).  `/` und `%` gibt es nur binär
-(spec/04_math §Operator Arity); für Vektoren gilt dieselbe unäre Form (spec/43_0, spec/39).
+`-` appears twice in the table on purpose: with ONE operand it is negation (level 1), with
+TWO it is subtraction (level 4).  `/` and `%` exist only in binary form
+(spec/04_math §Operator Arity); vectors use the same unary form (spec/43_0, spec/39).
 
 > **Note**: Because AIML uses explicit `{ op: [...] }` syntax, nesting always
 > takes precedence over the table above. The table is informational — it reflects
@@ -145,21 +145,21 @@ All comparison operators return `bool`.
 - Accepts 2 or more arguments (left fold), as with `and`.
 - **Short-circuit evaluation**: if first operand is `true`, remaining operands are not evaluated
 
-> **Umgesetzt erst 2026-10-15 — vorher war diese Regel nur Text.**  `and`/`&&` und
-> `or`/`||` erzeugten `CreateAnd` / `CreateOr` auf **beiden bereits ausgewerteten**
-> Operanden; eine Kurzauswertung gab es nicht.  Damit war das häufigste Schutzmuster der
-> Sprache wirkungslos:
+> **Implemented only on 2026-10-15 — before that this rule was text only.**  `and`/`&&`
+> and `or`/`||` emitted `CreateAnd` / `CreateOr` on **both already evaluated** operands;
+> there was no short-circuit.  That left the language's most common guard pattern without
+> effect:
 >
 > ```yaml
 > - if:
 >     condition: { '&&': [{ pneq: [<.live, null] }, { gt: [{ call: [<.live.has] }, 0] }] }
 > ```
 >
-> Die Wache bestand, der zweite Operand lief trotzdem — gemessen im cosmos-Client als
-> `SIGSEGV at addr=0x8`.  Jeder Null-Test vor einem Zugriff, jede Bereichsprüfung vor einem
-> Index war auf dieselbe Weise blind.  Seither emittiert `visitBinary` echten Kontrollfluss
-> (bedingter Sprung + `phi`), **bevor** die Operanden ausgewertet werden.  `equiv` und `xor`
-> brauchen beide Seiten und bleiben bitweise.  Regressionstest:
+> The guard held, yet the second operand still ran — measured in the cosmos client as
+> `SIGSEGV at addr=0x8`.  Every null check before an access and every bounds check before an
+> index was blind in the same way.  Since then `visitBinary` emits real control flow
+> (conditional branch + `phi`) **before** the operands are evaluated.  `equiv` and `xor` need
+> both sides and stay bitwise.  Regression test:
 > `tests/test_and_short_circuit_guard.aiml`.
 
 ### `not` — Logical NOT
@@ -185,10 +185,10 @@ All bitwise operators work on integer types only (`i32`, `i64`, `u32`, `u64`).
 | `shr` | Right shift (arithmetic) | `{ shr: [a, n] }` |
 | `ushr` | Right shift (logical/unsigned) | `{ ushr: [a, n] }` |
 
-**Schiebeweite.**  `n` muss in `[0, Breite(a))` liegen.  Eine **konstante** Weite ausserhalb ist
-ein Übersetzungsfehler; eine **dynamische** wird auf die Breite maskiert (`i32` → `& 31`,
-`i64` → `& 63`) und ist damit definiert.  Bis 01.11.2026 schlug stattdessen das C-UB durch:
-`{ shl: [6, -4] }` ergab Müll (gemessen 372022024) und auf einem anderen Ziel etwas anderes.
+**Shift distance.**  `n` must lie in `[0, width(a))`.  A **constant** distance outside that
+range is a compile error; a **dynamic** one is masked to the width (`i32` → `& 31`,
+`i64` → `& 63`) and is therefore defined.  Until 01.11.2026 the C UB came through instead:
+`{ shl: [6, -4] }` produced garbage (measured 372022024), and something else on another target.
 
 ```yaml
 - set: [flags, { bor: [0x01, 0x04] }]   # -> 0x05
@@ -299,14 +299,14 @@ of the implicit-conversion set listed in `/spec/13_cast.md` §6 and kept for now
 ```yaml
 - set: [res, { select: [condition, value_if_true, value_if_false] }]
 ```
-**`select` ist NICHT umgesetzt** — der Compiler kennt den Operator nicht und lehnt ihn ab
-(seit 01.11.2026; vorher übersetzte er still und lieferte `0`).  Eine Verzweigung im Wert ist
-`if`/`else` (spec/05).  Der Abschnitt beschreibt die offene Entwurfsabsicht, nicht den Stand.
+**`select` is NOT implemented** — the compiler does not know the operator and rejects it
+(since 01.11.2026; before that it compiled silently and yielded `0`).  A branch inside a value
+is `if`/`else` (spec/05).  This section describes the open design intent, not the current state.
 
-**Unbekannte Operatoren.**  Ein `{ name: [...] }`, dessen Name kein Operator ist und dessen
-Operandenzahl zu keiner Arität passt (1 unär, 2 binär, 2+ für `+`, `*`, `and`, `or`), ist ein
-Übersetzungsfehler.  Vorher ergab es still `0` — auch ein falsch geschriebener Konstruktor
-(`{ vec3: [1,2,3] }` statt `{ call: [math.vec3, 1, 2, 3] }`) wurde so zum Nullwert.
+**Unknown operators.**  A `{ name: [...] }` whose name is not an operator and whose operand
+count matches no arity (1 unary, 2 binary, 2+ for `+`, `*`, `and`, `or`) is a compile error.
+Before, it silently yielded `0` — a misspelled constructor
+(`{ vec3: [1,2,3] }` instead of `{ call: [math.vec3, 1, 2, 3] }`) became a zero value that way.
 
 - Condition: `bool`
 - Both branches must have compatible types

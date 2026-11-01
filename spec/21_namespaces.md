@@ -223,33 +223,32 @@ Top-level `decl:` statements in the imported file become **module-level globals*
    warning names the file and the variable so the exception is a decision someone made, not a
    habit nobody noticed.
 
-#### `singleton: true` — der erklärte Anker eines Rückrufs
+#### `singleton: true` — the declared anchor of a callback
 
-`engine.run(win, update, render)` nimmt **freie** Funktionen (`fn<f32:void>`,
-spec/44_1 §4.1): ein Rückruf trägt keinen Zustand, und im Browser gehört die
-Schleife ohnehin dem Wirt (`emscripten_set_main_loop`).  Also braucht jedes
-Fenster-Programm **einen** Anker auf Modulebene — in cosmos `g_cosmos_app`, in
-9rooms `g_app`.  Das ist keine Nachlässigkeit, sondern die Form, die die
-Schnittstelle vorschreibt; eine Warnung, die keinen Ausweg nennt, trainiert nur
-das Wegsehen.
+`engine.run(win, update, render)` takes **free** functions (`fn<f32:void>`,
+spec/44_1 §4.1): a callback carries no state, and in the browser the loop belongs
+to the host anyway (`emscripten_set_main_loop`).  So every windowed program needs
+**one** anchor at module level — `g_cosmos_app` in cosmos, `g_app` in 9rooms.
+That is not sloppiness but the shape the interface prescribes; a warning that
+offers no way out only trains people to ignore it.
 
 ```yaml
 - decl: [g_cosmos_app, ptr<CosmosApp>, null, { singleton: true }]
 ```
 
-- **F21-S1** `singleton: true` erklärt einen Modul-Global zum **einzigen Anker**
-  des Programms: er wird einmal gesetzt und lebt, solange das Programm lebt.
-  Die Warnung aus §6.2 entfällt für ihn — nur für ihn, nicht für die Datei.
-- **F21-S2** Dafür **prüft** der Compiler genau das, was die Warnung befürchtet:
-  ein so markierter Global darf **nicht als Argument an einen `ptr<T>`-Parameter**
-  gehen.  Das ist ein **Fehler**, kein Hinweis — es ist der Zug, der den
-  WASM-Client zweimal zum Absturz brachte (§6.2).  Lesen, Methoden aufrufen und
-  `set` bleiben erlaubt; der Anker wird benutzt, nicht weitergereicht.
-- **F21-S3** Es ist ein Tausch, kein Schalter: Schweigen gegen eine geprüfte
-  Einschränkung.  `AIML_LINT_GLOBALS=0` schaltet dagegen **alle** Globals stumm,
-  auch die, die man finden will.
-- **F21-S4** Es sagt nichts über Lebenszeit oder Freigabe: wer den Anker
-  freigeben will, tut das selbst (spec/61).
+- **F21-S1** `singleton: true` declares a module global to be the program's
+  **single anchor**: it is set once and lives as long as the program does.  The
+  warning from §6.2 is waived for it — for it alone, not for the file.
+- **F21-S2** In exchange the compiler **checks** exactly what the warning fears:
+  a global marked this way must **not be passed as an argument to a `ptr<T>`
+  parameter**.  That is an **error**, not a hint — it is the move that crashed
+  the WASM client twice (§6.2).  Reading it, calling methods on it and `set`
+  remain allowed; the anchor is used, not handed on.
+- **F21-S3** It is a trade, not a switch: silence in exchange for a checked
+  restriction.  `AIML_LINT_GLOBALS=0`, by contrast, silences **all** globals,
+  including the ones you want to find.
+- **F21-S4** It says nothing about lifetime or release: whoever wants to free the
+  anchor does so themselves (spec/61).
 
 ### 6.3 Variable Shadowing
 
