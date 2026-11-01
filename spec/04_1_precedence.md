@@ -11,7 +11,7 @@ precedence level (for mental model and documentation purposes).
 
 | Level | Category | Operators | Arity | Associativity |
 |-------|----------|-----------|-------|---------------|
-| 1 | Unary / Dereference | `not`, `?`, `??`, `neg` | 1 | Right |
+| 1 | Unary / Dereference | `not`, `?`, `??`, `-` | 1 | Right |
 | 2 | Cast | `cast` | 2 | Right |
 | 3 | Multiplicative | `*`, `/`, `//`, `%` | 2 | Left |
 | 4 | Additive | `+`, `-` | 2 | Left |
@@ -24,6 +24,10 @@ precedence level (for mental model and documentation purposes).
 | 11 | Logical OR | `or` | 2+ | Left |
 | 12 | Conditional | `select` | 3 | Right |
 | 13 | Assignment | `set` | — | — |
+
+`-` steht absichtlich zweimal in der Tabelle: mit EINEM Operanden ist es die Negation
+(Stufe 1), mit ZWEI die Subtraktion (Stufe 4).  `/` und `%` gibt es nur binär
+(spec/04_math §Operator Arity); für Vektoren gilt dieselbe unäre Form (spec/43_0, spec/39).
 
 > **Note**: Because AIML uses explicit `{ op: [...] }` syntax, nesting always
 > takes precedence over the table above. The table is informational — it reflects

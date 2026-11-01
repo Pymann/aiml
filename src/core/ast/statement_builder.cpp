@@ -15,6 +15,13 @@ bool StatementBuilder::OnSequenceStart() {
     // Detect inner sequence in `decl: [name, buffer<T>, [v1, v2, ...]]`
     if (seqDepth == 2 && type == "decl" && (int)args.size() == 2)
         innerSeqStart = (int)args.size(); // always 2, but keep it explicit
+    // spec/10: dasselbe Literal auf der rechten Seite von `set: [ziel, [v1, v2, ...]]`.
+    // `expectingValue` muss hier WEG, sonst schluckt OnScalar das erste Element als
+    // skalaren Wert und der Rest fiel still weg (SIGSEGV, Backlog 13/36).
+    if (seqDepth == 2 && type == "set" && (int)args.size() == 1) {
+        innerSeqStart = (int)args.size();
+        expectingValue = false;
+    }
     return true;
 }
 
@@ -31,6 +38,7 @@ bool StatementBuilder::OnMapEnd() {
 }
 
 bool StatementBuilder::OnScalar(const std::string& value, const std::string& tag) {
+    scalarCount++;
     if (expectingValue) {
         // We received the RHS of a `set: [x, value]`
         exprArg = parseScalarExpr(value, tag);
@@ -230,13 +238,26 @@ std::unique_ptr<Node> StatementBuilder::finish() {
          // 3+ scalar args sind also IMMER falsch — der Wert würde silent
          // verschluckt und der Index nie geschrieben → Runtime-Bug ohne
          // Compile-Hinweis.  Wir bricht hier hart ab und schlägt `idx:` vor.
-         if (args.size() >= 3 && !exprArg) {
+         // spec/02: GENAU [ziel, wert].  Gezaehlt werden die echten Skalare — `args.size()`
+         // war hier blind (expectingValue nimmt den zweiten Skalar vorweg), weshalb diese
+         // Pruefung nie ausloeste und das dritte Element still verschluckt wurde.
+         if (scalarCount >= 3 && innerSeqStart < 0) {
              LOG_ERROR("line " + std::to_string(capturedLine)
-                       + ": set: nimmt nur [target, value] — fuer Index-Schreiben benutze idx: [container, idx, value]."
-                       + " Got " + std::to_string(args.size()) + " scalar args; das Erste ist target='"
-                       + args[0].first + "', der dritte Wert wuerde silent ignoriert.");
+                       + ": set: nimmt GENAU [target, value] — fuer Index-Schreiben benutze"
+                       + " idx: [container, index, value] (spec/10), fuer den ganzen Inhalt"
+                       + " set: [target, [v1, v2, ...]] (spec/10). Gesehen: "
+                       + std::to_string(scalarCount) + " Skalare, target='" + args[0].first
+                       + "'; alles ab dem dritten wuerde stillschweigend verschwinden.");
+             return nullptr;
          }
-         if (!exprArg && args.size() >= 2) {
+         if (innerSeqStart >= 0) {
+             // spec/10: Listen-/Buffer-Literal als Wert — visitSetStmt loest es in
+             // `clear` + ein `push` je Element auf, genau wie am decl.
+             auto lit = std::make_unique<BufferLiteralExpr>();
+             for (int i = innerSeqStart; i < (int)args.size(); ++i)
+                 lit->elements.push_back(parseScalarExpr(args[i].first, args[i].second));
+             exprArg = std::move(lit);
+         } else if (!exprArg && args.size() >= 2) {
              const std::string& val = args[1].first;
              const std::string& tag = args[1].second;
              exprArg = parseScalarExpr(val, tag);

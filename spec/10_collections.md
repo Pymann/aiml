@@ -22,6 +22,15 @@
 - decl: [ring_x, list<i32>, [0, 1, 1, 1, 0, -1, -1, -1]]
 - decl: [kinds, list<string>, ["beast", "wraith", "construct"]]
 
+# Zuweisen geht genauso: `set: [liste, [v1, v2, ...]]` ERSETZT den Inhalt — der Compiler
+# emittiert ein `clear` und danach einen `push` pro Element, mit denselben Umwandlungen wie
+# beim decl. `[]` leert die Liste. Gilt ebenso fuer ein Member (`set: [<.names, ["a", "b"]]`)
+# und fuer buffer<T>. Bis 2026-10-31 nahm `set` nur das ERSTE Element (der Rest fiel still
+# weg) und schrieb es in den Container-Slot — kaputte Liste, dann SIGSEGV; `[]` uebersetzte
+# gar nicht.
+- set: [kinds, ["golem", "spirit"]]
+- set: [kinds, []]
+
 # Standard List Methods
 - call: [scores.push, 100]       # Add to end
 - call: [scores.pop]             # Remove from end (returns value)

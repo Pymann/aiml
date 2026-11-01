@@ -1,0 +1,15 @@
+# SPEC: 02_types
+# spec/02: ein Container-Ziel nimmt keinen Skalar. Vorher landete der Skalar im
+# Container-Slot → `.len` las Muell, dann SIGSEGV.
+#
+# Negativtest: die Uebersetzung MUSS scheitern, und die Meldung MUSS die Alternativen
+# nennen (push fuer ein Element, Literal fuer den ganzen Inhalt).
+# Expected exit code: 1
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [nums, list<i32>, []]
+      - set: [nums, 99]
+      - return: 0

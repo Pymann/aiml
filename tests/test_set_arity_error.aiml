@@ -1,0 +1,16 @@
+# SPEC: 02_types
+# spec/02: `set` nimmt GENAU [ziel, wert]. Ein drittes Element ist ein Uebersetzungsfehler —
+# vorher wurde es still verschluckt: `set: [nums, 0, 99]` wies 0 zu und warf 99 weg, ohne
+# jede Meldung. Die vorhandene Pruefung war toter Code (sie verlangte !exprArg, das durch
+# `expectingValue` immer belegt war).
+#
+# Negativtest: die Uebersetzung MUSS scheitern, und die Meldung MUSS auf `idx:` verweisen.
+# Expected exit code: 1
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [nums, list<i32>, [1, 2, 3]]
+      - set: [nums, 0, 99]
+      - return: 0

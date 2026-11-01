@@ -2941,6 +2941,65 @@ static bool setTargetSharesLocalHandle(SetStmt* setStmt) {
 }
 
 void Compiler::visitSetStmt(SetStmt* setStmt) {
+    // spec/10: `set: [ziel, [v1, v2, ...]]` ERSETZT den Inhalt — ein `clear`, dann ein `push`
+    // je Element.  Bewusst ueber die gewoehnliche Methoden-Dispatch (`ziel.clear`/`ziel.push`),
+    // damit Member, memV3-Handles, String-Besitz und Zahlumwandlung genauso behandelt werden
+    // wie beim handgeschriebenen `call: [ziel.push, v]` — kein zweiter Pfad, der driften kann.
+    if (auto* listLit = dynamic_cast<BufferLiteralExpr*>(setStmt->value.get())) {
+        CallExpr clearCall(setStmt->target + ".clear");
+        clearCall.sourceNode = setStmt->sourceNode;
+        visitExpression(&clearCall);
+        for (auto& elem : listLit->elements) {
+            if (!elem) continue;
+            CallExpr pushCall(setStmt->target + ".push");
+            pushCall.sourceNode = setStmt->sourceNode;
+            pushCall.args.push_back(std::move(elem));   // geliehen …
+            visitExpression(&pushCall);
+            elem = std::move(pushCall.args[0]);         // … und zurueck in den AST
+        }
+        return;
+    }
+    // spec/02: ein Container-Ziel nimmt keinen Skalar.  Vorher landete der Skalar im
+    // Container-Slot und machte ihn unbrauchbar (Muell in `.len`, danach SIGSEGV).
+    // Abgelehnt werden nur EINDEUTIGE Faelle — ein Literal oder eine Variable mit
+    // bekanntem Skalartyp.  Aufrufe und Interpolationen bleiben unberuehrt, damit die
+    // Pruefung nichts Richtiges verbietet.
+    if (setStmt->value) {
+        auto isContainer = [](const std::string& t) {
+            return t.rfind("list<", 0) == 0 || t.rfind("map<", 0) == 0
+                || t.rfind("buffer<", 0) == 0 || t.rfind("cascade<", 0) == 0
+                || HashmapImpl::isHashmapType(t);
+        };
+        std::string tgt = setStmt->target;
+        if (tgt.rfind("<.", 0) == 0) tgt = "this." + tgt.substr(2);
+        std::string tt;
+        if (tgt.find('.') == std::string::npos) {
+            if (Symbol* ts = resolveVariable(tgt)) tt = ts->typeName;
+        } else {
+            tt = dottedPathType(tgt);
+        }
+        if (isContainer(tt)) {
+            std::string vt, shown;
+            if (auto* le = dynamic_cast<LiteralExpr*>(setStmt->value.get())) {
+                vt = le->type;
+                // Ein nacktes Zahlliteral traegt hier noch keinen Typ ("unknown") —
+                // dann ist der geschriebene Wert die hilfreichere Auskunft.
+                shown = (vt.empty() || vt == "unknown") ? ("das Literal " + le->value) : vt;
+            } else if (dynamic_cast<VariableExpr*>(setStmt->value.get())) {
+                vt = declaredTypeOfExpr(setStmt->value.get());
+                shown = vt;
+            }
+            if (!vt.empty() && !isContainer(vt)) {
+                LOG_ERROR(ctx.fmtLoc() + "set: '" + setStmt->target + "' ist " + tt
+                          + ", der Wert ist " + shown + " — ein Container nimmt keinen Skalar."
+                          + " Fuer EIN Element: call: [" + setStmt->target + ".push, <wert>];"
+                          + " fuer einen Index: idx: [" + setStmt->target + ", <index>, <wert>];"
+                          + " fuer den ganzen Inhalt: set: [" + setStmt->target
+                          + ", [v1, v2, ...]] (spec/02, spec/10).");
+                return;
+            }
+        }
+    }
     // spec/61 §5.4: a ptr<T> local must not be (re)bound to a container/store borrow read either.
     if (ctx.memV3 && setStmt->value && setStmt->target.find('.') == std::string::npos
         && setStmt->target.find('<') == std::string::npos)

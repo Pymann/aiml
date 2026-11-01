@@ -31,7 +31,12 @@ Arithmetic operators in AIML are not uniformly variadic.
 
 - `+`, `add`, `*`, `mul` accept 2 or more operands.
 - When more than 2 operands are provided, they are folded from left to right.
-- `-`, `sub`, `/`, `div`, `%` are strictly binary and require exactly 2 operands.
+- `/`, `div`, `%` are strictly binary and require exactly 2 operands.
+- `-`, `sub` take exactly 2 operands as subtraction, and exactly 1 as **negation**
+  (`{ -: [a] }` → `-a`).  There is no 3-or-more form, and no `neg` operator — see
+  spec/04_1 §"`-` — Unary Negation" for the scalar types and spec/43_0 / spec/39 for
+  vectors, where the unary form is defined the same way.  Unary `/` or `%` is rejected
+  ("Unknown unary operator", measured 31.10.2026).
 
 Examples:
 

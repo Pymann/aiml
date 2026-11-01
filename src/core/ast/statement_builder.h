@@ -20,6 +20,9 @@ class StatementBuilder : public StateHandler {
     // idx: everything after the container in source order — a ".field" name or an expression.
     std::vector<std::pair<std::string, std::unique_ptr<Expr>>> idxParts;
     bool expectingValue = false;
+    // Zahl der WIRKLICH gesehenen Skalare.  `args.size()` taugt dafuer nicht: der
+    // expectingValue-Zweig in OnScalar kehrt frueh zurueck, bevor er in args landet.
+    int scalarCount = 0;
     bool is_const = false;
     bool is_singleton = false;   // spec/21 §6.2 F21-S1
     bool is_volatile = false;

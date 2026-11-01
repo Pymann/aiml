@@ -20,6 +20,21 @@
 # Type Safety
 # - set: [i, "text"] -> Compiler Error (Type Mismatch)
 # No implicit numeric promotion. Use cast: explicitly for all type conversions.
+#
+# `set` takes EXACTLY two elements: [target, value].  A third element is a compile
+# error — it would otherwise be swallowed without a trace.  The usual cause is an
+# index write, which is its own statement:
+# - set: [nums, 0, 99]            -> Compiler Error (use idx:)
+# - idx: [nums, 0, 99]            # write 99 at index 0 (spec/10)
+#
+# A container target does not take a scalar.  Assigning one used to write the scalar
+# into the container slot and corrupt it (garbage `.len`, then SIGSEGV):
+# - set: [nums, 99]               -> Compiler Error (nums is list<i32>)
+# - call: [nums.push, 99]         # one element (spec/10)
+# - set: [nums, [1, 2, 3]]        # the whole contents (spec/10)
+# Only unambiguous cases are rejected: a literal, or a variable of a known scalar
+# type.  A call or an interpolation is left alone rather than risk forbidding
+# something correct.
 
 # Dynamic Typing — the 'any' type
 #

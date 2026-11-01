@@ -39,6 +39,13 @@ Auch `[]` als Argument (null Argumente).  Umgehung bisher: lokale Liste anlegen.
 kommt erst aus der LLVM-Verifikation; nötig ist ein echtes Listenargument oder eine klare
 Fehlermeldung an der Aufrufstelle.
 
+**OFFEN (nachgemessen 31.10.2026)** — der Fix zu Punkt 13 deckt das NICHT ab, er betraf nur `set`.
+Die Ursache ist aber dieselbe Stelle: `OnSequenceStart` erkennt die innere Sequenz nur für `decl`
+und `set`; bei `call` wandern die Elemente einzeln über `orderedCallArgs` in die Argumentliste und
+werden dadurch aufgefächert.  Ein Fix gehört an dieselbe Stelle (innere Sequenz auch für `call`
+erkennen → `BufferLiteralExpr` als EIN Argument) und braucht zusätzlich eine Entscheidung, in was
+das Literal am Parameter materialisiert wird (temporäre Liste mit Besitzregel nach spec/61).
+
 ### 4. `Kv<string:i32>.get` auf einen fehlenden Schlüssel: SIGSEGV
 
 ```yaml
@@ -115,6 +122,24 @@ Wird nicht beanstandet (nur lokal), führt aber zu doppeltem Besitz.  cai nutzt 
 `holder.fill` stürzt ab (SIGSEGV in `aiml_list_handle_incref`).  Gefunden in cai (`AimlGraphLearner.setup`).
 Umgehung: eine lokale Liste anlegen (`decl: [names, list<string>, ["Knoten", "Text"]]`) bzw. eine
 Funktion, die den Eintrag liefert.  Verwandt mit Punkt 3.
+
+**ERLEDIGT 31.10.2026.**  Es betraf nicht nur Member, sondern **jedes** `set` mit Listenliteral,
+auch bei einer gewöhnlichen lokalen Variablen (so auch als Punkt 36 in cais `NOTES.md` gemeldet).
+Ursache lag im Parser, nicht im Codegen: `StatementBuilder::OnSequenceStart` erkannte die innere
+Sequenz nur für `decl`.  Bei `set` blieb `expectingValue` stehen, `OnScalar` verbrauchte das
+**erste** Listenelement als skalaren Wert und kehrte früh zurück — der Rest fiel still weg, und
+der Skalar landete im Container-Slot (Müll in `.len`, dann SIGSEGV).  `set: [x, []]` lieferte aus
+demselben Grund gar keinen Wert ("Failed to evaluate value expression").
+Fix: der Parser baut für `set` ein `BufferLiteralExpr`, `visitSetStmt` löst es in `ziel.clear` +
+ein `ziel.push` je Element auf — über die gewöhnliche Methoden-Dispatch, damit Member,
+memV3-Handles, String-Besitz und Zahlumwandlung ohne zweiten Pfad gelten.
+Spec: spec/10 (Semantik: ERSETZEN, `[]` leert) und spec/02 (`set` nimmt genau zwei Elemente;
+ein Container nimmt keinen Skalar).  Tests: `tests/test_set_list_literal.aiml` (6 Fälle inkl.
+Member), `tests/test_set_arity_error.aiml`, `tests/test_set_container_scalar_error.aiml`.
+Dabei fiel auf, dass die vorhandene Prüfung gegen `set: [liste, idx, wert]` **toter Code** war
+(sie verlangte `!exprArg`, das `expectingValue` immer belegte) — jetzt zählt der Parser die echten
+Skalare und bricht ab.  Nachgewiesen: Korpus 997 Tests ohne neue Fehlschläge, 9rooms Game +
+Client bauen ohne einen einzigen Verstoß, Leck-Gate 180/180 bei 0/0.
 
 ## Testsuite (zur Kenntnis)
 
