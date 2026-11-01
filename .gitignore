@@ -49,5 +49,17 @@ logs/
 tests/**/*.log
 tests/**/*.log.off
 
+# Bauartefakte. Sie waren versehentlich versioniert (357 Dateien, 5,8 MB): die
+# AOT-Binaries und .o/.d der Leak-Audits, und die .ll, die run_aot_tests.sh selbst
+# erzeugt und wieder loescht. Quellen und Protokolle der Audits bleiben versioniert.
+*.o
+*.d
+*.pyc
+__pycache__/
+tests/*.ll
+tests/**/*.ll
+tests/bundle_socket/*.out
+doc/analysis/**/bin
+
 # Wirts-Bibliothek der Clearance-Proben: wird von run.sh aus der .c gebaut (F65-39).
 tests/clearance/fixtures/*.so

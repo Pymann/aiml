@@ -1,1 +1,0 @@
-performance/results/struct_array_walk/struct_array_walk.o: performance/cases/struct_array_walk.aiml
