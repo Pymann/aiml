@@ -123,8 +123,36 @@ Wird nicht beanstandet (nur lokal), führt aber zu doppeltem Besitz.  cai nutzt 
 Umgehung: eine lokale Liste anlegen (`decl: [names, list<string>, ["Knoten", "Text"]]`) bzw. eine
 Funktion, die den Eintrag liefert.  Verwandt mit Punkt 3.
 
-**ERLEDIGT 31.10.2026.**  Es betraf nicht nur Member, sondern **jedes** `set` mit Listenliteral,
-auch bei einer gewöhnlichen lokalen Variablen (so auch als Punkt 36 in cais `NOTES.md` gemeldet).
+**Nachtrag 31.10.2026 (cai, `ProcTree.branch_step`):** Der Fehler betrifft nicht nur Member, sondern
+jedes `set:` einer Liste auf ein Listenliteral, auch lokal, mit Text- oder Variablenelementen.  `decl`
+mit Literal funktioniert.  Minimal (`aiml d.aiml -r`, Build von mem-v3-compiler 0b53eb8):
+
+```yaml
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [pick, list<string>, []]
+      - set: [pick, ["x", "y"]]
+      - print: ["${pick.len}"]      # gibt 1818624120 aus statt 2, danach SIGSEGV
+      - return: 0
+```
+
+Mit `- set: [pick, [one, two]]` (zwei `string`-Variablen) gleich: Unsinnslänge (7929976), dann Absturz.
+In cai fiel es nicht als Absturz auf: in einer tief verschachtelten Schleife las der Code danach
+`pick.len` = 1718968690, die Bedingung `pick.len == 4` war falsch, und ein Ergebnis fehlte still.
+
+Daneben übersetzt das Zuweisen einer leeren Liste gar nicht:
+
+```yaml
+      - decl: [ctx, list<string>, ["a"]]
+      - set: [ctx, []]               # Failed to evaluate value expression for assignment to: ctx
+```
+
+Umgehung in cai: `clear`, dann `push` je Element.
+
+**ERLEDIGT 31.10.2026** (dieser Nachtrag = Punkt 36 in cais `NOTES.md`).  Beide Minimalbeispiele
+oben sind nachvollzogen und behoben; sie stehen jetzt als Testfälle im Korpus.
 Ursache lag im Parser, nicht im Codegen: `StatementBuilder::OnSequenceStart` erkannte die innere
 Sequenz nur für `decl`.  Bei `set` blieb `expectingValue` stehen, `OnScalar` verbrauchte das
 **erste** Listenelement als skalaren Wert und kehrte früh zurück — der Rest fiel still weg, und
