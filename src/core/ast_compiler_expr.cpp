@@ -24,7 +24,66 @@ IRValue* Compiler::visitExpression(Expr* expr) {
     if (auto unary = dynamic_cast<UnaryExpr*>(expr)) return visitUnary(unary);
     if (auto spawn = dynamic_cast<SpawnExpr*>(expr)) return visitSpawn(spawn);
     if (auto at = dynamic_cast<AtExpr*>(expr)) return visitAtExpr(at);
+    if (auto blit = dynamic_cast<BufferLiteralExpr*>(expr)) return visitListLiteralValue(blit);
     return nullptr;
+}
+
+// spec/10: ein Listenliteral als WERT (heute: Aufrufargument).  Es entsteht eine frische
+// Liste, die das Literal fuellt; der Besitz liegt beim Aufrufer der Auswertung.  Vorher
+// wurde das Literal am Aufruf aufgefaechert und erzeugte "Incorrect number of arguments"
+// erst in der LLVM-Verifikation (Backlog-Punkt 3).
+IRValue* Compiler::visitListLiteralValue(BufferLiteralExpr* lit) {
+    llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+    // Elementtyp: der erwartete Parametertyp gewinnt (nur so ist `[]` typisierbar),
+    // sonst aus dem ersten Element abgeleitet.
+    std::string elemName;
+    const std::string& want = ctx.listLiteralArgType;
+    if (want.rfind("list<", 0) == 0 && want.back() == '>')
+        elemName = want.substr(5, want.size() - 6);
+    if (elemName.empty() && !lit->elements.empty()) {
+        if (auto* le = dynamic_cast<LiteralExpr*>(lit->elements[0].get())) {
+            if (le->type == "string") elemName = "string";
+            else if (le->value.find('.') != std::string::npos) elemName = "f64";
+            else elemName = "i32";
+        } else {
+            elemName = declaredTypeOfExpr(lit->elements[0].get());
+        }
+    }
+    if (elemName.empty()) {
+        LOG_ERROR(ctx.fmtLoc(lit->sourceNode) + "Listenliteral als Argument: der Elementtyp ist"
+                  " nicht bestimmbar — der Parameter muss `list<T>` sein (spec/10).");
+        return nullptr;
+    }
+    llvm::Type* elemTy = ctx.isRefcountModel(elemName)
+        ? static_cast<llvm::Type*>(llvm::PointerType::get(ctx.context, 0))
+        : static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(elemName)));
+    if (!elemTy) {
+        LOG_ERROR(ctx.fmtLoc(lit->sourceNode) + "Listenliteral als Argument: unbekannter"
+                  " Elementtyp '" + elemName + "' (spec/10).");
+        return nullptr;
+    }
+    llvm::Value* handle = ctx.builder.CreateCall(
+        ctx.getFunction("aiml_list_handle_new", i8p, {}), {}, "litarg_new");
+    ListImpl::initList(ctx, handle, elemTy, 4);
+    const std::string saved = ctx.listLiteralArgType;
+    ctx.listLiteralArgType.clear();           // verschachtelte Literale erben den Hinweis nicht
+    for (auto& elem : lit->elements) {
+        IRValue* ev = visitExpression(elem.get());
+        if (!ev) continue;
+        llvm::Value* val = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(ev));
+        llvm::Type* vt = val->getType();
+        if (elemTy->isIntegerTy() && vt->isIntegerTy() && vt != elemTy)
+            val = ctx.builder.CreateSExtOrTrunc(val, elemTy, "litarg_v");
+        else if (elemTy->isIntegerTy() && vt->isFloatingPointTy())
+            val = ctx.builder.CreateFPToSI(val, elemTy, "litarg_v");
+        else if (elemTy->isFloatingPointTy() && vt->isIntegerTy())
+            val = ctx.builder.CreateSIToFP(val, elemTy, "litarg_v");
+        else if (elemTy->isFloatingPointTy() && vt->isFloatingPointTy() && vt != elemTy)
+            val = ctx.builder.CreateFPCast(val, elemTy, "litarg_v");
+        ListImpl::push(ctx, handle, val);
+    }
+    ctx.listLiteralArgType = saved;
+    return ctx.ir_gen->wrap(handle);
 }
 IRValue* Compiler::visitStringInterpolation(StringInterpolationExpr* expr) {
     if (expr->parts.empty()) return ctx.ir_gen->createGlobalStringPtr("");
@@ -929,11 +988,16 @@ IRValue* Compiler::visitBinary(BinaryExpr* bin) {
             if (bin->op == "*" && !rhsIsScalar) return ctx.ir_gen->wrap(callVoidFn((pre+"mul").c_str(),{op,op,op},{store(lv,structTy),store(rv,structTy)},structTy));
             if (bin->op == "*" &&  rhsIsScalar) return ctx.ir_gen->wrap(callVoidFn((pre+"scale").c_str(),{op,ctx.builder.getFloatTy(),op},{store(lv,structTy),rv},structTy));
             if (bin->op == "/" &&  rhsIsScalar) return ctx.ir_gen->wrap(callVoidFn((pre+"div").c_str(),{op,ctx.builder.getFloatTy(),op},{store(lv,structTy),rv},structTy));
-            if (bin->op == "eq") {
+            // spec/43_0: `neq` ist die Negation von `eq` — dieselbe Laufzeitfunktion, nur
+            // andere Vergleichsrichtung.  Vorher fiel `neq` in den allgemeinen Struktur-Pfad
+            // und endete in "Cannot apply eq/neq to struct type without __eq__" (Backlog 7).
+            if (bin->op == "eq" || bin->op == "neq") {
                 llvm::Function* fn=ctx.module().getFunction((pre+"eq").c_str());
                 if (!fn) fn=llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getInt32Ty(),{op,op},false),llvm::Function::ExternalLinkage,(pre+"eq").c_str(),ctx.module());
                 llvm::Value* res=ctx.builder.CreateCall(fn,{store(lv,structTy),store(rv,structTy)});
-                return ctx.ir_gen->wrap(ctx.builder.CreateICmpNE(res,ctx.builder.getInt32(0)));
+                return ctx.ir_gen->wrap(bin->op == "neq"
+                    ? ctx.builder.CreateICmpEQ(res,ctx.builder.getInt32(0))
+                    : ctx.builder.CreateICmpNE(res,ctx.builder.getInt32(0)));
             }
         }
 
@@ -984,6 +1048,26 @@ IRValue* Compiler::visitBinary(BinaryExpr* bin) {
             return nullptr;
         }
         if (rv->getType() != lv->getType()) rv = ctx.builder.CreateSExtOrTrunc(rv, lv->getType(), "bit_rhs");
+        // spec/04_1: die Schiebeweite muss in [0, Breite) liegen.  Eine KONSTANTE ausserhalb
+        // ist statisch erkennbar und daher ein Fehler; eine dynamische wird explizit auf die
+        // Breite maskiert.  Vorher schlug das C-UB durch: `{ shl: [6, -4] }` ergab Muell
+        // (gemessen 372022024), und auf einem anderen Ziel etwas anderes (Backlog-Punkt 2).
+        if (bin->op == "shl" || bin->op == "shr" || bin->op == "ushr") {
+            const unsigned bits = lv->getType()->getIntegerBitWidth();
+            if (auto* amountConst = llvm::dyn_cast<llvm::ConstantInt>(rv)) {
+                const llvm::APInt& amount = amountConst->getValue();
+                if (amount.isNegative() || amount.uge(bits)) {
+                    LOG_ERROR(ctx.fmtLoc(bin->sourceNode) + "Schiebeweite " +
+                              std::to_string(amount.getSExtValue()) + " liegt ausserhalb [0, " +
+                              std::to_string(bits) + ") fuer '" + bin->op + "' — eine konstante" +
+                              " Weite muss gueltig sein (spec/04_1).");
+                    return nullptr;
+                }
+            } else {
+                rv = ctx.builder.CreateAnd(rv, llvm::ConstantInt::get(lv->getType(), bits - 1),
+                                           "shift_mask");
+            }
+        }
         if (bin->op == "band") return ctx.ir_gen->wrap(ctx.builder.CreateAnd(lv, rv, "band"));
         if (bin->op == "bor")  return ctx.ir_gen->wrap(ctx.builder.CreateOr(lv, rv, "bor"));
         if (bin->op == "bxor") return ctx.ir_gen->wrap(ctx.builder.CreateXor(lv, rv, "bxor"));

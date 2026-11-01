@@ -518,6 +518,12 @@ Both `Store<T>` and `Kv<K,V>` are **mmap-backed**:
   `kv.get` returns a pointer into the mmap'd region for blob/string/fixed
   modes — true zero-copy.
 
+**Fehlender Schlüssel.**  `kv.get` auf einen Schlüssel, den es nicht gibt, liefert den
+Nullwert des Werttyps: `0` für `i32`/`i64`, `0.0` für `f32`/`f64`, `""` für `string`, einen
+Nullzeiger für ein Modell.  Bis 01.11.2026 lud der Zahl-Pfad ungeprüft vom Nullzeiger und
+stürzte ab (SIGSEGV), während `Kv<string:string>` bereits `""` lieferte.  Wer zwischen
+„fehlt" und „steht auf 0" unterscheiden muss, fragt vorher `kv.has(key)`.
+
 The operating system manages which pages are RAM-resident and which are
 on disk. AionDB does not implement paging itself.
 

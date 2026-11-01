@@ -928,6 +928,9 @@ namespace AIML {
     // When non-empty, the type name of the current set-statement target variable.
     // Used by sys.deserialize to infer the type without an explicit second argument.
     std::string deserializeTargetType;
+    // spec/10: erwarteter Typ eines Listenliterals als Aufrufargument (`list<T>`).  Ohne den
+    // waere `[]` nicht typisierbar; bei nicht-leeren Literalen dient er als Gegenprobe.
+    std::string listLiteralArgType;
 
     // Set by visitCall before dispatching db namespace functions when a
     // DictLiteralExpr option bag is present (e.g. {persist: true}, {layout: "column"}).

@@ -22,7 +22,7 @@ precedence level (for mental model and documentation purposes).
 | 9 | Comparison | `eq`, `neq`, `lt`, `gt`, `le`, `ge` | 2 | None |
 | 10 | Logical AND | `and` | 2+ | Left |
 | 11 | Logical OR | `or` | 2+ | Left |
-| 12 | Conditional | `select` | 3 | Right |
+| 12 | Conditional | `select` *(nicht umgesetzt, §8)* | 3 | Right |
 | 13 | Assignment | `set` | — | — |
 
 `-` steht absichtlich zweimal in der Tabelle: mit EINEM Operanden ist es die Negation
@@ -132,7 +132,8 @@ All comparison operators return `bool`.
 ```
 - Operands: `bool`
 - Result: `bool`
-- Accepts 2 or more arguments: `{ and: [a, b, c] }` = `a && b && c`
+- Accepts 2 or more arguments: `{ and: [a, b, c] }` = `a && b && c` (left fold; implemented
+  01.11.2026, `spec/05_logic` says the same).
 - **Short-circuit evaluation**: if first operand is `false`, remaining operands are not evaluated
 
 ### `or` — Logical OR
@@ -141,7 +142,7 @@ All comparison operators return `bool`.
 ```
 - Operands: `bool`
 - Result: `bool`
-- Accepts 2 or more arguments
+- Accepts 2 or more arguments (left fold), as with `and`.
 - **Short-circuit evaluation**: if first operand is `true`, remaining operands are not evaluated
 
 > **Umgesetzt erst 2026-10-15 — vorher war diese Regel nur Text.**  `and`/`&&` und
@@ -183,6 +184,11 @@ All bitwise operators work on integer types only (`i32`, `i64`, `u32`, `u64`).
 | `shl` | Left shift | `{ shl: [a, n] }` |
 | `shr` | Right shift (arithmetic) | `{ shr: [a, n] }` |
 | `ushr` | Right shift (logical/unsigned) | `{ ushr: [a, n] }` |
+
+**Schiebeweite.**  `n` muss in `[0, Breite(a))` liegen.  Eine **konstante** Weite ausserhalb ist
+ein Übersetzungsfehler; eine **dynamische** wird auf die Breite maskiert (`i32` → `& 31`,
+`i64` → `& 63`) und ist damit definiert.  Bis 01.11.2026 schlug stattdessen das C-UB durch:
+`{ shl: [6, -4] }` ergab Müll (gemessen 372022024) und auf einem anderen Ziel etwas anderes.
 
 ```yaml
 - set: [flags, { bor: [0x01, 0x04] }]   # -> 0x05
@@ -293,6 +299,15 @@ of the implicit-conversion set listed in `/spec/13_cast.md` §6 and kept for now
 ```yaml
 - set: [res, { select: [condition, value_if_true, value_if_false] }]
 ```
+**`select` ist NICHT umgesetzt** — der Compiler kennt den Operator nicht und lehnt ihn ab
+(seit 01.11.2026; vorher übersetzte er still und lieferte `0`).  Eine Verzweigung im Wert ist
+`if`/`else` (spec/05).  Der Abschnitt beschreibt die offene Entwurfsabsicht, nicht den Stand.
+
+**Unbekannte Operatoren.**  Ein `{ name: [...] }`, dessen Name kein Operator ist und dessen
+Operandenzahl zu keiner Arität passt (1 unär, 2 binär, 2+ für `+`, `*`, `and`, `or`), ist ein
+Übersetzungsfehler.  Vorher ergab es still `0` — auch ein falsch geschriebener Konstruktor
+(`{ vec3: [1,2,3] }` statt `{ call: [math.vec3, 1, 2, 3] }`) wurde so zum Nullwert.
+
 - Condition: `bool`
 - Both branches must have compatible types
 - Only the selected branch is evaluated (short-circuit)

@@ -1,0 +1,26 @@
+# SPEC: 10_collections
+# Backlog-Punkt 8: `map<K:V>` hatte kein `clear` ("Unknown map method: clear"), `hashmap`
+# schon. Jetzt nachgezogen.
+# Expected exit code: 0
+
+- import: "tests/_cross/check.aiml"
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [chk, ptr<Checker>, { new: Checker }]
+      - decl: [tbl, map<string:i32>]
+      - call: [tbl.put, "eins", 1]
+      - call: [tbl.put, "zwei", 2]
+      - call: [chk.expect_i, "vor clear", tbl.len, 2]
+      - call: [tbl.clear]
+      - call: [chk.expect_i, "nach clear leer", tbl.len, 0]
+      - call: [tbl.put, "neu", 3]
+      - call: [chk.expect_i, "nach clear wieder nutzbar", tbl.len, 1]
+      - call: [chk.expect_i, "und der Wert stimmt", { call: [tbl.get, "neu"] }, 3]
+      - call: [tbl.clear]
+      - call: [chk.expect_i, "clear auf leerer map ist harmlos", tbl.len, 0]
+      - if: { condition: { gt: [chk.fails, 0] }, then: [{ print: ["FAIL map_clear (${chk.fails})"] }, { return: 1 }] }
+      - print: ["PASS map_clear"]
+      - return: 0

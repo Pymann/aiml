@@ -1,4 +1,5 @@
 #include "binary_io_runtime.h"
+#include "string_runtime.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -24,6 +25,25 @@ extern "C" void* aiml_io_open_binary(const char* path) {
 
 extern "C" void aiml_io_close(void* f) {
     if (f) fclose((FILE*)f);
+}
+
+/* ── zeilenweise lesen ────────────────────────────────────────────────────── */
+
+/* spec/23: `io.read` ist ein Blocklesen und bricht NICHT am Zeilenende ab.  Fuer eine
+ * Zeile gab es bis 01.11.2026 nichts (Backlog-Punkt 6) — cai las deshalb zeichenweise.
+ * Liefert die Zeile OHNE den Umbruch, am Dateiende eine leere Zeichenkette, und besitzt
+ * das Ergebnis (aiml_str_dup), wie aiml_process_read_line. */
+extern "C" char* aiml_io_read_line(void* f) {
+    if (!f) return aiml_str_dup("");
+    char*  buf = nullptr;
+    size_t cap = 0;
+    ssize_t got = getline(&buf, &cap, (FILE*)f);
+    if (got < 0) { free(buf); return aiml_str_dup(""); }
+    /* \r\n und \n abschneiden — eine Zeile ist ihr Inhalt, nicht ihr Trenner. */
+    while (got > 0 && (buf[got - 1] == '\n' || buf[got - 1] == '\r')) buf[--got] = '\0';
+    char* out = aiml_str_dup(buf);
+    free(buf);
+    return out;
 }
 
 /* ── position control ─────────────────────────────────────────────────────── */

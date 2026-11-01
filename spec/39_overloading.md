@@ -77,6 +77,7 @@ automatically overloads the standard operators — no additional syntax required
 | `*` | `mat4` | `vec4` | `vec4` | Matrix-vector transform |
 | `+` | `mat4` | `mat4` | `mat4` | Component-wise addition |
 | `eq` | `vec2/3/4` | same | `i32` | Exact equality of all components |
+| `neq` | `vec2/3/4` | same | `i32` | Negation von `eq` (spec/43_0) |
 
 ---
 

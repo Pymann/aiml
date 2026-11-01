@@ -31,7 +31,10 @@ bool isKnownBinaryOperator(const std::string& op) {
 }
 
 bool isVariadicFoldBinaryOperator(const std::string& op) {
-    return op == "+" || op == "*" || op == "add" || op == "mul";
+    // spec/04_1: `+`/`*` falten, und seit 01.11.2026 auch `and`/`or` — die Faltung
+    // schachtelt BinaryExpr, der Kurzschluss je Paar bleibt also erhalten.
+    return op == "+" || op == "*" || op == "add" || op == "mul"
+        || op == "and" || op == "&&" || op == "or" || op == "||";
 }
 
 bool isAllOf(const std::string& op, char c) {
@@ -97,6 +100,21 @@ bool ExpressionBuilder::OnScalar(const std::string& value, const std::string& ta
         return true;
     }
     
+    if (pendingListLiteral) {
+        // spec/10: Element eines Listenliterals, nicht ein weiteres Argument.
+        if (tag == "!" || value.find("${") != std::string::npos)
+            pendingListLiteral->elements.push_back(
+                value.find("${") != std::string::npos ? parseInterpolatedString(value)
+                                                      : std::unique_ptr<Expr>(new LiteralExpr(value, "string")));
+        else if (value == "null")
+            pendingListLiteral->elements.push_back(std::make_unique<LiteralExpr>("null", "null"));
+        else if (value == "true" || value == "false" || isdigit((unsigned char)value[0])
+                 || (!value.empty() && value[0] == '-'))
+            pendingListLiteral->elements.push_back(std::make_unique<LiteralExpr>(value, "unknown"));
+        else
+            pendingListLiteral->elements.push_back(std::make_unique<VariableExpr>(value));
+        return true;
+    }
     if (expectingArgs || (!op.empty() && !expectingArgs)) {
         if (tag == "!") {
             if (value.find("${") != std::string::npos) args.push_back(parseInterpolatedString(value));
@@ -120,10 +138,22 @@ bool ExpressionBuilder::OnSequenceStart() {
         hadSequence = true;
         return true;
     }
+    // spec/10: eine Sequenz INNERHALB der Argumentliste eines `call` ist ein Listenliteral
+    // und damit EIN Argument.  Vorher gab das `false` und die Elemente fielen einzeln durch.
+    if (expectingArgs && op == "call" && !pendingListLiteral) {
+        pendingListLiteral = std::make_unique<BufferLiteralExpr>();
+        return true;
+    }
     return false;
 }
 
 bool ExpressionBuilder::OnSequenceEnd() {
+    if (pendingListLiteral) {
+        // Ende des Literals — die aeussere Argumentliste laeuft weiter.
+        args.push_back(std::move(pendingListLiteral));
+        pendingListLiteral.reset();
+        return true;
+    }
     expectingArgs = false;
     return true;
 }
@@ -277,6 +307,19 @@ std::unique_ptr<Node> ExpressionBuilder::finish() {
         if (args.size() == 1) {
             return std::make_unique<UnaryExpr>(op, std::move(args[0]));
         }
+        // spec/04_1: ein `{ name: [...] }`, das hier ankommt und keine der Aritaeten trifft, ist
+        // UNBEKANNT.  Vorher fiel es als `nullptr` durch; der Aufrufer las das als „kein Wert" und
+        // initialisierte still mit 0 — jeder Tippfehler im Operatornamen ergab dieselbe falsche Null
+        // (Backlog-Punkt 1, `select`).  Auch ein falsch geschriebener Konstruktor landete hier:
+        // `{ vec3: [1,2,3] }` statt `{ call: [math.vec3, 1, 2, 3] }` ergab einen Nullvektor.
+        if (!op.empty()) {
+            const std::string where = builder->currentLine > 0
+                ? ("line " + std::to_string(builder->currentLine) + ": ") : std::string();
+            LOG_ERROR(where + "Unknown operator '" + op + "' with " + std::to_string(args.size())
+                      + " operand(s).  Bekannte Aritaeten: 1 (unaer), 2 (binaer), 2+ fuer +, *, and, or."
+                      + "  Ein Typ-Konstruktor heisst `{ call: [math.<typ>, ...] }` (spec/43_0);"
+                      + " eine dreiteilige Bedingung ist `if`/`else` (spec/05).");
+        }
         return nullptr;
     }
 
@@ -333,6 +376,19 @@ std::unique_ptr<Node> ExpressionBuilder::finish() {
     }
     if (args.size() == 1) {
         return std::make_unique<UnaryExpr>(op, std::move(args[0]));
+    }
+    // spec/04_1: ein `{ name: [...] }`, das hier ankommt und keine der Aritaeten trifft, ist
+    // UNBEKANNT.  Vorher fiel es als `nullptr` durch; der Aufrufer las das als „kein Wert" und
+    // initialisierte still mit 0 — jeder Tippfehler im Operatornamen ergab dieselbe falsche Null
+    // (Backlog-Punkt 1, `select`).  Auch ein falsch geschriebener Konstruktor landete hier:
+    // `{ vec3: [1,2,3] }` statt `{ call: [math.vec3, 1, 2, 3] }` ergab einen Nullvektor.
+    if (!op.empty()) {
+        const std::string where = builder->currentLine > 0
+            ? ("line " + std::to_string(builder->currentLine) + ": ") : std::string();
+        LOG_ERROR(where + "Unknown operator '" + op + "' with " + std::to_string(args.size())
+                  + " operand(s).  Bekannte Aritaeten: 1 (unaer), 2 (binaer), 2+ fuer +, *, and, or."
+                  + "  Ein Typ-Konstruktor heisst `{ call: [math.<typ>, ...] }` (spec/43_0);"
+                  + " eine dreiteilige Bedingung ist `if`/`else` (spec/05).");
     }
     return nullptr;
 }

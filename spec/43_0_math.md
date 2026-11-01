@@ -342,8 +342,8 @@ When passed to functions, a copy is made (analogous to `i32`).
 | `{ eq: [a, b] }` | `vec2/3/4` + same | `i8` |
 
 Vektorgleichheit heißt `eq` (die Symbolform `==` lehnt der Compiler ab, siehe spec/04_1).
-`neq` ist für Vektoren noch nicht umgesetzt („Cannot apply eq/neq to struct type without
-__eq__“, gemessen 29.10.2026); Ungleichheit vorerst als `{ not: [{ eq: [a, b] }] }`.
+`neq` ist die Negation von `eq` und seit 01.11.2026 umgesetzt (dieselbe Laufzeitfunktion,
+nur andere Vergleichsrichtung) — `{ not: [{ eq: [a, b] }] }` bleibt gleichwertig.
 
 Operands may be any expression of the type: variables, parameters, fields, builtin calls and
 calls of user methods/functions returning the math type.

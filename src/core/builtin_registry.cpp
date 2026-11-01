@@ -1586,6 +1586,21 @@ void registerBuiltins(CompilerContext& ctx) {
         return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {f}));
     };
 
+    // spec/23: io.read_line(f) → eine Zeile OHNE Umbruch.  `io.read` ist ein Blocklesen und
+    // bricht nicht am Zeilenende ab (Backlog-Punkt 6).  Das Ergebnis ist ein OWNED String
+    // (aiml_str_dup in der Laufzeit) und wird als String-Temp verbucht, damit ein
+    // verbrauchendes decl/set es uebernimmt und ein unbenutztes am Satzende freigegeben wird.
+    io.builtinFuncs["read_line"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+        llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+        if (args.empty()) return ctx.ir_gen->wrap(ctx.builder.CreateGlobalStringPtr(""));
+        llvm::Function* fn = ctx.getFunction("aiml_io_read_line", i8p, {i8p});
+        llvm::Value* f = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+        llvm::Value* line = ctx.builder.CreateCall(fn, {f}, "io_line");
+        if (ctx.lifetimeDropsEnabled && !ctx.stmtTempStack.empty())
+            AIML::AST::aimlTrackStringTemp(ctx, line);
+        return ctx.ir_gen->wrap(line);
+    };
+
     io.builtinFuncs["read_cstring"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
         llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
         if (args.empty()) return ctx.ir_gen->wrap(ctx.builder.CreateGlobalStringPtr(""));

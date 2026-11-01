@@ -1,0 +1,12 @@
+# SPEC: 04_1_precedence
+# Backlog-Punkt 2: `{ shl: [6, -4] }` lieferte undefinierten Muell (gemessen 372022024),
+# weil das C-UB durchschlug. Eine KONSTANTE Schiebeweite ausserhalb [0, Breite) ist
+# statisch erkennbar und daher ein Uebersetzungsfehler.
+# Expected exit code: 1
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [res, i32, { shl: [6, -4] }]
+      - return: 0

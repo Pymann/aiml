@@ -26,6 +26,7 @@ int32_t aiml_buffer_write_string(void* buf, const char* s);
 void*   aiml_io_std_stream(int32_t fd);
 
 /* Position control */
+char*   aiml_io_read_line(void* f);   /* spec/23: eine Zeile ohne Umbruch, owned */
 int64_t aiml_io_tell(void* f);
 void    aiml_io_seek(void* f, int64_t pos);
 void    aiml_io_skip(void* f, int64_t delta);

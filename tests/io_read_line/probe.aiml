@@ -1,0 +1,10 @@
+# Liest zwei Zeilen zeilenweise und meldet Laenge und Inhalt.
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [first, string, { call: [io.read_line, io.stdin] }]
+      - decl: [second, string, { call: [io.read_line, io.stdin] }]
+      - call: [log.info, "L1=[${first}] len=${first.len}"]
+      - call: [log.info, "L2=[${second}] len=${second.len}"]
+      - return: 0

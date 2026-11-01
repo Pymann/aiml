@@ -1,0 +1,41 @@
+# SPEC: 10_collections
+# Backlog-Punkt 3: ein Listenliteral als Aufrufargument wurde aufgefaechert — aus
+# { call: [count_items, [1, 2, 3]] } wurden DREI Argumente, und der Fehler kam erst aus
+# der LLVM-Verifikation ("Incorrect number of arguments"). Es muss EIN Listenargument sein.
+# Expected exit code: 0
+
+- import: "tests/_cross/check.aiml"
+
+- def:
+    name: count_items
+    args: [[items, list<i32>]]
+    return: i32
+    body:
+      - return: items.len
+
+- def:
+    name: join_words
+    args: [[words, list<string>]]
+    return: string
+    body:
+      - decl: [out, string, ""]
+      - decl: [pos, i32, 0]
+      - while:
+          condition: { lt: [pos, words.len] }
+          body:
+            - decl: [word, string, { at: [words, pos] }]
+            - set: [out, "${out}${word}"]
+            - set: [pos, { +: [pos, 1] }]
+      - return: out
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [chk, ptr<Checker>, { new: Checker }]
+      - call: [chk.expect_i, "drei Zahlen", { call: [count_items, [1, 2, 3]] }, 3]
+      - call: [chk.expect_i, "leeres Literal", { call: [count_items, []] }, 0]
+      - call: [chk.expect_s, "Strings", { call: [join_words, ["a", "b"]] }, "ab"]
+      - if: { condition: { gt: [chk.fails, 0] }, then: [{ print: ["FAIL list_literal_call_arg (${chk.fails})"] }, { return: 1 }] }
+      - print: ["PASS list_literal_call_arg"]
+      - return: 0

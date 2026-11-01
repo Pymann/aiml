@@ -397,6 +397,48 @@ namespace MapImpl {
         return ctx.builder.CreateLoad(ctx.builder.getInt1Ty(), resVar);
     }
     
+    // spec/10: `clear` leert die map.  Die Eintraege werden EINZELN freigegeben (wie in
+    // `remove`), bevor die Groesse auf 0 geht — ein blosses size=0 waere ein Leck pro
+    // Schluessel und Wert.  `map` hatte bis 01.11.2026 kein `clear` (Backlog-Punkt 8).
+    void clear(CompilerContext& ctx, llvm::Value* mapPtr, llvm::Type* keyType, llvm::Type* valType,
+               llvm::StructType* mapType, bool keyIsString, bool valIsString,
+               llvm::Value* relDesc, int relN, int relKind) {
+        llvm::Value* sizePtr = ctx.builder.CreateStructGEP(mapType, mapPtr, 0, "clr_sizePtr");
+        llvm::Value* sizeVal = ctx.builder.CreateLoad(ctx.builder.getInt32Ty(), sizePtr);
+        llvm::Value* keysPtr = ctx.builder.CreateLoad(llvm::PointerType::get(ctx.context, 0),
+                                                      ctx.builder.CreateStructGEP(mapType, mapPtr, 3));
+        llvm::Value* valsPtr = ctx.builder.CreateLoad(llvm::PointerType::get(ctx.context, 0),
+                                                      ctx.builder.CreateStructGEP(mapType, mapPtr, 4));
+
+        llvm::Function* parentFunc = ctx.builder.GetInsertBlock()->getParent();
+        llvm::BasicBlock* loopBB = llvm::BasicBlock::Create(ctx.context, "clr_loop", parentFunc);
+        llvm::BasicBlock* bodyBB = llvm::BasicBlock::Create(ctx.context, "clr_body", parentFunc);
+        llvm::BasicBlock* endBB  = llvm::BasicBlock::Create(ctx.context, "clr_end", parentFunc);
+
+        llvm::Value* iVar = ctx.createEntryAlloca(ctx.builder.getInt32Ty(), "i_clr");
+        ctx.builder.CreateStore(ctx.builder.getInt32(0), iVar);
+        ctx.builder.CreateBr(loopBB);
+
+        ctx.builder.SetInsertPoint(loopBB);
+        llvm::Value* iVal = ctx.builder.CreateLoad(ctx.builder.getInt32Ty(), iVar);
+        ctx.builder.CreateCondBr(ctx.builder.CreateICmpSLT(iVal, sizeVal), bodyBB, endBB);
+
+        ctx.builder.SetInsertPoint(bodyBB);
+        if (keyIsString) {
+            llvm::Value* keySlot = ctx.builder.CreateInBoundsGEP(keyType, keysPtr, iVal);
+            decrefIfString(ctx, ctx.builder.CreateLoad(keyType, keySlot), true);
+        }
+        llvm::Value* valSlot = ctx.builder.CreateInBoundsGEP(valType, valsPtr, iVal);
+        if (valIsString) decrefIfString(ctx, ctx.builder.CreateLoad(valType, valSlot), true);
+        releaseValSlot(ctx, valSlot, valType, relDesc, relN, relKind);
+        ctx.builder.CreateStore(ctx.builder.CreateAdd(iVal, ctx.builder.getInt32(1)), iVar);
+        ctx.builder.CreateBr(loopBB);
+
+        ctx.builder.SetInsertPoint(endBB);
+        // Kapazitaet und Puffer bleiben stehen: die map ist danach sofort wieder nutzbar.
+        ctx.builder.CreateStore(ctx.builder.getInt32(0), sizePtr);
+    }
+
     void remove(CompilerContext& ctx, llvm::Value* mapPtr, llvm::Value* keyVal, llvm::Type* valType, llvm::StructType* mapType, bool valIsString,
                 llvm::Value* relDesc, int relN, int relKind) {
         llvm::Value* sizePtr = ctx.builder.CreateStructGEP(mapType, mapPtr, 0, "sizePtr");

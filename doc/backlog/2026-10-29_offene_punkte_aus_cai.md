@@ -62,21 +62,40 @@ spec/04_1 Z. 131/140: „Accepts 2 or more arguments: `{ and: [a, b, c] }`“.
 Compiler: „Binary operator 'and' expects exactly 2 operands, got 3.“
 Entweder umsetzen (links fold) oder die Spec korrigieren.
 
+**Spec-Widerspruch behoben 01.11.2026, Funktion bleibt offen.**  spec/04_1 (Tabelle Z. 23/24 und
+beide Abschnitte) sagte „2 or more“, spec/05_logic Z. 63 „exactly 2“, der Compiler hielt sich an
+spec/05_logic.  spec/04_1 ist jetzt auf genau zwei Operanden korrigiert und nennt die Verkettung
+`{ and: [a, { and: [b, c] }] }` als Weg (nachgemessen: funktioniert).  **Offen bleibt die
+Entscheidung**, ob der Links-Fold umgesetzt wird — die Spec verspricht ihn nun nicht mehr.
+
 ### 6. `io.read(io.stdin, n)` liest über das Zeilenende hinaus
 
 spec/23 Z. 20: „Read 100 bytes or until EOF/Newline“.  Gemessen mit `printf 'ab\ncd\n'`:
 `io.read(io.stdin, 100)` liefert `"ab\ncd\n"` (fread-Block).  cai liest deshalb zeichenweise.
 Entweder zeilenweise lesen oder die Spec korrigieren (und ggf. ein `io.read_line` anbieten).
 
+**Spec-Widerspruch behoben 01.11.2026, Funktion bleibt offen.**  Nachgemessen: `printf 'ab\ncd\n'`
+→ `io.read(io.stdin, 100)` liefert 6 Bytes, bricht also nicht am Zeilenende ab.  spec/23 sagt das
+jetzt so und nennt das fehlende `io.read_line`.  **Offen bleibt** ein zeilenweises Lesen.
+
 ### 7. `neq` auf Vektoren fehlt
 
 `{ eq: [a, b] }` auf vec2/3/4 geht, `{ neq: [a, b] }` meldet „Cannot apply eq/neq to struct type
 without __eq__: vec3“.  spec/43_0 nennt vorerst `{ not: [{ eq: [a, b] }] }`.
 
+**Kein Spec-Widerspruch** (geprüft 01.11.2026): spec/43_0 Z. 345 dokumentiert die Lücke ehrlich.
+spec/39 führte in der Vektor-Tabelle nur `eq` auf — dort steht jetzt eine `neq`-Zeile mit
+„not implemented“ und Verweis, damit ein Leser von spec/39 es nicht annimmt.  **Funktion offen.**
+
 ### 8. `map<K:V>` hat kein `clear`
 
 „Unknown map method: clear on map<string:i32>“.  `hashmap` hat `clear`.  Für `map` entweder
 nachziehen oder in spec/10 als fehlend nennen.
+
+**Spec-Widerspruch behoben 01.11.2026, Funktion bleibt offen.**  spec/10 Z. 102 führte
+`call: [users.clear]` als gültig auf, obwohl der Compiler es ablehnt (nachgemessen).  Die Zeile ist
+jetzt als fehlend ausgewiesen, mit Verweis auf `hashmap` (spec/69) und dem Weg über `remove`.
+**Offen bleibt** ein `clear` für `map`.
 
 ## Niedrig — Ergonomie / Design
 
@@ -174,3 +193,8 @@ Client bauen ohne einen einzigen Verstoß, Leck-Gate 180/180 bei 0/0.
 Auf mem-v3-compiler schlagen 12–13 Tests unabhängig von diesen Punkten fehl, u. a.
 `test_bundle_*`, `test_pipeline_*`, `test_netfs_smb`, `test_widget_model_bind`, `tests/venv/run.sh`
 (verschobenes venv, F68-32 / F68-1).  Gemessen jeweils auch auf dem Stand vor den cai-Änderungen.
+
+**Aktualisiert 01.11.2026** (Korpus 997 Tests auf dem gemergten Stand): es sind **8**, nicht 12–13 —
+fünf `test_pipeline_*`, `test_bundle_exec_semantics`, `tests/closures/run.sh` (rotes spec/64-Labor)
+und `tests/venv/kontor_stub.aiml` (neu, Zeitgrenze 600 s).  `test_netfs_smb`,
+`test_widget_model_bind` und `tests/venv/run.sh` fallen nicht mehr aus.

@@ -60,7 +60,8 @@ The first (and only) element of the list is the condition.
 Logical and comparison operators have fixed arity.
 
 - Unary operators: `!`, `?`, `&` — exactly 1 operand
-- Binary logical operators: `and`, `&&`, `or`, `||` — exactly 2 operands
+- Logical operators: `and`, `&&`, `or`, `||` — 2 or more operands (left fold, short-circuit;
+  spec/04_1). Implemented 01.11.2026; vorher lehnte der Compiler mehr als zwei ab.
 - Comparison operators: `eq`, `neq`, `lt`, `gt`, `le`, `lte`, `ge`, `gte`, `peq`, `pneq` — exactly 2 operands
 
 ```yaml

@@ -22,11 +22,18 @@ bool StatementBuilder::OnSequenceStart() {
         innerSeqStart = (int)args.size();
         expectingValue = false;
     }
+    // spec/10: `call: [f, [v1, v2]]` — die innere Sequenz ist EIN Listenargument.
+    if (seqDepth == 2 && type == "call" && !pendingCallLiteral)
+        pendingCallLiteral = std::make_unique<BufferLiteralExpr>();
     return true;
 }
 
 bool StatementBuilder::OnSequenceEnd() {
     seqDepth--;
+    if (seqDepth == 1 && pendingCallLiteral) {
+        orderedCallArgs.push_back(std::move(pendingCallLiteral));
+        pendingCallLiteral.reset();
+    }
     if (seqDepth <= 0)
         builder->popState();
     return true;
@@ -51,6 +58,11 @@ bool StatementBuilder::OnScalar(const std::string& value, const std::string& tag
 
     // For call statements: redirect args after the function name to the ordered list
     // so that scalar args and nested-expr args are interleaved in YAML source order.
+    if (pendingCallLiteral) {
+        pendingCallLiteral->elements.push_back(parseScalarExpr(value, tag));
+        args.pop_back();
+        return true;
+    }
     if (type == "call" && args.size() > 1) {
         orderedCallArgs.push_back(parseScalarExpr(value, tag));
         args.pop_back(); // keep only function name in args

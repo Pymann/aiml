@@ -17,8 +17,13 @@
 
 # Reading from Stdin
 - decl: [input, string]
-# Read 100 bytes or until EOF/Newline
+# Read UP TO 100 bytes.  This is a block read (fread): it does NOT stop at a newline.
+# `printf 'ab\ncd\n'` yields "ab\ncd\n", not "ab\n".
 - set: [input, { call: [io.read, io.stdin, 100] }]
+
+# One line, WITHOUT the newline ("ab" for "ab\ncd\n"); "" at end of input, never a crash.
+# The result is an owned string (the caller's scope frees it).
+- set: [input, { call: [io.read_line, io.stdin] }]
 
 # File Operations
 # Writing

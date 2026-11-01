@@ -31,6 +31,14 @@
 - set: [kinds, ["golem", "spirit"]]
 - set: [kinds, []]
 
+# Als AUFRUFARGUMENT ist ein Listenliteral EIN Argument: der Compiler legt dafuer eine
+# frische Liste an und fuellt sie. Der Elementtyp kommt aus dem PARAMETERTYP — nur so ist
+# `[]` bestimmbar; sonst wird er aus dem ersten Element abgeleitet. Bis 01.11.2026 wurde das
+# Literal in Einzelargumente aufgefaechert und erst die LLVM-Verifikation meldete
+# "Incorrect number of arguments".
+- set: [num, { call: [count_items, [1, 2, 3]] }]
+- set: [num, { call: [count_items, []] }]
+
 # Standard List Methods
 - call: [scores.push, 100]       # Add to end
 - call: [scores.pop]             # Remove from end (returns value)
@@ -99,7 +107,7 @@
 - call: [users.put, "alice", 1]
 - set: [val, { call: [users.get, "alice"] }]   # returns i32 or null pointer if missing
 - call: [users.remove, "alice"]                # raises MissingKeyError if key not found
-- call: [users.clear]
+- call: [users.clear]                          # alle Eintraege; Kapazitaet bleibt, sofort wieder nutzbar
 - set: [len, users.len]
 - decl: [names, list<string>, { call: [users.keys] }]   # map<string:V> only: every key, byte order (F10-22)
 

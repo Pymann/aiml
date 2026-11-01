@@ -23,6 +23,10 @@ class StatementBuilder : public StateHandler {
     // Zahl der WIRKLICH gesehenen Skalare.  `args.size()` taugt dafuer nicht: der
     // expectingValue-Zweig in OnScalar kehrt frueh zurueck, bevor er in args landet.
     int scalarCount = 0;
+    // spec/10: ein Listenliteral als Aufrufargument.  Ohne das wandert jedes Element
+    // einzeln in orderedCallArgs und wird so zu mehreren Argumenten aufgefaechert
+    // (Backlog-Punkt 3).  Waehrend der inneren Sequenz sammeln wir hier.
+    std::unique_ptr<BufferLiteralExpr> pendingCallLiteral;
     bool is_const = false;
     bool is_singleton = false;   // spec/21 §6.2 F21-S1
     bool is_volatile = false;

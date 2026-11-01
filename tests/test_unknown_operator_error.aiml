@@ -1,0 +1,14 @@
+# SPEC: 04_1_precedence
+# Backlog-Punkt 1: `select` gibt es nicht. Bis 01.11.2026 uebersetzte der Compiler es
+# STILL und lieferte 0 — damit erzeugt jeder Tippfehler im Operatornamen dieselbe falsche
+# Null. Ein unbekannter Operator MUSS ein Uebersetzungsfehler sein.
+#
+# Negativtest: die Uebersetzung MUSS scheitern und den Operatornamen nennen.
+# Expected exit code: 1
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [res, i64, { select: [false, 10, 20] }]
+      - return: 0

@@ -174,6 +174,7 @@ private:
     // Declared type of an expression WITHOUT emitting IR (variable, dotted
     // member access incl. classgroup instances, `{new: C}`).  "" = unresolvable.
     std::string declaredTypeOfExpr(Expr* e);
+    IRValue* visitListLiteralValue(BufferLiteralExpr* lit);
     // spec/13 §6: a numeric argument converted to its parameter's type (integer resize,
     // integer→float, float↔float).  A real for an integer parameter is a compile error
     // (no implicit float→integer); the value is returned unchanged then.

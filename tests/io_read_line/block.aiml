@@ -1,0 +1,8 @@
+# io.read bleibt Blocklesen: es bricht NICHT am Zeilenende ab (spec/23).
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [blob, string, { call: [io.read, io.stdin, 100] }]
+      - call: [log.info, "block_len=${blob.len}"]
+      - return: 0

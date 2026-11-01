@@ -19,6 +19,9 @@ namespace MapImpl {
     // slotAddr: return the value SLOT address (null when missing) — the §5.4 borrow view for ref<V>.
     llvm::Value* get(CompilerContext& ctx, llvm::Value* mapPtr, llvm::Value* keyVal, llvm::Type* valType, llvm::StructType* mapType, bool slotAddr = false);
     llvm::Value* contains(CompilerContext& ctx, llvm::Value* mapPtr, llvm::Value* keyVal, llvm::StructType* mapType);
+    void clear(CompilerContext& ctx, llvm::Value* mapPtr, llvm::Type* keyType, llvm::Type* valType,
+               llvm::StructType* mapType, bool keyIsString = false, bool valIsString = false,
+               llvm::Value* relDesc = nullptr, int relN = 0, int relKind = 0);
     void remove(CompilerContext& ctx, llvm::Value* mapPtr, llvm::Value* keyVal, llvm::Type* valType, llvm::StructType* mapType, bool valIsString = false,
                 llvm::Value* relDesc = nullptr, int relN = 0, int relKind = 0);
 } // namespace MapImpl

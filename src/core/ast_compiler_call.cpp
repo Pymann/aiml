@@ -789,7 +789,13 @@ IRValue* Compiler::visitCall(CallExpr* call) {
     const auto callSignature = resolveCallSignature(funcName);
     std::vector<IRValue*> argVals;
     for (size_t i = 0; i < call->args.size(); ++i) {
+        // spec/10: ein Listenliteral als Argument braucht den Parametertyp — nur so ist `[]`
+        // typisierbar (Backlog-Punkt 3).  Der Hinweis gilt genau fuer dieses Argument.
+        const bool isListLit = dynamic_cast<AIML::AST::BufferLiteralExpr*>(call->args[i].get()) != nullptr;
+        if (isListLit && i < callSignature.parameterTypes.size())
+            ctx.listLiteralArgType = callSignature.parameterTypes[i];
         IRValue* val = visitExpression(call->args[i].get());
+        if (isListLit) ctx.listLiteralArgType.clear();
         if (val) {
             argVals.push_back(val);
             if (callSignature.valid) trackCallArgument(call->args[i].get(), val);
@@ -3041,6 +3047,16 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
              bool slotView = inlineModelVal && methodName == "get"
                  && (tgt == "ref<" + vName + ">" || tgt == "ptr<" + vName + ">");
              return ctx.ir_gen->wrap(MapImpl::get(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), keyVal, vTy, mapStructTy, slotView));
+         } else if (methodName == "clear") {
+             // spec/10: leert die map.  Der Schluesseltyp steckt nur im Typnamen (die
+             // remove-Variante bekommt ihn ueber ihr Argument), also hier ableiten.
+             std::string kName = (colon == std::string::npos) ? inner : inner.substr(0, colon);
+             llvm::Type* kTy = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(kName)));
+             if (!kTy || kName == "string") kTy = ctx.builder.getInt8Ty()->getPointerTo();
+             MapImpl::clear(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), kTy, vTy,
+                            mapStructTy, kName == "string", vName == "string",
+                            relDesc, relN, relKind);
+             return nullptr;
          } else if (methodName == "remove" && argVals.size() > 0) {
              llvm::Value* keyVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
              if (keyVal->getType()->isPointerTy() && keyVal->getType() != ctx.builder.getInt8Ty()->getPointerTo()) {
@@ -3060,7 +3076,8 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
          } else if (methodName == "len") {
              return ctx.ir_gen->wrap(MapImpl::getSize(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), mapStructTy));
          }
-         LOG_ERROR("Unknown map method: " + methodName + " on " + className);
+         LOG_ERROR("Unknown map method: " + methodName + " on " + className
+                   + " (put, get, get_copy, contains, remove, clear, len, keys)");
          return ctx.ir_gen->getInt32(0);
     }
     // hashmap<K:V> methods (spec/69): put/get/add/contains/remove/len/clear/keys
@@ -3440,15 +3457,32 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                 if (ctx.lifetimeDropsEnabled && !ctx.stmtTempStack.empty())
                     aimlTrackStringTemp(ctx, owned);
                 return ctx.ir_gen->wrap(owned); // string: owned char*
-            } else if (vName == "f32") {
-                return ctx.ir_gen->wrap(ctx.builder.CreateLoad(ctx.builder.getFloatTy(), retPtr, "kv_f32"));
-            } else if (vName == "f64") {
-                return ctx.ir_gen->wrap(ctx.builder.CreateLoad(ctx.builder.getDoubleTy(), retPtr, "kv_f64"));
-            } else if (vName == "i64") {
-                return ctx.ir_gen->wrap(ctx.builder.CreateLoad(ctx.builder.getInt64Ty(), retPtr, "kv_i64"));
-            } else if (vName == "i32") {
-                return ctx.ir_gen->wrap(ctx.builder.CreateLoad(i32, retPtr, "kv_i32"));
             }
+            // spec/31: ein fehlender Schluessel gibt `null` zurueck.  Der Skalar-Pfad lud bis
+            // 01.11.2026 ungeprueft davon → SIGSEGV (Backlog-Punkt 4), waehrend der
+            // String-Pfad ueber aiml_str_dup schon null-sicher war und "" lieferte.
+            // Jetzt liefert ein Fehltreffer den Nullwert des Typs (0 bzw. 0.0).
+            auto loadScalarOrZero = [&](llvm::Type* ty, const char* name) -> IRValue* {
+                llvm::Function* parent = ctx.builder.GetInsertBlock()->getParent();
+                auto* hitBB  = llvm::BasicBlock::Create(ctx.context, "kv_hit", parent);
+                auto* missBB = llvm::BasicBlock::Create(ctx.context, "kv_miss", parent);
+                auto* joinBB = llvm::BasicBlock::Create(ctx.context, "kv_join", parent);
+                ctx.builder.CreateCondBr(ctx.builder.CreateIsNotNull(retPtr), hitBB, missBB);
+                ctx.builder.SetInsertPoint(hitBB);
+                llvm::Value* loaded = ctx.builder.CreateLoad(ty, retPtr, name);
+                ctx.builder.CreateBr(joinBB);
+                ctx.builder.SetInsertPoint(missBB);
+                ctx.builder.CreateBr(joinBB);
+                ctx.builder.SetInsertPoint(joinBB);
+                llvm::PHINode* phi = ctx.builder.CreatePHI(ty, 2, name);
+                phi->addIncoming(loaded, hitBB);
+                phi->addIncoming(llvm::Constant::getNullValue(ty), missBB);
+                return ctx.ir_gen->wrap(phi);
+            };
+            if (vName == "f32") return loadScalarOrZero(ctx.builder.getFloatTy(), "kv_f32");
+            if (vName == "f64") return loadScalarOrZero(ctx.builder.getDoubleTy(), "kv_f64");
+            if (vName == "i64") return loadScalarOrZero(ctx.builder.getInt64Ty(), "kv_i64");
+            if (vName == "i32") return loadScalarOrZero(i32, "kv_i32");
             return ctx.ir_gen->wrap(retPtr);
 
         } else if (methodName == "get_copy_at" && argVals.size() >= 2) {

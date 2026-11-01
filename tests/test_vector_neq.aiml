@@ -1,0 +1,33 @@
+# SPEC: 43_0_math,39_overloading
+# Backlog-Punkt 7: `{ neq: [a, b] }` auf vec2/3/4 meldete "Cannot apply eq/neq to struct
+# type without __eq__". `eq` ging. Jetzt ist `neq` die Negation von `eq`.
+# Expected exit code: 0
+
+- import: "tests/_cross/check.aiml"
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [chk, ptr<Checker>, { new: Checker }]
+      - decl: [vone, vec3, { call: [math.vec3, 1.0, 2.0, 3.0] }]
+      - decl: [vtwo, vec3, { call: [math.vec3, 1.0, 2.0, 4.0] }]
+      - decl: [vsame, vec3, { call: [math.vec3, 1.0, 2.0, 3.0] }]
+
+      - decl: [diff, i32, 0]
+      - if: { condition: { neq: [vone, vtwo] }, then: [{ set: [diff, 1] }] }
+      - call: [chk.expect_i, "verschiedene vec3 sind neq", diff, 1]
+
+      - decl: [same, i32, 0]
+      - if: { condition: { neq: [vone, vsame] }, then: [{ set: [same, 1] }] }
+      - call: [chk.expect_i, "gleiche vec3 sind NICHT neq", same, 0]
+
+      - decl: [twod, vec2, { call: [math.vec2, 1.0, 2.0] }]
+      - decl: [twod_b, vec2, { call: [math.vec2, 9.0, 2.0] }]
+      - decl: [diff2, i32, 0]
+      - if: { condition: { neq: [twod, twod_b] }, then: [{ set: [diff2, 1] }] }
+      - call: [chk.expect_i, "vec2 neq", diff2, 1]
+
+      - if: { condition: { gt: [chk.fails, 0] }, then: [{ print: ["FAIL vector_neq (${chk.fails})"] }, { return: 1 }] }
+      - print: ["PASS vector_neq"]
+      - return: 0

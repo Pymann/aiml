@@ -1,0 +1,46 @@
+# SPEC: 04_1_precedence,05_logic
+# Backlog-Punkt 5: spec/04_1 versprach `{ and: [a, b, c] }` (Links-Fold mit Kurzschluss),
+# der Compiler lehnte ab ("expects exactly 2 operands, got 3"). Jetzt umgesetzt.
+# Der Kurzschluss ist mitgeprueft: ein Zaehler darf nach dem ersten falschen Operanden
+# nicht mehr hochgehen.
+# Expected exit code: 0
+
+- import: "tests/_cross/check.aiml"
+
+- decl: [g_calls, i32, 0]
+
+- def:
+    name: tally
+    args: [[answer, i32]]
+    return: bool
+    body:
+      - set: [g_calls, { +: [g_calls, 1] }]
+      - return: { neq: [answer, 0] }
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [chk, ptr<Checker>, { new: Checker }]
+      - decl: [res, i32, 0]
+
+      - if: { condition: { and: [true, true, true] }, then: [{ set: [res, 1] }] }
+      - call: [chk.expect_i, "and mit drei wahren", res, 1]
+      - set: [res, 0]
+      - if: { condition: { and: [true, false, true] }, then: [{ set: [res, 1] }] }
+      - call: [chk.expect_i, "and mit einem falschen", res, 0]
+      - set: [res, 0]
+      - if: { condition: { or: [false, false, true] }, then: [{ set: [res, 1] }] }
+      - call: [chk.expect_i, "or mit einem wahren", res, 1]
+      - set: [res, 0]
+      - if: { condition: { and: [true, true, true, true] }, then: [{ set: [res, 1] }] }
+      - call: [chk.expect_i, "and mit vier Operanden", res, 1]
+
+      # Kurzschluss: nach dem ersten falschen darf tally nicht mehr laufen.
+      - set: [g_calls, 0]
+      - if: { condition: { and: [{ call: [tally, 0] }, { call: [tally, 1] }, { call: [tally, 1] }] }, then: [{ set: [res, 9] }] }
+      - call: [chk.expect_i, "and bricht nach dem ersten falschen ab", g_calls, 1]
+
+      - if: { condition: { gt: [chk.fails, 0] }, then: [{ print: ["FAIL logic_fold (${chk.fails})"] }, { return: 1 }] }
+      - print: ["PASS logic_fold_operands"]
+      - return: 0
