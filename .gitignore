@@ -44,5 +44,10 @@ bs_sender
 # Build-/Suite-/Messprotokolle und Staging-Kopien (11 MB, 223 Dateien).
 logs/
 
+# Von Testlaeufen erzeugte Protokolle (Treiber schreiben sie neben die Probe).
+# Die Audit-Protokolle unter doc/analysis/ sind BEWUSST versioniert und bleiben.
+tests/**/*.log
+tests/**/*.log.off
+
 # Wirts-Bibliothek der Clearance-Proben: wird von run.sh aus der .c gebaut (F65-39).
 tests/clearance/fixtures/*.so
