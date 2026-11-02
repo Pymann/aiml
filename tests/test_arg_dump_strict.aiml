@@ -1,7 +1,9 @@
 # sys.arg_dump: alias as flag name, tokens that only look like flags, strict values.
-#   spec/15 F15-9   an alias is the external name: `[ident, ..., { alias: "id" }]` takes `--id`
-#   spec/23 F23-61  a flag is one or two dashes plus a name; "-Flies(Tweety)" and "--5 + 1"
-#                   are positional.  A non-bool flag needs a well-formed value, else exit 1.
+#   spec/23 F23-61  every non-bool field needs a well-formed value in its own range, else exit 1
+#   spec/23 F23-62  a flag is one or two dashes plus a name; "-Flies(Tweety)" and "--5 + 1"
+#                   are positional; "--" ends the flags and is never a value
+#   spec/23 F23-63  an alias (spec/15 F15-9) is the flag name, normalised (dry-run -> dry_run);
+#                   the collector is the field whose REAL name is `positional`
 # (A negative i8 is not checked here: `cast` i8 -> i32 zero-extends, a separate bug.)
 # Each case runs tests/_cross/argdump_strict_child.aiml in its own process.
 # Expected exit code: 0
@@ -79,6 +81,35 @@
       - decl: [case13, list<string>, ["--json"]]
       - call: [chk.expect_i, "switch exit", { call: [kid.run, case13] }, 0]
       - call: [chk.expect_has, "defaults kept", kid.out, "ident= depth=-1 small=0 ratio=0 json=1"]
+
+      # ── found in review ──
+      - decl: [case14, list<string>, ["--id", "--", "--json"]]
+      - call: [chk.expect_i, "-- is never a value", { call: [kid.run, case14] }, 1]
+      - call: [chk.expect_has, "-- after a value flag: value missing", kid.err, "flag '--id' expects a value"]
+      - decl: [case15, list<string>, ["a", "b"]]
+      - call: [chk.expect_i, "positional with an alias exit", { call: [kid.run, case15] }, 0]
+      - call: [chk.expect_has, "positional found by its real name", kid.out, "positional=a|b"]
+      - decl: [case16, list<string>, ["--dry-run", "x"]]
+      - call: [chk.expect_i, "hyphenated alias exit", { call: [kid.run, case16] }, 0]
+      - call: [chk.expect_has, "hyphenated alias sets the field", kid.out, "mode=x "]
+      - decl: [case17, list<string>, ["--big", "18446744073709551615", "--ubyte", "255"]]
+      - call: [chk.expect_i, "u64 above INT64_MAX is accepted", { call: [kid.run, case17] }, 0]
+      - call: [chk.expect_has, "u8 full range", kid.out, "ubyte=255"]
+      - decl: [case17b, list<string>, ["--big", "18446744073709551616"]]
+      - call: [chk.expect_i, "u64 beyond 2^64-1 is rejected", { call: [kid.run, case17b] }, 1]
+      - decl: [case17c, list<string>, ["--big", "-1"]]
+      - call: [chk.expect_i, "u64 -1 is rejected", { call: [kid.run, case17c] }, 1]
+      - decl: [case18, list<string>, ["--small", "200"]]
+      - call: [chk.expect_i, "i8 200 is out of range", { call: [kid.run, case18] }, 1]
+      - decl: [case19, list<string>, ["--ubyte", "-1"]]
+      - call: [chk.expect_i, "u8 -1 is rejected", { call: [kid.run, case19] }, 1]
+      - decl: [case20, list<string>, ["--ratio", "1e39"]]
+      - call: [chk.expect_i, "f32 overflow is rejected", { call: [kid.run, case20] }, 1]
+      - decl: [case21, list<string>, ["--tiny", "1e-310"]]
+      - call: [chk.expect_i, "f64 underflow is a value", { call: [kid.run, case21] }, 0]
+      - call: [chk.expect_has, "subnormal kept", kid.out, "tiny_small=1"]
+      - decl: [case22, list<string>, ["--depth", " 12"]]
+      - call: [chk.expect_i, "leading space is not a number", { call: [kid.run, case22] }, 1]
 
       - if: { condition: { gt: [chk.fails, 0] }, then: [{ print: ["FAIL arg_dump_strict (${chk.fails})"] }, { return: 1 }] }
       - print: ["PASS arg_dump_strict"]

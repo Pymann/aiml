@@ -9,7 +9,12 @@
       - [small, i8, 0]
       - [ratio, f32, 0.0]
       - [json, bool, false]
-      - [positional, list<string>, []]
+      - [mode_name, string, "dflt", { alias: "dry-run" }]
+      - [big, u64, 0]
+      - [ubyte, u8, 0]
+      - [tiny, f64, 1.0]
+      # the collector is found by its real name; this alias plays no part
+      - [positional, list<string>, [], { alias: "rest" }]
 
 - def:
     name: main
@@ -23,5 +28,12 @@
       - decl: [words, list<string>, opts.positional]
       - decl: [rest, string, { call: [words.join, "|"] }]
       - print: ["ident=${opts.ident} depth=${opts.depth} small=${small} ratio=${ratio_x100} json=${json}"]
+      - decl: [ubyte, i32, { cast: [opts.ubyte, i32] }]
+      - decl: [tiny_zero, i32, 0]
+      - if: [{ lt: [opts.tiny, 0.000001] }, true]
+        then:
+          - set: [tiny_zero, 1]
+      # (print and "/" treat a u64 as signed, a separate issue; the test checks u64 by exit code)
+      - print: ["mode=${opts.mode_name} ubyte=${ubyte} tiny_small=${tiny_zero}"]
       - print: ["positional=${rest}"]
       - return: 0

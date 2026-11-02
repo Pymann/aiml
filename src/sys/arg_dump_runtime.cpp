@@ -5,6 +5,8 @@
 #include <ctype.h>
 #include <stdint.h>
 #include <errno.h>
+#include <math.h>
+#include <float.h>
 
 // spec/61 §4: string struct fields must be aiml-MANAGED strings (with an AimlStrHeader) so the
 // owner's teardown (fre → aiml_str_decref) can read the rc header at (s - 8). A libc strdup'd /
@@ -35,20 +37,33 @@ static void fail_value(const char* arg, const char* what, const char* got) {
     exit(1);
 }
 
-// The whole token must be a number: "12" yes, "12abc", "" and "abc" no.
+// The whole token must be a number: "12" yes; "12abc", "", " 12" and "abc" no.
 static long long parse_int_or_fail(const char* arg, const char* value) {
     char* end = NULL;
     errno = 0;
+    if (!*value || isspace((unsigned char)*value)) fail_value(arg, "an integer", value);
     long long v = strtoll(value, &end, 10);
-    if (!*value || *end || errno == ERANGE) fail_value(arg, "an integer", value);
+    if (*end || errno == ERANGE) fail_value(arg, "an integer", value);
     return v;
 }
 
+// Unsigned: no sign, the full u64 range.
+static unsigned long long parse_uint_or_fail(const char* arg, const char* value) {
+    char* end = NULL;
+    errno = 0;
+    if (!*value || isspace((unsigned char)*value) || *value == '-') fail_value(arg, "a non-negative integer", value);
+    unsigned long long v = strtoull(value, &end, 10);
+    if (*end || errno == ERANGE) fail_value(arg, "a non-negative integer", value);
+    return v;
+}
+
+// A real: overflow is an error, underflow to a subnormal or 0 is a valid value.
 static double parse_real_or_fail(const char* arg, const char* value) {
     char* end = NULL;
     errno = 0;
+    if (!*value || isspace((unsigned char)*value)) fail_value(arg, "a number", value);
     double v = strtod(value, &end);
-    if (!*value || *end || errno == ERANGE) fail_value(arg, "a number", value);
+    if (*end || (errno == ERANGE && (v == HUGE_VAL || v == -HUGE_VAL))) fail_value(arg, "a number", value);
     return v;
 }
 
@@ -72,6 +87,15 @@ static void set_int(char* field, int code, long long v) {
         case ARG_I16: *(int16_t*)field = (int16_t)v; break;
         case ARG_I64: *(int64_t*)field = (int64_t)v; break;
         default: *(int32_t*)field = (int32_t)v; break;
+    }
+}
+
+static void set_uint(char* field, int code, unsigned long long v) {
+    switch (code) {
+        case ARG_U8: *(uint8_t*)field = (uint8_t)v; break;
+        case ARG_U16: *(uint16_t*)field = (uint16_t)v; break;
+        case ARG_U64: *(uint64_t*)field = (uint64_t)v; break;
+        default: *(uint32_t*)field = (uint32_t)v; break;
     }
 }
 
@@ -122,7 +146,8 @@ void aiml_arg_dump_impl(void*        struct_ptr,
         // Only a bool is a switch; every other field needs its value — a missing one is an
         // error, never a silent 1 or "" (F23-61), so a forgotten number cannot slip through.
         const char* value = inline_value;
-        if (!value && code != ARG_BOOL && next && !is_flag(next)) { value = next; argi++; }
+        // "--" is never a value: it ends the flags, so a flag right before it lacks its value
+        if (!value && code != ARG_BOOL && next && strcmp(next, "--") != 0 && !is_flag(next)) { value = next; argi++; }
         switch (code) {
             case ARG_BOOL: {
                 int on = 1;
@@ -137,18 +162,31 @@ void aiml_arg_dump_impl(void*        struct_ptr,
             case ARG_I8: case ARG_I16: case ARG_I32: case ARG_I64: {
                 if (!value) fail_value(arg, "an integer", NULL);
                 long long v = parse_int_or_fail(arg, value);
-                // signed and unsigned share a code: accept the union of both ranges
-                if ((code == ARG_I8  && (v < INT8_MIN  || v > UINT8_MAX)) ||
-                    (code == ARG_I16 && (v < INT16_MIN || v > UINT16_MAX)) ||
-                    (code == ARG_I32 && (v < INT32_MIN || v > (long long)UINT32_MAX)))
+                if ((code == ARG_I8  && (v < INT8_MIN  || v > INT8_MAX)) ||
+                    (code == ARG_I16 && (v < INT16_MIN || v > INT16_MAX)) ||
+                    (code == ARG_I32 && (v < INT32_MIN || v > INT32_MAX)))
                     fail_value(arg, "an integer in range of the field", value);
                 set_int(field, code, v);
                 break;
             }
-            case ARG_F32:
-                if (!value) fail_value(arg, "a number", NULL);
-                *(float*)field = (float)parse_real_or_fail(arg, value);
+            case ARG_U8: case ARG_U16: case ARG_U32: case ARG_U64: {
+                if (!value) fail_value(arg, "a non-negative integer", NULL);
+                unsigned long long v = parse_uint_or_fail(arg, value);
+                if ((code == ARG_U8  && v > UINT8_MAX) ||
+                    (code == ARG_U16 && v > UINT16_MAX) ||
+                    (code == ARG_U32 && v > UINT32_MAX))
+                    fail_value(arg, "an integer in range of the field", value);
+                set_uint(field, code, v);
                 break;
+            }
+            case ARG_F32: {
+                if (!value) fail_value(arg, "a number", NULL);
+                double v = parse_real_or_fail(arg, value);
+                // finite but beyond float: an error, not inf (the cast would be undefined)
+                if (isfinite(v) && fabs(v) > FLT_MAX) fail_value(arg, "a number in range of the field", value);
+                *(float*)field = (float)v;
+                break;
+            }
             case ARG_F64:
                 if (!value) fail_value(arg, "a number", NULL);
                 *(double*)field = parse_real_or_fail(arg, value);

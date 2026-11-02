@@ -103,17 +103,19 @@ gewesen; was fehlte, war die Fehlermeldung.
 # Field types (F23-61):
 #   bool    - a switch: `--verbose` sets 1 and consumes no token; `--verbose=V` takes
 #             V = 1|true|0|false
-#   i8, i16, i32 (and u-) - the next token as an integer, in the field's range
-#   i64, u64 - the next token as an integer
-#   f32, f64 - the next token as a real (each into its own width)
+#   i8, i16, i32, i64 - the next token as an integer in exactly that signed range
+#   u8, u16, u32, u64 - the next token as an integer without sign, in exactly that range
+#             (u64 takes up to 18446744073709551615)
+#   f32, f64 - the next token as a real; beyond the field's range is an error, an underflow
+#             to a subnormal or 0 is a value
 #   string  - the next token (`--name=` sets "")
 #   list<string> - the next token, appended; repeat the flag for more
 #   list<string> named `positional` - collects every token that is not a flag
 #
-# Every field except bool needs a value.  A flag followed by nothing or by another flag,
-# and a value that is not wholly a number of the field's type ("12abc", "", "300" for
-# an i8), is an error: the field never silently becomes 1, 0 or "".  A field keeps its
-# model default exactly when its flag is absent.
+# Every field except bool needs a value.  A flag followed by nothing, by another flag or by
+# "--", and a value that is not wholly a number of the field's type ("12abc", "", " 12",
+# "200" for an i8, "-1" for a u8), is an error: the field never silently becomes 1, 0, ""
+# or a wrapped value.  A field keeps its model default exactly when its flag is absent.
 #
 # Flag syntax (F23-62):
 #   --foo-bar v | --foo-bar=v | -foo v  -> field foo_bar / foo
@@ -121,11 +123,16 @@ gewesen; was fehlte, war die Fehlermeldung.
 #   A flag is one or two dashes followed by a name: a letter or '_', then letters,
 #   digits, '_' or '-'.  Every other token starting with '-' is a value or positional:
 #   "-3", "-0.5", "-" (stdin), "-Flies(Tweety)" (a negated fact), "--5 + 1".
+#   "--" is never a value.  A value that itself looks like a flag ("-v", "-inf") is passed
+#   inline: --name=-v, --limit=-inf.
 #
 # Field names (F23-63): a field with a spec/15 alias is set by its alias — the external
 # name, as in sys.deserialize.  `[ident, string, "", { alias: "id" }]` takes `--id`;
 # `--ident` is then unknown.  This is how a flag shorter than the 3-character identifier
-# rule is modelled.
+# rule is modelled.  The alias is normalised like a typed flag (`{ alias: "dry-run" }` is
+# set by `--dry-run`).  An alias that cannot be typed as a flag ("@type") or is "positional"
+# is a compile error.  The collector is the list<string> field whose REAL name is
+# `positional`; an alias on it plays no part.
 #
 # Notes:
 # - argv[0] is ignored; parsing starts at argv[1].

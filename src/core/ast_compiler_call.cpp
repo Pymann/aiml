@@ -4978,8 +4978,9 @@ IRValue* Compiler::visitSysExecCall(CallExpr* call) {
 // Flag-to-field mapping:
 //   --field-name  or  --field_name  →  field "field_name"
 //   -flag         →  field "flag"
-//   i32 fields without a value (or next arg is another flag) → set to 1 (boolean)
-//   Unknown flags → print error + exit(1)
+//   a field with a spec/15 alias is set by the alias (normalised: dry-run -> dry_run)
+//   bool fields are switches; every other field needs a well-formed value in its range
+//   Unknown flags, missing or malformed values → print error + exit(1)   (spec/23 F23-61..63)
 // ─────────────────────────────────────────────────────────────────────────────
 IRValue* Compiler::visitSysArgDumpCall(CallExpr* call) {
     using namespace llvm;
@@ -5028,10 +5029,14 @@ IRValue* Compiler::visitSysArgDumpCall(CallExpr* call) {
     const bool listHandles = ctx.memV3;
     auto typeCode = [listHandles](const std::string& tn) -> int {
         if (tn == "bool") return ARG_BOOL;
-        if (tn == "i8" || tn == "u8") return ARG_I8;
-        if (tn == "i16" || tn == "u16") return ARG_I16;
-        if (tn == "i32" || tn == "u32") return ARG_I32;
-        if (tn == "i64" || tn == "u64") return ARG_I64;
+        if (tn == "i8") return ARG_I8;
+        if (tn == "i16") return ARG_I16;
+        if (tn == "i32") return ARG_I32;
+        if (tn == "i64") return ARG_I64;
+        if (tn == "u8") return ARG_U8;
+        if (tn == "u16") return ARG_U16;
+        if (tn == "u32") return ARG_U32;
+        if (tn == "u64") return ARG_U64;
         if (tn == "f32") return ARG_F32;
         if (tn == "f64") return ARG_F64;
         if (tn == "string") return ARG_STRING;
@@ -5065,8 +5070,23 @@ IRValue* Compiler::visitSysArgDumpCall(CallExpr* call) {
         Value* offsetPtr = ctx.builder.CreateConstGEP2_32(i32ArrTy, offsetsArr, 0, fi);
 
         // spec/15 F15-9: the alias is the external name, the flag the user types (as in
-        // sys.deserialize) — `[ident, string, "", { alias: "id" }]` is set by `--id`.
-        const std::string& flagName = fmem.alias.empty() ? fname : fmem.alias;
+        // sys.deserialize) — `[ident, string, "", { alias: "id" }]` is set by `--id`.  It is
+        // normalised like a typed flag (`dry-run` -> `dry_run`).  The collector is found by its
+        // REAL name `positional`; its alias, if any, plays no part (F23-63).
+        std::string flagName = fname;
+        if (!fmem.alias.empty() && fname != "positional") {
+            const std::string& al = fmem.alias;
+            bool usable = !al.empty() && (std::isalpha((unsigned char)al[0]) || al[0] == '_');
+            for (char ch : al)
+                if (!(std::isalnum((unsigned char)ch) || ch == '_' || ch == '-')) usable = false;
+            if (!usable || al == "positional") {
+                LOG_ERROR("sys.arg_dump: alias '" + al + "' of field '" + fname + "' in '" + typeName +
+                          "' cannot be a flag name (a letter or '_', then letters, digits, '_' or '-'; not 'positional')");
+                return ctx.ir_gen->getInt32(0);
+            }
+            flagName = al;
+            for (char& ch : flagName) if (ch == '-') ch = '_';
+        }
         ctx.builder.CreateStore(ctx.builder.CreateGlobalStringPtr(flagName), namePtr);
         ctx.builder.CreateStore(ctx.builder.getInt32(tc), typePtr);
         ctx.builder.CreateStore(ctx.builder.getInt32((int)byteOffset), offsetPtr);

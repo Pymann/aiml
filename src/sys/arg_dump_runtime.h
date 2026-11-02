@@ -14,6 +14,7 @@ enum {
     ARG_I8 = 5, ARG_I16 = 6, ARG_BOOL = 7,
     ARG_LIST_HANDLE = 10,   // list<string> field holding a memV3 list handle
     ARG_LIST_INLINE = 11,   // list<string> field holding the list struct itself
+    ARG_U8 = 12, ARG_U16 = 13, ARG_U32 = 14, ARG_U64 = 15,   // unsigned: own range, no sign
     ARG_SKIP = 99           // any other field type: never matched
 };
 
