@@ -4,6 +4,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <stdint.h>
+#include <errno.h>
 
 // spec/61 §4: string struct fields must be aiml-MANAGED strings (with an AimlStrHeader) so the
 // owner's teardown (fre → aiml_str_decref) can read the rc header at (s - 8). A libc strdup'd /
@@ -12,9 +13,43 @@ extern "C" char* aiml_str_dup(const char* s);
 extern "C" void  aiml_str_decref(char* s);
 extern "C" int32_t aiml_list_push_str_copy(void* list_ptr, const char* s, size_t len);
 
-// A token that is a flag: '-' followed by something other than a digit ("-3" is a value).
+// A token that is a flag: one or two dashes, then a name — a letter or '_', followed by
+// letters, digits, '_' or '-' — optionally "=value".  Anything else is a value or a
+// positional token: "-3" and "-0.5" (numbers), "-Flies(Tweety)" (a negated fact),
+// "--5 + 1" (an expression), "-" (stdin by convention).  "--" alone is handled by the caller.
 static int is_flag(const char* s) {
-    return s && s[0] == '-' && s[1] && !isdigit((unsigned char)s[1]);
+    if (!s || s[0] != '-') return 0;
+    const char* p = s + 1;
+    if (*p == '-') p++;
+    if (!(isalpha((unsigned char)*p) || *p == '_')) return 0;
+    for (p++; *p && *p != '='; p++)
+        if (!(isalnum((unsigned char)*p) || *p == '_' || *p == '-')) return 0;
+    return 1;
+}
+
+static void fail_value(const char* arg, const char* what, const char* got) {
+    if (got)
+        fprintf(stderr, "InvalidArgumentException: flag '%s' expects %s, got '%s'\n", arg, what, got);
+    else
+        fprintf(stderr, "InvalidArgumentException: flag '%s' expects %s\n", arg, what);
+    exit(1);
+}
+
+// The whole token must be a number: "12" yes, "12abc", "" and "abc" no.
+static long long parse_int_or_fail(const char* arg, const char* value) {
+    char* end = NULL;
+    errno = 0;
+    long long v = strtoll(value, &end, 10);
+    if (!*value || *end || errno == ERANGE) fail_value(arg, "an integer", value);
+    return v;
+}
+
+static double parse_real_or_fail(const char* arg, const char* value) {
+    char* end = NULL;
+    errno = 0;
+    double v = strtod(value, &end);
+    if (!*value || *end || errno == ERANGE) fail_value(arg, "a number", value);
+    return v;
 }
 
 // "--foo-bar=v" → name "foo_bar" in buf, *value = "v" (or NULL without '=').
@@ -61,6 +96,7 @@ void aiml_arg_dump_impl(void*        struct_ptr,
     for (int argi = 1; argi < argc; argi++) {
         const char* arg = argv[argi];
         if (!arg) continue;
+        if (!flags_done && strcmp(arg, "--") == 0) { flags_done = 1; continue; }
         if (flags_done || !is_flag(arg)) {
             if (positional >= 0) {
                 char* field = (char*)struct_ptr + offsets[positional];
@@ -69,7 +105,6 @@ void aiml_arg_dump_impl(void*        struct_ptr,
             }
             continue;
         }
-        if (strcmp(arg, "--") == 0) { flags_done = 1; continue; }
         const char* inline_value;
         split_flag(arg, name, (int)sizeof(name), &inline_value);
         int fi = 0;
@@ -83,26 +118,51 @@ void aiml_arg_dump_impl(void*        struct_ptr,
         char* field = (char*)struct_ptr + offsets[fi];
         int code = types[fi];
         const char* next = (argi + 1 < argc) ? argv[argi + 1] : NULL;
-        // the value: "=v", else the next token (consumed) unless the field is a switch
+        // the value: "=v", else the next token (consumed) unless the field is a switch.
+        // Only a bool is a switch; every other field needs its value — a missing one is an
+        // error, never a silent 1 or "" (F23-61), so a forgotten number cannot slip through.
         const char* value = inline_value;
         if (!value && code != ARG_BOOL && next && !is_flag(next)) { value = next; argi++; }
         switch (code) {
-            case ARG_BOOL:
-                set_int(field, code, value ? atoll(value) != 0 : 1);
+            case ARG_BOOL: {
+                int on = 1;
+                if (value) {
+                    if (strcmp(value, "1") == 0 || strcmp(value, "true") == 0) on = 1;
+                    else if (strcmp(value, "0") == 0 || strcmp(value, "false") == 0) on = 0;
+                    else fail_value(arg, "0, 1, true or false", value);
+                }
+                set_int(field, code, on);
                 break;
-            case ARG_I8: case ARG_I16: case ARG_I32: case ARG_I64:
-                set_int(field, code, value ? atoll(value) : 1);
+            }
+            case ARG_I8: case ARG_I16: case ARG_I32: case ARG_I64: {
+                if (!value) fail_value(arg, "an integer", NULL);
+                long long v = parse_int_or_fail(arg, value);
+                // signed and unsigned share a code: accept the union of both ranges
+                if ((code == ARG_I8  && (v < INT8_MIN  || v > UINT8_MAX)) ||
+                    (code == ARG_I16 && (v < INT16_MIN || v > UINT16_MAX)) ||
+                    (code == ARG_I32 && (v < INT32_MIN || v > (long long)UINT32_MAX)))
+                    fail_value(arg, "an integer in range of the field", value);
+                set_int(field, code, v);
                 break;
-            case ARG_F32: if (value) *(float*)field = (float)atof(value); break;
-            case ARG_F64: if (value) *(double*)field = atof(value); break;
+            }
+            case ARG_F32:
+                if (!value) fail_value(arg, "a number", NULL);
+                *(float*)field = (float)parse_real_or_fail(arg, value);
+                break;
+            case ARG_F64:
+                if (!value) fail_value(arg, "a number", NULL);
+                *(double*)field = parse_real_or_fail(arg, value);
+                break;
             case ARG_STRING:
+                if (!value) fail_value(arg, "a value", NULL);
                 // the field holds its default (an aiml-managed string): release it first
                 aiml_str_decref(*(char**)field);
-                *(char**)field = aiml_str_dup(value ? value : "");
+                *(char**)field = aiml_str_dup(value);
                 break;
             case ARG_LIST_HANDLE: case ARG_LIST_INLINE: {
+                if (!value) fail_value(arg, "a value", NULL);
                 void* list = list_of(field, code);           // --name v repeats: each v is appended
-                if (list && value) aiml_list_push_str_copy(list, value, strlen(value));
+                if (list) aiml_list_push_str_copy(list, value, strlen(value));
                 break;
             }
             default: break;

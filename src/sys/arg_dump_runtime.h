@@ -7,7 +7,8 @@ extern "C" {
 //
 // Parses argv[1..argc-1] into a struct.  Fields are described by three parallel
 // arrays (names, types, offsets) of length num_fields; `types` holds the codes below.
-// Unknown flags cause an error message on stderr + exit(1).
+// Unknown flags, a missing or malformed value cause an error message on stderr + exit(1).
+// A field name is matched by its spec/15 alias when it has one.
 enum {
     ARG_I32 = 0, ARG_F32 = 1, ARG_STRING = 2, ARG_I64 = 3, ARG_F64 = 4,
     ARG_I8 = 5, ARG_I16 = 6, ARG_BOOL = 7,

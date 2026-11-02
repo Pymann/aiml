@@ -101,25 +101,40 @@ gewesen; was fehlte, war die Fehlermeldung.
 # Signature: sys.arg_dump(target: ModelOrStruct) -> void
 #
 # Field types (F23-61):
-#   bool    - a switch: `--verbose` sets 1 and consumes no token; `--verbose=0` sets 0
-#   i8, i16, i32 (and u-) - the next token as an integer; a flag followed by
-#             another flag or by nothing sets the field to 1
+#   bool    - a switch: `--verbose` sets 1 and consumes no token; `--verbose=V` takes
+#             V = 1|true|0|false
+#   i8, i16, i32 (and u-) - the next token as an integer, in the field's range
 #   i64, u64 - the next token as an integer
 #   f32, f64 - the next token as a real (each into its own width)
-#   string  - the next token
+#   string  - the next token (`--name=` sets "")
+#   list<string> - the next token, appended; repeat the flag for more
 #   list<string> named `positional` - collects every token that is not a flag
 #
-# Flag syntax:
+# Every field except bool needs a value.  A flag followed by nothing or by another flag,
+# and a value that is not wholly a number of the field's type ("12abc", "", "300" for
+# an i8), is an error: the field never silently becomes 1, 0 or "".  A field keeps its
+# model default exactly when its flag is absent.
+#
+# Flag syntax (F23-62):
 #   --foo-bar v | --foo-bar=v | -foo v  -> field foo_bar / foo
 #   --                                  -> every later token is positional
-#   a token starting with '-' and a digit ("-3") is a value, not a flag
+#   A flag is one or two dashes followed by a name: a letter or '_', then letters,
+#   digits, '_' or '-'.  Every other token starting with '-' is a value or positional:
+#   "-3", "-0.5", "-" (stdin), "-Flies(Tweety)" (a negated fact), "--5 + 1".
+#
+# Field names (F23-63): a field with a spec/15 alias is set by its alias — the external
+# name, as in sys.deserialize.  `[ident, string, "", { alias: "id" }]` takes `--id`;
+# `--ident` is then unknown.  This is how a flag shorter than the 3-character identifier
+# rule is modelled.
 #
 # Notes:
 # - argv[0] is ignored; parsing starts at argv[1].
 # - Positional tokens go to a `positional: list<string>` field, in order; without
 #   such a field they are ignored.
-# - Unknown flags print an error and terminate the process with exit code 1.
+# - Unknown flags and missing or malformed values print an error (UnknownArgumentException /
+#   InvalidArgumentException) and terminate the process with exit code 1.
 # - The target must be a named struct/model variable, not an arbitrary expression.
+# - tests/test_arg_dump_strict.aiml holds F23-61 to F23-63.
 #
 # Example:
 - model:

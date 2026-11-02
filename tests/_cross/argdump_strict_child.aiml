@@ -1,0 +1,27 @@
+# Child program of tests/test_arg_dump_strict.aiml: prints what sys.arg_dump made of its
+# command line.  Covers the alias (spec/15 F15-9) and the strict values of spec/23 F23-61.
+
+- model:
+    name: StrictOpts
+    fields:
+      - [ident, string, "", { alias: "id" }]
+      - [depth, i32, -1]
+      - [small, i8, 0]
+      - [ratio, f32, 0.0]
+      - [json, bool, false]
+      - [positional, list<string>, []]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [opts, StrictOpts]
+      - call: [sys.arg_dump, opts]
+      - decl: [ratio_x100, i32, { call: [math.round, { "*": [opts.ratio, 100.0] }] }]
+      - decl: [json, i32, { cast: [opts.json, i32] }]
+      - decl: [small, i32, { cast: [opts.small, i32] }]
+      - decl: [words, list<string>, opts.positional]
+      - decl: [rest, string, { call: [words.join, "|"] }]
+      - print: ["ident=${opts.ident} depth=${opts.depth} small=${small} ratio=${ratio_x100} json=${json}"]
+      - print: ["positional=${rest}"]
+      - return: 0

@@ -1,5 +1,5 @@
 # tests/test_arg_dump.aiml — Tests fuer sys.arg_dump
-# Run: ./out/aiml/aiml tests/test_arg_dump.aiml -- --steps 5 --output foo.txt --scale 2.5 --verbose --count 42 --db-tag myrun --output-prefix ft --limit-words 100
+# Run: ./out/aiml/aiml tests/test_arg_dump.aiml -- --steps 5 --output foo.txt --scale 2.5 --verbose 1 --count 42 --db-tag myrun --output-prefix ft --limit-words 100
 
 - model:
     name: CliArgs

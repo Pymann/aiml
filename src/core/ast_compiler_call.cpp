@@ -5064,7 +5064,10 @@ IRValue* Compiler::visitSysArgDumpCall(CallExpr* call) {
         Value* typePtr   = ctx.builder.CreateConstGEP2_32(i32ArrTy, typesArr,   0, fi);
         Value* offsetPtr = ctx.builder.CreateConstGEP2_32(i32ArrTy, offsetsArr, 0, fi);
 
-        ctx.builder.CreateStore(ctx.builder.CreateGlobalStringPtr(fname), namePtr);
+        // spec/15 F15-9: the alias is the external name, the flag the user types (as in
+        // sys.deserialize) — `[ident, string, "", { alias: "id" }]` is set by `--id`.
+        const std::string& flagName = fmem.alias.empty() ? fname : fmem.alias;
+        ctx.builder.CreateStore(ctx.builder.CreateGlobalStringPtr(flagName), namePtr);
         ctx.builder.CreateStore(ctx.builder.getInt32(tc), typePtr);
         ctx.builder.CreateStore(ctx.builder.getInt32((int)byteOffset), offsetPtr);
     }

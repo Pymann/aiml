@@ -96,7 +96,7 @@ Use `model` for data, `class` for data + behaviour.
 A field carries an optional **modifier map** in 4th position (the same slot that holds
 `db_indexed`, `unique`, `level`).  The key `alias` gives the field a *second* name, used
 wherever the field meets the outside world — today that is `sys.serialize` /
-`sys.deserialize`.
+`sys.deserialize` and the flag names of `sys.arg_dump` (spec/23 F23-63).
 
 ```aiml
 - model:
