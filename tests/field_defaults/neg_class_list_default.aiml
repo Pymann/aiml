@@ -1,0 +1,17 @@
+# Requires: driver
+# EXPECT-ERROR: non-empty list default
+# spec/15 F15-40: fuer ein `list<T>`-Feld ist `[]` der einzige Default; ein
+# gefuellter Default ist ein Compile-Fehler.  Der Check gab es nur fuer
+# `- model:`/`fields:`, nicht fuer `- class:`/`members:` — dort wurde der
+# Default still verworfen und das Feld war zur Laufzeit leer.
+- class:
+    name: Probe
+    members:
+      - [liste, list<string>, ["eins", "zwei"], { access: public }]
+    methods:
+      - def:
+          name: lauf
+          args: []
+          return: i32
+          body:
+            - return: <.liste.len

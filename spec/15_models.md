@@ -196,8 +196,17 @@ uninitialized/null field:
 - a field with an explicit default (`- [name, type, default]`) → that default.
   For a `list<T>` field the only default is `[]` (the empty list it gets anyway);
   a non-empty list default is a compile error — fill the list in code (F15-40).
+  This holds for **both** a model's `fields:` and a class's `members:`, and the
+  rejection names file and line. The check lives in the parser (`ModelBuilder` /
+  `ClassBuilder`), because the default never reaches code generation: the
+  field-init routine builds an empty container for every list field and does not
+  look at the default at all. So a missing check is not a mis-filled list but a
+  silently **empty** one — which looks like a data problem, not a translation
+  error. The class half of the check was absent until 2026-11-03; a filled
+  default was accepted without a word and the field was empty at run time.
   Before 2026-10-29 a `[]` default silently ended the field list: every later
-  field was missing.
+  field was missing. Regressions: `tests/field_defaults/` (both halves, plus the
+  allowed `[]` and scalar defaults).
 
 This holds for both stack decls and `{ new: Model }` heap allocations, and for
 fields of nested models. Both paths route through the same field-init routine

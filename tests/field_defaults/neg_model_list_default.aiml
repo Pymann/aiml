@@ -1,0 +1,15 @@
+# Requires: driver
+# EXPECT-ERROR: non-empty list default
+# Gegenstueck fuer `- model:`/`fields:` — dieser Pfad war schon richtig, der
+# Test haelt ihn fest.
+- model:
+    name: Probe
+    fields:
+      - [liste, list<string>, ["eins", "zwei"]]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [prb, Probe]
+      - return: prb.liste.len

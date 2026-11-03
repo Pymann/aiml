@@ -1,0 +1,52 @@
+# Requires: driver
+# Der ERLAUBTE Fall: `[]` als Default eines list-Feldes.  Muss uebersetzen, und
+# die Felder DANACH muessen noch da sein (spec/15: vor 2026-10-29 beendete ein
+# `[]`-Default still die Feldliste).
+- class:
+    name: Probe
+    members:
+      - [liste,  list<string>, [], { access: public }]
+      - [zahl,   i32,          7,  { access: public }]
+      - [wort,   string,       "danach", { access: public }]
+    methods:
+      - def:
+          name: lauf
+          args: []
+          return: i32
+          body:
+            - decl: [fehler, i32, 0]
+            - if:
+                condition: { neq: [<.liste.len, 0] }
+                then:
+                  - print: ["FAIL liste.len=${<.liste.len}"]
+                  - set: [fehler, { +: [fehler, 1] }]
+            # Das Feld nach dem []-Default muss existieren und seinen Default tragen.
+            - if:
+                condition: { neq: [<.zahl, 7] }
+                then:
+                  - print: ["FAIL zahl=${<.zahl}"]
+                  - set: [fehler, { +: [fehler, 1] }]
+            - if:
+                condition: { neq: [<.wort, "danach"] }
+                then:
+                  - print: ["FAIL wort=${<.wort}"]
+                  - set: [fehler, { +: [fehler, 1] }]
+            # `.push` muss sofort gehen.
+            - call: [<.liste.push, "spaeter"]
+            - if:
+                condition: { neq: [<.liste.len, 1] }
+                then:
+                  - print: ["FAIL push ergab len=${<.liste.len}"]
+                  - set: [fehler, { +: [fehler, 1] }]
+            - return: fehler
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [prb, Probe]
+      - decl: [fehler, i32, { call: [prb.lauf] }]
+      - if:
+          condition: { eq: [fehler, 0] }
+          then: [{ print: ["PASS ok_class_empty_list_default"] }]
+      - return: fehler

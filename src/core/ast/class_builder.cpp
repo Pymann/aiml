@@ -9,7 +9,15 @@
 namespace AIML {
 namespace AST {
 
+// spec/15 F15-40 gilt fuer Listenfelder; andere Typen behalten ihren bisherigen
+// Weg durch den ExpressionBuilder (ein `buffer`-Default `[1,2,3]` etwa).
+static bool isListMemberType(const std::string& t) {
+    return (t.rfind("list<", 0) == 0 || t.rfind("cascade<", 0) == 0) && !t.empty() && t.back() == '>';
+}
+
 bool ClassBuilder::OnMapStart() {
+    // Eine Map INNERHALB des Default-Literals ist ein Element, kein Ausdruck.
+    if (defaultSeqDepth > 0) { defaultSeqItems = true; return true; }
     if (insideRules) {
         // A rule item map opens → delegate to RuleBuilder (forward this open).
         auto rb = std::make_unique<RuleBuilder>(builder);
@@ -53,6 +61,8 @@ bool ClassBuilder::OnMapEnd() {
 }
 
 bool ClassBuilder::OnScalar(const std::string& value, const std::string& tag) {
+    // Ein Skalar im Default-Literal eines Listenfeldes ist ein Element.
+    if (defaultSeqDepth > 0) { defaultSeqItems = true; return true; }
     if (insideMethods && expectingKey && value == "def") {
          builder->pushState(std::make_unique<FunctionBuilder>(builder));
          expectingKey = true; // For when FunctionBuilder returns
@@ -180,6 +190,14 @@ bool ClassBuilder::OnSequenceStart() {
         currentKey = ""; // consumed
     }
     else if (insideMembers) {
+        if (defaultSeqDepth > 0 ||
+            (sequenceDepth == 2 && memberAttrIndex == 2 && isListMemberType(currentType))) {
+            // Eine Sequenz im Default-Literal ist selbst ein Element: `[[]]` hat
+            // ein Element und ist damit nicht leer, auch ohne Skalar darin.
+            if (defaultSeqDepth > 0) defaultSeqItems = true;
+            ++defaultSeqDepth;
+            return true;
+        }
         if (sequenceDepth == 2 && memberAttrIndex >= 2) {
              auto exprBuilder = std::make_unique<ExpressionBuilder>(builder);
              exprBuilder->OnSequenceStart();
@@ -202,6 +220,18 @@ bool ClassBuilder::OnSequenceStart() {
 }
 
 bool ClassBuilder::OnSequenceEnd() {
+    if (defaultSeqDepth > 0) {
+        if (--defaultSeqDepth == 0) {
+            if (defaultSeqItems)
+                LOG_ERROR(builder->fmtLoc() + "member '" + currentField + "' of class '" +
+                          classNode->name + "' has a non-empty list default — a list<T> field "
+                          "only takes `[]` (the empty list it gets anyway); fill the list in "
+                          "code (spec/15 F15-40)");
+            defaultSeqItems = false;
+            memberAttrIndex++;
+        }
+        return true;
+    }
     if (insideMembers) {
         sequenceDepth--;
         if (sequenceDepth == 1) {

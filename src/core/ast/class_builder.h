@@ -34,6 +34,13 @@ class ClassBuilder : public StateHandler {
     int currentLevel = -1;                 // spec/65 F65-33; -1 = absent
     bool currentConst = false;
     bool currentVolatile = false;
+    // spec/15 F15-40: ein `list<T>`-Member nimmt nur `[]` als Default.  Ein
+    // gefuellter Default wurde hier still verworfen (der ExpressionBuilder baute
+    // einen Ausdruck, den initClassContainerMembers fuer Listenfelder nie
+    // ansieht) → das Feld existierte und war zur Laufzeit leer.  Der ModelBuilder
+    // hatte den Check, der ClassBuilder nicht.
+    int  defaultSeqDepth = 0;
+    bool defaultSeqItems = false;
 public:
     ClassBuilder(Builder* b) : StateHandler(b) { classNode = std::make_unique<ClassDecl>(); }
     bool OnMapStart() override;

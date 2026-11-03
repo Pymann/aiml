@@ -1,0 +1,14 @@
+# Requires: driver
+# EXPECT-ERROR: non-empty list default
+# Auch eine VERSCHACHTELTE Liste als Default ist gefuellt und damit ein Fehler.
+- class:
+    name: Probe
+    members:
+      - [listen, list<string>, [["eins"], ["zwei"]], { access: public }]
+    methods:
+      - def:
+          name: lauf
+          args: []
+          return: i32
+          body:
+            - return: <.listen.len

@@ -51,6 +51,20 @@ public:
     // State handlers can read this to record source locations on AST nodes.
     int currentLine = 0;
 
+    // Quelldatei, gegen die gerade geparst wird.  Der Parser lief bisher ohne
+    // Dateinamen, darum konnte eine Meldung aus einem Builder nur den Text
+    // nennen, nicht die Fundstelle (gemessen am Listen-Default-Check: der
+    // Autor stand vor "field 'liste' has a non-empty list default" ohne zu
+    // wissen, in WELCHER Datei).  Leer bei synthetisierten Schnipseln.
+    std::string sourceFile;
+
+    // "datei:zeile: " fuer eine Meldung aus einem Builder, oder "" ohne Datei.
+    std::string fmtLoc() const {
+        if (sourceFile.empty()) return "";
+        if (currentLine > 0) return sourceFile + ":" + std::to_string(currentLine) + ": ";
+        return sourceFile + ": ";
+    }
+
     // YAML::EventHandler Overrides
     void OnDocumentStart(const YAML::Mark& mark) override {}
     void OnDocumentEnd() override {}

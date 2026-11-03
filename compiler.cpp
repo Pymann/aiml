@@ -959,6 +959,7 @@ std::shared_ptr<std::vector<std::string>> AIMLCompiler::installImportResolver(
         ctx.currentSourceFile = path;
 
         AIML::AST::Builder subBuilder;
+        subBuilder.sourceFile = path;          // Fundstelle fuer Parser-Meldungen
         std::ifstream fin(path);
         if (fin.is_open()) {
             try {
@@ -1120,6 +1121,7 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
 
     // 4. Parse YAML to AST & Compile (Two-Pass)
     AIML::AST::Builder astBuilder;
+    astBuilder.sourceFile = filename;          // Fundstelle fuer Parser-Meldungen
     // spec/62 §13.5f: eine deklarierte Pipeline wird VOR dem Uebersetzen in
     // die zusammengesetzte Form umgeschrieben.  Nur Dateien, die eine
     // enthalten, laufen durch die Umschreibung — jede andere nimmt
@@ -1443,6 +1445,7 @@ void AIMLCompiler::compileFromString(const std::string& yaml_source_in) {
         YAML::Node rawSeq = YAML::Load(yaml_source);
 
         AIML::AST::Builder astBuilder;
+        astBuilder.sourceFile = "<memory>";    // Fundstelle fuer Parser-Meldungen
         // Feed each node to the AST builder via a synthesised YAML stream
         std::istringstream ss(yaml_source);
         YAML::Parser parser(ss);

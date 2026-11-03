@@ -1,0 +1,38 @@
+# Requires: driver
+# Gegenprobe: skalare Defaults an Klassenmembern bleiben unberuehrt vom
+# Listen-Check.
+- class:
+    name: Probe
+    members:
+      - [zahl,  i32,    42,      { access: public }]
+      - [wort,  string, "hallo", { access: public }]
+      - [komma, f32,    1.5,     { access: public }]
+    methods:
+      - def:
+          name: lauf
+          args: []
+          return: i32
+          body:
+            - decl: [fehler, i32, 0]
+            - if:
+                condition: { neq: [<.zahl, 42] }
+                then:
+                  - print: ["FAIL zahl=${<.zahl}"]
+                  - set: [fehler, { +: [fehler, 1] }]
+            - if:
+                condition: { neq: [<.wort, "hallo"] }
+                then:
+                  - print: ["FAIL wort=${<.wort}"]
+                  - set: [fehler, { +: [fehler, 1] }]
+            - return: fehler
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [prb, Probe]
+      - decl: [fehler, i32, { call: [prb.lauf] }]
+      - if:
+          condition: { eq: [fehler, 0] }
+          then: [{ print: ["PASS ok_class_scalar_defaults"] }]
+      - return: fehler

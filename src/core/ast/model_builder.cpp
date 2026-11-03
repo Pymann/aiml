@@ -8,6 +8,8 @@ namespace AIML {
 namespace AST {
 
 bool ModelBuilder::OnMapStart() {
+    // Eine Map INNERHALB des Default-Literals ist ein Element, kein eigener Ausdruck.
+    if (defaultSeqDepth > 0) { defaultSeqItems = true; return true; }
     if (insideFields && memberAttrIndex == 2) {
         auto exprBuilder = std::make_unique<ExpressionBuilder>(builder);
         exprBuilder->OnMapStart();
@@ -126,6 +128,9 @@ bool ModelBuilder::OnScalar(const std::string& value, const std::string& tag) {
 
 bool ModelBuilder::OnSequenceStart() {
     if (defaultSeqDepth > 0 || (insideFields && memberAttrIndex == 2 && !currentField.empty())) {
+        // Eine Sequenz im Default-Literal ist selbst ein Element: `[[]]` hat ein
+        // Element und ist damit nicht leer, auch wenn kein Skalar darin steht.
+        if (defaultSeqDepth > 0) defaultSeqItems = true;
         ++defaultSeqDepth;               // a list literal as the field's default
         return true;
     }
@@ -153,8 +158,10 @@ bool ModelBuilder::OnSequenceEnd() {
         if (--defaultSeqDepth == 0) {
             // `[]` is what a list field starts as anyway; a filled default is not supported
             if (defaultSeqItems)
-                LOG_ERROR("model " + modelNode->name + ": field '" + currentField +
-                          "' has a non-empty list default — fill the list in code (spec/15)");
+                LOG_ERROR(builder->fmtLoc() + "field '" + currentField + "' of model '" +
+                          modelNode->name + "' has a non-empty list default — a list<T> field "
+                          "only takes `[]` (the empty list it gets anyway); fill the list in "
+                          "code (spec/15 F15-40)");
             defaultSeqItems = false;
             memberAttrIndex++;
         }
