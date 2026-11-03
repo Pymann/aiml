@@ -291,6 +291,32 @@ line.
 Integer width mixing (`i32` vs `i64`) is still reconciled silently by sign-extension; it is part
 of the implicit-conversion set listed in `/spec/13_cast.md` §6 and kept for now.
 
+### Which contexts type a real literal
+
+"Built in the type its context gives it" means the constant is produced at that **precision**,
+not produced at `f32` and widened.  The contexts are:
+
+| Context | Example | The literals are |
+|---------|---------|------------------|
+| the declared type of a `decl` | `decl: [rate, f64, { /: [1.0, 3.0] }]` | `f64` |
+| the destination of a `set:` | `set: [rate_f64, 0.1234567891]` | `f64` |
+| the declared return type | `return: { /: [1.0, 3.0] }` in an `f64` function | `f64` |
+| the other operand of an operator | `{ gt: [rate_f64, 0.1234567891] }` | `f64` |
+| a parameter's declared type | `f(rate: f64)` called as `{ call: [f, 0.1] }` | `f64` |
+| no context | `decl: [x, f32, 0.1]`, a builtin's argument | `f32` (spec/10) |
+
+Without this the literal was parsed as `f32` first and only the **result** widened, so every
+digit past the 8th was gone before the `f64` ever saw it:
+
+```yaml
+- decl: [val_a, f64, 0.1234567891]        # was 0.123456791043282, now 0.1234567891
+- decl: [val_b, f64, { /: [1.0, 3.0] }]   # was 0.333333343267441, now 0.333333333333333
+```
+
+A builtin's argument keeps the `f32` default on purpose — a parameter carries its own type, and
+the math builtins declare `f32`.  Where the width of a computation matters, the scalar math
+functions read the context of their *result* instead; see spec/43_0 §7.1.
+
 ---
 
 ## 8. Conditional Expression

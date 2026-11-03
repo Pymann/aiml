@@ -1,11 +1,31 @@
 # AIML-To-do-Liste aus der cai-Arbeit an W5–W8
 
 Datum: 2026-11-03
-Status: backlog
+Status: **abgearbeitet** (siehe „Ergebnis" je Punkt; Stand 2026-11-03 abends)
 Quelle: cai-Branch `feature/weighted-symbolic-reasoning` (Regelgewichte, Kausal-Export, TransE mit der
 Tensor-Laufzeit). Jeder Punkt ist mit einem kleinen Programm gegen den Compiler von `43144207` geprüft
 (`aiml DATEI -r`); die Programme stehen unten. Was nur beobachtet und nicht klein nachgestellt ist, steht
 unter „Beobachtet“.
+
+## Ergebnis im Überblick
+
+| # | Punkt | Ergebnis |
+|---|-------|----------|
+| 1 | f32-Literale im f64-Zusammenhang | **behoben** — Literal wird im Kontexttyp gebildet (spec/04_1 §7a-Tabelle), `tests/test_f64_literals.aiml` |
+| 2 | Liste von Klassen: get→remove→insert | **nicht reproduzierbar** — als Regressionstest festgehalten (`tests/test_list_model_mutate.aiml`, Modell- UND Klassenvariante grün) |
+| 3 | Methodenaufruf als Wert-Argument vom Klassentyp | **behoben** — Elementzeiger wird geladen wie im Freie-Funktions-Pfad (spec/10), Test im selben File |
+| 4 | `math.exp`/`log` nur f32 | **behoben** — Breite nach Argument ODER Ergebnis-Kontext (spec/43_0 §7.1) |
+| 5 | `string.parse_f64` | **ergänzt** (spec/09) |
+| 6 | Feste Nachkommastellen | **ergänzt** als `sys.format_fixed` (spec/23 F23-78) |
+| 7 | Tensor-Zufall nicht seedbar | **ergänzt** als `tensor.seed` + eigener splitmix64 (spec/50 §17.1) |
+| 8 | `begin_graph` gibt eigene Tensoren frei | **dokumentiert + `t.keep`** (spec/50 §14.1) |
+| 9 | Anführungszeichen in `${ { … } }` | **dokumentiert** (spec/09_1 §3.4) + Compiler nennt die betroffenen Zeilen |
+| 10 | Elementschreiben schwer zu finden | **behoben** — `idx:` steht jetzt im Listen-Abschnitt, und `Unknown list method: set` nennt es |
+| 11 | `try` in verschachteltem `if` | **nicht reproduzierbar** — Reduktion grün (`tests/test_try_in_nested_if.aiml`); die cai-Ursache lag anders |
+
+Nebenbefunde am `sys.arg_dump`-Fix desselben Branches: zwei Felder, die auf dasselbe Flag
+antworten, sind jetzt ein Compile-Fehler, und ein Alias `given` ist wie `positional` reserviert
+(spec/23 F23-63, Fälle in `tests/test_arg_dump_strict.aiml`).
 
 **Richtigstellung zu meinen früheren Anmerkungen in cai:**
 - „Es gibt kein `parse_f64`“ greift zu kurz. Mit `cast` geht es: `{ cast: [{ call: [s.parse_f32] }, f64] }`.

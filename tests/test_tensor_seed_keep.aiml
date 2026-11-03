@@ -1,0 +1,65 @@
+# tensor.seed (spec/50 §17.1) and t.keep (spec/50 §14.1).
+#   seed: randn draws from the runtime's OWN platform-independent generator, so the same seed
+#         gives the same numbers — before this it used libc rand() and nothing was repeatable.
+#   keep: begin_graph collects user-allocated tensors older than one epoch; a marked tensor
+#         survives, so an index/constant tensor built before a loop stays readable.
+# Found in the cai W5-W8 work, doc/backlog/2026-11-03_todo_aus_cai_w8.md points 7 and 8.
+# Expected exit code: 0
+
+- import: "tests/_cross/check.aiml"
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [chk, ptr<Checker>, { new: Checker }]
+
+      # ── the same seed gives the same draw ──
+      - call: [tensor.seed, 42]
+      - decl: [draw_a, tensor, { call: [tensor.randn, 4] }]
+      - call: [tensor.seed, 42]
+      - decl: [draw_b, tensor, { call: [tensor.randn, 4] }]
+      - call: [chk.expect_s, "same seed, same numbers",
+               { call: [tensor.sha256, draw_a] }, { call: [tensor.sha256, draw_b] }]
+
+      # ── a different seed gives a different draw ──
+      - call: [tensor.seed, 43]
+      - decl: [draw_c, tensor, { call: [tensor.randn, 4] }]
+      - decl: [hash_a, string, { call: [tensor.sha256, draw_a] }]
+      - decl: [hash_c, string, { call: [tensor.sha256, draw_c] }]
+      - decl: [differs, i32, 0]
+      - if: { condition: { neq: [hash_a, hash_c] }, then: [{ set: [differs, 1] }] }
+      - call: [chk.expect_i, "a different seed draws differently", differs, 1]
+
+      # ── the draw is not all zeros (the generator actually runs) ──
+      - decl: [sum_abs, f32, 0.0]
+      - decl: [idx_draw, i32, 0]
+      - while:
+          condition: { lt: [idx_draw, 4] }
+          body:
+            - set: [sum_abs, { "+": [sum_abs, { call: [math.abs, { call: [draw_a.get, idx_draw] }] }] }]
+            - set: [idx_draw, { "+": [idx_draw, 1] }]
+      - decl: [nonzero, i32, 0]
+      - if: { condition: { gt: [sum_abs, 0.0] }, then: [{ set: [nonzero, 1] }] }
+      - call: [chk.expect_i, "randn produced values", nonzero, 1]
+
+      # ── keep: a constant tensor built before the loop survives begin_graph ──
+      - decl: [ids, tensor, { call: [tensor.zeros, 3] }]
+      - call: [ids.set, 0, 7.0]
+      - call: [ids.set, 1, 8.0]
+      - call: [ids.set, 2, 9.0]
+      - call: [ids.keep]
+      - decl: [round_no, i32, 0]
+      - while:
+          condition: { lt: [round_no, 4] }
+          body:
+            - call: [tensor.begin_graph]
+            - decl: [work, tensor, { call: [tensor.ones, 3] }]
+            - set: [round_no, { +: [round_no, 1] }]
+      # after four graph resets the marked tensor must still read back
+      - call: [chk.expect_i, "kept tensor survives begin_graph (elem 0)", { cast: [{ call: [ids.get, 0] }, i64] }, 7]
+      - call: [chk.expect_i, "kept tensor survives begin_graph (elem 2)", { cast: [{ call: [ids.get, 2] }, i64] }, 9]
+
+      - if: { condition: { gt: [chk.fails, 0] }, then: [{ print: ["FAIL tensor_seed_keep (${chk.fails})"] }, { return: 1 }] }
+      - print: ["PASS tensor_seed_keep"]
+      - return: 0

@@ -360,9 +360,13 @@ IRValue* Compiler::visitLiteral(LiteralExpr* lit) {
                           sv.find('e') != std::string::npos ||
                           sv.find('E') != std::string::npos);
         if (looksFloat) {
+            // spec/04_1 §3 + §7a: a written-out constant has no type of its own — build it in
+            // the type the context gives it (ctx.floatLitTy), f32 when there is none (spec/10).
+            // Parsing with std::stof first and widening afterwards dropped every digit past the
+            // 8th, so an f64 never saw more than f32 precision.
+            llvm::Type* litTy = ctx.floatLitTy ? ctx.floatLitTy : ctx.builder.getFloatTy();
             try {
-                float f = std::stof(sv);
-                return ctx.ir_gen->wrap(llvm::ConstantFP::get(ctx.builder.getFloatTy(), (double)f));
+                return ctx.ir_gen->wrap(llvm::ConstantFP::get(litTy, std::stod(sv)));
             } catch (...) {}
         }
 
@@ -923,11 +927,17 @@ IRValue* Compiler::visitBinary(BinaryExpr* bin) {
             };
 
             bool handled = false;
+            /* Ein ausgeschriebenes Literal wird aus seinem QUELLTEXT im Zieltyp gebildet.
+             * Der Weg ueber asFloatConst() sieht nur die bereits auf f32 gerundete
+             * Konstante: `{ gt: [wert_f64, 0.1234567891] }` verglich gegen
+             * 0.123456791043282, weil die Stellen vor dem Verbreitern schon weg waren. */
             if (lTy->isFloatingPointTy()) {
-                if (llvm::Value* c = asFloatConst(rv, lTy)) { rhs = ctx.ir_gen->wrap(c); handled = true; }
+                if (llvm::Constant* c = floatLiteralIn(bin->rhs.get(), lTy)) { rhs = ctx.ir_gen->wrap(static_cast<llvm::Value*>(c)); handled = true; }
+                else if (llvm::Value* c = asFloatConst(rv, lTy)) { rhs = ctx.ir_gen->wrap(c); handled = true; }
             }
             if (!handled && rTy->isFloatingPointTy()) {
-                if (llvm::Value* c = asFloatConst(lv, rTy)) { lhs = ctx.ir_gen->wrap(c); handled = true; }
+                if (llvm::Constant* c = floatLiteralIn(bin->lhs.get(), rTy)) { lhs = ctx.ir_gen->wrap(static_cast<llvm::Value*>(c)); handled = true; }
+                else if (llvm::Value* c = asFloatConst(lv, rTy)) { lhs = ctx.ir_gen->wrap(c); handled = true; }
             }
             if (!handled) {
                 auto typeName = [](llvm::Type* t) -> const char* {

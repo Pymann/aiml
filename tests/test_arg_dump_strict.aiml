@@ -18,6 +18,20 @@
       - [err, string, "", { access: public }]
     methods:
       - def:
+          name: run_file
+          args: [[child_file, string]]
+          return: i32
+          body:
+            - decl: [argv, list<string>]
+            - call: [argv.push, { call: [sys.exe_path] }]
+            - call: [argv.push, "-r"]
+            - call: [argv.push, child_file]
+            - decl: [child, process, { call: [sys.exe, argv, { capture: true }] }]
+            - decl: [code, i32, { call: [child.wait] }]
+            - set: [<.out, child.stdout_buffer]
+            - set: [<.err, child.stderr_buffer]
+            - return: code
+      - def:
           name: run
           args: [[extra, list<string>]]
           return: i32
@@ -126,6 +140,14 @@
       - call: [chk.expect_i, "given is no flag", { call: [kid.run, case26] }, 1]
       - decl: [case27, list<string>, ["--seen", "depth"]]
       - call: [chk.expect_i, "alias of given is no flag either", { call: [kid.run, case27] }, 1]
+
+      # ── F23-63: two fields must not answer to the same flag, and `given` is reserved ──
+      - call: [chk.expect_i, "colliding alias does not compile",
+               { call: [kid.run_file, "tests/_cross/argdump_alias_collision_child.aiml"] }, 1]
+      - call: [chk.expect_has, "collision names both fields", kid.err, "are both set by '--mode'"]
+      - call: [chk.expect_i, "alias 'given' does not compile",
+               { call: [kid.run_file, "tests/_cross/argdump_alias_reserved_child.aiml"] }, 1]
+      - call: [chk.expect_has, "reserved alias message", kid.err, "cannot be a flag name"]
 
       - if: { condition: { gt: [chk.fails, 0] }, then: [{ print: ["FAIL arg_dump_strict (${chk.fails})"] }, { return: 1 }] }
       - print: ["PASS arg_dump_strict"]

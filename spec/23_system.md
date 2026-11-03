@@ -248,6 +248,32 @@ Intended use — sizing a worker pool (chapter 26):
 - if: { condition: { lt: [workers, 1] }, then: [{ set: [workers, 1] }] }
 ```
 
+## 4.2 `sys.format_fixed` — a real with a fixed number of decimals (F23-78)
+
+```
+# Signature: sys.format_fixed(value: f32|f64|integer, decimals: i32) -> string
+```
+
+Interpolation prints a real with as many digits as it has — up to 15 for an `f64`, 6 for an
+`f32` — which is unusable for a column, a report or a log line.  `sys.format_fixed` gives
+**exactly** `decimals` digits after the point, rounded half-away-from-zero, with no exponent.
+
+- `decimals` is clamped to `0 … 17`; an `f64` carries no more digits than that.
+- `decimals: 0` yields no point at all (`"3"`).
+- The value is widened to `f64` first, so an `f32` or an integer may be passed.
+- The result is an ordinary owned `string`.
+
+```yaml
+- decl: [one, f64, 1.0]
+- decl: [three, f64, 3.0]
+- decl: [third, f64, { /: [one, three] }]
+- decl: [shown, string, { call: [sys.format_fixed, third, 3] }]   # "0.333"
+- decl: [whole, string, { call: [sys.format_fixed, third, 0] }]   # "0"
+- decl: [money, string, { call: [sys.format_fixed, 1.005, 2] }]   # "1.00" or "1.01" —
+# a binary real cannot hold 1.005 exactly; this rounds what is stored, it does not invent
+# decimal arithmetic.  Count in whole cents where the last digit must be exact.
+```
+
 ## 5. Process Management
 
 ### 5.1 `sys.exe` — spawning

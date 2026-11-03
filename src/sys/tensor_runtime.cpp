@@ -6,6 +6,7 @@
 #include "tensor_runtime.h"
 #include <cblas.h>
 #include <cstdlib>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <cmath>
@@ -33,6 +34,7 @@ struct AimlTensor {
     int    owns_data;      // 1 = we own data, 0 = view (reshape/slice)
     int    is_param;       // 1 = weight/persistent tensor, survives begin_graph
     int    alloc_epoch;    // g_graph_epoch at allocation time
+    int    keep;           // 1 = never collected by begin_graph (spec/50 §14.1, tensor.keep)
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -224,6 +226,7 @@ static int compute_size(const int* shape, int ndim) {
 static AimlTensor* alloc_tensor(const int* shape, int ndim, bool zero = true, int is_param_hint = 0) {
     auto* t = struct_alloc();
     if (!t) { fprintf(stderr, "[AIML] FATAL: alloc_tensor: struct alloc failed\n"); return nullptr; }
+    t->keep = 0;               // spec/50 §14.1: opt-in, set by tensor.keep
     t->ndim = ndim;
     t->shape = (int*)malloc(ndim * sizeof(int));
     memcpy(t->shape, shape, ndim * sizeof(int));
@@ -324,12 +327,40 @@ void* aiml_tensor_ones(const int32_t* shape, int32_t ndim) {
     return t;
 }
 
+// ── Reproducible randomness (spec/50 §15) ───────────────────────────────────────────────────
+// rand()/RAND_MAX differ between platforms and C libraries (RAND_MAX is 32767 on some), so a
+// run could never be repeated across processes or machines and callers built their own LCG.
+// This is a fixed splitmix64: same seed, same numbers, everywhere.  The state is per thread, so
+// one thread's draws cannot shift another's.  aiml_tensor_seed(n) sets it; the default start is
+// a constant, which makes an unseeded program reproducible too.
+static thread_local uint64_t g_tensor_rng = 0x9E3779B97F4A7C15ULL;
+
+// spec/50 §14.1: mark a tensor as the caller's own — begin_graph never collects it.  For index
+// and constant tensors built once before a training loop.  Idempotent; a weight does not need it
+// (requires_grad already protects those).
+void aiml_tensor_keep(void* tv) {
+    if (auto* t = (AimlTensor*)tv) t->keep = 1;
+}
+
+void aiml_tensor_seed(int64_t seed) {
+    g_tensor_rng = (uint64_t)seed + 0x9E3779B97F4A7C15ULL;
+}
+
+// splitmix64 → the 24 high bits as a float in [0, 1)
+static float tensor_rand_unit(void) {
+    uint64_t z = (g_tensor_rng += 0x9E3779B97F4A7C15ULL);
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
+    z = z ^ (z >> 31);
+    return (float)(z >> 40) / 16777216.0f;       // 2^24
+}
+
 void* aiml_tensor_randn(const int32_t* shape, int32_t ndim, float mean, float stddev) {
     auto* t = alloc_tensor(shape, ndim, false, /*is_param_hint=*/1);
     // Box-Muller transform
     for (int i = 0; i < t->size; i += 2) {
-        float u1 = ((float)rand() / RAND_MAX);
-        float u2 = ((float)rand() / RAND_MAX);
+        float u1 = tensor_rand_unit();
+        float u2 = tensor_rand_unit();
         if (u1 < 1e-10f) u1 = 1e-10f;
         float z0 = sqrtf(-2.0f * logf(u1)) * cosf(2.0f * (float)M_PI * u2);
         float z1 = sqrtf(-2.0f * logf(u1)) * sinf(2.0f * (float)M_PI * u2);
@@ -1316,8 +1347,13 @@ void aiml_tensor_begin_graph(void) {
         if (!t->is_param) {
             g_pending_free.push_back(t);
             collected++;
-        } else if (!t->requires_grad && t->grad_node_id == -1
+        } else if (!t->keep && !t->requires_grad && t->grad_node_id == -1
                    && t->alloc_epoch < g_graph_epoch - 1) {
+            // spec/50 §14.1: a tensor the caller marked with `tensor.keep` is theirs to free.
+            // Without the flag this branch also swept up index and constant tensors built
+            // BEFORE the loop (tensor.zeros for ids: is_param=1, no grad, no graph node), and
+            // the second iteration read freed memory — embedding_lookup then crashed on a
+            // nonsense shape.
             g_pending_free.push_back(t);
             collected++;
             stale++;

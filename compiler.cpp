@@ -1337,7 +1337,37 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
             LOG_ERROR(filename + ": AST Builder failed to produce a valid program.");
         }
     } catch (const YAML::Exception& e) {
-        LOG_ERROR(filename + ": YAML Parsing Error during AST Build: " + std::string(e.what()));
+        // spec/09_1: `"... ${ { call: [<.f, \"x\"] } } ..."` is not valid YAML — the inner quote
+        // ENDS the surrounding scalar, and yaml-cpp then reports a structural error ("end of map
+        // not found") whose mark can sit many lines away from the cause.  Name the lines that
+        // carry the pattern so the author does not have to bisect the file.  A quote is only
+        // suspicious INSIDE the interpolation block: between the nested `{` and the last `}` of
+        // the line (a closing quote after that belongs to the scalar and is fine).
+        std::string hint;
+        try {
+            std::ifstream hin(filename);
+            std::string line, hits;
+            int ln = 0;
+            while (std::getline(hin, line)) {
+                ++ln;
+                size_t at = line.find("${");
+                if (at == std::string::npos) continue;
+                size_t brace = line.find('{', at + 2);
+                if (brace == std::string::npos) continue;
+                if (line.find_first_not_of(' ', at + 2) != brace) continue;   // `${ {`, not `${x}`
+                size_t end = line.rfind('}');
+                if (end == std::string::npos || end <= brace) continue;
+                if (line.find('"', brace) >= end) continue;                   // quote outside the block
+                if (!hits.empty()) hits += ", ";
+                hits += std::to_string(ln);
+            }
+            if (!hits.empty())
+                hint = " — line(s) " + hits + " interpolate a nested call with a quoted argument"
+                       " (`${ { call: [..., \"x\"] } }`): the inner quote ends the scalar, so YAML"
+                       " reports a structural error elsewhere. Evaluate the call into its own"
+                       " variable first (spec/09_1).";
+        } catch (...) {}
+        LOG_ERROR(filename + ": YAML Parsing Error during AST Build: " + std::string(e.what()) + hint);
     }
     
     // Propagate linked objects from pass 1
@@ -2323,6 +2353,8 @@ int AIMLCompiler::jitRun(int argc, char** argv) {
     llvm::sys::DynamicLibrary::AddSymbol("aiml_str_split_fill",    (void*)(intptr_t)aiml_str_split_fill);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_str_parse_i32",    (void*)(intptr_t)aiml_str_parse_i32);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_str_parse_f32",    (void*)(intptr_t)aiml_str_parse_f32);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_str_parse_f64",    (void*)(intptr_t)aiml_str_parse_f64);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_sys_format_fixed", (void*)(intptr_t)aiml_sys_format_fixed);
     // spec/61 §7 managed string-local assignment helpers (called only from generated code →
     // register + reference so they resolve in JIT and are not stripped from the binary).
     llvm::sys::DynamicLibrary::AddSymbol("aiml_str_empty",        (void*)(intptr_t)aiml_str_empty);
@@ -2545,6 +2577,8 @@ int AIMLCompiler::jitRun(int argc, char** argv) {
     llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_zeros",            (void*)(intptr_t)aiml_tensor_zeros);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_ones",             (void*)(intptr_t)aiml_tensor_ones);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_randn",            (void*)(intptr_t)aiml_tensor_randn);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_seed",             (void*)(intptr_t)aiml_tensor_seed);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_keep",             (void*)(intptr_t)aiml_tensor_keep);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_from_data",        (void*)(intptr_t)aiml_tensor_from_data);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_clone",            (void*)(intptr_t)aiml_tensor_clone);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_free",             (void*)(intptr_t)aiml_tensor_free);

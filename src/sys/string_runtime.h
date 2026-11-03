@@ -78,5 +78,7 @@ int32_t aiml_str_parse_i32(const char* s);
 
 // string.parse_f32() -> f32 — like strtof but returns 0.0 for null/empty
 float aiml_str_parse_f32(const char* s);
+double aiml_str_parse_f64(const char* s);
+char* aiml_sys_format_fixed(double value, int32_t decimals);
 
 }

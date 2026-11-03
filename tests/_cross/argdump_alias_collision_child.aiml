@@ -1,0 +1,15 @@
+# Must NOT compile: `ident`'s alias and the real field `mode` would both answer to `--mode`,
+# and the runtime takes the first match (spec/23 F23-63).
+- model:
+    name: CollidingOpts
+    fields:
+      - [ident, string, "", { alias: "mode" }]
+      - [mode, string, ""]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [opts, CollidingOpts]
+      - call: [sys.arg_dump, opts]
+      - return: 0

@@ -2470,7 +2470,17 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
         }
 
         ctx.deserializeTargetType = decl->typeName;
+        // spec/04_1 §3 + §7a: the declared type is the context that types the real literals in
+        // the initialiser, so `decl: [rate, f64, { "/": [1.0, 3.0] }]` divides in f64 instead of
+        // dividing in f32 and widening the already-rounded result.
+        llvm::Type* savedLitTy = ctx.floatLitTy;
+        llvm::Type* savedResTy = ctx.floatResultTy;
+        if (decl->typeName == "f64")      ctx.floatLitTy = ctx.builder.getDoubleTy();
+        else if (decl->typeName == "f32") ctx.floatLitTy = ctx.builder.getFloatTy();
+        if (ctx.floatLitTy != savedLitTy) ctx.floatResultTy = ctx.floatLitTy;   // spec/43_0 §7.1
         IRValue* initVal = visitExpression(decl->initialValue.get());
+        ctx.floatLitTy = savedLitTy;
+        ctx.floatResultTy = savedResTy;
         ctx.deserializeTargetType.clear();
         // spec/61 §7: normalise a managed string local's init to "one owned RC ref". An owned temp
         // (interpolation/producer, in the stmt-temp list) is MOVED (stored as-is, then removed from
@@ -2790,7 +2800,10 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
                             } else if (targetTy->isIntegerTy() && sv->getType()->isFloatingPointTy()) {
                                 initVal = ctx.ir_gen->wrap(ctx.builder.CreateFPToSI(sv, targetTy, "fp_to_int"));
                             } else if (targetTy->isFloatingPointTy() && sv->getType()->isFloatingPointTy()) {
-                                initVal = ctx.ir_gen->wrap(ctx.builder.CreateFPCast(sv, targetTy, "fp_cast"));
+                                if (llvm::Constant* c = floatLiteralIn(decl->initialValue.get(), targetTy))
+                                    initVal = ctx.ir_gen->wrap(static_cast<llvm::Value*>(c));   // spec/04_1 §7a
+                                else
+                                    initVal = ctx.ir_gen->wrap(ctx.builder.CreateFPCast(sv, targetTy, "fp_cast"));
                             }
                         }
                     }
@@ -4895,7 +4908,14 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
         emitReturnCleanup();
         ctx.ir_gen->createRet(ctx.ir_gen->wrap(handle));
     } else if (retStmt->value) {
+        // spec/04_1 §3 + §7a: the declared return type types the real literals of the returned
+        // expression — `return: { "/": [1.0, 3.0] }` in an f64 function divides in f64.
+        llvm::Type* savedRetLitTy = ctx.floatLitTy;
+        llvm::Type* savedRetResTy = ctx.floatResultTy;
+        if (retTy && retTy->isFloatingPointTy()) { ctx.floatLitTy = retTy; ctx.floatResultTy = retTy; }
         IRValue* val = visitExpression(retStmt->value.get());
+        ctx.floatLitTy = savedRetLitTy;
+        ctx.floatResultTy = savedRetResTy;
         // An owned statement temp (e.g. a string `at` that already retained the element) is moved
         // out as-is — dup'ing it again would orphan that reference.
         bool retWasOwnedTemp = val && inStringTempStack(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val)));
@@ -5174,8 +5194,10 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
                         raw = ctx.builder.CreateIntCast(raw, retTy, rt->getIntegerBitWidth() != 1, "ret_icast");
                     else if (rt->isIntegerTy() && retTy->isFloatingPointTy())
                         raw = ctx.builder.CreateSIToFP(raw, retTy, "ret_i2f");
-                    else if (rt->isFloatingPointTy() && retTy->isFloatingPointTy())
-                        raw = ctx.builder.CreateFPCast(raw, retTy, "ret_fcast");
+                    else if (rt->isFloatingPointTy() && retTy->isFloatingPointTy()) {
+                        if (llvm::Constant* c = floatLiteralIn(retStmt->value.get(), retTy)) raw = c;  // spec/04_1 §7a
+                        else raw = ctx.builder.CreateFPCast(raw, retTy, "ret_fcast");
+                    }
                 }
                 ctx.ir_gen->createRet(ctx.ir_gen->wrap(raw));
             }
@@ -6598,7 +6620,14 @@ void Compiler::visitStoreStmt(StoreStmt* st) {
         return;
     }
 
+    // spec/04_1 §3 + §7a: the destination's type is the context that types the real literals
+    // being stored, so `set: [rate_f64, { "/": [1.0, 3.0] }]` divides in f64.
+    llvm::Type* savedStoreLitTy = ctx.floatLitTy;
+    llvm::Type* savedStoreResTy = ctx.floatResultTy;
+    if (innerTy && innerTy->isFloatingPointTy()) { ctx.floatLitTy = innerTy; ctx.floatResultTy = innerTy; }
     IRValue* val = visitExpression(st->value.get());
+    ctx.floatLitTy = savedStoreLitTy;
+    ctx.floatResultTy = savedStoreResTy;
     if (val) consumeStringTemp(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val))); // spec/61: moved via store
     if (!val) {
         LOG_ERROR(ctx.fmtLoc() + "store: failed to evaluate value expression");
@@ -6613,7 +6642,8 @@ void Compiler::visitStoreStmt(StoreStmt* st) {
         } else if (innerTy->isFloatingPointTy() && storeVal->getType()->isIntegerTy()) {
             storeVal = ctx.builder.CreateSIToFP(storeVal, innerTy, "store_coerce_fp");
         } else if (innerTy->isFloatingPointTy() && storeVal->getType()->isFloatingPointTy()) {
-            storeVal = ctx.builder.CreateFPCast(storeVal, innerTy, "store_coerce_fp");
+            if (llvm::Constant* c = floatLiteralIn(st->value.get(), innerTy)) storeVal = c;   // spec/04_1 §7a
+            else storeVal = ctx.builder.CreateFPCast(storeVal, innerTy, "store_coerce_fp");
         }
     }
 

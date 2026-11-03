@@ -549,6 +549,20 @@ namespace AIML {
     // behavior. Opt OUT for A/B comparison with AIML_MEM_V3=0 (parsed in the ctor). See
     // spec/61_memory_management.
     bool memV3 = true;
+
+    // spec/04_1 §3 + §7a: the type a written-out real literal is BUILT in, set by the context
+    // that is about to consume it (an f64 decl, return, parameter or store).  nullptr = no
+    // context, and an untyped real literal is f32 (spec/10).  Without this an f64 initialiser
+    // like `{ "/": [1.0, 3.0] }` was computed in f32 and only the result widened, so every
+    // digit past the 8th was lost before the f64 ever saw it.
+    llvm::Type* floatLitTy = nullptr;
+
+    // spec/43_0 §7.1: the real width the surrounding context wants for a CALL's result.  Unlike
+    // floatLitTy this is NOT cleared when descending into a call, because the scalar math
+    // functions are overloaded on it: `decl: [v, f64, { call: [math.exp, 1.0] }]` must compute in
+    // f64.  (floatLitTy is cleared there on purpose, so a literal ARGUMENT keeps its f32 default
+    // and no builtin suddenly receives a double where it declared a float.)
+    llvm::Type* floatResultTy = nullptr;
     // Set while a chained builtin call (`req.params.get(k)`, `url.get_param.get(k)`) evaluates
     // its field accessor: the chain operates on the parser's AimlHttpMap directly, so the
     // memV3 managed-handle conversion of that field is skipped (see builtin_registry http getters).

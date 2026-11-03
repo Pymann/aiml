@@ -98,6 +98,35 @@ Binary operations (like `+`, `-`, `*`, `/`) work as expected.
 # Output: Calculated: 10
 ```
 
+### 3.4 A quoted argument inside an expansion is not possible
+
+An expansion lives **inside** a YAML scalar.  A double quote in the expansion therefore ends
+that scalar, and the rest of the line is read as YAML structure:
+
+```yaml
+# WRONG — the quote before x closes the string
+- print: ["name: ${ { call: [<.label, \"x\"] } }"]
+```
+
+What arrives is a structural error, usually far from the cause and worded in terms of the YAML
+grammar rather than the line you wrote:
+
+```
+YAML Parsing Error during AST Build: yaml-cpp: error at line 83, column 5: end of map not found
+```
+
+The compiler adds a hint naming the lines that carry the pattern, but the construct cannot be
+written.  Evaluate the call first and expand the variable:
+
+```yaml
+- decl: [shown, string, { call: [<.label, "x"] }]
+- print: ["name: ${shown}"]
+```
+
+Single quotes do not help: YAML treats a single-quoted scalar the same way, and the AIML parser
+reads the expansion body as YAML, where `'x'` is the same token as `"x"`.  An expansion can
+contain names, numbers, operators and calls **whose arguments are not written-out strings**.
+
 ## 4. Implicit Type Conversion (String -> Int)
 
 Whenever the result of a string assignment is a `ptr<i8>` (i.e., a string) but the target

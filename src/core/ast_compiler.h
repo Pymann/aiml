@@ -181,6 +181,13 @@ private:
     llvm::Value* convertNumericArg(llvm::Value* v, llvm::Type* expected, Expr* src,
                                    const std::string& callee, size_t argNo);
 
+    // spec/04_1 §3 + §7a: a written-out real constant has no type of its own — it is BUILT in
+    // the type its context gives it, which converts nothing.  An untyped literal defaults to
+    // f32, so widening it to f64 afterwards cannot bring back the digits past the 8th
+    // (0.1234567891 -> 0.123456791043282).  Wherever the context type is known, rebuild the
+    // constant from the SOURCE TEXT at that precision.  nullptr if `src` is no real literal.
+    llvm::Constant* floatLiteralIn(Expr* src, llvm::Type* dstTy);
+
     // Build a fat-pointer struct {obj_ptr, vtable_ptr} for interface upcasts.    // Build a fat-pointer struct {obj_ptr, vtable_ptr} for interface upcasts.
     // Returns the loaded fat-pointer value, or nullptr if the upcast is invalid
     // (interface not registered, class does not implement the interface, etc.).

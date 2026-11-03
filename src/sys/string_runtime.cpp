@@ -747,3 +747,33 @@ extern "C" float aiml_str_parse_f32(const char* s) {
     if (!s || !*s) return 0.0f;
     return strtof(s, nullptr);
 }
+
+// ── sys.format_fixed(value, decimals) → string ──────────────────────────────
+// spec/23 F23-78: a real with a FIXED number of decimals.  Interpolation prints an f64 with up
+// to 15 digits and an f32 with 6, so a column of numbers never lined up and callers rounded by
+// hand over whole thousandths.  `decimals` is clamped to 0..17 (an f64 carries no more digits);
+// the result is an aiml-MANAGED string (spec/61 §4), so the caller's drop can read its header.
+extern "C" char* aiml_sys_format_fixed(double value, int32_t decimals) {
+    if (decimals < 0)  decimals = 0;
+    if (decimals > 17) decimals = 17;
+    char buf[512];
+    int n = snprintf(buf, sizeof(buf), "%.*f", (int)decimals, value);
+    if (n < 0) return aiml_str_dup("");
+    if ((size_t)n < sizeof(buf)) return aiml_str_dup(buf);
+    // a huge magnitude needs more room than the stack buffer
+    char* big = (char*)malloc((size_t)n + 1);
+    if (!big) return aiml_str_dup("");
+    snprintf(big, (size_t)n + 1, "%.*f", (int)decimals, value);
+    char* out = aiml_str_dup(big);
+    free(big);
+    return out;
+}
+
+// ── string.parse_f64 ────────────────────────────────────────────────────────
+// spec/09: the f64 counterpart of parse_f32.  Going through parse_f32 + cast kept only f32
+// precision ("0.123456789" -> 0.123456791043282), because the digits were already gone before
+// the widening; strtod reads them all.
+extern "C" double aiml_str_parse_f64(const char* s) {
+    if (!s || !*s) return 0.0;
+    return strtod(s, nullptr);
+}

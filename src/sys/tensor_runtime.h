@@ -16,6 +16,10 @@ void    aiml_tensor_arena_free(void);   // free arena memory (call at worker end
 void*   aiml_tensor_zeros(const int32_t* shape, int32_t ndim);
 void*   aiml_tensor_ones(const int32_t* shape, int32_t ndim);
 void*   aiml_tensor_randn(const int32_t* shape, int32_t ndim, float mean, float stddev);
+// spec/50 §15: set the seed of the tensor runtime's own, platform-independent generator.
+void    aiml_tensor_seed(int64_t seed);
+// spec/50 §14.1: exempt a tensor from begin_graph's collection (index/constant tensors).
+void    aiml_tensor_keep(void* t);
 void*   aiml_tensor_from_data(const float* data, const int32_t* shape, int32_t ndim);
 void*   aiml_tensor_clone(void* t);
 void    aiml_tensor_free(void* t);

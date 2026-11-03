@@ -1234,6 +1234,29 @@ void registerBuiltins(CompilerContext& ctx) {
         auto* p = llvm::PointerType::get(ctx.context, 0);
         return ownedStringResult(ctx, ctx.builder.CreateCall(ctx.getFunction("aiml_sys_json_error", p, {}), {}));
     };
+    // spec/23 F23-78: sys.format_fixed(value, decimals) → string with exactly that many
+    // decimals ("0.333"), the one way to line a column of reals up.
+    sys.builtinFuncs["format_fixed"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+        auto* p = llvm::PointerType::get(ctx.context, 0);
+        llvm::Type* d = ctx.builder.getDoubleTy();
+        llvm::Type* i32Ty = ctx.builder.getInt32Ty();
+        if (args.empty()) {
+            LOG_ERROR(ctx.fmtLoc() + "sys.format_fixed expects (value, decimals) (spec/23 F23-78)");
+            return ctx.ir_gen->wrap(ctx.builder.CreateGlobalStringPtr(""));
+        }
+        llvm::Value* raw = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+        llvm::Value* val = raw->getType()->isDoubleTy() ? raw
+                         : raw->getType()->isFloatingPointTy() ? ctx.builder.CreateFPExt(raw, d)
+                         : ctx.builder.CreateSIToFP(raw, d);
+        llvm::Value* dec = ctx.builder.getInt32(6);
+        if (args.size() > 1) {
+            llvm::Value* dr = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]));
+            dec = dr->getType()->isIntegerTy() ? ctx.builder.CreateIntCast(dr, i32Ty, true)
+                                               : ctx.builder.CreateFPToSI(dr, i32Ty);
+        }
+        return ownedStringResult(ctx, ctx.builder.CreateCall(
+            ctx.getFunction("aiml_sys_format_fixed", p, {d, i32Ty}), {val, dec}));
+    };
     // spec/23 §5.6: sys.require_tools(csv) → "" oder ALLES Fehlende.  Ein Ort
     // fuer diese Frage (F23-43): `requires:` (spec/62 §18.2) und der cosmos-
     // Agent rufen denselben Code, statt zwei Pruefungen zu pflegen.
@@ -6677,34 +6700,75 @@ void registerBuiltins(CompilerContext& ctx) {
             return ctx.ir_gen->wrap(ctx.builder.CreateFMul(v, ctx.builder.CreateFDiv(d180, pi)));
         };
 
-        // Declare libm f32 functions once
-        auto libmF1 = [&](const char* aimlName, const char* cName) {
-            math.builtinFuncs[aimlName] = [cName, toF32](CompilerContext& ctx, const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
-                llvm::Function* fn = ctx.module().getFunction(cName);
+        // Declare the libm functions once.  spec/43_0 §7: a function is computed in the WIDTH OF
+        // ITS ARGUMENT — an f64 argument calls the double libm entry and yields f64, anything else
+        // stays the f32 path.  Before this every scalar function went through `expf`/`logf`, so
+        // `{ call: [math.exp, 1.0] }` into an f64 returned 2.71828174591064 instead of
+        // 2.718281828459045: statistics and learning rates were silently f32.
+        auto libmF1 = [&](const char* aimlName, const char* cName32, const char* cName64) {
+            math.builtinFuncs[aimlName] = [cName32, cName64, toF32](CompilerContext& ctx, const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+                llvm::Value* raw = args.empty() ? nullptr : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+                // f64 when the argument is f64 OR the context asking for the result is
+                // (spec/43_0 §7.1) — `decl: [v, f64, { call: [math.exp, 1.0] }]` must compute
+                // in f64, and a bare literal argument carries no type of its own.
+                bool wantWide = ctx.floatResultTy && ctx.floatResultTy->isDoubleTy();
+                if ((raw && raw->getType()->isDoubleTy()) || (raw && wantWide)) {
+                    llvm::Type* d = ctx.builder.getDoubleTy();
+                    llvm::Function* fn = ctx.module().getFunction(cName64);
+                    if (!fn) fn = llvm::Function::Create(
+                        llvm::FunctionType::get(d, {d}, false),
+                        llvm::Function::ExternalLinkage, cName64, ctx.module());
+                    llvm::Value* wv = raw->getType()->isDoubleTy() ? raw
+                                    : raw->getType()->isFloatingPointTy() ? ctx.builder.CreateFPExt(raw, d)
+                                    : ctx.builder.CreateSIToFP(raw, d);
+                    return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {wv}));
+                }
+                llvm::Function* fn = ctx.module().getFunction(cName32);
                 if (!fn) fn = llvm::Function::Create(
                     llvm::FunctionType::get(ctx.builder.getFloatTy(), {ctx.builder.getFloatTy()}, false),
-                    llvm::Function::ExternalLinkage, cName, ctx.module());
-                llvm::Value* v = args.empty() ? llvm::ConstantFP::get(ctx.builder.getFloatTy(),0.0)
-                                             : toF32(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])));
+                    llvm::Function::ExternalLinkage, cName32, ctx.module());
+                llvm::Value* v = raw ? toF32(ctx, raw) : llvm::ConstantFP::get(ctx.builder.getFloatTy(), 0.0);
                 return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {v}));
             };
         };
-        libmF1("sin",   "sinf");
-        libmF1("cos",   "cosf");
-        libmF1("tan",   "tanf");
-        libmF1("asin",  "asinf");
-        libmF1("acos",  "acosf");
-        libmF1("sqrt",  "sqrtf");
-        libmF1("exp",   "expf");
-        libmF1("log",   "logf");
-        libmF1("log2",  "log2f");
-        libmF1("floor", "floorf");
-        libmF1("ceil",  "ceilf");
-        libmF1("round", "roundf");
-        libmF1("abs",   "fabsf");
+        libmF1("sin",   "sinf",   "sin");
+        libmF1("cos",   "cosf",   "cos");
+        libmF1("tan",   "tanf",   "tan");
+        libmF1("asin",  "asinf",  "asin");
+        libmF1("acos",  "acosf",  "acos");
+        libmF1("sqrt",  "sqrtf",  "sqrt");
+        libmF1("exp",   "expf",   "exp");
+        libmF1("log",   "logf",   "log");
+        libmF1("log2",  "log2f",  "log2");
+        libmF1("floor", "floorf", "floor");
+        libmF1("ceil",  "ceilf",  "ceil");
+        libmF1("round", "roundf", "round");
+        libmF1("abs",   "fabsf",  "fabs");
 
         // atan2 (2-arg)
         math.builtinFuncs["atan2"] = [toF32](CompilerContext& ctx, const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            // spec/43_0 §7: f64 arguments compute in f64 (an f64 in EITHER place is enough)
+            auto rawOf = [&](int i) -> llvm::Value* {
+                return args.size() > (size_t)i ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[i])) : nullptr;
+            };
+            bool wide = (rawOf(0) && rawOf(0)->getType()->isDoubleTy()) ||
+                        (rawOf(1) && rawOf(1)->getType()->isDoubleTy()) ||
+                        (ctx.floatResultTy && ctx.floatResultTy->isDoubleTy());   // spec/43_0 §7.1
+            if (wide) {
+                llvm::Type* d = ctx.builder.getDoubleTy();
+                llvm::Function* fn = ctx.module().getFunction("atan2");
+                if (!fn) fn = llvm::Function::Create(
+                    llvm::FunctionType::get(d, {d, d}, false),
+                    llvm::Function::ExternalLinkage, "atan2", ctx.module());
+                auto gd = [&](int i) -> llvm::Value* {
+                    llvm::Value* r = rawOf(i);
+                    if (!r) return llvm::ConstantFP::get(d, 0.0);
+                    if (r->getType()->isDoubleTy()) return r;
+                    if (r->getType()->isFloatingPointTy()) return ctx.builder.CreateFPExt(r, d);
+                    return ctx.builder.CreateSIToFP(r, d);
+                };
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {gd(0), gd(1)}));
+            }
             llvm::Function* fn = ctx.module().getFunction("atan2f");
             if (!fn) fn = llvm::Function::Create(
                 llvm::FunctionType::get(ctx.builder.getFloatTy(),
@@ -6716,6 +6780,28 @@ void registerBuiltins(CompilerContext& ctx) {
 
         // pow (2-arg)
         math.builtinFuncs["pow"] = [toF32](CompilerContext& ctx, const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            // spec/43_0 §7: f64 arguments compute in f64 (an f64 in EITHER place is enough)
+            auto rawOf = [&](int i) -> llvm::Value* {
+                return args.size() > (size_t)i ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[i])) : nullptr;
+            };
+            bool wide = (rawOf(0) && rawOf(0)->getType()->isDoubleTy()) ||
+                        (rawOf(1) && rawOf(1)->getType()->isDoubleTy()) ||
+                        (ctx.floatResultTy && ctx.floatResultTy->isDoubleTy());   // spec/43_0 §7.1
+            if (wide) {
+                llvm::Type* d = ctx.builder.getDoubleTy();
+                llvm::Function* fn = ctx.module().getFunction("pow");
+                if (!fn) fn = llvm::Function::Create(
+                    llvm::FunctionType::get(d, {d, d}, false),
+                    llvm::Function::ExternalLinkage, "pow", ctx.module());
+                auto gd = [&](int i) -> llvm::Value* {
+                    llvm::Value* r = rawOf(i);
+                    if (!r) return llvm::ConstantFP::get(d, 0.0);
+                    if (r->getType()->isDoubleTy()) return r;
+                    if (r->getType()->isFloatingPointTy()) return ctx.builder.CreateFPExt(r, d);
+                    return ctx.builder.CreateSIToFP(r, d);
+                };
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {gd(0), gd(1)}));
+            }
             llvm::Function* fn = ctx.module().getFunction("powf");
             if (!fn) fn = llvm::Function::Create(
                 llvm::FunctionType::get(ctx.builder.getFloatTy(),
@@ -6727,6 +6813,28 @@ void registerBuiltins(CompilerContext& ctx) {
 
         // fmod
         math.builtinFuncs["fmod"] = [toF32](CompilerContext& ctx, const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            // spec/43_0 §7: f64 arguments compute in f64 (an f64 in EITHER place is enough)
+            auto rawOf = [&](int i) -> llvm::Value* {
+                return args.size() > (size_t)i ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[i])) : nullptr;
+            };
+            bool wide = (rawOf(0) && rawOf(0)->getType()->isDoubleTy()) ||
+                        (rawOf(1) && rawOf(1)->getType()->isDoubleTy()) ||
+                        (ctx.floatResultTy && ctx.floatResultTy->isDoubleTy());   // spec/43_0 §7.1
+            if (wide) {
+                llvm::Type* d = ctx.builder.getDoubleTy();
+                llvm::Function* fn = ctx.module().getFunction("fmod");
+                if (!fn) fn = llvm::Function::Create(
+                    llvm::FunctionType::get(d, {d, d}, false),
+                    llvm::Function::ExternalLinkage, "fmod", ctx.module());
+                auto gd = [&](int i) -> llvm::Value* {
+                    llvm::Value* r = rawOf(i);
+                    if (!r) return llvm::ConstantFP::get(d, 0.0);
+                    if (r->getType()->isDoubleTy()) return r;
+                    if (r->getType()->isFloatingPointTy()) return ctx.builder.CreateFPExt(r, d);
+                    return ctx.builder.CreateSIToFP(r, d);
+                };
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {gd(0), gd(1)}));
+            }
             llvm::Function* fn = ctx.module().getFunction("fmodf");
             if (!fn) fn = llvm::Function::Create(
                 llvm::FunctionType::get(ctx.builder.getFloatTy(),
@@ -13997,6 +14105,15 @@ void registerBuiltins(CompilerContext& ctx) {
             return nullptr;
         };
 
+        // t.keep — spec/50 §14.1: this tensor is the caller's own; begin_graph never collects it.
+        ci.builtinMethods["keep"] = [](CompilerContext& ctx, llvm::Value* tPtr,
+            AIML::AST::CallExpr*, std::function<IRValue*(AIML::AST::Expr*)>) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Function* f = ctx.getFunction("aiml_tensor_keep", ctx.builder.getVoidTy(), {i8p});
+            ctx.builder.CreateCall(f, {tPtr});
+            return nullptr;
+        };
+
         // t.add_inplace(src)
         ci.builtinMethods["add_inplace"] = [](CompilerContext& ctx, llvm::Value* tPtr,
             AIML::AST::CallExpr* call, std::function<IRValue*(AIML::AST::Expr*)> evalExpr) -> IRValue* {
@@ -14140,6 +14257,22 @@ void registerBuiltins(CompilerContext& ctx) {
             llvm::Value* mean   = llvm::ConstantFP::get(f32, 0.0);
             llvm::Value* stddev = llvm::ConstantFP::get(f32, 1.0);
             return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {shapePtr, ndim, mean, stddev}));
+        };
+
+        // tensor.seed(n) — spec/50 §15: fix the start of the tensor runtime's generator, so
+        // randn/randn_ex give the SAME numbers again, across processes and platforms.
+        tn.builtinFuncs["seed"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            auto* i64 = ctx.builder.getInt64Ty();
+            llvm::Value* seed = llvm::ConstantInt::get(i64, 0);
+            if (!args.empty()) {
+                llvm::Value* raw = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+                seed = raw->getType()->isIntegerTy() ? ctx.builder.CreateIntCast(raw, i64, true)
+                                                     : ctx.builder.CreateFPToSI(raw, i64);
+            } else {
+                LOG_ERROR(ctx.fmtLoc() + "tensor.seed expects the seed (spec/50 §15)");
+            }
+            ctx.builder.CreateCall(ctx.getFunction("aiml_tensor_seed", ctx.builder.getVoidTy(), {i64}), {seed});
+            return ctx.ir_gen->getInt32(0);
         };
 
         // tensor.randn_ex(mean, stddev, d0, d1, ...) → tensor

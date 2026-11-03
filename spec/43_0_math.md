@@ -271,6 +271,34 @@ When passed to functions, a copy is made (analogous to `i32`).
 > CSRF/nonce values — use `math.random_hex`, which draws from the OS CSPRNG via OpenSSL
 > `RAND_bytes`. Pair it with `hash.pbkdf2` (spec 33_1) for password storage.
 
+### 7.1 Width: a scalar function computes in the width of its argument
+
+`sin`, `cos`, `tan`, `asin`, `acos`, `sqrt`, `exp`, `log`, `log2`, `floor`, `ceil`, `round`,
+`abs`, `atan2`, `pow` and `fmod` are **overloaded on their argument's type**:
+
+The width is `f64` when **either** of these holds, and `f32` otherwise:
+
+| Signal | Example | Computed in |
+|--------|---------|-------------|
+| an argument is `f64` | `{ call: [math.exp, rate_f64] }` | `f64` (`exp`, `log`, `pow`, ...) |
+| the context taking the result is `f64` | `decl: [v, f64, { call: [math.exp, 1.0] }]` | `f64` |
+| neither | `decl: [v, f32, { call: [math.exp, 1.0] }]` | `f32` (`expf`, `logf`, `powf`, ...) |
+
+The context counts because a written-out argument has no type of its own (spec/04_1 §3): asking
+an `f64` for the result is how you ask for the `f64` computation.  The context is the declared
+type of a `decl`, the destination of a `set:` or the declared return type.  For the two-argument
+functions an `f64` in **either** place is enough; the other side is widened.
+
+```yaml
+- decl: [one, f64, 1.0]
+- decl: [wide,  f64, { call: [math.exp, one] }]         # 2.718281828459045
+- decl: [ctx,   f64, { call: [math.exp, 1.0] }]         # 2.718281828459045 — the f64 asked
+- decl: [narrow, f32, { call: [math.exp, 1.0] }]        # 2.7182817 (f32, as before)
+```
+
+This matters wherever a result is accumulated: a logistic regression or a learning rate that
+reads `math.exp`/`math.log` in f32 carries only ~7 digits, however wide the variable it lands in.
+
 ---
 
 ## 8. Constants

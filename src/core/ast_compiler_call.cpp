@@ -16,6 +16,7 @@
 #include <iostream>
 #include <queue>
 #include <set>
+#include <map>
 #include <cstdio>
 
 namespace AIML {
@@ -246,6 +247,16 @@ std::string Compiler::dottedPathType(const std::string& name) {
 }
 
 IRValue* Compiler::visitCall(CallExpr* call) {
+    // spec/04_1 §7a: a context type (ctx.floatLitTy) types the real literals of the expression
+    // it belongs to — NOT the arguments of a call inside it.  A parameter carries its own type
+    // and the math builtins take f32, so an f64 decl must not turn `math.sqrt(2.0)`'s argument
+    // into an f64 constant.  A literal argument of an f64 parameter is rebuilt from its source
+    // text in convertNumericArg instead.
+    struct LitTyGuard {
+        CompilerContext& ctxRef; llvm::Type* saved;
+        explicit LitTyGuard(CompilerContext& c) : ctxRef(c), saved(c.floatLitTy) { c.floatLitTy = nullptr; }
+        ~LitTyGuard() { ctxRef.floatLitTy = saved; }
+    } litTyGuard(ctx);
     std::string funcName = call->functionName;
     if (funcName == "gl.draw_elements_instanced" && call->args.size() == 3) {
         auto* literal = dynamic_cast<LiteralExpr*>(call->args[0].get());
@@ -1846,6 +1857,35 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
         return ctx.ir_gen->wrap(phi);
     }
 
+    // String.parse_f64() — lazy, null-safe, uses strtod (spec/09).  parse_f32 + { cast: [.., f64] }
+    // cannot replace it: the f32 parse already dropped every digit past the 8th.
+    if (className == "string" && methodName == "parse_f64") {
+        llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+        llvm::Type* f64Ty = ctx.builder.getDoubleTy();
+        llvm::Function* fn = ctx.module().getFunction("aiml_str_parse_f64");
+        if (!fn) fn = llvm::Function::Create(
+            llvm::FunctionType::get(f64Ty, {i8p}, false),
+            llvm::Function::ExternalLinkage, "aiml_str_parse_f64", ctx.module());
+        llvm::Value* strPtr = ctx.builder.CreateLoad(i8p,
+            static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)));
+        llvm::Value* isNull = ctx.builder.CreateIsNull(strPtr, "pf64_null");
+        llvm::Function* parent = ctx.builder.GetInsertBlock()->getParent();
+        llvm::BasicBlock* nullBB  = llvm::BasicBlock::Create(ctx.context, "pf64_null_bb", parent);
+        llvm::BasicBlock* okBB    = llvm::BasicBlock::Create(ctx.context, "pf64_ok",      parent);
+        llvm::BasicBlock* mergeBB = llvm::BasicBlock::Create(ctx.context, "pf64_merge",   parent);
+        ctx.builder.CreateCondBr(isNull, nullBB, okBB);
+        ctx.builder.SetInsertPoint(nullBB);
+        ctx.builder.CreateBr(mergeBB);
+        ctx.builder.SetInsertPoint(okBB);
+        llvm::Value* val = ctx.builder.CreateCall(fn, {strPtr});
+        ctx.builder.CreateBr(mergeBB);
+        ctx.builder.SetInsertPoint(mergeBB);
+        llvm::PHINode* phi = ctx.builder.CreatePHI(f64Ty, 2, "pf64");
+        phi->addIncoming(llvm::ConstantFP::get(f64Ty, 0.0), nullBB);
+        phi->addIncoming(val, okBB);
+        return ctx.ir_gen->wrap(phi);
+    }
+
     // String.len (lazy — needs only the alloca, no args)
     if (className == "string" && methodName == "len") {
         // size_t = target pointer-width int (i32 on WASM, i64 on x86_64).
@@ -2838,7 +2878,21 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                  llvmListElemType, listElemName, methodName == "sort_desc");
              return nullptr;
          }
-         LOG_ERROR("Unknown list method: " + methodName + " on " + className);
+         // spec/10 §2: writing an element is a STATEMENT (`idx:`), not a method, and `idx:` is
+         // only named in that section's header — so `list.set` sent people to remove/insert
+         // instead.  Name the replacement here, and give the location while we are at it.
+         {
+             std::string hint;
+             if (methodName == "set" || methodName == "put" || methodName == "replace")
+                 hint = " — write an element with `idx: [" + className + ", <index>, <value>]`"
+                        " and read it with `{ at: [" + className + ", <index>] }` (spec/10 §2)";
+             else if (methodName == "get" || methodName == "at")
+                 hint = " — read an element with `{ at: [" + className + ", <index>] }` (spec/10 §2)";
+             else if (methodName == "size" || methodName == "length" || methodName == "count")
+                 hint = " — the length is the property `" + className + ".len` (spec/10 §1)";
+             LOG_ERROR(ctx.fmtLoc(call->sourceNode) + "Unknown list method: " + methodName +
+                       " on " + className + hint);
+         }
          return ctx.ir_gen->getInt32(0);
     }
     // Map Methods
@@ -4245,11 +4299,19 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
              }
              // A struct-returning call used as a by-value struct argument arrives as the pointer to
              // its result temp (method_struct_tmp above) → load the value.
-             if (expected && expected->isStructTy() && i < call->args.size()
-                 && dynamic_cast<CallExpr*>(call->args[i].get())) {
-                 auto* tmp = llvm::dyn_cast_or_null<llvm::AllocaInst>(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a)));
-                 if (tmp && tmp->getAllocatedType() == expected)
-                     a = ctx.ir_gen->wrap(ctx.builder.CreateLoad(expected, tmp, "struct_arg_val"));
+             //
+             // This must accept ANY pointer, not just an alloca of exactly `expected`, and mirrors
+             // coerceArgs() for free functions (the isStructTy/isPointerTy branch there).  `get` on
+             // a list of models yields an ELEMENT pointer (a GEP into the data buffer, spec/10
+             // "Struct/Model Elements in Lists"), so the alloca-only form let it through unloaded:
+             // `{ call: [<.line, { call: [<.scores.get, 0] }] }` reached LLVM as
+             // `call @Holder_line(ptr, ptr)` against a by-value struct parameter and the module
+             // failed verification ("Call parameter type does not match function signature"),
+             // while the same call through an intermediate local worked.
+             if (expected && expected->isStructTy() && i < call->args.size()) {
+                 llvm::Value* rawArg = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a));
+                 if (rawArg && rawArg->getType()->isPointerTy())
+                     a = ctx.ir_gen->wrap(ctx.builder.CreateLoad(expected, rawArg, "struct_arg_val"));
              }
              // the same numeric conversion as for free functions (spec/13 §6)
              if (expected && (expected->isIntegerTy() || expected->isFloatingPointTy()))
@@ -5025,6 +5087,9 @@ IRValue* Compiler::visitSysArgDumpCall(CallExpr* call) {
     const auto& dl = ctx.module().getDataLayout();
     const auto* sl = dl.getStructLayout(ci.type);
 
+    // flag name -> the field that already claimed it, to reject a collision (F23-63)
+    std::map<std::string, std::string> flagNames;
+
     // Field codes of arg_dump_runtime.h — each type into its own width (F23-61).
     const bool listHandles = ctx.memV3;
     auto typeCode = [listHandles](const std::string& tn) -> int {
@@ -5083,13 +5148,30 @@ IRValue* Compiler::visitSysArgDumpCall(CallExpr* call) {
             bool usable = !al.empty() && (std::isalpha((unsigned char)al[0]) || al[0] == '_');
             for (char ch : al)
                 if (!(std::isalnum((unsigned char)ch) || ch == '_' || ch == '-')) usable = false;
-            if (!usable || al == "positional") {
-                LOG_ERROR("sys.arg_dump: alias '" + al + "' of field '" + fname + "' in '" + typeName +
-                          "' cannot be a flag name (a letter or '_', then letters, digits, '_' or '-'; not 'positional')");
+            // `given` is reserved for the same reason as `positional` (F23-64): the runtime
+            // finds that collector by its real name and `--given` is not a flag, so an alias
+            // claiming the name would make `--given` mean something else.
+            if (!usable || al == "positional" || al == "given") {
+                LOG_ERROR(ctx.fmtLoc(call->sourceNode) + "sys.arg_dump: alias '" + al + "' of field '" +
+                          fname + "' in '" + typeName + "' cannot be a flag name (a letter or '_', then "
+                          "letters, digits, '_' or '-'; not the reserved 'positional' or 'given') (spec/23 F23-63)");
                 return ctx.ir_gen->getInt32(0);
             }
             flagName = al;
             for (char& ch : flagName) if (ch == '-') ch = '_';
+        }
+        // Two fields must not answer to the same flag.  The runtime takes the FIRST match, so a
+        // collision silently set the wrong field: `[ident, string, "", { alias: "mode" }]` next to
+        // a real `mode` made `--mode` write `ident`.  Name it here instead (F23-63).
+        {
+            auto seen = flagNames.find(flagName);
+            if (seen != flagNames.end() && tc != ARG_SKIP) {
+                LOG_ERROR(ctx.fmtLoc(call->sourceNode) + "sys.arg_dump: fields '" + seen->second +
+                          "' and '" + fname + "' of '" + typeName + "' are both set by '--" + flagName +
+                          "' — an alias must not collide with another field's name or alias (spec/23 F23-63)");
+                return ctx.ir_gen->getInt32(0);
+            }
+            if (tc != ARG_SKIP) flagNames.emplace(flagName, fname);
         }
         ctx.builder.CreateStore(ctx.builder.CreateGlobalStringPtr(flagName), namePtr);
         ctx.builder.CreateStore(ctx.builder.CreateGlobalStringPtr(fname), realPtr);
@@ -5346,6 +5428,30 @@ IRValue* Compiler::emitGroupExport(Symbol* giSym, const std::string& gq, const s
 }
 
 
+// spec/04_1 §3 + §7a: a written-out real constant is built in the type its context gives it.
+// The literal visitor parses with std::stof because an untyped literal is f32 (spec/10); a later
+// f32 -> f64 widening cannot recover the lost digits, so rebuild from the source text instead.
+llvm::Constant* Compiler::floatLiteralIn(Expr* src, llvm::Type* dstTy) {
+    if (!src || !dstTy || !dstTy->isFloatingPointTy()) return nullptr;
+    auto* lit = dynamic_cast<LiteralExpr*>(src);
+    if (!lit) return nullptr;
+    if (lit->type != "unknown" && lit->type != "f32" && lit->type != "f64") return nullptr;
+    const std::string& sv = lit->value;
+    size_t at = (!sv.empty() && (sv[0] == '-' || sv[0] == '+')) ? 1 : 0;
+    if (at >= sv.size()) return nullptr;
+    // hex ("0x1E") is an integer literal even though it can carry an 'E'
+    if (sv.size() > at + 2 && sv[at] == '0' && (sv[at + 1] == 'x' || sv[at + 1] == 'X')) return nullptr;
+    // a real is written with a point or an exponent; anything else is an integer literal
+    if (sv.find('.') == std::string::npos && sv.find('e') == std::string::npos &&
+        sv.find('E') == std::string::npos) return nullptr;
+    try {
+        size_t used = 0;
+        double d = std::stod(sv, &used);
+        if (used != sv.size()) return nullptr;          // trailing junk: not a plain literal
+        return llvm::ConstantFP::get(dstTy, d);         // rounds to dstTy's semantics
+    } catch (...) { return nullptr; }
+}
+
 llvm::Value* Compiler::convertNumericArg(llvm::Value* v, llvm::Type* expected, Expr* src,
                                          const std::string& callee, size_t argNo) {
     if (!v || !expected) return v;
@@ -5365,8 +5471,10 @@ llvm::Value* Compiler::convertNumericArg(llvm::Value* v, llvm::Type* expected, E
     }
     if (expected->isFloatingPointTy() && actual->isIntegerTy() && !actual->isIntegerTy(1))
         return ctx.builder.CreateSIToFP(v, expected, "arg_i2f");
-    if (expected->isFloatingPointTy() && actual->isFloatingPointTy())
+    if (expected->isFloatingPointTy() && actual->isFloatingPointTy()) {
+        if (llvm::Constant* c = floatLiteralIn(src, expected)) return c;   // spec/04_1 §7a
         return ctx.builder.CreateFPCast(v, expected, "arg_fpcast");
+    }
     if (expected->isIntegerTy() && actual->isFloatingPointTy()) {
         LOG_ERROR((src ? ctx.fmtLoc(src->sourceNode) : ctx.fmtLoc()) + "'" + callee + "': argument " +
                   std::to_string(argNo + 1) + " is a real number but the parameter is an integer — "

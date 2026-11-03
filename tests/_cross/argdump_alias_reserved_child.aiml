@@ -1,0 +1,14 @@
+# Must NOT compile: `given` is reserved for the collector of F23-64, so an alias may not claim it.
+- model:
+    name: ReservedAliasOpts
+    fields:
+      - [wanted, string, "", { alias: "given" }]
+      - [given, list<string>, []]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [opts, ReservedAliasOpts]
+      - call: [sys.arg_dump, opts]
+      - return: 0

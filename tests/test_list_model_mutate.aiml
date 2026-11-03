@@ -1,0 +1,119 @@
+# list<Model>: get -> change -> remove -> insert must not destroy the other elements.
+# spec/10 "Struct/Model Elements in Lists": for a struct element `get` yields an element
+# pointer, and "a typed model local materializes a VALUE COPY".  A value copy owns its own
+# string references (spec/61 §4), so `remove` may not free strings the local still holds.
+# Found in the cai W5-W8 work, doc/backlog/2026-11-03_todo_aus_cai_w8.md points 2 and 3.
+# Expected exit code: 0
+
+- import: "tests/_cross/check.aiml"
+
+- model:
+    name: W8Row
+    fields:
+      - [name, string, ""]
+      - [part, string, ""]
+
+- class:
+    name: W8Item
+    members:
+      - [name, string, "", { access: public }]
+      - [part, string, "", { access: public }]
+
+# spec/10 "Struct/Model Elements in Lists": an element pointer passed where the parameter is a
+# model BY VALUE is loaded, so a method gets a value copy — the same as through a local.
+# Before 2026-11-03 the method path emitted `call @W8Holder_line(ptr, ptr)` and the module
+# failed LLVM verification (backlog point 3).
+- class:
+    name: W8Holder
+    members:
+      - [items, list<W8Item>, [], { access: public }]
+    methods:
+      - def:
+          name: line
+          args: [[item, W8Item]]
+          return: string
+          body:
+            - return: "${item.name}/${item.part}"
+      - def:
+          name: first_line
+          return: string
+          body:
+            - return: { call: [<.line, { call: [<.items.get, 0] }] }
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [chk, ptr<Checker>, { new: Checker }]
+      - decl: [rows, list<W8Row>]
+
+      - decl: [row_a, W8Row]
+      - set: [row_a.name, "name_zero"]
+      - set: [row_a.part, "part_zero"]
+      - call: [rows.push, row_a]
+      - decl: [row_b, W8Row]
+      - set: [row_b.name, "name_one"]
+      - set: [row_b.part, "part_one"]
+      - call: [rows.push, row_b]
+      - decl: [row_c, W8Row]
+      - set: [row_c.name, "name_two"]
+      - set: [row_c.part, "part_two"]
+      - call: [rows.push, row_c]
+
+      # the cai pattern: read a row out, change it, put it back at the same index
+      - decl: [cur, W8Row, { call: [rows.get, 0] }]
+      - set: [cur.part, "changed_zero"]
+      - call: [rows.remove, 0]
+      - call: [rows.insert, 0, cur]
+
+      - call: [chk.expect_i, "length after remove+insert", { cast: [rows.len, i64] }, 3]
+
+      # every name must still be readable — before the fix rows 0 and 1 held freed memory
+      - decl: [got_a, W8Row, { call: [rows.get, 0] }]
+      - decl: [got_b, W8Row, { call: [rows.get, 1] }]
+      - decl: [got_c, W8Row, { call: [rows.get, 2] }]
+      - call: [chk.expect_s, "row 0 name survives", got_a.name, "name_zero"]
+      - call: [chk.expect_s, "row 0 part is the change", got_a.part, "changed_zero"]
+      - call: [chk.expect_s, "row 1 name survives", got_b.name, "name_one"]
+      - call: [chk.expect_s, "row 1 part survives", got_b.part, "part_one"]
+      - call: [chk.expect_s, "row 2 name survives", got_c.name, "name_two"]
+      - call: [chk.expect_s, "row 2 part survives", got_c.part, "part_two"]
+
+      # the local copy keeps its own strings after the element is gone from the list
+      - call: [chk.expect_s, "the local copy still reads", cur.name, "name_zero"]
+
+      # ── the same round trip with CLASS elements (backlog point 2 used a class) ──
+      - decl: [holder, ptr<W8Holder>, { new: W8Holder }]
+      - decl: [item_a, W8Item]
+      - set: [item_a.name, "item_zero"]
+      - set: [item_a.part, "part_zero"]
+      - call: [holder.items.push, item_a]
+      - decl: [item_b, W8Item]
+      - set: [item_b.name, "item_one"]
+      - set: [item_b.part, "part_one"]
+      - call: [holder.items.push, item_b]
+      - decl: [item_c, W8Item]
+      - set: [item_c.name, "item_two"]
+      - set: [item_c.part, "part_two"]
+      - call: [holder.items.push, item_c]
+
+      - decl: [cur_item, W8Item, { call: [holder.items.get, 0] }]
+      - set: [cur_item.part, "changed_zero"]
+      - call: [holder.items.remove, 0]
+      - call: [holder.items.insert, 0, cur_item]
+
+      - decl: [item_got_a, W8Item, { call: [holder.items.get, 0] }]
+      - decl: [item_got_b, W8Item, { call: [holder.items.get, 1] }]
+      - decl: [item_got_c, W8Item, { call: [holder.items.get, 2] }]
+      - call: [chk.expect_s, "class row 0 name survives", item_got_a.name, "item_zero"]
+      - call: [chk.expect_s, "class row 0 part is the change", item_got_a.part, "changed_zero"]
+      - call: [chk.expect_s, "class row 1 name survives", item_got_b.name, "item_one"]
+      - call: [chk.expect_s, "class row 1 part survives", item_got_b.part, "part_one"]
+      - call: [chk.expect_s, "class row 2 name survives", item_got_c.name, "item_two"]
+
+      # ── point 3: get() straight into a model-by-value parameter of a METHOD ──
+      - call: [chk.expect_s, "method takes a model element directly", { call: [holder.first_line] }, "item_zero/changed_zero"]
+
+      - if: { condition: { gt: [chk.fails, 0] }, then: [{ print: ["FAIL list_model_mutate (${chk.fails})"] }, { return: 1 }] }
+      - print: ["PASS list_model_mutate"]
+      - return: 0

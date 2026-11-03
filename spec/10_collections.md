@@ -39,10 +39,17 @@
 - set: [num, { call: [count_items, [1, 2, 3]] }]
 - set: [num, { call: [count_items, []] }]
 
+# Reading and WRITING one element.  There is no `list.set` method: a write is the `idx:`
+# STATEMENT, the same form as for an array above.  `insert`/`remove` are for changing the
+# LENGTH — reaching for them to overwrite an element shifts everything after it.
+- idx: [scores, 0, 42]              # write element 0
+- set: [first, { at: [scores, 0] }] # read element 0
+# `Unknown list method: set` names `idx:` in its message (2026-11-03).
+
 # Standard List Methods
 - call: [scores.push, 100]       # Add to end
 - call: [scores.pop]             # Remove from end (returns value)
-- call: [scores.insert, 0, 50]   # Insert at index
+- call: [scores.insert, 0, 50]   # Insert at index — grows the list, shifts the rest
 - call: [scores.remove, 0]       # Remove at index; raises IndexOutOfBoundsException if out of range
 - call: [scores.clear]           # Remove all
 - set: [len, scores.len]         # Element count (property, i32)
@@ -181,6 +188,20 @@ a compile-time error for variables, members and nested calls alike. For example,
 `get()` returns an element pointer. Declare a local `MyModel` initialized from the
 `get()` result, then push that value; use `list<ptr<MyModel>>` when pointer sharing
 is intended. Calls returning actual model values remain valid push arguments.
+
+**As an argument**, by contrast, an element pointer **is** accepted where the parameter is a
+model by value: the element is loaded and the callee gets a value copy, exactly as it would
+through an intermediate local.  This holds for a method and for a free function alike.
+
+```yaml
+# `line(score: Score)`; `scores` is a list<Score>
+- call: [<.line, { call: [<.scores.get, 0] }]      # ok — the element is loaded
+```
+
+Until 2026-11-03 only the free-function path did this.  A method call reached LLVM as
+`call @Holder_line(ptr, ptr)` against a by-value parameter and the module failed verification
+("Call parameter type does not match function signature"), while the same call written through
+an intermediate local worked.
 
 **Consequence**: `list<MyModel>` and `list<ptr<MyModel>>` are both valid but have
 fundamentally different semantics:

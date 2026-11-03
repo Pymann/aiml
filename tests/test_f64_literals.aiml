@@ -1,0 +1,110 @@
+# Literal typing in an f64 context (spec/04_1 §3 "A numeric literal is not a type" and §7a):
+# a written-out constant has no type of its own, it is BUILT in the type its context gives it.
+# So an f64 context must build an f64 constant — not an f32 one that is widened afterwards,
+# which loses every digit past the 8th.
+# Also covers the f64 companions that came out of the same work:
+#   spec/43_0 §7.1  a scalar math function computes in the width it is asked for (point 4)
+#   spec/09        string.parse_f64 (point 5)
+#   spec/23 F23-78 sys.format_fixed (point 6)
+# Found in the cai W5-W8 work, doc/backlog/2026-11-03_todo_aus_cai_w8.md points 1, 4, 5, 6.
+# Expected exit code: 0
+
+- import: "tests/_cross/check.aiml"
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [chk, ptr<Checker>, { new: Checker }]
+
+      # ── decl initialiser: 0.1 + 0.2 != 0.3 holds in f64, but NOT in f32 ──
+      # f32:  0.1f+0.2f == 0.3f  (both 0.30000001192092896)
+      # f64:  0.1 +0.2  != 0.3   (0.30000000000000004 vs 0.29999999999999999)
+      - decl: [val_a, f64, 0.1]
+      - decl: [val_b, f64, 0.2]
+      - decl: [val_c, f64, 0.3]
+      - decl: [sum, f64, { "+": [val_a, val_b] }]
+      - decl: [decl_is_f64, i32, 0]
+      - if: { condition: { neq: [sum, val_c] }, then: [{ set: [decl_is_f64, 1] }] }
+      - call: [chk.expect_i, "decl literal is built as f64", decl_is_f64, 1]
+
+      # ── literal operand: 1.0/3.0 must equal one/three bit for bit ──
+      - decl: [one, f64, 1.0]
+      - decl: [three, f64, 3.0]
+      - decl: [var_div, f64, { "/": [one, three] }]
+      - decl: [lit_div, f64, { "/": [1.0, 3.0] }]
+      - decl: [div_same, i32, 0]
+      - if: { condition: { eq: [lit_div, var_div] }, then: [{ set: [div_same, 1] }] }
+      - call: [chk.expect_i, "literal operand is built as f64", div_same, 1]
+
+      # ── 0.1 * 10.0 is exactly 1.0 in f64, 1.00000001490116 in f32 ──
+      - decl: [tenth, f64, 0.1]
+      - decl: [scaled, f64, { "*": [tenth, 10.0] }]
+      - decl: [exact_one, i32, 0]
+      - if: { condition: { eq: [scaled, 1.0] }, then: [{ set: [exact_one, 1] }] }
+      - call: [chk.expect_i, "0.1 * 10.0 is exactly 1.0", exact_one, 1]
+
+      # ── a long literal keeps its digits past the 8th ──
+      # 0.1234567891 as f32 is 0.123456791043282; *1e10 that is 1234567910, not 1234567891
+      - decl: [long_lit, f64, 0.1234567891]
+      - decl: [billions, f64, 10000000000.0]
+      - decl: [as_int, i64, { cast: [{ "*": [long_lit, billions] }, i64] }]
+      - call: [chk.expect_i, "f64 literal keeps all its digits", as_int, 1234567891]
+
+      # ── spec/43_0 §7.1: a scalar math function computes in the width it is asked for ──
+      # e = 2.718281828459045; the f32 path returns 2.71828174591064
+      - decl: [one_f64, f64, 1.0]
+      - decl: [exp_arg, f64, { call: [math.exp, one_f64] }]
+      - decl: [exp_ctx, f64, { call: [math.exp, 1.0] }]
+      - decl: [exp_ref, f64, 2.718281828459045]
+      - decl: [exp_arg_ok, i32, 0]
+      - decl: [exp_ctx_ok, i32, 0]
+      - if: { condition: { eq: [exp_arg, exp_ref] }, then: [{ set: [exp_arg_ok, 1] }] }
+      - if: { condition: { eq: [exp_ctx, exp_ref] }, then: [{ set: [exp_ctx_ok, 1] }] }
+      - call: [chk.expect_i, "math.exp with an f64 argument", exp_arg_ok, 1]
+      - call: [chk.expect_i, "math.exp asked for an f64 result", exp_ctx_ok, 1]
+      # an f32 context still takes the f32 path
+      - decl: [exp_narrow, f32, { call: [math.exp, 1.0] }]
+      - decl: [narrow_is_f32, i32, 0]
+      - if: { condition: { neq: [{ cast: [exp_narrow, f64] }, exp_ref] }, then: [{ set: [narrow_is_f32, 1] }] }
+      - call: [chk.expect_i, "an f32 context stays f32", narrow_is_f32, 1]
+      # math.pow / math.sqrt in f64
+      - decl: [two_f64, f64, 2.0]
+      - decl: [root_two, f64, { call: [math.sqrt, two_f64] }]
+      - decl: [root_ref, f64, 1.4142135623730951]
+      - decl: [root_ok, i32, 0]
+      - if: { condition: { eq: [root_two, root_ref] }, then: [{ set: [root_ok, 1] }] }
+      - call: [chk.expect_i, "math.sqrt in f64", root_ok, 1]
+
+      # ── spec/09: string.parse_f64 keeps every digit, parse_f32 + cast does not ──
+      - decl: [digits, string, "0.123456789"]
+      - decl: [wide, f64, { call: [digits.parse_f64] }]
+      - decl: [wide_ref, f64, 0.123456789]
+      - decl: [wide_ok, i32, 0]
+      - if: { condition: { eq: [wide, wide_ref] }, then: [{ set: [wide_ok, 1] }] }
+      - call: [chk.expect_i, "string.parse_f64 is exact", wide_ok, 1]
+      - decl: [via_f32, f64, { cast: [{ call: [digits.parse_f32] }, f64] }]
+      - decl: [via_f32_differs, i32, 0]
+      - if: { condition: { neq: [via_f32, wide_ref] }, then: [{ set: [via_f32_differs, 1] }] }
+      - call: [chk.expect_i, "parse_f32 + cast is not a substitute", via_f32_differs, 1]
+      - decl: [not_a_number, string, "abc"]
+      - decl: [parsed_zero, f64, { call: [not_a_number.parse_f64] }]
+      - decl: [zero_ok, i32, 0]
+      - if: { condition: { eq: [parsed_zero, 0.0] }, then: [{ set: [zero_ok, 1] }] }
+      - call: [chk.expect_i, "parse_f64 of a non-number is 0", zero_ok, 1]
+
+      # ── spec/23 F23-78: sys.format_fixed gives exactly that many decimals ──
+      - decl: [three_f64, f64, 3.0]
+      - decl: [third, f64, { "/": [one_f64, three_f64] }]
+      - call: [chk.expect_s, "format_fixed 3 decimals", { call: [sys.format_fixed, third, 3] }, "0.333"]
+      - call: [chk.expect_s, "format_fixed 0 decimals", { call: [sys.format_fixed, third, 0] }, "0"]
+      - call: [chk.expect_s, "format_fixed rounds", { call: [sys.format_fixed, third, 1] }, "0.3"]
+      - call: [chk.expect_s, "format_fixed of a whole number", { call: [sys.format_fixed, two_f64, 2] }, "2.00"]
+      - decl: [neg_val, f64, -1.25]
+      - call: [chk.expect_s, "format_fixed keeps the sign", { call: [sys.format_fixed, neg_val, 1] }, "-1.2"]
+      - decl: [f32_val, f32, 0.5]
+      - call: [chk.expect_s, "format_fixed takes an f32", { call: [sys.format_fixed, f32_val, 2] }, "0.50"]
+
+      - if: { condition: { gt: [chk.fails, 0] }, then: [{ print: ["FAIL f64_literals (${chk.fails})"] }, { return: 1 }] }
+      - print: ["PASS f64_literals"]
+      - return: 0

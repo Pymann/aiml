@@ -259,6 +259,23 @@ or non-numeric strings. Handles decimal points, scientific notation (`1.5e3`), a
 
 ---
 
+### `string.parse_f64()` → `f64`
+
+The same with `strtod`: the whole number, not just the first eight digits.  Returns `0.0` for
+null, empty or non-numeric strings and reads the same forms as `parse_f32`.
+
+`parse_f32` + `{ cast: [..., f64] }` is **not** a substitute: the f32 parse has already rounded
+the value, and widening cannot bring the digits back.
+
+```yaml
+- decl: [txt, string, "0.123456789"]
+- decl: [wide, f64, { call: [txt.parse_f64] }]      # 0.123456789
+- decl: [narrow, f64, { cast: [{ call: [txt.parse_f32] }, f64] }]
+# narrow == 0.123456791043282 — the f32 parse decided this before the cast ran
+```
+
+---
+
 ## Implicit String → Integer Coercion
 
 When a `string` (or string interpolation expression) is assigned to an `i32` or `i64` variable,

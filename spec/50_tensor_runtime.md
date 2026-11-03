@@ -21,6 +21,7 @@ Tensors store `float32` data with up to 8 dimensions.
 | `tensor.from_data` | `(data_ptr, d0, d1, ...) -> tensor` | From float array |
 | `tensor.clone` | `(t) -> tensor` | Deep copy |
 | `tensor.free` | `(t) -> void` | Free memory |
+| `tensor.seed` | `(n) -> void` | Fix the start of the random generator (§17.1) |
 
 **Important**: `randn_ex` takes mean/stddev as the **first two** arguments, followed by shape dimensions.
 
@@ -236,6 +237,38 @@ once.
 For larger models, factor the optimizer + zero_grad pair into a helper
 function (see `tul/train/train_transformer.aiml` for a reference layout).
 
+### 14.1 What `begin_graph` frees — and `tensor.keep`
+
+`tensor.begin_graph` does more than reset the graph: it also **collects tensors for freeing**,
+in two groups.
+
+| Tensor | Collected? |
+|--------|-----------|
+| a graph output, slice or mask (`is_param = 0`) | yes, at the next `begin_graph` |
+| a weight (`requires_grad = 1`) or one with a graph node | no |
+| anything else older than one epoch — **including tensors you allocated yourself** | yes |
+
+The third row is the trap.  An index or constant tensor built **once before** the loop —
+`tensor.zeros(n)` for a row of ids, say — has `is_param = 1`, no gradient and no graph node, so
+from the second iteration on it is older than one epoch and gets collected.  The loop then reads
+freed memory, and `embedding_lookup` crashes on a nonsense shape.
+
+Adam state does not hit this: `adam_step` refreshes the epoch of the tensors it touches.
+
+Mark anything else you intend to keep:
+
+```yaml
+- decl: [ids, tensor, { call: [tensor.zeros, 64] }]
+- call: [ids.keep]                      # mine — begin_graph leaves it alone
+
+- loop: ...
+    - call: [tensor.begin_graph]        # `ids` still valid in iteration 2, 3, ...
+```
+
+`tensor.keep` is idempotent, takes no arguments, and is only needed for tensors that live
+**across** `begin_graph` calls without being weights.  A tensor marked `keep` is freed when its
+own binding goes away, like any other value.
+
 ## 15. Optimizer: Adam
 
 ```yaml
@@ -278,6 +311,30 @@ Tensors can be saved to and loaded from AionDB KV stores (persisted to disk via 
 | `tensor.print` | `(t, label) -> void` — Print shape and data |
 | `tensor.fill` | `(t, val) -> void` — Fill all elements with value |
 | `tensor.sha256` | `(t) -> string` — SHA-256 over tensor shape and raw `float32` payload |
+| `t.keep` | `-> void` — exempt this tensor from `begin_graph`'s collection (§14.1) |
+
+### 17.1 Reproducible randomness — `tensor.seed`
+
+`tensor.randn` and `tensor.randn_ex` draw from the tensor runtime's **own** generator, not from
+libc `rand()`.  It is a fixed splitmix64, so the same seed yields the same numbers in every
+process and on every platform — a run can be repeated and compared.
+
+```yaml
+- call: [tensor.seed, 42]
+- decl: [w_a, tensor, { call: [tensor.randn, 4, 4] }]
+
+- call: [tensor.seed, 42]
+- decl: [w_b, tensor, { call: [tensor.randn, 4, 4] }]
+# w_a and w_b hold the same numbers
+```
+
+- The seed is an integer; any value is accepted.
+- The state is **per thread**, so one thread's draws cannot shift another's.  Seed each thread
+  that draws.
+- Without a `tensor.seed` call the generator starts from a fixed constant, so an unseeded program
+  is reproducible too — it is **not** seeded from the clock.
+- This generator is for initialisation and noise, **not** for secrets; use `math.random_hex`
+  (spec/43_0 §7) for anything security-sensitive.
 
 ### Tensor Hashing
 

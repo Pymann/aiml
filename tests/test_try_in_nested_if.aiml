@@ -1,0 +1,82 @@
+# A `try` inside a nested `if` must not stop the REST of the method from resolving its own
+# methods.  In cai `Cli.run` (over 250 lines) every later `<.out` reported "Unknown method"
+# until the block was moved into a method of its own.
+# Found in the cai W5-W8 work, doc/backlog/2026-11-03_todo_aus_cai_w8.md point 11 (observed,
+# not reduced at the time) — this is the reduction.
+# Expected exit code: 0
+
+- import: "tests/_cross/check.aiml"
+
+- class:
+    name: W8Cli
+    members:
+      - [log_text, string, "", { access: public }]
+      - [steps, i32, 0, { access: public }]
+    methods:
+      - def:
+          name: out
+          args: [[line, string]]
+          body:
+            - set: [<.log_text, "${<.log_text}${line};"]
+            - set: [<.steps, { +: [<.steps, 1] }]
+      - def:
+          name: risky
+          args: [[fail_it, i32]]
+          return: i32
+          body:
+            - if: { condition: { gt: [fail_it, 0] }, then: [{ throw: { new: DivisionByZeroException, message: "asked to fail" } }] }
+            - return: 7
+      - def:
+          name: run
+          args: [[mode, i32]]
+          return: i32
+          body:
+            - call: [<.out, "start"]
+            - if:
+                condition: { gt: [mode, 0] }
+                then:
+                  - if:
+                      condition: { gt: [mode, 1] }
+                      then:
+                        # the try sits in the INNER if
+                        - try:
+                            body:
+                              - decl: [got, i32, { call: [<.risky, 1] }]
+                              - call: [<.out, "no throw"]
+                            catch:
+                              - type: DivisionByZeroException
+                                var: err
+                                body:
+                                  - call: [<.out, "caught"]
+                      else:
+                        - call: [<.out, "mode one"]
+                else:
+                  - call: [<.out, "mode zero"]
+            # everything below must still resolve <.out and <.risky
+            - call: [<.out, "after"]
+            - decl: [good, i32, { call: [<.risky, 0] }]
+            - call: [<.out, "risky=${good}"]
+            - return: <.steps
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [chk, ptr<Checker>, { new: Checker }]
+
+      - decl: [cli_two, ptr<W8Cli>, { new: W8Cli }]
+      - decl: [steps_two, i32, { call: [cli_two.run, 2] }]
+      - call: [chk.expect_s, "try path: the method log is complete", cli_two.log_text, "start;caught;after;risky=7;"]
+      - call: [chk.expect_i, "try path: step count", steps_two, 4]
+
+      - decl: [cli_one, ptr<W8Cli>, { new: W8Cli }]
+      - decl: [steps_one, i32, { call: [cli_one.run, 1] }]
+      - call: [chk.expect_s, "else path still resolves", cli_one.log_text, "start;mode one;after;risky=7;"]
+
+      - decl: [cli_zero, ptr<W8Cli>, { new: W8Cli }]
+      - decl: [steps_zero, i32, { call: [cli_zero.run, 0] }]
+      - call: [chk.expect_s, "outer else path", cli_zero.log_text, "start;mode zero;after;risky=7;"]
+
+      - if: { condition: { gt: [chk.fails, 0] }, then: [{ print: ["FAIL try_in_nested_if (${chk.fails})"] }, { return: 1 }] }
+      - print: ["PASS try_in_nested_if"]
+      - return: 0
