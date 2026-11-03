@@ -2212,6 +2212,7 @@ int AIMLCompiler::jitRun(int argc, char** argv) {
 
     // sys.arg_dump runtime
     llvm::sys::DynamicLibrary::AddSymbol("aiml_arg_dump_impl", (void*)(intptr_t)aiml_arg_dump_impl);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_arg_dump_impl2", (void*)(intptr_t)aiml_arg_dump_impl2);
 
     // binary io runtime
     llvm::sys::DynamicLibrary::AddSymbol("aiml_io_open_binary", (void*)(intptr_t)aiml_io_open_binary);

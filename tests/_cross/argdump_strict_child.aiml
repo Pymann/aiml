@@ -15,6 +15,8 @@
       - [tiny, f64, 1.0]
       # the collector is found by its real name; this alias plays no part
       - [positional, list<string>, [], { alias: "rest" }]
+      # F23-64: real names of the fields the command line set; never a flag itself
+      - [given, list<string>, [], { alias: "seen" }]
 
 - def:
     name: main
@@ -36,4 +38,7 @@
       # (print and "/" treat a u64 as signed, a separate issue; the test checks u64 by exit code)
       - print: ["mode=${opts.mode_name} ubyte=${ubyte} tiny_small=${tiny_zero}"]
       - print: ["positional=${rest}"]
+      - decl: [given_list, list<string>, opts.given]
+      - decl: [given_text, string, { call: [given_list.join, "|"] }]
+      - print: ["given=${given_text}"]
       - return: 0

@@ -4,6 +4,7 @@
 #                   are positional; "--" ends the flags and is never a value
 #   spec/23 F23-63  an alias (spec/15 F15-9) is the flag name, normalised (dry-run -> dry_run);
 #                   the collector is the field whose REAL name is `positional`
+#   spec/23 F23-64  the field whose REAL name is `given` lists the real names of the fields set
 # (A negative i8 is not checked here: `cast` i8 -> i32 zero-extends, a separate bug.)
 # Each case runs tests/_cross/argdump_strict_child.aiml in its own process.
 # Expected exit code: 0
@@ -110,6 +111,21 @@
       - call: [chk.expect_has, "subnormal kept", kid.out, "tiny_small=1"]
       - decl: [case22, list<string>, ["--depth", " 12"]]
       - call: [chk.expect_i, "leading space is not a number", { call: [kid.run, case22] }, 1]
+
+      # ── F23-64: given fields, a value equal to the default is still given ──
+      - decl: [case23, list<string>, ["--depth", "-1", "x"]]
+      - call: [chk.expect_i, "default value given exit", { call: [kid.run, case23] }, 0]
+      - call: [chk.expect_has, "default value is recorded as given", kid.out, "given=depth\n"]
+      - decl: [case24, list<string>, ["--id", "7", "--json", "--id", "8", "--dry-run", "y"]]
+      - call: [chk.expect_i, "given in order exit", { call: [kid.run, case24] }, 0]
+      - call: [chk.expect_has, "real names, each once, first-appearance order", kid.out, "given=ident|json|mode_name\n"]
+      - decl: [case25, list<string>, ["a", "--", "--depth", "3"]]
+      - call: [chk.expect_i, "nothing given exit", { call: [kid.run, case25] }, 0]
+      - call: [chk.expect_has, "positional tokens are not given", kid.out, "given=\n"]
+      - decl: [case26, list<string>, ["--given", "depth"]]
+      - call: [chk.expect_i, "given is no flag", { call: [kid.run, case26] }, 1]
+      - decl: [case27, list<string>, ["--seen", "depth"]]
+      - call: [chk.expect_i, "alias of given is no flag either", { call: [kid.run, case27] }, 1]
 
       - if: { condition: { gt: [chk.fails, 0] }, then: [{ print: ["FAIL arg_dump_strict (${chk.fails})"] }, { return: 1 }] }
       - print: ["PASS arg_dump_strict"]

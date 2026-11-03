@@ -111,11 +111,29 @@ void aiml_arg_dump_impl(void*        struct_ptr,
                         const char*  struct_name,
                         int          argc,
                         char**       argv) {
+    aiml_arg_dump_impl2(struct_ptr, names, types, offsets, num_fields, struct_name, argc, argv, NULL);
+}
+
+void aiml_arg_dump_impl2(void*        struct_ptr,
+                         const char** names,
+                         const int*   types,
+                         const int*   offsets,
+                         int          num_fields,
+                         const char*  struct_name,
+                         int          argc,
+                         char**       argv,
+                         const char** real_names) {
     char name[512];
     int positional = -1;                       // field collecting positional tokens
-    for (int fi = 0; fi < num_fields; fi++)
-        if ((types[fi] == ARG_LIST_HANDLE || types[fi] == ARG_LIST_INLINE) && strcmp(names[fi], "positional") == 0)
+    int given = -1;                            // field collecting the names of the fields set (F23-64)
+    for (int fi = 0; fi < num_fields; fi++) {
+        int is_list = types[fi] == ARG_LIST_HANDLE || types[fi] == ARG_LIST_INLINE;
+        if (is_list && strcmp(names[fi], "positional") == 0)
             positional = fi;
+        if (is_list && real_names && real_names[fi] && strcmp(real_names[fi], "given") == 0)
+            given = fi;
+    }
+    char* recorded = (char*)calloc(num_fields > 0 ? (size_t)num_fields : 1, 1);
     int flags_done = 0;
     for (int argi = 1; argi < argc; argi++) {
         const char* arg = argv[argi];
@@ -132,7 +150,7 @@ void aiml_arg_dump_impl(void*        struct_ptr,
         const char* inline_value;
         split_flag(arg, name, (int)sizeof(name), &inline_value);
         int fi = 0;
-        while (fi < num_fields && (types[fi] == ARG_SKIP || fi == positional || strcmp(name, names[fi]) != 0)) fi++;
+        while (fi < num_fields && (types[fi] == ARG_SKIP || fi == positional || fi == given || strcmp(name, names[fi]) != 0)) fi++;
         if (fi == num_fields) {
             fprintf(stderr, "UnknownArgumentException: unknown flag '%s'", arg);
             if (struct_name && struct_name[0]) fprintf(stderr, " (expected fields of %s)", struct_name);
@@ -205,5 +223,14 @@ void aiml_arg_dump_impl(void*        struct_ptr,
             }
             default: break;
         }
+        // F23-64: the field was set from the command line (a malformed value exited above)
+        if (given >= 0 && recorded && !recorded[fi]) {
+            recorded[fi] = 1;
+            char* gfield = (char*)struct_ptr + offsets[given];
+            void* glist = list_of(gfield, types[given]);
+            const char* real = (real_names && real_names[fi]) ? real_names[fi] : names[fi];
+            if (glist) aiml_list_push_str_copy(glist, real, strlen(real));
+        }
     }
+    free(recorded);
 }

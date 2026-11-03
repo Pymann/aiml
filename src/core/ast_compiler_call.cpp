@@ -5057,6 +5057,7 @@ IRValue* Compiler::visitSysArgDumpCall(CallExpr* call) {
     ArrayType* i32ArrTy = ArrayType::get(i32Ty, numFields);
 
     AllocaInst* namesArr   = ctx.createEntryAlloca(ptrArrTy, "argdump_names");
+    AllocaInst* realArr    = ctx.createEntryAlloca(ptrArrTy, "argdump_real_names");
     AllocaInst* typesArr   = ctx.createEntryAlloca(i32ArrTy, "argdump_types");
     AllocaInst* offsetsArr = ctx.createEntryAlloca(i32ArrTy, "argdump_offsets");
 
@@ -5066,6 +5067,7 @@ IRValue* Compiler::visitSysArgDumpCall(CallExpr* call) {
         int tc = typeCode(fmem.typeName);
 
         Value* namePtr   = ctx.builder.CreateConstGEP2_32(ptrArrTy, namesArr,   0, fi);
+        Value* realPtr   = ctx.builder.CreateConstGEP2_32(ptrArrTy, realArr,    0, fi);
         Value* typePtr   = ctx.builder.CreateConstGEP2_32(i32ArrTy, typesArr,   0, fi);
         Value* offsetPtr = ctx.builder.CreateConstGEP2_32(i32ArrTy, offsetsArr, 0, fi);
 
@@ -5074,7 +5076,9 @@ IRValue* Compiler::visitSysArgDumpCall(CallExpr* call) {
         // normalised like a typed flag (`dry-run` -> `dry_run`).  The collector is found by its
         // REAL name `positional`; its alias, if any, plays no part (F23-63).
         std::string flagName = fname;
-        if (!fmem.alias.empty() && fname != "positional") {
+        // F23-64: the collector `given` (real name, list<string>) is never a flag; an alias
+        // on it plays no part, like on `positional`.
+        if (!fmem.alias.empty() && fname != "positional" && fname != "given") {
             const std::string& al = fmem.alias;
             bool usable = !al.empty() && (std::isalpha((unsigned char)al[0]) || al[0] == '_');
             for (char ch : al)
@@ -5088,6 +5092,7 @@ IRValue* Compiler::visitSysArgDumpCall(CallExpr* call) {
             for (char& ch : flagName) if (ch == '-') ch = '_';
         }
         ctx.builder.CreateStore(ctx.builder.CreateGlobalStringPtr(flagName), namePtr);
+        ctx.builder.CreateStore(ctx.builder.CreateGlobalStringPtr(fname), realPtr);
         ctx.builder.CreateStore(ctx.builder.getInt32(tc), typePtr);
         ctx.builder.CreateStore(ctx.builder.getInt32((int)byteOffset), offsetPtr);
     }
@@ -5107,19 +5112,20 @@ IRValue* Compiler::visitSysArgDumpCall(CallExpr* call) {
 
     // Get element pointers (decay arrays to pointers)
     Value* namesPtr   = ctx.builder.CreateConstGEP2_32(ptrArrTy, namesArr,   0, 0);
+    Value* realPtr0   = ctx.builder.CreateConstGEP2_32(ptrArrTy, realArr,    0, 0);
     Value* typesPtr   = ctx.builder.CreateConstGEP2_32(i32ArrTy, typesArr,   0, 0);
     Value* offsetsPtr = ctx.builder.CreateConstGEP2_32(i32ArrTy, offsetsArr, 0, 0);
     Value* structName = ctx.builder.CreateGlobalStringPtr(typeName);
 
-    // Declare aiml_arg_dump_impl if not yet in module
-    Function* implFn = ctx.module().getFunction("aiml_arg_dump_impl");
+    // Declare aiml_arg_dump_impl2 (with the real field names, F23-64) if not yet in module
+    Function* implFn = ctx.module().getFunction("aiml_arg_dump_impl2");
     if (!implFn) {
         FunctionType* ft = FunctionType::get(
             ctx.builder.getVoidTy(),
             {i8p, i8pp, i32Ty->getPointerTo(), i32Ty->getPointerTo(),
-             i32Ty, i8p, i32Ty, i8pp},
+             i32Ty, i8p, i32Ty, i8pp, i8pp},
             false);
-        implFn = Function::Create(ft, Function::ExternalLinkage, "aiml_arg_dump_impl", ctx.module());
+        implFn = Function::Create(ft, Function::ExternalLinkage, "aiml_arg_dump_impl2", ctx.module());
     }
 
     // Cast struct alloca to i8*
@@ -5129,7 +5135,7 @@ IRValue* Compiler::visitSysArgDumpCall(CallExpr* call) {
         structPtr, namesPtr, typesPtr, offsetsPtr,
         ctx.builder.getInt32(numFields),
         structName,
-        argcVal, argvVal
+        argcVal, argvVal, realPtr0
     });
 
     return ctx.ir_gen->getInt32(0);

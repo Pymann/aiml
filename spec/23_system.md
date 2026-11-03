@@ -134,6 +134,12 @@ gewesen; was fehlte, war die Fehlermeldung.
 # is a compile error.  The collector is the list<string> field whose REAL name is
 # `positional`; an alias on it plays no part.
 #
+# Given flags (F23-64): the list<string> field whose REAL name is `given` collects the real
+# field name of every field the command line set, each once, in the order of first appearance
+# (`--id 7` records "ident").  It is never set by a flag (`--given` is unknown), an alias on it
+# plays no part.  A field keeps its default exactly when its name is not in `given`, so a
+# program needs no sentinel default: `--rate -1` is a given -1 to validate, not "unset".
+#
 # Notes:
 # - argv[0] is ignored; parsing starts at argv[1].
 # - Positional tokens go to a `positional: list<string>` field, in order; without
@@ -141,7 +147,7 @@ gewesen; was fehlte, war die Fehlermeldung.
 # - Unknown flags and missing or malformed values print an error (UnknownArgumentException /
 #   InvalidArgumentException) and terminate the process with exit code 1.
 # - The target must be a named struct/model variable, not an arbitrary expression.
-# - tests/test_arg_dump_strict.aiml holds F23-61 to F23-63.
+# - tests/test_arg_dump_strict.aiml holds F23-61 to F23-64.
 #
 # Example:
 - model:
