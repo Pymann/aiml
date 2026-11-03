@@ -25,6 +25,7 @@ Archives:
 | tar, tar.gz, tar.xz, tar.zst | — | `compress.untar` (§3.7a) | zlib, liblzma, libzstd |
 | ar (`.deb`) | — | `compress.unar` (§3.7a) | — |
 | zip      | `compress.zip`           | `compress.unzip`          | libzip or minizip |
+| ZIM (Kiwix, read-only) | — | `compress.zim_open` … (§6) | libzim ≥ 8 |
 
 ---
 
@@ -368,3 +369,143 @@ the caller does not need to hold the entire file in the heap.
 
 v2 plan: `compress_stream_handle` for incremental compression/decompression
 (analogous to `resp.write` in the HTTP server).
+
+---
+
+## 6. ZIM Archives (read-only, F33-2-20 … F33-2-34)
+
+ZIM is the archive format of Kiwix/openZIM (offline Wikipedia and similar). A ZIM file holds
+*entries* (path, title, either a redirect or an item with mimetype and content) whose contents
+live in compressed *clusters* (zstd or xz). AIML reads ZIM files; it does not write them.
+
+**Status:** specified, not implemented. Reference implementation of the access pattern:
+`cai:tools/zim_strom.cpp` (libzim `iterEfficient`), measured on
+`wikipedia_de_all_mini_2026-10.zim` (5 051 687 entries): ~2 000 articles/s streamed in cluster
+order, against ~14 ms per article (≈ 70/s) when the same articles are read in path order through a
+16 MB cluster cache. That difference is the reason §6.3 exists.
+
+### 6.1 Opening and metadata
+
+```aiml
+- decl: [zim, zim_handle, { call: [compress.zim_open, "/data/wikipedia_de_all_nopic_2026-10.zim"] }]
+- print: ["${ { call: [zim.entry_count] } } entries, ${ { call: [zim.article_count] } } articles"]
+- decl: [lang, string, { call: [zim.metadata, "Language"] }]    # "deu"; "" if the key is missing
+- call: [zim.close]
+```
+
+| Call | Return | Description |
+|------|--------|-------------|
+| `compress.zim_open(path)` | `zim_handle` | Opens the file read-only. Throws `ZimError` if it cannot be opened or is not a ZIM file (F33-2-20). |
+| `zim.entry_count()` | `i64` | All entries including redirects (`getAllEntryCount`). |
+| `zim.article_count()` | `i64` | Front articles only (`getArticleCount`). |
+| `zim.uuid()` | `string` | 32 hex digits. |
+| `zim.metadata(key)` | `string` | Metadata value (`Title`, `Language`, `Date`, …); `""` if absent. |
+| `zim.checksum_ok()` | `bool` | Verifies the stored MD5 over the whole file. Reads every byte: minutes for large files (F33-2-21). |
+| `zim.close()` | void | Releases the handle; also on scope end (spec/61). |
+
+### 6.2 Entries by path or title
+
+```aiml
+- decl: [entry, zim_entry, { call: [zim.by_path, "Kupfer"] }]
+- if: [{ call: [entry.found] }, true]
+  then:
+    - if: [entry.is_redirect, true]
+      then:
+        - set: [entry, { call: [zim.resolve, entry] }]      # follows redirects (max. 16 hops)
+    - decl: [html, string, { call: [zim.content_str, entry] }]
+```
+
+`zim_entry` is a value model (copyable; it holds only an index into the open archive):
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `found` | `bool` | `false` for a lookup that matched nothing; all other fields are then empty |
+| `index` | `i64` | Entry index in path order (stable for a given file) |
+| `path` | `string` | Path without namespace prefix in new-scheme files (`Kupfer`), as stored in old ones (`A/Kupfer`) |
+| `title` | `string` | Title (`Kupfer`) |
+| `is_redirect` | `bool` | Redirect entry |
+| `redirect_path` | `string` | Target path of a redirect; `""` otherwise |
+| `mimetype` | `string` | `text/html`, `image/webp`, …; `""` for redirects |
+| `size` | `i64` | Uncompressed content size in bytes; `0` for redirects |
+
+| Call | Return | Description |
+|------|--------|-------------|
+| `zim.by_path(path)` | `zim_entry` | Exact path. Tries the path as given; in old-scheme files also with `A/` (F33-2-22). |
+| `zim.by_title(title)` | `zim_entry` | Exact title (`getEntryByTitle`). |
+| `zim.resolve(entry)` | `zim_entry` | Follows redirects. A loop or more than 16 hops throws `ZimError` (F33-2-23). |
+| `zim.content(entry)` | `buffer<u8>` | Content of a non-redirect entry. Throws `ZimError` for a redirect or a missing entry (F33-2-24). |
+| `zim.content_str(entry)` | `string` | Same, as UTF-8 string (invalid bytes are kept as they are; no validation). |
+
+### 6.3 Scanning in cluster order
+
+Reading every entry by path decompresses, for most articles, a cluster that the previous article
+did not use. `zim.scan` hands out entries in *cluster order* (libzim `iterEfficient`), so every
+cluster is decompressed at most once for a full pass. Positions in this order are numbered
+from `0` and are stable for a given file; they are what a resumable reader stores.
+
+```aiml
+- decl: [pos, i64, 0]
+- decl: [total, i64, { call: [zim.entry_count] }]
+- while: [{ lt: [pos, total] }]
+  body:
+    - decl: [batch, list<zim_entry>, { call: [zim.scan, pos, 1000] }]   # up to 1000 entries from position pos
+    - decl: [row, i32, 0]
+    - while: [{ lt: [row, batch.len] }]
+      body:
+        - decl: [item, zim_entry, { call: [batch.get, row] }]
+        - if: [{ and: [{ eq: [item.is_redirect, false] }, { call: [item.mimetype.starts_with, "text/html"] }] }, true]
+          then:
+            - decl: [html, string, { call: [zim.content_str, item] }]
+            # … parse …
+        - set: [row, { +: [row, 1] }]
+    - set: [pos, { +: [pos, batch.len] }]
+```
+
+| Call | Return | Description |
+|------|--------|-------------|
+| `zim.scan(from, count)` | `list<zim_entry>` | Up to `count` entries starting at cluster-order position `from`; an empty list at the end (F33-2-25). |
+| `zim.position(entry)` | `i64` | Cluster-order position of an entry returned by `scan`; `-1` for entries from `by_path`/`by_title`. |
+| `compress.zim_cache(bytes)` | void | Process-wide cluster cache size (`setClusterCacheMaxSize`), default 16 MB (F33-2-26). |
+
+- **Cost of `from` (F33-2-27):** Consecutive calls (`from` = previous `from` + previous length)
+  continue the same iteration and cost nothing extra. Any other `from` restarts the iteration and
+  skips `from` entries. Skipping reads directory entries (≈ 55 s for 3 million entries in the
+  reference measurement), but no cluster.
+- **Content inside a scan (F33-2-28):** `zim.content(item)` for an entry of the current batch
+  uses the cluster the scan is positioned on. Fetching the contents of a batch in batch order
+  therefore decompresses each cluster once.
+- **Order (F33-2-29):** The cluster order is a property of the file and not an alphabetical
+  order. Redirects come first in the files measured.
+
+### 6.4 Safety and errors
+
+- **Untrusted content (F33-2-30):** ZIM contents are data. AIML never interprets them. Paths and
+  titles are arbitrary UTF-8 and may contain `/`, `..`, tabs or newlines; code that builds file
+  names from them must sanitise them. There is no extraction-to-filesystem function, so unlike
+  `untar` there is no path-escape case.
+- **Read-only (F33-2-31):** The file is opened read-only and is never modified or locked for
+  other readers. Several handles to the same file are allowed. A handle may be used from one
+  thread at a time; parallel readers each open their own handle.
+- **Errors (F33-2-32):** Errors raise `ZimError`, an exception of spec/22, with `message` and
+  `code`:
+
+  | Code | Meaning |
+  |------|---------|
+  | 1 | cannot open |
+  | 2 | not a ZIM file or unsupported version |
+  | 3 | corrupt or truncated (cluster cannot be decompressed) |
+  | 4 | redirect loop |
+  | 5 | entry is a redirect (`content`) |
+  | 6 | no such entry |
+
+  A lookup that finds nothing is not an error (`found = false`).
+- **Large files (F33-2-33):** Files above 4 GB are the normal case (German Wikipedia without
+  pictures: 18.6 GB). Sizes, counts and positions are `i64`.
+- **Dependency (F33-2-34):**
+  - libzim ≥ 8 (C++, `-lzim`; Debian/Ubuntu package `libzim-dev`), optional like brotli.
+  - Without libzim, every `compress.zim_*` call fails at compile time with a message naming the
+    missing library.
+  - Tests build a small ZIM with the libzim writer into `tests/data/` and run
+    `tests/test_compress_zim.aiml`. Covered there: by_path, by_title, resolve, a redirect loop, a
+    full scan with resume, and content of a redirect (error 5).
+
