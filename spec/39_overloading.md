@@ -33,6 +33,30 @@ Useful for null checks and identity comparisons.
 - decl: [self_ptr,     i32, { peq: [a, a] }]   # 1 (same pointer)
 ```
 
+**How the operand type is found.** Content comparison is chosen from the operands'
+*static* types, resolved from the **source spelling**: a local, a dotted member path
+(`obj.field`), a member of the current object (`<.field` and `this.field` — both
+spellings, they mean the same), a string literal, a string interpolation, or a
+string-returning call — a user function as well as a string builtin on a `string`
+receiver (`.lower`, `.upper`, `.trim`, `.substr`, …). Two `string` members of the
+same class therefore compare by content, exactly like two locals, and so do two
+builtin results:
+
+```aiml
+# inside a method of a class with `string` members `tag_name` and `skip_tag`
+- if: { condition: { eq: [<.tag_name, <.skip_tag] }, then: [ ... ] }   # content
+
+# two freshly allocated builtin results — content, not two different addresses
+- if: { condition: { eq: [{ call: [a_str.lower] }, { call: [b_str.lower] }] }, then: [ ... ] }
+```
+
+Only when **neither** operand's type can be resolved does the compiler warn
+("eq/neq on two pointers without resolvable type") and fall back to pointer
+identity. That fallback is a last resort, never a shortcut: a warning on operands
+whose types *are* statically known is a compiler bug, not a user error — it
+translates silently to "always unequal". Regression:
+`tests/test_eq_member_strings.aiml`.
+
 ---
 
 ## 1. Built-in Overloads (math types)

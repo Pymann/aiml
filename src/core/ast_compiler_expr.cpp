@@ -1194,13 +1194,24 @@ IRValue* Compiler::visitBinary(BinaryExpr* bin) {
             auto resolveTypeName = [&](Expr* expr) {
                 std::string name;
                 if (auto* varEx = dynamic_cast<VariableExpr*>(expr)) {
-                    if (Symbol* s = resolveVariable(varEx->name)) {
+                    // Ein Member des AKTUELLEN Objekts steht in der Quelle als `<.feld`
+                    // (oder `<`), nicht als `this.feld`.  Ohne diese Umschrift schlug
+                    // resolveVariable("<") fehl, der Typname blieb leer und ein Vergleich
+                    // ZWEIER string-Member derselben Klasse fiel auf Pointer-Identity
+                    // zurueck — lautlos "immer ungleich", obwohl beide Typen statisch
+                    // bekannt sind.  (cai-Wikipedia-Leser: `{ eq: [<.tag_name, <.skip_tag] }`
+                    // traf nie, 10.000 Artikel verworfen.)  `this.feld` ging schon.
+                    std::string vname = varEx->name;
+                    if (vname == "<") vname = "this";
+                    else if (vname.rfind("<.", 0) == 0) vname = "this." + vname.substr(2);
+
+                    if (Symbol* s = resolveVariable(vname)) {
                         name = s->typeName;
                     } else {
-                        size_t dotPos = varEx->name.find('.');
+                        size_t dotPos = vname.find('.');
                         if (dotPos != std::string::npos) {
-                            std::string baseName = varEx->name.substr(0, dotPos);
-                            std::string propPath = varEx->name.substr(dotPos + 1);
+                            std::string baseName = vname.substr(0, dotPos);
+                            std::string propPath = vname.substr(dotPos + 1);
                             if (Symbol* baseSym = resolveVariable(baseName)) {
                                 std::string propTypeName;
                                 resolvePropertyWritePtr(baseSym, propPath, propTypeName);
@@ -1215,6 +1226,40 @@ IRValue* Compiler::visitBinary(BinaryExpr* bin) {
                 } else if (auto* ce = dynamic_cast<CallExpr*>(expr)) {
                     // spec/39 §4: a string-returning call compares by content, not identity
                     if (auto* fi = resolveCallTarget(ce->functionName)) name = fi->returnTypeName;
+                    // Ein string-Builtin steht in keiner FunctionInfo, hat aber einen
+                    // statisch bekannten Rueckgabetyp.  Ohne das fiel
+                    // `{ eq: [zeichen.lower(), zeichen.upper()] }` auf Pointer-Identity
+                    // zurueck — zwei FRISCHE Allokationen, also lautlos "immer ungleich".
+                    // Der kurze Name allein genuegt nicht: `slice`/`reverse`/`replace`
+                    // gibt es auch auf Listen, darum muss der Empfaenger ein string sein.
+                    // Verwandt mit der Namensliste in `ownedStringReturnExpr`
+                    // (ast_compiler.cpp), die aber FRISCHHEIT prueft, nicht den Typ —
+                    // dort gehoert `split` dazu, das eine Liste liefert.
+                    if (name.empty()) {
+                        const std::string& fn = ce->functionName;
+                        size_t dp = fn.rfind('.');
+                        if (dp != std::string::npos && dp > 0) {
+                            static const std::set<std::string> strMeths = {
+                                "substr", "lower", "upper", "title", "trim", "replace",
+                                "slice", "concat", "join", "to_string", "repeat",
+                                "reverse", "pad_left", "pad_right", "format" };
+                            if (strMeths.count(fn.substr(dp + 1))) {
+                                std::string recv = fn.substr(0, dp);
+                                if (recv == "<") recv = "this";
+                                else if (recv.rfind("<.", 0) == 0) recv = "this." + recv.substr(2);
+                                std::string recvTy;
+                                if (Symbol* rs = resolveVariable(recv)) {
+                                    recvTy = rs->typeName;
+                                } else {
+                                    size_t rd = recv.find('.');
+                                    if (rd != std::string::npos)
+                                        if (Symbol* rb = resolveVariable(recv.substr(0, rd)))
+                                            resolvePropertyWritePtr(rb, recv.substr(rd + 1), recvTy);
+                                }
+                                if (recvTy == "string") name = "string";
+                            }
+                        }
+                    }
                 }
                 return name;
             };

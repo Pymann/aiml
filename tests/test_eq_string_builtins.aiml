@@ -1,0 +1,67 @@
+# SPEC?: 39_overloading,09_strings
+# Regression: `eq`/`neq` auf dem Ergebnis ZWEIER string-Builtins
+# (`{ eq: [zeichen.lower(), zeichen.upper()] }`) fiel auf Pointer-Identity
+# zurueck.  Beide Operanden sind frische Allokationen, also war das lautlos
+# "immer ungleich" — obwohl der Rueckgabetyp statisch bekannt ist.  Ein
+# string-Builtin steht in keiner FunctionInfo, darum lieferte der Resolver
+# in visitBinary einen leeren Typnamen.
+#
+# Aus derselben cai-Nacht wie test_eq_member_strings: in eigenschaft_leser.aiml
+# `fortsetzung` warnte der Compiler ueber zwei Aufruf-Temporaries.  Dort mit
+# typisierten Lokalen umschifft; hier festgehalten, dass es auch direkt geht.
+#
+# Expected exit code: 0
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [fails, i32, 0]
+      - decl: [zeichen, string, "Abc"]
+      - decl: [gleich,  string, "abc"]
+
+      # Zwei Builtins, UNTERSCHIEDLICHER Inhalt → muss ungleich sein.
+      - if:
+          condition: { eq: [{ call: [zeichen.lower] }, { call: [zeichen.upper] }] }
+          then:
+            - print: ["FAIL lower==upper ergab gleich"]
+            - set: [fails, { +: [fails, 1] }]
+      - if:
+          condition: { neq: [{ call: [zeichen.lower] }, { call: [zeichen.upper] }] }
+          then: []
+          else:
+            - print: ["FAIL neq auf lower/upper ergab gleich"]
+            - set: [fails, { +: [fails, 1] }]
+
+      # Zwei Builtins mit GLEICHEM Inhalt, getrennt alloziert → muss gleich
+      # sein.  Genau das ergab vorher false (zwei verschiedene Zeiger).
+      - if:
+          condition: { eq: [{ call: [zeichen.lower] }, { call: [gleich.lower] }] }
+          then: []
+          else:
+            - print: ["FAIL zwei lower() mit gleichem Inhalt ergaben ungleich"]
+            - set: [fails, { +: [fails, 1] }]
+
+      # Gemischt: Builtin gegen typisierte Lokale (ging schon vorher).
+      - decl: [klein, string, { call: [zeichen.lower] }]
+      - if:
+          condition: { eq: [{ call: [gleich.lower] }, klein] }
+          then: []
+          else:
+            - print: ["FAIL Builtin gegen Lokale ergab ungleich"]
+            - set: [fails, { +: [fails, 1] }]
+
+      # trim/substr als zweite Builtin-Paarung.
+      - decl: [roh, string, "  abc  "]
+      - if:
+          condition: { eq: [{ call: [roh.trim] }, { call: [gleich.trim] }] }
+          then: []
+          else:
+            - print: ["FAIL trim-Paarung ergab ungleich"]
+            - set: [fails, { +: [fails, 1] }]
+
+      - if:
+          condition: { eq: [fails, 0] }
+          then: [{ print: ["PASS test_eq_string_builtins"] }]
+          else: [{ print: ["FAILED ${fails} Pruefungen"] }]
+      - return: fails
