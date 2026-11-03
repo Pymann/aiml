@@ -205,8 +205,14 @@ uninitialized/null field:
   error. The class half of the check was absent until 2026-11-03; a filled
   default was accepted without a word and the field was empty at run time.
   Before 2026-10-29 a `[]` default silently ended the field list: every later
-  field was missing. Regressions: `tests/field_defaults/` (both halves, plus the
-  allowed `[]` and scalar defaults).
+  field was missing. The check is anchored at `members:`/`fields:`, **not** at the
+  shape of the entry: an interface signature
+  `- [spur_fuer, list<i32>, [[programm, string]]]` has the same three-element form
+  with a container type and a non-empty third element, but there that element is
+  the argument list, not a default — a check matching on the shape alone breaks
+  every interface with a container return type. Regressions:
+  `tests/field_defaults/` (both halves, the nested case, plus the allowed `[]`,
+  scalar defaults, and that interface boundary).
 
 This holds for both stack decls and `{ new: Model }` heap allocations, and for
 fields of nested models. Both paths route through the same field-init routine

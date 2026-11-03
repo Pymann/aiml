@@ -1,0 +1,68 @@
+# Requires: driver
+# Grenzfall des Listen-Default-Checks: eine INTERFACE-Signatur hat genau
+# dieselbe Form wie ein Member mit Default — `- [name, typ, drittes]`, wobei
+# das dritte Element eine nicht-leere Liste ist und der zweite Eintrag ein
+# Container-Typ sein kann:
+#
+#     - [spur_fuer, list<i32>, [[programm, string], [wert, i64]]]
+#
+# Hier ist das dritte Element aber die ARGUMENTLISTE, nicht ein Default.  Ein
+# Check, der nur auf die Form sieht statt auf `members:`/`fields:`, schlaegt
+# hier falsch an und bricht jedes Interface mit Container-Rueckgabetyp.
+#
+# Echte Fundstelle: cai src/kern/graph/graph_dienst.aiml:20 (Partner-Session
+# exodus-b9).  Dort gruen — dieser Test haelt es fest, damit ein spaeterer
+# Umbau des Checks es nicht lautlos kaputt macht.
+- interface:
+    name: Spurgeber
+    methods:
+      - [oeffne,    i32,       [[wissen, string]]]
+      - [spur_fuer, list<i32>, [[programm, string], [wert, i64]]]
+
+- class:
+    name: Spurwerk
+    implements: [Spurgeber]
+    members:
+      - [anzahl, i32, 0, { access: public }]
+      - [spuren, list<i32>, [], { access: public }]
+    methods:
+      - def:
+          name: oeffne
+          args: [[wissen, string]]
+          return: i32
+          body:
+            - set: [<.anzahl, wissen.len]
+            - return: <.anzahl
+      - def:
+          name: spur_fuer
+          args: [[programm, string], [wert, i64]]
+          return: list<i32>
+          body:
+            - call: [<.spuren.push, programm.len]
+            - return: <.spuren
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [fehler, i32, 0]
+      - decl: [werk, Spurwerk]
+
+      - decl: [auf, i32, { call: [werk.oeffne, "abcd"] }]
+      - if:
+          condition: { neq: [auf, 4] }
+          then:
+            - print: ["FAIL oeffne ergab ${auf}"]
+            - set: [fehler, { +: [fehler, 1] }]
+
+      - call: [werk.spur_fuer, "xyz", 7]
+      - if:
+          condition: { neq: [werk.spuren.len, 1] }
+          then:
+            - print: ["FAIL spuren.len=${werk.spuren.len}"]
+            - set: [fehler, { +: [fehler, 1] }]
+
+      - if:
+          condition: { eq: [fehler, 0] }
+          then: [{ print: ["PASS ok_interface_list_signature"] }]
+      - return: fehler
