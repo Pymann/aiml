@@ -1,0 +1,43 @@
+# Requires: driver
+# EXPECT-ERROR: from a void-returning method
+# A decl with a model type, initialised from a METHOD that has no `return:`.  The method is
+# reached through a member (`<.werte.fertig`), which is how it showed up in cai.
+#
+# Until 2026-11-03 this killed the compiler with a bare SIGSEGV and not one line of output:
+# the void value reached a typed slot and LLVM recursed in getPrefTypeAlignment until the
+# 8 MB stack was gone.  rejectVoidCallInit looked the method up under its BARE name, but
+# ctx.functions keys methods as `<Class>_<method>`, so the check never matched.
+- model:
+    name: VdWert
+    fields:
+      - [zahl, i32, 0]
+
+- class:
+    name: VdSpeicher
+    methods:
+      - def:
+          name: fertig
+          args: [[out, "ref<VdWert>"], [schluessel, string]]
+          body:
+            - set: [out.zahl, 7]
+
+- class:
+    name: VdHalter
+    members:
+      - [werte, VdSpeicher, { access: public }]
+    methods:
+      - def:
+          name: lauf
+          return: i32
+          body:
+            - decl: [leer, VdWert]
+            - decl: [wert, VdWert, { call: [<.werte.fertig, leer, "k"] }]
+            - return: wert.zahl
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [halter, ptr<VdHalter>, { new: VdHalter }]
+      - print: ["zahl=${ { call: [halter.lauf] } }"]
+      - return: 0

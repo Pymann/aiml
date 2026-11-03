@@ -1,0 +1,38 @@
+# Requires: driver
+# EXPECT-ERROR: from a void-returning method
+# The same through a `shared<T>` member, the shape cai actually had.  bareTypeName has to see
+# through ref<>/ptr<>/shared<> to find the class whose method is being called.
+- model:
+    name: SvWert
+    fields:
+      - [zahl, i32, 0]
+
+- class:
+    name: SvLeser
+    methods:
+      - def:
+          name: fertig
+          args: [[out, "ref<SvWert>"]]
+          body:
+            - set: [out.zahl, 3]
+
+- class:
+    name: SvHalter
+    members:
+      - [leser, "shared<SvLeser>", { access: public }]
+    methods:
+      - def:
+          name: lauf
+          return: i32
+          body:
+            - decl: [leer, SvWert]
+            - decl: [wert, SvWert, { call: [<.leser.fertig, leer] }]
+            - return: wert.zahl
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [halter, ptr<SvHalter>, { new: SvHalter }]
+      - print: ["zahl=${ { call: [halter.lauf] } }"]
+      - return: 0

@@ -1,0 +1,39 @@
+# Requires: driver
+# The correct form of the same program: a plain decl, then a `- call:` statement.  Here to
+# show the check does not reject the shape it is meant to steer people towards.
+- model:
+    name: OkWert
+    fields:
+      - [zahl, i32, 0]
+
+- class:
+    name: OkSpeicher
+    methods:
+      - def:
+          name: fertig
+          args: [[out, "ref<OkWert>"], [schluessel, string]]
+          body:
+            - set: [out.zahl, 7]
+
+- class:
+    name: OkHalter
+    members:
+      - [werte, OkSpeicher, { access: public }]
+    methods:
+      - def:
+          name: lauf
+          return: i32
+          body:
+            - decl: [wert, OkWert]
+            - call: [<.werte.fertig, wert, "k"]
+            - return: wert.zahl
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [halter, ptr<OkHalter>, { new: OkHalter }]
+      - decl: [got, i32, { call: [halter.lauf] }]
+      - if: { condition: { neq: [got, 7] }, then: [{ print: ["FAIL got=${got}"] }, { return: 1 }] }
+      - print: ["PASS void_init ok form"]
+      - return: 0

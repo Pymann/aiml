@@ -27,6 +27,25 @@
 # Function Call (as Statement)
 - call: [greet]
 
+# A void call has NO VALUE, so it cannot initialise or be assigned to anything:
+#   - decl: [text, string, { call: [greet] }]   # compile error
+#   - set:  [text, { call: [greet] }]           # compile error
+# The message names the call and the target and points at the source line.  Use the statement
+# form above, and give the function a `return:` when a value is wanted.
+#
+# This matters more than an ordinary type error: before it was reported (2026-11-03), a void
+# value stored into a typed slot produced IR whose type LLVM walked in circles —
+# getPrefTypeAlignment recursed until the 8 MB stack was gone and the compiler died of SIGSEGV
+# with NO output at all, so the author saw only "build failed" and no file or line.  The common
+# way into it is a function or method that LOSES its `return:` while its callers keep reading a
+# value (measured in cai: `fertig` changed to write through a `ref<T>` out-parameter instead).
+#
+# What is checked: a direct call to a function of this unit, and a method call whose receiver
+# resolves here — `<.m`, `<.member.m`, `local.m` — including through `ref<T>`/`ptr<T>`/
+# `shared<T>`. A namespace function (`io.open`, `sys.exe`) is not a method and is left alone.
+# A receiver this step cannot resolve falls through unreported: a wrong rejection would stop a
+# build that was fine, which is worse than a gap.  Regression tests: `tests/void_init/`.
+
 # Function Call (as Expression)
 - set: [sum, { call: [add_two, 5, 10] }]
 - print: [sum]

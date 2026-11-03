@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <iostream>
 #include <cstdlib>   // std::getenv (AIML_SIZETRACE)
+#include <cstring>   // strlen (bareTypeName)
 #include <vector>
 #include <llvm/TargetParser/Triple.h>
 
@@ -87,6 +88,57 @@ static void emitSizeTrace(CompilerContext& ctx, const std::string& symName) {
 // Returns true (and logs an error) when the call's target resolves to a void
 // function in this module.  Unresolved (non-LLVM) names and method/namespace
 // calls fall through silently — they have their own typing rules.
+// The bare type name behind a declared type: `ref<T>` / `ptr<T>` / `shared<T>` → `T`.
+static std::string bareTypeName(const std::string& tn) {
+    for (const char* w : {"ref<", "ptr<", "shared<"}) {
+        size_t n = strlen(w);
+        if (tn.size() > n + 1 && tn.rfind(w, 0) == 0 && tn.back() == '>')
+            return tn.substr(n, tn.size() - n - 1);
+    }
+    return tn;
+}
+
+// The class a dotted call's receiver belongs to, as far as it can be resolved here:
+//   "this"        → the class being compiled
+//   "this.member" → the declared type of that member
+//   "local"       → the declared type of that local or parameter
+//   "local.member"→ the declared type of that member
+// Empty when it cannot be told (an expression, an unknown name, a namespace).
+static std::string receiverClassOf(CompilerContext& ctx, const std::string& baseIn) {
+    if (baseIn.empty()) return "";
+    // The call keeps the source spelling, so a method on the current object arrives as `<`
+    // or `<.member`, not as `this`/`this.member`.
+    std::string base = baseIn;
+    if (base == "<") base = "this";
+    else if (base.rfind("<.", 0) == 0) base = "this." + base.substr(2);
+    auto memberType = [&](const std::string& cls, const std::string& mem) -> std::string {
+        auto ci = ctx.classes.find(cls);
+        if (ci == ctx.classes.end()) {
+            auto qi = ctx.classes.find(ctx.qualify(cls));
+            if (qi == ctx.classes.end()) return "";
+            ci = qi;
+        }
+        auto mi = ci->second.members.find(mem);
+        return mi == ci->second.members.end() ? "" : bareTypeName(mi->second.typeName);
+    };
+    size_t dot = base.find('.');
+    const std::string head = dot == std::string::npos ? base : base.substr(0, dot);
+    const std::string rest = dot == std::string::npos ? ""   : base.substr(dot + 1);
+    std::string headClass;
+    if (head == "this") {
+        headClass = ctx.currentClassKey();
+    } else {
+        auto sym = ctx.symbol_table.find(head);
+        if (sym == ctx.symbol_table.end()) return "";
+        headClass = bareTypeName(sym->second.typeName);
+    }
+    if (headClass.empty()) return "";
+    if (rest.empty()) return headClass;
+    // Only one further step is resolved; a deeper path falls through to the loose check.
+    if (rest.find('.') != std::string::npos) return "";
+    return memberType(headClass, rest);
+}
+
 bool rejectVoidCallInit(CompilerContext& ctx, Expr* initExpr,
                         const std::string& targetDesc,
                         const YAML::Node& srcNode) {
@@ -106,10 +158,35 @@ bool rejectVoidCallInit(CompilerContext& ctx, Expr* initExpr,
         // etwas zu melden (gemessen 2026-10-12 am cosmos-RunsScreen).
         const std::string base = call->functionName.substr(0, call->functionName.rfind('.'));
         const std::string meth = call->functionName.substr(call->functionName.rfind('.') + 1);
-        (void)base;
-        auto fit = ctx.functions.find(meth);
-        if (fit == ctx.functions.end() || !fit->second.func) return false;
-        if (!fit->second.func->getReturnType()->isVoidTy()) return false;
+
+        // A method lives in ctx.functions under `<Class>_<method>`, NOT under its bare name.
+        // Looking it up bare therefore never matched and the check fell through — the void
+        // value reached a typed slot and LLVM blew the stack in getPrefTypeAlignment with no
+        // diagnostic at all (reported from cai 2026-11-03: `decl: [wert, Wert,
+        // { call: [<.werte.fertig, …] }]` against a `fertig` that had lost its `return:`).
+        // `io.open`, `sys.exe`, `compress.zim_open`, … — a NAMESPACE function, not a method.
+        // `<`/`<.x` is always the current object, never a namespace.
+        const std::string head = base.substr(0, base.find('.'));
+        if (head != "<" && head != "this" && ctx.namespaces.count(head)) return false;
+
+        llvm::Function* mfn = nullptr;
+        const std::string cls = receiverClassOf(ctx, base);
+        if (!cls.empty()) {
+            auto fit = ctx.functions.find(cls + "_" + meth);
+            if (fit == ctx.functions.end() || !fit->second.func) {
+                // Also try the qualified class name (a namespaced class).
+                fit = ctx.functions.find(ctx.qualify(cls) + "_" + meth);
+            }
+            if (fit != ctx.functions.end() && fit->second.func) mfn = fit->second.func;
+        }
+        // No guessing: unless the receiver resolved to a class whose method this is, say
+        // nothing.  An earlier version fell back on the method NAME across the unit when the
+        // receiver was unknown, which made `decl: [handle, file_handle, { call: [io.open, …] }]`
+        // a hard error the moment any class happened to have a void method called `open` —
+        // io.open returns a file_handle (spec/23).  A namespace call is not a method call and
+        // has its own typing; a missed case is a crash we already fixed for the common shape,
+        // a wrong rejection stops a build that was fine.
+        if (!mfn || !mfn->getReturnType()->isVoidTy()) return false;
         LOG_ERROR(ctx.fmtLoc(srcNode) + targetDesc +
             " from a void-returning method '" + call->functionName +
             "()' — void values cannot be stored into a typed location.");
@@ -594,12 +671,12 @@ void Compiler::emitResourceBindTransfer(const std::string& typeName, Expr* rhs, 
     bool isHashmap = HashmapImpl::isHashmapType(typeName);
     bool isChan = isHashmap || (typeName.rfind("chan<", 0) == 0 && typeName.back() == '>');
     const char* retainFn = isHashmap ? "aiml_hashmap_retain" : "aiml_chan_retain";
-    if ((!isChan && typeName != "thread_handle" && typeName != "gl_texture" && typeName != "gl_cubemap" && typeName != "gl_timer_query" && typeName != "gl_buffer" && typeName != "gl_vao" && typeName != "process") || !rhs) return;
+    if ((!isChan && typeName != "thread_handle" && typeName != "gl_texture" && typeName != "gl_cubemap" && typeName != "gl_timer_query" && typeName != "gl_buffer" && typeName != "gl_vao" && typeName != "process" && typeName != "zim_handle") || !rhs) return;
     if (dynamic_cast<CallExpr*>(rhs) || dynamic_cast<SpawnExpr*>(rhs) || dynamic_cast<LiteralExpr*>(rhs)) return;
     auto* var = dynamic_cast<VariableExpr*>(rhs);
     Symbol* plain = (var && var->name.find('.') == std::string::npos && var->name.find('<') == std::string::npos)
         ? resolveVariable(var->name) : nullptr;
-    if ((typeName == "gl_buffer" || typeName == "gl_vao" || typeName == "process") && plain && plain->is_param) {
+    if ((typeName == "gl_buffer" || typeName == "gl_vao" || typeName == "process" || typeName == "zim_handle") && plain && plain->is_param) {
         LOG_ERROR(ctx.fmtLoc() + "spec/61: cannot move a borrowed " + typeName + " into an owner");
         return;
     }
@@ -627,7 +704,7 @@ void Compiler::emitResourceBindTransfer(const std::string& typeName, Expr* rhs, 
 bool Compiler::emitResourceStore(const std::string& typeName, Expr* rhs, llvm::Value* newV, llvm::Value* slot) {
     bool isHashmap = HashmapImpl::isHashmapType(typeName);
     bool isChan = isHashmap || (typeName.rfind("chan<", 0) == 0 && typeName.back() == '>');
-    if ((!isChan && typeName != "thread_handle" && typeName != "gl_texture" && typeName != "gl_cubemap" && typeName != "gl_timer_query" && typeName != "gl_buffer" && typeName != "gl_vao" && typeName != "process") || !newV || !slot || !newV->getType()->isPointerTy()) return false;
+    if ((!isChan && typeName != "thread_handle" && typeName != "gl_texture" && typeName != "gl_cubemap" && typeName != "gl_timer_query" && typeName != "gl_buffer" && typeName != "gl_vao" && typeName != "process" && typeName != "zim_handle") || !newV || !slot || !newV->getType()->isPointerTy()) return false;
     auto* i8p = llvm::PointerType::get(ctx.context, 0);
     if (isChan) {
         if (!dynamic_cast<CallExpr*>(rhs) && !dynamic_cast<LiteralExpr*>(rhs))
@@ -637,7 +714,7 @@ bool Compiler::emitResourceStore(const std::string& typeName, Expr* rhs, llvm::V
         emitResourceBindTransfer(typeName, rhs, slot);   // moved source slot → null
     }
     llvm::Value* oldV = ctx.builder.CreateLoad(i8p, slot, "res_old");
-    if (typeName == "gl_buffer" || typeName == "gl_vao" || typeName == "process") {
+    if (typeName == "gl_buffer" || typeName == "gl_vao" || typeName == "process" || typeName == "zim_handle") {
         // Self-move has already nulled its source slot. Other aliases are not owners.
         oldV = ctx.builder.CreateSelect(ctx.builder.CreateICmpEQ(oldV, newV),
             llvm::ConstantPointerNull::get(i8p), oldV);
@@ -646,6 +723,7 @@ bool Compiler::emitResourceStore(const std::string& typeName, Expr* rhs, llvm::V
         : typeName == "gl_texture" ? "aiml_gl_texture_release"
         : typeName == "gl_cubemap" ? "aiml_gl_cubemap_release"
         : typeName == "process" ? "aiml_process_release"
+        : typeName == "zim_handle" ? "aiml_zim_close"
         : typeName == "gl_buffer" ? "aiml_gl_buffer_delete"
         : typeName == "gl_vao" ? "aiml_gl_vao_delete"
         : typeName == "gl_timer_query" ? "aiml_gl_timer_query_release" : "aiml_thread_handle_drop",

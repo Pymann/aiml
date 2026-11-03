@@ -1,0 +1,38 @@
+# Requires: driver
+# A NAMESPACE function whose result goes into a typed decl — io.open returns a file_handle
+# (spec/23 "io.open(...) returns null on failure", i.e. a value), so this must compile.
+#
+# Here because the first version of the void-init check guessed: with the receiver unresolved
+# it fell back on the method NAME across the unit, and the class below has a void `open`.
+# That made every `decl: [h, file_handle, { call: [io.open, …] }]` a hard error and broke the
+# build of every project using io.open (reported from cai 2026-11-03, ~15 call sites).
+- class:
+    name: NsThing
+    members:
+      - [zahl, i32, 0, { access: public }]
+    methods:
+      # Same bare name as the namespace function, and void — the trap that was sprung.
+      - def:
+          name: open
+          args: [[wert, i32]]
+          body:
+            - set: [<.zahl, wert]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [pfad, string, "/tmp/aiml_void_init_probe.txt"]
+      - decl: [writer, file_handle, { call: [io.open, pfad, "w"] }]
+      - call: [io.write, writer, "hallo"]
+      - call: [io.close, writer]
+      - decl: [reader, file_handle, { call: [io.open, pfad, "r"] }]
+      - decl: [text, string, { call: [io.read_all, reader] }]
+      - call: [io.close, reader]
+      - call: [io.remove, pfad]
+      - decl: [thing, ptr<NsThing>, { new: NsThing }]
+      - call: [thing.open, 5]
+      - if: { condition: { neq: [thing.zahl, 5] }, then: [{ print: ["FAIL void method did not run"] }, { return: 1 }] }
+      - if: { condition: { lt: [{ call: [text.index_of, "hallo"] }, 0] }, then: [{ print: ["FAIL read back '${text}'"] }, { return: 1 }] }
+      - print: ["PASS void_init namespace handle"]
+      - return: 0
