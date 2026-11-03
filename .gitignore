@@ -63,3 +63,6 @@ doc/analysis/**/bin
 
 # Wirts-Bibliothek der Clearance-Proben: wird von run.sh aus der .c gebaut (F65-39).
 tests/clearance/fixtures/*.so
+
+# ZIM test fixture — built by tests/compress_zim/run.sh with the libzim writer (spec/33_2 §6)
+tests/data/aiml_zim_test.zim

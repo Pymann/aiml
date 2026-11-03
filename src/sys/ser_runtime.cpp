@@ -3,6 +3,7 @@
 #include "model_runtime.h"   // AIML v2: aiml_model_alloc / dec_hits_zero / free_shell (AIML_TD_MODEL)
 #include "tensor_runtime.h"  // round4 §3: aiml_tensor_clone / aiml_tensor_free (AIML_TD_TENSOR)
 // spec/61 §5 Option B (memV3): list/map-handle allocators (string_runtime.cpp).
+extern "C" void  aiml_zim_close(void*);   // spec/33_2 §6.1, AIML_TD_ZIM scope drop
 extern "C" void* aiml_list_handle_new();
 extern "C" void* aiml_map_handle_new();
 extern "C" void* aiml_buffer_handle_new();
@@ -360,6 +361,7 @@ static void enc(std::vector<uint8_t>& buf,
     case AIML_TD_GLBUFFER:
     case AIML_TD_GLVAO:
     case AIML_TD_PROCESS:
+    case AIML_TD_ZIM:
     case AIML_TD_IFACE:
         break;
     // in-process only (chan models are not wire-serialisable): the pointer, retained by dec
@@ -542,6 +544,7 @@ static void dec_node(const uint8_t* blob, int& pos, int end,
     case AIML_TD_GLBUFFER:
     case AIML_TD_GLVAO:
     case AIML_TD_PROCESS:
+    case AIML_TD_ZIM:
     case AIML_TD_IFACE:
         break;
     case AIML_TD_CHAN:
@@ -1019,6 +1022,15 @@ static void fre(int idx, const AimlTypeNode* ns, int nn, uint8_t* data) {
         aiml_process_release(p);
 #endif
         p = nullptr; memcpy(data, &p, sizeof(p));
+        break;
+    }
+    case AIML_TD_ZIM: {
+        // spec/33_2 §6.1: the handle is released at scope end too, not only by zim.close.
+        void* z = nullptr; memcpy(&z, data, sizeof(z));
+#ifndef __EMSCRIPTEN__   // no libzim in wasm
+        aiml_zim_close(z);
+#endif
+        z = nullptr; memcpy(data, &z, sizeof(z));
         break;
     }
     case AIML_TD_IFACE: {
@@ -1532,6 +1544,7 @@ static void clw(int idx, const AimlTypeNode* ns, int nn,
     case AIML_TD_GLBUFFER:
     case AIML_TD_GLVAO:
     case AIML_TD_PROCESS:
+    case AIML_TD_ZIM:
     case AIML_TD_THREAD: {   // Class 4, move-only: the clone has no thread
         void* t = nullptr;
         memcpy(dst, &t, sizeof(t));

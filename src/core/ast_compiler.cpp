@@ -4350,6 +4350,37 @@ void Compiler::registerTypes(Program* prog) {
         }
     }
 
+    // spec/33_2 §6.4 (F33-2-32): ZimError carries a REASON and a CODE — the table there maps
+    // 1..6 onto "cannot open", "not a ZIM file", "corrupt", "redirect loop", "entry is a
+    // redirect" and "no such entry", so a handler can branch without parsing the message.
+    // Registered apart from the list above because every other builtin exception has the one
+    // `message` field.
+    if (!ctx.classes.count("ZimError")) {
+        CompilerContext::ClassInfo zimErr;
+        zimErr.name = "ZimError";
+        zimErr.version = 0;
+        zimErr.parentName = "Exception";
+
+        CompilerContext::StructMember msgMember;
+        msgMember.typeName = "string";
+        msgMember.type = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType("string")));
+        msgMember.index = 0;
+        msgMember.access = AccessLevel::Public;
+        zimErr.members["message"] = msgMember;
+
+        CompilerContext::StructMember codeMember;
+        codeMember.typeName = "i32";
+        codeMember.type = llvm::Type::getInt32Ty(ctx.context);
+        codeMember.index = 1;
+        codeMember.access = AccessLevel::Public;
+        zimErr.members["code"] = codeMember;
+
+        llvm::StructType* zimErrTy = llvm::StructType::create(ctx.context, "ZimError");
+        zimErrTy->setBody({msgMember.type, codeMember.type});
+        zimErr.type = zimErrTy;
+        ctx.classes["ZimError"] = zimErr;
+    }
+
     // Fixed-point loop: ModelDecl with `inherits:` and ClassDecl with
     // `parentName:` / `models:` may defer when their dependencies aren't
     // registered yet.  In cross-file imports the declarations can arrive in
@@ -4422,6 +4453,7 @@ static bool serHasHeap(const std::string& typeName, CompilerContext& ctx) {
     // spec/61 Class 5 chan<T> / Class 4 thread_handle field: released with the owning model.
     if (ctx.memV3 && (typeName == "thread_handle" || typeName == "gl_texture" || typeName == "gl_cubemap"
                       || typeName == "gl_timer_query" || typeName == "gl_buffer" || typeName == "gl_vao" || typeName == "process"
+                      || typeName == "zim_handle"
                       || (typeName.rfind("chan<", 0) == 0 && typeName.back() == '>')
                       || HashmapImpl::isHashmapType(typeName))) return true;
     // spec/61 §6.2 (memV3): a `shared<T>` (refcounted co-owned) or `ptr<T>` (unique owner) FIELD owns
@@ -4546,6 +4578,8 @@ static std::vector<AimlTypeNode> serBuildSubtree(
             { res.push_back({AIML_TD_GLCUBE, 0,0,offset,0,0}); return res; }
         if (typeName == "process")
             { res.push_back({AIML_TD_PROCESS, 0,0,offset,0,0}); return res; }
+        if (typeName == "zim_handle")
+            { res.push_back({AIML_TD_ZIM, 0,0,offset,0,0}); return res; }
         if (typeName == "gl_buffer")
             { res.push_back({AIML_TD_GLBUFFER, 0,0,offset,0,0}); return res; }
         if (typeName == "gl_vao")

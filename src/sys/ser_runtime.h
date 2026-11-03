@@ -81,6 +81,9 @@ typedef enum {
                              //   chan). Leaf; free = aiml_hashmap_release; share = retain;
                              //   clone = aiml_hashmap_clone (independent deep copy); enc = in-process
                              //   pointer (retained by dec), not wire data.
+    AIML_TD_ZIM        = 28, // spec/33_2 §6.1 Class 4: an open ZIM archive handle. Leaf; free =
+                             //   aiml_zim_close, move-only (a copy leaves it null). Never wire
+                             //   data: an open file is not something to serialise.
 } AimlTDKind;
 
 // spec/61 Class 5 / Class 4 resource handles (ser_runtime.cpp).

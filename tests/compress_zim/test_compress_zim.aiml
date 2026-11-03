@@ -1,0 +1,182 @@
+# ZIM archives, read-only — spec/33_2 §6 (F33-2-20 … F33-2-34).
+# Requires: driver
+#
+# The archive is built by tests/compress_zim/run.sh with the libzim writer; its contents are
+# described in make_test_zim.cpp.  Covered here, as F33-2-34 asks: by_path, by_title, resolve,
+# a redirect loop, a full scan with resume, and content of a redirect (error 5).
+# Expected exit code: 0
+
+- import: "tests/_cross/check.aiml"
+
+# §6.1: a handle is released at scope end, not only by zim.close.  This function opens one and
+# returns WITHOUT closing it; called a few hundred times it would run the process out of file
+# descriptors (the usual limit is 1024) if the scope drop did not close the archive.
+- def:
+    name: open_and_drop
+    args: [[archive, string]]
+    return: i64
+    body:
+      - decl: [handle, zim_handle, { call: [compress.zim_open, archive] }]
+      - return: { call: [handle.entry_count] }
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [chk, ptr<Checker>, { new: Checker }]
+      - decl: [archive_path, string, "tests/data/aiml_zim_test.zim"]
+
+      # ── §6.1 opening and metadata ──
+      - decl: [zim, zim_handle, { call: [compress.zim_open, archive_path] }]
+      - decl: [entries, i64, { call: [zim.entry_count] }]
+      - decl: [articles, i64, { call: [zim.article_count] }]
+      - decl: [has_entries, i32, 0]
+      - if: { condition: { ge: [entries, 6] }, then: [{ set: [has_entries, 1] }] }
+      - call: [chk.expect_i, "entry_count counts items and redirects", has_entries, 1]
+      - decl: [has_articles, i32, 0]
+      - if: { condition: { ge: [articles, 2] }, then: [{ set: [has_articles, 1] }] }
+      - call: [chk.expect_i, "article_count counts front articles", has_articles, 1]
+      - call: [chk.expect_s, "metadata Language", { call: [zim.metadata, "Language"] }, "deu"]
+      - call: [chk.expect_s, "metadata Title", { call: [zim.metadata, "Title"] }, "AIML ZIM Testarchiv"]
+      - call: [chk.expect_s, "a missing metadata key is empty", { call: [zim.metadata, "KeinSolcherSchluessel"] }, ""]
+      - decl: [uuid_text, string, { call: [zim.uuid] }]
+      - call: [chk.expect_i, "uuid is 32 hex digits", { cast: [{ call: [uuid_text.len] }, i64] }, 32]
+
+      # ── §6.2 by_path ──
+      - decl: [copper_de, zim_entry, { call: [zim.by_path, "Kupfer"] }]
+      - call: [chk.expect_i, "by_path finds the article", { cast: [copper_de.found, i64] }, 1]
+      - call: [chk.expect_i, "the article is no redirect", { cast: [copper_de.is_redirect, i64] }, 0]
+      - call: [chk.expect_s, "by_path path", { call: [zim.path, copper_de] }, "Kupfer"]
+      - call: [chk.expect_s, "by_path title", { call: [zim.title, copper_de] }, "Kupfer"]
+      - call: [chk.expect_s, "by_path mimetype", { call: [zim.mimetype, copper_de] }, "text/html"]
+      - call: [chk.expect_s, "a non-redirect has no redirect_path", { call: [zim.redirect_path, copper_de] }, ""]
+      - call: [chk.expect_i, "an entry from by_path has no scan position", { call: [zim.position, copper_de] }, -1]
+      - decl: [html, string, { call: [zim.content_str, copper_de] }]
+      - call: [chk.expect_has, "content_str reads the article", html, "chemisches Element"]
+      - decl: [size_ok, i32, 0]
+      - if: { condition: { gt: [copper_de.size, 0] }, then: [{ set: [size_ok, 1] }] }
+      - call: [chk.expect_i, "size is the uncompressed length", size_ok, 1]
+      - decl: [raw, buffer<u8>, { call: [zim.content, copper_de] }]
+      - call: [chk.expect_i, "content gives the same number of bytes", { cast: [raw.len, i64] }, copper_de.size]
+
+      # a lookup that finds nothing is NOT an error (§6.4)
+      - decl: [missing, zim_entry, { call: [zim.by_path, "GibtEsNicht"] }]
+      - call: [chk.expect_i, "a miss sets found = 0", { cast: [missing.found, i64] }, 0]
+
+      # ── §6.2 by_title ──
+      - decl: [tin, zim_entry, { call: [zim.by_title, "Zinn"] }]
+      - call: [chk.expect_i, "by_title finds the article", { cast: [tin.found, i64] }, 1]
+      - call: [chk.expect_s, "by_title path", { call: [zim.path, tin] }, "Zinn"]
+
+      # ── §6.2 redirects and resolve ──
+      - decl: [copper_en, zim_entry, { call: [zim.by_path, "Copper"] }]
+      - call: [chk.expect_i, "the redirect is found", { cast: [copper_en.found, i64] }, 1]
+      - call: [chk.expect_i, "and marked as one", { cast: [copper_en.is_redirect, i64] }, 1]
+      - call: [chk.expect_s, "redirect_path names the target", { call: [zim.redirect_path, copper_en] }, "Kupfer"]
+      - call: [chk.expect_s, "a redirect has no mimetype", { call: [zim.mimetype, copper_en] }, ""]
+      - decl: [resolved, zim_entry, { call: [zim.resolve, copper_en] }]
+      - call: [chk.expect_i, "resolve yields a non-redirect", { cast: [resolved.is_redirect, i64] }, 0]
+      - call: [chk.expect_s, "resolve lands on the target", { call: [zim.path, resolved] }, "Kupfer"]
+
+      # ── §6.4 content of a redirect is error 5 ──
+      - decl: [redirect_code, i32, 0]
+      - try:
+          body:
+            - decl: [nope, string, { call: [zim.content_str, copper_en] }]
+            - call: [chk.expect_i, "content of a redirect must throw", 0, 1]
+          catch:
+            - type: ZimError
+              var: err
+              body:
+                - set: [redirect_code, err.code]
+      - call: [chk.expect_i, "content of a redirect is code 5", { cast: [redirect_code, i64] }, 5]
+
+      # ── §6.4 a redirect loop is error 4 ──
+      - decl: [loop_code, i32, 0]
+      - decl: [ring, zim_entry, { call: [zim.by_path, "Ring_A"] }]
+      - call: [chk.expect_i, "the ring entry is found", { cast: [ring.found, i64] }, 1]
+      - try:
+          body:
+            - decl: [spun, zim_entry, { call: [zim.resolve, ring] }]
+            - call: [chk.expect_i, "a redirect loop must throw", 0, 1]
+          catch:
+            - type: ZimError
+              var: loop_err
+              body:
+                - set: [loop_code, loop_err.code]
+      - call: [chk.expect_i, "a redirect loop is code 4", { cast: [loop_code, i64] }, 4]
+
+      # ── §6.3 a full scan, resumed in batches of two ──
+      - decl: [pos, i64, 0]
+      - decl: [seen, i64, 0]
+      - decl: [positions_match, i32, 1]
+      - decl: [rounds, i32, 0]
+      - while:
+          condition: { lt: [rounds, 64] }
+          body:
+            - decl: [batch, list<zim_entry>, { call: [zim.scan, pos, 2] }]
+            - decl: [got, i64, { cast: [batch.len, i64] }]
+            - if:
+                condition: { le: [got, 0] }
+                then:
+                  - set: [rounds, 64]
+                else:
+                  - decl: [row, i32, 0]
+                  - while:
+                      condition: { lt: [row, batch.len] }
+                      body:
+                        - decl: [item, zim_entry, { call: [batch.get, row] }]
+                        # F33-2-25: the position is the cluster-order place the scan read it at
+                        - if:
+                            condition: { neq: [{ call: [zim.position, item] }, { +: [pos, { cast: [row, i64] }] }] }
+                            then:
+                              - set: [positions_match, 0]
+                        - call: [chk.expect_i, "a scanned entry is found", { cast: [item.found, i64] }, 1]
+                        - set: [row, { +: [row, 1] }]
+                  - set: [seen, { +: [seen, got] }]
+                  - set: [pos, { +: [pos, got] }]
+                  - set: [rounds, { +: [rounds, 1] }]
+      - decl: [scannable, i64, { call: [zim.scan_count] }]
+      - call: [chk.expect_i, "a resumed scan sees every user entry", seen, scannable]
+      - decl: [scan_le_entries, i32, 0]
+      - if: { condition: { le: [scannable, entries] }, then: [{ set: [scan_le_entries, 1] }] }
+      - call: [chk.expect_i, "scan_count leaves out the metadata entries", scan_le_entries, 1]
+      - call: [chk.expect_i, "scan positions are consecutive", positions_match, 1]
+      - decl: [past_end, list<zim_entry>, { call: [zim.scan, scannable, 10] }]
+      - call: [chk.expect_i, "a scan past the end is empty", { cast: [past_end.len, i64] }, 0]
+
+      # ── §6.1 a second handle onto the same file is allowed (F33-2-31) ──
+      - decl: [second, zim_handle, { call: [compress.zim_open, archive_path] }]
+      - call: [chk.expect_i, "a second handle sees the same count", { call: [second.entry_count] }, entries]
+      - call: [second.close]
+
+      # ── §6.4 opening something that is not a ZIM file throws ──
+      - decl: [open_code, i32, 0]
+      - try:
+          body:
+            - decl: [bad, zim_handle, { call: [compress.zim_open, "tests/compress_zim/run.sh"] }]
+            - call: [chk.expect_i, "opening a non-ZIM file must throw", 0, 1]
+          catch:
+            - type: ZimError
+              var: open_err
+              body:
+                - set: [open_code, open_err.code]
+      - decl: [open_code_ok, i32, 0]
+      - if: { condition: { gt: [open_code, 0] }, then: [{ set: [open_code_ok, 1] }] }
+      - call: [chk.expect_i, "opening a non-ZIM file reports a code", open_code_ok, 1]
+
+      # ── §6.1 the scope drop closes the handle: 300 opens without a close ──
+      - decl: [loops, i32, 0]
+      - decl: [last_count, i64, 0]
+      - while:
+          condition: { lt: [loops, 300] }
+          body:
+            - set: [last_count, { call: [open_and_drop, archive_path] }]
+            - set: [loops, { +: [loops, 1] }]
+      - call: [chk.expect_i, "300 handles dropped at scope end, no descriptor ran out", last_count, entries]
+
+      - call: [zim.close]
+
+      - if: { condition: { gt: [chk.fails, 0] }, then: [{ print: ["FAIL compress_zim (${chk.fails})"] }, { return: 1 }] }
+      - print: ["PASS compress_zim"]
+      - return: 0

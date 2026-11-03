@@ -1,0 +1,41 @@
+# Requires: driver
+# The AOT leg of tests/compress_zim/run.sh: a program that links ONLY -laiml and reads a ZIM
+# file.  Self-contained on purpose (no import), so the link needs nothing but libaiml — which
+# is the point: libaiml carries no libzim, it loads libaiml_zim.so on first use (spec/33_2 §6.4).
+# This path uses the forwarders inside libaiml.so, a different copy than the JIT takes.
+# Expected exit code: 0
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [zim, zim_handle, { call: [compress.zim_open, "tests/data/aiml_zim_test.zim"] }]
+      - decl: [entries, i64, { call: [zim.entry_count] }]
+      - if:
+          condition: { lt: [entries, 6] }
+          then:
+            - print: ["FAIL aot: entry_count=${entries}"]
+            - return: 1
+      - decl: [article, zim_entry, { call: [zim.by_path, "Kupfer"] }]
+      - decl: [found, i32, { cast: [article.found, i32] }]
+      - if:
+          condition: { neq: [found, 1] }
+          then:
+            - print: ["FAIL aot: by_path did not find Kupfer"]
+            - return: 1
+      - decl: [html, string, { call: [zim.content_str, article] }]
+      - if:
+          condition: { lt: [{ call: [html.index_of, "chemisches Element"] }, 0] }
+          then:
+            - print: ["FAIL aot: content_str did not read the article"]
+            - return: 1
+      - decl: [batch, list<zim_entry>, { call: [zim.scan, 0, 3] }]
+      - if:
+          condition: { lt: [batch.len, 1] }
+          then:
+            - print: ["FAIL aot: scan returned nothing"]
+            - return: 1
+      - decl: [article_path, string, { call: [zim.path, article] }]
+      - call: [zim.close]
+      - print: ["PASS aot (entries=${entries}, path=${article_path})"]
+      - return: 0

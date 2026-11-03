@@ -7,7 +7,10 @@
     "output_type": "executable",
     "optimization": "0",
     "debug": true,
-    "warnings": ["all", "extra"],
+    "warnings": [
+        "all",
+        "extra"
+    ],
     "env": {},
     "werror": false,
     "source_root": ".",

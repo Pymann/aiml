@@ -1,0 +1,87 @@
+{
+    "jobs": 4,
+    "$schema": "exodus.project.config-1.0",
+    "name": "libaiml_zim",
+    "version": "0.1.0",
+    "license": [],
+    "dependencies": [],
+    "output_type": "shared_lib",
+    "optimization": "2",
+    "debug": false,
+    "warnings": [],
+    "werror": false,
+    "source_root": ".",
+    "build_root": "out",
+    "search_paths": [
+        "__exodus_cache/apt/libzim-dev/amd64/8.2.1-2build1/payload/usr/include"
+    ],
+    "sources": [
+        "zimmod/*.cpp"
+    ],
+    "defines": {},
+    "pre_compilation": null,
+    "pre_linkage": null,
+    "architecture": {
+        "arch": "x86_64",
+        "cpu": null,
+        "fpu": null,
+        "float_abi": null
+    },
+    "compiler": {
+        "name": "g++",
+        "path": null,
+        "flags": [
+            "-std=c++17",
+            "-fPIC",
+            "-w",
+            "-fvisibility=hidden"
+        ]
+    },
+    "linker": {
+        "name": "g++",
+        "path": null,
+        "script": null,
+        "map_file": null,
+        "flags": [
+            "-Wl,-Bsymbolic-functions",
+            "-Wl,-rpath,$ORIGIN",
+            "-Wl,--disable-new-dtags",
+            "-Wl,-rpath,__exodus_cache/apt/libzim8/amd64/8.2.1-2build1/payload/usr/lib/x86_64-linux-gnu",
+            "-Wl,-rpath,__exodus_cache/apt/libxapian30/amd64/1.4.22-1build1/payload/usr/lib/x86_64-linux-gnu",
+            "-Wl,-rpath-link,__exodus_cache/apt/libxapian30/amd64/1.4.22-1build1/payload/usr/lib/x86_64-linux-gnu"
+        ],
+        "libraries": [
+            "zim",
+            "stdc++",
+            "m"
+        ],
+        "library_paths": [
+            "__exodus_cache/apt/libzim-dev/amd64/8.2.1-2build1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libzim8/amd64/8.2.1-2build1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libxapian30/amd64/1.4.22-1build1/payload/usr/lib/x86_64-linux-gnu"
+        ]
+    },
+    "apt_packages": [
+        {
+            "name": "libzim-dev",
+            "version": "8.2.1-2build1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "c248b4bf2567b15446b32e47bff60609dfe70ccadd9ee3f8e20d0de1fece91f2"
+        },
+        {
+            "name": "libzim8",
+            "version": "8.2.1-2build1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "e2bb94e18b627ba63277d7ca67a5bdcde05e48c1620278d8c3132ebb68669f30"
+        },
+        {
+            "name": "libxapian30",
+            "version": "1.4.22-1build1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "9e9dc22265ecbe203387645347e3442b6af7f2998086f4a7d478baf7b141887b"
+        }
+    ]
+}

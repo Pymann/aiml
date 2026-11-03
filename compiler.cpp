@@ -30,6 +30,7 @@
 #include "src/sys/identity_runtime.h"
 #include "src/sys/storage_runtime.h"
 #include "src/sys/compress_runtime.h"
+#include "src/sys/zim_runtime.h"
 #include "src/sys/gltf_runtime.h"
 #include "src/sys/gl_runtime.h"
 #include "src/sys/engine_runtime.h"
@@ -2756,6 +2757,26 @@ int AIMLCompiler::jitRun(int argc, char** argv) {
     llvm::sys::DynamicLibrary::AddSymbol("aiml_compress_zip",                  (void*)(intptr_t)aiml_compress_zip);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_compress_unzip",                (void*)(intptr_t)aiml_compress_unzip);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_compress_zip_entries_fill",     (void*)(intptr_t)aiml_compress_zip_entries_fill);
+
+    // ZIM archives (spec/33_2 §6)
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_zim_open",          (void*)(intptr_t)aiml_zim_open);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_zim_close",         (void*)(intptr_t)aiml_zim_close);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_zim_entry_count",   (void*)(intptr_t)aiml_zim_entry_count);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_zim_article_count", (void*)(intptr_t)aiml_zim_article_count);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_zim_scan_count",    (void*)(intptr_t)aiml_zim_scan_count);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_zim_uuid",          (void*)(intptr_t)aiml_zim_uuid);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_zim_metadata",      (void*)(intptr_t)aiml_zim_metadata);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_zim_checksum_ok",   (void*)(intptr_t)aiml_zim_checksum_ok);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_zim_by_path",       (void*)(intptr_t)aiml_zim_by_path);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_zim_by_title",      (void*)(intptr_t)aiml_zim_by_title);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_zim_resolve",       (void*)(intptr_t)aiml_zim_resolve);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_zim_str",           (void*)(intptr_t)aiml_zim_str);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_zim_content",       (void*)(intptr_t)aiml_zim_content);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_zim_content_str",   (void*)(intptr_t)aiml_zim_content_str);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_zim_scan",          (void*)(intptr_t)aiml_zim_scan);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_zim_cache",         (void*)(intptr_t)aiml_zim_cache);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_zim_last_code",     (void*)(intptr_t)aiml_zim_last_code);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_zim_last_message",  (void*)(intptr_t)aiml_zim_last_message);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_compress_tar_entries_fill",     (void*)(intptr_t)aiml_compress_tar_entries_fill);
     // ai (Spec 51 — native ML acceleration)
     llvm::sys::DynamicLibrary::AddSymbol("aiml_ai_embedding_lookup",       (void*)(intptr_t)aiml_ai_embedding_lookup);

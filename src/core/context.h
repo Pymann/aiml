@@ -1439,6 +1439,8 @@ namespace AIML {
 
         if (typeName == "file_handle") return llvm::Type::getInt8Ty(context)->getPointerTo(); // FILE*
         if (typeName == "process") return llvm::Type::getInt8Ty(context)->getPointerTo();     // ProcessHandle*
+        // spec/33_2 §6.1: an open ZIM archive, released by zim.close or at scope end
+        if (typeName == "zim_handle") return llvm::Type::getInt8Ty(context)->getPointerTo();  // ZimHandle*
         if (typeName == "socket_handle") return llvm::Type::getInt8Ty(context)->getPointerTo(); // AimlSocket*
         if (typeName == "tls_socket_handle") return llvm::Type::getInt8Ty(context)->getPointerTo(); // AimlTlsSocket*
         if (typeName == "ws_handle") return llvm::Type::getInt8Ty(context)->getPointerTo();          // AimlWs*

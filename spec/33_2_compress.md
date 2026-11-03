@@ -378,11 +378,10 @@ ZIM is the archive format of Kiwix/openZIM (offline Wikipedia and similar). A ZI
 *entries* (path, title, either a redirect or an item with mimetype and content) whose contents
 live in compressed *clusters* (zstd or xz). AIML reads ZIM files; it does not write them.
 
-**Status:** specified, not implemented. Reference implementation of the access pattern:
-`cai:tools/zim_strom.cpp` (libzim `iterEfficient`), measured on
-`wikipedia_de_all_mini_2026-10.zim` (5 051 687 entries): ~2 000 articles/s streamed in cluster
-order, against ~14 ms per article (≈ 70/s) when the same articles are read in path order through a
-16 MB cluster cache. That difference is the reason §6.3 exists.
+**Status:** implemented against libzim 8.2.1 (`tests/compress_zim/`). Reference measurement of
+the access pattern (`cai:tools/zim_strom.cpp`) on `wikipedia_de_all_mini_2026-10.zim`
+(5 051 687 entries): ~2 000 articles/s streamed in cluster order, against ~14 ms per article
+(≈ 70/s) when the same articles are read in path order. That difference is why §6.3 exists.
 
 ### 6.1 Opening and metadata
 
@@ -396,7 +395,8 @@ order, against ~14 ms per article (≈ 70/s) when the same articles are read in 
 | Call | Return | Description |
 |------|--------|-------------|
 | `compress.zim_open(path)` | `zim_handle` | Opens the file read-only. Throws `ZimError` if it cannot be opened or is not a ZIM file (F33-2-20). |
-| `zim.entry_count()` | `i64` | All entries including redirects (`getAllEntryCount`). |
+| `zim.entry_count()` | `i64` | All entries, including the metadata and internal ones (`getAllEntryCount`). |
+| `zim.scan_count()` | `i64` | The user entries — items and redirects — which is how far `zim.scan` reaches (§6.3). |
 | `zim.article_count()` | `i64` | Front articles only (`getArticleCount`). |
 | `zim.uuid()` | `string` | 32 hex digits. |
 | `zim.metadata(key)` | `string` | Metadata value (`Title`, `Language`, `Date`, …); `""` if absent. |
@@ -407,26 +407,38 @@ order, against ~14 ms per article (≈ 70/s) when the same articles are read in 
 
 ```aiml
 - decl: [entry, zim_entry, { call: [zim.by_path, "Kupfer"] }]
-- if: [{ call: [entry.found] }, true]
+- if: [{ eq: [entry.found, true] }, true]
   then:
-    - if: [entry.is_redirect, true]
+    - if: [{ eq: [entry.is_redirect, true] }, true]
       then:
         - set: [entry, { call: [zim.resolve, entry] }]      # follows redirects (max. 16 hops)
     - decl: [html, string, { call: [zim.content_str, entry] }]
+    - print: ["${ { call: [zim.path, entry] } }: ${ { call: [zim.mimetype, entry] } }"]
 ```
 
-`zim_entry` is a value model (copyable; it holds only an index into the open archive):
+`zim_entry` is a value model that holds **only scalars** — an index into the open archive and
+what can be answered without touching it:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `found` | `bool` | `false` for a lookup that matched nothing; all other fields are then empty |
+| `found` | `bool` | `false` for a lookup that matched nothing; all other fields are then `0` |
 | `index` | `i64` | Entry index in path order (stable for a given file) |
-| `path` | `string` | Path without namespace prefix in new-scheme files (`Kupfer`), as stored in old ones (`A/Kupfer`) |
-| `title` | `string` | Title (`Kupfer`) |
 | `is_redirect` | `bool` | Redirect entry |
-| `redirect_path` | `string` | Target path of a redirect; `""` otherwise |
-| `mimetype` | `string` | `text/html`, `image/webp`, …; `""` for redirects |
 | `size` | `i64` | Uncompressed content size in bytes; `0` for redirects |
+| `position` | `i64` | Cluster-order position, or `-1` unless it came from `zim.scan` (§6.3) |
+
+That is what makes it a value: with no string of its own there is nothing to own, so an entry
+copies freely and a `list<zim_entry>` of a million rows cannot leak. The **strings are read
+through the handle**, because only the open archive can answer them:
+
+| Call | Return | Description |
+|------|--------|-------------|
+| `zim.path(entry)` | `string` | Path without namespace prefix in new-scheme files (`Kupfer`), as stored in old ones (`A/Kupfer`) |
+| `zim.title(entry)` | `string` | Title (`Kupfer`) |
+| `zim.mimetype(entry)` | `string` | `text/html`, `image/webp`, …; `""` for a redirect |
+| `zim.redirect_path(entry)` | `string` | Target path of a redirect; `""` otherwise |
+
+Each returns a fresh owned string; for an entry that is not `found` they all return `""`.
 
 | Call | Return | Description |
 |------|--------|-------------|
@@ -445,7 +457,7 @@ from `0` and are stable for a given file; they are what a resumable reader store
 
 ```aiml
 - decl: [pos, i64, 0]
-- decl: [total, i64, { call: [zim.entry_count] }]
+- decl: [total, i64, { call: [zim.scan_count] }]
 - while: [{ lt: [pos, total] }]
   body:
     - decl: [batch, list<zim_entry>, { call: [zim.scan, pos, 1000] }]   # up to 1000 entries from position pos
@@ -453,7 +465,8 @@ from `0` and are stable for a given file; they are what a resumable reader store
     - while: [{ lt: [row, batch.len] }]
       body:
         - decl: [item, zim_entry, { call: [batch.get, row] }]
-        - if: [{ and: [{ eq: [item.is_redirect, false] }, { call: [item.mimetype.starts_with, "text/html"] }] }, true]
+        - decl: [kind, string, { call: [zim.mimetype, item] }]
+        - if: [{ and: [{ eq: [item.is_redirect, false] }, { call: [kind.starts_with, "text/html"] }] }, true]
           then:
             - decl: [html, string, { call: [zim.content_str, item] }]
             # … parse …
@@ -463,19 +476,26 @@ from `0` and are stable for a given file; they are what a resumable reader store
 
 | Call | Return | Description |
 |------|--------|-------------|
-| `zim.scan(from, count)` | `list<zim_entry>` | Up to `count` entries starting at cluster-order position `from`; an empty list at the end (F33-2-25). |
+| `zim.scan(from, count)` | `list<zim_entry>` | Up to `count` entries starting at cluster-order position `from`; an empty list at or past the end (F33-2-25). |
 | `zim.position(entry)` | `i64` | Cluster-order position of an entry returned by `scan`; `-1` for entries from `by_path`/`by_title`. |
-| `compress.zim_cache(bytes)` | void | Process-wide cluster cache size (`setClusterCacheMaxSize`), default 16 MB (F33-2-26). |
+| `compress.zim_cache(clusters)` | void | How many clusters the reader keeps decompressed (F33-2-26). |
 
-- **Cost of `from` (F33-2-27):** Consecutive calls (`from` = previous `from` + previous length)
-  continue the same iteration and cost nothing extra. Any other `from` restarts the iteration and
-  skips `from` entries. Skipping reads directory entries (≈ 55 s for 3 million entries in the
-  reference measurement), but no cluster.
+- **How far a scan reaches:** positions run `0 … zim.scan_count() - 1`. That is **not**
+  `zim.entry_count()`: the metadata (`Title`, `Language`, …) and the internal entries (the
+  counter, the title index) are entries, but they are not in the cluster order. A loop bounded by
+  `entry_count` would ask for positions that do not exist and get an empty list early.
+- **Cost of `from` (F33-2-27):** any `from` costs the same. The cluster order is indexable
+  (`getEntryByClusterOrder`), so a reader resuming at position 2 000 000 does not re-walk the
+  file — nothing is skipped and no iterator is restarted. Only the clusters the entries actually
+  live in are read.
 - **Content inside a scan (F33-2-28):** `zim.content(item)` for an entry of the current batch
   uses the cluster the scan is positioned on. Fetching the contents of a batch in batch order
   therefore decompresses each cluster once.
 - **Order (F33-2-29):** The cluster order is a property of the file and not an alphabetical
   order. Redirects come first in the files measured.
+- **An unreadable entry (F33-2-25):** a single entry whose directory record will not read is
+  left out of the batch rather than losing the batch, so `batch.len` may be shorter than
+  `count` before the end. A resumable reader therefore advances by `batch.len`, as above.
 
 ### 6.4 Safety and errors
 
@@ -501,11 +521,48 @@ from `0` and are stable for a given file; they are what a resumable reader store
   A lookup that finds nothing is not an error (`found = false`).
 - **Large files (F33-2-33):** Files above 4 GB are the normal case (German Wikipedia without
   pictures: 18.6 GB). Sizes, counts and positions are `i64`.
-- **Dependency (F33-2-34):**
-  - libzim ≥ 8 (C++, `-lzim`; Debian/Ubuntu package `libzim-dev`), optional like brotli.
-  - Without libzim, every `compress.zim_*` call fails at compile time with a message naming the
-    missing library.
-  - Tests build a small ZIM with the libzim writer into `tests/data/` and run
-    `tests/test_compress_zim.aiml`. Covered there: by_path, by_title, resolve, a redirect loop, a
-    full scan with resume, and content of a redirect (error 5).
+- **Cluster cache (F33-2-26):** `compress.zim_cache(clusters)` takes a **number of clusters**,
+  not a number of bytes, and applies to archives opened **after** the call. libzim 8 has no
+  setter for the cache — it reads the environment variable `ZIM_CLUSTERCACHE` while opening an
+  archive, which is what this call sets. (The byte-sized `setClusterCacheMaxSize` arrived in
+  libzim 9; Ubuntu 24.04 ships 8.2.1, so it is not reachable here.) A handle already open keeps
+  the size it was opened with.
+- **Dependency (F33-2-34):** libzim 8 (C++; Debian/Ubuntu package `libzim-dev`, 8.2.1 on
+  Ubuntu 24.04). `exodus pkg install` fetches it into the cache — `exodus build` does not.
+
+  **libaiml does not link libzim.** The ZIM code lives in a separate loadable module,
+  `libaiml_zim.so`, which libaiml opens on first use of a `compress.zim_*` call.
+
+  The reason is the link, not taste. libzim needs **libxapian** for its full-text search, which
+  AIML never calls, and `DT_RUNPATH` is not searched for a dependency's own dependencies. With
+  libzim linked into libaiml, every aiml program — ZIM or no ZIM — failed to link with
+  `undefined reference to Xapian::…` unless it carried the libxapian paths itself. Measured on
+  2026-11-03: `tests/import_norm`, `tests/bundle_socket` and the AOT configs all broke, and so
+  would every project outside this repository. A module loaded on demand puts the cost only on
+  programs that read a ZIM file, which is what "optional" has to mean.
+
+  | | |
+  |---|---|
+  | Who links libzim | `libaiml_zim.so` only (≈ 50 KB), built by `exodus-zim.json` from `zimmod/` |
+  | What libaiml holds | forwarders that `dlopen` the module on first use and call it through a table |
+  | Where it is looked for | beside the calling object (`dladdr`), then `../libaiml_zim/`, then the ordinary loader search |
+  | Without the module | every call raises `ZimError` naming what is missing; nothing else changes |
+  | What a consumer links | `-laiml`, unchanged — no `-lzim`, no libxapian paths |
+
+  The module exports **exactly one** symbol, `aiml_zim_module_api`, returning a table of
+  function pointers matched by position. That is load-bearing: libaiml defines the same
+  `aiml_zim_*` names as forwarders and the compiler binary is linked `-rdynamic`, so while the
+  module's implementations were globally visible under those names the dynamic linker resolved
+  the table back to the **forwarders** — `aiml_zim_open` called itself until the stack ran out.
+  The module is therefore compiled `-fvisibility=hidden`, and a field in the table is only ever
+  appended, never moved.
+
+- **Tests:** `tests/compress_zim/run.sh` builds a small ZIM with the libzim **writer** (AIML
+  reads ZIM files and does not write them, so the fixture has no aiml route) into `tests/data/`,
+  then runs two legs: `test_compress_zim.aiml` under the JIT, and `aot_probe.aiml` compiled and
+  linked against `libaiml` alone. Both legs matter because each uses a different copy of the
+  forwarders, and the AOT one also shows that the link needs neither libzim nor libxapian.
+  Covered: by_path, by_title, resolve, a redirect loop, a full scan with resume, content of a
+  redirect (error 5), a second handle on the same file, opening something that is not a ZIM
+  file, and 300 handles released by their scope drop alone.
 

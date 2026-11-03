@@ -83,8 +83,11 @@ static void emitThrow(CompilerContext& ctx, const std::string& excClass) {
 // dessen Feld `message` auf den uebergebenen Text zeigt.  Ohne das steht an
 // Stelle [0] ein Nullzeiger — und ein `catch`, das `ex.message` liest, faellt
 // um (gemessen 25.10.2026 beim Bau von `ctx`, spec/29_2 §14a).
+// `codeVal` (i32, optional) fuellt ein ZWEITES Feld, wo die Ausnahmeklasse eines hat:
+// spec/33_2 §6.4 gibt ZimError neben `message` einen `code`, damit ein Handler nach Grund
+// verzweigen kann, ohne den Text zu lesen.
 static void emitThrowMsg(CompilerContext& ctx, const std::string& excClass,
-                         llvm::Value* msgPtr) {
+                         llvm::Value* msgPtr, llvm::Value* codeVal = nullptr) {
     llvm::PointerType* ptrTy = llvm::PointerType::getUnqual(ctx.context);
 
     llvm::Function* allocFn = ctx.module().getFunction("__cxa_allocate_exception");
@@ -114,6 +117,10 @@ static void emitThrowMsg(CompilerContext& ctx, const std::string& excClass,
             obj = ctx.builder.CreateCall(mallocFn, {ctx.getSizeConst(sz)}, "exc_obj");
             ctx.builder.CreateStore(msgPtr,
                 ctx.builder.CreateStructGEP(st, obj, 0, "exc_msg_slot"));
+            if (codeVal && st->getNumElements() > 1 && st->getElementType(1)->isIntegerTy())
+                ctx.builder.CreateStore(
+                    ctx.builder.CreateIntCast(codeVal, st->getElementType(1), true),
+                    ctx.builder.CreateStructGEP(st, obj, 1, "exc_code_slot"));
         }
     }
 
@@ -159,6 +166,23 @@ static llvm::BasicBlock* emitGuardMsg(CompilerContext& ctx, llvm::Value* flag,
     ctx.builder.CreateCondBr(isSet, throwBB, continueBB);
     ctx.builder.SetInsertPoint(throwBB);
     emitThrowMsg(ctx, excClass, msgPtr);
+    ctx.builder.SetInsertPoint(continueBB);
+    return continueBB;
+}
+
+// Wie emitGuardMsg, nur traegt der Wurf zusaetzlich einen Code (ZimError, spec/33_2 §6.4).
+static llvm::BasicBlock* emitGuardMsgCode(CompilerContext& ctx, llvm::Value* flag,
+                                          const std::string& throwLabel,
+                                          const std::string& continueLabel,
+                                          const std::string& excClass,
+                                          llvm::Value* msgPtr, llvm::Value* codeVal) {
+    llvm::Function* fn = ctx.builder.GetInsertBlock()->getParent();
+    llvm::Value* isSet = ctx.builder.CreateICmpNE(flag, ctx.builder.getInt8(0), throwLabel + "_cmp");
+    llvm::BasicBlock* throwBB    = llvm::BasicBlock::Create(ctx.context, throwLabel, fn);
+    llvm::BasicBlock* continueBB = llvm::BasicBlock::Create(ctx.context, continueLabel, fn);
+    ctx.builder.CreateCondBr(isSet, throwBB, continueBB);
+    ctx.builder.SetInsertPoint(throwBB);
+    emitThrowMsg(ctx, excClass, msgPtr, codeVal);
     ctx.builder.SetInsertPoint(continueBB);
     return continueBB;
 }
@@ -641,6 +665,41 @@ void registerBuiltins(CompilerContext& ctx) {
             ti.serNodesCount = ex->second.serNodesCount;
         }
         ctx.classes["tar_entry"] = std::move(ti);
+    }
+
+    // -----------------------------------------------------------------------
+    // zim_entry — one entry of a ZIM archive (spec/33_2 §6.2)
+    // Layout: { i64 index, i64 size, i64 position, i8 found, i8 is_redirect }
+    //
+    // SCALARS ONLY, deliberately.  §6.2 calls the entry "a value model (copyable; it holds
+    // only an index into the open archive)", and that is what makes it one: with no string
+    // field there is nothing to own, so a `list<zim_entry>` of a million rows copies freely
+    // and cannot leak, and a scan can hand back a flat buffer.  The four strings (path,
+    // title, mimetype, redirect_path) are read through the HANDLE instead — zim.path(entry)
+    // and friends — because only the archive can answer them anyway.
+    // -----------------------------------------------------------------------
+    {
+        llvm::Type* i64 = ctx.builder.getInt64Ty();
+        llvm::Type* i8  = ctx.builder.getInt8Ty();
+        llvm::StructType* zeTy = llvm::StructType::getTypeByName(ctx.context, "zim_entry");
+        if (!zeTy) zeTy = llvm::StructType::create(ctx.context, {i64, i64, i64, i8, i8}, "zim_entry");
+
+        CompilerContext::ClassInfo zi;
+        zi.name = "zim_entry"; zi.type = zeTy; zi.isBuiltin = false;
+        auto mk = [](llvm::Type* t, int idx, const std::string& tn) {
+            CompilerContext::StructMember m; m.type = t; m.index = idx; m.typeName = tn; return m;
+        };
+        zi.members["index"]       = mk(i64, 0, "i64");
+        zi.members["size"]        = mk(i64, 1, "i64");
+        zi.members["position"]    = mk(i64, 2, "i64");
+        zi.members["found"]       = mk(i8,  3, "bool");
+        zi.members["is_redirect"] = mk(i8,  4, "bool");
+        if (auto ex = ctx.classes.find("zim_entry"); ex != ctx.classes.end()) {
+            zi.hasHeapFields = ex->second.hasHeapFields;
+            zi.serNodesVar   = ex->second.serNodesVar;
+            zi.serNodesCount = ex->second.serNodesCount;
+        }
+        ctx.classes["zim_entry"] = std::move(zi);
     }
 
     // -----------------------------------------------------------------------
@@ -2252,6 +2311,250 @@ void registerBuiltins(CompilerContext& ctx) {
     procInfo.builtinMethods["read_err_line"] = procCall("aiml_process_read_line", rStr, 1, true);
 
     ctx.classes["process"] = std::move(procInfo);
+
+    // -----------------------------------------------------------------------
+    // zim_handle — an open ZIM archive (spec/33_2 §6).  An opaque pointer like `process`;
+    // every member below is a zero-arg accessor, so `zim.entry_count` reads as a property.
+    //
+    // A call that can fail records its reason in the runtime and the guard here turns that
+    // into the ZimError of §6.4 (message + code), so no libzim exception ever crosses into
+    // generated code.  A LOOKUP that finds nothing is not a failure: it sets found = 0.
+    // -----------------------------------------------------------------------
+    {
+        CompilerContext::ClassInfo zimInfo;
+        zimInfo.name      = "zim_handle";
+        zimInfo.isBuiltin = true;
+
+        // The entry argument as a POINTER: the runtime reads an AimlZimEntry*.  A local
+        // arrives as a loaded struct (spill it), a member or element as a pointer already.
+        auto entryArg = [](CompilerContext& ctx, AIML::AST::CallExpr* call,
+                           std::function<IRValue*(AIML::AST::Expr*)> evalExpr,
+                           size_t argNo) -> llvm::Value* {
+            auto* p = llvm::PointerType::get(ctx.context, 0);
+            if (!call || call->args.size() <= argNo) return llvm::ConstantPointerNull::get(p);
+            IRValue* a = evalExpr(call->args[argNo].get());
+            if (!a) return llvm::ConstantPointerNull::get(p);
+            llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a));
+            if (!v) return llvm::ConstantPointerNull::get(p);
+            if (v->getType()->isPointerTy()) return v;
+            llvm::Type* entryTy = ctx.getLLVMType("zim_entry");
+            llvm::Value* tmp = ctx.createEntryAlloca(entryTy, "zim_entry_arg");
+            ctx.builder.CreateStore(v, tmp);
+            return tmp;
+        };
+
+        // After a fallible call: throw ZimError(message, code) when the runtime set a code.
+        auto guardZim = [](CompilerContext& ctx) {
+            auto* p = llvm::PointerType::get(ctx.context, 0);
+            llvm::Type* i32 = ctx.builder.getInt32Ty();
+            llvm::Value* code = ctx.builder.CreateCall(
+                ctx.getFunction("aiml_zim_last_code", i32, {}), {}, "zim_code");
+            llvm::Value* bad = ctx.builder.CreateICmpNE(code, ctx.builder.getInt32(0), "zim_bad");
+            llvm::Value* msg = ctx.builder.CreateCall(
+                ctx.getFunction("aiml_zim_last_message", p, {}), {}, "zim_msg");
+            emitGuardMsgCode(ctx, ctx.builder.CreateZExt(bad, ctx.builder.getInt8Ty()),
+                             "zim_throw", "zim_ok", "ZimError", msg, code);
+        };
+
+        auto handleOf = [](CompilerContext& ctx, llvm::Value* baseAlloca) -> llvm::Value* {
+            auto* p = llvm::PointerType::get(ctx.context, 0);
+            return ctx.builder.CreateLoad(p, baseAlloca, "zim_h");
+        };
+
+        // zim.entry_count / zim.article_count → i64
+        auto countFn = [handleOf](const char* rtName) {
+            return [handleOf, rtName](CompilerContext& ctx, llvm::Value* baseAlloca,
+                AIML::AST::CallExpr*, std::function<IRValue*(AIML::AST::Expr*)>) -> IRValue* {
+                auto* p = llvm::PointerType::get(ctx.context, 0);
+                llvm::Type* i64 = ctx.builder.getInt64Ty();
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                    ctx.getFunction(rtName, i64, {p}), {handleOf(ctx, baseAlloca)}));
+            };
+        };
+        zimInfo.builtinMethods["entry_count"]   = countFn("aiml_zim_entry_count");
+        zimInfo.builtinMethods["article_count"] = countFn("aiml_zim_article_count");
+        // §6.3: how far a scan reaches.  NOT entry_count — that one also counts the metadata
+        // and internal entries (Title, Language, the counter, the title index), which have no
+        // place in the cluster order.
+        zimInfo.builtinMethods["scan_count"]    = countFn("aiml_zim_scan_count");
+
+        // zim.uuid → string (32 hex digits)
+        zimInfo.builtinMethods["uuid"] = [handleOf](CompilerContext& ctx, llvm::Value* baseAlloca,
+            AIML::AST::CallExpr*, std::function<IRValue*(AIML::AST::Expr*)>) -> IRValue* {
+            auto* p = llvm::PointerType::get(ctx.context, 0);
+            return ownedStringResult(ctx, ctx.builder.CreateCall(
+                ctx.getFunction("aiml_zim_uuid", p, {p}), {handleOf(ctx, baseAlloca)}));
+        };
+
+        // zim.metadata(key) → string ("" when the key is absent)
+        zimInfo.builtinMethods["metadata"] = [handleOf](CompilerContext& ctx, llvm::Value* baseAlloca,
+            AIML::AST::CallExpr* call, std::function<IRValue*(AIML::AST::Expr*)> evalExpr) -> IRValue* {
+            auto* p = llvm::PointerType::get(ctx.context, 0);
+            llvm::Value* key = llvm::ConstantPointerNull::get(p);
+            if (call && !call->args.empty())
+                if (IRValue* a = evalExpr(call->args[0].get()))
+                    key = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a));
+            return ownedStringResult(ctx, ctx.builder.CreateCall(
+                ctx.getFunction("aiml_zim_metadata", p, {p, p}), {handleOf(ctx, baseAlloca), key}));
+        };
+
+        // zim.checksum_ok → bool (reads every byte of the file)
+        zimInfo.builtinMethods["checksum_ok"] = [handleOf](CompilerContext& ctx, llvm::Value* baseAlloca,
+            AIML::AST::CallExpr*, std::function<IRValue*(AIML::AST::Expr*)>) -> IRValue* {
+            auto* p = llvm::PointerType::get(ctx.context, 0);
+            llvm::Type* i32 = ctx.builder.getInt32Ty();
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                ctx.getFunction("aiml_zim_checksum_ok", i32, {p}), {handleOf(ctx, baseAlloca)}));
+        };
+
+        // zim.close
+        zimInfo.builtinMethods["close"] = [handleOf](CompilerContext& ctx, llvm::Value* baseAlloca,
+            AIML::AST::CallExpr*, std::function<IRValue*(AIML::AST::Expr*)>) -> IRValue* {
+            auto* p = llvm::PointerType::get(ctx.context, 0);
+            llvm::Value* h = handleOf(ctx, baseAlloca);
+            ctx.builder.CreateCall(ctx.getFunction("aiml_zim_close", ctx.builder.getVoidTy(), {p}), {h});
+            // null the slot so a scope-drop (or a second close) cannot free it twice
+            ctx.builder.CreateStore(llvm::ConstantPointerNull::get(p), baseAlloca);
+            return ctx.ir_gen->getInt32(0);
+        };
+
+        // zim.by_path(path) / zim.by_title(title) → zim_entry
+        auto lookupFn = [handleOf](const char* rtName) {
+            return [handleOf, rtName](CompilerContext& ctx, llvm::Value* baseAlloca,
+                AIML::AST::CallExpr* call, std::function<IRValue*(AIML::AST::Expr*)> evalExpr) -> IRValue* {
+                auto* p = llvm::PointerType::get(ctx.context, 0);
+                llvm::Value* key = llvm::ConstantPointerNull::get(p);
+                if (call && !call->args.empty())
+                    if (IRValue* a = evalExpr(call->args[0].get()))
+                        key = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a));
+                llvm::Type* entryTy = ctx.getLLVMType("zim_entry");
+                llvm::Value* out = ctx.createEntryAlloca(entryTy, "zim_lookup");
+                ctx.builder.CreateCall(
+                    ctx.getFunction(rtName, ctx.builder.getVoidTy(), {p, p, p}),
+                    {handleOf(ctx, baseAlloca), key, out});
+                return ctx.ir_gen->wrap(ctx.builder.CreateLoad(entryTy, out, "zim_entry_val"));
+            };
+        };
+        zimInfo.builtinMethods["by_path"]  = lookupFn("aiml_zim_by_path");
+        zimInfo.builtinMethods["by_title"] = lookupFn("aiml_zim_by_title");
+
+        // zim.resolve(entry) → zim_entry; a loop or a chain over 16 hops throws
+        zimInfo.builtinMethods["resolve"] = [handleOf, entryArg, guardZim](CompilerContext& ctx,
+            llvm::Value* baseAlloca, AIML::AST::CallExpr* call,
+            std::function<IRValue*(AIML::AST::Expr*)> evalExpr) -> IRValue* {
+            auto* p = llvm::PointerType::get(ctx.context, 0);
+            llvm::Type* i32 = ctx.builder.getInt32Ty();
+            llvm::Type* entryTy = ctx.getLLVMType("zim_entry");
+            llvm::Value* in  = entryArg(ctx, call, evalExpr, 0);
+            llvm::Value* out = ctx.createEntryAlloca(entryTy, "zim_resolved");
+            ctx.builder.CreateCall(ctx.getFunction("aiml_zim_resolve", i32, {p, p, p}),
+                                   {handleOf(ctx, baseAlloca), in, out});
+            guardZim(ctx);
+            return ctx.ir_gen->wrap(ctx.builder.CreateLoad(entryTy, out, "zim_resolved_val"));
+        };
+
+        // zim.path / zim.title / zim.mimetype / zim.redirect_path (entry) → string
+        auto strFn = [handleOf, entryArg](int which) {
+            return [handleOf, entryArg, which](CompilerContext& ctx, llvm::Value* baseAlloca,
+                AIML::AST::CallExpr* call, std::function<IRValue*(AIML::AST::Expr*)> evalExpr) -> IRValue* {
+                auto* p = llvm::PointerType::get(ctx.context, 0);
+                llvm::Type* i32 = ctx.builder.getInt32Ty();
+                llvm::Value* e = entryArg(ctx, call, evalExpr, 0);
+                return ownedStringResult(ctx, ctx.builder.CreateCall(
+                    ctx.getFunction("aiml_zim_str", p, {p, p, i32}),
+                    {handleOf(ctx, baseAlloca), e, ctx.builder.getInt32(which)}));
+            };
+        };
+        zimInfo.builtinMethods["path"]          = strFn(0);
+        zimInfo.builtinMethods["title"]         = strFn(1);
+        zimInfo.builtinMethods["mimetype"]      = strFn(2);
+        zimInfo.builtinMethods["redirect_path"] = strFn(3);
+
+        // zim.content(entry) → buffer<u8>; a redirect or a missing entry throws
+        zimInfo.builtinMethods["content"] = [handleOf, entryArg, guardZim](CompilerContext& ctx,
+            llvm::Value* baseAlloca, AIML::AST::CallExpr* call,
+            std::function<IRValue*(AIML::AST::Expr*)> evalExpr) -> IRValue* {
+            auto* p = llvm::PointerType::get(ctx.context, 0);
+            llvm::Value* e = entryArg(ctx, call, evalExpr, 0);
+            llvm::Value* heap = ctx.builder.CreateCall(
+                ctx.getFunction("aiml_zim_content", p, {p, p}), {handleOf(ctx, baseAlloca), e});
+            guardZim(ctx);
+            // Copy the heap AimlCompressBuffer into an owned buffer handle and free it — the
+            // same hand-over compress.gzip does (a stack buffer would be "released" by the
+            // local's drop, i.e. free() on stack memory).
+            llvm::Type* bufTy = ctx.getLLVMType("buffer");
+            llvm::Value* out = ctx.memV3
+                ? static_cast<llvm::Value*>(ctx.builder.CreateCall(
+                      ctx.getFunction("aiml_buffer_handle_new", p, {}), {}, "zim_buf_h"))
+                : static_cast<llvm::Value*>(ctx.createEntryAlloca(bufTy, "zim_buf"));
+            uint64_t bufSz = ctx.module().getDataLayout().getTypeAllocSize(bufTy);
+            llvm::Function* cur = ctx.builder.GetInsertBlock()->getParent();
+            auto* copyBB = llvm::BasicBlock::Create(ctx.context, "zim_buf_copy", cur);
+            auto* doneBB = llvm::BasicBlock::Create(ctx.context, "zim_buf_done", cur);
+            ctx.builder.CreateCondBr(ctx.builder.CreateIsNull(heap), doneBB, copyBB);
+            ctx.builder.SetInsertPoint(copyBB);
+            ctx.builder.CreateCall(
+                ctx.getFunction("memcpy", p, {p, p, ctx.getSizeType()}),
+                {out, heap, ctx.getSizeConst(bufSz)});
+            ctx.builder.CreateCall(ctx.getFunction("free", ctx.builder.getVoidTy(), {p}), {heap});
+            ctx.builder.CreateBr(doneBB);
+            ctx.builder.SetInsertPoint(doneBB);
+            return ctx.ir_gen->wrap(out);
+        };
+
+        // zim.content_str(entry) → string; same errors as content
+        zimInfo.builtinMethods["content_str"] = [handleOf, entryArg, guardZim](CompilerContext& ctx,
+            llvm::Value* baseAlloca, AIML::AST::CallExpr* call,
+            std::function<IRValue*(AIML::AST::Expr*)> evalExpr) -> IRValue* {
+            auto* p = llvm::PointerType::get(ctx.context, 0);
+            llvm::Value* e = entryArg(ctx, call, evalExpr, 0);
+            llvm::Value* str = ctx.builder.CreateCall(
+                ctx.getFunction("aiml_zim_content_str", p, {p, p}), {handleOf(ctx, baseAlloca), e});
+            guardZim(ctx);
+            return ownedStringResult(ctx, str);
+        };
+
+        // zim.scan(from, count) → list<zim_entry>, in cluster order
+        zimInfo.builtinMethods["scan"] = [handleOf](CompilerContext& ctx, llvm::Value* baseAlloca,
+            AIML::AST::CallExpr* call, std::function<IRValue*(AIML::AST::Expr*)> evalExpr) -> IRValue* {
+            auto* p = llvm::PointerType::get(ctx.context, 0);
+            llvm::Type* i32 = ctx.builder.getInt32Ty();
+            llvm::Type* i64 = ctx.builder.getInt64Ty();
+            llvm::Type* entryTy = ctx.getLLVMType("zim_entry");
+            auto num = [&](size_t idx, llvm::Type* want, int64_t dflt) -> llvm::Value* {
+                if (call && call->args.size() > idx)
+                    if (IRValue* a = evalExpr(call->args[idx].get())) {
+                        llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a));
+                        if (v && v->getType()->isIntegerTy()) return ctx.builder.CreateIntCast(v, want, true);
+                        if (v && v->getType()->isFloatingPointTy()) return ctx.builder.CreateFPToSI(v, want);
+                    }
+                return llvm::ConstantInt::get(want, dflt);
+            };
+            llvm::Value* from  = num(0, i64, 0);
+            llvm::Value* count = num(1, i32, 1000);
+            llvm::StructType* listTy = ListImpl::getListStructType(ctx);
+            llvm::Value* list = ctx.memV3
+                ? static_cast<llvm::Value*>(ctx.builder.CreateCall(
+                      ctx.getFunction("aiml_list_handle_new", p, {}), {}, "zim_scan_h"))
+                : static_cast<llvm::Value*>(ctx.createEntryAlloca(listTy, "zim_scan_list"));
+            ListImpl::initList(ctx, list, entryTy, 8);
+            ctx.builder.CreateCall(ctx.getFunction("aiml_zim_scan", i32, {p, i64, i32, p}),
+                                   {handleOf(ctx, baseAlloca), from, count, list});
+            return ctx.ir_gen->wrap(list);
+        };
+
+        // zim.position(entry) → i64; just the field the scan wrote, -1 for a lookup
+        zimInfo.builtinMethods["position"] = [entryArg](CompilerContext& ctx, llvm::Value*,
+            AIML::AST::CallExpr* call, std::function<IRValue*(AIML::AST::Expr*)> evalExpr) -> IRValue* {
+            llvm::Type* entryTy = ctx.getLLVMType("zim_entry");
+            llvm::Value* e = entryArg(ctx, call, evalExpr, 0);
+            auto* st = llvm::cast<llvm::StructType>(entryTy);
+            llvm::Value* gep = ctx.builder.CreateStructGEP(st, e, 2, "zim_pos_gep");
+            return ctx.ir_gen->wrap(ctx.builder.CreateLoad(ctx.builder.getInt64Ty(), gep, "zim_pos"));
+        };
+
+        ctx.classes["zim_handle"] = std::move(zimInfo);
+    }
 
     // -----------------------------------------------------------------------
     // thread_handle builtin class: { i64 tid, i8 joined, i8 detached }
@@ -8058,6 +8361,42 @@ void registerBuiltins(CompilerContext& ctx) {
         REG_ARCHIVE("unar",     "aiml_compress_unar")     // ar members (.deb)
         REG_ARCHIVE("zip",      "aiml_compress_zip")
         REG_ARCHIVE("unzip",    "aiml_compress_unzip")
+
+        /* compress.zim_open(path) → zim_handle (spec/33_2 §6.1, F33-2-20).
+         * Throws ZimError when the file cannot be opened or is not a ZIM file. */
+        compress.builtinFuncs["zim_open"] = [](CompilerContext& ctx, const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto* p = llvm::PointerType::get(ctx.context, 0);
+            llvm::Type* i32 = ctx.builder.getInt32Ty();
+            llvm::Value* path = args.empty() ? llvm::ConstantPointerNull::get(p)
+                                             : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            llvm::Value* h = ctx.builder.CreateCall(
+                ctx.getFunction("aiml_zim_open", p, {p}), {path}, "zim_open");
+            llvm::Value* code = ctx.builder.CreateCall(
+                ctx.getFunction("aiml_zim_last_code", i32, {}), {}, "zim_open_code");
+            llvm::Value* bad = ctx.builder.CreateICmpNE(code, ctx.builder.getInt32(0), "zim_open_bad");
+            llvm::Value* msg = ctx.builder.CreateCall(
+                ctx.getFunction("aiml_zim_last_message", p, {}), {}, "zim_open_msg");
+            emitGuardMsgCode(ctx, ctx.builder.CreateZExt(bad, ctx.builder.getInt8Ty()),
+                             "zim_open_throw", "zim_open_ok", "ZimError", msg, code);
+            return ctx.ir_gen->wrap(h);
+        };
+
+        /* compress.zim_cache(clusters) → void (spec/33_2 §6.3, F33-2-26).
+         * libzim 8 has no setter; it reads ZIM_CLUSTERCACHE while opening, so this applies to
+         * archives opened afterwards, and the unit is a NUMBER OF CLUSTERS. */
+        compress.builtinFuncs["zim_cache"] = [](CompilerContext& ctx, const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            llvm::Type* i64 = ctx.builder.getInt64Ty();
+            llvm::Value* n = llvm::ConstantInt::get(i64, 16);
+            if (!args.empty()) {
+                llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+                if (v && v->getType()->isIntegerTy())            n = ctx.builder.CreateIntCast(v, i64, true);
+                else if (v && v->getType()->isFloatingPointTy()) n = ctx.builder.CreateFPToSI(v, i64);
+            } else {
+                LOG_ERROR(ctx.fmtLoc() + "compress.zim_cache expects the number of clusters (spec/33_2 F33-2-26)");
+            }
+            ctx.builder.CreateCall(ctx.getFunction("aiml_zim_cache", ctx.builder.getVoidTy(), {i64}), {n});
+            return ctx.ir_gen->getInt32(0);
+        };
 
         /* compress.zip_entries(path) → list<ptr<zip_entry>> */
         compress.builtinFuncs["zip_entries"] = [](CompilerContext& ctx, const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
