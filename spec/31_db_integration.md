@@ -886,6 +886,15 @@ process died in `aiml_ser_deep_copy` → `enc` → `strlen` on a released string
 graph work lost with it. A store under 1024 rows never showed it. Regression:
 `tests/kv_decoded_cache/run.sh` (1200 rows, two processes over one WAL).
 
+What rule 2 costs when it is broken, measured in the same session: a cai process that
+opens its nine stores and does nothing else (`graph stats`) peaked at **289 MiB** before the
+fix and **258–260 MiB** after it — ~30 MiB pinned in read caches at open time, with no read
+having happened yet. Against a store set with no rows the difference is **0 MiB**, which is
+the signature to look for: the old behaviour grew with the row count, the fixed one does
+not. (Run-to-run spread ±2 MiB. The per-row cost is ~250–300 bytes — 32-byte struct, four
+string headers, the map node with its key — so one 18k-row store accounts for ~5 MiB and the
+30 MiB are the several indexed stores together.)
+
 ### 6.8 Migration Notes — Format Versions
 
 Each `.kvwal` file starts with a 32-byte header containing magic
