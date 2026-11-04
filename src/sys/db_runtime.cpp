@@ -1219,9 +1219,17 @@ static void kv_decoded_clear_all(AimlKv* kv) {
 
 // After inserting a fresh decoded entry, evict the oldest entries until
 // the cache is within MAX_DECODED_LRU. Frees decoded heap data.
+//
+// spec/31 §6.7.3 Regel 1: der MRU-Eintrag bleibt stehen — das ist der Slot, den der
+// laufende `get`/`get_copy` gerade angelegt hat und zurueckgeben wird.  `size() > 1`
+// statt `!empty()`: lief der Cache einmal ueber die Grenze hinaus, ohne dass die
+// LRU-Liste davon weiss, kommt die Schleife durch Leerraeumen der Liste NIE unter den
+// Bound — sie nahm dann die ganze Liste mit, den gerade eingefuegten Eintrag zuletzt,
+// und der Aufrufer bekam einen Zeiger in einen freigegebenen Slot (cai 2026-11-04:
+// SIGSEGV in enc <- aiml_ser_deep_copy, strlen auf einen released String).
 static void kv_decoded_lru_trim(AimlKv* kv) {
     while (kv->decoded_cache.size() > MAX_DECODED_LRU
-           && !kv->decoded_lru.empty()) {
+           && kv->decoded_lru.size() > 1) {
         const std::string old_key = kv->decoded_lru.back();
         auto dc = kv->decoded_cache.find(old_key);
         if (dc != kv->decoded_cache.end()) {
@@ -2665,23 +2673,32 @@ extern "C" void aiml_db_index_backfill(void* kv_ptr, void* idx_ptr,
         for (auto& [key, loc] : kv->index) {
             const uint8_t* val_ptr = (const uint8_t*)kv->wal_mmap + loc.offset;
             if (kv->ser_nodes) {
-                // Decoded form may live in cache; fall through to decode if missing.
+                // spec/31 §6.7.3 Regel 2: nur Lesen fuellt den decoded_cache.  Ein schon
+                // dekodierter Eintrag wird MITBENUTZT (und nicht angefasst), eine selbst
+                // dekodierte Zeile gehoert in einen eigenen Puffer und wird gleich wieder
+                // freigegeben.  Vorher landete JEDE Zeile im Cache: beim Oeffnen eines
+                // Speichers mit N Zeilen haengen N dekodierte Zeilen fest (der 1024er-Bound
+                // ist dann keiner), und die LRU-Liste weiss von keiner davon — danach raeumt
+                // kv_decoded_lru_trim die Liste leer und gibt den Slot frei, den der naechste
+                // Lesevorgang zurueckgibt (cai 2026-11-04).
+                // extract_and_add kopiert Feldwert und Schluessel in den Index und behaelt
+                // keine Zeiger auf die Zeile — direkt danach freigeben ist sicher.
                 auto dc = kv->decoded_cache.find(key);
-                if (dc == kv->decoded_cache.end()) {
-                    std::vector<uint8_t> decoded((size_t)kv->val_size, 0);
-                    if (aiml_ser_decode((const char*)val_ptr, decoded.data(),
-                                        kv->ser_nodes, kv->ser_n) != 0) {
-                        // Corrupt record: free partial heap and SKIP indexing it — do
-                        // not feed garbage field pointers to extract_and_add (P0.3).
-                        // Partial index (bad rows omitted) rather than a hard abort.
-                        aiml_ser_free_decoded(decoded.data(), kv->ser_nodes, kv->ser_n);
-                        continue;
-                    }
-                    auto& cached = kv->decoded_cache[key];
-                    cached = std::move(decoded);
-                    dc = kv->decoded_cache.find(key);
+                if (dc != kv->decoded_cache.end()) {
+                    extract_and_add(key, dc->second.data());
+                    continue;
                 }
-                extract_and_add(key, dc->second.data());
+                std::vector<uint8_t> decoded((size_t)kv->val_size, 0);
+                if (aiml_ser_decode((const char*)val_ptr, decoded.data(),
+                                    kv->ser_nodes, kv->ser_n) != 0) {
+                    // Corrupt record: free partial heap and SKIP indexing it — do
+                    // not feed garbage field pointers to extract_and_add (P0.3).
+                    // Partial index (bad rows omitted) rather than a hard abort.
+                    aiml_ser_free_decoded(decoded.data(), kv->ser_nodes, kv->ser_n);
+                    continue;
+                }
+                extract_and_add(key, decoded.data());
+                aiml_ser_free_decoded(decoded.data(), kv->ser_nodes, kv->ser_n);
             } else {
                 extract_and_add(key, val_ptr);
             }

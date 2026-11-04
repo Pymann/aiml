@@ -1,0 +1,158 @@
+# SPEC: 31_db_integration,61_memory_management_DRAFT
+# static-check: off
+# Requires: driver
+# (einzeln gestartet legt diese Probe nur den Speicher an — der Fall braucht ZWEI
+#  Prozesse ueber dieselbe WAL, siehe run.sh in diesem Verzeichnis)
+# spec/31 §6.7.3: der decoded_cache eines typisierten Kv ist auf MAX_DECODED_LRU (1024)
+# begrenzt, und ein `kv.get` liefert den Slot, den es gerade angelegt hat — nie einen,
+# den dieselbe Verdraengung schon freigegeben hat.
+#
+# Diese Probe laeuft ZWEIMAL ueber dieselbe WAL (run.sh):
+#   1. Lauf  (Speicher leer) → 1200 Zeilen anlegen, das ist mehr als das Cache-Fenster.
+#   2. Lauf  (Speicher voll) → `db.open_kv` fuellt beim Backfill der db_indexed-Felder den
+#      decoded_cache mit ALLEN 1200 Zeilen.  Danach ein `set` (verdraengt den Schluessel)
+#      und ein Lesen desselben Schluessels: das ist der Cache-Miss, bei dem die Verdraengung
+#      zuschlaegt.  Gelesen wird der INHALT, damit ein freigegebener Slot auch dann auffaellt,
+#      wenn der Speicher noch lesbar ist.
+#
+# Das ist die Form des cai-Absturzes vom 2026-11-04 (SIGSEGV in __strlen_avx2 <- enc <-
+# aiml_ser_deep_copy <- cai.wissen.Aufloesung_eintraege): cai oeffnet einen Namens-Kv mit
+# zwei indizierten Feldern und zehntausenden Zeilen, schreibt im Lauf neue Namen und liest
+# sie spaeter wieder.
+- model:
+    name: NameRow
+    fields:
+      - [text, string, "", { db_indexed: true }]
+      - [ding, string, "", { db_indexed: true }]
+      - [sorte, string, ""]
+      - [quelle, string, ""]
+
+- class:
+    name: Namensgraf
+    members:
+      - [namen, Kv<string:NameRow>, null, { access: public }]
+    methods:
+      - def:
+          name: setup
+          args: [[store, Kv<string:NameRow>]]
+          body:
+            - set: [<.namen, store]
+
+      - def:
+          name: wert_von
+          args: [[nummer, i32]]
+          return: string
+          body:
+            - return: "ding-${nummer}-mit-etwas-laenge-damit-der-heap-sichtbar-ist"
+
+      - def:
+          name: zeile_setzen
+          args: [[nummer, i32], [marke, string]]
+          body:
+            - decl: [eintrag, NameRow]
+            - set: [eintrag.text, "wort-${nummer}"]
+            - set: [eintrag.ding, { call: [<.wert_von, nummer] }]
+            - set: [eintrag.sorte, marke]
+            - set: [eintrag.quelle, "quelle-${nummer}"]
+            - call: [<.namen.set, "k-${nummer}", eintrag]
+
+      - def:
+          name: saen
+          args: [[anzahl, i32]]
+          return: i32
+          body:
+            - decl: [row, i32, 0]
+            - while: [{ lt: [row, anzahl] }]
+              body:
+                - call: [<.zeile_setzen, row, "titel"]
+                - set: [row, { +: [row, 1] }]
+            - print: ["SEED ${anzahl}"]
+            - return: 0
+
+      # der Lesepfad aus cai.wissen.Aufloesung.eintraege: Schluessel ueber den Index, dann
+      # get_copy je Treffer (der Compiler macht daraus kv_get + aiml_ser_deep_copy)
+      - def:
+          name: eintraege
+          args: [[suchtext, string]]
+          return: list<NameRow>
+          body:
+            - decl: [keys, list<string>, { call: [<.namen.findings_by, "text", suchtext] }]
+            - decl: [out, list<NameRow>, []]
+            - decl: [row, i32, 0]
+            - while: [{ lt: [row, keys.len] }]
+              body:
+                - decl: [eintrag, NameRow, { call: [<.namen.get_copy, { call: [keys.get, row] }] }]
+                - call: [out.push, eintrag]
+                - set: [row, { +: [row, 1] }]
+            - return: out
+
+      - def:
+          name: lies_und_pruefe
+          args: [[nummer, i32], [marke, string]]
+          return: i32
+          body:
+            - decl: [erwartet, string, { call: [<.wert_von, nummer] }]
+            # 1. Borrow-Sicht auf den Slot
+            - decl: [sicht, ref<NameRow>, { call: [<.namen.get, "k-${nummer}"] }]
+            - if: [{ neq: [sicht.ding, erwartet] }, true]
+              then:
+                - print: ["FAIL k-${nummer}: get.ding stimmt nicht"]
+                - return: 1
+            - if: [{ neq: [sicht.sorte, marke] }, true]
+              then:
+                - print: ["FAIL k-${nummer}: get.sorte='${sicht.sorte}' erwartet '${marke}'"]
+                - return: 2
+            # 2. derselbe Slot ueber den Index + get_copy — hier knallte cai
+            - decl: [zeilen, list<NameRow>, { call: [<.eintraege, "wort-${nummer}"] }]
+            - if: [{ neq: [zeilen.len, 1] }, true]
+              then:
+                - print: ["FAIL k-${nummer}: eintraege.len=${zeilen.len}"]
+                - return: 3
+            - decl: [erste, NameRow, { call: [zeilen.get, 0] }]
+            - if: [{ neq: [erste.ding, erwartet] }, true]
+              then:
+                - print: ["FAIL k-${nummer}: get_copy.ding stimmt nicht"]
+                - return: 4
+            - if: [{ neq: [erste.sorte, marke] }, true]
+              then:
+                - print: ["FAIL k-${nummer}: get_copy.sorte='${erste.sorte}' erwartet '${marke}'"]
+                - return: 5
+            - return: 0
+
+      - def:
+          name: pruefe
+          return: i32
+          body:
+            # Lesen OHNE vorheriges Schreiben trifft den Cache (der Backfill hat alles abgelegt)
+            - decl: [kalt, i32, { call: [<.lies_und_pruefe, 7, "titel"] }]
+            - if: [{ neq: [kalt, 0] }, true]
+              then:
+                - return: kalt
+            # Schreiben verdraengt den Schluessel aus dem Cache; das naechste Lesen ist der
+            # Miss, bei dem die Verdraengung den gerade angelegten Slot erwischt.
+            - decl: [row, i32, 0]
+            - while: [{ lt: [row, 12] }]
+              body:
+                - decl: [nummer, i32, { +: [{ "*": [row, 97] }, 11] }]
+                - call: [<.zeile_setzen, nummer, "neu"]
+                - decl: [warm, i32, { call: [<.lies_und_pruefe, nummer, "neu"] }]
+                - if: [{ neq: [warm, 0] }, true]
+                  then:
+                    - print: ["FAIL nach set/get auf k-${nummer}"]
+                    - return: warm
+                - set: [row, { +: [row, 1] }]
+            - print: ["PASS kv decoded cache bounded, read slot stays valid"]
+            - return: 0
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [store, Kv<string:NameRow>, { call: [db.open_kv, "namen", { persist: true, path: "/tmp/aiml_test_kvcache/" }] }]
+      - decl: [graf, shared<Namensgraf>, { new: Namensgraf }]
+      - call: [graf.setup, store]
+      - decl: [vorhanden, i64, { call: [store.len] }]
+      - if: [{ eq: [vorhanden, 0] }, true]
+        then:
+          - return: { call: [graf.saen, 1200] }
+      - return: { call: [graf.pruefe] }

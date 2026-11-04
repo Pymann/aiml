@@ -1,0 +1,259 @@
+# SPEC: 61_memory_management_DRAFT,31_db_integration,15_models
+# static-check: off
+# Vier Formen aus der Jagd auf den cai-Absturz vom 2026-11-04 (SIGSEGV in __strlen_avx2 <-
+# enc <- aiml_ser_deep_copy <- cai.wissen.Aufloesung_eintraege), in EINER Datei, damit das
+# nur einmal uebersetzt werden muss:
+#
+#   A  eine Methode gibt eine FRISCH gebaute list<Model> zurueck, der Aufrufer weist sie
+#      einer schon belegten Lokalen zu und liest Elemente heraus   (cai: Aufloesung.loese)
+#   B  ein Borrow aus dem KV-Cache (`ref<T>` aus kv.get), dessen String-Feld in eine Liste
+#      geschoben wird                                   (cai: Wissensgraph.dinge_von)
+#   C  ein Borrow, dessen String-Feld ZURUECKGEGEBEN wird (cai: Wissensgraph.anzeige) —
+#      gaebe der Compiler es als owned zurueck, sinkt der Refcount des Cache-Strings
+#   D  Lesen und Schreiben verschraenkt ueber mehr Schluessel als das Cache-Fenster
+#      (MAX_DECODED_LRU = 1024) — das Regime des ZIM-Laufs
+#
+# Die eigentliche Ursache lag woanders (spec/31 §6.7.3, Netz: tests/kv_decoded_cache/);
+# diese vier Formen bleiben als Netz fuer den Weg dorthin.  Jede Runde prueft den INHALT,
+# damit ein freigegebener oder geteilter Slot auch dann auffaellt, wenn der Speicher noch
+# lesbar ist.
+- model:
+    name: NameRow
+    fields:
+      - [text, string, "", { db_indexed: true }]
+      - [ding, string, "", { db_indexed: true }]
+      - [sorte, string, ""]
+      - [quelle, string, ""]
+- model:
+    name: Treffer
+    fields:
+      - [eingabe, string, ""]
+      - [dinge, list<string>]
+      - [weg, string, ""]
+      - [sorte, string, ""]
+      - [mehrdeutig, i32, 0]
+
+- class:
+    name: Graf
+    members:
+      - [namen, Kv<string:NameRow>, null, { access: public }]
+    methods:
+      - def:
+          name: setup
+          args: [[store, Kv<string:NameRow>]]
+          body:
+            - set: [<.namen, store]
+
+      - def:
+          name: wert_von
+          args: [[nummer, i32]]
+          return: string
+          body:
+            - return: "ding-${nummer}-mit-etwas-laenge-damit-der-heap-sichtbar-ist"
+
+      - def:
+          name: lege_an
+          args: [[nummer, i32]]
+          body:
+            - decl: [eintrag, NameRow]
+            - set: [eintrag.text, "wort-${nummer}"]
+            - set: [eintrag.ding, { call: [<.wert_von, nummer] }]
+            - set: [eintrag.sorte, "titel"]
+            - set: [eintrag.quelle, "quelle-${nummer}"]
+            - call: [<.namen.set, "k-${nummer}", eintrag]
+
+      # ── A/D: frische list<Model> aus get_copy-Elementen, als Rueckgabe
+      - def:
+          name: eintraege
+          args: [[suchtext, string]]
+          return: list<NameRow>
+          body:
+            - decl: [keys, list<string>, { call: [<.namen.findings_by, "text", suchtext] }]
+            - decl: [out, list<NameRow>, []]
+            - decl: [row, i32, 0]
+            - while: [{ lt: [row, keys.len] }]
+              body:
+                - decl: [eintrag, NameRow, { call: [<.namen.get_copy, { call: [keys.get, row] }] }]
+                - call: [out.push, eintrag]
+                - set: [row, { +: [row, 1] }]
+            - return: out
+
+      # ── B: Borrow aus dem Cache, String-Feld in eine Liste
+      - def:
+          name: dinge_von
+          args: [[suchtext, string]]
+          return: list<string>
+          body:
+            - decl: [keys, list<string>, { call: [<.namen.findings_by, "text", suchtext] }]
+            - decl: [out, list<string>, []]
+            - decl: [row, i32, 0]
+            - while: [{ lt: [row, keys.len] }]
+              body:
+                - decl: [eintrag, ref<NameRow>, { call: [<.namen.get, { call: [keys.get, row] }] }]
+                - if: [{ eq: [{ call: [out.contains, eintrag.ding] }, 0] }, true]
+                  then:
+                    - call: [out.push, eintrag.ding]
+                - set: [row, { +: [row, 1] }]
+            - return: out
+
+      # ── C: Borrow, dessen String-Feld zurueckgegeben wird
+      - def:
+          name: anzeige
+          args: [[nummer, i32]]
+          return: string
+          body:
+            - if: [{ call: [<.namen.has, "k-${nummer}"] }, true]
+              then:
+                - decl: [eintrag, ref<NameRow>, { call: [<.namen.get, "k-${nummer}"] }]
+                - if: [{ gt: [eintrag.ding.len, 0] }, true]
+                  then:
+                    - return: eintrag.ding
+            - return: "unbekannt"
+
+      # ── A: belegte Lokale neu zuweisen, zweite Liste aus Elementen der ersten aufbauen
+      - def:
+          name: loese
+          args: [[suchtext, string], [zweit, string]]
+          return: Treffer
+          body:
+            - decl: [out, Treffer]
+            - set: [out.eingabe, suchtext]
+            - decl: [leer, list<string>, []]
+            - set: [out.dinge, leer]
+            - decl: [gefunden, list<NameRow>, []]
+            - set: [gefunden, { call: [<.eintraege, suchtext] }]
+            - if: [{ gt: [gefunden.len, 0] }, true]
+              then:
+                - decl: [erster, NameRow, { call: [gefunden.get, 0] }]
+                - call: [out.dinge.push, erster.ding]
+                - set: [out.sorte, erster.sorte]
+                - set: [out.weg, "name"]
+                - return: out
+            - decl: [aus_formen, list<NameRow>, []]
+            - decl: [teil, list<NameRow>, { call: [<.eintraege, zweit] }]
+            - decl: [col, i32, 0]
+            - while: [{ lt: [col, teil.len] }]
+              body:
+                - decl: [eintrag, NameRow, { call: [teil.get, col] }]
+                - call: [aus_formen.push, eintrag]
+                - set: [col, { +: [col, 1] }]
+            - if: [{ gt: [aus_formen.len, 0] }, true]
+              then:
+                - decl: [erster2, NameRow, { call: [aus_formen.get, 0] }]
+                - call: [out.dinge.push, erster2.ding]
+                - set: [out.sorte, erster2.sorte]
+                - set: [out.weg, "beugung"]
+            - return: out
+
+      - def:
+          name: pruefe_eine
+          args: [[nummer, i32]]
+          return: i32
+          body:
+            - decl: [erwartet, string, { call: [<.wert_von, nummer] }]
+            # C: zweimal lesen — ein unbalancierter decref schlaegt beim ersten zu
+            - decl: [eins, string, { call: [<.anzeige, nummer] }]
+            - if: [{ neq: [eins, erwartet] }, true]
+              then:
+                - print: ["FAIL C1 k-${nummer}"]
+                - return: 1
+            - decl: [zwei, string, { call: [<.anzeige, nummer] }]
+            - if: [{ neq: [zwei, erwartet] }, true]
+              then:
+                - print: ["FAIL C2 k-${nummer}"]
+                - return: 2
+            # B: Borrow-Feld in eine Liste, Liste faellt danach weg
+            - decl: [dinge, list<string>, { call: [<.dinge_von, "wort-${nummer}"] }]
+            - if: [{ neq: [dinge.len, 1] }, true]
+              then:
+                - print: ["FAIL B len=${dinge.len} k-${nummer}"]
+                - return: 3
+            - if: [{ neq: [{ call: [dinge.get, 0] }, erwartet] }, true]
+              then:
+                - print: ["FAIL B Inhalt k-${nummer}"]
+                - return: 4
+            # A: Rueckgabe einer frischen list<Model>, Zuweisung an eine belegte Lokale
+            - decl: [tref, Treffer, { call: [<.loese, "wort-${nummer}", "wort-${nummer}"] }]
+            - if: [{ neq: [tref.weg, "name"] }, true]
+              then:
+                - print: ["FAIL A weg='${tref.weg}' k-${nummer}"]
+                - return: 5
+            - if: [{ neq: [tref.dinge.len, 1] }, true]
+              then:
+                - print: ["FAIL A len=${tref.dinge.len} k-${nummer}"]
+                - return: 6
+            - if: [{ neq: [{ call: [tref.dinge.get, 0] }, erwartet] }, true]
+              then:
+                - print: ["FAIL A Inhalt k-${nummer}"]
+                - return: 7
+            - if: [{ neq: [tref.sorte, "titel"] }, true]
+              then:
+                - print: ["FAIL A sorte='${tref.sorte}' k-${nummer}"]
+                - return: 8
+            # A, zweiter Zweig: erster Suchtext leer, zweiter trifft -> ueber teil/aus_formen
+            - decl: [tref2, Treffer, { call: [<.loese, "fehlt-${nummer}", "wort-${nummer}"] }]
+            - if: [{ neq: [tref2.weg, "beugung"] }, true]
+              then:
+                - print: ["FAIL A2 weg='${tref2.weg}' k-${nummer}"]
+                - return: 9
+            - if: [{ neq: [{ call: [tref2.dinge.get, 0] }, erwartet] }, true]
+              then:
+                - print: ["FAIL A2 Inhalt k-${nummer}"]
+                - return: 10
+            # C erneut, nach allen deep_copy-Durchgaengen
+            - decl: [drei, string, { call: [<.anzeige, nummer] }]
+            - if: [{ neq: [drei, erwartet] }, true]
+              then:
+                - print: ["FAIL C3 k-${nummer}"]
+                - return: 11
+            - return: 0
+
+      # ── D: mehr Schluessel als Cache-Plaetze, Schreiben und Lesen verschraenkt
+      - def:
+          name: lauf
+          args: [[runden, i32]]
+          return: i32
+          body:
+            - decl: [row, i32, 0]
+            - while: [{ lt: [row, runden] }]
+              body:
+                - call: [<.lege_an, row]
+                # ein alter Schluessel, weit hinter dem Cache-Fenster (1024 Plaetze)
+                - decl: [alt, i32, { -: [row, 1500] }]
+                - if: [{ ge: [alt, 0] }, true]
+                  then:
+                    - decl: [ergebnis, i32, { call: [<.pruefe_eine, alt] }]
+                    - if: [{ neq: [ergebnis, 0] }, true]
+                      then:
+                        - print: ["FAIL D runde ${row}"]
+                        - return: ergebnis
+                - set: [row, { +: [row, 1] }]
+            # und noch zwei frische Schluessel ohne Cache-Druck
+            - decl: [ergebnis_a, i32, { call: [<.pruefe_eine, 3] }]
+            - if: [{ neq: [ergebnis_a, 0] }, true]
+              then:
+                - return: ergebnis_a
+            - return: 0
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [mem_store, Kv<string:NameRow>, { call: [db.open_kv, "lt175_mem", { persist: false }] }]
+      - decl: [graf_mem, shared<Graf>, { new: Graf }]
+      - call: [graf_mem.setup, mem_store]
+      - decl: [ergebnis_mem, i32, { call: [graf_mem.lauf, 2000] }]
+      - if: [{ neq: [ergebnis_mem, 0] }, true]
+        then:
+          - print: ["FAIL nicht-persistent ergebnis=${ergebnis_mem}"]
+          - return: 1
+      - decl: [wal_store, Kv<string:NameRow>, { call: [db.open_kv, "lt175_wal", { persist: true, path: "/tmp/aiml_test_lt175/" }] }]
+      - decl: [graf_wal, shared<Graf>, { new: Graf }]
+      - call: [graf_wal.setup, wal_store]
+      - decl: [ergebnis_wal, i32, { call: [graf_wal.lauf, 2000] }]
+      - if: [{ neq: [ergebnis_wal, 0] }, true]
+        then:
+          - print: ["FAIL persistent ergebnis=${ergebnis_wal}"]
+          - return: 1
+      - print: ["PASS kv rows and returned lists keep their content (A/B/C/D)"]
+      - return: 0

@@ -854,6 +854,38 @@ untouched); else `aiml_ser_free_decoded(dst, nodes, n)` then `aiml_ser_decode(wa
 dst, nodes, n)` → return `1`.  Never returns the cache slot; `dst` is always
 caller-owned and independent.
 
+### 6.7.3 Who fills the `decoded_cache` — and what the 1024 bound guarantees
+
+The 1024-entry bound of §6.7 is only a bound if **reads are the only thing that populates
+the cache**, and the pointer contract only holds if the trim keeps its hands off the entry
+the current call is about to hand back. Both rules are normative:
+
+1. **A read never returns a slot it has just released.** `kv.get` / `kv.get_copy` insert the
+   freshly decoded value, mark it most-recently-used, and only then trim. That trim evicts
+   from the cold end and **must leave the most-recently-used entry alone** — it is the one
+   being returned. A trim that drains the whole list hands the caller a pointer into a
+   freed slot; the next read of that value walks released string pointers.
+2. **Only reads populate the cache.** Index maintenance must not. The `db_indexed` backfill
+   that `db.open_kv` emits for every indexed field walks *all* existing rows; it may *use* a
+   cached decode when one is there, but a row it decodes itself belongs in its own buffer
+   and is released again (`aiml_ser_free_decoded`) once the field value is indexed. If the
+   backfill published those rows into `decoded_cache` instead, opening a store with N rows
+   would pin N decoded rows — the documented bound would not be a bound — and the cache
+   would hold entries the LRU list never heard of.
+
+Rule 2 is what makes rule 1 reachable when it is broken: once `decoded_cache.size()`
+exceeds the LRU list's length, the trim can never get back under the bound by popping that
+list, so it pops **all** of it — including the entry just inserted and returned.
+
+Measured on 2026-11-04 (cai, German Wikipedia into the knowledge graph): the name store
+holds two `db_indexed` fields and tens of thousands of rows, so every `db.open_kv` filled
+the cache with every row and left the LRU list nearly empty. Reads kept hitting that cache
+and looked healthy for 50 minutes. The first `kv.set` on a name evicted its key, the next
+read of that same name missed, and the trim then freed the slot that read returned — the
+process died in `aiml_ser_deep_copy` → `enc` → `strlen` on a released string, 50 minutes of
+graph work lost with it. A store under 1024 rows never showed it. Regression:
+`tests/kv_decoded_cache/run.sh` (1200 rows, two processes over one WAL).
+
 ### 6.8 Migration Notes — Format Versions
 
 Each `.kvwal` file starts with a 32-byte header containing magic
