@@ -100,6 +100,53 @@ to at most one kv-key.  `set` with a duplicate value silently
 overwrites the previous mapping (last-writer-wins).  `finding_by`
 returns `""` when no match (not null).
 
+### Cost of index maintenance — and what the bucket size may not do
+
+`kv.set` is **O(1) amortized** (spec/31 §9), and that holds *including* the
+index hook.  Normatively, per indexed field of the written row:
+
+| Step | Complexity | Must not depend on |
+|---|---|---|
+| remove the old field value from the sidecar | O(1) amortized | number of kv-keys sharing that value |
+| add the new field value to the sidecar | O(1) amortized | number of kv-keys sharing that value |
+| `findings_by(f, v)` | O(hits) | number of kv-keys **not** sharing that value |
+
+The second column of exclusions is the point.  A 1:N sidecar bucket holds every
+kv-key that carries one field value, so a **low-cardinality** field — `sorte`,
+`kind`, `status`, a language tag — collects a bucket that grows to the size of
+the whole store.  If maintaining that bucket were linear in its length, each
+`set` would cost O(rows) and a write batch would be **quadratic**; filling a
+store would get slower the fuller it got, with no bound in sight and nothing in
+the user's own code to blame.
+
+That is not hypothetical: until 2026-11-04 `aiml_db_index_add` scanned the
+bucket with `std::find` to deduplicate, and `aiml_db_index_remove` compacted it
+with `std::remove`.  Measured with 4 000 `set` per block into one growing store
+(`tests/kv_set_scaling/`):
+
+| after … rows | no indexed field | indexed, all values distinct | indexed, few values |
+|---|---|---|---|
+| 4 000 | 27 ms | 41 ms | **487 ms** |
+| 16 000 | 20 ms | 32 ms | **1 754 ms** |
+| 32 000 | 22 ms | 31 ms | **5 074 ms** |
+
+Flat, flat, linear — so the third column is quadratic in total.  At 32 000 rows
+one `set` cost 1.3 ms; reading German Wikipedia into cai, whose sentence index
+writes over a thousand keys per article, this alone turned a 69 s batch into one
+that had not finished after 600 s.
+
+The implementation therefore keeps per bucket, alongside the keys in insertion
+order, **the position of each key within it** — add is a map insert plus a
+`push_back`, remove marks a grave and compacts only once graves outnumber live
+entries (amortized O(1)).  `findings_by` skips the graves and so still yields
+**insertion order**, which is the order it has always returned and which callers
+may rely on.
+
+Choosing a high-cardinality field is good practice — a bucket of one is cheaper
+than a bucket of a million whatever the complexity — but it is *not* a condition
+for the cost promise above.  An index on a field with three distinct values is a
+legitimate, supported thing to declare.
+
 ## Architecture
 
 ```

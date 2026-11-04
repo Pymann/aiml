@@ -2474,12 +2474,67 @@ extern "C" void aiml_db_store_query(void* store_ptr, void* pred_fn,
 // a 1:N map<field_val, vector<kv_key>> with set semantics (idempotent add,
 // no duplicate kv_keys per field_val — see backlog Edge-Cases).
 
+// Ein Bucket des 1:N-Index: die kv-Schluessel in EINFUEGEREIHENFOLGE, dazu die
+// Stelle jedes Schluessels darin.  spec/45 "Cost of index maintenance": add und
+// remove sind O(1) amortisiert, unabhaengig von der Bucketgroesse.
+//
+// Vorher war der Bucket ein nackter vector<string>: `add` suchte ihn mit
+// std::find nach Duplikaten ab, `remove` verschob ihn mit std::remove — beides
+// O(Bucket) je kv.set.  Ein Bucket haelt alle Zeilen, die EINEN Feldwert
+// tragen, also waechst er bei einem Feld mit wenigen verschiedenen Werten auf
+// die Groesse des Speichers, und ein Schreibstapel wurde quadratisch: je 4000
+// set 487 ms bei 4k Zeilen und 4608 ms bei 24k (cai 2026-11-04, deutsche
+// Wikipedia: ein 69-s-Stapel war nach 600 s nicht fertig).
+//
+// `remove` setzt ein Grab statt zu verschieben und verdichtet erst, wenn die
+// Graeber die lebenden Eintraege ueberwiegen — damit bleibt die Reihenfolge
+// erhalten, und das Verdichten kostet amortisiert O(1).  Ein Grab ist nicht am
+// leeren Schluessel erkennbar ("" ist ein zulaessiger kv-Schluessel), sondern
+// an seiner eigenen Marke.
+struct AimlIndexBucket {
+    // `pos` BESITZT die Schluessel, `slots` zeigt auf seine Knoten: die Knoten
+    // einer unordered_map sind stabil (ein Rehash verschiebt sie nicht), und so
+    // liegt jeder Schluessel nur EINMAL im Speicher.  Ein Grab ist nullptr —
+    // am leeren Schluessel waere es nicht erkennbar, "" ist ein zulaessiger
+    // kv-Schluessel.  Wer einen Slot raeumt, raeumt ihn VOR dem pos.erase.
+    std::vector<const std::string*>         slots;  // Einfuegereihenfolge
+    std::unordered_map<std::string, size_t> pos;    // Schluessel → Stelle in slots
+    size_t graves = 0;
+
+    void add(const char* kv_key) {
+        auto [it, fresh] = pos.emplace(kv_key, slots.size());
+        if (!fresh) return;                         // schon drin — der Index ist eine Menge
+        slots.push_back(&it->first);
+    }
+    // true, wenn der Bucket danach leer ist (der Aufrufer loescht ihn dann)
+    bool remove(const char* kv_key) {
+        auto it = pos.find(kv_key);
+        if (it == pos.end()) return pos.empty();
+        slots[it->second] = nullptr;                // vor dem erase, sonst haengt der Zeiger
+        pos.erase(it);
+        ++graves;
+        if (pos.empty()) return true;
+        if (graves > pos.size()) compact();
+        return false;
+    }
+    void compact() {
+        size_t write = 0;
+        for (size_t read = 0; read < slots.size(); ++read)
+            if (slots[read]) slots[write++] = slots[read];
+        slots.resize(write);
+        // Nur vorhandene Schluessel neu beschriften — kein insert, also kein
+        // Rehash, also bleiben die Knoten gueltig, auf die slots zeigt.
+        for (size_t i = 0; i < slots.size(); ++i) pos[*slots[i]] = i;
+        graves = 0;
+    }
+};
+
 struct AimlIndex {
     std::mutex mtx;
     bool unique = false;
     std::string mode;  // "" | "lower"
-    std::unordered_map<std::string, std::vector<std::string>> map_1n;
-    std::unordered_map<std::string, std::string>              map_unique;
+    std::unordered_map<std::string, AimlIndexBucket> map_1n;
+    std::unordered_map<std::string, std::string>     map_unique;
 };
 
 namespace {
@@ -2536,10 +2591,7 @@ extern "C" void aiml_db_index_add(void* idx_ptr, const char* field_val, const ch
     if (idx->unique) {
         idx->map_unique[k] = kv_key;
     } else {
-        auto& lst = idx->map_1n[k];
-        if (std::find(lst.begin(), lst.end(), kv_key) == lst.end()) {
-            lst.emplace_back(kv_key);
-        }
+        idx->map_1n[k].add(kv_key);
     }
 }
 
@@ -2556,9 +2608,7 @@ extern "C" void aiml_db_index_remove(void* idx_ptr, const char* field_val, const
     } else {
         auto it = idx->map_1n.find(k);
         if (it == idx->map_1n.end()) return;
-        auto& lst = it->second;
-        lst.erase(std::remove(lst.begin(), lst.end(), kv_key), lst.end());
-        if (lst.empty()) idx->map_1n.erase(it);
+        if (it->second.remove(kv_key)) idx->map_1n.erase(it);
     }
 }
 
@@ -2571,13 +2621,19 @@ extern "C" void aiml_db_index_findings(void* idx_ptr, const char* field_val, voi
     std::lock_guard<std::mutex> lk(idx->mtx);
     std::string k = idx_normalize(field_val, idx->mode);
 
-    std::vector<std::string> hits;
+    // Zeiger auf die Treffer, keine Kopie der Schluessel — die Liste wird gleich
+    // ohnehin Eintrag fuer Eintrag mit aiml_str_dup aufgebaut.  Graeber (spec/45)
+    // werden uebersprungen, die Reihenfolge bleibt die Einfuegereihenfolge.
+    std::vector<const std::string*> hits;
     if (idx->unique) {
         auto it = idx->map_unique.find(k);
-        if (it != idx->map_unique.end()) hits.push_back(it->second);
+        if (it != idx->map_unique.end()) hits.push_back(&it->second);
     } else {
         auto it = idx->map_1n.find(k);
-        if (it != idx->map_1n.end()) hits = it->second;
+        if (it != idx->map_1n.end()) {
+            hits.reserve(it->second.pos.size());
+            for (const std::string* sl : it->second.slots) if (sl) hits.push_back(sl);
+        }
     }
     int32_t n = (int32_t)hits.size();
     if (n == 0) return;
@@ -2590,7 +2646,7 @@ extern "C" void aiml_db_index_findings(void* idx_ptr, const char* field_val, voi
         // aiml_str_dup (not libc strdup) so the returned char* is an aiml-managed string with an rc
         // header — the findings list<string> is a memV3 handle whose teardown decrefs each element
         // (libc strdup → no header → invalid read in aiml_str_decref). Survives index mutations.
-        out->data[i] = aiml_str_dup(hits[(size_t)i].c_str());
+        out->data[i] = aiml_str_dup(hits[(size_t)i]->c_str());
     }
     out->size = n;
 }
@@ -2721,7 +2777,9 @@ extern "C" const char* aiml_db_index_finding(void* idx_ptr, const char* field_va
         if (it != idx->map_unique.end()) return it->second.c_str();
     } else {
         auto it = idx->map_1n.find(k);
-        if (it != idx->map_1n.end() && !it->second.empty()) return it->second.front().c_str();
+        if (it != idx->map_1n.end()) {
+            for (const std::string* sl : it->second.slots) if (sl) return sl->c_str();
+        }
     }
     return empty;
 }

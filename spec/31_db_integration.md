@@ -1164,7 +1164,7 @@ If it detects a higher version with new fields, it applies **in-place migration*
 | `db.query(store, ...)` | O(N) | Can become O(log N) with index |
 | `db.run_system(fn, s1, s2)` | O(min(|s1|,|s2|)) | Intersection via slot bitmap |
 | `kv.get(key)` | O(1) | Hash table |
-| `kv.set(key, val)` | O(1) amortized | — |
+| `kv.set(key, val)` | O(1) amortized | Including the `db_indexed` hook — independent of how many rows share a field value (spec/45) |
 | `timeseries.at(t)` | O(log N) | Binary search on timestamps |
 | `timeseries.range(a,b)` | O(K) | K = number of results |
 | `vecstore.search(v, k)` | O(log N) | HNSW index |
