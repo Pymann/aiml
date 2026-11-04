@@ -142,7 +142,11 @@ public:
 };
 
 bool StatementBuilder::OnMapStart() {
-    if (type == "decl" && args.size() >= 2) {
+    // spec/10: innerhalb der inneren Sequenz eines Listen-/Buffer-Literals ist eine Map ein
+    // ELEMENT (`["P", { call: ... }]`), niemals ein Modifier-Block.  Ohne diese Abfrage
+    // schickte `args.size() >= 3` die Element-Map in den ModifierBuilder, der unbekannte
+    // Schluessel still verwirft — das Element fiel weg, ohne Warnung.
+    if (type == "decl" && args.size() >= 2 && !insideSeqLiteral()) {
         // If args size is 3, we already have Name, Type, Value. This map is Modifiers.
         // If args size is 2, it could be Value (an expr) or Modifiers.
         // We'll assume for simplicity that in AIML local var decl: [name, type, val, {modifiers}]
@@ -174,10 +178,30 @@ void StatementBuilder::receiveChildNode(std::unique_ptr<Node> node) {
             orderedCallArgs.push_back(std::unique_ptr<Expr>(e));
         } else if (type == "idx") {
             idxParts.push_back({"", std::unique_ptr<Expr>(e)});
+        } else if (insideSeqLiteral()) {
+            // Element eines Listen-/Buffer-Literals: mit seiner Stelle festhalten.  In
+            // `exprArg` waere es verloren (dort steht der Initialwert des decl) — stand die
+            // Map VORN, nahm finish() sie als ganzen Initialwert und schrieb einen String in
+            // den Listen-Slot: `.len` Muell, Heap beschaedigt.
+            innerSeqExprs.emplace_back((int)args.size(), std::unique_ptr<Expr>(e));
         } else {
             exprArg = std::unique_ptr<Expr>(e);
         }
     }
+}
+
+std::unique_ptr<BufferLiteralExpr> StatementBuilder::buildSeqLiteral(int from) {
+    auto lit = std::make_unique<BufferLiteralExpr>();
+    size_t nextExpr = 0;
+    for (int i = from; i <= (int)args.size(); ++i) {
+        // Alle Expressions, die VOR dem Skalar args[i] eintrafen (ihre Stelle ist <= i).
+        while (nextExpr < innerSeqExprs.size() && innerSeqExprs[nextExpr].first <= i)
+            lit->elements.push_back(std::move(innerSeqExprs[nextExpr++].second));
+        if (i < (int)args.size())
+            lit->elements.push_back(parseScalarExpr(args[i].first, args[i].second));
+    }
+    innerSeqExprs.clear();
+    return lit;
 }
 
 std::unique_ptr<Node> StatementBuilder::finish() {
@@ -227,10 +251,7 @@ std::unique_ptr<Node> StatementBuilder::finish() {
                     && typeName.back() == '>') {
              // Buffer/list literal: decl: [name, buffer<T>|list<T>, [v1, v2, ...]] (spec/10, spec/11)
              // Expand into a BufferLiteralExpr — visitDeclStmt emits write/push calls.
-             auto lit = std::make_unique<BufferLiteralExpr>();
-             for (int i = innerSeqStart; i < (int)args.size(); ++i)
-                 lit->elements.push_back(parseScalarExpr(args[i].first, args[i].second));
-             decl->initialValue = std::move(lit);
+             decl->initialValue = buildSeqLiteral(innerSeqStart);
          } else if (initStart < (int)args.size()) {
              decl->initialValue = parseScalarExpr(args[initStart].first, args[initStart].second);
          }
@@ -265,10 +286,7 @@ std::unique_ptr<Node> StatementBuilder::finish() {
          if (innerSeqStart >= 0) {
              // spec/10: Listen-/Buffer-Literal als Wert — visitSetStmt loest es in
              // `clear` + ein `push` je Element auf, genau wie am decl.
-             auto lit = std::make_unique<BufferLiteralExpr>();
-             for (int i = innerSeqStart; i < (int)args.size(); ++i)
-                 lit->elements.push_back(parseScalarExpr(args[i].first, args[i].second));
-             exprArg = std::move(lit);
+             exprArg = buildSeqLiteral(innerSeqStart);
          } else if (!exprArg && args.size() >= 2) {
              const std::string& val = args[1].first;
              const std::string& tag = args[1].second;

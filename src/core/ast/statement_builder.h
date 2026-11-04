@@ -27,6 +27,11 @@ class StatementBuilder : public StateHandler {
     // einzeln in orderedCallArgs und wird so zu mehreren Argumenten aufgefaechert
     // (Backlog-Punkt 3).  Waehrend der inneren Sequenz sammeln wir hier.
     std::unique_ptr<BufferLiteralExpr> pendingCallLiteral;
+    // spec/10: ein Element eines Listen-/Buffer-Literals darf eine Expression sein
+    // (`decl: [tags, list<string>, ["P", { call: ... }]]`).  Eine Map-Expression waechst
+    // `args` NICHT, also haelt dieser Vektor sie mit der Stelle fest, an der sie stand:
+    // first = args.size() im Moment ihres Eintreffens.  Ohne das fiel sie still weg.
+    std::vector<std::pair<int, std::unique_ptr<Expr>>> innerSeqExprs;
     bool is_const = false;
     bool is_singleton = false;   // spec/21 §6.2 F21-S1
     bool is_volatile = false;
@@ -45,6 +50,12 @@ public:
     bool OnMapEnd() override;
     void receiveChildNode(std::unique_ptr<Node> node) override;
     std::unique_ptr<Node> finish() override;
+private:
+    // Baut das Literal aus args[from..] und flicht die Expressions an ihrer Stelle ein.
+    std::unique_ptr<BufferLiteralExpr> buildSeqLiteral(int from);
+    // Sind wir gerade INNERHALB der inneren Sequenz eines Literals?  Dann ist eine Map ein
+    // ELEMENT und kein Modifier-Block.
+    bool insideSeqLiteral() const { return innerSeqStart >= 0 && seqDepth >= 2; }
 };
 
 } // namespace AST

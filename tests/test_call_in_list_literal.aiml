@@ -1,0 +1,203 @@
+# SPEC: 15_models,23_system
+# static-check: off
+# Ein `{ call: ... }` als ELEMENT eines Listen-Literals muss seinen Rueckgabewert in die
+# Liste legen — gemeldet 2026-11-04 aus cai: `decl: [log, list<string>, ["P", {call: ...}]]`
+# ergab eine Liste, deren zweites Element LEER war, ohne Warnung und ohne Fehler.
+# Diese Probe faechert die Stellung des Aufrufs auf (Element 0/1/2), die Art der Funktion
+# (eigene Funktion, string-Builtin, sys.serialize) und den Elementtyp (string, i32).
+- model:
+    name: PropRow
+    fields:
+      - [quelle, string, ""]
+      - [satz, string, ""]
+      - [rolle, string, ""]
+
+- def:
+    name: mach_text
+    args: [[marke, string]]
+    return: string
+    body:
+      - return: "text-${marke}"
+
+- def:
+    name: mach_zahl
+    args: [[grund, i32]]
+    return: i32
+    body:
+      - return: { +: [grund, 7] }
+
+- def:
+    name: wert_an
+    args: [[liste, list<string>], [idx, i32]]
+    return: string
+    body:
+      - if: [{ ge: [idx, liste.len] }, true]
+        then:
+          - return: "<fehlt>"
+      - return: { call: [liste.get, idx] }
+
+- def:
+    name: zahl_an
+    args: [[liste, list<i32>], [idx, i32]]
+    return: i32
+    body:
+      - if: [{ ge: [idx, liste.len] }, true]
+        then:
+          - return: -1
+      - return: { call: [liste.get, idx] }
+
+- def:
+    name: zaehle_leere
+    args: [[name, string], [liste, list<string>]]
+    return: i32
+    body:
+      - decl: [row, i32, 0]
+      - decl: [leere, i32, 0]
+      - while: [{ lt: [row, liste.len] }]
+        body:
+          - decl: [teil, string, { call: [liste.get, row] }]
+          - if: [{ eq: [teil.len, 0] }, true]
+            then:
+              - set: [leere, { +: [leere, 1] }]
+              - print: ["LEER ${name}[${row}]"]
+          - set: [row, { +: [row, 1] }]
+      - return: leere
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [fehler, i32, 0]
+
+      # 1. eigene Funktion als zweites Element
+      - decl: [lst_eigen, list<string>, ["P", { call: [mach_text, "a"] }]]
+      - if: [{ neq: [lst_eigen.len, 2] }, true]
+        then:
+          - print: ["FAIL eigen.len=${lst_eigen.len} erwartet 2"]
+          - set: [fehler, { +: [fehler, 1] }]
+      - set: [fehler, { +: [fehler, { call: [zaehle_leere, "eigen", lst_eigen] }] }]
+      - decl: [wert_eigen, string, { call: [wert_an, lst_eigen, 1] }]
+      - if: [{ neq: [wert_eigen, "text-a"] }, true]
+        then:
+          - print: ["FAIL eigen[1]='${wert_eigen}' erwartet 'text-a'"]
+          - set: [fehler, { +: [fehler, 1] }]
+
+      # 2. eigene Funktion als ERSTES Element
+      - decl: [lst_vorn, list<string>, [{ call: [mach_text, "b"] }, "P"]]
+      - if: [{ neq: [lst_vorn.len, 2] }, true]
+        then:
+          - print: ["FAIL vorn.len=${lst_vorn.len} erwartet 2"]
+          - set: [fehler, { +: [fehler, 1] }]
+      - set: [fehler, { +: [fehler, { call: [zaehle_leere, "vorn", lst_vorn] }] }]
+      - decl: [wert_vorn, string, { call: [wert_an, lst_vorn, 0] }]
+      - if: [{ neq: [wert_vorn, "text-b"] }, true]
+        then:
+          - print: ["FAIL vorn[0]='${wert_vorn}' erwartet 'text-b'"]
+          - set: [fehler, { +: [fehler, 1] }]
+
+      # 3. zwei Aufrufe hintereinander, Element 1 und 2
+      - decl: [lst_zwei, list<string>, ["P", { call: [mach_text, "c1"] }, { call: [mach_text, "c2"] }]]
+      - if: [{ neq: [lst_zwei.len, 3] }, true]
+        then:
+          - print: ["FAIL zwei.len=${lst_zwei.len} erwartet 3"]
+          - set: [fehler, { +: [fehler, 1] }]
+      - set: [fehler, { +: [fehler, { call: [zaehle_leere, "zwei", lst_zwei] }] }]
+      - decl: [wert_zwei, string, { call: [wert_an, lst_zwei, 2] }]
+      - if: [{ neq: [wert_zwei, "text-c2"] }, true]
+        then:
+          - print: ["FAIL zwei[2]='${wert_zwei}' erwartet 'text-c2'"]
+          - set: [fehler, { +: [fehler, 1] }]
+
+      # 4. string-Builtin als Element
+      - decl: [roh, string, "GROSS"]
+      - decl: [lst_builtin, list<string>, ["P", { call: [roh.lower] }]]
+      - if: [{ neq: [lst_builtin.len, 2] }, true]
+        then:
+          - print: ["FAIL builtin.len=${lst_builtin.len} erwartet 2"]
+          - set: [fehler, { +: [fehler, 1] }]
+      - set: [fehler, { +: [fehler, { call: [zaehle_leere, "builtin", lst_builtin] }] }]
+      - decl: [wert_builtin, string, { call: [wert_an, lst_builtin, 1] }]
+      - if: [{ neq: [wert_builtin, "gross"] }, true]
+        then:
+          - print: ["FAIL builtin[1]='${wert_builtin}' erwartet 'gross'"]
+          - set: [fehler, { +: [fehler, 1] }]
+
+      # 5. sys.serialize als Element — die gemeldete Stelle
+      - decl: [zeile, PropRow]
+      - set: [zeile.quelle, "zim:1#2"]
+      - set: [zeile.satz, "Kupfer leitet Strom"]
+      - set: [zeile.rolle, "aussage"]
+      - decl: [lst_inline, list<string>, ["P", { call: [sys.serialize, zeile, "bare"] }]]
+      - if: [{ neq: [lst_inline.len, 2] }, true]
+        then:
+          - print: ["FAIL inline.len=${lst_inline.len} erwartet 2"]
+          - set: [fehler, { +: [fehler, 1] }]
+      - set: [fehler, { +: [fehler, { call: [zaehle_leere, "inline", lst_inline] }] }]
+
+      # 6. dieselbe Serialisierung herausgehoben — der Umweg, der in cai funktioniert
+      - decl: [text, string, { call: [sys.serialize, zeile, "bare"] }]
+      - decl: [lst_hoch, list<string>, ["P", text]]
+      - if: [{ neq: [lst_hoch.len, 2] }, true]
+        then:
+          - print: ["FAIL hoch.len=${lst_hoch.len} erwartet 2"]
+          - set: [fehler, { +: [fehler, 1] }]
+      - set: [fehler, { +: [fehler, { call: [zaehle_leere, "hoch", lst_hoch] }] }]
+      - decl: [wert_inline, string, { call: [wert_an, lst_inline, 1] }]
+      - decl: [wert_hoch, string, { call: [wert_an, lst_hoch, 1] }]
+      - if: [{ neq: [wert_inline, wert_hoch] }, true]
+        then:
+          - print: ["FAIL inline != herausgehoben: '${wert_inline}' vs '${wert_hoch}'"]
+          - set: [fehler, { +: [fehler, 1] }]
+
+      # 7. Interpolation einer Variablen als Element (Kontrollfall, muss gehen)
+      - decl: [lst_interp, list<string>, ["P", "${text}"]]
+      - if: [{ neq: [lst_interp.len, 2] }, true]
+        then:
+          - print: ["FAIL interp.len=${lst_interp.len} erwartet 2"]
+          - set: [fehler, { +: [fehler, 1] }]
+      - set: [fehler, { +: [fehler, { call: [zaehle_leere, "interp", lst_interp] }] }]
+
+      # 8. list<i32> mit einem Aufruf als Element
+      - decl: [lst_zahl, list<i32>, [1, { call: [mach_zahl, 10] }, 3]]
+      - if: [{ neq: [lst_zahl.len, 3] }, true]
+        then:
+          - print: ["FAIL zahl.len=${lst_zahl.len} erwartet 3"]
+          - set: [fehler, { +: [fehler, 1] }]
+      - decl: [wert_zahl, i32, { call: [zahl_an, lst_zahl, 1] }]
+      - if: [{ neq: [wert_zahl, 17] }, true]
+        then:
+          - print: ["FAIL zahl[1]=${wert_zahl} erwartet 17"]
+          - set: [fehler, { +: [fehler, 1] }]
+
+      # 9. derselbe Fall auf der rechten Seite von `set:` (spec/10, gleicher Parser-Pfad)
+      - decl: [lst_set, list<string>, []]
+      - set: [lst_set, ["Q", { call: [mach_text, "s"] }, "R"]]
+      - if: [{ neq: [lst_set.len, 3] }, true]
+        then:
+          - print: ["FAIL set.len=${lst_set.len} erwartet 3"]
+          - set: [fehler, { +: [fehler, 1] }]
+      - decl: [wert_set, string, { call: [wert_an, lst_set, 1] }]
+      - if: [{ neq: [wert_set, "text-s"] }, true]
+        then:
+          - print: ["FAIL set[1]='${wert_set}' erwartet 'text-s'"]
+          - set: [fehler, { +: [fehler, 1] }]
+
+      # 10. Grenzfall: ein Modifier-Block NACH dem Literal bleibt ein Modifier-Block
+      #     (die Map steht hier auf der aeusseren Ebene, nicht im Literal)
+      - decl: [lst_mod, list<string>, ["a", { call: [mach_text, "m"] }], { const: true }]
+      - if: [{ neq: [lst_mod.len, 2] }, true]
+        then:
+          - print: ["FAIL mod.len=${lst_mod.len} erwartet 2"]
+          - set: [fehler, { +: [fehler, 1] }]
+      - decl: [wert_mod, string, { call: [wert_an, lst_mod, 1] }]
+      - if: [{ neq: [wert_mod, "text-m"] }, true]
+        then:
+          - print: ["FAIL mod[1]='${wert_mod}' erwartet 'text-m'"]
+          - set: [fehler, { +: [fehler, 1] }]
+
+      - if: [{ neq: [fehler, 0] }, true]
+        then:
+          - print: ["FAIL call-in-list-literal: ${fehler} Befunde"]
+          - return: 1
+      - print: ["PASS call in list literal keeps its return value"]
+      - return: 0

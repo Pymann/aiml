@@ -22,6 +22,20 @@
 - decl: [ring_x, list<i32>, [0, 1, 1, 1, 0, -1, -1, -1]]
 - decl: [kinds, list<string>, ["beast", "wraith", "construct"]]
 
+# Ein Element darf eine BELIEBIGE Expression sein, genau wie ein Map-Literal-Wert weiter
+# unten und genau wie das Argument von `push` — ein `{ call: ... }`, ein Rechenausdruck, eine
+# Interpolation. Bis 2026-11-04 fiel eine Expression als Element still weg: der Parser sammelte
+# nur die SKALARE der Sequenz, und die Map landete im Wert-Slot des decl. Stand sie hinten, war
+# die Liste ein Element kuerzer; stand sie VORN, nahm der decl sie als ganzen Initialwert und
+# schrieb einen String in den Listen-Slot — ab da war `.len` Muell und der Heap beschaedigt.
+# Beides ohne Warnung. Gekostet hat es in cai zwei Protokoll-Schichten: `["P", {call: …}]`
+# schrieb nur "P", beim Zurueckspielen fielen 731 und 736 Propositionen auf EINEN sha256-
+# Schluessel zusammen (aus beiden Schichten wurde eine einzige Zeile), waehrend die Fakten
+# derselben Schichten korrekt zusammenfuehrten — der Fehler war unsichtbar, solange man nur
+# auf die Faktenzahl sah. Netz: tests/test_call_in_list_literal.aiml.
+- decl: [tags, list<string>, ["P", { call: [serialize_row, row] }, "${name}"]]
+- decl: [ratios, list<f64>, [1.0, { "/": [sum, count] }]]
+
 # Zuweisen geht genauso: `set: [liste, [v1, v2, ...]]` ERSETZT den Inhalt — der Compiler
 # emittiert ein `clear` und danach einen `push` pro Element, mit denselben Umwandlungen wie
 # beim decl. `[]` leert die Liste. Gilt ebenso fuer ein Member (`set: [<.names, ["a", "b"]]`)
