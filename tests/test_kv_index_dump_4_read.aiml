@@ -1,0 +1,39 @@
+# SPEC?: 31_db_integration   # §6.2.1 Index-Dump, Verwerfen eines unbrauchbaren Dumps
+# Phase 4: oeffnet das Gedaechtnis mit der zerstoerten .kvidx.  Erwartet wird
+# der volle Replay und damit alle acht Werte -- nicht ein Absturz und nicht
+# eine halb gefuellte Sicht.
+# Expected exit code: 0
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [var_kv, "Kv<string:string>", { call: [db.open_kv, "idxkaputt", {persist: true, index_dump: true, path: "/tmp/aiml_kvidx_kaputt_20261106/"}] }]
+
+      - decl: [anz, i32, { call: [var_kv.len] }]
+      - if:
+          condition: { neq: [anz, 8] }
+          then:
+            - print: ["FAIL: len=${anz} bei kaputtem Dump, erwartet 8"]
+            - return: 1
+
+      - decl: [bad, i32, 0]
+      - decl: [var_i, i32, 0]
+      - while:
+          condition: { "<": [var_i, 8] }
+          body:
+            - decl: [ist, string, { call: [var_kv.get, "d${var_i}"] }]
+            - decl: [erw, string, "dwert_${var_i}"]
+            - if:
+                condition: { neq: [ist, erw] }
+                then:
+                  - print: ["FAIL d${var_i}: '${ist}' statt '${erw}'"]
+                  - set: [bad, { +: [bad, 1] }]
+            - set: [var_i, { +: [var_i, 1] }]
+
+      - if:
+          condition: { neq: [bad, 0] }
+          then:
+            - return: 1
+      - print: ["Phase 4 ok: kaputter Dump verworfen, alle 8 Werte da"]
+      - return: 0

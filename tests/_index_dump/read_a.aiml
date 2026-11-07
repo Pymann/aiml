@@ -1,0 +1,13 @@
+# Fixture: liest Gedaechtnis A.  Nach dem Unterschieben von Bs WAL muss der Dump
+# von A am Fingerabdruck scheitern und voll nachgespielt werden -- also Bs Inhalt
+# erscheinen, nicht As und erst recht kein Muell.
+- decl: [var_kv, Kv<string:string>]
+- set: [var_kv, { call: [db.open_kv, "idxswap", {persist: true, index_dump: true, path: "/tmp/aiml_idxswap/a/"}] }]
+- decl: [anz, i32, { call: [var_kv.len] }]
+- decl: [hat_a0, i32, { call: [var_kv.has, "a0"] }]
+- decl: [hat_b0, i32, { call: [var_kv.has, "b0"] }]
+- decl: [wert_b7, string, { call: [var_kv.get, "b7"] }]
+- print: ["len=${anz}"]
+- print: ["has_a0=${hat_a0}"]
+- print: ["has_b0=${hat_b0}"]
+- print: ["b7=${wert_b7}"]

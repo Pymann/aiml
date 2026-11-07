@@ -1,0 +1,14 @@
+# Fixture fuer tests/run_index_dump_gates.sh: Gedaechtnis A, fuenf Schluessel a0..a4,
+# checkpoint -- danach liegt a/idxswap.kvidx mit Wasserstand und Fingerabdruck.
+- decl: [var_kv, Kv<string:string>]
+- set: [var_kv, { call: [db.open_kv, "idxswap", {persist: true, index_dump: true, path: "/tmp/aiml_idxswap/a/"}] }]
+- call: [var_kv.clear]
+- decl: [var_i, i32, 0]
+- while:
+    condition: { "<": [var_i, 5] }
+    body:
+      - call: [var_kv.set, "a${var_i}", "aus_a_${var_i}"]
+      - set: [var_i, { +: [var_i, 1] }]
+- decl: [rcc, i32, { call: [db.checkpoint] }]
+- decl: [anz, i32, { call: [var_kv.len] }]
+- print: ["a_len=${anz}"]

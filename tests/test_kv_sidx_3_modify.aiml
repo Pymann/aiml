@@ -1,0 +1,88 @@
+# SPEC?: 45_db_indexed_fields   # Persistence -- Kopie je Feldwert
+# Phase 3: der Dump ist geladen, und JETZT wird geschrieben.  Jeder Feldwert,
+# den ein Schreibzugriff anfasst, muss aus dem Dump in den Speicher-Index
+# kopiert werden -- sonst sieht die Abfrage danach den alten Stand oder beide.
+# Geprueft werden alle drei Faelle: neuer Schluessel auf einen Feldwert, DER
+# SCHON IM DUMP STEHT; Umhaengen eines Schluessels von einem Dump-Feldwert auf
+# einen anderen; Loeschen.
+# Am Ende wird NICHT gecheckpointet -- Phase 4 lebt davon.
+# Expected exit code: 0
+
+- model:
+    name: Ding
+    fields:
+      - [ding_id, string]
+      - [name, string, "", { db_indexed: true }]
+      - [sku,  string, "", { db_indexed: true, unique: true }]
+      - [tag,  string, "", { db_indexed: "lower" }]
+
+- def:
+    name: pruef_zahl
+    args: [[ist, i32], [erw, i32], [was, string]]
+    return: i32
+    body:
+      - if:
+          condition: { neq: [ist, erw] }
+          then:
+            - print: ["FAIL ${was}: ${ist} Treffer, erwartet ${erw}"]
+            - return: 1
+      - return: 0
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [pfad, path, "/tmp/aiml_kvsidx_20261107/"]
+      - decl: [dinge, "Kv<string:Ding>"]
+      - set: [dinge, { call: [db.open_kv, "sidx_dinge", {persist: true, index_dump: true, path: pfad}] }]
+      - decl: [bad, i32, 0]
+
+      # Ausgangslage aus dem Dump.
+      - decl: [tr_vor, list<string>, { call: [dinge.findings_by, "name", "Hammer"] }]
+      - set: [bad, { +: [bad, { call: [pruef_zahl, tr_vor.len, 2, "start name=Hammer"] }] }]
+
+      # (1) Neuer Schluessel auf einen Feldwert, der im Dump steht.
+      - decl: [ding_d, Ding]
+      - set: [ding_d.ding_id, "ddd"]
+      - set: [ding_d.name, "Hammer"]
+      - set: [ding_d.sku, "S4"]
+      - set: [ding_d.tag, "Werkzeug"]
+      - call: [dinge.set, "ddd", ding_d]
+      - decl: [tr_neu, list<string>, { call: [dinge.findings_by, "name", "Hammer"] }]
+      - set: [bad, { +: [bad, { call: [pruef_zahl, tr_neu.len, 3, "nach-neu name=Hammer"] }] }]
+
+      # (2) Umhaengen: ccc von Saege nach Hammer.  Der alte Feldwert steht im
+      #     Dump und muss ccc verlieren, nicht behalten.
+      - decl: [ding_c, Ding]
+      - set: [ding_c.ding_id, "ccc"]
+      - set: [ding_c.name, "Hammer"]
+      - set: [ding_c.sku, "S3"]
+      - set: [ding_c.tag, "Holz"]
+      - call: [dinge.set, "ccc", ding_c]
+      - decl: [tr_umh, list<string>, { call: [dinge.findings_by, "name", "Hammer"] }]
+      - set: [bad, { +: [bad, { call: [pruef_zahl, tr_umh.len, 4, "nach-umhaengen name=Hammer"] }] }]
+      - decl: [tr_sae, list<string>, { call: [dinge.findings_by, "name", "Saege"] }]
+      - set: [bad, { +: [bad, { call: [pruef_zahl, tr_sae.len, 0, "nach-umhaengen name=Saege"] }] }]
+
+      # (3) Loeschen: bbb raus.
+      - call: [dinge.delete, "bbb"]
+      - decl: [tr_del, list<string>, { call: [dinge.findings_by, "name", "Hammer"] }]
+      - set: [bad, { +: [bad, { call: [pruef_zahl, tr_del.len, 3, "nach-loeschen name=Hammer"] }] }]
+      - decl: [sku_zwei, string, { call: [dinge.finding_by, "sku", "S2"] }]
+      - set: [bad, { +: [bad, { call: [pruef_zahl, sku_zwei.len, 0, "sku=S2 geloescht"] }] }]
+
+      # Der unangetastete Feldwert kommt weiter aus dem Dump.
+      - decl: [tr_hol, list<string>, { call: [dinge.findings_by, "tag", "holz"] }]
+      - set: [bad, { +: [bad, { call: [pruef_zahl, tr_hol.len, 1, "ende tag=holz"] }] }]
+      - decl: [tr_wrk, list<string>, { call: [dinge.findings_by, "tag", "werkzeug"] }]
+      - set: [bad, { +: [bad, { call: [pruef_zahl, tr_wrk.len, 2, "ende tag=werkzeug"] }] }]
+
+      - decl: [anzahl, i32, { call: [dinge.len] }]
+      - set: [bad, { +: [bad, { call: [pruef_zahl, anzahl, 3, "len"] }] }]
+
+      - if:
+          condition: { neq: [bad, 0] }
+          then:
+            - return: 1
+      - print: ["sidx modify PASS"]
+      - return: 0

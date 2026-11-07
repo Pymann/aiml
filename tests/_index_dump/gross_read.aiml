@@ -1,0 +1,8 @@
+# Fixture: oeffnet den grossen Kv und liest drei Werte -- mehr nicht.
+- decl: [var_kv, Kv<string:string>]
+- set: [var_kv, { call: [db.open_kv, "gross", {persist: true, index_dump: true, path: "/tmp/aiml_idx_gross/"}] }]
+- decl: [anz, i32, { call: [var_kv.len] }]
+- decl: [wert_erst, string, { call: [var_kv.get, "schluessel_0"] }]
+- decl: [wert_letzt, string, { call: [var_kv.get, "schluessel_1999999"] }]
+- decl: [wert_mitte, string, { call: [var_kv.get, "schluessel_1000000"] }]
+- print: ["len=${anz} erst=${wert_erst} letzt=${wert_letzt} mitte=${wert_mitte}"]

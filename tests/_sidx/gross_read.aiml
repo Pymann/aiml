@@ -1,0 +1,21 @@
+# Oeffnen und EINE Abfrage -- gemessen wird das Oeffnen, nicht die Abfrage.
+- model:
+    name: Fakt
+    fields:
+      - [fakt_id, string]
+      - [subj, string, "", { db_indexed: true }]
+      - [rel,  string, "", { db_indexed: true }]
+      - [obj,  string]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [pfad, path, "/tmp/aiml_sidxmess/"]
+      - decl: [fakten, "Kv<string:Fakt>"]
+      - set: [fakten, { call: [db.open_kv, "mess", {persist: true, index_dump: true, path: pfad}] }]
+      - decl: [anzahl, i32, { call: [fakten.len] }]
+      - decl: [tr_sub, list<string>, { call: [fakten.findings_by, "subj", "ding_7"] }]
+      - decl: [tr_rel, list<string>, { call: [fakten.findings_by, "rel", "rel_3"] }]
+      - print: ["LEN=${anzahl} SUBJ=${tr_sub.len} REL=${tr_rel.len}"]
+      - return: 0

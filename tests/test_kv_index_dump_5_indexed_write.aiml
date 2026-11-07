@@ -1,0 +1,53 @@
+# SPEC?: 31_db_integration,45_db_indexed_fields   # §6.2.1 zusammen mit db_indexed
+# Phase 5: ein Kv mit db_indexed-Feld UND index_dump, danach checkpoint -- alle
+# Eintraege liegen also im Dump und NICHTS im Ueberlauf.
+#
+# Hintergrund: genau diese Lage hat den Nebenindex zerstoert.  Das Auffuellen
+# beim Oeffnen lief ueber kv->index, und das ist mit Dump leer -- der Index
+# blieb leer, findings_by fand nichts.  Gemessen am cai-Wissensgraphen: 0 statt
+# 682593 exportierte Fakten, waehrend len und get korrekt blieben.  Darum
+# prueft Phase 6 ausdruecklich den Nebenindex und nicht nur die Werte.
+# Expected exit code: 0
+
+- model:
+    name: Werkzeug
+    fields:
+      - [kennung, string]
+      - [name,    string, "", { db_indexed: true }]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [db_path, path, "/tmp/aiml_kvidx_indexed_20261106/"]
+      - decl: [dinge, Kv<string:Werkzeug>]
+      - set:  [dinge, { call: [db.open_kv, "idx_indexed", {persist: true, index_dump: true, path: db_path}] }]
+      - call: [dinge.clear]
+
+      - decl: [var_a, Werkzeug]
+      - set:  [var_a.kennung, "wa"]
+      - set:  [var_a.name,    "Hammer"]
+      - call: [dinge.set, "wa", var_a]
+
+      - decl: [var_b, Werkzeug]
+      - set:  [var_b.kennung, "wb"]
+      - set:  [var_b.name,    "Hammer"]
+      - call: [dinge.set, "wb", var_b]
+
+      - decl: [var_c, Werkzeug]
+      - set:  [var_c.kennung, "wc"]
+      - set:  [var_c.name,    "Saege"]
+      - call: [dinge.set, "wc", var_c]
+
+      # Alles in den Dump zwingen: danach ist der Ueberlauf leer.
+      - decl: [rcc, i32, { call: [db.checkpoint] }]
+      - print: ["checkpoint rc=${rcc}"]
+
+      - decl: [vor, list<string>, { call: [dinge.findings_by, "name", "Hammer"] }]
+      - if:
+          condition: { neq: [vor.len, 2] }
+          then:
+            - print: ["FAIL Phase 5: findings_by im Schreiblauf = ${vor.len}, erwartet 2"]
+            - return: 1
+      - print: ["Phase 5 ok"]
+      - return: 0

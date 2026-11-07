@@ -399,7 +399,7 @@ no parser, direct IR:
     args: [[e, ref<Entity>]]
     return: i32
     body:
-      - return: { >: [e.hp, 0] }
+      - return: { ">": [e.hp, 0] }
 
 - def:
     name: is_active_enemy
@@ -407,7 +407,7 @@ no parser, direct IR:
     return: i32
     body:
       - decl: [alive, i32]
-      - set: [alive, { >: [e.hp, 0] }]
+      - set: [alive, { ">": [e.hp, 0] }]
       - decl: [enemy, i32]
       - set: [enemy, { eq: [e.ai_state, 2] }]
       - return: { and: [alive, enemy] }
@@ -515,6 +515,8 @@ Both `Store<T>` and `Kv<K,V>` are **mmap-backed**:
 - **`Kv<K,V>`** maps the WAL file itself (sparse-extended to an initial
   reserve of 16 MB; `mremap`'d to grow). All values live exclusively in
   the WAL, the in-process index holds only `(offset, length)` per key.
+  Mit `index_dump: true` liegt dieser Index auf der Platte statt im Prozess —
+  siehe §6.2.1.
   `kv.get` returns a pointer into the mmap'd region for blob/string/fixed
   modes — true zero-copy.
 
@@ -531,6 +533,251 @@ on disk. AionDB does not implement paging itself.
 > (or larger after `mremap`-grow) in `ls -la`. The actual disk usage
 > (`du -h`) reflects only the touched pages. Backup tools must be
 > sparse-aware (see §6.8).
+
+### 6.2.1 Index-Dump — `index_dump: true`
+
+Der Index aus §6.2 liegt **nur im Prozess** und wird bei jedem `open` aus der WAL
+neu aufgebaut.  Fuer kleine Stores ist das die schnellere Wahl.  Mit der Groesse
+kippt die Rechnung, und zwar in beide Richtungen gleichzeitig.  Gemessen am
+Wissensgraphen von `cai` (06.11.2026, 3,02 Mio Wikipedia-Artikel):
+
+| | |
+|---|---|
+| Schluessel ueber alle Stores | 18.166.149 |
+| Schluesselbytes | 713 MB |
+| WAL sichtbar | 5,53 GB |
+| Index **im RAM** | **19,5 GB** (434 Byte je Schluessel) |
+| Aufbauzeit je Prozessstart | **~5 min** |
+
+Die 434 Byte je Schluessel sind `unordered_map`-Aufwand — Bucket-Array,
+Knotenzeiger, `std::string`-Kopf, Allokator-Rundung — fuer eine Nutzlast von
+Schluessel plus `(offset, length)`.  Dazu kam: eine Abfrage auf diesem Store
+brauchte 63 s auf einer Scherbe, davon **63 s Aufbau und praktisch 0 s Abfrage**
+(`graph stats`, `ask` und ein Namensschlag waren bis auf 2 % gleich schnell).
+
+**`index_dump: true`** legt den Index neben der WAL ab und benutzt ihn von dort,
+**ohne ihn in eine Hashmap zu laden**:
+
+```aiml
+- decl: [kv, Kv<string:string>, { call: [db.open_kv, "namen", {persist: true, index_dump: true}] }]
+# → namen.kvwal  +  namen.kvidx
+```
+
+Die Vorgabe ist `false`; bestehende Stores verhalten sich unveraendert.
+`index_dump` ohne `persist: true` ist ein Fehler: ohne WAL gibt es keine Offsets,
+auf die ein Dump zeigen koennte.
+
+#### Datei `<name>.kvidx`
+
+Header 64 Byte, dann ein nach Schluesselbytes **sortiertes** Eintragsfeld, dann
+der Schluesselblock:
+
+| Feld | Breite | Bedeutung |
+|---|---|---|
+| `magic` | 8 | `"AIMLKVIX"` |
+| `version` | 4 | Formatversion |
+| `wal_version` | 4 | `version` der zugehoerigen WAL |
+| `val_size` | 8 | `val_size` der zugehoerigen WAL |
+| `wal_used` | 8 | **Wasserstand**: Stand der WAL beim Schreiben des Dumps |
+| `wal_dev` | 8 | `st_dev` der WAL beim Schreiben des Dumps |
+| `wal_ino` | 8 | `st_ino` der WAL beim Schreiben des Dumps |
+| `wal_fp` | 8 | **Fingerabdruck** des beschriebenen WAL-Bereichs (s. u.) |
+| `count` | 8 | Zahl der Eintraege |
+| je Eintrag: `val_off` | 8 | Offset des Werts **in der WAL** |
+| je Eintrag: `key_off` | 4 | Offset im Schluesselblock |
+| je Eintrag: `val_len` | 4 | Wertlaenge |
+| je Eintrag: `key_len` | 4 | Schluessellaenge |
+| je Eintrag: Polsterung | 4 | Ausrichtung auf 24 Byte |
+
+Bewusst 24 Byte und **kein** `pack(1)`: ein gepackter Eintrag brauchte
+unausgerichtete 64-Bit-Zugriffe mitten im mmap.  Die vier Byte Polsterung sind
+billiger als diese Klasse von Fehlern.
+
+Fuer die Messung oben: 18,17 Mio × 24 Byte + 713 MB Schluessel = **1,11 GB**
+gegen 19,5 GB im RAM, und die Datei ist **datei-gebunden**, also vom Kernel
+rueckgewinnbar — anders als die anonymen 19,5 GB heute.
+
+#### Oeffnen
+
+1. `.kvidx` mmappen.  Ist sie unbrauchbar, wird sie **ignoriert** und §6.2 gilt
+   unveraendert (voller Replay).  Der Dump ist nie maßgebend gegenueber der WAL.
+   Unbrauchbar heisst:
+   - `magic` falsch, oder `version`/`wal_version`/`val_size` passen nicht zur WAL;
+   - `wal_dev`/`wal_ino` weichen vom `fstat` der WAL ab — die **WAL-Datei wurde
+     ersetzt**, also sind alle Offsets im Dump wertlos;
+   - `wal_used` liegt **hinter** dem Ende der WAL-Daten;
+   - `wal_fp` passt nicht zum Fingerabdruck des beschriebenen Bereichs (s. u.).
+
+   Die Inode-Pruefung ist der tragende Teil, und sie ist kein Zufallsfund:
+   `kv.checkpoint` schreibt die WAL als Temp-Datei und zieht sie per `rename`
+   herueber (§6.3).  Die Inode wechselt also **genau dann**, wenn sich die Offsets
+   verschieben.  Ein `fstat` genuegt; ein Pruefwert ueber die Daten waere so teuer
+   wie der Replay, den wir vermeiden wollen.
+
+   Der Restfall ist eine **wiederverwendete Inode** nach einem Checkpoint durch
+   ein fremdes Binary.  Den deckt der Wasserstand ab: eine Verdichtung entfernt
+   veraltete Saetze, das Datenende liegt danach **vor** dem Wasserstand, und der
+   Dump fliegt raus.  Entfernt die Verdichtung nichts, bleiben die Saetze in
+   gleicher Reihenfolge an gleicher Stelle — dann ist der Dump weiter richtig.
+
+#### Fingerabdruck `wal_fp`
+
+Inode und Wasserstand allein genuegen nicht.  `cp quelle ziel` **behaelt die
+Inode des Ziels**: wer eine einzelne `.kvwal` aus einem Backup zuruecklegt,
+haette eine fremde WAL unter einem gueltig aussehenden Dump, und bei einer
+groesseren Datei greift auch der Wasserstand nicht.  Darum bindet der Dump sich
+an den **Inhalt des Bereichs, den er beschreibt**:
+
+- Bereich ist `[sizeof(AimlKvWalHeader), wal_used)` — also genau das, worauf die
+  Eintraege zeigen.  **Anhaengen aendert ihn nicht**, denn das passiert hinter
+  dem Wasserstand; der Ueberlauf-Pfad bleibt damit nutzbar.
+- Bis 64 KiB Bereichslaenge wird er ganz gehasht.  Darueber 16 Stichproben von
+  je 4 KiB an den Offsets `start + floor(i * (len - 4096) / 15)` fuer `i = 0..15`.
+- Hash ist FNV-1a 64, begonnen mit `wal_used` als Startwert.
+
+Das kostet hoechstens 64 KiB Lesen, ist reproduzierbar und faellt bei
+Austausch, Rueckkopieren und Teilbeschaedigung auf.  Ein Beweis ist es nicht —
+ein Hash bleibt ein Hash; die Zusage lautet: **ein falscher Dump fuehrt nie zu
+falschen Daten, sondern wird verworfen**, und die drei Pruefungen zusammen
+machen ein Durchkommen unwahrscheinlich genug, um den Replay zu sparen.
+2. **Nur den WAL-Rest ab `wal_used`** nachspielen, in einen kleinen
+   Ueberlauf-Index im RAM.  Er traegt, was seit dem Dump geschrieben wurde,
+   einschliesslich Tombstones fuer `kv.delete`.
+3. Kein Aufbau ueber den Dump-Teil: `kv.get` sucht **binaer im mmap**, O(log n).
+
+**Suchreihenfolge:** erst der Ueberlauf-Index (neuer), dann der Dump.  Ein
+Tombstone im Ueberlauf verdeckt einen Dump-Eintrag — sonst wuerde ein
+geloeschter Schluessel nach dem Neustart wieder auftauchen.
+
+#### Schreiben
+
+Der Dump entsteht **ausschliesslich bei `kv.checkpoint`** (§6.3), und nur bei
+`index_dump: true`.  Das passt dorthin: der Checkpoint schreibt die WAL neu,
+**alle Offsets aendern sich**, ein Dump von vorher waere falsch.  Darum gilt
+auch: `kv.checkpoint` und `kv.clear` schreiben den Dump neu oder loeschen ihn —
+sie duerfen ihn nie stehen lassen.
+
+Bewusst **nicht** beim Freigeben des Stores, aus zwei Gruenden.  Erstens waere
+der Ueberlauf-Pfad dann nie in Betrieb und damit nicht pruefbar: jedes
+Prozessende faltete ihn ein.  Zweitens ist ein stilles Gigabyte Schreiblast beim
+Beenden eine Ueberraschung, die niemand bestellt hat.  Folge, ausdruecklich:
+**ein Store, der nie checkpointet, bekommt nie einen Dump** und verhaelt sich
+wie §6.2.  Wer den Gewinn will, ruft `kv.checkpoint`.
+
+#### Zusammenspiel
+
+| | |
+|---|---|
+| `db.kv_evict` (§6.6) | wirkt jetzt auch auf den Index, weil er datei-gebunden ist.  Bisher hiess es dort ausdruecklich „keep index", und genau der Index war der groessere Posten. |
+| `db.reload_kv` (§6.5) | liest den Dump neu und spielt den Rest ab Wasserstand nach, statt die ganze WAL. |
+| `decoded_cache` (§6.7.3) | unberuehrt; die 1024er Grenze gilt weiter. |
+| Zeigerverträge (§6.7) | unveraendert: Werte kommen weiter aus dem WAL-mmap. |
+
+#### Kompatibilitaet — keine Migration
+
+Das **WAL-Format bleibt unveraendert**.  `index_dump` legt eine zusaetzliche
+Datei an und ruehrt Header und Satzaufbau der WAL nicht an.  Darum gibt es
+nichts zu migrieren, in keiner Richtung:
+
+| Fall | Verhalten |
+|---|---|
+| alte WAL, neues Binary mit `index_dump: true` | keine `.kvidx` vorhanden → voller Replay (§6.2); der Dump entsteht beim naechsten Checkpoint |
+| neue WAL **mit** `.kvidx`, altes Binary | `.kvidx` ist dem alten Binary unbekannt und wird nicht angefasst → voller Replay, korrekt |
+| altes Binary **schreibt** an die WAL an | Inode bleibt, Daten wachsen → das neue Binary spielt den Rest ab Wasserstand nach |
+| altes Binary macht `checkpoint` | Inode wechselt → Dump wird verworfen → voller Replay |
+| Gedaechtnis kopiert, verschoben, aus einem Backup geholt | Inode wechselt → Dump wird verworfen → voller Replay |
+
+Eine verwaiste oder fremde `.kvidx` kann also nie zu falschen Daten fuehren,
+sondern hoechstens zu einem langsamen Start.  Sie darf jederzeit geloescht
+werden; sie wird beim naechsten Checkpoint neu geschrieben.
+
+#### Wer ueber einen persistenten Kv laeuft
+
+**Jede** Aufzaehlung aller Eintraege muss Ueberlauf UND Dump zusammenfassen und
+die vom Ueberlauf verdeckten Dump-Schluessel auslassen.  `kv->index` allein ist
+mit Dump **nicht** der Inhalt des Stores, sondern nur das, was seit dem letzten
+Checkpoint geschrieben wurde -- bei einem frisch geoeffneten Store also nichts.
+
+Das ist keine theoretische Warnung.  Das Auffuellen der Nebenindizes
+(`db_indexed`, spec/45) lief ueber `kv->index` und baute damit einen **leeren**
+Index: `findings_by` fand nichts, waehrend `kv.len` und `kv.get` korrekt blieben.
+Am cai-Wissensgraphen gemessen: **0 statt 682593** exportierter Fakten, ohne
+Fehlermeldung.  Gefunden wurde es nicht von den Unit-Tests, sondern vom
+Vergleich eines vollen Exports mit und ohne Dump.
+
+Regressionsprobe: `tests/test_kv_index_dump_5_indexed_write.aiml` +
+`_6_read.aiml` (Phase 6 faellt, wenn das Auffuellen wieder den Ueberlauf liest).
+
+#### Gemessen (06./07.11.2026)
+
+Isoliert, an einem einfachen `Kv<string:string>` mit 2 Mio Schluesseln (ohne
+`db_indexed`, damit nichts anderes die Zahlen verdeckt):
+
+| Store oeffnen + drei Werte lesen | Zeit | RSS |
+|---|---|---|
+| Replay ueber den mmap-Zeiger | 1,60 s | 395 MB |
+| **mit Index-Dump** | **0,12 s** | **128 MB** |
+
+Also 13× schneller und 3× weniger Speicher; der Dump kostete dort 79 MB neben
+128 MB WAL.  Grob **0,8 s und ~135 Byte je Million Schluessel**, die wegfallen.
+
+Am Replay selbst, vorher und nachher (cai-Teilgraph s06, 5,83 Mio Schluessel):
+`read()` je Feld 63,62 s → mmap-Zeiger 39,32 s.
+
+**Treue** ist an echten Daten geprueft: nach Checkpoint und Dump sind
+Schluesselmengen und Werte aller 5,83 Mio Eintraege von s06 bytegleich mit dem
+Original (sechs Stores, 0 Abweichungen).
+
+#### Wo der Gewinn verschwindet
+
+Am cai-Wissensgraphen (18,17 Mio Schluessel) sank die Oeffnungszeit nur von
+275,9 s auf 261,7 s.  Das passt genau zur isolierten Messung — 0,8 s je Mio
+Schluessel sind bei 18,17 Mio eben 14 s -- und zeigt, dass dort etwas ANDERES
+dominiert: das Auffuellen der `db_indexed`-Nebenindizes (spec/45) dekodiert bei
+jedem Oeffnen jede Zeile und baut die Nebenindizes im RAM neu auf.  Gemessen am
+geoeffneten s06: 1867 MB anonym (Nebenindizes) gegen 720 MB Datei-Abbildung
+(der Dump).  Der Index-Dump nimmt dem Oeffnen den Primaerindex ab; wer die
+Nebenindizes nicht ebenfalls haltbar macht, merkt davon wenig.
+
+Daraus folgt der zweite Teil: `index_dump: true` macht AUCH die
+`db_indexed`-Nebenindizes haltbar, je Feld eine Datei `<name>__<feld>.kvsidx`.
+Format, Stempel und Grenzen stehen in spec/45 "Persistence" — ein eigenes
+Schluesselwort gibt es dafuer nicht, weil ein Nebenindex ein Index dieses
+Stores ist.
+
+**Nachgemessen am 07.11.2026**, nachdem es den Nebenindex-Dump gibt — dieselbe
+Art Gedaechtnis (`out/n0511_alles`, 3,7 GB WAL, 5,8 Mio Fakten), ein ganzer
+`cai2 graph stats`-Start je Zeile:
+
+| Zustand | Zeit | RSS |
+|---|---|---|
+| kein Dump | 251 s | 19,3 GB |
+| nur `.kvidx` | 230 s | 18,1 GB |
+| `.kvidx` + `.kvsidx` | **3,7 s** | **4,2 GB** |
+
+Die Vorhersage dieses Abschnitts trifft also zu, und zwar deutlicher als
+erwartet: der Primaerindex-Dump allein nimmt **8 %** ab, die Nebenindizes den
+Rest.  Die Reihenfolge der Arbeit war damit falsch herum — wer nur §6.2.1
+umsetzt, hat an einem solchen Store so gut wie nichts gewonnen.  Zahlen,
+Dateigroessen und die Gegenproben stehen in spec/45 "Gemessen an cai".
+
+Warnung aus eigener Erfahrung: die erste Messung ergab hier 0,06 s und 212 MB.
+Das war der Stand MIT dem Nebenindex-Fehler von oben -- das Auffuellen tat
+nichts, und der Fehler hat seine eigene Bestzahl erzeugt.  Wer eine
+ueberraschend gute Zahl sieht, prueft zuerst, ob noch alles getan wird.
+
+Zweitens, und unabhaengig vom Dump: der Dump laeuft **sortiert** statt in
+Hash-Reihenfolge.  Wer sich -- bewusst oder nicht -- auf die Reihenfolge einer
+Aufzaehlung verlassen hat, sieht andere Ergebnisse.  In cai hing daran die
+Dimensionswahl fuer Relationen ohne Schemaeintrag ("der zuerst gesehene
+gewinnt"): 729 von 9240 Relationen entschieden sich anders.  Nicht der Dump war
+falsch, sondern die Annahme, eine `unordered_map` habe eine Reihenfolge.
+
+#### Was der Dump NICHT loest
+
+Der Aufbau des Ueberlauf-Index ist weiter O(WAL-Rest).  Wer viel schreibt und
+selten checkpointet, zahlt beim Oeffnen wieder.  Der Dump verschiebt die Kosten
+auf den Checkpoint, er schafft sie nicht ab.
 
 ### 6.3 Checkpoint
 
@@ -667,6 +914,8 @@ open, and subsequent reads transparently re-fault the pages from disk.
 
 ```aiml
 - call: [db.kv_evict, kv]      # release mmap pages, keep index + handle
+#                              # mit index_dump: true ist der Index selbst
+#                              # datei-gebunden und wird mit freigegeben (§6.2.1)
 - decl: [v, string, { call: [kv.get, "k"] }]   # works — page faults in
 ```
 

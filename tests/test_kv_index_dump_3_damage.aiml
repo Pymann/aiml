@@ -1,0 +1,26 @@
+# SPEC?: 31_db_integration   # §6.2.1 Index-Dump, Verwerfen eines unbrauchbaren Dumps
+# Phase 3: eigenes Gedaechtnis aufbauen, checkpoint (Dump entsteht), dann die
+# .kvidx mit Muell ueberschreiben.  Phase 4 muss sie verwerfen und nach §6.2
+# voll nachspielen -- ein kaputter Dump darf nie zu falschen Daten fuehren,
+# hoechstens zu einem langsamen Start.
+# Expected exit code: 0
+
+- call: [io.write_file, "/tmp/aiml_kvidx_kaputt_20261106/.keep", ""]
+
+- decl: [var_kv, Kv<string:string>]
+- set: [var_kv, { call: [db.open_kv, "idxkaputt", {persist: true, index_dump: true, path: "/tmp/aiml_kvidx_kaputt_20261106/"}] }]
+- call: [var_kv.clear]
+
+- decl: [var_i, i32, 0]
+- while:
+    condition: { "<": [var_i, 8] }
+    body:
+      - call: [var_kv.set, "d${var_i}", "dwert_${var_i}"]
+      - set: [var_i, { +: [var_i, 1] }]
+
+- decl: [rcc, i32, { call: [db.checkpoint] }]
+- print: ["checkpoint rc=${rcc}"]
+
+# Dump zerstoeren: falsches Magic, zu kurz, unbrauchbar.
+- call: [io.write_file, "/tmp/aiml_kvidx_kaputt_20261106/idxkaputt.kvidx", "MUELL"]
+- print: ["Phase 3 ok: .kvidx ueberschrieben"]

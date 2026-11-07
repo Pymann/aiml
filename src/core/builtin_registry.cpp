@@ -5565,10 +5565,22 @@ void registerBuiltins(CompilerContext& ctx) {
                         ? ctx.dbOpenBasePathVal
                         : llvm::ConstantPointerNull::get(
                               llvm::PointerType::getUnqual(ctx.context));
-                    llvm::Function* f = ctx.getFunction("aiml_db_kv_open_typed_persist",
-                        i8p, {i8p, i64, i8p, i8p, i32});
-                    kvHandle = ctx.builder.CreateCall(f,
-                        {nameVal, ctx.builder.getInt64(valSize), pathVal, nodesPtr, nNodes});
+                    // Getrennte _idx-Einsprungpunkte statt geaenderter Signatur:
+                    // getFunction prueft Signaturen NICHT (erster Deklarierer
+                    // gewinnt), und aiml_db_kv_open_persist wird auch in
+                    // tensor_runtime.cpp deklariert.
+                    if (ctx.dbOpenIndexDump) {
+                        llvm::Function* f = ctx.getFunction("aiml_db_kv_open_typed_persist_idx",
+                            i8p, {i8p, i64, i8p, i8p, i32, i32});
+                        kvHandle = ctx.builder.CreateCall(f,
+                            {nameVal, ctx.builder.getInt64(valSize), pathVal, nodesPtr, nNodes,
+                             ctx.builder.getInt32(1)});
+                    } else {
+                        llvm::Function* f = ctx.getFunction("aiml_db_kv_open_typed_persist",
+                            i8p, {i8p, i64, i8p, i8p, i32});
+                        kvHandle = ctx.builder.CreateCall(f,
+                            {nameVal, ctx.builder.getInt64(valSize), pathVal, nodesPtr, nNodes});
+                    }
                 } else {
                     llvm::Function* f = ctx.getFunction("aiml_db_kv_open_typed", i8p, {i8p, i64, i8p, i32});
                     kvHandle = ctx.builder.CreateCall(f,
@@ -5581,9 +5593,16 @@ void registerBuiltins(CompilerContext& ctx) {
                     ? ctx.dbOpenBasePathVal
                     : llvm::ConstantPointerNull::get(
                           llvm::PointerType::getUnqual(ctx.context));
-                llvm::Function* f = ctx.getFunction("aiml_db_kv_open_persist", i8p, {i8p, i64, i8p});
-                kvHandle = ctx.builder.CreateCall(f,
-                    {nameVal, ctx.builder.getInt64(valSize), pathVal});
+                if (ctx.dbOpenIndexDump) {
+                    llvm::Function* f = ctx.getFunction("aiml_db_kv_open_persist_idx",
+                        i8p, {i8p, i64, i8p, i32});
+                    kvHandle = ctx.builder.CreateCall(f,
+                        {nameVal, ctx.builder.getInt64(valSize), pathVal, ctx.builder.getInt32(1)});
+                } else {
+                    llvm::Function* f = ctx.getFunction("aiml_db_kv_open_persist", i8p, {i8p, i64, i8p});
+                    kvHandle = ctx.builder.CreateCall(f,
+                        {nameVal, ctx.builder.getInt64(valSize), pathVal});
+                }
             } else {
                 llvm::Function* f = ctx.getFunction("aiml_db_kv_open", i8p, {i8p, i64});
                 kvHandle = ctx.builder.CreateCall(f, {nameVal, ctx.builder.getInt64(valSize)});

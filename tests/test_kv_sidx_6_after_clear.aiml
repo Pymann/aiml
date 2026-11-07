@@ -1,0 +1,42 @@
+# SPEC?: 45_db_indexed_fields   # Persistence -- nach dem Leeren bleibt leer
+# Phase 6: neu oeffnen nach `clear`.  Kommt hier wieder ein Treffer, hat ein
+# liegengebliebener Nebenindex-Dump den Store wiederbelebt.
+# Expected exit code: 0
+
+- model:
+    name: Ding
+    fields:
+      - [ding_id, string]
+      - [name, string, "", { db_indexed: true }]
+      - [sku,  string, "", { db_indexed: true, unique: true }]
+      - [tag,  string, "", { db_indexed: "lower" }]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [pfad, path, "/tmp/aiml_kvsidx_20261107/"]
+      - decl: [dinge, "Kv<string:Ding>"]
+      - set: [dinge, { call: [db.open_kv, "sidx_dinge", {persist: true, index_dump: true, path: pfad}] }]
+
+      - decl: [anz, i32, { call: [dinge.len] }]
+      - if:
+          condition: { neq: [anz, 0] }
+          then:
+            - print: ["FAIL after_clear: len=${anz}, erwartet 0"]
+            - return: 1
+      - decl: [ham, list<string>, { call: [dinge.findings_by, "name", "Hammer"] }]
+      - if:
+          condition: { neq: [ham.len, 0] }
+          then:
+            - print: ["FAIL after_clear: Hammer=${ham.len}, erwartet 0 -- alter Dump wiederbelebt"]
+            - return: 1
+      - decl: [tag_wert, list<string>, { call: [dinge.findings_by, "tag", "werkzeug"] }]
+      - if:
+          condition: { neq: [tag_wert.len, 0] }
+          then:
+            - print: ["FAIL after_clear: tag=werkzeug ergibt ${tag_wert.len}, erwartet 0"]
+            - return: 1
+
+      - print: ["sidx after-clear PASS"]
+      - return: 0

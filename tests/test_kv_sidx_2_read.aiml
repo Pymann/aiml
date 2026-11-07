@@ -1,0 +1,83 @@
+# SPEC?: 45_db_indexed_fields   # Persistence -- Nebenindex-Dump
+# Phase 2: oeffnet, was Phase 1 gecheckpointet hat.  Alle drei Nebenindizes
+# muessen aus dem Dump beantwortet werden -- 1:N, unique und "lower".  Dieser
+# Lauf SCHREIBT NICHT, damit der Stempel fuer Phase 3 gueltig bleibt.
+# Der Feldname muss bei findings_by literal stehen (spec/45 Out-of-Scope),
+# darum steht jeder Aufruf hier einzeln.
+# Expected exit code: 0
+
+- model:
+    name: Ding
+    fields:
+      - [ding_id, string]
+      - [name, string, "", { db_indexed: true }]
+      - [sku,  string, "", { db_indexed: true, unique: true }]
+      - [tag,  string, "", { db_indexed: "lower" }]
+
+- def:
+    name: pruef_zahl
+    args: [[ist, i32], [erw, i32], [was, string]]
+    return: i32
+    body:
+      - if:
+          condition: { neq: [ist, erw] }
+          then:
+            - print: ["FAIL ${was}: ${ist} Treffer, erwartet ${erw}"]
+            - return: 1
+      - return: 0
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [pfad, path, "/tmp/aiml_kvsidx_20261107/"]
+      - decl: [dinge, "Kv<string:Ding>"]
+      - set: [dinge, { call: [db.open_kv, "sidx_dinge", {persist: true, index_dump: true, path: pfad}] }]
+      - decl: [bad, i32, 0]
+
+      - decl: [anzahl, i32, { call: [dinge.len] }]
+      - set: [bad, { +: [bad, { call: [pruef_zahl, anzahl, 3, "len"] }] }]
+
+      - decl: [tr_ham, list<string>, { call: [dinge.findings_by, "name", "Hammer"] }]
+      - set: [bad, { +: [bad, { call: [pruef_zahl, tr_ham.len, 2, "name=Hammer"] }] }]
+      - decl: [tr_sae, list<string>, { call: [dinge.findings_by, "name", "Saege"] }]
+      - set: [bad, { +: [bad, { call: [pruef_zahl, tr_sae.len, 1, "name=Saege"] }] }]
+      # Ein Feldwert, den es nie gab: der Dump darf nicht raten.
+      - decl: [tr_zan, list<string>, { call: [dinge.findings_by, "name", "Zange"] }]
+      - set: [bad, { +: [bad, { call: [pruef_zahl, tr_zan.len, 0, "name=Zange"] }] }]
+
+      # "lower": die Abfrage wird normalisiert, GROSS wie klein findet dasselbe.
+      - decl: [tr_wkl, list<string>, { call: [dinge.findings_by, "tag", "werkzeug"] }]
+      - set: [bad, { +: [bad, { call: [pruef_zahl, tr_wkl.len, 2, "tag=werkzeug"] }] }]
+      - decl: [tr_wgr, list<string>, { call: [dinge.findings_by, "tag", "WERKZEUG"] }]
+      - set: [bad, { +: [bad, { call: [pruef_zahl, tr_wgr.len, 2, "tag=WERKZEUG"] }] }]
+      - decl: [tr_hol, list<string>, { call: [dinge.findings_by, "tag", "Holz"] }]
+      - set: [bad, { +: [bad, { call: [pruef_zahl, tr_hol.len, 1, "tag=Holz"] }] }]
+
+      # Die Treffer muessen die richtigen Schluessel sein, nicht nur die richtige Zahl.
+      - decl: [hat_aaa, i32, 0]
+      - decl: [hat_bbb, i32, 0]
+      - if: [{ call: [tr_ham.contains, "aaa"] }, true]
+        then:
+          - set: [hat_aaa, 1]
+      - if: [{ call: [tr_ham.contains, "bbb"] }, true]
+        then:
+          - set: [hat_bbb, 1]
+      - set: [bad, { +: [bad, { call: [pruef_zahl, { +: [hat_aaa, hat_bbb] }, 2, "Hammer sind aaa+bbb"] }] }]
+
+      # unique: ein Schluessel, und "" wenn es nichts gibt.
+      - decl: [sku_drei, string, { call: [dinge.finding_by, "sku", "S3"] }]
+      - if:
+          condition: { neq: [sku_drei, "ccc"] }
+          then:
+            - print: ["FAIL read: sku=S3 ergibt '${sku_drei}', erwartet 'ccc'"]
+            - set: [bad, { +: [bad, 1] }]
+      - decl: [sku_neun, string, { call: [dinge.finding_by, "sku", "S9"] }]
+      - set: [bad, { +: [bad, { call: [pruef_zahl, sku_neun.len, 0, "sku=S9 leer"] }] }]
+
+      - if:
+          condition: { neq: [bad, 0] }
+          then:
+            - return: 1
+      - print: ["sidx read PASS"]
+      - return: 0

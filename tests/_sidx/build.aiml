@@ -1,0 +1,37 @@
+# Baut den Store fuer tests/run_sidx_gates.sh: drei indizierte Felder, dann
+# checkpoint -- erst dort entstehen die .kvsidx-Dateien.
+- model:
+    name: Ding
+    fields:
+      - [ding_id, string]
+      - [name, string, "", { db_indexed: true }]
+      - [sku,  string, "", { db_indexed: true, unique: true }]
+      - [tag,  string, "", { db_indexed: "lower" }]
+
+- def:
+    name: lege_an
+    args: [[dinge, "Kv<string:Ding>"], [kid, string], [nam, string], [sku_wert, string], [tag_wert, string]]
+    return: i32
+    body:
+      - decl: [neu, Ding]
+      - set: [neu.ding_id, kid]
+      - set: [neu.name, nam]
+      - set: [neu.sku, sku_wert]
+      - set: [neu.tag, tag_wert]
+      - call: [dinge.set, kid, neu]
+      - return: 0
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [pfad, path, "/tmp/aiml_sidxgate/a/"]
+      - decl: [dinge, "Kv<string:Ding>"]
+      - set: [dinge, { call: [db.open_kv, "sidxgate", {persist: true, index_dump: true, path: pfad}] }]
+      - call: [dinge.clear]
+      - call: [lege_an, dinge, "aaa", "Hammer", "S1", "Werkzeug"]
+      - call: [lege_an, dinge, "bbb", "Hammer", "S2", "WERKZEUG"]
+      - call: [lege_an, dinge, "ccc", "Saege",  "S3", "Holz"]
+      - decl: [ckpt_rc, i32, { call: [db.checkpoint] }]
+      - print: ["BUILD_CKPT=${ckpt_rc}"]
+      - return: 0

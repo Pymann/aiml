@@ -1,0 +1,9 @@
+# SPEC?: 31_db_integration   # §6.2.1: "index_dump ohne persist: true ist ein Fehler"
+# Ohne WAL gibt es keine Offsets, auf die ein Dump zeigen koennte.  Das muss
+# auffallen und nicht still ignoriert werden -- sonst glaubt der Aufrufer, er
+# haette den Gewinn, und zahlt weiter den vollen Aufbau.
+# Expected exit code: 1
+
+- decl: [var_kv, Kv<string:string>]
+- set: [var_kv, { call: [db.open_kv, "idxnopersist", {persist: false, index_dump: true}] }]
+- print: ["FAIL: index_dump ohne persist wurde angenommen"]

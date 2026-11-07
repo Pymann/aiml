@@ -1,0 +1,55 @@
+# SPEC?: 45_db_indexed_fields   # Persistence -- clear raeumt auch die Indizes
+# Ein geleerter Store darf keine Treffer mehr liefern.  Das gilt OHNE
+# index_dump genauso: die Nebenindizes haengen am Store-Zeiger und ueberlebten
+# `clear` -- die Abfrage gab danach Schluessel zurueck, die es nicht mehr gab.
+# Dieser Lauf braucht keinen Dump und keinen Checkpoint.
+# Expected exit code: 0
+
+- model:
+    name: Ding
+    fields:
+      - [ding_id, string]
+      - [name, string, "", { db_indexed: true }]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [pfad, path, "/tmp/aiml_kvsidx_plain_20261107/"]
+      - decl: [dinge, "Kv<string:Ding>"]
+      - set: [dinge, { call: [db.open_kv, "sidx_plain", {persist: true, path: pfad}] }]
+      - call: [dinge.clear]
+
+      - decl: [eins, Ding]
+      - set: [eins.ding_id, "aaa"]
+      - set: [eins.name, "Hammer"]
+      - call: [dinge.set, "aaa", eins]
+      - decl: [zwei, Ding]
+      - set: [zwei.ding_id, "bbb"]
+      - set: [zwei.name, "Hammer"]
+      - call: [dinge.set, "bbb", zwei]
+
+      - decl: [tr_vor, list<string>, { call: [dinge.findings_by, "name", "Hammer"] }]
+      - if:
+          condition: { neq: [tr_vor.len, 2] }
+          then:
+            - print: ["FAIL clear_plain: vor clear ${tr_vor.len} Treffer, erwartet 2"]
+            - return: 1
+
+      - call: [dinge.clear]
+
+      - decl: [anzahl, i32, { call: [dinge.len] }]
+      - if:
+          condition: { neq: [anzahl, 0] }
+          then:
+            - print: ["FAIL clear_plain: len=${anzahl} nach clear, erwartet 0"]
+            - return: 1
+      - decl: [tr_nach, list<string>, { call: [dinge.findings_by, "name", "Hammer"] }]
+      - if:
+          condition: { neq: [tr_nach.len, 0] }
+          then:
+            - print: ["FAIL clear_plain: ${tr_nach.len} Treffer nach clear, erwartet 0 -- der Nebenindex hat clear ueberlebt"]
+            - return: 1
+
+      - print: ["sidx clear_plain PASS"]
+      - return: 0

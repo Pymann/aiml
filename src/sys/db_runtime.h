@@ -83,6 +83,9 @@ void*   aiml_db_store_open_col(const char* name, const char* type_name,
 void*   aiml_db_kv_open(const char* name, int64_t val_size);
 // Persistent Kv: WAL-backed append-only log (.kvwal file).
 void*   aiml_db_kv_open_persist(const char* name, int64_t val_size, const char* base_path);
+// spec/31 §6.2.1: wie oben, plus Index-Dump neben der WAL.
+void*   aiml_db_kv_open_persist_idx(const char* name, int64_t val_size,
+                                    const char* base_path, int32_t index_dump);
 // Typed Kv: value type contains heap fields (strings, lists, …).
 // nodes/n_nodes: descriptor emitted by the compiler as @__aiml_sernodes_<Type>.
 // set/get use aiml_ser_encode / aiml_ser_decode so the WAL stores safe blobs.
@@ -91,6 +94,10 @@ void*   aiml_db_kv_open_typed(const char* name, int64_t val_size,
 void*   aiml_db_kv_open_typed_persist(const char* name, int64_t val_size,
                                        const char* base_path,
                                        const AimlTypeNode* nodes, int32_t n_nodes);
+void*   aiml_db_kv_open_typed_persist_idx(const char* name, int64_t val_size,
+                                           const char* base_path,
+                                           const AimlTypeNode* nodes, int32_t n_nodes,
+                                           int32_t index_dump);
 int32_t aiml_db_kv_checkpoint(void* kv);  // compact WAL to current state
 void    aiml_db_kv_reload(void* kv);      // re-read WAL from disk (cross-process sync)
 void    aiml_db_kv_set(void* kv, const char* key, const void* val, int64_t val_size);

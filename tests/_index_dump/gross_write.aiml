@@ -1,0 +1,14 @@
+# Fixture: grosser EINFACHER Kv ohne db_indexed -- misst den Index-Dump isoliert,
+# ohne dass das Auffuellen von Nebenindizes die Zahlen verdeckt.
+- decl: [var_kv, Kv<string:string>]
+- set: [var_kv, { call: [db.open_kv, "gross", {persist: true, index_dump: true, path: "/tmp/aiml_idx_gross/"}] }]
+- call: [var_kv.clear]
+- decl: [var_i, i32, 0]
+- while:
+    condition: { "<": [var_i, 2000000] }
+    body:
+      - call: [var_kv.set, "schluessel_${var_i}", "wert_${var_i}"]
+      - set: [var_i, { +: [var_i, 1] }]
+- decl: [rcc, i32, { call: [db.checkpoint] }]
+- decl: [anz, i32, { call: [var_kv.len] }]
+- print: ["geschrieben: ${anz}, checkpoint rc=${rcc}"]

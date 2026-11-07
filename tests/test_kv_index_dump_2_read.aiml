@@ -1,0 +1,58 @@
+# SPEC?: 31_db_integration   # §6.2.1 Index-Dump
+# index_dump Phase 2.  Oeffnet, was Phase 1 hinterlassen hat: ein Dump mit
+# k0..k4 plus ein WAL-Rest mit k5, k6 und dem Tombstone auf k1.  Geprueft wird
+# beides zusammen -- Werte aus dem Dump (binaere Suche im mmap), Werte aus dem
+# Ueberlauf, und dass der Tombstone den Dump-Eintrag verdeckt.
+# Expected exit code: 0
+
+- def:
+    name: pruefe
+    args: [[key, string], [erw, string]]
+    return: i32
+    body:
+      - decl: [kvh, "Kv<string:string>", { call: [db.open_kv, "idxdump", {persist: true, index_dump: true, path: "/tmp/aiml_kvidx_20261106/"}] }]
+      - decl: [ist, string, { call: [kvh.get, key] }]
+      - if:
+          condition: { neq: [ist, erw] }
+          then:
+            - print: ["FAIL ${key}: '${ist}' statt '${erw}'"]
+            - return: 1
+      - return: 0
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [var_kv, "Kv<string:string>", { call: [db.open_kv, "idxdump", {persist: true, index_dump: true, path: "/tmp/aiml_kvidx_20261106/"}] }]
+
+      - decl: [anz, i32, { call: [var_kv.len] }]
+      - if:
+          condition: { neq: [anz, 6] }
+          then:
+            - print: ["FAIL: len=${anz} nach Neustart, erwartet 6"]
+            - return: 1
+
+      - decl: [bad, i32, 0]
+      # aus dem Dump
+      - set: [bad, { +: [bad, { call: [pruefe, "k0", "wert_0"] }] }]
+      - set: [bad, { +: [bad, { call: [pruefe, "k2", "wert_2"] }] }]
+      - set: [bad, { +: [bad, { call: [pruefe, "k3", "wert_3"] }] }]
+      - set: [bad, { +: [bad, { call: [pruefe, "k4", "wert_4"] }] }]
+      # aus dem WAL-Rest hinter dem Wasserstand
+      - set: [bad, { +: [bad, { call: [pruefe, "k5", "wert_5"] }] }]
+      - set: [bad, { +: [bad, { call: [pruefe, "k6", "wert_6"] }] }]
+
+      # Tombstone muss den Dump-Eintrag verdecken
+      - decl: [hat, i32, { call: [var_kv.has, "k1"] }]
+      - if:
+          condition: { neq: [hat, 0] }
+          then:
+            - print: ["FAIL: k1 ist nach dem Neustart wieder da (Tombstone verloren)"]
+            - set: [bad, { +: [bad, 1] }]
+
+      - if:
+          condition: { neq: [bad, 0] }
+          then:
+            - return: 1
+      - print: ["Phase 2 ok: Dump + Ueberlauf + Tombstone stimmen"]
+      - return: 0

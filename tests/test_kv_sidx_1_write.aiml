@@ -1,0 +1,68 @@
+# SPEC?: 45_db_indexed_fields   # Persistence -- Nebenindex-Dump
+# Phase 1: drei Zeilen schreiben, die Nebenindizes im Lauf pruefen, dann
+# checkpointen -- erst dort entstehen die .kvsidx-Dateien.
+# Expected exit code: 0
+
+- model:
+    name: Ding
+    fields:
+      - [ding_id, string]
+      - [name, string, "", { db_indexed: true }]
+      - [sku,  string, "", { db_indexed: true, unique: true }]
+      - [tag,  string, "", { db_indexed: "lower" }]
+
+- def:
+    name: lege_an
+    args: [[dinge, "Kv<string:Ding>"], [kid, string], [nam, string], [sku_wert, string], [tag_wert, string]]
+    return: i32
+    body:
+      - decl: [neu, Ding]
+      - set: [neu.ding_id, kid]
+      - set: [neu.name, nam]
+      - set: [neu.sku, sku_wert]
+      - set: [neu.tag, tag_wert]
+      - call: [dinge.set, kid, neu]
+      - return: 0
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [pfad, path, "/tmp/aiml_kvsidx_20261107/"]
+      - decl: [dinge, "Kv<string:Ding>"]
+      - set: [dinge, { call: [db.open_kv, "sidx_dinge", {persist: true, index_dump: true, path: pfad}] }]
+      - call: [dinge.clear]
+
+      - call: [lege_an, dinge, "aaa", "Hammer", "S1", "Werkzeug"]
+      - call: [lege_an, dinge, "bbb", "Hammer", "S2", "WERKZEUG"]
+      - call: [lege_an, dinge, "ccc", "Saege",  "S3", "Holz"]
+
+      # Im Schreiblauf muss der Index schon stimmen -- ohne Dump, rein im Speicher.
+      - decl: [ham, list<string>, { call: [dinge.findings_by, "name", "Hammer"] }]
+      - if:
+          condition: { neq: [ham.len, 2] }
+          then:
+            - print: ["FAIL write: name=Hammer ergibt ${ham.len}, erwartet 2"]
+            - return: 1
+      - decl: [wer, list<string>, { call: [dinge.findings_by, "tag", "werkzeug"] }]
+      - if:
+          condition: { neq: [wer.len, 2] }
+          then:
+            - print: ["FAIL write: tag=werkzeug ergibt ${wer.len}, erwartet 2"]
+            - return: 1
+      - decl: [sku_zwei, string, { call: [dinge.finding_by, "sku", "S2"] }]
+      - if:
+          condition: { neq: [sku_zwei, "bbb"] }
+          then:
+            - print: ["FAIL write: sku=S2 ergibt '${sku_zwei}', erwartet 'bbb'"]
+            - return: 1
+
+      - decl: [ckpt_rc, i32, { call: [db.checkpoint] }]
+      - if:
+          condition: { neq: [ckpt_rc, 0] }
+          then:
+            - print: ["FAIL write: checkpoint=${ckpt_rc}"]
+            - return: 1
+
+      - print: ["sidx write PASS"]
+      - return: 0

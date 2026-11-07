@@ -1,0 +1,58 @@
+# SPEC?: 31_db_integration,45_db_indexed_fields   # §6.2.1 zusammen mit db_indexed
+# Phase 6: neuer Prozess auf demselben Gedaechtnis.  Der Nebenindex wird beim
+# Oeffnen aus dem Haupt-Kv aufgefuellt -- und der steht vollstaendig im Dump.
+# Faellt dieser Test, laeuft das Auffuellen wieder ueber den leeren Ueberlauf.
+# Expected exit code: 0
+
+- model:
+    name: Werkzeug
+    fields:
+      - [kennung, string]
+      - [name,    string, "", { db_indexed: true }]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [db_path, path, "/tmp/aiml_kvidx_indexed_20261106/"]
+      - if:
+          condition: { eq: [{ call: [db_path.exists] }, 0] }
+          then:
+            - print: ["SKIP Phase 6 (zuerst Phase 5 laufen lassen)"]
+            - return: 0
+
+      - decl: [dinge, Kv<string:Werkzeug>]
+      - set:  [dinge, { call: [db.open_kv, "idx_indexed", {persist: true, index_dump: true, path: db_path}] }]
+
+      - decl: [anz, i32, { call: [dinge.len] }]
+      - if:
+          condition: { neq: [anz, 3] }
+          then:
+            - print: ["FAIL: len=${anz}, erwartet 3"]
+            - return: 1
+
+      # Der eigentliche Punkt: der Nebenindex muss aus dem Dump aufgefuellt sein.
+      - decl: [haemmer, list<string>, { call: [dinge.findings_by, "name", "Hammer"] }]
+      - if:
+          condition: { neq: [haemmer.len, 2] }
+          then:
+            - print: ["FAIL: findings_by Hammer = ${haemmer.len}, erwartet 2 (Nebenindex aus dem Dump)"]
+            - return: 1
+
+      - decl: [saegen, list<string>, { call: [dinge.findings_by, "name", "Saege"] }]
+      - if:
+          condition: { neq: [saegen.len, 1] }
+          then:
+            - print: ["FAIL: findings_by Saege = ${saegen.len}, erwartet 1"]
+            - return: 1
+
+      # Und die Zeile selbst, aus dem Dump gelesen.
+      - decl: [var_c, Werkzeug, { call: [dinge.get_copy, "wc"] }]
+      - if:
+          condition: { eq: [{ eq: [var_c.name, "Saege"] }, 0] }
+          then:
+            - print: ["FAIL: Zeile wc.name='${var_c.name}', erwartet 'Saege'"]
+            - return: 1
+
+      - print: ["Phase 6 ok: Nebenindex und Zeilen kommen aus dem Dump"]
+      - return: 0

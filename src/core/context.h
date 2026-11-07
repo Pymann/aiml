@@ -949,6 +949,7 @@ namespace AIML {
     // Set by visitCall before dispatching db namespace functions when a
     // DictLiteralExpr option bag is present (e.g. {persist: true}, {layout: "column"}).
     bool        dbOpenPersist      = false;
+    bool        dbOpenIndexDump    = false;   // spec/31 §6.2.1: {index_dump: true}
     bool        dbOpenColumnLayout = false;
     llvm::Value* dbOpenBasePathVal = nullptr;  // null = default "./aiondb/"
 

@@ -1,0 +1,27 @@
+# Ein zweiter Store mit demselben Aufbau, aber anderem Inhalt -- Quelle fuer
+# den Versuch, eine fremde .kvsidx unterzuschieben.
+- model:
+    name: Ding
+    fields:
+      - [ding_id, string]
+      - [name, string, "", { db_indexed: true }]
+      - [sku,  string, "", { db_indexed: true, unique: true }]
+      - [tag,  string, "", { db_indexed: "lower" }]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [pfad, path, "/tmp/aiml_sidxgate/b/"]
+      - decl: [dinge, "Kv<string:Ding>"]
+      - set: [dinge, { call: [db.open_kv, "sidxgate", {persist: true, index_dump: true, path: pfad}] }]
+      - call: [dinge.clear]
+      - decl: [eins, Ding]
+      - set: [eins.ding_id, "xxx"]
+      - set: [eins.name, "Hammer"]
+      - set: [eins.sku, "S7"]
+      - set: [eins.tag, "Fremd"]
+      - call: [dinge.set, "xxx", eins]
+      - decl: [ckpt_rc, i32, { call: [db.checkpoint] }]
+      - print: ["OTHER_CKPT=${ckpt_rc}"]
+      - return: 0

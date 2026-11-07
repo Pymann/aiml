@@ -1,0 +1,53 @@
+# SPEC?: 45_db_indexed_fields   # Persistence -- kv.clear loescht die Dumps
+# Phase 5: Phase 4 hat einen frischen Dump hinterlassen.  `clear` muss die
+# .kvsidx-Dateien loeschen; bliebe eine liegen, wuerde sie den geleerten Store
+# beim naechsten Oeffnen wieder bevoelkern.
+# Expected exit code: 0
+
+- model:
+    name: Ding
+    fields:
+      - [ding_id, string]
+      - [name, string, "", { db_indexed: true }]
+      - [sku,  string, "", { db_indexed: true, unique: true }]
+      - [tag,  string, "", { db_indexed: "lower" }]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [pfad, path, "/tmp/aiml_kvsidx_20261107/"]
+      - decl: [dinge, "Kv<string:Ding>"]
+      - set: [dinge, { call: [db.open_kv, "sidx_dinge", {persist: true, index_dump: true, path: pfad}] }]
+
+      # Der Dump aus Phase 4 muss tragen, sonst prueft dieser Lauf nichts.
+      - decl: [vor, list<string>, { call: [dinge.findings_by, "name", "Hammer"] }]
+      - if:
+          condition: { neq: [vor.len, 3] }
+          then:
+            - print: ["FAIL clear: Ausgangslage Hammer=${vor.len}, erwartet 3"]
+            - return: 1
+
+      - call: [dinge.clear]
+
+      - decl: [anz, i32, { call: [dinge.len] }]
+      - if:
+          condition: { neq: [anz, 0] }
+          then:
+            - print: ["FAIL clear: len=${anz} nach clear, erwartet 0"]
+            - return: 1
+      - decl: [nach, list<string>, { call: [dinge.findings_by, "name", "Hammer"] }]
+      - if:
+          condition: { neq: [nach.len, 0] }
+          then:
+            - print: ["FAIL clear: Hammer=${nach.len} nach clear, erwartet 0"]
+            - return: 1
+      - decl: [sku_eins, string, { call: [dinge.finding_by, "sku", "S1"] }]
+      - if:
+          condition: { neq: [sku_eins.len, 0] }
+          then:
+            - print: ["FAIL clear: sku=S1 lebt noch als '${sku_eins}'"]
+            - return: 1
+
+      - print: ["sidx clear PASS"]
+      - return: 0

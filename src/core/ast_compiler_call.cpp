@@ -468,6 +468,7 @@ IRValue* Compiler::visitCall(CallExpr* call) {
         // Supports both DictLiteralExpr (from nodeToExpr path) and UnaryExpr
         // (from event-based ExpressionBuilder: {key: val} → UnaryExpr(key, val)).
         ctx.dbOpenPersist      = false;
+        ctx.dbOpenIndexDump    = false;
         ctx.dbOpenColumnLayout = false;
         ctx.dbOpenBasePathVal  = nullptr;
         ctx.dbQueryStoreType   = "";
@@ -487,6 +488,7 @@ IRValue* Compiler::visitCall(CallExpr* call) {
             // Helper: apply a single key=value option pair
             auto applyDbOpt = [&](const std::string& key, const std::string& val) {
                 if      (key == "persist"  && val == "true")  ctx.dbOpenPersist = true;
+                else if (key == "index_dump" && val == "true") ctx.dbOpenIndexDump = true;
                 else if (key == "layout"   && val == "column") ctx.dbOpenColumnLayout = true;
                 else if (key == "where")    ctx.dbQueryWhere   = val;
                 else if (key == "order_by") ctx.dbQueryOrderBy = val;
@@ -529,6 +531,12 @@ IRValue* Compiler::visitCall(CallExpr* call) {
                     }
                 }
             }
+            // spec/31 §6.2.1: ohne WAL gibt es keine Offsets, auf die ein Dump
+            // zeigen koennte.  Das faellt hier auf und nicht erst zur Laufzeit,
+            // sonst glaubt der Aufrufer, er haette den Gewinn.
+            if (ctx.dbOpenIndexDump && !ctx.dbOpenPersist)
+                LOG_ERROR(ctx.fmtLoc(call->sourceNode) + "db." + methodName
+                    + ": index_dump: true braucht persist: true (spec/31 §6.2.1)");
         }
 
         // spec/23 §5.1: sys.exe option bag — bools are compile-time literals, the rest expressions.
@@ -607,7 +615,7 @@ IRValue* Compiler::visitCall(CallExpr* call) {
 
         // Eagerly evaluate arguments; skip option bags (DictLiteralExpr or db UnaryExpr options).
         static const std::set<std::string> kDbOpts = {
-            "persist","layout","where","order_by","dir","limit","offset","path"};
+            "persist","index_dump","layout","where","order_by","dir","limit","offset","path"};
         std::vector<IRValue*> argVals;
         for (auto& arg : call->args) {
             if (dynamic_cast<AIML::AST::DictLiteralExpr*>(arg.get())) continue;

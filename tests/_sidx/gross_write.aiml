@@ -1,0 +1,36 @@
+# Messfall: viele Zeilen, zwei indizierte Felder.  Fuer tests/measure_sidx.sh.
+- model:
+    name: Fakt
+    fields:
+      - [fakt_id, string]
+      - [subj, string, "", { db_indexed: true }]
+      - [rel,  string, "", { db_indexed: true }]
+      - [obj,  string]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [pfad, path, "/tmp/aiml_sidxmess/"]
+      - decl: [fakten, "Kv<string:Fakt>"]
+      - set: [fakten, { call: [db.open_kv, "mess", {persist: true, index_dump: true, path: pfad}] }]
+      - call: [fakten.clear]
+      - decl: [lauf, i32, 0]
+      - decl: [zeile, Fakt]
+      - while: [{ lt: [lauf, 300000] }]
+        body:
+          - decl: [schluessel, string, "f${lauf}"]
+          - set: [zeile.fakt_id, schluessel]
+          # Viele Zeilen je Subjekt (wie im Wissensgraphen), wenige Relationen.
+          - set: [zeile.subj, "ding_${ { /: [lauf, 20] } }"]
+          # Verschachtelte Anfuehrungszeichen in "${ { ... } }" brechen das
+          # YAML -- und "%" braucht sie, weil es als Flow-Key unquotiert
+          # ungueltig ist.  Darum herausgezogen.
+          - decl: [rest, i32, { "%": [lauf, 40] }]
+          - set: [zeile.rel,  "rel_${rest}"]
+          - set: [zeile.obj,  "wert fuer zeile ${lauf} mit etwas text"]
+          - call: [fakten.set, schluessel, zeile]
+          - set: [lauf, { +: [lauf, 1] }]
+      - decl: [ckpt_rc, i32, { call: [db.checkpoint] }]
+      - print: ["GROSS_CKPT=${ckpt_rc} ZEILEN=${lauf}"]
+      - return: 0

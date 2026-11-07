@@ -1,0 +1,33 @@
+# Liest den Store und gibt aus, was der Nebenindex sagt.  Das Gate vergleicht
+# diese Zeilen -- so wird sichtbar, OB der Dump beantwortet hat (eine
+# vergiftete Datei liefert andere Schluessel) oder ob aufgefuellt wurde.
+- model:
+    name: Ding
+    fields:
+      - [ding_id, string]
+      - [name, string, "", { db_indexed: true }]
+      - [sku,  string, "", { db_indexed: true, unique: true }]
+      - [tag,  string, "", { db_indexed: "lower" }]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [pfad, path, "/tmp/aiml_sidxgate/a/"]
+      - decl: [dinge, "Kv<string:Ding>"]
+      - set: [dinge, { call: [db.open_kv, "sidxgate", {persist: true, index_dump: true, path: pfad}] }]
+      - decl: [anzahl, i32, { call: [dinge.len] }]
+      - print: ["LEN=${anzahl}"]
+      - decl: [tr_ham, list<string>, { call: [dinge.findings_by, "name", "Hammer"] }]
+      - print: ["HAMMER_N=${tr_ham.len}"]
+      - decl: [lauf, i32, 0]
+      - while: [{ lt: [lauf, tr_ham.len] }]
+        body:
+          - decl: [eintrag, string, { call: [tr_ham.get, lauf] }]
+          - print: ["HIT=${eintrag}"]
+          - set: [lauf, { +: [lauf, 1] }]
+      - decl: [sku_eins, string, { call: [dinge.finding_by, "sku", "S1"] }]
+      - print: ["SKU_S1=${sku_eins}"]
+      - decl: [tr_wrk, list<string>, { call: [dinge.findings_by, "tag", "werkzeug"] }]
+      - print: ["WERKZEUG_N=${tr_wrk.len}"]
+      - return: 0

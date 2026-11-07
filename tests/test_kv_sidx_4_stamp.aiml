@@ -1,0 +1,75 @@
+# SPEC?: 45_db_indexed_fields   # Persistence -- Stempelbruch
+# Phase 4: Phase 3 hat geschrieben und NICHT gecheckpointet.  Der Dump auf der
+# Platte beschreibt damit einen aelteren Stand der WAL; sein Stempel (wal_used,
+# wal_fp) muss fallen und das Feld voll aufgefuellt werden.  Geprueft wird
+# nicht, DASS aufgefuellt wurde, sondern dass das Ergebnis stimmt -- genau das
+# ist der Sinn: ein Zweifel kostet Zeit, nie Richtigkeit.
+# Am Ende wird gecheckpointet, damit Phase 5 einen frischen Dump hat.
+# Expected exit code: 0
+
+- model:
+    name: Ding
+    fields:
+      - [ding_id, string]
+      - [name, string, "", { db_indexed: true }]
+      - [sku,  string, "", { db_indexed: true, unique: true }]
+      - [tag,  string, "", { db_indexed: "lower" }]
+
+- def:
+    name: pruef_zahl
+    args: [[ist, i32], [erw, i32], [was, string]]
+    return: i32
+    body:
+      - if:
+          condition: { neq: [ist, erw] }
+          then:
+            - print: ["FAIL ${was}: ${ist} Treffer, erwartet ${erw}"]
+            - return: 1
+      - return: 0
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [pfad, path, "/tmp/aiml_kvsidx_20261107/"]
+      - decl: [dinge, "Kv<string:Ding>"]
+      - set: [dinge, { call: [db.open_kv, "sidx_dinge", {persist: true, index_dump: true, path: pfad}] }]
+      - decl: [bad, i32, 0]
+
+      - decl: [anzahl, i32, { call: [dinge.len] }]
+      - set: [bad, { +: [bad, { call: [pruef_zahl, anzahl, 3, "len"] }] }]
+
+      # Stand nach Phase 3: aaa, ccc, ddd tragen Hammer; bbb ist weg.
+      - decl: [tr_ham, list<string>, { call: [dinge.findings_by, "name", "Hammer"] }]
+      - set: [bad, { +: [bad, { call: [pruef_zahl, tr_ham.len, 3, "name=Hammer"] }] }]
+      - decl: [tr_sae, list<string>, { call: [dinge.findings_by, "name", "Saege"] }]
+      - set: [bad, { +: [bad, { call: [pruef_zahl, tr_sae.len, 0, "name=Saege"] }] }]
+      - decl: [tr_wrk, list<string>, { call: [dinge.findings_by, "tag", "werkzeug"] }]
+      - set: [bad, { +: [bad, { call: [pruef_zahl, tr_wrk.len, 2, "tag=werkzeug"] }] }]
+      - decl: [tr_hol, list<string>, { call: [dinge.findings_by, "tag", "holz"] }]
+      - set: [bad, { +: [bad, { call: [pruef_zahl, tr_hol.len, 1, "tag=holz"] }] }]
+
+      - decl: [sku_eins, string, { call: [dinge.finding_by, "sku", "S1"] }]
+      - if:
+          condition: { neq: [sku_eins, "aaa"] }
+          then:
+            - print: ["FAIL stamp: sku=S1 ergibt '${sku_eins}', erwartet 'aaa'"]
+            - set: [bad, { +: [bad, 1] }]
+      - decl: [sku_zwei, string, { call: [dinge.finding_by, "sku", "S2"] }]
+      - set: [bad, { +: [bad, { call: [pruef_zahl, sku_zwei.len, 0, "sku=S2 geloescht"] }] }]
+      - decl: [sku_vier, string, { call: [dinge.finding_by, "sku", "S4"] }]
+      - if:
+          condition: { neq: [sku_vier, "ddd"] }
+          then:
+            - print: ["FAIL stamp: sku=S4 ergibt '${sku_vier}', erwartet 'ddd'"]
+            - set: [bad, { +: [bad, 1] }]
+
+      - decl: [ckpt_rc, i32, { call: [db.checkpoint] }]
+      - set: [bad, { +: [bad, { call: [pruef_zahl, ckpt_rc, 0, "checkpoint"] }] }]
+
+      - if:
+          condition: { neq: [bad, 0] }
+          then:
+            - return: 1
+      - print: ["sidx stamp PASS"]
+      - return: 0
