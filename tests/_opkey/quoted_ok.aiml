@@ -1,0 +1,15 @@
+# Die zitierte Form rechnet, und die blank erlaubten Operatoren bleiben blank
+# erlaubt -- in der Anweisung UND in der Expansion (spec/04, spec/09_1 §3.5).
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [lauf, i32, 143]
+      - decl: [rest, i32, { "%": [10, 3] }]
+      - decl: [prod, i32, { "*": [6, 7] }]
+      - decl: [grg, i32, { ">": [5, 3] }]
+      - decl: [ungl, i32, { neq: [1, 2] }]
+      - print: ["zitiert rest=${rest} prod=${prod} grg=${grg} ungl=${ungl}"]
+      - print: ["expansion rest=${ { \"%\": [lauf, 40] } } prod=${ { \"*\": [lauf, 2] } }"]
+      - print: ["blank plus=${ { +: [lauf, 1] } } minus=${ { -: [lauf, 3] } } durch=${ { /: [lauf, 11] } }"]
+      - return: 0

@@ -1,0 +1,7 @@
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [lauf, i32, 7]
+      - print: ["prod=${ { *: [lauf, 3] } }"]
+      - return: 0

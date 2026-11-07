@@ -1,0 +1,8 @@
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [rest, i32, 0]
+      - set: [rest, { %: [10, 3] }]
+      - print: ["rest=${rest}"]
+      - return: 0

@@ -1,5 +1,6 @@
 #define DEBUG_MODE
 #include "ast_builder.h"
+#include <cstring>
 #include "ast/root_state.h"
 #include "ast/statement_builder.h"
 #include "ast/block_builder.h"
@@ -52,7 +53,28 @@ namespace AST {
 
 std::unique_ptr<Expr> parseInterpolatedString(const std::string& input);
 
+thread_local int g_builderLine = 0;
+
+std::string bareOperatorKey(const std::string& text) {
+    // Lange Formen zuerst, sonst schluckt `>` das `>=`.
+    static const char* kReserved[] = {">=", ">>", "||", "&&", "!=",
+                                      "*", "%", ">", "|", "?", "&", "!", "~", "@", "`"};
+    for (size_t i = 0; i < text.size(); ++i) {
+        if (text[i] != '{' && text[i] != ',') continue;
+        size_t a = text.find_first_not_of(" \t", i + 1);
+        if (a == std::string::npos) break;
+        for (const char* op : kReserved) {
+            size_t n = std::strlen(op);
+            if (text.compare(a, n, op) != 0) continue;
+            size_t b = text.find_first_not_of(" \t", a + n);
+            if (b != std::string::npos && text[b] == ':') return op;
+        }
+    }
+    return "";
+}
+
 std::unique_ptr<Expr> nodeToExpr(const YAML::Node& node) {
+    if (node.Mark().line >= 0) g_builderLine = node.Mark().line + 1;
     if (node.IsScalar()) {
         std::string val = node.as<std::string>();
         if (node.Tag() == "!") {
@@ -209,6 +231,10 @@ std::unique_ptr<Expr> parseInterpolatedString(const std::string& input) {
     }
     
     auto interp = std::make_unique<StringInterpolationExpr>();
+    // Der Fundort gilt fuer den GANZEN Skalar.  Er muss vor der Schleife festgehalten
+    // werden: `nodeToExpr` laeuft unten auf dem Mini-Dokument der Expansion und setzt
+    // g_builderLine aus DESSEN Marke -- dort ist alles Zeile 1.
+    const int zeile = g_builderLine;
     size_t pos = 0;
     while (pos < input.length()) {
         size_t start = input.find("${", pos);
@@ -237,6 +263,29 @@ std::unique_ptr<Expr> parseInterpolatedString(const std::string& input) {
         if (end == std::string::npos) break; // Malformed
         
         std::string exprStr = input.substr(start + 2, end - start - 2);
+        // spec/09_1 §3.5: laesst sich der Koerper nicht als Ausdruck lesen, bleibt die
+        // Expansion wortwoertlicher Text ("so schreibt man ${...}" ist Prosa und soll das
+        // bleiben).  Genau dieser Rueckfall verschluckte aber den blanken
+        // Operatorschluessel: `${ { %: [lauf, 40] } }` ist kein gueltiges YAML, `Load`
+        // warf, und in die Zeichenkette kam der Text -- Austritt 0, keine Meldung.
+        // Gemessen 06.11.2026 an 300.000 Zeilen, die alle denselben "Wert" trugen.
+        // Die Erklaerung haengt darum AM FEHLSCHLAG, nicht am Koerper: Code, der heute
+        // laeuft, kommt hier nie vorbei.
+        auto alsText = [&](const char* grund) {
+            std::string blank = bareOperatorKey(exprStr);
+            if (!blank.empty()) {
+                std::string wo = zeile > 0 ? ("line " + std::to_string(zeile) + ": ") : "";
+                size_t sa = exprStr.find_first_not_of(" \t");
+                size_t se = exprStr.find_last_not_of(" \t");
+                std::string knapp = (sa == std::string::npos) ? exprStr
+                                                              : exprStr.substr(sa, se - sa + 1);
+                LOG_ERROR(wo + "operator key '" + blank + "' in an expansion must be quoted"
+                          " -- a bare '" + blank + "' is a YAML indicator character, so ${ "
+                          + knapp + " } " + grund + " and was silently left as text."
+                          " Write ${ { \\\"" + blank + "\\\": [...] } } (spec/09_1 §3.5).");
+            }
+            interp->parts.push_back(std::make_unique<LiteralExpr>("${" + exprStr + "}", "string"));
+        };
         try {
             YAML::Node node = YAML::Load(exprStr);
             LOG_DEBUG("parseInterpolatedString: Loaded YAML node for: " + exprStr);
@@ -245,11 +294,12 @@ std::unique_ptr<Expr> parseInterpolatedString(const std::string& input) {
                 LOG_DEBUG("parseInterpolatedString: Successfully created AST expr for: " + exprStr);
                 interp->parts.push_back(std::move(astExpr));
             } else {
-                interp->parts.push_back(std::make_unique<LiteralExpr>("${" + exprStr + "}", "string"));
+                alsText("is not an expression");
             }
         } catch (...) {
-            interp->parts.push_back(std::make_unique<LiteralExpr>("${" + exprStr + "}", "string"));
+            alsText("is not valid YAML");
         }
+        g_builderLine = zeile;
         
         pos = end + 1;
     }
@@ -301,12 +351,14 @@ void Builder::OnNull(const YAML::Mark&, YAML::anchor_t) {
 
 void Builder::OnScalar(const YAML::Mark& mark, const std::string& tag, YAML::anchor_t, const std::string& value) {
     currentLine = mark.line + 1; // YAML marks are 0-based; store 1-based
+    g_builderLine = currentLine;
     LOG_DEBUG("Router OnScalar: " + value);
     stateStack.top()->OnScalar(value, tag);
 }
 
 void Builder::OnSequenceStart(const YAML::Mark& mark, const std::string&, YAML::anchor_t, YAML::EmitterStyle::value) {
     currentLine = mark.line + 1;
+    g_builderLine = currentLine;
     LOG_DEBUG("Router OnSequenceStart");
     stateStack.top()->OnSequenceStart();
 }
@@ -318,6 +370,7 @@ void Builder::OnSequenceEnd() {
 
 void Builder::OnMapStart(const YAML::Mark& mark, const std::string&, YAML::anchor_t, YAML::EmitterStyle::value) {
     currentLine = mark.line + 1;
+    g_builderLine = currentLine;
     LOG_DEBUG("Router OnMapStart");
     stateStack.top()->OnMapStart();
 }

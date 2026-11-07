@@ -59,7 +59,7 @@ A function pointer is called with `call` — identical to direct function calls:
     args: [[n, i32]]
     return: i32
     body:
-      - return: { *: [n, 2] }
+      - return: { "*": [n, 2] }
 
 - decl: [r, i32]
 - set: [r, { call: [apply, double, 5] }]

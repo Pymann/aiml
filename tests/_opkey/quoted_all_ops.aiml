@@ -1,0 +1,20 @@
+# Jeder symbolische Operatorschluessel, den aiml kennt, in der ZITIERTEN Form.
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [zahl, i32, 143]
+      - decl: [wahr, i32, 1]
+      - decl: [falsch, i32, 0]
+      - decl: [prod, i32, { "*": [6, 7] }]
+      - decl: [rest, i32, { "%": [10, 3] }]
+      - decl: [grg, i32, { ">": [5, 3] }]
+      - decl: [gge, i32, { ">=": [5, 5] }]
+      - decl: [bde, i32, { "&&": [wahr, wahr] }]
+      - decl: [ode, i32, { "||": [falsch, wahr] }]
+      - decl: [nic, i32, { "!": [falsch] }]
+      - print: ["prod=${prod} rest=${rest} grg=${grg} gge=${gge} bde=${bde} ode=${ode} nic=${nic}"]
+      - decl: [zgr, ptr<i32>, { "&": [zahl] }]
+      - decl: [zrk, i32, { "?": [zgr] }]
+      - print: ["adresse-gelesen=${zrk}"]
+      - return: 0

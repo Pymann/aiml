@@ -12,6 +12,21 @@ namespace AST {
 
 class Builder;
 
+// spec/04 "Operator-Schluessel zitieren": `{ op: [args] }` ist eine YAML-Flow-Map, und
+// ein Teil der symbolischen Operatoren kann dort nicht blank stehen -- `*` `%` `>` `>=`
+// `||` `?` werfen, `&` `&&` `!` `~` werfen NICHT und liefern einen leeren bzw.
+// `null`-Schluessel.  Liefert den ersten blanken reservierten Operatorschluessel in
+// Flow-Schluesselposition (`{ op:` oder `, op:`), sonst "".  Rein lexikalisch, darum nur
+// zum ERKLAEREN eines schon feststehenden Fehlschlags verwenden -- in Daten in
+// Anfuehrungszeichen trifft die Suche auch (`"{ *: [a, b] }"` als Testeingabe).
+std::string bareOperatorKey(const std::string& text);
+
+// Die Zeile, die der Ereignis-Parser gerade liefert (1-basiert, 0 = unbekannt).
+// `parseInterpolatedString` bekommt nur die Zeichenkette und kommt sonst ohne
+// Fundort aus -- der Fundort ist bei einem 10.000-Zeilen-Modul aber die halbe
+// Meldung.  Thread-lokal, weil mehrere Quellen parallel uebersetzt werden.
+extern thread_local int g_builderLine;
+
 std::unique_ptr<Expr> parseInterpolatedString(const std::string& input);
 std::unique_ptr<Expr> parseScalarExpr(const std::string& val, const std::string& tag);
 std::unique_ptr<Expr> nodeToExpr(const YAML::Node& node);

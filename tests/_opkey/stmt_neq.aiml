@@ -1,0 +1,8 @@
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [flag, i32, 0]
+      - set: [flag, { !=: [1, 2] }]
+      - print: ["flag=${flag}"]
+      - return: 0

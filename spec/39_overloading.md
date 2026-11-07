@@ -70,17 +70,17 @@ automatically overloads the standard operators — no additional syntax required
 
 - decl: [c, vec3, { +: [a, b] }]           # component-wise addition
 - decl: [d, vec3, { -: [a, b] }]           # component-wise subtraction
-- decl: [e, vec3, { *: [a, 2.0] }]         # scaling (vec * f32)
+- decl: [e, vec3, { "*": [a, 2.0] }]         # scaling (vec * f32)
 - decl: [f, vec3, { /: [a, 2.0] }]         # division by scalar
-- decl: [g, vec3, { *: [a, b] }]           # component-wise product (Hadamard)
+- decl: [g, vec3, { "*": [a, b] }]           # component-wise product (Hadamard)
 - decl: [h, vec3, { -: [a] }]              # negation (unary)
 
 # mat4
 - decl: [m1, mat4, { call: [math.mat4_identity] }]
 - decl: [m2, mat4, { call: [math.mat4_translate, { call: [math.vec3, 1.0, 0.0, 0.0] }] }]
-- decl: [m3, mat4, { *: [m1, m2] }]        # matrix multiplication
+- decl: [m3, mat4, { "*": [m1, m2] }]        # matrix multiplication
 - decl: [v,  vec4, { call: [math.vec4, 1.0, 0.0, 0.0, 1.0] }]
-- decl: [tv, vec4, { *: [m2, v] }]         # mat4 * vec4 (transform)
+- decl: [tv, vec4, { "*": [m2, v] }]         # mat4 * vec4 (transform)
 
 # Comparison (yields i32 / bool)
 - decl: [vecs_eq, i32, { eq: [a, b] }]     # component-wise equality (all must be equal)

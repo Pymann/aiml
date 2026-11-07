@@ -1,0 +1,8 @@
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [bits, i32, 0]
+      - set: [bits, { &: [12, 10] }]
+      - print: ["bits=${bits}"]
+      - return: 0

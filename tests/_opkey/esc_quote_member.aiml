@@ -1,0 +1,22 @@
+- class:
+    name: Schild
+    methods:
+      - def:
+          name: label
+          args: [[txt, string]]
+          return: string
+          body:
+            - return: "[${txt}]"
+      - def:
+          name: zeige
+          return: i32
+          body:
+            - print: ["name: ${ { call: [<.label, \"x\"] } }"]
+            - return: 0
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [sch, Schild]
+      - return: { call: [sch.zeige] }

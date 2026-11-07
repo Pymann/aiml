@@ -291,7 +291,7 @@ On compile/link error → exception `gl.ShaderError` with the GLSL info log as t
 - call: [sh.uniform_vec4, "uFog",   { call: [math.vec4, 0.6, 0.7, 0.8, 1.0] }]
 
 # Matrices (column-major, transpose=false)
-- decl: [mvp, mat4, { *: [proj, { *: [view, model] }] }]
+- decl: [mvp, mat4, { "*": [proj, { "*": [view, model] }] }]
 - call: [sh.uniform_mat4, "uMVP", mvp]
 ```
 
@@ -549,7 +549,7 @@ Usage:
     # Update
     - set: [angle, { +: [angle, 0.016] }]
     - decl: [model, mat4, { call: [math.mat4_rotate_y, angle] }]
-    - decl: [mvp, mat4, { *: [proj, { *: [view, model] }] }]
+    - decl: [mvp, mat4, { "*": [proj, { "*": [view, model] }] }]
 
     # Render
     - call: [gl.clear_all, 0.1, 0.1, 0.15, 1.0]

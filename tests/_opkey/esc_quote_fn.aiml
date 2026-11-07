@@ -1,0 +1,13 @@
+- def:
+    name: etikett
+    args: [[txt, string]]
+    return: string
+    body:
+      - return: "[${txt}]"
+
+- def:
+    name: main
+    return: i32
+    body:
+      - print: ["name: ${ { call: [etikett, \"xyz\"] } }"]
+      - return: 0

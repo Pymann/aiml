@@ -1,0 +1,9 @@
+# Zitiert sieht der Compiler das '!=' und verweist auf 'neq' (spec/04).
+# Expected exit code: 1
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [ungl, i32, { "!=": [1, 2] }]
+      - print: ["ungl=${ungl}"]
+      - return: 0

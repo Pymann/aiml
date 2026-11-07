@@ -42,7 +42,7 @@
 ## Auto-Dereferencing on Member Access
 
 For `ptr<T>` where `T` is a class or model, the pointer is automatically dereferenced
-on dot-notation access — explicit `{ ?: [...] }` is not required:
+on dot-notation access — explicit `{ "?": [...] }` is not required:
 
 ```yaml
 - decl: [p, ptr<Point>, { new: Point }]
@@ -61,7 +61,7 @@ on dot-notation access — explicit `{ ?: [...] }` is not required:
 Applies at arbitrary depth: `p.nested.field` dereferences `p` and then accesses the
 field `nested` of the resulting struct.
 
-For primitive types (`ptr<i32>` etc.) `{ ?: [p] }` is still required for reading and
+For primitive types (`ptr<i32>` etc.) `{ "?": [p] }` is still required for reading and
 `store: [p, val]` for writing.  Semantik analog C:
 
 | C            | AIML                       |

@@ -1067,6 +1067,28 @@ std::shared_ptr<std::vector<std::string>> AIMLCompiler::installImportResolver(
     return deferredImports;
 }
 
+// spec/04 "Operator-Schluessel zitieren": fuer einen blanken Operatorschluessel meldet
+// yaml-cpp nur `unknown token` an der Spalte des Zeichens -- der Autor sucht dann nach
+// einem YAML-Problem, obwohl ein Anfuehrungszeichen fehlt.  Die Marke der Ausnahme zeigt
+// genau auf das Zeichen; damit laesst sich die Zeile holen und die Ursache benennen.
+// Die Suche ist rein lexikalisch und trifft auch in Daten in Anfuehrungszeichen -- das ist
+// hier unschaedlich, weil sie nur einen SCHON feststehenden Fehlschlag erklaert.
+static std::string bareOpKeyHint(const std::string& filename, const YAML::Exception& e) {
+    if (e.mark.line < 0) return "";
+    std::ifstream in(filename);
+    if (!in) return "";
+    std::string line;
+    for (int i = 0; i <= e.mark.line && std::getline(in, line); ++i) {}
+    std::string op = AIML::AST::bareOperatorKey(line);
+    if (op.empty()) return "";
+    size_t a = line.find_first_not_of(" \t");
+    std::string gezeigt = (a == std::string::npos) ? line : line.substr(a);
+    return " — line " + std::to_string(e.mark.line + 1) + " writes the operator key '"
+           + op + "' bare: `" + gezeigt + "`.  A bare '" + op + "' is a YAML indicator"
+           " character, not a key.  Quote it: { \"" + op + "\": [...] }"
+           " (spec/04 \"Operator-Schluessel zitieren\").";
+}
+
 void AIMLCompiler::compile(const std::string& filename, const std::string& outputFilename) {
     LOG_DEBUG("Compiling " + filename);
     // Asset Registry: scan roots once at the top of the compile.  Stored in
@@ -1077,7 +1099,8 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
     try {
         config = YAML::LoadFile(filename);
     } catch (const YAML::Exception& e) {
-        LOG_ERROR(filename + ": YAML parse error: " + std::string(e.what()));
+        LOG_ERROR(filename + ": YAML parse error: " + std::string(e.what())
+                  + bareOpKeyHint(filename, e));
         return;
     }
     auto seenFileSizeDiagnostics = std::make_shared<std::unordered_set<std::string>>();
@@ -1370,7 +1393,8 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
                        " reports a structural error elsewhere. Evaluate the call into its own"
                        " variable first (spec/09_1).";
         } catch (...) {}
-        LOG_ERROR(filename + ": YAML Parsing Error during AST Build: " + std::string(e.what()) + hint);
+        LOG_ERROR(filename + ": YAML Parsing Error during AST Build: " + std::string(e.what())
+                  + hint + bareOpKeyHint(filename, e));
     }
     
     // Propagate linked objects from pass 1

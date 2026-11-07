@@ -64,7 +64,7 @@ TWO it is subtraction (level 4).  `/` and `%` exist only in binary form
 
 ### `*` — Multiplication
 ```yaml
-- set: [res, { *: [a, b] }]
+- set: [res, { "*": [a, b] }]
 ```
 - Operands: `i32 | i64 | f32 | f64`
 - Result: same type as operands
@@ -87,7 +87,7 @@ TWO it is subtraction (level 4).  `/` and `%` exist only in binary form
 
 ### `%` — Modulo
 ```yaml
-- set: [res, { %: [10, 3] }]   # -> 1
+- set: [res, { "%": [10, 3] }]   # -> 1
 ```
 - Operands: `i32 | i64`
 - Result: `i32 | i64`
@@ -354,7 +354,7 @@ Before, it silently yielded `0` — a misspelled constructor
 Since nesting defines order, precedence is explicit. Example for `res = (a + b) * (c - d)`:
 
 ```yaml
-- set: [res, { *: [
+- set: [res, { "*": [
     { +: [a, b] },
     { -: [c, d] }
   ]

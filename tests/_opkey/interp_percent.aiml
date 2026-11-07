@@ -1,0 +1,7 @@
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [lauf, i32, 143]
+      - print: ["rest=${ { %: [lauf, 40] } }"]
+      - return: 0

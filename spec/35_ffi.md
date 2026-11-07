@@ -199,7 +199,7 @@ C libraries that expect callbacks receive AIML functions as `fn`:
 - decl: [GL_COLOR_BUFFER_BIT,   i32, 0x00004000]
 
 - decl: [win, ptr, { call: [SDL_CreateWindow, "AIML", 100, 100, 800, 600,
-    { |: [SDL_WINDOW_OPENGL] }] }]
+    { "|": [SDL_WINDOW_OPENGL] }] }]
 - decl: [ctx, ptr, { call: [SDL_GL_CreateContext, win] }]
 
 - call: [glClearColor, 0.1, 0.1, 0.15, 1.0]

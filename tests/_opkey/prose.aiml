@@ -1,0 +1,6 @@
+- def:
+    name: main
+    return: i32
+    body:
+      - print: ["eine Expansion schreibt man als ${...} im Text"]
+      - return: 0

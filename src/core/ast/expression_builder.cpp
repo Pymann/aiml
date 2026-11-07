@@ -1,5 +1,6 @@
 #include "../../../logger.h"
 #include "../ast_builder.h"
+#include <fstream>
 #include "expression_builder.h"
 #include <algorithm>
 #include <unordered_map>
@@ -61,6 +62,44 @@ std::unique_ptr<AIML::AST::Expr> foldBinaryExprList(
 namespace AIML {
 namespace AST {
 
+// spec/04 "Operator-Schluessel zitieren": `&`, `&&`, `!`, `!=` und `~` sind in
+// Schluesselposition YAML-Indikatoren und WERFEN NICHT.  Was yaml-cpp daraus macht,
+// ist am Ereignisstrom gemessen (07.11.2026):
+//
+//   { &: [12, 10] }   MapStart, SeqStart(anchor=1), 12, 10, SeqEnd, Null, MapEnd
+//   { !=: [1, 2] }    MapStart, SeqStart(tag='!=:'), 1, 2, SeqEnd, Null, MapEnd
+//   { ~: [12, 10] }   MapStart, Null, SeqStart, 12, 10, SeqEnd, MapEnd
+//
+// Bei den ersten zwei wird die SEQUENZ der Schluessel und der Wert `null` -- der
+// Operator ist vollstaendig verschwunden.  Beim dritten kommt der Schluessel als
+// Null-Skalar.  Ohne diese Meldung sah der Autor nur "Failed to evaluate value
+// expression" bzw. "Unknown binary operator: null" und nicht das fehlende
+// Anfuehrungszeichen.
+static void meldeGeschlucktenOperator(Builder* builder) {
+    std::string zeilentext;
+    if (!builder->sourceFile.empty() && builder->currentLine > 0) {
+        std::ifstream qin(builder->sourceFile);
+        std::string z;
+        for (int i = 0; i < builder->currentLine && std::getline(qin, z); ++i) {}
+        size_t a = z.find_first_not_of(" \t");
+        if (a != std::string::npos) zeilentext = " here: `" + z.substr(a) + "`";
+    }
+    std::string blank = zeilentext.empty() ? std::string() : bareOperatorKey(zeilentext);
+    std::string welcher = blank.empty() ? std::string("an indicator character ('&', '&&', '!', '!=' or '~')")
+                                        : ("the operator key '" + blank + "'");
+    std::string zitiert = blank.empty() ? std::string("&") : blank;
+    // `!=` blank wird als Tag geschluckt -- zitiert liefe es in die Veraltet-Pruefung
+    // und der Autor braeuchte zwei Laeufe.  Hier gleich auf die Wortform zeigen.
+    auto dep = kDeprecatedOps.find(blank);
+    std::string rat = (dep != kDeprecatedOps.end())
+        ? ("  Write { " + dep->second + ": [...] } -- '" + blank + "' is not allowed either.")
+        : ("  Quote it: { \"" + zitiert + "\": [...] }");
+    LOG_ERROR(builder->fmtLoc() + "operator key swallowed by YAML" + zeilentext +
+              " -- " + welcher + " stands bare in key position, so YAML read it as an"
+              " anchor/tag/null and the operator never reached the compiler." + rat +
+              " (spec/04 \"Operator-Schluessel zitieren\").");
+}
+
 bool ExpressionBuilder::OnMapStart() {
     if (!op.empty()) {
         // We are already inside an operator like `{ add: [ { mul: [1, 2] }, 3 ] }`
@@ -83,6 +122,17 @@ bool ExpressionBuilder::OnMapEnd() {
 
 bool ExpressionBuilder::OnScalar(const std::string& value, const std::string& tag) {
     if (expectingKey) {
+        // spec/04 "Operator-Schluessel zitieren": `&`, `&&`, `!` und `~` sind in
+        // Schluesselposition YAML-Indikatoren.  Sie WERFEN NICHT -- yaml-cpp liest
+        // Anker/Tag/Null und liefert einen leeren bzw. `null`-Schluessel.  Ohne diese
+        // Pruefung sah der Compiler einen Operator, den niemand geschrieben hat, und
+        // meldete weiter unten etwas anderes ("Failed to evaluate value expression",
+        // "Unknown binary operator: null") -- gemessen 07.11.2026.
+        if (value.empty() || (value == "null" && tag == "null")) {
+            meldeGeschlucktenOperator(builder);
+            return false;
+        }
+
         // Reject deprecated symbol operators
         auto dep = kDeprecatedOps.find(value);
         if (dep != kDeprecatedOps.end()) {
@@ -133,6 +183,13 @@ bool ExpressionBuilder::OnScalar(const std::string& value, const std::string& ta
 }
 
 bool ExpressionBuilder::OnSequenceStart() {
+    // Eine Sequenz in SCHLUESSELposition kann nur heissen, dass YAML ein
+    // Indikatorzeichen gefressen hat (`{ &: [...] }` -> die Sequenz IST der
+    // Schluessel).  AIML kennt keine Sequenz als Operatorschluessel.
+    if (op.empty() && expectingKey) {
+        meldeGeschlucktenOperator(builder);
+        return false;
+    }
     if (!op.empty() && !expectingArgs) {
         expectingArgs = true;
         hadSequence = true;
