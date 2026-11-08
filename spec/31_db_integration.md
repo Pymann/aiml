@@ -664,6 +664,32 @@ Beenden eine Ueberraschung, die niemand bestellt hat.  Folge, ausdruecklich:
 **ein Store, der nie checkpointet, bekommt nie einen Dump** und verhaelt sich
 wie §6.2.  Wer den Gewinn will, ruft `kv.checkpoint`.
 
+#### Nach dem Checkpoint gibt der Store den RAM-Index her
+
+Der Checkpoint muss jeden Schluessel in die Hand nehmen: er schreibt die WAL neu,
+also entsteht fuer jeden Eintrag ein neuer Offset, und aus genau diesen Offsets
+besteht der neue Dump.  Was er NICHT darf, ist den vollstaendigen Schluesselsatz
+danach liegen lassen.  Er sammelt die Paare `(Schluessel, Ort)` darum in einer
+**Liste**, schreibt daraus den Dump, laedt ihn (§"Oeffnen") und steht hinterher
+da wie ein frisch geoeffneter Store: Dump gemappt, Ueberlauf leer.
+
+Zwei Gruende, beide gerechnet:
+
+- Eine Liste kostet grob **60 Byte je Schluessel**, die `unordered_map` des
+  Ueberlaufs **434** (die Rechnung steht am Anfang von §6.2.1).  Der Checkpoint
+  ist damit nicht nur hinterher billiger, sondern auch waehrend seiner Laufzeit.
+- Ohne das Abgeben ist **periodisches Checkpointen kein Mittel**, einen langen
+  Schreiblauf im Speicher zu begrenzen — es hebt ihn im Gegenteil dauerhaft, weil
+  der Ueberlauf danach alles traegt.  Genau dieses Mittel braucht aber jeder
+  Neuaufbau eines grossen Gedaechtnisses aus Protokollen.
+
+**Der Rueckfall ist Pflicht.** Scheitert das Schreiben des Dumps oder seine
+Pruefung beim Laden, muss der Store den Ueberlauf aus der Liste auffuellen,
+bevor er die Sperre abgibt.  Ein Store mit leerem Ueberlauf und ohne gueltigen
+Dump haette seinen ganzen Inhalt verloren, ohne dass eine Zeile fehlt — der
+teuerste Fehler, den dieser Abschnitt zulaesst.  Ohne `index_dump: true` gibt es
+keine Liste: dort bleibt der Ueberlauf der Index, wie in §6.2.
+
 #### Zusammenspiel
 
 | | |
@@ -696,7 +722,8 @@ werden; sie wird beim naechsten Checkpoint neu geschrieben.
 **Jede** Aufzaehlung aller Eintraege muss Ueberlauf UND Dump zusammenfassen und
 die vom Ueberlauf verdeckten Dump-Schluessel auslassen.  `kv->index` allein ist
 mit Dump **nicht** der Inhalt des Stores, sondern nur das, was seit dem letzten
-Checkpoint geschrieben wurde -- bei einem frisch geoeffneten Store also nichts.
+Checkpoint geschrieben wurde -- bei einem frisch geoeffneten Store also nichts,
+und nach einem `kv.checkpoint` ebenfalls nichts (§"Nach dem Checkpoint").
 
 Das ist keine theoretische Warnung.  Das Auffuellen der Nebenindizes
 (`db_indexed`, spec/45) lief ueber `kv->index` und baute damit einen **leeren**

@@ -1,0 +1,18 @@
+# Fixture: schreiben, checkpoint, im SELBEN Prozess wieder lesen.  Das Gate legt
+# vor dem zweiten Lauf ein Verzeichnis an die Stelle der .kvidx -- dann scheitert
+# das Schreiben des Dumps UND sein Laden.  spec/31 §6.2.1 verlangt dafuer den
+# Rueckfall: der Ueberlauf wird aus der Liste aufgefuellt, bevor die Sperre
+# faellt.  Ohne ihn hat der Store seinen ganzen Inhalt verloren, ohne Fehler.
+- decl: [var_kv, Kv<string:string>]
+- set: [var_kv, { call: [db.open_kv, "rueck", {persist: true, index_dump: true, path: "/tmp/aiml_ckpt_rueck/"}] }]
+- decl: [var_i, i32, 0]
+- while:
+    condition: { "<": [var_i, 1000] }
+    body:
+      - call: [var_kv.set, "s_${var_i}", "w_${var_i}"]
+      - set: [var_i, { +: [var_i, 1] }]
+- decl: [rcc, i32, { call: [db.checkpoint] }]
+- decl: [anz, i32, { call: [var_kv.len] }]
+- decl: [w_erst, string, { call: [var_kv.get, "s_0"] }]
+- decl: [w_letzt, string, { call: [var_kv.get, "s_999"] }]
+- call: [io.write, io.stdout, "len=${anz} rc=${rcc} erst=${w_erst} letzt=${w_letzt}\n"]

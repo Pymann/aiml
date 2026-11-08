@@ -66,6 +66,72 @@ else
     sed -n '1,20p' $W/r.out
   fi
 fi
+# ── 4. Rueckfall: der Dump laesst sich nicht schreiben (spec/31 §6.2.1) ──────
+# Ein Verzeichnis an der Stelle der .kvidx laesst rename() scheitern UND mmap().
+# Der Store muss den Ueberlauf aus der Liste auffuellen, bevor er die Sperre
+# abgibt -- sonst ist sein ganzer Inhalt weg, ohne dass eine Zeile fehlt.
+R=/tmp/aiml_ckpt_rueck
+rm -rf $R; mkdir -p $R
+timeout 120 "$AIML" $FIX/ckpt_rueckfall.aiml -r > $W/rf1.out 2>&1
+len1=$(grep -oP 'len=\K[0-9]+' $W/rf1.out | tail -1)
+if [ "${len1:-0}" = "1000" ] && [ -f $R/rueck.kvidx ]; then
+  ok "Rueckfall-Vorlauf: 1000 Schluessel, Dump geschrieben"
+else
+  bad "Rueckfall-Vorlauf: len=${len1:-?}, kvidx=$(ls $R 2>/dev/null | tr '\n' ' ')"
+  sed -n '1,10p' $W/rf1.out
+fi
+rm -f $R/rueck.kvidx && mkdir -p $R/rueck.kvidx
+timeout 120 "$AIML" $FIX/ckpt_rueckfall.aiml -r > $W/rf2.out 2>&1
+rc=$?
+len2=$(grep -oP 'len=\K[0-9]+' $W/rf2.out | tail -1)
+e2=$(grep -oP 'erst=\K[^ ]+' $W/rf2.out | tail -1)
+l2=$(grep -oP 'letzt=\K[^ ]+' $W/rf2.out | tail -1)
+if [ "$rc" -eq 0 ] && [ "${len2:-0}" = "1000" ] && [ "$e2" = "w_0" ] && [ "$l2" = "w_999" ]; then
+  ok "Dump unschreibbar: Inhalt im selben Prozess weiter lesbar (len=$len2)"
+else
+  bad "Dump unschreibbar: rc=$rc len=${len2:-?} erst=${e2:-?} letzt=${l2:-?} (erwartet 0/1000/w_0/w_999)"
+  sed -n '1,10p' $W/rf2.out
+fi
+
+# ── 5. Spitzenverbrauch: checkpoint gibt den RAM-Index ab ────────────────────
+# Dieselben 1,6 Mio Schluessel, einmal in vier Phasen mit checkpoint je Phase,
+# einmal in einem Zug.  Gibt der Store den Ueberlauf nach jedem checkpoint ab,
+# bleibt die Spitze bei einer Phase; sonst sind beide Laeufe gleich teuer.
+# Laeuft ein paar Minuten -- deshalb ganz am Ende.
+if [ "${IDX_GATES_SCHNELL:-0}" = "1" ]; then
+  echo "[ -- ] Gate 5 (Spitzenverbrauch) uebersprungen: IDX_GATES_SCHNELL=1"
+else
+  rm -rf /tmp/aiml_ckpt_phasen /tmp/aiml_ckpt_ein
+  mkdir -p /tmp/aiml_ckpt_phasen /tmp/aiml_ckpt_ein
+  spitze() { /usr/bin/time -f '%M' -o "$2" timeout 1800 "$AIML" "$1" -r > "$3" 2>"$3.err"; }
+  spitze $FIX/ckpt_einphasig.aiml $W/ein.rss $W/ein.out
+  spitze $FIX/ckpt_phasen.aiml    $W/pha.rss $W/pha.out
+  rss_ein=$(tail -1 $W/ein.rss 2>/dev/null || echo 0)
+  rss_pha=$(tail -1 $W/pha.rss 2>/dev/null || echo 0)
+  len_ein=$(grep -oP 'len=\K[0-9]+' $W/ein.out | tail -1)
+  len_pha=$(grep -oP 'len=\K[0-9]+' $W/pha.out | tail -1)
+  p2=$(grep -oP 'p2=\K[^ ]+' $W/pha.out | tail -1)
+
+  if [ "${len_ein:-0}" = "1600000" ] && [ "${len_pha:-0}" = "1600000" ] && [ "$p2" = "wert_700000" ]; then
+    ok "beide Laeufe tragen 1,6 Mio Schluessel, Phase 2 nach drei Checkpoints lesbar"
+  else
+    bad "Inhalt: len_ein=${len_ein:-?} len_pha=${len_pha:-?} p2=${p2:-?} (erwartet 1600000/1600000/wert_700000)"
+    sed -n '1,10p' $W/pha.out; sed -n '1,10p' $W/pha.out.err
+  fi
+
+  # Gemessen 08.11.2026 (1,6 Mio Schluessel, 4 Phasen): mit Abgeben 411 gegen
+  # 510 MB = 81%, ohne Abgeben 510 gegen 510 = 100%.  Mehr Abstand ist nicht zu
+  # holen: die WAL-Abbildungen, die Liste des letzten Checkpoints und der
+  # frische Dump zaehlen in BEIDEN Laeufen mit, nur der Ueberlauf unterscheidet
+  # sie.  88% laesst der Messung 7 Punkte Luft und faellt auf die Mutation.
+  grenze=$(( rss_ein * 88 / 100 ))
+  if [ "${rss_pha:-0}" -gt 0 ] && [ "$rss_pha" -lt "$grenze" ]; then
+    ok "Spitze phasenweise $((rss_pha/1024)) MB < 88% von einphasig $((rss_ein/1024)) MB"
+  else
+    bad "Spitze phasenweise $((rss_pha/1024)) MB gegen einphasig $((rss_ein/1024)) MB -- der checkpoint gibt den Ueberlauf nicht ab"
+  fi
+fi
+
 
 echo "---- $PASS ok, $FAIL fehlgeschlagen"
 [ "$FAIL" -eq 0 ]

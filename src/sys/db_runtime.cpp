@@ -1515,34 +1515,33 @@ static inline bool kv_lookup(AimlKv* kv, const char* key, AimlKvValueLoc* out) {
 
 // ── Index-Dump: Schreiben (spec/31 §6.2.1) ─────────────────────────────────
 // Nur bei checkpoint.  Dort wird die WAL neu geschrieben, alle Offsets aendern
-// sich, und kv->index traegt danach den vollstaendigen Satz -- der Checkpoint
-// kopiert Dump UND Ueberlauf in die neue Datei.  Scheitert das Schreiben, ist
-// das kein Fehler: ohne Dump ist der naechste Start langsam, nicht falsch.
-static void kv_idx_write(AimlKv* kv) {
-    if (!kv->index_dump || kv->idx_path.empty()) return;
-    if (kv->wal_fd < 0 || !kv->wal_mmap) return;
+// sich.  `items` traegt ALLE lebenden Eintraege; die Zeiger muessen bis zur
+// Rueckkehr leben.  Rueckgabe true = die Datei steht.  false heisst nicht
+// "Daten verloren", sondern "kein Dump": der naechste Start ist langsam, nicht
+// falsch -- der Aufrufer muss dann aber den Ueberlauf tragen (spec/31 §6.2.1,
+// "Nach dem Checkpoint gibt der Store den RAM-Index her", Rueckfall).
+static bool kv_idx_write_items(
+        AimlKv* kv,
+        std::vector<std::pair<std::string, AimlKvValueLoc>>& items) {
+    if (!kv->index_dump || kv->idx_path.empty()) return false;
+    if (kv->wal_fd < 0 || !kv->wal_mmap) return false;
 
-    std::vector<std::pair<const std::string*, AimlKvValueLoc>> items;
-    items.reserve(kv->index.size());
     size_t key_bytes = 0;
-    for (auto& kvp : kv->index) {
-        if (kvp.second.offset == KV_IDX_TOMB) continue;
-        items.emplace_back(&kvp.first, kvp.second);
-        key_bytes += kvp.first.size();
-    }
+    for (auto& it : items) key_bytes += it.first.size();
     // key_off ist 32 Bit.  Bei mehr als 4 GiB Schluesselbytes gibt es keinen
     // Dump -- lieber kein Dump als ein stiller Ueberlauf.
-    if (key_bytes > 0xFFFFFFFFull) return;
+    if (key_bytes > 0xFFFFFFFFull) return false;
+    // An der Liste selbst sortiert, nicht an einer Zeigerliste daneben.
     std::sort(items.begin(), items.end(),
-              [](const auto& a, const auto& b) { return *a.first < *b.first; });
+              [](const auto& a, const auto& b) { return a.first < b.first; });
 
     const std::string tmp = kv->idx_path + ".tmp";
     unlink(tmp.c_str());
     int fd = open(tmp.c_str(), O_RDWR | O_CREAT | O_CLOEXEC | O_TRUNC, 0644);
-    if (fd < 0) return;
+    if (fd < 0) return false;
 
     struct stat ws{};
-    if (fstat(kv->wal_fd, &ws) != 0) { close(fd); unlink(tmp.c_str()); return; }
+    if (fstat(kv->wal_fd, &ws) != 0) { close(fd); unlink(tmp.c_str()); return false; }
 
     AimlKvIdxHeader h{};
     memcpy(h.magic, KV_IDX_MAGIC, 8);
@@ -1558,36 +1557,50 @@ static void kv_idx_write(AimlKv* kv) {
 
     bool ok = (write(fd, &h, sizeof(h)) == (ssize_t)sizeof(h));
 
-    // Eintraege, danach der Schluesselblock in derselben Reihenfolge.
-    std::vector<AimlKvIdxEntry> ents;
-    ents.reserve(items.size());
+    // Eintraege, danach der Schluesselblock in derselben Reihenfolge.  Beides
+    // laeuft durch einen 1-MiB-Puffer: ein eigener Eintragsvektor waere bei
+    // Millionen Schluesseln eine dritte Kopie derselben Liste, und genau diese
+    // Kopien soll §6.2.1 "Nach dem Checkpoint" einsparen.
+    std::string buf;
+    buf.reserve(1u << 20);
+    auto spuel = [&](bool erzwingen) {
+        if (!ok) return;
+        if (!erzwingen && buf.size() < (1u << 20)) return;
+        if (!buf.empty() && write(fd, buf.data(), buf.size()) != (ssize_t)buf.size()) ok = false;
+        buf.clear();
+    };
     uint32_t key_off = 0;
     for (auto& it : items) {
+        if (!ok) break;
         AimlKvIdxEntry e{};
         e.val_off = it.second.offset;
         e.val_len = it.second.length;
         e.key_off = key_off;
-        e.key_len = (uint32_t)it.first->size();
+        e.key_len = (uint32_t)it.first.size();
         e.pad     = 0;
-        ents.push_back(e);
-        key_off += (uint32_t)it.first->size();
+        buf.append((const char*)&e, sizeof(e));
+        spuel(false);
+        key_off += (uint32_t)it.first.size();
     }
-    if (ok && !ents.empty()) {
-        const size_t n = ents.size() * sizeof(AimlKvIdxEntry);
-        ok = (write(fd, ents.data(), n) == (ssize_t)n);
-    }
+    spuel(true);
     for (auto& it : items) {
         if (!ok) break;
-        if (it.first->empty()) continue;
-        ok = (write(fd, it.first->data(), it.first->size()) == (ssize_t)it.first->size());
+        buf.append(it.first);
+        spuel(false);
     }
-    if (!ok) { close(fd); unlink(tmp.c_str()); return; }
+    spuel(true);
+    if (!ok) { close(fd); unlink(tmp.c_str()); return false; }
     fsync(fd);
     close(fd);
     // Atomar einhaengen, wie der Checkpoint die WAL: ein halb geschriebener
     // Dump darf nie unter dem Namen stehen.
-    if (rename(tmp.c_str(), kv->idx_path.c_str()) != 0) unlink(tmp.c_str());
+    if (rename(tmp.c_str(), kv->idx_path.c_str()) != 0) {
+        unlink(tmp.c_str());
+        return false;
+    }
+    return true;
 }
+
 
 // ALLE lebenden Eintraege: Ueberlauf (ohne Grabsteine), dann Dump (ohne die vom
 // Ueberlauf verdeckten).  Wer ueber einen persistenten Kv laeuft, MUSS das hier
@@ -1853,13 +1866,21 @@ extern "C" int32_t aiml_db_kv_checkpoint(void* kv_ptr) {
     kv->index.clear();
     kv->blob_only = blob_only_save;  // preserve mode through rewrite
 
+    // Mit Dump sammeln die neuen Orte in einer LISTE statt im Ueberlauf: grob
+    // 60 Byte je Schluessel gegen 434 in der unordered_map, und der Ueberlauf
+    // bleibt danach leer (spec/31 §6.2.1, "Nach dem Checkpoint gibt der Store
+    // den RAM-Index her").  Ohne Dump bleibt der Ueberlauf der Index.
+    const bool want_dump = kv->index_dump && !kv->idx_path.empty();
+    std::vector<std::pair<std::string, AimlKvValueLoc>> frisch;
+    if (want_dump) frisch.reserve((size_t)old_count + old_index.size());
+
     // 4. Copy each record from old mmap → temp via kv_wal_write_* (uses memcpy
     //    into temp_mmap; kv_mmap_grow handles overflow within temp).
     //    Zuerst der Dump, ohne die vom Ueberlauf verdeckten Schluessel; dann der
     //    Ueberlauf ohne Grabsteine.  Jeder Schluessel landet so genau einmal.
     for (uint64_t i = 0; i < old_count; i++) {
         const AimlKvIdxEntry& e = old_ents[i];
-        const std::string k(old_keys + e.key_off, e.key_len);
+        std::string k(old_keys + e.key_off, e.key_len);
         if (old_index.find(k) != old_index.end()) continue;  // Wert oder Grabstein im Ueberlauf
         const void* old_val = (const char*)old_mmap + e.val_off;
         if (blob_only_save) {
@@ -1867,7 +1888,9 @@ extern "C" int32_t aiml_db_kv_checkpoint(void* kv_ptr) {
         } else {
             kv_wal_write_set(kv, k.c_str(), old_val, e.val_len);
         }
-        kv->index[k] = AimlKvValueLoc{kv->wal_used - e.val_len, e.val_len};
+        const AimlKvValueLoc loc{kv->wal_used - e.val_len, e.val_len};
+        if (want_dump) frisch.emplace_back(std::move(k), loc);
+        else           kv->index[k] = loc;
     }
     for (auto& [k, old_loc] : old_index) {
         if (old_loc.offset == KV_IDX_TOMB) continue;   // Grabstein: nichts zu schreiben
@@ -1877,9 +1900,13 @@ extern "C" int32_t aiml_db_kv_checkpoint(void* kv_ptr) {
         } else {
             kv_wal_write_set(kv, k.c_str(), old_val, old_loc.length);
         }
-        uint64_t new_offset = kv->wal_used - old_loc.length;
-        kv->index[k] = AimlKvValueLoc{new_offset, old_loc.length};
+        const AimlKvValueLoc loc{kv->wal_used - old_loc.length, old_loc.length};
+        if (want_dump) frisch.emplace_back(k, loc);
+        else           kv->index[k] = loc;
     }
+    // Der alte Ueberlauf ist abgeschrieben.  Mit Dump senkt das die Spitze um
+    // genau den Posten, den dieser Abschnitt sparen will.
+    if (want_dump) { old_index.clear(); old_index.rehash(0); }
 
     // 5. Persist + sync temp
     kv_mmap_persist_used(kv);
@@ -1901,9 +1928,19 @@ extern "C" int32_t aiml_db_kv_checkpoint(void* kv_ptr) {
     //    ausschliesslich hier, weil hier die Offsets entstehen.  Erst NACH dem
     //    rename, damit fstat die endgueltige Inode liefert.
     if (old_idx_mmap) munmap(old_idx_mmap, old_idx_mmap_size);
-    kv_idx_write(kv);
+    if (want_dump) {
+        const bool steht = kv_idx_write_items(kv, frisch);
+        // Erst laden, dann erst darf der Ueberlauf leer bleiben.  Laedt der
+        // frische Dump NICHT, muss der Ueberlauf aus der Liste aufgefuellt
+        // werden, bevor die Sperre faellt -- ein Store mit leerem Ueberlauf und
+        // ohne gueltigen Dump haette seinen ganzen Inhalt verloren, ohne dass
+        // eine Zeile fehlt (spec/31 §6.2.1, Rueckfall).
+        if (!steht || kv_idx_try_load(kv) != kv->wal_used) {
+            for (auto& p : frisch) kv->index[std::move(p.first)] = p.second;
+        }
+    }
     // 9. Und die Nebenindizes (spec/45 "Geschrieben wird beim Checkpoint") --
-    //    mit dem Stempel der eben umbenannten WAL, also nach kv_idx_write.
+    //    mit dem Stempel der eben umbenannten WAL, also nach dem Primaerindex.
     kv_sidx_write_all(kv);
     return 0;
 }
