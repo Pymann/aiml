@@ -69,6 +69,7 @@ value**. Later `gl.*` calls are then undefined (typically a crash or no output).
 ```aiml
 # Vertex data (xyz per vertex)
 - decl: [verts, buffer<f32>]
+- call: [verts.alloc, 128]   # alloc vor jedem Schreiben (spec/11 §Methoden)
 - call: [verts.push, 0.0]  - call: [verts.push, 0.5]  - call: [verts.push, 0.0]
 - call: [verts.push, -0.5] - call: [verts.push, -0.5] - call: [verts.push, 0.0]
 - call: [verts.push, 0.5]  - call: [verts.push, -0.5] - call: [verts.push, 0.0]
@@ -93,6 +94,7 @@ For dynamic data (updated every frame):
 
 ```aiml
 - decl: [idx, buffer<u32>]
+- call: [idx.alloc, 64]
 - call: [idx.push, 0] - call: [idx.push, 1] - call: [idx.push, 2]
 
 - decl: [ibo, gl_buffer, { call: [gl.create_index_buffer, idx] }]
@@ -506,6 +508,7 @@ Usage:
 
 # --- Geometry ---
 - decl: [verts, buffer<f32>]
+- call: [verts.alloc, 128]   # alloc vor jedem Schreiben (spec/11 §Methoden)
 # pos (xyz), uv (xy)
 - call: [verts.push,  0.0] - call: [verts.push,  0.5] - call: [verts.push, 0.0]
 - call: [verts.push,  0.5] - call: [verts.push,  1.0]
@@ -629,7 +632,10 @@ in just a few lines. Manual VBO/VAO setup is entirely unnecessary.
 
 | Call | Arguments | Return | Description |
 |--------|-----------|----------|--------------|
-| `gl.init` | — | — | Load GLAD, initialize OpenGL state |
+| `gl.init` | — | — | Load the GL functions with GLEW (desktop); no-op under WebGL2 (§2) |
+| `gl.supports` | `feature: string` | `bool` | Context capability; keys and semantics in `43_5_stylized_rendering.md` §7 |
+| `gl.limit` | `name: string` | `i32` | Context limit (`max_texture_size`, …), `-1` for an unknown key — 43_5 §7 |
+| `gl.read_rgba8` | `x, y, w, h: i32` | `buffer<u8>` | Read back the bound framebuffer — 43_5 §9; basis for headless pixel checks |
 | `gl.viewport` | `x, y, w, h: i32` | — | glViewport |
 | `gl.clear` | `r, g, b, a: f32` | — | Clear color buffer |
 | `gl.clear_depth` | — | — | Clear depth buffer |
@@ -725,11 +731,13 @@ in just a few lines. Manual VBO/VAO setup is entirely unnecessary.
 
 ## 13. Implementation Notes
 
-### 13.1 Backend: GLAD
+### 13.1 Backend: GLEW
 
-GLAD (OpenGL Loader, MIT license) is copied into the repo as a single header.
-`gl.init` calls `gladLoadGLLoader`. No external dependency other than the
-system OpenGL (`libGL.so` / `opengl32.lib`).
+`gl.init` calls `glewInit` (desktop).  GLEW is a declared build dependency
+(`libglew-dev` / `libglew2.2` in `exodus.json`) and is linked into `libaiml.so`;
+there is no vendored loader in the repo.  Under WebGL2 (WASM) no loader is needed
+and `gl.init` does nothing (§2).  Besides that only the system OpenGL is required
+(`libGL.so` / `opengl32.lib`).
 
 ### 13.2 Uniform Caching
 
@@ -746,6 +754,7 @@ For skeletal animation, `sh.uniform_mat4_array` is used:
 
 # All bone matrices as a flat f32 buffer
 - decl: [bones, buffer<f32>]
+- call: [bones.alloc, 4096]  # 64 Matrizen * 16 floats * 4 Byte
 - decl: [j, i32, 0]
 - while: [{ <: [j, { call: [pose.len] }] }]
   body:

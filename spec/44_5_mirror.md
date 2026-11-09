@@ -40,26 +40,29 @@
 
 ## 2. Model Declaration with Sync
 
-Fields and methods to be mirrored over the network are marked directly in the
-`model` declaration:
+The fields to be replicated over the network are marked in the `model`
+declaration with `sync:`:
 
 ```aiml
-- model: Player
-  sync: [pos, health, score]     # these fields are automatically replicated
-  rpc:  [take_damage, respawn]   # these methods are forwarded to peers
-  fields:
-    - [pos,    vec3]
-    - [health, i32]
-    - [score,  i32]
-    - [name,   string]           # not in sync: → local only
-    - [inv,    list<string>]     # not in sync: → local only
+- model:
+    name: Player
+    sync: [pos, health, score]   # these fields are automatically replicated
+    fields:
+      - [pos,    vec3]
+      - [health, i32]
+      - [score,  i32]
+      - [name,   string]         # not in sync: → local only
+      - [inv,    list<string>]   # not in sync: → local only
 ```
 
 - **`sync:`** — list of field names; the compiler automatically generates
   serialization/deserialization for these fields
-- **`rpc:`** — list of method names; calls are forwarded to the owner
-  (or all peers) with encoded arguments
 - Fields not listed in `sync:` are never transmitted
+- **`rpc:` does not belong here.**  A model has no methods, so `rpc:` on a model
+  is a compile error ("models have no methods; declare rpc: on a class") — the
+  methods callable over the network are listed on a **class**, see §7.1.  A class
+  can carry the replicated state through `models: [Player]`
+  (`tests/test_iface_list_return_after_mirror.aiml` shows that shape).
 
 The compiler generates per `sync:` model:
 - `__aiml_mirror_serialize_<Model>(obj*, buf*)` — only changed fields (delta)

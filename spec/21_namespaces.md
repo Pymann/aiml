@@ -45,7 +45,14 @@ Class groups follow the same rule; for `groupmethods:` files see
 The `import` command loads another AIML file.
 - Each file is compiled **at most once** — the `__aiml_cache` tracks already-compiled files.
 - Circular imports are therefore **allowed**. The cache prevents infinite loops.
-- Import paths are **relative to the importing file's directory**. `../` is supported.
+- Import paths are resolved **against the build root (the working directory) first,
+  then relative to the importing file's directory**. `../` is supported in both.
+  Measured 2026-11-09: with a file of the same name in both places, the one at the
+  build root wins — even though the other lies right next to the importing file.
+  That is a shadowing hazard: a new file at the root silently takes precedence over
+  a neighbour of the same name.  Both styles are in productive use — 9rooms and
+  datacreatures write every import root-relative (`sources/…`), glbview writes them
+  file-relative (`shading.aiml` from `src/`).
 - **Absolute paths in import statements are forbidden.**
 - `@name/…` imports from an installed package (§3.1).
 - Imported symbols must be accessed via their **Fully Qualified Name (FQN)**.
