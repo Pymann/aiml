@@ -5799,6 +5799,21 @@ void registerBuiltins(CompilerContext& ctx) {
 
             llvm::Value* storeVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
 
+            // spec/31 §4.1: db.query arbeitet auf einem Store<T> (db.open).
+            // Ein Kv (db.open_kv) hat ein anderes Innenleben -- der Aufruf
+            // uebersetzte bisher SAUBER und las dann Unsinn: im
+            // DataCreatures-Server ein SIGSEGV beim Hochfahren
+            // (aiml_db_store_is_active, addr=0x3f800000 -- das Bitmuster von
+            // 1.0f als Zeiger benutzt), in einer kleinen Probe stumm eine
+            // leere Liste.  Beides ist dieselbe Verwechslung, und beide
+            // Male faellt sie erst zur Laufzeit auf.
+            if (ctx.dbQueryStoreType.rfind("Kv<", 0) == 0) {
+                LOG_ERROR(ctx.fmtLoc() + "db.query erwartet einen Store<T> (db.open), bekommen hat es "
+                    + ctx.dbQueryStoreType + " (db.open_kv).  Ein Kv wird mit `.iter` durchlaufen "
+                    "oder mit `.get` gelesen -- db.query sieht seine Eintraege nicht.");
+                return ctx.ir_gen->getInt32(0);
+            }
+
             // Predicate function pointer (NULL if no where clause)
             llvm::Value* predPtr = llvm::ConstantPointerNull::get(
                 llvm::cast<llvm::PointerType>(i8p));

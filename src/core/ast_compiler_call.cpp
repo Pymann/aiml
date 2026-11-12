@@ -481,8 +481,32 @@ IRValue* Compiler::visitCall(CallExpr* call) {
             // For db.query: capture the store argument's type so order_by can look up field offsets.
             if (methodName == "query" && !call->args.empty()) {
                 if (auto* var = dynamic_cast<AIML::AST::VariableExpr*>(call->args[0].get())) {
-                    Symbol* sym = resolveVariable(var->name);
-                    if (sym) ctx.dbQueryStoreType = sym->typeName;
+                    // Ein KLASSENMITGLIED (`<.laden`) ist auch eine VariableExpr,
+                    // aber resolveVariable kennt es nicht -- der Typ blieb leer,
+                    // und damit fiel weder `order_by` noch die Store-Pruefung
+                    // unten auf.  Darum erst am Mitglied nachsehen, dann am
+                    // Symbol (spec/31 §4.1).
+                    std::string field;
+                    if (var->name.rfind("<.", 0) == 0)         field = var->name.substr(2);
+                    else if (var->name.rfind("this.", 0) == 0) field = var->name.substr(5);
+                    if (!field.empty() && field.find('.') == std::string::npos) {
+                        std::string cls = ctx.currentClassName;
+                        if (Symbol* th = resolveVariable("this")) {
+                            cls = th->typeName;
+                            if ((cls.rfind("ref<", 0) == 0 || cls.rfind("ptr<", 0) == 0) && cls.back() == '>')
+                                cls = cls.substr(4, cls.size() - 5);
+                        }
+                        auto cit = ctx.classes.find(cls);
+                        if (cit != ctx.classes.end()) {
+                            auto mit = cit->second.members.find(field);
+                            if (mit != cit->second.members.end())
+                                ctx.dbQueryStoreType = mit->second.typeName;
+                        }
+                    }
+                    if (ctx.dbQueryStoreType.empty()) {
+                        Symbol* sym = resolveVariable(var->name);
+                        if (sym) ctx.dbQueryStoreType = sym->typeName;
+                    }
                 }
             }
             // Helper: apply a single key=value option pair

@@ -388,6 +388,15 @@ AionDB avoids runtime parsing entirely. There are two query modes:
 
 ### 4.1 `db.query` — Single-Store Queries
 
+> **Nur `Store<T>`.** `db.query` arbeitet auf einem Store (`db.open`), nicht
+> auf einem `Kv<K:V>` (`db.open_kv`) — die beiden haben verschiedenes
+> Innenleben. Ein `Kv` als erstes Argument ist seit 2026-11-12 ein
+> **Übersetzungsfehler**. Vorher übersetzte der Aufruf sauber und las zur
+> Laufzeit Unsinn: einmal ein SIGSEGV (`aiml_db_store_is_active`, Adresse
+> `0x3f800000` — das Bitmuster von `1.0f`, als Zeiger benutzt), einmal stumm
+> eine leere Liste. Ein `Kv` wird mit `.iter` durchlaufen oder mit `.get`
+> gelesen. Netz: `tests/test_db_query_on_kv_error.aiml`.
+
 The `{where: ...}` argument takes a **function**, not a string.
 The function is compiled to a function pointer and called per element —
 no parser, direct IR:
