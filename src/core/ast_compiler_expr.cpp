@@ -690,6 +690,45 @@ static llvm::Value* coerceToBool(CompilerContext& ctx, llvm::Value* v) {
 }
 
 // spec/04_1 §7: { cast: [value, type] } — exactly the conversions of the table.
+// spec/13 §6 + spec/04_1 §7.  EINE Umwandlung float→Ganzzahl fuer alle Speicherpfade
+// (Member-Store, idx-Element, decl-Init, lokales set, Vorgabewert) UND fuer `cast` selbst:
+// zwei Eingaben haben kein Ganzzahl-Bild und ergaeben bei blankem CreateFPToSI poison,
+// also sind sie hier festgelegt -- NaN → 0, ausserhalb des Bereichs geklammert.  Geklammert
+// wird VOR der Umwandlung, denn danach wuerde man poison vergleichen.
+llvm::Value* coerceFloatToIntegral(CompilerContext& ctx, llvm::Value* v, llvm::Type* dstTy,
+                                   const std::string& dstName) {
+    if (!v || !dstTy || !v->getType()->isFloatingPointTy() || !dstTy->isIntegerTy()) return v;
+    auto& bld = ctx.builder;
+    llvm::Type* from = v->getType();
+    // `bool` ist als i8 abgelegt: dieselbe Antwort wie `cast` und wie eine Bedingung
+    // (ONE, also ist NaN false) -- nicht die Klammerung weiter unten.
+    if (dstName == "bool" || dstTy->isIntegerTy(1)) {
+        llvm::Value* nz = bld.CreateFCmpONE(v, llvm::ConstantFP::get(from, 0.0), "st_f2b");
+        return dstTy->isIntegerTy(1) ? nz : bld.CreateZExt(nz, dstTy, "st_f2b_w");
+    }
+    unsigned bits = dstTy->getIntegerBitWidth();
+    bool uns = dstName == "u8" || dstName == "u16" || dstName == "u32" || dstName == "u64"
+            || dstName == "usize" || dstName == "size_t";
+    double lo = uns ? 0.0 : -std::ldexp(1.0, (int)bits - 1);
+    double hi = uns ? std::ldexp(1.0, (int)bits) - 1.0 : std::ldexp(1.0, (int)bits - 1) - 1.0;
+    llvm::Value* zero  = llvm::ConstantFP::get(from, 0.0);
+    llvm::Value* isNan = bld.CreateFCmpUNO(v, v, "st_nan");
+    llvm::Value* safe  = bld.CreateSelect(isNan, zero, v, "st_nan0");
+    // Grenzen im QUELLtyp bilden: bei f32 sind sie nicht exakt darstellbar und werden
+    // gerundet -- genau deshalb wird geklammert und nicht nur verglichen.
+    llvm::Value* loV = llvm::ConstantFP::get(from, lo);
+    llvm::Value* hiV = llvm::ConstantFP::get(from, hi);
+    safe = bld.CreateSelect(bld.CreateFCmpOLT(safe, loV), loV, safe, "st_clamp_lo");
+    safe = bld.CreateSelect(bld.CreateFCmpOGT(safe, hiV), hiV, safe, "st_clamp_hi");
+    llvm::Value* conv = uns ? bld.CreateFPToUI(safe, dstTy, "st_f2u")
+                            : bld.CreateFPToSI(safe, dstTy, "st_f2i");
+    // Nach dem Klammern kann die gerundete Obergrenze noch ueberlaufen → festnageln.
+    llvm::Value* atHi = bld.CreateFCmpOGE(safe, hiV, "st_at_hi");
+    llvm::Value* hiI  = llvm::ConstantInt::get(dstTy, uns ? llvm::APInt::getMaxValue(bits)
+                                                          : llvm::APInt::getSignedMaxValue(bits));
+    return bld.CreateSelect(atHi, hiI, conv, "st_f2i_sat");
+}
+
 IRValue* Compiler::visitCast(BinaryExpr* bin) {
     auto* target = dynamic_cast<VariableExpr*>(bin->rhs.get());
     if (!target) {
@@ -733,34 +772,9 @@ IRValue* Compiler::visitCast(BinaryExpr* bin) {
     bool fromInt   = from->isIntegerTy(32) || from->isIntegerTy(64);
     bool fromFloat = from->isFloatTy() || from->isDoubleTy();
 
-    /* float → integer.  Two inputs have no integer image, and leaving them to
-     * CreateFPToSI means poison at IR level — a build could then legitimately
-     * produce any value.  So both are defined here (spec/04_1 §7):
-     *   NaN            → 0
-     *   out of range   → clamped to the target's range
-     * The clamp is done in floating point BEFORE the conversion, because
-     * comparing after it would already be comparing poison. */
+    // float → Ganzzahl: dieselbe Umwandlung wie jeder Speicherpfad (coerceFloatToIntegral)
     auto floatToInt = [&](llvm::Type* dst) -> IRValue* {
-        unsigned bits = dst->getIntegerBitWidth();
-        double lo = (bits == 32) ? -2147483648.0 : -9223372036854775808.0;
-        double hi = (bits == 32) ?  2147483647.0 :  9223372036854775807.0;
-        llvm::Value* zero   = llvm::ConstantFP::get(from, 0.0);
-        llvm::Value* isNan  = bld.CreateFCmpUNO(val, val, "cast_nan");
-        llvm::Value* safe   = bld.CreateSelect(isNan, zero, val, "cast_nan0");
-        /* Grenzen im Quelltyp bilden: bei f32 sind sie nicht exakt
-         * darstellbar und werden gerundet — genau deshalb wird GEKLAMMERT und
-         * nicht nur verglichen. */
-        llvm::Value* loV = llvm::ConstantFP::get(from, lo);
-        llvm::Value* hiV = llvm::ConstantFP::get(from, hi);
-        safe = bld.CreateSelect(bld.CreateFCmpOLT(safe, loV), loV, safe, "cast_clamp_lo");
-        safe = bld.CreateSelect(bld.CreateFCmpOGT(safe, hiV), hiV, safe, "cast_clamp_hi");
-        llvm::Value* conv = bld.CreateFPToSI(safe, dst, "cast_f2i");
-        /* Nach dem Klammern kann FPToSI am oberen Rand noch überlaufen (die
-         * gerundete Grenze liegt ggf. über hi) → auf hi festnageln. */
-        llvm::Value* atHi = bld.CreateFCmpOGE(safe, hiV, "cast_at_hi");
-        llvm::Value* hiI  = llvm::ConstantInt::getSigned(dst, (bits == 32)
-                              ? (int64_t)2147483647 : INT64_MAX);
-        return ctx.ir_gen->wrap(bld.CreateSelect(atHi, hiI, conv, "cast_f2i_sat"));
+        return ctx.ir_gen->wrap(coerceFloatToIntegral(ctx, val, dst, to));
     };
 
     if (to == "i32" || to == "i64") {

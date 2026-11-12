@@ -265,7 +265,7 @@ void coerceOrStoreFieldDefault(CompilerContext& ctx,
         } else if (targetTy->isFloatingPointTy() && storeVal->getType()->isIntegerTy()) {
             storeVal = ctx.builder.CreateSIToFP(storeVal, targetTy, "default_int_to_fp");
         } else if (targetTy->isIntegerTy() && storeVal->getType()->isFloatingPointTy()) {
-            storeVal = ctx.builder.CreateFPToSI(storeVal, targetTy, "default_fp_to_int");
+            storeVal = coerceFloatToIntegral(ctx, storeVal, targetTy, member.typeName);
         } else if (targetTy->isFloatingPointTy() && storeVal->getType()->isFloatingPointTy()) {
             storeVal = ctx.builder.CreateFPCast(storeVal, targetTy, "default_fp_cast");
         }
@@ -2876,7 +2876,7 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
                             } else if (targetTy->isFloatingPointTy() && sv->getType()->isIntegerTy()) {
                                 initVal = ctx.ir_gen->wrap(ctx.builder.CreateSIToFP(sv, targetTy, "int_to_fp"));
                             } else if (targetTy->isIntegerTy() && sv->getType()->isFloatingPointTy()) {
-                                initVal = ctx.ir_gen->wrap(ctx.builder.CreateFPToSI(sv, targetTy, "fp_to_int"));
+                                initVal = ctx.ir_gen->wrap(coerceFloatToIntegral(ctx, sv, targetTy, decl->typeName));
                             } else if (targetTy->isFloatingPointTy() && sv->getType()->isFloatingPointTy()) {
                                 if (llvm::Constant* c = floatLiteralIn(decl->initialValue.get(), targetTy))
                                     initVal = ctx.ir_gen->wrap(static_cast<llvm::Value*>(c));   // spec/04_1 §7a
@@ -3892,7 +3892,7 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                     } else if (targetTy->isFloatingPointTy() && sv->getType()->isIntegerTy()) {
                         val = ctx.ir_gen->wrap(ctx.builder.CreateSIToFP(sv, targetTy, "int_to_fp"));
                     } else if (targetTy->isIntegerTy() && sv->getType()->isFloatingPointTy()) {
-                        val = ctx.ir_gen->wrap(ctx.builder.CreateFPToSI(sv, targetTy, "fp_to_int"));
+                        val = ctx.ir_gen->wrap(coerceFloatToIntegral(ctx, sv, targetTy, sym->typeName));
                     } else if (targetTy->isFloatingPointTy() && sv->getType()->isFloatingPointTy()) {
                         val = ctx.ir_gen->wrap(ctx.builder.CreateFPCast(sv, targetTy, "fp_cast"));
                     }
@@ -4570,6 +4570,8 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                             val = ctx.ir_gen->wrap(ctx.builder.CreateSIToFP(sv3, fty, "fld_i2f"));
                         else if (fty->isFloatingPointTy() && sty->isFloatingPointTy())
                             val = ctx.ir_gen->wrap(ctx.builder.CreateFPCast(sv3, fty, "fld_fcast"));
+                        else if (fty->isIntegerTy() && sty->isFloatingPointTy())
+                            val = ctx.ir_gen->wrap(coerceFloatToIntegral(ctx, sv3, fty, finalTypeName));
                         else if (fty->isIntegerTy() && sty->isIntegerTy()) {
                             unsigned db = fty->getIntegerBitWidth(), sb = sty->getIntegerBitWidth();
                             val = ctx.ir_gen->wrap(db < sb ? ctx.builder.CreateTrunc(sv3, fty, "fld_trunc")
@@ -6270,7 +6272,7 @@ void Compiler::visitIdxStmt(IdxStmt* idx) {
             } else if (elemTy->isIntegerTy() && storeVal->getType()->isIntegerTy()) {
                 storeVal = ctx.builder.CreateZExtOrTrunc(storeVal, elemTy, "idx_icast");
             } else if (elemTy->isIntegerTy() && storeVal->getType()->isFloatingPointTy()) {
-                storeVal = ctx.builder.CreateFPToSI(storeVal, elemTy, "idx_f2i");
+                storeVal = coerceFloatToIntegral(ctx, storeVal, elemTy, parts[0]);
             } else {
                 LOG_ERROR(ctx.fmtLoc() + "idx: incompatible value for array element store");
                 return;
@@ -6299,6 +6301,8 @@ void Compiler::visitIdxStmt(IdxStmt* idx) {
                 storeVal = ctx.builder.CreateFPCast(storeVal, elemTy, "darr_fcast");
             else if (elemTy->isIntegerTy() && storeVal->getType()->isIntegerTy())
                 storeVal = ctx.builder.CreateZExtOrTrunc(storeVal, elemTy, "darr_icast");
+            else if (elemTy->isIntegerTy() && storeVal->getType()->isFloatingPointTy())
+                storeVal = coerceFloatToIntegral(ctx, storeVal, elemTy, elemName);
         }
         ctx.builder.CreateStore(storeVal, elemPtr);
         return;
@@ -6419,6 +6423,8 @@ void Compiler::visitIdxStmt(IdxStmt* idx) {
                     storeVal = ctx.builder.CreateSIToFP(storeVal, fldTy, "idx_mp_i2f");
                 else if (fldTy->isFloatingPointTy() && storeVal->getType()->isFloatingPointTy())
                     storeVal = ctx.builder.CreateFPCast(storeVal, fldTy, "idx_mp_fcast");
+                else if (fldTy->isIntegerTy() && storeVal->getType()->isFloatingPointTy())
+                    storeVal = coerceFloatToIntegral(ctx, storeVal, fldTy, fldTypeName);
                 else if (fldTy->isPointerTy() && storeVal->getType()->isPointerTy())
                     storeVal = ctx.builder.CreatePointerCast(storeVal, fldTy, "idx_mp_pcast");
             }
@@ -6632,6 +6638,8 @@ void Compiler::visitIdxStmt(IdxStmt* idx) {
                 storeVal = ctx.builder.CreateFPCast(storeVal, elemTy);
             else if (elemTy->isIntegerTy() && storeVal->getType()->isIntegerTy())
                 storeVal = ctx.builder.CreateZExtOrTrunc(storeVal, elemTy);
+            else if (elemTy->isIntegerTy() && storeVal->getType()->isFloatingPointTy())
+                storeVal = coerceFloatToIntegral(ctx, storeVal, elemTy, elemName);
         }
 
         ctx.builder.CreateStore(storeVal, elemPtr);

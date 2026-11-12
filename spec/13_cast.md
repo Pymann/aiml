@@ -82,17 +82,31 @@ deviation, not as contract: new code writes the `cast` explicitly.
 |---|---|
 | Function / method arguments (`Compiler::convertNumericArg`) | integer resize, integer→float, float↔float; a **real for an integer parameter is a compile error** (since 2026-10-29) |
 | `return` value (`ast_compiler_stmt.cpp` ~4904) | integer→float |
-| Default-value stores and member stores (`ast_compiler_stmt.cpp` ~158, ~2636, ~3571, ~3915, ~4207) | integer↔integer, `bool`→integer, integer→float, float↔float, **float→integer** |
+| Default-value stores and member stores (`ast_compiler_stmt.cpp` ~268, ~2911, ~3931, ~4610) | integer↔integer, `bool`→integer, integer→float, float↔float, **float→integer** |
+| `idx:` element and member-path stores (`ast_compiler_stmt.cpp` ~6311, ~6341, ~6463, ~6678) | integer resize, integer→float, float↔float, **float→integer** |
 | List / map / array literal elements (`ast_compiler_stmt.cpp` ~909, ~1197, ~1327, ~2286, ~2317) | integer resize, integer→float |
 | `list.push` (`ast_compiler_call.cpp` ~2094) | integer resize, integer→float |
 | Model / class field defaults (`ast_compiler.cpp` ~277) | integer resize, integer→float |
 | `vec*`/`quat` scalar operand (`ast_compiler_expr.cpp` ~704) | integer→`f32`, `f64`→`f32` |
 | Bitwise right operand (`ast_compiler_expr.cpp` ~771) | integer width match |
 
-⚠️ **Contradiction to record.** The store path at `ast_compiler_stmt.cpp:169` converts
-**float → integer** implicitly (`default_fp_to_int`). That is the one direction this chapter
-previously declared non-implicit, and it is the most lossy of all of them. It is the first
-candidate to remove when implicit conversion goes away.
+**float → integer is the most lossy of these** and the first candidate to remove when implicit
+conversion goes away. Wherever it happens implicitly today it performs the SAME defined
+conversion as `cast` (`coerceFloatToIntegral`, one definition for all paths): NaN → 0, out of
+range clamped to the target's range, `bool` via `!= 0`. A bare `CreateFPToSI` would be poison at
+IR level for exactly those two inputs, so no store path uses one.
+
+> [!WARNING]
+> Until 2026-11-12 four store paths — member store (`set: [m.field, <f32>]`), `idx:` member path,
+> `idx:` on `list<T>` and on `dyn_array<T>` — did not convert at all: they wrote the value's **bit
+> pattern** into the integer slot (`100.0` arrived as `1120403456`). Under opaque pointers a store
+> of the wrong scalar type into a slot is valid IR, so neither the verifier nor any test caught it;
+> it surfaced as a nonsense number in a game's UI. `tests/test_numeric_store_narrowing.aiml`
+> pins all of them, as `tests/test_numeric_store_widening.aiml` does the opposite direction.
+
+`return` is the one place where float → integer is NOT implicit (the table above says so) and
+there is no diagnostic for it either: `ret f32` in an `i32` function is invalid IR, so it is the
+LLVM verifier that complains, not the compiler.
 
 Arithmetic operands are not covered by any of this: mixed-type operands are a compile error
 (`04_1` §3), which is the rule the rest of the language is moving toward.

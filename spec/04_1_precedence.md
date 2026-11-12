@@ -249,7 +249,8 @@ always exact.
 image and are therefore **defined** rather than left to the hardware: `NaN` yields `0`, and a
 value outside the target's range is **clamped** to that range (`i32`: −2147483648 … 2147483647).
 Without this, an out-of-range conversion is undefined at IR level and a build could legitimately
-produce any value at all.
+produce any value at all. This range rule is not `cast`'s alone: every implicit float → integer
+store ([13 §6](13_cast.md)) goes through the same conversion.
 
 **NaN as a truth value** is `false`, the same answer `if` gives for it — `cast` to `bool` and a
 condition must not disagree about the same value.

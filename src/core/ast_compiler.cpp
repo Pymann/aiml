@@ -290,7 +290,7 @@ void Compiler::initClassContainerMembers(llvm::Value* basePtr,
                         else if (slotTy->isIntegerTy() && valTy->isIntegerTy())
                             raw = ctx.builder.CreateSExtOrTrunc(raw, slotTy, "default_int");
                         else if (slotTy->isIntegerTy() && valTy->isFloatingPointTy())
-                            raw = ctx.builder.CreateFPToSI(raw, slotTy, "default_fptoi");
+                            raw = coerceFloatToIntegral(ctx, raw, slotTy, mt);
                     }
                     ctx.builder.CreateStore(raw, fieldPtr);
                 }
