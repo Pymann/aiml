@@ -1,0 +1,90 @@
+# SPEC: 29_serialize
+# Ein Modellfeld vom Typ `map<string:f32>` muss durch BEIDE Wege kommen:
+# sys.serialize/deserialize und einen typisierten Kv mit persist.
+#
+# Anlass: die passiven Fertigkeiten in DataCreatures tragen ihre Wirkungen als
+# Kanal → Zahl (`action.duration: -0.10`).  Fuer `map<string:i32>` und
+# `map<string:string>` laeuft das dort laengst; fuer f32-Werte war es nicht
+# belegt, und ein Bruch waere erst in der Datenbank aufgefallen.
+# Expected exit code: 0
+
+- model:
+    name: WirkTraeger
+    fields:
+      - [name,      string]
+      - [wirkungen, map<string:f32>]
+
+- def:
+    name: pruefe_nah
+    args: [[was, string], [ist, f32], [soll, f32]]
+    return: i32
+    body:
+      - decl: [diff, f32, { "-": [ist, soll] }]
+      - if: { condition: { lt: [diff, 0.0] }, then: [{ set: [diff, { "-": [0.0, diff] }] }] }
+      - if:
+          condition: { gt: [diff, 0.0001] }
+          then:
+            - call: [log.error, "FAIL ${was}: ist ${ist}, soll ${soll}"]
+            - return: 1
+      - return: 0
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [fehl, i32, 0]
+      - decl: [quelle, WirkTraeger]
+      - set:  [quelle.name, "steady_heart"]
+      - call: [quelle.wirkungen.put, "attr.endurance", 1.0]
+      - call: [quelle.wirkungen.put, "action.duration", -0.1]
+      - call: [quelle.wirkungen.put, "find.chance", 0.25]
+
+      # ── 1. ueber die Serialisierung ─────────────────────────────────────
+      - decl: [roh, string, { call: [sys.serialize, quelle] }]
+      - call: [log.info, "serialisiert: ${roh}"]
+      - decl: [zurueck, WirkTraeger, { call: [sys.deserialize, roh, "WirkTraeger"] }]
+      - if:
+          condition: { neq: [zurueck.wirkungen.len, 3] }
+          then:
+            - call: [log.error, "FAIL nach deserialize ${zurueck.wirkungen.len} Eintraege statt 3"]
+            - return: 1
+      - set: [fehl, { "+": [fehl, { call: [pruefe_nah, "attr.endurance (ser)", { call: [zurueck.wirkungen.get, "attr.endurance"] }, 1.0] }] }]
+      - set: [fehl, { "+": [fehl, { call: [pruefe_nah, "action.duration (ser)", { call: [zurueck.wirkungen.get, "action.duration"] }, -0.1] }] }]
+      - set: [fehl, { "+": [fehl, { call: [pruefe_nah, "find.chance (ser)", { call: [zurueck.wirkungen.get, "find.chance"] }, 0.25] }] }]
+
+      # Ein Kanal, den niemand gesetzt hat, muss als fehlend erkennbar sein --
+      # sonst kann `passiv_summe` nicht zwischen 0 und "nicht da" trennen.
+      - if:
+          condition: { neq: [{ call: [zurueck.wirkungen.contains, "travel.duration"] }, 0] }
+          then:
+            - call: [log.error, "FAIL unbekannter Kanal meldet sich als vorhanden"]
+            - set: [fehl, { "+": [fehl, 1] }]
+
+      # ── 2. durch einen typisierten Kv mit persist ───────────────────────
+      - decl: [laden, Kv<string:WirkTraeger>, { call: [db.open_kv, "wirk_traeger", {persist: true}] }]
+      - call: [laden.set, "steady_heart", quelle]
+      - decl: [geholt, WirkTraeger, { call: [laden.get_copy, "steady_heart"] }]
+      - if:
+          condition: { neq: [geholt.wirkungen.len, 3] }
+          then:
+            - call: [log.error, "FAIL aus dem Kv ${geholt.wirkungen.len} Eintraege statt 3"]
+            - return: 1
+      - set: [fehl, { "+": [fehl, { call: [pruefe_nah, "attr.endurance (kv)", { call: [geholt.wirkungen.get, "attr.endurance"] }, 1.0] }] }]
+      - set: [fehl, { "+": [fehl, { call: [pruefe_nah, "action.duration (kv)", { call: [geholt.wirkungen.get, "action.duration"] }, -0.1] }] }]
+      - set: [fehl, { "+": [fehl, { call: [pruefe_nah, "find.chance (kv)", { call: [geholt.wirkungen.get, "find.chance"] }, 0.25] }] }]
+
+      # ── 3. Aufzaehlen (fuer die Anzeige im Tooltip) ─────────────────────
+      - decl: [kanaele, list<string>, { call: [geholt.wirkungen.keys] }]
+      - if:
+          condition: { neq: [kanaele.len, 3] }
+          then:
+            - call: [log.error, "FAIL keys liefert ${kanaele.len} Namen statt 3"]
+            - set: [fehl, { "+": [fehl, 1] }]
+
+      - if:
+          condition: { neq: [fehl, 0] }
+          then:
+            - call: [log.error, "map_f32_model_persist: ${fehl} Fehler"]
+            - return: 1
+      - call: [log.info, "PASS map_f32_model_persist"]
+      - return: 0
