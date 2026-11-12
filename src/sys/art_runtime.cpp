@@ -86,23 +86,24 @@ EM_ASYNC_JS(int, js_art_decode_texture, (int tex_id, const char* ptr, int len), 
     try {
         const bytes = HEAPU8.subarray(ptr, ptr + len);
         const blob  = new Blob([bytes.slice()]);        // copy out of the heap view
-        const bmp   = await createImageBitmap(blob);
+        // Die Bildlage sagt der Dekodierer, nicht ein Zwischen-Canvas:
+        // `imageOrientation: 'flipY'` liefert die Bitmap bereits in der
+        // bottom-up-Konvention der Engine.
+        //
+        // Vorher lief das Bild durch ein 2D-Canvas, nur um FLIP_Y zu bekommen
+        // (WebGL beachtet UNPACK_FLIP_Y_WEBGL bei ImageBitmap-Quellen nicht).
+        // Dieser Umweg gibt die Farbverwaltung des Browsers in den Weg: am
+        // 12.11.2026 kamen im Firefox ALLE PNG-Texturen mit vertauschtem Rot-
+        // und Blaukanal an -- blauer Himmel wurde orange, ein Pergament-Icon
+        // blau --, waehrend dieselbe Datei direkt im Browser richtig aussah
+        // und GLB-Texturen (anderer Weg) stimmten.
+        const bmp   = await createImageBitmap(blob, { imageOrientation: 'flipY' });
         const tex   = GL.textures[tex_id];
         if (!tex) { bmp.close(); return 0; }
-        // Draw the bitmap into a 2D canvas and upload THAT — WebGL ignores
-        // UNPACK_FLIP_Y_WEBGL for ImageBitmap sources (only the bitmap's own
-        // imageOrientation counts), which left artwork upside-down.  A <canvas>
-        // source honours FLIP_Y, matching the editor preview + the engine's
-        // bottom-up (stbi-flipped) texture convention → renders upright.
-        const cv = document.createElement('canvas');
-        cv.width = bmp.width; cv.height = bmp.height;
-        cv.getContext('2d').drawImage(bmp, 0, 0);
         const w = bmp.width & 0xFFFF, h = bmp.height & 0xFFFF;
-        bmp.close();
         GLctx.bindTexture(GLctx.TEXTURE_2D, tex);
-        GLctx.pixelStorei(GLctx.UNPACK_FLIP_Y_WEBGL, true);
-        GLctx.texImage2D(GLctx.TEXTURE_2D, 0, GLctx.RGBA, GLctx.RGBA, GLctx.UNSIGNED_BYTE, cv);
-        GLctx.pixelStorei(GLctx.UNPACK_FLIP_Y_WEBGL, false);
+        GLctx.texImage2D(GLctx.TEXTURE_2D, 0, GLctx.RGBA, GLctx.RGBA, GLctx.UNSIGNED_BYTE, bmp);
+        bmp.close();
         GLctx.texParameteri(GLctx.TEXTURE_2D, GLctx.TEXTURE_MIN_FILTER, GLctx.LINEAR);
         GLctx.texParameteri(GLctx.TEXTURE_2D, GLctx.TEXTURE_MAG_FILTER, GLctx.LINEAR);
         GLctx.texParameteri(GLctx.TEXTURE_2D, GLctx.TEXTURE_WRAP_S, GLctx.CLAMP_TO_EDGE);
