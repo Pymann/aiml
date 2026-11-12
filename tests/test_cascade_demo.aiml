@@ -1,5 +1,13 @@
 # SPEC?: 57_function_cascades   # aus dem Dateinamen, zu bestaetigen
 # Requires: display
+# Requires: manual
+#
+# WARTET AUF EINEN MENSCHEN: die Schleife unten laeuft, bis das Fenster
+# geschlossen wird (`engine.running`).  Ohne diese Zeile lief der Test in der
+# Suite 600 s in die Zeitgrenze und meldete einen Fehlschlag, den es nicht gab
+# -- dieselbe Klasse wie test_ui.aiml und test_mem_render_probe.aiml.
+# Mit `./run_all_tests.sh --manual` laeuft er.
+#
 # End-to-end demo: cascade type + nested cascade payload + list<cascade<X>>
 # + prefab container that spawns one row per effect + on-the-fly grow/shrink.
 #

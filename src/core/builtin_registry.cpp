@@ -10567,6 +10567,22 @@ void registerBuiltins(CompilerContext& ctx) {
                 ctx.builder.getVoidTy(), {}), {});
             return nullptr;
         };
+        // engine.draw_scene_upto(z) — spec/44_6 §8.1: only z_order < z, the
+        // rest stays for the closing draw_scene.
+        eng.builtinFuncs["draw_scene_upto"] = [](CompilerContext& ctx,
+            const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto* i32 = ctx.builder.getInt32Ty();
+            if (args.empty()) {
+                LOG_ERROR(ctx.fmtLoc() + "engine.draw_scene_upto needs the z it draws up to (spec/44_6 §8.1)");
+                return nullptr;
+            }
+            llvm::Value* z = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            if (z->getType()->isFloatingPointTy()) z = ctx.builder.CreateFPToSI(z, i32);
+            else if (z->getType() != i32)          z = ctx.builder.CreateZExtOrTrunc(z, i32);
+            ctx.builder.CreateCall(ctx.getFunction("aiml_prefab_draw_scene_upto",
+                ctx.builder.getVoidTy(), {i32}), {z});
+            return nullptr;
+        };
         // engine.hit_test(mx, my) → prefab_instance
         eng.builtinFuncs["hit_test"] = [](CompilerContext& ctx,
             const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {

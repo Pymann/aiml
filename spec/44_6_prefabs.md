@@ -162,7 +162,8 @@ Opaque handle (`i8*`) to a live prefab instance.
 | `engine.prefab_set_font(font: ui_font)` | Set font for label children. |
 | `engine.instantiate(name: string) -> prefab_instance` | Create a new instance of a registered prefab. |
 | `engine.destroy(inst: prefab_instance)` | Remove the instance from the scene and free it. Genestete Kinder werden **nicht** sofort frei, sondern zum Löschen markiert und beim nächsten `draw_scene` aufgeräumt — siehe „Sterbende Instanzen nehmen keine Eingabe". |
-| `engine.draw_scene()` | Render all visible instances in Z-order. Call after `gl.clear_all()`, before `engine.swap()`. |
+| `engine.draw_scene()` | Render all visible instances in Z-order. Call after `gl.clear_all()`, before `engine.swap()`. Ends the frame: dropdown popups, the dead-instance sweep and the partial-draw watermark (§8.1) all happen here. |
+| `engine.draw_scene_upto(z: i32)` | Render only the instances **below** `z` and leave the rest for a later call — the hook for putting your own drawing (3D, raw GL) **inside** the Z-order. See §8.1. |
 
 ---
 
@@ -1343,6 +1344,51 @@ gemischt** werden (sie würden sich die Aufnahme gegenseitig wegnehmen).
 Sprites and base textures are drawn as textured quads,
 labels as text, rects as solid-color quads.
 
+### 8.1 Eine eigene Schicht in die Z-Ordnung einhängen
+
+`draw_scene` zeichnet die Prefabs in **einem** Durchgang. Wer dazwischen selbst
+zeichnen will — ein 3D-Modell, rohes GL —, konnte das lange nur **davor** oder
+**danach** tun, und beides ist falsch, sobald es Fenster gibt: davor deckt der
+Hintergrund (negatives `z`) das eigene Bild zu, danach liegt es über **jedem**
+Fenster und scheint durch halbdurchsichtige Flächen hindurch.
+
+`engine.draw_scene_upto(z)` zeichnet nur die Instanzen mit `z_order < z` und
+merkt sich, wie weit es gekommen ist. Das abschließende `engine.draw_scene()`
+zeichnet den **Rest** — jede Instanz genau einmal:
+
+```aiml
+- call: [gl.clear_all, 0.05, 0.05, 0.1, 1.0]
+- call: [engine.draw_scene_upto, 10]   # Hintergrund (z=-10) und Bühne (z=5)
+- call: [zeichne_modell]               # die eigene Schicht, hier bei z=10
+- call: [engine.draw_scene]            # Fenster (z=50+) und alles darüber
+- call: [engine.swap, win]
+```
+
+Regeln:
+
+- **`draw_scene` beendet den Frame.** Nur dort laufen die Dropdown-Popups
+  (zweiter Pass, immer oben), der Sweep der sterbenden Instanzen und das
+  Zurücksetzen der Marke. Wer `draw_scene_upto` aufruft und `draw_scene`
+  weglässt, sieht die oberen Schichten nicht und räumt nichts auf.
+- **Die Z-Sortierung passiert beim ERSTEN Zeichenaufruf des Frames**, damit
+  alle Teilzeichnungen desselben Frames dieselbe Ordnung sehen. Ein `set_z`
+  zwischen zwei Teilzeichnungen wirkt erst im nächsten Frame.
+- **Halb-offenes Intervall.** `draw_scene_upto(10)` zeichnet `z < 10`, nicht
+  `z <= 10`. Mehrere eigene Schichten sind erlaubt: `upto(10)`, zeichnen,
+  `upto(60)`, zeichnen, `draw_scene`.
+- **Ohne `draw_scene_upto` ändert sich nichts.** Ein `draw_scene` ohne
+  vorangehende Teilzeichnung zeichnet die ganze Szene wie immer.
+- **Blending und Tiefentest nimmt die Engine sich zurück**, bei JEDER
+  Teilzeichnung, nicht nur einmal pro Frame. Eine eigene 3D-Schicht schaltet
+  den Tiefentest ein und leert den Tiefenpuffer; bliebe das stehen, fiele die
+  restliche UI durch den Tiefentest und wäre unsichtbar. Darauf muss der
+  Aufrufer also nicht achten.
+- **Den Viewport stellt der Aufrufer zurück.** Er geht nicht in den GL-Zustand
+  ein, den die Engine setzt, sondern bestimmt die Projektion, die beim ersten
+  Zeichenaufruf des Frames aus ihm abgeleitet wird. Wer für seine Schicht ein
+  Teilrechteck setzt, setzt danach wieder das ganze Fenster — sonst wird der
+  Rest des Frames in dieses Rechteck geklemmt.
+
 ---
 
 ## 9. C API (Runtime)
@@ -1406,6 +1452,7 @@ void  aiml_prefab_dock_y(void* inst, int32_t row, int32_t rowspan);
 
 // Scene rendering
 void  aiml_prefab_draw_scene(void);
+void  aiml_prefab_draw_scene_upto(int32_t z);   // §8.1 — partial draw
 
 // Hit testing
 void* aiml_prefab_hit_test(float mx, float my);

@@ -666,6 +666,13 @@ struct PrefabScene {
     /* Time uniform (seconds since first frame). Updated each draw_scene. */
     float u_time = 0.0f;
     double t_start_sec = 0.0;
+
+    /* spec/44_6 §8.1 — partial draw.  Everything with z_order < draw_z_floor
+     * has already been rendered THIS frame; INT32_MIN means "nothing drawn
+     * yet", which is also the state draw_scene restores when it ends the
+     * frame.  Caller-visible effect: draw_scene_upto(z) renders the window
+     * [floor, z) and raises the floor, draw_scene renders [floor, +inf). */
+    int32_t draw_z_floor = INT32_MIN;
 };
 
 static PrefabScene* g_scene = nullptr;
@@ -5482,9 +5489,11 @@ static void render_one_connector(AimlConnector* c) {
 
 /* ── Scene rendering ─────────────────────────────────────────────────────── */
 
-void aiml_prefab_draw_scene(void) {
-    if (!g_scene) return;
-
+/* spec/44_6 §8.1 — per-frame setup.  Runs on the FIRST draw call of a frame
+ * (draw_scene or draw_scene_upto) so every partial draw of the same frame sees
+ * ONE z-order and ONE u_time: a set_z between two partial draws must not
+ * reshuffle what the earlier part already rendered. */
+static void scene_frame_prologue(void) {
     /* Update projection to match current GL viewport (handles window resize) */
     GLint vp[4];
     glGetIntegerv(GL_VIEWPORT, vp);
@@ -5509,6 +5518,17 @@ void aiml_prefab_draw_scene(void) {
               [](AimlPrefabInstance* a, AimlPrefabInstance* b) {
                   return a->z_order < b->z_order;
               });
+}
+
+/* Render the instances and cables whose z_order lies in [zlo, zhi).
+ *
+ * spec/44_6 §8.1: the 2D GL state is re-asserted HERE, not once per frame.
+ * Between two partial draws the caller may have drawn 3D — which means depth
+ * test on and a depth buffer cleared.  Leaving that enabled would make the
+ * remaining UI fail the depth test and vanish, so the engine takes the state
+ * back for every window instead of trusting the caller to restore it. */
+static void render_scene_window(int64_t zlo, int64_t zhi) {
+    if (zhi <= zlo) return;
 
     /* Enable blending for alpha */
     glEnable(GL_BLEND);
@@ -5521,7 +5541,9 @@ void aiml_prefab_draw_scene(void) {
      * one less than the nodes it links. */
     std::vector<AimlConnector*> cs;
     cs.reserve(g_scene->connectors.size());
-    for (auto* c : g_scene->connectors) if (c->visible) cs.push_back(c);
+    for (auto* c : g_scene->connectors)
+        if (c->visible && (int64_t)c->z_order >= zlo && (int64_t)c->z_order < zhi)
+            cs.push_back(c);
     std::stable_sort(cs.begin(), cs.end(),
         [](AimlConnector* a, AimlConnector* b){ return a->z_order < b->z_order; });
 
@@ -5530,7 +5552,9 @@ void aiml_prefab_draw_scene(void) {
      * g_scene->instances and can invalidate the range-for iterator. */
     std::vector<AimlPrefabInstance*> render_targets;
     render_targets.reserve(g_scene->instances.size());
-    for (auto* inst : g_scene->instances) render_targets.push_back(inst);
+    for (auto* inst : g_scene->instances)
+        if ((int64_t)inst->z_order >= zlo && (int64_t)inst->z_order < zhi)
+            render_targets.push_back(inst);
     size_t ci = 0;
     for (auto* inst : render_targets) {
         if (inst->parent) continue;
@@ -5540,6 +5564,27 @@ void aiml_prefab_draw_scene(void) {
         render_instance(inst);
     }
     while (ci < cs.size()) { render_one_connector(cs[ci]); ++ci; }
+}
+
+/* spec/44_6 §8.1 — draw only what lies BELOW z and leave the rest for the
+ * closing draw_scene.  The hook for putting an own drawing (3D, raw GL) inside
+ * the prefab z-order instead of under or over all of it. */
+void aiml_prefab_draw_scene_upto(int32_t z) {
+    if (!g_scene) return;
+    if (g_scene->draw_z_floor == INT32_MIN) scene_frame_prologue();
+    render_scene_window((int64_t)g_scene->draw_z_floor, (int64_t)z);
+    /* Never lower the mark: a step backwards would redraw a layer, and with
+     * alpha blending a layer drawn twice is visibly wrong, not merely slow. */
+    if (z > g_scene->draw_z_floor) g_scene->draw_z_floor = z;
+}
+
+void aiml_prefab_draw_scene(void) {
+    if (!g_scene) return;
+
+    if (g_scene->draw_z_floor == INT32_MIN) scene_frame_prologue();
+    render_scene_window((int64_t)g_scene->draw_z_floor, INT64_MAX);
+    /* Frame is over: the mark drops back so the next frame draws everything. */
+    g_scene->draw_z_floor = INT32_MIN;
 
     /* Zweiter Pass: offene Dropdown-Popups über allem rendern. */
     render_dropdown_popups();

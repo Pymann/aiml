@@ -20,7 +20,8 @@ extern "C" {
  *         - { name: art,   type: sprite, x: 15, y: 100, ... }
  *
  * Runtime creates instances via engine.instantiate("CardFace") → prefab_instance (i8*).
- * engine.draw_scene() renders all instances sorted by z_order.
+ * engine.draw_scene() renders all instances sorted by z_order;
+ * engine.draw_scene_upto(z) renders only what is below z (spec/44_6 §8.1).
  *
  * prefab_instance = i8* (opaque AimlPrefabInstance*)
  *
@@ -193,6 +194,9 @@ int32_t aiml_prefab_bound_index(void* inst);
 /* Draw all visible instances sorted by z_order.
  * Call after gl.clear_all() and before ui.begin(). */
 void aiml_prefab_draw_scene(void);
+/* spec/44_6 §8.1 — render only z_order < z and leave the rest to the closing
+ * draw_scene, so an own drawing (3D, raw GL) can sit INSIDE the z-order. */
+void aiml_prefab_draw_scene_upto(int32_t z);
 
 /* ── Hit testing ──────────────────────────────────────────────────────── */
 
