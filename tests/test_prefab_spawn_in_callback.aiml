@@ -1,0 +1,130 @@
+# SPEC: 44_6_prefabs
+# Ein on_click-Rueckruf darf Prefabs ERZEUGEN.
+#
+# Der Fehler, den diese Probe festhaelt: der Widget-Durchlauf in
+# `update_hover` lief als range-for ueber `g_scene->instances`.  Erzeugt ein
+# Rueckruf waehrenddessen Instanzen, haengt jedes `instantiate` an genau
+# diesen Vektor an -- waechst er dabei ueber seine Kapazitaet, ist der
+# laufende Iterator UNGUELTIG und der naechste Schritt liest freigegebenen
+# Speicher.  Nativ ein Absturz, im Browser
+# "RuntimeError: index out of bounds" mitten in aiml_prefab_update_hover.
+# Im Spiel traf es die Reisekarte: ihr Klick-Handler baut acht Instanzen auf,
+# und der Client fror beim ersten Oeffnen ein.
+#
+# Zweitens haelt die Probe fest, dass ein Druck genau EINEN Abnehmer hat:
+# was erst durch diesen Klick entsteht, darf denselben Klick nicht noch
+# einmal abbekommen -- sonst nimmt ein frisch erschienenes Overlay den Druck,
+# der es gerade geoeffnet hat.
+# Requires: display
+# Expected exit code: 0
+
+- prefab:
+    name: SpawnButton
+    width: 200
+    height: 80
+    children:
+      - { name: spawn_btn, type: button,
+          x: 0, y: 0, width: 200, height: 80,
+          label: "spawn",
+          bg_color: 0x2A4060FF,
+          on_click: handle_spawn_click }
+
+# Die erzeugten Karten sind selbst Knoepfe und liegen GENAU unter demselben
+# Punkt -- nur so zeigt sich, ob sie den Klick mitnehmen, der sie erzeugt hat.
+- prefab:
+    name: SpawnCard
+    width: 200
+    height: 80
+    children:
+      - { name: card_btn, type: button,
+          x: 0, y: 0, width: 200, height: 80,
+          label: "card",
+          bg_color: 0x603030FF,
+          on_click: handle_card_click }
+
+- decl: [g_spawn_clicks, i32, 0]
+- decl: [g_card_clicks,  i32, 0]
+- decl: [g_cards, list<prefab_instance>, []]
+
+# Genug Instanzen, dass der Vektor sicher umzieht (Kapazitaet verdoppelt sich).
+- def:
+    name: handle_spawn_click
+    args: [[param, prefab_instance]]
+    body:
+      - set: [g_spawn_clicks, { "+": [g_spawn_clicks, 1] }]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 64] }
+          body:
+            - decl: [card, prefab_instance, { call: [engine.instantiate, "SpawnCard"] }]
+            - call: [card.set_z, 9]
+            - call: [card.set_pos, 20.0, 20.0]
+            - call: [card.set_visible, 1]
+            - call: [g_cards.push, card]
+            - set: [idx, { "+": [idx, 1] }]
+
+- def:
+    name: handle_card_click
+    args: [[param, prefab_instance]]
+    body:
+      - set: [g_card_clicks, { "+": [g_card_clicks, 1] }]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [win, window_handle, { call: [engine.create_window, 400, 300, "spawncb"] }]
+      - if: { condition: { eq: [win, null] }, then: [{ call: [log.error, "FAIL create_window"] }, { return: 1 }] }
+      - call: [gl.init]
+      - call: [ui.init]
+      - call: [engine.prefab_scene_init, 400, 300]
+      - call: [input.init, win]
+
+      - decl: [btn, prefab_instance, { call: [engine.instantiate, "SpawnButton"] }]
+      - call: [btn.set_pos, 20.0, 20.0]
+      - call: [btn.set_z, 5]
+      - call: [btn.set_visible, 1]
+      - call: [engine.draw_scene]
+
+      # Druck + Freigabe auf dem Knopf, im selben Frame ausgewertet.
+      - decl: [probe_x, f32, 60.0]
+      - decl: [probe_y, f32, 50.0]
+      - call: [input.post_mouse_move, probe_x, probe_y]
+      - call: [input.post_mouse_down, 0]
+      - call: [input.post_mouse_up, 0]
+      # HIER stuerzte es ab: der Rueckruf erzeugt 64 Instanzen, waehrend die
+      # Schleife noch laeuft.
+      - call: [engine.update_hover, probe_x, probe_y]
+
+      - if:
+          condition: { neq: [g_spawn_clicks, 1] }
+          then:
+            - call: [log.error, "FAIL der Knopf feuerte ${g_spawn_clicks} mal statt genau einmal"]
+            - return: 1
+      - if:
+          condition: { neq: [g_cards.len, 64] }
+          then:
+            - call: [log.error, "FAIL ${g_cards.len} Karten statt 64 -- der Rueckruf lief nicht durch"]
+            - return: 1
+      - if:
+          condition: { neq: [g_card_clicks, 0] }
+          then:
+            - call: [log.error, "FAIL ${g_card_clicks} frisch erzeugte Karten haben denselben Klick mitgenommen"]
+            - return: 1
+
+      # Die Szene muss nach dem Durchlauf weiter benutzbar sein: zeichnen,
+      # nochmal hovern, und ein zweiter Klick trifft jetzt die oberste Karte.
+      - call: [engine.draw_scene]
+      - call: [input.post_mouse_move, probe_x, probe_y]
+      - call: [input.post_mouse_down, 0]
+      - call: [input.post_mouse_up, 0]
+      - call: [engine.update_hover, probe_x, probe_y]
+      - if:
+          condition: { lt: [g_card_clicks, 1] }
+          then:
+            - call: [log.error, "FAIL der zweite Klick erreichte keine der erzeugten Karten"]
+            - return: 1
+
+      - call: [engine.destroy_window, win]
+      - call: [log.info, "PASS prefab_spawn_in_callback (${g_spawn_clicks} Knopf, ${g_cards.len} Karten, ${g_card_clicks} Kartenklicks)"]
+      - return: 0

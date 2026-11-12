@@ -1211,7 +1211,27 @@ static EM_BOOL bin_touchcancel(int /*type*/, const EmscriptenTouchEvent* /*e*/, 
 }
 /* Focus loss / tab hidden with a button still held: same reasoning — the press
  * cannot be completed, so cancel it instead of leaving it stuck down. */
-static EM_BOOL bin_blur(int /*type*/, const EmscriptenFocusEvent* /*e*/, void* /*ud*/) {
+/* spec/44_0 §2.2 nennt als Abbruchquelle "WINDOW focus loss / tab becoming
+ * hidden".  Ein Element INNERHALB der Seite, das den Fokus verliert, ist das
+ * nicht -- und genau das kam hier an: beim Klick auf einen Knopf gibt das
+ * versteckte Tastatur-Feld (aiml_web_kbd, siehe unten) seinen Fokus ab.  Der
+ * Abbruch setzte raw_mouse[0]=0, und bin_mouseup meldet die Freigabe NUR,
+ * wenn raw_mouse gesetzt war -- der erste Knopfdruck nach jeder Texteingabe
+ * fiel damit ersatzlos aus.  Im DataCreatures-Login hiess das: tippen,
+ * klicken, nichts geschieht; erst der zweite Klick zaehlte.
+ *
+ * Darum zweifach abgesichert: die Anmeldung unten faengt nicht mehr in der
+ * Capture-Phase (blur steigt nicht auf, ein Element-Blur erreicht das Fenster
+ * also gar nicht mehr), und falls ein Browser ihn doch zustellt, wird er hier
+ * am Knotennamen erkannt und uebergangen. */
+static EM_BOOL bin_blur(int /*type*/, const EmscriptenFocusEvent* e, void* /*ud*/) {
+    if (e && e->nodeName[0]) {
+        const char* n = e->nodeName;
+        if (strcmp(n, "INPUT")    == 0 || strcmp(n, "TEXTAREA") == 0 ||
+            strcmp(n, "SELECT")   == 0 || strcmp(n, "BUTTON")   == 0 ||
+            strcmp(n, "CANVAS")   == 0 || strcmp(n, "A")        == 0)
+            return EM_FALSE;   /* Element-Fokus, nicht Fensterfokus */
+    }
     for (int b = 0; b < AIML_MAX_MOUSE; b++) bin_cancel_press(b);
     return EM_FALSE;   /* don't swallow the event */
 }
@@ -1619,7 +1639,10 @@ void aiml_input_init(void* /*win*/) {
     emscripten_set_touchmove_callback  (EMSCRIPTEN_EVENT_TARGET_WINDOW, nullptr, EM_TRUE, bin_touchmove);
     emscripten_set_touchend_callback   (EMSCRIPTEN_EVENT_TARGET_WINDOW, nullptr, EM_TRUE, bin_touchend);
     emscripten_set_touchcancel_callback(EMSCRIPTEN_EVENT_TARGET_WINDOW, nullptr, EM_TRUE, bin_touchcancel);
-    emscripten_set_blur_callback       (EMSCRIPTEN_EVENT_TARGET_WINDOW, nullptr, EM_TRUE, bin_blur);
+    /* OHNE Capture: `blur` steigt nicht auf, ein Fenster-Blur wird aber am
+     * Fenster selbst ausgeloest.  Mit Capture fing dieser Handler jeden
+     * Element-Blur der Seite mit ab (siehe bin_blur). */
+    emscripten_set_blur_callback       (EMSCRIPTEN_EVENT_TARGET_WINDOW, nullptr, EM_FALSE, bin_blur);
     /* Keyboard goes on the window target — canvas elements need explicit
      * tabindex to receive key events, but window always works. */
     emscripten_set_keydown_callback (EMSCRIPTEN_EVENT_TARGET_WINDOW, nullptr, EM_TRUE, bin_keydown);

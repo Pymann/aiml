@@ -124,6 +124,15 @@ Sources of a cancel:
 | Window focus loss / tab becoming hidden while a button is held (`blur`, `visibilitychange`) | browser, desktop |
 | `input.post_touch_cancel()` | injection (§8.2) |
 
+Nur der Fokusverlust des **Fensters** zaehlt. Ein Element INNERHALB der Seite,
+das den Fokus abgibt, ist kein Abbruch — im Browser gibt genau das bei jedem
+Klick auf ein Bedienelement das versteckte Tastatur-Feld der Weichtastatur-
+Bruecke (§7, "Web (browser)") ab. Wer den `blur` in der Capture-Phase mitfaengt,
+sieht diesen Element-Blur wie einen Fensterwechsel und bricht den gerade
+begonnenen Druck ab; `mouseup` meldet die Freigabe dann nicht mehr (der Druck
+gilt als nie geschehen), und der **erste Knopfdruck nach jeder Texteingabe
+faellt aus**.
+
 > **Why this is normative and not a detail.** Without a distinct cancel edge, an
 > aborted touch produces a release, a release completes a drag, and a completed
 > drag is a drop — so a system gesture the user never aimed at the application

@@ -6324,7 +6324,24 @@ void aiml_prefab_update_hover(float mx, float my) {
         if (click_absorbed_by_popup) break;
     }
 
-    for (auto* inst : g_scene->instances) {
+    /* ÜBER DEN INDEX, nicht ueber einen Iterator: ein on_click-Rueckruf darf
+     * Prefabs ERZEUGEN -- die Reisekarte baut acht Instanzen in ihrem
+     * Klick-Handler auf.  Jedes instantiate haengt an g_scene->instances an;
+     * waechst der Vektor dabei ueber seine Kapazitaet, ist ein laufender
+     * range-for-Iterator UNGUELTIG und der naechste Schritt liest
+     * freigegebenen Speicher.  Im Browser endete das als
+     * "RuntimeError: index out of bounds" mitten in aiml_prefab_update_hover,
+     * sobald die Reisekarte zum ersten Mal geoeffnet wurde.
+     *
+     * Die Obergrenze ist der Stand VOR dem Durchlauf: was erst durch diesen
+     * Klick entsteht, darf denselben Klick nicht noch einmal abbekommen --
+     * sonst nimmt ein frisch erschienenes Overlay den Druck, der es gerade
+     * geoeffnet hat (spec/44_6 "ein Druck, ein Abnehmer"). */
+    const size_t inst_count_at_entry = g_scene->instances.size();
+    for (size_t ii_w = 0; ii_w < inst_count_at_entry; ii_w++) {
+        if (ii_w >= g_scene->instances.size()) break;   /* ein Rueckruf hat geloescht */
+        auto* inst = g_scene->instances[ii_w];
+        if (!inst) continue;
         if (!inst->visible) continue;
         /* spec/44_6: wer am Frame-Ende stirbt, nimmt keine Eingabe mehr — hier
          * besonders wichtig, weil sonst eine Waise in ihrem einen Frame noch
@@ -6845,7 +6862,13 @@ void aiml_prefab_update_hover(float mx, float my) {
     int32_t key_down_p  = aiml_input_key_pressed("Down");
     int32_t key_enter_p = aiml_input_key_pressed("Enter");
     int32_t key_esc_p   = aiml_input_key_pressed("Escape");
-    for (auto* inst : g_scene->instances) {
+    /* Index statt Iterator, gleiche Gefahr wie im Widget-Durchlauf: die
+     * Zeilen-Rueckrufe einer offenen Klappliste duerfen Prefabs erzeugen. */
+    const size_t inst_count_dd = g_scene->instances.size();
+    for (size_t ii_d = 0; ii_d < inst_count_dd; ii_d++) {
+        if (ii_d >= g_scene->instances.size()) break;
+        auto* inst = g_scene->instances[ii_d];
+        if (!inst) continue;
         if (!inst->visible) continue;
         for (auto& ch : inst->children) {
             if (ch.type != CHILD_DROPDOWN || !ch.dropdown_open) continue;
