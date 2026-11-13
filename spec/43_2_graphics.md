@@ -317,6 +317,18 @@ separately from the API below.
 Internally: stb_image → RGBA → `glTexImage2D` → mipmaps (`glGenerateMipmap`).
 Default filtering: `GL_LINEAR_MIPMAP_LINEAR` (min) / `GL_LINEAR` (mag).
 
+**Row order.** A texture from `gl.load_texture` / `gl.tex` arrives **bottom-up**
+(V = 0 is the bottom row), the convention the 2D paths sample with. Images that
+come out of a glTF/GLB (`gltf.*`, embedded or by URI) and `img.*` pixel buffers
+keep their file order, **top-down**, as glTF prescribes.
+
+Each decode states its own row order, and no decode leaves that choice behind
+for the next one. This is normative because the decoder's flag is process-wide:
+a loader that set it and walked away made every later decode come out upside
+down — a GLB loaded after one `gl.tex` call sampled the wrong part of its atlas
+and rendered with scrambled materials (found 2026-11-13, native only; the web
+path decodes in the browser). A caller may therefore load in any order.
+
 ### 5.2 From Pixel Data (e.g. from glTF)
 
 ```aiml

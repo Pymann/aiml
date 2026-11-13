@@ -752,6 +752,9 @@ void* aiml_gltf_img_pixels_rgba(void* img) {
                               + ci->buffer_view->offset;
         int len             = (int)ci->buffer_view->size;
         int w = 0, h = 0, ch = 0;
+        // glTF images are top-down.  Say so: stb's flip flag is global, and
+        // whoever decoded last may have left it set (see gl_runtime).
+        stbi_set_flip_vertically_on_load(0);
         stbi_uc* px = stbi_load_from_memory(raw, len, &w, &h, &ch, 4);
         if (!px) return make_empty_buffer();
         uint32_t sz = (uint32_t)(w * h * 4);
@@ -764,6 +767,7 @@ void* aiml_gltf_img_pixels_rgba(void* img) {
     /* Case 2: URI file path */
     if (ci->uri) {
         int w = 0, h = 0, ch = 0;
+        stbi_set_flip_vertically_on_load(0);
         stbi_uc* px = stbi_load(ci->uri, &w, &h, &ch, 4);
         if (!px) return make_empty_buffer();
         uint32_t sz = (uint32_t)(w * h * 4);
@@ -822,6 +826,9 @@ void* aiml_gltf_img_to_gl_texture(void* img) {
     int w = 0, h = 0, ch = 0;
     stbi_uc* px = nullptr;
 
+    // Top-down, like every glTF image -- not whatever the last decoder left
+    // in stb's global flip flag.
+    stbi_set_flip_vertically_on_load(0);
     if (ci->buffer_view && ci->buffer_view->buffer && ci->buffer_view->buffer->data) {
         const uint8_t* raw = (const uint8_t*)ci->buffer_view->buffer->data
                              + ci->buffer_view->offset;

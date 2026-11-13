@@ -629,9 +629,18 @@ void* aiml_gl_load_texture(const char* path) {
             }
         }
     } else {
+        // stb's flip flag is GLOBAL and sticky.  Setting it here and leaving
+        // it set made every image decoded afterwards come out upside down --
+        // most visibly the images embedded in a GLB (gltf_runtime), whose
+        // materials then sampled the wrong part of their atlas: a scene
+        // loaded after any gl.tex() call rendered with scrambled textures
+        // (reproduced 2026-11-13 in datacreatures; native only -- the web
+        // path decodes in the browser).  Set it for OUR call, then put it
+        // back; every other call site states what it wants.
         stbi_set_flip_vertically_on_load(1);
         int ch = 0;
         px = stbi_load_from_memory(bytes.data(), (int)flen, &w, &h, &ch, 4);
+        stbi_set_flip_vertically_on_load(0);
     }
     if (!px) { fprintf(stderr, "[aiml_gl] load_texture: cannot decode %s\n", path); return nullptr; }
     AimlGLTexture* t = new AimlGLTexture();

@@ -53,6 +53,9 @@ int64_t aiml_img_decode(void* dst_buf, const void* src_data, int32_t src_len) {
         rgba = WebPDecodeRGBA((const uint8_t*)src_data, (size_t)src_len, &w, &h);
     } else {
         int ch = 0;
+        // Top-down, as the caller's pixel buffer expects.  Stated, not
+        // assumed: stb's flip flag is global (see gl_runtime).
+        stbi_set_flip_vertically_on_load(0);
         rgba = stbi_load_from_memory((const stbi_uc*)src_data, src_len, &w, &h, &ch, 4);
     }
     if (!rgba) return 0;
