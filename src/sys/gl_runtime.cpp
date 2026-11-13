@@ -520,6 +520,21 @@ void aiml_gl_shader_uniform_f32(void* shader, const char* name, float v) {
     glUniform1f(((AimlGLShader*)shader)->location(name), v);
 }
 
+/* spec/43_2 §5.4a: where a name actually landed in the LINKED program.  Without
+   this a wrong binding is invisible: setting a uniform that the program does not
+   have is a silent no-op, and an attribute the mesh fills but the shader reads
+   from another slot draws nothing at all.  -1 = not in the program (or optimised
+   out), -2 = no shader/name given. */
+int32_t aiml_gl_shader_uniform_location(void* shader, const char* name) {
+    if (!shader || !name) return -2;
+    return (int32_t)((AimlGLShader*)shader)->location(name);
+}
+
+int32_t aiml_gl_shader_attrib_location(void* shader, const char* name) {
+    if (!shader || !name) return -2;
+    return (int32_t)glGetAttribLocation(((AimlGLShader*)shader)->prog, name);
+}
+
 void aiml_gl_shader_uniform_i32(void* shader, const char* name, int32_t v) {
     if (!shader) return;
     glUniform1i(((AimlGLShader*)shader)->location(name), v);

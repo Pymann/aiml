@@ -144,6 +144,13 @@ the VAO with a fixed attribute layout:
 | 4           | joints    | 4 × f32 (joint indices of the skin, from `JOINTS_0` u8/u16) | 16 B |
 | 5           | weights   | 4 × f32 (from `WEIGHTS_0`) | 16 B |
 
+**Finding a wrong binding.** Setting a uniform the program does not have is a
+silent no-op, and reading a vertex input from a slot the mesh does not fill
+draws nothing — neither reports an error, so a shader that renders an empty
+image looks exactly like one that was never drawn. `sh.uniform_location(name)`
+and `sh.attrib_location(name)` return where a name actually landed after
+linking, which separates the two cases in one line.
+
 Attribute 3 is filled by `prim.to_gl_mesh()` when the glTF primitive has `TANGENT`
 (normal mapping); attributes 4 and 5 when it has `JOINTS_0` and `WEIGHTS_0` (skinning: the
 vertex shader blends `uBones[int(aJoints[i])]` by `aWeights[i]`, see `uniform_mat4_array`);
@@ -711,6 +718,8 @@ in just a few lines. Manual VBO/VAO setup is entirely unnecessary.
 | `uniform_vec4` | `name: string, v: vec4` | |
 | `uniform_mat4` | `name: string, m: mat4` | No transpose (column-major) |
 | `uniform_mat4_array` | `name: string, buf: buffer<f32>, count: i32` | For skinning |
+| `uniform_location` | `name: string` → `i32` | Where the name sits in the LINKED program; `-1` it is not there (absent or optimised out), `-2` no shader/name |
+| `attrib_location` | `name: string` → `i32` | Same for a vertex input (`glGetAttribLocation`) |
 | `delete` | — | `glDeleteProgram` |
 
 ### `gl_texture` Methods

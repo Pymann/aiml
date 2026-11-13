@@ -9552,6 +9552,8 @@ void registerBuiltins(CompilerContext& ctx) {
             };
 
             ci.builtinMethods["uniform_vec3_array"] = gl43Method("aiml_gl_shader_uniform_vec3_array", "ppbi", 'i');
+            ci.builtinMethods["uniform_location"] = gl43Method("aiml_gl_shader_uniform_location", "pp", 'i');
+            ci.builtinMethods["attrib_location"]  = gl43Method("aiml_gl_shader_attrib_location",  "pp", 'i');
             GL_VOID0(ci, "delete", "aiml_gl_shader_delete")
 
             ctx.classes["gl_shader"] = std::move(ci);

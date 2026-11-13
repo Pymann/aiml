@@ -60,6 +60,8 @@ void* aiml_gl_load_shader   (const char* vert_path, const char* frag_path);
 void  aiml_gl_shader_use    (void* shader);
 
 void  aiml_gl_shader_uniform_f32       (void* shader, const char* name, float v);
+int32_t aiml_gl_shader_uniform_location(void* shader, const char* name);
+int32_t aiml_gl_shader_attrib_location (void* shader, const char* name);
 void  aiml_gl_shader_uniform_i32       (void* shader, const char* name, int32_t v);
 void  aiml_gl_shader_uniform_vec2      (void* shader, const char* name, float* v);
 void  aiml_gl_shader_uniform_vec3      (void* shader, const char* name, float* v);
