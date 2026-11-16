@@ -1136,7 +1136,15 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
     try {
         config = YAML::LoadFile(filename);
     } catch (const YAML::Exception& e) {
-        LOG_ERROR(filename + ": YAML parse error: " + std::string(e.what())
+        // spec/49 F49-100: die Marke der Ausnahme kennt Zeile UND Spalte -- sie
+        // standen bisher nur im Fliesstext von e.what(), zusammen mit einem
+        // zweiten Dateinamen, woran der --check-Leser zerbrach.
+        std::string where = filename;
+        if (e.mark.line >= 0) {
+            where += ":" + std::to_string(e.mark.line + 1);
+            if (e.mark.column >= 0) where += ":" + std::to_string(e.mark.column + 1);
+        }
+        LOG_ERROR(where + ": YAML parse error: " + e.msg
                   + bareOpKeyHint(filename, e));
         return;
     }
@@ -1183,6 +1191,14 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
     // 4. Parse YAML to AST & Compile (Two-Pass)
     AIML::AST::Builder astBuilder;
     astBuilder.sourceFile = filename;          // Fundstelle fuer Parser-Meldungen
+    // ... und fuer die freien Helfer ohne Builder (spec/49 F49-100).  Der alte
+    // Wert wird beim Verlassen wiederhergestellt: ein Import parst rekursiv.
+    const std::string prevParseFile = AIML::AST::currentParseFile();
+    AIML::AST::setCurrentParseFile(filename);
+    struct ParseFileGuard {
+        std::string prev;
+        ~ParseFileGuard() { AIML::AST::setCurrentParseFile(prev); }
+    } parseFileGuard{prevParseFile};
     // spec/62 §13.5f: eine deklarierte Pipeline wird VOR dem Uebersetzen in
     // die zusammengesetzte Form umgeschrieben.  Nur Dateien, die eine
     // enthalten, laufen durch die Umschreibung — jede andere nimmt
@@ -1339,7 +1355,7 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
             // and instantiation sites into the merged sets.  Sub-compilers have
             // already merged their (transitive) sets up via resolveImport, so at
             // the top level these unions are whole-build complete.
-            for (const auto& kv : ctx.prefabDecls) allPrefabDecls.insert(kv.first);
+            for (const auto& kv : ctx.prefabDecls) allPrefabDecls.emplace(kv.first, filename);
             allPrefabUses.insert(ctx.prefabUses.begin(), ctx.prefabUses.end());
             for (const auto& kv : ctx.serviceDecls) allServiceDecls.emplace(kv.first, kv.second);
             allServiceUses.insert(ctx.serviceUses.begin(), ctx.serviceUses.end());
@@ -1380,12 +1396,13 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
                             "(spec/66 §5.6).");
                 }
 
-                for (const auto& pname : allPrefabDecls) {
+                for (const auto& kvPrefab : allPrefabDecls) {
+                    const std::string& pname = kvPrefab.first;
                     if (!allPrefabUses.count(pname)) {
-                        LOG_WARNING("prefab '" + pname + "' is declared but never "
+                        LOG_WARNING(kvPrefab.second + ": prefab '" + pname + "' is declared but never "
                             "instantiated in this build — no engine.instantiate(\"" +
                             pname + "\") anywhere. Remove the dead `- prefab:` "
-                            "declaration or wire it up.");
+                            "declaration or wire it up (spec/44_6).");
                     }
                 }
 
@@ -3859,7 +3876,7 @@ void AIMLCompiler::resolveImport(const std::string& path) {
     }
 
     // Propagate transitive prefab decl/use sets for Tier-3 dead-prefab analysis.
-    allPrefabDecls.insert(subCompiler.allPrefabDecls.begin(), subCompiler.allPrefabDecls.end());
+    allPrefabDecls.insert(subCompiler.allPrefabDecls.begin(), subCompiler.allPrefabDecls.end());  // Name -> Datei
     allPrefabUses.insert(subCompiler.allPrefabUses.begin(),  subCompiler.allPrefabUses.end());
     allServiceDecls.insert(subCompiler.allServiceDecls.begin(), subCompiler.allServiceDecls.end());
     allServiceUses.insert(subCompiler.allServiceUses.begin(),   subCompiler.allServiceUses.end());

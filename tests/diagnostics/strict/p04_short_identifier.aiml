@@ -1,0 +1,12 @@
+# SPEC: 49_static_analysis
+# Requires: driver
+# EXPECT: shorter than 3 characters
+# RULE: spec/49
+# Dieser Check geht bereits ueber fmtLoc -- er ist die Vergleichsprobe dafuer,
+# wie eine vollstaendige Diagnose aussieht (Datei, Zeile, Spalte, Name).
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [ab, i32, 1]          # <<HERE
+      - return: 0

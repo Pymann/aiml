@@ -20,6 +20,10 @@ public:
     YAML::Node sourceNode;
     // 1-based line number in the AIML source file (-1 = unknown)
     int sourceLine = -1;
+    // Spalte zur sourceLine, 1-basiert (spec/49 F49-100).  Ohne sie konnte
+    // eine Diagnose aus einem AST-Durchlauf nur die Zeile nennen; spec/49
+    // fuehrte das als offenen Punkt "the column is partial".
+    int sourceColumn = -1;
 };
 
 // --- Expressions (Evaluate to a value) ---

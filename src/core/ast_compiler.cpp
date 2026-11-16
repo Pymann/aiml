@@ -2128,7 +2128,7 @@ void Compiler::compile(Program* prog) {
         // gerufen (renamed → __aiml_user_main, dann aus dem C-entrypoint).
         // Ein explizites `- call: [main]` am top-level würde main DOPPELT rufen.
         if (strict && hasExplicitMainCall) {
-            LOG_ERROR("explicit `- call: [main]` at top-level causes a double-call: "
+            LOG_ERROR(ctx.fmtLoc() + "explicit `- call: [main]` at top-level causes a double-call: "
                       "`main` is already invoked by the C entry-point.  Remove the explicit call.");
         }
 
@@ -2252,15 +2252,15 @@ void Compiler::checkCascadeClasses(Program* prog) {
             auto* cls = dynamic_cast<ClassDecl*>(d.get());
             if (!cls) continue;
             if (!cls->rules.empty() && cls->renders.empty())
-                LOG_ERROR("class '" + cls->name + "': has `rules:` but no `renders:` "
+                LOG_ERROR(ctx.fmtLoc(cls->sourceNode, cls->sourceLine, cls->sourceColumn) + "class '" + cls->name + "': has `rules:` but no `renders:` "
                           "(a rule-bundle must name the cascade|enum it renders).");
             for (const auto& r : cls->rules)
                 if (!r->def)
-                    LOG_ERROR("class '" + cls->name + "': a rule has no `def:` handler.");
+                    LOG_ERROR(ctx.fmtLoc(cls->sourceNode, cls->sourceLine, cls->sourceColumn) + "class '" + cls->name + "': a rule has no `def:` handler.");
             if (cls->renders.empty()) continue;
             if (!boundTargetExists(cls->renders, /*wantEnum=*/false) &&
                 !boundTargetExists(cls->renders, /*wantEnum=*/true))
-                LOG_ERROR("class '" + cls->name + "': renders '" + cls->renders +
+                LOG_ERROR(ctx.fmtLoc(cls->sourceNode, cls->sourceLine, cls->sourceColumn) + "class '" + cls->name + "': renders '" + cls->renders +
                           "' is not a declared cascade or enum.");
         }
     }
@@ -3100,7 +3100,7 @@ void Compiler::synthesizeServices(Program* prog) {
                      "      - call: [sess.reply_rpc, evt, \"set_result\", 0, resp]\n"
                      "      - return: 1\n";
                 if (auto hf = parseDefSnippet(h)) { hf->serviceSynth = true; toAppend.push_back(std::move(hf)); }
-                else LOG_ERROR("service '" + sv->name + "': internal — could not synthesize '" +
+                else LOG_ERROR(ctx.fmtLoc(sv->sourceNode, sv->sourceLine, sv->sourceColumn) + "service '" + sv->name + "': internal — could not synthesize '" +
                                rpcName + "'.");
 
                 // Einrueckung: der Rumpf sitzt in einer Methode der Fassade.
@@ -3189,7 +3189,7 @@ void Compiler::synthesizeServices(Program* prog) {
                       httpFail("                ", 500, "\"internal error\"", "err_500") +
                       "      - call: [htresp.send]\n";
                 if (auto hf = parseDefSnippet(ht)) { hf->serviceSynth = true; toAppend.push_back(std::move(hf)); }
-                else LOG_ERROR("service '" + sv->name + "': internal — could not synthesize '" +
+                else LOG_ERROR(ctx.fmtLoc(sv->sourceNode, sv->sourceLine, sv->sourceColumn) + "service '" + sv->name + "': internal — could not synthesize '" +
                                httpName + "'.");
 
                 std::string verb = ep.verb;
@@ -3221,7 +3221,7 @@ void Compiler::synthesizeServices(Program* prog) {
         }
         describe += "      - return: rows\n";
         if (auto df = parseDefSnippet(describe)) { df->serviceSynth = true; toAppend.push_back(std::move(df)); }
-        else LOG_ERROR("service '" + sv->name + "': internal — could not synthesize '__describe'.");
+        else LOG_ERROR(ctx.fmtLoc(sv->sourceNode, sv->sourceLine, sv->sourceColumn) + "service '" + sv->name + "': internal — could not synthesize '__describe'.");
 
         // Facade (§3): the thing a server holds.  It carries the gate the project
         // hands in and answers `dispatch` with 1 when the method was ours, 0 when it
@@ -3265,7 +3265,7 @@ void Compiler::synthesizeServices(Program* prog) {
             // liegt deshalb in einem Modul-Global, das serve_rest fuellt (§6).
             std::string gy = "- decl: [" + gateGlobal + ", " + q(gateType) + ", null]\n";
             if (auto gd = parseDeclSnippet(gy)) models.push_back(std::move(gd));
-            else LOG_ERROR("service '" + sv->name + "': internal — could not synthesize the gate global.");
+            else LOG_ERROR(ctx.fmtLoc(sv->sourceNode, sv->sourceLine, sv->sourceColumn) + "service '" + sv->name + "': internal — could not synthesize the gate global.");
         }
         if (auto facade = parseDeclSnippet(fy)) {
             if (auto* fc = dynamic_cast<ClassDecl*>(facade.get()))
@@ -3377,7 +3377,7 @@ void Compiler::synthesizeServiceBodies(Program* prog) {
                       "      - call: [io.write, io.stdout, \"\\n\"]\n"
                       "      - return: 0\n";
                 if (auto cf = parseDefSnippet(ct)) { cf->serviceSynth = true; toAppend.push_back(std::move(cf)); }
-                else LOG_ERROR("service '" + sv->name + "': internal — could not synthesize '" +
+                else LOG_ERROR(ctx.fmtLoc(sv->sourceNode, sv->sourceLine, sv->sourceColumn) + "service '" + sv->name + "': internal — could not synthesize '" +
                                cliName + "'.");
             }
         }
@@ -3579,20 +3579,20 @@ void Compiler::checkGroupImplements(ClassGroupDecl* g) {
             const ClassGroupInstance* inst = nullptr;
             for (const auto& i : g->instances) if (i.instanceName == ex.first) inst = &i;
             if (!inst) {
-                LOG_ERROR(ctx.fmtLoc() + "classgroup '" + g->name + "' implements '" + gname +
+                LOG_ERROR(ctx.fmtLoc(g->sourceNode, g->sourceLine, g->sourceColumn) + "classgroup '" + g->name + "' implements '" + gname +
                           "' but has no instance '" + ex.first + "' (" + gname + " exports " + ex.first + ": " +
                           ex.second + ").");
                 continue;
             }
             if (!g->exports.empty() &&
                 std::find(g->exports.begin(), g->exports.end(), ex.first) == g->exports.end())
-                LOG_ERROR(ctx.fmtLoc() + "classgroup '" + g->name + "' implements '" + gname +
+                LOG_ERROR(ctx.fmtLoc(g->sourceNode, g->sourceLine, g->sourceColumn) + "classgroup '" + g->name + "' implements '" + gname +
                           "' but does not export '" + ex.first + "'.");
             bool viaInstance = false;
             for (const auto& ii : inst->implements)
                 if (ii == ex.second || resolveIfaceName(ii, "") == iq) viaInstance = true;
             if (!viaInstance && !classImplementsIface(inst->className, iq))
-                LOG_ERROR(ctx.fmtLoc() + "classgroup '" + g->name + "' implements '" + gname + "': instance '" +
+                LOG_ERROR(ctx.fmtLoc(g->sourceNode, g->sourceLine, g->sourceColumn) + "classgroup '" + g->name + "' implements '" + gname + "': instance '" +
                           ex.first + "' (class " + inst->className + ") does not implement '" + ex.second + "'.");
         }
     }
@@ -3758,7 +3758,7 @@ void Compiler::checkClassGroups(Program* prog) {
                         LOG_ERROR(ctx.fmtLoc() + "classgroup '" + g->name + "': instance '" +
                                   inst.instanceName + "' sees itself.");
                     else if (!instNames.count(tpart) && !portNames.count(tpart))
-                        LOG_ERROR(ctx.fmtLoc() + "classgroup '" + g->name + "': instance '" +
+                        LOG_ERROR(ctx.fmtLoc(g->sourceNode, g->sourceLine, g->sourceColumn) + "classgroup '" + g->name + "': instance '" +
                                   inst.instanceName + "' sees unknown instance '" + tpart + "'.");
                     continue;
                 }
@@ -3783,7 +3783,7 @@ void Compiler::checkClassGroups(Program* prog) {
                     LOG_ERROR(ctx.fmtLoc() + "classgroup '" + g->name + "': sees '" + s +
                               "' — group '" + sgType + "' has no instance '" + tgt + "'.");
                 else if (!exported)
-                    LOG_ERROR(ctx.fmtLoc() + "classgroup '" + g->name + "': sees '" + s +
+                    LOG_ERROR(ctx.fmtLoc(g->sourceNode, g->sourceLine, g->sourceColumn) + "classgroup '" + g->name + "': sees '" + s +
                               "' — '" + tgt + "' is not exported by group '" + sgType +
                               "' (spec/58 §6).");
             }
@@ -3922,7 +3922,7 @@ void Compiler::synthesizeClassGroups(Program* prog) {
                     const std::string& wiredType = ctx.classes[inst.className].members[mName].typeName;
                     if (wiredType.rfind("ptr<", 0) == 0 && wiredType.back() == '>') {
                         std::string inner = wiredType.substr(4, wiredType.size() - 5);
-                        LOG_ERROR(ctx.fmtLoc() + "classgroup '" + g->name + "': instance '" +
+                        LOG_ERROR(ctx.fmtLoc(g->sourceNode, g->sourceLine, g->sourceColumn) + "classgroup '" + g->name + "': instance '" +
                             inst.instanceName + "' sees '" + s + "', which wires the existing member '" +
                             mName + ": " + wiredType + "' of class '" + inst.className + "'. A sees edge is a "
                             "BORROWED collaborator, but ptr<" + inner + "> is a UNIQUE OWNER — the group "
@@ -4035,7 +4035,7 @@ void Compiler::synthesizeClassGroups(Program* prog) {
                     }
                     acc += "      - return: gi_up\n";
                     if (auto fn = parseDefSnippet(acc)) cont->methods.push_back(std::move(fn));
-                    else LOG_ERROR("classgroup '" + g->name + "': internal — failed to synthesize " + m.name + ".");
+                    else LOG_ERROR(ctx.fmtLoc(g->sourceNode, g->sourceLine, g->sourceColumn) + "classgroup '" + g->name + "': internal — failed to synthesize " + m.name + ".");
                 }
             }
         }
@@ -4176,7 +4176,7 @@ void Compiler::synthesizeClassGroups(Program* prog) {
         if (auto ctorFn = parseDefSnippet(ctorText))
             cont->methods.push_back(std::move(ctorFn));
         else
-            LOG_ERROR("classgroup '" + g->name + "': internal — failed to synthesize __ctor.");
+            LOG_ERROR(ctx.fmtLoc(g->sourceNode, g->sourceLine, g->sourceColumn) + "classgroup '" + g->name + "': internal — failed to synthesize __ctor.");
 
         // spec/58 + spec/61 §10: synthesized DESTRUCTOR. The __ctor `new`s one box per instance and
         // per subgroup — those are OWNED by the container, so `free`ing the container (or its
@@ -4195,7 +4195,7 @@ void Compiler::synthesizeClassGroups(Program* prog) {
                 if (auto dtorFn = parseDefSnippet(dtorText))
                     cont->methods.push_back(std::move(dtorFn));
                 else
-                    LOG_ERROR("classgroup '" + g->name + "': internal — failed to synthesize __dtor.");
+                    LOG_ERROR(ctx.fmtLoc(g->sourceNode, g->sourceLine, g->sourceColumn) + "classgroup '" + g->name + "': internal — failed to synthesize __dtor.");
             }
         }
 
@@ -4229,7 +4229,7 @@ void Compiler::synthesizeClassGroups(Program* prog) {
             if (auto wpFn = parseDefSnippet(wpText))
                 cont->methods.push_back(std::move(wpFn));
             else
-                LOG_ERROR("classgroup '" + g->name + "': internal — failed to synthesize __wire_ports.");
+                LOG_ERROR(ctx.fmtLoc(g->sourceNode, g->sourceLine, g->sourceColumn) + "classgroup '" + g->name + "': internal — failed to synthesize __wire_ports.");
         }
 
         registerTypeDecl(cont.get());
@@ -5795,7 +5795,7 @@ void Compiler::registerTypeDecl(Node* node) {
         if (!casc->opcode.empty()) {
             auto eit = ctx.enums.find(casc->opcode);
             if (eit == ctx.enums.end()) {
-                LOG_ERROR("cascade '" + casName + "': opcode enum '" + casc->opcode +
+                LOG_ERROR(ctx.fmtLoc(casc->sourceNode, casc->sourceLine, casc->sourceColumn) + "cascade '" + casName + "': opcode enum '" + casc->opcode +
                           "' is not a declared enum (declare it before the cascade).");
             } else {
                 opEnum = &eit->second;
@@ -5814,27 +5814,27 @@ void Compiler::registerTypeDecl(Node* node) {
                 if (n.id < 0 && !n.name.empty()) {
                     auto mit = opEnum->find(n.name);
                     if (mit == opEnum->end())
-                        LOG_ERROR("cascade '" + casName + "': node '" + n.name +
+                        LOG_ERROR(ctx.fmtLoc(casc->sourceNode, casc->sourceLine, casc->sourceColumn) + "cascade '" + casName + "': node '" + n.name +
                                   "' is not a member of opcode enum '" + casc->opcode + "'.");
                     else n.id = mit->second;
                 } else if (n.name.empty() && n.id >= 0) {
                     auto vit = opByValue.find(n.id);
                     if (vit == opByValue.end())
-                        LOG_ERROR("cascade '" + casName + "': node id " + std::to_string(n.id) +
+                        LOG_ERROR(ctx.fmtLoc(casc->sourceNode, casc->sourceLine, casc->sourceColumn) + "cascade '" + casName + "': node id " + std::to_string(n.id) +
                                   " has no member in opcode enum '" + casc->opcode + "'.");
                     else n.name = vit->second;
                 } else if (!n.name.empty() && n.id >= 0) {
                     auto mit = opEnum->find(n.name);
                     if (mit == opEnum->end())
-                        LOG_ERROR("cascade '" + casName + "': node '" + n.name +
+                        LOG_ERROR(ctx.fmtLoc(casc->sourceNode, casc->sourceLine, casc->sourceColumn) + "cascade '" + casName + "': node '" + n.name +
                                   "' is not a member of opcode enum '" + casc->opcode + "'.");
                     else if (mit->second != n.id)
-                        LOG_ERROR("cascade '" + casName + "': node '" + n.name + "' id " +
+                        LOG_ERROR(ctx.fmtLoc(casc->sourceNode, casc->sourceLine, casc->sourceColumn) + "cascade '" + casName + "': node '" + n.name + "' id " +
                                   std::to_string(n.id) + " != " + casc->opcode + "." + n.name +
                                   " (" + std::to_string(mit->second) + ").");
                 }
             } else if (n.id < 0) {
-                LOG_ERROR("cascade '" + casName + "': node '" + n.name + "' has no numeric "
+                LOG_ERROR(ctx.fmtLoc(casc->sourceNode, casc->sourceLine, casc->sourceColumn) + "cascade '" + casName + "': node '" + n.name + "' has no numeric "
                           "id and the cascade has no `opcode:` to resolve it from.");
             }
             n.fields.reserve(src.fields.size());
@@ -6934,7 +6934,7 @@ void Compiler::visitFunction(FunctionDecl* func) {
             ? std::string("<no source mark>")
             : (std::string("line ") + std::to_string(func->sourceNode.Mark().line + 1)
                + " col " + std::to_string(func->sourceNode.Mark().column + 1));
-        LOG_ERROR("visitFunction: signature mismatch for '" + func->name + "' (mangled='" + mangledName
+        LOG_ERROR(ctx.fmtLoc() + "visitFunction: signature mismatch for '" + func->name + "' (mangled='" + mangledName
                   + "'): forward-decl has " + std::to_string(llvmFunc->arg_size())
                   + " args but current definition has " + std::to_string(argNames.size())
                   + " args.  Source: " + srcInfo
@@ -6949,14 +6949,14 @@ void Compiler::visitFunction(FunctionDecl* func) {
         LOG_ERROR(ctx.fmtLoc(func->sourceNode) + ctx.anyElementError(func->name + ": return", func->returnType));
     for (size_t i = 0; i < argNames.size(); ++i) {
         if (ctx.symbol_table.count(argNames[i])) {
-            LOG_ERROR("Variable shadowing is not allowed: function argument '" + argNames[i]
+            LOG_ERROR(ctx.fmtLoc() + "Variable shadowing is not allowed: function argument '" + argNames[i]
                       + "' in '" + func->name + "' shadows an existing variable");
             shadowError = true;
         }
         IRValue* argAlloca = ctx.ir_gen->createAlloca(argTypes[i], argNames[i]);
         IRValue* argVal = ctx.ir_gen->getFunctionArg(funcVal, i);
         if (!argVal || !ctx.ir_gen->unwrap(argVal)) {
-            LOG_ERROR("visitFunction: getFunctionArg returned null for arg #"
+            LOG_ERROR(ctx.fmtLoc() + "visitFunction: getFunctionArg returned null for arg #"
                       + std::to_string(i) + " '" + argNames[i] + "' in '" + func->name + "'");
             ctx.symbol_table = savedSymbols;
             ctx.ir_gen->setInsertPoint(oldBlock);
@@ -7429,7 +7429,7 @@ IRValue* Compiler::resolveEnum(const std::string& baseName, const std::string& p
         }
     }
 
-    LOG_ERROR("Undefined enum variant: " + propName + " on enum " + baseName);
+    LOG_ERROR(ctx.fmtLoc() + "Undefined enum variant: " + propName + " on enum " + baseName);
     return nullptr;
 }
 IRValue* Compiler::resolveProperty(Symbol* baseSym, const std::string& propName) {
@@ -7592,7 +7592,7 @@ IRValue* Compiler::resolveProperty(Symbol* baseSym, const std::string& propName)
                     if (false) {
                         // List index: field-idx
                         if (member.typeName.rfind("list<", 0) != 0 || member.typeName.back() != '>') {
-                            LOG_ERROR("Dash-index on non-list field: " + fieldName + " (type: " + member.typeName + ")");
+                            LOG_ERROR(ctx.fmtLoc() + "Dash-index on non-list field: " + fieldName + " (type: " + member.typeName + ")");
                             return nullptr;
                         }
                         std::string elemName = member.typeName.substr(5, member.typeName.length() - 6);
@@ -7618,7 +7618,7 @@ IRValue* Compiler::resolveProperty(Symbol* baseSym, const std::string& propName)
                                 if (idxVal->getType()->isIntegerTy(64))
                                     idxVal = ctx.builder.CreateTrunc(idxVal, ctx.builder.getInt32Ty());
                             } else {
-                                LOG_ERROR("Invalid list index: " + rest);
+                                LOG_ERROR(ctx.fmtLoc() + "Invalid list index: " + rest);
                                 return ctx.ir_gen->getInt32(0);
                             }
                         }
@@ -7731,7 +7731,7 @@ IRValue* Compiler::resolveProperty(Symbol* baseSym, const std::string& propName)
     // gemeldet wurde — sonst meldet jede Eigenschaft erneut dieselbe Ursache
     // (spec/49: eine Kaskade verdeckt die Zeile, auf die es ankommt).
     if (ctx.unknownTypeNames.count(className)) return nullptr;
-    LOG_ERROR("Undefined property: " + propName + " on type " + className);
+    LOG_ERROR(ctx.fmtLoc() + "Undefined property: " + propName + " on type " + className);
     return nullptr;
 }
 
@@ -7846,10 +7846,10 @@ IRValue* Compiler::resolvePropertyWritePtr(Symbol* baseSym, const std::string& p
                 auto& member = classInfo->members[fieldName];
 
                 if (member.access == AccessLevel::Private && ctx.currentClassName != className) {
-                    LOG_ERROR("Cannot access private member " + fieldName);
+                    LOG_ERROR(ctx.fmtLoc() + "Cannot access private member " + fieldName);
                     return nullptr;
                 } else if (member.access == AccessLevel::Protected && ctx.currentClassName != className) {
-                    LOG_ERROR("Cannot access protected member " + fieldName);
+                    LOG_ERROR(ctx.fmtLoc() + "Cannot access protected member " + fieldName);
                     return nullptr;
                 }
 
@@ -7869,7 +7869,7 @@ IRValue* Compiler::resolvePropertyWritePtr(Symbol* baseSym, const std::string& p
                 if (false) {
                     // List element: field-idx[.further]
                     if (member.typeName.rfind("list<", 0) != 0 || member.typeName.back() != '>') {
-                        LOG_ERROR("Dash-index on non-list field: " + fieldName);
+                        LOG_ERROR(ctx.fmtLoc() + "Dash-index on non-list field: " + fieldName);
                         return nullptr;
                     }
                     std::string elemName = member.typeName.substr(5, member.typeName.length() - 6);
@@ -7904,7 +7904,7 @@ IRValue* Compiler::resolvePropertyWritePtr(Symbol* baseSym, const std::string& p
                             if (idxVal->getType()->isIntegerTy(64))
                                 idxVal = ctx.builder.CreateTrunc(idxVal, ctx.builder.getInt32Ty());
                         } else {
-                            LOG_ERROR("Invalid list index: " + idxStr);
+                            LOG_ERROR(ctx.fmtLoc() + "Invalid list index: " + idxStr);
                             return nullptr;
                         }
                     }
@@ -7940,14 +7940,14 @@ IRValue* Compiler::resolvePropertyWritePtr(Symbol* baseSym, const std::string& p
     if (classInfo->members.count(propName)) {
         auto& member = classInfo->members[propName];
         if (member.access == AccessLevel::Private && ctx.currentClassName != className) {
-            LOG_ERROR("Cannot access private member " + propName);
+            LOG_ERROR(ctx.fmtLoc() + "Cannot access private member " + propName);
             return nullptr;
         } else if (member.access == AccessLevel::Protected && ctx.currentClassName != className) {
-            LOG_ERROR("Cannot access protected member " + propName);
+            LOG_ERROR(ctx.fmtLoc() + "Cannot access protected member " + propName);
             return nullptr;
         }
         if (member.is_const) {
-            LOG_ERROR("Cannot assign to const member " + propName);
+            LOG_ERROR(ctx.fmtLoc() + "Cannot assign to const member " + propName);
             return nullptr;
         }
 

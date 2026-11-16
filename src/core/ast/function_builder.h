@@ -14,6 +14,7 @@ class StateHandler;
 class FunctionBuilder : public StateHandler {
     std::unique_ptr<FunctionDecl> func;
     int capturedLine = -1;
+    int capturedColumn = -1;  // spec/49 F49-100
     std::string currentKey;
     bool expectingKey = false;
     bool expectingValue = false;
@@ -25,7 +26,7 @@ class FunctionBuilder : public StateHandler {
     std::string returnMapKey;
     bool returnMapExpectKey = true;
 public:
-    FunctionBuilder(Builder* b) : StateHandler(b), capturedLine(b->currentLine) {
+    FunctionBuilder(Builder* b) : StateHandler(b), capturedLine(b->currentLine), capturedColumn(b->currentColumn) {
         func = std::make_unique<FunctionDecl>();
     }
     bool OnMapStart() override;

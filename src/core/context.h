@@ -885,9 +885,21 @@ namespace AIML {
     // the time it was meant to save (gemessen 2026-10-15 am Prefab-Kindcheck:
     // Fundstelle Zeile 29, gemeldet Zeile 120 = letzte Zeile).
     std::string fmtLoc(const YAML::Node& node, int fallbackLine) const {
+        return fmtLoc(node, fallbackLine, -1);
+    }
+
+    // Mit Spalte: ein Statement traegt seine Position seit spec/49 F49-100 als
+    // sourceLine UND sourceColumn (gesetzt, wo capturedLine gesetzt wird).  Ohne
+    // den Spalten-Rueckfall meldete jeder Check, der ueber einen AST-Knoten ohne
+    // YAML-Marke laeuft, Spalte 0 -- das war der "column is partial"-Punkt.
+    std::string fmtLoc(const YAML::Node& node, int fallbackLine,
+                       int fallbackColumn) const {
         if (node.IsDefined() && node.Mark().line >= 0) return fmtLoc(node);
-        if (!currentSourceFile.empty() && fallbackLine > 0)
-            return currentSourceFile + ":" + std::to_string(fallbackLine) + ": ";
+        if (!currentSourceFile.empty() && fallbackLine > 0) {
+            std::string loc = currentSourceFile + ":" + std::to_string(fallbackLine);
+            if (fallbackColumn > 0) loc += ":" + std::to_string(fallbackColumn);
+            return loc + ": ";
+        }
         return fmtLoc(node);
     }
 
@@ -897,12 +909,13 @@ namespace AIML {
     // when the name is valid; emits LOG_ERROR and returns false otherwise.
     // `kind` describes the role for the diagnostic (e.g. "variable", "argument").
     bool validateIdentifier(const std::string& name, const std::string& kind,
-                            const YAML::Node& srcNode) const {
+                            const YAML::Node& srcNode,
+                            int fallbackLine = -1, int fallbackColumn = -1) const {
         if (name.size() >= 3) return true;
         // Empty names indicate a parser bug, reported elsewhere — don't double-log.
         if (name.empty()) return true;
-        LOG_ERROR(fmtLoc(srcNode) + kind + " name '" + name +
-                  "' is shorter than 3 characters — pick a descriptive name");
+        LOG_ERROR(fmtLoc(srcNode, fallbackLine, fallbackColumn) + kind + " name '" + name +
+                  "' is shorter than 3 characters — pick a descriptive name (spec/49 §23)");
         return false;
     }
 
@@ -919,7 +932,7 @@ namespace AIML {
         LOG_ERROR(fmtLoc(srcNode) + kind + " name '" + name +
                   "' is shorter than 5 characters — prefab and child names are "
                   "referenced by name across files; pick a descriptive name "
-                  "(>=5 chars)");
+                  "(>=5 chars) (spec/44_8)");
         return false;
     }
 

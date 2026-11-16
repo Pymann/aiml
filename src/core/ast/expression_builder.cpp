@@ -136,10 +136,8 @@ bool ExpressionBuilder::OnScalar(const std::string& value, const std::string& ta
         // Reject deprecated symbol operators
         auto dep = kDeprecatedOps.find(value);
         if (dep != kDeprecatedOps.end()) {
-            if (builder->currentLine > 0)
-                LOG_ERROR("line " + std::to_string(builder->currentLine) + ": Operator '" + value + "' is not allowed. Use '" + dep->second + "' instead.");
-            else
-                LOG_ERROR("Operator '" + value + "' is not allowed. Use '" + dep->second + "' instead.");
+            LOG_ERROR(builder->fmtLoc() + "Operator '" + value +
+                      "' is not allowed. Use '" + dep->second + "' instead.");
             return false;
         }
         op = value;
@@ -336,26 +334,16 @@ std::unique_ptr<Node> ExpressionBuilder::finish() {
     if (hadSequence) {
         std::string normalizedOp = normalizeOp(op);
         if (args.size() > 1 && isStrictUnaryOnlyOperator(op)) {
-            if (builder->currentLine > 0) {
-                LOG_ERROR("line " + std::to_string(builder->currentLine) + ": Unary operator '" + op +
-                          "' expects exactly 1 operand, got " + std::to_string(args.size()) + ".");
-            } else {
-                LOG_ERROR("Unary operator '" + op + "' expects exactly 1 operand, got " +
-                          std::to_string(args.size()) + ".");
-            }
+            LOG_ERROR(builder->fmtLoc() + "Unary operator '" + op +
+                      "' expects exactly 1 operand, got " + std::to_string(args.size()) + ".");
             return nullptr;
         }
         if (args.size() > 2 && isKnownBinaryOperator(normalizedOp)) {
             if (isVariadicFoldBinaryOperator(normalizedOp)) {
                 return foldBinaryExprList(normalizedOp, std::move(args));
             }
-            if (builder->currentLine > 0) {
-                LOG_ERROR("line " + std::to_string(builder->currentLine) + ": Binary operator '" + normalizedOp +
-                          "' expects exactly 2 operands, got " + std::to_string(args.size()) + ".");
-            } else {
-                LOG_ERROR("Binary operator '" + normalizedOp + "' expects exactly 2 operands, got " +
-                          std::to_string(args.size()) + ".");
-            }
+            LOG_ERROR(builder->fmtLoc() + "Binary operator '" + normalizedOp +
+                      "' expects exactly 2 operands, got " + std::to_string(args.size()) + ".");
             return nullptr;
         }
         if (args.size() == 2) {
@@ -370,8 +358,7 @@ std::unique_ptr<Node> ExpressionBuilder::finish() {
         // (Backlog-Punkt 1, `select`).  Auch ein falsch geschriebener Konstruktor landete hier:
         // `{ vec3: [1,2,3] }` statt `{ call: [math.vec3, 1, 2, 3] }` ergab einen Nullvektor.
         if (!op.empty()) {
-            const std::string where = builder->currentLine > 0
-                ? ("line " + std::to_string(builder->currentLine) + ": ") : std::string();
+            const std::string where = builder->fmtLoc();
             LOG_ERROR(where + "Unknown operator '" + op + "' with " + std::to_string(args.size())
                       + " operand(s).  Bekannte Aritaeten: 1 (unaer), 2 (binaer), 2+ fuer +, *, and, or."
                       + "  Ein Typ-Konstruktor heisst `{ call: [math.<typ>, ...] }` (spec/43_0);"
@@ -419,13 +406,8 @@ std::unique_ptr<Node> ExpressionBuilder::finish() {
         if (isVariadicFoldBinaryOperator(normalizedOp)) {
             return foldBinaryExprList(normalizedOp, std::move(args));
         }
-        if (builder->currentLine > 0) {
-            LOG_ERROR("line " + std::to_string(builder->currentLine) + ": Binary operator '" + normalizedOp +
-                      "' expects exactly 2 operands, got " + std::to_string(args.size()) + ".");
-        } else {
-            LOG_ERROR("Binary operator '" + normalizedOp + "' expects exactly 2 operands, got " +
-                      std::to_string(args.size()) + ".");
-        }
+        LOG_ERROR(builder->fmtLoc() + "Binary operator '" + normalizedOp +
+                  "' expects exactly 2 operands, got " + std::to_string(args.size()) + ".");
         return nullptr;
     }
     if (args.size() == 2) {
@@ -440,8 +422,7 @@ std::unique_ptr<Node> ExpressionBuilder::finish() {
     // (Backlog-Punkt 1, `select`).  Auch ein falsch geschriebener Konstruktor landete hier:
     // `{ vec3: [1,2,3] }` statt `{ call: [math.vec3, 1, 2, 3] }` ergab einen Nullvektor.
     if (!op.empty()) {
-        const std::string where = builder->currentLine > 0
-            ? ("line " + std::to_string(builder->currentLine) + ": ") : std::string();
+        const std::string where = builder->fmtLoc();
         LOG_ERROR(where + "Unknown operator '" + op + "' with " + std::to_string(args.size())
                   + " operand(s).  Bekannte Aritaeten: 1 (unaer), 2 (binaer), 2+ fuer +, *, and, or."
                   + "  Ein Typ-Konstruktor heisst `{ call: [math.<typ>, ...] }` (spec/43_0);"

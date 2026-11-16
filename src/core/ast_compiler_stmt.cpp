@@ -1568,7 +1568,8 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
         LOG_ERROR(ctx.fmtLoc(decl->sourceNode) + ctx.refContainerError("variable '" + decl->varName + "'", decl->typeName));
     if (!ctx.anyElementContainer(decl->typeName).empty())
         LOG_ERROR(ctx.fmtLoc(decl->sourceNode) + ctx.anyElementError("variable '" + decl->varName + "'", decl->typeName));
-    ctx.validateIdentifier(decl->varName, "variable", decl->sourceNode);
+    ctx.validateIdentifier(decl->varName, "variable", decl->sourceNode,
+                           decl->sourceLine, decl->sourceColumn);
 
     IRType* ty = ctx.ir_gen->resolveType(decl->typeName);
     if (!ty) return;

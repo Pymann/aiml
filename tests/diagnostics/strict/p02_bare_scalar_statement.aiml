@@ -1,0 +1,9 @@
+# SPEC: 49_static_analysis
+# Requires: driver
+# EXPECT: bare scalar
+- def:
+    name: main
+    return: i32
+    body:
+      - wartezeit                   # <<HERE
+      - return: 0

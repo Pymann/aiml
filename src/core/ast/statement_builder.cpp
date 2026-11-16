@@ -126,7 +126,7 @@ public:
                 if (value == "scope" || value == "persistent" || value == "consumed") {
                     if (lifetime) *lifetime = value;
                 } else {
-                    LOG_ERROR("decl lifetime must be scope|persistent|consumed, got '" + value + "'");
+                    LOG_ERROR(builder->fmtLoc() + "decl lifetime must be scope|persistent|consumed, got '" + value + "' (spec/61 §9)");
                 }
             }
             if (currentKey == "level") {     // spec/65: pruefen, nicht durchsetzen
@@ -238,7 +238,7 @@ std::unique_ptr<Node> StatementBuilder::finish() {
                          // after the initializer. For a qualified local with no init, put the
                          // `null` literal in the 3rd (init) slot: [name, type, null, { lifetime: persistent }].
                          if (capturedLine > 0)
-                             LOG_ERROR("line " + std::to_string(capturedLine) + ": decl modifiers must be the 4th list element: [name, type, value, { const: true }] (use null as the value when there is no initializer, e.g. [buf, T, null, { lifetime: persistent }]). A modifier map in 3rd position is invalid.");
+                             LOG_ERROR(builder->fmtLoc(capturedLine, capturedColumn) + "decl modifiers must be the 4th list element: [name, type, value, { const: true }] (use null as the value when there is no initializer, e.g. [buf, T, null, { lifetime: persistent }]). A modifier map in 3rd position is invalid.");
                          else
                              LOG_ERROR("decl modifiers must be the 4th list element: [name, type, value, { const: true }] (use null as the value when there is no initializer). A modifier map in 3rd position is invalid.");
                          return nullptr;
@@ -263,6 +263,7 @@ std::unique_ptr<Node> StatementBuilder::finish() {
          decl->lifetime    = decl_lifetime;
          decl->level       = decl_level;
          decl->sourceLine  = capturedLine;
+        decl->sourceColumn  = capturedColumn;
          return decl;
     }
     if (type == "set" && args.size() >= 1) {
@@ -275,8 +276,7 @@ std::unique_ptr<Node> StatementBuilder::finish() {
          // war hier blind (expectingValue nimmt den zweiten Skalar vorweg), weshalb diese
          // Pruefung nie ausloeste und das dritte Element still verschluckt wurde.
          if (scalarCount >= 3 && innerSeqStart < 0) {
-             LOG_ERROR("line " + std::to_string(capturedLine)
-                       + ": set: nimmt GENAU [target, value] — fuer Index-Schreiben benutze"
+             LOG_ERROR(builder->fmtLoc(capturedLine, capturedColumn) + "set: nimmt GENAU [target, value] — fuer Index-Schreiben benutze"
                        + " idx: [container, index, value] (spec/10), fuer den ganzen Inhalt"
                        + " set: [target, [v1, v2, ...]] (spec/10). Gesehen: "
                        + std::to_string(scalarCount) + " Skalare, target='" + args[0].first
@@ -294,13 +294,13 @@ std::unique_ptr<Node> StatementBuilder::finish() {
          }
          auto set = std::make_unique<SetStmt>(args[0].first, std::move(exprArg));
          set->sourceLine = capturedLine;
+        set->sourceColumn = capturedColumn;
          return set;
     }
     // store: [ptr_var, value, (optional)depth]
     if (type == "store" && args.size() >= 1) {
         if (args.size() < 2 && !exprArg) {
-            LOG_ERROR("line " + std::to_string(capturedLine)
-                      + ": store: braucht mindestens [ptr_var, value]");
+            LOG_ERROR(builder->fmtLoc(capturedLine, capturedColumn) + "store: braucht mindestens [ptr_var, value]");
             return nullptr;
         }
         std::unique_ptr<Expr> val;
@@ -312,8 +312,7 @@ std::unique_ptr<Node> StatementBuilder::finish() {
             if (args.size() >= 2) {
                 try { depth = std::stoi(args[1].first); }
                 catch (...) {
-                    LOG_ERROR("line " + std::to_string(capturedLine)
-                              + ": store: depth muss eine Integer-Konstante sein, got '"
+                    LOG_ERROR(builder->fmtLoc(capturedLine, capturedColumn) + "store: depth muss eine Integer-Konstante sein, got '"
                               + args[1].first + "'");
                     return nullptr;
                 }
@@ -324,20 +323,19 @@ std::unique_ptr<Node> StatementBuilder::finish() {
             if (args.size() >= 3) {
                 try { depth = std::stoi(args[2].first); }
                 catch (...) {
-                    LOG_ERROR("line " + std::to_string(capturedLine)
-                              + ": store: depth muss eine Integer-Konstante sein, got '"
+                    LOG_ERROR(builder->fmtLoc(capturedLine, capturedColumn) + "store: depth muss eine Integer-Konstante sein, got '"
                               + args[2].first + "'");
                     return nullptr;
                 }
             }
         }
         if (depth < 1) {
-            LOG_ERROR("line " + std::to_string(capturedLine)
-                      + ": store: depth >= 1 erforderlich, got " + std::to_string(depth));
+            LOG_ERROR(builder->fmtLoc(capturedLine, capturedColumn) + "store: depth >= 1 erforderlich, got " + std::to_string(depth));
             return nullptr;
         }
         auto st = std::make_unique<StoreStmt>(args[0].first, std::move(val), depth);
         st->sourceLine = capturedLine;
+        st->sourceColumn = capturedColumn;
         return st;
     }
     // idx: [container, idx1, ..., idxN, value]
@@ -357,11 +355,12 @@ std::unique_ptr<Node> StatementBuilder::finish() {
              else idx->memberPath.push_back(idxParts[i].first);
          }
          if (!idxParts.back().second) {
-             LOG_ERROR("line " + std::to_string(capturedLine) + ": idx: the last element must be the value");
+             LOG_ERROR(builder->fmtLoc(capturedLine, capturedColumn) + "idx: the last element must be the value");
              return nullptr;
          }
          idx->value = std::move(idxParts.back().second);
          idx->sourceLine = capturedLine;
+        idx->sourceColumn = capturedColumn;
          return idx;
     }
     if (type == "call" && args.size() >= 1) {
@@ -369,22 +368,27 @@ std::unique_ptr<Node> StatementBuilder::finish() {
          // orderedCallArgs preserves YAML source order (scalars and exprs interleaved)
          for (auto& ea : orderedCallArgs) call->args.push_back(std::move(ea));
          call->sourceLine = capturedLine;
+        call->sourceColumn = capturedColumn;
          auto exprStmt = std::make_unique<ExprStmt>(std::move(call));
          exprStmt->sourceLine = capturedLine;
+        exprStmt->sourceColumn = capturedColumn;
          return exprStmt;
     }
     if (type == "print" && !orderedCallArgs.empty()) {
          auto call = std::make_unique<CallExpr>("print");
          for (auto& ea : orderedCallArgs) call->args.push_back(std::move(ea));
          call->sourceLine = capturedLine;
+        call->sourceColumn = capturedColumn;
          auto exprStmt = std::make_unique<ExprStmt>(std::move(call));
          exprStmt->sourceLine = capturedLine;
+        exprStmt->sourceColumn = capturedColumn;
          return exprStmt;
     }
     if (type == "return") {
          auto ret = std::make_unique<RetStmt>();
          if (exprArg) ret->value = std::move(exprArg);
          ret->sourceLine = capturedLine;
+        ret->sourceColumn = capturedColumn;
          return ret;
     }
     // spec/61 §6.1/§10 (memV3 only): materialize `free: [p]` as an ExprStmt(CallExpr("free", …))
@@ -407,8 +411,10 @@ std::unique_ptr<Node> StatementBuilder::finish() {
             for (size_t i = 0; i < args.size(); ++i)
                 call->args.push_back(parseScalarExpr(args[i].first, args[i].second));
             call->sourceLine = capturedLine;
+        call->sourceColumn = capturedColumn;
             auto exprStmt = std::make_unique<ExprStmt>(std::move(call));
             exprStmt->sourceLine = capturedLine;
+        exprStmt->sourceColumn = capturedColumn;
             return exprStmt;
         }
         // OFF: fall through to the historical nullptr drop.
@@ -419,9 +425,10 @@ std::unique_ptr<Node> StatementBuilder::finish() {
          if (exprArg) {
              auto t = std::make_unique<ThrowStmt>(std::move(exprArg));
              t->sourceLine = capturedLine;
+        t->sourceColumn = capturedColumn;
              return t;
          } else {
-             LOG_ERROR("throw statement must have a value");
+             LOG_ERROR(builder->fmtLoc(capturedLine, capturedColumn) + "throw statement must have a value (spec/22)");
              return nullptr;
          }
     }
@@ -468,7 +475,7 @@ std::unique_ptr<Node> StatementBuilder::finish() {
             else msg += "  Statements are: decl, set, store, idx, call, print, return, free,"
                         " throw, if, while, ret, try, text.";
         }
-        if (capturedLine > 0) msg = "line " + std::to_string(capturedLine) + ": " + msg;
+        msg = builder->fmtLoc(capturedLine, capturedColumn) + msg;
         LOG_ERROR(msg);
     }
     return nullptr;

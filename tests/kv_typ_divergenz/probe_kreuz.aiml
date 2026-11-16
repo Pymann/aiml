@@ -1,4 +1,6 @@
 # spec/31 §6.10 (negativ): derselbe Store, zweimal mit VERSCHIEDENEM Werttyp.
+# Requires: driver — tests/kv_typ_divergenz/run.sh fuehrt beide Faelle;
+# einzeln gestartet ist der ABBRUCH des Kreuz-Falls das erwartete Verhalten.
 # Die Laufzeit muss das beim zweiten Oeffnen laut melden und abbrechen -- vorher
 # bediente sie den abweichenden Leser still und der Satz wurde fremd gelesen
 # (datacreatures, 11.11.2026).

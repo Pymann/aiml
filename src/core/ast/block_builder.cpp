@@ -35,10 +35,10 @@ bool BlockBuilder::OnScalar(const std::string& value, const std::string& tag) {
     // that swallowed the following YAML events (dropping later statements AND
     // even later top-level defs) with no diagnostic.  Reject it loudly instead.
     if (!inStatementMap) {
-        LOG_ERROR("invalid statement: bare scalar '" + value +
+        LOG_ERROR(builder->fmtLoc() + "invalid statement: bare scalar '" + value +
                   "' in a statement block — a statement must be a map, e.g. write "
                   "`- { " + value + " }` or `- " + value + ":` (with a value) "
-                  "instead of `- " + value + "`.");
+                  "instead of `- " + value + "` (spec/49 §2a).");
         return true;  // swallow the scalar; do NOT spawn a builder that eats the rest
     }
     inStatementMap = false;  // consume: the map's key has been read

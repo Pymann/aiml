@@ -157,7 +157,7 @@ IRValue* Compiler::visitNewArrayExpr(NewArrayExpr* na) {
     uint64_t    elemSize = ctx.module().getDataLayout().getTypeAllocSize(elemTy);
 
     IRValue* countIR = visitExpression(na->countExpr.get());
-    if (!countIR) { LOG_ERROR("new_array: could not evaluate count"); return ctx.ir_gen->getInt32(0); }
+    if (!countIR) { LOG_ERROR(ctx.fmtLoc() + "new_array: could not evaluate count"); return ctx.ir_gen->getInt32(0); }
     llvm::Value* count = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(countIR));
     count = ctx.toSizeType(count);
 
@@ -1745,7 +1745,7 @@ IRValue* Compiler::visitAtExpr(AtExpr* at) {
             sym->ir_alloca_inst ? sym->ir_alloca_inst : ctx.ir_gen->wrap(sym->alloca_inst)));
         llvm::Value* rawPtr  = ctx.builder.CreateLoad(i8p, ptrAlloca, "darr_base");
         llvm::Value* typedPtr = ctx.builder.CreatePointerCast(rawPtr, elemTy->getPointerTo(), "darr_typed");
-        if (indexVals.empty()) { LOG_ERROR("at: dyn_array requires index"); return nullptr; }
+        if (indexVals.empty()) { LOG_ERROR(ctx.fmtLoc() + "at: dyn_array requires index"); return nullptr; }
         llvm::Value* elemPtr = ctx.builder.CreateGEP(elemTy, typedPtr, indexVals[0], "darr_gep");
         llvm::Value* val     = ctx.builder.CreateLoad(elemTy, elemPtr, "darr_at");
         return ctx.ir_gen->wrap(val);
@@ -1767,7 +1767,7 @@ IRValue* Compiler::visitAtExpr(AtExpr* at) {
             auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
             listPtr = ctx.builder.CreateLoad(i8p, listPtr, "byref_deref_at");
         }
-        if (indexVals.empty()) { LOG_ERROR("at: list requires at least one index"); return nullptr; }
+        if (indexVals.empty()) { LOG_ERROR(ctx.fmtLoc() + "at: list requires at least one index"); return nullptr; }
         ListImpl::checkIndex(ctx, listPtr, indexVals[0]);   // spec/10: out of range throws
         // Trailing member path: { at: [list, i, "field", ...] } = element[i].field... — the dash-free
         // form of `list-i.field`. Get a pointer to the element (a %M* for a refcount model, else the

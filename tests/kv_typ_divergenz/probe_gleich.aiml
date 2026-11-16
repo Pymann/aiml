@@ -1,4 +1,6 @@
 # spec/31 §6.10 (positiv): derselbe Store, zweimal mit DEMSELBEN Werttyp
+# Requires: driver — tests/kv_typ_divergenz/run.sh fuehrt beide Faelle;
+# einzeln gestartet ist der ABBRUCH des Kreuz-Falls das erwartete Verhalten.
 # geoeffnet -- einmal als Global, einmal als Klassenmitglied.  Das ist der
 # Zustand einer schrittweisen Migration nach spec/58 und muss tragen.
 

@@ -14,6 +14,7 @@ class StateHandler;
 class ControlFlowBuilder : public StateHandler {
     std::string type;
     int capturedLine = -1;
+    int capturedColumn = -1;  // spec/49 F49-100
     std::unique_ptr<Expr> condition;
     std::unique_ptr<BlockStmt> thenBranch;
     std::unique_ptr<BlockStmt> elseBranch; 
@@ -22,7 +23,7 @@ class ControlFlowBuilder : public StateHandler {
     std::string currentKey;
     bool expectingKey = false;
 public:
-    ControlFlowBuilder(Builder* b, std::string t) : StateHandler(b), type(t), capturedLine(b->currentLine) {}
+    ControlFlowBuilder(Builder* b, std::string t) : StateHandler(b), type(t), capturedLine(b->currentLine), capturedColumn(b->currentColumn) {}
     bool OnMapStart() override;
     bool OnMapEnd() override;
     bool OnScalar(const std::string& value, const std::string& tag) override;

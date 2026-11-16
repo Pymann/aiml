@@ -226,7 +226,7 @@ bool CascadeBuilder::OnScalar(const std::string& value, const std::string& /*tag
             } else {
                 if (topKey == "id") {
                     try { currentNode.id = std::stoi(value); }
-                    catch (...) { LOG_ERROR("cascade: expected numeric id for '" + currentNode.name + "'"); }
+                    catch (...) { LOG_ERROR(builder->fmtLoc() + "cascade: expected numeric id for '" + currentNode.name + "' (spec/57)"); }
                 } else if (topKey == "label") {
                     currentNode.label = value;
                 }

@@ -1,0 +1,9 @@
+# SPEC: 49_static_analysis
+# Requires: driver
+# EXPECT: unknown top-level key
+- def:
+    name: main
+    return: i32
+    body:
+      - return: 0
+- rueckgabe: 0                      # <<HERE

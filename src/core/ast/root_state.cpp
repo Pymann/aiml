@@ -177,10 +177,11 @@ bool RootState::OnScalar(const std::string& value, const std::string& tag) {
                 {"level",     "`level:` ist ein Modifier an einer Deklaration, kein "
                               "Top-Level-Knoten (spec/65 §8)"},
             };
-            std::string msg = "unknown top-level key '" + currentKey +
-                              "' — not an aiml declaration.";
+            std::string msg = builder->fmtLoc() + "unknown top-level key '" +
+                              currentKey + "' — not an aiml declaration.";
             auto h = kTopHints.find(currentKey);
             if (h != kTopHints.end()) msg += "  " + h->second;
+            msg += "  (spec/49 §2a.1)";
             LOG_ERROR(msg);
         }
 

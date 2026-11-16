@@ -31,6 +31,16 @@ std::unique_ptr<Expr> parseInterpolatedString(const std::string& input);
 std::unique_ptr<Expr> parseScalarExpr(const std::string& val, const std::string& tag);
 std::unique_ptr<Expr> nodeToExpr(const YAML::Node& node);
 
+// Datei des gerade geparsten Stroms.  Die freien Helfer dieser Einheit
+// (nodeToExpr & Co.) haben keinen Builder, konnten also keine Datei nennen und
+// schrieben "line 42: " als Prosa (spec/49 F49-100).  Der Compiler setzt den
+// Namen vor dem Parsen; thread-lokal, weil Importe im selben Thread rekursiv
+// parsen und jeder Lauf seinen eigenen Namen braucht.
+void setCurrentParseFile(const std::string& file);
+std::string currentParseFile();
+// "datei:zeile:spalte: " aus der YAML-Marke, oder "line N: " ohne Datei.
+std::string locOf(const YAML::Node& node);
+
 // Base class for object-oriented states in the streaming parser
 class StateHandler {
 protected:
@@ -65,6 +75,10 @@ public:
     // Current 1-based line in the AIML source (updated on every YAML event).
     // State handlers can read this to record source locations on AST nodes.
     int currentLine = 0;
+    // Spalte dazu, 1-basiert.  Die YAML-Marke trug sie immer; ohne sie kann ein
+    // Werkzeug einen Befund nur der ZEILE zuordnen, nicht dem Token
+    // (spec/49 F49-100).
+    int currentColumn = 0;
 
     // Quelldatei, gegen die gerade geparst wird.  Der Parser lief bisher ohne
     // Dateinamen, darum konnte eine Meldung aus einem Builder nur den Text
@@ -73,11 +87,20 @@ public:
     // wissen, in WELCHER Datei).  Leer bei synthetisierten Schnipseln.
     std::string sourceFile;
 
-    // "datei:zeile: " fuer eine Meldung aus einem Builder, oder "" ohne Datei.
-    std::string fmtLoc() const {
+    // "datei:zeile:spalte: " fuer eine Meldung aus einem Builder, oder "" ohne
+    // Datei (spec/49 F49-100: der Ort ist ein Praefix in GENAU einer Form --
+    // nie Prosa wie "line 9: ", die kein Werkzeug lesen kann).
+    std::string fmtLoc() const { return fmtLoc(currentLine, currentColumn); }
+
+    // Dieselbe Form fuer eine Stelle, die ihre Position frueher festgehalten hat
+    // (StatementBuilder::capturedLine/-Column): ein Builder meldet oft erst beim
+    // Schliessen des Knotens, und currentLine steht dann schon weiter.
+    std::string fmtLoc(int line, int col) const {
         if (sourceFile.empty()) return "";
-        if (currentLine > 0) return sourceFile + ":" + std::to_string(currentLine) + ": ";
-        return sourceFile + ": ";
+        if (line <= 0) return sourceFile + ": ";
+        std::string loc = sourceFile + ":" + std::to_string(line);
+        if (col > 0) loc += ":" + std::to_string(col);
+        return loc + ": ";
     }
 
     // YAML::EventHandler Overrides

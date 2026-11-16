@@ -8,23 +8,27 @@ namespace {
 // Spec/22 + backlog 2026-06-07: prefab texture/shader/font fields are STRICT
 // stem-only.  Path-shaped values → compile-error.  Unknown stems → compile-error
 // (typo catched at build-time, not as black-square at runtime).
+// `loc` ist das Ortspraefix des Aufrufers (spec/49 F49-100).  Diese Funktion ist
+// frei und hat keinen Builder, also bekommt sie den Ort gereicht, statt ihn
+// wegzulassen -- drei Meldungen ueber Prefab-Felder nannten bisher weder Datei
+// noch Zeile, und ein Prefab-Feld steht selten allein in der Datei.
 void validate_asset_field(const std::string& field, const std::string& value,
-                          AIML::AssetKind kind) {
+                          AIML::AssetKind kind, const std::string& loc) {
     if (value.empty()) return;
     if (value.find('/') != std::string::npos) {
-        LOG_ERROR(std::string("prefab ") + field +
+        LOG_ERROR(loc + "prefab " + field +
                   " must be a stem, not a path: '" + value + "'");
         return;
     }
     if (value.find('.') != std::string::npos) {
-        LOG_ERROR(std::string("prefab ") + field +
+        LOG_ERROR(loc + "prefab " + field +
                   " must be a stem (no extension): '" + value + "'");
         return;
     }
     if (!AIML::AssetScanner::instance().has_stem(kind, value)) {
-        LOG_ERROR(std::string("prefab ") + field +
+        LOG_ERROR(loc + "prefab " + field +
                   ": stem '" + value + "' not in " +
-                  AIML::AssetScanner::kind_name(kind) + " store");
+                  AIML::AssetScanner::kind_name(kind) + " store (spec/44_7)");
     }
 }
 }  // namespace
@@ -76,7 +80,7 @@ bool PrefabBuilder::OnScalar(const std::string& value, const std::string& tag) {
             if (childKey == "name")      currentChild.name = value;
             else if (childKey == "type") currentChild.type = value;
             else if (childKey == "texture") {
-                validate_asset_field("texture", value, AIML::AssetKind::Texture);
+                validate_asset_field("texture", value, AIML::AssetKind::Texture, builder->fmtLoc());
                 currentChild.texture = value;
             }
             else if (childKey == "anchor")  currentChild.anchor = value;
@@ -92,7 +96,7 @@ bool PrefabBuilder::OnScalar(const std::string& value, const std::string& tag) {
             else if (childKey == "font") {
                 // Stem-only wie texture (spec/22): ein Tippfehler ist ein
                 // Build-Fehler, kein stiller Rückfall auf den Szenen-Font.
-                validate_asset_field("font", value, AIML::AssetKind::Font);
+                validate_asset_field("font", value, AIML::AssetKind::Font, builder->fmtLoc());
                 currentChild.font = value;
             }
             else if (childKey == "color")     currentChild.color = parse_color(value);
@@ -152,7 +156,7 @@ bool PrefabBuilder::OnScalar(const std::string& value, const std::string& tag) {
              * masking key is `secret` and nothing said so.  Typos in attribute
              * names are caught here, at build time, like a typo in an asset stem. */
             else {
-                LOG_ERROR("prefab child '" + currentChild.name + "' (type '" +
+                LOG_ERROR(builder->fmtLoc() + "prefab child '" + currentChild.name + "' (type '" +
                           currentChild.type + "'): unknown attribute '" + childKey +
                           "' — see spec/44_6 §4 for the attribute list" +
                           (childKey == "password"

@@ -41,8 +41,9 @@ class StatementBuilder : public StateHandler {
     int seqDepth = 0;       // nesting depth of sequences seen
     int innerSeqStart = -1; // args[] index where inner sequence elements begin
     int capturedLine = -1;  // 1-based line of this statement in the AIML source
+    int capturedColumn = -1;  // dazugehoerige Spalte (spec/49 F49-100)
 public:
-    StatementBuilder(Builder* b, std::string t) : StateHandler(b), type(t), capturedLine(b->currentLine) {}
+    StatementBuilder(Builder* b, std::string t) : StateHandler(b), type(t), capturedLine(b->currentLine), capturedColumn(b->currentColumn) {}
     bool OnSequenceStart() override;
     bool OnSequenceEnd() override;
     bool OnScalar(const std::string& value, const std::string& tag) override;

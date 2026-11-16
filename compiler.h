@@ -140,7 +140,11 @@ public:
     // resolveImport() exactly like importedSourceFiles.  At the top-level
     // (non-library) build, prefabs in allPrefabDecls \ allPrefabUses are warned
     // as declared-but-never-instantiated.
-    std::set<std::string> allPrefabDecls;
+    // Name -> Datei, in der das Prefab deklariert wurde.  Vorher nur die Namen:
+    // die Warnung ueber ein totes Prefab konnte darum keine Datei nennen, und
+    // bei einem Build ueber mehrere Dateien ist "irgendwo" keine Fundstelle
+    // (spec/49 F49-100).
+    std::map<std::string, std::string> allPrefabDecls;
     std::set<std::string> allPrefabUses;
     std::map<std::string, std::string> allServiceDecls;  // spec/66 §5.6
     std::set<std::string> allServiceUses;

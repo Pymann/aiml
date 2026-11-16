@@ -68,9 +68,17 @@ struct BorrowChecker {
     std::string fnName;   // enclosing function (for multi-file diagnostics)
     explicit BorrowChecker(const CompilerContext& c) : ctx(c) {}
 
+    // spec/49 F49-100/F49-102: Datei, Zeile und das Symbol, in dem der Befund
+    // sitzt.  Vorher stand hier "main line 42: " -- eine Prosa-Zeile ohne
+    // Dateinamen, also konnte --check weder Datei noch Zeile fuellen, und das
+    // ausgerechnet bei use-after-move, use-after-free und double free.
     std::string loc(int line) const {
-        std::string p = fnName.empty() ? std::string() : (fnName + " ");
-        return p + (line > 0 ? ("line " + std::to_string(line) + ": ") : std::string());
+        std::string out = ctx.currentSourceFile;
+        if (line > 0 && !out.empty()) out += ":" + std::to_string(line);
+        if (!out.empty()) out += ": ";
+        else if (line > 0) out = "line " + std::to_string(line) + ": ";
+        if (!fnName.empty()) out += "(in " + fnName + ") ";
+        return out;
     }
     bool tracked(const std::string& n) const { return ptrLocals.count(n) != 0; }
 
@@ -86,7 +94,7 @@ struct BorrowChecker {
                     + how + ") — a ptr<T> has a single owner (§6.2/§10). Re-bind it (set/new) first.");
             else if (it->second == St::Freed)
                 LOG_ERROR(loc(line) + "use-after-free: '" + n + "' was freed and is used here ("
-                    + how + ") (§10).");
+                    + how + ") (spec/61 §10).");
         }
         // §5.4: an element borrow used after its container was structurally mutated is dangling.
         auto ri = refInvalid.find(n);        if (ri != refInvalid.end() && ri->second)
@@ -292,7 +300,7 @@ struct BorrowChecker {
                     if (refParams.count(b) && b != returnAnchor)
                         LOG_ERROR(loc(line) + "borrow-return anchor mismatch: this function declares "
                             "`borrows: " + returnAnchor + "` but returns a borrow derived from '" + b +
-                            "' — the returned ref<T>'s lifetime is anchored to the wrong parameter (§8). "
+                            "' — the returned ref<T>'s lifetime is anchored to the wrong parameter (spec/61 §8). "
                             "Return a borrow of '" + returnAnchor + "', or change the `borrows:` anchor.");
                 }
             return;
@@ -433,9 +441,9 @@ struct BorrowChecker {
             if (!p.empty()) {
                 auto it = state.find(p);
                 if (it != state.end() && it->second == St::Freed)
-                    LOG_ERROR(loc(line) + "double free: '" + p + "' is freed again here (§10).");
+                    LOG_ERROR(loc(line) + "double free: '" + p + "' is freed again here (spec/61 §10).");
                 else if (it != state.end() && it->second == St::Moved)
-                    LOG_ERROR(loc(line) + "use-after-move: '" + p + "' was moved out, then freed here (§10).");
+                    LOG_ERROR(loc(line) + "use-after-move: '" + p + "' was moved out, then freed here (spec/61 §10).");
                 state[p] = St::Freed;
                 return;
             }
@@ -462,7 +470,7 @@ void checkBorrowsMemV3(const ::CompilerContext& ctx, const FunctionDecl& fn) {
         if (a.second.rfind("ref<", 0) == 0) bc.refParams.insert(a.first);
         bc.declTypes[a.first] = a.second;   // F3: params participate in target-type resolution
     }
-    // Parameters are borrows by default (§8) — do not track them as owned ptr locals.
+    // Parameters are borrows by default (spec/61 §8) — do not track them as owned ptr locals.
     bc.run(fn.body.get());
     // §10 leak lint: a `persistent` box that reaches function exit still Live never escaped
     // (the declared escape did not happen) → WARNING. `scope` (default) boxes cannot leak — they

@@ -73,6 +73,20 @@ std::string bareOperatorKey(const std::string& text) {
     return "";
 }
 
+static thread_local std::string g_parseFile;
+void setCurrentParseFile(const std::string& file) { g_parseFile = file; }
+std::string currentParseFile() { return g_parseFile; }
+
+std::string locOf(const YAML::Node& node) {
+    const int line = node.IsDefined() ? node.Mark().line + 1 : 0;
+    const int col  = node.IsDefined() ? node.Mark().column + 1 : 0;
+    if (g_parseFile.empty())
+        return line > 0 ? ("line " + std::to_string(line) + ": ") : std::string();
+    std::string out = g_parseFile + ":" + std::to_string(line);
+    if (col > 0) out += ":" + std::to_string(col);
+    return out + ": ";
+}
+
 std::unique_ptr<Expr> nodeToExpr(const YAML::Node& node) {
     if (node.Mark().line >= 0) g_builderLine = node.Mark().line + 1;
     if (node.IsScalar()) {
@@ -168,8 +182,7 @@ std::unique_ptr<Expr> nodeToExpr(const YAML::Node& node) {
         }
 
         if (argsNode.IsSequence() && argsNode.size() > 1 && isStrictUnaryOnlyOperator(op)) {
-            size_t line = node.Mark().line + 1;
-            LOG_ERROR("line " + std::to_string(line) + ": Unary operator '" + op +
+            LOG_ERROR(locOf(node) + "Unary operator '" + op +
                       "' expects exactly 1 operand, got " + std::to_string(argsNode.size()) + ".");
             return nullptr;
         }
@@ -187,7 +200,7 @@ std::unique_ptr<Expr> nodeToExpr(const YAML::Node& node) {
                 }
                 return acc;
             }
-            LOG_ERROR("line " + std::to_string(line) + ": Binary operator '" + op +
+            LOG_ERROR(locOf(node) + "Binary operator '" + op +
                       "' expects exactly 2 operands, got " + std::to_string(argsNode.size()) + ".");
             return nullptr;
         }
@@ -274,7 +287,9 @@ std::unique_ptr<Expr> parseInterpolatedString(const std::string& input) {
         auto alsText = [&](const char* grund) {
             std::string blank = bareOperatorKey(exprStr);
             if (!blank.empty()) {
-                std::string wo = zeile > 0 ? ("line " + std::to_string(zeile) + ": ") : "";
+                std::string wo = currentParseFile().empty()
+                                     ? (zeile > 0 ? ("line " + std::to_string(zeile) + ": ") : std::string())
+                                     : (currentParseFile() + ":" + std::to_string(zeile) + ": ");
                 size_t sa = exprStr.find_first_not_of(" \t");
                 size_t se = exprStr.find_last_not_of(" \t");
                 std::string knapp = (sa == std::string::npos) ? exprStr
@@ -350,7 +365,8 @@ void Builder::OnNull(const YAML::Mark&, YAML::anchor_t) {
 }
 
 void Builder::OnScalar(const YAML::Mark& mark, const std::string& tag, YAML::anchor_t, const std::string& value) {
-    currentLine = mark.line + 1; // YAML marks are 0-based; store 1-based
+    currentLine = mark.line + 1;
+    currentColumn = mark.column + 1; // YAML marks are 0-based; store 1-based
     g_builderLine = currentLine;
     LOG_DEBUG("Router OnScalar: " + value);
     stateStack.top()->OnScalar(value, tag);
@@ -358,6 +374,7 @@ void Builder::OnScalar(const YAML::Mark& mark, const std::string& tag, YAML::anc
 
 void Builder::OnSequenceStart(const YAML::Mark& mark, const std::string&, YAML::anchor_t, YAML::EmitterStyle::value) {
     currentLine = mark.line + 1;
+    currentColumn = mark.column + 1;
     g_builderLine = currentLine;
     LOG_DEBUG("Router OnSequenceStart");
     stateStack.top()->OnSequenceStart();
@@ -370,6 +387,7 @@ void Builder::OnSequenceEnd() {
 
 void Builder::OnMapStart(const YAML::Mark& mark, const std::string&, YAML::anchor_t, YAML::EmitterStyle::value) {
     currentLine = mark.line + 1;
+    currentColumn = mark.column + 1;
     g_builderLine = currentLine;
     LOG_DEBUG("Router OnMapStart");
     stateStack.top()->OnMapStart();

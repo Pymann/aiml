@@ -40,6 +40,8 @@ The compiler currently supports these static structural checks:
 | Unused enum member (never referenced `Enum.Member`) | whole-program, gated | Warning |
 | Blocking call reachable from a per-frame `engine.run` callback | whole-program, gated | Warning |
 | Unknown statement key (`- foo: …` in a body) | always-on | Compiler error |
+| Identifier shorter than 3 characters | always-on | Compiler error |
+| Prefab or prefab-child name shorter than 5 characters | always-on | Compiler error |
 
 The current compiler also contains two hard OOP architecture rules:
 
@@ -1425,6 +1427,144 @@ But roughly half the diagnostics are raised through `fmtLoc()` **without** a nod
 not a change to this mode: the AST would have to carry a source **column** alongside
 `sourceLine`, set wherever `capturedLine` is set today.  Until then a caller highlights the line
 and, where a column is present, the token.
+
+## 23. Identifier length (always-on **error**)
+
+Every identifier a program declares — variable, argument, class field, model
+field, function, class, interface, enum, alias, cascade — must be at least
+**three characters** long. Shorter ones are rejected:
+
+```
+tests/probe.aiml:11:16: variable name 'ab' is shorter than 3 characters — pick a descriptive name (spec/49 §23)
+```
+
+The rule exists because `i`, `k`, `n`, `t0`, `el` read at the declaration and
+nowhere else. A name is the only documentation that travels with a value to
+every use site, and a one-letter name forces a reader back to the declaration
+every time. Three characters is a floor, not a target.
+
+Prefab names and prefab **child** names are held to **five** characters by the
+same mechanism (`validatePrefabName`), because they are addressed by name
+*across files* — `engine.instantiate`, `spawn:`, `set_text`, `set_texture`,
+`child_clicked` — so `bg` or `btn` is both noise and a collision risk. See
+`spec/44_8_prefab_static.md`.
+
+Both are always on. There is no `static_off` key for them: a name is not a
+performance trade-off or a style preference the way a function's length is, and
+an exemption would be permanent by nature.
+
+**Documented on 2026-11-16.** The checks had been in the compiler
+(`context.h`, `validateIdentifier` / `validatePrefabName`) and rejected real
+programs, but appeared in no chapter — a rule that only the implementation knows
+is a rule a reader meets for the first time as a failed build.
+
+## Diagnostics have one shape
+
+Measured on 2026-11-16 over the 605 diagnostic sites in `src/core/`,
+`compiler.cpp` and `main.cpp` (the runtime in `src/sys/` is out of scope, see
+below):
+
+| | before | after |
+| --- | --- | --- |
+| carry a source location (static count) | **403 (63 %)** | **530 (84 %)** |
+| carry a **file** in the records a corpus run actually emits | 50 % | **100 %** |
+| carry **file and line** in those records | 50 % | **86 %** |
+| raised from the AST builders (`src/core/ast/*`) with a location | **1 of 35** | **35 of 35** |
+| location written as prose (`line 11: `, `main line 42: `) instead of a prefix | 24 | **0** — four `line N:` forms remain, each the explicit fallback for *no file known* |
+
+The before/after numbers come from the same counter run against `HEAD` and the
+working tree, so they are comparable; `tests/diagnostics/run.sh` measures the
+same thing at **runtime**, over records the compiler actually emitted, which is
+the number that counts.
+
+What that costs a user, in one line of real output:
+
+```
+error	-	0	0	statement_builder.cpp:472	line 11: unknown statement 'for' …
+```
+
+The line **is** known — it sits in the message as prose, `line 11:`. Because the
+location is text instead of data, `--check` reports file `-`, line `0`, column
+`0`, and an editor cannot jump to it. Two further diagnostics of the same run
+carry no location at all.
+
+The rules below apply to **every** diagnostic, error and warning, from the
+parser to the back end — that is, to everything the **compiler** says about a
+source file (`src/core/`, `compiler.cpp`, `main.cpp`). They do **not** apply to
+runtime messages from `src/sys/`: a running program has no source line to point
+at, and what it reports goes through `log` (spec/46) with the program's own
+context. Mixing the two would mean inventing a location at runtime, which
+F49-103 forbids.
+
+Three kinds of diagnostic carry **no** location on purpose, and that is not a
+gap to be closed:
+
+* the compiler synthesising **its own** snippet (`internal: could not
+  synthesize model 'ServiceEndpoint'`) — there is no user line to name;
+* a finding on a **registry entry** rather than a declaration (a cascade-class
+  pool assembled from several files);
+* a message that names only a string, with no AST node behind it.
+
+Each of these says `internal` or names the thing it found, and reports `0` for
+the line rather than a line that would be wrong. They are numbered in the `F49-100` block, which is
+reserved for the shape of diagnostics rather than for a particular check.
+
+**F49-100 — the location is a prefix, in exactly one form.** `file:line: `, or
+`file:line:column: ` where the column is known, produced by `fmtLoc()` (AST
+passes) or the builder's equivalent (parse passes). A location written into the
+prose of a message (`line 11: …`) is forbidden: it is data in a shape no tool
+can read, and it is the direct cause of the `-	0	0` above.
+
+**F49-101 — one producer, one anchored reader.** The location is written by
+exactly one function (`fmtLoc`, or the builder's equivalent) and read back by
+exactly one reader, **anchored at the start of the message** and requiring
+digits where digits belong. Searching the text for `.aiml:` and guessing the
+boundaries is forbidden: on a YAML syntax error, whose message names the file
+twice, that heuristic put the **path into the line field** — a record no tool
+can read (measured 2026-11-16). A message that does not match the shape yields
+file `-` and line `0`: an admitted gap, never a guess.
+
+**F49-102 — a diagnostic about a named thing names it.** The identifier appears
+in single quotes (`unknown statement 'for'`, `variable name 'idx'`), and the
+symbol the finding sits in is named when it is known — the `(in <function>)`
+form that `fmtLoc()` already emits when no line is available. Both, where both
+are known: a reader needs to find the place *and* recognise the thing.
+
+**F49-103 — a wrong location is worse than none.** Falling back to
+`currentLine` in a pass that runs after parsing points at the end of the file;
+that was measured on 2026-10-15 at the prefab child check, which reported line
+120 for a finding on line 29. `fmtLoc(node, fallbackLine)` exists for this.
+Where no honest location is available, the diagnostic carries none and reports
+`0` — an admitted gap, not a wrong answer.
+
+**F49-104 — a static check names the rule it enforces.** The message ends with
+the spec reference in parentheses: `(spec/06)`, `(spec/21 §6.2)`,
+`(spec/65 F65-6)`. Until real diagnostic codes exist (see the open item below),
+this reference is the stable handle a caller matches on — stable because the
+rule it names is numbered in the spec, unlike both the wording and `origin`.
+
+**F49-105 — one finding is one line.** No tabs, no embedded newlines: the
+record is tab-separated, and a message that breaks that breaks every reader.
+A long explanation belongs in the spec chapter the message cites.
+
+**F49-106 — warnings have the shape of errors.** Same prefix, same rule
+reference, same fields. A warning that is harder to locate than an error
+teaches people to ignore warnings.
+
+### How the gap is closed, and how it is measured
+
+The corpus is migrated in stages, and `tests/diagnostics/run.sh` is the
+measurement: it compiles probes with `--check` and classifies every record.
+Two sets, by design:
+
+* **strict** — every record must satisfy F49-100 to F49-106. A file moves into
+  this set when its diagnostics have been migrated; a regression there fails the
+  suite.
+* **survey** — the rest of the corpus. The driver reports the coverage number
+  and does not fail, so the state is visible in every run instead of being
+  rediscovered.
+
+A migration that cannot state its before and after number is not a migration.
 
 ### Offen: stable diagnostic codes
 

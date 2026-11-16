@@ -33,6 +33,11 @@ namespace AST {
 // ── helpers ──────────────────────────────────────────────────────────────────
 
 static void commitFunc(ExternBlock* block, ExternFuncDecl& f) {
+    // Freie Funktion, kein Builder: der Ort kommt aus dem Parse-Merker
+    // (spec/49 F49-100).  Ohne Datei bleibt das Praefix leer -- eine zugegebene
+    // Luecke statt einer erfundenen Zeile.
+    const std::string whereFile = AIML::AST::currentParseFile().empty()
+        ? std::string() : (AIML::AST::currentParseFile() + ": ");
     // spec/65 F65-13: `extern` umgeht JEDE Symboltabelle des Uebersetzers von
     // Bauart — das Skript nennt die Signatur selbst, und der JIT loest den Namen
     // gegen den Prozess auf (LoadLibraryPermanently(nullptr)).  Eine
@@ -44,7 +49,7 @@ static void commitFunc(ExternBlock* block, ExternFuncDecl& f) {
         const int lvl = aiml::clearance::exportedLevel(f.name);
         if (lvl == aiml::clearance::kAbsent) {
             // Der Wirt bietet den Namen nicht an: das ist die `extern`-Zulassung (F65-13).
-            LOG_ERROR("clearance-extern: `extern` auf '" + f.name + "' ist nicht zugelassen — "
+            LOG_ERROR(whereFile + "clearance-extern: `extern` auf '" + f.name + "' ist nicht zugelassen — "
                       "der Wirt bietet diesen Namen nicht an.  Eine eingeschraenkte Sitzung "
                       "darf nur Namen aus der Export-Tabelle deklarieren (spec/65 F65-13); "
                       "`extern` umgeht sonst jede Symboltabelle des Uebersetzers von Bauart.");
@@ -52,7 +57,7 @@ static void commitFunc(ExternBlock* block, ExternFuncDecl& f) {
             // Angeboten, aber ueber der Freigabe: das ist die ZUGRIFFSpruefung, und F65-12
             // verlangt, dass sie als VERWEIGERUNG erscheint — nicht unter einer zweiten
             // Kennung, nur weil der Weg hierher eine Deklaration war.
-            LOG_ERROR("clearance-denied: `" + f.name + "` liegt auf Level " +
+            LOG_ERROR(whereFile + "clearance-denied: `" + f.name + "` liegt auf Level " +
                       std::to_string(lvl) + ", diese Sitzung hat Freigabe " +
                       std::to_string(aiml::clearance::sessionClearance()) +
                       " (spec/65 F65-4: erreichbar ist nur, was `Freigabe <= Level` erfuellt).");

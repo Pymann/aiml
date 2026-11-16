@@ -1,0 +1,10 @@
+# SPEC: 49_static_analysis
+# Requires: driver
+# EXPECT: unknown statement 'for'
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [nums, list<i32>, [1, 2, 3]]
+      - for: [num, nums]            # <<HERE
+      - return: 0

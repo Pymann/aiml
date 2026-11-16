@@ -65,12 +65,12 @@ public:
                 if (value == "scope" || value == "persistent" || value == "consumed") {
                     pm.lifetime = value;
                 } else {
-                    LOG_ERROR("parameter lifetime must be scope|persistent|consumed, got '" + value + "'");
+                    LOG_ERROR(builder->fmtLoc() + "parameter lifetime must be scope|persistent|consumed, got '" + value + "' (spec/61 §9)");
                 }
             } else if (modKey == "const") {
                 pm.is_const = (value == "true" || value == "1");
             } else {
-                LOG_ERROR("unknown parameter modifier '" + modKey + "' (expected lifetime|const)");
+                LOG_ERROR(builder->fmtLoc() + "unknown parameter modifier '" + modKey + "' (expected lifetime|const) (spec/07)");
             }
             return true;
         }
@@ -114,7 +114,7 @@ bool FunctionBuilder::OnMapStart() {
         // Nested map inside function definition — most likely args: { name: type }
         // which is the wrong syntax. Emit a helpful error and discard the submap.
         if (currentKey == "args") {
-            LOG_ERROR("Invalid 'args' syntax in function '" + func->name + "': "
+            LOG_ERROR(builder->fmtLoc() + "Invalid 'args' syntax in function '" + func->name + "': "
                       "use a list of pairs [[name, type], ...], not a map {name: type}. "
                       "Example: args: [[x, i32], [y, i32]]");
         }
@@ -225,7 +225,7 @@ bool FunctionBuilder::OnScalar(const std::string& value, const std::string& tag)
             } else if (value == "scope") {
                 func->ownsReturn = false;
             } else {
-                LOG_ERROR("return lifetime must be scope|producer, got '" + value + "'");
+                LOG_ERROR(builder->fmtLoc() + "return lifetime must be scope|producer, got '" + value + "' (spec/61 §9)");
             }
         } else if (returnMapKey == "borrows") {
             // spec/61 §8: names the ref<T> parameter the returned borrow is anchored to. The
@@ -233,7 +233,7 @@ bool FunctionBuilder::OnScalar(const std::string& value, const std::string& tag)
             // return type stays a plain borrow (behaves like a ptr-return today).
             func->returnBorrowsParam = value;
         } else {
-            LOG_ERROR("unknown return modifier '" + returnMapKey + "' (expected type|lifetime|borrows)");
+            LOG_ERROR(builder->fmtLoc() + "unknown return modifier '" + returnMapKey + "' (expected type|lifetime|borrows) (spec/07)");
         }
         return true;
     }
@@ -279,16 +279,17 @@ void FunctionBuilder::receiveChildNode(std::unique_ptr<Node> node) {
 
 std::unique_ptr<Node> FunctionBuilder::finish() {
     func->sourceLine = capturedLine;
+        func->sourceColumn = capturedColumn;
     // Sanity-Check: ein `- def:` ohne `name:`-Feld erzeugt sonst eine
     // namenlose FunctionDecl, die als leerer Slot in __aiml_fptable landet
     // und beim Linken zu cross-module `__unnamed_<N>`-Bugs fuehrt
     // (siehe analysis Geschichte 2026-05-06). Lieber laut scheitern als
     // still kaputt linken.
     if (func->name.empty()) {
-        LOG_ERROR("FunctionDecl ohne 'name'-Feld at line " +
-                  std::to_string(capturedLine) +
-                  ": ein '- def:'-Mapping muss mindestens 'name: <funktionsname>' enthalten. "
-                  "Vermutlich ist hier ein verwaistes '- def:' uebrig (z.B. nach Refactor).");
+        LOG_ERROR(builder->fmtLoc(capturedLine, capturedColumn) +
+                  "FunctionDecl ohne 'name'-Feld: ein '- def:'-Mapping muss mindestens "
+                  "'name: <funktionsname>' enthalten. "
+                  "Vermutlich ist hier ein verwaistes '- def:' uebrig (z.B. nach Refactor) (spec/07).");
     }
     // spec/65 F65-10: ein Gateway darf Privilegien nur fallen lassen.
     aiml::clearance::checkGrants(func->level, func->grants, "def " + func->name);

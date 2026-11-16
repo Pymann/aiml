@@ -1095,7 +1095,7 @@ IRValue* Compiler::visitCall(CallExpr* call) {
             llvm::Type* expectedTy = f->getFunctionType()->getParamType(i);
             llvm::Value* actualVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[i]));
             if (!actualVal) {
-                LOG_ERROR("Null LLVM value passed as argument " + std::to_string(i) +
+                LOG_ERROR(ctx.fmtLoc() + "Null LLVM value passed as argument " + std::to_string(i) +
                           " for function " + funcName);
                 continue;
             }
@@ -1702,7 +1702,7 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                             llvm::Function::ExternalLinkage, "aiml_http_map_len", ctx.module());
                         return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {fieldVal}));
                     }
-                    LOG_ERROR("Unknown chained sub-method: " + subMethod + " on field " + fieldName);
+                    LOG_ERROR(ctx.fmtLoc() + "Unknown chained sub-method: " + subMethod + " on field " + fieldName);
                     return ctx.ir_gen->getInt32(0);
                 }
             }
@@ -1745,7 +1745,7 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
 
         } else if (methodName == "get" && !bArgVals.empty()) {
             llvm::Value* idxVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(bArgVals[0]));
-            if (!elemTy) { LOG_ERROR("buffer<T>.get: unknown elem type " + elemName); return ctx.ir_gen->getInt32(0); }
+            if (!elemTy) { LOG_ERROR(ctx.fmtLoc() + "buffer<T>.get: unknown elem type " + elemName); return ctx.ir_gen->getInt32(0); }
             llvm::DataLayout dl(&ctx.module());
             uint64_t esz    = dl.getTypeAllocSize(elemTy);
             llvm::Value* idx64    = ctx.builder.CreateZExtOrTrunc(idxVal, ctx.builder.getInt64Ty(), "bidx64");
@@ -3162,7 +3162,7 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
          } else if (methodName == "len") {
              return ctx.ir_gen->wrap(MapImpl::getSize(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), mapStructTy));
          }
-         LOG_ERROR("Unknown map method: " + methodName + " on " + className
+         LOG_ERROR(ctx.fmtLoc() + "Unknown map method: " + methodName + " on " + className
                    + " (put, get, get_copy, contains, remove, clear, len, keys)");
          return ctx.ir_gen->getInt32(0);
     }
@@ -3208,7 +3208,7 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
             ChanImpl::init(ctx, rawAlloca, cap);
             return nullptr;
         }
-        LOG_ERROR("Unknown channel method: " + methodName);
+        LOG_ERROR(ctx.fmtLoc() + "Unknown channel method: " + methodName);
         return ctx.ir_gen->getInt32(0);
     }
     // ── Store<T> methods ─────────────────────────────────────────────────────
@@ -3300,7 +3300,7 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
         } else if (methodName == "get_by_key" && !argVals.empty()) {
             if (!ctx.classes.count(elemName) || ctx.classes[elemName].primaryKey.empty() ||
                 !ctx.classes[elemName].members.count(ctx.classes[elemName].primaryKey)) {
-                LOG_ERROR("get_by_key: no primary_key defined for " + elemName);
+                LOG_ERROR(ctx.fmtLoc() + "get_by_key: no primary_key defined for " + elemName);
                 return ctx.ir_gen->getInt32(0);
             }
             auto& ci       = ctx.classes[elemName];
@@ -3344,7 +3344,7 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
             llvm::Function* f = ctx.getFunction("aiml_db_store_len", i32, {i8p});
             return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {storePtr}));
         }
-        LOG_ERROR("Unknown Store method: " + methodName);
+        LOG_ERROR(ctx.fmtLoc() + "Unknown Store method: " + methodName);
         return ctx.ir_gen->getInt32(0);
     }
     // ── Kv<K:V> methods ──────────────────────────────────────────────────────
@@ -3733,7 +3733,7 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                 }
             }
             if (!bufAlloca) {
-                LOG_ERROR("set_blob: second argument must be a buffer variable");
+                LOG_ERROR(ctx.fmtLoc() + "set_blob: second argument must be a buffer variable");
                 return ctx.ir_gen->getInt32(0);
             }
             llvm::StructType* bufType = llvm::cast<llvm::StructType>(ctx.getLLVMType("buffer"));
@@ -3790,7 +3790,7 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                 }
             }
             if (!bufAlloca) {
-                LOG_ERROR("get_blob: second argument must be a buffer variable");
+                LOG_ERROR(ctx.fmtLoc() + "get_blob: second argument must be a buffer variable");
                 return ctx.ir_gen->getInt32(0);
             }
             // Call C function: get_blob(kv, key, &out_size) -> data ptr
@@ -3864,7 +3864,7 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                 return ctx.ir_gen->getInt32(0);
             }
             if (methodName == "finding_by" && !mem.db_indexed_unique) {
-                LOG_ERROR("finding_by: field '" + fieldName + "' on model '" +
+                LOG_ERROR(ctx.fmtLoc() + "finding_by: field '" + fieldName + "' on model '" +
                           vName + "' is not unique.  Use findings_by, or add "
                           "`unique: true` to the modifier.");
                 return ctx.ir_gen->getInt32(0);
@@ -3930,7 +3930,7 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
             // Return the list struct by value (loaded from alloca).
             return ctx.ir_gen->wrap(ctx.builder.CreateLoad(listTy, outList, "findings_val"));
         }
-        LOG_ERROR("Unknown Kv method: " + methodName);
+        LOG_ERROR(ctx.fmtLoc() + "Unknown Kv method: " + methodName);
         return ctx.ir_gen->getInt32(0);
     }
     // ── iterator<T> methods ──────────────────────────────────────────────────
@@ -3960,7 +3960,7 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
             return nullptr;
 
         }
-        LOG_ERROR("Unknown iterator method: " + methodName);
+        LOG_ERROR(ctx.fmtLoc() + "Unknown iterator method: " + methodName);
         return ctx.ir_gen->getInt32(0);
     }
     // ── VecStore methods ──────────────────────────────────────────────────────
@@ -4062,7 +4062,7 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
             llvm::Function* f = ctx.getFunction("aiml_db_vec_len", i32, {i8p});
             return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {vsPtr}));
         }
-        LOG_ERROR("Unknown VecStore method: " + methodName);
+        LOG_ERROR(ctx.fmtLoc() + "Unknown VecStore method: " + methodName);
         return ctx.ir_gen->getInt32(0);
     }
     // ── TimeSeries<T> methods ─────────────────────────────────────────────────
@@ -4151,7 +4151,7 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
             llvm::Function* f = ctx.getFunction("aiml_db_ts_len", i32t, {i8p});
             return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {tsPtr}));
         }
-        LOG_ERROR("Unknown TimeSeries method: " + methodName);
+        LOG_ERROR(ctx.fmtLoc() + "Unknown TimeSeries method: " + methodName);
         return ctx.ir_gen->getInt32(0);
     }
     // User Class Methods
@@ -4485,7 +4485,7 @@ IRValue* Compiler::visitSysSerializeCall(const std::string& method, CallExpr* ca
 
         // any → compiler error
         if (argType == "any") {
-            LOG_ERROR("sys.serialize: 'any' type is not serialisable");
+            LOG_ERROR(ctx.fmtLoc() + "sys.serialize: 'any' type is not serialisable");
             return ctx.ir_gen->wrap(ctx.builder.CreateGlobalStringPtr("(error)"));
         }
 
@@ -4511,11 +4511,11 @@ IRValue* Compiler::visitSysSerializeCall(const std::string& method, CallExpr* ca
                         ? styleSym->ir_alloca_inst : ctx.ir_gen->wrap(styleSym->alloca_inst);
                     stylePtr = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca));
                 } else {
-                    LOG_ERROR("sys.serialize: optional style argument must be a JsonStyle variable");
+                    LOG_ERROR(ctx.fmtLoc() + "sys.serialize: optional style argument must be a JsonStyle variable");
                     return ctx.ir_gen->wrap(ctx.builder.CreateGlobalStringPtr("(error)"));
                 }
             } else {
-                LOG_ERROR("sys.serialize: optional style argument must be a JsonStyle variable");
+                LOG_ERROR(ctx.fmtLoc() + "sys.serialize: optional style argument must be a JsonStyle variable");
                 return ctx.ir_gen->wrap(ctx.builder.CreateGlobalStringPtr("(error)"));
             }
         }
@@ -4524,7 +4524,7 @@ IRValue* Compiler::visitSysSerializeCall(const std::string& method, CallExpr* ca
         if (argType.rfind("ptr<", 0) == 0 && argType.back() == '>') {
             std::string innerType = argType.substr(4, argType.size() - 5);
             if (!SerializeImpl::isSerializable(ctx, innerType)) {
-                LOG_ERROR("sys.serialize: ptr<" + innerType + "> inner type is not serialisable");
+                LOG_ERROR(ctx.fmtLoc() + "sys.serialize: ptr<" + innerType + "> inner type is not serialisable");
                 return ctx.ir_gen->wrap(ctx.builder.CreateGlobalStringPtr("(error)"));
             }
             if (argSym) {
@@ -4544,7 +4544,7 @@ IRValue* Compiler::visitSysSerializeCall(const std::string& method, CallExpr* ca
         // false cache hits + a read-past-buffer SIGSEGV). See probe_ser.aiml.
         if (argSym && ctx.isRefcountModel(argType)) {
             if (!SerializeImpl::isSerializable(ctx, argType)) {
-                LOG_ERROR("sys.serialize: type '" + argType + "' is not serialisable");
+                LOG_ERROR(ctx.fmtLoc() + "sys.serialize: type '" + argType + "' is not serialisable");
                 return ctx.ir_gen->wrap(ctx.builder.CreateGlobalStringPtr("(error)"));
             }
             IRValue* baseAlloca = argSym->ir_alloca_inst
@@ -4557,7 +4557,7 @@ IRValue* Compiler::visitSysSerializeCall(const std::string& method, CallExpr* ca
 
         // Validate serializability
         if (!argType.empty() && !SerializeImpl::isSerializable(ctx, argType)) {
-            LOG_ERROR("sys.serialize: type '" + argType + "' is not serialisable");
+            LOG_ERROR(ctx.fmtLoc() + "sys.serialize: type '" + argType + "' is not serialisable");
             return ctx.ir_gen->wrap(ctx.builder.CreateGlobalStringPtr("(error)"));
         }
 
@@ -4594,7 +4594,7 @@ IRValue* Compiler::visitSysSerializeCall(const std::string& method, CallExpr* ca
     } else if (method == "deserialize") {
         // Requires at least one argument (the source string).
         if (call->args.empty()) {
-            LOG_ERROR("sys.deserialize: requires at least one argument (source string)");
+            LOG_ERROR(ctx.fmtLoc() + "sys.deserialize: requires at least one argument (source string)");
             return ctx.ir_gen->getInt32(0);
         }
 
@@ -4605,7 +4605,7 @@ IRValue* Compiler::visitSysSerializeCall(const std::string& method, CallExpr* ca
             if (auto* lit = dynamic_cast<LiteralExpr*>(call->args[1].get()))
                 typeName = lit->value;
             else {
-                LOG_ERROR("sys.deserialize: second argument must be a string literal type name");
+                LOG_ERROR(ctx.fmtLoc() + "sys.deserialize: second argument must be a string literal type name");
                 return ctx.ir_gen->getInt32(0);
             }
         } else {
@@ -4613,7 +4613,7 @@ IRValue* Compiler::visitSysSerializeCall(const std::string& method, CallExpr* ca
         }
 
         if (typeName.empty()) {
-            LOG_ERROR("sys.deserialize: type cannot be inferred — provide a second argument or use inside a typed set statement");
+            LOG_ERROR(ctx.fmtLoc() + "sys.deserialize: type cannot be inferred — provide a second argument or use inside a typed set statement");
             return ctx.ir_gen->getInt32(0);
         }
 
@@ -4623,7 +4623,7 @@ IRValue* Compiler::visitSysSerializeCall(const std::string& method, CallExpr* ca
 
         // any → compiler error
         if (typeName == "any") {
-            LOG_ERROR("sys.deserialize: 'any' type is not serialisable");
+            LOG_ERROR(ctx.fmtLoc() + "sys.deserialize: 'any' type is not serialisable");
             return ctx.ir_gen->getInt32(0);
         }
 
@@ -4631,7 +4631,7 @@ IRValue* Compiler::visitSysSerializeCall(const std::string& method, CallExpr* ca
         if (typeName.rfind("ptr<", 0) == 0 && typeName.back() == '>') {
             std::string innerType = typeName.substr(4, typeName.size() - 5);
             if (!SerializeImpl::isSerializable(ctx, innerType)) {
-                LOG_ERROR("sys.deserialize: ptr<" + innerType + "> inner type is not serialisable");
+                LOG_ERROR(ctx.fmtLoc() + "sys.deserialize: ptr<" + innerType + "> inner type is not serialisable");
                 return ctx.ir_gen->getInt32(0);
             }
             return ctx.ir_gen->wrap(SerializeImpl::deserialize(ctx, src, innerType));
@@ -4639,7 +4639,7 @@ IRValue* Compiler::visitSysSerializeCall(const std::string& method, CallExpr* ca
 
         // Validate type
         if (!SerializeImpl::isSerializable(ctx, typeName)) {
-            LOG_ERROR("sys.deserialize: type '" + typeName + "' is not serialisable");
+            LOG_ERROR(ctx.fmtLoc() + "sys.deserialize: type '" + typeName + "' is not serialisable");
             return ctx.ir_gen->getInt32(0);
         }
 
@@ -4841,7 +4841,7 @@ static std::string fnv1a_hex(const std::string& s) {
 // ---------------------------------------------------------------------------
 IRValue* Compiler::visitSysBundleCall(CallExpr* call) {
     if (call->args.empty()) {
-        LOG_ERROR("sys.bundle: requires 1 argument (function name or instance)");
+        LOG_ERROR(ctx.fmtLoc() + "sys.bundle: requires 1 argument (function name or instance)");
         return ctx.ir_gen->getInt32(0);
     }
 
@@ -4897,7 +4897,7 @@ IRValue* Compiler::visitSysBundleCall(CallExpr* call) {
         }
 
         if (chunks.empty()) {
-            LOG_ERROR("sys.bundle: no YAML source found for '" + selector + "'");
+            LOG_ERROR(ctx.fmtLoc() + "sys.bundle: no YAML source found for '" + selector + "'");
             return ctx.ir_gen->getInt32(0);
         }
 
@@ -4937,7 +4937,7 @@ IRValue* Compiler::visitSysBundleCall(CallExpr* call) {
     if (auto* var = dynamic_cast<VariableExpr*>(call->args[0].get())) {
         Symbol* sym = resolveVariable(var->name);
         if (!sym) {
-            LOG_ERROR("sys.bundle: unknown variable '" + var->name + "'");
+            LOG_ERROR(ctx.fmtLoc() + "sys.bundle: unknown variable '" + var->name + "'");
             return ctx.ir_gen->getInt32(0);
         }
         std::string typeName = sym->typeName;
@@ -4946,7 +4946,7 @@ IRValue* Compiler::visitSysBundleCall(CallExpr* call) {
         std::vector<std::string> chunks = collectCodeChunks(ctx, typeName, &missing);
         warnIfIncomplete(ctx, call, typeName, missing);
         if (chunks.empty()) {
-            LOG_ERROR("sys.bundle: no YAML source found for type '" + typeName + "'");
+            LOG_ERROR(ctx.fmtLoc() + "sys.bundle: no YAML source found for type '" + typeName + "'");
             return ctx.ir_gen->getInt32(0);
         }
 
@@ -4991,7 +4991,7 @@ IRValue* Compiler::visitSysBundleCall(CallExpr* call) {
         return ctx.ir_gen->wrap(CodeImpl::create(ctx, idVal, startCall, ccMem, dcMem, newCtxI));
     }
 
-    LOG_ERROR("sys.bundle: argument must be a string literal (function name) or a variable (instance)");
+    LOG_ERROR(ctx.fmtLoc() + "sys.bundle: argument must be a string literal (function name) or a variable (instance)");
     return ctx.ir_gen->getInt32(0);
 }
 
@@ -5000,7 +5000,7 @@ IRValue* Compiler::visitSysBundleCall(CallExpr* call) {
 // ---------------------------------------------------------------------------
 IRValue* Compiler::visitSysExecCall(CallExpr* call) {
     if (call->args.empty()) {
-        LOG_ERROR("sys.exec: requires exactly 1 argument (Code object)");
+        LOG_ERROR(ctx.fmtLoc() + "sys.exec: requires exactly 1 argument (Code object)");
         return ctx.ir_gen->getInt32(-2);
     }
 
@@ -5008,7 +5008,7 @@ IRValue* Compiler::visitSysExecCall(CallExpr* call) {
     if (auto* var = dynamic_cast<VariableExpr*>(call->args[0].get())) {
         Symbol* sym = resolveVariable(var->name);
         if (!sym || sym->typeName != "Code") {
-            LOG_ERROR("sys.exec: argument must be a Code variable (got: " +
+            LOG_ERROR(ctx.fmtLoc() + "sys.exec: argument must be a Code variable (got: " +
                       (sym ? sym->typeName : "unknown") + ")");
             return ctx.ir_gen->getInt32(-1);
         }
@@ -5017,7 +5017,7 @@ IRValue* Compiler::visitSysExecCall(CallExpr* call) {
     // Evaluate the Code argument (load the i8* pointer from alloca)
     IRValue* codeVal = visitExpression(call->args[0].get());
     if (!codeVal) {
-        LOG_ERROR("sys.exec: failed to evaluate Code argument");
+        LOG_ERROR(ctx.fmtLoc() + "sys.exec: failed to evaluate Code argument");
         return ctx.ir_gen->getInt32(-1);
     }
 
@@ -5032,7 +5032,7 @@ IRValue* Compiler::visitSysExecCall(CallExpr* call) {
     // Ausdruck, weil eine Konsole die Richtlinie je Nutzer zur Laufzeit bildet.
     if (call->args.size() >= 2) {
         if (call->args.size() > 4) {
-            LOG_ERROR("sys.exec: hoechstens (pkg, clearance, create_level, replace_level) — "
+            LOG_ERROR(ctx.fmtLoc() + "sys.exec: hoechstens (pkg, clearance, create_level, replace_level) — "
                       "spec/65 F65-26/F65-36");
             return ctx.ir_gen->getInt32(-1);
         }
@@ -5080,26 +5080,26 @@ IRValue* Compiler::visitSysArgDumpCall(CallExpr* call) {
     using namespace llvm;
 
     if (call->args.empty()) {
-        LOG_ERROR("sys.arg_dump: requires exactly 1 argument (struct variable)");
+        LOG_ERROR(ctx.fmtLoc() + "sys.arg_dump: requires exactly 1 argument (struct variable)");
         return ctx.ir_gen->getInt32(0);
     }
 
     // arg[0] must be a variable of a struct type
     auto* varExpr = dynamic_cast<AIML::AST::VariableExpr*>(call->args[0].get());
     if (!varExpr) {
-        LOG_ERROR("sys.arg_dump: argument must be a struct variable");
+        LOG_ERROR(ctx.fmtLoc() + "sys.arg_dump: argument must be a struct variable");
         return ctx.ir_gen->getInt32(0);
     }
 
     Symbol* sym = resolveVariable(varExpr->name);
     if (!sym) {
-        LOG_ERROR("sys.arg_dump: variable '" + varExpr->name + "' not found");
+        LOG_ERROR(ctx.fmtLoc() + "sys.arg_dump: variable '" + varExpr->name + "' not found");
         return ctx.ir_gen->getInt32(0);
     }
 
     const std::string& typeName = sym->typeName;
     if (!ctx.classes.count(typeName) || !ctx.classes[typeName].type) {
-        LOG_ERROR("sys.arg_dump: '" + typeName + "' is not a known struct type");
+        LOG_ERROR(ctx.fmtLoc() + "sys.arg_dump: '" + typeName + "' is not a known struct type");
         return ctx.ir_gen->getInt32(0);
     }
 
@@ -5218,7 +5218,7 @@ IRValue* Compiler::visitSysArgDumpCall(CallExpr* call) {
     GlobalVariable* argcVar = ctx.module().getGlobalVariable("__argc", true);
     GlobalVariable* argvVar = ctx.module().getGlobalVariable("__argv", true);
     if (!argcVar || !argvVar) {
-        LOG_ERROR("sys.arg_dump: __argc/__argv globals not found (is this a JIT context?)");
+        LOG_ERROR(ctx.fmtLoc() + "sys.arg_dump: __argc/__argv globals not found (is this a JIT context?)");
         return ctx.ir_gen->getInt32(0);
     }
     Value* argcVal = ctx.builder.CreateLoad(i32Ty, argcVar, "argc");
@@ -5269,7 +5269,7 @@ IRValue* Compiler::visitSysArgDumpCall(CallExpr* call) {
 // ─────────────────────────────────────────────────────────────────────────────
 IRValue* Compiler::visitDbRunSystem(CallExpr* call) {
     if (call->args.empty()) {
-        LOG_ERROR("db.run_system: requires at least one argument (function name)");
+        LOG_ERROR(ctx.fmtLoc() + "db.run_system: requires at least one argument (function name)");
         return ctx.ir_gen->getInt32(0);
     }
 
@@ -5278,13 +5278,13 @@ IRValue* Compiler::visitDbRunSystem(CallExpr* call) {
     if (auto* v = dynamic_cast<AIML::AST::VariableExpr*>(call->args[0].get()))
         fnName = v->name;
     else {
-        LOG_ERROR("db.run_system: first arg must be a function name");
+        LOG_ERROR(ctx.fmtLoc() + "db.run_system: first arg must be a function name");
         return ctx.ir_gen->getInt32(0);
     }
 
     llvm::Function* sysFn = ctx.module().getFunction(fnName);
     if (!sysFn) {
-        LOG_ERROR("db.run_system: function '" + fnName + "' not found in module");
+        LOG_ERROR(ctx.fmtLoc() + "db.run_system: function '" + fnName + "' not found in module");
         return ctx.ir_gen->getInt32(0);
     }
 
@@ -5295,7 +5295,7 @@ IRValue* Compiler::visitDbRunSystem(CallExpr* call) {
 
     int numStoreArgs = (int)call->args.size() - 1;
     if (numStoreArgs < 1) {
-        LOG_ERROR("db.run_system: need at least one store argument");
+        LOG_ERROR(ctx.fmtLoc() + "db.run_system: need at least one store argument");
         return ctx.ir_gen->getInt32(0);
     }
 

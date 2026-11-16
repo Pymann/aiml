@@ -74,7 +74,7 @@ bool EnumBuilder::OnScalar(const std::string& value, const std::string& tag) {
                 int id = std::stoi(currentLabelKey);
                 enumNode->labels[id] = value;
             } catch (...) {
-                LOG_ERROR("enum labels: expected integer id key, got '" + currentLabelKey + "'");
+                LOG_ERROR(builder->fmtLoc() + "enum labels: expected integer id key, got '" + currentLabelKey + "' (spec/14)");
             }
             currentLabelKey.clear();
             expectingKey = true;
@@ -110,7 +110,7 @@ bool EnumBuilder::OnScalar(const std::string& value, const std::string& tag) {
         if (inFullValueMap) {
             if (fullValueKey == "id") {
                 try { fullValueId = std::stoi(value); }
-                catch (...) { LOG_ERROR("enum full-form: expected numeric id"); }
+                catch (...) { LOG_ERROR(builder->fmtLoc() + "enum full-form: expected numeric id (spec/14)"); }
             } else if (fullValueKey == "name") {
                 fullValueName = value;
             } else if (fullValueKey == "label") {
@@ -119,7 +119,7 @@ bool EnumBuilder::OnScalar(const std::string& value, const std::string& tag) {
             fullValueKey.clear();
         } else if (!activeValueName.empty()) {
             try { overrideValue = std::stoi(value); }
-            catch (...) { LOG_ERROR("enum legacy-override: expected numeric id"); }
+            catch (...) { LOG_ERROR(builder->fmtLoc() + "enum legacy-override: expected numeric id (spec/14)"); }
         } else {
             enumNode->values.push_back({value, -1});
         }

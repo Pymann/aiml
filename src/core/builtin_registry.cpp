@@ -298,7 +298,7 @@ static void emitRpcTableRegistration(CompilerContext& ctx, llvm::Value* sess, ll
     for (auto* e : ents) {
         auto ai = ctx.classes.find(e->argsModel);
         if (ai == ctx.classes.end() || !ai->second.serNodesVar || !ai->second.type) {
-            LOG_ERROR("rpc table: argument model '" + e->argsModel + "' has no serialization descriptor");
+            LOG_ERROR(ctx.fmtLoc() + "rpc table: argument model '" + e->argsModel + "' has no serialization descriptor");
             continue;
         }
         llvm::Function* th = ctx.module().getFunction(e->thunk);
@@ -1248,7 +1248,7 @@ void registerBuiltins(CompilerContext& ctx) {
         llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
         llvm::Type* i32 = ctx.builder.getInt32Ty();
         if (args.size() < 3) {
-            LOG_ERROR("sys.export_symbol erwartet (name, fn, level) — spec/65 F65-37");
+            LOG_ERROR(ctx.fmtLoc() + "sys.export_symbol erwartet (name, fn, level) — spec/65 F65-37");
             return ctx.ir_gen->getInt32(-1);
         }
         llvm::Value* nm = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
@@ -3668,7 +3668,7 @@ void registerBuiltins(CompilerContext& ctx) {
                     if (lit->type == "string" &&
                         !AIML::AssetScanner::instance().has_stem(
                             AIML::AssetKind::Data, lit->value)) {
-                        LOG_ERROR(std::string("io.read_asset: stem '") +
+                        LOG_ERROR(ctx.fmtLoc() + std::string("io.read_asset: stem '") +
                                   lit->value + "' not in data store");
                     }
                 }
@@ -4442,7 +4442,7 @@ void registerBuiltins(CompilerContext& ctx) {
             if (call->args.empty()) return ctx.ir_gen->getInt32(0);
             llvm::Value* bufv = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
             if (!bufv || bufv->getType() != ctx.getLLVMType("buffer")) {
-                LOG_ERROR("ssh_channel.write_buffer expects a buffer<u8> (spec/32_6 §5)");
+                LOG_ERROR(ctx.fmtLoc() + "ssh_channel.write_buffer expects a buffer<u8> (spec/32_6 §5)");
                 return ctx.ir_gen->getInt32(0);
             }
             llvm::Value* dataP = ctx.builder.CreateExtractValue(bufv, {4}, "ssh_buf_data");
@@ -4497,7 +4497,7 @@ void registerBuiltins(CompilerContext& ctx) {
                 llvm::Type* i32 = ctx.builder.getInt32Ty();
                 llvm::Value* self = ctx.builder.CreateLoad(i8p, baseAlloca, "cx");
                 if (call->args.empty()) {
-                    LOG_ERROR("cx.exec: ohne Bundle gibt es nichts auszufuehren");
+                    LOG_ERROR(ctx.fmtLoc() + "cx.exec: ohne Bundle gibt es nichts auszufuehren");
                     return ctx.ir_gen->getInt32(-2);
                 }
                 llvm::Value* code = static_cast<llvm::Value*>(
@@ -4517,7 +4517,7 @@ void registerBuiltins(CompilerContext& ctx) {
                 llvm::Type* i32 = ctx.builder.getInt32Ty();
                 llvm::Value* self = ctx.builder.CreateLoad(i8p, baseAlloca, "cx");
                 if (call->args.empty()) {
-                    LOG_ERROR("cx.load: ohne Bundle gibt es nichts zu uebersetzen");
+                    LOG_ERROR(ctx.fmtLoc() + "cx.load: ohne Bundle gibt es nichts zu uebersetzen");
                     return ctx.ir_gen->getInt32(-2);
                 }
                 llvm::Value* code = static_cast<llvm::Value*>(
@@ -4620,13 +4620,13 @@ void registerBuiltins(CompilerContext& ctx) {
                 llvm::Type* i32t = ctx.builder.getInt32Ty();
                 llvm::Type* i64t = ctx.builder.getInt64Ty();
                 if (call->args.size() < 2) {
-                    LOG_ERROR("cx.call: Name und volle Signatur, z.B. "
+                    LOG_ERROR(ctx.fmtLoc() + "cx.call: Name und volle Signatur, z.B. "
                               "cx.call(\"demo\", \"fn() -> pipeline\") (spec/29_2 F29_2-…j)");
                     return nullptr;
                 }
                 auto* sigLit = dynamic_cast<AIML::AST::LiteralExpr*>(call->args[1].get());
                 if (!sigLit) {
-                    LOG_ERROR("cx.call: die Signatur muss hier woertlich stehen — aus ihr "
+                    LOG_ERROR(ctx.fmtLoc() + "cx.call: die Signatur muss hier woertlich stehen — aus ihr "
                               "entsteht der Aufruftyp (spec/29_2 F29_2-…j)");
                     return nullptr;
                 }
@@ -4637,14 +4637,14 @@ void registerBuiltins(CompilerContext& ctx) {
                 size_t arrow_at = sig.find("->");
                 if (sig.compare(0, 3, "fn(") != 0 || close_at == std::string::npos ||
                     arrow_at == std::string::npos || arrow_at < close_at) {
-                    LOG_ERROR("cx.call: '" + sigLit->value + "' ist keine Signatur — erwartet "
+                    LOG_ERROR(ctx.fmtLoc() + "cx.call: '" + sigLit->value + "' ist keine Signatur — erwartet "
                               "wird 'fn(<argtypen>) -> <rueckgabe>' (spec/29_2 F29_2-…d3)");
                     return nullptr;
                 }
                 const std::string argPart = sig.substr(open_at + 1, close_at - open_at - 1);
                 const std::string retName = sig.substr(arrow_at + 2);
                 if (!argPart.empty()) {
-                    LOG_ERROR("cx.call: Argumente sind noch nicht umgesetzt — heute nur "
+                    LOG_ERROR(ctx.fmtLoc() + "cx.call: Argumente sind noch nicht umgesetzt — heute nur "
                               "'fn() -> T' (spec/29_2 F29_2-…j)");
                     return nullptr;
                 }
@@ -4658,7 +4658,7 @@ void registerBuiltins(CompilerContext& ctx) {
                     if (cls != ctx.classes.end() && cls->second.isBuiltin) retTy = i8p;
                 }
                 if (!retTy) {
-                    LOG_ERROR("cx.call: Rueckgabetyp '" + retName + "' kann hier nicht "
+                    LOG_ERROR(ctx.fmtLoc() + "cx.call: Rueckgabetyp '" + retName + "' kann hier nicht "
                               "entgegengenommen werden — void, i32, i64, string oder eine "
                               "eingebaute Griffklasse (spec/29_2 F29_2-…j)");
                     return nullptr;
@@ -9265,7 +9265,7 @@ void registerBuiltins(CompilerContext& ctx) {
                             size_t a = (slash == std::string::npos) ? 0 : slash + 1;
                             size_t b = (dot == std::string::npos || dot < a)
                                        ? lit->value.size() : dot;
-                            LOG_ERROR(std::string("gltf.load: literal path '") + lit->value +
+                            LOG_ERROR(ctx.fmtLoc() + std::string("gltf.load: literal path '") + lit->value +
                                       "' is in the asset bundle; use gltf.model(\"" +
                                       lit->value.substr(a, b - a) + "\") instead");
                         }
@@ -9291,7 +9291,7 @@ void registerBuiltins(CompilerContext& ctx) {
                         if (lit->type == "string" &&
                             !AIML::AssetScanner::instance().has_stem(
                                 AIML::AssetKind::Mesh, lit->value)) {
-                            LOG_ERROR(std::string("gltf.model: stem '") +
+                            LOG_ERROR(ctx.fmtLoc() + std::string("gltf.model: stem '") +
                                       lit->value + "' not in mesh store");
                         }
                     }
@@ -9824,7 +9824,7 @@ void registerBuiltins(CompilerContext& ctx) {
                             size_t b = (dot == std::string::npos || dot < a)
                                        ? lit->value.size() : dot;
                             suggest = lit->value.substr(a, b - a);
-                            LOG_ERROR(std::string("gl.load_texture: literal path '") +
+                            LOG_ERROR(ctx.fmtLoc() + std::string("gl.load_texture: literal path '") +
                                       lit->value + "' is in the asset bundle; use gl.tex(\"" +
                                       suggest + "\") instead");
                         }
@@ -9850,7 +9850,7 @@ void registerBuiltins(CompilerContext& ctx) {
                         if (lit->type == "string" &&
                             !AIML::AssetScanner::instance().has_stem(
                                 AIML::AssetKind::Texture, lit->value)) {
-                            LOG_ERROR(std::string("gl.tex: stem '") +
+                            LOG_ERROR(ctx.fmtLoc() + std::string("gl.tex: stem '") +
                                       lit->value + "' not in texture store");
                         }
                     }
@@ -9876,7 +9876,7 @@ void registerBuiltins(CompilerContext& ctx) {
                         if (lit->type == "string" &&
                             !AIML::AssetScanner::instance().has_stem(
                                 AIML::AssetKind::Font, lit->value)) {
-                            LOG_ERROR(std::string("gl.font: stem '") +
+                            LOG_ERROR(ctx.fmtLoc() + std::string("gl.font: stem '") +
                                       lit->value + "' not in font store");
                         }
                     }
@@ -13322,7 +13322,7 @@ void registerBuiltins(CompilerContext& ctx) {
                                 ctx.currentCall->args[0].get())) {
                             if (lit->type == "string" &&
                                 !AIML::AssetScanner::instance().has_stem(kind, lit->value)) {
-                                LOG_ERROR(std::string("audio.") + method +
+                                LOG_ERROR(ctx.fmtLoc() + std::string("audio.") + method +
                                           ": stem '" + lit->value +
                                           "' not in audio store");
                             }

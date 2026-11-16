@@ -162,21 +162,63 @@ int main(int argc, char** argv) {
         int errs = 0;
         for (const auto& d : Logger::instance().diags()) {
             std::string file = "-", line = "0", col = "0", msg = d.text;
-            // "datei:zeile[:spalte]: text" aufspalten; was nicht passt, bleibt Text.
-            size_t c1 = msg.find(".aiml:");
-            if (c1 != std::string::npos) {
-                size_t p0 = msg.rfind(' ', c1);
-                size_t beg = (p0 == std::string::npos) ? 0 : p0 + 1;
-                size_t c2 = msg.find(": ", c1);
-                if (c2 != std::string::npos) {
-                    std::string loc = msg.substr(beg, c2 - beg);
-                    msg = msg.substr(c2 + 2);
-                    size_t f1 = loc.find(':');
-                    file = loc.substr(0, f1);
-                    std::string rest = loc.substr(f1 + 1);
-                    size_t f2 = rest.find(':');
-                    if (f2 == std::string::npos) { line = rest; }
-                    else { line = rest.substr(0, f2); col = rest.substr(f2 + 1); }
+            // spec/49 F49-100/F49-101: der Ort steht VORNE und in genau einer
+            // Form, "<datei>:<zeile>[:<spalte>]: ".  Darum wird er hier
+            // VERANKERT gelesen und nicht im Text gesucht.
+            //
+            // Vorher suchte dieser Leser ".aiml:" IRGENDWO in der Meldung und
+            // riet die Grenzen per rfind(' ').  Bei einer YAML-Syntaxmeldung,
+            // die den Dateinamen zweimal enthaelt, landete so der Pfad im Feld
+            // ZEILE — ein Datensatz, den kein Werkzeug lesen kann (gemessen
+            // 16.11.2026).  Was nicht exakt passt, bleibt jetzt Text mit
+            // Zeile 0: eine zugegebene Luecke statt einer falschen Angabe.
+            {
+                size_t cut = msg.find(": ");
+                // "<datei>:<zahl>[:<zahl>]" vor dem ": " — alles andere faellt durch
+                while (cut != std::string::npos) {
+                    const std::string head = msg.substr(0, cut);
+                    size_t lastColon = head.rfind(':');
+                    if (lastColon != std::string::npos && lastColon + 1 < head.size()) {
+                        auto allDigits = [](const std::string& s) {
+                            return !s.empty() && s.find_first_not_of("0123456789") == std::string::npos;
+                        };
+                        const std::string tail = head.substr(lastColon + 1);
+                        if (allDigits(tail)) {
+                            const std::string rest = head.substr(0, lastColon);
+                            size_t prevColon = rest.rfind(':');
+                            if (prevColon != std::string::npos &&
+                                allDigits(rest.substr(prevColon + 1))) {
+                                file = rest.substr(0, prevColon);
+                                line = rest.substr(prevColon + 1);
+                                col  = tail;                 // datei:zeile:spalte
+                            } else {
+                                file = rest;
+                                line = tail;                 // datei:zeile
+                            }
+                            msg = msg.substr(cut + 2);
+                            break;
+                        }
+                    }
+                    // Kein "datei:zeile" -- aber fmtLoc kennt zwei weitere Formen,
+                    // wenn keine Zeile bekannt ist: "datei: " und
+                    // "datei (in funktion): ".  Beide nennen die DATEI, und die
+                    // gehoert ins Feld, auch wenn die Zeile 0 bleibt (F49-100:
+                    // zugegebene Luecke statt Rateversuch).
+                    const std::string inMark = " (in ";
+                    size_t im = head.find(inMark);
+                    std::string cand = (im == std::string::npos) ? head : head.substr(0, im);
+                    if (cand.size() > 5 &&
+                        cand.compare(cand.size() - 5, 5, ".aiml") == 0 &&
+                        cand.find(' ') == std::string::npos) {
+                        file = cand;
+                        msg = msg.substr(cut + 2);
+                        if (im != std::string::npos) {
+                            // Die Funktion bleibt im Text -- sie ist Teil der
+                            // Aussage, nicht des Ortes (F49-102).
+                            msg = head.substr(im + 1) + ": " + msg;
+                        }
+                    }
+                    break;
                 }
             }
             if (std::string(d.sev) == "error") ++errs;
