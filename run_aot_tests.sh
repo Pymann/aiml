@@ -19,36 +19,43 @@ run_aot_test() {
 
     echo "--- AOT: $name ---"
 
+    # Jeder Fall bekommt sein EIGENES Verzeichnis: die Objekte werden unten als
+    # Gruppe eingesammelt, und in einem gemeinsamen Verzeichnis zieht Fall 2
+    # sonst das Hauptobjekt von Fall 1 mit -- zwei Einsprungpunkte in einem Link.
+    local case_dir="$WORK_DIR/$name"
+    mkdir -p "$case_dir"
+
     # Compile to object file
-    if ! $AIML_BIN "$src" -o "$WORK_DIR/${name}.o" 2>"$WORK_DIR/${name}.compile.log"; then
+    if ! $AIML_BIN "$src" -o "$case_dir/${name}.o" 2>"$case_dir/${name}.compile.log"; then
         echo "[ FAIL ] $name — compilation failed"
-        cat "$WORK_DIR/${name}.compile.log"
+        cat "$case_dir/${name}.compile.log"
         ((FAILED++))
         return
     fi
 
-    # Collect object files (main + deps)
-    local objs="$WORK_DIR/${name}.o"
-    local depsfile="$WORK_DIR/${name}.o.deps"
-    if [ -f "$depsfile" ]; then
-        while IFS= read -r dep; do
-            [ -n "$dep" ] && objs="$objs $dep"
-        done < "$depsfile"
-    fi
+    # Objekte einsammeln: das Hauptobjekt UND die Import-Objekte, die der
+    # Compiler danebenlegt.  Bis hierher stand ein Leser fuer `${name}.o.deps`
+    # -- ein Sidecar, das main.cpp seit 0dd80d77 (2026-03-22) nicht mehr
+    # schreibt, sondern loescht; seitdem linkte dieser Test ohne die Importe und
+    # scheiterte an undefinierten Symbolen.  Die Abhaengigkeiten stehen heute in
+    # `${name}.d` (Make-Format), die Objekte liegen als <pfad_mit_unterstrichen>.o
+    # im selben Verzeichnis.
+    local objs
+    objs=$(ls "$case_dir"/*.o 2>/dev/null | tr '\n' ' ')
 
     # Link
-    if ! g++ -o "$WORK_DIR/${name}" $objs \
+    if ! g++ -o "$case_dir/${name}" $objs \
         -L"$LIBAIML_DIR" -laiml -lpthread -ldl -lm -lstdc++ \
-        -Wl,-rpath,"$LIBAIML_DIR" 2>"$WORK_DIR/${name}.link.log"; then
+        -Wl,-rpath,"$LIBAIML_DIR" 2>"$case_dir/${name}.link.log"; then
         echo "[ FAIL ] $name — linking failed"
-        cat "$WORK_DIR/${name}.link.log"
+        cat "$case_dir/${name}.link.log"
         ((FAILED++))
         return
     fi
 
     # Run and check output
     local output
-    output=$("$WORK_DIR/${name}" 2>&1) || true
+    output=$("$case_dir/${name}" 2>&1) || true
     if echo "$output" | grep -q "$expected"; then
         echo "[  OK  ] $name"
         ((PASSED++))
@@ -69,21 +76,25 @@ run_aot_test "hello" "tests/test_aot_hello.aiml" "AOT_HELLO_PASS"
 # Test 2: With import (lib_globals.aiml)
 run_aot_test "import" "tests/test_aot_import.aiml" "AOT_IMPORT_PASS"
 
-# Test 3: Raw .ll output (default mode, no flags)
+# Test 3: Text-IR mit -o <datei>.ll.  Frueher stand hier "default mode, no
+# flags" und die Erwartung, dass ein blosser Aufruf `tests/test_aot_hello.ll`
+# hinterlaesst.  Der blosse Aufruf UEBERSETZT UND FUEHRT HEUTE AUS (er druckte
+# AOT_HELLO_PASS), schreibt also gar keine Datei -- der Fall pruefte eine
+# Vorgabe, die es nicht mehr gibt.  Jetzt wird der .ll-Pfad gepruefet, den es gibt.
 echo "--- AOT: ll_output ---"
 ((TOTAL++))
-if $AIML_BIN "tests/test_aot_hello.aiml" 2>/dev/null; then
-    if [ -f "tests/test_aot_hello.ll" ]; then
-        if grep -q "AOT_HELLO_PASS" "tests/test_aot_hello.ll"; then
+LL_OUT="$WORK_DIR/hello_ir.ll"
+if $AIML_BIN "tests/test_aot_hello.aiml" -o "$LL_OUT" 2>/dev/null; then
+    if [ -f "$LL_OUT" ]; then
+        if grep -q "AOT_HELLO_PASS" "$LL_OUT"; then
             echo "[  OK  ] ll_output — .ll file generated with expected content"
             ((PASSED++))
         else
             echo "[ FAIL ] ll_output — .ll file missing expected string"
             ((FAILED++))
         fi
-        rm -f "tests/test_aot_hello.ll"
     else
-        echo "[ FAIL ] ll_output — no .ll file generated"
+        echo "[ FAIL ] ll_output — no .ll file generated at $LL_OUT"
         ((FAILED++))
     fi
 else
