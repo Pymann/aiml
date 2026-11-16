@@ -1468,7 +1468,7 @@ below):
 | --- | --- | --- |
 | carry a source location (static count) | **403 (63 %)** | **530 (84 %)** |
 | carry a **file** in the records a corpus run actually emits | 50 % | **100 %** |
-| carry **file and line** in those records | 50 % | **86 %** |
+| carry **file and line** in those records | 50 % | **100 %** |
 | raised from the AST builders (`src/core/ast/*`) with a location | **1 of 35** | **35 of 35** |
 | location written as prose (`line 11: `, `main line 42: `) instead of a prefix | 24 | **0** — four `line N:` forms remain, each the explicit fallback for *no file known* |
 

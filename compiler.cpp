@@ -1355,7 +1355,12 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
             // and instantiation sites into the merged sets.  Sub-compilers have
             // already merged their (transitive) sets up via resolveImport, so at
             // the top level these unions are whole-build complete.
-            for (const auto& kv : ctx.prefabDecls) allPrefabDecls.emplace(kv.first, filename);
+            for (const auto& kv : ctx.prefabDecls) {
+                auto itLoc = ctx.prefabDeclLoc.find(kv.first);
+                allPrefabDecls.emplace(kv.first,
+                    itLoc != ctx.prefabDeclLoc.end() && !itLoc->second.empty()
+                        ? itLoc->second : (filename + ": "));
+            }
             allPrefabUses.insert(ctx.prefabUses.begin(), ctx.prefabUses.end());
             for (const auto& kv : ctx.serviceDecls) allServiceDecls.emplace(kv.first, kv.second);
             allServiceUses.insert(ctx.serviceUses.begin(), ctx.serviceUses.end());
@@ -1399,7 +1404,7 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
                 for (const auto& kvPrefab : allPrefabDecls) {
                     const std::string& pname = kvPrefab.first;
                     if (!allPrefabUses.count(pname)) {
-                        LOG_WARNING(kvPrefab.second + ": prefab '" + pname + "' is declared but never "
+                        LOG_WARNING(kvPrefab.second + "prefab '" + pname + "' is declared but never "
                             "instantiated in this build — no engine.instantiate(\"" +
                             pname + "\") anywhere. Remove the dead `- prefab:` "
                             "declaration or wire it up (spec/44_6).");

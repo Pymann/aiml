@@ -1,3 +1,5 @@
+# Requires: driver — tests/io_read_line/run.sh speist stdin.  Einzeln gestartet
+# haengt die Probe an einer offenen Pipe, bis die Zeitgrenze zuschlaegt (600 s).
 # io.read bleibt Blocklesen: es bricht NICHT am Zeilenende ab (spec/23).
 - def:
     name: main

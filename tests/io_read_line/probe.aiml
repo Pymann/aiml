@@ -1,3 +1,5 @@
+# Requires: driver — tests/io_read_line/run.sh speist stdin.  Einzeln gestartet
+# haengt die Probe an einer offenen Pipe, bis die Zeitgrenze zuschlaegt (600 s).
 # Liest zwei Zeilen zeilenweise und meldet Laenge und Inhalt.
 - def:
     name: main

@@ -729,6 +729,11 @@ namespace AIML {
     /// children still gets an (empty) entry, so `.count(name)` answers the
     /// Tier-1 "is this a known prefab?" question.  See spec/44_8_prefab_static.md.
     std::map<std::string, std::set<std::string>> prefabDecls;
+    // Name -> fertiges Ortspraefix der Deklaration ("datei:zeile:spalte: ").
+    // Die Tote-Prefab-Warnung faellt erst im Ganzprogramm-Durchgang an, wo der
+    // AST-Knoten laengst weg ist -- ohne diesen Merker nennt sie bestenfalls
+    // die Datei (spec/49 F49-100).
+    std::map<std::string, std::string> prefabDeclLoc;
 
     /// Prefab names instantiated (via engine.instantiate("<literal>")) anywhere
     /// in THIS module's bodies.  Collected by checkPrefabUsage; merged up the

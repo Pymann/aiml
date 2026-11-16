@@ -1616,7 +1616,8 @@ static void lintModuleGlobal(CompilerContext& ctx, const DeclStmt* decl) {
     // zu reichen (geprueft im Ganzprogramm-Durchgang).
     if (decl->is_singleton) return;
     bool owning = decl->typeName.rfind("ptr<", 0) == 0;
-    LOG_WARNING(ctx.fmtLoc() + "module-level global '" + decl->varName + "' ("
+    LOG_WARNING(ctx.fmtLoc(decl->sourceNode, decl->sourceLine, decl->sourceColumn) +
+        "module-level global '" + decl->varName + "' ("
         + decl->typeName + ")" + (owning
             ? " OWNS its value: passing it to a ptr<T> parameter moves it out and every"
               " other reader is left with a dangling pointer"
@@ -3555,10 +3556,10 @@ void Compiler::checkGroupImplements(ClassGroupDecl* g) {
         std::string gq = groupInterfaceOf(gname);
         if (gq.empty()) {
             if (!resolveIfaceName(gname, "").empty())
-                LOG_ERROR(ctx.fmtLoc() + "classgroup '" + g->name + "': '" + gname +
+                LOG_ERROR(ctx.fmtLoc(g->sourceNode, g->sourceLine, g->sourceColumn) + "classgroup '" + g->name + "': '" + gname +
                           "' is an interface, not a group interface — instance interfaces go on the instance (spec/58 §5.2).");
             else
-                LOG_ERROR(ctx.fmtLoc() + "classgroup '" + g->name + "': implements unknown group interface '" + gname + "'.");
+                LOG_ERROR(ctx.fmtLoc(g->sourceNode, g->sourceLine, g->sourceColumn) + "classgroup '" + g->name + "': implements unknown group interface '" + gname + "'.");
             continue;
         }
         const auto& info = ctx.groupInterfaces[gq];
@@ -3570,7 +3571,7 @@ void Compiler::checkGroupImplements(ClassGroupDecl* g) {
             auto cl = claimed.find(ex.first);
             if (cl != claimed.end()) {
                 if (cl->second.first != iq)
-                    LOG_ERROR(ctx.fmtLoc() + "classgroup '" + g->name + "' implements '" + cl->second.second +
+                    LOG_ERROR(ctx.fmtLoc(g->sourceNode, g->sourceLine, g->sourceColumn) + "classgroup '" + g->name + "' implements '" + cl->second.second +
                               "' and '" + gname + "', which export '" + ex.first + "' as different interfaces ('" +
                               cl->second.first + "' vs '" + iq + "').");
                 continue;
@@ -3631,17 +3632,17 @@ void Compiler::checkClassGroups(Program* prog) {
         std::set<std::string> instNames;
         for (auto& inst : g->instances) {
             if (inst.instanceName.empty())
-                LOG_ERROR(ctx.fmtLoc() + "classgroup '" + g->name +
+                LOG_ERROR(ctx.fmtLoc(g->sourceNode, g->sourceLine, g->sourceColumn) + "classgroup '" + g->name +
                           "': an instance is missing `instance:`.");
             else if (!instNames.insert(inst.instanceName).second)
-                LOG_ERROR(ctx.fmtLoc() + "classgroup '" + g->name +
+                LOG_ERROR(ctx.fmtLoc(g->sourceNode, g->sourceLine, g->sourceColumn) + "classgroup '" + g->name +
                           "': duplicate instance name '" + inst.instanceName + "'.");
             if (inst.className.empty())
-                LOG_ERROR(ctx.fmtLoc() + "classgroup '" + g->name + "': instance '" +
+                LOG_ERROR(ctx.fmtLoc(g->sourceNode, g->sourceLine, g->sourceColumn) + "classgroup '" + g->name + "': instance '" +
                           inst.instanceName + "' is missing `class:`.");
             else if (!ctx.classes.count(inst.className) &&
                      !ctx.classes.count(ctx.qualify(inst.className)))
-                LOG_ERROR(ctx.fmtLoc() + "classgroup '" + g->name + "': instance '" +
+                LOG_ERROR(ctx.fmtLoc(g->sourceNode, g->sourceLine, g->sourceColumn) + "classgroup '" + g->name + "': instance '" +
                           inst.instanceName + "' names unknown class '" + inst.className + "'.");
         }
 
@@ -3649,18 +3650,18 @@ void Compiler::checkClassGroups(Program* prog) {
         // instances) + the referenced group type exists.
         for (auto& sg : g->subgroups) {
             if (!instNames.insert(sg.first).second)
-                LOG_ERROR(ctx.fmtLoc() + "classgroup '" + g->name +
+                LOG_ERROR(ctx.fmtLoc(g->sourceNode, g->sourceLine, g->sourceColumn) + "classgroup '" + g->name +
                           "': subgroup name '" + sg.first +
                           "' clashes with another instance/subgroup.");
             if (!groupByName.count(sg.second))
-                LOG_ERROR(ctx.fmtLoc() + "classgroup '" + g->name + "': subgroup '" +
+                LOG_ERROR(ctx.fmtLoc(g->sourceNode, g->sourceLine, g->sourceColumn) + "classgroup '" + g->name + "': subgroup '" +
                           sg.first + "' names unknown group '" + sg.second + "'.");
         }
         checkGroupImplements(g);   // spec/58 §12.4 GI-5..10
         // exports must name real instances of THIS group.
         for (auto& e : g->exports)
             if (!instNames.count(e))
-                LOG_ERROR(ctx.fmtLoc() + "classgroup '" + g->name +
+                LOG_ERROR(ctx.fmtLoc(g->sourceNode, g->sourceLine, g->sourceColumn) + "classgroup '" + g->name +
                           "': export '" + e + "' is not an instance of this group.");
 
         // requires: PORT names (spec/58 §6) — unique across the instance/subgroup
@@ -3669,14 +3670,14 @@ void Compiler::checkClassGroups(Program* prog) {
         std::set<std::string> portNames;
         for (auto& p : g->ports) {
             if (p.first.empty())
-                LOG_ERROR(ctx.fmtLoc() + "classgroup '" + g->name +
+                LOG_ERROR(ctx.fmtLoc(g->sourceNode, g->sourceLine, g->sourceColumn) + "classgroup '" + g->name +
                           "': a `requires` port is missing its name.");
             else if (instNames.count(p.first) || !portNames.insert(p.first).second)
-                LOG_ERROR(ctx.fmtLoc() + "classgroup '" + g->name + "': port '" + p.first +
+                LOG_ERROR(ctx.fmtLoc(g->sourceNode, g->sourceLine, g->sourceColumn) + "classgroup '" + g->name + "': port '" + p.first +
                           "' clashes with an instance/subgroup/port of the same name.");
             if (!p.second.empty() && !ctx.classes.count(p.second) &&
                 !ctx.classes.count(ctx.qualify(p.second)))
-                LOG_ERROR(ctx.fmtLoc() + "classgroup '" + g->name + "': port '" + p.first +
+                LOG_ERROR(ctx.fmtLoc(g->sourceNode, g->sourceLine, g->sourceColumn) + "classgroup '" + g->name + "': port '" + p.first +
                           "' names unknown class '" + p.second + "'.");
         }
 
@@ -3713,25 +3714,25 @@ void Compiler::checkClassGroups(Program* prog) {
                     std::string portClass;
                     for (auto& cp : cg->ports) if (cp.first == b.first) { portExists = true; portClass = cp.second; }
                     if (!portExists)
-                        LOG_ERROR(ctx.fmtLoc() + "classgroup '" + g->name + "': subgroup '" + sg.first +
+                        LOG_ERROR(ctx.fmtLoc(g->sourceNode, g->sourceLine, g->sourceColumn) + "classgroup '" + g->name + "': subgroup '" + sg.first +
                                   "' binds unknown port '" + b.first + "' of group '" + sg.second + "'.");
                     // bound target is a real instance of THIS group?
                     std::string bc = instClass(b.second);
                     if (bc.empty())
-                        LOG_ERROR(ctx.fmtLoc() + "classgroup '" + g->name + "': subgroup '" + sg.first +
+                        LOG_ERROR(ctx.fmtLoc(g->sourceNode, g->sourceLine, g->sourceColumn) + "classgroup '" + g->name + "': subgroup '" + sg.first +
                                   "' binds port '" + b.first + "' to '" + b.second +
                                   "' which is not an instance of this group.");
                     else if (!portClass.empty() && !isSubclassOf(bc, portClass))
-                        LOG_ERROR(ctx.fmtLoc() + "classgroup '" + g->name + "': subgroup '" + sg.first +
+                        LOG_ERROR(ctx.fmtLoc(g->sourceNode, g->sourceLine, g->sourceColumn) + "classgroup '" + g->name + "': subgroup '" + sg.first +
                                   "' binds port '" + b.first + "' (needs '" + portClass + "') to '" +
                                   b.second + "' of incompatible class '" + bc + "'.");
                     if (portExists && !bound.insert(b.first).second)
-                        LOG_ERROR(ctx.fmtLoc() + "classgroup '" + g->name + "': subgroup '" + sg.first +
+                        LOG_ERROR(ctx.fmtLoc(g->sourceNode, g->sourceLine, g->sourceColumn) + "classgroup '" + g->name + "': subgroup '" + sg.first +
                                   "' binds port '" + b.first + "' more than once.");
                 }
             for (auto& cp : cg->ports)
                 if (!bound.count(cp.first))
-                    LOG_ERROR(ctx.fmtLoc() + "classgroup '" + g->name + "': subgroup '" + sg.first +
+                    LOG_ERROR(ctx.fmtLoc(g->sourceNode, g->sourceLine, g->sourceColumn) + "classgroup '" + g->name + "': subgroup '" + sg.first +
                               "' (group '" + sg.second + "') leaves port '" + cp.first + "' unbound.");
         }
 
@@ -3740,7 +3741,7 @@ void Compiler::checkClassGroups(Program* prog) {
             std::set<std::string> seenSees;
             for (auto& s : inst.sees) {
                 if (!seenSees.insert(s).second)
-                    LOG_ERROR(ctx.fmtLoc() + "classgroup '" + g->name + "': instance '" +
+                    LOG_ERROR(ctx.fmtLoc(g->sourceNode, g->sourceLine, g->sourceColumn) + "classgroup '" + g->name + "': instance '" +
                               inst.instanceName + "' lists sees '" + s + "' twice.");
                 // Strip an optional `:Iface` suffix (interface-typed edge, §5.2).
                 std::string tpart = s, iface;
@@ -3748,14 +3749,14 @@ void Compiler::checkClassGroups(Program* prog) {
                 if (colon != std::string::npos) { iface = tpart.substr(colon + 1); tpart = tpart.substr(0, colon); }
                 if (!iface.empty() && !ctx.interfaces.count(iface) &&
                     !ctx.interfaces.count(ctx.qualify(iface)))
-                    LOG_ERROR(ctx.fmtLoc() + "classgroup '" + g->name + "': instance '" +
+                    LOG_ERROR(ctx.fmtLoc(g->sourceNode, g->sourceLine, g->sourceColumn) + "classgroup '" + g->name + "': instance '" +
                               inst.instanceName + "' sees '" + s +
                               "' names unknown interface '" + iface + "'.");
                 auto dot = tpart.find('.');
                 if (dot == std::string::npos) {
                     // Same-group sibling, or a declared PORT (child→parent injection).
                     if (tpart == inst.instanceName)
-                        LOG_ERROR(ctx.fmtLoc() + "classgroup '" + g->name + "': instance '" +
+                        LOG_ERROR(ctx.fmtLoc(g->sourceNode, g->sourceLine, g->sourceColumn) + "classgroup '" + g->name + "': instance '" +
                                   inst.instanceName + "' sees itself.");
                     else if (!instNames.count(tpart) && !portNames.count(tpart))
                         LOG_ERROR(ctx.fmtLoc(g->sourceNode, g->sourceLine, g->sourceColumn) + "classgroup '" + g->name + "': instance '" +
@@ -3768,7 +3769,7 @@ void Compiler::checkClassGroups(Program* prog) {
                 std::string sgType;
                 for (auto& sg : g->subgroups) if (sg.first == sgName) sgType = sg.second;
                 if (sgType.empty()) {
-                    LOG_ERROR(ctx.fmtLoc() + "classgroup '" + g->name + "': instance '" +
+                    LOG_ERROR(ctx.fmtLoc(g->sourceNode, g->sourceLine, g->sourceColumn) + "classgroup '" + g->name + "': instance '" +
                               inst.instanceName + "' sees '" + s + "' but there is no subgroup '" +
                               sgName + "'.");
                     continue;
@@ -3780,7 +3781,7 @@ void Compiler::checkClassGroups(Program* prog) {
                 for (auto& gi : cg->instances) if (gi.instanceName == tgt) found = true;
                 for (auto& e : cg->exports)     if (e == tgt) exported = true;
                 if (!found)
-                    LOG_ERROR(ctx.fmtLoc() + "classgroup '" + g->name + "': sees '" + s +
+                    LOG_ERROR(ctx.fmtLoc(g->sourceNode, g->sourceLine, g->sourceColumn) + "classgroup '" + g->name + "': sees '" + s +
                               "' — group '" + sgType + "' has no instance '" + tgt + "'.");
                 else if (!exported)
                     LOG_ERROR(ctx.fmtLoc(g->sourceNode, g->sourceLine, g->sourceColumn) + "classgroup '" + g->name + "': sees '" + s +
@@ -3791,20 +3792,20 @@ void Compiler::checkClassGroups(Program* prog) {
             collectMethods(inst.className, baseMethods, visited);
             for (auto& fn : inst.functions)
                 if (baseMethods.count(fn->name))
-                    LOG_ERROR(ctx.fmtLoc() + "classgroup '" + g->name + "': function '" +
+                    LOG_ERROR(ctx.fmtLoc(g->sourceNode, g->sourceLine, g->sourceColumn) + "classgroup '" + g->name + "': function '" +
                               fn->name + "' on instance '" + inst.instanceName +
                               "' overrides a base method of '" + inst.className +
                               "' — overriding is not allowed (spec/58 §7).");
             // A constructor names a base method run in phase 0 (sees-blind).
             if (!inst.constructor.empty() && !baseMethods.count(inst.constructor[0]))
-                LOG_ERROR(ctx.fmtLoc() + "classgroup '" + g->name + "': instance '" +
+                LOG_ERROR(ctx.fmtLoc(g->sourceNode, g->sourceLine, g->sourceColumn) + "classgroup '" + g->name + "': instance '" +
                           inst.instanceName + "' constructor '" + inst.constructor[0] +
                           "' is not a method of base '" + inst.className + "'.");
             // Declared interfaces must exist (subclass conformance — that a base
             // method or group-function satisfies each — is enforced downstream).
             for (auto& itf : inst.implements)
                 if (!ctx.interfaces.count(itf) && !ctx.interfaces.count(ctx.qualify(itf)))
-                    LOG_ERROR(ctx.fmtLoc() + "classgroup '" + g->name + "': instance '" +
+                    LOG_ERROR(ctx.fmtLoc(g->sourceNode, g->sourceLine, g->sourceColumn) + "classgroup '" + g->name + "': instance '" +
                               inst.instanceName + "' implements unknown interface '" + itf + "'.");
         }
     }
@@ -5953,6 +5954,8 @@ void Compiler::registerTypeDecl(Node* node) {
         // Imports are resolved eagerly into the same ctx, so this map spans the
         // whole (transitive) import closure.  Record the child names too, for
         // the Tier-2 child-known check.  See spec/44_8_prefab_static.md.
+        ctx.prefabDeclLoc[prefab->name] =
+            ctx.fmtLoc(prefab->sourceNode, prefab->sourceLine, prefab->sourceColumn);
         auto& kids = ctx.prefabDecls[prefab->name];
         for (const auto& ch : prefab->children)
             kids.insert(ch.name);
@@ -6829,7 +6832,8 @@ void Compiler::visitFunction(FunctionDecl* func) {
 
     for (size_t ai = 0; ai < func->args.size(); ++ai) {
         const auto& arg = func->args[ai];
-        ctx.validateIdentifier(arg.first, "argument", func->sourceNode);
+        ctx.validateIdentifier(arg.first, "argument", func->sourceNode,
+                               func->sourceLine, func->sourceColumn);
         // list<T>/map<K:V> args werden implizit by-reference übergeben (Python-/Java-Stil).
         // LLVM-Signatur: opaque pointer statt struct-by-value, damit size++/data-Wachstum
         // zum Caller propagiert.  Forward-decl in registerTypeDecl verwendet die GLEICHE
