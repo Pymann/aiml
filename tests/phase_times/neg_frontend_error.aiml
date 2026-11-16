@@ -1,0 +1,14 @@
+# SPEC: 70_performance
+# Requires: driver
+# EXPECT-ERROR: unknown statement 'for'
+# Der Fehler entsteht im Parse/AST-Durchlauf, also MUSS --parse-only ihn melden
+# (spec/70 F70-91) -- sonst waere der Schalter eine stille Abkuerzung.
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [nums, list<i32>, [1, 2, 3]]
+      - for: [num, nums]
+        body:
+          - call: [log.info, "${num}"]
+      - return: 0

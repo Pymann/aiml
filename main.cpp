@@ -20,6 +20,10 @@ int main(int argc, char** argv) {
 
     bool runMode = false;
     bool emitMain = false;
+    // spec/70 §11.3 — Messschalter.  Sie aendern nichts am erzeugten Code.
+    bool phaseTimes = false;   // F70-90: Phasenzaehler auf stderr
+    bool parseOnly = false;    // F70-91: nach Parse/AST abbrechen
+    bool noCacheFlag = false;  // F70-92: __aiml_cache fuer diesen Lauf verbieten
     bool reportPrefabs = false;
     bool checkOnly = false;   // --check: nur prüfen, maschinenlesbar melden (spec/49)
     std::string reportFilter;
@@ -50,6 +54,12 @@ int main(int argc, char** argv) {
             runMode = true;
         } else if (arg == "--emit-main") {
             emitMain = true;
+        } else if (arg == "--phase-times") {
+            phaseTimes = true;
+        } else if (arg == "--parse-only") {
+            parseOnly = true;
+        } else if (arg == "--no-cache") {
+            noCacheFlag = true;
         } else if (arg == "--check") {
             checkOnly = true;
         } else if (arg == "--prefab-report") {
@@ -81,7 +91,9 @@ int main(int argc, char** argv) {
     }
 
     if (inputFile.empty()) {
-        std::cerr << "Usage: aiml <input.aiml> [-o output.o|output.ll] [--log-level DEBUG|INFO|WARN|ERROR] [-r]\n       aiml venv <dir> [--runtime <libaiml.so>]" << std::endl;
+        std::cerr << "Usage: aiml <input.aiml> [-o output.o|output.ll] [--log-level DEBUG|INFO|WARN|ERROR] [-r]\n"
+                     "       aiml <input.aiml> --check | --parse-only | --phase-times | --no-cache   (spec/70 §11.3)\n"
+                     "       aiml venv <dir> [--runtime <libaiml.so>]" << std::endl;
         return 1;
     }
 
@@ -121,6 +133,21 @@ int main(int argc, char** argv) {
     bool isObjectFile = outputFile.length() >= 2 && outputFile.substr(outputFile.length() - 2) == ".o";
     LOG_DEBUG("isObjectFile=" + std::to_string(isObjectFile));
 
+    compiler.phaseTimes = phaseTimes;
+    compiler.parseOnly   = parseOnly;
+    if (noCacheFlag) compiler.noCache = true;
+
+    if (parseOnly) {
+        // --parse-only (spec/70 F70-91): nur der Frontend-Durchlauf.  compile()
+        // kehrt nach dem AST zurueck, also entsteht keine Datei -- das -o-Ziel
+        // wird absichtlich nicht angefasst.  Die Diagnosen des Durchlaufs
+        // entscheiden den Rueckgabewert, sonst waere der Schalter eine stille
+        // Abkuerzung um die Pruefungen herum.
+        compiler.compile(inputFile, "/dev/null");
+        compiler.reportPhaseTimes();
+        return Logger::instance().hasErrors() ? 1 : 0;
+    }
+
     if (checkOnly) {
         // --check (spec/49, cosmos spec/98 F98-8): nur analysieren, nichts
         // erzeugen — dieselbe Bauart wie --prefab-report.  Ausgabe ist
@@ -156,6 +183,7 @@ int main(int argc, char** argv) {
             std::cout << d.sev << '\t' << file << '\t' << line << '\t' << col
                       << '\t' << d.origin << '\t' << msg << std::endl;
         }
+        compiler.reportPhaseTimes();
         return errs > 0 ? 1 : 0;
     }
 
@@ -174,7 +202,8 @@ int main(int argc, char** argv) {
         // JIT Mode
         LOG_DEBUG("JIT Run Mode. Saving IR to " + outputFile);
         compiler.compile(inputFile, "/dev/null"); // Compile module
-        
+        compiler.reportPhaseTimes();
+
         if (Logger::instance().hasErrors()) {
             LOG_ERROR("Compilation failed with errors.");
             return 1;
@@ -210,6 +239,7 @@ int main(int argc, char** argv) {
         compiler.outputDir = std::filesystem::path(outputFile).parent_path().string();
         // Compile and generate entry point for LL debugging
         compiler.compile(inputFile, outputFile); // Parse and populate module
+        compiler.reportPhaseTimes();
 
         if (Logger::instance().hasErrors()) {
             LOG_ERROR("Compilation failed with errors.");
@@ -284,6 +314,7 @@ int main(int argc, char** argv) {
         
         // 3. Emit Object
         compiler.compileToObject(inputFile, objFile);
+        compiler.reportPhaseTimes();
         
         // Linking
         if (isExe) {

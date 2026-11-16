@@ -1,0 +1,16 @@
+# SPEC: 70_performance
+# Requires: driver
+# Kleine, gueltige Probe fuer die Messschalter (spec/70 §11.3).
+# Expected exit code: 0
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [total, i64, 0]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 10] }
+          body:
+            - set: [total, { "+": [total, idx] }]
+            - set: [idx, { "+": [idx, 1] }]
+      - return: 0

@@ -319,6 +319,111 @@ a `-O0` build once; the lesson is in `doc/`.
 **F70-85.** Deleting `__aiml_cache` by hand to manufacture a cold start
 (F70-31).
 
+## 11. Measurement switches
+
+The suite needs the toolchain to expose where time goes. These switches exist
+for that and for nothing else: they change no semantics, and a program compiled
+with them yields the same IR and the same object as without.
+
+### 11.1 Why the cut lies at the object file
+
+Measured on 2026-11-16 (7 samples each, quiet machine, Ryzen 7 5700U):
+
+| Step | aiml (120 lines) | C, `gcc -O0` (48 lines) | C, `gcc -O2` |
+| --- | --- | --- | --- |
+| source → object | 178 ms | 72 ms | 120 ms |
+| link | **1167 ms** | **21 ms** | 21 ms |
+
+The link is not the same job on both sides: an aiml program links against
+`libaiml.so` — 92.3 MB with 34 923 exported symbols — where the C program links
+libc. Cutting the comparison at the object file is therefore **favourable to
+aiml**, and that is exactly why the link number has to be printed next to it.
+
+**F70-97.** A front-end comparison is cut at the object file, and the link step
+is reported **beside** it, never folded in and never left out.
+
+### 11.2 What the phases are
+
+`compile()` does not lex, then parse, then build: the AST builder **is** the
+YAML event handler, so the stream parse and the AST build are one pass and are
+reported as one number. The same file is, however, loaded as a YAML tree twice
+more — once as the config (`compiler.cpp`, top of `compile()`) and once to zip
+`sourceNode` onto the declarations for `sys.bundle`. Three parses of one file is
+a finding, not a phase boundary, so it gets its own counter instead of being
+hidden in the first one.
+
+| Counter | What it covers |
+| --- | --- |
+| `parse_ms` | streaming YAML parse **and** AST build (one pass) |
+| `reparse_ms` | the config load plus the `sourceNode` tree load — the two extra full parses |
+| `ir_ms` | `registerTypes`, the `synthesize*` passes and `astCompiler.compile` |
+| `emit_ms` | writing IR text, or object codegen via `compileToObject` |
+| `total_ms` | process-internal total from the first parse to the last write |
+
+Imports are resolved **inside** the IR pass (`resolveImport` runs while the AST
+compiler walks the program), so an imported unit's entire compilation — its own
+parse, IR and object emission — is counted in `ir_ms`. Measured: 16 ms of `ir`
+for a 120-line file without imports, 74 ms for a 77-line file with one. Without
+a per-import counter the two cannot be separated, and pretending otherwise
+would be the invented split F70-94 forbids.
+
+`total_ms` runs from the first parse to the last write — across `compile()`
+**and** the object emission that follows it — so it is at least as large as any
+single counter.
+
+**F70-94.** The counters name the phases that **exist**. Splitting the
+parse/AST pass into two numbers would require instrumenting yaml-cpp; inventing
+the split instead is forbidden.
+
+### 11.3 `aiml` switches
+
+**F70-90 `--phase-times`.** Writes one tab-separated record per counter of
+§11.2 to **stderr**, because stdout belongs to the compiled program (and to
+`--check`'s diagnostics):
+
+```
+phase	parse	12
+phase	reparse	5
+phase	ir	41
+phase	emit	9
+phase	total	67
+```
+
+Milliseconds, integer, monotonic clock. The switch combines with `-o`,
+`--check`, `--parse-only` and a JIT run.
+
+**F70-91 `--parse-only`.** Stops after the parse/AST pass: no types are
+registered, no IR is emitted, nothing is written. Diagnostics of that pass are
+reported as usual and still decide the errorlevel. This is the phase boundary an
+outside measurement can use without any instrumentation — the front end alone.
+
+**F70-92 `--no-cache`.** Forbids `__aiml_cache` for this invocation, so a cold
+measurement is a stated intent instead of an accident. `--check` implies it (it
+always did; now that is documented rather than incidental).
+
+**F70-93.** None of the three changes code generation. `--phase-times` and
+`--no-cache` produce byte-identical output to a run without them;
+`--parse-only` produces no output at all. A switch that changed the result
+would make every measurement taken with it worthless.
+
+### 11.4 `exodus` switches
+
+The project-level cut needs the build tool to stop at the same place.
+
+**F70-95 `build --no-link`.** Compiles every out-of-date source to its object
+and stops before the linker. Errorlevel 0 when all objects are current. This is
+F70-97's cut for a whole project.
+
+**F70-96 `build --timings[=FILE]`.** Machine-readable wall times: one record per
+source with its compile duration, plus the totals, written to `FILE` (JSON) or
+to stderr when no file is given. The record distinguishes **compiled** from
+**skipped (up to date)**, so "built in 3 ms" cannot be mistaken for throughput,
+and it carries `link_ms` separately — absent under `--no-link`.
+
+**F70-98.** `--timings` measures the build tool's own view (per-source wall
+time including process spawn). It is not a substitute for `--phase-times`: the
+first says which file costs, the second says which phase costs.
+
 ## 10. What the suite unlocks
 
 §2 records that **no IR optimization pipeline runs**. Every Group A number

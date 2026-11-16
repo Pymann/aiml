@@ -6,6 +6,7 @@
 #include "src/core/builtin_registry.h"
 #include "src/core/asset_scanner.h"
 #include "src/sys/asset_runtime.h"
+#include <chrono>
 #include <iostream>
 #include <fstream>
 #include <sstream>
@@ -1089,13 +1090,49 @@ static std::string bareOpKeyHint(const std::string& filename, const YAML::Except
            " (spec/04 \"Operator-Schluessel zitieren\").";
 }
 
+// spec/70 §11.2 — eine Uhr fuer alle Phasenzaehler.  Millisekunden als double:
+// gerundet wird erst bei der Ausgabe, sonst runden vier kurze Phasen einzeln auf
+// 0 ab und die Summe ist kleiner als das Ganze.
+static double phaseNowMs() {
+    return std::chrono::duration<double, std::milli>(
+               std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+// F70-90 — tab-getrennt auf STDERR, weil stdout dem uebersetzten Programm
+// gehoert (und bei --check den Diagnosen).  Unter --parse-only gibt es die
+// Phasen ir/emit nicht, also werden sie auch nicht gemeldet: eine 0 waere eine
+// Behauptung ueber Arbeit, die nie lief.
+void AIMLCompiler::reportPhaseTimes() const {
+    if (!phaseTimes) return;
+    auto rec = [](const char* name, double ms) {
+        std::cerr << "phase\t" << name << '\t'
+                  << (long long)(ms + 0.5) << '\n';
+    };
+    rec("parse", phaseParseMs);
+    rec("reparse", phaseReparseMs);
+    if (!parseOnly) {
+        rec("ir", phaseIrMs);
+        rec("emit", phaseEmitMs);
+    }
+    rec("total", phaseTotalMs);
+    std::cerr.flush();
+}
+
 void AIMLCompiler::compile(const std::string& filename, const std::string& outputFilename) {
     LOG_DEBUG("Compiling " + filename);
+    // §11.2: total deckt die ganze compile()-Dauer ab, auch Arbeit, die keiner
+    // Phase gehoert (Clearance-Fluss, Diagnosen, Importe ueber Sub-Compiler).
+    // Als Guard, damit JEDER Rueckgabepfad zaehlt -- compile() hat viele.
+    struct TotalGuard {
+        double started; double& acc;
+        ~TotalGuard() { acc += phaseNowMs() - started; }
+    } totalGuard{phaseNowMs(), phaseTotalMs};
     // Asset Registry: scan roots once at the top of the compile.  Stored in
     // a singleton so builtin_registry can validate string-literal lookups and
     // the JIT-runtime can resolve stems via the same in-memory tables.
     AIML::AssetScanner::instance().scan(assetRootsStr);
     YAML::Node config;
+    const double phaseConfigStart = phaseNowMs();
     try {
         config = YAML::LoadFile(filename);
     } catch (const YAML::Exception& e) {
@@ -1103,6 +1140,7 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
                   + bareOpKeyHint(filename, e));
         return;
     }
+    phaseReparseMs += phaseNowMs() - phaseConfigStart;
     auto seenFileSizeDiagnostics = std::make_shared<std::unordered_set<std::string>>();
     logAimlFileSizeDiagnostic(filename, seenFileSizeDiagnostics.get());
     logAimlDeclCountDiagnostic(filename);
@@ -1170,6 +1208,7 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
         LOG_ERROR(filename + std::string(": pipeline-Umschreibung: ") + e.what());
         return;
     }
+    const double phaseParseStart = phaseNowMs();
     try {
         if (usedExpansion) {
             std::istringstream ein(expandedSource);
@@ -1186,9 +1225,17 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
         }
 
         auto programAST = astBuilder.takeProgram();
+        phaseParseMs += phaseNowMs() - phaseParseStart;
+
+        // --parse-only (spec/70 F70-91): hier endet der Frontend-Durchlauf.
+        // Keine Typen, keine IR, keine Datei.  Die Diagnosen dieses Durchlaufs
+        // sind gestellt und entscheiden in main den Rueckgabewert.
+        if (parseOnly) return;
+
         if (programAST) {
             // Assign sourceNode to each top-level declaration for sys.bundle.
             // Load the file as a YAML tree and zip entries with AST nodes.
+            const double phaseZipStart = phaseNowMs();
             try {
                 YAML::Node rawSeq = usedExpansion ? YAML::Load(expandedSource)
                                                   : YAML::LoadFile(filename);
@@ -1198,10 +1245,12 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
                         programAST->declarations[i]->sourceNode = rawSeq[i];
                 }
             } catch (...) {}
+            phaseReparseMs += phaseNowMs() - phaseZipStart;
 
             // Track current source file for log.* location injection (Spec 46)
             ctx.currentSourceFile = filename;
 
+            const double phaseIrStart = phaseNowMs();
             AIML::AST::Compiler astCompiler(ctx);
 
             // A unit sees exactly its own transitive import closure (spec/21 §2.1):
@@ -1265,6 +1314,7 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
 
             // Pass 2: Full Code Generation
             astCompiler.compile(programAST.get());
+            phaseIrMs += phaseNowMs() - phaseIrStart;
             // spec/65 F65-9 (opt-in, F65-17): Privilegienfluss ueber die Aufrufkanten.
             // Laeuft je uebersetzter Datei; datei-UEBERGREIFENDE Kanten deckt das noch
             // nicht ab (dafuer braucht es die Propagation wie bei den Enum-Mengen).
@@ -1411,7 +1461,9 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
         LOG_ERROR(filename + ": Could not open file: " + EC.message());
         return;
     }
+    const double phaseEmitStart = phaseNowMs();
     module_->print(dest, nullptr);
+    phaseEmitMs += phaseNowMs() - phaseEmitStart;
     // Save State for JIT/Linker
     linkedObjects = ctx.objectFilesToLink;
     entryPointName = ctx.config.entryPointName;
@@ -2075,6 +2127,14 @@ void AIMLCompiler::saveModule(const std::string& outputFilename) {
 }
 
 void AIMLCompiler::compileToObject(const std::string& /*filename*/, const std::string& outputFilename) {
+    // §11.2: total laeuft vom ersten Parse bis zum letzten Write.  Die Objekt-
+    // Ausgabe passiert NACH compile(), also zaehlt sie hier weiter -- sonst
+    // meldet der Objektpfad ein total, das kleiner ist als seine emit-Phase
+    // (gemessen: total=33, emit=55).
+    struct TotalGuard {
+        double started; double& acc;
+        ~TotalGuard() { acc += phaseNowMs() - started; }
+    } totalGuard{phaseNowMs(), phaseTotalMs};
     // Reuse compile logic to generate IR in module_
     // TODO: Refactor compile() to separate IR generation from file output to avoid double work or side effects
     
@@ -2151,7 +2211,9 @@ void AIMLCompiler::compileToObject(const std::string& /*filename*/, const std::s
         }
     }
 
+    const double phaseObjStart = phaseNowMs();
     pass.run(*module_);
+    phaseEmitMs += phaseNowMs() - phaseObjStart;
     LOG_INFO("Object code written to " + outputFilename);
 }
 

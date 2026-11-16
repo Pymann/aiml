@@ -176,6 +176,17 @@ public:
     bool libraryMode = false;
     // When true, skip the internal import cache (build tool handles caching).
     bool noCache = false;
+    // spec/70 §11.3 — Messschalter.  Sie aendern NICHTS am erzeugten Code
+    // (F70-93); eine Messung mit einem Schalter, der das Ergebnis verschiebt,
+    // waere wertlos.  parseOnly bricht nach dem Parse/AST-Durchlauf ab.
+    bool parseOnly = false;
+    bool phaseTimes = false;
+    double phaseParseMs = 0.0;    // Stream-Parse UND AST-Bau: ein Durchlauf (§11.2)
+    double phaseReparseMs = 0.0;  // Config-Load + sourceNode-Baum: die zwei zusaetzlichen Parses
+    double phaseIrMs = 0.0;       // registerTypes / synthesize* / astCompiler.compile
+    double phaseEmitMs = 0.0;     // IR-Text schreiben bzw. Objekt-Codegen
+    double phaseTotalMs = 0.0;    // ganze compile()-Dauer, auch was keine Phase ist
+    void reportPhaseTimes() const;   // F70-90: Zaehler auf stderr
     // Output directory for import .o files (used when noCache=true).
     std::string outputDir;
     // Per-instance guard: each compile root has its own "already-compiled-this-run"
