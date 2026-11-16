@@ -3,7 +3,10 @@
     "name": "aot_trycatch_repro",
     "version": "0.1.0",
     "license": [],
-    "dependencies": [],
+    "dependencies": [
+        { "name": "aiml" },
+        { "name": "libaiml" }
+    ],
     "output_type": "executable",
     "optimization": "0",
     "debug": true,
@@ -29,7 +32,7 @@
         "float_abi": null
     },
     "compiler": {
-        "name": "/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/out/aiml/aiml",
+        "name": "out/aiml/aiml",
         "lang_standard": "17",
         "flags": []
     },
@@ -39,7 +42,7 @@
         "script": null,
         "map_file": null,
         "flags": [
-            "-Wl,-rpath,/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/out/libaiml"
+            "-Wl,-rpath,out/libaiml"
         ],
         "libraries": [
             "aiml",
@@ -49,7 +52,7 @@
             "dl"
         ],
         "library_paths": [
-            "/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/out/libaiml"
+            "out/libaiml"
         ]
     },
     "artifact_in_cwd": true
