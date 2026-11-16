@@ -1,6 +1,13 @@
-# 58 — Class Groups (static component wiring)  [DRAFT]
+# 58 — Class Groups (static component wiring)
 
-Status: **Design settled. M1 + M2 + M3 implemented + tested.**
+Status: **Normative. Design settled, M1 + M2 + M3 implemented and in use.**
+Covered by 36 tests under `tests/` (`test_classgroup_*`, `classgroup_giface/`),
+13 of them negative probes on the static checks, all green; in production use in
+five projects (9rooms, cosmos, cai, datacreatures, aidoc — 20 group definitions
+in 19 files).  What is still missing is listed in §9 and is **additive**: no part
+of what this chapter specifies is provisional.  The label `[DRAFT]` was dropped
+on 2026-11-16; it had outlived the status line directly beneath it.
+
 - **M2d** — subgroup **ports** (injected dependencies, §6.1): a subgroup declares
   the external instances it consumes via `requires: [[port, BaseClass]]`; the
   embedding parent **binds** each port to one of its own instances through the
@@ -484,14 +491,21 @@ A group **without** ports is unchanged: its `on_wired` still runs inside its own
   (import-time header synthesis); coordination methods are callable cross-unit via
   the container (`g_runtime.<instance>.<method>`), retiring the per-instance `g_*`
   global bridge.
+- **Resolved** — serialization. A sees or port edge is a **wired collaborator,
+  not owned data, and is never serialized.** The synthesized member carries that
+  mark (`is_collaborator`), and every descriptor and teardown path honours it, so
+  a stored value never drags its ambient collaborators along and the walk cannot
+  recurse through the instance graph. `spec/45_heap_serialization.md` states the
+  same cut for ancestor back-references and names this rule as its precedent.
+  This paragraph is the normative home of the rule: the implementation cites
+  “spec/58 §9” at the mark and at each skip.
+
+Open, and additive — nothing specified above depends on them:
+
 - Interface typing combined with a cross-group target (`subgroup.inst:Iface`) is
   not yet supported.
 - May a `functions[]` def be marked private to the instance vs part of its public
   surface?
-- Serialization: synthesized subclasses carry sees `ptr<>` members; confirm
-  heap-ser treats them like any other `ptr<>` member (skip / re-inject on load),
-  keeping the data-vs-collaborator boundary clean (a stored `Kv<T>` value never
-  serializes its ambient collaborators).
 
 ## 10. Worked example — 9rooms match subsystem
 
