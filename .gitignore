@@ -66,3 +66,12 @@ tests/clearance/fixtures/*.so
 
 # ZIM test fixture — built by tests/compress_zim/run.sh with the libzim writer (spec/33_2 §6)
 tests/data/aiml_zim_test.zim
+
+# Protokolle und Mess-Artefakte, die neben der Arbeit anfallen (848 kB).  Gate-,
+# Suite- und Build-Protokolle gehoeren ins leak_probes-Session-Dir: persistent,
+# damit sie einen Neustart ueberleben, aber nicht versioniert.  rc1 hat dieses
+# Repo von 376 MB versehentlich versionierter Build-Ausgabe befreit; das bleibt so.
+leak_probes/
+build_introspect.log
+wasm_yaml_build.log
+reports/*.log
