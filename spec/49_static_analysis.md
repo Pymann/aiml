@@ -1525,10 +1525,16 @@ can read (measured 2026-11-16). A message that does not match the shape yields
 file `-` and line `0`: an admitted gap, never a guess.
 
 **F49-102 — a diagnostic about a named thing names it.** The identifier appears
-in single quotes (`unknown statement 'for'`, `variable name 'idx'`), and the
-symbol the finding sits in is named when it is known — the `(in <function>)`
-form that `fmtLoc()` already emits when no line is available. Both, where both
-are known: a reader needs to find the place *and* recognise the thing.
+in single quotes: `unknown statement 'for'`, `variable name 'idx'`,
+`classgroup 'MatchRuntime'`. Measured over a corpus run, 94 % of records do.
+
+The **enclosing** symbol is named when there is no line to point at — the
+`(in <function>)` form `fmtLoc()` emits in that case. With a line it is left
+out on purpose: the location already answers *where*, and repeating the
+function in every message makes the part that matters harder to find. A
+diagnostic that can name neither the thing nor the place is the one to fix, and
+`failed to evaluate the return expression` was exactly that until it learned to
+name its function.
 
 **F49-103 — a wrong location is worse than none.** Falling back to
 `currentLine` in a pass that runs after parsing points at the end of the file;
@@ -1550,6 +1556,31 @@ A long explanation belongs in the spec chapter the message cites.
 **F49-106 — warnings have the shape of errors.** Same prefix, same rule
 reference, same fields. A warning that is harder to locate than an error
 teaches people to ignore warnings.
+
+### The checks of this chapter name their section
+
+**F49-104** applies first of all to the rules this chapter itself defines. Of
+the checks in the §2 table, these now end with their section — file size (§3),
+function size (§4), void-call as initializer (§12), top-level types per file
+(§14), string-literal comparison (§16), `ptr<T>` into a value `list<T>` (§17),
+unused enum member (§18), pointer-indirection mismatch (§19), blocking call in
+a frame context (§20), value round-trip (§21), identifier length (§23),
+unknown statement key (§2a):
+
+```
+tests/probe.aiml:11:16: variable name 'ab' is shorter than 3 characters — pick a descriptive name (spec/49 §23)
+```
+
+A caller that must react to one specific check matches that reference. It is
+stable because the section is numbered in this chapter — unlike the wording,
+which improves, and unlike `origin`, which moves with every refactor.
+
+Three near-misses are worth naming, because the same trap waits for the next
+person: `must be a string literal` (an argument-type error) is **not** the §16
+check about comparing *against* string literals, and attaching §16 to it would
+send a reader to the wrong chapter. A rule reference is a claim about which
+rule rejected the program; a wrong one is worse than none, exactly as with a
+wrong location (F49-103).
 
 ### How the gap is closed, and how it is measured
 

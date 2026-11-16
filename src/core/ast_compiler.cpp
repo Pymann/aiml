@@ -393,11 +393,11 @@ void Compiler::checkStringComparisons(Program* prog) {
                     "' is compared against string literals " + std::to_string(n) +
                     " times in '" + fn->name + "' — this hand-rolled string switch "
                     "should be an enum or polymorphic dispatch.  Add "
-                    "`static_off: [\"str_cmp\"]` to this def to bypass.");
+                    "`static_off: [\"str_cmp\"]` to this def to bypass. (spec/49 §16)");
             } else {
                 LOG_WARNING(ctx.fmtLoc(fn->sourceNode) + "variable '" + var +
                     "' is compared against a string literal in '" + fn->name +
-                    "' — consider a regular expression for string matching.");
+                    "' — consider a regular expression for string matching. (spec/49 §16)");
             }
         }
     };
@@ -541,7 +541,7 @@ void Compiler::checkPtrIndirection(Program* prog) {
                         std::to_string(ad) + " but the parameter expects depth " +
                         std::to_string(pd) + " (" + sig->second[i] + ").  The callee "
                         "will dereference too few levels; drop a '&' or add a '?'.  "
-                        "Suppress with `static_off: [\"ptr_indirection\"]`.");
+                        "Suppress with `static_off: [\"ptr_indirection\"]`. (spec/49 §19)");
                 }
             } else {
                 // Unresolvable callee (method/builtin/cross-file): the only safe
@@ -555,7 +555,7 @@ void Compiler::checkPtrIndirection(Program* prog) {
                         std::to_string(ad - (int)un->op.size()) + ") — this passes an "
                         "over-indirected pointer (depth " + std::to_string(ad) +
                         ").  Pass '" + baseVar + "' directly, or suppress with "
-                        "`static_off: [\"ptr_indirection\"]`.");
+                        "`static_off: [\"ptr_indirection\"]`. (spec/49 §19)");
                 }
             }
         }
@@ -835,7 +835,7 @@ void Compiler::checkFrameBlocking(Program* prog) {
                 "`engine.run` render/update callback.  A blocking RPC/sleep in the "
                 "frame loop stalls rendering — under WASM asyncify it can freeze the "
                 "page.  Make it async (`send_rpc` + `poll_rpc` across frames) or "
-                "suppress with `static_off: [\"frame_blocking\"]`.");
+                "suppress with `static_off: [\"frame_blocking\"]`. (spec/49 §20)");
     }
 }
 
@@ -6985,7 +6985,7 @@ void Compiler::visitFunction(FunctionDecl* func) {
                 LOG_WARNING(func->name + ": parameter '" + argNames[i] + "' is '" + ptn +
                     "'. list/map are already passed by reference (single indirection); "
                     "'" + ptn.substr(4, ptn.size() - 5) + "' is enough — the explicit ptr<> "
-                    "adds a second indirection.");
+                    "adds a second indirection. (spec/49 §19)");
             }
         }
         if (i < argIsRefModel.size() && argIsRefModel[i]) {

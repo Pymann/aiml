@@ -2195,7 +2195,7 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                          + argTy + "' into a value list<" + listElemName + ">: the element slot is an "
                          "inline value, so this would store a pointer instead of a value. Push a value "
                          "(dereference { '?': [x] } / materialise / clone the pointee) or declare the list "
-                         "as list<ptr<" + listElemName + ">> (§6.2/§10).");
+                         "as list<ptr<" + listElemName + ">> (§6.2/§10). (spec/49 §17)");
                      return ctx.ir_gen->getInt32(0);
                  }
              }

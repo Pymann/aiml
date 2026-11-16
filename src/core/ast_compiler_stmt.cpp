@@ -189,7 +189,7 @@ bool rejectVoidCallInit(CompilerContext& ctx, Expr* initExpr,
         if (!mfn || !mfn->getReturnType()->isVoidTy()) return false;
         LOG_ERROR(ctx.fmtLoc(srcNode) + targetDesc +
             " from a void-returning method '" + call->functionName +
-            "()' — void values cannot be stored into a typed location.");
+            "()' — void values cannot be stored into a typed location. (spec/49 §12)");
         return true;
     }
     llvm::Function* fn = ctx.module().getFunction(call->functionName);
@@ -204,7 +204,7 @@ bool rejectVoidCallInit(CompilerContext& ctx, Expr* initExpr,
         "()' — void values cannot be stored into a typed location. " +
         "Add `return: <T>` + a `- return: ...` to '" + call->functionName +
         "', or use an explicit `- call: [" + call->functionName +
-        ", ...]` statement (no init).");
+        ", ...]` statement (no init). (spec/49 §12)");
     return true;
 }
 }  // namespace
@@ -5319,7 +5319,10 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
                 ctx.ir_gen->createRet(ctx.ir_gen->wrap(raw));
             }
         } else {
-             LOG_ERROR(ctx.fmtLoc() + "Failed to evaluate return expression");
+             LOG_ERROR(ctx.fmtLoc() + "failed to evaluate the return expression of '" +
+                      (ctx.currentFunctionName.empty() ? std::string("<unbenannt>")
+                                                       : ctx.currentFunctionName) +
+                      "' — the expression produced no value (spec/07)");
              ctx.ir_gen->createRet(ctx.ir_gen->wrap(llvm::Constant::getNullValue(retTy)));
         }
     } else {

@@ -173,7 +173,7 @@ void logAimlDeclCountDiagnostic(const std::string& path) {
                   std::to_string(c.classes) + " class, " +
                   std::to_string(c.interfaces) + " interface). " +
                   "Maximum is " + std::to_string(kAimlMaxModelsPerFile) +
-                  "; split this file into smaller modules.");
+                  "; split this file into smaller modules. (spec/49 §14)");
     }
 }
 
@@ -352,10 +352,10 @@ void logAimlFileSizeDiagnostic(const std::string& path,
     if (lines < 0) return;
     if (lines >= kAimlFileErrorLines) {
         LOG_ERROR(path + ": AIML file too large (" + std::to_string(lines) +
-                  " lines). Maximum is 1499 lines; 1500+ is a hard error.");
+                  " lines). Maximum is 1499 lines; 1500+ is a hard error. (spec/49 §3)");
     } else if (lines >= kAimlFileWarningLines) {
         LOG_WARNING(path + ": AIML file large (" + std::to_string(lines) +
-                    " lines). 1000+ lines should be split.");
+                    " lines). 1000+ lines should be split. (spec/49 §3)");
     }
 }
 
