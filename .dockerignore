@@ -1,0 +1,24 @@
+# Build outputs and caches — the image rebuilds them from source.
+out/
+out-*/
+__aiml_cache/
+__exodus_cache/
+__pycache__/
+*.o
+*.d
+
+# History and local working material, not needed to build.
+.git/
+logs/
+leak_probes/
+reports/
+doc/
+assets/
+*.log
+test_results.txt
+
+# Host binaries that happen to sit in the repo root.
+aot_trycatch_repro
+test_link_bug
+bs_listener
+bs_sender
