@@ -1,5 +1,12 @@
 # AIML Performance
 
+> **The normative chapter is [`spec/70_performance.md`](../spec/70_performance.md).**
+> It defines the metrics, the methodology, the workload catalogue (language core,
+> JIT, AOT, Kv/Store, networking), the result format and the regression gate, and
+> it says why nothing in `results/summary.md` may be published as it stands. What
+> lives here today is the five-case precursor; the suite spec/70 describes is not
+> built yet.
+
 This directory holds standalone performance benchmarks for AIML.
 
 It is intentionally separate from `tests/` and from the normal test runner.

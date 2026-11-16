@@ -92,6 +92,7 @@ This file is the entry point for the `aiml/spec` directory.
 - [40_containerization.md](40_containerization.md)
 - [49_static_analysis.md](49_static_analysis.md)
 - [49_static_off.md](49_static_off.md)
+- [70_performance.md](70_performance.md) — what a performance number has to carry to count
 
 ## OS, Math, Engine, and Applications
 
