@@ -1,0 +1,120 @@
+# SPEC: 70_performance
+# fib100 — wie schnell die ersten 100 Fibonacci-Zahlen entstehen (spec/70 §6.1).
+#
+# F70-10  Wiederholungen werden hochgezogen, bis eine Probe >= 500 ms dauert
+#         (time.mono_ms hat nur Millisekunden; eine einzelne Runde aus 100
+#          Additionen liegt weit unter der Auflösung).
+# F70-11  Die Kalibrierung ist der verworfene Warmlauf.
+# F70-12  Danach sieben Proben, Median aus der sortierten Liste.
+# F70-16  Das Ergebnis wird geprüft (fib(10)) und ausgegeben (fib(92)), damit die
+#         Schleife nicht wegoptimiert werden kann und falsche Arithmetik auffällt.
+#
+# Zahlenbreite: fib(92) = 7540113804746346429 ist die größte exakt in i64
+# darstellbare Fibonacci-Zahl. Ab fib(93) läuft die Summe über und die Runde
+# rechnet modulo 2^64 weiter. Als Arbeitslast ist das gewollt und hier
+# dokumentiert; als *Ergebnis* wären die Werte ab 93 falsch.
+#
+# Expected exit code: 0
+
+- def:
+    name: fib_round
+    return: i64
+    body:
+      - decl: [prev, i64, 0]
+      - decl: [curr, i64, 1]
+      - decl: [acc, i64, 0]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 100] }
+          body:
+            - set: [acc, { "+": [acc, prev] }]
+            - decl: [nxt, i64, { "+": [prev, curr] }]
+            - set: [prev, curr]
+            - set: [curr, nxt]
+            - set: [idx, { "+": [idx, 1] }]
+      - return: acc
+
+- def:
+    name: fib_at
+    args: [[steps, i32]]
+    return: i64
+    body:
+      - decl: [prev, i64, 0]
+      - decl: [curr, i64, 1]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, steps] }
+          body:
+            - decl: [nxt, i64, { "+": [prev, curr] }]
+            - set: [prev, curr]
+            - set: [curr, nxt]
+            - set: [idx, { "+": [idx, 1] }]
+      - return: prev
+
+- def:
+    name: bench
+    args: [[reps, i64]]
+    return: i64
+    body:
+      - decl: [start_ms, i64, { call: [time.mono_ms] }]
+      - decl: [sink, i64, 0]
+      - decl: [steps, i64, 0]
+      - while:
+          condition: { lt: [steps, reps] }
+          body:
+            - set: [sink, { "+": [sink, { call: [fib_round] }] }]
+            - set: [steps, { "+": [steps, 1] }]
+      - decl: [elapsed, i64, { "-": [{ call: [time.mono_ms] }, start_ms] }]
+      - if:
+          condition: { eq: [sink, 0] }
+          then:
+            - call: [io.write, io.stdout, "sink=0 — die Runde wurde wegoptimiert\n"]
+            - call: [sys.exit, 1]
+      - return: elapsed
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [f10, i64, { call: [fib_at, 10] }]
+      - if:
+          condition: { neq: [f10, 55] }
+          then:
+            - decl: [bad, string, "FAIL fib(10)=${f10} erwartet 55\n"]
+            - call: [io.write, io.stdout, bad]
+            - call: [sys.exit, 1]
+
+      - decl: [f92, i64, { call: [fib_at, 92] }]
+      - decl: [l92, string, "fib92=${f92}\n"]
+      - call: [io.write, io.stdout, l92]
+
+      - decl: [reps, i64, 1000]
+      - decl: [elapsed, i64, { call: [bench, reps] }]
+      - while:
+          condition: { lt: [elapsed, 500] }
+          body:
+            - set: [reps, { "*": [reps, 2] }]
+            - set: [elapsed, { call: [bench, reps] }]
+      - decl: [line_c, string, "reps=${reps} calib_ms=${elapsed}\n"]
+      - call: [io.write, io.stdout, line_c]
+
+      - decl: [samples, list<i64>]
+      - decl: [run_idx, i32, 0]
+      - while:
+          condition: { lt: [run_idx, 7] }
+          body:
+            - decl: [one, i64, { call: [bench, reps] }]
+            - call: [samples.push, one]
+            - decl: [line_s, string, "sample_ms=${one}\n"]
+            - call: [io.write, io.stdout, line_s]
+            - set: [run_idx, { "+": [run_idx, 1] }]
+
+      - call: [samples.sort]
+      - decl: [med, i64, { at: [samples, 3] }]
+      - decl: [fastest, i64, { at: [samples, 0] }]
+      - decl: [slowest, i64, { at: [samples, 6] }]
+      - decl: [ns_round, i64, { "/": [{ "*": [med, 1000000] }, reps] }]
+      - decl: [ns_step, i64, { "/": [ns_round, 100] }]
+      - decl: [out, string, "median_ms=${med} min_ms=${fastest} max_ms=${slowest} reps=${reps} ns_per_round=${ns_round} ns_per_step=${ns_step}\n"]
+      - call: [io.write, io.stdout, out]
+      - return: 0

@@ -75,3 +75,11 @@ leak_probes/
 build_introspect.log
 wasm_yaml_build.log
 reports/*.log
+
+# Mess-Artefakte der Performance-Laeufe.  Versioniert wird das Ergebnis
+# (spec/70 F70-70: results/<case>/<run-id>.json), nicht die Binaries und Logs.
+performance/results/**/*.bin
+performance/results/**/*.log
+performance/results/**/*.out
+performance/results/**/*.stdout
+performance/results/**/*.stderr

@@ -87,15 +87,20 @@ form depends on F70-3):
     args: [[reps, i32]]
     return: i64
     body:
-      - decl: [t0, i64, { call: [time.mono_ms] }]
-      - decl: [i, i32, 0]
+      - decl: [start_ms, i64, { call: [time.mono_ms] }]
+      - decl: [idx, i32, 0]
       - while:
-          condition: { lt: [i, reps] }
+          condition: { lt: [idx, reps] }
           body:
             - call: [workload]
-            - set: [i, { +: [i, 1] }]
-      - return: { -: [{ call: [time.mono_ms] }, t0] }
+            - set: [idx, { "+": [idx, 1] }]
+      - return: { "-": [{ call: [time.mono_ms] }, start_ms] }
 ```
+
+**F70-7.** Every identifier in a case obeys the static checks the compiler
+enforces on any other program — among them the **minimum of three characters**
+(`context.h`): `t0`, `el`, `i` are rejected. A benchmark is not exempt from the
+language's own rules, and a case that does not compile has measured nothing.
 
 ## 4. Methodology
 
