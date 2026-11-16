@@ -1,4 +1,4 @@
-# SPEC: 61_memory_management_DRAFT
+# SPEC: 61_memory_management
 # An interface-typed MEMBER assigned from a fresh box — `set: [obj.member, {new: Impl}]`
 # — must be upcast to the fat pointer {obj, vtable}, as the decl site does.  Before
 # 2026-10-28 the bare object pointer was stored and the first call through the member

@@ -6,10 +6,10 @@ Datum: 2026-04-02
 
 Das relevante Restproblem ist ein Binary-Arity-Problem.
 
-- `UnaryExpr` ist im AST strikt einoperandig ausgelegt: [ast_nodes.h](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_nodes.h#L60)
-- `BinaryExpr` ist im AST strikt zweioperandig ausgelegt: [ast_nodes.h](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_nodes.h#L49)
-- Der Builder erzeugt Unary nur bei `size()==1` und Binary nur bei `size()==2`: [ast_builder.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_builder.cpp#L80), [expression_builder.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast/expression_builder.cpp#L143)
-- Der Compiler behandelt `||` und `&&` explizit binaer: [ast_compiler_expr.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_expr.cpp#L580)
+- `UnaryExpr` ist im AST strikt einoperandig ausgelegt: [ast_nodes.h](../../src/core/ast_nodes.h#L60)
+- `BinaryExpr` ist im AST strikt zweioperandig ausgelegt: [ast_nodes.h](../../src/core/ast_nodes.h#L49)
+- Der Builder erzeugt Unary nur bei `size()==1` und Binary nur bei `size()==2`: [ast_builder.cpp](../../src/core/ast_builder.cpp#L80), [expression_builder.cpp](../../src/core/ast/expression_builder.cpp#L143)
+- Der Compiler behandelt `||` und `&&` explizit binaer: [ast_compiler_expr.cpp](../../src/core/ast_compiler_expr.cpp#L580)
 
 Unary-only-Operatoren mit mehr als einem Operand werden jetzt bereits sauber als Compilerfehler abgewiesen. Bei Binary gilt jetzt:
 
@@ -26,7 +26,7 @@ Sichtbar binaer ausgewertete Operatoren:
 - Vergleich: `eq`, `neq`, `lt`, `gt`, `le`, `lte`, `ge`, `gte`, `peq`, `pneq`
 - Logik: `and`, `&&`, `or`, `||`
 
-Referenz: [ast_compiler_expr.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_expr.cpp#L459)
+Referenz: [ast_compiler_expr.cpp](../../src/core/ast_compiler_expr.cpp#L459)
 
 Bewertung:
 
@@ -45,9 +45,9 @@ Bewertung:
 
 Referenzen:
 
-- [expression_builder.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast/expression_builder.cpp#L23)
-- [expression_builder.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast/expression_builder.cpp#L190)
-- [ast_builder.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_builder.cpp#L121)
+- [expression_builder.cpp](../../src/core/ast/expression_builder.cpp#L23)
+- [expression_builder.cpp](../../src/core/ast/expression_builder.cpp#L190)
+- [ast_builder.cpp](../../src/core/ast_builder.cpp#L121)
 
 Verifiziert:
 

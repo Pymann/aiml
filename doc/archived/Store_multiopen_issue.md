@@ -28,7 +28,7 @@ Damit ist der Befund:
 
 Neuer Test:
 
-- [test_aiondb_persist_reuse.aiml](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/tests/test_aiondb_persist_reuse.aiml)
+- [test_aiondb_persist_reuse.aiml](../../tests/test_aiondb_persist_reuse.aiml)
 
 Ablauf:
 
@@ -51,7 +51,7 @@ Erwartung:
 
 Neuer Test:
 
-- [test_aiondb_persist_reuse_kv_ts.aiml](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/tests/test_aiondb_persist_reuse_kv_ts.aiml)
+- [test_aiondb_persist_reuse_kv_ts.aiml](../../tests/test_aiondb_persist_reuse_kv_ts.aiml)
 
 Ergebnis:
 
@@ -69,12 +69,12 @@ Das grenzt den Fehler sauber ein:
 
 Neue Tests:
 
-- [test_aiondb_store_reopen_write.aiml](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/tests/test_aiondb_store_reopen_write.aiml)
-- [test_aiondb_store_reopen_read.aiml](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/tests/test_aiondb_store_reopen_read.aiml)
-- [test_aiondb_kv_reopen_write.aiml](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/tests/test_aiondb_kv_reopen_write.aiml)
-- [test_aiondb_kv_reopen_read.aiml](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/tests/test_aiondb_kv_reopen_read.aiml)
-- [test_aiondb_ts_reopen_write.aiml](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/tests/test_aiondb_ts_reopen_write.aiml)
-- [test_aiondb_ts_reopen_read.aiml](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/tests/test_aiondb_ts_reopen_read.aiml)
+- [test_aiondb_store_reopen_write.aiml](../../tests/test_aiondb_store_reopen_write.aiml)
+- [test_aiondb_store_reopen_read.aiml](../../tests/test_aiondb_store_reopen_read.aiml)
+- [test_aiondb_kv_reopen_write.aiml](../../tests/test_aiondb_kv_reopen_write.aiml)
+- [test_aiondb_kv_reopen_read.aiml](../../tests/test_aiondb_kv_reopen_read.aiml)
+- [test_aiondb_ts_reopen_write.aiml](../../tests/test_aiondb_ts_reopen_write.aiml)
+- [test_aiondb_ts_reopen_read.aiml](../../tests/test_aiondb_ts_reopen_read.aiml)
 
 Ergebnisse:
 
@@ -121,7 +121,7 @@ Dann erklären sich die Symptome sauber:
 
 ## Erwartete Semantik laut Runtime
 
-In [db_runtime.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/sys/db_runtime.cpp#L279) bis [db_runtime.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/sys/db_runtime.cpp#L282) steht explizit:
+In [db_runtime.cpp](../../src/sys/db_runtime.cpp#L279) bis [db_runtime.cpp](../../src/sys/db_runtime.cpp#L282) steht explizit:
 
 - gleicher `name + path`
 - gleicher Prozess
@@ -149,7 +149,7 @@ Denn:
 
 ### 1. `Store<T>`-Open schlägt fehl und wird im AIML-Code nur indirekt sichtbar
 
-In [db_runtime.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/sys/db_runtime.cpp#L289) bis [db_runtime.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/sys/db_runtime.cpp#L350) kann `aiml_db_store_open_persist(...)` bei Fehlern `nullptr` zurückgeben:
+In [db_runtime.cpp](../../src/sys/db_runtime.cpp#L289) bis [db_runtime.cpp](../../src/sys/db_runtime.cpp#L350) kann `aiml_db_store_open_persist(...)` bei Fehlern `nullptr` zurückgeben:
 
 - `open(db_path, ...) < 0`
 - `mmap(...) == MAP_FAILED`
@@ -157,8 +157,8 @@ In [db_runtime.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects
 
 Das passt gut zu den beobachteten Symptomen:
 
-- `players.len()` auf `nullptr` ergibt in [db_runtime.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/sys/db_runtime.cpp#L497) bis [db_runtime.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/sys/db_runtime.cpp#L500) einfach `0`
-- `players.insert(...)` auf `nullptr` ergibt in [db_runtime.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/sys/db_runtime.cpp#L378) bis [db_runtime.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/sys/db_runtime.cpp#L381) `-1`
+- `players.len()` auf `nullptr` ergibt in [db_runtime.cpp](../../src/sys/db_runtime.cpp#L497) bis [db_runtime.cpp](../../src/sys/db_runtime.cpp#L500) einfach `0`
+- `players.insert(...)` auf `nullptr` ergibt in [db_runtime.cpp](../../src/sys/db_runtime.cpp#L378) bis [db_runtime.cpp](../../src/sys/db_runtime.cpp#L381) `-1`
 
 Genau dieses Muster sehen die neuen Tests:
 
@@ -167,20 +167,20 @@ Genau dieses Muster sehen die neuen Tests:
 
 ### 2. `Store<T>` könnte zusätzlich ein `elem_size`-Mismatch haben
 
-In [db_runtime.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/sys/db_runtime.cpp#L378) bis [db_runtime.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/sys/db_runtime.cpp#L382) liefert `aiml_db_store_insert(...)` auch dann `-1`, wenn `elem_size != s->elem_size`.
+In [db_runtime.cpp](../../src/sys/db_runtime.cpp#L378) bis [db_runtime.cpp](../../src/sys/db_runtime.cpp#L382) liefert `aiml_db_store_insert(...)` auch dann `-1`, wenn `elem_size != s->elem_size`.
 
 Das ist die zweite plausible Erklärung für `FAIL store_reopen_write_id=-1`.
 
 Relevant ist dabei:
 
-- `db.open` berechnet `elemSize` in [builtin_registry.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/builtin_registry.cpp#L1773) bis [builtin_registry.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/builtin_registry.cpp#L1843)
-- `Store.insert` berechnet `elemSize` separat in [ast_compiler_call.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_call.cpp#L803) bis [ast_compiler_call.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_call.cpp#L823)
+- `db.open` berechnet `elemSize` in [builtin_registry.cpp](../../src/core/builtin_registry.cpp#L1773) bis [builtin_registry.cpp](../../src/core/builtin_registry.cpp#L1843)
+- `Store.insert` berechnet `elemSize` separat in [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp#L803) bis [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp#L823)
 
 Wenn diese beiden Pfade nicht exakt dieselbe Größe emittieren, ist `insert == -1` die direkte Folge.
 
 ### 3. `Kv` und `TimeSeries` maskieren `open()`-Fehler stillschweigend
 
-In [db_runtime.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/sys/db_runtime.cpp#L618) bis [db_runtime.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/sys/db_runtime.cpp#L643) und [db_runtime.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/sys/db_runtime.cpp#L908) bis [db_runtime.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/sys/db_runtime.cpp#L933) gilt:
+In [db_runtime.cpp](../../src/sys/db_runtime.cpp#L618) bis [db_runtime.cpp](../../src/sys/db_runtime.cpp#L643) und [db_runtime.cpp](../../src/sys/db_runtime.cpp#L908) bis [db_runtime.cpp](../../src/sys/db_runtime.cpp#L933) gilt:
 
 - `open(...)` kann fehlschlagen
 - trotzdem wird ein `AimlKv*` bzw. `AimlTimeSeries*` zurückgegeben
@@ -191,15 +191,15 @@ Das ist gefährlich, weil der Fehler damit wie ein leerer Store aussieht statt w
 Das passt sehr gut zu den neuen Reopen-Ergebnissen:
 
 - Write-Test innerhalb eines Laufs kann gegen den in-memory Zustand funktionieren
-- `db.checkpoint` ist bei `wal_fd < 0` bzw. `log_fd < 0` in [db_runtime.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/sys/db_runtime.cpp#L645) bis [db_runtime.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/sys/db_runtime.cpp#L663) und [db_runtime.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/sys/db_runtime.cpp#L937) bis [db_runtime.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/sys/db_runtime.cpp#L944) ein stilles `0`
+- `db.checkpoint` ist bei `wal_fd < 0` bzw. `log_fd < 0` in [db_runtime.cpp](../../src/sys/db_runtime.cpp#L645) bis [db_runtime.cpp](../../src/sys/db_runtime.cpp#L663) und [db_runtime.cpp](../../src/sys/db_runtime.cpp#L937) bis [db_runtime.cpp](../../src/sys/db_runtime.cpp#L944) ein stilles `0`
 - der zweite Prozess sieht dann einfach nichts mehr
 
 ### 4. Die `path`-Option aus Variablen könnte im Compiler/Builtin verloren gehen
 
 Der relevante Übergabepfad ist:
 
-- Vorverarbeitung der Option Bags in [ast_compiler_call.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_call.cpp#L95) bis [ast_compiler_call.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_call.cpp#L136)
-- Nutzung von `ctx.dbOpenBasePathVal` in [builtin_registry.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/builtin_registry.cpp#L1829) bis [builtin_registry.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/builtin_registry.cpp#L1953)
+- Vorverarbeitung der Option Bags in [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp#L95) bis [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp#L136)
+- Nutzung von `ctx.dbOpenBasePathVal` in [builtin_registry.cpp](../../src/core/builtin_registry.cpp#L1829) bis [builtin_registry.cpp](../../src/core/builtin_registry.cpp#L1953)
 
 Verdacht:
 
@@ -210,7 +210,7 @@ Indizien:
 
 - neue Tests mit `path`-Variable erzeugen keine Dateien am Zielort
 - ältere Tests mit Literal-Pfad funktionieren
-- `path` ist ein eigener Typ mit Interning in [ast_compiler_stmt.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_stmt.cpp#L113) bis [ast_compiler_stmt.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_stmt.cpp#L121) und [ast_compiler_stmt.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_stmt.cpp#L296) bis [ast_compiler_stmt.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_stmt.cpp#L304), also genau dort liegt ein plausibler Integrationsfehler
+- `path` ist ein eigener Typ mit Interning in [ast_compiler_stmt.cpp](../../src/core/ast_compiler_stmt.cpp#L113) bis [ast_compiler_stmt.cpp](../../src/core/ast_compiler_stmt.cpp#L121) und [ast_compiler_stmt.cpp](../../src/core/ast_compiler_stmt.cpp#L296) bis [ast_compiler_stmt.cpp](../../src/core/ast_compiler_stmt.cpp#L304), also genau dort liegt ein plausibler Integrationsfehler
 
 ### 5. `Kv`-/`TimeSeries`-Replay hat keinerlei harte Fehlerdiagnostik
 
@@ -223,9 +223,9 @@ Auch wenn die Datei geöffnet wird, fehlen an kritischen Stellen belastbare Fehl
 
 Relevant:
 
-- [db_runtime.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/sys/db_runtime.cpp#L538) bis [db_runtime.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/sys/db_runtime.cpp#L574)
-- [db_runtime.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/sys/db_runtime.cpp#L644) bis [db_runtime.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/sys/db_runtime.cpp#L663)
-- [db_runtime.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/sys/db_runtime.cpp#L920) bis [db_runtime.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/sys/db_runtime.cpp#L944)
+- [db_runtime.cpp](../../src/sys/db_runtime.cpp#L538) bis [db_runtime.cpp](../../src/sys/db_runtime.cpp#L574)
+- [db_runtime.cpp](../../src/sys/db_runtime.cpp#L644) bis [db_runtime.cpp](../../src/sys/db_runtime.cpp#L663)
+- [db_runtime.cpp](../../src/sys/db_runtime.cpp#L920) bis [db_runtime.cpp](../../src/sys/db_runtime.cpp#L944)
 
 ## Noch nicht abgedeckt
 
@@ -248,8 +248,8 @@ Diese Folgefälle sind nachrangig, solange:
 
 Betroffene Stellen:
 
-- [ast_compiler_call.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_call.cpp#L95)
-- [builtin_registry.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/builtin_registry.cpp#L1829)
+- [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp#L95)
+- [builtin_registry.cpp](../../src/core/builtin_registry.cpp#L1829)
 
 Vorgehen:
 
@@ -267,8 +267,8 @@ Wahrscheinlich nötige Änderung:
 
 Betroffene Stellen:
 
-- [db_runtime.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/sys/db_runtime.cpp#L618)
-- [db_runtime.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/sys/db_runtime.cpp#L908)
+- [db_runtime.cpp](../../src/sys/db_runtime.cpp#L618)
+- [db_runtime.cpp](../../src/sys/db_runtime.cpp#L908)
 
 Vorgehen:
 
@@ -286,9 +286,9 @@ Nutzen:
 
 Betroffene Stellen:
 
-- [builtin_registry.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/builtin_registry.cpp#L1773)
-- [ast_compiler_call.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_call.cpp#L803)
-- [db_runtime.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/sys/db_runtime.cpp#L378)
+- [builtin_registry.cpp](../../src/core/builtin_registry.cpp#L1773)
+- [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp#L803)
+- [db_runtime.cpp](../../src/sys/db_runtime.cpp#L378)
 
 Vorgehen:
 
@@ -302,7 +302,7 @@ Vorgehen:
 
 Betroffene Stelle:
 
-- [db_runtime.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/sys/db_runtime.cpp#L289)
+- [db_runtime.cpp](../../src/sys/db_runtime.cpp#L289)
 
 Vorgehen:
 
@@ -321,10 +321,10 @@ Nutzen:
 
 Betroffene Stellen:
 
-- [db_runtime.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/sys/db_runtime.cpp#L538)
-- [db_runtime.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/sys/db_runtime.cpp#L644)
-- [db_runtime.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/sys/db_runtime.cpp#L920)
-- [db_runtime.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/sys/db_runtime.cpp#L937)
+- [db_runtime.cpp](../../src/sys/db_runtime.cpp#L538)
+- [db_runtime.cpp](../../src/sys/db_runtime.cpp#L644)
+- [db_runtime.cpp](../../src/sys/db_runtime.cpp#L920)
+- [db_runtime.cpp](../../src/sys/db_runtime.cpp#L937)
 
 Vorgehen:
 
@@ -335,12 +335,12 @@ Vorgehen:
 
 ### 6. Danach Tests in dieser Reihenfolge erneut fahren
 
-1. [test_aiondb_store_reopen_write.aiml](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/tests/test_aiondb_store_reopen_write.aiml)
-2. [test_aiondb_persist_reuse.aiml](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/tests/test_aiondb_persist_reuse.aiml)
-3. [test_aiondb_kv_reopen_write.aiml](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/tests/test_aiondb_kv_reopen_write.aiml)
-4. [test_aiondb_kv_reopen_read.aiml](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/tests/test_aiondb_kv_reopen_read.aiml)
-5. [test_aiondb_ts_reopen_write.aiml](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/tests/test_aiondb_ts_reopen_write.aiml)
-6. [test_aiondb_ts_reopen_read.aiml](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/tests/test_aiondb_ts_reopen_read.aiml)
+1. [test_aiondb_store_reopen_write.aiml](../../tests/test_aiondb_store_reopen_write.aiml)
+2. [test_aiondb_persist_reuse.aiml](../../tests/test_aiondb_persist_reuse.aiml)
+3. [test_aiondb_kv_reopen_write.aiml](../../tests/test_aiondb_kv_reopen_write.aiml)
+4. [test_aiondb_kv_reopen_read.aiml](../../tests/test_aiondb_kv_reopen_read.aiml)
+5. [test_aiondb_ts_reopen_write.aiml](../../tests/test_aiondb_ts_reopen_write.aiml)
+6. [test_aiondb_ts_reopen_read.aiml](../../tests/test_aiondb_ts_reopen_read.aiml)
 
 Empfohlene Priorität:
 

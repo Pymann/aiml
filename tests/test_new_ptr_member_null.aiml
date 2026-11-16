@@ -1,4 +1,4 @@
-# SPEC: 61_memory_management_DRAFT
+# SPEC: 61_memory_management
 # spec/61 §6 Regel 1: `{ new: T }` initialisiert die Felder "exactly like a
 # stack decl".  Fuer ein `ptr<T>`-Feld heisst das NULL — Regel 2 setzt es
 # zwingend voraus: die Freigabe FOLGT jedem ptr<T>-Feld, und einem nicht

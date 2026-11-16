@@ -22,11 +22,11 @@ Die aktuelle Array-Implementierung ist auf primitive Werte ausgerichtet.
 
 Relevante Stellen:
 
-- Typauflösung: [context.h](</media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/context.h:480>)
-- Array-Read via `at`: [ast_compiler_expr.cpp](</media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_expr.cpp:882>)
-- Array-Write via `idx`: [ast_compiler_stmt.cpp](</media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_stmt.cpp:854>)
-- Array-Properties `.len/.data_ptr/.dimX`: [ast_compiler.cpp](</media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler.cpp:1212>)
-- Aktuelle Tests: [test_array.aiml](</media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/tests/test_array.aiml:1>)
+- Typauflösung: [context.h](../../src/core/context.h#L480)
+- Array-Read via `at`: [ast_compiler_expr.cpp](../../src/core/ast_compiler_expr.cpp#L882)
+- Array-Write via `idx`: [ast_compiler_stmt.cpp](../../src/core/ast_compiler_stmt.cpp#L854)
+- Array-Properties `.len/.data_ptr/.dimX`: [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L1212)
+- Aktuelle Tests: [test_array.aiml](../../tests/test_array.aiml#L1)
 
 Die Implementierung baut LLVM-Arrays schon generisch aus `elemType + count`. Das ist gut:
 
@@ -170,7 +170,7 @@ Diese Semantik soll nicht versteckt "verbessert" werden. Falls spaeter Deep-Copy
 
 ### Stellen
 
-- [context.h](</media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/context.h:480>)
+- [context.h](../../src/core/context.h#L480)
 - optional Diagnose-/Validation-Code in den AST-Buildern oder Type-Checker-Stellen
 
 ### Aenderung
@@ -204,7 +204,7 @@ Lesen aus `array<ptr<T>:N>` und `array<MyStruct:N>` muss korrekt typisiert zurue
 
 ### Stelle
 
-- [ast_compiler_expr.cpp](</media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_expr.cpp:882>)
+- [ast_compiler_expr.cpp](../../src/core/ast_compiler_expr.cpp#L882)
 
 ### Ist-Zustand
 
@@ -238,7 +238,7 @@ Schreiben in `array<MyStruct:N>` muss Value-Stores fuer Structs sauber akzeptier
 
 ### Stelle
 
-- [ast_compiler_stmt.cpp](</media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_stmt.cpp:854>)
+- [ast_compiler_stmt.cpp](../../src/core/ast_compiler_stmt.cpp#L854)
 
 ### Problem
 
@@ -308,7 +308,7 @@ Struct-Arrays muessen garantiert wertmaessig null-/zero-initialisiert sein, ents
 ### Stellen
 
 - Compiler-Alloca-Initialisierung fuer Arrays
-- Tests in [test_array.aiml](</media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/tests/test_array.aiml:1>)
+- Tests in [test_array.aiml](../../tests/test_array.aiml#L1)
 
 ### Aenderung
 
@@ -338,7 +338,7 @@ Zusaetzliche Struct-Tests:
 
 ### Stelle
 
-- [ast_compiler.cpp](</media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler.cpp:1212>)
+- [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L1212)
 
 ### Bewertung
 
@@ -361,8 +361,8 @@ Nicht zwingend als Runtime-Test, aber mindestens Compile-Test.
 
 ### Stellen
 
-- [52_arrays.md](</media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/spec/52_arrays.md:1>)
-- evtl. [aiml_reference_guide.md](</media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/spec/aiml_reference_guide.md>)
+- [52_arrays.md](../../spec/52_arrays.md#L1)
+- evtl. [aiml_reference_guide.md](../../spec/aiml_reference_guide.md)
 
 ### Aenderung
 
@@ -413,7 +413,7 @@ Und Struct-Beispiel:
 
 ### Datei
 
-- [test_array.aiml](</media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/tests/test_array.aiml:1>)
+- [test_array.aiml](../../tests/test_array.aiml#L1)
 
 ### Neue Testgruppe
 

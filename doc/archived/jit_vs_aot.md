@@ -21,12 +21,12 @@ Das ist sehr wahrscheinlich eine reale Ursache für:
 
 Betroffene Stellen:
 
-- [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp#L104)
-- [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp#L431)
+- [compiler.cpp](../../compiler.cpp#L104)
+- [compiler.cpp](../../compiler.cpp#L431)
 
 ### AOT / Datei-Pfad
 
-In [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp#L104) bis [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp#L426) macht `compile(...)` unter anderem:
+In [compiler.cpp](../../compiler.cpp#L104) bis [compiler.cpp](../../compiler.cpp#L426) macht `compile(...)` unter anderem:
 
 - setzt `ctx.libraryMode`
 - setzt `ctx.compilerPath`
@@ -41,7 +41,7 @@ In [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/p
 
 ### JIT / String-Pfad
 
-In [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp#L431) bis [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp#L480) macht `compileFromString(...)` im Vergleich deutlich weniger:
+In [compiler.cpp](../../compiler.cpp#L431) bis [compiler.cpp](../../compiler.cpp#L480) macht `compileFromString(...)` im Vergleich deutlich weniger:
 
 - kein `ctx.libraryMode`
 - kein `ctx.resolveImportCallback`
@@ -61,16 +61,16 @@ Das ist kein kleiner Unterschied, sondern ein semantischer Split.
 
 Betroffene Stellen:
 
-- [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp#L135)
-- [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp#L263)
-- [ast_compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler.cpp#L417)
+- [compiler.cpp](../../compiler.cpp#L135)
+- [compiler.cpp](../../compiler.cpp#L263)
+- [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L417)
 
 ### AOT
 
 Im Datei-Pfad wird Importauflösung aktiv vorbereitet:
 
-- [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp#L135) bis [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp#L205)
-- [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp#L263) bis [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp#L398)
+- [compiler.cpp](../../compiler.cpp#L135) bis [compiler.cpp](../../compiler.cpp#L205)
+- [compiler.cpp](../../compiler.cpp#L263) bis [compiler.cpp](../../compiler.cpp#L398)
 
 Dabei werden:
 
@@ -101,13 +101,13 @@ Alles, was auf Importkontext angewiesen ist, kann im JIT-Pfad anders reagieren:
 
 Betroffene Stellen:
 
-- [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp#L723)
-- [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp#L1614)
-- [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp#L489)
+- [compiler.cpp](../../compiler.cpp#L723)
+- [compiler.cpp](../../compiler.cpp#L1614)
+- [compiler.cpp](../../compiler.cpp#L489)
 
 ### `jitRun()`
 
-Der normale JIT-Lauf in [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp#L723) bis [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp#L1668):
+Der normale JIT-Lauf in [compiler.cpp](../../compiler.cpp#L723) bis [compiler.cpp](../../compiler.cpp#L1668):
 
 - lädt Host-Prozess-Symbole per `LoadLibraryPermanently(nullptr)`
 - preloadet Libraries aus `exodus.json`
@@ -117,7 +117,7 @@ Der normale JIT-Lauf in [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff
 
 ### `compileChunkAndGetAddress()`
 
-Der Chunk-/Hot-Reload-Pfad in [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp#L489) bis [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp#L530):
+Der Chunk-/Hot-Reload-Pfad in [compiler.cpp](../../compiler.cpp#L489) bis [compiler.cpp](../../compiler.cpp#L530):
 
 - kompiliert via `compileFromString(...)`
 - baut direkt eine JIT-Engine
@@ -133,16 +133,16 @@ Ein Symbol kann im normalen JIT-Lauf verfügbar sein, im Chunk-/Bundle-Pfad aber
 
 Betroffene Stellen:
 
-- [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp#L259)
-- [ast_compiler_call.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_call.cpp#L166)
+- [compiler.cpp](../../compiler.cpp#L259)
+- [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp#L166)
 
-In [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp#L247) bis [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp#L256) wird im Datei-Pfad `ctx.currentSourceFile` gesetzt.
+In [compiler.cpp](../../compiler.cpp#L247) bis [compiler.cpp](../../compiler.cpp#L256) wird im Datei-Pfad `ctx.currentSourceFile` gesetzt.
 
 `compileFromString(...)` tut das nicht.
 
 Das betrifft mindestens:
 
-- `log.*`-Location-Injection in [ast_compiler_call.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_call.cpp#L151)
+- `log.*`-Location-Injection in [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp#L151)
 
 ### Konsequenz
 
@@ -154,11 +154,11 @@ Das ist kein Kernruntime-Bug, aber ein weiterer Beleg dafür, dass beide Pfade n
 
 Betroffene Stellen:
 
-- [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp#L124)
-- [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp#L431)
-- [ast_compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler.cpp#L25)
+- [compiler.cpp](../../compiler.cpp#L124)
+- [compiler.cpp](../../compiler.cpp#L431)
+- [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L25)
 
-Im Datei-Pfad wird `ctx.libraryMode = libraryMode` gesetzt in [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp#L123).
+Im Datei-Pfad wird `ctx.libraryMode = libraryMode` gesetzt in [compiler.cpp](../../compiler.cpp#L123).
 
 Im String-Pfad fehlt diese Übernahme.
 
@@ -176,10 +176,10 @@ Dasselbe Codefragment kann in String/JIT und Datei/AOT unterschiedliche globale 
 
 Betroffene Stellen:
 
-- [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp#L1614)
-- [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp#L489)
+- [compiler.cpp](../../compiler.cpp#L1614)
+- [compiler.cpp](../../compiler.cpp#L489)
 
-In [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp#L1614) bis [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp#L1634) lädt `jitRun()` explizit `linkedObjects` in die Engine.
+In [compiler.cpp](../../compiler.cpp#L1614) bis [compiler.cpp](../../compiler.cpp#L1634) lädt `jitRun()` explizit `linkedObjects` in die Engine.
 
 `compileChunkAndGetAddress()` macht diesen Schritt nicht.
 
@@ -198,10 +198,10 @@ Das ist besonders relevant für:
 
 Betroffene Stellen:
 
-- [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp#L642)
-- [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp#L723)
+- [compiler.cpp](../../compiler.cpp#L642)
+- [compiler.cpp](../../compiler.cpp#L723)
 
-Der AOT-Pfad über `compileToObject(...)` in [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp#L642) bis [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp#L720) endet in echten Objektdateien.
+Der AOT-Pfad über `compileToObject(...)` in [compiler.cpp](../../compiler.cpp#L642) bis [compiler.cpp](../../compiler.cpp#L720) endet in echten Objektdateien.
 
 Der JIT-Pfad muss dagegen:
 
@@ -222,10 +222,10 @@ JIT ist aktuell keine saubere Spiegelung von AOT, sondern ein eigener Modus mit 
 
 Betroffene Stellen:
 
-- [ast_compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler.cpp#L20)
-- [ast_compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler.cpp#L153)
+- [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L20)
+- [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L153)
 
-In [ast_compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler.cpp#L20) bis [ast_compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler.cpp#L183) gibt es zwei grundsätzlich verschiedene Codegen-Modi:
+In [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L20) bis [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L183) gibt es zwei grundsätzlich verschiedene Codegen-Modi:
 
 - `ctx.libraryMode == true`
 - `ctx.libraryMode == false`
@@ -259,14 +259,14 @@ Wenn `compileFromString(...)` `libraryMode` nicht korrekt übernimmt, ist das ke
 
 Betroffene Stellen:
 
-- [ast_compiler_call.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_call.cpp#L298)
-- [fptable.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/fptable.cpp#L11)
-- [ast_compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler.cpp#L182)
+- [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp#L298)
+- [fptable.cpp](../../src/core/fptable.cpp#L11)
+- [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L182)
 
 Die indirekte Call-Infrastruktur hängt von `__aiml_fptable_current` ab:
 
-- Call-Site-Nutzung in [ast_compiler_call.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_call.cpp#L298) bis [ast_compiler_call.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_call.cpp#L337)
-- Emission in [fptable.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/fptable.cpp#L11)
+- Call-Site-Nutzung in [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp#L298) bis [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp#L337)
+- Emission in [fptable.cpp](../../src/core/fptable.cpp#L11)
 
 Da `emitFptable(ctx)` nur im Nicht-Library-Pfad erzeugt wird, hängt das Vorhandensein der Hot-Reload-Tabellen direkt an der Moduswahl.
 
@@ -282,9 +282,9 @@ String-/JIT-Code, der versehentlich in einem anderen Modus landet, kann:
 
 Betroffene Stellen:
 
-- [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp#L483)
-- [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp#L530)
-- [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp#L489)
+- [compiler.cpp](../../compiler.cpp#L483)
+- [compiler.cpp](../../compiler.cpp#L530)
+- [compiler.cpp](../../compiler.cpp#L489)
 
 `compileAndRun(...)` macht:
 
@@ -292,7 +292,7 @@ Betroffene Stellen:
 - `generateEntryPoint()`
 - `jitRun()`
 
-Siehe [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp#L483) bis [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp#L486)
+Siehe [compiler.cpp](../../compiler.cpp#L483) bis [compiler.cpp](../../compiler.cpp#L486)
 
 `compileChunkAndGetAddress(...)` macht dagegen:
 
@@ -301,7 +301,7 @@ Siehe [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/project
 - `finalizeObject()`
 - Symbol lookup
 
-Siehe [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp#L489) bis [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp#L530)
+Siehe [compiler.cpp](../../compiler.cpp#L489) bis [compiler.cpp](../../compiler.cpp#L530)
 
 ### Konsequenz
 
@@ -317,10 +317,10 @@ Das ist besonders relevant, wenn Code implizit auf Top-Level-Init oder CLI-Globa
 
 Betroffene Stellen:
 
-- [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp#L1657)
-- [exec_impl.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/exec_impl.cpp#L53)
+- [compiler.cpp](../../compiler.cpp#L1657)
+- [exec_impl.cpp](../../exec_impl.cpp#L53)
 
-In [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp#L1657) bis [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp#L1659) setzt `jitRun()`:
+In [compiler.cpp](../../compiler.cpp#L1657) bis [compiler.cpp](../../compiler.cpp#L1659) setzt `jitRun()`:
 
 - `aiml_set_active_context(compiler_ctx_, engine)`
 
@@ -330,7 +330,7 @@ In [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/p
 
 Alles, was zur Laufzeit über den aktiven Compiler-/Engine-Kontext arbeitet, kann im Chunk-/Bundle-Pfad anders oder gar nicht funktionieren.
 
-Der Kommentar in [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp#L1656) nennt explizit:
+Der Kommentar in [compiler.cpp](../../compiler.cpp#L1656) nennt explizit:
 
 - `aiml_exec_code`
 
@@ -340,10 +340,10 @@ Das macht den Unterschied direkt relevant für `sys.exec`-/Code-Objekt-Pfade.
 
 Betroffene Stellen:
 
-- [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp#L695)
-- [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp#L705)
+- [compiler.cpp](../../compiler.cpp#L695)
+- [compiler.cpp](../../compiler.cpp#L705)
 
-In [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp#L695) bis [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp#L715) verifiziert `compileToObject(...)`:
+In [compiler.cpp](../../compiler.cpp#L695) bis [compiler.cpp](../../compiler.cpp#L715) verifiziert `compileToObject(...)`:
 
 - jede Funktion
 - das gesamte Modul
@@ -361,11 +361,11 @@ Das ist ein Unterschied in Debuggability und Fehleroberfläche, auch wenn dersel
 
 Betroffene Stellen:
 
-- [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp#L1739)
-- [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp#L1757)
-- [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp#L1774)
+- [compiler.cpp](../../compiler.cpp#L1739)
+- [compiler.cpp](../../compiler.cpp#L1757)
+- [compiler.cpp](../../compiler.cpp#L1774)
 
-In [resolveImport](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp#L1739) bis [resolveImport](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp#L1825) gilt:
+In [resolveImport](../../compiler.cpp#L1739) bis [resolveImport](../../compiler.cpp#L1825) gilt:
 
 - `noCache == false`: interner SHA-basierter Cache in `__aiml_cache`
 - `noCache == true`: Buildsystem-/OutputDir-orientierter Objektpfad
@@ -385,11 +385,11 @@ Das ist ein weiterer Grund, warum Import-/Link-Bugs nur in einem der beiden Modi
 
 Betroffene Stellen:
 
-- [exec_impl.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/exec_impl.cpp#L43)
-- [exec_impl.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/exec_impl.cpp#L303)
-- [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp#L1657)
+- [exec_impl.cpp](../../exec_impl.cpp#L43)
+- [exec_impl.cpp](../../exec_impl.cpp#L303)
+- [compiler.cpp](../../compiler.cpp#L1657)
 
-Die Runtime in [exec_impl.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/exec_impl.cpp#L43) bis [exec_impl.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/exec_impl.cpp#L108) arbeitet mit globalem Zustand:
+Die Runtime in [exec_impl.cpp](../../exec_impl.cpp#L43) bis [exec_impl.cpp](../../exec_impl.cpp#L108) arbeitet mit globalem Zustand:
 
 - `g_active_context`
 - `g_active_ee`
@@ -397,7 +397,7 @@ Die Runtime in [exec_impl.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a
 
 Dieser Zustand wird nur im normalen JIT-Lauf explizit gesetzt:
 
-- [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp#L1657)
+- [compiler.cpp](../../compiler.cpp#L1657)
 
 `compileChunkAndGetAddress()` setzt diesen aktiven Kontext nicht.
 
@@ -410,15 +410,15 @@ Das betrifft insbesondere:
 - fptable-Lookup
 - Hot-Reload
 - `compileYamlChunk(...)`
-- direkte Engine-Lookups in [exec_impl.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/exec_impl.cpp#L455)
+- direkte Engine-Lookups in [exec_impl.cpp](../../exec_impl.cpp#L455)
 
 ## 15. `sys.bundle` hängt an Compiler-seitig gesammeltem Source-Metadatenzustand
 
 Betroffene Stellen:
 
-- [ast_compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler.cpp#L431)
-- [ast_compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler.cpp#L886)
-- [ast_compiler_call.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_call.cpp#L1424)
+- [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L431)
+- [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L886)
+- [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp#L1424)
 
 `sys.bundle` verwendet:
 
@@ -429,10 +429,10 @@ Betroffene Stellen:
 
 Siehe:
 
-- [ast_compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler.cpp#L431)
-- [ast_compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler.cpp#L886)
-- [ast_compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler.cpp#L939)
-- [ast_compiler_call.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_call.cpp#L1365)
+- [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L431)
+- [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L886)
+- [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L939)
+- [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp#L1365)
 
 Da `compileFromString(...)` weniger Kontext setzt und weniger Importvorbau hat, ist sehr plausibel, dass die Closure für `sys.bundle` in JIT/String-Fällen unvollständiger ist als im Datei-/AOT-Pfad.
 
@@ -448,11 +448,11 @@ Selbst wenn derselbe Funktionsname gebundlet wird, kann der Inhalt des Bundles u
 
 Betroffene Stellen:
 
-- [exec_impl.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/exec_impl.cpp#L225)
-- [exec_impl.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/exec_impl.cpp#L276)
-- [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp#L483)
+- [exec_impl.cpp](../../exec_impl.cpp#L225)
+- [exec_impl.cpp](../../exec_impl.cpp#L276)
+- [compiler.cpp](../../compiler.cpp#L483)
 
-`aiml_isolated_exec(...)` in [exec_impl.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/exec_impl.cpp#L225) bis [exec_impl.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/exec_impl.cpp#L301) baut aus `code_chunks` neues YAML und ruft dann:
+`aiml_isolated_exec(...)` in [exec_impl.cpp](../../exec_impl.cpp#L225) bis [exec_impl.cpp](../../exec_impl.cpp#L301) baut aus `code_chunks` neues YAML und ruft dann:
 
 - `AIMLCompiler iso;`
 - `iso.compileAndRun(yaml_source);`
@@ -474,10 +474,10 @@ Es gibt praktisch nicht nur JIT vs AOT, sondern mindestens drei relevante Semant
 
 Betroffene Stellen:
 
-- [ast_compiler_stmt.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_stmt.cpp#L520)
-- [ast_compiler_stmt.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_stmt.cpp#L634)
-- [ast_compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler.cpp#L871)
-- [ast_compiler_call.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_call.cpp#L322)
+- [ast_compiler_stmt.cpp](../../src/core/ast_compiler_stmt.cpp#L520)
+- [ast_compiler_stmt.cpp](../../src/core/ast_compiler_stmt.cpp#L634)
+- [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L871)
+- [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp#L322)
 
 Das Exception-Handling im Compiler nutzt:
 
@@ -491,13 +491,13 @@ Das Exception-Handling im Compiler nutzt:
 
 Siehe:
 
-- [ast_compiler_stmt.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_stmt.cpp#L520)
-- [ast_compiler_stmt.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_stmt.cpp#L634)
-- [ast_compiler_call.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_call.cpp#L322)
+- [ast_compiler_stmt.cpp](../../src/core/ast_compiler_stmt.cpp#L520)
+- [ast_compiler_stmt.cpp](../../src/core/ast_compiler_stmt.cpp#L634)
+- [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp#L322)
 
 Zusätzlich gilt:
 
-- Personality-Funktion wird nur auf Definitionspfaden gesetzt, nicht in Header-Only, siehe [ast_compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler.cpp#L871)
+- Personality-Funktion wird nur auf Definitionspfaden gesetzt, nicht in Header-Only, siehe [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L871)
 
 ### Konsequenz
 
@@ -513,8 +513,8 @@ Das ist ein weiterer Bereich, in dem JIT und AOT nicht automatisch als äquivale
 
 Betroffene Stellen:
 
-- [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp#L489)
-- [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp#L723)
+- [compiler.cpp](../../compiler.cpp#L489)
+- [compiler.cpp](../../compiler.cpp#L723)
 
 `jitRun()` macht zusätzlich:
 
@@ -541,7 +541,7 @@ Viele Probleme dort sind deshalb keine lokalen Bugs einzelner Features, sondern 
 
 ### 1. `compileFromString(...)`
 
-- [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp#L431)
+- [compiler.cpp](../../compiler.cpp#L431)
 
 Hauptproblem:
 
@@ -549,7 +549,7 @@ Hauptproblem:
 
 ### 2. `compileChunkAndGetAddress(...)`
 
-- [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp#L489)
+- [compiler.cpp](../../compiler.cpp#L489)
 
 Hauptproblem:
 
@@ -557,7 +557,7 @@ Hauptproblem:
 
 ### 3. `resolveImport(...)`
 
-- [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp#L1739)
+- [compiler.cpp](../../compiler.cpp#L1739)
 
 Hauptproblem:
 
@@ -565,7 +565,7 @@ Hauptproblem:
 
 ### 4. `libraryMode` / `ast_compiler.cpp`
 
-- [ast_compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler.cpp#L20)
+- [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L20)
 
 Hauptproblem:
 
@@ -573,7 +573,7 @@ Hauptproblem:
 
 ### 5. `compileChunkAndGetAddress(...)`
 
-- [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp#L489)
+- [compiler.cpp](../../compiler.cpp#L489)
 
 Zusätzliches Hauptproblem:
 
@@ -581,7 +581,7 @@ Zusätzliches Hauptproblem:
 
 ### 6. `exec_impl.cpp`
 
-- [exec_impl.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/exec_impl.cpp#L43)
+- [exec_impl.cpp](../../exec_impl.cpp#L43)
 
 Hauptproblem:
 
@@ -589,8 +589,8 @@ Hauptproblem:
 
 ### 7. Exception-Handling / Personality
 
-- [ast_compiler_stmt.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_stmt.cpp#L520)
-- [ast_compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler.cpp#L871)
+- [ast_compiler_stmt.cpp](../../src/core/ast_compiler_stmt.cpp#L520)
+- [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L871)
 
 Hauptproblem:
 

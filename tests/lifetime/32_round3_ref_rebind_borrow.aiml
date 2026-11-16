@@ -1,4 +1,4 @@
-# SPEC?: 61_memory_management_DRAFT,24_time,18_refs_and_pointers   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 61_memory_management,24_time,18_refs_and_pointers   # aus dem Dateinamen, zu bestaetigen
 # static-check: off
 # TIER: T2
 # Spec 61 §6.2: assigning ptr<T> to ref<T> borrows; it never moves the owner.

@@ -17,7 +17,7 @@ a value that the caller will continue to mutate.
 - decl: [y, T, { call: [sys.clone, x] }]
 ```
 
-- The argument (the same applies to the shallow `{ copy: x }`, `61_memory_management_DRAFT.md`
+- The argument (the same applies to the shallow `{ copy: x }`, `61_memory_management.md`
   §5.1) may be a **variable**, an **`at` element** (`{ at: [outer, i] }`), a container accessor
   (`.get` / `.at` / `.first` / `.last`), a **member access** (`obj.field`) or a **call** result.
   For anything but a plain variable the compiler takes the type from the typed target

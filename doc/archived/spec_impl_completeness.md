@@ -2,7 +2,7 @@
 
 ## Kurzfazit
 
-Die AIML-Implementierung deckt einen brauchbaren Kern der Sprache ab, ist gegen die aktuelle Spec aber nicht vollstaendig. Der groesste Punkt ist nicht nur fehlende Implementierung, sondern auch, dass die Spec selbst laut [SPEC_REVIEW.md](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/spec/SPEC_REVIEW.md) noch 71 offene Inkonsistenzen, Luecken oder Widersprueche hat.
+Die AIML-Implementierung deckt einen brauchbaren Kern der Sprache ab, ist gegen die aktuelle Spec aber nicht vollstaendig. Der groesste Punkt ist nicht nur fehlende Implementierung, sondern auch, dass die Spec selbst laut [SPEC_REVIEW.md](../../spec/SPEC_REVIEW.md) noch 71 offene Inkonsistenzen, Luecken oder Widersprueche hat.
 
 Deshalb muss die Luecke in zwei Ebenen betrachtet werden:
 
@@ -20,7 +20,7 @@ Deshalb muss die Luecke in zwei Ebenen betrachtet werden:
 
 ### 1. Funktionsaufrufe und Aufrufsemantik
 
-Die Spec in [07_functions.md](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/spec/07_functions.md) verspricht mehr als der aktuelle Compiler belastbar absichert:
+Die Spec in [07_functions.md](../../spec/07_functions.md) verspricht mehr als der aktuelle Compiler belastbar absichert:
 
 - Default-Argumente und benannte Trailing-Overrides sind spezifiziert
 - `map<string:any>` als Eingabe fuer Funktionssignaturen mit Validierung und Auto-Unboxing ist spezifiziert
@@ -34,13 +34,13 @@ Der aktuelle Call-Pfad ist hier nach bisheriger Analyse nur teilweise strikt:
 
 Betroffene Stellen:
 
-- [ast_compiler_call.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_call.cpp)
-- [call_dispatcher.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/call_dispatcher.cpp)
-- [ir_generator.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ir_generator.cpp)
+- [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp)
+- [call_dispatcher.cpp](../../src/core/call_dispatcher.cpp)
+- [ir_generator.cpp](../../src/core/ir_generator.cpp)
 
 ### 2. Modelle, strukturelle Typisierung und tiefe Member-Zugriffe
 
-Die Spec in [15_models.md](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/spec/15_models.md) ist deutlich reicher als der heute robuste Alltagsumfang:
+Die Spec in [15_models.md](../../spec/15_models.md) ist deutlich reicher als der heute robuste Alltagsumfang:
 
 - Zuweisung aus Maps mit Laufzeitvalidierung
 - strukturelle Typisierung fuer Modellparameter
@@ -54,14 +54,14 @@ Die bekannte praktische Luecke ist vor allem der Zugriffspfad:
 
 Betroffene Stellen:
 
-- [member_chain_plan.md](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/member_chain_plan.md)
-- [ast_compiler_expr.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_expr.cpp)
-- [ast_compiler_stmt.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_stmt.cpp)
-- [utils.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/utils.cpp)
+- [member_chain_plan.md](../../member_chain_plan.md)
+- [ast_compiler_expr.cpp](../../src/core/ast_compiler_expr.cpp)
+- [ast_compiler_stmt.cpp](../../src/core/ast_compiler_stmt.cpp)
+- [utils.cpp](../../src/core/utils.cpp)
 
 ### 3. Mirror-Spec gegen Runtime-Verhalten
 
-Die Mirror-Spec in [44_5_mirror.md](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/spec/44_5_mirror.md) beschreibt eine relativ glatte transportagnostische API.
+Die Mirror-Spec in [44_5_mirror.md](../../spec/44_5_mirror.md) beschreibt eine relativ glatte transportagnostische API.
 
 Die Runtime ist funktional, aber nicht voll auf diesem Niveau:
 
@@ -71,9 +71,9 @@ Die Runtime ist funktional, aber nicht voll auf diesem Niveau:
 
 Betroffene Stellen:
 
-- [mirror_ws_crash_report.md](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/mirror_ws_crash_report.md)
-- [builtin_registry.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/builtin_registry.cpp)
-- [mirror_runtime.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/sys/mirror_runtime.cpp)
+- [mirror_ws_crash_report.md](../../mirror_ws_crash_report.md)
+- [builtin_registry.cpp](../../src/core/builtin_registry.cpp)
+- [mirror_runtime.cpp](../../src/sys/mirror_runtime.cpp)
 
 ### 4. JIT- und AOT-Verhalten ist nicht aequivalent
 
@@ -88,9 +88,9 @@ Der aktuelle Compiler hat hier bekannte Unterschiede:
 
 Betroffene Stellen:
 
-- [jit_vs_aot.md](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/jit_vs_aot.md)
-- [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp)
-- [ast_compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler.cpp)
+- [jit_vs_aot.md](../../jit_vs_aot.md)
+- [compiler.cpp](../../compiler.cpp)
+- [ast_compiler.cpp](../../src/core/ast_compiler.cpp)
 
 ### 5. Die Spec selbst ist noch kein harter Vertragsstand
 
@@ -105,7 +105,7 @@ Die Vollstaendigkeitsfrage ist ohne Normierung der Spec nur begrenzt beantwortba
 
 Betroffene Stelle:
 
-- [SPEC_REVIEW.md](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/spec/SPEC_REVIEW.md)
+- [SPEC_REVIEW.md](../../spec/SPEC_REVIEW.md)
 
 ## Prioritaet
 

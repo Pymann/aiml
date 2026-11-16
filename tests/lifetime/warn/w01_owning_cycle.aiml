@@ -1,4 +1,4 @@
-# SPEC?: 61_memory_management_DRAFT,24_time   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 61_memory_management,24_time   # aus dem Dateinamen, zu bestaetigen
 # static-check: off
 # WARN (§10 owning-cycle lint): a Ring whose owning ptr<Ring> edge points back at Ring forms an
 # owning cycle with no ref<T> break → leak-prone. Must WARN (not error — compiles + runs, rc=0).

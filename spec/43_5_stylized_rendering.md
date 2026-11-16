@@ -8,7 +8,7 @@ queries (V6); web/Android paths of §8 report `wait_events` as unsupported.
 Consumers: [ShapeML 2](../../shaper/doc/spec/visual_pipeline_v2.md),
 [glbview studio renderer](../../glbview/doc/spec/studio_renderer_v2.md).
 Extends [glTF](43_1_gltf.md), [GL](43_2_graphics.md),
-[engine](44_1_engine.md), subject to [ownership](61_memory_management_DRAFT.md).
+[engine](44_1_engine.md), subject to [ownership](61_memory_management.md).
 [Stages and acceptance](../doc/plans/visual_pipeline_implementation_2026-10-05.md).
 
 ## 1. Existing functionality versus additions

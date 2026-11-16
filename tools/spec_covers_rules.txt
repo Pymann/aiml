@@ -110,7 +110,7 @@ A|spec/57|57_function_cascades
 A|spec/58|58_classgroups
 A|spec/59|59_unit_testing
 A|spec/60|60_yaml
-A|spec/61|61_memory_management_DRAFT
+A|spec/61|61_memory_management
 A|spec/62|62_pipelines
 A|spec/63|63_network_filesystems
 A|spec/64|64_closures
@@ -150,7 +150,7 @@ N|iterator|54_iterators
 N|decorator|55_decorators
 N|closure|64_closures
 N|clearance|65_symbol_clearance
-N|lifetime|61_memory_management_DRAFT
+N|lifetime|61_memory_management
 N|pipeline|62_pipelines
 N|buffer|11_buffer
 N|cast|13_cast
@@ -186,8 +186,8 @@ N|ffi|35_ffi
 N|interop|34_interop
 N|process|23_system
 N|storage|23_2_storage
-N|leak|61_memory_management_DRAFT
-N|heap|61_memory_management_DRAFT
+N|leak|61_memory_management
+N|heap|61_memory_management
 
 # --- D: Konstrukt im Rumpf.  Nur spezifische Marker; die allgegenwaertigen
 #     (list<, map<, while:, io., log., - model:, - class:) stehen bewusst NICHT
@@ -195,7 +195,7 @@ N|heap|61_memory_management_DRAFT
 D|free:|20_free_operator
 D|fn<|12_1_function_pointers
 D|{ new:|18_instantiation
-D|lifetime:|61_memory_management_DRAFT
+D|lifetime:|61_memory_management
 D|buffer<|11_buffer
 D|dyn_array<|53_dyn_arrays
 D|chan<|27_channels
@@ -254,8 +254,8 @@ N|binary_io|23_system
 N|_ws|32_4_network_websockets
 N|extern|35_ffi
 N|struct|02_types
-N|uaf|61_memory_management_DRAFT
-N|sanitize|61_memory_management_DRAFT
+N|uaf|61_memory_management
+N|sanitize|61_memory_management
 N|asset|44_7_asset_registry
 N|store|23_2_storage
 N|func|07_functions

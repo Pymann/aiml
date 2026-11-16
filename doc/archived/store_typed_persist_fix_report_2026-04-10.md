@@ -20,7 +20,7 @@ Jetzt:
 
 ### Compiler
 
-In [builtin_registry.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/builtin_registry.cpp) wurde `db.open("...", {persist: true})` fuer `Store<T>` erweitert:
+In [builtin_registry.cpp](../../src/core/builtin_registry.cpp) wurde `db.open("...", {persist: true})` fuer `Store<T>` erweitert:
 
 - wenn `T.hasHeapFields` und `T.serNodesVar` gesetzt sind
 - dann wird nicht mehr `aiml_db_store_open_persist(...)`
@@ -28,13 +28,13 @@ In [builtin_registry.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/pr
 
 ### Runtime API
 
-In [db_runtime.h](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/sys/db_runtime.h) wurde die neue Runtime-API ergaenzt:
+In [db_runtime.h](../../src/sys/db_runtime.h) wurde die neue Runtime-API ergaenzt:
 
 - `aiml_db_store_open_typed_persist(...)`
 
 ### Runtime-Implementierung
 
-In [db_runtime.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/sys/db_runtime.cpp) wurden folgende Punkte umgesetzt:
+In [db_runtime.cpp](../../src/sys/db_runtime.cpp) wurden folgende Punkte umgesetzt:
 
 - `AimlStore` bekam `ser_nodes`, `ser_n` und `typed_persistent`
 - fuer typed persistente Stores gibt es jetzt decoded slot storage statt roher mmap-Slotdaten
@@ -47,8 +47,8 @@ In [db_runtime.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects
 
 Neu hinzugefuegt:
 
-- [test_aiondb_store_heap_reopen_write.aiml](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/tests/test_aiondb_store_heap_reopen_write.aiml)
-- [test_aiondb_store_heap_reopen_read.aiml](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/tests/test_aiondb_store_heap_reopen_read.aiml)
+- [test_aiondb_store_heap_reopen_write.aiml](../../tests/test_aiondb_store_heap_reopen_write.aiml)
+- [test_aiondb_store_heap_reopen_read.aiml](../../tests/test_aiondb_store_heap_reopen_read.aiml)
 
 Diese Tests decken einen `Store<T>` mit:
 
@@ -67,11 +67,11 @@ ab und pruefen:
 Nach den Aenderungen wurden erfolgreich ausgefuehrt:
 
 - Rebuild von `aiml-tests`
-- [test_aiondb_store_heap_reopen_write.aiml](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/tests/test_aiondb_store_heap_reopen_write.aiml)
-- [test_aiondb_store_heap_reopen_read.aiml](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/tests/test_aiondb_store_heap_reopen_read.aiml)
-- [test_aiondb_store_reopen_write.aiml](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/tests/test_aiondb_store_reopen_write.aiml)
-- [test_aiondb_store_reopen_read.aiml](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/tests/test_aiondb_store_reopen_read.aiml)
-- [test_card_heap_persist.aiml](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/tests/test_card_heap_persist.aiml)
+- [test_aiondb_store_heap_reopen_write.aiml](../../tests/test_aiondb_store_heap_reopen_write.aiml)
+- [test_aiondb_store_heap_reopen_read.aiml](../../tests/test_aiondb_store_heap_reopen_read.aiml)
+- [test_aiondb_store_reopen_write.aiml](../../tests/test_aiondb_store_reopen_write.aiml)
+- [test_aiondb_store_reopen_read.aiml](../../tests/test_aiondb_store_reopen_read.aiml)
+- [test_card_heap_persist.aiml](../../tests/test_card_heap_persist.aiml)
 
 ## Restlicher Unterschied zum alten Store-Pfad
 

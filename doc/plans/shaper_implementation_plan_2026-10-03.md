@@ -184,7 +184,7 @@ dieser Plan behauptet weder ihre vollständige Implementierung noch eine bereits
 gemessene Leak-Freiheit. Abweichungen im tatsächlich verwendeten Compilerstand
 müssen durch Proben erkannt und vor Freigabe behoben werden.
 
-Referenz: [Spec 61](../../spec/61_memory_management_DRAFT.md), insbesondere
+Referenz: [Spec 61](../../spec/61_memory_management.md), insbesondere
 §2.1, §5–5.7, §6.2, §7, §8, §9.1/9.3 und §10.
 
 | Ressource | Ownership-Vertrag für shaper |
@@ -319,7 +319,7 @@ Konkrete Pflichten:
 
 Relevante bestehende Grundlagen:
 
-- [Spec 61](../../spec/61_memory_management_DRAFT.md)
+- [Spec 61](../../spec/61_memory_management.md)
 - [Memory-Sanitizer-Harness](../../tests/run_memory_sanitizers.sh)
 - [Call-Temporary-Cleanup-Plan](spec61_call_temporary_cleanup_implementation_2026-10-02.md)
 - `tests/lifetime/163_yaml_doc_scope_release.aiml`

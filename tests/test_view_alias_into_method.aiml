@@ -1,4 +1,4 @@
-# SPEC: 61_memory_management_DRAFT
+# SPEC: 61_memory_management
 # Ein VIEW-ALIAS aus einem Container, per WERT in eine Methode gereicht — und
 # danach wird der Container wieder gelesen.
 #

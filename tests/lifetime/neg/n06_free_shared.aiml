@@ -1,4 +1,4 @@
-# SPEC?: 61_memory_management_DRAFT,20_free_operator,24_time   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 61_memory_management,20_free_operator,24_time   # aus dem Dateinamen, zu bestaetigen
 # static-check: off
 # NEGATIVE (§10/§6.2): freeing a shared<T> is an error — it is released by refcount, never freed.
 # EXPECT-ERROR: free of a shared<T>

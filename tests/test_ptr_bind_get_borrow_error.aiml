@@ -1,4 +1,4 @@
-# SPEC: 61_memory_management_DRAFT
+# SPEC: 61_memory_management
 # static-check: off
 # Negative test (spec/61 §5.4): `.get`/`.at`/`.first`/`.last` on a container (list/map/cascade) or a
 # Class-6 store (Kv/Store/TimeSeries/VecStore) yields a `ref<T>` BORROW — the container/store keeps

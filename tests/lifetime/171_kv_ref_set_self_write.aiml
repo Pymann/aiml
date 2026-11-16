@@ -1,4 +1,4 @@
-# SPEC: 31_db_integration,61_memory_management_DRAFT
+# SPEC: 31_db_integration,61_memory_management
 # static-check: off
 # spec/61 §5.4/§5.5 step 0 + spec/31 §6.7: kv.set(k, view) with view = kv.get(k) is a self-write —
 # the cache slot is persisted, not released, so view stays valid (no UAF) and nothing leaks.

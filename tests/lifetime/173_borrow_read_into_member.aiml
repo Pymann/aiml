@@ -1,4 +1,4 @@
-# SPEC: 61_memory_management_DRAFT
+# SPEC: 61_memory_management
 # static-check: off
 # spec/61 §5.4 + §7: ein Container-/Store-LESEN (`get`/`at`/`first`/`last`) liefert einen
 # BORROW — der Container behaelt das Eigentum.  Wird so ein Borrow in eine Senke gelegt, die

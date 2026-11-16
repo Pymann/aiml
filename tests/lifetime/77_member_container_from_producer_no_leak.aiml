@@ -1,4 +1,4 @@
-# SPEC: 61_memory_management_DRAFT
+# SPEC: 61_memory_management
 # static-check: off
 # spec/61 §5/§8: storing a FRESH owned container (producer result) into a container FIELD adopts
 # its reference — an extra incref leaked the whole list per store (9rooms-style response fields).

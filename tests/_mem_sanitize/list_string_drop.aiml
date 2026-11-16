@@ -1,4 +1,4 @@
-# SPEC: 61_memory_management_DRAFT
+# SPEC: 61_memory_management
 # spec/61 E-leak probe: a fresh list<string> value-local built by pushing interpolated
 # strings, going out of scope every iteration. Before the list scope-drop this leaked the
 # data buffer + all element strings; now aiml_list_free reclaims them. Must be double-free/UAF-free.

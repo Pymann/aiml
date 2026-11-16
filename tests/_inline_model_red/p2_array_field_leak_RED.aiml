@@ -1,4 +1,4 @@
-# SPEC?: 52_arrays,15_models,61_memory_management_DRAFT   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 52_arrays,15_models,61_memory_management   # aus dem Dateinamen, zu bestaetigen
 # static-check: off
 # RED — Paket 2 §9.6 (doc/spec61_inline_value_model_release_plan_2026-09-24.md): ein Heap-ARRAY-Feld
 # (array<string:N>) in einem Model wird von serFieldSubtree auf RAWBYTES abgebildet (kein Array-

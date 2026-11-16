@@ -1,6 +1,6 @@
 # Builtin Path Type
 
-See also: [42_1_globber.md](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/spec/42_1_globber.md)
+See also: [42_1_globber.md](42_1_globber.md)
 
 ## Motivation: The String-Path Problem
 

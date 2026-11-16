@@ -1,4 +1,4 @@
-# SPEC: 61_memory_management_DRAFT
+# SPEC: 61_memory_management
 # static-check: off
 # spec/61 §5.4/§5.5: `decl e = at(list,i)` materialises an owning copy (fields retained);
 # `set e.name = v` must release e's OLD reference before storing (secure-new-then-release-old),

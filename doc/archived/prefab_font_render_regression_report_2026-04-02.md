@@ -10,7 +10,7 @@ Der kaputte Spiel-Render kommt sehr wahrscheinlich nicht daher, dass in `board_s
 
 `prefab_runtime.cpp` definiert lokal eine eigene `AimlUIFont`-Struktur und kommentiert selbst, dass sie `ui_runtime.cpp` exakt matchen muss.
 
-In [prefab_runtime.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/sys/prefab_runtime.cpp#L41) ist sie aktuell:
+In [prefab_runtime.cpp](../../src/sys/prefab_runtime.cpp#L41) ist sie aktuell:
 - `info`
 - `ttf_data`
 - `atlas_tex`
@@ -20,7 +20,7 @@ In [prefab_runtime.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/proj
 - `scale`
 - `atlas_w`, `atlas_h`
 
-In [ui_runtime.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/sys/ui_runtime.cpp#L64) wurde sie aber erweitert um:
+In [ui_runtime.cpp](../../src/sys/ui_runtime.cpp#L64) wurde sie aber erweitert um:
 - `ttf_size`
 - `baked_size_px`
 
@@ -28,7 +28,7 @@ Damit ist das Layout nicht mehr identisch.
 
 ## Warum das das Rendering zerlegt
 
-Prefab-Rendering liest an mehreren Stellen Felder direkt aus `AimlUIFont*`, z.B. in [prefab_runtime.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/sys/prefab_runtime.cpp#L587):
+Prefab-Rendering liest an mehreren Stellen Felder direkt aus `AimlUIFont*`, z.B. in [prefab_runtime.cpp](../../src/sys/prefab_runtime.cpp#L587):
 - `lf->atlas_tex`
 - danach indirekt auch Glyph-Daten und Metriken in `push_text_batch(...)`
 
@@ -49,7 +49,7 @@ Der eigentliche Regressionspunkt ist sehr wahrscheinlich die Kombination aus:
 
 ## Nicht der Hauptschuldige
 
-Die Stelle in [board_screen.aiml](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/9rooms/client/board_screen.aiml#L929) mit `ui.load_font_default, 24.0` ist eher nicht die eigentliche Ursache.
+Die Stelle in `test/9rooms/client/board_screen.aiml#L929` mit `ui.load_font_default, 24.0` ist eher nicht die eigentliche Ursache.
 
 Sie kann Texte groß machen, aber sie erklärt nicht, warum das Spiel insgesamt "nicht mehr richtig rendert". Dieses Symptom passt deutlich besser zu dem Layout-Mismatch.
 

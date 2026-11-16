@@ -1,7 +1,7 @@
 # AIML lifetime lab — spec/61 memory-management target
 
 Small, **self-verifying** probes that pin down the memory behavior mandated by
-`spec/61_memory_management_DRAFT.md`. Each probe defines its own types, performs one
+`spec/61_memory_management.md`. Each probe defines its own types, performs one
 lifetime operation, checks the survivors, and returns exit code 0 (PASS) / 1 (FAIL).
 
 ## Call-temporary regression package (2026-10-02)

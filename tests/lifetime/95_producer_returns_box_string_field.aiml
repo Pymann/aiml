@@ -1,4 +1,4 @@
-# SPEC: 61_memory_management_DRAFT
+# SPEC: 61_memory_management
 # static-check: off
 # spec/61 §6.2/§8: a producer returning a string field of an owned ptr<T> box keeps the string and frees the whole box, also after ref<T> borrows of the box.
 - model:

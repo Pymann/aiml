@@ -1,4 +1,4 @@
-# SPEC: 61_memory_management_DRAFT
+# SPEC: 61_memory_management
 # Expected exit code: 0
 # spec/61 §6.2: methods dispatch on a shared<Class> handle as on ptr<Class> —
 # a local shared, a shared member of another object (co-owner), both reach

@@ -141,7 +141,7 @@ The same applies to a `fn<…>` nested inside another generic
 ## No Environment
 
 An `fn<…>` is **one code pointer** — a trivially copyable value with no teardown
-(`61_memory_management_DRAFT.md` §2.1, Class 1). It sees only its parameters and globals; it
+(`61_memory_management.md` §2.1, Class 1). It sees only its parameters and globals; it
 cannot carry values captured from the scope it was created in, and this does not change.
 
 Code *plus* captured state is a different pair of types — `block<Sig>` (non-escaping, implicit

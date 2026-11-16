@@ -1,4 +1,4 @@
-# SPEC: 61_memory_management_DRAFT
+# SPEC: 61_memory_management
 # spec/61 §7: a managed string local that is handed to a container (push/put) must stay VALID for a
 # subsequent read (AIML code reads event-log lines / mana-color keys after pushing them — the old
 # shallow-share semantics). The managed model gives the local its own dup at the move, so:

@@ -1,4 +1,4 @@
-# SPEC: 61_memory_management_DRAFT
+# SPEC: 61_memory_management
 # spec/61 §5/§8: a method returning a builtin value type (mat4/vec3) still drops its local
 # container handles (buffer, list) on the return path.
 # Expected exit code: 0

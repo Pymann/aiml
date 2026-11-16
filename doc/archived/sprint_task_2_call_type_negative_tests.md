@@ -14,7 +14,7 @@ Ein kleines, belastbares Negativtestpaket soll sicherstellen, dass falsche Aufru
 
 ## Aktueller Stand
 
-- Der Call-Pfad ist heute staerker in [ast_compiler_call.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_call.cpp) konzentriert.
+- Der Call-Pfad ist heute staerker in [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp) konzentriert.
 - Die alte Fassung verwies noch auf einen Dispatcher-Zuschnitt, der im aktuellen Code so nicht mehr existiert.
 
 ## Was an der alten Fassung veraltet war
@@ -31,9 +31,9 @@ Ein kleines, belastbares Negativtestpaket soll sicherstellen, dass falsche Aufru
 
 ## Betroffene Stellen
 
-- [tests](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/tests)
-- [ast_compiler_call.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_call.cpp)
-- bei Builtin-Ausnahmen: [builtin_registry.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/builtin_registry.cpp)
+- [tests](../../tests)
+- [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp)
+- bei Builtin-Ausnahmen: [builtin_registry.cpp](../../src/core/builtin_registry.cpp)
 
 ## Akzeptanzkriterien
 

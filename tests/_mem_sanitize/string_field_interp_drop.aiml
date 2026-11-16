@@ -1,4 +1,4 @@
-# SPEC: 61_memory_management_DRAFT
+# SPEC: 61_memory_management
 # spec/61: a STRING FIELD stored from a fresh OWNED temp (a string interpolation) must
 # TRANSFER its single refcount into the field — NOT be incref'd.  The deck-editor UAF fix
 # increfs a string field stored from a BORROW (a VariableExpr like `mock.name = cdat.name`);

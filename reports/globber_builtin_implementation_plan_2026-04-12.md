@@ -4,8 +4,8 @@ Stand: 2026-04-12
 
 Basis:
 
-- [42_1_globber.md](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/spec/42_1_globber.md)
-- [42_path_type.md](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/spec/42_path_type.md)
+- [42_1_globber.md](../spec/42_1_globber.md)
+- [42_path_type.md](../spec/42_path_type.md)
 
 Ziel:
 
@@ -23,8 +23,8 @@ Ziel:
 
 **Pfad-Runtime**
 
-- [path_runtime.h](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/path_runtime.h)
-- [path_runtime.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/path_runtime.cpp)
+- [path_runtime.h](../src/core/path_runtime.h)
+- [path_runtime.cpp](../src/core/path_runtime.cpp)
 
 Bereits vorhanden:
 
@@ -45,7 +45,7 @@ Bereits vorhanden:
 
 **Compiler/Builtins**
 
-- [builtin_registry.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/builtin_registry.cpp)
+- [builtin_registry.cpp](../src/core/builtin_registry.cpp)
 
 Bereits vorhanden:
 
@@ -58,12 +58,12 @@ Bereits vorhanden:
 
 **Tests**
 
-- [test_path.aiml](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/tests/test_path.aiml)
-- [test_io_write_listdir.aiml](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/tests/test_io_write_listdir.aiml)
+- [test_path.aiml](../tests/test_path.aiml)
+- [test_io_write_listdir.aiml](../tests/test_io_write_listdir.aiml)
 
 **AIML-seitiger Vorläufer**
 
-- [tul/train/main.aiml](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/tul/train/main.aiml)
+- `test/tul/train/main.aiml`
 
 Dort existiert bereits `expand_glob(...)` als Workaround auf Basis von:
 
@@ -150,7 +150,7 @@ Die Spezifikation hat Variante 3 festgezogen. Das ist auch technisch die richtig
 
 ## 4. Technische Kernentscheidung: Runtime-Handle statt reinem Struct-State
 
-Die bestehende Builtin-Strategie in [builtin_registry.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/builtin_registry.cpp) benutzt für zustandsbehaftete Builtins opaque Runtime-Pointer:
+Die bestehende Builtin-Strategie in [builtin_registry.cpp](../src/core/builtin_registry.cpp) benutzt für zustandsbehaftete Builtins opaque Runtime-Pointer:
 
 - `process`
 - `socket_handle`
@@ -344,7 +344,7 @@ Wenn Konstruktion von Klassenwerten im Builtin-Pfad zu teuer ist:
 
 Neue Testdatei:
 
-- `/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/tests/test_globber.aiml`
+- `../tests/test_globber.aiml`
 
 Pflichtfälle:
 
@@ -367,12 +367,12 @@ Pflichtfälle:
 
 Bestehende Tests müssen weiter laufen:
 
-- [test_path.aiml](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/tests/test_path.aiml)
-- [test_io_write_listdir.aiml](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/tests/test_io_write_listdir.aiml)
+- [test_path.aiml](../tests/test_path.aiml)
+- [test_io_write_listdir.aiml](../tests/test_io_write_listdir.aiml)
 
 ### 7.3 TUL-Smoke-Test
 
-Bestehenden AIML-Workaround in [tul/train/main.aiml](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/tul/train/main.aiml) später ersetzen oder parallel prüfen:
+Bestehenden AIML-Workaround in `test/tul/train/main.aiml` später ersetzen oder parallel prüfen:
 
 - `"docs/*.md"` mit altem `expand_glob(...)`
 - `"docs/*.md"` mit neuem `Globber`
@@ -383,7 +383,7 @@ Das ist ein guter Praxistest.
 
 ## 8. Thread-Safety
 
-Aus [47_thread_safety.md](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/spec/47_thread_safety.md) folgt:
+Aus [47_thread_safety.md](../spec/47_thread_safety.md) folgt:
 
 - `path`-Interning ist bereits global geschützt
 - `io.list_dir` ist als reine Funktion einsortiert

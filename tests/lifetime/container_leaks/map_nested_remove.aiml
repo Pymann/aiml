@@ -1,4 +1,4 @@
-# SPEC?: 61_memory_management_DRAFT,24_time   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 61_memory_management,24_time   # aus dem Dateinamen, zu bestaetigen
 # static-check: off
 # Spec 61 container audit: B4; target: correct content, 0 lost bytes, no memory errors.
 - def:

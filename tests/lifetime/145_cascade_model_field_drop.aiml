@@ -1,4 +1,4 @@
-# SPEC: 61_memory_management_DRAFT
+# SPEC: 61_memory_management
 # static-check: off
 # spec/61 §2.1: a cascade<X> model field is a Class-3 handle — released with its model.
 - cascade: {name: ProbeCode, nodes: [{value: [1, i32]}]}

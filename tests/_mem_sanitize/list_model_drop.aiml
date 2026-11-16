@@ -1,4 +1,4 @@
-# SPEC: 61_memory_management_DRAFT
+# SPEC: 61_memory_management
 # spec/61: fresh list<Rec> value-local (Rec has heap fields) built by push, dropped at
 # scope exit each call. aiml_list_free elemKind 2 frees each element's heap + the buffer.
 - model:

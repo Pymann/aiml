@@ -1,4 +1,4 @@
-# SPEC: 31_db_integration,61_memory_management_DRAFT
+# SPEC: 31_db_integration,61_memory_management
 # spec/61 §5: list-returning builtins hand back an owned heap list under memV3. Called
 # repeatedly from helpers (result dropped at scope end, or reassigned), each list is released
 # exactly once: io.read_f32_array, ai.embedding_lookup. (db.query: spec/31 vs spec/61 ptr-vs-ref

@@ -10,7 +10,7 @@ Weiterhin offen und strukturell wichtig.
 
 ## Ziel
 
-Den grossen Ambient-State-Container [context.h](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/context.h) so zu entschlacken, dass neue Features nicht weiter an einen God-Context gekoppelt werden.
+Den grossen Ambient-State-Container [context.h](../../src/core/context.h) so zu entschlacken, dass neue Features nicht weiter an einen God-Context gekoppelt werden.
 
 ## Aktueller Stand
 
@@ -31,9 +31,9 @@ Den grossen Ambient-State-Container [context.h](/media/nikolai/95a208ef-ffa2-478
 
 ## Betroffene Stellen
 
-- [context.h](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/context.h)
-- [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp)
-- [ast_compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler.cpp)
+- [context.h](../../src/core/context.h)
+- [compiler.cpp](../../compiler.cpp)
+- [ast_compiler.cpp](../../src/core/ast_compiler.cpp)
 
 ## Akzeptanzkriterien
 

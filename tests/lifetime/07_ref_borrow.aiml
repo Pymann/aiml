@@ -1,4 +1,4 @@
-# SPEC?: 61_memory_management_DRAFT,24_time,18_refs_and_pointers   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 61_memory_management,24_time,18_refs_and_pointers   # aus dem Dateinamen, zu bestaetigen
 # static-check: off
 # TIER: T1
 # CONSTRUCT: ref<T> non-owning borrow — param borrow + mutate; explicit {ref: x}; auto-borrow (§8, §6.2).

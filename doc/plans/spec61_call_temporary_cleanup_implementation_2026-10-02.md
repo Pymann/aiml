@@ -24,7 +24,7 @@ schleifenübergreifendes use-after-move und Moves an Methoden-/Interface-Paramet
 
 ## Ziel und Abgrenzung
 
-Alle sechs bestätigten Fehlerbilder beheben: Methoden-Vorwärtsreferenz, Producer über verschachtelten Receiver, Producer über Funktionszeiger, Interface-Consumer, Funktionszeiger-Consumer und temporärer Caller-Owner bei Exception im Consumer. Vorrang hat spec/61_memory_management_DRAFT.md, besonders §§5, 8, 9.2 und 9.3. Der gültige Originalausdruck in 9rooms muss ohne zusätzliche lokale Variable leakfrei werden.
+Alle sechs bestätigten Fehlerbilder beheben: Methoden-Vorwärtsreferenz, Producer über verschachtelten Receiver, Producer über Funktionszeiger, Interface-Consumer, Funktionszeiger-Consumer und temporärer Caller-Owner bei Exception im Consumer. Vorrang hat spec/61_memory_management.md, besonders §§5, 8, 9.2 und 9.3. Der gültige Originalausdruck in 9rooms muss ohne zusätzliche lokale Variable leakfrei werden.
 
 Keine Änderung des Sprachvertrags und keine zusätzlichen Pflicht-Annotationen in 9rooms. Containerargumente behalten ihre RC-Semantik. `ref<list<T>>` ist keine Lösung. `consumed` auf RC-Typen bedeutet nicht pauschal, dass die Caller-Referenz verschwindet: der Consumer hält seine eigene Referenz gemäß Vertrag. `ptr<T>`-Übergaben sind davon getrennt echte Moves.
 

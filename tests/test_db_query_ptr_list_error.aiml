@@ -1,4 +1,4 @@
-# SPEC: 31_db_integration,61_memory_management_DRAFT
+# SPEC: 31_db_integration,61_memory_management
 # static-check: off
 # Negative test (spec/31 §4.1, spec/61 §5.4): db.query yields store borrows — binding the result to
 # list<ptr<T>> (unique owners of the store's records) is a compile error. Use list<ref<T>>.

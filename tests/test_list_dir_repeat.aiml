@@ -1,4 +1,4 @@
-# SPEC: 42_path_type,61_memory_management_DRAFT
+# SPEC: 42_path_type,61_memory_management
 # spec/42 / spec/61 §5: io.list_dir returns an owned list<path>; calling it repeatedly from a
 # helper (several directories, an empty one, a nested one) releases every list exactly once.
 # Expected exit code: 0

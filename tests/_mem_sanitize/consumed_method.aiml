@@ -1,4 +1,4 @@
-# SPEC: 61_memory_management_DRAFT
+# SPEC: 61_memory_management
 # spec/61 §3.1: `consumed` string param on a plain (non-interface) class method, called on
 # the DIRECT path — must compile, run correctly, and be double-free/UAF-free under valgrind.
 # caller-move (visitObjectMethodCall) removes the caller's decref; push moves it into items.

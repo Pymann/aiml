@@ -1,4 +1,4 @@
-# SPEC: 61_memory_management_DRAFT
+# SPEC: 61_memory_management
 # static-check: off
 # Repro: precise prophecy InferenceDemo class layout — the Workspace class
 # holds an Inner + a Body (which itself holds the Inner) + multiple Head

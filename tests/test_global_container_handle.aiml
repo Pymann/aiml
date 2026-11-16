@@ -1,4 +1,4 @@
-# SPEC: 61_memory_management_DRAFT
+# SPEC: 61_memory_management
 # spec/61 §5: a top-level (global) container is a refcounted HANDLE, exactly like a local —
 # storage location is representation-invariant. Covers: global list built via push + read via
 # .get, a global assigned an OWNED handle from a builtin (string.split returns a heap list<string>

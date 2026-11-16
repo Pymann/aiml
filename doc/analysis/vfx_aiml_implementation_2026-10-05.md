@@ -3,7 +3,7 @@
 Date: 2026-10-05. Implements the AIML work in
 [ShapeML VFX 1 sections 10 and 13.1](../../../shaper/doc/spec/vfx_v1.md), under
 [graphics spec 43.2](../../spec/43_2_graphics.md) and
-[memory spec 61](../../spec/61_memory_management_DRAFT.md).
+[memory spec 61](../../spec/61_memory_management.md).
 This is the runtime/compiler layer, not a claim that shaper/glbview VFX exists.
 
 ## Implemented

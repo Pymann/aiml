@@ -1,4 +1,4 @@
-# SPEC: 61_memory_management_DRAFT
+# SPEC: 61_memory_management
 # CONTROL probe for the memory-sanitizer harness (run_memory_sanitizers.sh).
 # Deliberately double-frees an iterator handle (aiml_iter_free = C++ delete) from
 # AIML-generated code → valgrind memcheck MUST report an "Invalid free / delete".

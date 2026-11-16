@@ -1,4 +1,4 @@
-# SPEC: 31_db_integration,61_memory_management_DRAFT
+# SPEC: 31_db_integration,61_memory_management
 # static-check: off
 # Requires: driver
 # (einzeln gestartet legt diese Probe nur den Speicher an — der Fall braucht ZWEI

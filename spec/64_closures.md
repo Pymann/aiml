@@ -5,7 +5,7 @@
 > (2026-10-15): **named signatures** instead of an inline `<param:return>` notation, **two
 > kinds** (a non-escaping `block`, an escaping `closure`), and **`fn<…>` left untouched**.
 > Where this spec and the implementation disagree, **this spec wins** (Arbeitsprinzip 2).
-> Memory wording, qualifiers and diagnostics are those of `spec/61_memory_management_DRAFT.md`.
+> Memory wording, qualifiers and diagnostics are those of `spec/61_memory_management.md`.
 
 ## 1. Three callable types, and why
 
@@ -475,7 +475,7 @@ Run time: calling a null closure raises `NullPointerException` (§5).
 |---|---|
 | `12_1_function_pointers` | **unchanged.** `fn<…>` keeps its inline `<param:return>` notation, its POD code-pointer representation and its ABI. `block`/`closure` are sibling types with a *different* (named) notation — a deliberate inconsistency, chosen over migrating ~60 `fn<…>` sites in 36 files. ⚠ Unrelated finding to fix there separately: the multi-parameter inline form **must be quoted** in a YAML flow sequence (`[sinkfn, 'fn<string,i32:i32>']`), because the comma otherwise splits the sequence; the spec never says so and its own examples (and `tests/test_fn_ptr.aiml:36`) are unquoted |
 | `07_functions` | `args` / `return` / `body` of a `callable:` / `block:` / `closure:` are those of `def:`; `name` / `version` are not accepted on a `block:`/`closure:`, and defaults not in a `callable:` |
-| `61_memory_management_DRAFT` | `closure<Sig>` is a **Class-4 unique resource**; `block<Sig>` is a **non-owning / borrowed view** (last row of the §2.1 table). §7 (composition), §8 (params/returns), §9 (qualifiers) and §10 (diagnostics) apply as written |
+| `61_memory_management` | `closure<Sig>` is a **Class-4 unique resource**; `block<Sig>` is a **non-owning / borrowed view** (last row of the §2.1 table). §7 (composition), §8 (params/returns), §9 (qualifiers) and §10 (diagnostics) apply as written |
 | `18_refs_and_pointers` / `20_free_operator` | `ref<closure<Sig>>` borrows; `free: [c]` releases early |
 | `22_exceptions` | a `throw` out of either body propagates to that callable's caller; unwind releases a closure environment (§61 §9.3) |
 | `44_1_engine` | `engine.run` is the first callable-capable API, with `block<Frame>` recommended (§7); the Asyncify loop in `src/sys/engine_runtime.cpp` is the behaviour to preserve |

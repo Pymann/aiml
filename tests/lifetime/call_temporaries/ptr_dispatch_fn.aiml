@@ -1,4 +1,4 @@
-# SPEC: 61_memory_management_DRAFT
+# SPEC: 61_memory_management
 # static-check: off
 # spec/61 regression: unique boxes: fn / named+fresh / normal+callee throw+later argument throw
 # Status: verified 2026-10-02 — exit 0, 0 definite/indirect leaks, no memory errors.

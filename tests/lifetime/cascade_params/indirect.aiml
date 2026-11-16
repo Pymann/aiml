@@ -1,4 +1,4 @@
-# SPEC?: 57_function_cascades,61_memory_management_DRAFT,24_time   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 57_function_cascades,61_memory_management,24_time   # aus dem Dateinamen, zu bestaetigen
 # fn signatures must use the same parameter ABI as their concrete targets.
 - cascade: {name: ProbeCode, nodes: [{value: [1, i32]}]}
 - def:

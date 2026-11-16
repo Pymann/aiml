@@ -244,27 +244,27 @@ Fuer AIML wuerde ich mit einem Mirror-/Runtime-Snapshot-Modus anfangen, weil dor
 
 Die sinnvollsten Einstiegspunkte im aktuellen AIML-Code sind:
 
-- [mirror_runtime.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/sys/mirror_runtime.cpp)
+- [mirror_runtime.cpp](../../src/sys/mirror_runtime.cpp)
   Dort sitzen die Mirror-Lifecycle-Hooks wie `aiml_mirror_session_update`, `register`, `register_id`, `next_event` und `send_rpc`.
-- [mirror_runtime.h](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/sys/mirror_runtime.h)
+- [mirror_runtime.h](../../src/sys/mirror_runtime.h)
   Fuer die Runtime-API des Snapshot-Modus.
-- [serialize_impl.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/serialize_impl.cpp)
+- [serialize_impl.cpp](../../src/core/serialize_impl.cpp)
   Vorhandene Struktur-Serialisierung kann fuer lesbare Snapshot-Payloads wiederverwendet werden.
-- [builtin_registry.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/builtin_registry.cpp)
+- [builtin_registry.cpp](../../src/core/builtin_registry.cpp)
   Wenn eine AIML-seitige API wie `snapshot.dump(...)` angeboten werden soll.
-- [context.h](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/context.h)
+- [context.h](../../src/core/context.h)
   Dort liegen bereits Typinfos, Klasseninfos und Mirror-Metadaten wie `sync`-/`rpc`-Felder.
 
 ### Warum gerade dort
 
 Im Mirror-Pfad sind die wichtigsten Hooks schon zentralisiert:
 
-- `aiml_mirror_session_update(...)` in [mirror_runtime.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/sys/mirror_runtime.cpp#L794)
-- `aiml_mirror_session_register(...)` in [mirror_runtime.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/sys/mirror_runtime.cpp#L828)
-- `aiml_mirror_session_register_id(...)` in [mirror_runtime.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/sys/mirror_runtime.cpp#L837)
-- `aiml_mirror_session_register_id_typed(...)` in [mirror_runtime.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/sys/mirror_runtime.cpp#L915)
-- `aiml_mirror_session_next_event(...)` in [mirror_runtime.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/sys/mirror_runtime.cpp#L1005)
-- `aiml_mirror_session_send_rpc(...)` in [mirror_runtime.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/sys/mirror_runtime.cpp#L1084)
+- `aiml_mirror_session_update(...)` in [mirror_runtime.cpp](../../src/sys/mirror_runtime.cpp#L794)
+- `aiml_mirror_session_register(...)` in [mirror_runtime.cpp](../../src/sys/mirror_runtime.cpp#L828)
+- `aiml_mirror_session_register_id(...)` in [mirror_runtime.cpp](../../src/sys/mirror_runtime.cpp#L837)
+- `aiml_mirror_session_register_id_typed(...)` in [mirror_runtime.cpp](../../src/sys/mirror_runtime.cpp#L915)
+- `aiml_mirror_session_next_event(...)` in [mirror_runtime.cpp](../../src/sys/mirror_runtime.cpp#L1005)
+- `aiml_mirror_session_send_rpc(...)` in [mirror_runtime.cpp](../../src/sys/mirror_runtime.cpp#L1084)
 
 Das ist genau der Pfad, in dem der aktuelle Debug-Bedarf am groessten ist.
 
@@ -372,7 +372,7 @@ Nutzen:
 
 ### Session-Metadaten
 
-Aus `AimlMirrorSession` in [mirror_runtime.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/sys/mirror_runtime.cpp#L121):
+Aus `AimlMirrorSession` in [mirror_runtime.cpp](../../src/sys/mirror_runtime.cpp#L121):
 
 - `is_host`
 - `next_net_id`
@@ -383,7 +383,7 @@ Aus `AimlMirrorSession` in [mirror_runtime.cpp](/media/nikolai/95a208ef-ffa2-478
 
 ### Registrierte Mirror-Objekte
 
-Aus `AimlMirrorRegistered` in [mirror_runtime.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/sys/mirror_runtime.cpp#L86):
+Aus `AimlMirrorRegistered` in [mirror_runtime.cpp](../../src/sys/mirror_runtime.cpp#L86):
 
 - `net_id`
 - `obj_size`
@@ -497,7 +497,7 @@ Beispiel:
 - call: [snapshot.dump_obj, "view", g_view]
 ```
 
-Dafuer waeren Anpassungen in [builtin_registry.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/builtin_registry.cpp) noetig.
+Dafuer waeren Anpassungen in [builtin_registry.cpp](../../src/core/builtin_registry.cpp) noetig.
 
 Zuerst wuerde ich das aber vermeiden und nur die Runtime-Hooks bauen. Sonst landet man wieder bei einem groesseren Compiler-Thema, bevor der erste Nutzen da ist.
 

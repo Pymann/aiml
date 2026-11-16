@@ -1,4 +1,4 @@
-# SPEC: 61_memory_management_DRAFT
+# SPEC: 61_memory_management
 # spec/61 §6 (P2a, dataflow-gated): a function builds an owned list<string> local and RETURNS
 # A SCALAR. Before P2a the list-drop was bypassed (return terminates the block) → per-call leak.
 # With gated return-cleanup the owned `words` slot is freed before the return (mayDrop=true),

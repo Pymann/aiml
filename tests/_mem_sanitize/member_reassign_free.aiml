@@ -1,4 +1,4 @@
-# SPEC: 61_memory_management_DRAFT
+# SPEC: 61_memory_management
 # spec/61 §7.0 — a repeated member assignment `set: [<.field, x]` must RELEASE the field's previous
 # value before overwriting it. The compiler was overwriting a container field's {len,cap,data} (or a
 # model field's struct) WITHOUT freeing the prior heap → the old buffer + its elements/strings leaked

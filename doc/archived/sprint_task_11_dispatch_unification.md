@@ -16,7 +16,7 @@ Es soll klar sein, welche Stellen heute wirklich Aufrufsemantik entscheiden: AST
 
 - `call_dispatcher.cpp` existiert im aktuellen Stand nicht.
 - `expression.cpp` als Legacy-Referenz ist ebenfalls kein realer aktiver Kernpfad.
-- Der relevante Ist-Zuschnitt liegt heute vor allem in [ast_compiler_call.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_call.cpp) und [builtin_registry.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/builtin_registry.cpp).
+- Der relevante Ist-Zuschnitt liegt heute vor allem in [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp) und [builtin_registry.cpp](../../src/core/builtin_registry.cpp).
 
 ## Was an der alten Fassung veraltet war
 
@@ -31,10 +31,10 @@ Es soll klar sein, welche Stellen heute wirklich Aufrufsemantik entscheiden: AST
 
 ## Betroffene Stellen
 
-- [ast_compiler_call.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_call.cpp)
-- [builtin_registry.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/builtin_registry.cpp)
-- [builtin_registry.h](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/builtin_registry.h)
-- bei Legacy-Hinweisen: [context.h](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/context.h)
+- [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp)
+- [builtin_registry.cpp](../../src/core/builtin_registry.cpp)
+- [builtin_registry.h](../../src/core/builtin_registry.h)
+- bei Legacy-Hinweisen: [context.h](../../src/core/context.h)
 
 ## Akzeptanzkriterien
 

@@ -1,4 +1,4 @@
-# SPEC: 23_system,61_memory_management_DRAFT
+# SPEC: 23_system,61_memory_management
 # spec/23 + spec/61 §5: io.read_bytes / io.read_at return an owned buffer (memV3 handle) — read
 # repeatedly in a helper, dropped at scope end, without invalid free or leak.
 # Expected exit code: 0

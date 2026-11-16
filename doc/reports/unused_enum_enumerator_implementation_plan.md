@@ -37,24 +37,24 @@ Das ist absichtlich konservativ: V1 meldet nur das, was der Compiler mit hoher S
 Die bestehende Compiler-/Static-Analysis hat bereits ein sehr aehnliches Muster fuer **whole-program**-Checks:
 
 - Prefab-Deklarationen und Prefab-Verwendungen werden gesammelt in
-  [context.h](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/context.h:299)
+  [context.h](../../src/core/context.h#L299)
 - die Analyse laeuft in
-  [ast_compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler.cpp:269)
+  [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L269)
 - die Funktion wird sowohl fuer Entry- als auch fuer `libraryMode`-Module aufgerufen in
-  [ast_compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler.cpp:968)
+  [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L968)
   und
-  [ast_compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler.cpp:1207)
+  [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L1207)
 
 Die Enum-Aufloesung existiert ebenfalls schon zentral:
 
 - Enum-Registry in
-  [context.h](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/context.h:262)
+  [context.h](../../src/core/context.h#L262)
 - Enum-Registrierung in
-  [ast_compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler.cpp:1922)
+  [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L1922)
 - explizite Enum-Referenz-Aufloesung in
-  [ast_compiler_expr.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_expr.cpp:301)
+  [ast_compiler_expr.cpp](../../src/core/ast_compiler_expr.cpp#L301)
   und
-  [ast_compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler.cpp:2911)
+  [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L2911)
 
 ## Implementierungsstrategie
 
@@ -66,9 +66,9 @@ Der Compiler soll fuer jedes Enum alle deklarierten Member inklusive Quellort re
 
 #### Betroffene Stellen
 
-- [ast_nodes.h](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_nodes.h:359)
-- [context.h](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/context.h:262)
-- [ast_compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler.cpp:1922)
+- [ast_nodes.h](../../src/core/ast_nodes.h#L359)
+- [context.h](../../src/core/context.h#L262)
+- [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L1922)
 
 #### Konkrete Aenderungen
 
@@ -98,7 +98,7 @@ std::map<std::string, std::map<std::string, YAML::Node>> enumMemberDeclNodes;
 #### Wichtige Anmerkung
 
 `EnumDecl::values` speichert derzeit nur `name -> int`, nicht den Quellort pro einzelnes Mitglied
-([ast_nodes.h](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_nodes.h:362)).
+([ast_nodes.h](../../src/core/ast_nodes.h#L362)).
 
 Deshalb gibt es zwei Optionen:
 
@@ -118,8 +118,8 @@ Jede explizite symbolische Referenz wie `GamePhase.combat` soll als Verwendung m
 
 #### Betroffene Stellen
 
-- [ast_compiler_expr.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_expr.cpp:301)
-- [ast_compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler.cpp:2911)
+- [ast_compiler_expr.cpp](../../src/core/ast_compiler_expr.cpp#L301)
+- [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L2911)
 
 #### Konkrete Aenderungen
 
@@ -150,7 +150,7 @@ Die Mitgliedsverwendungen aus importierten/libraryMode-Modulen sollen in den Top
 #### Betroffene Stellen
 
 Die exakten Merge-Stellen fuer `allPrefabUses` muessen in der Compiler-Driver-/Import-Pipeline gespiegelt werden. Der Plan orientiert sich dabei explizit an dem schon existierenden `dead-prefab`-Pfad, der in den Kommentaren von `CompilerContext` referenziert ist
-([context.h](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/context.h:303)).
+([context.h](../../src/core/context.h#L303)).
 
 #### Konkrete Aenderungen
 
@@ -180,7 +180,7 @@ Am Ende des Top-Level-Builds soll fuer jedes deklarierte, aber nie verwendete En
 
 - derselbe Top-Level-Postpass, der bereits whole-program-Warnungen wie `dead-prefab` ausgibt
 - Diagnoseformat ueber `fmtLoc(...)`-artige Pfade aus
-  [context.h](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/context.h:377)
+  [context.h](../../src/core/context.h#L377)
 
 #### Konkrete Aenderungen
 
@@ -208,13 +208,13 @@ Warnung nur ausgeben, wenn der Use-Set als vollstaendig betrachtet werden kann:
 - oder Single-File ohne Imports
 
 Damit bleibt das Verhalten konsistent mit
-[44_8_prefab_static.md](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/spec/44_8_prefab_static.md:131).
+[44_8_prefab_static.md](../../spec/44_8_prefab_static.md#L131).
 
 ## Phase 5: Spec ergaenzen
 
 #### Betroffene Dateien
 
-- [49_static_analysis.md](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/spec/49_static_analysis.md:449)
+- [49_static_analysis.md](../../spec/49_static_analysis.md#L449)
 - optional neue dedizierte Spec-Datei, falls die Regel groesser beschrieben werden soll
 
 #### Inhalt
@@ -300,11 +300,11 @@ Es soll spaeter eine Warning geben, wenn Enum-Werte serialisiert werden, bei der
 Das ist relevant, weil Enums aktuell serialisierungsseitig wie Integer behandelt werden:
 
 - Serialisierung von Enums als Integer in
-  [serialize_impl.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/serialize_impl.cpp:1102)
+  [serialize_impl.cpp](../../src/core/serialize_impl.cpp#L1102)
 - `sys.deserialize` kennt den Zieltyp ueber `deserializeTargetType` in
-  [context.h](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/context.h:451)
+  [context.h](../../src/core/context.h#L451)
 - Deserialisierungspfad in
-  [serialize_impl.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/serialize_impl.cpp:1150)
+  [serialize_impl.cpp](../../src/core/serialize_impl.cpp#L1150)
 
 ## Ziel des Zukunftschecks
 
@@ -363,8 +363,8 @@ Es braucht entweder:
 
 ### Betroffene Stellen
 
-- [serialize_impl.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/serialize_impl.cpp:1098)
-- [serialize_impl.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/serialize_impl.cpp:1150)
+- [serialize_impl.cpp](../../src/core/serialize_impl.cpp#L1098)
+- [serialize_impl.cpp](../../src/core/serialize_impl.cpp#L1150)
 - Call-Dispatch/Statement-Compile-Pfade, in denen `sys.deserialize`-Zieltypen bekannt sind
 
 ### Heuristische V2-Regel

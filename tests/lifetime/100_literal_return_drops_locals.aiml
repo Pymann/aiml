@@ -1,4 +1,4 @@
-# SPEC: 61_memory_management_DRAFT
+# SPEC: 61_memory_management
 # static-check: off
 # spec/61 §6/§8: a `return "<literal>"` path still drops owned locals; `return {at: [list, i]}` hands out the element exactly once.
 - def:

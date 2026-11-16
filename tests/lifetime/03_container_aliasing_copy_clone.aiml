@@ -1,4 +1,4 @@
-# SPEC?: 29_3_sys_clone,61_memory_management_DRAFT,24_time   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 29_3_sys_clone,61_memory_management,24_time   # aus dem Dateinamen, zu bestaetigen
 # static-check: off
 # TIER: T2
 # CONSTRUCT: containers are refcounted handles (§5, Option B).

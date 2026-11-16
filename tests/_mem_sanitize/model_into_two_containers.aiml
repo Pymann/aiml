@@ -1,4 +1,4 @@
-# SPEC: 61_memory_management_DRAFT
+# SPEC: 61_memory_management
 # spec/61 §7.0 — a value MODEL pushed into TWO containers (or a list->list copy via at) must be
 # DEEP-copied per insert, so each element owns an independent inner heap. Else the owner's model-
 # drop frees a shared inner heap twice (the list<Model> double-free / 9rooms WASM client crash).

@@ -16,9 +16,9 @@ Compiler- und Semantikfehler sollen verlässlich als AIML-Diagnostics erscheinen
 
 Der aktuelle Compiler hat bereits mehrere Vorarbeiten:
 
-- [ast_nodes.h](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_nodes.h) haengt `sourceNode` und `sourceLine` an AST-Knoten.
-- [ast_builder.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_builder.cpp) aktualisiert `currentLine` aus `YAML::Mark()`.
-- [context.h](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/context.h) hat mit `currentSourceFile`, `currentLine`, `currentFunctionName` sowie `fmtLoc()` bereits eine primitive Location-Surface.
+- [ast_nodes.h](../../src/core/ast_nodes.h) haengt `sourceNode` und `sourceLine` an AST-Knoten.
+- [ast_builder.cpp](../../src/core/ast_builder.cpp) aktualisiert `currentLine` aus `YAML::Mark()`.
+- [context.h](../../src/core/context.h) hat mit `currentSourceFile`, `currentLine`, `currentFunctionName` sowie `fmtLoc()` bereits eine primitive Location-Surface.
 
 Trotzdem ist die Fehleroberflaeche nicht konsistent zentralisiert.
 
@@ -34,20 +34,20 @@ Das erklaert den beobachteten Effekt: Manche Fehler zeigen AIML-Datei/Zeile, and
 
 ### Bereits vorhanden
 
-- Primitive Location-Tracking-Felder im [context.h](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/context.h)
-- AST-Knoten mit YAML-Ursprung in [ast_nodes.h](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_nodes.h)
-- Teilweise lokalisierte Fehlerpfade, z. B. in [ast_compiler_call.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_call.cpp)
+- Primitive Location-Tracking-Felder im [context.h](../../src/core/context.h)
+- AST-Knoten mit YAML-Ursprung in [ast_nodes.h](../../src/core/ast_nodes.h)
+- Teilweise lokalisierte Fehlerpfade, z. B. in [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp)
 
 ### Noch nicht sauber geloest
 
-- Viele Semantikfehler in [ast_compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler.cpp), [ast_compiler_expr.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_expr.cpp), [ast_compiler_stmt.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_stmt.cpp), [utils.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/utils.cpp) und [builtin_registry.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/builtin_registry.cpp) laufen noch ohne AIML-Quellort.
-- Parse-/Builder-Fehler wie in [expression_builder.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast/expression_builder.cpp) nutzen rohe `LOG_ERROR(...)`-Meldungen.
-- Top-Level-Fehler in [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp) fangen YAML-/AST-/Import-Fehler nicht durchgaengig in einem einheitlichen AIML-Diagnostic-Format ab.
-- Es existiert sogar noch mindestens ein roher `throw std::runtime_error(...)`-Pfad in [context.h](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/context.h), der die zentrale Diagnostic-Schicht komplett umgeht.
+- Viele Semantikfehler in [ast_compiler.cpp](../../src/core/ast_compiler.cpp), [ast_compiler_expr.cpp](../../src/core/ast_compiler_expr.cpp), [ast_compiler_stmt.cpp](../../src/core/ast_compiler_stmt.cpp), [utils.cpp](../../src/core/utils.cpp) und [builtin_registry.cpp](../../src/core/builtin_registry.cpp) laufen noch ohne AIML-Quellort.
+- Parse-/Builder-Fehler wie in [expression_builder.cpp](../../src/core/ast/expression_builder.cpp) nutzen rohe `LOG_ERROR(...)`-Meldungen.
+- Top-Level-Fehler in [compiler.cpp](../../compiler.cpp) fangen YAML-/AST-/Import-Fehler nicht durchgaengig in einem einheitlichen AIML-Diagnostic-Format ab.
+- Es existiert sogar noch mindestens ein roher `throw std::runtime_error(...)`-Pfad in [context.h](../../src/core/context.h), der die zentrale Diagnostic-Schicht komplett umgeht.
 
 ## Was an der bisherigen Planung fehlte
 
-Das Thema war bisher teilweise in [sprint_task_16_stacktraces_and_crash_diagnostics.md](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/sprint_task_16_stacktraces_and_crash_diagnostics.md) enthalten, dort aber als Teil einer viel breiteren Crash-/Runtime-Architektur.
+Das Thema war bisher teilweise in [sprint_task_16_stacktraces_and_crash_diagnostics.md](../../sprint_task_16_stacktraces_and_crash_diagnostics.md) enthalten, dort aber als Teil einer viel breiteren Crash-/Runtime-Architektur.
 
 Fuer die aktuelle Compiler-Qualitaet ist ein eigener Task sinnvoller, weil das Problem enger ist:
 
@@ -67,18 +67,18 @@ Task 17 ist damit kein Ersatz fuer Task 16, sondern eine gezielte Vorstufe: Comp
 
 ## Betroffene Stellen
 
-- [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp)
-- [src/core/context.h](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/context.h)
-- [src/core/ast_nodes.h](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_nodes.h)
-- [src/core/ast_builder.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_builder.cpp)
-- [src/core/ast_compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler.cpp)
-- [src/core/ast_compiler_expr.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_expr.cpp)
-- [src/core/ast_compiler_stmt.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_stmt.cpp)
-- [src/core/ast_compiler_call.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_call.cpp)
-- [src/core/utils.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/utils.cpp)
-- [src/core/string_utils.h](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/string_utils.h)
-- [src/core/builtin_registry.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/builtin_registry.cpp)
-- [logger.h](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/logger.h)
+- [compiler.cpp](../../compiler.cpp)
+- [src/core/context.h](../../src/core/context.h)
+- [src/core/ast_nodes.h](../../src/core/ast_nodes.h)
+- [src/core/ast_builder.cpp](../../src/core/ast_builder.cpp)
+- [src/core/ast_compiler.cpp](../../src/core/ast_compiler.cpp)
+- [src/core/ast_compiler_expr.cpp](../../src/core/ast_compiler_expr.cpp)
+- [src/core/ast_compiler_stmt.cpp](../../src/core/ast_compiler_stmt.cpp)
+- [src/core/ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp)
+- [src/core/utils.cpp](../../src/core/utils.cpp)
+- [src/core/string_utils.h](../../src/core/string_utils.h)
+- [src/core/builtin_registry.cpp](../../src/core/builtin_registry.cpp)
+- [logger.h](../../logger.h)
 
 ## Konkrete Problemklassen
 
@@ -99,9 +99,9 @@ Diese Fehler entstehen oft an AST-Knoten, loggen aber heute noch ohne deren `sou
 
 Beispiele:
 
-- veraltete Operatoren in [expression_builder.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast/expression_builder.cpp)
-- String-Expansion-Parsefehler in [string_utils.h](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/string_utils.h)
-- YAML-Ausnahmen in [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp)
+- veraltete Operatoren in [expression_builder.cpp](../../src/core/ast/expression_builder.cpp)
+- String-Expansion-Parsefehler in [string_utils.h](../../src/core/string_utils.h)
+- YAML-Ausnahmen in [compiler.cpp](../../compiler.cpp)
 
 Hier muss klar getrennt werden zwischen:
 
@@ -131,7 +131,7 @@ Nicht jeder dieser Fehler hat eine AIML-Node. Der Task muss daher eine saubere S
 
 ## Zielarchitektur
 
-Es braucht eine kleine zentrale Surface, zum Beispiel im oder neben [context.h](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/context.h):
+Es braucht eine kleine zentrale Surface, zum Beispiel im oder neben [context.h](../../src/core/context.h):
 
 - `DiagnosticLoc`
 - `ctx.error(node, message)`
@@ -188,9 +188,9 @@ Empfohlene Reihenfolge:
 
 1. `DiagnosticLoc` und `ctx.error(...)` definieren.
 2. Ein enges Paket besonders haeufiger AST-/Semantikfehler auf die neue API umstellen:
-   - [ast_compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler.cpp)
-   - [ast_compiler_stmt.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_stmt.cpp)
-   - [ast_compiler_expr.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_expr.cpp)
+   - [ast_compiler.cpp](../../src/core/ast_compiler.cpp)
+   - [ast_compiler_stmt.cpp](../../src/core/ast_compiler_stmt.cpp)
+   - [ast_compiler_expr.cpp](../../src/core/ast_compiler_expr.cpp)
 3. Builder-/Parsefehler nachziehen.
-4. Top-Level-Compilerpfade in [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp) vereinheitlichen.
+4. Top-Level-Compilerpfade in [compiler.cpp](../../compiler.cpp) vereinheitlichen.
 5. Negative Tests auf Diagnoseinhalt ergaenzen.

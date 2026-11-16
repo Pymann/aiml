@@ -1,4 +1,4 @@
-# SPEC: 61_memory_management_DRAFT
+# SPEC: 61_memory_management
 # static-check: off
 # spec/61 §8/§9.2: a producer value-model result is owned by the caller — dropped when discarded or bound in a nested branch.
 - model:

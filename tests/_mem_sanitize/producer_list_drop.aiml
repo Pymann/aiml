@@ -1,4 +1,4 @@
-# SPEC: 61_memory_management_DRAFT
+# SPEC: 61_memory_management
 # spec/61: a bare `list<T>` / `map` returned by an `owns_return` (producer) function is a
 # FRESH independent container the CALLER owns → the caller's local must be dropped ({ at: [kind, 2] }) at
 # scope exit, exactly like a value-model producer result. TWO bugs combined to leak it (the

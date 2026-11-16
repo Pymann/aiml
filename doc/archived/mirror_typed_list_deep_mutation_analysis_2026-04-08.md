@@ -12,7 +12,7 @@ Kurzantwort: nein, nicht den wahrscheinlichsten Fehlerfall.
 
 Der aktuell wahrscheinlichste Fehler im C++-Mirror-Pfad ist kein genereller `list<struct>`-Encode/Decode-Defekt, sondern die Dirty-Erkennung fuer typed Mirror-Objekte mit Heap-Feldern.
 
-In [src/sys/mirror_runtime.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/sys/mirror_runtime.cpp#L819) wird Dirty-State nur per flachem `memcmp(reg->obj_ptr, reg->shadow, reg->obj_size)` erkannt.
+In [src/sys/mirror_runtime.cpp](../../src/sys/mirror_runtime.cpp#L819) wird Dirty-State nur per flachem `memcmp(reg->obj_ptr, reg->shadow, reg->obj_size)` erkannt.
 
 Das ist fuer folgende Felder strukturell unzureichend:
 - `string`
@@ -51,7 +51,7 @@ Befund:
 - er beweist nicht, dass Deep-Mutationen hinter stabilem `data*` erkannt werden
 
 Referenz:
-- [tests/test_mirror_ws_list_mutation.aiml](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/tests/test_mirror_ws_list_mutation.aiml)
+- [tests/test_mirror_ws_list_mutation.aiml](../../tests/test_mirror_ws_list_mutation.aiml)
 
 ### 2. `tests/test_mirror_ws_list_mutation_poll.aiml`
 
@@ -61,7 +61,7 @@ Deckt nicht ab:
 - denselben kritischen Deep-Mutation-Fall ebenfalls nicht
 
 Referenz:
-- [tests/test_mirror_ws_list_mutation_poll.aiml](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/tests/test_mirror_ws_list_mutation_poll.aiml)
+- [tests/test_mirror_ws_list_mutation_poll.aiml](../../tests/test_mirror_ws_list_mutation_poll.aiml)
 
 ### 3. `tests/test_mirror_ws_events_tail_fields.aiml`
 
@@ -79,7 +79,7 @@ Deckt nicht ab:
 - Beispiel: `root.active_triggers-0.code = 99`
 
 Referenz:
-- [tests/test_mirror_ws_events_tail_fields.aiml](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/tests/test_mirror_ws_events_tail_fields.aiml)
+- [tests/test_mirror_ws_events_tail_fields.aiml](../../tests/test_mirror_ws_events_tail_fields.aiml)
 
 ### 4. `tests/test_mirror_ws_9rooms_gameview_events.aiml`
 
@@ -102,7 +102,7 @@ Beispiele, die aktuell nicht getestet werden:
 - `v.reactable_triggers-0.expired = 1`
 
 Referenz:
-- [tests/test_mirror_ws_9rooms_gameview_events.aiml](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/tests/test_mirror_ws_9rooms_gameview_events.aiml)
+- [tests/test_mirror_ws_9rooms_gameview_events.aiml](../../tests/test_mirror_ws_9rooms_gameview_events.aiml)
 
 ### 5. `tests/test_mirror_rpc_model_ws.aiml`
 
@@ -114,17 +114,17 @@ Deckt nicht ab:
 - also nicht das eigentliche Problem der periodischen Delta-Erkennung
 
 Referenz:
-- [tests/test_mirror_rpc_model_ws.aiml](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/tests/test_mirror_rpc_model_ws.aiml)
+- [tests/test_mirror_rpc_model_ws.aiml](../../tests/test_mirror_rpc_model_ws.aiml)
 
 ## Analyse der wahrscheinlichen Ursache im C++-Code
 
 ### Dirty-Erkennung ist shallow
 
-In [src/sys/mirror_runtime.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/sys/mirror_runtime.cpp#L819) gilt:
+In [src/sys/mirror_runtime.cpp](../../src/sys/mirror_runtime.cpp#L819) gilt:
 
 - dirty wenn `memcmp(obj_ptr, shadow, obj_size) != 0`
 
-In [src/sys/mirror_runtime.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/sys/mirror_runtime.cpp#L321) wird der Shadow danach ebenfalls nur per `memcpy` aktualisiert.
+In [src/sys/mirror_runtime.cpp](../../src/sys/mirror_runtime.cpp#L321) wird der Shadow danach ebenfalls nur per `memcpy` aktualisiert.
 
 Das bedeutet:
 - vergleicht wird nur die Inline-Struktur des Root-Modells
@@ -133,7 +133,7 @@ Das bedeutet:
 
 ### Typed Encode/Decode wirkt fuer `list<struct>` selbst konsistent
 
-Der eigentliche Runtime-Codec in [src/sys/ser_runtime.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/sys/ser_runtime.cpp) sieht fuer `AIML_TD_LIST` normal aus:
+Der eigentliche Runtime-Codec in [src/sys/ser_runtime.cpp](../../src/sys/ser_runtime.cpp) sieht fuer `AIML_TD_LIST` normal aus:
 - Encode iteriert ueber `count` und `elem_size`
 - Decode alloziert Liste neu und decodiert rekursiv pro Element
 - `list<struct>` und nested lists sind im Code ausdruecklich vorgesehen

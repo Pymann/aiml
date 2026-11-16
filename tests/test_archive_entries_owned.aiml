@@ -1,4 +1,4 @@
-# SPEC: 33_2_compress,33_security,61_memory_management_DRAFT
+# SPEC: 33_2_compress,33_security,61_memory_management
 # spec/33_2 + spec/61 §5.5: compress.zip_entries / tar_entries return list<ptr<zip_entry|tar_entry>>
 # — the list owns each entry box and its name string; repeated listing in a helper releases all.
 # Expected exit code: 0

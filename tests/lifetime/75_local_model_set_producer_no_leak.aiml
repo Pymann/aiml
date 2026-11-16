@@ -1,4 +1,4 @@
-# SPEC: 61_memory_management_DRAFT
+# SPEC: 61_memory_management
 # static-check: off
 # spec/61 §5.5/§8: `set [local, producer()]` moves a FRESH owned value into an owned model local →
 # the old value is released and the new one dropped at scope exit (9rooms phase_coordinator

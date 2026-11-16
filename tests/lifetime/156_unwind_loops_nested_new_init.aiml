@@ -1,4 +1,4 @@
-# SPEC: 61_memory_management_DRAFT
+# SPEC: 61_memory_management
 # static-check: off
 # spec/61 §9.3: throw from a new-initializer inside a loop in try (no half-built object), nested try + rethrow.
 - model: {name: Box, fields: [[label, string], [rows, list<string>]]}

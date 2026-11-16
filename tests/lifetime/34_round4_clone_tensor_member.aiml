@@ -1,4 +1,4 @@
-# SPEC?: 50_tensor_runtime,29_3_sys_clone,61_memory_management_DRAFT,24_time   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 50_tensor_runtime,29_3_sys_clone,61_memory_management,24_time   # aus dem Dateinamen, zu bestaetigen
 # static-check: off
 # TIER: T2
 # Spec 61 §5.1 / §7: tensor is clonable; cloning an aggregate must clone its owned tensor data.

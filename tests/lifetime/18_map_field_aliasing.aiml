@@ -1,4 +1,4 @@
-# SPEC?: 61_memory_management_DRAFT,24_time,10_collections   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 61_memory_management,24_time,10_collections   # aus dem Dateinamen, zu bestaetigen
 # static-check: off
 # TIER: T2
 # CONSTRUCT: a map<K:V> model FIELD is a refcounted handle (§5, Option B) — by-value model copy

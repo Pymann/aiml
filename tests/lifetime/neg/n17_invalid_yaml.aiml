@@ -1,4 +1,4 @@
-# SPEC?: 60_yaml,61_memory_management_DRAFT,24_time   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 60_yaml,61_memory_management,24_time   # aus dem Dateinamen, zu bestaetigen
 # EXPECT-ERROR: YAML parse error
 # Invalid YAML is reported as a compile error (no compiler abort).
 - def:

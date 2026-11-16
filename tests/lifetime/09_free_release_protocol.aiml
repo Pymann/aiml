@@ -1,4 +1,4 @@
-# SPEC?: 61_memory_management_DRAFT,20_free_operator,24_time   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 61_memory_management,20_free_operator,24_time   # aus dem Dateinamen, zu bestaetigen
 # static-check: off
 # TIER: T1
 # CONSTRUCT: a heap object owning fields of several classes; free runs the class-based release (§6.1).

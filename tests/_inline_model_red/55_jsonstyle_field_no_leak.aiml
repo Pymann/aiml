@@ -1,4 +1,4 @@
-# SPEC: 61_memory_management_DRAFT
+# SPEC: 61_memory_management
 # static-check: off
 # spec/61 §7/§6.1 regression: setting JsonStyle's owned string fields must NOT leak.
 # BUG (fixed 2026-09-25, leak_probes/round6 §2): registerBuiltins (builtin_registry.cpp) re-registered

@@ -1,4 +1,4 @@
-# SPEC: 58_classgroups,61_memory_management_DRAFT
+# SPEC: 58_classgroups,61_memory_management
 # static-check: relaxed
 # PROBE/spec/58: Lässt sich eine Gruppen-Instanz mit instance-level
 # `implements: [Iface]` an einen Parameter vom Typ `ptr<Iface>` übergeben,

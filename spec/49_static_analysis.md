@@ -1332,7 +1332,7 @@ whose fields include a `string`, a container, a nested model with such fields, �
 ### 21.1 Rationale
 
 The idiom "copy in, modified copy out" hands the whole aggregate to the callee by value (a
-member-wise share, `61_memory_management_DRAFT.md` §7), lets the callee mutate its parameter and
+member-wise share, `61_memory_management.md` §7), lets the callee mutate its parameter and
 return it, and rebinds the caller's variable to the result. Under spec/61 the ownership of that
 result is ambiguous: the returned value still shares the caller's heap, so releasing the old
 value (§5.5) frees what the result references, and not releasing it leaks the whole aggregate on

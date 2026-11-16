@@ -14,7 +14,7 @@ Die AIML-Spec soll nicht nur gesammelt, sondern in einen aktuellen, umsetzbaren 
 
 ## Aktueller Stand
 
-- [SPEC_REVIEW.md](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/spec/SPEC_REVIEW.md) und [spec_impl_completeness.md](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/spec_impl_completeness.md) existieren bereits.
+- [SPEC_REVIEW.md](../../spec/SPEC_REVIEW.md) und [spec_impl_completeness.md](../../spec_impl_completeness.md) existieren bereits.
 - Es gibt damit schon Vorarbeit; der Engpass ist heute eher Pflege, Priorisierung und Entschlackung als reine Erstaufnahme.
 
 ## Was an der alten Fassung veraltet war
@@ -30,9 +30,9 @@ Die AIML-Spec soll nicht nur gesammelt, sondern in einen aktuellen, umsetzbaren 
 
 ## Betroffene Stellen
 
-- [spec](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/spec)
-- [SPEC_REVIEW.md](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/spec/SPEC_REVIEW.md)
-- [spec_impl_completeness.md](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/spec_impl_completeness.md)
+- [spec](../../spec)
+- [SPEC_REVIEW.md](../../spec/SPEC_REVIEW.md)
+- [spec_impl_completeness.md](../../spec_impl_completeness.md)
 
 ## Akzeptanzkriterien
 

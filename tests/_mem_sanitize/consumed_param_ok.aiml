@@ -1,4 +1,4 @@
-# SPEC: 61_memory_management_DRAFT
+# SPEC: 61_memory_management
 # spec/61 §3.1: `consumed` is valid on reference/handle parameters (lower to a pointer).
 # This file must COMPILE and run cleanly.
 - model:

@@ -15,7 +15,7 @@ Das deckt sich mit dem beobachteten Nutzerverhalten in `9rooms` und mit den Mirr
 
 ### 1. `visitVariable(...)` splittet nur am ersten Separator
 
-In [ast_compiler_expr.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_expr.cpp#L184) bis [ast_compiler_expr.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_expr.cpp#L190) wird ein Variablenname mit `find('.')` bzw. `find('-')` zerlegt.
+In [ast_compiler_expr.cpp](../../src/core/ast_compiler_expr.cpp#L184) bis [ast_compiler_expr.cpp](../../src/core/ast_compiler_expr.cpp#L190) wird ein Variablenname mit `find('.')` bzw. `find('-')` zerlegt.
 
 Das heißt:
 
@@ -26,7 +26,7 @@ Damit ist die Expression-Seite strukturell nicht auf echte beliebig tiefe Pfade 
 
 ### 2. `visitSetStmt(...)` splittet ebenfalls nur einmal
 
-In [ast_compiler_stmt.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_stmt.cpp#L219) bis [ast_compiler_stmt.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_stmt.cpp#L230) wird das `set`-Ziel genauso nur in `baseName` und `propName` zerlegt.
+In [ast_compiler_stmt.cpp](../../src/core/ast_compiler_stmt.cpp#L219) bis [ast_compiler_stmt.cpp](../../src/core/ast_compiler_stmt.cpp#L230) wird das `set`-Ziel genauso nur in `baseName` und `propName` zerlegt.
 
 Folge:
 
@@ -38,11 +38,11 @@ Das ist die direkte Ursache dafür, dass tiefe `set`-Ziele heute praktisch nicht
 
 ### 3. `Utils::resolveLValue(...)` ist näher an der richtigen Richtung, aber noch nicht tief genug
 
-In [utils.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/utils.cpp#L117) bis [utils.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/utils.cpp#L129) wird mit `rfind('.')` gearbeitet.
+In [utils.cpp](../../src/core/utils.cpp#L117) bis [utils.cpp](../../src/core/utils.cpp#L129) wird mit `rfind('.')` gearbeitet.
 
 Das ist besser als `find('.')`, weil wenigstens der letzte Member isoliert wird. Aber:
 
-- `resolveLValueMemberAccess(...)` in [utils.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/utils.cpp#L8) erwartet, dass `objName` bereits direkt im `symbol_table` liegt
+- `resolveLValueMemberAccess(...)` in [utils.cpp](../../src/core/utils.cpp#L8) erwartet, dass `objName` bereits direkt im `symbol_table` liegt
 - bei `a.b.c` wird daraus `objName = "a.b"`
 - `"a.b"` ist aber kein echtes Symbol im `symbol_table`
 
@@ -60,9 +60,9 @@ Es gibt heute keine einzige zentrale Pfadauflösung für:
 
 Stattdessen ist die Logik verteilt über:
 
-- [ast_compiler_expr.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_expr.cpp)
-- [ast_compiler_stmt.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_stmt.cpp)
-- [utils.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/utils.cpp)
+- [ast_compiler_expr.cpp](../../src/core/ast_compiler_expr.cpp)
+- [ast_compiler_stmt.cpp](../../src/core/ast_compiler_stmt.cpp)
+- [utils.cpp](../../src/core/utils.cpp)
 
 Das ist der Hauptgrund, warum tiefe Dot-Logik inkonsistent ist.
 
@@ -91,7 +91,7 @@ Diese Logik sollte nicht mehr ad hoc in `visitVariable` und `visitSetStmt` steck
 
 Primäre C++-Stelle:
 
-- neu in [utils.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/utils.cpp)
+- neu in [utils.cpp](../../src/core/utils.cpp)
 
 Hilfreiche API:
 
@@ -117,8 +117,8 @@ Diese Funktion läuft Segment für Segment durch und liefert:
 
 Primäre C++-Stellen:
 
-- [utils.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/utils.cpp)
-- optional Deklarationen in [utils.h](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/utils.h)
+- [utils.cpp](../../src/core/utils.cpp)
+- optional Deklarationen in [utils.h](../../src/core/utils.h)
 
 Diese Funktion muss folgende Fälle einheitlich beherrschen:
 
@@ -130,7 +130,7 @@ Diese Funktion muss folgende Fälle einheitlich beherrschen:
 
 ### Stufe 3: `visitVariable(...)` auf die neue Pfadauflösung umstellen
 
-`visitVariable(...)` in [ast_compiler_expr.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_expr.cpp#L179) sollte nicht mehr selbst mit `find('.')` arbeiten.
+`visitVariable(...)` in [ast_compiler_expr.cpp](../../src/core/ast_compiler_expr.cpp#L179) sollte nicht mehr selbst mit `find('.')` arbeiten.
 
 Stattdessen:
 
@@ -147,7 +147,7 @@ Ziel:
 
 Das ist der wichtigste Schritt für die wahrgenommene Nutzbarkeit.
 
-In [ast_compiler_stmt.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_stmt.cpp#L213) sollte `set` nicht mehr `baseName/propName` manuell zerlegen.
+In [ast_compiler_stmt.cpp](../../src/core/ast_compiler_stmt.cpp#L213) sollte `set` nicht mehr `baseName/propName` manuell zerlegen.
 
 Stattdessen:
 
@@ -166,7 +166,7 @@ Aktuell gibt es Spezialfälle wie:
 - `list.empty`
 - `map.len`
 
-in [utils.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/utils.cpp#L134).
+in [utils.cpp](../../src/core/utils.cpp#L134).
 
 Diese sollten nicht als völlig separater Seitentrieb leben, sondern sauber in das Segmentmodell integriert werden:
 
@@ -178,7 +178,7 @@ Sonst bleibt die Pfadlogik wieder zweigeteilt.
 
 ### Stufe 6: Builtin-Handle-Typen bewusst abgrenzen
 
-Es gibt Builtins mit eigens verdrahteten Settern/Gettern, z. B. in [builtin_registry.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/builtin_registry.cpp#L2421).
+Es gibt Builtins mit eigens verdrahteten Settern/Gettern, z. B. in [builtin_registry.cpp](../../src/core/builtin_registry.cpp#L2421).
 
 Wichtig:
 

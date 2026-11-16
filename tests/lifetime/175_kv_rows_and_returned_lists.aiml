@@ -1,4 +1,4 @@
-# SPEC: 61_memory_management_DRAFT,31_db_integration,15_models
+# SPEC: 61_memory_management,31_db_integration,15_models
 # static-check: off
 # Vier Formen aus der Jagd auf den cai-Absturz vom 2026-11-04 (SIGSEGV in __strlen_avx2 <-
 # enc <- aiml_ser_deep_copy <- cai.wissen.Aufloesung_eintraege), in EINER Datei, damit das

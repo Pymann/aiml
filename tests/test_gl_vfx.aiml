@@ -1,4 +1,4 @@
-# SPEC: 43_2_graphics,61_memory_management_DRAFT
+# SPEC: 43_2_graphics,61_memory_management
 # VFX 1 section 10; spec/43_2 and spec/61 Class 4.
 # Requires: display
 # Expected exit code: 0

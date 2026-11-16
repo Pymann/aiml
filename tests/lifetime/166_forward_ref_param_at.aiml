@@ -1,4 +1,4 @@
-# SPEC: 61_memory_management_DRAFT
+# SPEC: 61_memory_management
 # static-check: off
 # spec/61 §6.2/§8: a ref<T> parameter forwarded into another ref<T> call (recursion) keeps borrowing the
 # caller's object; `at` borrows into its list<Model> field and nested reads stay valid.

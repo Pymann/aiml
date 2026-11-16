@@ -1,4 +1,4 @@
-# SPEC: 61_memory_management_DRAFT
+# SPEC: 61_memory_management
 # spec/61 §6.2 (T1): the return-cleanup owner-exemption must fire ONLY for alias-capable
 # (pointer/struct) returns. For a SCALAR return the value is a copy that cannot alias the owner's
 # heap, so an owned string local must still be dropped. Regression for the deckset-editor `build_a`

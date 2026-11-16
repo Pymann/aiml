@@ -1,4 +1,4 @@
-# SPEC: 61_memory_management_DRAFT
+# SPEC: 61_memory_management
 # static-check: off
 # spec/61 §4/§5.4/§8: insert owns its element (start/middle/end, growth, source from the same list); pop results are owned on every use.
 - def:

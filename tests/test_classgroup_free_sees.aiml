@@ -1,4 +1,4 @@
-# SPEC: 58_classgroups,61_memory_management_DRAFT
+# SPEC: 58_classgroups,61_memory_management
 # `free: <group>` with a sees edge: the instance's sees member is a BORROW of a
 # sibling the container owns (spec/58 §9).  Until 2026-10-28 the instance's own
 # free descriptor listed it as an owned ptr, so the __dtor freed the sibling and the

@@ -1,4 +1,4 @@
-# SPEC: 61_memory_management_DRAFT
+# SPEC: 61_memory_management
 # spec/61 sections 2.1, 5, 8: all call paths share one cascade handle.
 - cascade: {name: ProbeCode, nodes: [{value: [1, i32]}]}
 - def:

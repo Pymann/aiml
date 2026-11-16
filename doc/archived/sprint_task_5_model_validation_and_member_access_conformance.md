@@ -14,8 +14,8 @@ Tiefe Member-Zugriffe, LValue-Aufloesung und Modellvalidierung sollen konsistent
 
 ## Aktueller Stand
 
-- Der Member-Zugriff ist heute noch ueber [ast_compiler_expr.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_expr.cpp), [ast_compiler_stmt.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_stmt.cpp) und [utils.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/utils.cpp) verteilt.
-- [member_chain_plan.md](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/member_chain_plan.md) ist weiterhin die naheliegende Vorarbeit.
+- Der Member-Zugriff ist heute noch ueber [ast_compiler_expr.cpp](../../src/core/ast_compiler_expr.cpp), [ast_compiler_stmt.cpp](../../src/core/ast_compiler_stmt.cpp) und [utils.cpp](../../src/core/utils.cpp) verteilt.
+- [member_chain_plan.md](../../member_chain_plan.md) ist weiterhin die naheliegende Vorarbeit.
 
 ## Was an der alten Fassung veraltet war
 
@@ -30,11 +30,11 @@ Tiefe Member-Zugriffe, LValue-Aufloesung und Modellvalidierung sollen konsistent
 
 ## Betroffene Stellen
 
-- [spec/15_models.md](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/spec/15_models.md)
-- [member_chain_plan.md](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/member_chain_plan.md)
-- [ast_compiler_expr.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_expr.cpp)
-- [ast_compiler_stmt.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_stmt.cpp)
-- [utils.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/utils.cpp)
+- [spec/15_models.md](../../spec/15_models.md)
+- [member_chain_plan.md](../../member_chain_plan.md)
+- [ast_compiler_expr.cpp](../../src/core/ast_compiler_expr.cpp)
+- [ast_compiler_stmt.cpp](../../src/core/ast_compiler_stmt.cpp)
+- [utils.cpp](../../src/core/utils.cpp)
 
 ## Akzeptanzkriterien
 

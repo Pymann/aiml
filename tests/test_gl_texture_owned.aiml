@@ -1,4 +1,4 @@
-# SPEC: 43_2_graphics,61_memory_management_DRAFT
+# SPEC: 43_2_graphics,61_memory_management
 # spec/43_2 §5.5 + spec/61 Class 4: an owned gl_texture is deleted once at owner drop (local,
 # model field), moves (return, push, field store) transfer it, delete() is an early close, a
 # framebuffer's color_texture() view never deletes the attachment. Run under valgrind: no

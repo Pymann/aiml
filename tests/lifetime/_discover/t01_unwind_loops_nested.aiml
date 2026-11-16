@@ -1,4 +1,4 @@
-# SPEC?: 61_memory_management_DRAFT,24_time   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 61_memory_management,24_time   # aus dem Dateinamen, zu bestaetigen
 # static-check: off
 - model: {name: Box, fields: [[label, string], [rows, list<string>]]}
 - def:

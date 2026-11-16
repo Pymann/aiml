@@ -1,4 +1,4 @@
-# SPEC: 61_memory_management_DRAFT
+# SPEC: 61_memory_management
 # static-check: off
 # spec/61 §5/§5.7 regression: a list local that receives a container HANDLE by SHARE (incref of a
 # plain-local, a model member, or an at-element) OR by a fresh producer (copy/clone/slice) OWNS an

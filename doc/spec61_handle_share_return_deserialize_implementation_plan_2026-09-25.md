@@ -4,7 +4,7 @@ Stand: 2026-09-25. Gelesener AIML-HEAD: `a281adb` (Listenalias-Fall-through und 
 
 - [Round6-Befunde und Probes](../../9rooms_v2/leak_probes/round6_general/README.md)
 - [Round5-Deserialisierungsbefund](../../9rooms_v2/leak_probes/round5_interpolation/README.md)
-- [Spec 61](../spec/61_memory_management_DRAFT.md)
+- [Spec 61](../spec/61_memory_management.md)
 - [Bestehender Inline-Value-Modell-Plan](spec61_inline_value_model_release_plan_2026-09-24.md)
 
 ## Ausgangslage und gemeinsame Regeln

@@ -1,4 +1,4 @@
-# SPEC: 61_memory_management_DRAFT
+# SPEC: 61_memory_management
 # static-check: off
 # spec/61 §5.7: cascade<X> handles as list/map elements — share, replace, get, remove, pop.
 - cascade: {name: ProbeCode, nodes: [{value: [1, i32]}]}

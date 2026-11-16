@@ -1,4 +1,4 @@
-# SPEC?: 61_memory_management_DRAFT,15_models,24_time   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 61_memory_management,15_models,24_time   # aus dem Dateinamen, zu bestaetigen
 # static-check: off
 # Reduced endphase-crash repro: value-model copy from a list element (at) whose map FIELD is then
 # REPLACED (set c.choice = empty → release-old on the still-shared handle), then written back (idx).

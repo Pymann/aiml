@@ -15,7 +15,7 @@ Typregeln fuer Pointer, Container, Heap-Typen und Serialisierung sollen nicht we
 ## Aktueller Stand
 
 - Eine explizite `TypeSemantics`-API existiert im aktuellen Code nicht.
-- Typentscheidungen sind weiterhin ueber [context.h](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/context.h), [ast_compiler_expr.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_expr.cpp), [ast_compiler_stmt.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_stmt.cpp), [serialize_impl.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/serialize_impl.cpp) und [builtin_registry.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/builtin_registry.cpp) verteilt.
+- Typentscheidungen sind weiterhin ueber [context.h](../../src/core/context.h), [ast_compiler_expr.cpp](../../src/core/ast_compiler_expr.cpp), [ast_compiler_stmt.cpp](../../src/core/ast_compiler_stmt.cpp), [serialize_impl.cpp](../../src/core/serialize_impl.cpp) und [builtin_registry.cpp](../../src/core/builtin_registry.cpp) verteilt.
 
 ## Was an der alten Fassung veraltet war
 
@@ -30,11 +30,11 @@ Typregeln fuer Pointer, Container, Heap-Typen und Serialisierung sollen nicht we
 
 ## Betroffene Stellen
 
-- [context.h](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/context.h)
-- [ast_compiler_stmt.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_stmt.cpp)
-- [ast_compiler_expr.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_expr.cpp)
-- [serialize_impl.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/serialize_impl.cpp)
-- [builtin_registry.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/builtin_registry.cpp)
+- [context.h](../../src/core/context.h)
+- [ast_compiler_stmt.cpp](../../src/core/ast_compiler_stmt.cpp)
+- [ast_compiler_expr.cpp](../../src/core/ast_compiler_expr.cpp)
+- [serialize_impl.cpp](../../src/core/serialize_impl.cpp)
+- [builtin_registry.cpp](../../src/core/builtin_registry.cpp)
 
 ## Akzeptanzkriterien
 

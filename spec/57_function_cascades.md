@@ -156,7 +156,7 @@ element handler has the signature
 def: { name: f_mana, args: [[carry, ref<CostDraft>]], body: [ ... ] }   # no return
 ```
 
-- The first parameter is `ref<carrier>` for a value-model carrier (`61_memory_management_DRAFT.md`
+- The first parameter is `ref<carrier>` for a value-model carrier (`61_memory_management.md`
   §3: `ref<T>` is the tool for in-place mutation). A container carrier (`list`/`map`/`buffer`) is
   already a shared handle with reference semantics (spec/61 §5) and is taken as the plain
   container type (`[carry, list<string>]`). Either way the handler **mutates the carrier in

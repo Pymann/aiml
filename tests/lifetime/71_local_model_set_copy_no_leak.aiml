@@ -1,4 +1,4 @@
-# SPEC: 61_memory_management_DRAFT
+# SPEC: 61_memory_management
 # static-check: off
 # spec/61 §7: set [dst, src] on a model local deep-copies into dst → dst OWNS the copy and drops it.
 - model: {name: Item, fields: [[text, string]]}

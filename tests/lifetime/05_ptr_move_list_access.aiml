@@ -1,4 +1,4 @@
-# SPEC?: 61_memory_management_DRAFT,24_time,18_refs_and_pointers,10_collections   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 61_memory_management,24_time,18_refs_and_pointers,10_collections   # aus dem Dateinamen, zu bestaetigen
 # static-check: off
 # TIER: T2
 # CONSTRUCT: unique ptr<T> move + list<ptr<T>> access verbs (§6.2, §5.4).

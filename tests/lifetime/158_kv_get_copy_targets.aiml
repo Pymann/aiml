@@ -1,4 +1,4 @@
-# SPEC: 61_memory_management_DRAFT
+# SPEC: 61_memory_management
 # static-check: off
 # spec/61 §5.5/§6: kv.get_copy into a decl, a local rebind (old copy released) and a field; kv.get as ref borrow.
 - model: {name: Entry, fields: [[name, string], [tags, list<string>]]}

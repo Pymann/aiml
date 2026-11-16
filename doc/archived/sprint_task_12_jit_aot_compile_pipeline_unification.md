@@ -14,7 +14,7 @@ Die unterschiedlichen Compile-Entry-Points sollen auf einen kleinen gemeinsamen 
 
 ## Aktueller Stand
 
-- [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp) besitzt weiterhin getrennte Pfade fuer `compile()`, `compileFromString()`, `jitRun()` und `compileChunkAndGetAddress()`.
+- [compiler.cpp](../../compiler.cpp) besitzt weiterhin getrennte Pfade fuer `compile()`, `compileFromString()`, `jitRun()` und `compileChunkAndGetAddress()`.
 - Genau das macht die Task weiterhin aktuell.
 
 ## Was an der alten Fassung veraltet war
@@ -30,8 +30,8 @@ Die unterschiedlichen Compile-Entry-Points sollen auf einen kleinen gemeinsamen 
 
 ## Betroffene Stellen
 
-- [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp)
-- [ast_compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler.cpp)
+- [compiler.cpp](../../compiler.cpp)
+- [ast_compiler.cpp](../../src/core/ast_compiler.cpp)
 
 ## Akzeptanzkriterien
 

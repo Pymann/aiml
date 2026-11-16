@@ -1,4 +1,4 @@
-# SPEC: 61_memory_management_DRAFT
+# SPEC: 61_memory_management
 # EXPECT-ERROR: owning ptr<T> parameter
 # spec/61 §8: a ptr<T> parameter takes ownership — a borrow (&x, a field, an element) cannot be passed; use ref<T>.
 - model: {name: Card, fields: [[title, string]]}

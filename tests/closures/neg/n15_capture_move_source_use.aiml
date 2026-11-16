@@ -1,4 +1,4 @@
-# SPEC: 61_memory_management_DRAFT,64_closures
+# SPEC: 61_memory_management,64_closures
 # static-check: off
 # Requires: driver
 # NEGATIVE (spec/64 §4.2 + spec/61 §10): `mode: move` moves the source out — using it

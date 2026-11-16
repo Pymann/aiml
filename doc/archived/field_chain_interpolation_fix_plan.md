@@ -58,18 +58,18 @@ Der Bruch sitzt wahrscheinlich in einem dieser Punkte:
 
 Die heissesten Stellen fuer den Fix sind:
 
-- [ast_compiler_expr.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_expr.cpp)
+- [ast_compiler_expr.cpp](../../src/core/ast_compiler_expr.cpp)
   - `visitStringInterpolation(...)`
   - `visitVariable(...)`
   - `visitExpression(...)`
-- [ast/expression_builder.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast/expression_builder.cpp)
+- [ast/expression_builder.cpp](../../src/core/ast/expression_builder.cpp)
   - falls `${...}`-Inhalte dort nicht als normale Expressions gebaut werden
-- [string_utils.h](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/string_utils.h)
-- [expression.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/expression.cpp)
+- [string_utils.h](../../src/core/string_utils.h)
+- [expression.cpp](../../src/core/expression.cpp)
   - falls dort Sonderbehandlung fuer Variablen-/Pfadauflosung steckt
 - optional zur Diagnose:
-  - [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp)
-  - [context.h](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/context.h)
+  - [compiler.cpp](../../compiler.cpp)
+  - [context.h](../../src/core/context.h)
 
 ## Zielverhalten
 
@@ -128,7 +128,7 @@ Akzeptanz:
 
 Betroffene Stellen:
 
-- [ast_compiler_expr.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_expr.cpp)
+- [ast_compiler_expr.cpp](../../src/core/ast_compiler_expr.cpp)
 - `tests/`
 
 ### sprint_task_2: AST-Baum fuer `${...}` normieren
@@ -144,8 +144,8 @@ werden:
 
 Betroffene Stellen:
 
-- [ast/expression_builder.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast/expression_builder.cpp)
-- ggf. [ast_builder.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_builder.cpp)
+- [ast/expression_builder.cpp](../../src/core/ast/expression_builder.cpp)
+- ggf. [ast_builder.cpp](../../src/core/ast_builder.cpp)
 
 ### sprint_task_3: `visitStringInterpolation(...)` gegen Chain-Ergebnisse haerten
 
@@ -166,7 +166,7 @@ Stattdessen:
 
 Betroffene Stellen:
 
-- [ast_compiler_expr.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_expr.cpp)
+- [ast_compiler_expr.cpp](../../src/core/ast_compiler_expr.cpp)
 
 ### sprint_task_4: gemeinsame „value-to-string“-Konvertierung extrahieren
 
@@ -184,8 +184,8 @@ einer anderen nicht.
 
 Betroffene Stellen:
 
-- [ast_compiler_expr.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_expr.cpp)
-- [string_utils.h](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/string_utils.h)
+- [ast_compiler_expr.cpp](../../src/core/ast_compiler_expr.cpp)
+- [string_utils.h](../../src/core/string_utils.h)
 - ggf. neue Implementierungsdatei in `src/core/`
 
 ### sprint_task_5: Regressionen fuer reale 9rooms-Muster

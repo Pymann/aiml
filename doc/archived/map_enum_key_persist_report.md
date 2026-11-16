@@ -3,7 +3,7 @@
 ## Summary
 
 The current repro
-[test_map_enum_key_persist.aiml](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/tests/test_map_enum_key_persist.aiml)
+[test_map_enum_key_persist.aiml](../../tests/test_map_enum_key_persist.aiml)
 still fails, but the strongest current finding is not the original
 "string-only map serializer" theory.
 
@@ -36,10 +36,10 @@ compiled AIML test path, not with a clean AIML-level `FAIL ...` assertion.
 ## Strongest Evidence
 
 In the generated IR for
-[test_map_enum_key_persist.ll](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/tests/test_map_enum_key_persist.ll):
+[test_map_enum_key_persist.ll](../../tests/test_map_enum_key_persist.ll):
 
 - `bag` is allocated as zero-initialized storage in
-  [test_map_enum_key_persist.ll](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/tests/test_map_enum_key_persist.ll#L61)
+  [test_map_enum_key_persist.ll](../../tests/test_map_enum_key_persist.ll#L61)
 - then `bag.mana_cost.put(...)` is executed immediately
 - but the map starts with:
   - `size = 0`
@@ -47,11 +47,11 @@ In the generated IR for
   - `keysBase = null`
   - `valsBase = null`
   in
-  [test_map_enum_key_persist.ll](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/tests/test_map_enum_key_persist.ll#L65)
+  [test_map_enum_key_persist.ll](../../tests/test_map_enum_key_persist.ll#L65)
 - the generated grow path multiplies `capacity * 2`, so `0` stays `0` in
-  [test_map_enum_key_persist.ll](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/tests/test_map_enum_key_persist.ll#L117)
+  [test_map_enum_key_persist.ll](../../tests/test_map_enum_key_persist.ll#L117)
 - afterwards the append path writes through null key/value bases in
-  [test_map_enum_key_persist.ll](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/tests/test_map_enum_key_persist.ll#L134)
+  [test_map_enum_key_persist.ll](../../tests/test_map_enum_key_persist.ll#L134)
 
 That is immediate undefined behavior and is enough to explain the crash.
 
@@ -62,17 +62,17 @@ keys as strings. That was true for an older state, but the current source now
 shows a more generic `AIML_TD_MAP` serializer path:
 
 - encode uses recursive key serialization in
-  [ser_runtime.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/sys/ser_runtime.cpp#L166)
+  [ser_runtime.cpp](../../src/sys/ser_runtime.cpp#L166)
 - decode uses recursive key deserialization in
-  [ser_runtime.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/sys/ser_runtime.cpp#L268)
+  [ser_runtime.cpp](../../src/sys/ser_runtime.cpp#L268)
 - free uses recursive key cleanup in
-  [ser_runtime.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/sys/ser_runtime.cpp#L360)
+  [ser_runtime.cpp](../../src/sys/ser_runtime.cpp#L360)
 
 So the current repro no longer proves a serializer string-key bug by itself.
 
 ## Why `test_card_heap_persist.aiml` Can Still Pass
 
-[test_card_heap_persist.aiml](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/tests/test_card_heap_persist.aiml)
+[test_card_heap_persist.aiml](../../tests/test_card_heap_persist.aiml)
 passes because its `mana_cost` map is populated via `sys.deserialize(...)`,
 not via `.put()` on a fresh zero-initialized model instance.
 
@@ -89,11 +89,11 @@ typed `Kv` persistence itself.
 Relevant places:
 
 - top-level/model initialization semantics in
-  [ast_compiler_stmt.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_stmt.cpp)
+  [ast_compiler_stmt.cpp](../../src/core/ast_compiler_stmt.cpp)
 - class/model field initialization in
-  [ast_compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler.cpp)
+  [ast_compiler.cpp](../../src/core/ast_compiler.cpp)
 - map runtime implementation in
-  [map_impl.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/map_impl.cpp)
+  [map_impl.cpp](../../src/core/map_impl.cpp)
 
 The specific runtime symptom is in `MapImpl::put(...)`:
 

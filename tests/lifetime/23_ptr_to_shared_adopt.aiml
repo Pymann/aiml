@@ -1,4 +1,4 @@
-# SPEC?: 61_memory_management_DRAFT,24_time,18_refs_and_pointers   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 61_memory_management,24_time,18_refs_and_pointers   # aus dem Dateinamen, zu bestaetigen
 # static-check: off
 # TIER: T2
 # CONSTRUCT: ptr<T> → shared<T> adoption via { share: p } (§6.2 conversion matrix) — the only

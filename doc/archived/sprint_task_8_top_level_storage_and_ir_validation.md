@@ -30,11 +30,11 @@ Top-Level-`decl` soll semantisch konsistent bleiben, und invalide IR-Situationen
 
 ## Betroffene Stellen
 
-- [ast_compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler.cpp)
-- [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp)
-- [ast_compiler_stmt.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_stmt.cpp)
-- [ast_compiler_expr.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_expr.cpp)
-- [context.h](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/context.h)
+- [ast_compiler.cpp](../../src/core/ast_compiler.cpp)
+- [compiler.cpp](../../compiler.cpp)
+- [ast_compiler_stmt.cpp](../../src/core/ast_compiler_stmt.cpp)
+- [ast_compiler_expr.cpp](../../src/core/ast_compiler_expr.cpp)
+- [context.h](../../src/core/context.h)
 
 ## Akzeptanzkriterien
 

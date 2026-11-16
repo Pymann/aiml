@@ -1,9 +1,15 @@
-# 61 — Memory Management [DRAFT — replaces the deprecated `[deprecated]_lifetime_ownership.md`]
+# 61 — Memory Management
 
-> Status: DRAFT for review. Replaces the now-deprecated
-> `[deprecated]_lifetime_ownership.md` (the older move/borrow proposal); this draft claims
-> spec number 61 once approved. Where this draft and the implementation disagree, **this
-> spec, once approved, wins** (Arbeitsprinzip 2).
+> Status: **Normative.** Replaces the now-deprecated
+> `[deprecated]_lifetime_ownership.md` (the older move/borrow proposal). Every design
+> decision in §11 is resolved, memV3 is the compiler default, and the leak gates under
+> `tests/lifetime/` and `tests/_mem_sanitize/` are this chapter's acceptance tests. Where
+> this spec and the implementation disagree, **this spec wins** (Arbeitsprinzip 2).
+> The `DRAFT` marker was dropped from the title and from the file name on 2026-11-16
+> (`61_memory_management_DRAFT.md` → `61_memory_management.md`); §11 had been resolved
+> throughout for some time. Only the two audit records under
+> `doc/analysis/container_leak_audit_2026-09-29/` keep the old file name, because they
+> record a past state.
 
 ## 0. Terminology & abbreviations
 
@@ -1600,7 +1606,7 @@ argument beyond the call (see below) — a real added contract.
 - **string / container correctness** is automatic (rc for strings and containers) and needs no
   diagnostics; reference cycles are the one rc hazard, covered by the lint above.
 
-## 11. Open design decisions (to confirm before implementation)
+## 11. Design decisions (all resolved)
 
 **11.1 Container copy semantics.** **RESOLVED → Option B** (refcounted shared handles, §5).
 Copy shares (incref), mutation aliases, freed at rc 0; independence via `copy` (shallow) /

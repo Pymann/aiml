@@ -216,21 +216,21 @@ Nuechtern betrachtet ist Stub-Generierung im aktuellen Code deutlich einfacher a
 
 Relativ einfach:
 
-- Funktionssignaturen liegen nach dem Parse bereits strukturiert vor und werden in `registerTypeDecl(...)` und `visitFunction(...)` verarbeitet, siehe [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp#L217) und [ast_compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler.cpp#L933)
-- Typen, Modelle und Enums werden ohnehin vorab registriert, also kann man fuer ein Stub-Modul die oeffentliche Form eines importierten Moduls grundsaetzlich schon ableiten, siehe [ast_compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler.cpp#L466)
+- Funktionssignaturen liegen nach dem Parse bereits strukturiert vor und werden in `registerTypeDecl(...)` und `visitFunction(...)` verarbeitet, siehe [compiler.cpp](../../compiler.cpp#L217) und [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L933)
+- Typen, Modelle und Enums werden ohnehin vorab registriert, also kann man fuer ein Stub-Modul die oeffentliche Form eines importierten Moduls grundsaetzlich schon ableiten, siehe [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L466)
 - fuer reine Funktionsmodule ohne globale mutable States waere ein generierter Stub im Wesentlichen nur ein zweites AIML-AST oder direkt erzeugtes IR mit Default-Rueckgaben
 
 Mittelschwer:
 
-- importierte Module laufen in `libraryMode` und bekommen eigene `__aiml_lib_init_*`-Funktionen, die vor Top-Level-Code des Hauptmoduls ausgefuehrt werden, siehe [ast_compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler.cpp#L24) und [ast_compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler.cpp#L172)
+- importierte Module laufen in `libraryMode` und bekommen eigene `__aiml_lib_init_*`-Funktionen, die vor Top-Level-Code des Hauptmoduls ausgefuehrt werden, siehe [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L24) und [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L172)
 - ein Stub fuer ein Modul mit Top-Level-Initialisierung muesste diese Init-Semantik kompatibel nachbilden, sonst veraendert sich das Verhalten gegenueber dem echten Modul
-- fuer globale Decl-Stmts erzeugt der Compiler echte LLVM-Globals und traegt sie sofort in `ctx.symbol_table` ein, siehe [ast_compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler.cpp#L53) und [ast_compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler.cpp#L93)
+- fuer globale Decl-Stmts erzeugt der Compiler echte LLVM-Globals und traegt sie sofort in `ctx.symbol_table` ein, siehe [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L53) und [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L93)
 
 Schwierig:
 
-- die Symbolbindung ist aktuell stark datei- und zustandsabhaengig: `resolveImportCallback`, `currentSourceFile`, `libInitFuncNames`, `symbol_table` und sibling injection greifen ineinander, siehe [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp#L145) und [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp#L357)
+- die Symbolbindung ist aktuell stark datei- und zustandsabhaengig: `resolveImportCallback`, `currentSourceFile`, `libInitFuncNames`, `symbol_table` und sibling injection greifen ineinander, siehe [compiler.cpp](../../compiler.cpp#L145) und [compiler.cpp](../../compiler.cpp#L357)
 - ein Mock, der nur einzelne Funktionen ersetzen soll, braucht heute keine saubere Modulgrenze, sondern muss effektiv dieselben Symbolnamen, Globals und Initialisierungsreihenfolgen treffen wie das Original
-- `extern`-Globals werden absichtlich ueber plain `__lib_<name>` zusammengefuehrt, nicht-`extern`-Globals ueber dateinamenspezifische Symbole; ein generierter Mock muesste genau diese Regeln treffen, sonst entstehen stille Link- oder Laufzeitabweichungen, siehe [ast_compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler.cpp#L68)
+- `extern`-Globals werden absichtlich ueber plain `__lib_<name>` zusammengefuehrt, nicht-`extern`-Globals ueber dateinamenspezifische Symbole; ein generierter Mock muesste genau diese Regeln treffen, sonst entstehen stille Link- oder Laufzeitabweichungen, siehe [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L68)
 - weil sehr viel ueber `ctx.symbol_table` aufgeloest wird, ist teilweises Ersetzen eines Moduls schwieriger als komplettes Ersetzen eines Imports
 
 Konsequenz:

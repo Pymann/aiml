@@ -1,4 +1,4 @@
-# SPEC: 61_memory_management_DRAFT
+# SPEC: 61_memory_management
 # static-check: off
 # Positive controls for rejecting pointer expressions in aggregate value lists.
 # Covers nested model-returning calls, explicit value copies, borrow lists,

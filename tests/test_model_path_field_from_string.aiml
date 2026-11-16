@@ -1,4 +1,4 @@
-# SPEC: 61_memory_management_DRAFT
+# SPEC: 61_memory_management
 # A path model field assigned from a string local keeps its text after the local's scope ends and
 # after the model was pushed into a list (spec/61: the field owns its value).
 # Expected exit code: 0

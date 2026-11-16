@@ -1,4 +1,4 @@
-# SPEC: 61_memory_management_DRAFT
+# SPEC: 61_memory_management
 # spec/61: a fresh owned value-model local that is CONDITIONALLY moved into a container
 # (push inside an `if` in a loop body) must still be freed on the paths that SKIP the push.
 #

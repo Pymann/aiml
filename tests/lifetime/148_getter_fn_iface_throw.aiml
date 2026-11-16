@@ -1,4 +1,4 @@
-# SPEC: 61_memory_management_DRAFT
+# SPEC: 61_memory_management
 # static-check: off
 # spec/61 §8/§9.3: getter returning a member container, fn<> container return, throw through interface dispatch.
 - class:

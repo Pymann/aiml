@@ -1,4 +1,4 @@
-# SPEC: 61_memory_management_DRAFT
+# SPEC: 61_memory_management
 # static-check: off
 # spec/61 §5.5: list<ptr<Interface>> push/at/remove/idx/pop/clear release via the vtable free slot; buffer field re-alloc.
 - interface:

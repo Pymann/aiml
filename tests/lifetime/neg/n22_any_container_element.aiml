@@ -1,4 +1,4 @@
-# SPEC: 02_types,13_cast,61_memory_management_DRAFT
+# SPEC: 02_types,13_cast,61_memory_management
 # EXPECT-ERROR: not allowed as a container element type
 # spec/02 + spec/13 §4: `any` is never a container element type (no release class, spec/61 §2.1).
 - model:

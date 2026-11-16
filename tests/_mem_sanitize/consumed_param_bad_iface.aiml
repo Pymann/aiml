@@ -1,4 +1,4 @@
-# SPEC: 61_memory_management_DRAFT
+# SPEC: 61_memory_management
 # spec/61 §3.1: `consumed` on an INTERFACE-overriding method param must be REJECTED — vtable
 # dispatch cannot apply caller-move yet (would double-free). Expect a compile error.
 - interface:

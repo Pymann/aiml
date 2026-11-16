@@ -1,6 +1,6 @@
 # Spec 61 — Implementierungsplan für Container-Leaks und Speicherfehler
 
-Stand: 2026-09-29. **Implementierungsplan; Regressionstests im Review ergänzt, Compiler-/Runtime-Fixes noch offen.** Gelesener AIML-HEAD: `be736b3`, mit bereits vorhandenen uncommitteten Änderungen. Maßgeblich für diesen Auftrag ist die aktuelle [Spec 61](../spec/61_memory_management_DRAFT.md), einschließlich ihres DRAFT-Status; der ältere v2-Entwurf mit genereller Modell-Referenzsemantik ist nicht die Grundlage.
+Stand: 2026-09-29. **Implementierungsplan; Regressionstests im Review ergänzt, Compiler-/Runtime-Fixes noch offen.** Gelesener AIML-HEAD: `be736b3`, mit bereits vorhandenen uncommitteten Änderungen. Maßgeblich für diesen Auftrag ist die aktuelle [Spec 61](../spec/61_memory_management.md), einschließlich ihres DRAFT-Status; der ältere v2-Entwurf mit genereller Modell-Referenzsemantik ist nicht die Grundlage.
 
 ## 1. Ziel und belegter Ausgangspunkt
 

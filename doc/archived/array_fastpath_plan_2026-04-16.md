@@ -31,19 +31,19 @@ Nicht erstes Ziel:
 Die noetigen Grundlagen sind bereits da:
 
 1. Arrays werden direkt als LLVM-`[N x T]` gebaut:
-   [context.h](</media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/context.h:480>)
+   [context.h](../../src/core/context.h#L480)
 
 2. Array-Lesen ist direkter `GEP + load`:
-   [ast_compiler_expr.cpp](</media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_expr.cpp:882>)
+   [ast_compiler_expr.cpp](../../src/core/ast_compiler_expr.cpp#L882)
 
 3. Array-Schreiben ist direkter `GEP + store`:
-   [ast_compiler_stmt.cpp](</media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_stmt.cpp:854>)
+   [ast_compiler_stmt.cpp](../../src/core/ast_compiler_stmt.cpp#L854)
 
 4. Arrays haben bereits `.data_ptr`:
-   [ast_compiler.cpp](</media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler.cpp:1212>)
+   [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L1212)
 
 5. Builtin-Seite kennt schon Pointer-basierte Stack-Array-Helfer:
-   [builtin_registry.cpp](</media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/builtin_registry.cpp:8068>)
+   [builtin_registry.cpp](../../src/core/builtin_registry.cpp#L8068)
 
 Das bedeutet:
 
@@ -56,13 +56,13 @@ TUL baut kleine Feature-Vektoren aktuell ueber `list<f32>` und `push`.
 
 Beispiele:
 
-- [tul/math/scoring.aiml](</media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/tul/math/scoring.aiml:34>)
-- [tul/math/vector.aiml](</media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/tul/math/vector.aiml:12>)
+- `test/tul/math/scoring.aiml:34`
+- `test/tul/math/vector.aiml:12`
 
 `list<f32>` ist im Compiler und Runtime-System ein Heap-Container mit Layout `{size, capacity, data*}`:
 
-- Listenmethoden: [ast_compiler_call.cpp](</media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_call.cpp:911>)
-- `ListImpl` API: [list_impl.h](</media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/list_impl.h:21>)
+- Listenmethoden: [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp#L911)
+- `ListImpl` API: [list_impl.h](../../src/core/list_impl.h#L21)
 
 Das ist flexibel, aber fuer feste 10er-Features unnötig teuer.
 
@@ -134,7 +134,7 @@ Die neuen Runtime-Funktionen aus AIML aufrufbar machen.
 
 ### Datei
 
-- [builtin_registry.cpp](</media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/builtin_registry.cpp>)
+- [builtin_registry.cpp](../../src/core/builtin_registry.cpp)
 
 ### Vorgehen
 
@@ -142,7 +142,7 @@ An den bestehenden `ai.*`-Builtins orientieren.
 
 Vorbild:
 
-- `tensor.from_data`: [builtin_registry.cpp](</media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/builtin_registry.cpp:8325>)
+- `tensor.from_data`: [builtin_registry.cpp](../../src/core/builtin_registry.cpp#L8325)
 
 ### Implementierung
 
@@ -162,7 +162,7 @@ Vorbild:
 
 ### Datei
 
-- [tul/math/scoring.aiml](</media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/tul/math/scoring.aiml:1>)
+- `test/tul/math/scoring.aiml:1`
 
 ### Umsetzung
 
@@ -216,9 +216,9 @@ Oder Builtin:
 
 ### Betroffene Stellen
 
-- `ListImpl`-Layout ist bekannt: [list_impl.h](</media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/list_impl.h:21>)
+- `ListImpl`-Layout ist bekannt: [list_impl.h](../../src/core/list_impl.h#L21)
 - `tensor.from_int_list` extrahiert bereits das Data-Feld aus einem Listenwert:
-  [builtin_registry.cpp](</media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/builtin_registry.cpp:8337>)
+  [builtin_registry.cpp](../../src/core/builtin_registry.cpp#L8337)
 
 ### Empfehlung
 
@@ -253,7 +253,7 @@ Primitive `list<T>` sollen optional einen rohen Datenpointer exponieren koennen.
 
 Array-Property `.data_ptr`:
 
-- [ast_compiler.cpp](</media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler.cpp:1231>)
+- [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L1231)
 
 ### Regel
 

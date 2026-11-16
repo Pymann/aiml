@@ -1,4 +1,4 @@
-# SPEC?: 61_memory_management_DRAFT,24_time   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 61_memory_management,24_time   # aus dem Dateinamen, zu bestaetigen
 # static-check: off
 # NEGATIVE (§5.4/§10): using a ref<T> element borrow of an INLINE-element container after growth
 # (push may reallocate the backing → the inline element MOVES) is an error — the borrow dangles.

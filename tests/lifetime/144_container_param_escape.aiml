@@ -1,4 +1,4 @@
-# SPEC: 61_memory_management_DRAFT
+# SPEC: 61_memory_management
 # static-check: off
 # spec/61 §8: a container parameter's call reference — returned (moves out), shared into a local,
 # a field or a container (survives the caller scope), consumed, and through interface dispatch.

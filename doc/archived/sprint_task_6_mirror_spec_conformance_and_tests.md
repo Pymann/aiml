@@ -16,7 +16,7 @@ Die Mirror-Implementierung soll fuer die realen Problemzonen stabilisiert werden
 
 - Mirror ist produktiv nutzbar und im Compiler bereits breit exponiert.
 - `poll_event` und `poll_rpc` sind heute vorhanden; die alte Formulierung als reine API-Luecke ist deshalb zu schwach.
-- Reale Fehlerbilder leben bereits in [mirror_ws_crash_report.md](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/mirror_ws_crash_report.md) und WS-Tests.
+- Reale Fehlerbilder leben bereits in [mirror_ws_crash_report.md](../../mirror_ws_crash_report.md) und WS-Tests.
 
 ## Was an der alten Fassung veraltet war
 
@@ -32,11 +32,11 @@ Die Mirror-Implementierung soll fuer die realen Problemzonen stabilisiert werden
 
 ## Betroffene Stellen
 
-- [spec/44_5_mirror.md](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/spec/44_5_mirror.md)
-- [mirror_ws_crash_report.md](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/mirror_ws_crash_report.md)
-- [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp)
-- [src/sys/mirror_runtime.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/sys/mirror_runtime.cpp)
-- [tests](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/tests)
+- [spec/44_5_mirror.md](../../spec/44_5_mirror.md)
+- [mirror_ws_crash_report.md](../../mirror_ws_crash_report.md)
+- [compiler.cpp](../../compiler.cpp)
+- [src/sys/mirror_runtime.cpp](../../src/sys/mirror_runtime.cpp)
+- [tests](../../tests)
 
 ## Akzeptanzkriterien
 

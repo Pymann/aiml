@@ -1,4 +1,4 @@
-# SPEC: 61_memory_management_DRAFT
+# SPEC: 61_memory_management
 # spec/61 (T1c): an interpolation/owned string temp built inside an if/while CONDITION must be freed
 # on every path — including a branch that terminates (return/break) before visitStatement's
 # per-statement temp-decref. Regression for CardArtCache.fetch `if has_texture("@art:${hsh}") return 1`

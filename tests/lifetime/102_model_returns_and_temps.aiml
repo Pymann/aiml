@@ -1,4 +1,4 @@
-# SPEC?: 61_memory_management_DRAFT,15_models,24_time   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 61_memory_management,15_models,24_time   # aus dem Dateinamen, zu bestaetigen
 # static-check: off
 - model: {name: Item, fields: [[label, string], [tags, list<string>]]}
 - def:

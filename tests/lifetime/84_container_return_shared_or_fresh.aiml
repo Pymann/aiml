@@ -1,4 +1,4 @@
-# SPEC: 61_memory_management_DRAFT
+# SPEC: 61_memory_management
 # static-check: off
 # spec/61 §8: a container return hands the caller one owning reference on every path (shared or fresh), with or without producer — the caller drops it.
 - def:

@@ -14,7 +14,7 @@ Derselbe AIML-Inhalt soll in JIT und AOT dieselbe sichtbare Semantik haben.
 
 ## Aktueller Stand
 
-- [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp) zeigt weiterhin getrennte Entry-Points fuer `compile`, `compileFromString`, `jitRun` und `compileChunkAndGetAddress`.
+- [compiler.cpp](../../compiler.cpp) zeigt weiterhin getrennte Entry-Points fuer `compile`, `compileFromString`, `jitRun` und `compileChunkAndGetAddress`.
 - Modulverifikation existiert bereits in beiden Hauptpfaden; das Problem ist heute also weniger „Verifier fehlt“ als „Semantik und Init-Verhalten driften“. 
 
 ## Was an der alten Fassung veraltet war
@@ -31,11 +31,11 @@ Derselbe AIML-Inhalt soll in JIT und AOT dieselbe sichtbare Semantik haben.
 
 ## Betroffene Stellen
 
-- [jit_vs_aot.md](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/jit_vs_aot.md)
-- [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp)
-- [ast_compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler.cpp)
-- [exec_impl.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/exec_impl.cpp)
-- [fptable.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/fptable.cpp)
+- [jit_vs_aot.md](../../jit_vs_aot.md)
+- [compiler.cpp](../../compiler.cpp)
+- [ast_compiler.cpp](../../src/core/ast_compiler.cpp)
+- [exec_impl.cpp](../../exec_impl.cpp)
+- [fptable.cpp](../../src/core/fptable.cpp)
 
 ## Akzeptanzkriterien
 

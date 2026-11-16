@@ -1,4 +1,4 @@
-# SPEC?: 61_memory_management_DRAFT   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 61_memory_management   # aus dem Dateinamen, zu bestaetigen
 # Memory-Leak-Probe: jede Probe-Methode läuft eine Primitive N-mal in einer Schleife
 # und liefert das RSS-Delta (sys.mem_usage, Bytes).  Leckt eine Primitive, wächst das
 # Delta ~linear mit N → die 2N-Messung ist dann ~doppelt so groß wie die N-Messung.

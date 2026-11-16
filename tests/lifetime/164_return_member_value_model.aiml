@@ -1,4 +1,4 @@
-# SPEC: 61_memory_management_DRAFT
+# SPEC: 61_memory_management
 # static-check: off
 # spec/61 §8: returning a value-model MEMBER by value (`return: <.field`) shares its string/container
 # fields with the caller (incref); the object keeps its own reference. Both drop independently —

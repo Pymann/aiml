@@ -28,7 +28,7 @@ AIML hat bereits nackte Funktionszeiger und Interface-Aufrufe mit Objektkontext.
 | Indirekter Aufruf | Signatur wird aus fn-Typ rekonstruiert; Aufruf über `callOrInvoke`, inklusive bestehender Argument-Aufräumlogik | `src/core/ast_compiler_call.cpp:1035` |
 | Objektkontext | Interface-Dispatch verwendet `{obj, vtable}` und einen versteckten this-Parameter | `src/core/ast_compiler_call.cpp:1158` |
 | Syntax/AST | Geprüfte AST- und Expression-/Block-Builder haben keinen dedizierten Closure-Ausdruck beziehungsweise Capture-Knoten | `src/core/ast_nodes.h`, `src/core/ast/expression_builder.h`, `src/core/ast/block_builder.cpp` |
-| Speicherregeln | fn ist laut Spec ein trivial kopierbarer Wert ohne Teardown; ptr/shared/ref und Cleanup-Pfade existieren für andere Typen | `spec/61_memory_management_DRAFT.md:156`, `src/core/borrow_check.cpp` |
+| Speicherregeln | fn ist laut Spec ein trivial kopierbarer Wert ohne Teardown; ptr/shared/ref und Cleanup-Pfade existieren für andere Typen | `spec/61_memory_management.md:156`, `src/core/borrow_check.cpp` |
 | Engine-Callbacks | Feste native Signaturen `void(float)` und `void()`; Builtin übergibt drei Zeiger | `src/sys/engine_runtime.cpp:491`, `src/core/builtin_registry.cpp:8311` |
 | Browserpfad | Der aktive engine.run-Pfad verwendet eine manuelle Asyncify-Schleife | `src/sys/engine_runtime.cpp:503` |
 

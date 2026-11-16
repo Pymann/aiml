@@ -1,4 +1,4 @@
-# SPEC: 61_memory_management_DRAFT
+# SPEC: 61_memory_management
 # spec/61 — map.put moves the key/value string RAW (no dup/incref). A DECLARED string local
 # used as key (decl colkey "${n}" → m.put(colkey, v)) has a scope-drop ({ at: [kind, 1] } decref); the put
 # must consume it, else that decref frees the string the map still holds → corrupted/empty map

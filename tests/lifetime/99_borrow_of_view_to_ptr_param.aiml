@@ -1,4 +1,4 @@
-# SPEC: 61_memory_management_DRAFT
+# SPEC: 61_memory_management
 # static-check: off
 # spec/61 §8: `&view` is a borrow — passing it to a ref<T> parameter never removes the view's own drop — also when the call returns a string borrowed from it.
 - model:

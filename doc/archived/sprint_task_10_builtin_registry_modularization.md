@@ -14,8 +14,8 @@ Den weiterhin sehr grossen Builtin-Monolithen in fachliche Module schneiden, ohn
 
 ## Aktueller Stand
 
-- [builtin_registry.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/builtin_registry.cpp) liegt weiterhin bei rund 7250 Zeilen.
-- Es gibt bereits [builtin_registry.h](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/builtin_registry.h), aber noch keine echte Domaenentrennung.
+- [builtin_registry.cpp](../../src/core/builtin_registry.cpp) liegt weiterhin bei rund 7250 Zeilen.
+- Es gibt bereits [builtin_registry.h](../../src/core/builtin_registry.h), aber noch keine echte Domaenentrennung.
 
 ## Was an der alten Fassung veraltet war
 
@@ -30,8 +30,8 @@ Den weiterhin sehr grossen Builtin-Monolithen in fachliche Module schneiden, ohn
 
 ## Betroffene Stellen
 
-- [builtin_registry.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/builtin_registry.cpp)
-- [builtin_registry.h](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/builtin_registry.h)
+- [builtin_registry.cpp](../../src/core/builtin_registry.cpp)
+- [builtin_registry.h](../../src/core/builtin_registry.h)
 
 ## Akzeptanzkriterien
 

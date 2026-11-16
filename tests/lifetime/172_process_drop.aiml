@@ -1,4 +1,4 @@
-# SPEC: 23_system,61_memory_management_DRAFT
+# SPEC: 23_system,61_memory_management
 # static-check: off
 # spec/61 Class 4 + spec/23 §5.2: process locals, rebinds and model fields are released at owner
 # drop (handle + capture pipes); captured strings bound to locals/fields are owned; no fd leak.

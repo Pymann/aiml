@@ -1,4 +1,4 @@
-# SPEC?: 61_memory_management_DRAFT   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 61_memory_management   # aus dem Dateinamen, zu bestaetigen
 # Mirrors 9rooms ManaPool (sources/models/mana_pool.aiml): a MODEL-backed map<string:i32>
 # whose keys are managed string locals built from "${i}" interpolation, used as map keys via
 # contains/get/put across many calls, accumulating. The live regression was "kein Mana mehr":

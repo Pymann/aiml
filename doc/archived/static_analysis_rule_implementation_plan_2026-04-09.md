@@ -27,9 +27,9 @@ Bereits implementiert:
 
 Relevante Implementierungsorte:
 
-- statische Strukturdiagnostik in [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp)
-- AST-Struktur in [ast_nodes.h](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_nodes.h)
-- Statement-Dispatch in [ast_compiler_stmt.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_stmt.cpp)
+- statische Strukturdiagnostik in [compiler.cpp](../../compiler.cpp)
+- AST-Struktur in [ast_nodes.h](../../src/core/ast_nodes.h)
+- Statement-Dispatch in [ast_compiler_stmt.cpp](../../src/core/ast_compiler_stmt.cpp)
 
 Wichtiger Architekturpunkt:
 

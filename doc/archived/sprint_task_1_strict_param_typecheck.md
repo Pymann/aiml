@@ -14,9 +14,9 @@ Funktions- und Methodenaufrufe sollen bei falschen Argumenttypen frueh und einde
 
 ## Aktueller Stand
 
-- Der relevante Hauptpfad liegt heute in [ast_compiler_call.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_call.cpp).
+- Der relevante Hauptpfad liegt heute in [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp).
 - Die alte Annahme eines separaten `call_dispatcher.cpp` als Kernpfad ist veraltet; diese Datei existiert im aktuellen Stand nicht.
-- Builtin-Semantik lebt weiterhin stark in [builtin_registry.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/builtin_registry.cpp).
+- Builtin-Semantik lebt weiterhin stark in [builtin_registry.cpp](../../src/core/builtin_registry.cpp).
 
 ## Was an der alten Fassung veraltet war
 
@@ -32,10 +32,10 @@ Funktions- und Methodenaufrufe sollen bei falschen Argumenttypen frueh und einde
 
 ## Betroffene Stellen
 
-- [ast_compiler_call.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_call.cpp)
-- [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp)
-- [context.h](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/context.h)
-- bei Builtin-Sonderfaellen: [builtin_registry.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/builtin_registry.cpp)
+- [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp)
+- [compiler.cpp](../../compiler.cpp)
+- [context.h](../../src/core/context.h)
+- bei Builtin-Sonderfaellen: [builtin_registry.cpp](../../src/core/builtin_registry.cpp)
 
 ## Akzeptanzkriterien
 

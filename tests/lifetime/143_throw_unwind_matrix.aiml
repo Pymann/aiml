@@ -1,4 +1,4 @@
-# SPEC: 61_memory_management_DRAFT
+# SPEC: 61_memory_management
 # static-check: off
 # spec/61 §9.3: unwind is a scope exit — every frame between throw and catch releases its
 # locals; the catch owns the exception object and releases it on every exit; rethrow moves on.

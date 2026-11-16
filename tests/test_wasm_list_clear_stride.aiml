@@ -1,4 +1,4 @@
-# SPEC: 61_memory_management_DRAFT
+# SPEC: 61_memory_management
 # Regressionstest (spec/61 §5.7): `clear()` / `pop()` muessen zeigergrosse
 # Element-Slots mit der ZIEL-Schrittweite freigeben — 8 auf x86_64, 4 auf wasm32.
 #

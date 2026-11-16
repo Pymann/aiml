@@ -30,7 +30,7 @@ Dadurch brechen echte Ketten frueh weg.
 
 ### 1. Read-Pfad zerlegt nur einmal
 
-In [ast_compiler_expr.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_expr.cpp#L184) wird in `visitVariable(...)` nur der erste Trenner (`.` oder `-`) verarbeitet.
+In [ast_compiler_expr.cpp](../../src/core/ast_compiler_expr.cpp#L184) wird in `visitVariable(...)` nur der erste Trenner (`.` oder `-`) verarbeitet.
 
 Folge:
 
@@ -42,7 +42,7 @@ Das ist keine echte rekursive Pfadauflösung.
 
 ### 2. Write-Pfad zerlegt ebenfalls nur einmal
 
-In [ast_compiler_stmt.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_stmt.cpp) wird `set` strukturell genauso behandelt.
+In [ast_compiler_stmt.cpp](../../src/core/ast_compiler_stmt.cpp) wird `set` strukturell genauso behandelt.
 
 Folge:
 
@@ -50,7 +50,7 @@ Folge:
 
 ### 3. Method-Call-Pfad splittet nur am ersten Punkt
 
-In [ast_compiler_call.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_call.cpp#L62) wird `call->functionName` mit `find('.')` nur einmal zerlegt.
+In [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp#L62) wird `call->functionName` mit `find('.')` nur einmal zerlegt.
 
 Beispiel:
 
@@ -63,7 +63,7 @@ eigentliche Receiver-Instanz erst nach mehreren Segmenten erreicht wird.
 
 ### 4. Es gibt bereits Teil-Sonderfaelle, aber keinen allgemeinen Kettenpfad
 
-In [ast_compiler_call.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_call.cpp#L459) und [ast_compiler_call.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_call.cpp#L1215) existiert bereits "chained method dispatch", aber nur als lokaler Sonderfall:
+In [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp#L459) und [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp#L1215) existiert bereits "chained method dispatch", aber nur als lokaler Sonderfall:
 
 - Feldname isolieren
 - dann Unter-Methode ausfuehren
@@ -190,7 +190,7 @@ Der Resolver laeuft Segment fuer Segment:
 
 #### `visitVariable(...)`
 
-In [ast_compiler_expr.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_expr.cpp#L179)
+In [ast_compiler_expr.cpp](../../src/core/ast_compiler_expr.cpp#L179)
 
 soll:
 
@@ -199,7 +199,7 @@ soll:
 
 #### `visitSetStmt(...)`
 
-In [ast_compiler_stmt.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_stmt.cpp)
+In [ast_compiler_stmt.cpp](../../src/core/ast_compiler_stmt.cpp)
 
 soll:
 
@@ -208,7 +208,7 @@ soll:
 
 #### `visitCall(...)`
 
-In [ast_compiler_call.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_call.cpp#L62)
+In [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp#L62)
 
 soll:
 
@@ -321,8 +321,8 @@ Ergebnis:
 
 Betroffene Stellen:
 
-- [utils.h](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/utils.h)
-- [utils.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/utils.cpp)
+- [utils.h](../../src/core/utils.h)
+- [utils.cpp](../../src/core/utils.cpp)
 
 ### sprint_task_2
 
@@ -334,9 +334,9 @@ Ergebnis:
 
 Betroffene Stellen:
 
-- [utils.h](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/utils.h)
-- [utils.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/utils.cpp)
-- [ast_compiler_expr.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_expr.cpp)
+- [utils.h](../../src/core/utils.h)
+- [utils.cpp](../../src/core/utils.cpp)
+- [ast_compiler_expr.cpp](../../src/core/ast_compiler_expr.cpp)
 
 ### sprint_task_3
 
@@ -348,9 +348,9 @@ Ergebnis:
 
 Betroffene Stellen:
 
-- [utils.h](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/utils.h)
-- [utils.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/utils.cpp)
-- [ast_compiler_stmt.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_stmt.cpp)
+- [utils.h](../../src/core/utils.h)
+- [utils.cpp](../../src/core/utils.cpp)
+- [ast_compiler_stmt.cpp](../../src/core/ast_compiler_stmt.cpp)
 
 ### sprint_task_4
 
@@ -366,9 +366,9 @@ laufen ueber echte Receiver-Aufloesung
 
 Betroffene Stellen:
 
-- [utils.h](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/utils.h)
-- [utils.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/utils.cpp)
-- [ast_compiler_call.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_call.cpp)
+- [utils.h](../../src/core/utils.h)
+- [utils.cpp](../../src/core/utils.cpp)
+- [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp)
 
 ### sprint_task_5
 
@@ -381,9 +381,9 @@ Ergebnis:
 
 Betroffene Stellen:
 
-- [ast_compiler_call.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_call.cpp)
-- [builtin_registry.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/builtin_registry.cpp)
-- [utils.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/utils.cpp)
+- [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp)
+- [builtin_registry.cpp](../../src/core/builtin_registry.cpp)
+- [utils.cpp](../../src/core/utils.cpp)
 
 ### sprint_task_6
 
@@ -400,11 +400,11 @@ mit klarer Meldung statt spaetem IR- oder Runtime-Fehler
 
 Betroffene Stellen:
 
-- [context.h](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/context.h)
-- [utils.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/utils.cpp)
-- [ast_compiler_expr.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_expr.cpp)
-- [ast_compiler_stmt.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_stmt.cpp)
-- [ast_compiler_call.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler_call.cpp)
+- [context.h](../../src/core/context.h)
+- [utils.cpp](../../src/core/utils.cpp)
+- [ast_compiler_expr.cpp](../../src/core/ast_compiler_expr.cpp)
+- [ast_compiler_stmt.cpp](../../src/core/ast_compiler_stmt.cpp)
+- [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp)
 
 ## Testplan
 

@@ -1,4 +1,4 @@
-# SPEC: 61_memory_management_DRAFT
+# SPEC: 61_memory_management
 # static-check: off
 # spec/61 §2.1: chan<T> is Class 5 (atomic rc: copy/field store/spawn argument retain, owner drop
 # releases), thread_handle is Class 4 (owner drop detaches an unjoined thread, frees the handle).

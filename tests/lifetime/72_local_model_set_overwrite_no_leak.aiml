@@ -1,4 +1,4 @@
-# SPEC: 61_memory_management_DRAFT
+# SPEC: 61_memory_management
 # static-check: off
 # spec/61 §5.5/§7: set [dst, src] on an OCCUPIED model local releases dst's old heap first.
 - model: {name: Item, fields: [[text, string]]}

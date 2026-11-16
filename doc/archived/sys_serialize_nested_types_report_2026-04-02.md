@@ -8,8 +8,8 @@ Verschachtelte Datentypen sind aktuell nur teilweise robust.
 
 Es gibt zwei getrennte Serialisierungspfade:
 
-- JSON-basierter Pfad fuer `sys.serialize` / `sys.deserialize` in [serialize_impl.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/serialize_impl.cpp)
-- binaerer Descriptor-Pfad `aiml_ser_*` in [ser_runtime.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/sys/ser_runtime.cpp)
+- JSON-basierter Pfad fuer `sys.serialize` / `sys.deserialize` in [serialize_impl.cpp](../../src/core/serialize_impl.cpp)
+- binaerer Descriptor-Pfad `aiml_ser_*` in [ser_runtime.cpp](../../src/sys/ser_runtime.cpp)
 
 Der JSON-Pfad ist fuer einige wichtige Nested-Faelle brauchbar:
 
@@ -26,9 +26,9 @@ Der binaere Descriptor-Pfad ist konzeptionell generischer und fuer `struct/list/
 
 Positiv verifiziert:
 
-- [test_serialize_struct.aiml](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/tests/test_serialize_struct.aiml) laeuft erfolgreich
-- [test_serialize_card.aiml](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/tests/test_serialize_card.aiml) laeuft erfolgreich
-- [test_serialize_ext.aiml](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/tests/test_serialize_ext.aiml) laeuft erfolgreich
+- [test_serialize_struct.aiml](../../tests/test_serialize_struct.aiml) laeuft erfolgreich
+- [test_serialize_card.aiml](../../tests/test_serialize_card.aiml) laeuft erfolgreich
+- [test_serialize_ext.aiml](../../tests/test_serialize_ext.aiml) laeuft erfolgreich
 
 Damit ist aktuell konkret belegt:
 
@@ -51,10 +51,10 @@ Die JSON-Schicht behauptet Rekursion, implementiert sie bei Maps aber nicht saub
 
 Belege:
 
-- Map-Schreibpfad fuer struct-Felder kennt nur `string`, `i64`, `f32`, `f64`, sonst faellt alles auf `i32` zurueck in [serialize_impl.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/serialize_impl.cpp#L252)
-- Top-Level-Map-Schreibpfad hat dieselbe Einschraenkung in [serialize_impl.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/serialize_impl.cpp#L489)
-- Map-Lesepfad fuer struct-Felder kennt nur primitive/string-Werte in [serialize_impl.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/serialize_impl.cpp#L714)
-- Top-Level-Map-Lesepfad hat dieselbe Einschraenkung in [serialize_impl.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/serialize_impl.cpp#L900)
+- Map-Schreibpfad fuer struct-Felder kennt nur `string`, `i64`, `f32`, `f64`, sonst faellt alles auf `i32` zurueck in [serialize_impl.cpp](../../src/core/serialize_impl.cpp#L252)
+- Top-Level-Map-Schreibpfad hat dieselbe Einschraenkung in [serialize_impl.cpp](../../src/core/serialize_impl.cpp#L489)
+- Map-Lesepfad fuer struct-Felder kennt nur primitive/string-Werte in [serialize_impl.cpp](../../src/core/serialize_impl.cpp#L714)
+- Top-Level-Map-Lesepfad hat dieselbe Einschraenkung in [serialize_impl.cpp](../../src/core/serialize_impl.cpp#L900)
 
 Folge:
 
@@ -70,19 +70,19 @@ Die JSON-Schicht liest und schreibt Map-Keys als `i8*`/String.
 
 Belege:
 
-- Beim Schreiben wird `kp` immer als `i8pT` gelesen in [serialize_impl.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/serialize_impl.cpp#L284) und [serialize_impl.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/serialize_impl.cpp#L535)
-- Beim Lesen wird fuer Maps hart `ctx.getLLVMType("string")` als Key-Typ verwendet in [serialize_impl.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/serialize_impl.cpp#L716) und [serialize_impl.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/serialize_impl.cpp#L906)
+- Beim Schreiben wird `kp` immer als `i8pT` gelesen in [serialize_impl.cpp](../../src/core/serialize_impl.cpp#L284) und [serialize_impl.cpp](../../src/core/serialize_impl.cpp#L535)
+- Beim Lesen wird fuer Maps hart `ctx.getLLVMType("string")` als Key-Typ verwendet in [serialize_impl.cpp](../../src/core/serialize_impl.cpp#L716) und [serialize_impl.cpp](../../src/core/serialize_impl.cpp#L906)
 
 Folge:
 
 - `map<ManaColor:i32>` ist im JSON-Pfad strukturell inkonsistent
 - der Laufzeitcrash fuer den Repro mit Enum-Key-Map ist damit technisch erklaerbar
 
-Das ist auch deshalb problematisch, weil [test_serialize_card.aiml](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/tests/test_serialize_card.aiml) bereits `map<ManaColor:i32>` benutzt, aber nur den Deserialize-only-Fall ohne Roundtrip oder Map-Inhaltstest abdeckt.
+Das ist auch deshalb problematisch, weil [test_serialize_card.aiml](../../tests/test_serialize_card.aiml) bereits `map<ManaColor:i32>` benutzt, aber nur den Deserialize-only-Fall ohne Roundtrip oder Map-Inhaltstest abdeckt.
 
 ### Hoch: `isSerializable()` ist fuer den JSON-Pfad zu permissiv
 
-`isSerializable()` erlaubt rekursiv `list<T>` und `map<K:V>`, solange der Value-Typ rekursiv serialisierbar ist, siehe [serialize_impl.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/serialize_impl.cpp#L958).
+`isSerializable()` erlaubt rekursiv `list<T>` und `map<K:V>`, solange der Value-Typ rekursiv serialisierbar ist, siehe [serialize_impl.cpp](../../src/core/serialize_impl.cpp#L958).
 
 Das passt nicht zur echten JSON-Implementierung, die:
 
@@ -100,8 +100,8 @@ Es gibt gezielte Sonderfaelle fuer `list<list<T>>`, aber keine allgemeine rekurs
 
 Belege:
 
-- Schreibpfad: Sonderfall `isListType(elemTn)` in [serialize_impl.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/serialize_impl.cpp#L183) und [serialize_impl.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/serialize_impl.cpp#L424)
-- Lesepfad: derselbe Sonderfall in [serialize_impl.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/serialize_impl.cpp#L668) und [serialize_impl.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/serialize_impl.cpp#L850)
+- Schreibpfad: Sonderfall `isListType(elemTn)` in [serialize_impl.cpp](../../src/core/serialize_impl.cpp#L183) und [serialize_impl.cpp](../../src/core/serialize_impl.cpp#L424)
+- Lesepfad: derselbe Sonderfall in [serialize_impl.cpp](../../src/core/serialize_impl.cpp#L668) und [serialize_impl.cpp](../../src/core/serialize_impl.cpp#L850)
 
 Folge:
 
@@ -110,7 +110,7 @@ Folge:
 
 ### Mittel: Spec und Implementierung laufen beim JSON-Pfad auseinander
 
-Die Spec beschreibt Nested-Maps und Nested-Lists deutlich allgemeiner, siehe [29_serialize.md](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/spec/29_serialize.md#L90).
+Die Spec beschreibt Nested-Maps und Nested-Lists deutlich allgemeiner, siehe [29_serialize.md](../../spec/29_serialize.md#L90).
 
 Die echte Implementierung ist enger:
 
@@ -122,13 +122,13 @@ Das fuehrt zu einer false sense of support.
 
 ### Mittel: Binary Descriptor-Pfad ist fuer `struct/list/map` generischer, aber `buffer<T>` ist nicht tief serialisiert
 
-Im binaeren Pfad werden `struct`, `list` und `map` rekursiv ueber `enc/dec/fre` traversiert, siehe [ser_runtime.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/sys/ser_runtime.cpp#L147), [ser_runtime.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/sys/ser_runtime.cpp#L157) und [ser_runtime.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/sys/ser_runtime.cpp#L171).
+Im binaeren Pfad werden `struct`, `list` und `map` rekursiv ueber `enc/dec/fre` traversiert, siehe [ser_runtime.cpp](../../src/sys/ser_runtime.cpp#L147), [ser_runtime.cpp](../../src/sys/ser_runtime.cpp#L157) und [ser_runtime.cpp](../../src/sys/ser_runtime.cpp#L171).
 
 Bei `buffer<T>` wird aber nur ein Rohbyteblock kopiert:
 
-- Encode macht `w_raw(...)` in [ser_runtime.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/sys/ser_runtime.cpp#L189)
-- Decode macht `memcpy(...)` in [ser_runtime.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/sys/ser_runtime.cpp#L309)
-- Free traversiert `buffer` aber rekursiv ueber Elemente in [ser_runtime.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/sys/ser_runtime.cpp#L401)
+- Encode macht `w_raw(...)` in [ser_runtime.cpp](../../src/sys/ser_runtime.cpp#L189)
+- Decode macht `memcpy(...)` in [ser_runtime.cpp](../../src/sys/ser_runtime.cpp#L309)
+- Free traversiert `buffer` aber rekursiv ueber Elemente in [ser_runtime.cpp](../../src/sys/ser_runtime.cpp#L401)
 
 Folge:
 
@@ -137,12 +137,12 @@ Folge:
 
 ### Mittel: Binary Decode validiert nur List-Counts hart
 
-Listen haben eine Absurditaetspruefung in [ser_runtime.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/sys/ser_runtime.cpp#L264).
+Listen haben eine Absurditaetspruefung in [ser_runtime.cpp](../../src/sys/ser_runtime.cpp#L264).
 
 Maps und Buffer haben keine vergleichbare harte Count/Size-Pruefung:
 
-- Map in [ser_runtime.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/sys/ser_runtime.cpp#L287)
-- Buffer in [ser_runtime.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/sys/ser_runtime.cpp#L309)
+- Map in [ser_runtime.cpp](../../src/sys/ser_runtime.cpp#L287)
+- Buffer in [ser_runtime.cpp](../../src/sys/ser_runtime.cpp#L309)
 
 Folge:
 
@@ -150,7 +150,7 @@ Folge:
 
 ### Niedrig: Debug-Ausgabe ist noch in der Binary-Decode-Implementierung aktiv
 
-In [ser_runtime.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/sys/ser_runtime.cpp#L248) gibt es noch `fprintf(stderr, "[ser-pos] ...")`.
+In [ser_runtime.cpp](../../src/sys/ser_runtime.cpp#L248) gibt es noch `fprintf(stderr, "[ser-pos] ...")`.
 
 Das ist fuer Produktivpfade noisig und sollte raus oder hinter ein Debug-Flag.
 

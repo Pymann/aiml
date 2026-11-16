@@ -1,4 +1,4 @@
-# SPEC: 61_memory_management_DRAFT
+# SPEC: 61_memory_management
 # EXPECT-ERROR: owning ptr<T> parameter
 # spec/61 §8: `&view` is a borrow — it cannot be passed to an owning ptr<T> parameter (use ref<T>).
 - model: {name: Seat, fields: [[nick, string], [hand, list<string>]]}

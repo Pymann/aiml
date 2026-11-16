@@ -1,6 +1,6 @@
 # [DEPRECATED] Lifetime & Ownership
 
-> **DEPRECATED — superseded by `61_memory_management_DRAFT.md`.** This document is no longer a
+> **DEPRECATED — superseded by `61_memory_management.md`.** This document is no longer a
 > numbered spec. Its move/borrow model (no reference counting by default) has been replaced by
 > the memory-management model in the new 61: five storage classes, refcounted strings **and**
 > containers (Option B), `ptr<T>` = owning / `ref<T>` = weak, `scope`-default drops, and the

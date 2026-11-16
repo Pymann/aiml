@@ -12,7 +12,7 @@ the stage evidence below. This plan does not mark existing P10 work as finished.
 | [AIML 43.5](../../spec/43_5_stylized_rendering.md) | runtime methods, capabilities, failure/ownership rules |
 | [VFX 1 follow-on](../../../shaper/doc/spec/vfx_v1.md) | proposed effects schema, runtime and budgets; independent F1-F5 packages, not an additional V1-V7 acceptance gate |
 | [Existing shaper](../../../shaper/doc/spec/shaper.md) | v1 compatibility and P10 skin binding |
-| [Memory model](../../spec/61_memory_management_DRAFT.md) | ownership and cleanup requirements |
+| [Memory model](../../spec/61_memory_management.md) | ownership and cleanup requirements |
 
 These are normative implementation targets. Fix disagreements in the owning
 contract and its consumers. Preserve unrelated local changes and earlier user
