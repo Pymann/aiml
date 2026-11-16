@@ -1,0 +1,58 @@
+# spec/31 §6.10 (positiv): derselbe Store, zweimal mit DEMSELBEN Werttyp
+# geoeffnet -- einmal als Global, einmal als Klassenmitglied.  Das ist der
+# Zustand einer schrittweisen Migration nach spec/58 und muss tragen.
+
+- model:
+    name: Fund
+    fields:
+      - [fid,    string]
+      - [name,   string]
+      - [marken, list<string>]
+      - [stufe,  i32, 0]
+
+- decl: [glob_kv, Kv<string:Fund>, { call: [db.open_kv, "tdiv_gleich", {persist: true, path: "/tmp/aiml_test_kvtypdiv/"}] }]
+
+- class:
+    name: Speicher
+    members:
+      - [funde, Kv<string:Fund>, null, { access: public }]
+    methods:
+      - def:
+          name: oeffne
+          args: []
+          body:
+            - set: [<.funde, { call: [db.open_kv, "tdiv_gleich", {persist: true, path: "/tmp/aiml_test_kvtypdiv/"}] }]
+      - def:
+          name: hole
+          args: [[sch, string]]
+          return: Fund
+          body:
+            - decl: [erg, Fund, { call: [<.funde.get_copy, sch] }]
+            - return: erg
+
+- def:
+    name: main
+    body:
+      - decl: [ein, Fund]
+      - set: [ein.fid,  "f1"]
+      - set: [ein.name, "Gate Wraith"]
+      - call: [ein.marken.push, "schnell"]
+      - call: [ein.marken.push, "aetherisch"]
+      - set: [ein.stufe, 7]
+      - call: [glob_kv.set, "schluessel", ein]
+
+      - decl: [spei, ptr<Speicher>, { new: Speicher }]
+      - call: [spei.oeffne]
+      - decl: [zur, Fund, { call: [spei.hole, "schluessel"] }]
+      - decl: [zahl, i32, { call: [zur.marken.len] }]
+      - if:
+          condition: { eq: [zur.name, "Gate Wraith"] }
+          then:
+            - if:
+                condition: { eq: [zahl, 2] }
+                then:
+                  - call: [log.info, "PASS gleicher Typ: name='${zur.name}' marken=${zahl} stufe=${zur.stufe}"]
+                else:
+                  - call: [log.error, "FAIL marken=${zahl}, soll 2"]
+          else:
+            - call: [log.error, "FAIL name='${zur.name}', soll 'Gate Wraith'"]

@@ -11,6 +11,9 @@ extern "C" void  aiml_list_handle_incref(void*);
 extern "C" void  aiml_map_handle_incref(void*);
 extern "C" void  aiml_buffer_handle_incref(void*);
 #include <cstring>
+#include <chrono>
+#include <cerrno>
+#include <unistd.h>
 #include <cstdlib>
 #include <vector>
 #include <cstdint>
@@ -52,6 +55,22 @@ extern "C" void aiml_thread_handle_drop(void* h) {
     auto* t = static_cast<AimlThreadHandle*>(h);
     if (!t->joined && !t->detached) pthread_detach(static_cast<pthread_t>(t->tid));
     free(t);
+}
+
+// spec/29 §5.4.1: `chan`/`hashmap` sind IN-PROZESS-Handles — die Drahtform ist der
+// Zeiger selbst.  Ein gespeicherter Blob ueberlebt seinen Prozess, also steht hinter
+// dem Zeiger ein Stempel dieses Prozesses; beim Dekodieren wird er VERGLICHEN, bevor
+// der Zeiger ueberhaupt angefasst wird.  Ohne das greift ein Leser auf eine Adresse
+// zu, die ein laengst beendeter Prozess geschrieben hat (gemessen in datacreatures:
+// SIGSEGV beim Lesen eines Monate alten KV-Stores).
+static uint64_t aiml_proc_stamp() {
+    static const uint64_t stamp = [] {
+        uint64_t mix = (uint64_t)(uintptr_t)&errno;                 // ASLR
+        mix ^= (uint64_t)getpid() * 0x9E3779B97F4A7C15ull;          // Prozess
+        mix ^= (uint64_t)std::chrono::steady_clock::now().time_since_epoch().count();
+        return mix ? mix : 0x5BAD5EEDull;                           // nie 0
+    }();
+    return stamp;
 }
 
 // Thread-local decode-error flag — set when a structural error (absurd count etc.) is detected.
@@ -197,6 +216,13 @@ static uint32_t aiml_ser_schema_fp(const AimlTypeNode* nodes, int32_t n_nodes) {
     uint32_t h = 2166136261u;               // FNV-1a offset basis
     aiml_ser_fp_walk(nodes, n_nodes, 0, h, 0);   // root node is always index 0
     return h;
+}
+
+// spec/31 §6.10: derselbe Wert, nach aussen gegeben.  Die KV-Registratur braucht
+// ihn, um eine zweite Oeffnung gegen die erste zu pruefen.
+extern "C" uint32_t aiml_ser_schema_fingerprint(const AimlTypeNode* nodes, int32_t n_nodes) {
+    if (!nodes || n_nodes <= 0) return 0u;
+    return aiml_ser_schema_fp(nodes, n_nodes);
 }
 
 // ── Internal struct mirrors ────────────────────────────────────────────────────
@@ -366,9 +392,12 @@ static void enc(std::vector<uint8_t>& buf,
         break;
     // in-process only (chan models are not wire-serialisable): the pointer, retained by dec
     case AIML_TD_CHAN:
-    case AIML_TD_HASHMAP:
+    case AIML_TD_HASHMAP: {
         w_raw(buf, data, sizeof(void*));
+        uint64_t stamp = aiml_proc_stamp();      // §5.4.1: Herkunft mitschreiben
+        w_raw(buf, &stamp, sizeof(stamp));
         break;
+    }
 
     case AIML_TD_I8:
         w_u8(buf, *data);
@@ -548,19 +577,26 @@ static void dec_node(const uint8_t* blob, int& pos, int end,
     case AIML_TD_IFACE:
         break;
     case AIML_TD_CHAN:
-        if (end - pos >= (int)sizeof(void*)) {
-            void* ch = nullptr; memcpy(&ch, blob + pos, sizeof(ch)); pos += sizeof(ch);
-            aiml_chan_retain(ch);
-            memcpy(out, &ch, sizeof(ch));
+    case AIML_TD_HASHMAP: {
+        // §5.4.1: Zeiger UND Stempel lesen, vergleichen, erst dann adoptieren.
+        void* handle = nullptr;
+        if (end - pos >= (int)(sizeof(void*) + sizeof(uint64_t))) {
+            uint64_t stamp = 0;
+            memcpy(&handle, blob + pos, sizeof(handle)); pos += sizeof(handle);
+            memcpy(&stamp, blob + pos, sizeof(stamp));   pos += sizeof(stamp);
+            if (stamp != aiml_proc_stamp()) {
+                fprintf(stderr, "[ser-ERROR] handle from another process (idx=%d off=%d) — decoded as null\n",
+                        idx, n.offset);
+                g_dec_error = true;
+                handle = nullptr;                        // NICHT anfassen
+            } else if (handle) {
+                if (n.kind == AIML_TD_CHAN) aiml_chan_retain(handle);
+                else                        aiml_hashmap_retain(handle);
+            }
         } else { g_dec_error = true; }
+        memcpy(out, &handle, sizeof(handle));
         break;
-    case AIML_TD_HASHMAP:
-        if (end - pos >= (int)sizeof(void*)) {
-            void* hm = nullptr; memcpy(&hm, blob + pos, sizeof(hm)); pos += sizeof(hm);
-            aiml_hashmap_retain(hm);
-            memcpy(out, &hm, sizeof(hm));
-        } else { g_dec_error = true; }
-        break;
+    }
 
     // Truncated scalar = corrupt blob → flag it (F1); a valid blob always has all
     // field bytes present, so pos+N>end is never a legitimate decode.
@@ -852,6 +888,10 @@ static void fre(int idx, const AimlTypeNode* ns, int nn, uint8_t* data) {
         if (map->size > 0 && map->keys && map->values) {
             int ksz = key_stride(n.param1, ns, nn);
             int vsz = n.elem_size;
+            if (g_aiml_ser_debug)
+                fprintf(stderr, "[ser-DBG] MAP-FREE size=%ld ksz=%d vsz=%d valkind=%d valesz=%d valparam1=%d\n",
+                        (long)map->size, ksz, vsz, (int)ns[n.param2].kind,
+                        (int)ns[n.param2].elem_size, (int)ns[n.param2].param1);
             for (int i = 0; i < map->size; i++) {
                 fre(n.param1, ns, nn, (uint8_t*)map->keys  + i * ksz);
                 fre(n.param2, ns, nn, (uint8_t*)map->values + i * vsz);

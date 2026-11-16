@@ -1236,6 +1236,68 @@ start:
 The merge's `mp.base_store` points to `build_store_name(cfg.pf_db_tag, "tul_transformer")`
 which is guaranteed to have weights after this call.
 
+### 6.10 Die Typisierung gehoert dem Store, nicht dem Oeffner
+
+Ein `Kv<K:V>` wird von seiner **ersten** Oeffnung typisiert.  `db.open_kv` fuehrt
+eine Registratur je `(Verzeichnis, Name)`; jede weitere Oeffnung desselben Stores
+im selben Prozess bekommt **denselben** Handle zurueck -- mit der `val_size` und
+dem Deskriptor der ersten Oeffnung (§6.4 bestimmt das Verzeichnis).
+
+Daraus folgt eine normative Regel:
+
+> **Jede Oeffnung eines Stores muss denselben Werttyp verlangen.**  Weicht eine
+> spaetere Oeffnung in `val_size`, in der Typisierung (typisiert vs. roh) oder im
+> Schema-Fingerabdruck des Deskriptors ab, ist das ein **Programmierfehler**.  Die
+> Laufzeit meldet ihn beim Oeffnen laut und bricht ab; sie darf den abweichenden
+> Oeffner nicht stillschweigend bedienen.
+
+Der Grund, warum das nicht tiefer abgefangen werden kann: `kv.get` dekodiert mit
+dem Deskriptor des **Handles** und gibt einen Zeiger auf den dekodierten Satz
+zurueck; die Aufrufstelle liest ihn als ihren eigenen **deklarierten** Typ.  Der
+Fingerabdruck, der jeden KV-Blob schuetzt (§7, `aiml_ser_decode`), kann das nicht
+sehen -- Blob und Handle passen ja zusammen, nur der Leser passt nicht.  Ohne
+Wache am Oeffnen liest der abweichende Leser die Bytes eines fremden Satzaufbaus:
+`has` sagt 1, der Satz sieht plausibel aus, und der erste Zeichenketten-Zeiger,
+der auf Nicht-Zeiger-Bytes faellt, stuerzt beim Weitergeben ab
+(`aiml_ser_encode` <- `aiml_ser_deep_copy`).
+
+Dazu traegt der WAL-Kopf (§6.8) `flags` (typisiert) und `val_size` der
+**erzeugenden** Oeffnung.  Beim Oeffnen einer vorhandenen Datei werden beide mit
+dem Verlangten verglichen; eine Abweichung wird **gemeldet, aber nicht** zum
+Abbruch gemacht -- ein angehaengtes Feld (§7, Schema-Evolution) aendert `val_size`
+zulaessig, und der Blob-Fingerabdruck sagt dann beim Lesen, was zu tun ist.
+
+**Wo die Regel beisst.**  Beim Global stehen Name und Typ in *einer* Zeile:
+
+```aiml
+- decl: [disc_enemies_kv, Kv<string:Enemy>, { call: [db.open_kv, "disc_enemies", {persist: true}] }]
+```
+
+Zieht man den Zustand nach spec/58 in eine Klasse oder eine classgroup-Instanz,
+stehen sie an **zwei** Stellen -- der Typ im Klassenkoerper, der Name im
+Konstruktor:
+
+```aiml
+- class:
+    name: WeltSpeicher
+    members:
+      - [feinde, Kv<string:Enemy>]        # Typ hier
+    methods:
+      - def:
+          name: oeffne
+          body:
+            - set: [<.feinde, { call: [db.open_kv, "disc_enemies", {persist: true}] }]   # Name hier
+```
+
+Das ist zulaessig und richtig typisiert (eine Probe ueber Global, Klassenmitglied,
+classgroup-Instanz, Gruppenmethode und Zwei-Schritt-Leihe zeigt in allen fuenf
+Wegen den typisierten Oeffnungsaufruf).  Waehrend einer **schrittweisen**
+Migration oeffnen aber Global und Mitglied denselben Store, und ein vertauschtes
+Paar (Name des einen Stores, Typ des anderen) ist dann genau der Fall oben: kein
+Compiler-Fehler, kein Laufzeit-Wort, ein fremd gelesener Satz.  Gefunden am
+11.11.2026 in datacreatures (abgebrochener Repository-Pilot), nachgestellt in
+`tests/kv_typ_divergenz/`.
+
 ---
 
 ## 7. Schema Evolution — Integration with Hot-Reload

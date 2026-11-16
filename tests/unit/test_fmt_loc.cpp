@@ -7,8 +7,10 @@
 #include "../../src/core/context.h"
 
 int mirror_delta_unit_tests();
+int ser_handle_stamp_unit_tests();
 
 int main() {
+    assert(ser_handle_stamp_unit_tests() == 0);
     llvm::LLVMContext llvm_ctx;
     llvm::Module mod("aiml_unit_tests", llvm_ctx);
     llvm::IRBuilder<> builder(llvm_ctx);

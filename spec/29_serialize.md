@@ -280,6 +280,27 @@ The following types produce a compile-time error when passed to `sys.serialize` 
 | `Code` | Use `sys.bundle` / `sys.exec` instead |
 | `file_handle`, `process` | OS resources |
 
+### 5.4.1 In-process handles carry a process stamp
+
+`chan<T>` and `hashmap` are **handles**, not values: the wire form is the pointer
+itself, valid only inside the process that wrote it. The encoder therefore writes
+an 8-byte **process stamp** after the pointer — a value drawn once per process —
+and the decoder compares it:
+
+| Stamp | Decoder |
+|---|---|
+| equal | the handle is live: the pointer is adopted and retained (in-process handoff, `sys.clone`, pipelines) |
+| different | the blob was written by **another process**: the field decodes as `null`, the decode error flag is set, and `[ser-ERROR] handle from another process` is printed |
+
+A pointer read from a blob is **never** dereferenced before that comparison. A
+stored blob (KV, file, network) outlives its process, so without the stamp a
+later decode retains a dead address — observed as a SIGSEGV in a server reading
+a months-old store.
+
+The stamp does not make such a model storable: a handle that decodes as `null`
+is a loss of data, and §5.4 stands — it only keeps the loss from becoming a
+crash.
+
 ### 5.5 Examples
 
 ```aiml

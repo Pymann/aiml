@@ -998,11 +998,58 @@ extern "C" int32_t aiml_db_checkpoint_all(void) {
 // Kv<K:V> implementation
 // ─────────────────────────────────────────────────────────────────────────────
 
+// spec/31 §6.10: Die Typisierung gehoert dem Store, nicht dem Oeffner.
+//
+// `db.open_kv` fuehrt eine Registratur je (Verzeichnis, Name) und gibt bei einer
+// zweiten Oeffnung denselben Handle zurueck -- mit val_size und Deskriptor der
+// ERSTEN Oeffnung.  Verlangt die zweite Oeffnung einen anderen Werttyp, dekodiert
+// `kv.get` weiter mit dem alten Deskriptor, waehrend die Aufrufstelle den Satz als
+// ihren eigenen deklarierten Typ liest: `has` sagt 1, der Satz sieht plausibel aus,
+// und der erste Zeichenketten-Zeiger, der auf Nicht-Zeiger-Bytes faellt, stirbt beim
+// Weitergeben (aiml_ser_encode <- aiml_ser_deep_copy).  Der Fingerabdruck, der jeden
+// Blob schuetzt, kann das nicht sehen -- Blob und Handle passen zusammen, nur der
+// Leser nicht.  Darum die Wache hier, am einzigen Punkt, der beide Typen sieht.
+//
+// Gefunden am 11.11.2026 in datacreatures (abgebrochener Repository-Pilot: ein Kv
+// als Klassenmitglied las einen fremd aufgebauten Satz).  AIML_DB_ALLOW_RETYPE=1
+// macht daraus eine Warnung -- fuer Werkzeuge, die einen Store absichtlich mit
+// einem anderen Aufbau lesen (Migration, Export).
+static void kv_guard_reopen(AimlKv* kv, const std::string& nm, int64_t val_size,
+                            const AimlTypeNode* nodes, int32_t n_nodes) {
+    if (!kv) return;
+    const bool want_typed = (nodes != nullptr && n_nodes > 0);
+    const bool have_typed = (kv->ser_nodes != nullptr && kv->ser_n > 0);
+    const uint32_t want_fp = aiml_ser_schema_fingerprint(nodes, n_nodes);
+    const uint32_t have_fp = aiml_ser_schema_fingerprint(kv->ser_nodes, kv->ser_n);
+    if (want_typed == have_typed && val_size == kv->val_size && want_fp == have_fp) return;
+
+    const char* env = getenv("AIML_DB_ALLOW_RETYPE");
+    const bool erlaubt = env && *env && strcmp(env, "0") != 0;
+    fprintf(stderr,
+        "[AionDB] %s: KV store '%s' was first opened as %s (val_size=%lld, schema_fp=0x%08x, "
+        "n_nodes=%d) and is now opened as %s (val_size=%lld, schema_fp=0x%08x, n_nodes=%d).\n"
+        "[AionDB] %s: a store's value type is fixed by its FIRST open — every further open must "
+        "request the same Kv<K:V> (spec/31 §6.10).  The second opener would read this store's "
+        "records as a foreign layout: no compiler error, no further warning, and a crash in "
+        "aiml_ser_encode as soon as the record is passed on.\n"
+        "[AionDB] %s: check the store name against the declared value type at both open sites "
+        "(a class member splits them: type in the class body, name in the constructor).  "
+        "Set AIML_DB_ALLOW_RETYPE=1 to downgrade this to a warning.\n",
+        erlaubt ? "WARN" : "FATAL", nm.c_str(),
+        have_typed ? "typed" : "raw",   (long long)kv->val_size, have_fp, kv->ser_n,
+        want_typed ? "typed" : "raw",   (long long)val_size,     want_fp, n_nodes,
+        erlaubt ? "WARN" : "FATAL", erlaubt ? "WARN" : "FATAL");
+    if (!erlaubt) _exit(1);
+}
+
 extern "C" void* aiml_db_kv_open(const char* name, int64_t val_size) {
     std::string nm = name ? name : "kv";
     std::lock_guard<std::mutex> lock(g_db_mutex);
     auto it = g_non_persist_kvs_by_name.find(nm);
-    if (it != g_non_persist_kvs_by_name.end()) return it->second;
+    if (it != g_non_persist_kvs_by_name.end()) {
+        kv_guard_reopen(it->second, nm, val_size, nullptr, 0);   // spec/31 §6.10
+        return it->second;
+    }
     AimlKv* kv = new AimlKv();
     kv->val_size = val_size;
     g_non_persist_kvs_by_name[nm] = kv;
@@ -1309,7 +1356,8 @@ static bool kv_wal_init_header(int fd, bool typed, int64_t val_size) {
 // Validate the header of an existing WAL file. On magic/version mismatch,
 // prints a fatal message and exits — old-format files are unrecoverable.
 // Returns true if the header is well-formed.
-static bool kv_wal_check_header(int fd, const std::string& path) {
+static bool kv_wal_check_header(int fd, const std::string& path,
+                                bool want_typed, int64_t want_val_size) {
     AimlKvWalHeader hdr;
     if (lseek(fd, 0, SEEK_SET) < 0) return false;
     ssize_t n = read(fd, &hdr, sizeof(hdr));
@@ -1336,6 +1384,21 @@ static bool kv_wal_check_header(int fd, const std::string& path) {
             path.c_str(), hdr.version, KV_WAL_VERSION, path.c_str());
         _exit(1);
     }
+    // spec/31 §6.10: der Kopf traegt Typisierung und val_size der ERZEUGENDEN
+    // Oeffnung.  Eine Abweichung wird gemeldet, aber NICHT zum Abbruch gemacht:
+    // ein angehaengtes Feld (§7 Schema-Evolution) aendert val_size zulaessig, und
+    // beim Lesen sagt der Blob-Fingerabdruck, was mit alten Saetzen zu tun ist.
+    // Ein anderer Werttyp ist dagegen ein Fehler -- den faengt kv_guard_reopen,
+    // sobald derselbe Store im selben Prozess zweimal geoeffnet wird.
+    const bool have_typed = (hdr.flags & KV_WAL_FLAG_TYPED) != 0;
+    if (have_typed != want_typed || hdr.val_size != want_val_size) {
+        fprintf(stderr,
+            "[AionDB] WARN: KV file '%s' was created %s with val_size=%lld, now opened %s with "
+            "val_size=%lld (spec/31 §6.10).  An appended field changes val_size legitimately; a "
+            "different value TYPE does not -- check the declared Kv<K:V> against this store name.\n",
+            path.c_str(), have_typed ? "typed" : "raw", (long long)hdr.val_size,
+            want_typed ? "typed" : "raw", (long long)want_val_size);
+    }
     return true;
 }
 
@@ -1351,7 +1414,8 @@ static int kv_wal_open_with_header(const std::string& path, bool typed,
     if (st.st_size == 0) {
         if (!kv_wal_init_header(fd, typed, val_size)) { close(fd); return -1; }
     } else {
-        kv_wal_check_header(fd, path);  // does not return on mismatch
+        // spec/31 §6.10: Kopf gegen das Verlangte pruefen (laut, nicht fatal).
+        kv_wal_check_header(fd, path, typed, val_size);  // does not return on magic/version mismatch
     }
     return fd;
 }
@@ -1742,7 +1806,10 @@ static void* kv_open_persist_impl(const char* name, int64_t val_size,
 
     std::lock_guard<std::mutex> lock(g_db_mutex);
     auto it = g_persistent_kvs_by_name.find(registry_key);
-    if (it != g_persistent_kvs_by_name.end()) return it->second;
+    if (it != g_persistent_kvs_by_name.end()) {
+        kv_guard_reopen(it->second, registry_key, val_size, nullptr, 0);   // spec/31 §6.10
+        return it->second;
+    }
 
     db_mkdir_p(dir);
     AimlKv* kv    = new AimlKv();
@@ -1984,7 +2051,10 @@ extern "C" void* aiml_db_kv_open_typed(const char* name, int64_t val_size,
     std::string nm = name ? name : "kv";
     std::lock_guard<std::mutex> lock(g_db_mutex);
     auto it = g_non_persist_kvs_by_name.find(nm);
-    if (it != g_non_persist_kvs_by_name.end()) return it->second;
+    if (it != g_non_persist_kvs_by_name.end()) {
+        kv_guard_reopen(it->second, nm, val_size, nodes, n_nodes);   // spec/31 §6.10
+        return it->second;
+    }
     AimlKv* kv    = new AimlKv();
     kv->val_size  = val_size;
     kv->ser_nodes = nodes;
@@ -2003,7 +2073,10 @@ static void* kv_open_typed_persist_impl(const char* name, int64_t val_size,
 
     std::lock_guard<std::mutex> lock(g_db_mutex);
     auto it = g_persistent_kvs_by_name.find(registry_key);
-    if (it != g_persistent_kvs_by_name.end()) return it->second;
+    if (it != g_persistent_kvs_by_name.end()) {
+        kv_guard_reopen(it->second, registry_key, val_size, nodes, n_nodes);   // spec/31 §6.10
+        return it->second;
+    }
 
     db_mkdir_p(dir);
     AimlKv* kv    = new AimlKv();

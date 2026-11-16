@@ -2153,6 +2153,35 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
             && decl->typeName.rfind("ptr<", 0) == 0 && decl->typeName.back() == '>'
             && !ctx.cleanupStack.empty()) {
             bool ownedInit = dynamic_cast<NewExpr*>(decl->initialValue.get()) != nullptr;
+            // spec/19 §Polymorphism + spec/61 §8: AUFWAERTSWANDLUNG eines eigenen Zeigers
+            //   decl: [sicht, ptr<Iface>, besitzer]      (besitzer: ptr<Klasse>)
+            // Bisher entstand dabei ein BESITZLOSER Zwilling: `sicht` bekam keinen Drop,
+            // `besitzer` behielt seinen.  Beim Weiterreichen an einen ptr<T>-Parameter
+            // (§8: Argument wird gemoved) gab dann der Aufgerufene frei UND der Besitzer
+            // noch einmal -- Doppelfreigabe, danach kaputte vtables (gemessen 2026-11-10 in
+            // datacreatures: Absturz beim Hovern, tests/test_iface_upcast_param.aiml).
+            // Richtig ist die UEBERGABE: `sicht` wird Eigentuemer, `besitzer` verliert
+            // seinen Drop -- ein Eigentuemer, eine Freigabe.
+            bool transferFromLocal = false;
+            if (!ownedInit && ctx.lifetimeDropsEnabled) {
+                std::string declInner = decl->typeName.substr(4, decl->typeName.size() - 5);
+                if (ctx.interfaces.count(declInner)) {
+                    if (auto* ve = dynamic_cast<VariableExpr*>(decl->initialValue.get())) {
+                        if (ve->name.find('.') == std::string::npos && ve->name.find('<') == std::string::npos) {
+                            auto sit = ctx.symbol_table.find(ve->name);
+                            if (sit != ctx.symbol_table.end() && sit->second.ir_alloca_inst
+                                && sit->second.typeName.rfind("ptr<", 0) == 0) {
+                                llvm::Value* srcAddr =
+                                    static_cast<llvm::Value*>(ctx.ir_gen->unwrap(sit->second.ir_alloca_inst));
+                                for (auto& frame : ctx.cleanupStack)
+                                    for (auto& sd : frame)
+                                        if (sd.addr == srcAddr && (sd.kind == 4 || sd.kind == 5))
+                                            { ownedInit = true; transferFromLocal = true; }
+                            }
+                        }
+                    }
+                }
+            }
             if (!ownedInit) {
                 if (auto* c = dynamic_cast<CallExpr*>(decl->initialValue.get())) {
                     const std::string& fn = c->functionName;
@@ -2224,6 +2253,9 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
                     sd.debugName = decl->varName; sd.debugType = decl->typeName;
                     ctx.cleanupStack.back().push_back(sd);
                 }
+                // Uebergabe abschliessen: die Quelle verliert ihren Drop, sonst
+                // gaeben beide frei (siehe transferFromLocal oben).
+                if (transferFromLocal) consumeLocalDrop(decl->initialValue.get(), false);
             }
         }
 
@@ -2982,9 +3014,13 @@ bool Compiler::borrowReadInfo(Expr* value, std::string& meth, std::string& recv)
         }
     } else if (auto* ax = dynamic_cast<AtExpr*>(value)) {
         // `{ at: [c, i] }` with NO trailing member path is exactly `c.at(i)` — a borrow read.
+        // The container may be a MEMBER PATH (`det.items_inv`, `<.index`) just as in the CallExpr
+        // branch above; the type resolution below handles dotted receivers (dottedPathType), so
+        // restricting this to dot-free names silently exempted every `{at: [a.b, i]}` from the
+        // §5.4/§6.2 checks while the equivalent `a.b.at(i)` spelling was rejected.
         if (ax->memberPath.empty())
             if (auto* cv = dynamic_cast<VariableExpr*>(ax->container.get()))
-                if (cv->name.find('.') == std::string::npos) { meth = "at"; recv = cv->name; }
+                { meth = "at"; recv = cv->name; }
     }
     if (meth.empty()) return false;
     std::string rt;

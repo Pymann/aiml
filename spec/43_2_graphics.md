@@ -100,6 +100,13 @@ For dynamic data (updated every frame):
 - decl: [ibo, gl_buffer, { call: [gl.create_index_buffer, idx] }]
 ```
 
+A buffer keeps the kind it is created with. An index buffer is only ever bound
+to `GL_ELEMENT_ARRAY_BUFFER`, a vertex buffer never is — creation, growth
+(`reserve_bytes`) and updates (`update_range`) all obey that. WebGL fixes a
+buffer's kind on its first bind and rejects every later bind to the other kind
+with `INVALID_OPERATION`, so a buffer uploaded through a generic target would
+be unusable as an index buffer in the browser while it still worked natively.
+
 ### 3.3 Vertex Array Object (VAO) + Attribute Layout
 
 ```aiml

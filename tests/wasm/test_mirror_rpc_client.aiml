@@ -115,7 +115,7 @@
 - print: ["phase1a PASS (direct replica.tags[0]='tool')"]
 
 # Via interface vtable.
-- decl: [view, ptr<Tagged>, replica]
+- decl: [view, ref<Tagged>, replica]
 - decl: [got, list<string>, { call: [view.tags] }]
 - if:
     condition: { neq: [got.len, 3] }
@@ -197,7 +197,7 @@
 
 # CRITICAL: access first item's tags via interface vtable.
 # This is the EXACT path DataCreatures takes for tile_tags on hover.
-- decl: [first_item, ptr<ItemImpl>, { at: [reply.items, 0] }]
+- decl: [first_item, ref<ItemImpl>, { at: [reply.items, 0] }]
 - print: ["client: first_item.name='${first_item.name}' tags.len=${first_item.tags.len}"]
 - if:
     condition: { neq: [first_item.tags.len, 2] }
@@ -215,7 +215,7 @@
 - print: ["phase3a PASS (nested direct access)"]
 
 # Same access via interface vtable — DataCreatures' crash spot.
-- decl: [iview, ptr<Tagged>, first_item]
+- decl: [iview, ref<Tagged>, first_item]
 - decl: [igot, list<string>, { call: [iview.tags] }]
 - if:
     condition: { neq: [igot.len, 2] }

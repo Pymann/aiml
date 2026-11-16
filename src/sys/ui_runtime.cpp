@@ -247,6 +247,14 @@ struct AimlUIState {
         int    max_visible   = 12;  /* max visible rows before scrolling */
     } pending_popup;
 
+    /* Input shield of an open spinbox popup: the rect it covered in the PREVIOUS
+     * frame. Widgets under it are not hot and the wheel over it is not theirs —
+     * an overlay that only draws on top would otherwise let clicks fall through. */
+    bool  shield_on = false;      /* shield valid this frame */
+    bool  shield_next = false;    /* a popup drew this frame → shield the next one */
+    uint32_t shield_owner = 0;    /* the spinbox the shield belongs to */
+    float shield_x = 0, shield_y = 0, shield_w = 0, shield_h = 0;
+
     bool initialized;
 
     /* Notebook / tab widget state — persistent across frames */
@@ -507,7 +515,13 @@ static bool point_in_rect(float px, float py, float rx, float ry, float rw, floa
     return px >= rx && px < rx+rw && py >= ry && py < ry+rh;
 }
 
+static bool shielded(float mx, float my) {
+    return g_ui->shield_on && point_in_rect(mx, my, g_ui->shield_x, g_ui->shield_y,
+                                            g_ui->shield_w, g_ui->shield_h);
+}
+
 static bool widget_hot(uint32_t id, float x, float y, float w, float h) {
+    if (shielded(g_ui->mouse_x, g_ui->mouse_y)) return false;
     return point_in_rect(g_ui->mouse_x, g_ui->mouse_y, x, y, w, h);
 }
 
@@ -779,8 +793,11 @@ void aiml_ui_begin(void* win) {
     g_ui->grid_stack.clear();
     g_ui->cell_stack.clear();
 
-    /* Reset hot and deferred popup */
+    /* Reset hot and deferred popup; the popup drawn last frame shields this one */
     g_ui->hot = 0;
+    g_ui->shield_on   = g_ui->shield_next;
+    g_ui->shield_next = false;
+    if (!g_ui->shield_on) g_ui->shield_owner = 0;
     g_ui->pending_popup.active = false;
     g_ui->pending_popup.opts.clear();
 
@@ -1115,7 +1132,8 @@ void aiml_ui_end_cell(void) {
 
         /* Mouse wheel — if cursor inside original cell bounds */
         bool mouse_in = point_in_rect(g_ui->mouse_x, g_ui->mouse_y,
-                                       cs.orig_x, cs.orig_y, cs.orig_w, cs.orig_h);
+                                       cs.orig_x, cs.orig_y, cs.orig_w, cs.orig_h)
+                        && !shielded(g_ui->mouse_x, g_ui->mouse_y);
         if (mouse_in) {
             float scroll_delta_y = aiml_input_mouse_scroll_y();
             if (scroll_delta_y != 0.0f && cs.scroll_y) {
@@ -1593,7 +1611,10 @@ int32_t aiml_ui_spinbox(const char* id, void* opts_list, int32_t current, void* 
     cell_advance(cell.w, bh, nullptr, nullptr);
 
     bool open = (g_ui->focused == wid);
-    bool hot  = widget_hot(wid, bx, by, bw, bh);
+    /* The header lies outside its own popup, so its own shield must not hide it. */
+    bool hot  = (g_ui->shield_owner == wid)
+                ? point_in_rect(g_ui->mouse_x, g_ui->mouse_y, bx, by, bw, bh)
+                : widget_hot(wid, bx, by, bw, bh);
     if (hot) g_ui->hot = wid;
 
     /* Toggle open/closed on header click */
@@ -1690,8 +1711,12 @@ int32_t aiml_ui_spinbox(const char* id, void* opts_list, int32_t current, void* 
             }
         }
 
-        /* Store for deferred rendering in ui_end() */
+        /* Store for deferred rendering in ui_end() — and shield that rect next frame */
         if (open) {
+            g_ui->shield_next = true;
+            g_ui->shield_owner = wid;
+            g_ui->shield_x = bx; g_ui->shield_y = popup_y;
+            g_ui->shield_w = bw; g_ui->shield_h = popup_h;
             auto& pp    = g_ui->pending_popup;
             pp.active   = true;
             pp.bx       = bx; pp.by = by; pp.bw = bw; pp.row_h = row_h;

@@ -138,6 +138,30 @@ struct AimlGLMesh {
 
 /* ── Hilfsfunktionen ────────────────────────────────────────────────────── */
 
+/* WebGL legt die Art eines Puffers beim ERSTEN Binden fest (spec/43_2 §3.2):
+   ein Indexpuffer muss von Anfang an an GL_ELEMENT_ARRAY_BUFFER haengen,
+   sonst weist der Browser jede spaetere Index-Bindung mit INVALID_OPERATION
+   ab -- nativ faellt das nicht auf.  Die Index-Bindung gehoert zur gebundenen
+   VAO, darum wird sie fuer die Dauer des Hochladens geloest. */
+struct GlPufferZiel {
+    GLenum ziel; GLint vorher = 0; GLint vao = 0; bool index;
+    explicit GlPufferZiel(GLenum target) : index(target == GL_ELEMENT_ARRAY_BUFFER) {
+        ziel = index ? GL_ELEMENT_ARRAY_BUFFER : GL_COPY_WRITE_BUFFER;
+        if (index) {
+            glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &vao);
+            glBindVertexArray(0);
+            glGetIntegerv(GL_ELEMENT_ARRAY_BUFFER_BINDING, &vorher);
+        } else {
+            glGetIntegerv(GL_COPY_WRITE_BUFFER_BINDING, &vorher);
+        }
+    }
+    void binde(GLuint id) const { glBindBuffer(ziel, id); }
+    ~GlPufferZiel() {
+        glBindBuffer(ziel, (GLuint)vorher);
+        if (index) glBindVertexArray((GLuint)vao);
+    }
+};
+
 static AimlGLBuffer* make_buffer(GLenum target, const AimlGLRawBuf* src, GLenum usage) {
     if (src && !valid_upload(src)) return nullptr;
     auto* b = new (std::nothrow) AimlGLBuffer();
@@ -148,13 +172,11 @@ static AimlGLBuffer* make_buffer(GLenum target, const AimlGLRawBuf* src, GLenum 
         if (target == GL_ELEMENT_ARRAY_BUFFER && b->capacity)
             b->indices.assign(src->data, src->data + b->capacity);
     } catch (const std::bad_alloc&) { delete b; return nullptr; }
-    GLint previous = 0;
-    glGetIntegerv(GL_COPY_WRITE_BUFFER_BINDING, &previous);
+    GlPufferZiel ziel(target);
     glGenBuffers(1, &b->id);
-    glBindBuffer(GL_COPY_WRITE_BUFFER, b->id);
-    glBufferData(GL_COPY_WRITE_BUFFER, b->capacity, src ? src->data : nullptr, usage);
+    ziel.binde(b->id);
+    glBufferData(ziel.ziel, b->capacity, src ? src->data : nullptr, usage);
     bool ok = glGetError() == GL_NO_ERROR && b->id;
-    glBindBuffer(GL_COPY_WRITE_BUFFER, previous);
     if (!ok) { glDeleteBuffers(1, &b->id); delete b; return nullptr; }
     return b;
 }
@@ -281,12 +303,13 @@ int32_t aiml_gl_buffer_update_range(void* buf, int32_t offset, void* data_buf) {
     if (!b || !valid_upload(src) || offset < 0 || offset > b->capacity
         || src->size > b->capacity - offset) return 0;
     if (src->size == 0) return 1;
-    GLint previous = 0;
-    glGetIntegerv(GL_COPY_WRITE_BUFFER_BINDING, &previous);
-    glBindBuffer(GL_COPY_WRITE_BUFFER, b->id);
-    glBufferSubData(GL_COPY_WRITE_BUFFER, offset, src->size, src->data);
-    bool ok = glGetError() == GL_NO_ERROR;
-    glBindBuffer(GL_COPY_WRITE_BUFFER, previous);
+    bool ok = false;
+    {
+        GlPufferZiel ziel(b->target);
+        ziel.binde(b->id);
+        glBufferSubData(ziel.ziel, offset, src->size, src->data);
+        ok = glGetError() == GL_NO_ERROR;
+    }
     if (ok && b->target == GL_ELEMENT_ARRAY_BUFFER)
         memcpy(b->indices.data() + offset, src->data, src->size);
     return ok;
@@ -315,10 +338,14 @@ int32_t aiml_gl_buffer_reserve_bytes(void* buf, int32_t capacity) {
     glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &array);
     GLuint replacement = 0;
     glGenBuffers(1, &replacement);
-    glBindBuffer(GL_COPY_WRITE_BUFFER, replacement);
-    glBufferData(GL_COPY_WRITE_BUFFER, capacity,
-        indices.empty() ? nullptr : indices.data(), GL_DYNAMIC_DRAW);
-    bool ok = glGetError() == GL_NO_ERROR && replacement;
+    bool ok = false;
+    {   // Der Ersatz muss mit der Art des Originals geboren werden (§3.2).
+        GlPufferZiel ziel(b->target);
+        ziel.binde(replacement);
+        glBufferData(ziel.ziel, capacity,
+            indices.empty() ? nullptr : indices.data(), GL_DYNAMIC_DRAW);
+        ok = glGetError() == GL_NO_ERROR && replacement;
+    }
     if (ok && b->capacity && b->target != GL_ELEMENT_ARRAY_BUFFER) {
         glBindBuffer(GL_COPY_READ_BUFFER, b->id);
         glCopyBufferSubData(GL_COPY_READ_BUFFER, GL_COPY_WRITE_BUFFER, 0, 0, b->capacity);

@@ -11868,6 +11868,16 @@ void registerBuiltins(CompilerContext& ctx) {
         INP_POST_BTN("post_mouse_down_pending", "aiml_input_post_mouse_down_pending")
         INP_POST_BTN("post_mouse_up_pending",   "aiml_input_post_mouse_up_pending")
 #undef INP_POST_BTN
+        // post_focus_lost() -> void — spec/44_0 §8.2: the window lost focus.
+        // Cancels every active press AND releases every held key (§2.1), so a
+        // scenario can prove that no key stays stuck down without opening a
+        // second window.
+        inp.builtinFuncs["post_focus_lost"] = [](CompilerContext& ctx,
+            const std::vector<AIML::IRValue*>&) -> AIML::IRValue* {
+            ctx.builder.CreateCall(ctx.getFunction("aiml_input_post_focus_lost",
+                ctx.builder.getVoidTy(), {}), {});
+            return nullptr;
+        };
         // post_touch_cancel() -> void — spec/44_0 §8.2: abort the active press
         // WITHOUT a release latch, so a scenario can prove that an aborted
         // gesture produces no drop.

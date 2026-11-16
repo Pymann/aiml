@@ -1,0 +1,87 @@
+# SPEC: 19_inheritance
+# spec/19 zeigt fuer Polymorphie NUR `decl: [d, ptr<Iface>]` + `set: [d, { new: X }]`.
+# datacreatures benutzt drei weitere Formen; diese Datei haelt sie fest:
+#   (a) ptr<Iface> aus einer bestehenden ptr<Klasse>-Variablen
+#   (b) Uebergabe dieses Zeigers als FUNKTIONSARGUMENT vom Typ ptr<Iface>
+#   (c) Ablage in map<string:ptr<Iface>> und Aufruf nach dem Auslesen
+# Gemessen am 2026-11-10: genau dieser Weg stuerzte im Client beim Hovern ab
+# (valgrind: "Invalid read of size 8, Address 0x68" im virtuellen Aufruf).
+
+- interface:
+    name: Tileish
+    methods:
+      - [tile_icon_path, string,       []]
+      - [tile_name,      string,       []]
+      - [tile_tags,      list<string>, []]
+      - [tile_count,     i32,          []]
+      - [tile_id,        string,       []]
+
+- model:
+    name: ItemData
+    fields:
+      - [name,    string]
+      - [item_id, string]
+      - [anzahl,  i32, 1]
+
+- class:
+    name: ItemBehavior
+    models: [ItemData]
+    implements: [Tileish]
+    methods:
+      - def: { name: tile_icon_path, return: string, args: [], body: [{ return: "icons/${<.item_id}" }] }
+      - def: { name: tile_name,      return: string, args: [], body: [{ return: <.name }] }
+      - def:
+          name: tile_tags
+          return: list<string>
+          args: []
+          body:
+            - decl: [out, list<string>]
+            - call: [out.push, "starter"]
+            - return: out
+      - def: { name: tile_count, return: i32,    args: [], body: [{ return: <.anzahl }] }
+      - def: { name: tile_id,    return: string, args: [], body: [{ return: <.item_id }] }
+
+# (b) Argumenttyp ist die SCHNITTSTELLE, der Aufrufer reicht eine aufwaerts
+# gewandelte Klasse herein -- im Client ist das TileGrid.spawn.
+- def:
+    name: stelle_auf
+    args: [[tid, string], [verhalten, ptr<Tileish>], [karte, map<string:ptr<Tileish>>]]
+    body:
+      - decl: [icon, string, { call: [verhalten.tile_icon_path] }]
+      - call: [log.info, "stelle_auf ${tid}: icon=${icon}"]
+      - call: [karte.put, tid, verhalten]
+
+- def:
+    name: main
+    return: i32
+    static_off: ["str_cmp"]
+    body:
+      - decl: [var_ok, i32, 1]
+      - decl: [verhalten, ptr<ItemBehavior>, { new: ItemBehavior }]
+      - set: [verhalten.name,    "Hammer"]
+      - set: [verhalten.item_id, "hammer"]
+      - set: [verhalten.anzahl,  3]
+
+      # (a) Aufwaerts in eine eigene Variable.
+      - decl: [sicht, ptr<Tileish>, verhalten]
+      - decl: [direkt, string, { call: [sicht.tile_name] }]
+      - if:
+          condition: { neq: [direkt, "Hammer"] }
+          then: [{ print: ["FAIL A: ptr<Iface> aus ptr<Klasse> -> '${direkt}'"] }, { set: [var_ok, 0] }]
+
+      # (b) + (c) ueber Argument und Karte.
+      - decl: [karte, map<string:ptr<Tileish>>]
+      - call: [stelle_auf, "hammer", sicht, karte]
+      # (c) Auslesen und erneut virtuell aufrufen -- im Client der Tooltip.
+      - decl: [aus_karte, string, ""]
+      - if:
+          condition: { eq: [{ call: [karte.contains, "hammer"] }, 1] }
+          then:
+            - decl: [zurueck, ref<Tileish>, { call: [karte.get, "hammer"] }]
+            - set: [aus_karte, { call: [zurueck.tile_name] }]
+      - if:
+          condition: { neq: [aus_karte, "Hammer"] }
+          then: [{ print: ["FAIL B: ueber Argument+Karte -> '${aus_karte}'"] }, { set: [var_ok, 0] }]
+
+      - if: { condition: { eq: [var_ok, 1] }, then: [{ print: ["PASS iface upcast"] }], else: [{ return: 1 }] }
+      - return: 0

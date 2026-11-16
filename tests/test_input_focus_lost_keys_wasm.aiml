@@ -1,0 +1,87 @@
+# SPEC: 44_0_input
+# spec/44_0 §2.1: Fokusverlust gibt GEHALTENE TASTEN frei.
+#
+# Bis zum 15.11.2026 raeumten beide Fokus-Handler nur die Maus
+# (`glfw_focus_cb` nativ, `bin_blur` im Browser) -- die Tastatur kam in keinem
+# von beiden vor.  Haelt jemand eine Taste und verliert das Fenster den Fokus,
+# geht das `keyup` an das Fenster, das den Fokus JETZT hat: der Pegel blieb fuer
+# immer unten, und jede `key_down`-Abfrage meldete die Taste weiter.  In
+# DataCreatures drehte dadurch die Kampfkamera (an `key_down("q"/"e")`
+# gebunden) den Rest der Sitzung.
+#
+# Fuer die Maus gab es diese Zusage und ihren Test (test_input_touch_cancel)
+# laengst; fuer die Tastatur fehlten beide.
+# Requires: wasm
+#   Der Browser-Zweig existiert nur im wasm-Build; nativ wuerde input.init
+#   ohne Fenster scheitern.  Laeuft ueber run_wasm_tests.sh.
+# Expected exit code: 0
+
+- def:
+    name: main
+    static_off: ["str_cmp"]
+    return: i32
+    body:
+      - call: [input.init, null]
+
+      # ── Gehalten heisst gehalten, Bild um Bild ───────────────────────────
+      - call: [input.post_key_down, "q"]
+      - if:
+          condition: { neq: [{ call: [input.key_down, "q"] }, 1] }
+          then: [{ call: [log.error, "FAIL q nach Druck nicht unten"] }, { return: 1 }]
+      - call: [input.update]
+      - if:
+          condition: { neq: [{ call: [input.key_down, "q"] }, 1] }
+          then: [{ call: [log.error, "FAIL q nach einem Bild nicht mehr unten"] }, { return: 1 }]
+
+      # ── Fokusverlust gibt sie frei ───────────────────────────────────────
+      - call: [input.post_focus_lost]
+      - if:
+          condition: { neq: [{ call: [input.key_down, "q"] }, 0] }
+          then: [{ call: [log.error, "FAIL q klebt nach Fokusverlust"] }, { return: 1 }]
+      # Kein Cancel-Kanal fuer Tasten (§2.1): der Fokusverlust wird als
+      # RELEASE gemeldet, damit wer "gehalten" aus Flanken mitfuehrt nicht
+      # ohne jedes Ereignis haengen bleibt.
+      - if:
+          condition: { neq: [{ call: [input.key_released, "q"] }, 1] }
+          then: [{ call: [log.error, "FAIL Loslass-Flanke fehlt"] }, { return: 1 }]
+
+      # ── Und sie bleibt oben ──────────────────────────────────────────────
+      - decl: [bild, i32, 0]
+      - while:
+          condition: { lt: [bild, 20] }
+          body:
+            - set: [bild, { "+": [bild, 1] }]
+            - call: [input.update]
+            - if:
+                condition: { neq: [{ call: [input.key_down, "q"] }, 0] }
+                then: [{ call: [log.error, "FAIL q wieder unten in Bild ${bild}"] }, { return: 1 }]
+
+      # ── Mehrere Tasten zugleich ──────────────────────────────────────────
+      - call: [input.update]
+      - call: [input.post_key_down, "e"]
+      - call: [input.post_key_down, "w"]
+      - call: [input.post_key_down, "lshift"]
+      - call: [input.post_focus_lost]
+      - if:
+          condition: { neq: [{ call: [input.key_down, "e"] }, 0] }
+          then: [{ call: [log.error, "FAIL e klebt"] }, { return: 1 }]
+      - if:
+          condition: { neq: [{ call: [input.key_down, "w"] }, 0] }
+          then: [{ call: [log.error, "FAIL w klebt"] }, { return: 1 }]
+      - if:
+          condition: { neq: [{ call: [input.key_down, "lshift"] }, 0] }
+          then: [{ call: [log.error, "FAIL lshift klebt"] }, { return: 1 }]
+
+      # ── Danach ist wieder alles normal ───────────────────────────────────
+      - call: [input.update]
+      - call: [input.post_key_down, "e"]
+      - if:
+          condition: { neq: [{ call: [input.key_down, "e"] }, 1] }
+          then: [{ call: [log.error, "FAIL e laesst sich nach Fokusverlust nicht mehr druecken"] }, { return: 1 }]
+      - call: [input.post_key_up, "e"]
+      - if:
+          condition: { neq: [{ call: [input.key_down, "e"] }, 0] }
+          then: [{ call: [log.error, "FAIL e nach Loslassen noch unten"] }, { return: 1 }]
+
+      - call: [log.info, "OK Fokusverlust gibt gehaltene Tasten frei"]
+      - return: 0

@@ -61,6 +61,25 @@ prefer the mapping layer in game code.
 | `input.key_pressed_once(key: string)` | `bool` | Rising edge, **consumed on first read per frame**: the first poll this frame returns `true`, every later poll returns `false` until the edge resets next frame. Use for edge-triggered *actions* (skip, toggle, confirm) in code paths that may run more than once per frame — e.g. an input handler invoked from `render()`, which is often called several times per frame (once per reactive redraw after an action). Polling `key_pressed` there would fire the action once per redraw. |
 | `input.key_released(key: string)` | `bool` | Key came up **this frame** (falling edge) |
 
+Key state is a **per-frame snapshot**, exactly like the button state in §2.2:
+every consumer in one frame sees the same `key_down` / `key_pressed` /
+`key_released` values, even when events arrive mid-frame. Edges are latched,
+never lost: a press and release that both happen between two frame boundaries
+report `key_pressed` **and** `key_released` in the next frame (`key_down` is
+then already false).
+
+**Focus loss releases every held key (normative).** A key held while the
+window loses focus (alt-tab, another window taking over, the browser tab
+becoming hidden) can never be released *to us* — the `keyup` goes to whoever
+has focus now. So on focus loss the runtime clears the level of every held key
+and sets its **release** latch. Without that a held key stays down forever and
+every `key_down` poll keeps reporting it: a camera bound to `key_down("E")`
+rotates for the rest of the session (datacreatures, 15.11.2026).
+
+Unlike the mouse there is no *cancel* channel for keys (§2.2), so focus loss is
+reported as a release. That is the lesser evil: a consumer that tracks "held"
+from edges would otherwise stay stuck with no event that could ever free it.
+
 **Key names** are the same on every target.  Letters are `"A"`..`"Z"` (always
 uppercase, regardless of Shift), digits `"0"`..`"9"`, and the named keys are
 `Space`, `Escape`, `Enter`, `Tab`, `Backspace`, `Delete`, `Insert`,
@@ -643,9 +662,10 @@ the person running it, and several tests can run in parallel.
 | `input.post_mouse_down(btn: i32)` | Press button `btn` (0 = left): sets the current state **and** the press latch. |
 | `input.post_mouse_up(btn: i32)` | Release button `btn`: sets the current state **and** the release latch. |
 | `input.post_touch_cancel()` | Abort the active press on button 0: clears the current state and sets the **cancel** latch (§2.2) — never the release latch. Models `touchcancel`, the two-finger takeover and focus loss, so a scenario can prove that an aborted gesture produces no drop. |
+| `input.post_focus_lost()` | The window lost focus: cancels every active press (as `post_touch_cancel` does, for all buttons) **and** releases every held key with its release latch (§2.1). Models alt-tab and the hidden browser tab, so a scenario can prove that no key stays stuck down. |
 | `input.post_scroll(dx: f32, dy: f32)` | Add to the scroll accumulator; drained by the next `update()` exactly like a real wheel event. |
-| `input.post_key_down(name: string)` | Press a key.  `name` uses the canonical names of §5 (`"lctrl"`, `"Left"`, `"a"`). |
-| `input.post_key_up(name: string)` | Release a key. |
+| `input.post_key_down(name: string)` | Press a key.  `name` uses the canonical names of §5 (`"lctrl"`, `"Left"`, `"a"`).  Sets the current state **and** the press latch. |
+| `input.post_key_up(name: string)` | Release a key: clears the current state **and** sets the release latch. |
 | `input.post_text(s: string)` | Queue `s` as character input for the focused `text_input` — one `char` event per code point, as typing would. |
 | `input.post_mouse_move_pending(x: f32, y: f32)` | wie `post_mouse_move`, schreibt aber in die **Ereignis-Schicht** (§8.3a) |
 | `input.post_mouse_down_pending(btn: i32)` | wie `post_mouse_down`, Ereignis-Schicht |
@@ -720,6 +740,29 @@ Verstoß dagegen blieb über Monate unentdeckt. Canonical:
 > Für Szenarien, die Bedienung nachspielen, bleiben die Hooks **ohne** Zusatz
 > die richtige Wahl. Die `*_pending`-Varianten sind dafür da, den Frame-Vertrag
 > selbst zu prüfen.
+
+**Auf welcher Plattform was passiert.** Die Zwischenschicht gibt es nur im
+Browser-Zweig. Nativ schreiben die GLFW-Rückrufe direkt die frame-sichtbaren
+Slots — es gibt dort keine zweite Schicht, in die man injizieren könnte. „Tut,
+was die Ereignis-Handler tun" heißt deshalb je Plattform etwas anderes:
+
+| Plattform | `post_mouse_*_pending` |
+|---|---|
+| Browser (wasm) | schreibt `pend_*`; `update()` übernimmt die Kante in den **nächsten** Frame |
+| Desktop (GLFW) | **identisch** mit `post_mouse_*` — dieselben Rückrufe, dieselben Latches |
+| Android | wie die übrige Injektion: no-op |
+
+Die Funktionen sind damit auf **jeder** Plattform vorhanden. Das ist der Punkt:
+ein Programm, das sie ruft, muss überall linken. Bis 2026-11-11 fehlten sie im
+Desktop-Zweig ganz (Android hatte Stubs), und der native Link brach mit
+`undefined reference to aiml_input_post_mouse_down_pending` — ein Fehler, der
+erst beim Linken auffiel und nicht beim Übersetzen.
+
+Was eine **Prüfung** daraus ziehen darf, ist entsprechend verschieden: die
+Zusicherung aus §2.3 (Loslassen und Drücken in derselben Lücke) lässt sich nur
+im wasm-Build prüfen (`tests/test_input_pending_layer_wasm.aiml`); nativ prüft
+`tests/test_input_pending_layer_native.aiml` nur, dass die Hooks da sind und
+sich wie die Varianten ohne Zusatz verhalten.
 
 ### 8.4 A click spans frames
 

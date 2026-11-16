@@ -1187,7 +1187,8 @@
         "__exodus_cache/apt/libxml2-dev/amd64/2.9.14+dfsg-1.3ubuntu3.10/payload/usr/include",
         "__exodus_cache/apt/libxslt1-dev/amd64/1.1.39-0exp1ubuntu0.24.04.3/payload/usr/include",
         "__exodus_cache/apt/libgnutls28-dev/amd64/3.8.3-1.1ubuntu3.6/payload/usr/include",
-        "__exodus_cache/apt/libsasl2-dev/amd64/2.1.28+dfsg1-5ubuntu3.1/payload/usr/include"
+        "__exodus_cache/apt/libsasl2-dev/amd64/2.1.28+dfsg1-5ubuntu3.1/payload/usr/include",
+        "__exodus_cache/apt/libzim-dev/amd64/8.2.1-2build1/payload/usr/include"
     ],
     "sources": [
         "*.c",
@@ -1411,7 +1412,10 @@
             "__exodus_cache/apt/libgnutls28-dev/amd64/3.8.3-1.1ubuntu3.6/payload/usr/lib/x86_64-linux-gnu",
             "__exodus_cache/apt/libsasl2-modules-db/amd64/2.1.28+dfsg1-5ubuntu3.1/payload/usr/lib/x86_64-linux-gnu",
             "__exodus_cache/apt/libsasl2-2/amd64/2.1.28+dfsg1-5ubuntu3.1/payload/usr/lib/x86_64-linux-gnu",
-            "__exodus_cache/apt/libsasl2-dev/amd64/2.1.28+dfsg1-5ubuntu3.1/payload/usr/lib/x86_64-linux-gnu"
+            "__exodus_cache/apt/libsasl2-dev/amd64/2.1.28+dfsg1-5ubuntu3.1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libzim-dev/amd64/8.2.1-2build1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libzim8/amd64/8.2.1-2build1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libxapian30/amd64/1.4.22-1build1/payload/usr/lib/x86_64-linux-gnu"
         ],
         "rpath": true
     }

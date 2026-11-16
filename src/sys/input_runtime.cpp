@@ -481,9 +481,46 @@ extern "C" void aiml_input_post_mouse_up(int32_t btn) {
     if (!g_input) return;
     glfw_mbtn_cb(nullptr, (int)btn, GLFW_RELEASE, 0);
 }
+
+/* spec/44_0 §8.3a: die *_pending-Varianten.  Die Ereignis-Schicht (pend_*)
+ * gibt es nur im Browser-Zweig -- dort schreiben die DOM-Handler dorthin und
+ * `update()` uebernimmt die Kante in den naechsten Frame.  Hier schreiben die
+ * GLFW-Rueckrufe die frame-sichtbaren Slots selbst; es gibt keine zweite
+ * Schicht, in die man injizieren koennte.  "Tut, was der Ereignis-Handler tut"
+ * heisst nativ also genau das, was post_mouse_* schon tut.
+ *
+ * Sie trotzdem hier zu haben ist der Punkt: ein Programm, das sie ruft, muss
+ * auf JEDER Plattform linken (Android hat sie als no-op).  Vorher fehlten sie
+ * nur in diesem Zweig, und der Fehler fiel erst beim Linken auf. */
+extern "C" void aiml_input_post_mouse_move_pending(float x, float y) {
+    aiml_input_post_mouse_move(x, y);
+}
+extern "C" void aiml_input_post_mouse_down_pending(int32_t btn) {
+    aiml_input_post_mouse_down(btn);
+}
+extern "C" void aiml_input_post_mouse_up_pending(int32_t btn) {
+    aiml_input_post_mouse_up(btn);
+}
 /* spec/44_0 §8.2: abort the active press on button 0 without a release latch. */
+/* spec/44_0 §2.1: a key held while the window loses focus can never be released
+ * TO US — the keyup goes to whoever has focus now.  Ohne dieses Aufräumen bleibt
+ * die Taste für immer unten, und jede `key_down`-Abfrage meldet sie weiter: eine
+ * Kamera an `key_down("E")` dreht dann den Rest der Sitzung (datacreatures,
+ * 15.11.2026).  Für Tasten gibt es keinen Cancel-Kanal wie für die Maus, also
+ * wird der Fokusverlust als RELEASE gemeldet -- das kleinere Übel, denn wer
+ * "gehalten" aus Flanken mitführt, bliebe sonst ohne jedes Ereignis hängen. */
+static void release_keys_on_focus_loss(void) {
+    if (!g_input) return;
+    for (int k = 0; k < AIML_MAX_KEYS; k++) {
+        if (!g_input->curr_keys[k]) continue;
+        g_input->curr_keys[k]        = 0;
+        g_input->key_release_latch[k] = 1;
+    }
+}
+
 /* GLFW focus callback: a button held while the window loses focus can never be
- * completed — cancel it (spec/44_0 §2.2) instead of leaving it stuck down. */
+ * completed — cancel it (spec/44_0 §2.2) instead of leaving it stuck down.
+ * Dasselbe gilt für gehaltene Tasten (§2.1). */
 static void glfw_focus_cb(GLFWwindow* /*w*/, int focused) {
     if (!g_input || focused) return;
     for (int b = 0; b < AIML_MAX_MOUSE; b++) {
@@ -494,6 +531,7 @@ static void glfw_focus_cb(GLFWwindow* /*w*/, int focused) {
         if (ds.active) ds.cancelled_this_frame = true;
         ds.held = false; ds.active = false;
     }
+    release_keys_on_focus_loss();
 }
 
 extern "C" void aiml_input_post_touch_cancel(void) {
@@ -510,6 +548,13 @@ extern "C" void aiml_input_post_touch_cancel(void) {
 extern "C" void aiml_input_post_scroll(float dx, float dy) {
     if (!g_input) return;
     glfw_scroll_cb(nullptr, (double)dx, (double)dy);
+}
+/* spec/44_0 §8.2: das Fenster verliert den Fokus -- jeder laufende Druck wird
+ * abgebrochen, jede gehaltene Taste freigegeben.  Damit ist §2.1 pruefbar,
+ * ohne ein zweites Fenster zu oeffnen. */
+extern "C" void aiml_input_post_focus_lost(void) {
+    if (!g_input) return;
+    glfw_focus_cb(nullptr, 0);
 }
 extern "C" void aiml_input_post_key_down(const char* name) {
     if (!g_input || !name) return;
@@ -1201,6 +1246,21 @@ static EM_BOOL bin_mouseup(int /*type*/, const EmscriptenMouseEvent* e, void* /*
 }
 static void bin_cancel_press(int btn);   /* defined with the touch handlers below */
 
+/* spec/44_0 §2.1: gehaltene Tasten beim Fokusverlust freigeben.  Das `keyup`
+ * geht an das Fenster, das den Fokus JETZT hat -- ohne dieses Aufraeumen bleibt
+ * `raw_keys` fuer immer gesetzt, und eine Kamera an `key_down("E")` dreht den
+ * Rest der Sitzung (datacreatures, 15.11.2026). */
+static void bin_release_keys(void) {
+    if (!g_b) return;
+    for (int k = 0; k < AIML_MAX_KEYS; k++) {
+        if (!g_b->raw_keys[k] && !g_b->curr_keys[k]) continue;
+        g_b->raw_keys[k]  = 0;
+        g_b->curr_keys[k] = 0;
+        g_b->pend_krelease[k]  = 1;
+        g_b->frame_krelease[k] = 1;
+    }
+}
+
 /* touchcancel = the system took the press away (incoming call, edge gesture,
  * browser took over scrolling, notification overlay).  The gesture did NOT
  * happen, so this must not look like touchend (spec/44_0 §2.2). */
@@ -1233,6 +1293,7 @@ static EM_BOOL bin_blur(int /*type*/, const EmscriptenFocusEvent* e, void* /*ud*
             return EM_FALSE;   /* Element-Fokus, nicht Fensterfokus */
     }
     for (int b = 0; b < AIML_MAX_MOUSE; b++) bin_cancel_press(b);
+    bin_release_keys();
     return EM_FALSE;   /* don't swallow the event */
 }
 static EM_BOOL bin_wheel(int /*type*/, const EmscriptenWheelEvent* e, void* /*ud*/) {
@@ -1866,6 +1927,15 @@ extern "C" void aiml_input_post_mouse_move_pending(float x, float y) {
     }
 }
 
+/* spec/44_0 §8.2: Fokusverlust -- Druck abbrechen UND gehaltene Tasten
+ * freigeben (§2.1).  Der Abbruch steht weiter unten, darum die Vorab-Ansage. */
+extern "C" void aiml_input_post_touch_cancel(void);
+extern "C" void aiml_input_post_focus_lost(void) {
+    if (!g_b) return;
+    aiml_input_post_touch_cancel();
+    bin_release_keys();
+}
+
 /* spec/44_0 §8.2 + §8.3: write the FRAME-visible cancel slot directly (same rule
  * as post_mouse_up here), so an injected cancel fires exactly once. */
 extern "C" void aiml_input_post_touch_cancel(void) {
@@ -2118,6 +2188,7 @@ void aiml_input_post_mouse_move_pending(float, float) {}
 void aiml_input_post_mouse_down_pending(int32_t) {}
 void aiml_input_post_mouse_up_pending  (int32_t) {}
 void aiml_input_post_touch_cancel(void)   {}
+void aiml_input_post_focus_lost(void)     {}
 void aiml_input_post_scroll    (float, float) {}
 void aiml_input_post_key_down  (const char*) {}
 void aiml_input_post_key_up    (const char*) {}

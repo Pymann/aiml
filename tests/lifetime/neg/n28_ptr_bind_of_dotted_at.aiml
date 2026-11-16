@@ -1,0 +1,16 @@
+# SPEC: 61_memory_management
+# EXPECT-ERROR: yields a ref<Card> BORROW
+# spec/61 §5.4/§6.2: `at` on a list<ptr<T>> yields a BORROW — the list keeps sole ownership.
+# Binding it to ptr<T> makes a second unique owner (double free). Identical to the
+# `deck.cards.at(0)` spelling, which was already rejected: the container being a MEMBER PATH
+# (`deck.cards`) must not change the verdict.
+- model: {name: Card, fields: [[title, string]]}
+- model: {name: Deck, fields: [[cards, list<ptr<Card>>]]}
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [deck, Deck]
+      - call: [deck.cards.push, {new: Card}]
+      - decl: [card, ptr<Card>, {at: [deck.cards, 0]}]
+      - return: card.title.len

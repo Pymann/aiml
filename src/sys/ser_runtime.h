@@ -259,6 +259,12 @@ int32_t aiml_ser_encoded_size(const void*          obj,
 // previous value so callers can save/restore (nesting-safe).  See ser_runtime.cpp.
 int     aiml_ser_set_guard(int on);
 
+// spec/31 §6.10: der Schema-Fingerabdruck eines Deskriptors (derselbe Wert, der
+// jeden persistenten KV-Blob schuetzt).  Inhaltsbasiert, also gleich fuer dasselbe
+// Modell aus verschiedenen Uebersetzungseinheiten -- die KV-Registratur vergleicht
+// damit, ob eine zweite Oeffnung denselben Werttyp verlangt wie die erste.
+uint32_t aiml_ser_schema_fingerprint(const AimlTypeNode* nodes, int32_t n_nodes);
+
 // Debug: walk a live struct via its type descriptor and print every field
 // (i-values, string content+len with an AimlStrHeader-magic sanity check, list
 // counts + element size, nested structs) to stderr.  String pointers whose

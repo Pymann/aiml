@@ -1389,6 +1389,14 @@ aggregate (fresh strings/containers/`ptr` boxes/clonable resources) use `clone` 
   owned via `a` — that field may point at an object freed independently, so a `ref` returned
   through it is **not** a valid anchor and is **rejected**. The anchor path must be provably
   owning end-to-end.
+  - **A `global` is the second valid anchor, and needs no annotation.** Static storage outlives
+    every borrow, so a `ref<T>` reached from a global — the global itself, its value fields, its
+    `ptr`/`shared`/container members, their elements — cannot outlive its owner, and such a
+    return is accepted from a function with **no** `ref<T>` parameter at all. The owning-path
+    rule applies unchanged (a step through a weak `ref` field still disqualifies it), and the
+    result stays subject to §5.4 invalidation like any other borrow: mutating the global's
+    container invalidates it even though the global lives on. `borrows:` names a **parameter**
+    only, so a global-anchored return carries no `borrows:` — there is nothing to disambiguate.
   - **Not guaranteed / disallowed anchors:** a **callee local** or a callee-`new`'d value (dies
     at return); a **`ptr<T>` parameter** (moved-in — the callee **owns** it and frees it at
     return, so a `ref` to it dangles); and — the subtle ones —
