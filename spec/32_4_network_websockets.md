@@ -164,10 +164,13 @@ Ping frames from the peer are automatically answered with pong.
     args: [[conn, ws_handle], [msg, string]]
     body:
       # Broadcast: send to all connected clients
-      - decl: [c, ws_handle]
-      - for: [c, clients]
-        body:
-          - call: [c.send, msg]
+      - decl: [i, i32, 0]
+      - while:
+          condition: { lt: [i, clients.len] }
+          body:
+            - decl: [c, ws_handle, { at: [clients, i] }]
+            - call: [c.send, msg]
+            - set:  [i, { +: [i, 1] }]
 
 - def:
     name: ws_on_close

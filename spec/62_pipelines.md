@@ -1,5 +1,14 @@
 # 62 - Pipelines: Matrix, Reuse, Parallelism [PROPOSAL]
 
+> **Note — `for:` does not exist in aiml.** Two examples below (§11, §13) walk a
+> list with `- for: [x, xs]`. There is no such statement: the compiler rejects
+> the key by name (`unknown statement 'for'`). A collection is walked with
+> `while` over an index, or with an `iterator<T>` — see
+> [06_loops.md](06_loops.md) and [54_iterators.md](54_iterators.md). Those two
+> examples are left as written until this chapter is implemented; as they stand
+> they are not valid aiml, and the §11 one iterates a `reports` it never
+> declares.
+
 ## 1. Goal
 
 A pipeline builds something, usually not once but across a set of configurations: architecture ×
@@ -1035,6 +1044,7 @@ and verify mode reports divergence over time (cosmos `doc/spec/96` §96.5).
                 return: i32
                 body:
                   - decl: [total, i32, 0]
+                  # `for:` does not exist — see spec/06; not valid aiml as written
                   - for: [rep, reports]
                     body: [{ set: [total, { +: [total, rep.warnings] }] }]
                   - call: [log.info, "Matrix fertig, ${total} Warnungen"]
@@ -1588,6 +1598,7 @@ auf den Laufbeginn (§13.3), dieser hier nicht.
     return: { type: string, lifetime: producer }
     body:
       - decl: [src, string, "- pipeline:\n    name: generated\n    steps:\n"]
+      # `for:` does not exist — see spec/06; not valid aiml as written
       - for: [row, rows]
         body:
           - set: [src, "${src}      - stage:\n          name: ${row.name}\n"]

@@ -35,7 +35,7 @@ This document serves as a comprehensive reference for AIML's built-in data types
     - [Multiplayer (`mirror`)](#411-multiplayer-mirror)
 5. [Language Syntax & Structures](#5-language-syntax--structures)
     - [Variables (`decl`, `set`)](#51-variables-decl-set)
-    - [Control Flow (`if`, `while`, `for`)](#52-control-flow-if-while-for)
+    - [Control Flow (`if`, `while`)](#52-control-flow-if-while)
     - [Functions (`def`, `call`)](#53-functions-def-call)
     - [Object-Oriented (`class`, `model`, `interface`)](#54-object-oriented-class-model-interface)
     - [Modules (`namespace`, `import`)](#55-modules-namespace-import)
@@ -387,7 +387,7 @@ AIML utilizes YAML for Abstract Syntax Tree representations. All statements are 
   - set: [count, { +: [count, 1] }]  # Inline expression calculation
   ```
 
-### 5.2 Control Flow (`if`, `while`, `for`)
+### 5.2 Control Flow (`if`, `while`)
 Control structures execute block lists dynamically based on strictly boolean conditions.
 A `bool` value (variable, member, call result) is a condition by itself, e.g.
 `condition: ready`; comparisons and `not`/`&&`/`||` yield `bool`.
@@ -407,11 +407,16 @@ A `bool` value (variable, member, call result) is a condition by itself, e.g.
       - set: [x, { +: [x, 1] }]
   ```
 
-- **`for`**: Treat this as provisional only. It is not currently as well evidenced in the live test/spec corpus as `if` and `while`, so do not rely on it as strongly validated syntax.
+- **Walking a collection**: there is no `for:` — the compiler rejects that key
+  (`spec/06`). Index with `while`, or take an `iterator<T>` (`spec/54`).
   ```yaml
-  - for: [item, my_list]
-    body:
-      - print: [item]
+  - decl: [i, i32, 0]
+  - while:
+      condition: { lt: [i, my_list.len] }
+      body:
+        - decl: [item, string, { at: [my_list, i] }]
+        - call: [log.info, item]
+        - set:  [i, { +: [i, 1] }]
   ```
 
 - **`try` / `catch`**: Structured exception handling exists and is used in tests.

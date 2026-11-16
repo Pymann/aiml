@@ -1429,12 +1429,15 @@ If it detects a higher version with new fields, it applies **in-place migration*
       - set:  [matches, { call: [doc_vecs.search, query_embedding, 3] }]
 
       - decl: [result, list<Document>]
-      - decl: [m, VecResult]
-      - for: [m, matches]
-        body:
-          - decl: [d, ref<Document>]
-          - set:  [d, { call: [docs.get, m.id] }]
-          - call: [result.push, d]
+      - decl: [i, i32, 0]
+      - while:
+          condition: { lt: [i, matches.len] }
+          body:
+            - decl: [m, VecResult, { at: [matches, i] }]
+            - decl: [d, ref<Document>]
+            - set:  [d, { call: [docs.get, m.id] }]
+            - call: [result.push, d]
+            - set:  [i, { +: [i, 1] }]
       - return: result
 ```
 
