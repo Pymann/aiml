@@ -15,6 +15,40 @@
 | `ws_handle`        | `i8*` | Client- or server-side WebSocket connection |
 | `ws_server_handle` | `i8*` | WebSocket server (binds port, manages connections) |
 
+### 1.1 Address Families (IPv4 / IPv6)
+
+Every socket this chapter opens — `ws.connect`, `ws.server`, `http.server`, and the
+`ws://`/`wss://` transports of `mirror` (spec/44_5) — is **address-family agnostic**.
+Neither the caller nor the URL selects a family; the resolver does.
+
+**Clients** resolve the host with `AF_UNSPEC` and **MUST try every address the
+resolver returns, in the order it returns them**, until one connects. RFC 6724 puts
+IPv6 ahead of IPv4, so a host that publishes an `AAAA` record which does not answer
+(the address is routed but nothing listens, a firewall blackholes it, or the DNS
+record outlives the service) is **unreachable** for a client that stops at the first
+address. At the call site that failure is indistinguishable from "server down", which
+is why it MUST NOT happen. The timeout the caller passes is the budget for the
+**whole** call and is divided across the candidates — a blackholed address must never
+double the wait that was asked for.
+
+**Servers** given a wildcard host (`"0.0.0.0"`, `"::"`, `"*"`, or no host at all)
+**MUST** open a single dual-stack `AF_INET6` socket with `IPV6_V6ONLY` disabled, so
+one listener serves both stacks. A kernel without IPv6 falls back to an IPv4 listener
+rather than failing to bind. A **literal** host is resolved with `AI_PASSIVE` and the
+family follows the address named, so `"127.0.0.1"` and `"::1"` both bind as written.
+
+> **Why this is mandatory, not a nicety.** A server bound `AF_INET`-only while DNS
+> advertises an `AAAA` record refuses every IPv6 client, and the refusal is silent:
+> the listener logs nothing, because the connection never reaches it. Browsers hide
+> this with Happy Eyeballs (they retry over IPv4 after ~250 ms); a native client that
+> takes the first address simply fails, and the two symptoms look nothing alike.
+
+**Peer addresses.** A dual-stack listener delivers IPv4 peers as **V4-mapped**
+addresses (`::ffff:a.b.c.d`). `ws` and `mirror` **MUST** unwrap those to plain dotted
+form before exposing them (`session.peer_ip`, spec/44_5 §3.4), so an address captured
+at accept compares equal to the same address seen over IPv4 — bans, rate-limit keys
+and audit logs stay keyed consistently across both stacks.
+
 ---
 
 ## 2. WebSocket Client

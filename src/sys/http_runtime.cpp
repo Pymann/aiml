@@ -1028,7 +1028,7 @@ struct AimlHttpServer {
     std::atomic<int> active_conns{0};        // live handler threads
     int              rate_max  = 0;          // 0 = per-IP rate limiting off
     int              rate_window_secs = 60;  // fixed-window length
-    std::unordered_map<uint32_t, std::pair<time_t,int>> rate_map; // ip → (window_start, count)
+    std::unordered_map<std::string, std::pair<time_t,int>> rate_map; // ip → (window_start, count)
     std::mutex       rate_mtx;
 };
 
@@ -1921,7 +1921,7 @@ struct ConnCtx {
     int             fd;
     SSL*            ssl;
     AimlHttpServer* server;
-    uint32_t        peer_ip;   // network-order IPv4 of the connecting socket
+    std::string     peer_ip;   // dotted/colon form of the connecting socket (v4 or v6)
 };
 
 // Decrements the live-connection counter on scope exit (both handler return paths).
@@ -1957,7 +1957,7 @@ static void* handle_connection(void* arg) {
     int fd = ctx->fd;
     SSL* ssl = ctx->ssl;
     AimlHttpServer* srv = ctx->server;
-    uint32_t peer_ip = ctx->peer_ip;
+    std::string peer_ip = ctx->peer_ip;
     delete ctx;
     ConnGuard conn_guard{srv};   // decrements active_conns on every return path
 
@@ -1982,10 +1982,7 @@ static void* handle_connection(void* arg) {
 
     // Record the trusted socket peer IP (dotted) so req.client_ip() never has to
     // trust a spoofable X-Forwarded-For header. struct in_addr wants network order.
-    {
-        struct in_addr ina; ina.s_addr = peer_ip;
-        req->peer_ip = xstrdup(inet_ntoa(ina));
-    }
+    req->peer_ip = xstrdup(peer_ip.c_str());
 
     // TLS on the plain listener (see parse_http_request): just close.
     if (req->reject_status == -1) {
@@ -2127,9 +2124,31 @@ static void send_raw_status(int fd, int code, const char* reason) {
     if (n > 0) ::send(fd, buf, static_cast<size_t>(n), MSG_NOSIGNAL);
 }
 
+/* Peer address → string, any family.  A dual-stack listener (spec/32_4 §1.1)
+ * delivers IPv4 peers V4-MAPPED (::ffff:a.b.c.d); unwrap those so a rate-limit
+ * key or client_ip() reads the same whichever stack the client arrived on. */
+static std::string http_render_peer_ip(const struct sockaddr* sa) {
+    char buf[INET6_ADDRSTRLEN] = {0};
+    if (!sa) return std::string();
+    if (sa->sa_family == AF_INET) {
+        const auto* a4 = reinterpret_cast<const struct sockaddr_in*>(sa);
+        inet_ntop(AF_INET, &a4->sin_addr, buf, sizeof(buf));
+    } else if (sa->sa_family == AF_INET6) {
+        const auto* a6 = reinterpret_cast<const struct sockaddr_in6*>(sa);
+        if (IN6_IS_ADDR_V4MAPPED(&a6->sin6_addr)) {
+            struct in_addr v4{};
+            memcpy(&v4, reinterpret_cast<const uint8_t*>(&a6->sin6_addr) + 12, 4);
+            inet_ntop(AF_INET, &v4, buf, sizeof(buf));
+        } else {
+            inet_ntop(AF_INET6, &a6->sin6_addr, buf, sizeof(buf));
+        }
+    }
+    return std::string(buf);
+}
+
 // Per-IP fixed-window rate limit. Returns true if the connection is allowed.
 // Prunes stale windows when the table grows, so unique-IP floods stay bounded.
-static bool rate_allow(AimlHttpServer* srv, uint32_t ip) {
+static bool rate_allow(AimlHttpServer* srv, const std::string& ip) {
     if (srv->rate_max <= 0) return true;
     time_t now = time(nullptr);
     std::lock_guard<std::mutex> g(srv->rate_mtx);
@@ -2148,21 +2167,21 @@ static bool rate_allow(AimlHttpServer* srv, uint32_t ip) {
 static void* accept_loop(void* arg) {
     AimlHttpServer* srv = static_cast<AimlHttpServer*>(arg);
     while (srv->running) {
-        struct sockaddr_in addr{};
+        struct sockaddr_storage addr{};
         socklen_t len = sizeof(addr);
         int cfd = ::accept4(srv->listen_fd, reinterpret_cast<sockaddr*>(&addr), &len, SOCK_CLOEXEC);
         if (cfd < 0) {
             if (srv->running) continue;
             break;
         }
-        uint32_t peer_ip = addr.sin_addr.s_addr;
+        std::string peer_ip = http_render_peer_ip(reinterpret_cast<const sockaddr*>(&addr));
 
         // Per-IP rate limit — reject before spending a thread or TLS handshake.
         if (!rate_allow(srv, peer_ip)) {
             if (!srv->ssl_ctx) send_raw_status(cfd, 429, "Too Many Requests");
             ::close(cfd);
             fprintf(stderr, "[http] rate-limit: rejected %s (>%d/%ds)\n",
-                    inet_ntoa(addr.sin_addr), srv->rate_max, srv->rate_window_secs);
+                    peer_ip.c_str(), srv->rate_max, srv->rate_window_secs);
             continue;
         }
         // Concurrent-connection cap — bound thread/resource growth under load.
@@ -2171,7 +2190,7 @@ static void* accept_loop(void* arg) {
             if (!srv->ssl_ctx) send_raw_status(cfd, 503, "Service Unavailable");
             ::close(cfd);
             fprintf(stderr, "[http] conn-cap: rejected %s (active=%d max=%d)\n",
-                    inet_ntoa(addr.sin_addr),
+                    peer_ip.c_str(),
                     srv->active_conns.load(std::memory_order_relaxed), srv->max_conns);
             continue;
         }
@@ -2187,19 +2206,45 @@ static void* accept_loop(void* arg) {
 
 extern "C" void* aiml_http_server(const char* host, int32_t port) {
     signal(SIGPIPE, SIG_IGN);
-    int fd = ::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
-    if (fd < 0) return nullptr;
-    int yes = 1;
-    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
-    struct sockaddr_in addr{};
-    addr.sin_family      = AF_INET;
-    addr.sin_port        = htons(static_cast<uint16_t>(port));
-    addr.sin_addr.s_addr = host && strcmp(host, "0.0.0.0") != 0
-                            ? inet_addr(host) : INADDR_ANY;
-    if (::bind(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0 ||
-        ::listen(fd, 128) < 0) {
-        ::close(fd); return nullptr;
+    /* spec/32_4 §1.1: a wildcard bind opens ONE dual-stack AF_INET6 socket so the
+     * host answers on both stacks.  AF_INET-only meant a page served under a name
+     * with an AAAA record was refused over IPv6 — silently, because the connection
+     * never reached this server. */
+    const bool wildcard = !host || !*host || strcmp(host, "0.0.0.0") == 0
+                       || strcmp(host, "::") == 0 || strcmp(host, "*") == 0;
+    int fd = -1;
+    if (wildcard) {
+        fd = ::socket(AF_INET6, SOCK_STREAM | SOCK_CLOEXEC, 0);
+        if (fd >= 0) {
+            int yes = 1, no = 0;
+            setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+            setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &no, sizeof(no));
+            struct sockaddr_in6 a6{};
+            a6.sin6_family = AF_INET6;
+            a6.sin6_addr   = in6addr_any;
+            a6.sin6_port   = htons(static_cast<uint16_t>(port));
+            if (::bind(fd, reinterpret_cast<sockaddr*>(&a6), sizeof(a6)) < 0 ||
+                ::listen(fd, 128) < 0) { ::close(fd); fd = -1; }
+        }
     }
+    if (fd < 0) {
+        char ps[16]; snprintf(ps, sizeof(ps), "%d", port);
+        struct addrinfo hints{}, *res = nullptr;
+        hints.ai_family   = AF_UNSPEC;
+        hints.ai_socktype = SOCK_STREAM;
+        hints.ai_flags    = AI_PASSIVE;
+        if (getaddrinfo(wildcard ? nullptr : host, ps, &hints, &res) != 0 || !res) return nullptr;
+        for (struct addrinfo* ai = res; ai && fd < 0; ai = ai->ai_next) {
+            int cand = ::socket(ai->ai_family, SOCK_STREAM | SOCK_CLOEXEC, 0);
+            if (cand < 0) continue;
+            int yes = 1;
+            setsockopt(cand, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+            if (::bind(cand, ai->ai_addr, ai->ai_addrlen) == 0 && ::listen(cand, 128) == 0) fd = cand;
+            else ::close(cand);
+        }
+        freeaddrinfo(res);
+    }
+    if (fd < 0) return nullptr;
     AimlHttpServer* srv = new AimlHttpServer();
     srv->listen_fd       = fd;
     srv->default_headers = aiml_http_map_new();

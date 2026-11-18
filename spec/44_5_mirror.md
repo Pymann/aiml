@@ -162,6 +162,13 @@ In the browser (WASM), only `ws://` and `wss://` are available.
 | `mirror.listen_max(url: string, max_peers: i32)` | `mirror_session` | With peer limit |
 | `mirror.listen_tls(url: string, cert: string, key: string)` | `mirror_session` | `wss://` host with a server cert (PEM cert + key paths) |
 
+**Address family.** The host part of a listen URL selects no address family.
+`"0.0.0.0"`, `"::"`, `"*"` and an empty host all mean *wildcard* and open a single
+**dual-stack** listener that serves IPv4 and IPv6 at once; a literal address binds the
+family it names. Clients resolve with `AF_UNSPEC` and try every resolved address in
+order. The rules, and why an `AF_INET`-only bind silently refuses every IPv6 client,
+are in **spec/32_4 §1.1**.
+
 **TLS hosting (`wss://`)** requires a server certificate — a plain `mirror.listen`
 on a `wss://` URL fails, because the WSS server cannot complete a handshake without
 one. Use `mirror.listen_tls(url, cert, key)`; the underlying WSS server applies the
@@ -198,6 +205,13 @@ cannot block the host tick (`tests/test_mirror_wss_stall.aiml`). Example:
 |--------|----------|--------------|
 | `mirror.connect(url: string)` | `mirror_session` | Establish connection (blocks until connected or error) |
 | `mirror.connect_timeout(url: string, ms: i32)` | `mirror_session` | With timeout in ms |
+
+`ms` bounds the **entire** connect — address resolution, TCP, the TLS handshake for
+`wss://`, and the HTTP upgrade — not just the TCP part. A peer that completes the TCP
+connect and then stays silent (a host whose session is never pumped, a wedged process,
+a middlebox dropping the upgrade) **MUST NOT** stall the caller past `ms`; returning
+`null` late is a bug, returning `null` on time is the contract. Across several resolved
+addresses (spec/32_4 §1.1) the budget is divided, never multiplied.
 
 ### 3.4 Closing a Session
 

@@ -11,6 +11,10 @@ extern "C" {
 
 // ── Client ────────────────────────────────────────────────────────────────────
 void*   aiml_ws_connect(const char* host, int32_t port, const char* path);
+// Same, but the whole connect (TCP + HTTP upgrade, + TLS for wss) is bounded by
+// timeout_ms.  mirror.connect_timeout routes through these (spec/44_5 §3.3).
+void*   aiml_ws_connect_to(const char* host, int32_t port, const char* path, int32_t timeout_ms);
+void*   aiml_wss_connect_to(const char* host, int32_t port, const char* path, int32_t timeout_ms);
 void*   aiml_wss_connect(const char* host, int32_t port, const char* path);
 
 // ── Server ────────────────────────────────────────────────────────────────────

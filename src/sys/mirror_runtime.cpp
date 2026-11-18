@@ -278,6 +278,19 @@ static ParsedUrl mirror_parse_url(const char* url) {
     else if (u.substr(0, 6) == "wss://") { r.type = MT_WSS; u = u.substr(6); }
     else return r;
 
+    /* RFC 3986: an IPv6 literal is bracketed — "ws://[::1]:8765".  Without this the
+     * rfind(':') below would split inside the address and hand getaddrinfo a host
+     * that cannot resolve, so an IPv6 URL was not expressible at all (spec/32_4 §1.1). */
+    if (!u.empty() && u[0] == '[') {
+        auto rb = u.find(']');
+        if (rb == std::string::npos) return r;
+        r.host = u.substr(1, rb - 1);
+        if (rb + 1 >= u.size() || u[rb + 1] != ':') return r;
+        try { r.port = std::stoi(u.substr(rb + 2)); } catch(...) { return r; }
+        r.ok = true;
+        return r;
+    }
+
     auto colon = u.rfind(':');
     if (colon == std::string::npos) return r;
     r.host = u.substr(0, colon);
@@ -783,6 +796,28 @@ static void process_packet(AimlMirrorSession* s, AimlMirrorPeer* from_peer,
 
 /* ── Peer accept ──────────────────────────────────────────────────────────── */
 
+/* Peer address → string, any family.  A dual-stack listener (spec/32_4 §1.1)
+ * delivers IPv4 peers as V4-MAPPED (::ffff:a.b.c.d); unwrap those so bans and
+ * rate-limit keys stay comparable with the dotted form stored elsewhere. */
+static std::string mirror_peer_ip(const struct sockaddr* sa) {
+    char buf[INET6_ADDRSTRLEN] = {0};
+    if (!sa) return std::string();
+    if (sa->sa_family == AF_INET) {
+        const auto* a4 = (const struct sockaddr_in*)sa;
+        inet_ntop(AF_INET, &a4->sin_addr, buf, sizeof(buf));
+    } else if (sa->sa_family == AF_INET6) {
+        const auto* a6 = (const struct sockaddr_in6*)sa;
+        if (IN6_IS_ADDR_V4MAPPED(&a6->sin6_addr)) {
+            struct in_addr v4{};
+            memcpy(&v4, ((const uint8_t*)&a6->sin6_addr) + 12, 4);
+            inet_ntop(AF_INET, &v4, buf, sizeof(buf));
+        } else {
+            inet_ntop(AF_INET6, &a6->sin6_addr, buf, sizeof(buf));
+        }
+    }
+    return std::string(buf);
+}
+
 static void mirror_send_hello(AimlMirrorPeer* peer) {
     uint8_t pkt[6] = {0, 0, 0, 0, PKT_HELLO, AIML_RPC_VERSION};
     mirror_send(peer, pkt, 6);
@@ -796,7 +831,7 @@ static void mirror_try_accept(AimlMirrorSession* s) {
         int srv_fd = s->listener.tcp_fd;
         if (srv_fd < 0) return;
         if (!tcp_readable(srv_fd)) return;
-        struct sockaddr_in addr{}; socklen_t len = sizeof(addr);
+        struct sockaddr_storage addr{}; socklen_t len = sizeof(addr);
         int client_fd = accept4(srv_fd, (struct sockaddr*)&addr, &len, SOCK_CLOEXEC);
         if (client_fd < 0) return;
         tcp_set_nonblocking(client_fd);
@@ -805,7 +840,7 @@ static void mirror_try_accept(AimlMirrorSession* s) {
         peer->transport.type   = MT_TCP;
         peer->transport.tcp_fd = client_fd;
         peer->id = s->next_peer_id++;
-        peer->ip = inet_ntoa(addr.sin_addr);
+        peer->ip = mirror_peer_ip((const struct sockaddr*)&addr);
         s->peers.push_back(peer);
         mirror_send_hello(peer);
 
@@ -972,20 +1007,47 @@ static void* mirror_listen_impl(const char* url, int32_t max_peers,
     s->max_peers = max_peers;
 
     if (pu.type == MT_TCP) {
-        int srv = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
-        if (srv < 0) { delete s; return nullptr; }
-        int opt = 1;
-        setsockopt(srv, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-        struct sockaddr_in addr{};
-        addr.sin_family      = AF_INET;
-        addr.sin_port        = htons((uint16_t)pu.port);
-        addr.sin_addr.s_addr = INADDR_ANY;
-        if (pu.host != "0.0.0.0" && !pu.host.empty())
-            inet_pton(AF_INET, pu.host.c_str(), &addr.sin_addr);
-        if (bind(srv, (struct sockaddr*)&addr, sizeof(addr)) < 0 ||
-            listen(srv, 16) < 0) {
-            close(srv); delete s; return nullptr;
+        /* spec/32_4 §1.1: wildcard bind → ONE dual-stack AF_INET6 socket
+         * (IPV6_V6ONLY off) so both stacks are served; AF_INET-only silently
+         * refused every IPv6 client while DNS kept advertising the AAAA. */
+        const bool wildcard = pu.host.empty() || pu.host == "0.0.0.0"
+                           || pu.host == "::" || pu.host == "*";
+        int srv = -1;
+        if (wildcard) {
+            srv = socket(AF_INET6, SOCK_STREAM | SOCK_CLOEXEC, 0);
+            if (srv >= 0) {
+                int opt = 1, no = 0;
+                setsockopt(srv, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+                setsockopt(srv, IPPROTO_IPV6, IPV6_V6ONLY, &no, sizeof(no));
+                struct sockaddr_in6 a6{};
+                a6.sin6_family = AF_INET6;
+                a6.sin6_addr   = in6addr_any;
+                a6.sin6_port   = htons((uint16_t)pu.port);
+                if (bind(srv, (struct sockaddr*)&a6, sizeof(a6)) < 0 || listen(srv, 16) < 0) {
+                    close(srv); srv = -1;   /* no IPv6 here → IPv4 candidate below */
+                }
+            }
         }
+        if (srv < 0) {
+            struct addrinfo hints{}, *res = nullptr;
+            hints.ai_family   = AF_UNSPEC;
+            hints.ai_socktype = SOCK_STREAM;
+            hints.ai_flags    = AI_PASSIVE;
+            std::string lport = std::to_string(pu.port);
+            if (getaddrinfo(wildcard ? nullptr : pu.host.c_str(), lport.c_str(), &hints, &res) != 0 || !res) {
+                delete s; return nullptr;
+            }
+            for (struct addrinfo* ai = res; ai && srv < 0; ai = ai->ai_next) {
+                int cand = socket(ai->ai_family, SOCK_STREAM | SOCK_CLOEXEC, 0);
+                if (cand < 0) continue;
+                int opt = 1;
+                setsockopt(cand, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+                if (bind(cand, ai->ai_addr, ai->ai_addrlen) == 0 && listen(cand, 16) == 0) srv = cand;
+                else close(cand);
+            }
+            freeaddrinfo(res);
+        }
+        if (srv < 0) { delete s; return nullptr; }
         tcp_set_nonblocking(srv);
         s->listener.type   = MT_TCP;
         s->listener.tcp_fd = srv;
@@ -1046,42 +1108,54 @@ void* aiml_mirror_connect_timeout(const char* url, int32_t ms) {
     peer->id = 0;  /* server is peer 0 */
 
     if (pu.type == MT_TCP) {
-        int fd = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
-        if (fd < 0) { delete peer; delete s; return nullptr; }
+        /* spec/32_4 §1.1: resolve with AF_UNSPEC and try EVERY address in order.
+         * AF_INET-only could not reach an IPv6-only host at all; stopping at the
+         * first address would strand a host whose preferred (v6) address is
+         * published but unanswered.  `ms` is the budget for the whole call. */
         struct addrinfo hints{}, *res = nullptr;
-        hints.ai_family   = AF_INET;
+        hints.ai_family   = AF_UNSPEC;
         hints.ai_socktype = SOCK_STREAM;
         std::string port_str = std::to_string(pu.port);
         if (getaddrinfo(pu.host.c_str(), port_str.c_str(), &hints, &res) != 0 || !res) {
-            close(fd); delete peer; delete s; return nullptr;
+            delete peer; delete s; return nullptr;
         }
-        /* Set non-blocking for timeout connect */
-        tcp_set_nonblocking(fd);
-        connect(fd, res->ai_addr, res->ai_addrlen);
-        freeaddrinfo(res);
+        int n_addrs = 0;
+        for (struct addrinfo* ai = res; ai; ai = ai->ai_next) ++n_addrs;
+        int32_t per_ms = (n_addrs > 1 && ms > 0) ? (ms / n_addrs) : ms;
+        if (per_ms < 250 && ms > 0) per_ms = ms < 250 ? ms : 250;
 
-        /* Wait for connection up to `ms` milliseconds */
-        fd_set wfds; FD_ZERO(&wfds); FD_SET(fd, &wfds);
-        struct timeval tv;
-        tv.tv_sec  = ms / 1000;
-        tv.tv_usec = (ms % 1000) * 1000;
-        if (select(fd + 1, nullptr, &wfds, nullptr, &tv) <= 0) {
-            close(fd); delete peer; delete s; return nullptr;
+        int fd = -1;
+        for (struct addrinfo* ai = res; ai && fd < 0; ai = ai->ai_next) {
+            int cand = socket(ai->ai_family, SOCK_STREAM | SOCK_CLOEXEC, 0);
+            if (cand < 0) continue;
+            tcp_set_nonblocking(cand);
+            if (connect(cand, ai->ai_addr, ai->ai_addrlen) != 0 && errno != EINPROGRESS) {
+                close(cand); continue;
+            }
+            fd_set wfds; FD_ZERO(&wfds); FD_SET(cand, &wfds);
+            struct timeval tv;
+            tv.tv_sec  = per_ms / 1000;
+            tv.tv_usec = (per_ms % 1000) * 1000;
+            if (select(cand + 1, nullptr, &wfds, nullptr, &tv) <= 0) { close(cand); continue; }
+            int err = 0; socklen_t errlen = sizeof(err);
+            getsockopt(cand, SOL_SOCKET, SO_ERROR, &err, &errlen);
+            if (err != 0) { close(cand); continue; }
+            fd = cand;
         }
-        /* Verify connection */
-        int err = 0; socklen_t errlen = sizeof(err);
-        getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &errlen);
-        if (err != 0) { close(fd); delete peer; delete s; return nullptr; }
+        freeaddrinfo(res);
+        if (fd < 0) { delete peer; delete s; return nullptr; }
 
         peer->transport.type   = MT_TCP;
         peer->transport.tcp_fd = fd;
     } else {
         /* WS/WSS connect */
         void* ws_client = nullptr;
+        /* Die zugesagte Frist MUSS den ganzen Verbindungsaufbau decken, nicht nur
+         * den TCP-Teil: der HTTP-Upgrade hing frueher unbegrenzt (spec/44_5 §3.3). */
         if (pu.type == MT_WS)
-            ws_client = aiml_ws_connect(pu.host.c_str(), pu.port, "/");
+            ws_client = aiml_ws_connect_to(pu.host.c_str(), pu.port, "/", ms);
         else
-            ws_client = aiml_wss_connect(pu.host.c_str(), pu.port, "/");
+            ws_client = aiml_wss_connect_to(pu.host.c_str(), pu.port, "/", ms);
         if (!ws_client) {
             fprintf(stderr, "[mirror] WS connect to %s:%d failed\n", pu.host.c_str(), pu.port);
             delete peer; delete s; return nullptr;

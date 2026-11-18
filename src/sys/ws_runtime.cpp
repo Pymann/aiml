@@ -71,7 +71,11 @@ static EM_BOOL ws_on_error(int, const EmscriptenWebSocketErrorEvent*, void* ud) 
     return EM_TRUE;
 }
 
-static AimlWs* ws_connect_url(const char* url) {
+/* timeout_ms bounds the whole connect (spec/44_5 §3.3).  The wait below used to
+ * be unbounded: a peer that accepts the socket but never finishes the WebSocket
+ * handshake left this loop spinning forever — and because emscripten_sleep gives
+ * up the frame, the page simply stopped repainting, with no error anywhere. */
+static AimlWs* ws_connect_url(const char* url, int32_t timeout_ms = 10000) {
     if (!emscripten_websocket_is_supported()) {
         fprintf(stderr, "[ws] WebSocket API not supported in this environment\n");
         return nullptr;
@@ -88,7 +92,18 @@ static AimlWs* ws_connect_url(const char* url) {
     emscripten_websocket_set_onmessage_callback(s, ws, ws_on_message);
     emscripten_websocket_set_onclose_callback(s, ws, ws_on_close);
     emscripten_websocket_set_onerror_callback(s, ws, ws_on_error);
-    while (!ws->is_open && !ws->is_closed) emscripten_sleep(5);
+    if (timeout_ms <= 0) timeout_ms = 10000;
+    const double deadline = emscripten_get_now() + (double)timeout_ms;
+    while (!ws->is_open && !ws->is_closed) {
+        if (emscripten_get_now() >= deadline) {
+            fprintf(stderr, "[ws] connect to %s timed out after %d ms\n", url, (int)timeout_ms);
+            emscripten_websocket_close(s, 1000, "connect-timeout");
+            emscripten_websocket_delete(s);
+            free(ws);
+            return nullptr;
+        }
+        emscripten_sleep(5);
+    }
     if (ws->is_closed) {
         emscripten_websocket_close(s, 1000, "open-failed");
         emscripten_websocket_delete(s);
@@ -100,17 +115,23 @@ static AimlWs* ws_connect_url(const char* url) {
 
 extern "C" {
 
-void* aiml_ws_connect(const char* host, int32_t port, const char* path) {
+void* aiml_ws_connect_to(const char* host, int32_t port, const char* path, int32_t timeout_ms) {
     char url[512];
     snprintf(url, sizeof(url), "ws://%s:%d%s",
              host ? host : "localhost", port, path ? path : "/");
-    return ws_connect_url(url);
+    return ws_connect_url(url, timeout_ms);
 }
-void* aiml_wss_connect(const char* host, int32_t port, const char* path) {
+void* aiml_wss_connect_to(const char* host, int32_t port, const char* path, int32_t timeout_ms) {
     char url[512];
     snprintf(url, sizeof(url), "wss://%s:%d%s",
              host ? host : "localhost", port, path ? path : "/");
-    return ws_connect_url(url);
+    return ws_connect_url(url, timeout_ms);
+}
+void* aiml_ws_connect(const char* host, int32_t port, const char* path) {
+    return aiml_ws_connect_to(host, port, path, 10000);
+}
+void* aiml_wss_connect(const char* host, int32_t port, const char* path) {
+    return aiml_wss_connect_to(host, port, path, 10000);
 }
 
 void* aiml_ws_server(const char*, int32_t)                                  { errno = ENOTSUP; return nullptr; }
@@ -499,7 +520,27 @@ static char* hdr_get(const char* hdrs, const char* name) {
 // HTTP Upgrade handshake
 // ══════════════════════════════════════════════════════════════════════════════
 
-static int ws_client_handshake(AimlWs* ws, const char* host, int32_t port, const char* path) {
+/* Bound the client handshake in time.
+ *
+ * read_http_head() reads the 101 response byte by byte on a BLOCKING socket.  A
+ * peer that completes the TCP connect but never answers — a server whose session
+ * is not being pumped, a wedged process, a silently dropping middlebox — left the
+ * caller stuck here FOREVER, which made the millisecond budget of
+ * mirror.connect_timeout (spec/44_5 §3.3) a promise nothing enforced.  The
+ * receive timeout is applied for the handshake only and restored afterwards, so
+ * normal traffic keeps its own timing behaviour. */
+static void ws_set_rcv_timeout(int fd, int32_t ms) {
+    struct timeval tv;
+    tv.tv_sec  = ms / 1000;
+    tv.tv_usec = (ms % 1000) * 1000;
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+}
+
+static int ws_client_handshake(AimlWs* ws, const char* host, int32_t port, const char* path,
+                               int32_t timeout_ms = 10000) {
+    if (timeout_ms <= 0) timeout_ms = 10000;
+    ws_set_rcv_timeout(ws->fd, timeout_ms);
     char key[25];
     ws_gen_key(key);
 
@@ -514,9 +555,10 @@ static int ws_client_handshake(AimlWs* ws, const char* host, int32_t port, const
         "\r\n",
         path, host, port, key);
 
-    if (ws_write_n(ws, req, (int)strlen(req)) < 0) return -1;
+    if (ws_write_n(ws, req, (int)strlen(req)) < 0) { ws_set_rcv_timeout(ws->fd, 0); return -1; }
 
     char* resp = read_http_head(ws);
+    ws_set_rcv_timeout(ws->fd, 0);   /* back to blocking for normal traffic */
     if (!resp) return -1;
     bool ok = strncmp(resp, "HTTP/1.1 101", 12) == 0;
     free(resp);
@@ -631,17 +673,40 @@ static int hs_step(WsHs* h) {
     return 1;
 }
 
+/* Render an accepted peer's address, whatever family it arrived on.
+ * A dual-stack listener (spec/32_4 §1.1) hands IPv4 peers over as V4-MAPPED
+ * addresses (::ffff:a.b.c.d); those are unwrapped to plain dotted form so that
+ * stored IPs, bans and rate-limit keys stay comparable across both stacks. */
+static void ws_render_peer_ip(const struct sockaddr* sa, char* out, size_t out_len) {
+    if (!out || out_len == 0) return;
+    out[0] = '\0';
+    if (!sa) return;
+    if (sa->sa_family == AF_INET) {
+        const auto* a4 = (const struct sockaddr_in*)sa;
+        inet_ntop(AF_INET, &a4->sin_addr, out, (socklen_t)out_len);
+    } else if (sa->sa_family == AF_INET6) {
+        const auto* a6 = (const struct sockaddr_in6*)sa;
+        if (IN6_IS_ADDR_V4MAPPED(&a6->sin6_addr)) {
+            struct in_addr v4{};
+            memcpy(&v4, ((const uint8_t*)&a6->sin6_addr) + 12, 4);
+            inet_ntop(AF_INET, &v4, out, (socklen_t)out_len);
+        } else {
+            inet_ntop(AF_INET6, &a6->sin6_addr, out, (socklen_t)out_len);
+        }
+    }
+}
+
 // Accept new connections, advance pending handshakes, drop failed/expired ones.
 // Caller holds p->mtx.
 static void ws_pump(AimlWs* srv, WsPending* p) {
     for (;;) {
-        struct sockaddr_in addr{};
+        struct sockaddr_storage addr{};
         socklen_t len = sizeof(addr);
         int cfd = ::accept4(srv->fd, (sockaddr*)&addr, &len, SOCK_CLOEXEC | SOCK_NONBLOCK);
         if (cfd < 0) break;
         if (p->hs.size() >= kMaxPendingHandshakes) { ::close(cfd); continue; }
         AimlWs* c = new AimlWs{cfd, nullptr, nullptr, false, false, {0}};
-        inet_ntop(AF_INET, &addr.sin_addr, c->ip, sizeof(c->ip));
+        ws_render_peer_ip((const struct sockaddr*)&addr, c->ip, sizeof(c->ip));
         if (srv->ctx) {
             c->ssl = SSL_new(srv->ctx);
             SSL_set_fd(c->ssl, cfd);
@@ -800,22 +865,16 @@ static char* ws_recv_frame_raw(AimlWs* ws, uint8_t* out_opcode, size_t* out_len)
 
 /* Non-blocking TCP connect with millisecond timeout.
  * Returns connected fd (blocking mode restored) or -1 on failure. */
-static int tcp_connect(const char* host, int32_t port, int32_t timeout_ms = 5000) {
-    char ps[16];
-    snprintf(ps, sizeof(ps), "%d", port);
-    struct addrinfo hints{}, *res = nullptr;
-    hints.ai_family   = AF_UNSPEC;
-    hints.ai_socktype = SOCK_STREAM;
-    if (getaddrinfo(host, ps, &hints, &res) != 0 || !res) return -1;
-    int fd = ::socket(res->ai_family, SOCK_STREAM | SOCK_CLOEXEC, 0);
-    if (fd < 0) { freeaddrinfo(res); return -1; }
+/* Connect to ONE resolved address with a millisecond timeout. */
+static int tcp_connect_addr(const struct addrinfo* ai, int32_t timeout_ms) {
+    int fd = ::socket(ai->ai_family, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    if (fd < 0) return -1;
 
     /* Switch to non-blocking so connect() returns immediately */
     int fl = fcntl(fd, F_GETFL, 0);
     fcntl(fd, F_SETFL, fl | O_NONBLOCK);
 
-    int rc = ::connect(fd, res->ai_addr, res->ai_addrlen);
-    freeaddrinfo(res);
+    int rc = ::connect(fd, ai->ai_addr, ai->ai_addrlen);
 
     if (rc == 0) {
         /* Immediate success (unlikely but possible for loopback) */
@@ -842,6 +901,36 @@ static int tcp_connect(const char* host, int32_t port, int32_t timeout_ms = 5000
     return fd;
 }
 
+/* Non-blocking TCP connect with millisecond timeout.
+ *
+ * spec/32_4 §1.1: EVERY address `getaddrinfo` returns is tried, in the order the
+ * resolver gives them.  Stopping at the first one makes a dual-stacked host
+ * unreachable whenever its preferred address does not answer — RFC 6724 puts
+ * IPv6 first, so a host that publishes an AAAA record but listens only on IPv4
+ * fails outright instead of falling back.  The caller's timeout is the budget for
+ * the WHOLE call, so it is split across the candidates rather than spent per
+ * candidate (a blackholed address must not double the wait the caller asked for).
+ */
+static int tcp_connect(const char* host, int32_t port, int32_t timeout_ms = 5000) {
+    char ps[16];
+    snprintf(ps, sizeof(ps), "%d", port);
+    struct addrinfo hints{}, *res = nullptr;
+    hints.ai_family   = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    if (getaddrinfo(host, ps, &hints, &res) != 0 || !res) return -1;
+
+    int n_addrs = 0;
+    for (struct addrinfo* ai = res; ai; ai = ai->ai_next) ++n_addrs;
+    int32_t per = (n_addrs > 1 && timeout_ms > 0) ? (timeout_ms / n_addrs) : timeout_ms;
+    if (per < 250 && timeout_ms > 0) per = timeout_ms < 250 ? timeout_ms : 250;
+
+    int fd = -1;
+    for (struct addrinfo* ai = res; ai && fd < 0; ai = ai->ai_next)
+        fd = tcp_connect_addr(ai, per);
+    freeaddrinfo(res);
+    return fd;
+}
+
 static std::once_flag g_ws_ssl_once;
 static void ws_ssl_init() {
     signal(SIGPIPE, SIG_IGN); // SSL_write has no MSG_NOSIGNAL equivalent
@@ -853,20 +942,55 @@ static void ws_ssl_init() {
 static std::once_flag g_ws_sigpipe_once;
 static void ws_ignore_sigpipe() { signal(SIGPIPE, SIG_IGN); }
 
+/* Listening socket for a ws:// / wss:// host.
+ *
+ * spec/32_4 §1.1: a wildcard bind ("0.0.0.0", "::", "*" or no host) opens ONE
+ * dual-stack AF_INET6 socket with IPV6_V6ONLY off, so the server answers on both
+ * stacks.  Binding AF_INET only — as this did — means a host that publishes an
+ * AAAA record silently refuses every IPv6 client while the DNS keeps advertising
+ * the address.  A literal host is resolved with AI_PASSIVE, so "::1" and
+ * "127.0.0.1" both work and the family follows the address the caller named.
+ * Kernels without IPv6 fall back to the IPv4 candidate rather than failing. */
 static int tcp_server_fd(const char* host, int32_t port) {
-    int fd = ::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
-    if (fd < 0) return -1;
-    int yes = 1;
-    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
-    struct sockaddr_in addr{};
-    addr.sin_family = AF_INET;
-    addr.sin_port   = htons((uint16_t)port);
-    if (!host || strcmp(host, "0.0.0.0") == 0)
-        addr.sin_addr.s_addr = INADDR_ANY;
-    else
-        inet_pton(AF_INET, host, &addr.sin_addr);
-    if (bind(fd, (sockaddr*)&addr, sizeof(addr)) < 0 ||
-        listen(fd, 128) < 0) { ::close(fd); return -1; }
+    const bool wildcard = !host || !*host
+                       || strcmp(host, "0.0.0.0") == 0
+                       || strcmp(host, "::") == 0
+                       || strcmp(host, "*") == 0;
+
+    if (wildcard) {
+        int fd = ::socket(AF_INET6, SOCK_STREAM | SOCK_CLOEXEC, 0);
+        if (fd >= 0) {
+            int yes = 1, no = 0;
+            setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+            setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &no, sizeof(no));
+            struct sockaddr_in6 a6{};
+            a6.sin6_family = AF_INET6;
+            a6.sin6_addr   = in6addr_any;
+            a6.sin6_port   = htons((uint16_t)port);
+            if (bind(fd, (sockaddr*)&a6, sizeof(a6)) == 0 && listen(fd, 128) == 0)
+                return fd;
+            ::close(fd);
+        }
+        /* fall through: no IPv6 in this kernel (or v6only forced) → IPv4 only */
+    }
+
+    char ps[16];
+    snprintf(ps, sizeof(ps), "%d", port);
+    struct addrinfo hints{}, *res = nullptr;
+    hints.ai_family   = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_flags    = AI_PASSIVE;
+    if (getaddrinfo(wildcard ? nullptr : host, ps, &hints, &res) != 0 || !res) return -1;
+    int fd = -1;
+    for (struct addrinfo* ai = res; ai && fd < 0; ai = ai->ai_next) {
+        int sfd = ::socket(ai->ai_family, SOCK_STREAM | SOCK_CLOEXEC, 0);
+        if (sfd < 0) continue;
+        int yes = 1;
+        setsockopt(sfd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+        if (bind(sfd, ai->ai_addr, ai->ai_addrlen) == 0 && listen(sfd, 128) == 0) fd = sfd;
+        else ::close(sfd);
+    }
+    freeaddrinfo(res);
     return fd;
 }
 
@@ -874,15 +998,21 @@ static int tcp_server_fd(const char* host, int32_t port) {
 // Public API
 // ══════════════════════════════════════════════════════════════════════════════
 
-extern "C" void* aiml_ws_connect(const char* host, int32_t port, const char* path) {
+extern "C" void* aiml_ws_connect_to(const char* host, int32_t port, const char* path,
+                                    int32_t timeout_ms) {
     std::call_once(g_ws_sigpipe_once, ws_ignore_sigpipe);
-    int fd = tcp_connect(host, port);
+    if (timeout_ms <= 0) timeout_ms = 10000;
+    int fd = tcp_connect(host, port, timeout_ms);
     if (fd < 0) return nullptr;
     AimlWs* ws = new AimlWs{fd, nullptr, nullptr, false, true};
-    if (ws_client_handshake(ws, host, port, path ? path : "/") < 0) {
+    if (ws_client_handshake(ws, host, port, path ? path : "/", timeout_ms) < 0) {
         ::close(fd); delete ws; return nullptr;
     }
     return ws;
+}
+
+extern "C" void* aiml_ws_connect(const char* host, int32_t port, const char* path) {
+    return aiml_ws_connect_to(host, port, path, 10000);
 }
 
 // wss client certificate-verification policy. Default: verify (secure). Seeded
@@ -901,10 +1031,15 @@ extern "C" void aiml_ws_set_client_insecure(int32_t on) { g_wss_insecure = on ? 
 // mirror.tls_insecure(1) / AIML_WSS_INSECURE=1 relaxes verification for both.
 extern "C" int32_t aiml_ws_client_insecure() { return ws_client_insecure() ? 1 : 0; }
 
-extern "C" void* aiml_wss_connect(const char* host, int32_t port, const char* path) {
+extern "C" void* aiml_wss_connect_to(const char* host, int32_t port, const char* path,
+                                     int32_t timeout_ms) {
     std::call_once(g_ws_ssl_once, ws_ssl_init);
-    int fd = tcp_connect(host, port);
+    if (timeout_ms <= 0) timeout_ms = 10000;
+    int fd = tcp_connect(host, port, timeout_ms);
     if (fd < 0) return nullptr;
+    /* SSL_connect() below blocks on a silent peer exactly as the plain handshake
+     * did; bound it with the same budget (spec/44_5 §3.3). */
+    ws_set_rcv_timeout(fd, timeout_ms);
 
     SSL_CTX* ctx = SSL_CTX_new(TLS_client_method());
     SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION);
@@ -938,10 +1073,14 @@ extern "C" void* aiml_wss_connect(const char* host, int32_t port, const char* pa
     SSL_CTX_free(ctx);
 
     AimlWs* ws = new AimlWs{fd, ssl, nullptr, false, true};
-    if (ws_client_handshake(ws, host, port, path ? path : "/") < 0) {
+    if (ws_client_handshake(ws, host, port, path ? path : "/", timeout_ms) < 0) {
         SSL_free(ssl); ::close(fd); delete ws; return nullptr;
     }
     return ws;
+}
+
+extern "C" void* aiml_wss_connect(const char* host, int32_t port, const char* path) {
+    return aiml_wss_connect_to(host, port, path, 10000);
 }
 
 extern "C" void* aiml_ws_server(const char* host, int32_t port) {
