@@ -1,3 +1,4 @@
+# Requires: driver
 # kontor's read side, served from a directory — so that tests/venv/run.sh can
 # test `install --kontor` (spec/68 §6.1) without a kontor.
 #
