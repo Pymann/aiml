@@ -650,6 +650,11 @@ public:
 };
 
 struct PrefabChildInfo {
+    // Fundstelle des Kindes in der Quelle (spec/49 F49-100).  Tier 4 meldet AM
+    // KIND, nicht an der Prefab-Zeile: ein Prefab hat oft zwanzig Kinder, und
+    // ein Befund, der auf die Deklarationszeile zeigt, laesst den Leser suchen.
+    int src_line = -1;
+    int src_col  = -1;
     std::string name;
     std::string type;      // "sprite", "label", "rect", "button", "text_input"
     float x = 0, y = 0, width = 0, height = 0;

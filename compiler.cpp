@@ -1361,6 +1361,14 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
                     itLoc != ctx.prefabDeclLoc.end() && !itLoc->second.empty()
                         ? itLoc->second : (filename + ": "));
             }
+            // Tier 4 (spec/44_8): Deklarationen und Methodenaufrufe mitmischen.
+            for (const auto& kv : ctx.prefabMeta) allPrefabMeta.emplace(kv.first, kv.second);
+            for (const auto& kv : ctx.prefabInstMethods)
+                allPrefabInstMethods[kv.first].insert(kv.second.begin(), kv.second.end());
+            allPrefabDynamicChild.insert(ctx.prefabDynamicChild.begin(),
+                                         ctx.prefabDynamicChild.end());
+            for (const auto& kv : ctx.prefabVisibleManaged)
+                allPrefabVisibleManaged[kv.first].insert(kv.second.begin(), kv.second.end());
             allPrefabUses.insert(ctx.prefabUses.begin(), ctx.prefabUses.end());
             for (const auto& kv : ctx.serviceDecls) allServiceDecls.emplace(kv.first, kv.second);
             allServiceUses.insert(ctx.serviceUses.begin(), ctx.serviceUses.end());
@@ -1408,6 +1416,201 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
                             "instantiated in this build — no engine.instantiate(\"" +
                             pname + "\") anywhere. Remove the dead `- prefab:` "
                             "declaration or wire it up (spec/44_6).");
+                    }
+                }
+
+                // ── Tier 4: Eingabe-Erreichbarkeit (spec/44_8 F44_8-1..6) ──
+                // Ganzprogrammweit wie Tier 3: ein Prefab wird in einer Datei
+                // deklariert und in einer anderen bedient.
+                {
+                    static const std::set<std::string> kInteractive = {
+                        "button", "checkbox", "radio", "slider", "dropdown",
+                        "text_input", "textbox", "cascade"
+                    };
+                    // Fragt jemand diese Instanz nach Zeiger-Eingabe?
+                    static const std::set<std::string> kPointerAsk = {
+                        "is_hovered", "was_clicked", "child_contains",
+                        "child_rect_x", "child_rect_y", "child_rect_w", "child_rect_h",
+                        "set_draggable", "set_input_blocking", "get_input_blocking",
+                        "set_input_transparent", "get_input_transparent"
+                    };
+                    // Liest jemand den Zustand eines Widgets?
+                    static const std::set<std::string> kWidgetRead = {
+                        "child_clicked", "is_checked", "text_value", "child_focused",
+                        "dropdown_value", "dropdown_index", "dropdown_enum",
+                        "get_slider_value", "selection", "container_row_count"
+                    };
+                    // Fuer welche Typen zaehlt die Box ueberhaupt?  Ein `label`
+                    // wird nach TEXTMETRIK gezeichnet (pos + font_size) und nimmt
+                    // keine Eingabe -- `width: 0` ist dort der Normalfall, wie der
+                    // Korpus zeigt (test_prefab.aiml: 'zone_label' 0x0).  Fuer
+                    // alles andere ist die Box die Zeichen- UND die Trefferflaeche
+                    // (child_screen_bbox nimmt ch.width/ch.height direkt).
+                    static const std::set<std::string> kBoxed = {
+                        "rect", "sprite", "button", "checkbox", "radio", "slider",
+                        "dropdown", "text_input", "textbox", "container", "bar"
+                    };
+                    // `cascade` fehlt hier bewusst: die Laufzeit baut die
+                    // Kaskaden-UI (Wurzel-Dropdown + Payload-Zeilen) selbst, und
+                    // dass ihre Flaeche aus der deklarierten Box kommt, ist nicht
+                    // belegt -- die einzige Probe im Korpus deklariert sie ohne
+                    // Groesse und steht in einer Datei, die sich selbst als
+                    // DESIGN-DRAFT bezeichnet.  Interaktiv ist sie trotzdem
+                    // (F44_8-1/-4 gelten weiter); nur die Box-Regeln schweigen,
+                    // solange die Fundlage fehlt.
+                    auto fmtSize = [](float value) {
+                        std::string s = std::to_string(value);
+                        while (s.size() > 1 && s.back() == '0') s.pop_back();
+                        if (!s.empty() && s.back() == '.') s.pop_back();
+                        return s;
+                    };
+                    const char* hintEnv = std::getenv("AIML_LINT_PREFAB_INPUT");
+                    const bool prefabInputHints = hintEnv && std::string(hintEnv) != "0";
+                    for (const auto& kvMeta : allPrefabMeta) {
+                        const std::string& pname = kvMeta.first;
+                        const aiml::prefab::Meta& meta = kvMeta.second;
+                        // Nie instanziiert?  Das meldet Tier 3 schon -- hier
+                        // nichts draufsatteln.
+                        if (!allPrefabUses.count(pname)) continue;
+                        auto methodsIt = allPrefabInstMethods.find(pname);
+                        auto hasMethod = [&](const std::string& m) {
+                            return methodsIt != allPrefabInstMethods.end() &&
+                                   methodsIt->second.count(m) != 0;
+                        };
+                        bool anyInteractive = false;
+                        for (const auto& ch : meta.children)
+                            if (kInteractive.count(ch.type)) { anyInteractive = true; break; }
+
+                        // F44_8-1 — durchklickbares Prefab mit interaktivem Kind
+                        if (meta.inputTransparent && !hasMethod("set_input_transparent")) {
+                            for (const auto& ch : meta.children) {
+                                if (!kInteractive.count(ch.type)) continue;
+                                LOG_ERROR(ch.loc + "prefab '" + pname + "': child '" + ch.name +
+                                    "' is a " + ch.type + ", but the prefab is declared "
+                                    "`input_transparent: true` — hit_test AND the widget pass "
+                                    "both skip such an instance, so this widget can be neither "
+                                    "hovered nor clicked. Move the decoration into its own "
+                                    "prefab, or switch the value per instance with "
+                                    "set_input_transparent (spec/44_8 F44_8-1).");
+                            }
+                        }
+
+                        for (const auto& ch : meta.children) {
+                            if (!kBoxed.count(ch.type)) continue;   // label/text: Box zaehlt nicht
+                            // F44_8-3 — Kind ohne Flaeche
+                            if (ch.width <= 0.0f || ch.height <= 0.0f) {
+                                LOG_ERROR(ch.loc + "prefab '" + pname + "': child '" + ch.name +
+                                    "' has size " + fmtSize(ch.width) + "x" + fmtSize(ch.height) +
+                                    " — a child without area is drawn nowhere and hit nowhere "
+                                    "(spec/44_8 F44_8-3).");
+                                continue;
+                            }
+                            // F44_8-2 — Kind ausserhalb der Trefferflaeche der Instanz
+                            if (!meta.inputTransparent && meta.width > 0.0f && meta.height > 0.0f &&
+                                (ch.pos_x < 0.0f || ch.pos_y < 0.0f ||
+                                 ch.pos_x + ch.width  > meta.width ||
+                                 ch.pos_y + ch.height > meta.height)) {
+                                LOG_WARNING(ch.loc + "prefab '" + pname + "': child '" + ch.name +
+                                    "' reaches outside the prefab box (" +
+                                    fmtSize(ch.pos_x) + "," + fmtSize(ch.pos_y) + " + " +
+                                    fmtSize(ch.width) + "x" + fmtSize(ch.height) + " vs " +
+                                    fmtSize(meta.width) + "x" + fmtSize(meta.height) +
+                                    ") — hit_test uses the declared prefab size, so the instance "
+                                    "is never hovered there while the widget pass still hits the "
+                                    "child. Grow the prefab, move the child, or declare the "
+                                    "prefab `input_transparent: true` if the overhang is pure "
+                                    "decoration (spec/44_8 F44_8-2).");
+                            }
+                        }
+
+                        // F44_8-4 — zwei interaktive Kinder ueberlappen.
+                        // Gestapelte Alternativen sind legitim und werden in
+                        // echtem Code mit set_child_visible gesteuert, nicht mit
+                        // `visible: false` -- ist die Sichtbarkeit eines der
+                        // beiden verwaltet, ist der Stapel Absicht.
+                        const std::set<std::string>* managed = nullptr;
+                        {
+                            auto mv = allPrefabVisibleManaged.find(pname);
+                            if (mv != allPrefabVisibleManaged.end()) managed = &mv->second;
+                        }
+                        auto visManaged = [&](const std::string& childName) {
+                            return managed && managed->count(childName) != 0;
+                        };
+                        for (size_t ia = 0; ia < meta.children.size(); ++ia) {
+                            const auto& cha = meta.children[ia];
+                            if (!kInteractive.count(cha.type) || !cha.visible) continue;
+                            if (cha.width <= 0.0f || cha.height <= 0.0f) continue;
+                            for (size_t ib = ia + 1; ib < meta.children.size(); ++ib) {
+                                const auto& chb = meta.children[ib];
+                                if (!kInteractive.count(chb.type) || !chb.visible) continue;
+                                if (chb.width <= 0.0f || chb.height <= 0.0f) continue;
+                                const bool apart =
+                                    cha.pos_x + cha.width  <= chb.pos_x ||
+                                    chb.pos_x + chb.width  <= cha.pos_x ||
+                                    cha.pos_y + cha.height <= chb.pos_y ||
+                                    chb.pos_y + chb.height <= cha.pos_y;
+                                if (apart) continue;
+                                if (visManaged(cha.name) || visManaged(chb.name)) continue;
+                                // WARNUNG, nicht Fehler: ob ein Stapel Absicht
+                                // ist, haengt an set_child_visible auf einer
+                                // Instanz -- und die Bindung var=instantiate
+                                // sieht Container-Zeilen nicht.  An 9rooms waren
+                                // nach dem Notausgang noch 3 von 6 Funden
+                                // gesteuerte Stapel (AckDot).  Ein Fehler mit
+                                // dieser Quote waere unbrauchbar.
+                                LOG_WARNING(chb.loc + "prefab '" + pname + "': children '" +
+                                    cha.name + "' (" + cha.type + ") and '" + chb.name + "' (" +
+                                    chb.type + ") overlap — the widget pass does not stop at the "
+                                    "first hit, so ONE click acts on BOTH. Separate the "
+                                    "rectangles, or declare one `visible: false` if they are "
+                                    "alternatives (spec/44_8 F44_8-4).");
+                            }
+                        }
+
+                        // F44_8-5 und F44_8-6 stehen hinter AIML_LINT_PREFAB_INPUT=1.
+                        // Beide ruhen auf der Tier-2-Bindung (var = instantiate
+                        // "Literal"), und echter Code gibt Instanzen durch Helfer
+                        // und Container weiter: an 9rooms meldete F44_8-6 zwanzig
+                        // Prefabs, deren Widgets sehr wohl gelesen werden --
+                        // ueber Instanzen, die die Bindung nicht sieht.  Als
+                        // Hinweis taugt die Regel, als Dauerwarnung luegt sie.
+                        if (!prefabInputHints) continue;
+
+                        // F44_8-5 — Dekoration, die nur Hover nehmen kann
+                        if (!anyInteractive && !meta.inputTransparent && !meta.draggable) {
+                            bool asked = false;
+                            for (const auto& m : kPointerAsk)
+                                if (hasMethod(m)) { asked = true; break; }
+                            if (!asked) {
+                                LOG_WARNING(meta.loc + "prefab '" + pname + "' has no interactive "
+                                    "child and is not `input_transparent` — hit_test returns the "
+                                    "topmost VISIBLE instance, so this one takes the hover away "
+                                    "from whatever it covers and uses it for nothing. Declare "
+                                    "`input_transparent: true` for decoration, or call "
+                                    "set_input_blocking(1) on it if it is meant to block "
+                                    "(spec/44_8 F44_8-5).");
+                            }
+                        }
+
+                        // F44_8-6 — deklariertes Widget, das niemand liest
+                        if (anyInteractive && !allPrefabDynamicChild.count(pname)) {
+                            bool read = false;
+                            for (const auto& m : kWidgetRead)
+                                if (hasMethod(m)) { read = true; break; }
+                            if (!read) {
+                                std::string names;
+                                for (const auto& ch : meta.children) {
+                                    if (!kInteractive.count(ch.type)) continue;
+                                    if (!names.empty()) names += ", ";
+                                    names += "'" + ch.name + "'";
+                                }
+                                LOG_WARNING(meta.loc + "prefab '" + pname + "': the widget(s) " +
+                                    names + " are never read — no child_clicked, is_checked, "
+                                    "text_value, dropdown_*, get_slider_value or selection on any "
+                                    "instance. The prefab renders and reacts visually, and nothing "
+                                    "acts on it (spec/44_8 F44_8-6).");
+                            }
+                        }
                     }
                 }
 
@@ -3882,6 +4085,13 @@ void AIMLCompiler::resolveImport(const std::string& path) {
 
     // Propagate transitive prefab decl/use sets for Tier-3 dead-prefab analysis.
     allPrefabDecls.insert(subCompiler.allPrefabDecls.begin(), subCompiler.allPrefabDecls.end());  // Name -> Datei
+    allPrefabMeta.insert(subCompiler.allPrefabMeta.begin(), subCompiler.allPrefabMeta.end());
+    for (const auto& kv : subCompiler.allPrefabInstMethods)
+        allPrefabInstMethods[kv.first].insert(kv.second.begin(), kv.second.end());
+    allPrefabDynamicChild.insert(subCompiler.allPrefabDynamicChild.begin(),
+                                 subCompiler.allPrefabDynamicChild.end());
+    for (const auto& kv : subCompiler.allPrefabVisibleManaged)
+        allPrefabVisibleManaged[kv.first].insert(kv.second.begin(), kv.second.end());
     allPrefabUses.insert(subCompiler.allPrefabUses.begin(),  subCompiler.allPrefabUses.end());
     allServiceDecls.insert(subCompiler.allServiceDecls.begin(), subCompiler.allServiceDecls.end());
     allServiceUses.insert(subCompiler.allServiceUses.begin(),   subCompiler.allServiceUses.end());

@@ -1,0 +1,17 @@
+# SPEC: 44_8_prefab_static
+# Requires: driver
+# EXPECT-SILENT: als Dekoration deklariert
+- prefab:
+    name: FrameDeco
+    width: 300
+    height: 200
+    input_transparent: true
+    children:
+      - { name: outer_rim, type: rect, pos_x: 0, pos_y: 0, width: 300, height: 200 }
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [deco, prefab_instance, { call: [engine.instantiate, "FrameDeco"] }]
+      - call: [deco.set_alpha, 0.5]
+      - return: 0

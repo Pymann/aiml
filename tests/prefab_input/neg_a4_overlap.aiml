@@ -1,0 +1,19 @@
+# SPEC: 44_8_prefab_static
+# Requires: driver
+# EXPECT: F44_8-4
+# EXPECT-SEV: warning
+- prefab:
+    name: DoubleBar
+    width: 200
+    height: 60
+    children:
+      - { name: left_btn,  type: button, pos_x: 10, pos_y: 10, width: 100, height: 30 }
+      - { name: right_btn, type: button, pos_x: 60, pos_y: 10, width: 100, height: 30 }   # <<HERE
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [bars, prefab_instance, { call: [engine.instantiate, "DoubleBar"] }]
+      - decl: [one, i32, { call: [bars.child_clicked, "left_btn"] }]
+      - decl: [two, i32, { call: [bars.child_clicked, "right_btn"] }]
+      - return: 0

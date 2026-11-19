@@ -1,0 +1,17 @@
+# SPEC: 44_8_prefab_static
+# Requires: driver
+# EXPECT: F44_8-3
+# EXPECT-SEV: error
+- prefab:
+    name: ToolStrip
+    width: 200
+    height: 40
+    children:
+      - { name: ghost_btn, type: button, pos_x: 10, pos_y: 5, width: 0, height: 30 }   # <<HERE
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [strip, prefab_instance, { call: [engine.instantiate, "ToolStrip"] }]
+      - decl: [hit, i32, { call: [strip.child_clicked, "ghost_btn"] }]
+      - return: 0

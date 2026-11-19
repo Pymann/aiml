@@ -42,6 +42,8 @@ bool PrefabBuilder::OnMapStart() {
         /* Start of a child object inside the children sequence */
         insideChildObj = true;
         currentChild = PrefabChildInfo();
+        currentChild.src_line = builder->currentLine;
+        currentChild.src_col  = builder->currentColumn;
         childExpectingKey = true;
         return true;
     }

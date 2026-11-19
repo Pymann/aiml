@@ -7,6 +7,7 @@
 #include <memory>
 #include <unordered_set>
 #include "logger.h"
+#include "src/core/prefab_meta.h"
 
 // Forward declarations
 namespace llvm {
@@ -145,6 +146,12 @@ public:
     // bei einem Build ueber mehrere Dateien ist "irgendwo" keine Fundstelle
     // (spec/49 F49-100).
     std::map<std::string, std::string> allPrefabDecls;
+    // Tier 4 (spec/44_8): Deklarationen und die auf ihren Instanzen gerufenen
+    // Methoden, ueber alle Module gemischt -- dieselbe Bauart wie allPrefabDecls.
+    std::map<std::string, aiml::prefab::Meta> allPrefabMeta;
+    std::map<std::string, std::set<std::string>> allPrefabInstMethods;
+    std::set<std::string> allPrefabDynamicChild;
+    std::map<std::string, std::set<std::string>> allPrefabVisibleManaged;
     std::set<std::string> allPrefabUses;
     std::map<std::string, std::string> allServiceDecls;  // spec/66 §5.6
     std::set<std::string> allServiceUses;

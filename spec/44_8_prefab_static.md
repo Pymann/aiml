@@ -234,6 +234,176 @@ propagates `importedSourceFiles` and `linkedObjects` upward):
   `cascade_chips.aiml`; the board-only client build imports the former but not
   the latter).  Flagging that would break legitimate partial builds.
 
+## Tier 4 — input reachability
+
+Tiers 1 to 3 ask whether a **name** exists. Tier 4 asks whether a declared
+widget can ever be **reached by input** — the class of bug that produces a
+button nobody can press, a decoration that swallows the pointer, and a plate
+you click straight through.
+
+### The model these rules rest on
+
+Input travels **two independent paths**, and they arbitrate differently:
+
+| Path | Order | Honours |
+| --- | --- | --- |
+| `hit_test` / `update_hover` (`prefab_runtime.cpp`, reverse instance order) | top-to-bottom by z, **first hit wins** | `visible`, `input_transparent` |
+| the **widget pass** (same file, per child) | over **all** instances, no z arbitration, `if (over)` with **no `break`** | `visible`, `input_transparent`, `input_blocking` (as a modal gate) |
+
+Three consequences, each one a bug class:
+
+* A widget covered by a higher instance usually **stays clickable** — what it
+  loses is the *hover*. The engine's own comment records the case: a fullscreen
+  overlay blocked hover correctly while the buttons underneath kept firing.
+  `input_blocking` is what closes that path.
+* `input_transparent` is skipped by **both** paths, so an interactive child
+  inside such a prefab is not merely hard to reach, it is **dead**.
+* Because the widget pass does not stop at the first hit, **two overlapping
+  widgets both fire** on one click.
+
+The instance's hover rectangle is the prefab's **declared** `width`/`height`
+(× scale), while children are **not** clipped to it unless `clip_children` is
+set. A child outside that box is therefore drawn and clickable but never part
+of the instance's hover.
+
+### The rules
+
+**F44_8-1 — a click-through prefab has no interactive children (error).**
+`input_transparent: true` together with a child of type `button`, `checkbox`,
+`radio`, `slider`, `dropdown`, `text_input`, `textbox` or `cascade` is a
+contradiction: the widget can be neither hovered nor clicked. *Escape:* if any
+code calls `set_input_transparent` on an instance of this prefab, the prefab
+value is only a default and the check stays silent.
+
+**F44_8-2 — a child lies inside its prefab's box (warning).** `pos_x`,
+`pos_y`, `pos_x + width`, `pos_y + height` within `0 … width/height` of the
+prefab. Outside it, the child is drawn and the widget pass still hits it, but
+`hit_test` never reports the instance there — hover-driven logic silently does
+not apply. Deliberate overhang (a banner, a glow) belongs in a prefab that is
+`input_transparent: true`, which also silences this rule.
+
+**F44_8-3 — a child has a positive size (error).** `width <= 0` or
+`height <= 0` is invisible and unhittable.
+
+Both F44_8-2 and F44_8-3 apply **only to children whose box is used**: `rect`,
+`sprite`, `button`, `checkbox`, `radio`, `slider`, `dropdown`, `text_input`,
+`textbox`, `container`, `bar`, `cascade`. A `label` / `text` child is placed by
+**text metrics** (`pos_x`/`pos_y` + `font_size`) and takes no input, so
+`width: 0` is its normal state — the corpus declares labels that way
+(`test_prefab.aiml`, child `zone_label`). Measuring a label against a box it
+never uses would be a false finding, and this rule set is only worth having if
+every finding is real.
+
+**F44_8-4 — two interactive children do not overlap (warning).** Both receive
+the same click, in declaration order, and both act. Two escapes, because real
+code stacks alternatives in two different ways: one of the pair declared
+`visible: false`, **or** either name passed to `set_child_visible` somewhere —
+runtime-managed stacking is the common form, and 9rooms builds all of its
+stacked panels that way.
+
+It is a **warning and not an error** for a measured reason. On the 9rooms client
+the rule found 22 overlaps; the `set_child_visible` escape removed 16, and of
+the remaining 6, three (`AckDot`'s three checkboxes) are still runtime-managed
+stacks whose management the compiler cannot see: the instance comes from a
+container row, and the `var = engine.instantiate("Literal")` binding Tier 2
+relies on does not track it. An error with that rate would be unusable; a
+warning that names its escape is worth having, because the other three findings
+(`ForumCatRow`, `ForumThreadRow`: a delete button on top of a full-row click
+area) are exactly the bug this chapter is for.
+
+### F44_8-5 and F44_8-6 are hints behind a switch
+
+Both rules rest on the same Tier-2 binding, and real code defeats it: instances
+travel through helper functions and container rows, so "nobody reads this
+widget" often means "the compiler cannot see who reads it". Measured on the
+9rooms client: F44_8-6 named 24 prefabs, and spot checks showed their widgets
+**are** read (`pchip.child_clicked("btn_main")` on an instance the binding never
+tracked). As a hint the rule is useful; as an always-on warning it lies.
+
+Both therefore require `AIML_LINT_PREFAB_INPUT=1`, the same shape as the
+env-gated rules in `spec/49` §11. F44_8-1 to F44_8-4 are always on, because their
+evidence is the declaration itself.
+
+**F44_8-5 — decoration declares itself (warning, gated).** A prefab with **no**
+interactive child, not `input_transparent`, not `draggable`, and no instance of
+which is ever asked about pointer input (`is_hovered`, `was_clicked`,
+`child_contains`, `child_rect_x`/`_w`, `set_draggable`) can only ever *take*
+hover from what lies under it. The remedy depends on the intent, and the
+diagnostic names both: `input_transparent: true` for decoration,
+`set_input_blocking(1)` for a plate that is meant to block.
+
+**F44_8-6 — a declared widget is read somewhere (warning, gated).** A prefab whose
+interactive children are never read — no `child_clicked`, `is_checked`,
+`text_value`, `dropdown_value`/`_index`/`_enum`, `get_slider_value`,
+`selection`, `child_focused` on any of its instances — is dead UI: it renders,
+it reacts visually, and nothing acts on it. *Escape:* a call with a
+**non-literal** child name (a loop over names) disables the rule for that
+prefab, because Tier 2's limits (only string literals are tracked) apply here
+too.
+
+### What the rules found when they were first run (2026-11-19)
+
+A check is worth having only if its findings are real, so the rule set was
+measured against the corpus and against the largest real interface in reach
+before it was kept:
+
+| | corpus (`tests/`, 1238 files) | 9rooms client (2290 diagnostics in total) |
+| --- | --- | --- |
+| always on (F44_8-1 … -4) | **0** | **11** — 5 × F44_8-2, 6 × F44_8-4 |
+| gated hints (F44_8-5, -6) | 4 | 35 — 11 × F44_8-5, 24 × F44_8-6 |
+
+Three false-positive classes were found and removed on the way, and each one
+shaped a rule:
+
+1. **Labels have no box.** F44_8-3 first reported every `label` declared
+   without `width`/`height` — three in the corpus alone. A label is placed by
+   text metrics and takes no input, so the box rules now apply only to the types
+   whose box is actually used. `cascade` is excluded for the same reason: the
+   runtime builds its sub-UI itself, and nothing establishes that the declared
+   box is its area.
+2. **Stacks are managed at runtime.** F44_8-4 reported 22 overlaps on the
+   client; 16 of them were alternative panels toggled with `set_child_visible`,
+   not with `visible: false`. Hence the second escape.
+3. **Instances travel.** F44_8-6 reported widgets as unread that are read
+   through instances the Tier-2 binding never sees (container rows, helper
+   functions). Hence the switch.
+
+Of the six overlaps that remain on the client, three (`AckDot`) are still
+runtime-managed stacks the compiler cannot see, and three are the real thing:
+`ForumCatRow` and `ForumThreadRow` put a delete button on top of a full-row
+click area, so one click acts twice.
+
+### Where a finding is reported
+
+F44_8-1 to F44_8-4 are findings about **one child**, and they report at that
+child's line and column — a prefab has a dozen children, and a diagnostic
+pointing at the `- prefab:` line leaves the reader searching (spec/49 F49-100).
+F44_8-5 and F44_8-6 are findings about the **prefab**: the first says the prefab
+as a whole consumes no input, the second names several widgets at once. Both
+report at the declaration.
+
+### Scope and limits
+
+The rules above use **only** declaration data and the wiring Tier 2b already
+collects. Deliberately **not** checked:
+
+* **Occlusion between instances.** Instance position and z come from `set_pos`
+  and `set_z` at runtime and are usually computed (card layouts, scroll
+  offsets). Worse, z takes effect for hit-testing **one frame late**, because
+  the sort happens while drawing. A compiler claiming "always covered" would be
+  guessing, and a wrong finding costs exactly the time it was meant to save
+  (F49-103).
+* **Runtime visibility.** `set_visible` can turn any of this on and off per
+  frame.
+
+"Always covered" needs runs, not a declaration. The honest home for it is a
+frame-time audit, and the engine already has the data: the hit recorder writes
+**every** child under the press point to `prefab_last_hit`, separated by `|`,
+without stopping at the first. An `engine.input_audit()` over the live scene —
+covered widgets, hovered instances with no interactive child, several
+interactive rectangles under one point — is an open item for `spec/44_9`
+(UI testing), not for this chapter.
+
 ## `--prefab-report` — wiring audit mode
 
 `aiml <entry> --prefab-report [--asset-roots=…]` runs the whole import graph

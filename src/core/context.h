@@ -1,4 +1,5 @@
 #pragma once
+#include "prefab_meta.h"
 #include "clearance.h"
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
@@ -729,6 +730,26 @@ namespace AIML {
     /// children still gets an (empty) entry, so `.count(name)` answers the
     /// Tier-1 "is this a known prefab?" question.  See spec/44_8_prefab_static.md.
     std::map<std::string, std::set<std::string>> prefabDecls;
+    // ── Tier 4, Eingabe-Erreichbarkeit (spec/44_8) ──────────────────────
+    // Die Pruefung laeuft als GANZPROGRAMM-Durchgang wie Tier 3: ein Prefab
+    // wird in einer Datei deklariert und oft in einer anderen bedient, also
+    // waere eine Pruefung je Modul falsch-positiv.  Darum eine Registratur,
+    // die wie prefabDecls ueber die Sub-Compiler hochgemischt wird.
+    std::map<std::string, aiml::prefab::Meta> prefabMeta;
+    // Name -> Instanzmethoden, die irgendwo auf einer seiner Instanzen gerufen
+    // werden (nicht nur Kind-Methoden): set_input_transparent ist der Notausgang
+    // von F44_8-1, die Lese-Methoden entscheiden F44_8-5 und F44_8-6.
+    std::map<std::string, std::set<std::string>> prefabInstMethods;
+    // Name -> ein Kindname wurde NICHT als Literal uebergeben.  Dann ist die
+    // Lese-Analyse unvollstaendig (Tier-2-Grenze) und F44_8-6 schweigt.
+    std::set<std::string> prefabDynamicChild;
+    // Name -> Kindnamen, deren Sichtbarkeit zur LAUFZEIT gesetzt wird
+    // (set_child_visible).  Gestapelte Alternativen sind in echtem Code so
+    // gebaut, nicht mit `visible: false` -- ohne diesen Notausgang meldet
+    // F44_8-4 jeden Stapel (gemessen an 9rooms: AckDot, LoginScene,
+    // CardEditorScene, zusammen 22 Fehlalarme).
+    std::map<std::string, std::set<std::string>> prefabVisibleManaged;
+
     // Name -> fertiges Ortspraefix der Deklaration ("datei:zeile:spalte: ").
     // Die Tote-Prefab-Warnung faellt erst im Ganzprogramm-Durchgang an, wo der
     // AST-Knoten laengst weg ist -- ohne diesen Merker nennt sie bestenfalls

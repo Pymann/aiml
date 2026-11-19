@@ -1,0 +1,17 @@
+# SPEC: 44_8_prefab_static
+# Requires: driver
+# EXPECT: F44_8-6
+# EXPECT-SEV: warning
+- prefab:                           # <<HERE
+    name: QuietForm
+    width: 200
+    height: 80
+    children:
+      - { name: submit_btn, type: button, pos_x: 10, pos_y: 10, width: 120, height: 30 }
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [form, prefab_instance, { call: [engine.instantiate, "QuietForm"] }]
+      - call: [form.set_text, "submit_btn", "Senden"]
+      - return: 0

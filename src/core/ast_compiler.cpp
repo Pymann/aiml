@@ -864,6 +864,25 @@ void Compiler::checkPrefabUsage(Program* prog) {
         int ln = (c && c->sourceLine > 0) ? c->sourceLine : curStmtLine;
         return ctx.fmtLoc(c ? c->sourceNode : YAML::Node(), ln);
     };
+    // Tier 4 (spec/44_8): welche Instanzmethoden ueberhaupt auf Instanzen eines
+    // Prefabs gerufen werden -- JEDE, nicht nur die Kind-Methoden.  A1 braucht
+    // set_input_transparent als Notausgang, F44_8-5 die Zeige-, F44_8-6 die
+    // Lese-Methoden.  Ein Kindname, der kein Literal ist, macht die Lese-Analyse
+    // unvollstaendig und schaltet F44_8-6 fuer dieses Prefab ab.
+    auto noteInstMethod = [&](const std::string& prefabName,
+                              const std::string& method, CallExpr* call) {
+        if (prefabName.empty() || !call) return;
+        ctx.prefabInstMethods[prefabName].insert(method);
+        if (call->args.empty()) return;
+        auto* arg0 = dynamic_cast<LiteralExpr*>(call->args[0].get());
+        if (!arg0) { ctx.prefabDynamicChild.insert(prefabName); return; }
+        if (method == "set_child_visible" && arg0->type == "string") {
+            std::string childName = arg0->value;
+            if (childName.size() >= 2 && childName.front() == '"' && childName.back() == '"')
+                childName = childName.substr(1, childName.size() - 2);
+            ctx.prefabVisibleManaged[prefabName].insert(childName);
+        }
+    };
     std::function<void(Expr*)> scanExpr;
     std::function<void(Stmt*)> scanStmt;
     scanExpr = [&](Expr* e) {
@@ -1023,6 +1042,9 @@ void Compiler::checkPrefabUsage(Program* prog) {
             if (dot != std::string::npos) {
                 std::string base = fn.substr(0, dot);
                 std::string method = fn.substr(dot + 1);
+                // Tier 4: erst mitschreiben, dann die engere Tier-2-Pruefung.
+                if (method.find('.') == std::string::npos && bound.count(base))
+                    noteInstMethod(bound[base], method, call);
                 // Only simple `var.method` (no chained receiver) on a tracked
                 // prefab-instance variable, addressing a child by literal name.
                 if (method.find('.') == std::string::npos &&
@@ -1244,6 +1266,13 @@ void Compiler::checkPrefabUsage(Program* prog) {
                 // No chained receivers: `<.state.menu.scene.set_text` names a
                 // field of ANOTHER object, whose binding lives in another class.
                 if (field.find('.') != std::string::npos) return;
+                // Tier 4: auch hier VOR dem Kind-Methoden-Filter mitschreiben --
+                // set_input_transparent und is_hovered sind keine Kind-Methoden.
+                if (!ambiguous.count(field)) {
+                    auto fpIt = fieldPrefab.find(field);
+                    if (fpIt != fieldPrefab.end())
+                        noteInstMethod(fpIt->second, method, call);
+                }
                 if (!childMethods.count(method)) return;
                 if (ambiguous.count(field)) return;
                 auto fit = fieldPrefab.find(field);
@@ -5956,6 +5985,28 @@ void Compiler::registerTypeDecl(Node* node) {
         // the Tier-2 child-known check.  See spec/44_8_prefab_static.md.
         ctx.prefabDeclLoc[prefab->name] =
             ctx.fmtLoc(prefab->sourceNode, prefab->sourceLine, prefab->sourceColumn);
+        // Tier 4 (spec/44_8): die Deklaration selbst mitschreiben.  Die Pruefung
+        // laeuft erst im Ganzprogramm-Durchgang, wo der AST weg ist.
+        {
+            aiml::prefab::Meta meta;
+            meta.loc    = ctx.prefabDeclLoc[prefab->name];
+            meta.width  = prefab->width;
+            meta.height = prefab->height;
+            meta.inputTransparent = prefab->inputTransparent;
+            meta.draggable        = prefab->draggable;
+            for (const auto& ch : prefab->children) {
+                aiml::prefab::ChildMeta cm;
+                cm.loc = ch.src_line > 0
+                    ? ctx.fmtLoc(YAML::Node(), ch.src_line, ch.src_col)
+                    : meta.loc;
+                cm.name = ch.name; cm.type = ch.type;
+                cm.pos_x = ch.x; cm.pos_y = ch.y;
+                cm.width = ch.width; cm.height = ch.height;
+                cm.visible = ch.is_visible;
+                meta.children.push_back(cm);
+            }
+            ctx.prefabMeta[prefab->name] = std::move(meta);
+        }
         auto& kids = ctx.prefabDecls[prefab->name];
         for (const auto& ch : prefab->children)
             kids.insert(ch.name);

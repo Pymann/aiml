@@ -1,0 +1,18 @@
+# SPEC: 44_8_prefab_static
+# Requires: driver
+# EXPECT-SILENT: set_input_transparent macht den Prefab-Wert zur Vorgabe
+- prefab:
+    name: GlowBanner
+    width: 200
+    height: 60
+    input_transparent: true
+    children:
+      - { name: press_here, type: button, pos_x: 10, pos_y: 10, width: 120, height: 30 }
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [banner, prefab_instance, { call: [engine.instantiate, "GlowBanner"] }]
+      - call: [banner.set_input_transparent, 0]
+      - decl: [hit, i32, { call: [banner.child_clicked, "press_here"] }]
+      - return: 0
