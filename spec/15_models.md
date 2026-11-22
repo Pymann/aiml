@@ -155,10 +155,57 @@ fields — identical layout to class `extends:`.
 - set:  [c.defense,  2]
 ```
 
+### Declaring a derived model FROM a base value
+
+Because the parent's fields are a **prefix**, a derived local may be declared
+from a base value. The shared prefix is copied; the derived type's **own**
+fields are set up exactly as a plain `decl` would — containers get a valid
+empty handle, scalars and strings their declared default.
+
+```yaml
+- decl: [basis, Grund]
+- set:  [basis.kennung, "abc"]
+- decl: [weit, Erweitert, basis]   # kennung = "abc", eigene Felder = Vorgabe
+```
+
+The copy is **shallow**, like writing a derived value into a base-typed field
+(the other direction): the prefix's strings and containers are shared with the
+source, and the two are independent only in their own slots.
+
+The source may be a value, a `ptr<Base>` or a `ref<Base>`; and the same copy
+happens when assigning to an existing **variable** of the derived type — there
+the target's own fields keep what they held, because `set` is an assignment,
+not a declaration.
+
+**Not allowed: a base value into a derived FIELD.**
+
+```yaml
+- set: [traeger.platz, basis]   # FEHLER (spec/15)
+```
+
+What should happen to the derived type's own fields in that slot has no
+defined answer, and the path there releases the field's whole heap before
+copying — with a smaller source the own fields would point at freed memory.
+Assign the shared fields one by one, or build the value with
+`decl: [x, Erweitert, basis]` and assign **that**.
+Test: `tests/test_model_set_base_into_field_error.aiml`.
+
+> **Warum das hier steht (21.11.2026).** Bis dahin war die Form nicht
+> beschrieben — der Compiler nahm sie an und kopierte `sizeof(ZIEL)` Bytes aus
+> der **kleineren** Quelle. Das liest über deren Ende hinaus, und der Müll
+> landet in den eigenen Feldern der abgeleiteten Form: ein `i32` las 0, eine
+> Zeichenkette leer, ein Listen-Handle **stürzte mit SIGSEGV ab**. Gefunden in
+> datacreatures (`SkillProfile inherits CombatSkill`), wo der Build grün war
+> und erst der Lauf fiel. Regression: `tests/test_model_init_from_base.aiml`.
+
 Constraints:
 - A model can only inherit from another model, not from a class.
 - Only single inheritance (one `inherits:` parent).
 - Duplicate field names between parent and child are a CompilationError.
+- Initialising a derived model from a base value copies only the shared
+  prefix (see above). The reverse — a derived value into a base-typed slot —
+  copies the same prefix and is likewise allowed
+  (`tests/test_assign_inherited_model_ok.aiml`).
 
 ## Heap Allocation and ptr<Model>
 

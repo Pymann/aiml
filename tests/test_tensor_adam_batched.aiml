@@ -1,0 +1,126 @@
+# spec/50 §14.1/§15: wem gehoert der Adam-Zustand (m, v) zwischen den Schritten?
+#
+# Zwei Faelle, zwei Zustaendigkeiten:
+#
+#  (1) Der erste Schritt kommt erst NACH mehreren `begin_graph` (ein Trainer,
+#      der Gradienten ueber einen Stapel sammelt).  Bis dahin sind m/v nichts
+#      als eigene Tensoren und werden eingesammelt -- der Aufrufer MUSS sie mit
+#      `keep` kennzeichnen, wie jeden anderen Tensor vor der Schleife.
+#
+#  (2) Nach einem Schritt folgt eine lange Strecke ohne Schritt (eine
+#      MESSSCHLEIFE: viele `begin_graph`, kein backward).  Hier ist die
+#      Laufzeit zustaendig: `adam_step` kennzeichnet m/v als `keep`.  Vorher
+#      hielt sie nur die Epoche frisch, der Zustand veraltete nach zwei
+#      Durchgaengen und der naechste Schritt las freigegebenen Speicher
+#      (SIGSEGV in adam_step, 21.11.2026 am Chance-Kopf: 6856 Messzeilen
+#      zwischen Epoche 1 und 2).
+
+- def:
+    name: main
+    args: []
+    return: i32
+    body:
+      - decl: [fehlt, i32, 0]
+
+      # ── Fall 2: Schritt, dann lange Messstrecke, dann Schritt ─────────────
+      - decl: [gew, tensor, { call: [tensor.randn_ex, 0.0, 0.1, 4, 3] }]
+      - call: [gew.set_requires_grad, 1]
+      - decl: [mom, tensor, { call: [tensor.zeros, 4, 3] }]
+      - decl: [vel, tensor, { call: [tensor.zeros, 4, 3] }]
+      - decl: [ziel, tensor, { call: [tensor.zeros, 1, 3] }]
+      - call: [ziel.keep]
+      - call: [ziel.set, 0, 1.0]
+      - decl: [ein, tensor, { call: [tensor.zeros, 1, 4] }]
+      - call: [ein.keep]
+      - call: [ein.set, 0, 1.0]
+
+      - call: [tensor.begin_graph]
+      - decl: [aus1, tensor, { call: [tensor.matmul, ein, gew] }]
+      - decl: [feh1, tensor, { call: [tensor.sub, aus1, ziel] }]
+      - decl: [qua1, tensor, { call: [tensor.mul, feh1, feh1] }]
+      - call: [tensor.backward, qua1]
+      - decl: [verlust_erst, f32, { call: [qua1.get, 0] }]
+      - call: [tensor.adam_step, gew, mom, vel, 0.05, 0.9, 0.999, 0.00000001, 1]
+      - call: [gew.zero_grad]
+
+      # Messstrecke: 50 Durchgaenge, kein Schritt.
+      - decl: [mess, i32, 0]
+      - while:
+          condition: { lt: [mess, 50] }
+          body:
+            - set: [mess, { "+": [mess, 1] }]
+            - call: [tensor.begin_graph]
+            - decl: [aus_m, tensor, { call: [tensor.matmul, ein, gew] }]
+            - decl: [feh_m, tensor, { call: [tensor.sub, aus_m, ziel] }]
+
+      # Hier starb es: m/v waren eingesammelt und freigegeben.
+      - call: [tensor.begin_graph]
+      - decl: [aus2, tensor, { call: [tensor.matmul, ein, gew] }]
+      - decl: [feh2, tensor, { call: [tensor.sub, aus2, ziel] }]
+      - decl: [qua2, tensor, { call: [tensor.mul, feh2, feh2] }]
+      - call: [tensor.backward, qua2]
+      - decl: [verlust_zwei, f32, { call: [qua2.get, 0] }]
+      - call: [tensor.adam_step, gew, mom, vel, 0.05, 0.9, 0.999, 0.00000001, 2]
+      - call: [gew.zero_grad]
+      - if:
+          condition: { gte: [verlust_zwei, verlust_erst] }
+          then:
+            - call: [log.error, "FEHL Messstrecke: ${verlust_erst} -> ${verlust_zwei}"]
+            - set: [fehlt, { "+": [fehlt, 1] }]
+      # Ein genullter Impuls waere ein frisch angelegter Ersatz -- also der alte
+      # Fehler ohne Absturz.
+      - decl: [m_null, i32, 0]
+      - decl: [pos_m, i32, 0]
+      - while:
+          condition: { lt: [pos_m, 12] }
+          body:
+            - decl: [wert_m, f32, { call: [mom.get, pos_m] }]
+            - if: { condition: { eq: [wert_m, 0.0] }, then: [{ set: [m_null, { "+": [m_null, 1] }] }] }
+            - set: [pos_m, { "+": [pos_m, 1] }]
+      - if:
+          condition: { eq: [m_null, 12] }
+          then:
+            - call: [log.error, "FEHL der Impuls ist leer -- m/v wurden ersetzt"]
+            - set: [fehlt, { "+": [fehlt, 1] }]
+
+      # ── Fall 1: Stapel, erster Schritt erst nach 8 Durchgaengen ───────────
+      - decl: [gew_b, tensor, { call: [tensor.randn_ex, 0.0, 0.1, 4, 3] }]
+      - call: [gew_b.set_requires_grad, 1]
+      - decl: [mom_b, tensor, { call: [tensor.zeros, 4, 3] }]
+      - decl: [vel_b, tensor, { call: [tensor.zeros, 4, 3] }]
+      - call: [mom_b.keep]
+      - call: [vel_b.keep]
+      - decl: [schritt, i32, 0]
+      - decl: [runde, i32, 0]
+      - decl: [erste_summe, f32, 0.0]
+      - decl: [letzte_summe, f32, 0.0]
+      - while:
+          condition: { lt: [runde, 5] }
+          body:
+            - set: [runde, { "+": [runde, 1] }]
+            - decl: [im_stapel, i32, 0]
+            - decl: [summe, f32, 0.0]
+            - while:
+                condition: { lt: [im_stapel, 8] }
+                body:
+                  - set: [im_stapel, { "+": [im_stapel, 1] }]
+                  - call: [tensor.begin_graph]
+                  - decl: [aus_s, tensor, { call: [tensor.matmul, ein, gew_b] }]
+                  - decl: [feh_s, tensor, { call: [tensor.sub, aus_s, ziel] }]
+                  - decl: [qua_s, tensor, { call: [tensor.mul, feh_s, feh_s] }]
+                  - call: [tensor.backward, qua_s]
+                  - set: [summe, { "+": [summe, { call: [qua_s.get, 0] }] }]
+            - set: [schritt, { "+": [schritt, 1] }]
+            - call: [tensor.adam_step, gew_b, mom_b, vel_b, 0.05, 0.9, 0.999, 0.00000001, schritt]
+            - call: [gew_b.zero_grad]
+            - if: { condition: { eq: [runde, 1] }, then: [{ set: [erste_summe, summe] }] }
+            - set: [letzte_summe, summe]
+      - if:
+          condition: { gte: [letzte_summe, erste_summe] }
+          then:
+            - call: [log.error, "FEHL Stapel: ${erste_summe} -> ${letzte_summe}"]
+            - set: [fehlt, { "+": [fehlt, 1] }]
+
+      - if: { condition: { gt: [fehlt, 0] }, then: [{ return: 1 }] }
+      - call: [log.info, "test_tensor_adam_batched: alles gut (Messstrecke ${verlust_erst}->${verlust_zwei}, Stapel ${erste_summe}->${letzte_summe})"]
+      - return: 0

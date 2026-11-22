@@ -16,6 +16,10 @@
 namespace AIML {
 namespace AST {
 
+// Weiter unten definiert; der decl-Pfad braucht sie fuer die Initialisierung
+// einer abgeleiteten Form aus einem Basiswert (spec/15).
+static bool modelIsAncestor(CompilerContext& ctx, std::string derived, const std::string& base);
+
 namespace {
 
 // ── AIML_SIZETRACE (compile-time gated) ──────────────────────────────────────
@@ -2593,6 +2597,116 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
         ctx.floatLitTy = savedLitTy;
         ctx.floatResultTy = savedResTy;
         ctx.deserializeTargetType.clear();
+
+        // Eine ABGELEITETE Form aus einem BASISWERT anlegen (spec/15 "Model
+        // Inheritance": die Felder der Basis liegen als Vorspann im Speicher).
+        // Der allgemeine Weg kopiert `sizeof(ZIEL)` Bytes aus einer KLEINEREN
+        // Quelle -- er liest ueber deren Ende hinaus, und der Muell landet in
+        // den eigenen Feldern der abgeleiteten Form: ein i32 las 0, eine
+        // Zeichenkette leer, ein Listen-Handle stuerzte mit SIGSEGV ab
+        // (gemessen 21.11.2026 in datacreatures, `SkillProfile`).
+        // Also: nur den geteilten Vorspann kopieren und die EIGENEN Felder so
+        // einrichten, wie ein `decl` ohne Initialisierer es taete.
+        // Regression: tests/test_model_init_from_base.aiml
+        if (initVal && !isPrePromotedGlobal) {
+            std::string srcTypeName = declaredTypeOfExpr(decl->initialValue.get());
+            // Eine Variable mit WERT-Typ meldet sich dort als `ptr<T>` (eine
+            // Klasseninstanz verhaelt sich am Argument wie ein Zeiger) -- die
+            // Huelle gehoert hier weg, sonst findet die Suche den Typ nie.
+            if ((srcTypeName.rfind("ptr<", 0) == 0 || srcTypeName.rfind("ref<", 0) == 0)
+                && !srcTypeName.empty() && srcTypeName.back() == '>')
+                srcTypeName = srcTypeName.substr(4, srcTypeName.size() - 5);
+            auto dstIt = ctx.classes.find(decl->typeName);
+            auto srcIt = ctx.classes.find(srcTypeName);
+            llvm::Value* initRawB = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(initVal));
+            if (!srcTypeName.empty() && srcTypeName != decl->typeName
+                && dstIt != ctx.classes.end() && srcIt != ctx.classes.end()
+                && dstIt->second.isModel && srcIt->second.isModel
+                && srcIt->second.type && dstIt->second.type
+                && initRawB
+                && modelIsAncestor(ctx, decl->typeName, srcTypeName)) {
+                // Die Auswertung liefert je nach Ausdruck einen ZEIGER auf die
+                // Quelle oder den Strukturwert selbst -- ein Wert wird erst in
+                // einen Zwischenplatz gelegt, damit es etwas zu kopieren gibt.
+                llvm::Value* srcPtr = initRawB;
+                if (!initRawB->getType()->isPointerTy()) {
+                    if (initRawB->getType() != srcIt->second.type) { /* fremde Form */ }
+                    llvm::IRBuilder<> tmpB(&ctx.builder.GetInsertBlock()->getParent()->getEntryBlock(),
+                                           ctx.builder.GetInsertBlock()->getParent()->getEntryBlock().begin());
+                    llvm::Value* spill = tmpB.CreateAlloca(initRawB->getType(), nullptr, "basis_spill");
+                    ctx.builder.CreateStore(initRawB, spill);
+                    srcPtr = spill;
+                }
+                uint64_t srcSize = ctx.module().getDataLayout()
+                                       .getTypeAllocSize(srcIt->second.type);
+                llvm::Type* ptrTyB = llvm::PointerType::get(ctx.context, 0);
+                llvm::Function* mcfB = ctx.getFunction(
+                    "memcpy", ptrTyB, {ptrTyB, ptrTyB, ctx.getSizeType()});
+                ctx.builder.CreateCall(mcfB, {
+                    unwrappedAlloca, srcPtr, ctx.getSizeConst(srcSize)
+                });
+                // Die Grenze ist der HOECHSTE Feldindex der Quelle plus eins --
+                // nicht die Zahl ihrer Mitglieder: `members` fuehrt bei einem
+                // geerbten Modell nur die EIGENEN Felder, die Indizes laufen
+                // aber ueber den geerbten Vorspann weiter.  Mit der Zahl als
+                // Grenze wurden Felder der Quelle neu eingerichtet und kamen
+                // leer an (icon_path, outcome_tags -- gemessen 21.11.2026 im
+                // datacreatures-Gate).
+                unsigned ownFrom = 0;
+                for (const auto& [sm_name, sm] : srcIt->second.members)
+                    if (sm.index + 1 > ownFrom) ownFrom = (unsigned)(sm.index + 1);
+                // Die Kopie TEILT die Zeichenketten und Listen des Vorspanns mit
+                // der Quelle.  Ohne eigenen Ref-Zaehler gibt die Quelle sie am
+                // Blockende frei, und die Kopie steht leer da -- im
+                // datacreatures-Gate kamen `icon_path` und `outcome_tags` leer an,
+                // und der Lauf endete mit SIGABRT (21.11.2026).  Die
+                // Serialisierungsknoten der QUELLE beschreiben genau den
+                // Vorspann, also halten sie genau das Richtige fest.
+                if (srcIt->second.hasHeapFields && srcIt->second.serNodesVar) {
+                    llvm::Type* ptrTyR = llvm::PointerType::get(ctx.context, 0);
+                    llvm::Function* rf = ctx.getFunction("aiml_ser_retain", ctx.builder.getVoidTy(),
+                        {ptrTyR, ptrTyR, ctx.builder.getInt32Ty()});
+                    ctx.builder.CreateCall(rf, { unwrappedAlloca, srcIt->second.serNodesVar,
+                        ctx.builder.getInt32(srcIt->second.serNodesCount) });
+                }
+                initClassContainerMembers(unwrappedAlloca, decl->typeName, ownFrom);
+                // Und weil die Kopie jetzt eigene Rechte haelt (Vorspann per
+                // Festhalten, eigene Felder frisch), gehoert sie beim Verlassen
+                // des Blocks aufgeraeumt -- mit den Knoten des ZIELS, die beides
+                // abdecken.
+                if (decl->lifetime != "persistent" && !ctx.cleanupStack.empty()
+                    && dstIt->second.hasHeapFields && dstIt->second.serNodesVar) {
+                    CompilerContext::ScopeDrop sd;
+                    sd.addr = unwrappedAlloca;
+                    sd.serNodes = dstIt->second.serNodesVar;
+                    sd.serNodesCount = dstIt->second.serNodesCount;
+                    sd.ownershipId =
+                        (ctx.ownershipPlan && ctx.ownershipPlan->declarations.count(decl))
+                        ? ctx.ownershipPlan->declarations.at(decl) : NoOwnership;
+                    sd.debugName = decl->varName; sd.debugType = decl->typeName;
+                    ctx.cleanupStack.back().push_back(sd);
+                }
+                for (const auto& [memberName, member] : dstIt->second.members) {
+                    if (member.index < ownFrom || !member.initValue) continue;
+                    const std::string& mtn = member.typeName;
+                    bool isContainerField =
+                           (mtn.rfind("list<", 0) == 0 && mtn.back() == '>')
+                        || (mtn.rfind("map<", 0) == 0 && mtn.back() == '>')
+                        || mtn == "buffer"
+                        || (mtn.rfind("buffer<", 0) == 0 && mtn.back() == '>');
+                    if (ctx.memV3 && isContainerField) continue;
+                    IRValue* fv = visitExpression(member.initValue.get());
+                    if (!fv) continue;
+                    llvm::Value* iv2 = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(fv));
+                    if (!iv2) continue;
+                    llvm::Value* fp = ctx.builder.CreateStructGEP(
+                        dstIt->second.type, unwrappedAlloca, member.index,
+                        memberName + "_own_default_gep");
+                    coerceOrStoreFieldDefault(ctx, fp, member, iv2);
+                }
+                return;
+            }
+        }
         // spec/61 §7: normalise a managed string local's init to "one owned RC ref". An owned temp
         // (interpolation/producer, in the stmt-temp list) is MOVED (stored as-is, then removed from
         // the temp list below). A BORROW (variable/member/at/non-producer call/literal) is DUPLICATED
@@ -4332,6 +4446,28 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                         // this memcpy writes into a zeroed field; the moved-in source's own scope-drop
                         // was consumed by consumeLocalDrop → no double-free, no leak.
                         uint64_t sz = ctx.module().getDataLayout().getTypeAllocSize(fieldTy);
+                        // Verwandte Modelle duerfen einander zugewiesen werden
+                        // (modelsInheritanceRelated) -- dann teilen sie nur den
+                        // VORSPANN, und kopiert werden darf hoechstens so viel,
+                        // wie die QUELLE hat.  Ist die Quelle die Basis, las die
+                        // Kopie sonst ueber deren Ende hinaus: der Muell landete
+                        // in den eigenen Feldern des Ziels und stuerzte beim
+                        // naechsten Zugriff ab (SIGSEGV, gemessen 21.11.2026;
+                        // Regression tests/test_model_init_from_base.aiml, Fall
+                        // "Feld als Ziel").  Dasselbe Leiden wie im decl-Pfad,
+                        // nur eine Anweisung weiter.
+                        {
+                            std::string srcTn = declaredTypeOfExpr(setStmt->value.get());
+                            if ((srcTn.rfind("ptr<", 0) == 0 || srcTn.rfind("ref<", 0) == 0)
+                                && srcTn.back() == '>')
+                                srcTn = srcTn.substr(4, srcTn.size() - 5);
+                            auto srcCi = ctx.classes.find(srcTn);
+                            if (srcCi != ctx.classes.end() && srcCi->second.type) {
+                                uint64_t srcSz = ctx.module().getDataLayout()
+                                                     .getTypeAllocSize(srcCi->second.type);
+                                if (srcSz < sz) sz = srcSz;
+                            }
+                        }
                         llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
                         llvm::Function* mcf = ctx.getFunction("memcpy", ptrTy,
                             {ptrTy, ptrTy, ctx.getSizeType()});
@@ -4376,6 +4512,40 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                         // so the member owns an INDEPENDENT heap. Skipped for a ptr<T>/ref<T> source
                         // (finding #2: emitLValueAddress would give the pointer SLOT, not the pointee
                         // model — those fall through to the pointer-aware logic below).
+                        // Eine Tiefkopie laeuft ueber die Serialisierungsknoten des
+                        // ZIELS.  Ist die Quelle nur die BASIS, beschreiben diese
+                        // Knoten Felder, die es in ihr gar nicht gibt -- der
+                        // Durchlauf liest hinter ihrem Ende weiter und stuerzt ab
+                        // (SIGSEGV, gemessen 21.11.2026).  Verwandte Modelle teilen
+                        // nur den Vorspann; dann gilt der flache Weg weiter unten,
+                        // der auf die Quellgroesse geklemmt ist.
+                        // Ein BASISWERT in ein abgeleitetes FELD ist mehrdeutig: was
+                        // soll mit den eigenen Feldern des Ziels geschehen?  Der
+                        // Weg dorthin gibt erst den ganzen Zielspeicher frei und
+                        // kopiert dann -- bei einer kleineren Quelle zeigen die
+                        // eigenen Felder danach auf Freigegebenes (SIGSEGV, gemessen
+                        // 21.11.2026).  Statt eine Bedeutung zu erfinden, wird die
+                        // Form abgelehnt; `decl: [x, Abgeleitet, basis]` und die
+                        // Zuweisung an eine VARIABLE sind beschrieben und getestet
+                        // (spec/15, tests/test_model_init_from_base.aiml).
+                        {
+                            std::string srcTn = declaredTypeOfExpr(setStmt->value.get());
+                            if ((srcTn.rfind("ptr<", 0) == 0 || srcTn.rfind("ref<", 0) == 0)
+                                && !srcTn.empty() && srcTn.back() == '>')
+                                srcTn = srcTn.substr(4, srcTn.size() - 5);
+                            if (!srcTn.empty() && srcTn != finalTypeName
+                                && ctx.classes.count(srcTn)
+                                && modelIsAncestor(ctx, finalTypeName, srcTn)) {
+                                LOG_ERROR(ctx.fmtLoc(setStmt->sourceNode)
+                                    + "a value of the BASE model '" + srcTn + "' cannot be assigned to"
+                                      " a field of the derived model '" + finalTypeName + "': the"
+                                      " derived type's own fields have no defined meaning here"
+                                      " (spec/15). Assign the shared fields one by one, or build the"
+                                      " value with `decl: [x, " + finalTypeName + ", <base>]` and"
+                                      " assign that.");
+                                return;
+                            }
+                        }
                         if (memberDeepCopy && !srcIsPtrLike
                             && cIt->second.hasHeapFields && cIt->second.serNodesVar) {
                             std::string lvTy;
@@ -4440,6 +4610,25 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                                 return;
                             }
                             uint64_t sz = ctx.module().getDataLayout().getTypeAllocSize(structTy);
+                            // Verwandte Modelle teilen nur den VORSPANN: ist die
+                            // Quelle die Basis, darf hoechstens ihre Groesse
+                            // kopiert werden.  Sonst liest die Kopie ueber das
+                            // Quellende hinaus, und der Muell landet in den
+                            // eigenen Feldern des Ziels -- SIGSEGV beim naechsten
+                            // Zugriff (gemessen 21.11.2026, Fall "Feld als Ziel"
+                            // in tests/test_model_init_from_base.aiml).
+                            {
+                                std::string srcTn = declaredTypeOfExpr(setStmt->value.get());
+                                if ((srcTn.rfind("ptr<", 0) == 0 || srcTn.rfind("ref<", 0) == 0)
+                                    && !srcTn.empty() && srcTn.back() == '>')
+                                    srcTn = srcTn.substr(4, srcTn.size() - 5);
+                                auto srcCi2 = ctx.classes.find(srcTn);
+                                if (srcCi2 != ctx.classes.end() && srcCi2->second.type) {
+                                    uint64_t ssz = ctx.module().getDataLayout()
+                                                       .getTypeAllocSize(srcCi2->second.type);
+                                    if (ssz < sz) sz = ssz;
+                                }
+                            }
                             // spec/61 §5.5/§4.4.5: this is the MOVE path (an owned/producer struct value,
                             // not a borrowed/view/param source — those took deep_copy_replace above). Before
                             // overwriting the field, RELEASE its previous heap, else a re-assigned value-model
@@ -4700,6 +4889,51 @@ void Compiler::visitExprStmt(ExprStmt* exprStmt) {
 }
 static void emitScopeDrop(CompilerContext& ctx, const CompilerContext::ScopeDrop& it);  // defined below
 void Compiler::visitRetStmt(RetStmt* retStmt) {
+    // spec/10: `return: [a, b]` ist ein LISTENLITERAL -- `return: [{ +: [x, 1] }]` dagegen
+    // der EINE Wert in Folgenschreibweise, und so steht es ueberall im Korpus.  Der Parser
+    // kann die beiden nicht trennen (er kennt den Rueckgabetyp nicht), also entscheidet es
+    // hier: ohne Container-Rueckgabetyp wird das einzelne Element durchgelassen, mehrere
+    // sind ein Fehler.  Ein einzelnes Element, das SELBST den Rueckgabetyp hat
+    // (`return: [meine_liste]`), ist ebenfalls Durchlass, keine Liste in der Liste.
+    if (auto* retLit = dynamic_cast<BufferLiteralExpr*>(retStmt->value.get())) {
+        const std::string& rtDecl = ctx.currentFunctionReturnType;
+        const bool willListe = rtDecl.rfind("list<", 0) == 0 || rtDecl.rfind("buffer", 0) == 0;
+        bool durchlass = !willListe;
+        // EIN Element in einer Funktion, die einen Behaelter zurueckgibt: ist das
+        // ein Literal ("eins") -- dann ein Behaelter mit einem Element -- oder der
+        // fertige Behaelter selbst?
+        //
+        // Entschieden wird am Typ des Elements, und `""` (nicht bestimmbar, also
+        // ein AUFRUF) heisst Durchlass.  Genau daran scheiterten am 21.11.2026
+        // neun Tests: `return: [{ call: [bytes.concat, ...] }]` in einer
+        // `buffer<u8>`-Funktion wurde als Behaelterliteral gelesen, dessen
+        // Elementtyp niemand bestimmen kann (test_bytes, test_pipeline_*).  Vor
+        // der Regel liess der Compiler JEDEN Einzelfall durch -- fuer Aufrufe
+        // bleibt es dabei.
+        if (willListe && retLit->elements.size() == 1) {
+            Expr* eins = retLit->elements[0].get();
+            const std::string et = declaredTypeOfExpr(eins);
+            const bool istLiteral = dynamic_cast<LiteralExpr*>(eins) != nullptr;
+            if (et == rtDecl) durchlass = true;              // schon der Behaelter
+            else if (!istLiteral && et.empty()) durchlass = true;  // Aufruf: der ganze Behaelter
+        }
+        if (durchlass) {
+            if (retLit->elements.size() == 1) {
+                std::unique_ptr<Expr> innen = std::move(retLit->elements[0]);
+                retStmt->value = std::move(innen);
+            } else if (retLit->elements.empty()) {
+                // `return: []` ohne Listen-Rueckgabetyp ist das blanke Verlassen der
+                // Funktion -- so steht es 118 Mal im Korpus (tests/venv/kontor_stub.aiml
+                // und ueberall in datacreatures).  Ein nicht-void Rumpf faellt danach in
+                // die bestehende Diagnose "Empty return statement in non-void function".
+                retStmt->value.reset();
+            } else {
+                LOG_ERROR(ctx.fmtLoc(retStmt->sourceNode) + "return: [...] mit "
+                          + std::to_string(retLit->elements.size()) + " Werten, aber der"
+                          " Rueckgabetyp '" + rtDecl + "' ist kein list<T> (spec/10).");
+            }
+        }
+    }
     // The move below only applies to THIS return path: paths compiled after it (e.g. the rest of a
     // loop body around a conditional `return x`) must keep x's drop → restore the frames afterwards.
     struct CleanupRestore { CompilerContext& c; std::vector<std::vector<CompilerContext::ScopeDrop>> saved;
@@ -4801,6 +5035,12 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
     // composed string). Marking it fresh-owned lets emitReturnCleanup drop those siblings (mayDrop-
     // gated, so a still-shared view is not freed); the returned concat temp is moved out, not dropped.
     if (dynamic_cast<StringInterpolationExpr*>(retStmt->value.get()))
+        retFreshOwned = true;
+    // spec/61 §6.2: `return: ["a", "b"]` -- ein Listen-/Pufferliteral ist ein FRISCHER
+    // Behaelter.  Er kann keine Lokale dieser Funktion aliasieren (er kopiert deren
+    // Inhalt), also darf der Rueckgabepfad die Geschwister aufraeumen, und der
+    // Behaelter selbst wird hinausgegeben.
+    if (dynamic_cast<BufferLiteralExpr*>(retStmt->value.get()))
         retFreshOwned = true;
     // spec/61 §4/§8 diagnostic (finding-1 class): a function that returns a FRESH string (an
     // interpolation, a string builtin like substr/trim/…, or a producer-call result) but is NOT
@@ -5030,7 +5270,16 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
         llvm::Type* savedRetLitTy = ctx.floatLitTy;
         llvm::Type* savedRetResTy = ctx.floatResultTy;
         if (retTy && retTy->isFloatingPointTy()) { ctx.floatLitTy = retTy; ctx.floatResultTy = retTy; }
+        // spec/10: `return: [a, b]` -- den Elementtyp gibt der ERKLAERTE Rueckgabetyp,
+        // nicht das erste Element.  Nur so traegt `return: []` (leere Liste) und nur so
+        // wird `list<f32>` nicht aus einer ganzen Zahl zu i32 geraten.
+        const std::string savedRetLitArg = ctx.listLiteralArgType;
+        if (dynamic_cast<BufferLiteralExpr*>(retStmt->value.get())
+            && (ctx.currentFunctionReturnType.rfind("list<", 0) == 0
+                || ctx.currentFunctionReturnType.rfind("buffer<", 0) == 0))
+            ctx.listLiteralArgType = ctx.currentFunctionReturnType;
         IRValue* val = visitExpression(retStmt->value.get());
+        ctx.listLiteralArgType = savedRetLitArg;
         ctx.floatLitTy = savedRetLitTy;
         ctx.floatResultTy = savedRetResTy;
         // An owned statement temp (e.g. a string `at` that already retained the element) is moved

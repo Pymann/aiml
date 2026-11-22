@@ -161,7 +161,7 @@ struct AimlMirrorPeer {
     int32_t rpc_version = 0;   /* from the peer's HELLO: 0 = none/v2, 3 = RPC v3 */
     std::deque<std::vector<uint8_t>> held_deltas;   /* AIML_MIRROR_TEST_HOLD_DELTA */
     bool    dead        = false;   /* invalid frame / overload / send error → disconnect */
-    const char* dead_reason = nullptr;
+    char    dead_reason[96] = {0};   /* Kopie, nicht Zeiger: der Grund kann aus einem Stack-Puffer kommen */
 };
 
 struct AimlMirrorRegistered {
@@ -344,8 +344,8 @@ static int32_t read_i32_le(const uint8_t* p)    { return (int32_t)read_u32_le(p)
 static void mirror_mark_dead(AimlMirrorPeer* peer, const char* why) {
     if (!peer || peer->dead) return;
     peer->dead = true;
-    peer->dead_reason = why;
-    fprintf(stderr, "[mirror] peer %d: %s — disconnecting\n", peer->id, why);
+    snprintf(peer->dead_reason, sizeof(peer->dead_reason), "%s", why ? why : "connection lost");
+    fprintf(stderr, "[mirror] peer %d: %s — disconnecting\n", peer->id, peer->dead_reason);
 }
 
 /* Flush a TCP peer's unsent backlog (non-blocking; the rest waits for the next update). */
@@ -929,9 +929,14 @@ static void mirror_recv_from_peers(AimlMirrorSession* s) {
                     tcp_consume(s, peer);
                     continue;
                 }
-                if (n == 0) { closed = true; break; }
-                if (errno == EINTR) continue;
-                if (errno != EAGAIN && errno != EWOULDBLOCK) closed = true;
+                if (n == 0) { mirror_mark_dead(peer, "peer closed"); closed = true; break; }
+                if (errno == EINTR) continue;             /* Signal, nicht Verlust */
+                if (errno != EAGAIN && errno != EWOULDBLOCK) {
+                    char why[96];
+                    snprintf(why, sizeof(why), "recv failed: %s", strerror(errno));
+                    mirror_mark_dead(peer, why);          /* nur die Meldung, sofort gedruckt */
+                    closed = true;
+                }
                 break;
             }
             if (closed || peer->dead) disconnected.push_back(peer);
@@ -941,14 +946,27 @@ static void mirror_recv_from_peers(AimlMirrorSession* s) {
              * (real socket on native, opaque handle on wasm/emscripten). */
             for (int iter = 0; iter < 64; ++iter) {
                 if (!peer->transport.ws_ptr) break;
+                /* Beide Abbruchzweige nennen ihren Grund (spec/44_5 §8) — sie
+                 * warfen den Peer vorher WORTLOS weg, und eine Sitzung, die
+                 * ohne Spur verschwindet, ist von einem Netzfehler nicht zu
+                 * unterscheiden. */
                 int pr = aiml_ws_poll(peer->transport.ws_ptr, 0);
                 if (pr == 0) break;                       /* no data ready */
-                if (pr < 0) { disconnected.push_back(peer); break; }
+                if (pr < 0) {
+                    mirror_mark_dead(peer, aiml_ws_last_error(peer->transport.ws_ptr));
+                    disconnected.push_back(peer);
+                    break;
+                }
                 int32_t msg_len = 0;
                 const char* _rr_prev = g_rt_rpc_phase; g_rt_rpc_phase = "ws.recv_raw";
                 void* msg = aiml_ws_recv_raw(peer->transport.ws_ptr, &msg_len);
                 g_rt_rpc_phase = _rr_prev;
-                if (!msg || msg_len <= 0) { free(msg); disconnected.push_back(peer); break; }
+                if (!msg || msg_len <= 0) {
+                    free(msg);
+                    mirror_mark_dead(peer, aiml_ws_last_error(peer->transport.ws_ptr));
+                    disconnected.push_back(peer);
+                    break;
+                }
                 size_t total = 0;
                 if (mirror_packet_length(s, (const uint8_t*)msg, (size_t)msg_len, true, &total) != PKT_COMPLETE) {
                     free(msg);

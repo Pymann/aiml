@@ -140,12 +140,14 @@ static llvm::Function* getOrCreateClassFree(CompilerContext& ctx, const std::str
 // Recursively initialises container-typed members (list/map/chan/buffer) of
 // a class instance at `basePtr`.  See ast_compiler.h.
 void Compiler::initClassContainerMembers(llvm::Value* basePtr,
-                                         const std::string& className) {
+                                         const std::string& className,
+                                         unsigned fromIndex) {
     auto it = ctx.classes.find(className);
     if (it == ctx.classes.end()) return;
     auto& info = it->second;
     if (!info.type) return;  // builtin / opaque — no struct layout to walk
     for (const auto& [memberName, m] : info.members) {
+        if (m.index < fromIndex) continue;   // prefix comes from the base value
         const std::string& mt = m.typeName;
         llvm::Value* fieldPtr = ctx.builder.CreateStructGEP(
             info.type, basePtr, m.index, memberName + "_init_gep");

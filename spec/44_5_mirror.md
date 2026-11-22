@@ -641,6 +641,52 @@ in the RPC queue when `peer_disconnected` is polled — draining events first th
 without effect) RPCs from a `peer_id` it has already seen disconnect; a reconnecting client gets a
 new `peer_id` and re-sends. (`peer_id`s are never reused, so this check is exact.)
 
+### When a peer counts as disconnected
+
+`peer_disconnected` is a statement about the **connection**, not about a single failed call.  An
+implementation MUST raise it only when one of these is true:
+
+- the peer closed (TCP FIN, or a WebSocket CLOSE frame — `recv` returned 0),
+- the transport reported a real error (`recv`/`poll`/`SSL_read` failed for a reason other than the
+  two below),
+- the peer was marked dead by a protocol rule of this chapter (invalid frame §10, queue or backlog
+  overflow §7.2/§11).
+
+It MUST NOT raise it when the call was merely **interrupted or would block**:
+
+- `EINTR` — a signal arrived while the process sat in `poll()` or `recv()`.  The connection is
+  untouched; the call is retried.  A process that receives signals at all (a window system, an
+  audio thread, a child process exiting) would otherwise drop healthy peers at random intervals,
+  and the drop looks exactly like a network failure.
+- `EAGAIN` / `EWOULDBLOCK` / `SSL_ERROR_WANT_READ` / `SSL_ERROR_WANT_WRITE` — no data yet.  Outside
+  a frame there is nothing to report; mid frame the read is resumed as long as the frame keeps
+  making progress.
+
+  A frame that stops **mid-way** is the one exception.  Once a peer has announced a frame length and
+  then delivers nothing more for the duration of the implementation's read timeout, that peer counts
+  as a real transport error under the second bullet above and is dropped, naming the reason
+  (`recv failed: Resource temporarily unavailable`).  Without that bound a single-threaded server
+  reading a frame with blocking `recv` waits forever and stops serving every other peer (measured on
+  the cosmos controller, 18.10.2026: log ends mid-tick, 13 kB unread in one peer's queue).
+
+  The bound is a stopgap, not the design.  What is owed here is an incremental, non-blocking frame
+  reader with a per-connection buffer (spec/32_4 §Lesen), which resumes a stalled frame instead of
+  dropping the peer.  Until that exists an implementation MUST keep the timeout far above any delay
+  a healthy link can produce, and MUST name it in the drop line — a mid-frame stall and a real reset
+  are then told apart in the log, not guessed at.
+
+**Every drop carries a diagnostic.**  Exactly one line per dropped peer, on stderr, naming the peer
+and the reason:
+
+```
+[mirror] peer 2: peer closed — disconnecting
+[mirror] peer 7: recv failed: Connection reset by peer — disconnecting
+[mirror] peer 9: invalid frame — disconnecting
+```
+
+A silent drop is a defect: the application sees a dead session and has nothing to go on.  The
+reason text is diagnostic only — programs branch on the event, never on the wording.
+
 ### `type_enum()` — typed event kind
 
 `mirror_event` also exposes a method `type_enum()` returning the built-in enum

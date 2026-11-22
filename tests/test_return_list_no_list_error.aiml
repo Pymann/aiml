@@ -1,0 +1,18 @@
+# Negativtest (spec/10): MEHRERE Werte in `return: [...]`, aber der Rueckgabetyp ist
+# keine Liste.  Vorher gewann still das LETZTE Element -- die Funktion gab 9 zurueck,
+# und niemand sagte etwas.  Das muss ein harter Fehler sein.
+- def:
+    name: drei_werte
+    args: []
+    return: i32
+    body:
+      - return: [7, 8, 9]
+
+- def:
+    name: main
+    args: []
+    return: i32
+    body:
+      - decl: [wert, i32, { call: [drei_werte] }]
+      - call: [log.info, "nie erreicht: ${wert}"]
+      - return: 0

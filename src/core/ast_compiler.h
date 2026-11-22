@@ -209,8 +209,13 @@ private:
     // of a class instance at `basePtr`.  Lets `- decl: [g, ClassName]` work
     // without `{ new: ClassName }` boilerplate — used by Phase-2 prologue and
     // by visitDeclStmt for local class-instance decls.
+    // `fromIndex` > 0 initialises only the members at or after that field index.
+    // Used when a derived model is declared FROM a base value: the shared prefix
+    // comes from the source, only the derived type's OWN fields need setting up
+    // (spec/15 "Model Inheritance").
     void initClassContainerMembers(llvm::Value* basePtr,
-                                   const std::string& className);
+                                   const std::string& className,
+                                   unsigned fromIndex = 0);
     IRValue* visitSysExecCall(CallExpr* call);
     IRValue* visitSysArgDumpCall(CallExpr* call);
     IRValue* visitDbRunSystem(CallExpr* call);

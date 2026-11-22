@@ -53,6 +53,40 @@
 - set: [num, { call: [count_items, [1, 2, 3]] }]
 - set: [num, { call: [count_items, []] }]
 
+# Als RUECKGABEWERT gilt dasselbe: `return: [a, b]` gibt eine frische Liste zurueck, und
+# den Elementtyp gibt der ERKLAERTE Rueckgabetyp (`return: list<f32>` macht aus `[1, 2]`
+# zwei Brueche, nicht zwei ganze Zahlen) -- darum traegt auch `return: []`.  Der Behaelter
+# wird an den Aufrufer uebergeben, nicht am Rueckgabepfad freigegeben (spec/61 §6.2).
+# Bis 21.11.2026 landeten die Elemente im Argumentspeicher des Parsers, der Rumpf bekam
+# gar keinen Wert, und die Funktion gab einen UNDEFINIERTEN Rueckgabewert zurueck: `len`
+# war Muell (gemessen 1768256100) und der erste Zugriff stuerzte ab.
+# Test: tests/test_return_list_literal.aiml.
+- return: ["eins", "zwei"]
+- return: []
+
+# WANN eine Folge hinter `return:` ein Listenliteral ist, entscheidet der erklaerte
+# Rueckgabetyp -- `return: [{ "+": [x, 1] }]` ist die ueberall gebrauchte Schreibweise
+# fuer EINEN Wert:
+#   Rueckgabetyp list<T>/buffer, ein Element mit genau diesem Typ  -> Durchlass
+#   Rueckgabetyp list<T>/buffer, ein Element aus einem AUFRUF      -> Durchlass
+#   Rueckgabetyp list<T>/buffer, sonst                             -> Listenliteral
+#   anderer Rueckgabetyp, genau ein Element                        -> Durchlass
+#   anderer Rueckgabetyp, LEER (`return: []`)                      -> blankes Verlassen
+#   anderer Rueckgabetyp, mehrere Elemente                         -> FEHLER
+# Der vorletzte Fall war vorher still: das LETZTE Element gewann, eine i32-Funktion gab
+# `ret i32 9` zurueck.  Test: tests/test_return_list_no_list_error.aiml.
+#
+# Die Aufruf-Zeile kam am 21.11.2026 dazu: der Typ eines Aufrufs ist an dieser
+# Stelle nicht bestimmbar, und `return: [{ call: [bytes.concat, ...] }]` in einer
+# `buffer<u8>`-Funktion wurde als Behaelterliteral gelesen, dessen Elementtyp
+# niemand kennt -- neun Tests fielen (test_bytes, test_pipeline_*).  Ein Aufruf
+# liefert fast immer den fertigen Behaelter, also gilt Durchlass; wer wirklich
+# einen Behaelter MIT einem berechneten Element will, schreibt ihn in eine
+# Variable und gibt die zurueck.
+- return: [{ "+": [wert, 1] }]      # i32-Funktion: der Wert selbst
+- return: [innen]                   # list<string>-Funktion, `innen` ist list<string>: Durchlass
+- return: []                        # void-Funktion: einfach heraus (118 Stellen im Korpus)
+
 # Reading and WRITING one element.  There is no `list.set` method: a write is the `idx:`
 # STATEMENT, the same form as for an array above.  `insert`/`remove` are for changing the
 # LENGTH — reaching for them to overwrite an element shifts everything after it.

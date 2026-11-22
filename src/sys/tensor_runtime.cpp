@@ -1983,9 +1983,13 @@ void aiml_tensor_adam_step(void* pv, void* mv, void* vv,
     auto* p = (AimlTensor*)pv;
     auto* m = (AimlTensor*)mv;
     auto* v = (AimlTensor*)vv;
-    // Adam states must survive GC — refresh epoch so they're never "stale"
-    m->is_param = 1;  m->alloc_epoch = g_graph_epoch;
-    v->is_param = 1;  v->alloc_epoch = g_graph_epoch;
+    // Adam states must survive GC.  Refreshing the epoch alone only helps while a step
+    // happens at least every other begin_graph: a trainer that accumulates gradients over
+    // N bags and steps ONCE (spec/50 §14.1 + §15) made the state stale, begin_graph freed
+    // it, and the next step read freed memory — a SIGSEGV inside adam_step, no diagnosis
+    // (gemessen 21.11.2026, prophecy_pretrain mit Stapel 64).  `keep` holds for any N.
+    m->is_param = 1;  m->keep = 1;  m->alloc_epoch = g_graph_epoch;
+    v->is_param = 1;  v->keep = 1;  v->alloc_epoch = g_graph_epoch;
     if (!p->grad) return;
 
     float bc1 = 1.0f - powf(beta1, (float)step);
@@ -2012,8 +2016,8 @@ void aiml_tensor_adam_step_with_grad(void* pv, void* mv, void* vv, void* gv,
     auto* v = (AimlTensor*)vv;
     auto* g = (AimlTensor*)gv;
     if (!p || !m || !v || !g) return;
-    m->is_param = 1;  m->alloc_epoch = g_graph_epoch;
-    v->is_param = 1;  v->alloc_epoch = g_graph_epoch;
+    m->is_param = 1;  m->keep = 1;  m->alloc_epoch = g_graph_epoch;
+    v->is_param = 1;  v->keep = 1;  v->alloc_epoch = g_graph_epoch;
 
     float bc1 = 1.0f - powf(beta1, (float)step);
     float bc2 = 1.0f - powf(beta2, (float)step);

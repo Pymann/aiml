@@ -1,0 +1,127 @@
+# `return: [a, b]` gibt eine LISTE zurueck (spec/10 "Listenliteral als Rueckgabe").
+#
+# Vor dem 21.11.2026 landeten die Elemente im Argumentspeicher des Parsers, der
+# Rumpf bekam gar keinen Wert, und die Funktion gab einen undefinierten
+# Rueckgabewert zurueck: `len` war Muell (gemessen 1768256100) und der erste
+# Zugriff stuerzte ab.  Der Elementtyp kommt aus dem ERKLAERTEN Rueckgabetyp,
+# darum traegt auch die leere Liste.
+
+- def:
+    name: drei_woerter
+    args: []
+    return: list<string>
+    body:
+      - return: ["eins", "zwei", "drei"]
+
+- def:
+    name: leere_liste
+    args: []
+    return: list<string>
+    body:
+      - return: []
+
+- def:
+    name: zahlen
+    args: []
+    return: list<i32>
+    body:
+      - return: [7, 8, 9]
+
+- def:
+    name: brueche
+    args: []
+    return: list<f32>
+    body:
+      - return: [1, 2]
+
+# Durchlass (spec/10): eine EINELEMENTIGE Folge in einer Funktion, die keine Liste
+# zurueckgibt, ist der Wert selbst -- diese Schreibweise steht ueberall im Korpus.
+- def:
+    name: plus_eins
+    args: [[wert, i32]]
+    return: i32
+    body:
+      - return: [{ "+": [wert, 1] }]
+
+# Dasselbe, wenn das eine Element SELBST den Rueckgabetyp hat: keine Liste in der Liste.
+- def:
+    name: liste_weiter
+    args: []
+    return: list<string>
+    body:
+      - decl: [innen, list<string>]
+      - call: [innen.push, "durch"]
+      - return: [innen]
+
+# Eine Liste aus Literal UND Ausdruck gemischt.
+- def:
+    name: gemischt
+    args: [[dazu, string]]
+    return: list<string>
+    body:
+      - return: ["fest", dazu]
+
+- def:
+    name: main
+    args: []
+    return: i32
+    body:
+      - decl: [fehler, i32, 0]
+      - decl: [woerter, list<string>, { call: [drei_woerter] }]
+      - if:
+          condition: { neq: [woerter.len, 3] }
+          then: [{ call: [log.error, "FEHL drei Woerter: ${woerter.len}"] }, { set: [fehler, { "+": [fehler, 1] }] }]
+      - decl: [erstes, string, { at: [woerter, 0] }]
+      - decl: [letztes, string, { at: [woerter, 2] }]
+      - if:
+          condition: { neq: [erstes, "eins"] }
+          then: [{ call: [log.error, "FEHL erstes Wort: '${erstes}'"] }, { set: [fehler, { "+": [fehler, 1] }] }]
+      - if:
+          condition: { neq: [letztes, "drei"] }
+          then: [{ call: [log.error, "FEHL letztes Wort: '${letztes}'"] }, { set: [fehler, { "+": [fehler, 1] }] }]
+
+      - decl: [leer, list<string>, { call: [leere_liste] }]
+      - if:
+          condition: { neq: [leer.len, 0] }
+          then: [{ call: [log.error, "FEHL leere Liste: ${leer.len}"] }, { set: [fehler, { "+": [fehler, 1] }] }]
+      # Eine zurueckgegebene leere Liste muss BENUTZBAR sein, nicht nur leer.
+      - call: [leer.push, "danach"]
+      - if:
+          condition: { neq: [leer.len, 1] }
+          then: [{ call: [log.error, "FEHL push auf leere Liste: ${leer.len}"] }, { set: [fehler, { "+": [fehler, 1] }] }]
+
+      - decl: [zahl_liste, list<i32>, { call: [zahlen] }]
+      - decl: [mitte, i32, { at: [zahl_liste, 1] }]
+      - if:
+          condition: { "||": [{ neq: [zahl_liste.len, 3] }, { neq: [mitte, 8] }] }
+          then: [{ call: [log.error, "FEHL Zahlen: ${zahl_liste.len} / ${mitte}"] }, { set: [fehler, { "+": [fehler, 1] }] }]
+
+      - decl: [bruch_liste, list<f32>, { call: [brueche] }]
+      - decl: [erster_bruch, f32, { at: [bruch_liste, 0] }]
+      - if:
+          condition: { "||": [{ neq: [bruch_liste.len, 2] }, { gt: [{ call: [math.abs, { "-": [erster_bruch, 1.0] }] }, 0.001] }] }
+          then: [{ call: [log.error, "FEHL Brueche: ${bruch_liste.len} / ${erster_bruch}"] }, { set: [fehler, { "+": [fehler, 1] }] }]
+
+      - decl: [mix, list<string>, { call: [gemischt, "beweglich"] }]
+      - decl: [mix_zwei, string, { at: [mix, 1] }]
+      - if:
+          condition: { "||": [{ neq: [mix.len, 2] }, { neq: [mix_zwei, "beweglich"] }] }
+          then: [{ call: [log.error, "FEHL gemischt: ${mix.len} / '${mix_zwei}'"] }, { set: [fehler, { "+": [fehler, 1] }] }]
+
+      - decl: [sechs, i32, { call: [plus_eins, 5] }]
+      - if:
+          condition: { neq: [sechs, 6] }
+          then: [{ call: [log.error, "FEHL Durchlass i32: ${sechs}"] }, { set: [fehler, { "+": [fehler, 1] }] }]
+
+      - decl: [weiter, list<string>, { call: [liste_weiter] }]
+      - if:
+          condition: { neq: [weiter.len, 1] }
+          then: [{ call: [log.error, "FEHL Durchlass Liste: ${weiter.len}"] }, { set: [fehler, { "+": [fehler, 1] }] }]
+
+      - if:
+          condition: { gt: [fehler, 0] }
+          then:
+            - call: [log.error, "test_return_list_literal: ${fehler} Fehler"]
+            - return: 1
+      - call: [log.info, "test_return_list_literal: alles gut"]
+      - return: 0

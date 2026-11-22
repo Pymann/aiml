@@ -139,6 +139,7 @@ void* aiml_wss_server(const char*, int32_t, const char*, const char*)       { er
 void* aiml_ws_accept(void*)                                                 { errno = ENOTSUP; return nullptr; }
 int32_t aiml_ws_set_timeout(void*, int32_t)                                 { errno = ENOTSUP; return -1; }
 const char* aiml_ws_peer_ip(void*)                                          { return ""; }
+const char* aiml_ws_last_error(void* h)                                     { return (h && static_cast<AimlWs*>(h)->is_closed) ? "peer closed" : "connection lost"; }
 void aiml_ws_set_client_insecure(int32_t)                                   { /* browser TLS is enforced by the browser */ }
 int32_t aiml_ws_client_insecure()                                           { return 0; }
 
@@ -434,22 +435,58 @@ struct AimlWs {
     char     ip[46];         // accepted peer's IP (dotted); "" unless set at accept
     int32_t    hs_timeout_ms = 5000;  // listener: per-connection handshake timeout (spec/32_4 §5.1)
     WsPending* pend = nullptr;        // listener: in-flight handshakes + ready clients
+    char     last_err[96] = {0};      // why the last read/poll gave up (spec/44_5 §8)
 };
 
 static AimlWs* to_ws(void* p) { return static_cast<AimlWs*>(p); }
+
+// Warum ein Lesen oder ein poll aufgab -- der Mirror haengt das an den
+// peer_disconnected-Grund (spec/44_5 §8: kein stiller Abbruch).
+static void ws_err(AimlWs* ws, const char* what, int err) {
+    if (!ws) return;
+    if (err) snprintf(ws->last_err, sizeof(ws->last_err), "%s: %s", what, strerror(err));
+    else     snprintf(ws->last_err, sizeof(ws->last_err), "%s", what);
+}
+
+extern "C" const char* aiml_ws_last_error(void* p) {
+    if (!p) return "no connection";
+    AimlWs* ws = to_ws(p);
+    return ws->last_err[0] ? ws->last_err : "connection lost";
+}
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Low-level I/O (unified TCP / TLS)
 // ══════════════════════════════════════════════════════════════════════════════
 
+// spec/44_5 §8: ein Signal ist kein Verbindungsverlust.  `r <= 0` warf vorher
+// sauberen Abbruch, echten Fehler und EINTR in EINEN Topf -- der Mirror machte
+// daraus ein peer_disconnected, und zwar wortlos.  Der TCP-Zweig des Mirror
+// behandelt EINTR seit je richtig; dieser hier war die Ausnahme.
 static int ws_read_n(AimlWs* ws, void* buf, int n) {
     int done = 0;
     while (done < n) {
+        errno = 0;
         int r = ws->ssl
             ? SSL_read(ws->ssl, (char*)buf + done, n - done)
             : (int)::recv(ws->fd, (char*)buf + done, n - done, 0);
-        if (r <= 0) return -1;
-        done += r;
+        if (r > 0) { done += r; continue; }
+        if (ws->ssl) {
+            int e = SSL_get_error(ws->ssl, r);
+            // NUR das Signal wird wiederholt.  WANT_READ heisst auf einem
+            // blockierenden Socket "SO_RCVTIMEO ist abgelaufen" -- wer das
+            // wiederholt, dreht sich endlos (tests/test_ws_accept_stall.aiml
+            // haengt dann in conn.set_timeout(300)).
+            if (e == SSL_ERROR_SYSCALL && errno == EINTR) continue;
+            if (e == SSL_ERROR_ZERO_RETURN) ws_err(ws, "peer closed (TLS)", 0);
+            else if (e == SSL_ERROR_WANT_READ || e == SSL_ERROR_WANT_WRITE) ws_err(ws, "TLS read timed out", 0);
+            else if (e == SSL_ERROR_SYSCALL && errno) ws_err(ws, "TLS read failed", errno);
+            else ws_err(ws, "TLS read failed", 0);
+            return -1;
+        }
+        if (r == 0) { ws_err(ws, "peer closed", 0); return -1; }
+        if (errno == EINTR) continue;              // Signal, nicht Verlust
+        ws_err(ws, "recv failed", errno);
+        return -1;
     }
     return done;
 }
@@ -1213,6 +1250,7 @@ extern "C" void* aiml_ws_recv_raw(void* p, int32_t* out_len) {
                 return payload;
             case 0x8:  // close
                 ws_send_frame(ws, 0x8, "", 0, ws->is_client_side);
+                ws_err(ws, "peer sent close", 0);
                 free(payload); return nullptr;
             case 0x9:  // ping → auto-pong
                 ws_send_frame(ws, 0xA, payload, len, ws->is_client_side);
@@ -1220,6 +1258,7 @@ extern "C" void* aiml_ws_recv_raw(void* p, int32_t* out_len) {
             case 0xA:  // pong — discard
                 free(payload); continue;
             default:
+                ws_err(ws, "unknown websocket opcode", 0);
                 free(payload); return nullptr;
         }
     }
@@ -1313,9 +1352,29 @@ extern "C" int aiml_ws_poll(void* p, int32_t timeout_ms) {
     AimlWs* ws = to_ws(p);
     // Check TLS internal buffer first (data already decrypted but not yet read)
     if (ws->ssl && SSL_pending(ws->ssl) > 0) return 1;
-    struct pollfd pfd = { ws->fd, POLLIN, 0 };
-    int r = ::poll(&pfd, 1, timeout_ms);
-    return r > 0 ? 1 : (r == 0 ? 0 : -1);
+    // poll(2) wird von SA_RESTART NICHT fortgesetzt (siehe die Anmerkung an
+    // aiml_sys_catch_signals): jedes Signal im Prozess kam hier als -1 heraus,
+    // und der Mirror warf dafuer einen gesunden Peer weg (spec/44_5 §8).
+    // Fester Zielzeitpunkt, damit ein Signal die zugesagte Wartezeit nicht
+    // verlaengert (bei timeout_ms <= 0 gibt es nichts zu rechnen).
+    struct timespec t0;
+    if (timeout_ms > 0) clock_gettime(CLOCK_MONOTONIC, &t0);
+    int rest = timeout_ms;
+    for (;;) {
+        struct pollfd pfd = { ws->fd, POLLIN, 0 };
+        errno = 0;
+        int r = ::poll(&pfd, 1, rest);
+        if (r > 0) return 1;
+        if (r == 0) return 0;
+        if (errno != EINTR) { ws_err(ws, "poll failed", errno); return -1; }
+        if (timeout_ms > 0) {                     // Signal, nicht Verlust
+            struct timespec t1;
+            clock_gettime(CLOCK_MONOTONIC, &t1);
+            long weg = (t1.tv_sec - t0.tv_sec) * 1000 + (t1.tv_nsec - t0.tv_nsec) / 1000000;
+            rest = (int)(timeout_ms - weg);
+            if (rest <= 0) return 0;
+        }
+    }
 }
 
 /* Poll a WS listener socket for a pending accept()-able connection.

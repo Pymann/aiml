@@ -47,6 +47,7 @@ int32_t aiml_ws_fd(void* ws);      // raw TCP fd
 int     aiml_ws_poll(void* ws, int32_t timeout_ms);          // 1=data ready, 0=timeout, -1=error
 int     aiml_ws_poll_listener(void* srv, int32_t timeout_ms); // 1=handshaken client ready, 0=timeout, -1=error
 int32_t aiml_ws_set_timeout(void* ws, int32_t ms);           // listener: handshake timeout; conn: recv/send timeout
+const char* aiml_ws_last_error(void* ws);  // why the last read/poll gave up (spec/44_5 §8); never null
 
 #ifdef __cplusplus
 }

@@ -25,6 +25,12 @@ bool StatementBuilder::OnSequenceStart() {
     // spec/10: `call: [f, [v1, v2]]` — die innere Sequenz ist EIN Listenargument.
     if (seqDepth == 2 && type == "call" && !pendingCallLiteral)
         pendingCallLiteral = std::make_unique<BufferLiteralExpr>();
+    // spec/10: `return: [v1, v2]` ist ein LISTENLITERAL.  Ohne diese Fahne landeten
+    // die Elemente in `args`, `finish()` baute daraus keinen Wert, und die Funktion
+    // gab einen undefinierten Rueckgabewert zurueck: `len` war Muell und der erste
+    // Zugriff stuerzte ab (gemessen 20.11.2026 im Korpus-Erzeuger).
+    if (seqDepth == 1 && type == "return")
+        retSeq = true;
     return true;
 }
 
@@ -89,7 +95,10 @@ bool StatementBuilder::OnScalar(const std::string& value, const std::string& tag
     }
     
     if (type == "return") {
-        exprArg = parseScalarExpr(value, tag);
+        // `return: [a, b]` -- die Elemente gehoeren ins Listenliteral (args), NICHT
+        // einzeln in exprArg: dort gewann das letzte, und eine `list<i32>`-Funktion
+        // gab `ret i32 9` zurueck (gemessen 21.11.2026).
+        if (!retSeq) exprArg = parseScalarExpr(value, tag);
     }
     
     return true;
@@ -387,6 +396,10 @@ std::unique_ptr<Node> StatementBuilder::finish() {
     if (type == "return") {
          auto ret = std::make_unique<RetStmt>();
          if (exprArg) ret->value = std::move(exprArg);
+         // `return: [a, b]` / `return: []` -- die Elemente stehen in args/innerSeqExprs.
+         // Den Elementtyp bestimmt der erklaerte Rueckgabetyp (visitRetStmt setzt
+         // listLiteralArgType), darum traegt auch die leere Liste.
+         else if (retSeq) ret->value = buildSeqLiteral(0);
          ret->sourceLine = capturedLine;
         ret->sourceColumn = capturedColumn;
          return ret;

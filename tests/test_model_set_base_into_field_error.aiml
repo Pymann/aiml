@@ -1,0 +1,24 @@
+# SPEC: 15_models "Model Inheritance"
+# EXPECTED_CODE: 1
+# static-check: off
+#
+# Ein BASISWERT in ein abgeleitetes FELD ist mehrdeutig -- was soll mit den
+# eigenen Feldern des Ziels geschehen?  Der Weg dorthin gab erst den ganzen
+# Zielspeicher frei und kopierte dann nur den Vorspann; die eigenen Felder
+# zeigten danach auf Freigegebenes (SIGSEGV, gemessen 21.11.2026).
+# Abgelehnt statt erfunden.  Erlaubt und getestet sind `decl: [x, Abgeleitet,
+# basis]` und die Zuweisung an eine VARIABLE (test_model_init_from_base).
+
+- model: { name: Grund,     fields: [[kennung, string], [zahl, i32]] }
+- model: { name: Erweitert, inherits: Grund, fields: [[notiz, string, "frisch"], [marken, list<string>]] }
+- model: { name: Traeger,   fields: [[platz, Erweitert]] }
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [basis, Grund]
+      - set: [basis.kennung, "abc"]
+      - decl: [trg, Traeger]
+      - set: [trg.platz, basis]
+      - return: 0

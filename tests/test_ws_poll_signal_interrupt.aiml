@@ -1,0 +1,131 @@
+# SPEC: 44_5_mirror §8 (Wann ein Peer als getrennt gilt) + 32_4 §5
+#
+# Ein Signal ist kein Verbindungsverlust.  `aiml_ws_poll` rechnete
+#
+#     int r = ::poll(&pfd, 1, timeout_ms);
+#     return r > 0 ? 1 : (r == 0 ? 0 : -1);
+#
+# und lieferte damit -1, sobald irgendein Signal den Prozess traf -- poll(2)
+# wird von SA_RESTART NICHT fortgesetzt, was aiml an `sys.catch_signals` sogar
+# selbst anmerkt.  Der Mirror machte aus diesem -1 ein `peer_disconnected`,
+# und zwar WORTLOS: eine gesunde Sitzung verschwand ohne eine Zeile Begruendung
+# (datacreatures, 15.11. und 20.11.2026, Server lief jeweils weiter).
+#
+# Geprueft wird das Verhalten, nicht der Wettlauf: ein blockierendes
+# ws.poll(2000) wird nach ~300 ms von SIGUSR1 getroffen.
+#   vorher:  poll kehrt bei ~300 ms mit -1 zurueck (Fehler)
+#   jetzt:   poll laeuft seine 2000 ms aus und meldet 0 (nichts da),
+#            und die Verbindung traegt danach noch Daten.
+#
+# Expected exit code: 0
+
+- decl: [g_srv_bereit, i32, 0]
+
+- def:
+    name: stiller_server
+    args: []
+    body:
+      - decl: [srv, ws_handle, { call: [ws.server, "127.0.0.1", 19907] }]
+      - if:
+          condition: { peq: [srv, null] }
+          then:
+            - print: ["FAIL: listen auf 127.0.0.1:19907 fehlgeschlagen"]
+            - return: []
+      - set: [g_srv_bereit, 1]
+      - decl: [conn, ws_handle, { call: [ws.accept, srv] }]
+      # Absichtlich STILL: erst nach dem Ablauf des Pollfensters kommt etwas.
+      # So misst der Test wirklich den Zeitgeber und nicht ankommende Daten.
+      - call: [time.sleep_ms, 2600]
+      - call: [ws.send, conn, "nach dem Signal"]
+      - call: [time.sleep_ms, 300]
+      - call: [ws.close, conn]
+
+- decl: [pass, i32, 0]
+- decl: [fail, i32, 0]
+
+# Ohne Handler kein EINTR: ein Signal mit Vorgabe-Behandlung unterbricht
+# keinen Systemaufruf.  catch_signals setzt genau den Handler, den eine echte
+# Anwendung auch setzt (spec/23 §5.7).
+- decl: [fang, i32, { call: [sys.catch_signals, "USR1"] }]
+- if:
+    condition: { neq: [fang, 0] }
+    then:
+      - print: ["FAIL: sys.catch_signals('USR1') ergab ${fang}"]
+      - set: [fail, { +: [fail, 1] }]
+
+- decl: [srv_t, thread_handle]
+- set: [srv_t, { spawn: [stiller_server] }]
+- decl: [warte, i32, 0]
+- while:
+    condition: { "&&": [{ eq: [g_srv_bereit, 0] }, { lt: [warte, 200] }] }
+    body:
+      - call: [time.sleep_ms, 10]
+      - set: [warte, { +: [warte, 1] }]
+
+- decl: [cli, ws_handle, { call: [ws.connect, "127.0.0.1", 19907, "/"] }]
+- if:
+    condition: { peq: [cli, null] }
+    then:
+      - print: ["FAIL: connect auf 127.0.0.1:19907 fehlgeschlagen"]
+      - set: [fail, { +: [fail, 1] }]
+
+# Ein Kind schickt dem eigenen Prozess nach 300 ms SIGUSR1 -- $PPID ist der
+# Test selbst, weil sys.exe direkt aus ihm heraus startet.
+- decl: [argv, list<string>]
+- call: [argv.push, "sh"]
+- call: [argv.push, "-c"]
+- call: [argv.push, "sleep 0.3; kill -USR1 $PPID"]
+- decl: [kind, process, { call: [sys.exe, argv] }]
+
+- decl: [beginn, i64, { call: [time.mono_ms] }]
+- decl: [erg, i32, { call: [ws.poll, cli, 2000] }]
+- decl: [dauer, i64, { -: [{ call: [time.mono_ms] }, beginn] }]
+
+- print: ["ws.poll(2000) → ${erg} nach ${dauer} ms"]
+
+# Das Signal ist auch wirklich angekommen -- sonst prueft der Test nichts.
+- decl: [sig, i32, { call: [sys.caught_signal] }]
+- if:
+    condition: { eq: [sig, 0] }
+    then:
+      - print: ["FAIL: kein Signal angekommen — der Test hat seinen Gegenstand verfehlt"]
+      - set: [fail, { +: [fail, 1] }]
+    else: [{ set: [pass, { +: [pass, 1] }] }]
+
+- if:
+    condition: { eq: [erg, -1] }
+    then:
+      - print: ["FAIL: ws.poll meldete Fehler (-1) — das Signal gilt als Verbindungsverlust"]
+      - set: [fail, { +: [fail, 1] }]
+    else: [{ set: [pass, { +: [pass, 1] }] }]
+
+# Das Pollfenster muss AUSGELAUFEN sein; ein Abbruch bei ~300 ms ist genau der
+# Fehler, um den es geht.
+- if:
+    condition: { lt: [dauer, 1900] }
+    then:
+      - print: ["FAIL: ws.poll kehrte nach ${dauer} ms zurueck, zugesagt waren 2000"]
+      - set: [fail, { +: [fail, 1] }]
+    else: [{ set: [pass, { +: [pass, 1] }] }]
+
+# Und die Verbindung lebt: der Server sendet nach 2600 ms, das muss ankommen.
+- decl: [erg2, i32, { call: [ws.poll, cli, 2000] }]
+- if:
+    condition: { neq: [erg2, 1] }
+    then:
+      - print: ["FAIL: nach dem Signal kam nichts mehr durch (poll → ${erg2})"]
+      - set: [fail, { +: [fail, 1] }]
+    else:
+      - decl: [txt, string, { call: [ws.recv, cli] }]
+      - if:
+          condition: { eq: [txt, "nach dem Signal"] }
+          then: [{ set: [pass, { +: [pass, 1] }] }]
+          else:
+            - print: ["FAIL: falsche Nutzlast nach dem Signal: '${txt}'"]
+            - set: [fail, { +: [fail, 1] }]
+
+- call: [ws.close, cli]
+- call: [srv_t.join]
+
+- print: [""]
+- print: ["=== test_ws_poll_signal_interrupt: ${pass} passed, ${fail} failed ==="]

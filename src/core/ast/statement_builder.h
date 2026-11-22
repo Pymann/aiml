@@ -39,6 +39,7 @@ class StatementBuilder : public StateHandler {
     std::string decl_lifetime = "scope";   // {lifetime: scope|persistent|consumed} (spec/61)
     int decl_level = -1;                   // {level: N} (spec/65 F65-19); -1 = absent
     int seqDepth = 0;       // nesting depth of sequences seen
+    bool retSeq = false;    // `return: [a, b]` -- der Wert war eine Folge (spec/10)
     int innerSeqStart = -1; // args[] index where inner sequence elements begin
     int capturedLine = -1;  // 1-based line of this statement in the AIML source
     int capturedColumn = -1;  // dazugehoerige Spalte (spec/49 F49-100)
@@ -56,7 +57,9 @@ private:
     std::unique_ptr<BufferLiteralExpr> buildSeqLiteral(int from);
     // Sind wir gerade INNERHALB der inneren Sequenz eines Literals?  Dann ist eine Map ein
     // ELEMENT und kein Modifier-Block.
-    bool insideSeqLiteral() const { return innerSeqStart >= 0 && seqDepth >= 2; }
+    // Bei `decl`/`set` steckt das Literal EINE Ebene tiefer, bei `return` ist es die
+    // Folge selbst -- sonst waere eine Ausdrucks-Map darin kein Element (spec/10).
+    bool insideSeqLiteral() const { return (innerSeqStart >= 0 && seqDepth >= 2) || (retSeq && seqDepth >= 1); }
 };
 
 } // namespace AST

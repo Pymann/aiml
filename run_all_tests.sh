@@ -253,6 +253,14 @@ for TEST in $TEST_FILES; do
         # Negative test: 3+ project files but main() does not instantiate
         # a class from another file — see spec/49 §7.
         EXPECTED_CODE=1
+    elif [[ "$TEST" == *"test_model_set_base_into_field_error.aiml" ]]; then
+        # Negativtest: ein Basiswert in ein abgeleitetes FELD -- mehrdeutig, und
+        # der alte Weg stuerzte ab (spec/15).
+        EXPECTED_CODE=1
+    elif [[ "$TEST" == *"test_return_list_no_list_error.aiml" ]]; then
+        # Negativtest: `return: [a, b, c]` in einer i32-Funktion -- vorher gewann
+        # still das letzte Element. Harter Fehler (spec/10).
+        EXPECTED_CODE=1
     elif [[ "$TEST" == *"test_static_string_switch_error.aiml" ]]; then
         # Negative test: same variable compared against 2+ string literals —
         # hand-rolled string switch, must be enum/polymorphic. See spec/49 §16.

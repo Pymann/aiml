@@ -253,7 +253,26 @@ The third row is the trap.  An index or constant tensor built **once before** th
 from the second iteration on it is older than one epoch and gets collected.  The loop then reads
 freed memory, and `embedding_lookup` crashes on a nonsense shape.
 
-Adam state does not hit this: `adam_step` refreshes the epoch of the tensors it touches.
+Adam state (`m`, `v`) teilt sich die Pflicht:
+
+- **Nach dem ersten Schritt** gehoert der Zustand der Laufzeit: `adam_step` kennzeichnet die
+  `m`/`v`-Tensoren, die es anfasst, als `keep`.  Damit uebersteht er auch eine lange Strecke
+  ohne Schritt -- eine MESSSCHLEIFE etwa, die nur vorwaerts rechnet.  Vorher hielt `adam_step`
+  nur die Epoche frisch; das traegt genau zwei Durchgaenge, danach gab `begin_graph` den
+  Zustand frei und der naechste Schritt las freigegebenen Speicher (SIGSEGV in `adam_step`,
+  21.11.2026: 6856 Messzeilen zwischen zwei Epochen).
+- **Vor dem ersten Schritt** sind `m` und `v` gewoehnliche eigene Tensoren und fallen unter
+  die dritte Zeile oben.  Wer sie vor der Schleife anlegt und erst nach einem STAPEL den
+  ersten Schritt macht, kennzeichnet sie selbst:
+
+```yaml
+- decl: [mom, tensor, { call: [tensor.zeros, 4, 3] }]
+- decl: [vel, tensor, { call: [tensor.zeros, 4, 3] }]
+- call: [mom.keep]
+- call: [vel.keep]
+```
+
+Test fuer beide Faelle: `tests/test_tensor_adam_batched.aiml`.
 
 Mark anything else you intend to keep:
 
