@@ -1,62 +1,62 @@
-# Implementierungspaket: §4 Ownership-Dataflow
+# Implementation packet: §4 ownership data flow
 
-Stand: 2026-09-10. Grundlage: `lifetime_hard_packages_progress_2026-09-09.md`, Kapitel 61 und direkte Lektüre des aktuellen Compilers. Kein Git verwendet. Dieses Dokument enthält vorgeschlagene C++-Änderungen; es ist kein bereits angewendeter Patch und kein bestandener Testlauf.
+As of: 2026-09-10. Basis: `lifetime_hard_packages_progress_2026-09-09.md`, chapter 61 and direct reading of the current compiler. Git was not used. This document contains proposed C++ changes; it is not an already applied patch and not a passed test run.
 
-## 1. Auftrag und Abgrenzung
+## 1. Assignment and scope
 
-Implementiere zunächst einen intraprozeduralen Ownership-Vorlauf und binde dessen Ergebnis an die bereits vorhandenen normalen Scope-Drops. Nicht erneut gleichzeitig Return-Cleanup, Box-Drop oder vollständigen Map-Drop einschalten. Der zurückgenommene Return-Versuch bleibt bis zur Abnahme dieses Pakets zurückgenommen.
+First implement an intra-procedural ownership pre-pass and bind its result to the already existing normal scope drops. Do not switch on return clean-up, box drop or full map drop again at the same time. The reverted return attempt stays reverted until this package is accepted.
 
-Adoptierte Entscheidungen aus dem Fortschrittsbericht bleiben sichtbar:
+Adopted decisions from the progress report remain visible:
 
-- Q1: Warning-first. Diagnose allein ist keine Sicherheitsmaßnahme; konservative Behandlung unsicherer neuer Drops gehört zwingend dazu.
-- Q2: Der bestehende `void`-Deep-Copy-Vertrag bleibt für dieses Paket unverändert. Kein Free-old-target ergänzen, bevor Erfolg und Alias-Sicherheit gesondert geklärt sind.
-- Q3: Kleine Schritte, jeweils Build und passende Prüfungen; keine Freigabe durch bloßes Bestehen der bisherigen Suite.
+- Q1: warning-first. A diagnostic alone is not a safety measure; conservative handling of unsafe new drops is a mandatory part of it.
+- Q2: the existing `void` deep copy contract stays unchanged for this package. Do not add free-old-target before success and alias safety have been clarified separately.
+- Q3: small steps, each with a build and matching checks; no sign-off merely by passing the previous suite.
 
-WP-C bleibt verworfen. Benötigt wird ein endlicher, funktionslokaler Datenfluss mit bekannten Call-Verträgen, keine Ganzprogramm-Escape-Analyse und keine Runtime-Drop-Flags.
+WP-C stays rejected. What is needed is a finite, function-local data flow with known call contracts, no whole-program escape analysis and no runtime drop flags.
 
-## 2. Konkreter Ausgangsfehler
+## 2. Concrete initial bug
 
-`tests/test_list_list_inner_values.aiml` enthält:
+`tests/test_list_list_inner_values.aiml` contains:
 
 ```aiml
 - decl: [var_cb, list<i32>]
 - set: [var_cb, { call: [var_ab.activation_cost.get, 0] }]
 ```
 
-`var_cb` erhält die Listenhülle eines fremden, im Modell enthaltenen Buffers. Sein Typ bleibt `list<i32>`, er besitzt den Buffer dadurch aber nicht. Die bei `decl` registrierte List-Freigabe passt nach `set` nicht mehr zum Wert im Slot. Gleichzeitig kann der Modell-Drop von `var_ab` denselben Buffer rekursiv freigeben.
+`var_cb` receives the list shell of a foreign buffer contained in the model. Its type stays `list<i32>`, but it does not own the buffer because of that. The list free registered at `decl` no longer matches the value in the slot after `set`. At the same time, the model drop of `var_ab` can free the same buffer recursively.
 
-`tests/test_class_member_shared_tensor.aiml` enthält außerdem `set: [<.inner, an_inner]` aus einem Modellparameter. Das ist ein anderes Problem: gespeicherte flache Teilung über eine Funktionsgrenze. Ein rein lokaler Variablenstatus im Callee reicht dafür nicht. Ein offengelegter Retain-/Escape-Effekt muss an den Aufrufer gelangen; andernfalls darf der neue rekursive Drop nicht als sicher gelten. Tensor-Handles nicht pauschal klonen oder freigeben.
+`tests/test_class_member_shared_tensor.aiml` additionally contains `set: [<.inner, an_inner]` from a model parameter. That is a different problem: stored shallow sharing across a function boundary. A purely local variable status in the callee is not enough for it. An exposed retain/escape effect must reach the caller; otherwise the new recursive drop must not count as safe. Do not blanket-clone or free tensor handles.
 
-Die berichteten Exitcodes 134/139 stammen aus dem Fortschrittsbericht. In dieser Planerstellung wurden sie nicht erneut reproduziert.
+The reported exit codes 134/139 come from the progress report. They were not reproduced again while writing this plan.
 
-## 3. Code-Landkarte
+## 3. Code map
 
-Zeilen sind Anker des gelesenen Standes, keine stabilen Patch-Offsets.
+Lines are anchors of the state read, not stable patch offsets.
 
-| Datei / Stelle | Änderung |
+| File / place | Change |
 |---|---|
-| `src/core/context.h:47`, `Symbol` | stabile `ownershipId` ergänzen, Qualifier nicht als Besitzbeweis verwenden |
-| `src/core/context.h:279`, `ScopeDrop` | Besitzer-ID ergänzen; Cleanup bleibt Drop-Rezept, nicht Zustandsdatenbank |
-| `src/core/context.h:292–299` | aktiven Ownership-Plan neben Cleanup-/Parameter-Frames halten |
-| `src/core/ast_compiler.h:64` | `consumeLocalDrop` ersetzen/überführen; neue Plan-Schnittstellen deklarieren |
-| `src/core/ast_compiler.cpp:4354`, `visitFunction` | Analyse nach Signaturauflösung und vor Body-IR einbauen; Kontext sichern/wiederherstellen |
-| `src/core/ast_compiler_stmt.cpp:314–377` | Decl-Drop-Kandidaten an analysierte Deklarations-ID binden |
-| `:813–945`, `visitSetStmt` | Default-Move bei `:910` entfernen; pro Statement Copy/Move/View-Plan anwenden |
-| `:1473`, `consumeLocalDrop` | kein Löschen aus allen Frames mehr; Ownership-Plan bestimmt Sink-Transfer |
-| `:1495`, `emitScopeDrop` | Primitive beibehalten; Aufrufer prüft Freigaberecht am konkreten Ausgang |
-| `:1527–1554`, `visitBlockStmt` | Drop-Zulässigkeit aus Block-Exit-Fakten statt Decl-Typ ableiten |
-| `:1556`, `visitIfStmt`; `:1601`, `visitWhileStmt` | Datenfluss im Vorlauf; nicht erst beim Emittieren Branches entdecken |
-| `src/core/ast_compiler_call.cpp` | aufgelöste Call-/Container-Verträge, Argumenttransfer und Retain-Effekte liefern |
-| `src/core/ast_compiler_expr.cpp:15ff.` | Expression-Herkunft beim Lowering gegen Vorlauf prüfen |
-| neue `src/core/ownership_flow.h/.cpp` | reine Zustands-/Merge-/Analyse-Logik, unabhängig von LLVM-Emission |
+| `src/core/context.h:47`, `Symbol` | add a stable `ownershipId`, do not use qualifiers as proof of ownership |
+| `src/core/context.h:279`, `ScopeDrop` | add an owner ID; clean-up stays a drop recipe, not a state database |
+| `src/core/context.h:292–299` | keep the active ownership plan next to the clean-up/parameter frames |
+| `src/core/ast_compiler.h:64` | replace/migrate `consumeLocalDrop`; declare the new plan interfaces |
+| `src/core/ast_compiler.cpp:4354`, `visitFunction` | build the analysis in after signature resolution and before the body IR; save/restore the context |
+| `src/core/ast_compiler_stmt.cpp:314–377` | bind decl drop candidates to the analysed declaration ID |
+| `:813–945`, `visitSetStmt` | remove the default move at `:910`; apply the copy/move/view plan per statement |
+| `:1473`, `consumeLocalDrop` | no more deleting from all frames; the ownership plan determines the sink transfer |
+| `:1495`, `emitScopeDrop` | keep the primitive; the caller checks the right to free at the concrete exit |
+| `:1527–1554`, `visitBlockStmt` | derive drop permissibility from block exit facts instead of the decl type |
+| `:1556`, `visitIfStmt`; `:1601`, `visitWhileStmt` | data flow in the pre-pass; do not discover branches only while emitting |
+| `src/core/ast_compiler_call.cpp` | provide resolved call/container contracts, argument transfer and retain effects |
+| `src/core/ast_compiler_expr.cpp:15ff.` | check expression origin against the pre-pass during lowering |
+| new `src/core/ownership_flow.h/.cpp` | pure state/merge/analysis logic, independent of LLVM emission |
 
-`exodus.json:821–825` enthält bereits `src/**/*.cpp`. Vor einer Build-Konfigurationsänderung prüfen, ob die neuen Dateien dadurch automatisch erfasst werden.
+`exodus.json:821–825` already contains `src/**/*.cpp`. Before changing the build configuration, check whether the new files are picked up automatically by that.
 
-## 4. Inkrement A: Datenmodell und reine Merge-Funktionen
+## 4. Increment A: data model and pure merge functions
 
-### 4.1 Neue Datei `src/core/ownership_flow.h`
+### 4.1 New file `src/core/ownership_flow.h`
 
-Folgender C++-Kern ist als konkrete Vorlage gedacht. Weitere Adapter/Visitor werden in den nachfolgenden Abschnitten ausdrücklich beschrieben; dieser Ausschnitt allein implementiert noch keinen vollständigen Analyzer.
+The following C++ core is meant as a concrete template. Further adapters/visitors are described explicitly in the following sections; this excerpt alone does not yet implement a complete analyzer.
 
 ```cpp
 #pragma once
@@ -106,7 +106,7 @@ struct OwnershipPlan {
     std::map<const BlockStmt*, FlowState> normalExits;
     std::map<const Stmt*, FlowState> earlyExits;
     std::set<ResourceId> suppressNewDrops;
-    // Unaufgelöste Alias-/Retain-Effekte: keine neuen Drops dieser Funktion.
+    // Unresolved alias/retain effects: no new drops for this function.
     bool suppressFunctionDrops = false;
 };
 
@@ -116,9 +116,9 @@ bool sameState(const FlowState& a, const FlowState& b);
 }
 ```
 
-`SharedView` bedeutet hier Legacy-Teilung ohne eigenen Freigabeanspruch, NICHT Reference Counting und NICHT `shared<T>` als neues Sprachfeature. Owner-Qualifikation und Pfad-Lebendigkeit sind orthogonal: ein einzelnes Enum `owned/borrowed/moved` würde an Merges Information verlieren.
+`SharedView` here means legacy sharing without a free claim of its own, NOT reference counting and NOT `shared<T>` as a new language feature. Owner qualification and path liveness are orthogonal: a single enum `owned/borrowed/moved` would lose information at merges.
 
-### 4.2 Neue Datei `ownership_flow.cpp`: ausführbarer Merge-Kern
+### 4.2 New file `ownership_flow.cpp`: executable merge core
 
 ```cpp
 #include "ownership_flow.h"
@@ -166,21 +166,21 @@ bool sameState(const FlowState& a, const FlowState& b) {
 }
 ```
 
-Vor Block-Merges blocklokale Symbole aus dem Zustand entfernen. Fehlende äußere Zustände werden oben bewusst konservativ behandelt; dieser Fall sollte nach korrekt aufgebauten Lexikalscopes selten sein.
+Remove block-local symbols from the state before block merges. Missing outer states are deliberately treated conservatively above; this case should be rare once lexical scopes are built correctly.
 
-### 4.3 Stabile Identitäten und Ressourcen
+### 4.3 Stable identities and resources
 
-IDs einmal vor der Fixpunktanalyse vergeben: pro Deklaration und Parameter eine `OwnershipId`, pro Allocation-/Copy-Stelle eine `ResourceId`. Im Schleifenlauf niemals neue IDs erzeugen, sonst terminiert die Analyse nicht. Shadowing erhält andere IDs; Namen sind ausschließlich für Lexikalauflösung und Diagnosen.
+Assign IDs once before the fixed-point analysis: one `OwnershipId` per declaration and parameter, one `ResourceId` per allocation/copy site. Never create new IDs in the loop run, otherwise the analysis does not terminate. Shadowing gets different IDs; names are exclusively for lexical resolution and diagnostics.
 
-Für einen Modell-Drop muss bekannt sein, welche Ressourcen er rekursiv freigibt. Eine Liste als Modellfeld gehört deshalb zur Ressourcenmenge des Modell-Owners. Beim Binden eines Views diese Ressource mitgeben. Beim Einbau eines fremden Feldes aktualisiert sich auch die transitive Ressourcenmenge des Zielmodells.
+For a model drop it must be known which resources it frees recursively. A list as a model field therefore belongs to the resource set of the model owner. When binding a view, pass this resource along. When a foreign field is built in, the transitive resource set of the target model is updated too.
 
-Erste konservative Darstellung: Ressourcenverband pro Modell/Container einschließlich seiner Heap-Felder. Verschiedene dynamische Indizes dürfen zunächst zusammenfallen. Das erzeugt zusätzliche Unterdrückungen/Lecks, aber darf kein Alias übersehen. Nicht einfach jedem Feldzugriff eine unabhängige neue Allocation-ID geben.
+First conservative representation: a resource group per model/container including its heap fields. Different dynamic indices may coincide at first. That creates additional suppressions/leaks, but must not miss an alias. Do not simply give every field access an independent new allocation ID.
 
-## 5. Inkrement B: Herkunft aller relevanten Ausdrücke
+## 5. Increment B: origin of all relevant expressions
 
-### 5.1 Analyzer-Adapter passend zum vorhandenen AST
+### 5.1 Analyzer adapter matching the existing AST
 
-Im neuen Modul einen `OwnershipAnalyzer` mit `analyzeBlock`, `analyzeStatement`, `classifyExpr` und einer lexikalen Symbolumgebung implementieren. Tatsächliche AST-Felder:
+In the new module, implement an `OwnershipAnalyzer` with `analyzeBlock`, `analyzeStatement`, `classifyExpr` and a lexical symbol environment. Actual AST fields:
 
 - `VariableExpr::name`;
 - `CallExpr::functionName`, `args`;
@@ -192,48 +192,48 @@ Im neuen Modul einen `OwnershipAnalyzer` mit `analyzeBlock`, `analyzeStatement`,
 - `WhileStmt::condition`, `body`;
 - `BlockStmt::statements`, `RetStmt::value`.
 
-`classifyExpr` erhält aufgelöste Typ-/Call-Metadaten. Keine Klassifikation allein nach dem Text `.get`: Tensor-Get, Listen-Get und KV-Get besitzen unterschiedliche Rückgaben. Bestehende Auflösungslogik in einen gemeinsam genutzten Helfer auslagern, statt im Analyzer einen zweiten, abweichenden Dispatch zu erfinden. Bei noch nicht aufgelösten Overloads/Imports konservativ `Unknown` liefern.
+`classifyExpr` receives resolved type/call metadata. No classification based on the text `.get` alone: tensor get, list get and KV get have different returns. Extract the existing resolution logic into a shared helper instead of inventing a second, diverging dispatch in the analyzer. For not yet resolved overloads/imports, conservatively return `Unknown`.
 
-### 5.2 Verbindliche Herkunftstabelle
+### 5.2 Binding origin table
 
-| Ausdruck | Fact / Lowering-Vertrag |
+| Expression | Fact / lowering contract |
 |---|---|
-| Skalar | `None`, kein Heap-Drop |
-| Stringliteral | `Static`, niemals Header-Decref allein wegen Typ `string` |
-| frischer Container | `Owned`, Allocation-Site-Ressource |
-| Variable | Fact des Slots, keine neue Ressource |
-| Modellfeld / Container-View | `Borrowed` oder `SharedView`, Ressourcen des wirklichen Owners |
-| `at` / aufgelöstes Listen-Get mit Heap-Wert | View; eine flache Struct-Hülle macht daraus keinen Owner |
-| `kv.get` | Borrow auf externen Cache-Owner, nicht scope-owned |
-| `kv.get_copy` als Runtime-Pointer | ebenfalls cachegebunden; erst die tatsächlich erzeugte lokale Deep-Copy ist owned |
-| `kv.get_copy_at` | Statuswert; Zielinhalt wird bei Erfolg owned, bei Fehler gemäß Runtime-Vertrag leer; missing erhält vorherigen Zustand |
-| `new` | bekannte Box-Herkunft, Box-Drop dennoch in diesem Paket aus |
-| Interpolation | frisch nur bei tatsächlicher Allocation; Ein-String-Durchleitung bleibt View/Static |
-| gewöhnlicher Parameter | Borrow, auch bei Value-Modell oder by-ref-Liste |
-| consumed-Parameter | owned entsprechend vorhandenem Signaturvertrag; Root und Drop-Art getrennt |
-| unbekannte Call-Rückgabe / externes Handle | `Unknown`; keine generische rekursive Freigabe behaupten |
+| Scalar | `None`, no heap drop |
+| String literal | `Static`, never a header decref merely because of the type `string` |
+| Fresh container | `Owned`, allocation site resource |
+| Variable | fact of the slot, no new resource |
+| Model field / container view | `Borrowed` or `SharedView`, resources of the real owner |
+| `at` / resolved list get with a heap value | view; a shallow struct shell does not make it an owner |
+| `kv.get` | borrow of an external cache owner, not scope-owned |
+| `kv.get_copy` as a runtime pointer | likewise cache-bound; only the actually created local deep copy is owned |
+| `kv.get_copy_at` | status value; the target content becomes owned on success, empty on error per the runtime contract; missing keeps the previous state |
+| `new` | known box origin, box drop nevertheless off in this package |
+| Interpolation | fresh only on an actual allocation; a single-string pass-through stays view/static |
+| Ordinary parameter | borrow, also for a value model or a by-ref list |
+| consumed parameter | owned according to the existing signature contract; root and drop kind separate |
+| Unknown call return / external handle | `Unknown`; do not claim a generic recursive free |
 
-Für `get_copy_at` entweder seinen Rückgabewert pfadbezogen auswerten oder die Zustandsalternativen zusammenführen. Ist das Ziel vorher borrowed und missing möglich, ist das Ergebnis nicht ohne Weiteres Owned.
+For `get_copy_at`, either evaluate its return value per path or merge the state alternatives. If the target was borrowed before and missing is possible, the result is not simply Owned.
 
-## 6. Inkrement C: Zuweisungen ohne pauschalen Move
+## 6. Increment C: assignments without a blanket move
 
-### 6.1 `visitSetStmt` umbauen
+### 6.1 Rebuild `visitSetStmt`
 
-Den Fallback `if (setStmt->value) consumeLocalDrop(...)` bei `:910` entfernen. Den Transfer aus `OwnershipPlan::statements.at(setStmt)` lesen. Ergebniszustand erst nach tatsächlich erfolgreichem Lowering installieren; ein Diagnose-/Fehlerpfad darf keinen Move verbuchen.
+Remove the fallback `if (setStmt->value) consumeLocalDrop(...)` at `:910`. Read the transfer from `OwnershipPlan::statements.at(setStmt)`. Install the result state only after actually successful lowering; a diagnostic/error path must not record a move.
 
-Konkrete Struktur als Einfügevorlage, Helfernamen sind neu zu implementierende Adapter:
+Concrete structure as an insertion template; helper names are adapters to be implemented anew:
 
 ```cpp
 const StatementPlan& op = ctx.ownershipPlan->statements.at(setStmt);
 if (op.transfer == Transfer::SelfAssign) return;
 
-// Vorhandene Typ-, Const- und Void-Prüfung VOR jeder Mutation beibehalten.
+// Keep the existing type, const and void checks BEFORE any mutation.
 IRValue* rhs = visitExpression(setStmt->value.get());
 if (!rhs) return;
 
 switch (op.transfer) {
 case Transfer::DeepCopy:
-    // Dispatch auf unterstützte Copy-Primitive; einmalige RHS-Auswertung.
+    // Dispatch to supported copy primitives; evaluate the RHS once.
     emitPlannedCopy(setStmt, rhs, op);
     break;
 case Transfer::Move:
@@ -251,30 +251,30 @@ case Transfer::SelfAssign:
 }
 ```
 
-`emitLegacyAssignment` entsteht durch Extraktion des bisherigen unteren Zuweisungsteils. Es darf RHS nicht erneut auswerten. `emitPlannedMove` entfernt passende String-Temporaries genau wie die bereits korrigierten Call-Sinks; es löscht keine globalen Cleanup-Rezepte. Das Freigaberecht folgt dem Exit-Plan.
+`emitLegacyAssignment` arises by extracting the previous lower assignment part. It must not evaluate the RHS again. `emitPlannedMove` removes matching string temporaries exactly like the already corrected call sinks; it does not delete global clean-up recipes. The right to free follows the exit plan.
 
-### 6.2 Transferregeln des ersten Pakets
+### 6.2 Transfer rules of the first package
 
-- Selbstzuweisung bleibt No-op nach erforderlicher Ziel-/Typprüfung.
-- Unterstützte Model-local→local-Kopie bleibt Deep-Copy. Vorherigen Ziel-Heap wie bisher noch nicht freigeben; Leck explizit dokumentieren.
-- Flaches Binden eines inneren Containers wird als `BindView` markiert. Neuer Slot darf dessen Buffer nicht freigeben. Eine eventuell zuvor angelegte leere Hülle ist eine andere Allocation; deren Verlust als offenes Replace-Leck erfassen.
-- String/List/Map-local→local nur dann als unabhängiges Owned-Ergebnis markieren, wenn das Lowering wirklich unabhängig kopiert. Bis zum jeweiligen Copy-Primitive `SharedView`/Legacy, mit Aliasbeziehung und konservativem Drop-Verbot.
-- Member-/Container-Sink ist nicht allein wegen eines Punkts im Namen ein gültiger Move. Gewöhnliche Parameter und Views können keinen Besitz übertragen. Nicht kopierbare Ressourcen nicht über Serializer „klonen“.
-- Reinitialisierung eines Moved-Slots setzt ihn auf Live mit neuer Herkunft. Alte Ressourcen nicht erneut freigeben.
+- Self-assignment stays a no-op after the required target/type check.
+- A supported model local→local copy stays a deep copy. Do not free the previous target heap yet, as before; document the leak explicitly.
+- Shallow binding of an inner container is marked as `BindView`. The new slot must not free its buffer. A possibly previously created empty shell is a different allocation; record its loss as an open replace leak.
+- Mark string/list/map local→local as an independent owned result only if the lowering really copies independently. Until the respective copy primitive exists: `SharedView`/legacy, with an alias relation and a conservative drop prohibition.
+- A member/container sink is not a valid move merely because of a dot in the name. Ordinary parameters and views cannot transfer ownership. Do not "clone" non-copyable resources via the serializer.
+- Reinitialising a moved slot sets it to live with a new origin. Do not free old resources again.
 
-Ziel dieses Pakets ist ein korrektes Abbild tatsächlicher Besitzverhältnisse. Eine vollständige Umstellung jeder Legacy-Operation auf die neue Copy-Semantik ist ein separates Increment und muss pro Typ nachgewiesen werden.
+The goal of this package is a correct picture of actual ownership. A complete switch of every legacy operation to the new copy semantics is a separate increment and must be proven per type.
 
-## 7. Inkrement D: Branches, Schleifen und Warning-first
+## 7. Increment D: branches, loops and warning-first
 
-### 7.1 Analyse vor IR, nicht rückwirkend
+### 7.1 Analysis before IR, not retroactively
 
-Die vollständige Funktion vor ihrer Body-IR-Ausgabe analysieren. Andernfalls ist ein Drop im THEN-Block bereits emittiert, bevor im ELSE-Block ein Alias entdeckt wird. Die spätere Löschung eines Cleanup-Eintrags repariert dieses IR nicht.
+Analyse the complete function before its body IR is emitted. Otherwise a drop in the THEN block is already emitted before an alias is discovered in the ELSE block. Deleting a clean-up entry later does not repair this IR.
 
-`analyzeIf` als C++-Vorlage:
+`analyzeIf` as a C++ template:
 
 ```cpp
 FlowState OwnershipAnalyzer::analyzeIf(const IfStmt& node, FlowState in) {
-    analyzeCondition(*node.condition, in); // Calls in Bedingung können Effekte haben
+    analyzeCondition(*node.condition, in); // calls in the condition can have effects
     FlowState left = node.thenBranch
         ? analyzeBlock(*node.thenBranch, in) : in;
     FlowState right = node.elseBranch
@@ -283,9 +283,9 @@ FlowState OwnershipAnalyzer::analyzeIf(const IfStmt& node, FlowState in) {
 }
 ```
 
-Die Bedingung wird in der Analyse auf beiden Kanten konservativ berücksichtigt; branchfeine Refinements optional später. Ein Return speichert seinen Exit-Zustand und setzt `reachable=false`. Kein Merge mit `ret_dead` als scheinbar lebendem Vorgänger.
+The condition is taken into account conservatively on both edges in the analysis; branch-precise refinements optionally later. A return stores its exit state and sets `reachable=false`. No merge with `ret_dead` as a seemingly live predecessor.
 
-### 7.2 Schleifenfixpunkt
+### 7.2 Loop fixed point
 
 ```cpp
 FlowState head = entry;
@@ -299,47 +299,47 @@ for (;;) {
 }
 ```
 
-Dies ist der Kern, nicht die komplette Exit-Behandlung: Break-Ausgänge sammeln und dem Schleifenexit zuführen; Continue/Rückkante dem Header; Return/Throw nicht der Rückkante. Die Bedingung kann auch beim Verlassen Ressourcen verändern, daher den Exit aus dem stabilen Header nach Bedingungsanalyse bilden. Unbekannte Konstrukte dürfen nicht als effektfrei gelten.
+This is the core, not the complete exit handling: collect break exits and feed them to the loop exit; continue/back edge to the header; return/throw not to the back edge. The condition can also change resources on leaving, so form the exit from the stable header after the condition analysis. Unknown constructs must not count as effect-free.
 
-Diagnosen erst nach Konvergenz ausgeben oder pro AST-Stelle deduplizieren. Plan-Fakten pro Stelle bei wiederholter Analyse zusammenführen, nicht nur die letzte Iteration behalten. Bei Implementierungsfehler/Iteration-Limit Analyse konservativ abbrechen und neue Funktions-Drops unterdrücken; nicht den zufälligen letzten Zustand freigeben.
+Emit diagnostics only after convergence or deduplicate them per AST location. Merge plan facts per location on repeated analysis, do not just keep the last iteration. On an implementation error/iteration limit, abort the analysis conservatively and suppress new function drops; do not free the random last state.
 
-### 7.3 Warning-first technisch absichern
+### 7.3 Secure warning-first technically
 
-`Live|Moved`, unbekannte Eigentümerschaft oder ein nach Move verwendeter Alias erzeugen eine Warnung und markieren den betroffenen Ressourcenverband in `suppressNewDrops`. Das muss ALLE neu eingeführten Freigaben dieses Verbands umfassen, auch rekursive Modell-/Container-Drops und temporäre Drops.
+`Live|Moved`, unknown ownership or an alias used after a move produce a warning and mark the affected resource group in `suppressNewDrops`. That must cover ALL newly introduced frees of this group, including recursive model/container drops and temporary drops.
 
-Falls der Verband über eine Funktionsgrenze nicht verlässlich verfolgt werden kann, genügt eine Warnung mit lokal unterdrücktem Quell-Drop NICHT: Ein Callee kann bereits freigeben. Solchen consumed-/Escape-Fall im neuen Ownership-Modus nicht destruktiv absenken. Konservativer Legacy-Modus ist nur zulässig, wenn seine bisherigen Operationen unverändert bleiben; ansonsten gezielte Ablehnung des nicht implementierten Transfers. Dies ist keine pauschale Umstellung der Use-after-move-Diagnose auf Error, sondern eine Grenze des sicheren neuen Lowerings.
+If the group cannot be tracked reliably across a function boundary, a warning with a locally suppressed source drop is NOT enough: a callee may already free. Do not lower such a consumed/escape case destructively in the new ownership mode. A conservative legacy mode is only permissible if its previous operations stay unchanged; otherwise a targeted rejection of the not implemented transfer. This is not a blanket switch of the use-after-move diagnostic to an error, but a boundary of the safe new lowering.
 
-Dieser Übergangsmodus vermeidet zusätzliche unbewiesene Drops. Er beweist nicht, dass beliebiger bereits unsicherer Legacy-Code sicher wird. Insbesondere explizites `free`, unbekannte Retain-Callbacks und mutierende externe Funktionen brauchen ihren eigenen Vertrag.
+This transition mode avoids additional unproven drops. It does not prove that arbitrary already unsafe legacy code becomes safe. In particular, explicit `free`, unknown retain callbacks and mutating external functions need their own contract.
 
-## 8. Funktionsverträge: notwendig für das Shared-Tensor-Muster
+## 8. Function contracts: necessary for the shared tensor pattern
 
-Neben Parameter-Qualifiern minimale Effekte in `FunctionInfo` ergänzen: Ergebnis frisch/borrowed/unknown; borrowed Ergebnis abhängig von Argument N; Argument retained/stored; Argument mutiert oder konsumiert. Keine Methodennamen-Heuristik als Ersatz.
+Besides parameter qualifiers, add minimal effects to `FunctionInfo`: result fresh/borrowed/unknown; borrowed result dependent on argument N; argument retained/stored; argument mutated or consumed. No method-name heuristic as a substitute.
 
-Für `Body.setup(an_inner, ...)` muss die Speicherung in `<.inner` einen Retain-/Share-Effekt für `an_inner` liefern. Beim Aufrufer muss diese Ressource damit auch im neuen Zielmodell auftauchen oder konservativ von rekursiven Drops ausgenommen sein. Eine reine Callee-Warnung reicht nicht.
+For `Body.setup(an_inner, ...)`, the store into `<.inner` must yield a retain/share effect for `an_inner`. At the caller, this resource must thereby also show up in the new target model or be conservatively exempted from recursive drops. A pure callee warning is not enough.
 
-Erste Ausbaustufe darf unaufgelöste, rekursive oder externe Calls als `UnknownRetain` behandeln. Alle erreichbaren Heap-Ressourcen ihrer Argumente für neue Drops sperren; bei unbekannter Reichweite funktionsweiten Fallback verwenden. Keine vollständige interprozedurale Fixpunktinferenz erforderlich: explizite bzw. lokal ableitbare Signatur-Effekte und konservative Defaults genügen. Bekannte reine Borrow-Calls benötigen einen belegten Vertrag, damit der Fallback nicht jede Funktion entwertet.
+The first stage may treat unresolved, recursive or external calls as `UnknownRetain`. Lock all reachable heap resources of their arguments for new drops; with unknown reach, use the function-wide fallback. No complete interprocedural fixed-point inference required: explicit or locally derivable signature effects and conservative defaults suffice. Known pure borrow calls need a proven contract so that the fallback does not devalue every function.
 
-## 9. Inkrement E: Codegen ausschließlich aus Exit-Fakten
+## 9. Increment E: codegen exclusively from exit facts
 
 ### 9.1 `context.h`
 
-`#include "ownership_flow.h"` ergänzen. In `Symbol` und am ENDE von `ScopeDrop` jeweils ergänzen (am Ende, damit bestehende Aggregate-Initialisierungen nicht verschoben werden):
+Add `#include "ownership_flow.h"`. Add at the END of both `Symbol` and `ScopeDrop` (at the end, so that existing aggregate initialisations are not shifted):
 
 ```cpp
 OwnershipId ownershipId = NoOwnership;
 ```
 
-Im `CompilerContext`:
+In the `CompilerContext`:
 
 ```cpp
-const OwnershipPlan* ownershipPlan = nullptr; // geliehener Plan von visitFunction
+const OwnershipPlan* ownershipPlan = nullptr; // borrowed plan from visitFunction
 ```
 
-Bei Parametern/Declarations die im Vorlauf vergebenen IDs setzen. Keine ID-Zuordnung über den textuellen Namen nach Verlassen des Lexikalscopes.
+For parameters/declarations, set the IDs assigned in the pre-pass. No ID mapping via the textual name after leaving the lexical scope.
 
-### 9.2 Gemeinsame Drop-Prüfung
+### 9.2 Shared drop check
 
-In `ownership_flow.h/.cpp` ergänzen:
+Add to `ownership_flow.h/.cpp`:
 
 ```cpp
 bool mayDrop(const OwnershipPlan& plan, const FlowState& exit,
@@ -357,13 +357,13 @@ bool mayDrop(const OwnershipPlan& plan, const FlowState& exit,
 }
 ```
 
-Vor jedem `emitScopeDrop` in `visitBlockStmt`:
+Before every `emitScopeDrop` in `visitBlockStmt`:
 
 ```cpp
 const OwnershipPlan* plan = ctx.ownershipPlan;
 if (!plan) {
-    // Nicht analysiert bedeutet nicht bewiesen owned.
-    // Diagnose zentral einmal pro Funktion; keine neue Freigabe hier.
+    // Not analysed does not mean proven owned.
+    // Diagnose centrally once per function; no new free here.
 } else {
     auto ex = plan->normalExits.find(block);
     if (ex != plan->normalExits.end()) {
@@ -375,60 +375,60 @@ if (!plan) {
 }
 ```
 
-Wichtig: `normalExits[block]` speichert den Zustand VOR Entfernen der blocklokalen Slots, damit ihre Drops geprüft werden können. Der an den Elternblock zurückgegebene Zustand entfernt sie anschließend.
+Important: `normalExits[block]` stores the state BEFORE removing the block-local slots, so that their drops can be checked. The state returned to the parent block removes them afterwards.
 
-Freigabe-Rezepte müssen auf den aktuellen Slottyp passen. Zuweisung kann Owned zu View ändern, aber nicht unbemerkt die Destructor-Art eines Slots. Überlappende rekursive Owner-Ressourcen vor Emission als Konflikt erkennen; `mayDrop` alleine erkennt keine zwei gleichzeitig Owned markierten Aliase. Der Analyzer muss diesen Zustand sperren oder Ownership korrekt übertragen.
+Free recipes must match the current slot type. An assignment can change owned to view, but not unnoticed the destructor kind of a slot. Detect overlapping recursive owner resources as a conflict before emission; `mayDrop` alone does not detect two aliases marked owned at the same time. The analyzer must lock this state or transfer ownership correctly.
 
-### 9.3 Funktionskontext sichern
+### 9.3 Secure the function context
 
-`visitFunction` nach aufgelöster Signatur, vor `visitBlockStmt(func->body.get())`:
+In `visitFunction` after the resolved signature, before `visitBlockStmt(func->body.get())`:
 
 ```cpp
-OwnershipPlan plan = analyzer.analyze(*func); // neue Adapter-Schnittstelle
+OwnershipPlan plan = analyzer.analyze(*func); // new adapter interface
 const OwnershipPlan* previous = ctx.ownershipPlan;
 ctx.ownershipPlan = &plan;
-// Body-Emission; in der tatsächlichen Implementierung RAII für alle Exits verwenden.
+// Body emission; use RAII for all exits in the actual implementation.
 visitBlockStmt(func->body.get());
 ctx.ownershipPlan = previous;
 ```
 
-Auch `pendingParamDrops`, Cleanup-/Temporary-Frames und aktuelle Symbolbindung pro Funktion isolieren. Der lokale Plan muss bis zum Ende der Body-Emission leben. Ein RAII-Guard statt manuellem Restore auf nur einem Erfolgspfad ist Pflicht, besonders bei Diagnosen und verschachtelter Funktionsgenerierung.
+Also isolate `pendingParamDrops`, clean-up/temporary frames and the current symbol binding per function. The local plan must live until the end of the body emission. An RAII guard instead of a manual restore on only one success path is mandatory, especially with diagnostics and nested function generation.
 
-### 9.4 Alte Konsum-Helfer
+### 9.4 Old consume helpers
 
-`consumeLocalDrop` darf nach Migration keinen globalen Frame mehr zerstören. Alle Aufrufer auf geplanten Transfer umstellen: Set, Push, Return, freie/direkte/Interface-Calls, Index-/Store-Pfade. Ein leerer Helfer ohne vollständige Callsite-Migration wäre ebenfalls falsch, weil dann gültige Moves doppelt gedroppt würden.
+After migration, `consumeLocalDrop` must no longer destroy a global frame. Switch all callers to the planned transfer: set, push, return, free/direct/interface calls, index/store paths. An empty helper without complete call site migration would be wrong too, because valid moves would then be dropped twice.
 
-String-Temporary-Tracking bleibt getrennt, muss aber mit dem Ownership-Plan übereinstimmen. Die bereits korrigierten direkten consumed-Temporaries nicht wieder regressieren lassen.
+String temporary tracking stays separate, but must agree with the ownership plan. Do not let the already corrected direct consumed temporaries regress again.
 
-## 10. Prüfmatrix und sinnvolle Commit-/Änderungseinheiten ohne Git-Befehle
+## 10. Check matrix and sensible commit/change units without git commands
 
-| Increment | Implementierung | Abnahme |
+| Increment | Implementation | Acceptance |
 |---|---|---|
-| A | reine Facts, IDs, Join | Unit-Checks für erreichbare/tote Branches, gemischte LifeBits, Shadowing |
-| B | AST-/Call-Herkunft, Ressourcenverbände | Trace klassifiziert `var_cb/gcb` als Views desselben Ownerverbands |
-| C | Assignment-Pläne | Model-Copy bleibt unabhängig; lokale Listen-Views werden nicht freigegeben; unbekannte Fälle klar dokumentiert |
-| D | If/While/Exit-Analyse, konservativer Modus | kein pfadglobales Entfernen; Warnungen dedupliziert; Fixpunkt terminiert |
-| E | normale Drops planbasiert | beide berichteten Regressionen plus void-/innerer-Scope-Varianten speichersicher |
-| F | Call-Retain und Container-Verknüpfungen | Shared-Tensor-Muster bewahrt Owner; consumed-Temporary-Proben weiter sauber |
+| A | pure facts, IDs, join | unit checks for reachable/dead branches, mixed LifeBits, shadowing |
+| B | AST/call origin, resource groups | the trace classifies `var_cb/gcb` as views of the same owner group |
+| C | assignment plans | model copy stays independent; local list views are not freed; unknown cases clearly documented |
+| D | if/while/exit analysis, conservative mode | no path-global removal; warnings deduplicated; fixed point terminates |
+| E | normal drops plan-based | both reported regressions plus void/inner scope variants memory-safe |
+| F | call retain and container links | shared tensor pattern preserves the owner; consumed temporary probes stay clean |
 
-Neue notwendige Proben unter `tests/_mem_sanitize/` vorschlagen:
+Propose new necessary probes under `tests/_mem_sanitize/`:
 
-- `ownership_inner_view_void.aiml`: reproduziert inneren Listen-View mit normalem Funktionsende; der Return darf die Gefahr nicht maskieren.
-- `ownership_branch_view.aiml`: ein Branch bindet View, anderer besitzt eigene Liste; gemischter Merge darf keinen falschen Drop erzeugen.
-- `ownership_branch_move_return.aiml`: THEN terminiert, ELSE läuft weiter; dessen Quelle bleibt korrekt owned.
-- `ownership_loop_outer_move.aiml`: äußere Quelle in wiederholtem Body; Zero-/Multi-Iteration prüfen.
-- `ownership_shadowing.aiml`: gleichnamige Slots besitzen verschiedene IDs.
-- `ownership_retained_model_param.aiml`: Callee speichert geteiltes Modell; Owner ist beim Aufrufer bekannt.
-- `ownership_reassign_view_to_owned.aiml`: erneute echte Kopie nach View; nur neuer eigener Heap ist droppbar.
+- `ownership_inner_view_void.aiml`: reproduces an inner list view with a normal function end; the return must not mask the danger.
+- `ownership_branch_view.aiml`: one branch binds a view, the other owns its own list; the mixed merge must not produce a wrong drop.
+- `ownership_branch_move_return.aiml`: THEN terminates, ELSE keeps running; its source stays correctly owned.
+- `ownership_loop_outer_move.aiml`: an outer source in a repeated body; check zero/multi iteration.
+- `ownership_shadowing.aiml`: slots of the same name have different IDs.
+- `ownership_retained_model_param.aiml`: the callee stores a shared model; the owner is known at the caller.
+- `ownership_reassign_view_to_owned.aiml`: a new real copy after a view; only the new own heap is droppable.
 
-Die existierenden `test_list_list_inner_values` und `test_class_member_shared_tensor` unverändert weiter prüfen. Letztere schreibt Tensor-Dateien mit relativen Pfaden: isoliertes Test-Arbeitsverzeichnis verwenden. Keine Probe gegen produktive 9rooms-WALs ausführen.
+Keep checking the existing `test_list_list_inner_values` and `test_class_member_shared_tensor` unchanged. The latter writes tensor files with relative paths: use an isolated test working directory. Do not run any probe against productive 9rooms WALs.
 
-Harness muss fachlichen Erfolg UND instrumentierten vollständigen Lauf nachweisen; keine neuen UAF/Double-Frees, kein ungeprüfter Skip. Unterdrückte Drops samt Ressourcenursache separat zählen, damit „alles unterdrückt“ nicht als abgeschlossene Ownership-Implementierung gilt. Q2-Replace-Lecks bleiben einzeln gelistet.
+The harness must prove functional success AND an instrumented complete run; no new UAF/double frees, no unchecked skip. Count suppressed drops together with their resource cause separately, so that "everything suppressed" does not count as a completed ownership implementation. The Q2 replace leaks stay listed individually.
 
-## 11. Abnahmegrenze und nächstes Paket
+## 11. Acceptance boundary and next package
 
-Dieses Paket ist fertig, wenn normale Scope-Drops auf nachgewiesenem Besitz beruhen, Branches/Loops nicht mehr textuell-global behandelt werden, die beiden regressierten Muster einschließlich normaler Ausgänge abgesichert sind und unbekannte/retained Ressourcen nachvollziehbar konservativ behandelt werden. Ein Trace-Modus alleine erfüllt das nicht.
+This package is done when normal scope drops rest on proven ownership, branches/loops are no longer handled textually-globally, the two regressed patterns including normal exits are secured and unknown/retained resources are handled conservatively in a traceable way. A trace mode alone does not fulfil that.
 
-Danach P2a separat wieder aufnehmen: dessen Return-Exit-Fakten liegen bereits in `earlyExits`, aber Rückgabewert und Borrow-Rückgaben müssen vor den aktiven Drops abgesichert werden. Box-/Map-Drop bleiben eigene Folgepakete mit jeweils passenden Runtime-Verträgen.
+Then take up P2a again separately: its return exit facts are already in `earlyExits`, but the return value and borrow returns must be secured before the active drops. Box/map drop remain separate follow-up packages, each with matching runtime contracts.
 
-Server-e2e ist Abnahme nach den lokalen Sicherheitsnachweisen, kein Ersatz dafür und keine Vorbedingung dafür, den Analyzer überhaupt zu implementieren. Mit isolierter Datenkopie Login, Token, Deckset, Match und Disconnect prüfen; Produktionsdaten nicht als Repro-Material verändern.
+Server e2e is acceptance after the local safety proofs, not a substitute for them and not a precondition for implementing the analyzer at all. Check login, token, deckset, match and disconnect with an isolated data copy; do not modify production data as repro material.
