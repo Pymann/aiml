@@ -69,18 +69,18 @@
 # Exit Progam
 - call: [sys.exit, 1]
 
-### Es gibt kein `exit:`-Statement
+### There is no `exit:` statement
 
-Das Programm endet mit `call: [sys.exit, N]` — und **nur** damit.  Ein Statement
-`- exit: [1]` ist KEIN gueltiges aiml; der Compiler weist es seit 2026-10-15 als
-unbekannten Statement-Schluessel ab (spec/49 §49.x).
+The program ends with `call: [sys.exit, N]` — and **only** with that.  A statement
+`- exit: [1]` is NOT valid aiml; since 2026-10-15 the compiler rejects it as an
+unknown statement key (spec/49 §49.x).
 
-Das steht hier, weil es teuer war: `- exit: [1]` wurde vom Statement-Builder
-still verworfen (unbekannter Schluessel → `nullptr`, kein Wort).  54 Stellen im
-Testkorpus bauten darauf — jeder FAIL-Zweig endete mit `- exit: [1]`, lief
-durch und lieferte Rueckgabewert **0**.  Die Suite meldete also PASS fuer Tests,
-die „FAIL" druckten.  Ein zweiter Weg zum selben Ziel waere ueberfluessig
-gewesen; was fehlte, war die Fehlermeldung.
+This is written here because it was expensive: `- exit: [1]` was silently
+discarded by the statement builder (unknown key → `nullptr`, not a word).  54 places in the
+test corpus relied on it — every FAIL branch ended with `- exit: [1]`, ran
+through and returned **0**.  The suite therefore reported PASS for tests
+that printed "FAIL".  A second way to the same goal would have been
+superfluous; what was missing was the error message.
 
 # Command Line Arguments
 # Access logic to argv/argc
@@ -180,18 +180,18 @@ gewesen; was fehlte, war die Fehlermeldung.
 
 # sys.env
 
-> ✅ **Property-Form gefixt (2026-10-21):** `sys.env` ist hier als PROPERTY
-> dokumentiert, kompilierte aber zu einem NULLPOINTER (`ast_compiler_expr.cpp`),
-> waehrend nur die Call-Form `{ call: [sys.env] }` echte Daten lieferte. Folge:
-> `- set: [m, sys.env]` lief durch, der erste Lesezugriff (`.len`/`.contains`/
-> `.get`) dereferenzierte null → SIGSEGV. Beide Formen emittieren jetzt denselben
-> `aiml_sys_env`-Call; `tests/test_sys_env.aiml` prueft beide.
+> ✅ **Property form fixed (2026-10-21):** `sys.env` is documented here as a PROPERTY,
+> but compiled to a NULL POINTER (`ast_compiler_expr.cpp`),
+> while only the call form `{ call: [sys.env] }` returned real data. Consequence:
+> `- set: [m, sys.env]` ran through, the first read access (`.len`/`.contains`/
+> `.get`) dereferenced null → SIGSEGV. Both forms now emit the same
+> `aiml_sys_env` call; `tests/test_sys_env.aiml` checks both.
 >
-> ⚠️ **Lebensdauer (2026-10-11):** Ein mit `sys.env` erzeugtes `map<string:string>` ist ein
-> gewöhnliches Local. Ein Wert aus `envm.get(key)` ist **nur so lange gültig, wie die Map
-> lebt** — die in spec/61 zugesagte `incref` für String-Werte findet derzeit nicht statt.
-> Wer den Wert länger braucht (Rückgabe, Modellfeld), muss ihn kopieren, z. B. über
-> Interpolation: `- return: "${raw}"`. Siehe spec/61, Abschnitt Container-Lesezugriff.
+> ⚠️ **Lifetime (2026-10-11):** A `map<string:string>` created with `sys.env` is an
+> ordinary local. A value from `envm.get(key)` is **only valid as long as the map
+> lives** — the `incref` for string values promised in spec/61 does not currently take place.
+> Whoever needs the value longer (return, model field) must copy it, e.g. via
+> interpolation: `- return: "${raw}"`. See spec/61, section on container read access.
 # Access to environment variables as a map
 # Type: map<string:string>  (der Compiler akzeptiert NUR die Doppelpunkt-Form;
 # `map<string, string>` ist ein Uebersetzungsfehler)
@@ -285,12 +285,12 @@ Interpolation prints a real with as many digits as it has — up to 15 for an `f
 - decl: [proc2, process, { call: [sys.exe, argv, {cwd: "/tmp", capture: true, timeout: 5000}] }]
 ```
 
-**Ein falsch typisiertes erstes Argument ist ein Uebersetzungsfehler** (seit 17.10.2026). Bis
-dahin war es ein **SIGSEGV**: ein String ist in LLVM ebenfalls ein `i8*`, rutschte darum durch
-die Zeiger-Weiche des Builtins und wurde von der Laufzeit als Listenkopf gelesen. Geprueft wird,
-was statisch bekannt ist — ein Literal ist nie eine Liste, und bei einer Variablen steht der
-deklarierte Typ im Symbol; ein zusammengesetzter Ausdruck bleibt ungeprueft (lieber keine
-Diagnose als eine falsche). Negativprobe: `tests/test_sys_exe_argv_type_neg.aiml`.
+**A wrongly typed first argument is a compile error** (since 2026-10-17). Until
+then it was a **SIGSEGV**: a string is also an `i8*` in LLVM, so it slipped through
+the builtin's pointer switch and was read by the runtime as a list header. What is checked is
+what is statically known — a literal is never a list, and for a variable the
+declared type is in the symbol; a compound expression remains unchecked (better no
+diagnostic than a wrong one). Negative probe: `tests/test_sys_exe_argv_type_neg.aiml`.
 
 `argv` is a `list<string>` variable (list literals exist only as `decl` initializers, spec/10).
 `argv[0]` is looked up in `PATH`. The process is started immediately. A spawn that fails
@@ -423,35 +423,35 @@ pipe holds can not block the pool — and enforces their `timeout`s.  It sleeps 
 A `list<process>` owns its processes: `remove(i)` and the list's drop release them like
 a `process` variable's drop (pipes closed, the child reaped later, never killed).
 
-## 5.6 `sys.require_tools` — was die Umgebung mitbringen muss
+## 5.6 `sys.require_tools` — what the environment must bring along
 
 ```aiml
 - decl: [fehlt, string, { call: [sys.require_tools, "git,gcc>=13,lib:yaml-cpp"] }]
 - if: { condition: { gt: [fehlt.len, 0] }, then: [{ print: ["fehlt:${fehlt}"] }] }
 ```
 
-Eine Zeile, drei Formen, eine Antwort: `""` heisst „alles da", sonst stehen **alle**
-fehlenden Eintraege darin, durch Leerzeichen getrennt.
+One line, three forms, one answer: `""` means "everything is there", otherwise **all**
+missing entries are in it, separated by spaces.
 
-| Form | Bedeutung | Pruefung |
+| Form | Meaning | Check |
 |---|---|---|
-| `git` | ein ausfuehrbares Programm | im `PATH`, ausfuehrbar |
-| `gcc>=13` | Programm mit Mindestversion | `--version`, erste Zahl, numerisch verglichen |
-| `lib:yaml-cpp` | eine Bibliothek | `pkg-config --exists` |
+| `git` | an executable program | in `PATH`, executable |
+| `gcc>=13` | program with a minimum version | `--version`, first number, compared numerically |
+| `lib:yaml-cpp` | a library | `pkg-config --exists` |
 
-- **F23-40** Die Antwort nennt **alles** Fehlende, nicht das erste.  Eine Pruefung, die beim
-  ersten Fehler aufhoert, erzeugt drei Laeufe statt einem — und einen Nutzer, der nach dem
-  dritten aufgibt.  Genau dafuer gibt es diesen Aufruf und nicht drei `sys.exe`.
-- **F23-41** Fehlt `pkg-config` selbst, gilt jede `lib:`-Anforderung als fehlend und wird
-  mit `(pkg-config fehlt)` genannt.  Still „ja" zu sagen waere die gefaehrliche Richtung:
-  der Bau liefe los und braeche am Linker ab.
-- **F23-42** Die Versionspruefung vergleicht die **erste Zahl** der ersten Ausgabezeile.
-  Das genuegt fuer `gcc 13.3.0` und `cmake 3.28` und ist absichtlich einfach; wer mehr
-  braucht, prueft selbst.  Was NICHT passiert: raten.  Gibt das Programm keine Zahl her,
-  gilt die Anforderung als nicht erfuellt und sagt das (`gcc>=13(hat ?)`).
-- **F23-43** Der Aufruf ist **ein** Ort fuer diese Frage.  aiml `spec/62` §18.2 (`requires:`)
-  und cosmos (doc/spec/110) rufen ihn beide auf — zwei Kopien derselben Pruefung laufen
-  auseinander, und die Haelfte, die schweigt, ist die gefaehrliche.
+- **F23-40** The answer names **everything** that is missing, not the first.  A check that stops at the
+  first error produces three runs instead of one — and a user who gives up after the
+  third.  That is exactly what this call is for, rather than three `sys.exe`.
+- **F23-41** If `pkg-config` itself is missing, every `lib:` requirement counts as missing and is
+  named with `(pkg-config fehlt)`.  Silently saying "yes" would be the dangerous direction:
+  the build would start and break at the linker.
+- **F23-42** The version check compares the **first number** of the first output line.
+  That is enough for `gcc 13.3.0` and `cmake 3.28` and is deliberately simple; whoever needs more
+  checks for themselves.  What does NOT happen: guessing.  If the program yields no number,
+  the requirement counts as not met and says so (`gcc>=13(hat ?)`).
+- **F23-43** The call is **one** place for this question.  aiml `spec/62` §18.2 (`requires:`)
+  and cosmos (doc/spec/110) both call it — two copies of the same check drift
+  apart, and the half that stays silent is the dangerous one.
 
 ### 5.7 Signals — `sys.catch_signals`, `sys.caught_signal` (F23-53)
 

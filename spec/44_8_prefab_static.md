@@ -62,7 +62,7 @@ set_dropdown_index set_dropdown_selected set_compact set_bg_color set_border_col
 set_color set_color_runs clear_color_runs set_checked set_focus set_bar_value
 set_bar_max set_bar_fill set_slider_value set_slider_min set_slider_max focus
 select_all scroll_to_end bind_list
-# lesend — ein falscher Name liefert stumm einen Vorgabewert
+# reading — a wrong name silently returns a default value
 child_clicked text_value child_focused is_checked dropdown_value dropdown_index
 dropdown_enum get_slider_value selection container_row_count
 ```
@@ -532,22 +532,22 @@ literal key is recorded (`Y` record) with its enclosing method, and printed in a
 BoardScreen.apply_reaction_window`, `"f"/"s"/"d"/"a" -> apply_movement_keys`).
 Filtered by class like collections, so a scene focus shows only that scene's keys.
 
-## Behoben (2026-10-15): Kindnamen-Check deckte die Produktionsform nicht ab
+## Fixed (2026-10-15): the child name check did not cover the production form
 
-Gefunden am 2026-10-11, geschlossen am 2026-10-15 — die Lücke bestand aus zwei Hälften,
-die zusammen genau die gebaute Wirklichkeit ausnahmen: geprüft wurden nur **schreibende**
-Kindmethoden (`set_*`) auf einer Instanz aus einer **lokalen** Bindung.  Beides traf auf
-keinen einzigen cosmos-Bildschirm zu: dort hält ein Klassen-Member die Szene, und die
-klickkritischen Methoden sind die lesenden (`child_clicked`, `text_value`).
+Found on 2026-10-11, closed on 2026-10-15 — the gap consisted of two halves
+that together excluded exactly the reality that was built: only **writing**
+child methods (`set_*`) on an instance from a **local** binding were checked.  Neither applied to
+a single cosmos screen: there a class member holds the scene, and the
+click-critical methods are the reading ones (`child_clicked`, `text_value`).
 
-Bis dahin lautete die Auflage „der Abgleich bleibt Handarbeit".  Diese Handarbeit hat am
-2026-10-15 versagt: beim Umbau des cosmos-Hauptmenüs (doc/spec/107) fielen die Kinder
-`logo_img` und `build_lbl` aus der `MainMenuScene`, zwei Aufrufe blieben stehen, der Build
-war grün — und der WASM-Client brach im ersten Rahmen ab (`___cxa_throw`, schwarze Seite).
-Ein Check, der die vorherrschende Schreibweise nicht sieht, schützt nicht; die Regel steht
-jetzt als **Tier 2b** oben.
+Until then the requirement read "the reconciliation remains manual work".  That manual work failed on
+2026-10-15: while rebuilding the cosmos main menu (doc/spec/107) the children
+`logo_img` and `build_lbl` dropped out of the `MainMenuScene`, two calls remained, the build
+was green — and the WASM client aborted in the first frame (`___cxa_throw`, black page).
+A check that does not see the prevailing notation does not protect; the rule is now
+in place as **tier 2b** above.
 
-## Behoben (2026-10-13): unknown child keys were silently ignored
+## Fixed (2026-10-13): unknown child keys were silently ignored
 
 Found while adding the per-child `font:` attribute (cosmos `doc/spec/98` F98-15): the prefab child
 parser (`src/core/ast/prefab_builder.cpp`) is a chain of `else if (childKey == …)` with **no final
@@ -564,14 +564,14 @@ Needed: an error on an unknown child key, with the valid keys listed (the error 
 `spec/62` F62-65 for pipeline steps, for the same reason: here the defaults are the dangerous
 direction.
 
-**Behoben.** Die Kette hat ein abschliessendes `else`, das ein unbekanntes Attribut als
-Compile-Fehler meldet (Kind, Typ, Schluessel; bei `password` mit dem Hinweis auf `secret`).
-Die Regel steht in spec/44_6 §4, der Negativ-Test ist `tests/test_prefab_unknown_attr.aiml`.
-Anlass war ein unmaskiertes SSH- und sudo-Passwort im cosmos-Client: dort stand
-`password: true`, der Maskierungs-Schluessel heisst `secret` — die Zeile wurde verworfen und
-die Passwoerter standen im Klartext auf dem Schirm.
+**Fixed.** The chain has a final `else` that reports an unknown attribute as a
+compile error (child, type, key; for `password` with a hint to `secret`).
+The rule is in spec/44_6 §4, the negative test is `tests/test_prefab_unknown_attr.aiml`.
+The trigger was an unmasked SSH and sudo password in the cosmos client: it said
+`password: true`, but the masking key is called `secret` — the line was discarded and
+the passwords were shown in plain text on screen.
 
-Beim Scharfschalten kamen drei weitere stille Luecken ans Licht: `min`, `scrollable` und
-`tail` standen in der Attribut-Tabelle, wurden aber nur vom JSON-Lader der Laufzeit gelesen;
-und `visible` las **niemand**, obwohl 9rooms es an 44 Kindern deklariert. Alle vier sind
-inzwischen durchgezogen (Parser, Deskriptor, Laufzeit).
+When the check was armed, three more silent gaps came to light: `min`, `scrollable` and
+`tail` were in the attribute table but were only read by the runtime's JSON loader;
+and **nobody** read `visible`, although 9rooms declares it on 44 children. All four have
+since been wired through (parser, descriptor, runtime).
