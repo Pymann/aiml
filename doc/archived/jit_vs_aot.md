@@ -1,65 +1,65 @@
 # JIT vs AOT
 
-## Kurzfassung
+## Summary
 
-Der Compiler hat aktuell keine einheitliche Semantik zwischen JIT- und AOT-Pfad.
+The compiler currently has no uniform semantics between the JIT and AOT paths.
 
-Es gibt mindestens zwei deutlich verschiedene Compile-/Link-Pipelines:
+There are at least two clearly different compile/link pipelines:
 
-- Datei-/AOT-Pfad über `compile(...)`
-- String-/JIT-/Chunk-Pfad über `compileFromString(...)` und `compileChunkAndGetAddress(...)`
+- the file/AOT path via `compile(...)`
+- the string/JIT/chunk path via `compileFromString(...)` and `compileChunkAndGetAddress(...)`
 
-Diese Pfade setzen nicht denselben Compiler-Kontext auf, behandeln Imports unterschiedlich und laden externe Symbole/Objektdateien nicht gleich.
+These paths do not set up the same compiler context, handle imports differently and do not load external symbols/object files the same way.
 
-Das ist sehr wahrscheinlich eine reale Ursache für:
+This is very probably a real cause of:
 
-- Unterschiede zwischen normalem Build und `sys.bundle` / Hot-Reload
-- Import-/Extern-/Global-Probleme nur im JIT-Pfad
-- Unterschiede bei transitive imports, sibling imports und object linking
+- differences between a normal build and `sys.bundle` / hot reload
+- import/extern/global problems only in the JIT path
+- differences with transitive imports, sibling imports and object linking
 
-## 1. Größter Unterschied: `compile()` vs `compileFromString()`
+## 1. Biggest difference: `compile()` vs `compileFromString()`
 
-Betroffene Stellen:
+Affected places:
 
 - [compiler.cpp](../../compiler.cpp#L104)
 - [compiler.cpp](../../compiler.cpp#L431)
 
-### AOT / Datei-Pfad
+### AOT / file path
 
-In [compiler.cpp](../../compiler.cpp#L104) bis [compiler.cpp](../../compiler.cpp#L426) macht `compile(...)` unter anderem:
+In [compiler.cpp](../../compiler.cpp#L104) to [compiler.cpp](../../compiler.cpp#L426), `compile(...)` among other things:
 
-- setzt `ctx.libraryMode`
-- setzt `ctx.compilerPath`
-- installiert `ctx.resolveImportCallback`
-- sammelt `deferredImports`
-- macht Header-Propagation für Imports
-- registriert `libInitFuncNames`
-- macht `siblingImports`-Injection
-- registriert externe Globals aus importierten Dateien
-- propagiert `ctx.objectFilesToLink`
-- setzt `ctx.currentSourceFile`
+- sets `ctx.libraryMode`
+- sets `ctx.compilerPath`
+- installs `ctx.resolveImportCallback`
+- collects `deferredImports`
+- does header propagation for imports
+- registers `libInitFuncNames`
+- does `siblingImports` injection
+- registers external globals from imported files
+- propagates `ctx.objectFilesToLink`
+- sets `ctx.currentSourceFile`
 
-### JIT / String-Pfad
+### JIT / string path
 
-In [compiler.cpp](../../compiler.cpp#L431) bis [compiler.cpp](../../compiler.cpp#L480) macht `compileFromString(...)` im Vergleich deutlich weniger:
+In [compiler.cpp](../../compiler.cpp#L431) to [compiler.cpp](../../compiler.cpp#L480), `compileFromString(...)` does considerably less by comparison:
 
-- kein `ctx.libraryMode`
-- kein `ctx.resolveImportCallback`
-- keine `deferredImports`
-- keine `siblingImports`
-- keine Header-Only-Importpropagation
-- keine separate Registrierung importierter Globals
-- kein `ctx.currentSourceFile`
+- no `ctx.libraryMode`
+- no `ctx.resolveImportCallback`
+- no `deferredImports`
+- no `siblingImports`
+- no header-only import propagation
+- no separate registration of imported globals
+- no `ctx.currentSourceFile`
 
-### Konsequenz
+### Consequence
 
-Gleicher AIML-Inhalt hat aus Datei und aus String nicht denselben Compile-Kontext.
+The same AIML content does not have the same compile context from a file and from a string.
 
-Das ist kein kleiner Unterschied, sondern ein semantischer Split.
+That is not a small difference, but a semantic split.
 
-## 2. Importbehandlung ist nicht symmetrisch
+## 2. Import handling is not symmetric
 
-Betroffene Stellen:
+Affected places:
 
 - [compiler.cpp](../../compiler.cpp#L135)
 - [compiler.cpp](../../compiler.cpp#L263)
@@ -67,39 +67,39 @@ Betroffene Stellen:
 
 ### AOT
 
-Im Datei-Pfad wird Importauflösung aktiv vorbereitet:
+In the file path, import resolution is actively prepared:
 
-- [compiler.cpp](../../compiler.cpp#L135) bis [compiler.cpp](../../compiler.cpp#L205)
-- [compiler.cpp](../../compiler.cpp#L263) bis [compiler.cpp](../../compiler.cpp#L398)
+- [compiler.cpp](../../compiler.cpp#L135) to [compiler.cpp](../../compiler.cpp#L205)
+- [compiler.cpp](../../compiler.cpp#L263) to [compiler.cpp](../../compiler.cpp#L398)
 
-Dabei werden:
+In the process:
 
-- Typen aus Imports vorgezogen registriert
-- Geschwisterimporte berücksichtigt
-- globale `decl`s aus Imports in die Symboltabelle gehoben
-- Objektdateien für Imports vorbereitet
+- types from imports are registered ahead of time
+- sibling imports are taken into account
+- global `decl`s from imports are lifted into the symbol table
+- object files for imports are prepared
 
 ### JIT
 
-`compileFromString(...)` macht nur:
+`compileFromString(...)` only does:
 
 - `registerTypes(programAST.get())`
 - `compile(programAST.get())`
 
-ohne den Importvorbau.
+without the import preparation.
 
-### Konsequenz
+### Consequence
 
-Alles, was auf Importkontext angewiesen ist, kann im JIT-Pfad anders reagieren:
+Everything that depends on the import context can react differently in the JIT path:
 
-- globale Variablen aus Imports
-- `extern`-artige Symbole
-- transitive Modelle/Klassen
+- global variables from imports
+- `extern`-like symbols
+- transitive models/classes
 - sibling imports
 
-## 3. JIT-Laufzeitbindung ist nicht einheitlich
+## 3. JIT runtime binding is not uniform
 
-Betroffene Stellen:
+Affected places:
 
 - [compiler.cpp](../../compiler.cpp#L723)
 - [compiler.cpp](../../compiler.cpp#L1614)
@@ -107,379 +107,379 @@ Betroffene Stellen:
 
 ### `jitRun()`
 
-Der normale JIT-Lauf in [compiler.cpp](../../compiler.cpp#L723) bis [compiler.cpp](../../compiler.cpp#L1668):
+The normal JIT run in [compiler.cpp](../../compiler.cpp#L723) to [compiler.cpp](../../compiler.cpp#L1668):
 
-- lädt Host-Prozess-Symbole per `LoadLibraryPermanently(nullptr)`
-- preloadet Libraries aus `exodus.json`
-- registriert sehr viele Runtime-Funktionen via `DynamicLibrary::AddSymbol`
-- lädt `linkedObjects` per `engine->addObjectFile(...)`
-- setzt `aiml_set_active_context(...)`
+- loads host process symbols via `LoadLibraryPermanently(nullptr)`
+- preloads libraries from `exodus.json`
+- registers a great many runtime functions via `DynamicLibrary::AddSymbol`
+- loads `linkedObjects` via `engine->addObjectFile(...)`
+- sets `aiml_set_active_context(...)`
 
 ### `compileChunkAndGetAddress()`
 
-Der Chunk-/Hot-Reload-Pfad in [compiler.cpp](../../compiler.cpp#L489) bis [compiler.cpp](../../compiler.cpp#L530):
+The chunk/hot reload path in [compiler.cpp](../../compiler.cpp#L489) to [compiler.cpp](../../compiler.cpp#L530):
 
-- kompiliert via `compileFromString(...)`
-- baut direkt eine JIT-Engine
-- macht keine sichtbare Import-Objektladung
-- macht keine breite `AddSymbol`-Registrierung wie `jitRun()`
-- verwendet keinen äquivalenten Setup-Pfad für externe Runtime-Abhängigkeiten
+- compiles via `compileFromString(...)`
+- builds a JIT engine directly
+- does no visible import object loading
+- does no broad `AddSymbol` registration like `jitRun()`
+- uses no equivalent setup path for external runtime dependencies
 
-### Konsequenz
+### Consequence
 
-Ein Symbol kann im normalen JIT-Lauf verfügbar sein, im Chunk-/Bundle-Pfad aber fehlen oder anders aufgelöst werden.
+A symbol can be available in the normal JIT run, but be missing or resolved differently in the chunk/bundle path.
 
-## 4. `currentSourceFile` nur im Datei-Pfad
+## 4. `currentSourceFile` only in the file path
 
-Betroffene Stellen:
+Affected places:
 
 - [compiler.cpp](../../compiler.cpp#L259)
 - [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp#L166)
 
-In [compiler.cpp](../../compiler.cpp#L247) bis [compiler.cpp](../../compiler.cpp#L256) wird im Datei-Pfad `ctx.currentSourceFile` gesetzt.
+In [compiler.cpp](../../compiler.cpp#L247) to [compiler.cpp](../../compiler.cpp#L256), `ctx.currentSourceFile` is set in the file path.
 
-`compileFromString(...)` tut das nicht.
+`compileFromString(...)` does not do that.
 
-Das betrifft mindestens:
+This affects at least:
 
-- `log.*`-Location-Injection in [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp#L151)
+- `log.*` location injection in [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp#L151)
 
-### Konsequenz
+### Consequence
 
-JIT-/Bundle-Code hat andere oder fehlende Source-Locations in Logs.
+JIT/bundle code has different or missing source locations in logs.
 
-Das ist kein Kernruntime-Bug, aber ein weiterer Beleg dafür, dass beide Pfade nicht dieselben Invarianten haben.
+That is not a core runtime bug, but further evidence that both paths do not have the same invariants.
 
-## 5. `libraryMode` ist nicht konsistent gesetzt
+## 5. `libraryMode` is not set consistently
 
-Betroffene Stellen:
+Affected places:
 
 - [compiler.cpp](../../compiler.cpp#L124)
 - [compiler.cpp](../../compiler.cpp#L431)
 - [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L25)
 
-Im Datei-Pfad wird `ctx.libraryMode = libraryMode` gesetzt in [compiler.cpp](../../compiler.cpp#L123).
+In the file path, `ctx.libraryMode = libraryMode` is set in [compiler.cpp](../../compiler.cpp#L123).
 
-Im String-Pfad fehlt diese Übernahme.
+This takeover is missing in the string path.
 
-Das ist relevant, weil `libraryMode` Einfluss auf globale Symbolnamen und Import-/Lib-Initialisierungsverhalten hat, insbesondere bei:
+That is relevant because `libraryMode` influences global symbol names and import/lib initialisation behaviour, in particular for:
 
-- importierten `decl`s
+- imported `decl`s
 - `__aiml_lib_init_*`
-- extern/Datei-spezifischen Symbolpräfixen
+- extern/file-specific symbol prefixes
 
-### Konsequenz
+### Consequence
 
-Dasselbe Codefragment kann in String/JIT und Datei/AOT unterschiedliche globale Namen emittieren oder andere Linkage-Semantik bekommen.
+The same code fragment can emit different global names or get different linkage semantics in string/JIT and file/AOT.
 
-## 6. Objektdatei-Linking nur im normalen JIT-Pfad sichtbar
+## 6. Object file linking only visible in the normal JIT path
 
-Betroffene Stellen:
+Affected places:
 
 - [compiler.cpp](../../compiler.cpp#L1614)
 - [compiler.cpp](../../compiler.cpp#L489)
 
-In [compiler.cpp](../../compiler.cpp#L1614) bis [compiler.cpp](../../compiler.cpp#L1634) lädt `jitRun()` explizit `linkedObjects` in die Engine.
+In [compiler.cpp](../../compiler.cpp#L1614) to [compiler.cpp](../../compiler.cpp#L1634), `jitRun()` explicitly loads `linkedObjects` into the engine.
 
-`compileChunkAndGetAddress()` macht diesen Schritt nicht.
+`compileChunkAndGetAddress()` does not do this step.
 
-### Konsequenz
+### Consequence
 
-Wenn ein JIT-Chunk auf Importcode oder importierte Objektdateien angewiesen ist, verhält er sich nicht wie der normale JIT-/AOT-Pfad.
+If a JIT chunk depends on import code or imported object files, it does not behave like the normal JIT/AOT path.
 
-Das ist besonders relevant für:
+This is particularly relevant for:
 
 - `sys.bundle`
-- Hot-Reload
-- transitive Funktions-/Typnutzung
-- importierte globale Zustände
+- hot reload
+- transitive function/type use
+- imported global state
 
-## 7. AOT hat echte Linkerphase, JIT simuliert nur Teile davon
+## 7. AOT has a real linker phase, JIT only simulates parts of it
 
-Betroffene Stellen:
+Affected places:
 
 - [compiler.cpp](../../compiler.cpp#L642)
 - [compiler.cpp](../../compiler.cpp#L723)
 
-Der AOT-Pfad über `compileToObject(...)` in [compiler.cpp](../../compiler.cpp#L642) bis [compiler.cpp](../../compiler.cpp#L720) endet in echten Objektdateien.
+The AOT path via `compileToObject(...)` in [compiler.cpp](../../compiler.cpp#L642) to [compiler.cpp](../../compiler.cpp#L720) ends in real object files.
 
-Der JIT-Pfad muss dagegen:
+The JIT path, on the other hand, has to:
 
-- Hostsymbole selbst registrieren
-- Runtime-Symbole selbst registrieren
-- Importobjekte selbst nachladen
+- register host symbols itself
+- register runtime symbols itself
+- load import objects itself
 
-Das ist grundsätzlich normal, aber hier ist es nicht zentralisiert. Stattdessen gibt es:
+That is fundamentally normal, but here it is not centralised. Instead there is:
 
-- einen umfassenderen `jitRun()`-Pfad
-- einen verkürzten `compileChunkAndGetAddress()`-Pfad
+- a more comprehensive `jitRun()` path
+- a shortened `compileChunkAndGetAddress()` path
 
-### Konsequenz
+### Consequence
 
-JIT ist aktuell keine saubere Spiegelung von AOT, sondern ein eigener Modus mit anderer Infrastruktur.
+JIT is currently not a clean mirror of AOT, but a mode of its own with different infrastructure.
 
-## 8. `libraryMode` ändert den gesamten Top-Level-Codegen
+## 8. `libraryMode` changes the entire top-level codegen
 
-Betroffene Stellen:
+Affected places:
 
 - [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L20)
 - [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L153)
 
-In [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L20) bis [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L183) gibt es zwei grundsätzlich verschiedene Codegen-Modi:
+In [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L20) to [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L183) there are two fundamentally different codegen modes:
 
 - `ctx.libraryMode == true`
 - `ctx.libraryMode == false`
 
-### Im Library-Mode
+### In library mode
 
-- Top-Level-`decl`s werden zu LLVM-Globals
-- es wird `__aiml_lib_init_<file>` erzeugt
-- Initialisierung läuft über diese Lib-Init-Funktion
-- es wird kein normales `__aiml_init` erzeugt
-- `emitFptable(ctx)` läuft nicht
-- `emitSchemaRegistry(ctx)` läuft nicht
+- top-level `decl`s become LLVM globals
+- `__aiml_lib_init_<file>` is generated
+- initialisation runs via this lib init function
+- no normal `__aiml_init` is generated
+- `emitFptable(ctx)` does not run
+- `emitSchemaRegistry(ctx)` does not run
 
-### Im normalen Modus
+### In normal mode
 
-- es wird `__aiml_init` erzeugt
-- importierte `libInitFuncNames` werden dort aufgerufen
-- danach wird `emitFptable(ctx)` erzeugt
-- danach wird `emitSchemaRegistry(ctx)` erzeugt
+- `__aiml_init` is generated
+- imported `libInitFuncNames` are called there
+- afterwards `emitFptable(ctx)` is generated
+- afterwards `emitSchemaRegistry(ctx)` is generated
 
-### Konsequenz
+### Consequence
 
-Wenn `compileFromString(...)` `libraryMode` nicht korrekt übernimmt, ist das kein Randdetail, sondern führt zu völlig anderem Modulaufbau:
+If `compileFromString(...)` does not take over `libraryMode` correctly, that is not a side detail, but leads to a completely different module structure:
 
-- andere Globalnamen
-- andere Initialisierungsreihenfolge
-- fehlendes `__aiml_init`
-- fehlende fptable/schema-Emission
+- different global names
+- a different initialisation order
+- missing `__aiml_init`
+- missing fptable/schema emission
 
-## 9. Hot-Reload-/fptable-Infrastruktur ist nicht überall gleich vorhanden
+## 9. Hot reload/fptable infrastructure is not equally present everywhere
 
-Betroffene Stellen:
+Affected places:
 
 - [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp#L298)
 - [fptable.cpp](../../src/core/fptable.cpp#L11)
 - [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L182)
 
-Die indirekte Call-Infrastruktur hängt von `__aiml_fptable_current` ab:
+The indirect call infrastructure depends on `__aiml_fptable_current`:
 
-- Call-Site-Nutzung in [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp#L298) bis [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp#L337)
-- Emission in [fptable.cpp](../../src/core/fptable.cpp#L11)
+- call site use in [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp#L298) to [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp#L337)
+- emission in [fptable.cpp](../../src/core/fptable.cpp#L11)
 
-Da `emitFptable(ctx)` nur im Nicht-Library-Pfad erzeugt wird, hängt das Vorhandensein der Hot-Reload-Tabellen direkt an der Moduswahl.
+Since `emitFptable(ctx)` is only generated in the non-library path, the presence of the hot reload tables depends directly on the mode choice.
 
-### Konsequenz
+### Consequence
 
-String-/JIT-Code, der versehentlich in einem anderen Modus landet, kann:
+String/JIT code that accidentally ends up in a different mode can:
 
-- direkte Calls statt fptable-Calls erzeugen
-- keine `__aiml_fptable_current`-Globale haben
-- andere Hot-Reload-Semantik haben als der normale Build
+- generate direct calls instead of fptable calls
+- have no `__aiml_fptable_current` global
+- have different hot reload semantics than the normal build
 
-## 10. Entry-Point-Erzeugung ist zwischen den Pfaden nicht symmetrisch
+## 10. Entry point generation is not symmetric between the paths
 
-Betroffene Stellen:
+Affected places:
 
 - [compiler.cpp](../../compiler.cpp#L483)
 - [compiler.cpp](../../compiler.cpp#L530)
 - [compiler.cpp](../../compiler.cpp#L489)
 
-`compileAndRun(...)` macht:
+`compileAndRun(...)` does:
 
 - `compileFromString(...)`
 - `generateEntryPoint()`
 - `jitRun()`
 
-Siehe [compiler.cpp](../../compiler.cpp#L483) bis [compiler.cpp](../../compiler.cpp#L486)
+See [compiler.cpp](../../compiler.cpp#L483) to [compiler.cpp](../../compiler.cpp#L486)
 
-`compileChunkAndGetAddress(...)` macht dagegen:
+`compileChunkAndGetAddress(...)`, on the other hand, does:
 
 - `compileFromString(...)`
-- sofort Engine bauen
+- build the engine immediately
 - `finalizeObject()`
-- Symbol lookup
+- symbol lookup
 
-Siehe [compiler.cpp](../../compiler.cpp#L489) bis [compiler.cpp](../../compiler.cpp#L530)
+See [compiler.cpp](../../compiler.cpp#L489) to [compiler.cpp](../../compiler.cpp#L530)
 
-### Konsequenz
+### Consequence
 
-Der Chunk-Pfad läuft nie durch dieselbe Entry-Point-Logik wie der normale JIT-Lauf:
+The chunk path never runs through the same entry point logic as the normal JIT run:
 
-- kein standardisiertes `main`
-- kein `__argc`/`__argv`-Store über `generateEntryPoint()`
-- kein garantierter `__aiml_init()`-Call über den Entry-Point
+- no standardised `main`
+- no `__argc`/`__argv` store via `generateEntryPoint()`
+- no guaranteed `__aiml_init()` call via the entry point
 
-Das ist besonders relevant, wenn Code implizit auf Top-Level-Init oder CLI-Globals angewiesen ist.
+This is particularly relevant if code implicitly depends on top-level init or CLI globals.
 
-## 11. `aiml_set_active_context(...)` nur im normalen JIT-Lauf
+## 11. `aiml_set_active_context(...)` only in the normal JIT run
 
-Betroffene Stellen:
+Affected places:
 
 - [compiler.cpp](../../compiler.cpp#L1657)
 - [exec_impl.cpp](../../exec_impl.cpp#L53)
 
-In [compiler.cpp](../../compiler.cpp#L1657) bis [compiler.cpp](../../compiler.cpp#L1659) setzt `jitRun()`:
+In [compiler.cpp](../../compiler.cpp#L1657) to [compiler.cpp](../../compiler.cpp#L1659), `jitRun()` sets:
 
 - `aiml_set_active_context(compiler_ctx_, engine)`
 
-`compileChunkAndGetAddress()` tut das nicht.
+`compileChunkAndGetAddress()` does not do that.
 
-### Konsequenz
+### Consequence
 
-Alles, was zur Laufzeit über den aktiven Compiler-/Engine-Kontext arbeitet, kann im Chunk-/Bundle-Pfad anders oder gar nicht funktionieren.
+Everything that works at runtime via the active compiler/engine context can work differently or not at all in the chunk/bundle path.
 
-Der Kommentar in [compiler.cpp](../../compiler.cpp#L1656) nennt explizit:
+The comment in [compiler.cpp](../../compiler.cpp#L1656) explicitly names:
 
 - `aiml_exec_code`
 
-Das macht den Unterschied direkt relevant für `sys.exec`-/Code-Objekt-Pfade.
+That makes the difference directly relevant for `sys.exec`/code object paths.
 
-## 12. Modulverifikation läuft nur im AOT-Objektemit explizit
+## 12. Module verification only runs explicitly in the AOT object emit
 
-Betroffene Stellen:
+Affected places:
 
 - [compiler.cpp](../../compiler.cpp#L695)
 - [compiler.cpp](../../compiler.cpp#L705)
 
-In [compiler.cpp](../../compiler.cpp#L695) bis [compiler.cpp](../../compiler.cpp#L715) verifiziert `compileToObject(...)`:
+In [compiler.cpp](../../compiler.cpp#L695) to [compiler.cpp](../../compiler.cpp#L715), `compileToObject(...)` verifies:
 
-- jede Funktion
-- das gesamte Modul
-- schreibt bei Fehlern `/tmp/aiml_bad_module.ll`
+- every function
+- the entire module
+- writes `/tmp/aiml_bad_module.ll` on errors
 
-Der normale JIT-Pfad hat diese explizite Diagnose nicht im selben Umfang.
+The normal JIT path does not have this explicit diagnostic to the same extent.
 
-### Konsequenz
+### Consequence
 
-Es kann IR geben, die im JIT später diffus scheitert, aber im AOT-Pfad früh und mit besserer Diagnose auffällt.
+There can be IR that fails diffusely later in the JIT, but stands out early and with better diagnostics in the AOT path.
 
-Das ist ein Unterschied in Debuggability und Fehleroberfläche, auch wenn derselbe Quellcode kompiliert wird.
+That is a difference in debuggability and error surface, even though the same source code is compiled.
 
-## 13. Caching-/Objektstrategie unterscheidet sich nach Modus
+## 13. The caching/object strategy differs by mode
 
-Betroffene Stellen:
+Affected places:
 
 - [compiler.cpp](../../compiler.cpp#L1739)
 - [compiler.cpp](../../compiler.cpp#L1757)
 - [compiler.cpp](../../compiler.cpp#L1774)
 
-In [resolveImport](../../compiler.cpp#L1739) bis [resolveImport](../../compiler.cpp#L1825) gilt:
+In [resolveImport](../../compiler.cpp#L1739) to [resolveImport](../../compiler.cpp#L1825):
 
-- `noCache == false`: interner SHA-basierter Cache in `__aiml_cache`
-- `noCache == true`: Buildsystem-/OutputDir-orientierter Objektpfad
+- `noCache == false`: an internal SHA-based cache in `__aiml_cache`
+- `noCache == true`: a build system/OutputDir-oriented object path
 
-`compileFromString(...)` nutzt diesen Import-/Cachepfad aber praktisch gar nicht.
+`compileFromString(...)`, however, practically does not use this import/cache path at all.
 
-### Konsequenz
+### Consequence
 
-Auch die Artefaktstrategie unterscheidet sich:
+The artefact strategy differs too:
 
-- Datei/AOT/JIT mit Imports baut reale Objektdateien und cached sie
-- String/JIT-Chunk arbeitet viel direkter auf dem Modul und umgeht diese Stufe
+- file/AOT/JIT with imports builds real object files and caches them
+- the string/JIT chunk works much more directly on the module and bypasses this stage
 
-Das ist ein weiterer Grund, warum Import-/Link-Bugs nur in einem der beiden Modi sichtbar sein können.
+That is another reason why import/link bugs can be visible in only one of the two modes.
 
-## 14. `sys.exec` hängt hart am aktiven JIT-Kontext
+## 14. `sys.exec` depends hard on the active JIT context
 
-Betroffene Stellen:
+Affected places:
 
 - [exec_impl.cpp](../../exec_impl.cpp#L43)
 - [exec_impl.cpp](../../exec_impl.cpp#L303)
 - [compiler.cpp](../../compiler.cpp#L1657)
 
-Die Runtime in [exec_impl.cpp](../../exec_impl.cpp#L43) bis [exec_impl.cpp](../../exec_impl.cpp#L108) arbeitet mit globalem Zustand:
+The runtime in [exec_impl.cpp](../../exec_impl.cpp#L43) to [exec_impl.cpp](../../exec_impl.cpp#L108) works with global state:
 
 - `g_active_context`
 - `g_active_ee`
-- gecachte fptable-Globale
+- cached fptable globals
 
-Dieser Zustand wird nur im normalen JIT-Lauf explizit gesetzt:
+This state is only set explicitly in the normal JIT run:
 
 - [compiler.cpp](../../compiler.cpp#L1657)
 
-`compileChunkAndGetAddress()` setzt diesen aktiven Kontext nicht.
+`compileChunkAndGetAddress()` does not set this active context.
 
-### Konsequenz
+### Consequence
 
-`sys.exec`-nahe Pfade sind nicht nur “JIT statt AOT”, sondern zusätzlich abhängig davon, ob überhaupt ein aktiver Engine-/Compiler-Kontext gesetzt wurde.
+`sys.exec`-related paths are not only "JIT instead of AOT", but additionally depend on whether an active engine/compiler context was set at all.
 
-Das betrifft insbesondere:
+This particularly affects:
 
-- fptable-Lookup
-- Hot-Reload
+- fptable lookup
+- hot reload
 - `compileYamlChunk(...)`
-- direkte Engine-Lookups in [exec_impl.cpp](../../exec_impl.cpp#L455)
+- direct engine lookups in [exec_impl.cpp](../../exec_impl.cpp#L455)
 
-## 15. `sys.bundle` hängt an Compiler-seitig gesammeltem Source-Metadatenzustand
+## 15. `sys.bundle` depends on source metadata state collected on the compiler side
 
-Betroffene Stellen:
+Affected places:
 
 - [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L431)
 - [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L886)
 - [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp#L1424)
 
-`sys.bundle` verwendet:
+`sys.bundle` uses:
 
 - `FunctionInfo.sourceYaml`
 - `FunctionInfo.referencedTypes`
 - `ClassInfo.sourceYaml`
 - `ClassInfo.referencedTypes`
 
-Siehe:
+See:
 
 - [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L431)
 - [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L886)
 - [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L939)
 - [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp#L1365)
 
-Da `compileFromString(...)` weniger Kontext setzt und weniger Importvorbau hat, ist sehr plausibel, dass die Closure für `sys.bundle` in JIT/String-Fällen unvollständiger ist als im Datei-/AOT-Pfad.
+Since `compileFromString(...)` sets less context and has less import preparation, it is very plausible that the closure for `sys.bundle` is more incomplete in JIT/string cases than in the file/AOT path.
 
-### Konsequenz
+### Consequence
 
-Selbst wenn derselbe Funktionsname gebundlet wird, kann der Inhalt des Bundles unterschiedlich sein:
+Even if the same function name is bundled, the content of the bundle can differ:
 
-- fehlende importierte Typen
-- fehlende transitive Referenzen
-- fehlende oder andere `sourceYaml`-Zuordnung
+- missing imported types
+- missing transitive references
+- missing or different `sourceYaml` assignment
 
-## 16. Isolated `sys.exec` benutzt wieder einen anderen Compilerpfad
+## 16. Isolated `sys.exec` uses yet another compiler path
 
-Betroffene Stellen:
+Affected places:
 
 - [exec_impl.cpp](../../exec_impl.cpp#L225)
 - [exec_impl.cpp](../../exec_impl.cpp#L276)
 - [compiler.cpp](../../compiler.cpp#L483)
 
-`aiml_isolated_exec(...)` in [exec_impl.cpp](../../exec_impl.cpp#L225) bis [exec_impl.cpp](../../exec_impl.cpp#L301) baut aus `code_chunks` neues YAML und ruft dann:
+`aiml_isolated_exec(...)` in [exec_impl.cpp](../../exec_impl.cpp#L225) to [exec_impl.cpp](../../exec_impl.cpp#L301) builds new YAML from `code_chunks` and then calls:
 
 - `AIMLCompiler iso;`
 - `iso.compileAndRun(yaml_source);`
 
-Das heißt:
+That means:
 
-- Shared-Context-`sys.exec` nutzt den aktiven Context + fptable + Hot-Reload
-- Isolated-Context-`sys.exec` kompiliert und läuft über einen frischen Compiler mit `compileFromString(...)`
+- shared-context `sys.exec` uses the active context + fptable + hot reload
+- isolated-context `sys.exec` compiles and runs via a fresh compiler with `compileFromString(...)`
 
-### Konsequenz
+### Consequence
 
-Es gibt praktisch nicht nur JIT vs AOT, sondern mindestens drei relevante Semantikpfade:
+In practice there is not only JIT vs AOT, but at least three relevant semantic paths:
 
-- Datei/AOT
-- Shared JIT
-- Isolated JIT via `compileFromString(...)`
+- file/AOT
+- shared JIT
+- isolated JIT via `compileFromString(...)`
 
-## 17. Exception-/Invoke-Verhalten hängt von compile-time Kontext und Runtime-Symbolen ab
+## 17. Exception/invoke behaviour depends on the compile-time context and runtime symbols
 
-Betroffene Stellen:
+Affected places:
 
 - [ast_compiler_stmt.cpp](../../src/core/ast_compiler_stmt.cpp#L520)
 - [ast_compiler_stmt.cpp](../../src/core/ast_compiler_stmt.cpp#L634)
 - [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L871)
 - [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp#L322)
 
-Das Exception-Handling im Compiler nutzt:
+Exception handling in the compiler uses:
 
 - `ctx.catchBlock`
 - `CreateInvoke(...)`
@@ -489,138 +489,138 @@ Das Exception-Handling im Compiler nutzt:
 - `__cxa_begin_catch`
 - `__cxa_end_catch`
 
-Siehe:
+See:
 
 - [ast_compiler_stmt.cpp](../../src/core/ast_compiler_stmt.cpp#L520)
 - [ast_compiler_stmt.cpp](../../src/core/ast_compiler_stmt.cpp#L634)
 - [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp#L322)
 
-Zusätzlich gilt:
+Additionally:
 
-- Personality-Funktion wird nur auf Definitionspfaden gesetzt, nicht in Header-Only, siehe [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L871)
+- the personality function is only set on definition paths, not in header-only, see [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L871)
 
-### Konsequenz
+### Consequence
 
-Exception-Semantik ist besonders empfindlich gegenüber Pfadunterschieden:
+Exception semantics are particularly sensitive to path differences:
 
-- Header-Only / Import-Kontext
-- fehlende oder andere Personality-Setups
-- JIT-Symbolverfügbarkeit für C++-Runtime-Funktionen
+- header-only / import context
+- missing or different personality setups
+- JIT symbol availability for C++ runtime functions
 
-Das ist ein weiterer Bereich, in dem JIT und AOT nicht automatisch als äquivalent gelten sollten.
+That is another area in which JIT and AOT should not automatically be considered equivalent.
 
-## 18. `compileChunkAndGetAddress()` umgeht `jitRun()`-Initialisierungslogik komplett
+## 18. `compileChunkAndGetAddress()` completely bypasses the `jitRun()` initialisation logic
 
-Betroffene Stellen:
+Affected places:
 
 - [compiler.cpp](../../compiler.cpp#L489)
 - [compiler.cpp](../../compiler.cpp#L723)
 
-`jitRun()` macht zusätzlich:
+`jitRun()` additionally does:
 
-- Library-Preload aus `exodus.json`
-- breite `AddSymbol(...)`-Registrierung für Runtime-Funktionen
-- Import-Objektladung
+- library preload from `exodus.json`
+- broad `AddSymbol(...)` registration for runtime functions
+- import object loading
 - `aiml_set_active_context(...)`
-- Aufruf von `main`
+- calling `main`
 
-`compileChunkAndGetAddress()` macht nur:
+`compileChunkAndGetAddress()` only does:
 
 - `compileFromString(...)`
-- Engine erzeugen
+- create the engine
 - `finalizeObject()`
-- Funktion lookup
+- function lookup
 
-### Konsequenz
+### Consequence
 
-Der Chunk-/Bundle-/Hot-Reload-Pfad ist nicht einfach “JIT ohne main”, sondern eine klar reduzierte Laufzeitumgebung.
+The chunk/bundle/hot reload path is not simply "JIT without main", but a clearly reduced runtime environment.
 
-Viele Probleme dort sind deshalb keine lokalen Bugs einzelner Features, sondern Folgen eines grundsätzlich anderen Execution-Setups.
+Many problems there are therefore not local bugs of individual features, but consequences of a fundamentally different execution setup.
 
-## Priorisierte Problemstellen
+## Prioritised problem places
 
 ### 1. `compileFromString(...)`
 
 - [compiler.cpp](../../compiler.cpp#L431)
 
-Hauptproblem:
+Main problem:
 
-- zu wenig Kontext im Vergleich zu `compile(...)`
+- too little context compared to `compile(...)`
 
 ### 2. `compileChunkAndGetAddress(...)`
 
 - [compiler.cpp](../../compiler.cpp#L489)
 
-Hauptproblem:
+Main problem:
 
-- benutzt den verkürzten String-Pfad und lädt die importierten Objekte/Runtime-Symbole nicht äquivalent zu `jitRun()`
+- uses the shortened string path and does not load the imported objects/runtime symbols equivalently to `jitRun()`
 
 ### 3. `resolveImport(...)`
 
 - [compiler.cpp](../../compiler.cpp#L1739)
 
-Hauptproblem:
+Main problem:
 
-- dieser Pfad ist zentral für Datei/AOT und normalen JIT, aber praktisch außerhalb des String-/Chunk-Pfads
+- this path is central for file/AOT and the normal JIT, but practically outside the string/chunk path
 
 ### 4. `libraryMode` / `ast_compiler.cpp`
 
 - [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L20)
 
-Hauptproblem:
+Main problem:
 
-- Modusbit entscheidet über anderen Modulaufbau, aber wird nicht durch alle Compile-Pfade konsistent gesetzt
+- the mode bit decides on a different module structure, but is not set consistently by all compile paths
 
 ### 5. `compileChunkAndGetAddress(...)`
 
 - [compiler.cpp](../../compiler.cpp#L489)
 
-Zusätzliches Hauptproblem:
+Additional main problem:
 
-- kein äquivalenter Entry-Point-, Context- und Object-Link-Setup wie im normalen JIT-Lauf
+- no equivalent entry point, context and object link setup as in the normal JIT run
 
 ### 6. `exec_impl.cpp`
 
 - [exec_impl.cpp](../../exec_impl.cpp#L43)
 
-Hauptproblem:
+Main problem:
 
-- `sys.exec`-Semantik hängt vom gesetzten aktiven Engine-/Compiler-Kontext ab und unterscheidet Shared vs Isolated JIT zusätzlich
+- `sys.exec` semantics depend on the set active engine/compiler context and additionally distinguish shared vs isolated JIT
 
-### 7. Exception-Handling / Personality
+### 7. Exception handling / personality
 
 - [ast_compiler_stmt.cpp](../../src/core/ast_compiler_stmt.cpp#L520)
 - [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L871)
 
-Hauptproblem:
+Main problem:
 
-- Invoke-/Exception-Pfade sind empfindlich gegenüber Header-Only-, JIT-Symbol- und Personality-Unterschieden
+- invoke/exception paths are sensitive to header-only, JIT symbol and personality differences
 
-## Wahrscheinlichste reale Auswirkungen
+## Most likely real effects
 
-Die Unterschiede erklären wahrscheinlich bereits beobachtete oder plausible Fehler bei:
+The differences probably already explain observed or plausible errors with:
 
 - `sys.bundle` / `sys.exec`
-- Hot-Reload
-- importierten Globals
-- `extern`-Symbolen
-- importierten Klassen/Modellen, die im JIT anders aufgelöst werden
-- Logging/Debugging mit fehlender `currentSourceFile`
-- Hot-Reload/fptable-Verhalten
-- `sys.exec` / `aiml_exec_code`-Kontext
-- Top-Level-Initialisierung über `__aiml_init` vs `__aiml_lib_init_*`
-- JIT-only oder AOT-only IR-Fehler durch unterschiedliche Verifikationspfade
-- Unterschiede in `sys.bundle`-Inhaltsclosure
-- Unterschiede in `sys.exec` Shared-vs-Isolated-Verhalten
-- Unterschiede bei Exceptions, `invoke` und Personality-Funktionen
+- hot reload
+- imported globals
+- `extern` symbols
+- imported classes/models that are resolved differently in the JIT
+- logging/debugging with a missing `currentSourceFile`
+- hot reload/fptable behaviour
+- the `sys.exec` / `aiml_exec_code` context
+- top-level initialisation via `__aiml_init` vs `__aiml_lib_init_*`
+- JIT-only or AOT-only IR errors due to different verification paths
+- differences in the `sys.bundle` content closure
+- differences in `sys.exec` shared-vs-isolated behaviour
+- differences with exceptions, `invoke` and personality functions
 
-## Empfehlung
+## Recommendation
 
-Die nachhaltige Richtung wäre:
+The sustainable direction would be:
 
-1. einen gemeinsamen IR-Setup-Pfad für Datei und String schaffen
-2. Import-/Header-/Sibling-Logik aus `compile()` in einen wiederverwendbaren gemeinsamen Aufbau extrahieren
-3. `compileChunkAndGetAddress()` auf dieselbe Symbol-/Objekt-Ladepipeline wie `jitRun()` bringen
-4. `libraryMode`, `currentSourceFile`, `resolveImportCallback`, `objectFilesToLink` in beiden Pfaden konsistent setzen
+1. create a shared IR setup path for file and string
+2. extract the import/header/sibling logic from `compile()` into a reusable shared setup
+3. bring `compileChunkAndGetAddress()` onto the same symbol/object loading pipeline as `jitRun()`
+4. set `libraryMode`, `currentSourceFile`, `resolveImportCallback`, `objectFilesToLink` consistently in both paths
 
-Solange das nicht passiert, sollte man JIT und AOT nicht als semantisch äquivalent behandeln.
+As long as that does not happen, JIT and AOT should not be treated as semantically equivalent.
