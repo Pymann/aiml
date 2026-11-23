@@ -1,10 +1,10 @@
-// spec/23 §4.1 — Host-Parallelitaet.  Drei Fragen, drei Funktionen:
-//   core_count            physische Kerne           → CPU-gebundene Pools
-//   logical_thread_count  Affinitaets-Maske         → was gleichzeitig laufen kann
-//   quota_thread_count    cgroup cpu.max            → was der Container erlaubt
-// Alle Werte werden EINMAL pro Prozess gelesen und gecacht (spec: deterministisch
-// innerhalb eines Prozesses, Kategorie 2 = aus jedem Thread aufrufbar).  Ein
-// Quota schrumpft die Affinitaets-Maske NICHT — deshalb ist das der eigene Wert.
+// spec/23 §4.1 — host parallelism.  Three questions, three functions:
+//   core_count            physical cores            → CPU-bound pools
+//   logical_thread_count  affinity mask             → what can run at the same time
+//   quota_thread_count    cgroup cpu.max            → what the container allows
+// All values are read ONCE per process and cached (spec: deterministic
+// within a process, category 2 = callable from any thread).  A
+// quota does NOT shrink the affinity mask — that is why it is a value of its own.
 #include "cpu_runtime.h"
 #include <thread>
 #include <set>
@@ -19,7 +19,7 @@
 
 namespace {
 
-// Untergrenze 1: nie 0 zurueckgeben, sonst teilt eine Sizing-Formel durch 0.
+// Lower bound 1: never return 0, otherwise a sizing formula divides by 0.
 int32_t at_least_one(long v) { return v >= 1 ? static_cast<int32_t>(v) : 1; }
 
 int32_t read_logical() {
@@ -34,9 +34,9 @@ int32_t read_logical() {
     return at_least_one(static_cast<long>(std::thread::hardware_concurrency()));
 }
 
-// Physische Kerne: (package_id, core_id)-Paare der erlaubten CPUs zaehlen.  Nur
-// CPUs aus der Affinitaets-Maske, damit core_count <= logical_thread_count gilt
-// (sonst meldete ein getaskseter Prozess mehr Kerne als nutzbare Threads).
+// Physical cores: count the (package_id, core_id) pairs of the allowed CPUs.  Only
+// CPUs from the affinity mask, so that core_count <= logical_thread_count holds
+// (otherwise a taskset process would report more cores than usable threads).
 int32_t read_physical(int32_t logical) {
 #ifdef __linux__
     cpu_set_t set;
@@ -50,7 +50,7 @@ int32_t read_physical(int32_t logical) {
         snprintf(path, sizeof(path),
                  "/sys/devices/system/cpu/cpu%d/topology/core_id", cpu);
         FILE* f = fopen(path, "r");
-        if (!f) continue;                      // CPU existiert nicht (oder kein sysfs)
+        if (!f) continue;                      // CPU does not exist (or no sysfs)
         if (fscanf(f, "%ld", &core) != 1) core = -1;
         fclose(f);
         if (core < 0) continue;
@@ -65,7 +65,7 @@ int32_t read_physical(int32_t logical) {
     }
     if (!cores.empty()) {
         int32_t n = static_cast<int32_t>(cores.size());
-        return n <= logical ? n : logical;     // Topologie darf die Maske nie uebersteigen
+        return n <= logical ? n : logical;     // topology must never exceed the mask
     }
 #endif
     return logical;                            // Topologie unlesbar → konservativ
@@ -73,7 +73,7 @@ int32_t read_physical(int32_t logical) {
 
 // cgroup v2: "/sys/fs/cgroup/cpu.max" = "<quota|max> <period>".
 // cgroup v1: cpu.cfs_quota_us (-1 = unlimited) / cpu.cfs_period_us.
-// Rueckgabe: ganze Threads, abgerundet, min 1; ohne Quota → logical.
+// Return: whole threads, rounded down, min 1; without a quota → logical.
 int32_t read_quota(int32_t logical) {
 #ifdef __linux__
     if (FILE* f = fopen("/sys/fs/cgroup/cpu.max", "r")) {
@@ -84,7 +84,7 @@ int32_t read_quota(int32_t logical) {
         if (got == 2 && period > 0 && strcmp(quota, "max") != 0) {
             long q = strtol(quota, nullptr, 10);
             if (q > 0) {
-                long threads = q / period;     // abrunden, aber nie unter 1
+                long threads = q / period;     // round down, but never below 1
                 int32_t n = at_least_one(threads);
                 return n <= logical ? n : logical;
             }
@@ -104,7 +104,7 @@ int32_t read_quota(int32_t logical) {
         return n <= logical ? n : logical;
     }
 #endif
-    return logical;                            // kein Quota gesetzt
+    return logical;                            // no quota set
 }
 
 struct CpuInfo {
@@ -118,8 +118,8 @@ struct CpuInfo {
     }
 };
 
-// Funktions-lokales static: thread-safe initialisiert (C++11 magic static), also
-// aus jedem Thread aufrufbar, ohne eigenen Mutex (spec/47 Kategorie 2).
+// Function-local static: initialised thread-safely (C++11 magic static), so
+// callable from any thread without a mutex of its own (spec/47 category 2).
 const CpuInfo& info() {
     static const CpuInfo cached;
     return cached;

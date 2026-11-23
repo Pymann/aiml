@@ -66,10 +66,10 @@ bool RootState::OnScalar(const std::string& value, const std::string& tag) {
              builder->pushState(std::make_unique<FunctionBuilder>(builder));
              return true;
         }
-        // `free` fehlte hier bis 17.10.2026 und fiel damit in den SkipBuilder: ein
-        // `- free: [p]` auf oberster Ebene wurde WORTLOS verworfen und nie ausgefuehrt
-        // (gemessen in 8 Korpus-Tests, u.a. tests/test_oo.aiml:55).  Bei einer Sprache,
-        // deren Speichermodell auf explizitem `new`/`free` steht, ist das kein Randfall.
+        // `free` was missing here until 2026-10-17 and so fell into the SkipBuilder: a
+        // top-level `- free: [p]` was SILENTLY discarded and never executed
+        // (measured in 8 corpus tests, e.g. tests/test_oo.aiml:55).  For a language
+        // whose memory model rests on explicit `new`/`free`, that is not an edge case.
         else if (currentKey == "decl" || currentKey == "set" || currentKey == "call" || currentKey == "print" || currentKey == "idx" || currentKey == "store" || currentKey == "free") {
              builder->pushState(std::make_unique<StatementBuilder>(builder, currentKey));
              return true;
@@ -156,26 +156,26 @@ bool RootState::OnScalar(const std::string& value, const std::string& tag) {
             return true;
         }
 
-        // spec/49 §2a, sinngemaess fuer die OBERSTE Ebene: ein unbekannter Schluessel
-        // ist ein FEHLER, kein stilles Ueberspringen.  Bis 17.10.2026 landete hier
-        // alles Unbekannte im SkipBuilder und verschwand wortlos — ein `- mdoel:`
-        // liess das ganze Modell verschwinden, dieselbe Fehlerklasse wie das
-        // verschluckte `exit:` (spec/23).  Weiterparsen bleibt, damit ein Lauf mehr
-        // als einen Fehler meldet.
+        // spec/49 §2a, applied to the TOP level: an unknown key
+        // is an ERROR, not a silent skip.  Until 2026-10-17 everything unknown
+        // ended up here in the SkipBuilder and vanished silently — a `- mdoel:`
+        // made the whole model vanish, the same error class as the
+        // swallowed `exit:` (spec/23).  Parsing continues, so that a run reports more
+        // than one error.
         {
             static const std::map<std::string, std::string> kTopHints = {
-                {"clearance", "clearance-self-certify: die Freigabe setzt der WIRT, "
-                              "nicht die Quelle (spec/65 F65-6)"},
-                {"function",  "benutze `def:` (spec/07)"},
-                {"struct",    "benutze `class:` oder `model:` (spec/02)"},
-                {"type",      "benutze `alias:` (spec/02)"},
-                {"include",   "benutze `import:` (spec/21)"},
-                {"use",       "benutze `import:` (spec/21)"},
-                {"main",      "`main` ist ein `def`: `- def: { name: main, ... }` (spec/08)"},
-                {"return",    "`return:` gehoert in einen `def`-Rumpf (spec/07)"},
-                {"throw",     "`throw:` gehoert in einen Rumpf, meist mit `try:` (spec/19)"},
-                {"level",     "`level:` ist ein Modifier an einer Deklaration, kein "
-                              "Top-Level-Knoten (spec/65 §8)"},
+                {"clearance", "clearance-self-certify: the clearance is set by the HOST, "
+                              "not by the source (spec/65 F65-6)"},
+                {"function",  "use `def:` (spec/07)"},
+                {"struct",    "use `class:` or `model:` (spec/02)"},
+                {"type",      "use `alias:` (spec/02)"},
+                {"include",   "use `import:` (spec/21)"},
+                {"use",       "use `import:` (spec/21)"},
+                {"main",      "`main` is a `def`: `- def: { name: main, ... }` (spec/08)"},
+                {"return",    "`return:` belongs in a `def` body (spec/07)"},
+                {"throw",     "`throw:` belongs in a body, usually with `try:` (spec/19)"},
+                {"level",     "`level:` is a modifier on a declaration, not a "
+                              "top-level node (spec/65 §8)"},
             };
             std::string msg = builder->fmtLoc() + "unknown top-level key '" +
                               currentKey + "' — not an aiml declaration.";

@@ -33,34 +33,34 @@ namespace AST {
 // ── helpers ──────────────────────────────────────────────────────────────────
 
 static void commitFunc(ExternBlock* block, ExternFuncDecl& f) {
-    // Freie Funktion, kein Builder: der Ort kommt aus dem Parse-Merker
-    // (spec/49 F49-100).  Ohne Datei bleibt das Praefix leer -- eine zugegebene
-    // Luecke statt einer erfundenen Zeile.
+    // A free function, not a builder: the location comes from the parse marker
+    // (spec/49 F49-100).  Without a file the prefix stays empty -- an admitted
+    // gap instead of an invented line.
     const std::string whereFile = AIML::AST::currentParseFile().empty()
         ? std::string() : (AIML::AST::currentParseFile() + ": ");
-    // spec/65 F65-13: `extern` umgeht JEDE Symboltabelle des Uebersetzers von
-    // Bauart — das Skript nennt die Signatur selbst, und der JIT loest den Namen
-    // gegen den Prozess auf (LoadLibraryPermanently(nullptr)).  Eine
-    // eingeschraenkte Sitzung darf darum nur Namen deklarieren, die der Wirt
-    // ausdruecklich angeboten hat — die Export-Tabelle (spec/65 §5a).  Ohne Tabelle
-    // ist die zulaessige Menge leer (fail closed), mit Tabelle entscheidet das Level.
+    // spec/65 F65-13: `extern` bypasses EVERY symbol table of the compiler by
+    // design — the script names the signature itself, and the JIT resolves the name
+    // against the process (LoadLibraryPermanently(nullptr)).  A
+    // restricted session may therefore only declare names that the host has
+    // explicitly offered — the export table (spec/65 §5a).  Without a table
+    // the permissible set is empty (fail closed), with a table the level decides.
     if (!f.name.empty() && aiml::clearance::restricted() &&
         !aiml::clearance::exportReachable(f.name)) {
         const int lvl = aiml::clearance::exportedLevel(f.name);
         if (lvl == aiml::clearance::kAbsent) {
-            // Der Wirt bietet den Namen nicht an: das ist die `extern`-Zulassung (F65-13).
-            LOG_ERROR(whereFile + "clearance-extern: `extern` auf '" + f.name + "' ist nicht zugelassen — "
-                      "der Wirt bietet diesen Namen nicht an.  Eine eingeschraenkte Sitzung "
-                      "darf nur Namen aus der Export-Tabelle deklarieren (spec/65 F65-13); "
-                      "`extern` umgeht sonst jede Symboltabelle des Uebersetzers von Bauart.");
+            // The host does not offer the name: that is the `extern` admission (F65-13).
+            LOG_ERROR(whereFile + "clearance-extern: `extern` on '" + f.name + "' is not admitted — "
+                      "the host does not offer this name.  A restricted session "
+                      "may only declare names from the export table (spec/65 F65-13); "
+                      "otherwise `extern` bypasses every symbol table of the compiler by design.");
         } else {
-            // Angeboten, aber ueber der Freigabe: das ist die ZUGRIFFSpruefung, und F65-12
-            // verlangt, dass sie als VERWEIGERUNG erscheint — nicht unter einer zweiten
-            // Kennung, nur weil der Weg hierher eine Deklaration war.
-            LOG_ERROR(whereFile + "clearance-denied: `" + f.name + "` liegt auf Level " +
-                      std::to_string(lvl) + ", diese Sitzung hat Freigabe " +
+            // Offered, but above the clearance: that is the ACCESS check, and F65-12
+            // demands that it appears as a DENIAL — not under a second
+            // identifier just because the way here was a declaration.
+            LOG_ERROR(whereFile + "clearance-denied: `" + f.name + "` is at level " +
+                      std::to_string(lvl) + ", this session has clearance " +
                       std::to_string(aiml::clearance::sessionClearance()) +
-                      " (spec/65 F65-4: erreichbar ist nur, was `Freigabe <= Level` erfuellt).");
+                      " (spec/65 F65-4: only what satisfies `clearance <= level` is reachable).");
         }
     }
     if (!f.name.empty())
