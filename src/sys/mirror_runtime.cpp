@@ -161,7 +161,7 @@ struct AimlMirrorPeer {
     int32_t rpc_version = 0;   /* from the peer's HELLO: 0 = none/v2, 3 = RPC v3 */
     std::deque<std::vector<uint8_t>> held_deltas;   /* AIML_MIRROR_TEST_HOLD_DELTA */
     bool    dead        = false;   /* invalid frame / overload / send error → disconnect */
-    char    dead_reason[96] = {0};   /* Kopie, nicht Zeiger: der Grund kann aus einem Stack-Puffer kommen */
+    char    dead_reason[96] = {0};   /* a copy, not a pointer: the reason may come from a stack buffer */
 };
 
 struct AimlMirrorRegistered {
@@ -930,11 +930,11 @@ static void mirror_recv_from_peers(AimlMirrorSession* s) {
                     continue;
                 }
                 if (n == 0) { mirror_mark_dead(peer, "peer closed"); closed = true; break; }
-                if (errno == EINTR) continue;             /* Signal, nicht Verlust */
+                if (errno == EINTR) continue;             /* signal, not loss */
                 if (errno != EAGAIN && errno != EWOULDBLOCK) {
                     char why[96];
                     snprintf(why, sizeof(why), "recv failed: %s", strerror(errno));
-                    mirror_mark_dead(peer, why);          /* nur die Meldung, sofort gedruckt */
+                    mirror_mark_dead(peer, why);          /* only the message, printed immediately */
                     closed = true;
                 }
                 break;
@@ -946,10 +946,10 @@ static void mirror_recv_from_peers(AimlMirrorSession* s) {
              * (real socket on native, opaque handle on wasm/emscripten). */
             for (int iter = 0; iter < 64; ++iter) {
                 if (!peer->transport.ws_ptr) break;
-                /* Beide Abbruchzweige nennen ihren Grund (spec/44_5 §8) — sie
-                 * warfen den Peer vorher WORTLOS weg, und eine Sitzung, die
-                 * ohne Spur verschwindet, ist von einem Netzfehler nicht zu
-                 * unterscheiden. */
+                /* Both abort branches name their reason (spec/44_5 §8) — they
+                 * used to throw the peer away SILENTLY, and a session that
+                 * vanishes without a trace cannot be told apart from a network
+                 * error. */
                 int pr = aiml_ws_poll(peer->transport.ws_ptr, 0);
                 if (pr == 0) break;                       /* no data ready */
                 if (pr < 0) {
@@ -1168,8 +1168,8 @@ void* aiml_mirror_connect_timeout(const char* url, int32_t ms) {
     } else {
         /* WS/WSS connect */
         void* ws_client = nullptr;
-        /* Die zugesagte Frist MUSS den ganzen Verbindungsaufbau decken, nicht nur
-         * den TCP-Teil: der HTTP-Upgrade hing frueher unbegrenzt (spec/44_5 §3.3). */
+        /* The promised deadline MUST cover the whole connection setup, not only
+         * the TCP part: the HTTP upgrade used to hang without limit (spec/44_5 §3.3). */
         if (pu.type == MT_WS)
             ws_client = aiml_ws_connect_to(pu.host.c_str(), pu.port, "/", ms);
         else

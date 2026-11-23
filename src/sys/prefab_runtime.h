@@ -67,14 +67,14 @@ void  aiml_prefab_set_draggable(void* inst, int32_t d);
 float aiml_prefab_get_width   (void* inst);
 float aiml_prefab_get_height  (void* inst);
 
-/* Scene-resize: nur Screen-Dims + Projection updaten, design_w/h bleibt.
- * Wird vom Framebuffer-Size-Callback gerufen. */
+/* Scene resize: only update screen dims + projection, design_w/h stays.
+ * Called from the framebuffer size callback. */
 void aiml_prefab_scene_resize(int32_t screen_w, int32_t screen_h);
 
 /* ── Layout helpers (Spec 44_6 §Layout) ────────────────────────────────
- * Positionieren eine Liste von prefab_instances automatisch.  Compiler-Glue
- * extrahiert data + size aus der list<prefab_instance> (AimlList-Struct)
- * via ExtractValue und reicht sie als (data_ptr, count) weiter.
+ * Position a list of prefab_instances automatically.  The compiler glue
+ * extracts data + size from the list<prefab_instance> (AimlList struct)
+ * via ExtractValue and passes them on as (data_ptr, count).
  */
 void aiml_engine_layout_hflow(void* data_ptr, int32_t count, float x, float y, float gap);
 void aiml_engine_layout_vflow(void* data_ptr, int32_t count, float x, float y, float gap);
@@ -333,7 +333,7 @@ void aiml_material_register(const char* name, const char* shader_path,
 /* Returns the current text contents of a text_input child. Lifetime: valid
  * until the next aiml_prefab_set_text or destroy on this child. */
 const char* aiml_prefab_text_value(void* inst, const char* child_name);
-/* spec/44_6 §5f — Auswahl eines textbox/text_input programmatisch setzen/lesen. */
+/* spec/44_6 §5f — set/read the selection of a textbox/text_input programmatically. */
 void        aiml_prefab_select_all(void* inst, const char* child_name);
 const char* aiml_prefab_selection(void* inst, const char* child_name);
 /* Returns 1 if a button child has been clicked this frame, 0 otherwise. */

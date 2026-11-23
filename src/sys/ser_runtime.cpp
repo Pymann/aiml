@@ -57,12 +57,12 @@ extern "C" void aiml_thread_handle_drop(void* h) {
     free(t);
 }
 
-// spec/29 §5.4.1: `chan`/`hashmap` sind IN-PROZESS-Handles — die Drahtform ist der
-// Zeiger selbst.  Ein gespeicherter Blob ueberlebt seinen Prozess, also steht hinter
-// dem Zeiger ein Stempel dieses Prozesses; beim Dekodieren wird er VERGLICHEN, bevor
-// der Zeiger ueberhaupt angefasst wird.  Ohne das greift ein Leser auf eine Adresse
-// zu, die ein laengst beendeter Prozess geschrieben hat (gemessen in datacreatures:
-// SIGSEGV beim Lesen eines Monate alten KV-Stores).
+// spec/29 §5.4.1: `chan`/`hashmap` are IN-PROCESS handles — the wire form is the
+// pointer itself.  A stored blob outlives its process, so after the
+// pointer there is a stamp of this process; on decoding it is COMPARED before
+// the pointer is touched at all.  Without this a reader accesses an address
+// that a long-finished process wrote (measured in datacreatures:
+// SIGSEGV when reading a months-old KV store).
 static uint64_t aiml_proc_stamp() {
     static const uint64_t stamp = [] {
         uint64_t mix = (uint64_t)(uintptr_t)&errno;                 // ASLR
@@ -218,8 +218,8 @@ static uint32_t aiml_ser_schema_fp(const AimlTypeNode* nodes, int32_t n_nodes) {
     return h;
 }
 
-// spec/31 §6.10: derselbe Wert, nach aussen gegeben.  Die KV-Registratur braucht
-// ihn, um eine zweite Oeffnung gegen die erste zu pruefen.
+// spec/31 §6.10: the same value, handed out.  The KV registry needs
+// it to check a second open against the first.
 extern "C" uint32_t aiml_ser_schema_fingerprint(const AimlTypeNode* nodes, int32_t n_nodes) {
     if (!nodes || n_nodes <= 0) return 0u;
     return aiml_ser_schema_fp(nodes, n_nodes);
@@ -588,7 +588,7 @@ static void dec_node(const uint8_t* blob, int& pos, int end,
                 fprintf(stderr, "[ser-ERROR] handle from another process (idx=%d off=%d) — decoded as null\n",
                         idx, n.offset);
                 g_dec_error = true;
-                handle = nullptr;                        // NICHT anfassen
+                handle = nullptr;                        // do NOT touch
             } else if (handle) {
                 if (n.kind == AIML_TD_CHAN) aiml_chan_retain(handle);
                 else                        aiml_hashmap_retain(handle);

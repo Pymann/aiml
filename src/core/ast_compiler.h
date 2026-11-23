@@ -6,10 +6,10 @@
 namespace AIML {
 namespace AST {
 
-// spec/13 §6 + spec/04_1 §7: eine Realzahl, die auf einem SPEICHERPFAD in einen
-// Ganzzahl-Slot geht, wird mit DERSELBEN definierten Umwandlung umgerechnet wie `cast`
-// -- NaN → 0, ausserhalb des Bereichs geklammert, `bool` ueber `!= 0`.  Ein blankes
-// CreateFPToSI ist in genau diesen zwei Faellen poison.
+// spec/13 §6 + spec/04_1 §7: a real number that goes into an integer slot on a
+// STORE PATH is converted with THE SAME defined conversion as `cast`
+// -- NaN → 0, out of range clamped, `bool` via `!= 0`.  A bare
+// CreateFPToSI is poison in exactly these two cases.
 llvm::Value* coerceFloatToIntegral(CompilerContext& ctx, llvm::Value* v, llvm::Type* dstTy,
                                    const std::string& dstName);
 

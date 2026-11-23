@@ -1,21 +1,21 @@
 #ifndef AIML_PIPELINE_EXPAND_H
 #define AIML_PIPELINE_EXPAND_H
 
-// spec/62 §13.5f — die deklarierte Pipeline-Form in die zusammengesetzte
-// umschreiben, VOR dem Uebersetzen.  Damit gibt es nur einen Ausfuehrer
-// (F62-23) und keine zwei, die auseinander driften (§16 Punkt 4).
+// spec/62 §13.5f — rewrite the declared pipeline form into the composed
+// one, BEFORE compiling.  That way there is only one executor
+// (F62-23) and not two that drift apart (§16 item 4).
 #include <string>
 
 namespace aiml {
 
-// Enthaelt die Quelle eine `- pipeline:`-Deklaration?  Nur dann wird
-// umgeschrieben — jede andere Datei laeuft unveraendert durch den gewohnten
-// Weg, damit die Umschreibung keine Datei anfasst, die sie nichts angeht.
+// Does the source contain a `- pipeline:` declaration?  Only then is it
+// rewritten — every other file runs unchanged through the usual
+// path, so that the rewrite touches no file that is none of its business.
 bool sourceHasPipelineDecl(const std::string& text);
 
-// Schreibt um.  `out` bekommt den erweiterten Quelltext.  Gibt false zurueck,
-// wenn etwas abzulehnen war (die Diagnose steht dann im Log) oder nichts
-// umzuschreiben ist.
+// Rewrites.  `out` gets the expanded source text.  Returns false
+// if something had to be rejected (the diagnostic is then in the log) or there is nothing
+// to rewrite.
 bool expandPipelineDeclarations(const std::string& text, const std::string& where,
                                 std::string& out);
 

@@ -56,7 +56,7 @@ std::unique_ptr<Expr> parseInterpolatedString(const std::string& input);
 thread_local int g_builderLine = 0;
 
 std::string bareOperatorKey(const std::string& text) {
-    // Lange Formen zuerst, sonst schluckt `>` das `>=`.
+    // Long forms first, otherwise `>` swallows the `>=`.
     static const char* kReserved[] = {">=", ">>", "||", "&&", "!=",
                                       "*", "%", ">", "|", "?", "&", "!", "~", "@", "`"};
     for (size_t i = 0; i < text.size(); ++i) {
@@ -244,9 +244,9 @@ std::unique_ptr<Expr> parseInterpolatedString(const std::string& input) {
     }
     
     auto interp = std::make_unique<StringInterpolationExpr>();
-    // Der Fundort gilt fuer den GANZEN Skalar.  Er muss vor der Schleife festgehalten
-    // werden: `nodeToExpr` laeuft unten auf dem Mini-Dokument der Expansion und setzt
-    // g_builderLine aus DESSEN Marke -- dort ist alles Zeile 1.
+    // The location applies to the WHOLE scalar.  It must be captured before the loop:
+    // `nodeToExpr` below runs on the mini document of the expansion and sets
+    // g_builderLine from ITS mark -- there everything is line 1.
     const int zeile = g_builderLine;
     size_t pos = 0;
     while (pos < input.length()) {
@@ -276,14 +276,14 @@ std::unique_ptr<Expr> parseInterpolatedString(const std::string& input) {
         if (end == std::string::npos) break; // Malformed
         
         std::string exprStr = input.substr(start + 2, end - start - 2);
-        // spec/09_1 §3.5: laesst sich der Koerper nicht als Ausdruck lesen, bleibt die
-        // Expansion wortwoertlicher Text ("so schreibt man ${...}" ist Prosa und soll das
-        // bleiben).  Genau dieser Rueckfall verschluckte aber den blanken
-        // Operatorschluessel: `${ { %: [lauf, 40] } }` ist kein gueltiges YAML, `Load`
-        // warf, und in die Zeichenkette kam der Text -- Austritt 0, keine Meldung.
-        // Gemessen 06.11.2026 an 300.000 Zeilen, die alle denselben "Wert" trugen.
-        // Die Erklaerung haengt darum AM FEHLSCHLAG, nicht am Koerper: Code, der heute
-        // laeuft, kommt hier nie vorbei.
+        // spec/09_1 §3.5: if the body cannot be read as an expression, the
+        // expansion stays literal text ("this is how you write ${...}" is prose and should stay
+        // that way).  But exactly this fallback swallowed the bare
+        // operator key: `${ { %: [lauf, 40] } }` is not valid YAML, `Load`
+        // threw, and the text went into the string -- exit 0, no message.
+        // Measured 2026-11-06 on 300,000 lines that all carried the same "value".
+        // That is why the explanation hangs ON THE FAILURE, not on the body: code that runs
+        // today never comes past here.
         auto alsText = [&](const char* grund) {
             std::string blank = bareOperatorKey(exprStr);
             if (!blank.empty()) {

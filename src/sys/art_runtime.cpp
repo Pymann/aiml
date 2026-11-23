@@ -86,17 +86,17 @@ EM_ASYNC_JS(int, js_art_decode_texture, (int tex_id, const char* ptr, int len), 
     try {
         const bytes = HEAPU8.subarray(ptr, ptr + len);
         const blob  = new Blob([bytes.slice()]);        // copy out of the heap view
-        // Die Bildlage sagt der Dekodierer, nicht ein Zwischen-Canvas:
-        // `imageOrientation: 'flipY'` liefert die Bitmap bereits in der
-        // bottom-up-Konvention der Engine.
+        // The image orientation is told by the decoder, not by an intermediate canvas:
+        // `imageOrientation: 'flipY'` delivers the bitmap already in the
+        // engine's bottom-up convention.
         //
-        // Vorher lief das Bild durch ein 2D-Canvas, nur um FLIP_Y zu bekommen
-        // (WebGL beachtet UNPACK_FLIP_Y_WEBGL bei ImageBitmap-Quellen nicht).
-        // Dieser Umweg gibt die Farbverwaltung des Browsers in den Weg: am
-        // 12.11.2026 kamen im Firefox ALLE PNG-Texturen mit vertauschtem Rot-
-        // und Blaukanal an -- blauer Himmel wurde orange, ein Pergament-Icon
-        // blau --, waehrend dieselbe Datei direkt im Browser richtig aussah
-        // und GLB-Texturen (anderer Weg) stimmten.
+        // Before, the image ran through a 2D canvas just to get FLIP_Y
+        // (WebGL ignores UNPACK_FLIP_Y_WEBGL for ImageBitmap sources).
+        // This detour puts the browser's colour management in the way: on
+        // 2026-11-12 in Firefox ALL PNG textures arrived with swapped red
+        // and blue channels -- blue sky turned orange, a parchment icon
+        // blue --, while the same file looked right directly in the browser
+        // and GLB textures (a different path) were correct.
         const bmp   = await createImageBitmap(blob, { imageOrientation: 'flipY' });
         const tex   = GL.textures[tex_id];
         if (!tex) { bmp.close(); return 0; }

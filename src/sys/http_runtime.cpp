@@ -1555,8 +1555,8 @@ extern "C" char* aiml_http_req_header(void* req_ptr, const char* name) {
     if (!req || !name) return nullptr;
     std::string lname = str_tolower(name);
     // Refcounted copy so the value outlives the request (no UAF after req free).
-    // Ein fehlender Header ist der LEERE String — nullptr liess das Beispiel aus
-    // spec/32_3 §2.2 (`set: [auth, req.header("Authorization")]`) abstuerzen.
+    // A missing header is the EMPTY string — nullptr made the example from
+    // spec/32_3 §2.2 (`set: [auth, req.header("Authorization")]`) crash.
     const char* v = aiml_http_map_get(req->req_headers, lname.c_str());
     return aiml_str_dup(v ? v : "");
 }
@@ -2609,9 +2609,9 @@ extern "C" void* aiml_http_resp_get_headers(void* resp) {
 
 // method/path/body: return refcounted copies (aiml_str_dup) so they are lifetime-
 // safe if referenced past the request's own free — consistent with aiml_http_resp_body.
-// NIE nullptr: ein aiml-`string` hat fuer "nichts da" den LEEREN String.  Eine
-// Anfrage ohne Content-Length (jedes GET) liess `req->body` null, und ein voellig
-// korrektes `- set: [body, req.body]` starb dann in strlen(nullptr).
+// NEVER nullptr: for "nothing there" an aiml `string` has the EMPTY string.  A
+// request without Content-Length (every GET) left `req->body` null, and a perfectly
+// correct `- set: [body, req.body]` then died in strlen(nullptr).
 extern "C" char* aiml_http_req_method(void* req) {
     const char* v = req ? static_cast<AimlHttpRequest*>(req)->method : nullptr;
     return aiml_str_dup(v ? v : "");
