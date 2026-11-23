@@ -1,143 +1,143 @@
 # Compiler Dispatch / Lookup Cleanup
 
-**Status**: Backlog (2026-06-07)
+**Status**: backlog (2026-06-07)
 **Scope**: AIML compiler hot paths (`src/core/context.h`, `ast_compiler_expr.cpp`, AST dispatch)
-**Motivation**: Der Compiler enthält mehrere große String- und RTTI-Dispatch-Pfade, die im laufenden Compile-Prozess sehr oft getroffen werden. Ein Teil davon ist nur unübersichtlich; ein Teil ist auch ein echter Performance-Kandidat.
+**Motivation**: the compiler contains several large string and RTTI dispatch paths that are hit very often during a compile run. Some of them are only hard to read; some are also a real performance candidate.
 
-## Ziel
+## Goal
 
-Die größten wiederholten linearen Dispatch-Pfade im Compiler systematisch auf passendere Lookup-Mechanismen umstellen:
+Systematically switch the largest repeated linear dispatch paths in the compiler over to more suitable lookup mechanisms:
 
-- String-`if`-Ketten -> tabellarischer Lookup / `unordered_map`
-- Operator-Stringvergleiche -> einmalige Normalisierung auf `enum` + `switch`
-- große `dynamic_cast`-Ketten -> `NodeKind` / Tag-Dispatch statt RTTI-Kaskaden
+- string `if` chains -> table lookup / `unordered_map`
+- operator string comparisons -> one-time normalisation to an `enum` + `switch`
+- large `dynamic_cast` chains -> `NodeKind` / tag dispatch instead of RTTI cascades
 
-Nicht jeder Umbau soll aus Performance-Gründen passieren. Priorität haben die Pfade, die im normalen Compile-Lauf häufig aufgerufen werden.
+Not every rework is meant to happen for performance reasons. Priority goes to the paths that are called often in a normal compile run.
 
-## Priorität 1 — `CompilerContext::getLLVMType`
+## Priority 1 — `CompilerContext::getLLVMType`
 
-**Datei**: `src/core/context.h`
+**File**: `src/core/context.h`
 
-Aktuell steckt hier ein großes String-Dispatch-Grab für:
+Currently there is a big string dispatch graveyard here for:
 
-- primitive Typen (`i32`, `f32`, `bool`, ...)
-- opake Handle-Typen (`gl_texture`, `prefab_instance`, `audio_sound`, ...)
-- einige Spezialstrukturen (`vec2`, `mat4`, `mirror_event`, `ui_style`, ...)
+- primitive types (`i32`, `f32`, `bool`, ...)
+- opaque handle types (`gl_texture`, `prefab_instance`, `audio_sound`, ...)
+- some special structures (`vec2`, `mat4`, `mirror_event`, `ui_style`, ...)
 
 ### Problem
 
-`getLLVMType(typeName)` wird an sehr vielen Stellen aufgerufen. Die aktuelle Form ist eine lange lineare Folge von `if (typeName == "...")`-Vergleichen.
+`getLLVMType(typeName)` is called in very many places. The current form is a long linear sequence of `if (typeName == "...")` comparisons.
 
-### Zielbild
+### Target picture
 
-1. Spezialfälle am Anfang behalten:
+1. Keep the special cases at the start:
    - `ptr<T>`
    - `ref<T>`
    - `list<T>` / `map<K:V>` / `fn<...>` / `iterator<T>`
-2. Danach tabellarischer Lookup:
-   - `unordered_map<string, llvm::Type*>` für triviale cached Typen
-   - oder `unordered_map<string, std::function<llvm::Type*()>>` für lazy create
-3. Komplexere Struktur-Typen (`mat4`, `mirror_event`, `ui_style`) als kleine dedizierte Builder-Funktionen auslagern
+2. After that a table lookup:
+   - `unordered_map<string, llvm::Type*>` for trivial cached types
+   - or `unordered_map<string, std::function<llvm::Type*()>>` for lazy creation
+3. Move more complex structure types (`mat4`, `mirror_event`, `ui_style`) out into small dedicated builder functions
 
-### Erwarteter Nutzen
+### Expected benefit
 
-- weniger wiederholte Stringvergleiche
-- kleinerer, lesbarer Hot Path
-- weniger Risiko für versehentliche Doppeldefinitionen / vergessene Alias-Pfade
+- fewer repeated string comparisons
+- a smaller, readable hot path
+- less risk of accidental double definitions / forgotten alias paths
 
-## Priorität 2 — Binary Operator Dispatch
+## Priority 2 — binary operator dispatch
 
-**Datei**: `src/core/ast_compiler_expr.cpp`
+**File**: `src/core/ast_compiler_expr.cpp`
 
-Aktuell wird `bin->op` mehrfach über Stringvergleiche ausgewertet:
+Currently `bin->op` is evaluated several times via string comparisons:
 
-- mathematische Struct-Ops
+- mathematical struct ops
 - float arithmetic / comparisons
 - integer fallback
 - pointer equality special cases
 
 ### Problem
 
-Ein einzelner Operator (`+`, `eq`, `gte`, `pneq`, ...) wird im selben Compile-Pfad mehrfach als String geprüft.
+A single operator (`+`, `eq`, `gte`, `pneq`, ...) is checked as a string several times in the same compile path.
 
-### Zielbild
+### Target picture
 
-1. Operator früh auf `enum class BinOpKind` normalisieren
-2. Synonyme direkt dort vereinheitlichen:
+1. Normalise the operator early to an `enum class BinOpKind`
+2. Unify synonyms right there:
    - `+` / `add`
    - `-` / `sub`
    - `le` / `lte`
    - `ge` / `gte`
-3. Danach Dispatch per `switch(opKind)`
+3. After that dispatch via `switch(opKind)`
 
-### Erwarteter Nutzen
+### Expected benefit
 
-- weniger Stringarbeit im Hot Path
-- klarerer Kontrollfluss
-- weniger verstreute Alias-Behandlung
+- less string work in the hot path
+- clearer control flow
+- less scattered alias handling
 
-## Priorität 3 — AST Node Dispatch ohne RTTI-Kaskaden
+## Priority 3 — AST node dispatch without RTTI cascades
 
-**Dateien**:
+**Files**:
 
 - `src/core/ast_compiler.cpp`
 - `src/core/ast_compiler_expr.cpp`
 - `src/core/ast_compiler_stmt.cpp`
-- teilweise `compiler.cpp`
+- partly `compiler.cpp`
 
 ### Problem
 
-Viele Pfade arbeiten mit langen `dynamic_cast`-Ketten:
+Many paths work with long `dynamic_cast` chains:
 
 - top-level decl dispatch
 - expr dispatch
 - stmt dispatch
-- diverse Registrierungs- und Header-Pässe
+- various registration and header passes
 
-### Zielbild
+### Target picture
 
-- `NodeKind` oder äquivalenter Tag direkt auf AST-Basis
-- zentrale `switch(node->kind())`-Dispatches
-- nur dort `dynamic_cast`, wo wirklich konkrete Datenfelder gebraucht werden
+- `NodeKind` or an equivalent tag directly on the AST base
+- central `switch(node->kind())` dispatches
+- `dynamic_cast` only where concrete data fields are really needed
 
-### Erwarteter Nutzen
+### Expected benefit
 
-- weniger RTTI-Rauschen
-- klarerer Dispatch
-- potentiell geringerer Overhead bei großen ASTs
+- less RTTI noise
+- clearer dispatch
+- potentially lower overhead for large ASTs
 
-## Was **nicht** primär gemeint ist
+## What is **not** primarily meant
 
 ### `builtin_registry.cpp`
 
-Der File ist groß, aber der Haupt-Dispatch ist dort bereits weitgehend tabellarisch organisiert (`builtinFuncs`, `builtinMethods`). Das ist eher ein Volumen-/Wartbarkeitsthema als ein klassisches `if/else`-Performanceproblem.
+The file is large, but the main dispatch there is already largely organised as tables (`builtinFuncs`, `builtinMethods`). That is more a volume/maintainability topic than a classic `if/else` performance problem.
 
-### Kleine seltene If-Ketten
+### Small, rare if chains
 
-Import-/Fehler-/One-shot-Logik in `compiler.cpp` ist nicht der erste Hebel. Nur umbauen, wenn sie strukturell ohnehin angefasst wird.
+Import/error/one-shot logic in `compiler.cpp` is not the first lever. Only rework it if it is touched structurally anyway.
 
-## Konkreter Arbeitsplan
+## Concrete work plan
 
-1. `getLLVMType` zerlegen
-   - Spezialparser vorne
+1. Split up `getLLVMType`
+   - special parsers at the front
    - primitive/opaque lookup table
-   - strukturierte helper für komplexe Typen
-2. `visitBinary` auf `BinOpKind` umstellen
-3. Expr-/Stmt-Dispatch auf `NodeKind` vorbereiten
-4. Danach top-level decl dispatch in `registerTypeDecl` / verwandten Pfaden anfassen
+   - structured helpers for complex types
+2. Switch `visitBinary` to `BinOpKind`
+3. Prepare expr/stmt dispatch for `NodeKind`
+4. After that tackle the top-level decl dispatch in `registerTypeDecl` / related paths
 
-## Messidee
+## Measurement idea
 
-Vorher/Nachher messen auf:
+Measure before/after on:
 
-- kompletter Build des AIML-Repos
-- kompletter Build von DataCreatures client/server
-- optional instrumentierte Counter:
-  - Anzahl `getLLVMType`-Calls
-  - Häufigkeit der wichtigsten Operatoren
+- a complete build of the AIML repo
+- a complete build of the DataCreatures client/server
+- optionally instrumented counters:
+  - number of `getLLVMType` calls
+  - frequency of the most important operators
 
-## Erfolgskriterium
+## Success criterion
 
-- Keine Semantikänderung im erzeugten IR / Verhalten
-- spürbar weniger String-/RTTI-Dispatch in den Hot Paths
-- Compiler-Code wird zugleich klarer, nicht nur „cleverer"
+- No semantic change in the generated IR / behaviour
+- noticeably less string/RTTI dispatch in the hot paths
+- the compiler code becomes clearer at the same time, not just "more clever"

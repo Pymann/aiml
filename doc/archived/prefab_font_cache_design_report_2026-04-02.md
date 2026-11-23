@@ -1,87 +1,87 @@
 # Prefab Font Cache Design Report
 
-Datum: 2026-04-02
+Date: 2026-04-02
 
-## Kurzfassung
+## Summary
 
-Ja, eine Wiederverwendung bereits gebackener Font-Groessen ist sinnvoll und sollte fuer Prefab-Labels in der Runtime umgesetzt werden.
+Yes, reusing already baked font sizes makes sense and should be implemented for prefab labels in the runtime.
 
-Die richtige Stelle dafuer ist nicht der AIML-Compiler, sondern die Prefab-/UI-Runtime. Der Compiler kennt zwar die `font_size`-Werte aus den Prefabs, aber das eigentliche Backen der Font-Atlanten passiert zur Laufzeit, nachdem die Font-Datei geladen wurde.
+The right place for it is not the AIML compiler but the prefab/UI runtime. The compiler does know the `font_size` values from the prefabs, but the actual baking of the font atlases happens at runtime, after the font file has been loaded.
 
-## Warum nicht im Compiler
+## Why not in the compiler
 
-Der Compiler sieht nur:
+The compiler only sees:
 
-- Prefab-Definitionen
-- Child-Typen
-- `font_size`-Zahlen
+- prefab definitions
+- child types
+- `font_size` numbers
 
-Der Compiler hat aber nicht automatisch:
+But the compiler does not automatically have:
 
-- die geladene Font-Datei als TTF-Bytes
-- die zur Laufzeit gesetzte Prefab-Font
-- den konkreten DPI-/Scale-Kontext
-- den Moment, in dem `engine.prefab_set_font(...)` aufgerufen wird
+- the loaded font file as TTF bytes
+- the prefab font set at runtime
+- the concrete DPI/scale context
+- the moment at which `engine.prefab_set_font(...)` is called
 
-Deshalb ist ein Compiler-Cache hier die falsche Ebene.
+That is why a compiler cache is the wrong level here.
 
-## Richtige Ebene: Runtime
+## The right level: runtime
 
-Die Runtime hat alle noetigen Informationen:
+The runtime has all the information needed:
 
-- die aktuell gesetzte Prefab-Font
-- die TTF-Daten dieser Font
-- die benoetigten `font_size`-Werte pro Label
-- die echte Bildschirm-/Scale-Situation
+- the currently set prefab font
+- the TTF data of this font
+- the required `font_size` values per label
+- the real screen/scale situation
 
-Darum sollte die Loesung so aussehen:
+So the solution should look like this:
 
-1. Eine Basisfont wird normal geladen.
-2. Die Runtime merkt sich die TTF-Quelle dieser Font.
-3. Fuer jede benoetigte Prefab-Label-Groesse wird bei Bedarf eine passende gebackene Font erzeugt.
-4. Diese wird in einer Cache-Map gespeichert.
-5. Naechste Labels mit derselben Groesse verwenden dieselbe gebackene Font wieder.
+1. A base font is loaded normally.
+2. The runtime remembers the TTF source of this font.
+3. For every required prefab label size a matching baked font is created on demand.
+4. It is stored in a cache map.
+5. Subsequent labels with the same size reuse the same baked font.
 
-## Konkretes Design
+## Concrete design
 
-### Datenmodell
+### Data model
 
-`AimlUIFont` sollte zusaetzlich behalten:
+`AimlUIFont` should additionally keep:
 
 - `ttf_data`
 - `ttf_size`
 - `baked_size_px`
 
-Die Prefab-Szene sollte einen Cache halten, z.B.:
+The prefab scene should hold a cache, e.g.:
 
 ```cpp
 std::unordered_map<int, AimlUIFont*> font_cache;
 ```
 
-### Cache-Key
+### Cache key
 
-Praktisch ist ein quantisierter Integer-Key, z.B.:
+A quantised integer key is practical, e.g.:
 
 - `round(font_size * 10)`
 
-Damit lassen sich auch halbe oder zehntel Groessen stabil wiederverwenden.
+That way half or tenth sizes can also be reused stably.
 
-### Lookup-Pfad
+### Lookup path
 
-Beim Rendern eines Label-Children:
+When rendering a label child:
 
-1. Zielgroesse bestimmen
-2. Cache-Key daraus berechnen
-3. Cache pruefen
-4. falls nicht vorhanden: Font mit genau dieser Groesse backen
-5. Ergebnis im Cache speichern
-6. mit dieser Font rendern
+1. Determine the target size
+2. Compute the cache key from it
+3. Check the cache
+4. if not present: bake a font with exactly this size
+5. store the result in the cache
+6. render with this font
 
-## Warum das fuer moderne Rechner okay ist
+## Why that is fine for modern machines
 
-Die Zahl der real benoetigten Font-Groessen ist normalerweise klein.
+The number of font sizes actually needed is normally small.
 
-Im aktuellen `9rooms`-Prefab-Set sind z.B. nur wenige Werte relevant:
+In the current `9rooms` prefab set, for example, only a few values are relevant:
 
 - `6`
 - `9`
@@ -90,52 +90,51 @@ Im aktuellen `9rooms`-Prefab-Set sind z.B. nur wenige Werte relevant:
 - `12`
 - `16`
 
-Das bedeutet:
+That means:
 
-- nicht tausende Atlanten
-- sondern nur einige wenige gebackene Varianten
-- danach fast nur noch Cache-Hits
+- not thousands of atlases
+- but only a few baked variants
+- after that almost only cache hits
 
-Der Speicher- und CPU-Aufwand ist fuer heutige Rechner voellig vertretbar.
+The memory and CPU effort is perfectly acceptable for today's machines.
 
-## Vorteile gegenueber einfachem Scale-Fix
+## Advantages over a simple scale fix
 
-Option B hat diese Vorteile:
+Option B has these advantages:
 
-- echte Typometrik pro Groesse
-- sauberere Glyph-Abstaende
-- schaerfere kleine Texte
-- weniger visuelle Artefakte als bloesses Runterskalieren einer grossen Atlas-Font
+- real typographic metrics per size
+- cleaner glyph spacing
+- sharper small texts
+- fewer visual artefacts than merely scaling down a large atlas font
 
-## Offene Punkte
+## Open points
 
-Beim Design muss man noch zwei Dinge klar machen:
+Two things still need to be made clear in the design:
 
-### 1. Invalidierung bei Font-Wechsel
+### 1. Invalidation on a font change
 
-Wenn `engine.prefab_set_font(...)` erneut aufgerufen wird, muss der Cache geleert werden.
+When `engine.prefab_set_font(...)` is called again, the cache must be cleared.
 
-Sonst wuerden gebackene Groessen einer alten Font weiterverwendet.
+Otherwise baked sizes of an old font would keep being used.
 
 ### 2. Cleanup
 
-Die gecachten `AimlUIFont*` muessen beim Font-Wechsel oder beim Scene-Teardown sauber freigegeben werden.
+The cached `AimlUIFont*` must be freed cleanly on a font change or at scene teardown.
 
-## Empfehlung
+## Recommendation
 
-Empfehlung: genau diese Runtime-Cache-Variante implementieren.
+Recommendation: implement exactly this runtime cache variant.
 
-Kurz gesagt:
+In short:
 
-- nicht im Compiler
-- sondern in der Prefab-Runtime
-- pro Groesse lazy backen
-- per Map wiederverwenden
-- bei Font-Wechsel Cache leeren
+- not in the compiler
+- but in the prefab runtime
+- bake lazily per size
+- reuse via a map
+- clear the cache on a font change
 
-## Aufwand
+## Effort
 
-Saubere Implementierung inklusive Cleanup und Rebuild:
+Clean implementation including cleanup and rebuild:
 
-- etwa `0.5 bis 1 Tag`
-
+- about `0.5 to 1 day`
