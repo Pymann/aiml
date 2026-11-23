@@ -111,18 +111,18 @@ Data-value serialization (not code bundles). Implemented via **yyjson**.
 | Nested list field | JSON array inline | `{"__type":"Wrapper","nums":[1,2,3]}` |
 | Nested map field | JSON object inline | `{"__type":"Wrapper","scores":{"a":10}}` |
 
-### 5.2 Nachtrag — Maps werden mit Inhalt geschrieben
+### 5.2 Addendum — maps are written with their content
 
-- **F29-22** Eine `map<K:V>` wird **mit ihren Einträgen** geschrieben, als eigener
-  Wert (Zeile 109) wie als Modellfeld (Zeile 112).  Bis 18.10.2026 schrieb die
-  Implementierung **jede** Map als `{}`: der Schreiber lief über `capacity` und
-  liess nur Plätze durch, deren `occupied`-Byte gesetzt war — doch `MapImpl::put`
-  setzt dieses Byte nie.  Eine aiml-Map ist **dicht** (Einträge `0..size-1`;
-  `get`, `len` und `remove` rechnen genauso, `remove` schiebt per `memmove`
-  nach), und der Serializer war der einzige Leser des `occupied`-Feldes.  Die
-  Spec hatte recht, die Implementierung nicht; gefunden am OCI-Wandler
-  (`cosmos/doc/spec/110` §110.25), wo `annotations` still leer blieb.
-  `tests/test_ser_alias_bare.aiml` hält beide Fälle fest.
+- **F29-22** A `map<K:V>` is written **with its entries**, as a value of its own
+  (row 109) as well as as a model field (row 112).  Until 2026-10-18 the
+  implementation wrote **every** map as `{}`: the writer iterated over `capacity` and
+  only let through slots whose `occupied` byte was set — but `MapImpl::put`
+  never sets that byte.  An aiml map is **dense** (entries `0..size-1`;
+  `get`, `len` and `remove` compute the same way, `remove` shifts down with `memmove`),
+  and the serializer was the only reader of the `occupied` field.  The
+  spec was right, the implementation was not; found on the OCI converter
+  (`cosmos/doc/spec/110` §110.25), where `annotations` silently stayed empty.
+  `tests/test_ser_alias_bare.aiml` pins down both cases.
 
 ### 5.2a `JsonStyle` — shaping the output
 
@@ -141,15 +141,15 @@ this section closes that gap.
 ```aiml
 - decl: [plain, JsonStyle]
 - set:  [plain.bare, 1]
-- set:  [text, { call: [sys.serialize, value, plain] }]           # Kurzform
-- set:  [text, { call: [sys.serialize, nums, "list<i32>", plain] }]  # mit Typnamen
+- set:  [text, { call: [sys.serialize, value, plain] }]           # short form
+- set:  [text, { call: [sys.serialize, nums, "list<i32>", plain] }]  # with a type name
 ```
 
-- **F29-17** Beide Formen gelten: der Stil darf als **zweites** Argument stehen oder hinter
-  einem ausdrücklichen Typnamen.  Bis 18.10.2026 nahm die Implementierung nur die lange Form
-  an und verwarf die kurze **still** — kein Fehler, keine Wirkung, auch bei `pretty`.
-  Mehrdeutig ist die Unterscheidung nicht: ein `JsonStyle` ist eine Variable dieses Typs, ein
-  Typname ein Literal.
+- **F29-17** Both forms apply: the style may be the **second** argument or come after
+  an explicit type name.  Until 2026-10-18 the implementation only accepted the long form
+  and discarded the short one **silently** — no error, no effect, even with `pretty`.
+  The distinction is not ambiguous: a `JsonStyle` is a variable of this type, a
+  type name is a literal.
 
 - **F29-12** `bare` removes `__type` **recursively**, at every nesting depth.  What remains is
   ordinary JSON that a foreign reader accepts.
@@ -172,15 +172,15 @@ what makes foreign formats readable whose keys break aiml's three-character rule
 - **F29-16** Fields the document does not mention keep their default value; keys the model does
   not know are ignored.  Neither is an error — a format that grows must stay readable.
 
-### 5.2c `skip_empty` — Leeres weglassen
+### 5.2c `skip_empty` — leaving out what is empty
 
-Ein aiml-Modell hat kein „nicht gesetzt": jedes Feld hat einen Vorgabewert, und
-`sys.serialize` schreibt jedes Feld.  Fremde Formate unterscheiden aber
-**fehlend** von **leer**: die OCI-Image-Spec sagt zu `variant` *SHOULD be omitted
-if unknown*, und `"annotations": {}` oder `"Entrypoint": []` sind dort Ballast,
-den strenge Leser bemängeln.  `skip_empty` schließt genau diese Lücke — ohne das
-Modell zu verbiegen (ein `ptr<string>`, nur um „fehlend" ausdrücken zu können,
-wäre die schlechtere Antwort).
+An aiml model has no "not set": every field has a default value, and
+`sys.serialize` writes every field.  Foreign formats, however, distinguish
+**missing** from **empty**: the OCI image spec says of `variant` *SHOULD be omitted
+if unknown*, and `"annotations": {}` or `"Entrypoint": []` are ballast there
+that strict readers complain about.  `skip_empty` closes exactly this gap — without
+bending the model (a `ptr<string>` just to be able to express "missing"
+would be the worse answer).
 
 ```aiml
 - decl: [lean, JsonStyle]
@@ -189,78 +189,78 @@ wäre die schlechtere Antwort).
 - set:  [text, { call: [sys.serialize, img_cfg, lean] }]
 ```
 
-- **F29-18** Entfernt werden **Objekt-Mitglieder**, deren Wert ein leerer String,
-  ein leeres Array oder ein leeres Objekt ist — auf jeder Ebene.  **Nicht**
-  entfernt werden `0`, `false` und `null`: eine Null ist ein Wert, kein Fehlen.
-  Wer `0` weglässt, ändert Daten; wer `""` weglässt, ändert nur die Schreibweise.
-- **F29-19** Die Prüfung läuft **von unten nach oben**: wird ein Objekt durch das
-  Entfernen seiner Mitglieder selbst leer, fällt es ebenfalls weg.  Die **Wurzel**
-  bleibt immer stehen — ein leeres Dokument wäre kein Dokument.
-- **F29-20** **Array-Elemente** werden nie entfernt, auch leere nicht: ein Array
-  trägt seine Bedeutung in der Reihenfolge, und ein entfernter Eintrag verschiebt
-  alle folgenden.
-- **F29-21** `skip_empty` und `bare` sind unabhängig und kombinierbar; beide
-  arbeiten nach dem Schreiben auf dem fertigen Dokument (wie `pretty`), nicht im
-  Schreibpfad.  Zurücklesen bleibt möglich: fehlende Felder behalten ihren
-  Vorgabewert (F29-16) — genau den, der sie hat weglassen lassen.
+- **F29-18** What is removed are **object members** whose value is an empty string,
+  an empty array or an empty object — at every level.  **Not**
+  removed are `0`, `false` and `null`: a zero is a value, not an absence.
+  Whoever leaves out `0` changes data; whoever leaves out `""` only changes the notation.
+- **F29-19** The check runs **bottom-up**: if an object becomes empty itself through
+  the removal of its members, it is dropped as well.  The **root**
+  always stays — an empty document would not be a document.
+- **F29-20** **Array elements** are never removed, not even empty ones: an array
+  carries its meaning in the order, and a removed entry shifts
+  all following ones.
+- **F29-21** `skip_empty` and `bare` are independent and can be combined; both
+  work after writing on the finished document (like `pretty`), not in the
+  write path.  Reading back remains possible: missing fields keep their
+  default value (F29-16) — exactly the one that caused them to be left out.
 
-### 5.2d Lesen: Vorgaben, `null`, Fehler
+### 5.2d Reading: defaults, `null`, errors
 
-`sys.deserialize` bleibt **duldsam** (F29-15): ein Dokument, das wächst, bleibt
-lesbar, und ein Fehler bricht das Lesen nicht ab — es entsteht immer ein Wert.
-Duldsam heißt aber nicht **still**.  Ein Werkzeug, dessen ganze Eingabe eine
-Konfigurationsdatei ist (exodus: `exodus.json`), muss erfahren, dass `"jobs":
-"viele"` kein Wert war und dass `{"name": kaputt` kein Dokument ist.  Bis
-29.10.2026 bekam es in beiden Fällen nur Nullen.
+`sys.deserialize` stays **tolerant** (F29-15): a document that grows stays
+readable, and an error does not abort reading — a value always results.
+But tolerant does not mean **silent**.  A tool whose entire input is a
+configuration file (exodus: `exodus.json`) must find out that `"jobs":
+"viele"` was not a value and that `{"name": kaputt` is not a document.  Until
+2026-10-29 it got only zeros in both cases.
 
-- **F29-16 (präzisiert)** Ein Feld, das das Dokument nicht nennt **oder mit
-  `null` belegt**, erhält seinen **deklarierten Vorgabewert**: `[jobs, i32, 4]`
-  liest sich als 4, `[name, string, "app"]` als `"app"`, `[on, bool, true]` als
-  `true`.  Das gilt auf jeder Ebene — in verschachtelten Modellen und in den
-  Elementen einer `list<Modell>`.  Bis 29.10.2026 wurde der Vorgabewert
-  ignoriert (gelesen wurde 0 bzw. `""`), obwohl F29-16 ihn versprach.
-  Vorgabewerte werden übernommen, wenn sie **Literale** sind (Zahl, Wahrheits-
-  wert, Zeichenkette) — das ist der gewöhnliche Fall; ein Ausdruck oder ein
-  Enum-Mitglied als Vorgabe liest sich bei fehlendem Schlüssel weiter als
-  Null-/Leerwert.
-- **F29-23** Fehlt ein **verschachteltes Objekt** ganz, entsteht es trotzdem
-  vollständig: mit den Vorgaben seiner Felder, leeren Zeichenketten und leeren
-  Listen/Maps.  (Vorher blieben seine Zeichenketten und Container Nullzeiger —
-  ein `.len` darauf stürzte ab.)
-- **F29-24** Zahlen werden **zwischen Ganz- und Gleitkommazahl umgewandelt**:
-  ein `f32`-Feld liest `10` als 10.0, ein `i32`-Feld liest `3.0` als 3 (in
-  Richtung null abgeschnitten).  Vorher las die „falsche“ Zahlenart still 0.
-  Ein `true`/`false` in einem Zahlenfeld liest sich als 1/0.
-- **F29-25** `sys.json_error() → string` sagt, was der **letzte**
-  `sys.deserialize` **dieses Threads** falsch fand; `""` heißt sauber.  Jeder
-  Aufruf von `sys.deserialize` setzt die Meldung zurück.  Gemeldet werden
-  - ein **Syntaxfehler** mit Zeile und Spalte (1-basiert):
+- **F29-16 (refined)** A field that the document does not mention **or sets to
+  `null`** receives its **declared default value**: `[jobs, i32, 4]`
+  reads as 4, `[name, string, "app"]` as `"app"`, `[on, bool, true]` as
+  `true`.  That applies at every level — in nested models and in the
+  elements of a `list<Model>`.  Until 2026-10-29 the default value was
+  ignored (0 or `""` was read), although F29-16 promised it.
+  Default values are taken over if they are **literals** (number, boolean,
+  string) — that is the ordinary case; an expression or an
+  enum member as a default still reads as a null/empty value when the key is
+  missing.
+- **F29-23** If a **nested object** is missing entirely, it is still created
+  completely: with the defaults of its fields, empty strings and empty
+  lists/maps.  (Before, its strings and containers stayed null pointers —
+  a `.len` on them crashed.)
+- **F29-24** Numbers are **converted between integer and floating point**:
+  an `f32` field reads `10` as 10.0, an `i32` field reads `3.0` as 3 (truncated
+  towards zero).  Before, the "wrong" kind of number silently read 0.
+  A `true`/`false` in a number field reads as 1/0.
+- **F29-25** `sys.json_error() → string` says what the **last**
+  `sys.deserialize` **of this thread** found wrong; `""` means clean.  Every
+  call of `sys.deserialize` resets the message.  Reported are
+  - a **syntax error** with line and column (1-based):
     `line 3 column 12: unexpected character`;
-  - ein Wert der **falschen JSON-Art** mit seinem Pfad:
+  - a value of the **wrong JSON kind** with its path:
     `deps[2].version: expected a string, got a number`,
-    `jobs: expected a number, got a string`.  Der Wert erhält dann den
-    Vorgabewert, als fehlte er.
-  Mehrere Funde stehen zeilenweise (höchstens 20, dann `…`).  Ein unbekannter
-  Schlüssel ist **kein** Fehler (F29-16).
-- **F29-26** Die Prüfung gehört dem Aufrufer: wer streng sein will, prüft nach
-  dem Lesen.
+    `jobs: expected a number, got a string`.  The value then receives the
+    default value, as if it were missing.
+  Several findings are listed line by line (at most 20, then `…`).  An unknown
+  key is **not** an error (F29-16).
+- **F29-26** The check belongs to the caller: whoever wants to be strict checks after
+  reading.
 
   ```aiml
   - decl: [cfg, ProjectConfig, { call: [sys.deserialize, text, "ProjectConfig"] }]
   - decl: [problem, string, { call: [sys.json_error] }]
   - if: { condition: { gt: [problem.len, 0] }, then: [{ call: [log.error, "exodus.json: ${problem}"] }, { return: 1 }] }
   ```
-- **F29-27** Eine `list<T>` darf als **nacktes Array** vorliegen
-  (`[1,2,3]`), eine `map<string:V>` als **nacktes Objekt** (`{"a":1}`) —
-  so, wie fremde Werkzeuge sie schreiben.  Die Hülle (`{"values":[…]}`,
-  `{"entries":{…}}`, §5.2) wird weiter gelesen; als Hülle gilt ein Objekt, das
-  den Schlüssel `entries` oder `__type` trägt.  Geschrieben wird unverändert
-  mit Hülle (F29-13).
-- **F29-28** Der Fehlertext ist **pro Thread**: zwei Threads, die gleichzeitig
-  lesen, sehen jeweils ihre eigenen Funde.
+- **F29-27** A `list<T>` may come as a **bare array**
+  (`[1,2,3]`), a `map<string:V>` as a **bare object** (`{"a":1}`) —
+  the way foreign tools write them.  The wrapper (`{"values":[…]}`,
+  `{"entries":{…}}`, §5.2) is still read; an object counts as a wrapper if it
+  carries the key `entries` or `__type`.  Writing is unchanged,
+  with a wrapper (F29-13).
+- **F29-28** The error text is **per thread**: two threads reading at the same time
+  each see their own findings.
 
-`tests/test_ser_defaults_errors.aiml` hält F29-16 (präzisiert) und
-F29-23 bis F29-28 fest.
+`tests/test_ser_defaults_errors.aiml` pins down F29-16 (refined) and
+F29-23 to F29-28.
 
 ### 5.3 ptr\<T\> Semantics
 
