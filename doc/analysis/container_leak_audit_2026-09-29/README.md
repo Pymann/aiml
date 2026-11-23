@@ -1,70 +1,70 @@
-# Review und Beweistests — Container-Leaks, 2026-09-29
+# Review and proof tests — container leaks, 2026-09-29
 
-[Plan](../../spec61_container_leak_fix_plan_2026-09-29.md) · [Tests/Runner](../../../tests/lifetime/container_leaks/README.md)
+[Plan](../../spec61_container_leak_fix_plan_2026-09-29.md) · [Tests/runner](../../../tests/lifetime/container_leaks/README.md)
 
-## Ergebnis
+## Result
 
-Compiler und native Runtime wurden mit `exodus build -c exodus.json -j 4` bzw. `exodus build -c exodus2.json -j 4` frisch gebaut; beide Builds erfolgreich. Anschließend native AOT-Programme mit Größen-/Inhaltsassertions und Valgrind geprüft. Flags: `AIML_MEM_V3=1`, `AIML_LIFETIME_DROPS=1`, `AIML_MODEL_REFCOUNT=0`. Binary-Hashes vor/nach jedem Lauf identisch. Vorhandene Compileränderungen wurden nicht verändert; Quellstand und Buildlogs sind hier festgehalten.
+Compiler and native runtime were freshly built with `exodus build -c exodus.json -j 4` and `exodus build -c exodus2.json -j 4` respectively; both builds succeeded. After that, native AOT programs with size/content assertions were checked under Valgrind. Flags: `AIML_MEM_V3=1`, `AIML_LIFETIME_DROPS=1`, `AIML_MODEL_REFCOUNT=0`. Binary hashes identical before/after every run. Existing compiler changes were not altered; the source state and build logs are recorded here.
 
-**15 dauerhafte Probes × N=200/400 = 30 endgültige Messungen:** 10 PASS (fünf Kontrollfälle), 12 LEAK (sechs Varianten der vier bekannten Leak-Klassen), 8 SAFETY_FAIL (vier Varianten von drei Safety-Ursachen einschließlich des neuen Modell-Get-Crashs). Alle als LEAK klassifizierten Varianten: nativer Exit 0, vollständiger Valgrind-Bericht, definite/indirect lost > 0. Sämtliche bestätigten Leaks verdoppeln die verlorenen Bytes bei doppelter Iterationszahl. Strings verwenden dafür konstante Payloads.
+**15 permanent probes × N=200/400 = 30 final measurements:** 10 PASS (five control cases), 12 LEAK (six variants of the four known leak classes), 8 SAFETY_FAIL (four variants of three safety causes, including the new model get crash). All variants classified as LEAK: native exit 0, complete Valgrind report, definite/indirect lost > 0. All confirmed leaks double the lost bytes at double the iteration count. Strings use constant payloads for that.
 
-Der strikte Runner liefert für die offenen Fehler Exit 1; das ist ein nachgewiesener roter Zielzustand, kein erfolgreicher Fix. Historische Erwartungen lockern das Gate nicht. Das allgemeine Leak-Gate registriert die zehn fehlerhaften Probes als RED und die fünf Kontrollen als GREEN; RED beeinflusst dort weiterhin nicht den Exitcode. Deshalb zusätzlich den strikten Runner benutzen.
+The strict runner returns exit 1 for the open failures; that is a demonstrated red target state, not a successful fix. Historical expectations do not loosen the gate. The general leak gate registers the ten failing probes as RED and the five controls as GREEN; RED still does not affect the exit code there. So use the strict runner in addition.
 
-## Review-Korrekturen am Plan
+## Review corrections to the plan
 
-- P1-Safety/Layout von der erst in P4 abgeschlossenen Self-put-Referenzbilanz getrennt.
-- Strikte Abnahme ergänzt: das bestehende RED-reporting-Gate allein genügt nicht.
-- Bei neuem SHARE-Vertrag müssen Map-Append und Update sowie überzählige Key-Temporaries gemeinsam umgestellt werden.
-- Bereits fremd bearbeitete Tests 86/87 (nun GREEN) und 88 erhalten.
-- B7 als zusätzliche Voraussetzung für Modell-Get-Inhaltsprüfungen aufgenommen: get-Borrow und Value-Materialisierung dürfen nicht denselben falsch interpretierten Structwert verwenden.
+- P1 safety/layout separated from the self-put reference balance that is only completed in P4.
+- Strict acceptance added: the existing RED-reporting gate alone is not enough.
+- With a new SHARE contract, map append and update as well as surplus key temporaries must be switched over together.
+- Tests 86/87 (now GREEN) and 88, already edited by others, kept.
+- B7 added as an additional precondition for model get content checks: the get borrow and value materialisation must not use the same misinterpreted struct value.
 
-## Zusätzlich entdeckt: B7
+## Discovered in addition: B7
 
-Die neue Assertion `decl [view, ref<Item>, {call: [index.get, "key"]}]` gefolgt von `view.text` verursacht bereits ohne Remove/Replace einen Invalid read in `strcmp`, danach SIGSEGV. Die Adresse enthält Bytes des Stringinhalts, z.B. `0x3d64616f6c796170` ("payload="). Exakte erste fehlerhafte IR-Operation noch nicht abschließend lokalisiert. Kein Leakbefund: der Zugriff auf die Borrow-View ist kaputt.
+The new assertion `decl [view, ref<Item>, {call: [index.get, "key"]}]` followed by `view.text` already causes an invalid read in `strcmp` without any remove/replace, then SIGSEGV. The address contains bytes of the string content, e.g. `0x3d64616f6c796170` ("payload="). The exact first faulty IR operation has not yet been conclusively located. Not a leak finding: access to the borrow view is broken.
 
-Zunächst löste diese Leseassertion in `map_model_control` und `map_model_replace` den früheren Crash aus und verdeckte deren Scope-Abbau. Beide ersten Messungen bleiben unter `initial/` erhalten. Die Assertion steht jetzt isoliert in `map_model_get_borrow`; die beiden Leak-/Kontrollprobes prüfen gezielt Map-Größe und vollständigen Abbau. Sie wurden als einzige geänderte Probes zusammen mit B7 erneut ausgeführt (`targeted/`). `results.json` und die Tabelle unten verwenden pro Case/Iteration ausschließlich den endgültigen Quellstand; kein Crash wurde als 0-Byte-Erfolg gewertet.
+At first this read assertion in `map_model_control` and `map_model_replace` triggered the earlier crash and hid their scope teardown. Both first measurements are kept under `initial/`. The assertion now lives in isolation in `map_model_get_borrow`; the two leak/control probes check map size and complete teardown specifically. They were the only changed probes and were re-run together with B7 (`targeted/`). `results.json` and the table below use only the final source state per case/iteration; no crash was counted as a 0-byte success.
 
-## Gemessene endgültige Varianten
+## Measured final variants
 
-Alle Zahlen sind Bytes. Safety-Fälle können 0 verlorene Bytes melden, sind aber wegen Invalid-read/Signal trotzdem fehlgeschlagen.
+All figures are bytes. Safety cases can report 0 lost bytes but still failed because of an invalid read/signal.
 
-| Probe | N | Status | Definite | Indirect | Native Exit | Belege |
+| Probe | N | Status | Definite | Indirect | Native Exit | Evidence |
 |---|---:|---|---:|---:|---:|---|
-| map_nested_control | 200 | SAFETY_FAIL | 0 | 0 | -11 | [Quelle](initial/map_nested_control-200/main.aiml), [Valgrind](initial/map_nested_control-200/valgrind.log) |
-| map_nested_control | 400 | SAFETY_FAIL | 0 | 0 | -11 | [Quelle](initial/map_nested_control-400/main.aiml), [Valgrind](initial/map_nested_control-400/valgrind.log) |
-| map_nested_self_put | 200 | SAFETY_FAIL | 0 | 0 | -11 | [Quelle](initial/map_nested_self_put-200/main.aiml), [Valgrind](initial/map_nested_self_put-200/valgrind.log) |
-| map_nested_self_put | 400 | SAFETY_FAIL | 0 | 0 | -11 | [Quelle](initial/map_nested_self_put-400/main.aiml), [Valgrind](initial/map_nested_self_put-400/valgrind.log) |
-| list_string_insert | 200 | SAFETY_FAIL | 0 | 0 | 0 | [Quelle](initial/list_string_insert-200/main.aiml), [Valgrind](initial/list_string_insert-200/valgrind.log) |
-| list_string_insert | 400 | SAFETY_FAIL | 0 | 0 | 0 | [Quelle](initial/list_string_insert-400/main.aiml), [Valgrind](initial/list_string_insert-400/valgrind.log) |
-| map_shared_control | 200 | LEAK | 3200 | 3800 | 0 | [Quelle](initial/map_shared_control-200/main.aiml), [Valgrind](initial/map_shared_control-200/valgrind.log) |
-| map_shared_control | 400 | LEAK | 6400 | 7600 | 0 | [Quelle](initial/map_shared_control-400/main.aiml), [Valgrind](initial/map_shared_control-400/valgrind.log) |
-| map_nested_remove | 200 | LEAK | 4800 | 3200 | 0 | [Quelle](initial/map_nested_remove-200/main.aiml), [Valgrind](initial/map_nested_remove-200/valgrind.log) |
-| map_nested_remove | 400 | LEAK | 9600 | 6400 | 0 | [Quelle](initial/map_nested_remove-400/main.aiml), [Valgrind](initial/map_nested_remove-400/valgrind.log) |
-| map_model_remove | 200 | LEAK | 3800 | 0 | 0 | [Quelle](initial/map_model_remove-200/main.aiml), [Valgrind](initial/map_model_remove-200/valgrind.log) |
-| map_model_remove | 400 | LEAK | 7600 | 0 | 0 | [Quelle](initial/map_model_remove-400/main.aiml), [Valgrind](initial/map_model_remove-400/valgrind.log) |
-| map_model_replace | 200 | LEAK | 3400 | 0 | 0 | [Quelle](targeted/map_model_replace-200/main.aiml), [Valgrind](targeted/map_model_replace-200/valgrind.log) |
-| map_model_replace | 400 | LEAK | 6800 | 0 | 0 | [Quelle](targeted/map_model_replace-400/main.aiml), [Valgrind](targeted/map_model_replace-400/valgrind.log) |
-| list_pop_bound | 200 | LEAK | 3400 | 0 | 0 | [Quelle](initial/list_pop_bound-200/main.aiml), [Valgrind](initial/list_pop_bound-200/valgrind.log) |
-| list_pop_bound | 400 | LEAK | 6800 | 0 | 0 | [Quelle](initial/list_pop_bound-400/main.aiml), [Valgrind](initial/list_pop_bound-400/valgrind.log) |
-| list_pop_arg | 200 | LEAK | 3400 | 0 | 0 | [Quelle](initial/list_pop_arg-200/main.aiml), [Valgrind](initial/list_pop_arg-200/valgrind.log) |
-| list_pop_arg | 400 | LEAK | 6800 | 0 | 0 | [Quelle](initial/list_pop_arg-400/main.aiml), [Valgrind](initial/list_pop_arg-400/valgrind.log) |
-| map_model_control | 200 | PASS | 0 | 0 | 0 | [Quelle](targeted/map_model_control-200/main.aiml), [Valgrind](targeted/map_model_control-200/valgrind.log) |
-| map_model_control | 400 | PASS | 0 | 0 | 0 | [Quelle](targeted/map_model_control-400/main.aiml), [Valgrind](targeted/map_model_control-400/valgrind.log) |
-| map_string_control | 200 | PASS | 0 | 0 | 0 | [Quelle](initial/map_string_control-200/main.aiml), [Valgrind](initial/map_string_control-200/valgrind.log) |
-| map_string_control | 400 | PASS | 0 | 0 | 0 | [Quelle](initial/map_string_control-400/main.aiml), [Valgrind](initial/map_string_control-400/valgrind.log) |
-| map_shared_string_key_control | 200 | PASS | 0 | 0 | 0 | [Quelle](initial/map_shared_string_key_control-200/main.aiml), [Valgrind](initial/map_shared_string_key_control-200/valgrind.log) |
-| map_shared_string_key_control | 400 | PASS | 0 | 0 | 0 | [Quelle](initial/map_shared_string_key_control-400/main.aiml), [Valgrind](initial/map_shared_string_key_control-400/valgrind.log) |
-| list_nested_control | 200 | PASS | 0 | 0 | 0 | [Quelle](initial/list_nested_control-200/main.aiml), [Valgrind](initial/list_nested_control-200/valgrind.log) |
-| list_nested_control | 400 | PASS | 0 | 0 | 0 | [Quelle](initial/list_nested_control-400/main.aiml), [Valgrind](initial/list_nested_control-400/valgrind.log) |
-| list_pop_discard | 200 | PASS | 0 | 0 | 0 | [Quelle](initial/list_pop_discard-200/main.aiml), [Valgrind](initial/list_pop_discard-200/valgrind.log) |
-| list_pop_discard | 400 | PASS | 0 | 0 | 0 | [Quelle](initial/list_pop_discard-400/main.aiml), [Valgrind](initial/list_pop_discard-400/valgrind.log) |
-| map_model_get_borrow | 200 | SAFETY_FAIL | 0 | 0 | -11 | [Quelle](targeted/map_model_get_borrow-200/main.aiml), [Valgrind](targeted/map_model_get_borrow-200/valgrind.log) |
-| map_model_get_borrow | 400 | SAFETY_FAIL | 0 | 0 | -11 | [Quelle](targeted/map_model_get_borrow-400/main.aiml), [Valgrind](targeted/map_model_get_borrow-400/valgrind.log) |
+| map_nested_control | 200 | SAFETY_FAIL | 0 | 0 | -11 | [source](initial/map_nested_control-200/main.aiml), [Valgrind](initial/map_nested_control-200/valgrind.log) |
+| map_nested_control | 400 | SAFETY_FAIL | 0 | 0 | -11 | [source](initial/map_nested_control-400/main.aiml), [Valgrind](initial/map_nested_control-400/valgrind.log) |
+| map_nested_self_put | 200 | SAFETY_FAIL | 0 | 0 | -11 | [source](initial/map_nested_self_put-200/main.aiml), [Valgrind](initial/map_nested_self_put-200/valgrind.log) |
+| map_nested_self_put | 400 | SAFETY_FAIL | 0 | 0 | -11 | [source](initial/map_nested_self_put-400/main.aiml), [Valgrind](initial/map_nested_self_put-400/valgrind.log) |
+| list_string_insert | 200 | SAFETY_FAIL | 0 | 0 | 0 | [source](initial/list_string_insert-200/main.aiml), [Valgrind](initial/list_string_insert-200/valgrind.log) |
+| list_string_insert | 400 | SAFETY_FAIL | 0 | 0 | 0 | [source](initial/list_string_insert-400/main.aiml), [Valgrind](initial/list_string_insert-400/valgrind.log) |
+| map_shared_control | 200 | LEAK | 3200 | 3800 | 0 | [source](initial/map_shared_control-200/main.aiml), [Valgrind](initial/map_shared_control-200/valgrind.log) |
+| map_shared_control | 400 | LEAK | 6400 | 7600 | 0 | [source](initial/map_shared_control-400/main.aiml), [Valgrind](initial/map_shared_control-400/valgrind.log) |
+| map_nested_remove | 200 | LEAK | 4800 | 3200 | 0 | [source](initial/map_nested_remove-200/main.aiml), [Valgrind](initial/map_nested_remove-200/valgrind.log) |
+| map_nested_remove | 400 | LEAK | 9600 | 6400 | 0 | [source](initial/map_nested_remove-400/main.aiml), [Valgrind](initial/map_nested_remove-400/valgrind.log) |
+| map_model_remove | 200 | LEAK | 3800 | 0 | 0 | [source](initial/map_model_remove-200/main.aiml), [Valgrind](initial/map_model_remove-200/valgrind.log) |
+| map_model_remove | 400 | LEAK | 7600 | 0 | 0 | [source](initial/map_model_remove-400/main.aiml), [Valgrind](initial/map_model_remove-400/valgrind.log) |
+| map_model_replace | 200 | LEAK | 3400 | 0 | 0 | [source](targeted/map_model_replace-200/main.aiml), [Valgrind](targeted/map_model_replace-200/valgrind.log) |
+| map_model_replace | 400 | LEAK | 6800 | 0 | 0 | [source](targeted/map_model_replace-400/main.aiml), [Valgrind](targeted/map_model_replace-400/valgrind.log) |
+| list_pop_bound | 200 | LEAK | 3400 | 0 | 0 | [source](initial/list_pop_bound-200/main.aiml), [Valgrind](initial/list_pop_bound-200/valgrind.log) |
+| list_pop_bound | 400 | LEAK | 6800 | 0 | 0 | [source](initial/list_pop_bound-400/main.aiml), [Valgrind](initial/list_pop_bound-400/valgrind.log) |
+| list_pop_arg | 200 | LEAK | 3400 | 0 | 0 | [source](initial/list_pop_arg-200/main.aiml), [Valgrind](initial/list_pop_arg-200/valgrind.log) |
+| list_pop_arg | 400 | LEAK | 6800 | 0 | 0 | [source](initial/list_pop_arg-400/main.aiml), [Valgrind](initial/list_pop_arg-400/valgrind.log) |
+| map_model_control | 200 | PASS | 0 | 0 | 0 | [source](targeted/map_model_control-200/main.aiml), [Valgrind](targeted/map_model_control-200/valgrind.log) |
+| map_model_control | 400 | PASS | 0 | 0 | 0 | [source](targeted/map_model_control-400/main.aiml), [Valgrind](targeted/map_model_control-400/valgrind.log) |
+| map_string_control | 200 | PASS | 0 | 0 | 0 | [source](initial/map_string_control-200/main.aiml), [Valgrind](initial/map_string_control-200/valgrind.log) |
+| map_string_control | 400 | PASS | 0 | 0 | 0 | [source](initial/map_string_control-400/main.aiml), [Valgrind](initial/map_string_control-400/valgrind.log) |
+| map_shared_string_key_control | 200 | PASS | 0 | 0 | 0 | [source](initial/map_shared_string_key_control-200/main.aiml), [Valgrind](initial/map_shared_string_key_control-200/valgrind.log) |
+| map_shared_string_key_control | 400 | PASS | 0 | 0 | 0 | [source](initial/map_shared_string_key_control-400/main.aiml), [Valgrind](initial/map_shared_string_key_control-400/valgrind.log) |
+| list_nested_control | 200 | PASS | 0 | 0 | 0 | [source](initial/list_nested_control-200/main.aiml), [Valgrind](initial/list_nested_control-200/valgrind.log) |
+| list_nested_control | 400 | PASS | 0 | 0 | 0 | [source](initial/list_nested_control-400/main.aiml), [Valgrind](initial/list_nested_control-400/valgrind.log) |
+| list_pop_discard | 200 | PASS | 0 | 0 | 0 | [source](initial/list_pop_discard-200/main.aiml), [Valgrind](initial/list_pop_discard-200/valgrind.log) |
+| list_pop_discard | 400 | PASS | 0 | 0 | 0 | [source](initial/list_pop_discard-400/main.aiml), [Valgrind](initial/list_pop_discard-400/valgrind.log) |
+| map_model_get_borrow | 200 | SAFETY_FAIL | 0 | 0 | -11 | [source](targeted/map_model_get_borrow-200/main.aiml), [Valgrind](targeted/map_model_get_borrow-200/valgrind.log) |
+| map_model_get_borrow | 400 | SAFETY_FAIL | 0 | 0 | -11 | [source](targeted/map_model_get_borrow-400/main.aiml), [Valgrind](targeted/map_model_get_borrow-400/valgrind.log) |
 
-## Wiederholen
+## Repeating
 
 ```bash
 python3 tests/lifetime/container_leaks/run.py
 ```
 
-Weitere Optionen und Testzuordnung im Test-README. Die Messartefakte hier enthalten Quellen und Logs, keine Binärdateien. `source_state.json`, `preexisting_source_changes.patch` und die beiden Run-`provenance.json` dokumentieren den untersuchten Stand. Die großen bestehenden Suites sowie WASM/Browser wurden bei diesem Test-/Planreview nicht neu ausgeführt; deren Abnahme bleibt Implementierungsarbeit. Dieser Bericht behauptet weder Leakfreiheit der Sprache noch vollständige Spec-61-Konformität.
+Further options and test mapping in the test README. The measurement artifacts here contain sources and logs, no binaries. `source_state.json`, `preexisting_source_changes.patch` and the two run `provenance.json` files document the examined state. The large existing suites as well as WASM/browser were not re-run for this test/plan review; their acceptance remains implementation work. This report claims neither leak freedom of the language nor complete spec 61 conformance.

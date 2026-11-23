@@ -1,81 +1,81 @@
 # AIML Operator Arity Report
 
-Datum: 2026-04-02
+Date: 2026-04-02
 
-## Kurzfazit
+## Short conclusion
 
-Das relevante Restproblem ist ein Binary-Arity-Problem.
+The relevant remaining problem is a binary arity problem.
 
-- `UnaryExpr` ist im AST strikt einoperandig ausgelegt: [ast_nodes.h](../../src/core/ast_nodes.h#L60)
-- `BinaryExpr` ist im AST strikt zweioperandig ausgelegt: [ast_nodes.h](../../src/core/ast_nodes.h#L49)
-- Der Builder erzeugt Unary nur bei `size()==1` und Binary nur bei `size()==2`: [ast_builder.cpp](../../src/core/ast_builder.cpp#L80), [expression_builder.cpp](../../src/core/ast/expression_builder.cpp#L143)
-- Der Compiler behandelt `||` und `&&` explizit binaer: [ast_compiler_expr.cpp](../../src/core/ast_compiler_expr.cpp#L580)
+- `UnaryExpr` is designed strictly single-operand in the AST: [ast_nodes.h](../../src/core/ast_nodes.h#L60)
+- `BinaryExpr` is designed strictly two-operand in the AST: [ast_nodes.h](../../src/core/ast_nodes.h#L49)
+- The builder only creates unary at `size()==1` and binary only at `size()==2`: [ast_builder.cpp](../../src/core/ast_builder.cpp#L80), [expression_builder.cpp](../../src/core/ast/expression_builder.cpp#L143)
+- The compiler treats `||` and `&&` explicitly as binary: [ast_compiler_expr.cpp](../../src/core/ast_compiler_expr.cpp#L580)
 
-Unary-only-Operatoren mit mehr als einem Operand werden jetzt bereits sauber als Compilerfehler abgewiesen. Bei Binary gilt jetzt:
+Unary-only operators with more than one operand are now already rejected cleanly as a compiler error. For binary the following now applies:
 
-- `+` und `*` duerfen mehr als 2 Operanden haben und werden links gefaltet
-- alle anderen bekannten binaeren Operatoren erzeugen bei mehr als 2 Operanden einen Compilerfehler
+- `+` and `*` may have more than 2 operands and are folded to the left
+- all other known binary operators produce a compiler error with more than 2 operands
 
-## Betroffene Operatoren
+## Affected operators
 
 ### Binary
 
-Sichtbar binaer ausgewertete Operatoren:
+Operators visibly evaluated as binary:
 
-- Arithmetik: `+`, `-`, `*`, `/`, `%`
-- Vergleich: `eq`, `neq`, `lt`, `gt`, `le`, `lte`, `ge`, `gte`, `peq`, `pneq`
-- Logik: `and`, `&&`, `or`, `||`
+- arithmetic: `+`, `-`, `*`, `/`, `%`
+- comparison: `eq`, `neq`, `lt`, `gt`, `le`, `lte`, `ge`, `gte`, `peq`, `pneq`
+- logic: `and`, `&&`, `or`, `||`
 
-Referenz: [ast_compiler_expr.cpp](../../src/core/ast_compiler_expr.cpp#L459)
+Reference: [ast_compiler_expr.cpp](../../src/core/ast_compiler_expr.cpp#L459)
 
-Bewertung:
+Assessment:
 
-- Diese Operatoren sind im aktuellen AST/Compiler-Modell alle binär.
-- `+` und `*` sind jetzt der einzige bewusst variadische Sonderfall.
-- Alle anderen bekannten Binary-Operatoren bleiben strikt 2-stellig.
-- Das verhindert stille Fehlkompilierung bei Operatoren wie `eq`, `||`, `lt` oder `pneq`.
+- In the current AST/compiler model these operators are all binary.
+- `+` and `*` are now the only deliberately variadic special case.
+- All other known binary operators stay strictly 2-ary.
+- That prevents silent miscompilation for operators like `eq`, `||`, `lt` or `pneq`.
 
-## Aufwand nach Option
+## Effort per option
 
-### Umgesetzte Policy
+### Implemented policy
 
-- Unary-only-Operatoren: exakt 1 Operand
-- `+`, `*`, `add`, `mul`: 2 oder mehr Operanden, links gefaltet
-- alle anderen bekannten Binary-Operatoren: exakt 2 Operanden
+- Unary-only operators: exactly 1 operand
+- `+`, `*`, `add`, `mul`: 2 or more operands, folded to the left
+- all other known binary operators: exactly 2 operands
 
-Referenzen:
+References:
 
 - [expression_builder.cpp](../../src/core/ast/expression_builder.cpp#L23)
 - [expression_builder.cpp](../../src/core/ast/expression_builder.cpp#L190)
 - [ast_builder.cpp](../../src/core/ast_builder.cpp#L121)
 
-Verifiziert:
+Verified:
 
-- `{ +: [1, 2, 3] }` kompiliert und liefert `6`
-- `{ eq: [1, 1, 1] }` bricht jetzt mit `Binary operator 'eq' expects exactly 2 operands, got 3.` ab
+- `{ +: [1, 2, 3] }` compiles and yields `6`
+- `{ eq: [1, 1, 1] }` now aborts with `Binary operator 'eq' expects exactly 2 operands, got 3.`
 
-## Aufwand nach heutigem Stand
+## Effort as of today
 
-### Bereits erledigt
+### Already done
 
-- Unary-Arity-Fehler
-- Binary-Arity-Fehler fuer alle bekannten Operatoren ausser `+` und `*`
-- Linksfaltung fuer `+` und `*`
+- Unary arity errors
+- Binary arity errors for all known operators except `+` and `*`
+- Left folding for `+` and `*`
 
-Geschaetzter Aufwand:
+Estimated effort:
 
-- erledigt
+- done
 
-### Optional spaeter: weitere variadische Operatoren
+### Optional later: further variadic operators
 
-Wenn spaeter noch `eq`, `&&`, `||` oder Vergleichsketten variadisch werden sollen, ist das ein bewusster Sprachdesign-Schritt.
+If later `eq`, `&&`, `||` or comparison chains should become variadic as well, that is a deliberate language design step.
 
-Geschaetzter Aufwand:
+Estimated effort:
 
-- etwa 0.5 bis 1.5 Tage je nach Umfang und Testtiefe
+- about 0.5 to 1.5 days depending on scope and test depth
 
-## Konkrete Aussage zur Frage
+## Concrete answer to the question
 
-- Der Unary-Teil ist jetzt erledigt: Unary-only-Operatoren mit mehr als einem Operand erzeugen einen Compilerfehler.
-- Binary ist jetzt bewusst eingeschraenkt: nur `+` und `*` duerfen mehr als 2 Operanden haben.
-- Fuer alle anderen bekannten binaeren Operatoren gibt es jetzt bei `>2` einen Compilerfehler.
+- The unary part is now done: unary-only operators with more than one operand produce a compiler error.
+- Binary is now deliberately restricted: only `+` and `*` may have more than 2 operands.
+- For all other known binary operators there is now a compiler error at `>2`.

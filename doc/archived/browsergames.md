@@ -1,22 +1,22 @@
-# Browser Games mit AIML hosten
+# Hosting browser games with AIML
 
-## Architektur
+## Architecture
 
 ```
 ┌─────────────────────────────────────────────────┐
-│  AIML HTTP-Server (spec/32_2_network_http_s.md)  │
+│  AIML HTTP server (spec/32_2_network_http_s.md)  │
 │  srv.filesystem("/", ["dist/"], {})              │
-│  → serviert index.html + game.wasm + game.js    │
+│  → serves index.html + game.wasm + game.js      │
 └─────────────────────────────────────────────────┘
           ↕ HTTP/HTTPS
 ┌─────────────────────────────────────────────────┐
 │  Browser                                         │
-│  → lädt game.wasm (Emscripten-Output)            │
-│  → verbindet sich via wss:// zum Mirror-Server   │
+│  → loads game.wasm (Emscripten output)           │
+│  → connects to the mirror server via wss://      │
 └─────────────────────────────────────────────────┘
 ```
 
-## HTTP-Server-Code (AIML)
+## HTTP server code (AIML)
 
 ```aiml
 - decl: [srv, http_server_handle, { call: [http.server, "0.0.0.0", 8080] }]
@@ -24,50 +24,50 @@
 - call: [srv.start]
 ```
 
-`dist/` enthält den Emscripten-Output des AIML-Game-Projekts.
+`dist/` contains the Emscripten output of the AIML game project.
 
-## Was bereits funktioniert
+## What already works
 
-- HTTP-Server mit `filesystem`-Middleware → statische Files servieren ✓
-- Mirror mit `wss://` → Browser-kompatibles Multiplayer ✓
-- `ws`/`wss` Namespace → implementiert ✓
+- HTTP server with `filesystem` middleware → serving static files ✓
+- Mirror with `wss://` → browser-compatible multiplayer ✓
+- `ws`/`wss` namespace → implemented ✓
 
-## Was noch fehlt
+## What is still missing
 
-### 1. WASM-Compilation-Pipeline (größte Lücke)
+### 1. WASM compilation pipeline (the biggest gap)
 
-Der AIML AOT-Compiler muss `emcc` (Emscripten) statt `clang` als Backend nutzen:
+The AIML AOT compiler must use `emcc` (Emscripten) instead of `clang` as the backend:
 
 - `-s ASYNCIFY -s ASYNCIFY_IMPORTS=[engine_swap_internal]`
-  → damit `engine.run` / `engine.swap` im Browser funktioniert (blockierender Loop via Coroutinen-Transformation)
+  → so that `engine.run` / `engine.swap` work in the browser (blocking loop via coroutine transformation)
 - `-s USE_WEBGL2=1 -s FULL_ES3=1`
-  → OpenGL ES 3 → WebGL 2 Mapping
-- Linker-Ausgabe: `game.wasm` + `game.js` (Glue) + `index.html`
+  → OpenGL ES 3 → WebGL 2 mapping
+- Linker output: `game.wasm` + `game.js` (glue) + `index.html`
 
-### 2. `engine.platform()` zur Laufzeit
+### 2. `engine.platform()` at runtime
 
-Muss im WASM-Build `"web"` zurückgeben (für transport-Entscheidungen wie `tcp://` vs `ws://`).
+Must return `"web"` in the WASM build (for transport decisions such as `tcp://` vs `ws://`).
 
-### 3. Asset-Packaging
+### 3. Asset packaging
 
-Emscripten braucht ein virtuelles Dateisystem:
+Emscripten needs a virtual file system:
 
 ```
 emcc ... --preload-file assets/
 ```
 
-Assets landen als `.data`-Datei neben der `.wasm`, werden beim Start ins virtuelle FS gemountet.
+Assets end up as a `.data` file next to the `.wasm` and are mounted into the virtual FS at startup.
 
-## Multiplayer-Szenario (Mirror)
+## Multiplayer scenario (mirror)
 
 ```
-[AIML Mirror-Server]  tcp://0.0.0.0:7777   ← Desktop-Clients
-                      wss://0.0.0.0:7778   ← Browser-Clients
+[AIML mirror server]  tcp://0.0.0.0:7777   ← desktop clients
+                      wss://0.0.0.0:7778   ← browser clients
 
-[AIML HTTP-Server]    https://0.0.0.0:443  ← serviert game.wasm
+[AIML HTTP server]    https://0.0.0.0:443  ← serves game.wasm
 ```
 
-Client-seitiger Transport-Switch via `engine.platform()`:
+Client-side transport switch via `engine.platform()`:
 
 ```aiml
 - decl: [platform, string, { call: [engine.platform] }]
@@ -79,7 +79,7 @@ Client-seitiger Transport-Switch via `engine.platform()`:
     - set: [session, { call: [mirror.connect, "tcp://gameserver.com:7777"] }]
 ```
 
-## Zusammenfassung
+## Summary
 
-Die Server-Seite (HTTP + Mirror) ist bereits spezifiziert und umsetzbar.
-Die fehlende Lücke ist primär die `emcc`-Zielstufe im AIML AOT-Compiler.
+The server side (HTTP + mirror) is already specified and implementable.
+The missing gap is primarily the `emcc` target stage in the AIML AOT compiler.

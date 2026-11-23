@@ -1,78 +1,78 @@
-# Performance: die A-Grundlinie vervollständigen und den JIT/AOT-Faktor 2 klären
+# Performance: complete the A baseline and explain the JIT/AOT factor of 2
 
 Date: 2026-11-16
-Status: backlog (beides hat Zeit — vom User so eingeordnet)
+Status: backlog (both can wait — classified that way by the user)
 Spec: `spec/70_performance.md`
-Erster Messpunkt: Commit `929c80ff`, `performance/cases/fib100.aiml`
+First measuring point: commit `929c80ff`, `performance/cases/fib100.aiml`
 
-## Warum beides zusammengehört
+## Why the two belong together
 
-Die Reihenfolge aus spec/70 §10 ist: Suite, Grundlinien auf der heutigen
-Pipeline, **dann** die IR-Mittelschicht, dann dieselbe Suite. Beide Punkte hier
-sind das „Grundlinien"-Stück. Wer die `PassBuilder`-Pipeline vorher baut, hat
-hinterher kein Vorher.
+The order from spec/70 §10 is: suite, baselines on today's
+pipeline, **then** the IR middle layer, then the same suite. Both points here
+are the "baselines" piece. Whoever builds the `PassBuilder` pipeline first has
+no "before" afterwards.
 
-## Punkt 1 — der JIT ist 1,9× langsamer als das AOT-Binary
+## Point 1 — the JIT is 1.9× slower than the AOT binary
 
-Gemessen an `fib100` (Ryzen 7 5700U, Governor powersave, LLVM 18.1.3,
-`ir_opt=none`, Median aus 7 Proben, Kalibrierung ≥500 ms):
+Measured on `fib100` (Ryzen 7 5700U, governor powersave, LLVM 18.1.3,
+`ir_opt=none`, median of 7 samples, calibration ≥500 ms):
 
-| Batterie | ns je Runde (100 Schritte) | reps | Median |
+| Battery | ns per round (100 steps) | reps | Median |
 | --- | --- | --- | --- |
-| JIT | 455 | 2.048.000 | 932 ms |
-| AOT | 245 | 4.096.000 | 1.005 ms |
-| C (gcc 13.3 -O2) | 22 | 32.768.000 | 748 ms |
+| JIT | 455 | 2,048,000 | 932 ms |
+| AOT | 245 | 4,096,000 | 1,005 ms |
+| C (gcc 13.3 -O2) | 22 | 32,768,000 | 748 ms |
 
-Beide Batterien übersetzen **dieselbe IR** und setzen **keinen**
-Optimierungsgrad explizit:
+Both batteries compile **the same IR** and set **no**
+optimisation level explicitly:
 
-* JIT: `llvm::EngineBuilder` ohne `setOptLevel` (`compiler.cpp:1559`, `:1705`)
-* AOT: `createTargetMachine(triple, cpu, features, TargetOptions, PIC)` ohne
-  `CodeGenOptLevel`, danach `addPassesToEmitFile` über einen
+* JIT: `llvm::EngineBuilder` without `setOptLevel` (`compiler.cpp:1559`, `:1705`)
+* AOT: `createTargetMachine(triple, cpu, features, TargetOptions, PIC)` without
+  `CodeGenOptLevel`, then `addPassesToEmitFile` via a
   `legacy::PassManager` (`compiler.cpp:2106`, `:2118`)
 
-Die Ausgaben sind identisch — es ist **kein** Korrektheitsbefund (spec/70 C5),
-aber ein Faktor 2 ohne genannten Grund. Zu prüfen:
+The outputs are identical — it is **not** a correctness finding (spec/70 C5),
+but a factor of 2 without a stated reason. To check:
 
-1. Welchen `CodeGenOptLevel` nimmt `EngineBuilder` in LLVM 18 tatsächlich an,
-   und welchen die Standard-`TargetMachine`? Wenn sie sich unterscheiden, ist das
-   die Erklärung — und dann gehört der Grad an beiden Stellen **explizit**
-   hingeschrieben, statt sich auf Vorgaben zu verlassen (eine Vorgabe, die man
-   nicht sieht, ändert sich beim LLVM-Sprung still).
-2. Ist es stattdessen die Relocation (PIC im AOT) oder die Symbolauflösung über
-   `DynamicLibrary` im JIT?
-3. Gilt der Faktor nur für diese Schleife oder über die ganze A-Gruppe? Das
-   entscheidet, ob es ein Codegen-Thema oder ein Aufruf-Overhead ist.
+1. Which `CodeGenOptLevel` does `EngineBuilder` actually assume in LLVM 18,
+   and which one the default `TargetMachine`? If they differ, that is
+   the explanation — and then the level belongs written down **explicitly** in both places,
+   instead of relying on defaults (a default you
+   cannot see changes silently with an LLVM upgrade).
+2. Is it instead the relocation (PIC in AOT) or symbol resolution via
+   `DynamicLibrary` in the JIT?
+3. Does the factor apply only to this loop or across the whole A group? That
+   decides whether it is a codegen topic or a call overhead.
 
-## Punkt 2 — die restlichen A-Fälle (spec/70 §6.1)
+## Point 2 — the remaining A cases (spec/70 §6.1)
 
-`fib100` deckt A1 (`loop_sum`) ab. Offen sind A2–A12: `float_math`,
+`fib100` covers A1 (`loop_sum`). A2–A12 are open: `float_math`,
 `call_overhead`, `iface_dispatch`, `string_build`, `list_ops`, `map_put_get`
-(trägt den unerklärten 4,87-s-Ausreißer der alten Messung), `sort`,
-`struct_array_walk`, `alloc_churn` (mit/ohne `scope`), `exceptions`,
+(carries the unexplained 4.87 s outlier of the old measurement), `sort`,
+`struct_array_walk`, `alloc_churn` (with/without `scope`), `exceptions`,
 `serialize`.
 
-Je Fall gilt, was `fib100` schon zeigt: eigene Kalibrierung, sieben Proben,
-Korrektheitsanker, C-Grundlinie im selben Lauf, beide Batterien aus derselben
-Quelle (F70-30).
+For each case, what `fib100` already shows applies: its own calibration, seven samples,
+a correctness anchor, the C baseline in the same run, both batteries from the same
+source (F70-30).
 
-## Was dafür vorher fehlt
+## What is missing beforehand
 
-* **`time.mono_us`** (F70-3, spec/24). Mit Millisekunden braucht jede Probe
-  ≥500 ms; bei zwölf Fällen × zwei Batterien × acht Proben sind das allein
-  ~2,5 Minuten reine Messzeit, und Latenz-Perzentile (Gruppe D/E) sind
-  unmöglich.
-* **JSON-Ausgabe im Runner** (F70-70). `performance/run_case.sh` misst richtig,
-  schreibt aber noch Text; ohne `results/<case>/<run-id>.json` gibt es kein
-  Regressions-Gate (F70-71).
-* **`performance/run.sh` ist für AOT kaputt** — er übergibt `-o <case>.bin`,
-  bekommt ein Objektfile und versucht es auszuführen; mit `set -e` endet er dort.
-  Entweder auf `run_case.sh` umstellen oder ersetzen.
+* **`time.mono_us`** (F70-3, spec/24). With milliseconds every sample needs
+  ≥500 ms; with twelve cases × two batteries × eight samples that alone is
+  ~2.5 minutes of pure measuring time, and latency percentiles (groups D/E) are
+  impossible.
+* **JSON output in the runner** (F70-70). `performance/run_case.sh` measures correctly
+  but still writes text; without `results/<case>/<run-id>.json` there is no
+  regression gate (F70-71).
+* **`performance/run.sh` is broken for AOT** — it passes `-o <case>.bin`,
+  gets an object file and tries to execute it; with `set -e` it ends there.
+  Either switch it over to `run_case.sh` or replace it.
 
-## Nebenbefund, der bleibt
+## Side finding that remains
 
-Eine Probe je JIT-Serie fällt um ~27 % nach unten aus (678 ms gegen Median 932,
-in beiden Läufen reproduziert). Unter `powersave` vermutlich Boost-Verhalten;
-`performance` als Governor braucht root. Solange das nicht erklärt ist, ist die
-JIT-Zahl nach F70-13 grenzwertig (der MAD bleibt zwar bei 0,6 %, weil der
-Ausreißer einzeln bleibt).
+One sample per JIT series drops ~27 % low (678 ms against a median of 932,
+reproduced in both runs). Under `powersave` probably boost behaviour;
+`performance` as the governor needs root. As long as that is not explained, the
+JIT figure is borderline per F70-13 (the MAD does stay at 0.6 %, because the
+outlier stays a single one).

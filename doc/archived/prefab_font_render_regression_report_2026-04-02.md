@@ -1,16 +1,16 @@
 # Prefab Font Render Regression Report
 
-Datum: 2026-04-02
+Date: 2026-04-02
 
-## Kurzfazit
+## Short conclusion
 
-Der kaputte Spiel-Render kommt sehr wahrscheinlich nicht daher, dass in `board_screen.aiml` eine zu große Font gesetzt wird, sondern durch einen Struct-Layout-Mismatch zwischen `ui_runtime.cpp` und `prefab_runtime.cpp`.
+The broken game render very probably does not come from `board_screen.aiml` setting too large a font, but from a struct layout mismatch between `ui_runtime.cpp` and `prefab_runtime.cpp`.
 
-## Root Cause
+## Root cause
 
-`prefab_runtime.cpp` definiert lokal eine eigene `AimlUIFont`-Struktur und kommentiert selbst, dass sie `ui_runtime.cpp` exakt matchen muss.
+`prefab_runtime.cpp` defines its own local `AimlUIFont` struct and itself comments that it must match `ui_runtime.cpp` exactly.
 
-In [prefab_runtime.cpp](../../src/sys/prefab_runtime.cpp#L41) ist sie aktuell:
+In [prefab_runtime.cpp](../../src/sys/prefab_runtime.cpp#L41) it currently is:
 - `info`
 - `ttf_data`
 - `atlas_tex`
@@ -20,61 +20,61 @@ In [prefab_runtime.cpp](../../src/sys/prefab_runtime.cpp#L41) ist sie aktuell:
 - `scale`
 - `atlas_w`, `atlas_h`
 
-In [ui_runtime.cpp](../../src/sys/ui_runtime.cpp#L64) wurde sie aber erweitert um:
+In [ui_runtime.cpp](../../src/sys/ui_runtime.cpp#L64), however, it was extended by:
 - `ttf_size`
 - `baked_size_px`
 
-Damit ist das Layout nicht mehr identisch.
+So the layout is no longer identical.
 
-## Warum das das Rendering zerlegt
+## Why that wrecks rendering
 
-Prefab-Rendering liest an mehreren Stellen Felder direkt aus `AimlUIFont*`, z.B. in [prefab_runtime.cpp](../../src/sys/prefab_runtime.cpp#L587):
+Prefab rendering reads fields directly from `AimlUIFont*` in several places, e.g. in [prefab_runtime.cpp](../../src/sys/prefab_runtime.cpp#L587):
 - `lf->atlas_tex`
-- danach indirekt auch Glyph-Daten und Metriken in `push_text_batch(...)`
+- after that indirectly also glyph data and metrics in `push_text_batch(...)`
 
-Wenn `prefab_runtime.cpp` das Font-Objekt mit falschem Layout interpretiert, dann liest es verschobene Offsets:
-- `atlas_tex` ist potentiell nicht mehr der echte Texture-Handle
-- `cdata`, `line_height`, `ascent_px`, `scale` koennen aus falschen Speicherpositionen gelesen werden
-- dadurch sind kaputte Glyphen, falsche Positionen, unplausible Groessen oder kompletter visueller Muell plausibel
+When `prefab_runtime.cpp` interprets the font object with the wrong layout, it reads shifted offsets:
+- `atlas_tex` is potentially no longer the real texture handle
+- `cdata`, `line_height`, `ascent_px`, `scale` can be read from wrong memory positions
+- so broken glyphs, wrong positions, implausible sizes or complete visual garbage are plausible
 
-Das ist ein harter ABI-/Layout-Fehler, kein bloßes Tuning-Problem.
+That is a hard ABI/layout error, not a mere tuning problem.
 
-## Einordnung zur neuen Font-Logik
+## Placement relative to the new font logic
 
-Die neue Font-Cache-Idee in `prefab_runtime.cpp` ist an sich sinnvoll.
+The new font cache idea in `prefab_runtime.cpp` makes sense in itself.
 
-Der eigentliche Regressionspunkt ist sehr wahrscheinlich die Kombination aus:
-- Erweiterung von `AimlUIFont` in `ui_runtime.cpp`
-- aber nicht nachgezogener Spiegelstruktur in `prefab_runtime.cpp`
+The actual regression point is very probably the combination of:
+- extending `AimlUIFont` in `ui_runtime.cpp`
+- but not updating the mirror struct in `prefab_runtime.cpp`
 
-## Nicht der Hauptschuldige
+## Not the main culprit
 
-Die Stelle in `test/9rooms/client/board_screen.aiml#L929` mit `ui.load_font_default, 24.0` ist eher nicht die eigentliche Ursache.
+The spot in `test/9rooms/client/board_screen.aiml#L929` with `ui.load_font_default, 24.0` is probably not the actual cause.
 
-Sie kann Texte groß machen, aber sie erklärt nicht, warum das Spiel insgesamt "nicht mehr richtig rendert". Dieses Symptom passt deutlich besser zu dem Layout-Mismatch.
+It can make texts large, but it does not explain why the game as a whole "no longer renders properly". That symptom fits the layout mismatch much better.
 
-## Empfohlener Fix
+## Recommended fix
 
-### Fix A: gemeinsame Font-Definition erzwingen
+### Fix A: enforce a shared font definition
 
-Am saubersten:
-- `AimlUIFont` nicht doppelt definieren
-- gemeinsame Struct-Definition in ein gemeinsames Header auslagern und in beiden Runtimes verwenden
+Cleanest:
+- do not define `AimlUIFont` twice
+- move the shared struct definition into a shared header and use it in both runtimes
 
-Das beseitigt die Fehlerklasse dauerhaft.
+That removes the error class permanently.
 
-### Fix B: kurzfristiger Minimalfix
+### Fix B: short-term minimal fix
 
-Falls schnell:
-- die lokale `AimlUIFont`-Definition in `prefab_runtime.cpp` exakt auf den neuen Stand von `ui_runtime.cpp` bringen
+If it has to be quick:
+- bring the local `AimlUIFont` definition in `prefab_runtime.cpp` exactly up to the new state of `ui_runtime.cpp`
 
-Das ist aber nur die weniger robuste Variante.
+But that is only the less robust variant.
 
-## Aufwand
+## Effort
 
-- Minimalfix: `0.25 bis 0.5 Tag`
-- robuster gemeinsamer Header-Fix: `0.5 bis 1 Tag`
+- Minimal fix: `0.25 to 0.5 days`
+- robust shared header fix: `0.5 to 1 day`
 
-## Bewertung
+## Assessment
 
-Wahrscheinlichkeit, dass das der aktuelle Render-Bug ist: hoch.
+Probability that this is the current render bug: high.

@@ -1,20 +1,20 @@
-# Map-Literal-Initializer für `map<K:V>` — DONE 2026-07-02
+# Map literal initialiser for `map<K:V>` — DONE 2026-07-02
 
-Implementiert:
-- `DictLiteralExpr.entriesExpr` speichert Reihenfolge-erhaltend die typed
-  Value-Expressions (parallel zur legacy `entries: map<string,string>` für
-  Call-Args).
-- `expression_builder.cpp` befüllt beide beim Parse.
-- `ast_compiler_stmt.cpp::visitDeclStmt` erkennt `map<K:V>` + `DictLiteralExpr`
-  und emittiert `MapImpl::put` pro Entry.  Key-Typen: string, i32, i64.
-- Test: `tests/test_map_literal_init.aiml` — grün.
-- Spec: `spec/10_collections.md` Beispiel eingefügt.
+Implemented:
+- `DictLiteralExpr.entriesExpr` stores the typed value expressions in order
+  (parallel to the legacy `entries: map<string,string>` for
+  call args).
+- `expression_builder.cpp` fills both while parsing.
+- `ast_compiler_stmt.cpp::visitDeclStmt` recognises `map<K:V>` + `DictLiteralExpr`
+  and emits `MapImpl::put` per entry.  Key types: string, i32, i64.
+- Test: `tests/test_map_literal_init.aiml` — green.
+- Spec: example added to `spec/10_collections.md`.
 
 ---
 
-## Beobachtung
-Listen erlauben Compile-Time-Init mit `[1, 2, 3]`. Maps haben
-das aktuell nicht — man muss nach dem `decl` einzeln `.put`-Calls emittieren:
+## Observation
+Lists allow compile-time init with `[1, 2, 3]`. Maps currently do not
+have that — after the `decl` you have to emit `.put` calls one by one:
 
 ```yaml
 - decl: [effect_params, map<string:list<string>>]
@@ -23,11 +23,11 @@ das aktuell nicht — man muss nach dem `decl` einzeln `.put`-Calls emittieren:
 # … × 20
 ```
 
-Für Config-Maps (Enum-Kaskaden im Card-Editor, Trigger→ParamCascade,
-Effect→ParamCascade, Localization-Bundles etc.) ist das sehr laut.
+For config maps (enum cascades in the card editor, trigger→ParamCascade,
+effect→ParamCascade, localisation bundles etc.) that is very noisy.
 
-## Wunsch
-Map-Literal-Init im `decl` unterstützen, analog zu Listen:
+## Wish
+Support map literal init in `decl`, analogous to lists:
 
 ```yaml
 - decl: [effect_params, map<string:list<string>>,
@@ -39,15 +39,15 @@ Map-Literal-Init im `decl` unterstützen, analog zu Listen:
   ]
 ```
 
-YAML-Map als Init-Wert; Compiler emittiert die `put`-Calls unter der Haube.
+A YAML map as the init value; the compiler emits the `put` calls under the hood.
 
-## Nutzen konkret
-- Card-Editor: `apply_param_cascade` kann von 200-Zeilen if-Kaskade auf
-  `map.get(effect)` schrumpfen.
-- Localization: `map<string:string>` mit allen Keys inline.
-- Effect-Bytecode-Decoder braucht Reverse-Maps (id → name) für Rendering.
+## Concrete benefit
+- Card editor: `apply_param_cascade` can shrink from a 200-line if cascade to
+  `map.get(effect)`.
+- Localisation: `map<string:string>` with all keys inline.
+- The effect bytecode decoder needs reverse maps (id → name) for rendering.
 
 ## Nice-to-have
-- Bei `map<K:any>` implicit tagging pro Value (spec sagt heute schon:
-  `any` speichert Runtime-Typ, wäre in Literal genauso möglich).
-- Verschachtelte Literale (`map<string:map<...>>`) einheitlich.
+- For `map<K:any>` implicit tagging per value (the spec already says today:
+  `any` stores the runtime type, which would be just as possible in a literal).
+- Nested literals (`map<string:map<...>>`) handled uniformly.

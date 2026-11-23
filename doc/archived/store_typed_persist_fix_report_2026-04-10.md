@@ -1,85 +1,85 @@
 # Store Typed Persist Fix Report
 
-## Kurzfassung
+## Summary
 
-Der persistente `Store<T>`-Pfad wurde fuer Heap-Felder auf denselben sicheren Serialize/Deserialize-Ansatz umgestellt, den typed `Kv<K:V>` bereits nutzt.
+The persistent `Store<T>` path for heap fields was switched over to the same safe serialize/deserialize approach that typed `Kv<K:V>` already uses.
 
-Vorher:
+Before:
 
-- persistente `Store<T>`-Eintraege wurden bei `insert`/`update` als rohe Struct-Bytes geschrieben
-- das war fuer Typen mit `string`, `list<...>`, `map<...>` oder anderen heapbasierten Feldern gefaehrlich
-- bei Reopen konnten dadurch stale pointer wiederverwendet werden
+- persistent `Store<T>` entries were written as raw struct bytes on `insert`/`update`
+- that was dangerous for types with `string`, `list<...>`, `map<...>` or other heap-based fields
+- on reopen, stale pointers could be reused as a result
 
-Jetzt:
+Now:
 
-- der Compiler waehlt fuer persistente `Store<T>` mit Heap-Feldern automatisch einen typed-Store-Pfad
-- der Runtime-Pfad schreibt WAL-Records als serialisierte Blobs
-- beim Laden werden diese Blobs wieder in owned decoded slots materialisiert
+- for persistent `Store<T>` with heap fields the compiler automatically chooses a typed store path
+- the runtime path writes WAL records as serialised blobs
+- when loading, these blobs are materialised again into owned decoded slots
 
-## Geaenderte Stellen
+## Changed places
 
 ### Compiler
 
-In [builtin_registry.cpp](../../src/core/builtin_registry.cpp) wurde `db.open("...", {persist: true})` fuer `Store<T>` erweitert:
+In [builtin_registry.cpp](../../src/core/builtin_registry.cpp) `db.open("...", {persist: true})` was extended for `Store<T>`:
 
-- wenn `T.hasHeapFields` und `T.serNodesVar` gesetzt sind
-- dann wird nicht mehr `aiml_db_store_open_persist(...)`
-- sondern `aiml_db_store_open_typed_persist(...)` aufgerufen
+- if `T.hasHeapFields` and `T.serNodesVar` are set
+- then no longer `aiml_db_store_open_persist(...)`
+- but `aiml_db_store_open_typed_persist(...)` is called
 
 ### Runtime API
 
-In [db_runtime.h](../../src/sys/db_runtime.h) wurde die neue Runtime-API ergaenzt:
+In [db_runtime.h](../../src/sys/db_runtime.h) the new runtime API was added:
 
 - `aiml_db_store_open_typed_persist(...)`
 
-### Runtime-Implementierung
+### Runtime implementation
 
-In [db_runtime.cpp](../../src/sys/db_runtime.cpp) wurden folgende Punkte umgesetzt:
+In [db_runtime.cpp](../../src/sys/db_runtime.cpp) the following points were implemented:
 
-- `AimlStore` bekam `ser_nodes`, `ser_n` und `typed_persistent`
-- fuer typed persistente Stores gibt es jetzt decoded slot storage statt roher mmap-Slotdaten
-- `store_wal_write(...)` serialisiert typed-Store-Eintraege als Blob
-- `store_wal_replay(...)` decodiert typed-Store-Eintraege wieder in owned Slots
-- `insert` / `update` / `get` / `delete` behandeln typed persistente Stores separat
-- `checkpoint` kompaktisiert typed Store WALs jetzt aktiv statt nur `fsync`
+- `AimlStore` got `ser_nodes`, `ser_n` and `typed_persistent`
+- for typed persistent stores there is now decoded slot storage instead of raw mmap slot data
+- `store_wal_write(...)` serialises typed store entries as a blob
+- `store_wal_replay(...)` decodes typed store entries back into owned slots
+- `insert` / `update` / `get` / `delete` handle typed persistent stores separately
+- `checkpoint` now actively compacts typed store WALs instead of only `fsync`
 
-## Neue Regressionstests
+## New regression tests
 
-Neu hinzugefuegt:
+Newly added:
 
 - [test_aiondb_store_heap_reopen_write.aiml](../../tests/test_aiondb_store_heap_reopen_write.aiml)
 - [test_aiondb_store_heap_reopen_read.aiml](../../tests/test_aiondb_store_heap_reopen_read.aiml)
 
-Diese Tests decken einen `Store<T>` mit:
+These tests cover a `Store<T>` with:
 
 - `intent: string`
 - `dependencies: list<string>`
 
-ab und pruefen:
+and check:
 
 - `insert`
 - `checkpoint`
-- Reopen im zweiten Lauf
-- korrekte Rueckgabe der Heap-Felder
+- reopen in the second run
+- correct return of the heap fields
 
-## Verifikation
+## Verification
 
-Nach den Aenderungen wurden erfolgreich ausgefuehrt:
+After the changes the following were run successfully:
 
-- Rebuild von `aiml-tests`
+- rebuild of `aiml-tests`
 - [test_aiondb_store_heap_reopen_write.aiml](../../tests/test_aiondb_store_heap_reopen_write.aiml)
 - [test_aiondb_store_heap_reopen_read.aiml](../../tests/test_aiondb_store_heap_reopen_read.aiml)
 - [test_aiondb_store_reopen_write.aiml](../../tests/test_aiondb_store_reopen_write.aiml)
 - [test_aiondb_store_reopen_read.aiml](../../tests/test_aiondb_store_reopen_read.aiml)
 - [test_card_heap_persist.aiml](../../tests/test_card_heap_persist.aiml)
 
-## Restlicher Unterschied zum alten Store-Pfad
+## Remaining difference to the old store path
 
-Der klassische persistente scalar-`Store<T>` bleibt mmap-slotbasiert.
+The classic persistent scalar `Store<T>` stays mmap-slot based.
 
-Der neue heap-sichere Pfad fuer typed Stores ist bewusst anders:
+The new heap-safe path for typed stores is deliberately different:
 
-- Snapshot/Replay ueber serialisierte Blobs
-- keine rohen heaphaltigen Struct-Bytes mehr in persistenten Slots
+- snapshot/replay via serialised blobs
+- no more raw heap-containing struct bytes in persistent slots
 
-Das ist die eigentliche Ursache des Fixes.
+That is the actual cause of the fix.
