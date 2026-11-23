@@ -1,50 +1,50 @@
-# Chapter 44.7 — Asset Registry: Stem-Lookup pro Kind
+# Chapter 44.7 — Asset Registry: stem lookup per kind
 
-> **Core idea:** Asset-Dateien (Texturen, Audios, Shader, Fonts, Data)
-> werden zur Compile-Zeit nach Dateinamen-Stem in einen Kind-Store
-> registriert.  AIML-Code spricht Assets ausschließlich über den Stem
-> an: `gl.tex("hammer")`, `audio.sfx("click")`.  Pfade sind verboten —
-> "single source of truth" liegt im `asset_directories`-Scan.
+> **Core idea:** asset files (textures, audio, shaders, fonts, data)
+> are registered at compile time by file-name stem in a per-kind store.
+> AIML code refers to assets exclusively by stem:
+> `gl.tex("hammer")`, `audio.sfx("click")`.  Paths are forbidden —
+> the single source of truth is the `asset_directories` scan.
 
 ---
 
 ## Why
 
-Asset-Pfade als String-Literale im Code verteilen erzeugt drei Schmerzen:
+Scattering asset paths through the code as string literals causes three problems:
 
-1. **Pfad-Irrgärten** — jedes neue Subverzeichnis erfindet ein neues
-   Pfadschema, "wo liegt `crystal-rock.png`?" wird zur Grep-Aktion.
-2. **Fehlende Datei wird zur Runtime sichtbar** — als Black-Square statt
-   als Compile-Error.
-3. **Doppellade-Vermeidung** — jeder Caller müsste selbst cachen.
+1. **Path mazes** — every new subdirectory invents a new
+   path scheme; "where is `crystal-rock.png`?" becomes a grep job.
+2. **A missing file only shows up at runtime** — as a black square instead
+   of a compile error.
+3. **Avoiding double loads** — every caller would have to cache by itself.
 
-Der Asset-Scanner liest die `asset_directories` aus `exodus.json`, klassifiziert
-jede Datei nach Extension in einen Kind-Store, und stellt Lookups + Caching
-über eine pro-Kind C-API bereit.  Der Compiler validiert String-Literal-
-Lookups schon im Build, **nicht erst zur Laufzeit**.
+The asset scanner reads the `asset_directories` from `exodus.json`, classifies
+each file by extension into a per-kind store, and provides lookups plus caching
+through a per-kind C API.  The compiler validates string-literal
+lookups during the build, **not only at runtime**.
 
 ## Surface
 
-### Compile-Time
+### Compile time
 
-Im Build-Tool (z.B. `exodus`) werden die deklarierten `asset_directories`
-unverändert als CLI-Flag durchgereicht — pro `.aiml`-Compile-Call:
+The build tool (e.g. `exodus`) passes the declared `asset_directories`
+through unchanged as a CLI flag — on every `.aiml` compile call:
 
 ```
 aiml --asset-roots=assets,data  main.aiml
 ```
 
-`exodus build` macht das automatisch in `_compile_file` (build.py):
-für jede `.aiml`-Source wird `--asset-roots=<comma-joined
-asset_directories>` an den AIML-Compiler-Call angehängt.  Andere
-Build-Tools müssen die Flag-Konvention nachbilden.
+`exodus build` does this automatically in `_compile_file` (build.py):
+for every `.aiml` source, `--asset-roots=<comma-joined
+asset_directories>` is appended to the AIML compiler call.  Other
+build tools have to replicate the flag convention.
 
-Kein Manifest-File auf Disk.  Der Compiler scannt die Roots zum
-Compile-Start (singleton `AIML::AssetScanner`).
+No manifest file on disk.  The compiler scans the roots at the
+start of compilation (singleton `AIML::AssetScanner`).
 
-### Asset-Kinds (Stores)
+### Asset kinds (stores)
 
-Klassifikation per Extension:
+Classification by extension:
 
 | Kind     | Extensions                       | API                                     |
 |----------|----------------------------------|-----------------------------------------|
@@ -55,8 +55,8 @@ Klassifikation per Extension:
 | data     | `.json .yml .yaml .txt .md`      | `io.read_asset(stem) → string`          |
 | mesh     | `.glb .gltf`                     | `gltf.model(stem) → gltf_scene`         |
 
-Selber Stem in verschiedenen Stores ist erlaubt:
-`golem.png` (texture) und `golem.mp3` (audio) koexistieren konfliktfrei.
+The same stem in different stores is allowed:
+`golem.png` (texture) and `golem.mp3` (audio) coexist without conflict.
 
 ### Lookup
 
@@ -68,173 +68,172 @@ Selber Stem in verschiedenen Stores ist erlaubt:
 - decl: [cfg, string,        { call: [io.read_asset, "balance"]   }]
 ```
 
-Stem = Dateiname ohne Extension.  Kein `/`, kein Pfad.  Punkte im
-Dateinamen werden nicht unterstützt (jeder Punkt = Extension-Marker).
+Stem = file name without extension.  No `/`, no path.  Dots in the
+file name are not supported (every dot is an extension marker).
 
-### Font: per-(stem, size) Cache
+### Font: per-(stem, size) cache
 
-`gl.font(stem, size)` cacht pro **(stem, size)**-Paar — derselbe TTF in
-mehreren Größen erzeugt mehrere `ui_font`-Handles.  Cache-Key intern
-ist `"<stem>|<size>"` (size auf eine Dezimalstelle gerundet).  Beispiel:
+`gl.font(stem, size)` caches per **(stem, size)** pair — the same TTF in
+several sizes produces several `ui_font` handles.  The internal cache key
+is `"<stem>|<size>"` (size rounded to one decimal place).  Example:
 
 ```aiml
 - decl: [body, ui_font, { call: [gl.font, "ui", 16.0] }]   # body-text
 - decl: [head, ui_font, { call: [gl.font, "ui", 24.0] }]   # heading
-# Beide nutzen dieselbe assets/fonts/ui.ttf, aber zwei separate Handles.
+# Both use the same assets/fonts/ui.ttf, but two separate handles.
 ```
 
-### Compile-Time-Validierung
+### Compile-time validation
 
-String-Literale werden zur Build-Zeit gegen den Store geprüft.  Fünf
-Fehlerfälle führen zu Compile-Hard-Errors:
+String literals are checked against the store at build time.  The
+following cases are hard compile errors:
 
-| Fall | Fehler |
+| Case | Error |
 |---|---|
-| `gl.tex("misspelled")` mit String-Literal und Stem nicht im Texture-Store | `gl.tex: stem 'misspelled' not in texture store` |
-| `gl.load_texture("resources/...")` mit String-Literal-Pfad in einem `asset_directory` | `gl.load_texture: literal path '<path>' is in the asset bundle; use gl.tex("<stem>") instead` |
-| `gltf.model("misspelled")` mit String-Literal und Stem nicht im Mesh-Store | `gltf.model: stem 'misspelled' not in mesh store` |
-| `gltf.load("assets/...")` mit String-Literal-Pfad in einem `asset_directory` | `gltf.load: literal path '<path>' is in the asset bundle; use gltf.model("<stem>") instead` |
-| Prefab-Spec `texture: "resources/foo.png"` (enthält `/`) | `prefab texture must be a stem, not a path: 'resources/foo.png'` |
-| Prefab-Spec `texture: "foo.png"` (enthält `.`) | `prefab texture must be a stem (no extension): 'foo.png'` |
-| Prefab-Spec `texture: "unknown"` (Stem nicht im Store) | `prefab texture: stem 'unknown' not in texture store` |
+| `gl.tex("misspelled")` with a string literal and the stem not in the texture store | `gl.tex: stem 'misspelled' not in texture store` |
+| `gl.load_texture("resources/...")` with a string-literal path inside an `asset_directory` | `gl.load_texture: literal path '<path>' is in the asset bundle; use gl.tex("<stem>") instead` |
+| `gltf.model("misspelled")` with a string literal and the stem not in the mesh store | `gltf.model: stem 'misspelled' not in mesh store` |
+| `gltf.load("assets/...")` with a string-literal path inside an `asset_directory` | `gltf.load: literal path '<path>' is in the asset bundle; use gltf.model("<stem>") instead` |
+| Prefab spec `texture: "resources/foo.png"` (contains `/`) | `prefab texture must be a stem, not a path: 'resources/foo.png'` |
+| Prefab spec `texture: "foo.png"` (contains `.`) | `prefab texture must be a stem (no extension): 'foo.png'` |
+| Prefab spec `texture: "unknown"` (stem not in the store) | `prefab texture: stem 'unknown' not in texture store` |
 
-Dynamische Args (z.B. `gl.tex(some_var)`) sind erlaubt und bleiben
-Runtime-Lookup; Miss erzeugt einen Runtime-Error, kein Crash.
+Dynamic arguments (e.g. `gl.tex(some_var)`) are allowed and remain a
+runtime lookup; a miss produces a runtime error, not a crash.
 
-## Scan-Semantik
+## Scan semantics
 
-### Roots: Verzeichnis oder Datei
+### Roots: directory or file
 
-Jeder Wert in `--asset-roots=...` kann ein Verzeichnis **oder eine
-einzelne Datei** sein.  Datei-Roots werden als ein-Element-Walk
-behandelt; Verzeichnis-Roots rekursiv.
+Every value in `--asset-roots=...` can be a directory **or a
+single file**.  File roots are treated as a one-element walk;
+directory roots are walked recursively.
 
-Reason: historisch enthalten `asset_directories`-Listen oft direkte
-File-Verweise (z.B. ein Fallback-Icon `resources/skills/skill_default.png`
-neben den Subdir-Roots).  Beide Formen müssen funktionieren.
+Reason: historically, `asset_directories` lists often contain direct
+file references (e.g. a fallback icon `resources/skills/skill_default.png`
+next to the subdirectory roots).  Both forms must work.
 
-### Überlappende Roots: dedup via absolute Pfad
+### Overlapping roots: dedup via absolute path
 
-Wenn zwei Roots überlappen (z.B. `resources/ui` und `resources/ui/action_bar`),
-wird derselbe File durch beide Walks erreicht.  Der Scanner canonicalized
-jeden Pfad und prüft VOR der Duplicate-Stem-Detection ob `abs_path` bereits
-registriert ist — wenn ja: no-op, kein Konflikt.
+If two roots overlap (e.g. `resources/ui` and `resources/ui/action_bar`),
+the same file is reached by both walks.  The scanner canonicalises
+every path and checks BEFORE duplicate-stem detection whether `abs_path` is already
+registered — if so: no-op, no conflict.
 
-Echte Duplicate-Stem-Konflikte sind **zwei verschiedene `abs_path`** mit
-demselben Stem im selben Kind-Store.  Beispiel: `items/sword.png` und
-`icons/sword.png` als zwei separate Roots → Hard-Error mit beiden Pfaden.
+Real duplicate-stem conflicts are **two different `abs_path`s** with
+the same stem in the same kind store.  Example: `items/sword.png` and
+`icons/sword.png` as two separate roots → hard error naming both paths.
 
-### Convention-Enforcement: kein Uppercase
+### Convention enforcement: no uppercase
 
-Files und Subdirs mit Großbuchstaben im Namen werden **gewarnt + geskippt**.
-Begründung: Lookup ist case-sensitive; halb-aliased Files (`Hammer.png` neben
-`hammer.png`) sollen erst gar nicht ins Store, sondern an die Quelle
-zurückgemeldet werden.
+Files and subdirectories with uppercase letters in their names are **warned about and skipped**.
+Reason: lookup is case-sensitive; half-aliased files (`Hammer.png` next to
+`hammer.png`) should not get into the store at all, but be reported back to
+the source.
 
-### Mesh: 3D-Modelle sind Assets wie Texturen
+### Mesh: 3D models are assets like textures
 
-`gltf.load(path)` gibt es seit spec/43_1 — aber ohne Kind im Register waren `.glb`
-und `.gltf` **unbekannte Endungen**: der Scanner warnte und übersprang sie, und der
-einzige Weg zu einem Modell war ein **Pfad im Quelltext**.  Das ist genau das, was
-dieses Kapitel für Texturen verbietet (ein Pfad bricht, sobald jemand das
-Arbeitsverzeichnis wechselt oder nach WASM baut).  Gemessen in cosmos
-(18.10.2026): 248 Warnungen in einem Client-Build — zwei Dateien, einmal pro
-Übersetzungseinheit.
+`gltf.load(path)` has existed since spec/43_1 — but without a kind in the registry, `.glb`
+and `.gltf` were **unknown extensions**: the scanner warned and skipped them, and the
+only way to a model was a **path in the source code**.  That is exactly what
+this chapter forbids for textures (a path breaks as soon as someone changes the
+working directory or builds for WASM).  Measured in cosmos
+(2026-10-18): 248 warnings in one client build — two files, once per
+translation unit.
 
 ```aiml
 - decl: [rack, gltf_scene, { call: [gltf.model, "cosmos_rack"] }]   # assets/shapes/cosmos_rack.glb
 ```
 
-`gltf.model(stem)` schlägt den Stem im Mesh-Store nach und lädt die Datei mit
-demselben Loader wie `gltf.load`.  **Kein Cache**: eine `gltf_scene` ist eine
-eindeutige Ressource (spec/61 §2.1) mit `scene.free` — zwei Aufrufer, die sich
-ein Handle teilen, gäben ihr zweimal frei.  Wer dasselbe Modell mehrfach
-braucht, hält es in seiner Klasse, wie jede andere Ressource auch.
+`gltf.model(stem)` looks the stem up in the mesh store and loads the file with
+the same loader as `gltf.load`.  **No cache**: a `gltf_scene` is a
+unique resource (spec/61 §2.1) with `scene.free` — two callers sharing
+one handle would free it twice.  Whoever needs the same model several times
+keeps it in their class, like any other resource.
 
-`gltf.load` mit einem **String-Literal**, das in einem `asset_directory` liegt,
-ist seither ein Fehler — dieselbe Regel wie `gl.load_texture` (siehe
-Compile-Time-Validierung).  Ein dynamischer Pfad (Kommandozeile, Konfiguration)
-bleibt erlaubt: `glbview FILE.glb` lädt Dateien, die gar nicht zum Bündel gehören.
+`gltf.load` with a **string literal** that lies inside an `asset_directory`
+has been an error since then — the same rule as `gl.load_texture` (see
+compile-time validation).  A dynamic path (command line, configuration)
+remains allowed: `glbview FILE.glb` loads files that are not part of the bundle at all.
 
-**Was NICHT ins Register gehört:** die QUELLE eines Modells.  ShapeML (`.shaml`)
-beschreibt, wie ein `.glb` entsteht; ausgeliefert wird das Ergebnis.  Solche
-Quellen liegen neben dem Projekt, nicht im Asset-Verzeichnis — sonst wandert bei
-jedem WASM-Build Material ins Bündel, das niemand lädt.
+**What does NOT belong in the registry:** the SOURCE of a model.  ShapeML (`.shaml`)
+describes how a `.glb` is produced; what ships is the result.  Such
+sources live next to the project, not in the asset directory — otherwise every
+WASM build carries material into the bundle that nobody loads.
 
-### Unbekannte Extensions: warn + skip
+### Unknown extensions: warn + skip
 
-Files mit Extensions die keinem Kind zugeordnet sind (`.tmp`, `.bak`,
-`.DS_Store` etc.) werden gewarnt und übersprungen.  Sie blockieren nicht
-den Build.
+Files with extensions not assigned to any kind (`.tmp`, `.bak`,
+`.DS_Store` etc.) are warned about and skipped.  They do not block
+the build.
 
-## Runtime-Semantik
+## Runtime semantics
 
 ### Caching
 
-Per-Kind in-memory Cache (`unordered_map<stem, handle>`).  Erster Lookup
-eines Stems lädt + cacht; jeder weitere Aufruf gibt denselben Pointer
-zurück.
+Per-kind in-memory cache (`unordered_map<stem, handle>`).  The first lookup
+of a stem loads and caches; every further call returns the same pointer.
 
-Konsequenz: identische `gl.tex("hammer")`-Calls überall im Code teilen
-sich genau eine GPU-Texture.
+Consequence: identical `gl.tex("hammer")` calls throughout the code share
+exactly one GPU texture.
 
-### TODO: Zugriffszeitstempel und Cache-Bereinigung
+### TODO: access timestamps and cache eviction
 
-- [ ] Runtime-Asset-Symbole/Cache-Einträge mit einem monotonen
-  `last_used`-Zeitstempel versehen; bei Lookup und tatsächlicher Nutzung
-  (auch über bereits gespeicherte Render-Handles) aktualisieren.
-- [ ] Alte, ungenutzte Einträge periodisch nach konfigurierbarer Ruhezeit
-  aufräumen. Noch referenzierte/gepinnte Assets behalten; vor dem Entfernen
-  abhängige Prefab-/Material-Caches berücksichtigen und CPU-/GPU-Ressourcen
-  genau einmal über den jeweiligen Eigentümer freigeben. Gebündelte
-  Stem-/Pfad-Metadaten für erneutes Laden erhalten; für Runtime-Stems
-  (`@art:…`) erneutes Anfordern ermöglichen.
+- [ ] Give runtime asset symbols/cache entries a monotonic
+  `last_used` timestamp; update it on lookup and on actual use
+  (including through render handles that are already stored).
+- [ ] Periodically clean up old, unused entries after a configurable idle
+  time. Keep assets that are still referenced/pinned; before removal take
+  dependent prefab/material caches into account and release CPU/GPU resources
+  exactly once through their respective owner. Keep bundled
+  stem/path metadata for reloading; allow runtime stems
+  (`@art:…`) to be requested again.
 
-### Headless-Modus
+### Headless mode
 
-Bei fehlendem GL-Kontext (z.B. CLI-Tests ohne Display) gibt
-`aiml_gl_load_texture` einen `AimlGLTexture` mit `id=0` zurück (kein
-`glGenTextures`-Call).  `gl.tex` returnt damit auch in Headless-Tests
-einen non-null Pointer; nur GPU-Upload findet nicht statt.
+Without a GL context (e.g. CLI tests without a display),
+`aiml_gl_load_texture` returns an `AimlGLTexture` with `id=0` (no
+`glGenTextures` call).  `gl.tex` therefore returns a non-null pointer
+in headless tests too; only the GPU upload does not happen.
 
-### Persistente Pfade
+### Persistent paths
 
-Die Stores speichern intern den **absoluten Pfad** zum File (nicht den
-rel_path).  Damit funktioniert das Loading unabhängig vom Working-
-Directory des aiml-Prozesses.
+The stores internally keep the **absolute path** to the file (not the
+rel_path).  Loading therefore works independently of the working
+directory of the aiml process.
 
-V2 (WASM-Bundle): wenn das aiml-Binary nach WASM compiled wird, ersetzt
-der Bundle-Loader den Disk-Lookup durch einen emscripten-VFS-Lookup über
-den rel_path.
+V2 (WASM bundle): when the aiml binary is compiled to WASM, the
+bundle loader replaces the disk lookup with an emscripten VFS lookup via
+the rel_path.
 
-### Runtime-Texturen (nicht aus dem Asset-Bundle)
+### Runtime textures (not from the asset bundle)
 
-Manche Texturen entstehen erst zur Laufzeit — z.B. **Card-Artwork**, das ein
-User hochlädt und der Client per WebSocket vom Media-Server holt (nicht Teil
-des gebauten Asset-Bundles).  Sie werden unter einem **synthetischen Stem**
-`@art:<sha256>` in denselben Texture-Store gelegt, sodass ein Sprite-`texture_path`
-bzw. `gl.tex("@art:<hash>")` sie wie jede gebündelte Textur auflöst.
+Some textures only come into being at runtime — e.g. **card artwork** that a
+user uploads and the client fetches from the media server over WebSocket (not part
+of the built asset bundle).  They are put into the same texture store under a **synthetic stem**
+`@art:<sha256>`, so that a sprite `texture_path`
+or `gl.tex("@art:<hash>")` resolves them like any bundled texture.
 
-| Builtin | Signatur | Zweck |
+| Builtin | Signature | Purpose |
 |---|---|---|
-| `gl.register_texture` | `gl.register_texture(stem: string, tex: gl_texture) → void` | Eine zur Laufzeit erzeugte Textur unter `stem` registrieren (Store = Cache). |
-| `gl.has_texture` | `gl.has_texture(stem: string) → i32` | `1` wenn unter `stem` eine Textur gecacht ist (Hit-Test = Dedup). |
-| `gl.decode_texture` | `gl.decode_texture(webp: buffer) → gl_texture` | Kodierte Bytes (WebP/PNG/JPG) in `webp` → GPU-Textur. Cross-target (nativ stb/libwebp, WASM `createImageBitmap`). `null` bei Fehler. Braucht GL-Kontext. |
+| `gl.register_texture` | `gl.register_texture(stem: string, tex: gl_texture) → void` | Register a texture created at runtime under `stem` (store = cache). |
+| `gl.has_texture` | `gl.has_texture(stem: string) → i32` | `1` if a texture is cached under `stem` (hit test = dedup). |
+| `gl.decode_texture` | `gl.decode_texture(webp: buffer) → gl_texture` | Encoded bytes (WebP/PNG/JPG) in `webp` → GPU texture. Cross-target (native stb/libwebp, WASM `createImageBitmap`). `null` on error. Needs a GL context. |
 
-Muster (Fetch → Decode → Register, idempotent über den Store als Cache):
+Pattern (fetch → decode → register, idempotent with the store as cache):
 
 ```
 - if:
     condition: { eq: [{ call: [gl.has_texture, "@art:${hsh}"] }, 0] }
     then:
-      # … webp-Bytes per WS holen …
+      # … fetch the webp bytes over WS …
       - decl: [tex, gl_texture, { call: [gl.decode_texture, webp] }]
       - if:
           condition: { pneq: [tex, null] }
           then: [ { call: [gl.register_texture, "@art:${hsh}", tex] } ]
 ```
 
-## Architektur
+## Architecture
 
 ```
 ┌───────────────────────────────┐
@@ -247,7 +246,7 @@ Muster (Fetch → Decode → Register, idempotent über den Store als Cache):
 │  AssetScanner (Singleton)     │  src/core/asset_scanner.h
 │   • walk roots (dir+file)     │
 │   • dedup via abs_path        │
-│   • Kind-Klassifikation       │
+│   • kind classification       │
 │   • Hard-Errors on dup-stem   │
 │   • Warning+skip uppercase    │
 └───────────────┬───────────────┘
@@ -263,31 +262,31 @@ Muster (Fetch → Decode → Register, idempotent über den Store als Cache):
 └───────────────────────────────┘
 ```
 
-### Singleton-Pattern
+### Singleton pattern
 
-`AssetScanner::instance()` lebt im Compiler- UND JIT-Prozess (gleich,
-weil aiml JIT-mäßig läuft).  Zur Compile-Zeit befüllt der Compiler den
-Singleton, zur JIT-Zeit liest der `asset_runtime` aus demselben.
+`AssetScanner::instance()` lives in the compiler AND the JIT process (the same one,
+because aiml runs as a JIT).  At compile time the compiler fills the
+singleton; at JIT time `asset_runtime` reads from the same one.
 
-Konsequenz: für JIT-Mode kein Manifest-Format nötig, kein Persistenz-
-Layer, kein Schema-Versioning.
+Consequence: JIT mode needs no manifest format, no persistence
+layer, no schema versioning.
 
-## Migration / Backwards-Compat
+## Migration / backwards compatibility
 
-Drei Surfaces sind strict:
+Three surfaces are strict:
 
-1. **Imperative API**: `gl.load_texture(path)` bleibt als Escape-Hatch
-   für **runtime-generierte Pfade** (User-Uploads, gestreamte Assets).
-   String-Literale unter einem `asset_directory` → Hard-Error.
-2. **Prefab-Spec-Felder** (`texture:` / V2 `shader:` / V2 `font:`):
-   nur Stems, keine Pfade.
-3. **Material-Shader-Includes** (V2): nur `#include "@stem"`.
+1. **Imperative API**: `gl.load_texture(path)` remains as an escape hatch
+   for **runtime-generated paths** (user uploads, streamed assets).
+   String literals under an `asset_directory` → hard error.
+2. **Prefab spec fields** (`texture:` / V2 `shader:` / V2 `font:`):
+   stems only, no paths.
+3. **Material shader includes** (V2): only `#include "@stem"`.
 
-Bei Aktivierung des Features in einem Projekt muss alles auf Stems
-migriert sein, sonst bricht der Build.  Feature-Flag-Phase optional
-falls eine Migrations-Sicherheitslinie gewünscht ist.
+When the feature is enabled in a project, everything must be migrated to stems,
+otherwise the build breaks.  A feature-flag phase is optional
+if a migration safety line is wanted.
 
-## C-API (`src/sys/asset_runtime.h`)
+## C API (`src/sys/asset_runtime.h`)
 
 ```c
 void*       aiml_asset_get_texture(const char* stem);   // gl_texture* or null
@@ -297,7 +296,7 @@ const char* aiml_asset_read_data  (const char* stem);   // heap-allocated string
 void*       aiml_asset_get_font   (const char* stem, float size);  // ui_font*; size in cache key
 ```
 
-Compile-Time-Helpers (`src/core/asset_scanner.h`):
+Compile-time helpers (`src/core/asset_scanner.h`):
 
 ```cpp
 bool        AssetScanner::has_stem(AssetKind, std::string stem);
@@ -312,41 +311,41 @@ bool        AssetScanner::path_under_root(std::string path);
 aiml [...] --asset-roots=<comma,separated,paths> input.aiml
 ```
 
-Pfade können relativ oder absolut sein.  Trailing Slashes werden
-toleriert.  Leerer Wert → Scanner-Singleton bleibt leer; alle Lookups
-returnen null (für nicht-asset-using Projekte unproblematisch).
+Paths can be relative or absolute.  Trailing slashes are
+tolerated.  Empty value → the scanner singleton stays empty; all lookups
+return null (unproblematic for projects that use no assets).
 
-## Test-Infrastruktur
+## Test infrastructure
 
-`tests/_asset_helper/run_asset_test.sh` parsed einen Header der Form
-`# AssetRoots: a,b,c` und ruft `aiml` mit den entsprechenden Roots.
-`run_all_tests.sh` route Test-Files mit diesem Header automatisch durch
-den Helper.
+`tests/_asset_helper/run_asset_test.sh` parses a header of the form
+`# AssetRoots: a,b,c` and calls `aiml` with the corresponding roots.
+`run_all_tests.sh` routes test files with this header through
+the helper automatically.
 
-Fixtures liegen unter `tests/_asset_fixtures/<scenario>/` (minimal
-valid PNG/WAV-Files für Scanner+Loader-Pfade).
+Fixtures live under `tests/_asset_fixtures/<scenario>/` (minimal
+valid PNG/WAV files for the scanner and loader paths).
 
-## Out-of-Scope (V1)
+## Out of scope (V1)
 
-- **Shader-Builtin** (`gl.shader(stem)`): API steht im Spec; Implementation
-  kommt mit der Material-Compiler-Welle (siehe nächster Eintrag)
-- **Material `#include "@stem"`**: Material-Compiler-Pipeline ist eigene
-  Welt; folgt in einer eigenen Welle
-- **Asset-Hot-Reload zur Laufzeit**: Native könnte filesystem-watcher
-  hinzubekommen; WASM nicht.  Out-of-scope für V1
-- **Locale-spezifische Varianten** (`hammer.de.png` vs `hammer.en.png`):
-  noch ungeklärt; potentiell eigener Kind oder per-Stem-Metadata
-- **Procedural-Generated Textures** (z.B. atlas-on-build): bleibt bei
-  `gl.create_texture` direkt-Pfad
+- **Shader builtin** (`gl.shader(stem)`): the API is in the spec; the implementation
+  comes with the material-compiler wave (see next entry)
+- **Material `#include "@stem"`**: the material-compiler pipeline is a world
+  of its own; follows in its own wave
+- **Asset hot reload at runtime**: native could manage a filesystem watcher;
+  WASM could not.  Out of scope for V1
+- **Locale-specific variants** (`hammer.de.png` vs `hammer.en.png`):
+  still unresolved; potentially a kind of its own or per-stem metadata
+- **Procedurally generated textures** (e.g. atlas-on-build): stay on the
+  direct `gl.create_texture` path
 
-## Verwandte Spec-Kapitel
+## Related spec chapters
 
-- Chapter 44.6 — Prefab-System (consumes `texture:` Stems)
-- Chapter 44.1 — Engine (Initialisation, GL-Context)
-- Chapter 44.2 — Audio (consumes `audio.sfx/music` Stems)
+- Chapter 44.6 — Prefab system (consumes `texture:` stems)
+- Chapter 44.1 — Engine (initialisation, GL context)
+- Chapter 44.2 — Audio (consumes `audio.sfx/music` stems)
 
 ## Tests
 
-`tests/test_asset_registry_*.aiml` (4 positive) und
-`tests/test_asset_neg_*.aiml` (6 negative) decken alle hier
-spezifizierten Garantien ab.
+`tests/test_asset_registry_*.aiml` (4 positive) and
+`tests/test_asset_neg_*.aiml` (6 negative) cover all guarantees
+specified here.

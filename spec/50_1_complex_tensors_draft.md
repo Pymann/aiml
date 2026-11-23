@@ -1,73 +1,72 @@
 # DRAFT — Complex Tensors for AIML
 
-Status: nicht final  
-Reifegrad: Entwurf / Diskussionsbasis  
-Diese Spec ist absichtlich **noch nicht fertig**. Sie beschreibt eine
-moegliche Richtung fuer komplexe Tensoren in AIML, aber keine bereits
-abgeschlossene oder voll implementierte Sprachfunktion.
+Status: not final  
+Maturity: draft / basis for discussion  
+This spec is deliberately **not finished yet**. It describes a
+possible direction for complex tensors in AIML, not a language feature
+that is already settled or fully implemented.
 
-## 1. Ziel
+## 1. Goal
 
-AIML soll komplexe Zahlen **zuerst** als numerisches Spezialwerkzeug im
-Tensor-System unterstuetzen, nicht sofort als allgemeinen neuen
-Primitive-Typ fuer die gesamte Sprache.
+AIML should support complex numbers **first** as a specialised numerical tool
+inside the tensor system, not straight away as a new general
+primitive type for the whole language.
 
-Die Leitidee ist:
+The guiding idea:
 
-- kein sofortiger First-Class-Skalartyp `complex`
-- stattdessen ein kontrollierter Ausbau des bestehenden Tensor-Runtimes
-- Fokus auf wissenschaftliche Modelle, Signalverarbeitung, FFT,
-  Phasenmodelle, Rotationen und experimentelle ML-Architekturen
+- no immediate first-class scalar type `complex`
+- instead a controlled extension of the existing tensor runtime
+- focus on scientific models, signal processing, FFT,
+  phase models, rotations and experimental ML architectures
 
-## 2. Warum kein sofortiger `complex`-Primitive-Typ
+## 2. Why no immediate `complex` primitive type
 
-Ein allgemeiner Sprachtyp `complex64` oder `complex128` wuerde sofort viele
-Folgesysteme beruehren:
+A general language type `complex64` or `complex128` would immediately touch many
+dependent systems:
 
-- Literalsyntax
-- Cast-Regeln
-- Operator-Promotion
+- literal syntax
+- cast rules
+- operator promotion
 - FFI / ABI
-- Persistenz
-- Debug-Formatting
-- Collections und Maps
-- statische Typregeln
+- persistence
+- debug formatting
+- collections and maps
+- static type rules
 
-Das ist fuer AIML aktuell zu breit.
+That is too broad for AIML at present.
 
-Die meisten realistischen Use-Cases liegen ohnehin im Tensor- und
-Numerikbereich. Deshalb ist ein Tensor-zentrierter Einstieg deutlich
-realistischer.
+Most realistic use cases are in the tensor and numerics area anyway.
+A tensor-centred entry point is therefore far more realistic.
 
-## 3. Grundidee
+## 3. Basic idea
 
-Die bestehende `tensor`-Runtime speichert aktuell `float32`-Daten.
-Komplexe Tensoren koennen als Erweiterung dieses Systems modelliert werden.
+The existing `tensor` runtime currently stores `float32` data.
+Complex tensors can be modelled as an extension of this system.
 
-Moegliche Zieltypen:
+Possible target types:
 
-- `tensor` bleibt vorerst reell
-- `ctensor` als eigener komplexer Tensortyp
+- `tensor` stays real for now
+- `ctensor` as a separate complex tensor type
 
-oder spaeter:
+or later:
 
-- `tensor` mit `dtype`
-- etwa `f32`, `f64`, `complex64`, `complex128`
+- `tensor` with a `dtype`
+- such as `f32`, `f64`, `complex64`, `complex128`
 
-Fuer einen ersten AIML-Schritt ist `ctensor` wahrscheinlich einfacher als
-ein kompletter allgemeiner `dtype`-Umbau.
+For a first AIML step, `ctensor` is probably simpler than
+a complete general `dtype` rework.
 
-## 4. Vorlaeufige Empfehlung
+## 4. Provisional recommendation
 
 ### Phase 1
 
-Ein neuer komplexer Tensortyp:
+A new complex tensor type:
 
 ```yaml
 - decl: [z, ctensor]
 ```
 
-oder als Rueckgabewert von Fabrikfunktionen:
+or as the return value of factory functions:
 
 ```yaml
 - decl: [z, ctensor, { call: [tensor.complex_from_parts, re, im] }]
@@ -75,20 +74,20 @@ oder als Rueckgabewert von Fabrikfunktionen:
 
 ### Phase 2
 
-Spaeter optionaler allgemeiner `dtype`-Ansatz:
+Later, an optional general `dtype` approach:
 
 ```yaml
 - decl: [z, tensor, { call: [tensor.zeros_dtype, "complex64", 8, 8] }]
 ```
 
-Dieser zweite Schritt ist **nicht** Teil dieser ersten Draft-Spec.
+This second step is **not** part of this first draft spec.
 
-## 5. Geplante Kernoperationen
+## 5. Planned core operations
 
-Die folgenden Operationen waeren fuer eine erste komplexe Tensor-API der
-wichtigste Umfang.
+The following operations would be the most important scope for a first
+complex tensor API.
 
-### 5.1 Konstruktion
+### 5.1 Construction
 
 ```yaml
 - decl: [z, ctensor, { call: [tensor.complex_from_parts, re, im] }]
@@ -96,12 +95,12 @@ wichtigste Umfang.
 - decl: [im, tensor, { call: [tensor.imag, z] }]
 ```
 
-Semantik:
+Semantics:
 
-- `re` und `im` muessen gleiche Shape haben
-- Ergebnis ist ein komplexer Tensor derselben Shape
+- `re` and `im` must have the same shape
+- the result is a complex tensor of the same shape
 
-### 5.2 Elementweise Operationen
+### 5.2 Element-wise operations
 
 ```yaml
 - decl: [zc, ctensor, { call: [tensor.conj, z] }]
@@ -112,85 +111,85 @@ Semantik:
 - decl: [out, ctensor, { call: [tensor.csub, a, b] }]
 ```
 
-Hinweis:
+Note:
 
-- `tensor.abs_complex(z)` sollte den Betrag liefern, also einen **reellen**
-  Tensor
-- `tensor.phase(z)` sollte die Winkel in Radiant liefern, ebenfalls als
-  reeller Tensor
+- `tensor.abs_complex(z)` should return the magnitude, i.e. a **real**
+  tensor
+- `tensor.phase(z)` should return the angles in radians, also as a
+  real tensor
 
-### 5.3 Skalar-Mischformen
+### 5.3 Mixed scalar forms
 
 ```yaml
 - decl: [out, ctensor, { call: [tensor.cmul_scalar, z, 0.5] }]
 - decl: [out, ctensor, { call: [tensor.cadd_real, z, bias] }]
 ```
 
-Noch offen:
+Still open:
 
-- ob diese Mischformen wirklich noetig sind
-- oder ob man sie am Anfang bewusst klein haelt
+- whether these mixed forms are really needed
+- or whether they are deliberately kept small at first
 
-### 5.4 Mathematische Reduktionen
+### 5.4 Mathematical reductions
 
 ```yaml
 - decl: [s, ctensor, { call: [tensor.csum, z, -1] }]
 - decl: [m, ctensor, { call: [tensor.cmean, z, -1] }]
 ```
 
-Wichtig:
+Important:
 
-Das sind echte komplexe Mittelwerte, also komponentenweise Mittelung von
-Real- und Imaginaerteil. Kein Winkelmittel.
+These are true complex means, i.e. component-wise averaging of the
+real and imaginary parts. Not an angular mean.
 
-### 5.5 Komplexes Skalarprodukt
+### 5.5 Complex dot product
 
 ```yaml
 - decl: [score, ctensor, { call: [tensor.cdot, a, b] }]
 ```
 
-Semantik:
+Semantics:
 
 - `cdot(a, b) = sum(conj(a_i) * b_i)`
 
-Optional zusaetzliche Helpers:
+Optional additional helpers:
 
 ```yaml
 - decl: [score_re, tensor, { call: [tensor.cdot_real, a, b] }]
 - decl: [score_im, tensor, { call: [tensor.cdot_imag, a, b] }]
 ```
 
-## 6. Erweiterte Operationen
+## 6. Extended operations
 
-Diese Operationen wirken sinnvoll, sollten aber vermutlich **nicht** Teil
-des minimalen ersten Schritts sein:
+These operations look useful but should probably **not** be part
+of the minimal first step:
 
 - `tensor.cmatmul`
 - `tensor.fft`
 - `tensor.ifft`
 - `tensor.eig`
 - `tensor.svd_complex`
-- komplexes `layer_norm`
-- komplexe Aktivierungen
+- complex `layer_norm`
+- complex activations
 
-Die Gefahr waere, die Runtime zu frueh zu gross zu machen.
+The danger would be making the runtime too big too early.
 
 ## 7. Autograd
 
-Status: **noch offen, nicht final**
+Status: **still open, not final**
 
-Das ist einer der groessten offenen Punkte.
+This is one of the biggest open points.
 
-Fuer komplexe Tensoren gibt es mindestens drei denkbare Wege:
+For complex tensors there are at least three conceivable approaches:
 
-1. keine Gradienten im ersten Schritt
-2. Gradienten ueber getrennte Real-/Imaginaer-Kanaele
-3. explizite Wirtinger-orientierte Semantik
+1. no gradients in the first step
+2. gradients via separate real/imaginary channels
+3. explicit Wirtinger-oriented semantics
 
-Empfehlung fuer AIML v1:
+Recommendation for AIML v1:
 
-- komplexe Tensoren zuerst ohne vollstaendige Autograd-Garantie einfuehren
-- oder nur fuer einen kleinen sicheren Ops-Kern:
+- introduce complex tensors first without a full autograd guarantee
+- or only for a small, safe core of ops:
   - `cadd`
   - `csub`
   - `cmul`
@@ -200,46 +199,46 @@ Empfehlung fuer AIML v1:
   - `csum`
   - `cmean`
 
-Die finale Gradienten-Semantik ist **noch nicht beschlossen**.
+The final gradient semantics are **not yet decided**.
 
-## 8. Persistenz
+## 8. Persistence
 
-Status: **noch offen, nicht final**
+Status: **still open, not final**
 
-Ein moegliches Blob-Format waere:
+A possible blob format would be:
 
 - `ndim`
-- Shape
+- shape
 - `dtype = complex64`
-- rohe Daten als interleavtes
+- raw data, interleaved as
   - `re0, im0, re1, im1, ...`
 
-Offene Fragen:
+Open questions:
 
-- eigener `ctensor.save` / `ctensor.load`-Pfad?
-- oder allgemeine `tensor.save`-Erweiterung mit `dtype`?
-- wie Hashing fuer komplexe Tensoren aussehen soll
+- a separate `ctensor.save` / `ctensor.load` path?
+- or a general `tensor.save` extension with `dtype`?
+- what hashing should look like for complex tensors
 
-## 9. Print / Debug
+## 9. Print / debug
 
-Status: **noch offen, nicht final**
+Status: **still open, not final**
 
-Noetig waeren klare Regeln fuer:
+Clear rules would be needed for:
 
-- `tensor.print`-Darstellung
-- Rundung
-- Anzeige als
+- the `tensor.print` representation
+- rounding
+- display as
   - `(re, im)`
-  - oder `a + bi`
+  - or `a + bi`
 
-Empfehlung:
+Recommendation:
 
-- intern interleavt speichern
-- fuer User-Ausgabe lesbare `a + bi`-Darstellung
+- store interleaved internally
+- readable `a + bi` representation for user output
 
-## 10. Minimaler erster Scope
+## 10. Minimal first scope
 
-Wenn AIML komplexe Zahlen aufnimmt, sollte der erste Scope klein bleiben:
+If AIML takes on complex numbers, the first scope should stay small:
 
 - `ctensor`
 - `tensor.complex_from_parts`
@@ -253,50 +252,49 @@ Wenn AIML komplexe Zahlen aufnimmt, sollte der erste Scope klein bleiben:
 - `tensor.cmean`
 - `tensor.cdot`
 
-Das waere schon genug fuer:
+That would already be enough for:
 
-- komplexe Resonanzmodelle
-- holographisches Binding
-- Phasenrotationen
-- wissenschaftliche Visualisierung
-- viele Signalverarbeitungs-Experimente
+- complex resonance models
+- holographic binding
+- phase rotations
+- scientific visualisation
+- many signal-processing experiments
 
-## 11. Was bewusst noch nicht Teil dieser Spec ist
+## 11. What is deliberately not part of this spec yet
 
-Folgende Dinge sind bewusst ausgeklammert:
+The following are deliberately left out:
 
-- allgemeiner `complex64`-Sprach-Primitive-Typ
-- komplexe Literale wie `3 + 4i`
-- Operator-Ueberladung fuer `+`, `*`, `/` auf Skalaren
-- Maps oder Lists komplexer Skalare als Basiskonzept
-- volle komplexe Autograd-Abdeckung
-- komplette FFT-/DSP-Standardbibliothek
+- a general `complex64` primitive language type
+- complex literals such as `3 + 4i`
+- operator overloading for `+`, `*`, `/` on scalars
+- maps or lists of complex scalars as a basic concept
+- full complex autograd coverage
+- a complete FFT/DSP standard library
 
-## 12. Empfehlung
+## 12. Recommendation
 
-Wenn AIML komplexe Zahlen einfuehrt, dann am besten:
+If AIML introduces complex numbers, it is best done:
 
-1. zuerst als **Draft-Spec fuer komplexe Tensoren**
-2. dann als kleine Runtime-Erweiterung ohne Big Bang
-3. erst viel spaeter als allgemeiner Sprach-Primitive-Typ, falls wirklich
-   noetig
+1. first as a **draft spec for complex tensors**
+2. then as a small runtime extension without a big bang
+3. only much later as a general primitive language type, if really
+   needed
 
-## 13. Offene Fragen
+## 13. Open questions
 
-- Soll der erste Typ `ctensor` heissen oder lieber direkt `tensor` mit
-  zukuenftigem `dtype` vorbereiten?
-- Soll komplexe Autograd-Unterstuetzung im ersten Schritt fehlen oder nur
-  eingeschraenkt vorhanden sein?
-- Soll `cdot` ein komplexes Ergebnis liefern oder standardmaessig ein
-  reelles Resonanz-Readout anbieten?
-- Wie stark soll die API wissenschaftlich sein und wie stark eher
-  ML-pragmatisch?
+- Should the first type be called `ctensor`, or should `tensor` be prepared
+  directly for a future `dtype`?
+- Should complex autograd support be missing in the first step or only
+  partially present?
+- Should `cdot` return a complex result or offer a real
+  resonance readout by default?
+- How scientific should the API be, and how ML-pragmatic?
 
-## 14. Klarer Hinweis
+## 14. Clear notice
 
-Diese Spec ist **nicht final**.
+This spec is **not final**.
 
-Sie ist ein Arbeitsentwurf, um zu entscheiden:
+It is a working draft for deciding:
 
-- ob AIML komplexe Zahlen ueberhaupt aufnehmen soll
-- und wenn ja, in welcher kleinsten vernuenftigen Form
+- whether AIML should take on complex numbers at all
+- and if so, in what smallest reasonable form

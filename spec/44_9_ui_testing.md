@@ -1,27 +1,27 @@
-# Kapitel 44.9 — UI-Testfälle (Szenario-Format)
+# Chapter 44.9 — UI test cases (scenario format)
 
-Ein Format, um eine laufende Oberfläche automatisch zu bedienen und zu prüfen: Widgets
-werden **beim Namen** angesprochen, nicht über Pixelkoordinaten, und geprüft wird an dem,
-was wirklich getroffen wurde.
+A format for driving and checking a running user interface automatically: widgets
+are addressed **by name**, not by pixel coordinates, and the check is made against
+what was actually hit.
 
-Grundlage: `input.post_*` (`/spec/44_0_input.md` §8) für die Eingabe, die Geometrie-Getter
-`.child_rect_*` und die Treffer-Spur `engine.prefab_trace_hits` (`/spec/44_6_prefabs.md` §5).
+Building blocks: `input.post_*` (`/spec/44_0_input.md` §8) for input, the geometry getters
+`.child_rect_*` and the hit trace `engine.prefab_trace_hits` (`/spec/44_6_prefabs.md` §5).
 
-Abgrenzung zu `/spec/59_unit_testing.md`: das sind Unit-Tests **einer Funktion** mit
-automatisch erzeugten Stubs. Hier geht es um ein Interaktions-Szenario gegen die echte
-Anwendung, ohne Stubs.
+Distinction from `/spec/59_unit_testing.md`: those are unit tests of **one function** with
+automatically generated stubs. This chapter is about an interaction scenario against the real
+application, without stubs.
 
-## 1. Warum ein Format und nicht einfach aiml-Code
+## 1. Why a format and not just aiml code
 
-Ein Szenario in aiml zu schreiben geht auch — `post_mouse_move`, `update`, `post_mouse_down`,
-`update`, … (§8.4). Nur steht dann in jedem Test dreimal dieselbe Frame-Choreografie, und wer
-sie einmal falsch schreibt, bekommt einen Test, der grün ist, ohne geklickt zu haben. Das
-Format hält die Choreografie an **einer** Stelle, im Treiber.
+A scenario can be written in aiml as well — `post_mouse_move`, `update`, `post_mouse_down`,
+`update`, … (§8.4). But then every test repeats the same frame choreography three times, and
+whoever gets it wrong once ends up with a test that is green without having clicked. The
+format keeps the choreography in **one** place, the driver.
 
-Das Szenario ist YAML (wie aiml selbst) und wird vom Treiber über `/spec/60_yaml.md` gelesen —
-kein Generator, keine zweite Sprache.
+The scenario is YAML (like aiml itself) and the driver reads it via `/spec/60_yaml.md` —
+no generator, no second language.
 
-## 2. Aufbau
+## 2. Structure
 
 ```yaml
 name: agent_ausfuehren
@@ -40,87 +40,87 @@ steps:
   - expect_no_hit: "AgentsScene/token_overlay_bg"
 ```
 
-### 2.1 Widget-Adresse
+### 2.1 Widget address
 
-`"<Prefab-Def>[<Index>]/<Kind>"`, z. B. `"AgentsScene[0]/run_btn"` — so wie
-`engine.prefab_last_hit()` sie zurückgibt. Der Index ist die Position in der Szene, weil der
-Def-Name bei mehreren Instanzen desselben Prefabs nicht eindeutig ist. Für `move`/`click` genügt
-`"<Prefab-Def>/<Kind>"`, wenn es nur eine Instanz gibt. Der Treiber löst die Adresse
-über `.child_rect_*` auf und rechnet daraus den Mittelpunkt.
+`"<prefab-def>[<index>]/<child>"`, e.g. `"AgentsScene[0]/run_btn"` — exactly as
+`engine.prefab_last_hit()` returns it. The index is the position in the scene, because the
+def name is not unique when there are several instances of the same prefab. For `move`/`click`
+`"<prefab-def>/<child>"` is enough if there is only one instance. The driver resolves the
+address via `.child_rect_*` and computes the centre point from it.
 
-Existiert die Adresse nicht, **scheitert der Schritt** — ein Szenario kann nicht versehentlich
-ins Leere klicken und dabei bestehen.
+If the address does not exist, **the step fails** — a scenario cannot accidentally click into
+nothing and still pass.
 
-## 3. Schritte
+## 3. Steps
 
-| Schritt | Wirkung |
+| Step | Effect |
 |---|---|
-| `move: <addr>` | Cursor auf den Mittelpunkt des Widgets, ein Frame. |
-| `move_at: [x, y]` | Cursor auf absolute Fensterkoordinaten (Notausgang, wenn kein Widget gemeint ist). |
-| `click: <addr>` | Die vollen drei Frames aus §8.4: bewegen, drücken, loslassen. |
-| `click_at: [x, y]` | Dasselbe auf absoluten Koordinaten. |
-| `press: <addr>` / `release: <addr>` | Druck und Loslassen getrennt — für Drag-Gesten. |
-| `drag: { from: <addr>, to: <addr> }` | Drücken, in Schritten bewegen (damit die Drag-Schwelle überschritten wird), loslassen. |
-| `scroll: { at: <addr>, dy: <f32> }` | Scrollen über einem Widget. |
-| `focus: <addr>` | Tastaturfokus setzen (`.focus`), ohne Klick. |
-| `type: "<text>"` | Text ins fokussierte Feld (`input.post_text`). |
-| `key: "<name>"` | Eine Taste, kanonische Namen aus §5 (`"Return"`, `"lctrl+c"` als Kombination). |
-| `wait_frames: <n>` | `n` Frames weiterlaufen lassen. |
-| `wait_for: { … }` | Bis eine Bedingung gilt oder `timeout_ms` abläuft (siehe §4). |
-| `screenshot: "<datei>"` | Bild ablegen — für den Layout-Vergleich, den die Treffer-Spur nicht leisten kann (§5). |
+| `move: <addr>` | Cursor to the centre of the widget, one frame. |
+| `move_at: [x, y]` | Cursor to absolute window coordinates (escape hatch when no widget is meant). |
+| `click: <addr>` | The full three frames from §8.4: move, press, release. |
+| `click_at: [x, y]` | The same at absolute coordinates. |
+| `press: <addr>` / `release: <addr>` | Press and release separately — for drag gestures. |
+| `drag: { from: <addr>, to: <addr> }` | Press, move in steps (so the drag threshold is exceeded), release. |
+| `scroll: { at: <addr>, dy: <f32> }` | Scroll over a widget. |
+| `focus: <addr>` | Set keyboard focus (`.focus`) without a click. |
+| `type: "<text>"` | Text into the focused field (`input.post_text`). |
+| `key: "<name>"` | One key, canonical names from §5 (`"Return"`, `"lctrl+c"` as a combination). |
+| `wait_frames: <n>` | Let `n` frames run. |
+| `wait_for: { … }` | Until a condition holds or `timeout_ms` expires (see §4). |
+| `screenshot: "<file>"` | Save an image — for the layout comparison the hit trace cannot provide (§5). |
 
-## 4. Prüfungen
+## 4. Checks
 
-| Prüfung | Bedeutung |
+| Check | Meaning |
 |---|---|
-| `expect_hit: <addr>` | `engine.prefab_last_hit()` enthält diese Adresse. |
-| `expect_no_hit: <addr>` | Sie ist **nicht** enthalten. Deckt „ein anderes Widget hat den Klick geschluckt" ab. |
-| `expect_only_hit: <addr>` | Sie ist die **einzige** — fängt den Fall, dass zwei überlappende Widgets gemeinsam feuern (spec/44_6). |
-| `expect_miss: true` | `prefab_last_hit()` ist leer: der Klick traf nichts. Als Erwartung formulierbar, nicht nur als Unfall. |
-| `expect_text: { child, value }` | `.text_value(child)` ist genau `value`. |
-| `expect_contains: { child, value }` | Teilstring-Prüfung (Textbox-Ausgabe). |
+| `expect_hit: <addr>` | `engine.prefab_last_hit()` contains this address. |
+| `expect_no_hit: <addr>` | It is **not** contained. Covers "another widget swallowed the click". |
+| `expect_only_hit: <addr>` | It is the **only** one — catches the case where two overlapping widgets fire together (spec/44_6). |
+| `expect_miss: true` | `prefab_last_hit()` is empty: the click hit nothing. Expressible as an expectation, not only as an accident. |
+| `expect_text: { child, value }` | `.text_value(child)` is exactly `value`. |
+| `expect_contains: { child, value }` | Substring check (text box output). |
 | `expect_checked: { child, value }` | `.is_checked`. |
-| `expect_visible: { child, value }` | Widget ist sichtbar / verborgen. |
+| `expect_visible: { child, value }` | Widget is visible / hidden. |
 | `expect_focused: <addr>` | `.child_focused`. |
 
-`wait_for` nimmt dieselben Bedingungen plus `timeout_ms`; beim Ablauf scheitert der Schritt mit
-der Bedingung im Fehlertext.
+`wait_for` takes the same conditions plus `timeout_ms`; when it expires the step fails with
+the condition in the error text.
 
-**`expect_hit` ist die wichtige Prüfung.** Ein Szenario, das nur Endzustände prüft, kann
-„Button tut nichts" nicht von „Klick kam nie an" unterscheiden. Erst `prefab_last_hit()` trennt
-das: es nennt die Widgets, die den Druck tatsächlich aufgelöst haben. Geprüft wird über die
-Abfrage, nicht über Log-Parsing — das Log ist für Menschen, die Abfrage für Tests.
+**`expect_hit` is the important check.** A scenario that only checks end states cannot tell
+"button does nothing" from "click never arrived". Only `prefab_last_hit()` separates the two:
+it names the widgets that actually resolved the press. The check uses the query, not log
+parsing — the log is for humans, the query is for tests.
 
-## 5. Was dieses Format nicht prüfen kann
+## 5. What this format cannot check
 
-Der Treiber fragt die Anwendung, **wo** ein Widget liegt, und klickt dann dorthin. Liegt das
-Widget woanders, als die Anwendung glaubt — falsch gezeichnet, außerhalb des Fensters, hinter
-einem Element, das keinen Hit-Test hat —, dann klickt der Test mit und merkt nichts. Diese
-Klasse fängt nur ein Bildvergleich (`screenshot:`) oder die OS-Ebene
-(`/spec/44_0_input.md` §8.5, noch nicht umgesetzt).
+The driver asks the application **where** a widget is and then clicks there. If the widget is
+somewhere other than where the application believes — drawn wrongly, outside the window,
+behind an element without a hit test — the test clicks along and notices nothing. This class
+of error is caught only by an image comparison (`screenshot:`) or at the OS level
+(`/spec/44_0_input.md` §8.5, not yet implemented).
 
-Was es prüft: dass Verdrahtung, Handler, Fokus-Fluss, Zustandsübergänge und die
-Trefferauflösung inklusive z-Reihenfolge stimmen — die Fehlerklassen, die beim Umbauen einer
-Oberfläche tatsächlich entstehen.
+What it does check: that wiring, handlers, focus flow, state transitions and hit resolution
+including z-order are correct — the error classes that actually arise when a user interface
+is reworked.
 
-## 6. Treiber
+## 6. Driver
 
-Der Treiber ist ein aiml-Programm: Szenario über `/spec/60_yaml.md` lesen, Fenster öffnen,
-Schritte abarbeiten, Treffer-Spur mitlesen, am Ende Bilanz. Ein Szenario, das nie klickt,
-besteht nicht — ein Lauf ohne einen einzigen aufgelösten Treffer gilt als Fehler, nicht als
-leeres Bestehen.
+The driver is an aiml program: read the scenario via `/spec/60_yaml.md`, open the window,
+work through the steps, read the hit trace along the way, report a summary at the end. A
+scenario that never clicks does not pass — a run without a single resolved hit counts as a
+failure, not as an empty pass.
 
-Der Treiber MUSS `engine.prefab_trace_hits(1)` setzen und die Frame-Reihenfolge aus §8.3 einhalten
-(injizieren nach dem Input-Update des Frames, vor dem App-Update).
+The driver MUST set `engine.prefab_trace_hits(1)` and keep the frame order from §8.3
+(inject after the frame's input update, before the app update).
 
 ## 7. Status
 
-Format: hier festgelegt. Vorbedingungen **umgesetzt und nachgewiesen**: `input.post_*`,
-`.child_rect_*`, `engine.prefab_trace_hits`, `engine.prefab_last_hit`, `engine.window_pos` und
-`input.os_*` (Nachweise siehe `/spec/44_0_input.md` §8.5). Offen ist nur noch der Treiber (§6).
+Format: defined here. Prerequisites **implemented and verified**: `input.post_*`,
+`.child_rect_*`, `engine.prefab_trace_hits`, `engine.prefab_last_hit`, `engine.window_pos` and
+`input.os_*` (evidence in `/spec/44_0_input.md` §8.5). Only the driver (§6) is still open.
 
-Der Treiber bekommt **einen** Schalter für den Kanal: dieselben Schritte laufen über
-`input.post_*` (schnell, headless, parallelisierbar) oder über `input.os_*` (echte Kette,
-eigener Display).  Die Schritte selbst bleiben gleich, weil die Frame-Choreografie im Treiber
-steckt und nicht im Szenario. OS-Ebene (XTEST auf eigenem Xvfb-Display) ist als
-zweiter Kanal vorgesehen und in `/spec/44_0_input.md` §8.5 als TODO festgehalten.
+The driver gets **one** switch for the channel: the same steps run either via
+`input.post_*` (fast, headless, parallelisable) or via `input.os_*` (the real chain, its
+own display).  The steps themselves stay the same, because the frame choreography lives in
+the driver and not in the scenario. The OS level (XTEST on a dedicated Xvfb display) is
+planned as the second channel and recorded as a TODO in `/spec/44_0_input.md` §8.5.
