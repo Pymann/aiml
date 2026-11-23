@@ -284,10 +284,10 @@ char* aiml_jw_done(void* wv) {
     return rc;
 }
 
-// spec/29 §5.2a `bare`: `__type` aus dem FERTIGEN Dokument entfernen, auf jeder
-// Ebene.  Nach der Serialisierung statt waehrend ihr, weil der Stil ohnehin ein
-// Nachbearbeitungsschritt ist — damit bleibt der Schreibpfad (und sein IR)
-// unberuehrt, und `bare` kann nichts verfaelschen ausser diesem einen Schluessel.
+// spec/29 §5.2a `bare`: remove `__type` from the FINISHED document, on every
+// level.  After serialisation instead of during it, because the style is a
+// post-processing step anyway — that way the write path (and its IR) stays
+// untouched, and `bare` can falsify nothing except this one key.
 static void aiml_strip_type_keys(yyjson_mut_doc* doc, yyjson_mut_val* node) {
     if (!node) return;
     if (yyjson_mut_is_obj(node)) {
@@ -322,11 +322,11 @@ static std::string aiml_json_bare_cpp(const char* json) {
     return res;
 }
 
-// spec/29 §5.2c `skip_empty`: leere MITGLIEDER entfernen — "" , [] und {}.
-// Nicht 0, nicht false, nicht null: eine Null ist ein Wert, kein Fehlen (F29-18).
-// Von unten nach oben, damit ein Objekt, das durch das Entfernen seiner
-// Mitglieder leer wird, selbst wegfaellt (F29-19).  Array-ELEMENTE bleiben
-// stehen, auch leere — ein entfernter Eintrag verschiebt alle folgenden (F29-20).
+// spec/29 §5.2c `skip_empty`: remove empty MEMBERS — "" , [] and {}.
+// Not 0, not false, not null: a null is a value, not an absence (F29-18).
+// Bottom up, so that an object that becomes empty through the removal of its
+// members falls away itself (F29-19).  Array ELEMENTS stay,
+// empty ones too — a removed entry shifts all following ones (F29-20).
 static bool aiml_json_is_empty_val(yyjson_mut_val* v) {
     if (!v) return false;
     if (yyjson_mut_is_str(v)) { const char* t = yyjson_mut_get_str(v); return t && *t == 0; }
@@ -338,7 +338,7 @@ static bool aiml_json_is_empty_val(yyjson_mut_val* v) {
 static void aiml_strip_empty(yyjson_mut_val* node) {
     if (!node) return;
     if (yyjson_mut_is_obj(node)) {
-        // Erst absteigen (unten aufraeumen), dann hier entscheiden.
+        // Descend first (clean up below), then decide here.
         {
             yyjson_mut_obj_iter it;
             yyjson_mut_obj_iter_init(node, &it);
@@ -346,8 +346,8 @@ static void aiml_strip_empty(yyjson_mut_val* node) {
             while ((key = yyjson_mut_obj_iter_next(&it)))
                 aiml_strip_empty(yyjson_mut_obj_iter_get_val(key));
         }
-        // Entfernen waehrend des Laufs ist nicht erlaubt — Namen sammeln,
-        // danach loeschen.
+        // Removing during the walk is not allowed — collect names,
+        // delete afterwards.
         std::vector<std::string> gone;
         {
             yyjson_mut_obj_iter it;
@@ -375,7 +375,7 @@ static std::string aiml_json_lean_cpp(const char* json) {
     yyjson_mut_doc* doc = yyjson_doc_mut_copy(in, nullptr);
     yyjson_doc_free(in);
     if (!doc) return std::string(json);
-    aiml_strip_empty(yyjson_mut_doc_get_root(doc));   // die WURZEL bleibt stehen
+    aiml_strip_empty(yyjson_mut_doc_get_root(doc));   // the ROOT stays
     char* out = yyjson_mut_write(doc, YYJSON_WRITE_NOFLAG, nullptr);
     std::string res = out ? std::string(out) : std::string(json);
     if (out) free(out);

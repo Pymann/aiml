@@ -348,7 +348,7 @@ static void emitWriteField(CompilerContext& ctx, llvm::Value* writer,
                            llvm::Value* structPtr, llvm::StructType* structLLVMTy,
                            const std::string& fname,
                            const CompilerContext::StructMember& fm){
-    // spec/15: nach aussen zaehlt der Alias, drinnen der Feldname.
+    // spec/15: to the outside the alias counts, inside the field name.
     const std::string& fkeyName = fm.alias.empty() ? fname : fm.alias;
     llvm::Value* fkey = ctx.builder.CreateGlobalStringPtr(fkeyName, "fk_"+fname);
     std::string tn = fm.typeName;
@@ -386,8 +386,8 @@ static void emitWriteField(CompilerContext& ctx, llvm::Value* writer,
         // memV3: map FIELD is a handle pointer (see the list case) → load before GEP.
         if(ctx.memV3 && ctx.isMemV3ContainerHandle(tn))
             fp = memv3LoadContainerHandleOrEmpty(ctx, fp, mapTy);
-        // Dicht gezaehlt wird ueber `size` (Index 0), nicht ueber `capacity`:
-        // siehe die Anmerkung an emitSerializeMap.
+        // Counted densely via `size` (index 0), not via `capacity`:
+        // see the note on emitSerializeMap.
         llvm::Value* cg   = ctx.builder.CreateStructGEP(mapTy,fp,0,"msg");
         llvm::Value* cap  = ctx.builder.CreateLoad(i32T(ctx),cg,"msize");
         llvm::Value* kg   = ctx.builder.CreateStructGEP(mapTy,fp,3,"mkg");
@@ -409,7 +409,7 @@ static void emitWriteField(CompilerContext& ctx, llvm::Value* writer,
         idx->addIncoming(ctx.builder.getInt32(0),ph);
         ctx.builder.CreateCondBr(ctx.builder.CreateICmpSLT(idx,cap),lb,le);
         ctx.builder.SetInsertPoint(lb);
-        ctx.builder.CreateBr(we);     // jeder Platz < size ist belegt
+        ctx.builder.CreateBr(we);     // every slot < size is occupied
         ctx.builder.SetInsertPoint(we);
         llvm::Value* ks;
         if(intKey){
@@ -553,14 +553,14 @@ static llvm::Function* emitSerializeList(CompilerContext& ctx,
 }
 
 // ─── emitSerializeMap ─────────────────────────────────────────────────────────
-// spec/29 Zeile 109/112: eine Map wird MIT ihren Eintraegen geschrieben.  Bis
-// 18.10.2026 schrieb jede Map `{}` — der Schreiber lief ueber `capacity` und
-// liess nur Plaetze durch, deren `occupied`-Byte gesetzt war.  `MapImpl::put`
-// setzt dieses Byte aber NIE: die Map ist DICHT (Eintraege 0..size-1, `get`,
-// `len` und `remove` rechnen genauso, `remove` schiebt per memmove nach).  Das
-// occupied-Feld hat nie ein Schreiber beschrieben — der Serializer war sein
-// einziger Leser.  Gefunden am OCI-Wandler (cosmos doc/spec/110 §110.25), wo
-// `annotations` still leer blieb: stiller Datenverlust, nichts stuerzte ab.
+// spec/29 lines 109/112: a map is written WITH its entries.  Until
+// 2026-10-18 every map wrote `{}` — the writer ran over `capacity` and
+// only let through slots whose `occupied` byte was set.  But `MapImpl::put`
+// NEVER sets this byte: the map is DENSE (entries 0..size-1, `get`,
+// `len` and `remove` compute the same way, `remove` shifts down via memmove).  The
+// occupied field was never written by any writer — the serializer was its
+// only reader.  Found on the OCI converter (cosmos doc/spec/110 §110.25), where
+// `annotations` silently stayed empty: silent data loss, nothing crashed.
 static llvm::Function* emitSerializeMap(CompilerContext& ctx,
                                         const std::string& mapTn){
     std::string fnName = "__aiml_ser_"+sanitize(mapTn);
@@ -602,7 +602,7 @@ static llvm::Function* emitSerializeMap(CompilerContext& ctx,
     idx->addIncoming(ctx.builder.getInt32(0),ph);
     ctx.builder.CreateCondBr(ctx.builder.CreateICmpSLT(idx,cap),lb,le);
     ctx.builder.SetInsertPoint(lb);
-    ctx.builder.CreateBr(we);     // jeder Platz < size ist belegt
+    ctx.builder.CreateBr(we);     // every slot < size is occupied
     ctx.builder.SetInsertPoint(we);
     llvm::Value* ks;
     if(intKey){

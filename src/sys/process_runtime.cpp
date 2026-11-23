@@ -607,14 +607,14 @@ extern "C" int32_t aiml_sys_wait_any(void* listPtr, int32_t timeout_ms) {
 
 // spec/23: absolute path of the running executable, "" when unknown; runtime-owned.
 /* ── spec/23 §5.6: sys.require_tools ──────────────────────────────────────────
- * Was die Umgebung mitbringen muss, in EINER Antwort.  Drei Formen:
- *   "git"            ein Programm im PATH
- *   "gcc>=13"        ein Programm mit Mindestversion (erste Zahl der ersten Zeile)
- *   "lib:yaml-cpp"   eine Bibliothek ueber pkg-config
+ * What the environment must bring along, in ONE answer.  Three forms:
+ *   "git"            a program in PATH
+ *   "gcc>=13"        a program with a minimum version (first number of the first line)
+ *   "lib:yaml-cpp"   a library via pkg-config
  *
- * Genannt wird ALLES Fehlende (F23-40) — eine Pruefung, die beim ersten Fehler
- * aufhoert, erzeugt drei Laeufe statt einem.  EIN Ort fuer diese Frage (F23-43):
- * `requires:` in aiml spec/62 und der cosmos-Agent rufen denselben Code.
+ * EVERYTHING missing is named (F23-40) — a check that stops at the first error
+ * produces three runs instead of one.  ONE place for this question (F23-43):
+ * `requires:` in aiml spec/62 and the cosmos agent call the same code.
  */
 static bool rt_tool_in_path(const std::string& name) {
     if (name.find('/') != std::string::npos)
@@ -636,7 +636,7 @@ static bool rt_tool_in_path(const std::string& name) {
     return false;
 }
 
-/* Erste Zahl der ersten Ausgabezeile von `<tool> --version`; -1 = keine. */
+/* First number of the first output line of `<tool> --version`; -1 = none. */
 static long rt_tool_version(const std::string& tool) {
     std::string cmd = tool + " --version 2>/dev/null";
     FILE* pipe = popen(cmd.c_str(), "r");

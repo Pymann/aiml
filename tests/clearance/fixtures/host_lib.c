@@ -1,16 +1,16 @@
-/* host_lib.c — ein WIRT als Shared Library (spec/65 F65-24, zweiter Weg).
+/* host_lib.c — a HOST as a shared library (spec/65 F65-24, second route).
  *
- * spec/65 kannte bisher nur einen Weg, wie eine ADRESSE zum Skript kommt:
- * `sys.export_symbol` im selben Prozess (Probe 09).  Ein echter Wirt, der fremden
- * Quelltext uebersetzen laesst, kann das nicht — er IST der Uebersetzer, und der kennt
- * das Skript erst zur Laufzeit.  Dort kommt die Adresse aus einer vorgeladenen
- * Bibliothek, und Name + Level aus der Export-Tabelle.
+ * spec/65 used to know only one route by which an ADDRESS reaches the script:
+ * `sys.export_symbol` in the same process (probe 09).  A real host that has foreign
+ * source text compiled cannot do that — it IS the compiler, and that one only knows
+ * the script at runtime.  There the address comes from a preloaded
+ * library, and name + level from the export table.
  *
- * Diese Datei ist der kleinste Wirt, der das pruefbar macht.  cosmos doc/spec/108 F108-9
- * baut darauf. */
+ * This file is the smallest host that makes this testable.  cosmos doc/spec/108 F108-9
+ * builds on it. */
 int clearance_host_answer(void) { return 42; }
 
-/* Auf Level 2 angeboten: eine Sitzung mit Freigabe 7 darf den Namen nicht nennen,
- * obwohl die Adresse im Prozess vorhanden ist.  Das ist der Punkt — die Zulassung
- * haengt an der Tabelle, nicht an der Erreichbarkeit des Symbols. */
+/* Offered at level 2: a session with clearance 7 must not name it,
+ * although the address exists in the process.  That is the point — admission
+ * depends on the table, not on the reachability of the symbol. */
 int clearance_host_secret(void) { return 7; }

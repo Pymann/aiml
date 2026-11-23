@@ -1,14 +1,14 @@
 /* AIML — Vocab (i18n) Runtime — implementation.
  *
- * Design-Notes:
- *   • Module-Level-State: eine map<string, vector<string>> für die
- *     Übersetzungen + ein vector<string> für die Sprach-Codes.
- *     Existiert einmal pro Prozess; hot-reloadable via aiml_vocab_load().
- *   • Der zurückgegebene const char* zeigt in den internen std::string-
- *     Speicher der Map — solange kein aiml_vocab_load() zwischendrin
- *     läuft, sind die Pointer stabil.
- *   • JSON-Parser hand-rolled (kein nlohmann): das gleiche minimale
- *     Vokabular wie prefab_runtime.cpp, spart eine Dependency.
+ * Design notes:
+ *   • Module-level state: a map<string, vector<string>> for the
+ *     translations + a vector<string> for the language codes.
+ *     Exists once per process; hot-reloadable via aiml_vocab_load().
+ *   • The returned const char* points into the internal std::string
+ *     storage of the map — as long as no aiml_vocab_load() runs
+ *     in between, the pointers are stable.
+ *   • Hand-rolled JSON parser (no nlohmann): the same minimal
+ *     vocabulary as prefab_runtime.cpp, saves a dependency.
  */
 
 #include "vocab_runtime.h"
@@ -29,7 +29,7 @@ std::vector<std::string>                                g_language_codes;
 std::unordered_map<std::string, std::vector<std::string>> g_vocab;
 int32_t                                                 g_current_language = 0;
 
-/* ── Mini JSON parser (siehe prefab_runtime.cpp für Vorlage) ─────────── */
+/* ── Mini JSON parser (see prefab_runtime.cpp for the template) ──────── */
 
 void skip_ws(const char*& p) {
     while (*p && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r'))

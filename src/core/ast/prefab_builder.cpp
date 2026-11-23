@@ -8,10 +8,10 @@ namespace {
 // Spec/22 + backlog 2026-06-07: prefab texture/shader/font fields are STRICT
 // stem-only.  Path-shaped values → compile-error.  Unknown stems → compile-error
 // (typo catched at build-time, not as black-square at runtime).
-// `loc` ist das Ortspraefix des Aufrufers (spec/49 F49-100).  Diese Funktion ist
-// frei und hat keinen Builder, also bekommt sie den Ort gereicht, statt ihn
-// wegzulassen -- drei Meldungen ueber Prefab-Felder nannten bisher weder Datei
-// noch Zeile, und ein Prefab-Feld steht selten allein in der Datei.
+// `loc` is the caller's location prefix (spec/49 F49-100).  This function is
+// free and has no builder, so it is handed the location instead of
+// leaving it out -- three messages about prefab fields used to name neither file
+// nor line, and a prefab field rarely stands alone in the file.
 void validate_asset_field(const std::string& field, const std::string& value,
                           AIML::AssetKind kind, const std::string& loc) {
     if (value.empty()) return;
@@ -96,8 +96,8 @@ bool PrefabBuilder::OnScalar(const std::string& value, const std::string& tag) {
             else if (childKey == "font_size") currentChild.font_size = strtof(value.c_str(), nullptr);
             else if (childKey == "gutter")    currentChild.gutter = (value == "true" || value == "1");
             else if (childKey == "font") {
-                // Stem-only wie texture (spec/22): ein Tippfehler ist ein
-                // Build-Fehler, kein stiller Rückfall auf den Szenen-Font.
+                // Stem-only like texture (spec/22): a typo is a
+                // build error, not a silent fallback to the scene font.
                 validate_asset_field("font", value, AIML::AssetKind::Font, builder->fmtLoc());
                 currentChild.font = value;
             }
@@ -144,11 +144,11 @@ bool PrefabBuilder::OnScalar(const std::string& value, const std::string& tag) {
             else if (childKey == "compact")       currentChild.compact = (value == "true" || value == "1");
             else if (childKey == "cascade_type")  currentChild.cascade_type = value;
             else if (childKey == "payload_spawn") currentChild.payload_spawn = value;
-            /* spec/44_6 §5h: cascade_flow und payload_scroll waren nur im
-             * JSON-Loader des Runtimes verdrahtet — deklariert waren sie ein
-             * "unknown attribute"-Fehler.  Genau die Luecke, die die Tabelle in
-             * §4 beschreibt (ein dokumentierter Schluessel MUSS beide Pfade
-             * erreichen, sonst faellt er still weg wie damals min/scrollable/tail). */
+            /* spec/44_6 §5h: cascade_flow and payload_scroll were only
+             * wired into the runtime's JSON loader — declared, they were an
+             * "unknown attribute" error.  Exactly the gap that the table in
+             * §4 describes (a documented key MUST reach both paths,
+             * otherwise it silently falls away as min/scrollable/tail once did). */
             else if (childKey == "cascade_flow")  currentChild.cascade_flow = value;
             else if (childKey == "payload_scroll") currentChild.payload_scroll = (value == "true" || value == "1");
             else if (childKey == "enum")          currentChild.enum_type = value;
