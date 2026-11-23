@@ -1,8 +1,8 @@
-# Asset Registry — Stem-Lookup pro Kind, Compile-Time-Validierung
+# Asset registry — stem lookup per kind, compile-time validation
 
-**Status**: Backlog (2026-06-07, refined)
-**Scope**: AIML Compiler + Engine-Runtime (gl/audio/io)
-**Motivation**: Aktuell stehen Asset-Pfade als String-Literale im Code verteilt:
+**Status**: backlog (2026-06-07, refined)
+**Scope**: AIML compiler + engine runtime (gl/audio/io)
+**Motivation**: currently asset paths are spread through the code as string literals:
 
 ```aiml
 - set: [self.tex_golem,      { call: [gl.load_texture, "resources/creatures/golem.png"] }]
@@ -10,40 +10,40 @@
 - set: [g_combat_atk_tex,    { call: [gl.load_texture, "resources/ui/battle/attack.png"] }]
 ```
 
-Probleme:
-1. **Pfad-Irrgärten**: Wer wissen will wo `crystal-rock.png` liegt muss
-   greppen — jedes neue Subverzeichnis erfindet ein neues Pfadschema.
-2. **Fehlende Datei** wird erst zur Laufzeit als black-square sichtbar;
-   Compiler kann nicht warnen.
-3. **Doppellade-Vermeidung**: jedes `gl.load_texture` lädt erneut wenn
-   der Caller nicht selbst cached.
-4. **WASM-Asset-Bundle**: `asset_directories` in `exodus.json` ist die
-   einzige Quelle der Wahrheit was ausgeliefert wird — der Engine-Code
-   weiß das aber nicht und muss raten.
+Problems:
+1. **Path mazes**: whoever wants to know where `crystal-rock.png` lives has to
+   grep — every new subdirectory invents a new path scheme.
+2. **A missing file** only becomes visible at runtime as a black square;
+   the compiler cannot warn.
+3. **Avoiding double loading**: every `gl.load_texture` loads again if
+   the caller does not cache it itself.
+4. **WASM asset bundle**: `asset_directories` in `exodus.json` is the
+   only source of truth for what is shipped — but the engine code
+   does not know that and has to guess.
 
 ## Vision
 
 ```aiml
-# Compile-time: aiml-Compiler scannt asset_directories, baut pro
-# Asset-Kind eine Stem-Map (kein .png-Suffix beim Lookup nötig).
+# Compile time: the aiml compiler scans asset_directories and builds a
+# stem map per asset kind (no .png suffix needed in the lookup).
 - set: [self.tex_golem,   { call: [gl.tex, "golem"] }]
 - set: [self.intro_tex,   { call: [gl.tex, "intro_bg"] }]
 - set: [g_combat_atk_tex, { call: [gl.tex, "attack"] }]
-# gl.tex(stem) ist Single-Cache-Lookup + lazy-load.
+# gl.tex(stem) is a single cache lookup + lazy load.
 ```
 
-Zusätzlich:
-- `gl.load_texture(path)` bleibt als low-level Escape-Hatch für
-  runtime-generierte Pfade außerhalb des Bundles (User-Uploads,
-  Server-gestreamte Assets). Für statische Source-Strings veraltet,
-  Compiler emittiert Deprecation-Warning beim alten Call.
-- Compiler-Hard-Error wenn `gl.tex("foo")` mit string-literalem Arg
-  und `foo` nicht im Texture-Store — *bevor* WASM gebaut wird.
-- Dynamische Args (`gl.tex(some_var)`) bleiben Runtime-Hash-Lookup.
+In addition:
+- `gl.load_texture(path)` stays as a low-level escape hatch for
+  runtime-generated paths outside the bundle (user uploads,
+  server-streamed assets). Deprecated for static source strings;
+  the compiler emits a deprecation warning on the old call.
+- Compiler hard error when `gl.tex("foo")` has a string literal arg
+  and `foo` is not in the texture store — *before* WASM is built.
+- Dynamic args (`gl.tex(some_var)`) stay a runtime hash lookup.
 
-## Asset-Kinds (Stores)
+## Asset kinds (stores)
 
-Jeder Kind hat eigenen Stem→Pfad-Store. Klassifikation per Extension:
+Every kind has its own stem→path store. Classification by extension:
 
 | Kind     | Extensions                       | API                                     |
 |----------|----------------------------------|-----------------------------------------|
@@ -53,194 +53,194 @@ Jeder Kind hat eigenen Stem→Pfad-Store. Klassifikation per Extension:
 | shader   | `.glsl .frag .vert`              | `gl.shader(stem) → gl_shader`           |
 | font     | `.ttf .otf`                      | `gl.font(stem, size) → gl_font`         |
 
-`golem.png` (texture) und `golem.mp3` (audio) sind zulässig — sie
-landen in unterschiedlichen Stores, kein Konflikt.
+`golem.png` (texture) and `golem.mp3` (audio) are allowed — they
+end up in different stores, no conflict.
 
-## Architektur
+## Architecture
 
-### Phase 1 — Compile-time Scan
+### Phase 1 — compile-time scan
 
-1. **exodus** reicht den `asset_directories`-Inhalt aus `exodus.json`
-   1:1 als CLI-Flag an den aiml-Compiler durch:
+1. **exodus** passes the `asset_directories` content from `exodus.json`
+   1:1 as a CLI flag to the aiml compiler:
    `--asset-roots=resources/intro,resources/creatures,…`.
-   Kein neuer Config-Key, kein Manifest-File auf Disk.
-2. **Roots können Dirs ODER Files sein.** `asset_directories` ist
-   historisch gewachsen und enthält in DataCreatures bereits einzelne
-   Files (z.B. `resources/skills/skill_default.png`).  Der Scanner
-   unterscheidet:
-   - Datei-Root → ein-Element-Walk (klassifiziere, registriere)
-   - Verzeichnis-Root → rekursiver Walk
-3. **aiml-Compiler** ruft `AssetScanner::scan(roots)` zum Compile-Start:
-   - Pro Root den passenden Walk
-   - Pro File: realpath/canonicalize → Kollision-Schlüssel
-   - Extension → Kind klassifizieren, Stem = Filename ohne Extension
-   - In `unordered_map<Kind, unordered_map<stem, AssetEntry>>` ablegen,
-     wobei `AssetEntry = { rel_path, abs_path }`
-4. **Overlapping Roots dedup'en BEFORE Stem-Collision-Check.**
-   `resources/ui` UND `resources/ui/action_bar` als Roots ist legitim
-   (DataCreatures' aktuelle exodus-client.json hat genau das).  Same
-   absolute path → exakt EIN Entry — KEIN Error.  Vor dem Insert
-   prüfen ob das `abs_path` schon registriert ist; wenn ja, kürzeren
-   `rel_path` bevorzugen, sonst skip.
-5. **Hard-Errors** zur Compile-Zeit, Abbruch ohne IR-Emission:
-   - Großbuchstabe in File- oder Subdir-Namen → Warning + skip
-     (Convention-Enforcement; Lookup ist case-sensitive, halb-aliased
-     Files sollen erst gar nicht ins Store).
-   - Duplikat-Stem im gleichen Kind in verschiedenen `abs_path` (nicht:
-     denselben File via überlappende Roots) → Error mit beiden Pfaden
-     im Fehlertext.
-   - Unbekannte Extension → Warning + skip.
-6. **Codegen**: pro Kind eine statische LLVM-Konstante
-   `__aiml_asset_table_<kind>` als Array `{i8* stem, i8* rel_path}[]`,
-   sortiert für binary-search im Runtime.
+   No new config key, no manifest file on disk.
+2. **Roots can be dirs OR files.** `asset_directories` has grown
+   historically and already contains single files in DataCreatures
+   (e.g. `resources/skills/skill_default.png`).  The scanner
+   distinguishes:
+   - file root → one-element walk (classify, register)
+   - directory root → recursive walk
+3. **The aiml compiler** calls `AssetScanner::scan(roots)` at compile start:
+   - per root the matching walk
+   - per file: realpath/canonicalize → collision key
+   - extension → classify the kind, stem = file name without extension
+   - store in `unordered_map<Kind, unordered_map<stem, AssetEntry>>`,
+     where `AssetEntry = { rel_path, abs_path }`
+4. **Dedup overlapping roots BEFORE the stem collision check.**
+   `resources/ui` AND `resources/ui/action_bar` as roots is legitimate
+   (DataCreatures' current exodus-client.json has exactly that).  Same
+   absolute path → exactly ONE entry — NO error.  Before the insert,
+   check whether the `abs_path` is already registered; if so, prefer the shorter
+   `rel_path`, otherwise skip.
+5. **Hard errors** at compile time, abort without IR emission:
+   - Upper-case letter in a file or subdir name → warning + skip
+     (convention enforcement; the lookup is case-sensitive, half-aliased
+     files should not get into the store at all).
+   - Duplicate stem in the same kind at different `abs_path`s (not:
+     the same file via overlapping roots) → error with both paths
+     in the error text.
+   - Unknown extension → warning + skip.
+6. **Codegen**: per kind a static LLVM constant
+   `__aiml_asset_table_<kind>` as an array `{i8* stem, i8* rel_path}[]`,
+   sorted for binary search in the runtime.
 
-### Phase 2 — Runtime-API
+### Phase 2 — runtime API
 
-`src/sys/asset_runtime.h/cpp` (neu) registriert die Builtins in
+`src/sys/asset_runtime.h/cpp` (new) registers the builtins in
 `src/core/builtin_registry.cpp`:
 
 - `gl.tex(stem)`:
-  1. Lookup im Cache `unordered_map<string, AimlGLTexture*>`. Hit → return.
-  2. Lookup im `__aiml_asset_table_texture` (binary search).
-  3. Miss → runtime-error mit Hinweis "stem '<x>' not in texture store".
-  4. Hit → `gl_load_texture(rel_path)` + cachen + return.
-- `audio.sfx(stem)` / `audio.music(stem)`: gleiche Stem-Map, eigene
-  Cache-Tabelle pro Wiedergabe-API.
-- `io.read_asset(stem)`: returnt File-Inhalt als string, kein Cache.
-- `gl.shader(stem)` / `gl.font(stem, size)`: analog.
+  1. Lookup in the cache `unordered_map<string, AimlGLTexture*>`. Hit → return.
+  2. Lookup in `__aiml_asset_table_texture` (binary search).
+  3. Miss → runtime error with the hint "stem '<x>' not in texture store".
+  4. Hit → `gl_load_texture(rel_path)` + cache + return.
+- `audio.sfx(stem)` / `audio.music(stem)`: the same stem map, a separate
+  cache table per playback API.
+- `io.read_asset(stem)`: returns the file content as a string, no cache.
+- `gl.shader(stem)` / `gl.font(stem, size)`: analogous.
 
-### Phase 2.5 — Prefab/Material-Literale: Stem-only
+### Phase 2.5 — prefab/material literals: stem only
 
-Die imperative API ist nur ein Teil der Asset-Surface.  AIML-Prefab-
-Specs und Material-Files referenzieren Texturen/Shader/Fonts über
-String-Felder.  **Strikt: nur noch Stem-Form. Keine Pfade. Kein
-Escape-Hatch.**
+The imperative API is only part of the asset surface.  AIML prefab
+specs and material files reference textures/shaders/fonts via
+string fields.  **Strict: stem form only. No paths. No
+escape hatch.**
 
 ```yaml
-# Alt (Hard-Error):
+# Old (hard error):
 - { name: icon, type: rect, texture: "resources/items/hammer.png" }
-# Neu (einziger Pfad):
+# New (the only way):
 - { name: icon, type: rect, texture: "hammer" }
 ```
 
-Regeln:
+Rules:
 
-1. **Prefab-Felder `texture:` / `shader:` / `font:` akzeptieren NUR Stems.**
-   Wert mit `/` oder Datei-Extension (`.png`/`.glsl`/…) → Compile-Hard-Error
-   mit Hinweis "use stem `hammer` instead of `resources/items/hammer.png`".
-2. **Pflicht-Existenz-Check**: Stem der nicht im jeweiligen Kind-Store
-   existiert → Hard-Error mit YAML-Pfad+Zeile.  Schreibfehler werden zur
-   Build-Zeit gefangen, nicht als Black-Square zur Runtime.
-3. **Material-Files** (`.glsl`/`.frag`/`.vert`): Nur noch
-   `#include "@stem"` Syntax.  `#include "common.glsl"` → Hard-Error im
-   Material-Compiler mit dem gleichen "use @common"-Hinweis.
+1. **Prefab fields `texture:` / `shader:` / `font:` accept ONLY stems.**
+   A value with `/` or a file extension (`.png`/`.glsl`/…) → compile hard error
+   with the hint "use stem `hammer` instead of `resources/items/hammer.png`".
+2. **Mandatory existence check**: a stem that does not exist in the respective kind store
+   → hard error with YAML path+line.  Typos are caught at
+   build time, not as a black square at runtime.
+3. **Material files** (`.glsl`/`.frag`/`.vert`): only the
+   `#include "@stem"` syntax.  `#include "common.glsl"` → hard error in the
+   material compiler with the same "use @common" hint.
 
-**Touchpoints im Prefab-Parser** (src/sys/prefab_runtime.cpp):
-- Texture/Shader/Font-Resolver: Stem-Lookup im Kind-Store.  Keine
-  `gl_load_texture(path)` Fallbacks mehr für Prefab-Specs.
-- Material-Compiler: `@`-prefixed `#include`-Direktive parsen + via
-  shader-Store auflösen.
+**Touchpoints in the prefab parser** (src/sys/prefab_runtime.cpp):
+- Texture/shader/font resolver: stem lookup in the kind store.  No more
+  `gl_load_texture(path)` fallbacks for prefab specs.
+- Material compiler: parse the `@`-prefixed `#include` directive + resolve via
+  the shader store.
 
-DataCreatures-Migration nötig BEVOR das Feature gemerged werden kann —
-sonst bricht jeder build sofort.  Reihenfolge im Migration-Block unten.
+DataCreatures migration needed BEFORE the feature can be merged —
+otherwise every build breaks immediately.  Order in the migration block below.
 
-### Phase 3 — Compile-time Lookup (Optional)
+### Phase 3 — compile-time lookup (optional)
 
-- `{call: [gl.tex, "golem"]}` mit String-Literal-Arg ist statisch
-  auflösbar. Compiler kann:
-  - Existenzcheck zur Compile-Zeit (Stem im Store?) — Hard-Error falls
-    nicht. Inkludiert "did you mean"-Vorschlag bei naher Levenshtein-
-    Distanz.
-  - Konstante i32 (Index ins Asset-Table) statt String emittieren →
-    Runtime ist O(1) Array-Index statt Binary-Search.
-- Dynamische Args bleiben Binary-Search.
+- `{call: [gl.tex, "golem"]}` with a string literal arg is statically
+  resolvable. The compiler can:
+  - do an existence check at compile time (stem in the store?) — hard error if
+    not. Includes a "did you mean" suggestion at a close Levenshtein
+    distance.
+  - emit a constant i32 (index into the asset table) instead of a string →
+    the runtime is an O(1) array index instead of a binary search.
+- Dynamic args stay a binary search.
 
-### Phase 4 — Bundle-Awareness im Engine-Runtime
+### Phase 4 — bundle awareness in the engine runtime
 
-- **WASM**: rel_path zeigt in den emscripten-VFS (`--preload-file=...`
-  hat das Verzeichnis schon gemountet). Asset wird via fetch geladen.
-- **Native**: rel_path ist relativ zu cwd, oder explizit
-  `--asset-root` Runtime-Flag für deployed Builds.
+- **WASM**: rel_path points into the emscripten VFS (`--preload-file=...`
+  has already mounted the directory). The asset is loaded via fetch.
+- **Native**: rel_path is relative to cwd, or an explicit
+  `--asset-root` runtime flag for deployed builds.
 
-## Files & Code-Changes
+## Files & code changes
 
-- `exodus/core/build.py` (oder wo der aiml-Compile-Call zusammengebaut
-  wird): füge `--asset-roots=<comma-joined asset_directories>` hinzu.
-  Eine Zeile.
-- `src/core/asset_scanner.h/cpp` (neu): walkt roots (Dir+File),
-  canonicalize, dedup via abs_path, klassifiziert, errort, emittiert
-  `__aiml_asset_table_<kind>` als LLVM-Konstante.
-- `src/sys/asset_runtime.h/cpp` (neu): per-kind Caches +
-  Lookup-Helper. C-ABI zum Aufruf aus LLVM-emittiertem Code.
-- `src/core/builtin_registry.cpp`: `gl.tex/shader/font`, `audio.sfx/music`,
-  `io.read_asset` Builtins registrieren; je ein `AddSymbol` pro C-ABI
-  Lookup-Funktion in `compiler.cpp`.
-- `src/sys/prefab_runtime.cpp` (Phase 2.5): Texture/Shader/Font-Resolver
-  versuchen Stem-Lookup zuerst, fallen auf Pfad-Load zurück mit
-  Deprecation-Warning.  Affecting: rect/sprite-Children mit `texture:`,
-  Material-Refs mit `material:`, künftig `font:` falls hinzukommt.
-- Spec-Doc `aiml/spec/44_7_asset_registry.md` (neu): Syntax, Stem-Regeln,
-  Kind-Klassifikation, Garantien.
+- `exodus/core/build.py` (or wherever the aiml compile call is assembled):
+  add `--asset-roots=<comma-joined asset_directories>`.
+  One line.
+- `src/core/asset_scanner.h/cpp` (new): walks roots (dir+file),
+  canonicalises, dedups via abs_path, classifies, errors, emits
+  `__aiml_asset_table_<kind>` as an LLVM constant.
+- `src/sys/asset_runtime.h/cpp` (new): per-kind caches +
+  lookup helpers. C ABI for calls from LLVM-emitted code.
+- `src/core/builtin_registry.cpp`: register the `gl.tex/shader/font`, `audio.sfx/music`,
+  `io.read_asset` builtins; one `AddSymbol` per C ABI
+  lookup function in `compiler.cpp`.
+- `src/sys/prefab_runtime.cpp` (phase 2.5): texture/shader/font resolvers
+  try a stem lookup first, fall back to a path load with a
+  deprecation warning.  Affecting: rect/sprite children with `texture:`,
+  material refs with `material:`, in future `font:` if it gets added.
+- Spec doc `aiml/spec/44_7_asset_registry.md` (new): syntax, stem rules,
+  kind classification, guarantees.
 
-## Test-Plan
+## Test plan
 
 - `tests/test_asset_registry.aiml`:
-  - `gl.tex("known")` → texture nicht null
-  - `gl.tex("known")` zweimal → identischer Pointer (Cache-Hit)
-  - `audio.sfx("known")` + `audio.music("known")` separat gecacht
-  - `gl.tex("golem")` + `audio.sfx("golem")` koexistieren (verschiedene
-    Stores) ohne Konflikt
-  - **Overlapping Roots**: zwei Roots wo einer Subset des anderen ist
-    (z.B. `resources/ui` + `resources/ui/action_bar`) → derselbe File
-    wird genau einmal registriert, kein Duplikat-Error
-  - **File-Root**: einzelne PNG als Root → registriert wie sonst ein Eintrag
+  - `gl.tex("known")` → texture not null
+  - `gl.tex("known")` twice → identical pointer (cache hit)
+  - `audio.sfx("known")` + `audio.music("known")` cached separately
+  - `gl.tex("golem")` + `audio.sfx("golem")` coexist (different
+    stores) without a conflict
+  - **Overlapping roots**: two roots where one is a subset of the other
+    (e.g. `resources/ui` + `resources/ui/action_bar`) → the same file
+    is registered exactly once, no duplicate error
+  - **File root**: a single PNG as a root → registered like any other entry
 - `tests/_asset_negatives/`:
-  - String-Literal-Lookup mit unbekanntem Stem → Compiler-Hard-Error
-  - Großbuchstabe-Datei im scan-root → Warning, Datei nicht auffindbar
-  - Duplikat-Stem im selben Kind in zwei verschiedenen abs_paths →
-    Compiler-Hard-Error
-  - Prefab-Spec mit Pfad-Literal (`texture: "resources/..."`) →
-    Compile-Hard-Error mit "use stem" Hinweis
-  - Prefab-Spec mit unbekanntem `texture:` Stem → Compile-Hard-Error
-  - Material-File mit `#include "common.glsl"` → Hard-Error mit "use @common"
-  - `gl.load_texture("resources/...")` literal call mit Pfad im Bundle →
-    Compile-Hard-Error
+  - string literal lookup with an unknown stem → compiler hard error
+  - upper-case file in the scan root → warning, file not findable
+  - duplicate stem in the same kind at two different abs_paths →
+    compiler hard error
+  - prefab spec with a path literal (`texture: "resources/..."`) →
+    compile hard error with the "use stem" hint
+  - prefab spec with an unknown `texture:` stem → compile hard error
+  - material file with `#include "common.glsl"` → hard error with "use @common"
+  - `gl.load_texture("resources/...")` literal call with a path in the bundle →
+    compile hard error
 
 ## Migration
 
-Drei Surfaces, alle drei werden bei der Aktivierung des Features
-**erzwungen** umgestellt (kein Backward-Compat-Modus):
+Three surfaces, all three are **forcibly** switched over when the feature
+is activated (no backward compat mode):
 
-1. **Imperative API**: `gl.load_texture(path)` bleibt als Escape-Hatch
-   für runtime-generierte Pfade (User-Uploads etc.), aber Compiler
-   Hard-Errort wenn das Argument string-literal **und** der Pfad in
-   einem `asset_directory` liegt → `gl.tex(stem)` benutzen.
-2. **Prefab-Spec-Felder** (texture/shader/font): nur noch Stems.
-   Pfad-Literale → Compile-Hard-Error.
-3. **Material/Shader-Includes**: nur noch `#include "@stem"`.
-   Pfad-Includes → Hard-Error im Material-Compiler.
+1. **Imperative API**: `gl.load_texture(path)` stays as an escape hatch
+   for runtime-generated paths (user uploads etc.), but the compiler
+   raises a hard error when the argument is a string literal **and** the path lies in
+   an `asset_directory` → use `gl.tex(stem)`.
+2. **Prefab spec fields** (texture/shader/font): stems only.
+   Path literals → compile hard error.
+3. **Material/shader includes**: only `#include "@stem"`.
+   Path includes → hard error in the material compiler.
 
-**DataCreatures muss in einer einzigen Welle migriert werden** bevor
-das aiml-Feature aktiv geschaltet wird:
-- Alle `gl.load_texture("resources/...")` literal calls (~20-30 Stellen)
-- Alle Prefab `texture: "resources/..."` Felder (~50 Stellen)
-- Alle Material `#include "..."` Pfade (paar Stellen)
+**DataCreatures must be migrated in a single wave** before
+the aiml feature is switched on:
+- all `gl.load_texture("resources/...")` literal calls (~20-30 places)
+- all prefab `texture: "resources/..."` fields (~50 places)
+- all material `#include "..."` paths (a few places)
 
-Lösungsweg: Asset-Scan + neue API erst implementieren mit feature-flag
-`AIML_ASSET_REGISTRY=1`.  Per-File DataCreatures-Migration und Test mit
-Flag.  Wenn alle Welle durch und Tests grün, Flag default-on, alte
-Code-Pfade entfernen.
+Approach: implement the asset scan + new API first behind the feature flag
+`AIML_ASSET_REGISTRY=1`.  Per-file DataCreatures migration and testing with the
+flag.  When the whole wave is through and the tests are green, flag default-on, remove the old
+code paths.
 
-## Verbleibende Open Questions
+## Remaining open questions
 
-- **Loose files mit unbekannter Extension**: Warning+skip ist Default.
-  Brauchen wir einen Override (`asset_extensions` in exodus.json um
-  z.B. `.lua` als data einzuziehen)? — vorerst nein, später ergänzbar.
-- **Asset-Hot-Reload zur Laufzeit**: Native könnte filesystem-watcher
-  hinzubekommen, WASM nicht. **Out-of-scope** für V1; eigener Backlog-
-  Eintrag wenn benötigt.
+- **Loose files with an unknown extension**: warning+skip is the default.
+  Do we need an override (`asset_extensions` in exodus.json to
+  pull in e.g. `.lua` as data)? — not for now, can be added later.
+- **Asset hot reload at runtime**: native could get a file system watcher,
+  WASM not. **Out of scope** for V1; a separate backlog
+  entry when needed.
 
-## Verwandte Backlog-Einträge
+## Related backlog entries
 
-- `2026-06-06_aiondb_indexed_fields.md` — beide Features adressieren
-  "linear-scan-Schmerz" mit Compiler-unterstützten Lookups.
+- `2026-06-06_aiondb_indexed_fields.md` — both features address the
+  "linear scan pain" with compiler-supported lookups.
