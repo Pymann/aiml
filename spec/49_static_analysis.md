@@ -95,49 +95,49 @@ simply does not.  That is strictly worse than a parse error, which at least name
 The diagnostic names the key, the line, and the nearest legal spelling where one exists
 (`exit` → `call: [sys.exit, N]`).
 
-### 2a.1 Dasselbe gilt fuer die OBERSTE Ebene (17.10.2026)
+### 2a.1 The same applies to the TOP level (2026-10-17)
 
-Die Regel oben deckte nur Statements ab.  Auf der obersten Ebene — dort, wo `def`, `class`,
+The rule above only covered statements.  On the top level — where `def`, `class`,
 `model`, `enum`, `interface`, `cascade`, `classgroup`, `alias`, `prefab`, `material`,
-`namespace`, `import`, `config`, `text`, `extern` stehen — lief jeder unbekannte Schluessel in
-einen `SkipBuilder` und **verschwand wortlos**.
+`namespace`, `import`, `config`, `text`, `extern` live — every unknown key ran into
+a `SkipBuilder` and **disappeared without a word**.
 
-Das ist dieselbe Fehlerklasse mit groesserer Wirkung: ein `- mdoel:` laesst nicht ein Statement
-verschwinden, sondern **den ganzen Typ**, und der Fehler zeigt sich erst viel spaeter als
-„Unknown type" an einer ganz anderen Stelle — oder gar nicht, wenn der Typ nur an einer Stelle
-benutzt wird, die ebenfalls verschwand.
+That is the same class of error with a bigger effect: a `- mdoel:` makes not one statement
+disappear, but **the whole type**, and the error only shows up much later as
+"Unknown type" in a completely different place — or not at all, if the type is only used in a place
+that disappeared as well.
 
-Gefunden beim Bauen von `spec/65`: die Probe `neg/n04_self_certify.aiml` schreibt ein
-Top-Level `- clearance: 0`, das abgelehnt werden muss (die Freigabe setzt der Wirt, F65-6).
-Sie wurde **angenommen**, weil der Schluessel einfach uebersprungen wurde.
+Found while building `spec/65`: the probe `neg/n04_self_certify.aiml` writes a
+top-level `- clearance: 0` that must be refused (the host sets the clearance, F65-6).
+It was **accepted**, because the key was simply skipped.
 
-Die Regel lautet daher: **ein Schluessel, der auf der obersten Ebene keine Deklaration ist, ist
-ein Fehler.**  Geparst wird weiter, damit ein Lauf mehr als einen Fehler meldet.  Die Diagnose
-nennt den Schluessel und, wo es eine gibt, die naechstliegende richtige Schreibweise
+The rule is therefore: **a key on the top level that is not a declaration is
+an error.**  Parsing continues, so that one run reports more than one error.  The diagnostic
+names the key and, where there is one, the closest correct spelling
 (`function` → `def:`, `struct` → `class:`/`model:`, `include`/`use` → `import:`,
 
-#### Was die Regel sofort gefunden hat: `free:` lief auf oberster Ebene nie
+#### What the rule found immediately: `free:` never ran on the top level
 
-Beim Einschalten der Regel schlugen **8 Korpus-Tests** fehl, alle mit demselben unbekannten
-Schluessel: `free`.  Das war kein Fehlalarm, sondern der Befund.
+When the rule was switched on, **8 corpus tests** failed, all with the same unknown
+key: `free`.  That was not a false alarm but the finding.
 
-`free: [p]` ist ein Statement (spec/20).  Die Weiche auf der obersten Ebene reichte
-`decl`, `set`, `call`, `print`, `idx` und `store` an den StatementBuilder weiter — **`free`
-fehlte**.  Ein `- free: [p]` auf oberster Ebene fiel damit in den `SkipBuilder` und wurde
-wortlos verworfen: die Freigabe ist nie passiert.  Betroffen u.a.
+`free: [p]` is a statement (spec/20).  The switch on the top level passed
+`decl`, `set`, `call`, `print`, `idx` and `store` on to the StatementBuilder — **`free`
+was missing**.  A `- free: [p]` on the top level therefore fell into the `SkipBuilder` and was
+discarded without a word: the free never happened.  Affected, among others,
 `tests/test_oo.aiml:55` (`- free: [var_c]`), `tests/test_model_defaults.aiml`,
-`tests/test_chan_class_member.aiml` und die drei
-`*_class_member_heap_init_repro`-Tests.
+`tests/test_chan_class_member.aiml` and the three
+`*_class_member_heap_init_repro` tests.
 
-Bei einer Sprache, deren Speichermodell ausdruecklich auf `new`/`free` steht (spec/61, spec/20),
-ist ein stillschweigend verworfenes `free` kein Randfall: der Quelltext sagt, dass freigegeben
-wird, und es wird nicht freigegeben — und kein Test konnte es merken, weil ein fehlendes `free`
-nur leakt und nichts bricht.  Genau die Eigenschaft, die `exit:` so teuer gemacht hat.
+In a language whose memory model explicitly relies on `new`/`free` (spec/61, spec/20),
+a silently discarded `free` is not an edge case: the source text says that something is freed,
+and it is not freed — and no test could notice, because a missing `free`
+only leaks and breaks nothing.  Exactly the property that made `exit:` so expensive.
 
-Behoben am 17.10.2026: `free` steht in der Weiche.  `return:` und `throw:` bleiben auf der
-obersten Ebene Fehler — sie haben dort keine Bedeutung — bekommen aber einen Hinweis statt
-stiller Verwerfung.
-`clearance` → gibt es nicht, das setzt der Wirt).
+Fixed on 2026-10-17: `free` is in the switch.  `return:` and `throw:` remain errors on the
+top level — they have no meaning there — but get a hint instead of
+silent discarding.
+`clearance` → does not exist, the host sets it).
 
 ---
 
@@ -1056,32 +1056,32 @@ any single member would be a false positive:
   enum's members and the selection is read back via `dropdown_enum`; recorded in
   `checkPrefabUsage` (per prefab child's `enum_type`).
 
-### 18.2a `wire: true` — ein Vokabular, das über eine Grenze geht
+### 18.2a `wire: true` — a vocabulary that crosses a boundary
 
-Ein Enum, dessen Mitglieder über ein **Protokoll**, eine **Datei** oder eine
-**Datenbank** gehen, wird in *einem* Build nur teilweise benannt und im anderen
-vollständig: `JobState.agent_lost` schreibt der Server, liest der Client, und
-der Client-Build sieht das Wort nirgends.  Der Hinweis „remove the unused
-enumerator" wäre dort das genaue Gegenteil des Richtigen — das Mitglied ist
-**der Vertrag**.
+An enum whose members go over a **protocol**, a **file** or a
+**database** is only partially named in *one* build and fully in the other:
+the server writes `JobState.agent_lost`, the client reads it, and
+the client build sees the word nowhere.  The hint "remove the unused
+enumerator" would there be the exact opposite of the right thing — the member is
+**the contract**.
 
 ```aiml
 - enum:
     name: JobState
-    wire: true          # Vokabular einer Schnittstelle, nicht dieses Builds
+    wire: true          # vocabulary of an interface, not of this build
     values: [queued, running, agent_lost, finished]
 ```
 
-- **F49-W1** `wire: true` markiert **alle** Mitglieder des Enums als verwendet —
-  dieselbe Wirkung wie eine reflexive Ganz-Enum-Nutzung (§18.2), nur erklärt
-  statt erschlossen.
-- **F49-W2** Es ist eine **Behauptung des Autors**, keine Messung: wer es setzt,
-  sagt „dieses Vokabular wird auswärts benannt".  Darum steht es am Enum und
-  nicht an einem Schalter des Builds — ein `AIML_LINT=0` hätte alle Enums
-  stummgeschaltet, auch die, deren tote Mitglieder man finden will.
-- **F49-W3** Es ändert **nichts** an der Kodierung: `wire` ist kein Format,
-  keine Stabilitätszusage für Zahlenwerte und keine Erlaubnis, Mitglieder
-  umzusortieren.  Es schaltet genau eine Warnung ab.
+- **F49-W1** `wire: true` marks **all** members of the enum as used —
+  the same effect as a reflective whole-enum use (§18.2), only declared
+  instead of inferred.
+- **F49-W2** It is a **claim by the author**, not a measurement: whoever sets it
+  says "this vocabulary is named elsewhere".  That is why it is on the enum and
+  not on a build switch — an `AIML_LINT=0` would have silenced all enums,
+  including those whose dead members one wants to find.
+- **F49-W3** It changes **nothing** about the encoding: `wire` is not a format,
+  not a stability guarantee for numeric values and not a permission to reorder
+  members.  It switches off exactly one warning.
 
 ### 18.3 What Does **Not** Count (V1)
 
@@ -1089,7 +1089,7 @@ These are intentionally **not** treated as a use, so an otherwise-unreferenced
 member still warns:
 
 - a raw integer literal that happens to equal a member's value,
-- implicit use only through persisted / networked data (dafür gibt es `wire: true`, §18.2a),
+- implicit use only through persisted / networked data (that is what `wire: true` is for, §18.2a),
 - using the enum **type** (e.g. as a field or argument type) without naming a member.
 
 (A `enum: SomeEnum` dropdown/radio binding *does* now count — see the reflective
