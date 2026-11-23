@@ -1,48 +1,48 @@
-# Code-Statistiken: Funktionen und Klassen
+# Code statistics: functions and classes
 
-Hier ist eine Einschätzung zur typischen Größe von Funktionen und Klassen in beliebigen Programmiersprachen. Diese Werte basieren auf gängigen Best Practices (Clean Code) sowie empirischen Untersuchungen großer Codebasen.
+Here is an estimate of the typical size of functions and classes in arbitrary programming languages. These values are based on common best practices (Clean Code) as well as empirical studies of large code bases.
 
-## 1. Funktionen / Methoden
+## 1. Functions / methods
 
-Die Größe einer Funktion ist ein wichtiger Indikator für ihre Wartbarkeit und Verständlichkeit.
+The size of a function is an important indicator of its maintainability and comprehensibility.
 
-*   **Ideal:** 5 - 20 Zeilen (LOC) / **ca. 200 - 1000 Bytes**.
-    *   Eine Funktion sollte genau **eine** Aufgabe erledigen (Single Responsibility Principle).
-    *   Wenn eine Funktion nicht mehr auf einen Bildschirm passt, ist sie oft zu lang.
-*   **Durchschnitt / Realität:** 20 - 50 Zeilen / **ca. 1000 - 2500 Bytes**.
-    *   In vielen Legacy-Systemen oder komplexen Logik-Blöcken sind Funktionen oft etwas länger.
-*   **Warnsignal (Code Smell):** > 50-100 Zeilen / **> 2.5 - 5 KB**.
-    *   Solche Funktionen sind schwer zu testen und zu verstehen. Sie sollten meistens refactored werden.
+*   **Ideal:** 5 - 20 lines (LOC) / **approx. 200 - 1000 bytes**.
+    *   A function should do exactly **one** job (Single Responsibility Principle).
+    *   If a function no longer fits on one screen, it is often too long.
+*   **Average / reality:** 20 - 50 lines / **approx. 1000 - 2500 bytes**.
+    *   In many legacy systems or complex logic blocks, functions are often somewhat longer.
+*   **Warning sign (code smell):** > 50-100 lines / **> 2.5 - 5 KB**.
+    *   Such functions are hard to test and to understand. They should usually be refactored.
 
-**Faustregel:** Je komplexer die Logik (viele Verschachtelungen, `if`/`else`), desto kürzer sollte die Funktion sein.
+**Rule of thumb:** The more complex the logic (deep nesting, `if`/`else`), the shorter the function should be.
 
-## 2. Klassen
+## 2. Classes
 
-Die Größe von Klassen variiert stärker je nach Sprache (z.B. Java vs. Python vs. C++), aber es gibt grobe Richtwerte.
+The size of classes varies more by language (e.g. Java vs. Python vs. C++), but there are rough guidelines.
 
-*   **Ideal:** < 200 Zeilen / **< 10 KB**.
-    *   Eine Klasse sollte ein klares Konzept abbilden.
-*   **Durchschnitt / Realität:** 200 - 500 Zeilen / **ca. 10 - 25 KB**.
-    *   Dies ist oft akzeptabel, solange die Klasse kohärent ist (High Cohesion).
-*   **Warnsignal (God Class):** > 1000 Zeilen / **> 50 KB**.
-    *   Klassen, die zu viel wissen oder zu viel tun ("God Classes"). Sie verletzen oft das Single Responsibility Principle und sind schwer zu warten.
+*   **Ideal:** < 200 lines / **< 10 KB**.
+    *   A class should represent one clear concept.
+*   **Average / reality:** 200 - 500 lines / **approx. 10 - 25 KB**.
+    *   This is often acceptable, as long as the class is coherent (high cohesion).
+*   **Warning sign (God class):** > 1000 lines / **> 50 KB**.
+    *   Classes that know too much or do too much ("God classes"). They often violate the Single Responsibility Principle and are hard to maintain.
 
-### Weitere Metriken für Klassen:
-*   **Anzahl Methoden:** 
-    *   Ideal: 10 - 20 Methoden (inklusive kleiner Helper/Getter/Setter).
-    *   Zu viele öffentliche Methoden deuten auf ein unklares Interface hin.
-*   **Anzahl Felder/Attribute:**
-    *   Ideal: Wenige (z.B. < 7). Viele Felder deuten darauf hin, dass die Klasse eigentlich aus mehreren kleineren Klassen bestehen sollte.
+### Further metrics for classes:
+*   **Number of methods:** 
+    *   Ideal: 10 - 20 methods (including small helpers/getters/setters).
+    *   Too many public methods point to an unclear interface.
+*   **Number of fields/attributes:**
+    *   Ideal: few (e.g. < 7). Many fields suggest that the class should really consist of several smaller classes.
 
-## 3. Unterschiede nach Sprache
+## 3. Differences by language
 
-*   **Java / C#:** Neigen zu etwas mehr Boilerplate, daher sind Klassen oft etwas länger (Getter/Setter, Verbose Syntax).
-*   **Python / Ruby:** Durch prägnantere Syntax oft kürzer für die gleiche Logik.
-*   **C++:** Kann durch Header/Source-Trennung schwerer direkt vergleichbar sein, aber Implementierungsdateien folgen ähnlichen Regeln wie Java.
+*   **Java / C#:** Tend towards somewhat more boilerplate, so classes are often somewhat longer (getters/setters, verbose syntax).
+*   **Python / Ruby:** Often shorter for the same logic thanks to more concise syntax.
+*   **C++:** Can be harder to compare directly because of the header/source split, but implementation files follow rules similar to Java.
 
-## Zusammenfassung
+## Summary
 
-| Element | Ideal (Clean Code) | Akzeptabel | Refactoring empfohlen |
+| Element | Ideal (Clean Code) | Acceptable | Refactoring recommended |
 | :--- | :--- | :--- | :--- |
-| **Funktion** | 5 - 15 Zeilen (~200B - 800B) | bis 50 Zeilen (bis 2.5KB) | > 80 - 100 Zeilen (> 4-5KB) |
-| **Klasse** | < 200 Zeilen (< 10KB) | bis 500 Zeilen (bis 25KB) | > 800 - 1000 Zeilen (> 40-50KB) |
+| **Function** | 5 - 15 lines (~200B - 800B) | up to 50 lines (up to 2.5KB) | > 80 - 100 lines (> 4-5KB) |
+| **Class** | < 200 lines (< 10KB) | up to 500 lines (up to 25KB) | > 800 - 1000 lines (> 40-50KB) |

@@ -65,14 +65,14 @@ is that type, or inherits from it (`extends`).  A clause of the base type theref
 belongs LAST; a clause after it is dead.  Matches nothing in this `try`?  Then the
 exception keeps unwinding to the enclosing `try`, exactly as if this `try` were not there.
 
-Bis 18.10.2026 war davon nichts umgesetzt, und zwar still: der Parser behielt **nur den
-letzten** Zweig (jeder `type:`/`var:`/`body:` ueberschrieb den vorherigen), und die
-Codegenerierung prueefte den Typ gar nicht — `__cxa_throw` bekam `nullptr` als Typinfo, der
-Handler fing alles.  Zwei Zweige zu schreiben hiess also: der erste verschwand wortlos, und
-der zweite bekam auch das, was er nie fangen wollte.  Dieselbe Fehlerklasse wie das frueher
-verschluckte `free:` (spec/61) und `exit:` (spec/23).  Das Ausnahme-Record traegt seitdem
-den Klassennamen, und der Handler vergleicht ihn gegen die statisch bekannte Menge
-"dieser Typ und alles, was von ihm erbt".
+Until 2026-10-18 none of this was implemented, and silently so: the parser kept **only the
+last** branch (every `type:`/`var:`/`body:` overwrote the previous one), and
+code generation did not check the type at all — `__cxa_throw` got `nullptr` as type info, the
+handler caught everything.  Writing two branches therefore meant: the first disappeared without a word, and
+the second also got what it never wanted to catch.  The same class of error as the formerly
+swallowed `free:` (spec/61) and `exit:` (spec/23).  Since then the exception record carries
+the class name, and the handler compares it against the statically known set
+"this type and everything that inherits from it".
 
 ## Implementation invariant — calls inside `try` must be `invoke`
 
@@ -109,16 +109,16 @@ built AOT via `exodus-aot-repro.json` — must be checked in AOT, not only JIT.
 
 ## wasm32
 
-Werfen und Fangen gilt auf wasm32 unverändert. Der Link muss die Ausnahmen aber
-mitnehmen: emcc übersetzt ohne `-fexceptions` gegen `libc++-noexcept`, und
-`__cxa_throw` endet dann in `RuntimeError: unreachable` statt zu werfen. Das Flag
-steht in `tools/run_wasm_test.sh` und in den wasm-Configs der Projekte.
+Throwing and catching apply unchanged on wasm32. But the link has to bring the exceptions
+along: without `-fexceptions` emcc compiles against `libc++-noexcept`, and
+`__cxa_throw` then ends in `RuntimeError: unreachable` instead of throwing. The flag
+is in `tools/run_wasm_test.sh` and in the projects' wasm configs.
 
-Im Codegen ist dabei zweierlei zeigerbreitenabhängig (`CompilerContext`,
-`src/core/context.h`): die `size_t`-Argumente der libc-Aufrufe
-(`getSizeType`/`getSizeConst`/`toSizeType`) und der Ausnahme-Record
-`{Objekt, Free-Thunk, Typ-Tag}` (`getExcRecordType`/`excRecordField`) — auf wasm32
-ist ein Zeiger 4 Byte, feste Abstände 8/16 schreiben dort ins Leere. `__cxa_throw`
-bekommt ein echtes `__class_type_info` (`getExcTypeInfo`); mit `null` greift
-Emscriptens `__cxa_throw` beim Bauen der Meldung aus dem Speicher. Wächter:
+Two things in codegen depend on the pointer width (`CompilerContext`,
+`src/core/context.h`): the `size_t` arguments of the libc calls
+(`getSizeType`/`getSizeConst`/`toSizeType`) and the exception record
+`{object, free thunk, type tag}` (`getExcRecordType`/`excRecordField`) — on wasm32
+a pointer is 4 bytes, fixed offsets 8/16 write into nothing there. `__cxa_throw`
+gets a real `__class_type_info` (`getExcTypeInfo`); with `null`, Emscripten's
+`__cxa_throw` reaches out of memory when building the message. Guard:
 `tests/test_builtin_throw_after_list_alloc.aiml` (in `tests/wasm_tests.list`).
