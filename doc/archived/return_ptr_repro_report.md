@@ -1,185 +1,185 @@
-# Pointer-Return Repro: C++-Fehleranalyse
+# Pointer return repro: C++ error analysis
 
 ## Repro
 
-Datei:
+File:
 - `tests/test_return_types_ptr_repro.aiml`
 
-Inhaltlich minimal:
+Minimal content:
 - top-level `decl g_i32`
-- Funktion `ret_ptr_i32() -> ptr<i32>`
+- function `ret_ptr_i32() -> ptr<i32>`
 - `return [&g_i32]`
-- Aufrufer liest den Rueckgabepointer
+- the caller reads the returned pointer
 
-Lauf:
+Run:
 - `./out/aiml/aiml -r tests/test_return_types_ptr_repro.aiml`
 
-Beobachtung:
-- kein normaler Compilerfehler
-- harter Absturz mit `exit code -1`
+Observation:
+- no normal compiler error
+- hard crash with `exit code -1`
 
-`gdb`-Backtrace:
+`gdb` backtrace:
 - SIGSEGV in LLVM `LiveVariables::HandleVirtRegUse`
-- Stack ueber `MCJIT::emitObject`, `MCJIT::generateCodeForModule`, `MCJIT::runFunction`
-- also kein normaler AIML-Runtime-Fehler, sondern kaputtes oder inkonsistentes erzeugtes LLVM-IR / Machine-IR
+- stack via `MCJIT::emitObject`, `MCJIT::generateCodeForModule`, `MCJIT::runFunction`
+- so not a normal AIML runtime error, but broken or inconsistent generated LLVM IR / machine IR
 
-## Staerkster Verdacht
+## Strongest suspicion
 
-Der Repro wirkt aktuell **nicht** wie ein allgemeiner Fehler "Pointer-Returns gehen nie", sondern wie ein spezifischer Fehler:
+The repro currently does **not** look like a general error "pointer returns never work", but like a specific error:
 
-- `&g_i32` nimmt die Adresse eines **top-level `decl`**
-- im normalen Nicht-Library-Pfad werden top-level `decl`s **nicht** als echte Globals angelegt
-- stattdessen landen sie als lokale Allocas in `__aiml_init`
-- spaeter kompilierte Funktionen sehen diese Symbole aber weiter in `ctx.symbol_table`
-- dadurch kann Funktionscode eine Alloca aus einer **anderen Funktion** referenzieren
+- `&g_i32` takes the address of a **top-level `decl`**
+- in the normal non-library path top-level `decl`s are **not** created as real globals
+- instead they end up as local allocas in `__aiml_init`
+- functions compiled later, however, still see these symbols in `ctx.symbol_table`
+- as a result function code can reference an alloca from **another function**
 
-Das ergibt invalides IR und passt sehr gut zu dem spaeten LLVM-Absturz im Codegen.
+That produces invalid IR and fits the late LLVM crash in codegen very well.
 
-## Relevante C++-Stellen
+## Relevant C++ places
 
-### 1. Top-level `decl` wird im normalen Programm nicht als Global erzeugt
+### 1. A top-level `decl` is not created as a global in a normal program
 
-In `src/core/ast_compiler.cpp` wird nur im `libraryMode` der sichere Pfad benutzt:
+In `src/core/ast_compiler.cpp` the safe path is only used in `libraryMode`:
 
 - top-level `DeclStmt` -> `llvm::GlobalVariable`
-- Kommentar dort sagt das selbst explizit
+- the comment there says so itself explicitly
 
-Im normalen Pfad:
-- es wird `__aiml_init` erzeugt
-- danach wird jedes top-level Node einfach mit `visitTopLevel(...)` besucht
+In the normal path:
+- `__aiml_init` is created
+- after that every top-level node is simply visited with `visitTopLevel(...)`
 
-Betroffene Stellen:
+Affected places:
 - `src/core/ast_compiler.cpp`
-  - `compile(...)`, Library-Pfad mit `GlobalVariable`
-  - `compile(...)`, Nicht-Library-Pfad mit `__aiml_init`
+  - `compile(...)`, library path with `GlobalVariable`
+  - `compile(...)`, non-library path with `__aiml_init`
 
-Konsequenz:
-- top-level `decl` im Run-/JIT-Modus lebt wie eine lokale Variable in `__aiml_init`
-- nicht wie ein echtes Modulglobal
+Consequence:
+- a top-level `decl` in run/JIT mode lives like a local variable in `__aiml_init`
+- not like a real module global
 
-### 2. `visitDeclStmt(...)` erzeugt Allocas am aktuellen Insert-Point
+### 2. `visitDeclStmt(...)` creates allocas at the current insert point
 
 In `src/core/ast_compiler_stmt.cpp`:
-- `visitDeclStmt(...)` ruft `ctx.ir_gen->createAlloca(...)`
-- im Nicht-Library-Fall ist der aktuelle Insert-Point fuer top-level Code eben `__aiml_init`
+- `visitDeclStmt(...)` calls `ctx.ir_gen->createAlloca(...)`
+- in the non-library case the current insert point for top-level code is exactly `__aiml_init`
 
-Konsequenz:
-- `g_i32` aus dem Repro wird als Stack-/Entry-Alloca von `__aiml_init` angelegt
+Consequence:
+- `g_i32` from the repro is created as a stack/entry alloca of `__aiml_init`
 
-### 3. `visitFunction(...)` uebernimmt vorhandene Symbole in die Funktionskompilierung
+### 3. `visitFunction(...)` takes existing symbols over into function compilation
 
 In `src/core/ast_compiler.cpp`:
-- `visitFunction(...)` speichert `auto savedSymbols = ctx.symbol_table`
-- damit sind top-level Symbole in der Funktionskompilierung weiterhin sichtbar
-- es gibt dort keinen Schutz, dass ein Symbol aus einer anderen Funktion stammt
+- `visitFunction(...)` stores `auto savedSymbols = ctx.symbol_table`
+- so top-level symbols stay visible in function compilation
+- there is no protection there against a symbol coming from another function
 
-Konsequenz:
-- `ret_ptr_i32()` kann `g_i32` erfolgreich aufloesen
-- obwohl `g_i32` physisch in `__aiml_init` allokiert wurde
+Consequence:
+- `ret_ptr_i32()` can resolve `g_i32` successfully
+- although `g_i32` was physically allocated in `__aiml_init`
 
-### 4. Unary `&` gibt fuer Variablen blind deren Alloca zurueck
+### 4. Unary `&` blindly returns the alloca for variables
 
 In `src/core/ast_compiler_expr.cpp`:
 - `visitUnary(...)`
-- bei `&x` wird direkt `sym->ir_alloca_inst` zurueckgegeben
+- for `&x`, `sym->ir_alloca_inst` is returned directly
 
-Wichtig:
-- dort gibt es keinen Check, ob diese Alloca zum aktuellen `llvm::Function` gehoert
-- es wird schlicht die Adresse des Symbols zurueckgegeben
+Important:
+- there is no check there whether this alloca belongs to the current `llvm::Function`
+- the address of the symbol is simply returned
 
-Konsequenz:
-- `&g_i32` in `ret_ptr_i32()` gibt sehr wahrscheinlich eine Alloca aus `__aiml_init` zurueck
-- das ist fuer die aktuelle Funktion kein gueltiger lokaler Wertursprung
+Consequence:
+- `&g_i32` in `ret_ptr_i32()` very probably returns an alloca from `__aiml_init`
+- that is not a valid local value origin for the current function
 
-### 5. `visitRetStmt(...)` selbst macht keine Zusatzvalidierung
+### 5. `visitRetStmt(...)` itself does no additional validation
 
 In `src/core/ast_compiler_stmt.cpp`:
-- `visitRetStmt(...)` evaluiert nur den Ausdruck
-- dann `ctx.ir_gen->createRet(val)`
+- `visitRetStmt(...)` only evaluates the expression
+- then `ctx.ir_gen->createRet(val)`
 
-Das ist fuer sich genommen nicht der Hauptfehler, aber:
-- hier wird der problematische Pointer einfach ungeprueft als Return-Wert emittiert
+That is not the main error in itself, but:
+- here the problematic pointer is simply emitted unchecked as the return value
 
-## Warum das den LLVM-Crash plausibel erklaert
+## Why that plausibly explains the LLVM crash
 
-Wenn eine Funktion IR verwendet, das effektiv auf Allocas / Definitionen aus einer anderen Funktion zeigt, ist das IR semantisch kaputt.
+If a function uses IR that effectively points to allocas / definitions from another function, the IR is semantically broken.
 
-Typische Folgen:
-- Verifier-Fehler, falls verifiziert wird
-- oder spaetere Abstuerze in LLVM-Passes
+Typical consequences:
+- verifier errors, if it is verified
+- or later crashes in LLVM passes
 
-Genau hier sehen wir letzteres:
-- nicht sauberer AIML-Compile-Fehler
-- sondern SIGSEGV tief in LLVM LiveVariables waehrend MCJIT-Codegen
+Here we see exactly the latter:
+- not a clean AIML compile error
+- but a SIGSEGV deep in LLVM LiveVariables during MCJIT codegen
 
-Das passt deutlich besser zu **invalidem funktionsuebergreifendem IR** als zu einem einfachen Runtime-Bug.
+That fits **invalid cross-function IR** much better than a simple runtime bug.
 
-## Warum `test_return_types.aiml` trotzdem durchlaeuft
+## Why `test_return_types.aiml` still passes
 
-Der stabile Test nutzt aktuell nur:
-- `i32`-Return
-- `string`-Return
+The stable test currently only uses:
+- `i32` return
+- `string` return
 
-Diese Funktionen greifen nicht auf top-level Alloca-Adressen zu.
+These functions do not access top-level alloca addresses.
 
-Deshalb:
-- der Basis-Return-Pfad funktioniert
-- der spezifische Repro mit `&g_i32` kippt
+Therefore:
+- the basic return path works
+- the specific repro with `&g_i32` tips over
 
-## Weitere moegliche Auswirkungen
+## Further possible effects
 
-Der Fehler ist wahrscheinlich groesser als nur `ptr<i32>`-Return:
+The error is probably bigger than just the `ptr<i32>` return:
 
-- jede Funktion, die auf ein top-level `decl` im Nicht-Library-Pfad zugreift, koennte betroffen sein
-- besonders kritisch:
+- every function that accesses a top-level `decl` in the non-library path could be affected
+- particularly critical:
   - `&global`
-  - Rueckgabe von `ptr<T>`
-  - Weitergabe solcher Pointer an andere Funktionen
-  - moeglicherweise auch direkte Loads aus top-level `decl`, falls sie aus fremdem Funktionskontext kommen
+  - returning `ptr<T>`
+  - passing such pointers on to other functions
+  - possibly also direct loads from a top-level `decl`, if they come from a foreign function context
 
-## Wahrscheinlich sinnvollste Fixrichtungen
+## Probably the most sensible fix directions
 
-### Fixrichtung 1: top-level `decl` auch im Nicht-Library-Pfad als echte Globals materialisieren
+### Fix direction 1: materialise top-level `decl`s as real globals in the non-library path too
 
-Das ist die robusteste Richtung.
+That is the most robust direction.
 
-Statt:
-- top-level `decl` als lokale Allocas in `__aiml_init`
+Instead of:
+- top-level `decl` as local allocas in `__aiml_init`
 
-besser:
-- top-level `decl` immer als `llvm::GlobalVariable`
-- `__aiml_init` macht nur noch Initialisierung und Builtin-Init
+better:
+- top-level `decl` always as an `llvm::GlobalVariable`
+- `__aiml_init` only does initialisation and builtin init
 
-Das waere konzeptionell konsistent mit dem bereits vorhandenen Library-Pfad.
+That would be conceptually consistent with the already existing library path.
 
-### Fixrichtung 2: Bis dahin harte Schutzregel im Compiler
+### Fix direction 2: until then a hard protection rule in the compiler
 
-Falls der groessere Umbau nicht sofort gemacht wird:
+If the larger rework is not done right away:
 
-- `visitUnary('&')` sollte ablehnen, wenn das Zielsymbol aus einem anderen `llvm::Function` stammt
-- allgemeiner: jede Nutzung eines Symbols mit Alloca aus fremdem Funktionskontext sollte einen Compilerfehler werfen
+- `visitUnary('&')` should reject when the target symbol comes from another `llvm::Function`
+- more generally: every use of a symbol with an alloca from a foreign function context should raise a compiler error
 
-Dann gaebe es wenigstens:
-- klaren AIML-Fehler
-- keinen LLVM-SIGSEGV
+Then there would at least be:
+- a clear AIML error
+- no LLVM SIGSEGV
 
-### Fixrichtung 3: Modulverifikation vor JIT erzwingen
+### Fix direction 3: enforce module verification before JIT
 
-Unabhaengig vom eigentlichen Fix sehr sinnvoll:
+Very sensible independently of the actual fix:
 
-- erzeugtes LLVM-Modul verifizieren
-- bei Verifier-Fehler sauber abbrechen
-- nicht erst LLVM-Passes abstuerzen lassen
+- verify the generated LLVM module
+- abort cleanly on a verifier error
+- do not let LLVM passes crash first
 
-## Kurzfazit
+## Short conclusion
 
-Der staerkste aktuelle Befund ist:
+The strongest current finding is:
 
-- `ptr<i32>`-Return selbst ist nicht zwingend der eigentliche Grundfehler
-- der Repro bricht sehr wahrscheinlich, weil `&g_i32` auf ein top-level `decl` zeigt, das im Nicht-Library/JIT-Pfad nur als Alloca in `__aiml_init` existiert
-- diese Adresse wird dann aus einer anderen Funktion heraus verwendet und zurueckgegeben
-- das erzeugt sehr wahrscheinlich invalides LLVM-IR und fuehrt spaet zum Crash in `LiveVariables`
+- the `ptr<i32>` return itself is not necessarily the actual root error
+- the repro very probably breaks because `&g_i32` points to a top-level `decl` that only exists as an alloca in `__aiml_init` in the non-library/JIT path
+- this address is then used and returned from another function
+- that very probably produces invalid LLVM IR and later leads to the crash in `LiveVariables`
 
-Der beste naechste technische Schritt waere:
-- top-level `decl`-Storage zwischen Library- und Nicht-Library-Pfad vereinheitlichen
-- oder mindestens die fremde-Funktion-Alloca-Nutzung hart verbieten
+The best next technical step would be:
+- unify top-level `decl` storage between the library and non-library paths
+- or at least hard-forbid the use of foreign-function allocas
