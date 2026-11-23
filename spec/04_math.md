@@ -54,39 +54,39 @@ Examples:
 This restriction is intentional. Only associative arithmetic operators with clear fold
 semantics are variadic. Non-associative operators stay binary to avoid ambiguous code.
 
-## Operator-Schluessel zitieren (07.11.2026)
+## Quoting operator keys ("Operator-Schluessel zitieren", 2026-11-07)
 
-`{ op: [args] }` ist eine YAML-Flow-Map, und `op` ist ein YAML-**Schluessel**.  Dort gelten
-die Indikatorzeichen von YAML, nicht die Operatortabelle von AIML.  Von den symbolischen
-Operatoren, die AIML kennt, laesst sich nur ein Teil blank hinschreiben — gemessen an
-yaml-cpp 0.8 am 07.11.2026:
+`{ op: [args] }` is a YAML flow map, and `op` is a YAML **key**.  There the
+indicator characters of YAML apply, not the operator table of AIML.  Of the symbolic
+operators AIML knows, only some can be written bare — measured with
+yaml-cpp 0.8 on 2026-11-07:
 
-| Schluessel | Stelligkeit | blank | was YAML aus der blanken Form macht |
+| Key | Arity | bare | what YAML makes of the bare form |
 |---|---|---|---|
-| `+` `-` | binaer, `-` auch unaer | ja | Schluessel wie geschrieben |
-| `/` | binaer | ja | Schluessel wie geschrieben |
-| `<` `<=` | binaer | ja | Schluessel wie geschrieben |
-| `*` | binaer | **nein** | Alias-Indikator → Wurf `the referenced anchor is not defined` |
-| `%` | binaer | **nein** | Wurf `unknown token` |
-| `>` `>=` | binaer | **nein** | Wurf `unknown token` |
-| `\|\|` | binaer | **nein** | Wurf `unknown token` |
-| `?` | unaer (Dereferenz) | **nein** | Wurf `unknown token` |
-| `&&` | binaer | **nein** | Anker-Indikator → Schluessel wird **leer, kein Wurf** |
-| `&` | unaer (Adresse) | **nein** | Anker-Indikator → Schluessel wird **leer, kein Wurf** |
-| `!` | unaer | **nein** | Tag-Indikator → Schluessel wird **leer, kein Wurf** |
-| alle Wortformen (`div`, `mod`, `and`, `or`, `not`, `eq`, `neq`, `lt`, `gt`, `le`, `ge`, `band`, `bor`, `bxor`, `shl`, `shr`, `ushr`) | | ja | Schluessel wie geschrieben |
+| `+` `-` | binary, `-` also unary | yes | key as written |
+| `/` | binary | yes | key as written |
+| `<` `<=` | binary | yes | key as written |
+| `*` | binary | **no** | alias indicator → throws `the referenced anchor is not defined` |
+| `%` | binary | **no** | throws `unknown token` |
+| `>` `>=` | binary | **no** | throws `unknown token` |
+| `\|\|` | binary | **no** | throws `unknown token` |
+| `?` | unary (dereference) | **no** | throws `unknown token` |
+| `&&` | binary | **no** | anchor indicator → key becomes **empty, no throw** |
+| `&` | unary (address) | **no** | anchor indicator → key becomes **empty, no throw** |
+| `!` | unary | **no** | tag indicator → key becomes **empty, no throw** |
+| all word forms (`div`, `mod`, `and`, `or`, `not`, `eq`, `neq`, `lt`, `gt`, `le`, `ge`, `band`, `bor`, `bxor`, `shl`, `shr`, `ushr`) | | yes | key as written |
 
-Darum gilt fuer **jeden symbolischen** Operatorschluessel: **zitieren**.  `{ "%": [10, 3] }`
-und `{ '%': [10, 3] }` sind beide richtig, die Wortformen brauchen nie Anfuehrungszeichen.
-Die zitierte Form ist fuer jeden Schluessel der Tabelle gemessen (`tests/_opkey/quoted_all_ops.aiml`),
-einschliesslich `{ "&": [zahl] }` und `{ "?": [zgr] }`.
+Therefore, for **every symbolic** operator key: **quote it**.  `{ "%": [10, 3] }`
+and `{ '%': [10, 3] }` are both correct; the word forms never need quotation marks.
+The quoted form is measured for every key in the table (`tests/_opkey/quoted_all_ops.aiml`),
+including `{ "&": [zahl] }` and `{ "?": [zgr] }`.
 
-Das ist keine Stilfrage, und zwar aus zwei Gruenden:
+This is not a matter of style, for two reasons:
 
-1. Die Wurf-Zeilen der Tabelle melden YAML-Grammatik, nicht den Operator, der gemeint war —
-   `unknown token` an der Spalte des Zeichens.
-2. Die Zeilen mit **kein Wurf** sind schlimmer: der Operator verschwindet ganz.  Am
-   Ereignisstrom von yaml-cpp gemessen (07.11.2026):
+1. The throwing rows of the table report YAML grammar, not the operator that was meant —
+   `unknown token` at the column of the character.
+2. The rows with **no throw** are worse: the operator disappears entirely.  Measured on
+   the event stream of yaml-cpp (2026-11-07):
 
    ```
    { &: [12, 10] }    MapStart, SeqStart(anchor=1), 12, 10, SeqEnd, Null, MapEnd
@@ -94,39 +94,39 @@ Das ist keine Stilfrage, und zwar aus zwei Gruenden:
    { ~: [12, 10] }    MapStart, Null, SeqStart, 12, 10, SeqEnd, MapEnd
    ```
 
-   Bei den ersten zwei wird die **Argumentsequenz zum Schluessel** der Map und der Wert
-   `null` — `&` ist als Anker gelesen, `!=:` als Tag.  Der Compiler bekommt also eine Map
-   ohne jeden Operator und meldete vor 07.11.2026 weiter unten etwas anderes (`Failed to
-   evaluate value expression`, bei `~` `Unknown binary operator: null`).
+   In the first two, the **argument sequence becomes the key** of the map and the value
+   `null` — `&` is read as an anchor, `!=:` as a tag.  The compiler therefore gets a map
+   without any operator and, before 2026-11-07, reported something else further down (`Failed to
+   evaluate value expression`, for `~` `Unknown binary operator: null`).
 
-Seit 07.11.2026 nennt der Compiler in beiden Faellen Zeile, Ursache und Abhilfe.  Gemessene
-Meldungen:
+Since 2026-11-07 the compiler names line, cause and remedy in both cases.  Measured
+messages:
 
 ```
-# Wurf-Klasse -- der Hinweis haengt am YAML-Fehler und holt sich die Zeile aus dessen Marke
+# throwing class -- the hint hangs on the YAML error and takes the line from its mark
 stmt_percent.aiml: YAML parse error: yaml-cpp: error at line 6, column 23: unknown token
  — line 6 writes the operator key '%' bare: `- set: [rest, { %: [10, 3] }]`.  A bare '%'
 is a YAML indicator character, not a key.  Quote it: { "%": [...] }
 (spec/04 "Operator-Schluessel zitieren").
 
-# Schluck-Klasse -- erkannt daran, dass in Schluesselposition eine Sequenz bzw. ein
-# Null-Skalar ankommt
+# swallowing class -- recognised by a sequence or a null scalar arriving
+# in key position
 stmt_anchor.aiml:6: operator key swallowed by YAML here: `- set: [bits, { &: [12, 10] }]`
  -- the operator key '&' stands bare in key position, so YAML read it as an anchor/tag/null
 and the operator never reached the compiler.  Quote it: { "&": [...] }
 (spec/04 "Operator-Schluessel zitieren").
 ```
 
-`==`, `!=` und `<>` sind ausserdem veraltet; Vergleiche werden in Wortform geschrieben.
-Blank geschrieben nennt die Schluck-Meldung darum gleich die Wortform
-("Write { neq: [...] } -- '!=' is not allowed either"), zitiert greift die eigene
-Veraltet-Pruefung ("Operator '!=' is not allowed. Use 'neq' instead.").
+`==`, `!=` and `<>` are also deprecated; comparisons are written in word form.
+Written bare, the swallow message therefore names the word form right away
+("Write { neq: [...] } -- '!=' is not allowed either"); quoted, the separate
+deprecation check applies ("Operator '!=' is not allowed. Use 'neq' instead.").
 
-Beide Pruefungen haengen **am schon feststehenden Fehlschlag**, nicht am Quelltext: sie
-erklaeren einen Fehler, den es ohne sie auch gab, und koennen darum keinen Code brechen,
-der heute laeuft.  Das ist nicht nur Absicht, sondern noetig — die Suche ist rein
-lexikalisch und trifft `{ *: ... }` auch in Daten in Anfuehrungszeichen (gemessen: drei
-Stellen in 12.024 .aiml-Dateien, alle Testeingaben eines Tokenizers).
+Both checks hang **on the failure that is already certain**, not on the source text: they
+explain an error that existed without them too, and therefore cannot break any code
+that runs today.  That is not only intent but necessary — the search is purely
+lexical and also hits `{ *: ... }` in quoted data (measured: three
+places in 12,024 .aiml files, all test inputs of a tokenizer).
 
-Fuer Operatoren **innerhalb einer Interpolation** gilt dasselbe; dort war die blanke Form
-bis 07.11.2026 **still** — siehe spec/09_1 §3.5.
+The same applies to operators **within an interpolation**; there the bare form was
+**silent** until 2026-11-07 — see spec/09_1 §3.5.

@@ -90,9 +90,9 @@ Object methods (on lists, maps, or custom classes) can also be called.
 
 ### 3.3 Math and Logic
 
-Binary operations (like `+`, `-`, `*`, `/`) work as expected.  Symbolische Operator-
-schluessel werden dabei zitiert — `+`, `-`, `/` duerfen blank stehen, `*` und `%` nicht
-(spec/04 "Operator-Schluessel zitieren", in der Expansion §3.5).
+Binary operations (like `+`, `-`, `*`, `/`) work as expected.  Symbolic operator
+keys are quoted here — `+`, `-`, `/` may stand bare, `*` and `%` may not
+(spec/04 "Quoting operator keys", in an expansion §3.5).
 
 ```yaml
 - decl: [x, i32, 5]
@@ -100,67 +100,67 @@ schluessel werden dabei zitiert — `+`, `-`, `/` duerfen blank stehen, `*` und 
 # Output: Calculated: 10
 ```
 
-### 3.4 Anfuehrungszeichen in einer Expansion — nur escaped (korrigiert 07.11.2026)
+### 3.4 Quotation marks in an expansion — escaped only (corrected 2026-11-07)
 
-Eine Expansion liegt **innerhalb** eines YAML-Skalars.  Ein **blankes** doppeltes
-Anfuehrungszeichen in der Expansion beendet darum diesen Skalar, und der Rest der Zeile
-wird als YAML-Struktur gelesen:
+An expansion lies **within** a YAML scalar.  A **bare** double
+quotation mark in the expansion therefore ends this scalar, and the rest of the line
+is read as YAML structure:
 
 ```yaml
-# FALSCH — das Anfuehrungszeichen vor xyz schliesst den Skalar
+# WRONG — the quotation mark before xyz closes the scalar
 - print: ["name: ${ { call: [etikett, "xyz"] } }"]
 ```
 
-Was ankommt, ist ein Strukturfehler, formuliert in YAML-Grammatik und oft weit von der
-Ursache entfernt:
+What arrives is a structure error, phrased in YAML grammar and often far away from the
+cause:
 
 ```
 YAML parse error: yaml-cpp: error at line 12, column 46: end of sequence flow not found
 ```
 
-Der Compiler haengt an diesen Fehler einen Hinweis, der die Zeilen mit dem Muster nennt.
+The compiler attaches a hint to this error that names the lines with the pattern.
 
-**Escaped geht es.**  `\"` ist in einem doppelt zitierten YAML-Skalar ein gueltiges
-Fluchtzeichen; yaml-cpp gibt den Skalar mit dem Anfuehrungszeichen weiter, und der
-Expansionskoerper wird korrekt gelesen:
+**Escaped, it works.**  `\"` is a valid escape in a double-quoted YAML scalar;
+yaml-cpp passes the scalar on with the quotation mark, and the
+expansion body is read correctly:
 
 ```yaml
 - print: ["name: ${ { call: [etikett, \"xyz\"] } }"]   # name: [xyz]
-- print: ["name: ${ { call: [<.label, \"x\"] } }"]     # name: [x]   (auch als Member)
+- print: ["name: ${ { call: [<.label, \"x\"] } }"]     # name: [x]   (also as a member)
 ```
 
-Bis 07.11.2026 stand hier, der Aufbau sei **gar nicht** schreibbar, und das Gegenbeispiel
-war selbst escaped — also genau die Form, die laeuft.  Beides gemessen am 07.11.2026.
-Wer die Zeile trotzdem nicht escapen will, wertet den Aufruf vorher aus:
+Until 2026-11-07 this section said the construct could **not be written at all**, and the counterexample
+was itself escaped — i.e. exactly the form that works.  Both measured on 2026-11-07.
+Whoever still does not want to escape the line evaluates the call beforehand:
 
 ```yaml
 - decl: [shown, string, { call: [<.label, "x"] }]
 - print: ["name: ${shown}"]
 ```
 
-Einfache Anfuehrungszeichen helfen nicht: der AIML-Parser liest den Expansionskoerper als
-YAML, und dort ist `'x'` derselbe Token wie `"x"` — blank beendet es den aeusseren Skalar
-genauso.
+Single quotation marks do not help: the AIML parser reads the expansion body as
+YAML, and there `'x'` is the same token as `"x"` — bare, it ends the outer scalar
+just the same.
 
-### 3.5 Operator-Schluessel in einer Expansion (07.11.2026)
+### 3.5 Operator keys in an expansion (2026-11-07)
 
-Fuer Operatoren in einer Expansion gilt die Regel aus spec/04 "Operator-Schluessel
-zitieren" unveraendert: **jeder symbolische Operatorschluessel wird zitiert**.  In der
-Expansion braucht das Anfuehrungszeichen die escapte Form aus §3.4:
+For operators in an expansion the rule from spec/04 "Quoting operator keys"
+applies unchanged: **every symbolic operator key is quoted**.  In an
+expansion the quotation mark needs the escaped form from §3.4:
 
 ```yaml
 - decl: [lauf, i32, 143]
 - print: ["rest=${ { \"%\": [lauf, 40] } }"]   # rest=23
 ```
 
-Bis 07.11.2026 war der blanke Schluessel hier **still**.  `${ { %: [lauf, 40] } }` ist
-kein gueltiges YAML (spec/04, Tabelle), `YAML::Load` wirft, und `parseInterpolatedString`
-fiel auf "dann ist es eben Text" zurueck: in die Zeichenkette kam wortwoertlich
-`${ %: [lauf, 40] }`.  Der Compiler meldete nichts, der Austritt war 0.  Gemessen am
-06.11.2026 an einer Messprobe mit 300.000 Zeilen, die diesen Text als Feldwert ablegte —
-alle 300.000 Zeilen mit demselben Wert, und der Index darueber hatte genau einen Eintrag.
+Until 2026-11-07 the bare key was **silent** here.  `${ { %: [lauf, 40] } }` is
+not valid YAML (spec/04, table), `YAML::Load` throws, and `parseInterpolatedString`
+fell back to "then it is just text": the string literally received
+`${ %: [lauf, 40] }`.  The compiler reported nothing, the exit was 0.  Measured on
+2026-11-06 on a measurement probe with 300,000 rows that stored this text as a field value —
+all 300,000 rows with the same value, and the index over it had exactly one entry.
 
-Seit 07.11.2026 ist das ein harter Fehler:
+Since 2026-11-07 this is a hard error:
 
 ```
 line 6: operator key '%' in an expansion must be quoted -- a bare '%' is a YAML indicator
@@ -168,16 +168,16 @@ character, so ${ { %: [lauf, 40] } } is not valid YAML and was silently left as 
 Write ${ { \"%\": [...] } } (spec/09_1 §3.5).
 ```
 
-Die Grenze der Regel: ein Expansionskoerper, der sich nicht als Ausdruck lesen laesst und
-**keinen** blanken Operatorschluessel enthaelt, bleibt weiterhin wortwoertlicher Text.  Das
-ist gewollt und gemessen — `"so schreibt man ${...} im Text"` ist Prosa ueber Expansionen
-und steht neunmal im Korpus (12.024 .aiml-Dateien).
+The limit of the rule: an expansion body that cannot be read as an expression and
+contains **no** bare operator key still remains literal text.  That
+is intended and measured — `"so schreibt man ${...} im Text"` is prose about expansions
+and appears nine times in the corpus (12,024 .aiml files).
 
-Die Pruefung haengt also an **zwei** Bedingungen: der Koerper ist schon durchgefallen (Wurf
-oder kein Ausdruck) **und** er traegt einen blanken Operatorschluessel.  Die erste Bedingung
-ist die wichtige: Code, der heute uebersetzt, kommt an dieser Stelle nie vorbei, die neue
-Meldung kann ihn also nicht brechen.  Alle Faelle liegen als Treiber in
-`tests/_opkey/run.sh` (14 Pruefungen, laeuft in der Suite mit).
+The check therefore hangs on **two** conditions: the body has already failed (throw
+or no expression) **and** it carries a bare operator key.  The first condition
+is the important one: code that compiles today never gets past this point, so the new
+message cannot break it.  All cases are drivers in
+`tests/_opkey/run.sh` (14 checks, runs along in the suite).
 
 ## 4. Implicit Type Conversion (String -> Int)
 
