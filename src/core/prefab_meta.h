@@ -2,12 +2,12 @@
 #include <string>
 #include <vector>
 
-// Tier 4, Eingabe-Erreichbarkeit (spec/44_8).  Die Pruefung laeuft als
-// GANZPROGRAMM-Durchgang wie Tier 3 — ein Prefab wird in einer Datei deklariert
-// und oft in einer anderen bedient, eine Pruefung je Modul waere also
-// falsch-positiv.  Darum stehen diese Strukturen in einem eigenen Kopf: der
-// Kontext (je Modul) UND der Compiler (ganzprogrammweit) brauchen sie, und
-// context.h ist in compiler.h nicht einbindbar (Zyklus).
+// Tier 4, input reachability (spec/44_8).  The check runs as a
+// WHOLE-PROGRAM pass like Tier 3 — a prefab is declared in one file
+// and often operated in another, so a per-module check would be a
+// false positive.  That is why these structures are in a header of their own: the
+// context (per module) AND the compiler (whole-program) need them, and
+// context.h cannot be included in compiler.h (cycle).
 namespace aiml {
 namespace prefab {
 
@@ -20,7 +20,7 @@ struct ChildMeta {
 };
 
 struct Meta {
-    std::string loc;      // Fundstelle der Prefab-Deklaration
+    std::string loc;      // location of the prefab declaration
     float width = 0, height = 0;
     bool inputTransparent = false;
     bool draggable = false;

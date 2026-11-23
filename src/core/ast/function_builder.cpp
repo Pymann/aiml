@@ -250,7 +250,7 @@ bool FunctionBuilder::OnScalar(const std::string& value, const std::string& tag)
         else if (currentKey == "version") {
             try { func->version = std::stoull(value); } catch (...) {}
         }
-        else if (currentKey == "level") {   // spec/65 F65-19: pruefen, nicht durchsetzen
+        else if (currentKey == "level") {   // spec/65 F65-19: check, do not enforce
             int parsed = aiml::clearance::kAbsent;
             if (aiml::clearance::parseLevel(value, "def " + func->name, parsed))
                 func->level = parsed;
@@ -280,18 +280,18 @@ void FunctionBuilder::receiveChildNode(std::unique_ptr<Node> node) {
 std::unique_ptr<Node> FunctionBuilder::finish() {
     func->sourceLine = capturedLine;
         func->sourceColumn = capturedColumn;
-    // Sanity-Check: ein `- def:` ohne `name:`-Feld erzeugt sonst eine
-    // namenlose FunctionDecl, die als leerer Slot in __aiml_fptable landet
-    // und beim Linken zu cross-module `__unnamed_<N>`-Bugs fuehrt
-    // (siehe analysis Geschichte 2026-05-06). Lieber laut scheitern als
-    // still kaputt linken.
+    // Sanity check: a `- def:` without a `name:` field otherwise produces a
+    // nameless FunctionDecl that lands as an empty slot in __aiml_fptable
+    // and at link time leads to cross-module `__unnamed_<N>` bugs
+    // (see analysis history 2026-05-06). Better to fail loudly than
+    // to link silently broken.
     if (func->name.empty()) {
         LOG_ERROR(builder->fmtLoc(capturedLine, capturedColumn) +
-                  "FunctionDecl ohne 'name'-Feld: ein '- def:'-Mapping muss mindestens "
-                  "'name: <funktionsname>' enthalten. "
-                  "Vermutlich ist hier ein verwaistes '- def:' uebrig (z.B. nach Refactor) (spec/07).");
+                  "FunctionDecl without a 'name' field: a '- def:' mapping must contain at least "
+                  "'name: <function_name>'. "
+                  "Probably an orphaned '- def:' is left over here (e.g. after a refactor) (spec/07).");
     }
-    // spec/65 F65-10: ein Gateway darf Privilegien nur fallen lassen.
+    // spec/65 F65-10: a gateway may only drop privileges.
     aiml::clearance::checkGrants(func->level, func->grants, "def " + func->name);
     return std::move(func);
 }

@@ -17,7 +17,7 @@ llvm::Value* loadHandle(CompilerContext& ctx, llvm::Value* slot) {
     return ctx.builder.CreateLoad(i8p(ctx), slot, "hm_handle");
 }
 
-// Ganzzahl (beliebige Breite) -> i64; bool/vorzeichenlos ohne, sonst mit Vorzeichenerweiterung.
+// Integer (any width) -> i64; bool/unsigned without, otherwise with sign extension.
 llvm::Value* toI64(CompilerContext& ctx, llvm::Value* v, bool zeroExtend) {
     auto* i64 = ctx.builder.getInt64Ty();
     if (v->getType()->isIntegerTy(64)) return v;
@@ -29,7 +29,7 @@ llvm::Value* toI64(CompilerContext& ctx, llvm::Value* v, bool zeroExtend) {
     return ctx.builder.getInt64(0);
 }
 
-// Schlüssel -> (string*, i64) gemäß Schlüsselart.
+// Key -> (string*, i64) according to the key kind.
 void keyArgs(CompilerContext& ctx, const Kinds& k, llvm::Value* key, llvm::Value*& sk, llvm::Value*& ik) {
     if (k.key == 0) {
         sk = key->getType()->isPointerTy() ? ctx.builder.CreateBitCast(key, i8p(ctx)) : llvm::ConstantPointerNull::get(
@@ -57,7 +57,7 @@ llvm::Value* fromBits(CompilerContext& ctx, const Kinds& k, llvm::Value* bits) {
     return bits;
 }
 
-// Wert V -> i64-Bitmuster.
+// Value V -> i64 bit pattern.
 llvm::Value* toBits(CompilerContext& ctx, const Kinds& k, llvm::Value* v) {
     if (k.val == 1) {
         llvm::Value* d = v;
@@ -82,7 +82,7 @@ Kinds kinds(CompilerContext& ctx, const std::string& typeName, bool report) {
     std::string inner = typeName.substr(8, typeName.size() - 9);
     size_t colon = inner.find(':');
     if (colon == std::string::npos) {
-        if (report) LOG_ERROR(ctx.fmtLoc() + "hashmap braucht Schlüssel- und Werttyp: hashmap<K:V>, bekam '" + typeName + "'");
+        if (report) LOG_ERROR(ctx.fmtLoc() + "hashmap needs a key and a value type: hashmap<K:V>, got '" + typeName + "'");
         return k;
     }
     k.keyName = inner.substr(0, colon);
@@ -95,9 +95,9 @@ Kinds kinds(CompilerContext& ctx, const std::string& typeName, bool report) {
     else if (k.valName == "f32" || k.valName == "f64") k.val = 1;
     else if (isIntName(k.valName) || k.valName == "bool" || valEnum) k.val = 0;
     if (report && k.key < 0)
-        LOG_ERROR(ctx.fmtLoc() + "hashmap: Schlüsseltyp '" + k.keyName + "' wird nicht unterstützt (string, Ganzzahl, Enum)");
+        LOG_ERROR(ctx.fmtLoc() + "hashmap: key type '" + k.keyName + "' is not supported (string, integer, enum)");
     if (report && k.val < 0)
-        LOG_ERROR(ctx.fmtLoc() + "hashmap: Werttyp '" + k.valName + "' wird nicht unterstützt (Ganzzahl, bool, f32, f64, string, Enum)");
+        LOG_ERROR(ctx.fmtLoc() + "hashmap: value type '" + k.valName + "' is not supported (integer, bool, f32, f64, string, enum)");
     if (k.key < 0 || k.val < 0) { k.key = -1; k.val = -1; }
     return k;
 }
@@ -150,7 +150,7 @@ llvm::Value* method(CompilerContext& ctx, const std::string& typeName, llvm::Val
     if (methodName == "add") {
         if (!expectArgs(ctx, methodName, args, 2)) return nullptr;
         if (k.val != 0) {
-            LOG_ERROR(ctx.fmtLoc() + "hashmap.add gibt es nur für ganzzahlige Werte, nicht für '" + k.valName + "'");
+            LOG_ERROR(ctx.fmtLoc() + "hashmap.add only exists for integer values, not for '" + k.valName + "'");
             return nullptr;
         }
         keyArgs(ctx, k, args[0], sk, ik);
@@ -177,7 +177,7 @@ llvm::Value* method(CompilerContext& ctx, const std::string& typeName, llvm::Val
         if (!elemTy) elemTy = i64;
         int elemSize = elemTy->isPointerTy() ? 8 : static_cast<int>(elemTy->getPrimitiveSizeInBits() / 8);
         if (elemSize != 4 && elemSize != 8) {
-            LOG_ERROR(ctx.fmtLoc() + "hashmap.keys: Schlüsseltyp '" + k.keyName + "' braucht i32 oder i64");
+            LOG_ERROR(ctx.fmtLoc() + "hashmap.keys: key type '" + k.keyName + "' needs i32 or i64");
             return nullptr;
         }
         llvm::Value* list = nullptr;

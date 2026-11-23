@@ -96,11 +96,11 @@ struct Analyzer {
             // later member-store's release-old freed a handle the container still referenced:
             // mana_choice double-free). Lockstep with is_view_alias retain/drop in ast_compiler_stmt.cpp.
             if (dynamic_cast<const AtExpr*>(d->initialValue.get())) return true;
-            // Ein DOTTED Name (`obj.feld`) ist eine Sicht; ein PLAINER Name ist eine Kopie aus
-            // einem anderen Lokal (spec/61 §7) — beide teilen die Feld-Handles und besitzen nach
-            // dem incref ihre EIGENEN Referenzen, also muessen beide am Ende abgeben.  Fehlte das
-            // beim plainen Namen, gab der naechste Member-Store der Kopie den String des
-            // Originals frei (Probe tests/test_value_model_copy_share.aiml).
+            // A DOTTED name (`obj.field`) is a view; a PLAIN name is a copy from
+            // another local (spec/61 §7) — both share the field handles and after
+            // the incref own their OWN references, so both must give them up at the end.  When that was missing
+            // for the plain name, the next member store of the copy freed the
+            // original's string (probe tests/test_value_model_copy_share.aiml).
             if (dynamic_cast<const VariableExpr*>(d->initialValue.get())) return true;
             if (auto* c = dynamic_cast<CallExpr*>(d->initialValue.get())) {
                 // spec/61 §5.1: `{ clone: X }` / `{ copy: X }` produce a FRESH, INDEPENDENT owned

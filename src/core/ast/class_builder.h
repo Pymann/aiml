@@ -34,11 +34,11 @@ class ClassBuilder : public StateHandler {
     int currentLevel = -1;                 // spec/65 F65-33; -1 = absent
     bool currentConst = false;
     bool currentVolatile = false;
-    // spec/15 F15-40: ein `list<T>`-Member nimmt nur `[]` als Default.  Ein
-    // gefuellter Default wurde hier still verworfen (der ExpressionBuilder baute
-    // einen Ausdruck, den initClassContainerMembers fuer Listenfelder nie
-    // ansieht) → das Feld existierte und war zur Laufzeit leer.  Der ModelBuilder
-    // hatte den Check, der ClassBuilder nicht.
+    // spec/15 F15-40: a `list<T>` member only takes `[]` as a default.  A
+    // filled default was silently discarded here (the ExpressionBuilder built
+    // an expression that initClassContainerMembers never looks at for list fields)
+    // → the field existed and was empty at runtime.  The ModelBuilder
+    // had the check, the ClassBuilder did not.
     int  defaultSeqDepth = 0;
     bool defaultSeqItems = false;
 public:

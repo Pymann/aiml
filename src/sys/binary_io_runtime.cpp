@@ -29,17 +29,17 @@ extern "C" void aiml_io_close(void* f) {
 
 /* ── zeilenweise lesen ────────────────────────────────────────────────────── */
 
-/* spec/23: `io.read` ist ein Blocklesen und bricht NICHT am Zeilenende ab.  Fuer eine
- * Zeile gab es bis 01.11.2026 nichts (Backlog-Punkt 6) — cai las deshalb zeichenweise.
- * Liefert die Zeile OHNE den Umbruch, am Dateiende eine leere Zeichenkette, und besitzt
- * das Ergebnis (aiml_str_dup), wie aiml_process_read_line. */
+/* spec/23: `io.read` is a block read and does NOT stop at the end of the line.  For a
+ * line there was nothing until 2026-11-01 (backlog item 6) — that is why cai read character by character.
+ * Returns the line WITHOUT the line break, an empty string at end of file, and owns
+ * the result (aiml_str_dup), like aiml_process_read_line. */
 extern "C" char* aiml_io_read_line(void* f) {
     if (!f) return aiml_str_dup("");
     char*  buf = nullptr;
     size_t cap = 0;
     ssize_t got = getline(&buf, &cap, (FILE*)f);
     if (got < 0) { free(buf); return aiml_str_dup(""); }
-    /* \r\n und \n abschneiden — eine Zeile ist ihr Inhalt, nicht ihr Trenner. */
+    /* Cut off \r\n and \n — a line is its content, not its separator. */
     while (got > 0 && (buf[got - 1] == '\n' || buf[got - 1] == '\r')) buf[--got] = '\0';
     char* out = aiml_str_dup(buf);
     free(buf);

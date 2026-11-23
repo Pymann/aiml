@@ -8,7 +8,7 @@ namespace AIML {
 namespace AST {
 
 bool ModelBuilder::OnMapStart() {
-    // Eine Map INNERHALB des Default-Literals ist ein Element, kein eigener Ausdruck.
+    // A map INSIDE the default literal is an element, not an expression of its own.
     if (defaultSeqDepth > 0) { defaultSeqItems = true; return true; }
     if (insideFields && memberAttrIndex == 2) {
         auto exprBuilder = std::make_unique<ExpressionBuilder>(builder);
@@ -58,7 +58,7 @@ bool ModelBuilder::OnScalar(const std::string& value, const std::string& tag) {
             // "false" leaves curDbIndexed = false (default).
         } else if (modifierKey == "unique") {
             curDbIndexedUnique = (value == "true");
-        } else if (modifierKey == "level") {   // spec/65: pruefen, nicht durchsetzen
+        } else if (modifierKey == "level") {   // spec/65: check, do not enforce
             int parsed = aiml::clearance::kAbsent;
             if (aiml::clearance::parseLevel(value, "model-Feld " + currentField, parsed))
                 curLevel = parsed;
@@ -128,8 +128,8 @@ bool ModelBuilder::OnScalar(const std::string& value, const std::string& tag) {
 
 bool ModelBuilder::OnSequenceStart() {
     if (defaultSeqDepth > 0 || (insideFields && memberAttrIndex == 2 && !currentField.empty())) {
-        // Eine Sequenz im Default-Literal ist selbst ein Element: `[[]]` hat ein
-        // Element und ist damit nicht leer, auch wenn kein Skalar darin steht.
+        // A sequence in the default literal is itself an element: `[[]]` has one
+        // element and is therefore not empty, even if there is no scalar in it.
         if (defaultSeqDepth > 0) defaultSeqItems = true;
         ++defaultSeqDepth;               // a list literal as the field's default
         return true;
@@ -195,8 +195,8 @@ bool ModelBuilder::OnSequenceEnd() {
             currentAccess = "public";
             curDbIndexed = false; curDbIndexedMode.clear();
             curDbIndexedUnique = false; curDbIndexedSkipEmpty = false;
-            curLevel = -1;   // spec/65: nicht ans naechste Feld vererben
-            curAlias.clear();  // spec/15: ein Alias gilt genau einem Feld
+            curLevel = -1;   // spec/65: do not inherit to the next field
+            curAlias.clear();  // spec/15: an alias applies to exactly one field
             return true;
         } else {
             insideFields = false;

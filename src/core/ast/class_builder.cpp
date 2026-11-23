@@ -9,14 +9,14 @@
 namespace AIML {
 namespace AST {
 
-// spec/15 F15-40 gilt fuer Listenfelder; andere Typen behalten ihren bisherigen
-// Weg durch den ExpressionBuilder (ein `buffer`-Default `[1,2,3]` etwa).
+// spec/15 F15-40 applies to list fields; other types keep their previous
+// path through the ExpressionBuilder (a `buffer` default `[1,2,3]`, for instance).
 static bool isListMemberType(const std::string& t) {
     return (t.rfind("list<", 0) == 0 || t.rfind("cascade<", 0) == 0) && !t.empty() && t.back() == '>';
 }
 
 bool ClassBuilder::OnMapStart() {
-    // Eine Map INNERHALB des Default-Literals ist ein Element, kein Ausdruck.
+    // A map INSIDE the default literal is an element, not an expression.
     if (defaultSeqDepth > 0) { defaultSeqItems = true; return true; }
     if (insideRules) {
         // A rule item map opens → delegate to RuleBuilder (forward this open).
@@ -61,7 +61,7 @@ bool ClassBuilder::OnMapEnd() {
 }
 
 bool ClassBuilder::OnScalar(const std::string& value, const std::string& tag) {
-    // Ein Skalar im Default-Literal eines Listenfeldes ist ein Element.
+    // A scalar in the default literal of a list field is an element.
     if (defaultSeqDepth > 0) { defaultSeqItems = true; return true; }
     if (insideMethods && expectingKey && value == "def") {
          builder->pushState(std::make_unique<FunctionBuilder>(builder));
@@ -192,8 +192,8 @@ bool ClassBuilder::OnSequenceStart() {
     else if (insideMembers) {
         if (defaultSeqDepth > 0 ||
             (sequenceDepth == 2 && memberAttrIndex == 2 && isListMemberType(currentType))) {
-            // Eine Sequenz im Default-Literal ist selbst ein Element: `[[]]` hat
-            // ein Element und ist damit nicht leer, auch ohne Skalar darin.
+            // A sequence in the default literal is itself an element: `[[]]` has
+            // one element and is therefore not empty, even without a scalar in it.
             if (defaultSeqDepth > 0) defaultSeqItems = true;
             ++defaultSeqDepth;
             return true;
@@ -245,7 +245,7 @@ bool ClassBuilder::OnSequenceEnd() {
                 m.level = currentLevel;
                 classNode->members.push_back(std::move(m));
                 currentField = ""; currentType = "";
-                currentLevel = -1;   // spec/65: nicht ans naechste Mitglied vererben
+                currentLevel = -1;   // spec/65: do not inherit to the next member
                 return true;
             }
         } else if (sequenceDepth == 0) {
