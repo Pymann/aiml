@@ -2,12 +2,12 @@
 # EXPECTED_CODE: 1
 # static-check: off
 #
-# Ein BASISWERT in ein abgeleitetes FELD ist mehrdeutig -- was soll mit den
-# eigenen Feldern des Ziels geschehen?  Der Weg dorthin gab erst den ganzen
-# Zielspeicher frei und kopierte dann nur den Vorspann; die eigenen Felder
-# zeigten danach auf Freigegebenes (SIGSEGV, gemessen 21.11.2026).
-# Abgelehnt statt erfunden.  Erlaubt und getestet sind `decl: [x, Abgeleitet,
-# basis]` und die Zuweisung an eine VARIABLE (test_model_init_from_base).
+# A BASE value into a derived FIELD is ambiguous -- what should happen to the
+# target's own fields?  The path there first freed the whole
+# target memory and then only copied the prefix; the own fields
+# then pointed to freed memory (SIGSEGV, measured 2026-11-21).
+# Rejected instead of invented.  Allowed and tested are `decl: [x, Derived,
+# base]` and the assignment to a VARIABLE (test_model_init_from_base).
 
 - model: { name: Grund,     fields: [[kennung, string], [zahl, i32]] }
 - model: { name: Erweitert, inherits: Grund, fields: [[notiz, string, "frisch"], [marken, list<string>]] }

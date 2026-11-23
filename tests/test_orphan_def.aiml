@@ -1,13 +1,13 @@
 # SPEC?: 07_functions   # derived from the file name, to be confirmed
-# Test: ein verwaistes `- def:` (ohne `name:`-Feld) muss zu einem klaren
-# Compile-Fehler fuehren, NICHT still durchgehen.
+# Test: an orphaned `- def:` (without a `name:` field) must lead to a clear
+# compile error, NOT pass silently.
 #
-# Hintergrund: ein leeres `- def:` erzeugte vorher eine namenlose
-# FunctionDecl, die als leerer Slot in `__aiml_fptable` landet und beim
-# Linken cross-module zu `undefined reference to __unnamed_<N>` fuehrt.
-# Sehr schwer zu diagnostizieren. Daher: lieber laut scheitern.
+# Background: an empty `- def:` used to produce a nameless
+# FunctionDecl that lands as an empty slot in `__aiml_fptable` and at
+# link time leads cross-module to `undefined reference to __unnamed_<N>`.
+# Very hard to diagnose. Hence: better to fail loudly.
 #
-# Erwartetes Verhalten: aiml meldet "FunctionDecl ohne 'name'-Feld".
+# Expected behaviour: aiml reports "FunctionDecl without a 'name' field".
 
 - def:
 - def:

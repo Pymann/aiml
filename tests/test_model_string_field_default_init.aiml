@@ -1,12 +1,12 @@
 # SPEC?: 15_models,09_strings   # derived from the file name, to be confirmed
-# Regression: ungesetzte `string`-Felder eines Models müssen als LEERER String
-# ("") vorinitialisiert sein, nicht als null-Pointer.  Ein string-Feld ist ein
-# i8* und `.len` lowert zu strlen(ptr) — ein null-Feld segfaultet bei JEDEM
-# Zugriff.  Analog zu list/map-Feldern, die auf leere Container defaulten.
+# Regression: unset `string` fields of a model must be pre-initialised as an EMPTY string
+# (""), not as a null pointer.  A string field is an
+# i8* and `.len` lowers to strlen(ptr) — a null field segfaults on EVERY
+# access.  Analogous to list/map fields, which default to empty containers.
 #
-# Vorher-Bug: der DeckEditor crashte in build_card_text, weil eine frisch
-# gebaute MockCard das nie gesetzte `ability_text` als null hatte und
-# `card.ability_text.len` strlen(null) ausführte.
+# The bug before: the DeckEditor crashed in build_card_text, because a freshly
+# built MockCard had the never set `ability_text` as null and
+# `card.ability_text.len` executed strlen(null).
 #
 # Expected exit code: 0
 
@@ -14,15 +14,15 @@
     name: Widget
     fields:
       - [label, string]
-      - [descr, string]                 # nie gesetzt → muss "" sein, nicht null
-      - [tags,  list<string>]           # Gegenprobe: list default = leer
+      - [descr, string]                 # never set → must be "", not null
+      - [tags,  list<string>]           # counter-probe: list default = empty
 
 - def:
     name: read_len
     args: [[wid, Widget]]
     return: i32
     body:
-      # by-value Übergabe: die Kopie muss ebenfalls gültige "" Felder haben.
+      # by-value passing: the copy must also have valid "" fields.
       - return: wid.descr.len
 
 - def:
@@ -33,16 +33,16 @@
       - decl: [wid, Widget]
       - set: [wid.label, "hello"]
 
-      # Gesetztes Feld korrekt.
+      # the set field is correct.
       - if: { condition: { neq: [wid.label.len, 5] }, then: [{ print: ["FAIL label.len=${wid.label.len}"] }, { set: [fails, { +: [fails, 1] }] }] }
-      # UNGESETZTES string-Feld: direkter .len-Zugriff darf nicht crashen, = 0.
+      # UNSET string field: direct .len access must not crash, = 0.
       - if: { condition: { neq: [wid.descr.len, 0] }, then: [{ print: ["FAIL descr.len=${wid.descr.len}"] }, { set: [fails, { +: [fails, 1] }] }] }
-      # Gegenprobe list-Feld.
+      # counter-probe list field.
       - if: { condition: { neq: [wid.tags.len, 0] }, then: [{ print: ["FAIL tags.len=${wid.tags.len}"] }, { set: [fails, { +: [fails, 1] }] }] }
-      # Ungesetztes Feld in Interpolation (auch strlen-Pfad).
+      # unset field in an interpolation (strlen path too).
       - decl: [joined, string, "d=[${wid.descr}]"]
       - if: { condition: { neq: [joined, "d=[]"] }, then: [{ print: ["FAIL interp='${joined}'"] }, { set: [fails, { +: [fails, 1] }] }] }
-      # by-value an Funktion — Kopie muss auch gültig sein.
+      # by value to a function — the copy must be valid too.
       - if: { condition: { neq: [{ call: [read_len, wid] }, 0] }, then: [{ print: ["FAIL byval descr.len"] }, { set: [fails, { +: [fails, 1] }] }] }
 
       - if:

@@ -1,11 +1,11 @@
 # SPEC?: 15_models   # derived from the file name, to be confirmed
-# Ein Modell, das eine LISTE VON MODELLEN als Feld hat — und eine Funktion,
-# die so ein Element mit `lifetime: producer` liefert.
+# A model that has a LIST OF MODELS as a field — and a function
+# that returns such an element with `lifetime: producer`.
 #
-# Regression: diese Kombination liess den Compiler mit SIGSEGV abstuerzen
-# (gefunden 2026-10-12 beim cosmos-Lauf-Datensatz: PipelineRun.axes ist
-# list<PipelineAxis>).  Ein Absturz ist nie eine zulaessige Antwort — selbst
-# wenn das Muster nicht unterstuetzt waere, muesste eine Diagnose kommen.
+# Regression: this combination made the compiler crash with SIGSEGV
+# (found 2026-10-12 on the cosmos run record: PipelineRun.axes is
+# list<PipelineAxis>).  A crash is never a permissible answer — even
+# if the pattern were not supported, a diagnostic would have to come.
 # Expected exit code: 0
 
 - model:
@@ -50,18 +50,18 @@
       - decl: [run, OuterRun]
       - set: [run.run_id, "run-1"]
 
-      # Variante A: ueber eine lokale Variable
+      # variant A: via a local variable
       - decl: [axis_a, InnerAxis, { call: [make_axis, "arch", "x86_64"] }]
       - call: [run.axes.push, axis_a]
-      # Variante B: das Ergebnis direkt pushen
+      # variant B: push the result directly
       - call: [run.axes.push, { call: [make_axis, "mode", "debug"] }]
 
-      - set: [fails, { +: [fails, { call: [expect, "zwei Achsen im Modell", { eq: [run.axes.len, 2] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "two axes in the model", { eq: [run.axes.len, 2] }] }] }]
       - decl: [got_a, InnerAxis, { at: [run.axes, 0] }]
       - decl: [got_b, InnerAxis, { at: [run.axes, 1] }]
-      - set: [fails, { +: [fails, { call: [expect, "erste Achse heisst arch", { eq: [got_a.name, "arch"] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "zweite Achse heisst mode", { eq: [got_b.name, "mode"] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "innere Liste traegt ihren Wert", { eq: [{ at: [got_a.values, 0] }, "x86_64"] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "first axis is called arch", { eq: [got_a.name, "arch"] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "second axis is called mode", { eq: [got_b.name, "mode"] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "inner list carries its value", { eq: [{ at: [got_a.values, 0] }, "x86_64"] }] }] }]
 
       - if:
           condition: { neq: [fails, 0] }

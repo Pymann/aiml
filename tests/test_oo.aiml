@@ -39,7 +39,7 @@
             - print: ["Circle ID: ${<.var_id}, Pos: (${<.var_x}, ${<.var_y}), Radius: ${<.radius}"]
 
 # 5. Test Instantiation and Methods
-- decl: [var_c, ptr<Circle>]            # spec/18: Eigentuemer einer `new`-Allokation ist ptr<T>
+- decl: [var_c, ptr<Circle>]            # spec/18: the owner of a `new` allocation is ptr<T>
 - set: [var_c, { new: Circle }]
 
 - print: ["Testing OO Features..."]

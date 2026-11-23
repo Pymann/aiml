@@ -1,15 +1,15 @@
 # SPEC?: 02_types   # derived from the file name, to be confirmed
 # static-check: off
-# Charakterisiert, wie man ein VERSCHACHTELTES Struct-Feld (resp.card: Card)
-# korrekt befüllt.  9rooms_v2 Card-Refactor: CardResp.card blieb leer.
+# Characterises how to correctly fill a NESTED struct field (resp.card: Card).
+# 9rooms_v2 card refactor: CardResp.card stayed empty.
 #
-# Drei Muster:
+# Three patterns:
 #   A: plain-var via ptr-Param fill                → Baseline
 #   B: nested-assign  set: [resp.card, <var>]      → ?
 #   C: fill nested field via {'&': [resp.card]}    → ?
 #
-# Erwartung: alle drei sollten ID42/5 liefern.  Was NICHT klappt, ist ein
-# Compiler-Issue (Backlog-Kandidat).
+# Expectation: all three should deliver ID42/5.  What does NOT work is a
+# compiler issue (backlog candidate).
 
 - model: { name: Card2, fields: [[card_id, string], [attack, i32]] }
 - model: { name: Resp2, fields: [[success, i32], [card, Card2]] }
@@ -39,7 +39,7 @@
       - call: [log.info, "B res.card.card_id='${res.card.card_id}' attack=${res.card.attack} (want ID42/5)"]
       - if: { condition: { neq: [res.card.card_id, "ID42"] }, then: [{ set: [fails, { +: [fails, 1] }] }] }
 
-      # C: fill nested field via {'&': [res2.card]} (BUG #3 — muss kompilieren)
+      # C: fill nested field via {'&': [res2.card]} (BUG #3 — must compile)
       - decl: [res2, Resp2]
       - call: [fill_card, { '&': [res2.card] }]
       - call: [log.info, "C res2.card.card_id='${res2.card.card_id}' attack=${res2.card.attack} (want ID42/5)"]

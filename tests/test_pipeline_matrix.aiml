@@ -1,10 +1,10 @@
 # SPEC: 62_pipelines
-# spec/62 §4: Parameterraum und exclude.
+# spec/62 §4: parameter space and exclude.
 #
-# Die Matrix ist die Hauptsache (§1): drei Achsen ergeben acht Lanes, eine
-# Teilbindung schliesst zwei davon aus.  Geprueft wird vor allem, dass ein
-# FALSCHES exclude auffaellt (F62-4) statt still nichts auszuschliessen — das
-# ist die Fehlerart, die Matrix-Konfiguration anderswo unzuverlaessig macht.
+# The matrix is the main thing (§1): three axes give eight lanes, a
+# partial binding excludes two of them.  Above all it is checked that a
+# WRONG exclude is noticed (F62-4) instead of silently excluding nothing — that
+# is the kind of error that makes matrix configuration unreliable elsewhere.
 # Expected exit code: 0
 
 - def:
@@ -23,7 +23,7 @@
       - print: ["  FAIL ${what}"]
       - return: 1
 
-# build_three: Pipeline mit drei Achsen, frisch gebaut.
+# build_three: a pipeline with three axes, freshly built.
 - def:
     name: build_three
     return: pipeline
@@ -62,35 +62,35 @@
       - decl: [full, pipeline, { call: [build_three] }]
       - set: [fails, { +: [fails, { call: [expect, "2x2x2 ergibt acht Lanes", { eq: [{ call: [full.lane_count] }, 8] }] }] }]
 
-      # ── exclude als Teilbindung: zwei Lanes fallen weg ──────────────────
+      # ── exclude as a partial binding: two lanes drop out ─────────────────
       - decl: [cut, pipeline, { call: [build_three] }]
       - call: [cut.add_exclude, "arch=arm64,compiler=gcc"]
-      - set: [fails, { +: [fails, { call: [expect, "eine Teilbindung schliesst zwei Lanes aus", { eq: [{ call: [cut.lane_count] }, 6] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "a partial binding excludes two lanes", { eq: [{ call: [cut.lane_count] }, 6] }] }] }]
       - decl: [rc_cut, i32, { call: [cut.run] }]
-      - set: [fails, { +: [fails, { call: [expect, "der gekuerzte Lauf gelingt", { eq: [rc_cut, 0] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "und fuehrt genau sechs Schritte aus", { eq: [{ call: [cut.ran_count] }, 6] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "the shortened run succeeds", { eq: [rc_cut, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "and executes exactly six steps", { eq: [{ call: [cut.ran_count] }, 6] }] }] }]
 
-      # ── F62-4: unbekannte Achse im exclude ist ein FEHLER ───────────────
+      # ── F62-4: an unknown axis in exclude is an ERROR ───────────────────
       - decl: [bad_axis, pipeline, { call: [build_three] }]
       - call: [bad_axis.add_exclude, "gibtsnicht=egal"]
       - decl: [rc_axis, i32, { call: [bad_axis.run] }]
-      - set: [fails, { +: [fails, { call: [expect, "unbekannte Achse im exclude wird abgelehnt", { neq: [rc_axis, 0] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "dabei lief kein Schritt", { eq: [{ call: [bad_axis.ran_count] }, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "unknown axis in exclude is rejected", { neq: [rc_axis, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "no step ran in the process", { eq: [{ call: [bad_axis.ran_count] }, 0] }] }] }]
 
-      # ── F62-4: Wert ausserhalb der Domaene ist ein FEHLER ───────────────
-      # Sonst schliesst ein Tippfehler still NICHTS aus, und die Matrix laeuft
-      # groesser als gedacht — ohne dass jemand es merkt.
+      # ── F62-4: a value outside the domain is an ERROR ───────────────────
+      # Otherwise a typo silently excludes NOTHING, and the matrix runs
+      # larger than intended — without anyone noticing.
       - decl: [bad_val, pipeline, { call: [build_three] }]
       - call: [bad_val.add_exclude, "arch=sparc"]
       - decl: [rc_val, i32, { call: [bad_val.run] }]
-      - set: [fails, { +: [fails, { call: [expect, "Wert ausserhalb der Domaene wird abgelehnt", { neq: [rc_val, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "value outside the domain is rejected", { neq: [rc_val, 0] }] }] }]
 
-      # ── F62-5: alles ausschliessen ist ein FEHLER ───────────────────────
+      # ── F62-5: excluding everything is an ERROR ─────────────────────────
       - decl: [all_out, pipeline, { call: [build_three] }]
       - call: [all_out.add_exclude, "arch=x86_64"]
       - call: [all_out.add_exclude, "arch=arm64"]
       - decl: [rc_all, i32, { call: [all_out.run] }]
-      - set: [fails, { +: [fails, { call: [expect, "eine leere Matrix wird abgelehnt", { neq: [rc_all, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "an empty matrix is rejected", { neq: [rc_all, 0] }] }] }]
 
       - if:
           condition: { neq: [fails, 0] }

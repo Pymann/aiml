@@ -1,17 +1,17 @@
 # SPEC?: 61_memory_management   # derived from the file name, to be confirmed
-# Memory-Leak-Probe: jede Probe-Methode läuft eine Primitive N-mal in einer Schleife
-# und liefert das RSS-Delta (sys.mem_usage, Bytes).  Leckt eine Primitive, wächst das
-# Delta ~linear mit N → die 2N-Messung ist dann ~doppelt so groß wie die N-Messung.
-# Bleibt beides ~flach (Allocator recycelt), ist die Primitive sauber.
+# Memory leak probe: every probe method runs a primitive N times in a loop
+# and returns the RSS delta (sys.mem_usage, bytes).  If a primitive leaks, the
+# delta grows ~linearly with N → the 2N measurement is then ~twice as large as the N measurement.
+# If both stay ~flat (the allocator recycles), the primitive is clean.
 #
-# Motiviert durch den 9rooms-Server-Leak (~13 MB/30s): der Scheduler ruft pro Tick
-# match_get → matches.get_copy (Deep-Copy einer MatchSession).  Probe A bildet genau
-# das ab; B–G sind Vergleichs-/Kontrollfälle.
+# Motivated by the 9rooms server leak (~13 MB/30s): the scheduler calls per tick
+# match_get → matches.get_copy (deep copy of a MatchSession).  Probe A models exactly
+# that; B–G are comparison/control cases.
 #
-# Parametrisierung (Memory-Lifetime-Plan §8.1 — Proben ISOLIERT in eigenen Prozessen):
-#   AIML_MEM_PROBE = A|B|C|D|E|F|G|all   (Default all)
-#   AIML_MEM_ITERS = <N>                 (Default 20000; gemessen werden N und 2N)
-# Für eine saubere Zuschreibung immer EINE Probe pro Prozess starten, z.B.
+# Parametrisation (memory lifetime plan §8.1 — probes ISOLATED in their own processes):
+#   AIML_MEM_PROBE = A|B|C|D|E|F|G|all   (default all)
+#   AIML_MEM_ITERS = <N>                 (default 20000; N and 2N are measured)
+# For a clean attribution always start ONE probe per process, e.g.
 #   AIML_MEM_PROBE=A AIML_MEM_ITERS=20000 aiml -r tests/test_mem_leak_probe.aiml
 
 - model:
@@ -31,7 +31,7 @@
           args: [[dir, string]]
           body:
             - set: [<.store, { call: [db.open_kv, "mem_leak_probe", {persist: true, path: dir}] }]
-            # Ein Eintrag mit spürbarem Heap (String + zwei Listen).
+            # An entry with noticeable heap (string + two lists).
             - decl: [rec, Rec]
             - set: [rec.name, "some reasonably long value for the heap"]
             - decl: [sidx, i32, 0]
@@ -43,7 +43,7 @@
                   - set: [sidx, { +: [sidx, 1] }]
             - call: [<.store.set, "k", rec]
 
-      # Probe A: get_copy Deep-Copy pro Iteration, Local fällt am Iter-Ende aus dem Scope.
+      # Probe A: get_copy deep copy per iteration, the local goes out of scope at the end of the iteration.
       - def:
           name: probe_get_copy
           args: [[iters, i32]]
@@ -58,16 +58,16 @@
                   - set: [acnt, { +: [acnt, 1] }]
             - return: { -: [{ call: [sys.mem_usage] }, before] }
 
-      # Probe C: kv.set desselben Keys pro Iteration (Scheduler-Write-Back-Pfad).
+      # Probe C: kv.set of the same key per iteration (scheduler write-back path).
       # NOTE (2026-09-09): the RSS delta this reports is an ALLOCATOR/WAL-ring ARTIFACT,
       # not a true heap leak.  valgrind definite-lost is identical at 100 and 900 iters
       # (~20.9 KB, all compiler/JIT one-time), i.e. it does NOT scale — the kv.set path is
       # clean (blob freed, decoded_cache evicted, the get_copy mrec dropped).  glibc simply
       # does not return freed memory to the OS (arena growth) + the 16 MB WAL ring touches
       # pages as it fills.  Track true leaks with valgrind, not this RSS number.
-      # WICHTIG (§8.1): KONSTANTE Payload — ein vorhandenes Skalar-Element ERSETZEN,
-      # nicht pro Iteration anhängen (sonst wächst der Record selbst und die Messung
-      # ist unbrauchbar/Test-Artefakt).
+      # IMPORTANT (§8.1): CONSTANT payload — REPLACE an existing scalar element,
+      # do not append per iteration (otherwise the record itself grows and the measurement
+      # is useless/a test artefact).
       - def:
           name: probe_set
           args: [[iters, i32]]
@@ -84,7 +84,7 @@
                   - set: [ccnt, { +: [ccnt, 1] }]
             - return: { -: [{ call: [sys.mem_usage] }, before] }
 
-# Probe B: frische Model-Instanz pro Iteration (Heap-Felder), fällt am Iter-Ende raus.
+# Probe B: a fresh model instance per iteration (heap fields), goes out at the end of the iteration.
 - def:
     name: probe_model_new
     static_off: ["same_arg"]
@@ -104,11 +104,11 @@
             - set: [bcnt, { +: [bcnt, 1] }]
       - return: { -: [{ call: [sys.mem_usage] }, before] }
 
-# Probe H: OWNED new-Box pro Iteration (ptr<Rec> via { new: Rec }, Heap-Felder), fällt
-# am Iter-Ende aus dem Scope.  Gegenstück zu B (Value-Model-Local): B bleibt flach
-# (Scope-Drop tief), H MUSS ebenfalls flach bleiben — tut es das nicht, werden owned
-# new-Boxen am Scope-Ende nicht freigegeben (Wurzel der 9rooms-Leaks: get_base /
-# new CardMkpMath).  Regressions-Assertion in _mem_sanitize/newbox_scope_drop.aiml.
+# Probe H: OWNED new box per iteration (ptr<Rec> via { new: Rec }, heap fields), goes
+# out of scope at the end of the iteration.  Counterpart to B (value model local): B stays flat
+# (deep scope drop), H MUST stay flat as well — if it does not, owned
+# new boxes are not freed at the end of the scope (root of the 9rooms leaks: get_base /
+# new CardMkpMath).  Regression assertion in _mem_sanitize/newbox_scope_drop.aiml.
 - def:
     name: probe_box_new
     static_off: ["same_arg"]
@@ -147,9 +147,9 @@
             - set: [dcnt, { +: [dcnt, 1] }]
       - return: { -: [{ call: [sys.mem_usage] }, before] }
 
-# Probe E: list<string> mit DYNAMISCHEN (interpolierten) Strings pro Iteration.
-# Disambiguiert: leckt nur Model-Heap (dann E≈0) oder dynamischer Heap in JEDEM
-# Container (dann E≈B)?
+# Probe E: list<string> with DYNAMIC (interpolated) strings per iteration.
+# Disambiguates: does only model heap leak (then E≈0) or dynamic heap in EVERY
+# container (then E≈B)?
 - def:
     name: probe_list_dyn
     static_off: ["same_arg"]
@@ -168,9 +168,9 @@
             - set: [ecnt, { +: [ecnt, 1] }]
       - return: { -: [{ call: [sys.mem_usage] }, before] }
 
-# Probe F (Kontrolle §8.1): NACKTE Interpolation OHNE Container — ein dynamischer
-# String-Local pro Iteration, sonst nichts.  Isoliert das Interpolations-Temporary
-# selbst (leckt der interpolierte String schon ohne jede Liste?).
+# Probe F (control §8.1): BARE interpolation WITHOUT a container — one dynamic
+# string local per iteration, nothing else.  Isolates the interpolation temporary
+# itself (does the interpolated string leak even without any list?).
 - def:
     name: probe_interp_bare
     static_off: ["same_arg"]
@@ -186,11 +186,11 @@
             - set: [fcnt, { +: [fcnt, 1] }]
       - return: { -: [{ call: [sys.mem_usage] }, before] }
 
-# Probe G (Kontrolle §8.1): Liste mit AUSSERHALB der Schleife erzeugten dynamischen
-# Strings.  Pro Iteration werden dieselben (bereits besessenen) dyn-Strings in eine
-# frische Liste gepusht + die Liste gedroppt.  Trennt Container-Element-Ownership
-# (push/drop) von der String-Erzeugung: leckt G, liegt es am Container-Drop, nicht
-# am Erzeugen dynamischer Strings.
+# Probe G (control §8.1): a list with dynamic strings created OUTSIDE the loop.
+# Per iteration the same (already owned) dyn strings are pushed into a
+# fresh list + the list is dropped.  Separates container element ownership
+# (push/drop) from string creation: if G leaks, it is due to the container drop, not
+# to creating dynamic strings.
 - def:
     name: probe_list_dyn_hoisted
     static_off: ["same_arg"]
@@ -212,7 +212,7 @@
             - set: [gcnt, { +: [gcnt, 1] }]
       - return: { -: [{ call: [sys.mem_usage] }, before] }
 
-# want: Probe-Selektion aus AIML_MEM_PROBE (all → immer).
+# want: probe selection from AIML_MEM_PROBE (all → always).
 - def:
     name: want
     static_off: ["same_arg", "str_cmp"]
@@ -238,7 +238,7 @@
       - if: { condition: { gt: [{ call: [envm.contains, "AIML_MEM_ITERS"] }, 0] }, then: [{ decl: [itxt, string, { call: [envm.get, "AIML_MEM_ITERS"] }] }, { set: [reps, { call: [itxt.to_int] }] }] }
       - decl: [reps2, i32, { '*': [reps, 2] }]
       - call: [log.info, "MEMPROBE sel=${sel} N=${reps} 2N=${reps2} (Leck ⇔ 2N≈2·N; sauber ⇔ beide≈0)"]
-      # Warmup, damit einmalige Lazy-Allokationen nicht als Leck zählen.
+      # warm-up, so that one-time lazy allocations do not count as a leak.
       - decl: [warm, i64, { call: [svc.probe_get_copy, 2000] }]
 
       - if:

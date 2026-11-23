@@ -1,15 +1,15 @@
 # SPEC: 62_pipelines
-# spec/62 §5.2: eine Teilmenge der Achsen in `args` ist der SINN, nicht eine
-# Nachlaessigkeit.  Der Schluessel traegt nur die DEKLARIERTEN Bindungen (§8),
-# also laeuft ein Schritt, der eine Achse nicht benutzt, bei deren Wechsel auch
-# nicht neu — ein Ergebnis wird ueber jene Lanes geteilt.
+# spec/62 §5.2: a subset of the axes in `args` is the POINT, not
+# carelessness.  The key only carries the DECLARED bindings (§8),
+# so a step that does not use an axis does not rerun when it changes
+# either — a result is shared across those lanes.
 #
-# Geprueft wird die Kehrseite mit: wer Achsen deklariert, die er nicht braucht,
-# VERLIERT die Wiederverwendung (F62-32-Begruendung).  Darum drei gleiche
-# Rumpfe, die sich NUR in den deklarierten Achsen unterscheiden:
-#   keine Achse  -> einmal fuer die ganze Matrix
-#   nur arch     -> einmal pro arch
-#   arch + mode  -> jede Lane einzeln
+# The flip side is checked too: whoever declares axes they do not need
+# LOSES the reuse (F62-32 reasoning).  Hence three identical
+# bodies that differ ONLY in the declared axes:
+#   no axis      -> once for the whole matrix
+#   only arch    -> once per arch
+#   arch + mode  -> every lane individually
 # Expected exit code: 0
 
 - def:
@@ -28,8 +28,8 @@
       - print: ["  FAIL ${what}"]
       - return: 1
 
-# two_axis: 2x2 = vier Lanes.  `declare` waehlt, welche Achsen der Schritt
-# deklariert: 0 = keine, 1 = nur arch, 2 = arch und mode.
+# two_axis: 2x2 = four lanes.  `declare` chooses which axes the step
+# declares: 0 = none, 1 = only arch, 2 = arch and mode.
 - def:
     name: two_axis
     args: [[declare, i32]]
@@ -64,33 +64,33 @@
     body:
       - decl: [fails, i32, 0]
 
-      # ── keine Achse deklariert: einmal fuer die ganze Matrix ────────────
+      # ── no axis declared: once for the whole matrix ─────────────────────
       - decl: [p_none, pipeline, { call: [two_axis, 0] }]
       - set: [fails, { +: [fails, { call: [expect, "2x2 ergibt vier Lanes", { eq: [{ call: [p_none.lane_count] }, 4] }] }] }]
       - decl: [rc_n, i32, { call: [p_none.run] }]
-      - set: [fails, { +: [fails, { call: [expect, "ohne Achsen: der Lauf gelingt", { eq: [rc_n, 0] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "ohne Achsen: EINMAL ausgefuehrt", { eq: [{ call: [p_none.ran_count] }, 1] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "ohne Achsen: drei Lanes teilen das Ergebnis", { eq: [{ call: [p_none.reused_count] }, 3] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "without axes: the run succeeds", { eq: [rc_n, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "without axes: executed ONCE", { eq: [{ call: [p_none.ran_count] }, 1] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "without axes: three lanes share the result", { eq: [{ call: [p_none.reused_count] }, 3] }] }] }]
 
-      # ── nur arch deklariert: mode-Wechsel aendert nichts ────────────────
+      # ── only arch declared: a mode change changes nothing ───────────────
       - decl: [p_arch, pipeline, { call: [two_axis, 1] }]
       - decl: [rc_a, i32, { call: [p_arch.run] }]
-      - set: [fails, { +: [fails, { call: [expect, "nur arch: der Lauf gelingt", { eq: [rc_a, 0] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "nur arch: einmal pro arch ausgefuehrt", { eq: [{ call: [p_arch.ran_count] }, 2] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "nur arch: mode-Wechsel trifft", { eq: [{ call: [p_arch.reused_count] }, 2] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "only arch: the run succeeds", { eq: [rc_a, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "only arch: executed once per arch", { eq: [{ call: [p_arch.ran_count] }, 2] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "only arch: mode change hits", { eq: [{ call: [p_arch.reused_count] }, 2] }] }] }]
 
-      # ── beide Achsen deklariert: keine Wiederverwendung mehr ────────────
+      # ── both axes declared: no more reuse ───────────────────────────────
       - decl: [p_both, pipeline, { call: [two_axis, 2] }]
       - decl: [rc_b, i32, { call: [p_both.run] }]
-      - set: [fails, { +: [fails, { call: [expect, "beide Achsen: der Lauf gelingt", { eq: [rc_b, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "both axes: the run succeeds", { eq: [rc_b, 0] }] }] }]
       - set: [fails, { +: [fails, { call: [expect, "beide Achsen: jede Lane laeuft einzeln", { eq: [{ call: [p_both.ran_count] }, 4] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "beide Achsen: nichts wird geteilt", { eq: [{ call: [p_both.reused_count] }, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "both axes: nothing is shared", { eq: [{ call: [p_both.reused_count] }, 0] }] }] }]
 
-      # ── der Kern von §5.2 als EIN Vergleich: gleicher Rumpf, gleiche
-      # Matrix, nur die Deklaration unterscheidet sich -> 1 gegen 4 Laeufe.
+      # ── the core of §5.2 as ONE comparison: the same body, the same
+      # matrix, only the declaration differs -> 1 against 4 runs.
       - set: [fails, { +: [fails, { call: [expect, "unnoetige Achsen kosten Wiederverwendung", { gt: [{ call: [p_both.ran_count] }, { call: [p_none.ran_count] }] }] }] }]
 
-      # ── und ein zweiter Lauf trifft durchweg (der Schluessel ist stabil) ─
+      # ── and a second run hits throughout (the key is stable) ─
       - decl: [rc_b2, i32, { call: [p_both.run] }]
       - set: [fails, { +: [fails, { call: [expect, "zweiter Lauf trifft in allen vier Lanes", { eq: [{ call: [p_both.reused_count] }, 4] }] }] }]
 

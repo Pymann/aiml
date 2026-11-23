@@ -1,11 +1,11 @@
 # SPEC: 32_4_network_websockets §1.1 + 44_5_mirror §3.1
 #
-# Ein Wildcard-Bind MUSS beide Stacks bedienen: derselbe Listener nimmt eine
-# IPv4- UND eine IPv6-Verbindung an.  Vorher band der Listener AF_INET und wies
-# jeden IPv6-Client still ab — ohne Logzeile, weil die Verbindung den Server nie
-# erreicht.  Zusaetzlich: peer_ip eines ueber IPv4 angenommenen Peers muss die
-# punktierte Form liefern, nicht ::ffff:127.0.0.1 (sonst passen Banns und
-# Rate-Limit-Schluessel nicht mehr zu den ueber IPv4 gespeicherten).
+# A wildcard bind MUST serve both stacks: the same listener accepts an
+# IPv4 AND an IPv6 connection.  Before, the listener bound AF_INET and silently
+# rejected every IPv6 client — without a log line, because the connection never
+# reaches the server.  In addition: peer_ip of a peer accepted via IPv4 must deliver the
+# dotted form, not ::ffff:127.0.0.1 (otherwise bans and
+# rate limit keys no longer match the ones stored via IPv4).
 #
 # Expected exit code: 0
 
@@ -17,7 +17,7 @@
       - if:
           condition: { peq: [sess, null] }
           then:
-            - print: ["FAIL dualstack: listen auf ws://0.0.0.0:19886 fehlgeschlagen"]
+            - print: ["FAIL dualstack: listen on ws://0.0.0.0:19886 failed"]
             - return: []
       - decl: [tick, i32, 0]
       - while:
@@ -38,7 +38,7 @@
       - if:
           condition: { peq: [sess, null] }
           then:
-            - print: ["FAIL fallback: listen auf 127.0.0.1:19887 fehlgeschlagen"]
+            - print: ["FAIL fallback: listen on 127.0.0.1:19887 failed"]
             - return: []
       - set: [g_v4_ready, 1]
       - decl: [tick, i32, 0]
@@ -68,39 +68,39 @@
       - call: [cli4.update]
       - print: ["  [ok] IPv4 verbunden (peers=${{ call: [cli4.peer_count] }})"]
 
-      # ── IPv6 auf DEMSELBEN Listener ────────────────────────────────────────
+      # ── IPv6 on THE SAME listener ──────────────────────────────────────────
       - decl: [cli6, mirror_session, { call: [mirror.connect_timeout, "ws://[::1]:19886", 3000] }]
       - if:
           condition: { peq: [cli6, null] }
           then:
-            - print: ["FAIL dualstack: IPv6-Verbindung zu [::1] abgelehnt — Listener ist nicht dual-stack"]
+            - print: ["FAIL dualstack: IPv6 connection to [::1] refused — listener is not dual-stack"]
             - call: [cli4.close]
             - return: 1
       - call: [time.sleep_ms, 150]
       - call: [cli6.update]
-      - print: ["  [ok] IPv6 verbunden auf demselben Listener"]
+      - print: ["  [ok] IPv6 connected on the same listener"]
 
       - call: [cli4.close]
       - call: [cli6.close]
 
-      # ── Adress-Rueckfall ───────────────────────────────────────────────────
-      # "localhost" loest zu ::1 UND 127.0.0.1 auf, und RFC 6724 stellt ::1 nach
-      # vorne.  Dieser Listener bindet NUR IPv4 — der Client muss die Liste also
-      # weiterlaufen und ueber 127.0.0.1 ankommen.  Vorher nahm tcp_connect nur
-      # res[0] und scheiterte: genau der Fall eines Hosts, dessen AAAA-Record
-      # beworben wird, auf dem aber nichts lauscht (spec/32_4 §1.1).
+      # ── address fallback ─────────────────────────────────────────────────
+      # "localhost" resolves to ::1 AND 127.0.0.1, and RFC 6724 puts ::1
+      # first.  This listener binds ONLY IPv4 — so the client must keep walking the list
+      # and arrive via 127.0.0.1.  Before, tcp_connect only took
+      # res[0] and failed: exactly the case of a host whose AAAA record
+      # is advertised but on which nothing listens (spec/32_4 §1.1).
       - decl: [v4_th, thread_handle, { spawn: [v4only_host] }]
       - call: [time.sleep_ms, 400]
       - if:
           condition: { neq: [g_v4_ready, 1] }
-          then: [{ print: ["FAIL fallback: IPv4-Listener nicht bereit"] }, { return: 1 }]
+          then: [{ print: ["FAIL fallback: IPv4 listener not ready"] }, { return: 1 }]
       - decl: [fallb, mirror_session, { call: [mirror.connect_timeout, "ws://localhost:19887", 3000] }]
       - if:
           condition: { peq: [fallb, null] }
           then:
-            - print: ["FAIL fallback: ws://localhost erreichte den IPv4-Listener nicht — kein Adress-Rueckfall"]
+            - print: ["FAIL fallback: ws://localhost did not reach the IPv4 listener — no address fallback"]
             - return: 1
       - print: ["  [ok] Rueckfall ::1 -> 127.0.0.1 greift"]
       - call: [fallb.close]
-      - print: ["PASS mirror_dualstack: ein Wildcard-Listener bedient IPv4 und IPv6"]
+      - print: ["PASS mirror_dualstack: one wildcard listener serves IPv4 and IPv6"]
       - return: 0

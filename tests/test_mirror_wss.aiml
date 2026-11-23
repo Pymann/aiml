@@ -52,7 +52,7 @@
       - decl: [host_th, thread_handle, { spawn: [server_thread] }]
       - call: [time.sleep_ms, 250]
 
-      # Self-signed Dev-Cert → Client-Verifikation für diesen Test abschalten.
+      # Self-signed dev cert → switch off client verification for this test.
       - call: [mirror.tls_insecure, 1]
       - decl: [client, mirror_session, { call: [mirror.connect_timeout, "wss://127.0.0.1:19983", 4000] }]
       - call: [time.sleep_ms, 100]

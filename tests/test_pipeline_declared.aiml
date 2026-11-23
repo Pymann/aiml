@@ -1,14 +1,14 @@
 # SPEC: 62_pipelines
-# spec/62 §5 + §13.5f: die DEKLARIERTE Form — die Schreibweise, in der die
-# Spec ihre Beispiele schreibt.  Sie wird vor dem Uebersetzen in die
-# zusammengesetzte Form umgeschrieben, ist also keine zweite Implementierung.
+# spec/62 §5 + §13.5f: the DECLARED form — the notation in which the
+# spec writes its examples.  It is rewritten into the composed form before compiling,
+# so it is not a second implementation.
 #
-# Geprueft wird, dass die Umschreibung die Bedeutung TRAEGT, nicht nur
-# uebersetzt:
-#   * die deklarierten Achsen sind im Rumpf als ${name} lesbar (F62-109)
-#   * jede Lane hat ihren eigenen Arbeitsbereich
-#   * exclude, cache und parallel wirken wie in der zusammengesetzten Form
-#   * die Pipeline entsteht erst beim Aufruf von demo() (F62-108)
+# What is checked is that the rewrite CARRIES the meaning, not just
+# compiles:
+#   * the declared axes are readable in the body as ${name} (F62-109)
+#   * every lane has its own workspace
+#   * exclude, cache and parallel act as in the composed form
+#   * the pipeline only comes into being when demo() is called (F62-108)
 # Expected exit code: 0
 
 - pipeline:
@@ -24,8 +24,8 @@
       - stage:
           name: mark
           steps:
-            # per: once — EINMAL fuer die ganze Matrix (§5.5).  Genau das, was
-            # ein `git clone` oder `apt install` braucht.
+            # per: once — ONCE for the whole matrix (§5.5).  Exactly what
+            # a `git clone` or `apt install` needs.
             - step:
                 name: prepare
                 per: once
@@ -34,8 +34,8 @@
                 return: string
                 body:
                   - call: [io.write_file, "${workspace}/shared.txt", "einmal"]
-                  # F62-121: der Rueckgabewert wandert von selbst in den
-                  # Ergebniskanal — der Autor schreibt nur `return`.
+                  # F62-121: the return value moves into the result channel by itself
+                  # — the author only writes `return`.
                   - return: "commit-xyz"
             - step:
                 name: write
@@ -44,9 +44,9 @@
                 args: [arch, mode]
                 return: i32
                 body:
-                  # ${prepare} ist der Wert, den der Schritt `prepare`
-                  # zurueckgegeben hat (F62-121) — als lokaler Name, wie die
-                  # Achsen.
+                  # ${prepare} is the value that the step `prepare`
+                  # returned (F62-121) — as a local name, like the
+                  # axes.
                   - call: [io.write_file, "${workspace}/lane.txt", "${arch}-${mode}-${prepare}"]
                   - return: 0
 
@@ -68,34 +68,34 @@
     body:
       - decl: [fails, i32, 0]
 
-      # F62-108: die Deklaration fuehrt nichts aus — erst der Aufruf baut sie.
+      # F62-108: the declaration executes nothing — only the call builds it.
       - decl: [pipe, pipeline, { call: [declared_demo] }]
-      - set: [fails, { +: [fails, { call: [expect, "2x2 minus ein exclude = drei Lanes", { eq: [{ call: [pipe.lane_count] }, 3] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "2x2 minus one exclude = three lanes", { eq: [{ call: [pipe.lane_count] }, 3] }] }] }]
 
       - decl: [rc_run, i32, { call: [pipe.run] }]
-      - set: [fails, { +: [fails, { call: [expect, "der Lauf gelingt", { eq: [rc_run, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "the run succeeds", { eq: [rc_run, 0] }] }] }]
       # 1x prepare (per: once) + 3x write (je Lane)
-      - set: [fails, { +: [fails, { call: [expect, "einmal gemeinsam plus drei Lanes", { eq: [{ call: [pipe.ran_count] }, 4] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "once shared plus three lanes", { eq: [{ call: [pipe.ran_count] }, 4] }] }] }]
       - decl: [p_shared, string, "logs/declared_ws/declared_demo/_/mark/shared.txt"]
-      - set: [fails, { +: [fails, { call: [expect, "der gemeinsame Schritt hat EINEN Arbeitsbereich", { call: [io.exists, p_shared] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "the shared step has ONE workspace", { call: [io.exists, p_shared] }] }] }]
 
-      # F62-109: der Rumpf hat SEINE Achsen gesehen.
+      # F62-109: the body saw ITS axes.
       - decl: [p_one, string, "logs/declared_ws/declared_demo/arch=x86_64,mode=debug/mark/lane.txt"]
       - decl: [p_two, string, "logs/declared_ws/declared_demo/arch=arm64,mode=debug/mark/lane.txt"]
-      - set: [fails, { +: [fails, { call: [expect, "Lane x86_64/debug schrieb ihre Datei", { call: [io.exists, p_one] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "lane x86_64/debug wrote its file", { call: [io.exists, p_one] }] }] }]
       - decl: [got_one, string, { call: [io.read_file, p_one] }]
       - decl: [got_two, string, { call: [io.read_file, p_two] }]
-      - set: [fails, { +: [fails, { call: [expect, "und ihre eigenen Achsenwerte", { eq: [got_one, "x86_64-debug-commit-xyz"] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "and its own axis values", { eq: [got_one, "x86_64-debug-commit-xyz"] }] }] }]
       - set: [fails, { +: [fails, { call: [expect, "die andere Lane ebenso", { eq: [got_two, "arm64-debug-commit-xyz"] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "der Rueckgabewert des gemeinsamen Schritts kam an", { gt: [got_one.len, 15] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "the return value of the shared step arrived", { gt: [got_one.len, 15] }] }] }]
 
-      # Die ausgeschlossene Lane gibt es nicht.
+      # The excluded lane does not exist.
       - decl: [p_gone, string, "logs/declared_ws/declared_demo/arch=arm64,mode=release/mark/lane.txt"]
-      - set: [fails, { +: [fails, { call: [expect, "die ausgeschlossene Lane lief nicht", { eq: [{ call: [io.exists, p_gone] }, false] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "the excluded lane did not run", { eq: [{ call: [io.exists, p_gone] }, false] }] }] }]
 
-      # Ein zweiter Lauf trifft (cache: pure wirkt wie zusammengesetzt).
+      # A second run hits (cache: pure acts as in the composed form).
       - decl: [rc_two, i32, { call: [pipe.run] }]
-      - set: [fails, { +: [fails, { call: [expect, "der zweite Lauf trifft viermal", { eq: [{ call: [pipe.reused_count] }, 4] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "the second run hits four times", { eq: [{ call: [pipe.reused_count] }, 4] }] }] }]
 
       - if:
           condition: { neq: [fails, 0] }

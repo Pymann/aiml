@@ -1,22 +1,22 @@
 # SPEC: 44_5_mirror
-# spec/44_5 §7.2 cancel_request: eine BEREITS EINGEREIHTE Antwort wird mit
-# entfernt und freigegeben — nicht nur die Anmeldung geloescht.
+# spec/44_5 §7.2 cancel_request: an ALREADY QUEUED response is removed and
+# freed along with it — not just the registration deleted.
 #
-# Der Fehler, den dieser Test festnagelt: cancel_request loeschte nur die ID aus
-# `outstanding`.  Eine Antwort, die vorher schon angekommen und eingereiht war,
-# blieb fuer immer in der Queue liegen — und war ueber take_response nicht mehr
-# erreichbar, weil das zuerst die ID gegen `outstanding` prueft.  Da nie etwas
-# verworfen wird, um Platz zu machen, laufen solche Waisen gegen das
-# Per-Peer-Limit (4096 Events / 64 MiB) und trennen am Ende den eigenen Peer.
-# Ein Client, der nur take_response benutzt (9rooms), hat keinen poll_rpc-Drain,
-# der sie noch abholen koennte.
+# The bug this test nails down: cancel_request only deleted the ID from
+# `outstanding`.  A response that had already arrived and been queued before
+# stayed in the queue forever — and was no longer reachable via take_response,
+# because that first checks the ID against `outstanding`.  Since nothing is ever
+# discarded to make room, such orphans run against the
+# per-peer limit (4096 events / 64 MiB) and in the end disconnect our own peer.
+# A client that only uses take_response (9rooms) has no poll_rpc drain
+# that could still collect them.
 #
-# Geprueft wird in dieser Reihenfolge:
-#   1. die Antwort ist eingereiht (has_rpc steigt), aber noch nicht abgeholt
-#   2. cancel_request senkt has_rpc wieder — die Waise ist weg
-#   3. take_response auf die abgebrochene ID meldet -1 (Request beendet)
-#   4. Gegenprobe: eine zweite, NICHT abgebrochene Antwort ist weiter abholbar
-#      (ohne 4. waere 2. auch mit "Queue komplett leeren" erfuellt)
+# Checked in this order:
+#   1. the response is queued (has_rpc rises), but not yet collected
+#   2. cancel_request lowers has_rpc again — the orphan is gone
+#   3. take_response on the cancelled ID reports -1 (request finished)
+#   4. counter-probe: a second response that is NOT cancelled can still be collected
+#      (without 4. 2. would also be satisfied by "empty the queue completely")
 #
 # Expected exit code: 0
 
@@ -52,7 +52,7 @@
                   - set: [served, { +: [served, 1] }]
             - call: [time.sleep_ms, 5]
             - set: [tries, { +: [tries, 1] }]
-      # letzte Pakete rauslassen, bevor geschlossen wird
+      # let the last packets out before closing
       - decl: [drain, i32, 0]
       - while:
           condition: { lt: [drain, 20] }
@@ -78,13 +78,13 @@
       - call: [time.sleep_ms, 50]
       - call: [client.update]
 
-      # ── 1. Anfrage stellen und die Antwort EINREIHEN lassen ─────────────
-      # Bewusst NICHT take_response rufen — die Antwort soll in der Queue liegen,
-      # genau wie bei einem Screen, der inzwischen geschlossen wurde.
+      # ── 1. make a request and let the response be QUEUED ────────────────
+      # Deliberately do NOT call take_response — the response should lie in the queue,
+      # just as for a screen that has been closed in the meantime.
       - decl: [req_one, CancelReq]
       - set: [req_one.tag, "abandoned"]
       - decl: [id_one, i64, { call: [client.send_request, 0, "num", 0, req_one] }]
-      - if: { condition: { le: [id_one, 0] }, then: [{ call: [cancel_fail, "send_request lieferte keine ID (${id_one})"] }] }
+      - if: { condition: { le: [id_one, 0] }, then: [{ call: [cancel_fail, "send_request returned no ID (${id_one})"] }] }
 
       - decl: [queued, i32, 0]
       - decl: [wait_q, i32, 0]
@@ -95,30 +95,30 @@
             - if: { condition: { gt: [{ call: [client.has_rpc] }, 0] }, then: [{ set: [queued, 1] }] }
             - call: [time.sleep_ms, 5]
             - set: [wait_q, { +: [wait_q, 1] }]
-      - if: { condition: { neq: [queued, 1] }, then: [{ call: [cancel_fail, "Antwort wurde nie eingereiht"] }] }
+      - if: { condition: { neq: [queued, 1] }, then: [{ call: [cancel_fail, "response was never queued"] }] }
 
       - decl: [n_before, i32, { call: [client.has_rpc] }]
-      - if: { condition: { lt: [n_before, 1] }, then: [{ call: [cancel_fail, "has_rpc=${n_before} vor dem Abbruch"] }] }
+      - if: { condition: { lt: [n_before, 1] }, then: [{ call: [cancel_fail, "has_rpc=${n_before} before the cancel"] }] }
 
-      # ── 2. Abbruch muss die Waise mitnehmen ────────────────────────────
+      # ── 2. the cancel must take the orphan with it ─────────────────────
       - call: [client.cancel_request, id_one]
       - decl: [n_after, i32, { call: [client.has_rpc] }]
       - if:
           condition: { neq: [n_after, { -: [n_before, 1] }] }
-          then: [{ call: [cancel_fail, "cancel_request liess die eingereihte Antwort liegen (has_rpc ${n_before} -> ${n_after}); sie ist jetzt unerreichbar und zaehlt dauerhaft gegen das Per-Peer-Limit"] }]
+          then: [{ call: [cancel_fail, "cancel_request left the queued response behind (has_rpc ${n_before} -> ${n_after}); it is now unreachable and counts permanently against the per-peer limit"] }]
 
-      # ── 3. die abgebrochene ID ist beendet ─────────────────────────────
+      # ── 3. the cancelled ID is finished ───────────────────────────────
       - decl: [dead, CancelResp]
       - decl: [rc_dead, i32, { call: [client.take_response, id_one, dead] }]
       - if:
           condition: { neq: [rc_dead, -1] }
-          then: [{ call: [cancel_fail, "take_response auf die abgebrochene ID gab ${rc_dead}, erwartet -1"] }]
+          then: [{ call: [cancel_fail, "take_response on the cancelled ID gave ${rc_dead}, expected -1"] }]
 
-      # ── 4. Gegenprobe: eine nicht abgebrochene Antwort bleibt abholbar ──
+      # ── 4. counter-probe: a response that is not cancelled stays collectable ──
       - decl: [req_two, CancelReq]
       - set: [req_two.tag, "kept"]
       - decl: [id_two, i64, { call: [client.send_request, 0, "num", 0, req_two] }]
-      - if: { condition: { le: [id_two, 0] }, then: [{ call: [cancel_fail, "zweite Anfrage lieferte keine ID"] }] }
+      - if: { condition: { le: [id_two, 0] }, then: [{ call: [cancel_fail, "second request returned no ID"] }] }
       - decl: [kept, CancelResp]
       - decl: [got_two, i32, 0]
       - decl: [wait_two, i32, 0]
@@ -130,8 +130,8 @@
             - if: { condition: { lt: [got_two, 0] }, then: [{ call: [cancel_fail, "zweite Antwort war undekodierbar"] }] }
             - call: [time.sleep_ms, 5]
             - set: [wait_two, { +: [wait_two, 1] }]
-      - if: { condition: { neq: [got_two, 1] }, then: [{ call: [cancel_fail, "zweite Antwort kam nicht an — der Abbruch hat zu viel entfernt"] }] }
-      - if: { condition: { neq: [kept.value, 7] }, then: [{ call: [cancel_fail, "zweite Antwort hat value=${kept.value}, erwartet 7"] }] }
+      - if: { condition: { neq: [got_two, 1] }, then: [{ call: [cancel_fail, "second response did not arrive — the cancel removed too much"] }] }
+      - if: { condition: { neq: [kept.value, 7] }, then: [{ call: [cancel_fail, "second response has value=${kept.value}, expected 7"] }] }
 
       - call: [client.close]
       - call: [host_th.join]

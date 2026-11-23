@@ -1,18 +1,18 @@
 # SPEC: 62_pipelines
-# spec/62 §13.5e: wie ein Schritt-Rumpf seine Lane sieht.
+# spec/62 §13.5e: how a step body sees its lane.
 #
-# Ohne das waere die Matrix wirkungslos — jede Lane fuehrte denselben Rumpf
-# aus, ohne zu wissen, welche Lane sie ist.  Geprueft wird deshalb das, was
-# die Matrix erst nuetzlich macht:
-#   * der Rumpf liest den Wert SEINER Lane (step.arg)
-#   * jede (Lane, Stufe) hat ihr EIGENES Verzeichnis (step.workspace, §4.3)
-#   * eine nicht deklarierte Achse zu lesen ist ein FEHLER, kein leerer Wert
-#     (F62-106) — ein leerer Wert waere ein blinder Schluessel
+# Without that the matrix would be ineffective — every lane would execute the same body
+# without knowing which lane it is.  That is why what is checked is what
+# makes the matrix useful in the first place:
+#   * the body reads the value of ITS lane (step.arg)
+#   * every (lane, stage) has its OWN directory (step.workspace, §4.3)
+#   * reading an undeclared axis is an ERROR, not an empty value
+#     (F62-106) — an empty value would be a blind key
 # Expected exit code: 0
 
-# Der Rumpf schreibt seinen Lane-Wert in eine Datei IM Arbeitsbereich.  Damit
-# ist beides zugleich geprueft: dass er den Wert kennt und dass er einen
-# eigenen Platz hat.
+# The body writes its lane value into a file IN the workspace.  That way
+# both are checked at once: that it knows the value and that it has its
+# own place.
 - def:
     name: write_marker
     return: i32
@@ -23,7 +23,7 @@
       - call: [io.write_file, "${work_dir}/marker.txt", which]
       - return: 0
 
-# Liest eine Achse, die der Schritt NICHT deklariert hat.
+# Reads an axis that the step did NOT declare.
 - def:
     name: read_undeclared
     return: i32
@@ -81,23 +81,23 @@
 
       - decl: [pipe, pipeline, { call: [two_arch, 0] }]
       - decl: [rc_run, i32, { call: [pipe.run] }]
-      - set: [fails, { +: [fails, { call: [expect, "der Lauf gelingt", { eq: [rc_run, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "the run succeeds", { eq: [rc_run, 0] }] }] }]
       - set: [fails, { +: [fails, { call: [expect, "beide Lanes liefen", { eq: [{ call: [pipe.ran_count] }, 2] }] }] }]
 
-      # Jede Lane hat ihren eigenen Arbeitsbereich mit IHREM Wert darin.
+      # Every lane has its own workspace with ITS value in it.
       - decl: [p_x86, string, "logs/pipeline_ws/lanes/arch=x86_64,mode=debug/mark/marker.txt"]
       - decl: [p_arm, string, "logs/pipeline_ws/lanes/arch=arm64,mode=debug/mark/marker.txt"]
       - set: [fails, { +: [fails, { call: [expect, "Lane x86_64 hat ihr Verzeichnis", { call: [io.exists, p_x86] }] }] }]
       - set: [fails, { +: [fails, { call: [expect, "Lane arm64 hat ihr Verzeichnis", { call: [io.exists, p_arm] }] }] }]
       - decl: [got_x86, string, { call: [io.read_file, p_x86] }]
       - decl: [got_arm, string, { call: [io.read_file, p_arm] }]
-      - set: [fails, { +: [fails, { call: [expect, "x86_64 sah ihren eigenen Wert", { eq: [got_x86, "x86_64"] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "arm64 sah ihren eigenen Wert", { eq: [got_arm, "arm64"] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "x86_64 saw its own value", { eq: [got_x86, "x86_64"] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "arm64 saw its own value", { eq: [got_arm, "arm64"] }] }] }]
 
-      # Nicht deklarierte Achse lesen: Fehler, nicht leerer Wert (F62-106).
+      # Reading an undeclared axis: an error, not an empty value (F62-106).
       - decl: [sneak, pipeline, { call: [two_arch, 1] }]
       - decl: [rc_sneak, i32, { call: [sneak.run] }]
-      - set: [fails, { +: [fails, { call: [expect, "nicht deklarierte Achse lesen scheitert", { neq: [rc_sneak, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "reading an undeclared axis fails", { neq: [rc_sneak, 0] }] }] }]
 
       - if:
           condition: { neq: [fails, 0] }

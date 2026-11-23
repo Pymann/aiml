@@ -1,14 +1,14 @@
 # SPEC?: 44_5_mirror   # derived from the file name, to be confirmed
 # static-check: off
-# Regression test: RPC-Dispatch via Klassen-Handler + Interface + Dispatcher-Map
+# Regression test: RPC dispatch via class handler + interface + dispatcher map
 # Expected exit code: 0
 #
-# Aufbauend auf test_mirror_rpc_model_ws.aiml, aber das if-else-Manuell-Decoding
-# wird durch eine RpcDispatcher-Klasse ersetzt, deren handlers-map die Method-
-# Namen auf Handler-Klassen abbildet.  Jeder Handler:
-#   - implements: [RpcHandler]              (Interface mit run-Methode)
-#   - models: [SomeReqModel]                (Wire-Daten als Member)
-#   - run() ruft sess.decode_rpc(rpc, this) und macht seine Logik
+# Built on test_mirror_rpc_model_ws.aiml, but the manual if-else decoding
+# is replaced by an RpcDispatcher class whose handlers map maps the method
+# names to handler classes.  Every handler:
+#   - implements: [RpcHandler]              (interface with a run method)
+#   - models: [SomeReqModel]                (wire data as members)
+#   - run() calls sess.decode_rpc(rpc, this) and does its logic
 
 - model:
     name: NetPlayer
@@ -29,8 +29,8 @@
     methods:
       - [run, void, [[rpc, rpc_event], [sess, mirror_session], [player, ref<NetPlayer>]]]
 
-# Handler-Klasse: implements RpcHandler + models RpcCast.
-# `<.name`, `<.amount`, `<.tags` sind durch das Model-Mixin verfügbar.
+# Handler class: implements RpcHandler + models RpcCast.
+# `<.name`, `<.amount`, `<.tags` are available through the model mixin.
 - class:
     name: CastHandler
     implements: [RpcHandler]
@@ -100,13 +100,13 @@
       - decl: [nid, i32, { call: [sess.register, player] }]
       - print: ["host-disp: registered net_id=${nid}"]
 
-      # Dispatcher + Handler aufbauen — impliziter Upcast macht den
-      # ptr<CastHandler> → ptr<RpcHandler>-Cast bei register() automatisch.
+      # Build dispatcher + handler — the implicit upcast does the
+      # ptr<CastHandler> → ptr<RpcHandler> cast automatically on register().
       - decl: [dispatcher, RpcDispatcher]
       - decl: [cast_handler, ptr<CastHandler>, { new: CastHandler }]
       - call: [dispatcher.register, "cast", cast_handler]
 
-      # player als ptr für den dispatcher
+      # player as a ptr for the dispatcher
       - decl: [player_ptr, ptr<NetPlayer>, { '&': [player] }]
 
       - decl: [var_i, i32, 0]

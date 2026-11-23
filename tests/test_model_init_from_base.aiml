@@ -1,15 +1,15 @@
 # SPEC: 15_models "Model Inheritance"
 # static-check: off
 #
-# Eine ABGELEITETE Instanz aus einem BASISWERT anlegen.  Das Gegenstueck zu
-# test_assign_inherited_model_ok, das die andere Richtung prueft (abgeleitet
-# in ein Basisfeld schreiben kopiert den geteilten Vorspann).
+# Create a DERIVED instance from a BASE value.  The counterpart to
+# test_assign_inherited_model_ok, which checks the other direction (writing a derived one
+# into a base field copies the shared prefix).
 #
-# Gefunden am 21.11.2026 in datacreatures: der Compiler nahm die Form an und
-# erzeugte ein Programm, das mit SIGSEGV abstuerzte -- gruener Build, roter
-# Lauf.  Die Felder liegen laut spec/15 als Vorspann im Speicher, also ist die
-# Bedeutung eindeutig: der geteilte Vorspann wird kopiert, die EIGENEN Felder
-# der abgeleiteten Form behalten ihre Vorgabe.
+# Found on 2026-11-21 in datacreatures: the compiler accepted the form and
+# produced a program that crashed with SIGSEGV -- green build, red
+# run.  By spec/15 the fields lie in memory as a prefix, so the
+# meaning is unambiguous: the shared prefix is copied, the derived form's OWN fields
+# keep their default.
 
 - model: { name: Grund,    fields: [[kennung, string], [zahl, i32]] }
 - model:
@@ -17,8 +17,8 @@
     inherits: Grund
     fields:
       - [zusatz, i32, 42]
-      # Eigene Felder MIT Heap: genau hier stuerzte es in datacreatures ab --
-      # ein uninitialisierter Listenzeiger ist kein stiller Nullwert.
+      # own fields WITH heap: exactly here it crashed in datacreatures --
+      # an uninitialised list pointer is not a silent zero value.
       - [notiz,  string, "frisch"]
       - [marken, list<string>]
 
@@ -39,30 +39,30 @@
       - if:
           condition: { neq: [weit.zahl, 7] }
           then: [{ call: [log.error, "FEHL Vorspann zahl=${weit.zahl}"] }, { set: [fehler, { "+": [fehler, 1] }] }]
-      # Das eigene Feld der abgeleiteten Form bleibt auf seiner Vorgabe.
+      # The derived form's own field stays at its default.
       - if:
           condition: { neq: [weit.zusatz, 42] }
-          then: [{ call: [log.error, "FEHL eigenes Feld zusatz=${weit.zusatz}"] }, { set: [fehler, { "+": [fehler, 1] }] }]
+          then: [{ call: [log.error, "FAIL own field zusatz=${weit.zusatz}"] }, { set: [fehler, { "+": [fehler, 1] }] }]
 
       - if:
           condition: { neq: [weit.notiz, "frisch"] }
-          then: [{ call: [log.error, "FEHL eigene Zeichenkette notiz='${weit.notiz}'"] }, { set: [fehler, { "+": [fehler, 1] }] }]
-      # Die eigene Liste muss BENUTZBAR sein, nicht nur leer.
+          then: [{ call: [log.error, "FAIL own string notiz='${weit.notiz}'"] }, { set: [fehler, { "+": [fehler, 1] }] }]
+      # The own list must be USABLE, not just empty.
       - if:
           condition: { neq: [weit.marken.len, 0] }
-          then: [{ call: [log.error, "FEHL eigene Liste len=${weit.marken.len}"] }, { set: [fehler, { "+": [fehler, 1] }] }]
+          then: [{ call: [log.error, "FAIL own list len=${weit.marken.len}"] }, { set: [fehler, { "+": [fehler, 1] }] }]
       - call: [weit.marken.push, "danach"]
       - if:
           condition: { neq: [weit.marken.len, 1] }
-          then: [{ call: [log.error, "FEHL push auf eigene Liste len=${weit.marken.len}"] }, { set: [fehler, { "+": [fehler, 1] }] }]
+          then: [{ call: [log.error, "FAIL push onto own list len=${weit.marken.len}"] }, { set: [fehler, { "+": [fehler, 1] }] }]
 
-      # Und sie sind getrennt: am Original aendert sich nichts.
+      # And they are separate: nothing changes on the original.
       - set: [weit.zahl, 99]
       - if:
           condition: { neq: [basis.zahl, 7] }
           then: [{ call: [log.error, "FEHL Original veraendert zahl=${basis.zahl}"] }, { set: [fehler, { "+": [fehler, 1] }] }]
 
-      # ── Dasselbe mit einem ZEIGER als Quelle ────────────────────────────
+      # ── the same with a POINTER as the source ───────────────────────────
       - decl: [basis_zgr, ptr<Grund>, { new: Grund }]
       - set: [basis_zgr.kennung, "zgr"]
       - set: [basis_zgr.zahl, 5]
@@ -72,17 +72,17 @@
           then: [{ call: [log.error, "FEHL Zeiger-Vorspann kennung='${weit_z.kennung}'"] }, { set: [fehler, { "+": [fehler, 1] }] }]
       - if:
           condition: { neq: [weit_z.zusatz, 42] }
-          then: [{ call: [log.error, "FEHL Zeiger eigenes Feld zusatz=${weit_z.zusatz}"] }, { set: [fehler, { "+": [fehler, 1] }] }]
+          then: [{ call: [log.error, "FAIL pointer own field zusatz=${weit_z.zusatz}"] }, { set: [fehler, { "+": [fehler, 1] }] }]
       - if:
           condition: { neq: [weit_z.notiz, "frisch"] }
-          then: [{ call: [log.error, "FEHL Zeiger eigene Zeichenkette notiz='${weit_z.notiz}'"] }, { set: [fehler, { "+": [fehler, 1] }] }]
+          then: [{ call: [log.error, "FAIL pointer own string notiz='${weit_z.notiz}'"] }, { set: [fehler, { "+": [fehler, 1] }] }]
       - call: [weit_z.marken.push, "ok"]
       - if:
           condition: { neq: [weit_z.marken.len, 1] }
-          then: [{ call: [log.error, "FEHL Zeiger eigene Liste len=${weit_z.marken.len}"] }, { set: [fehler, { "+": [fehler, 1] }] }]
+          then: [{ call: [log.error, "FAIL pointer own list len=${weit_z.marken.len}"] }, { set: [fehler, { "+": [fehler, 1] }] }]
       - free: basis_zgr
 
-      # ── Und der `set:`-Pfad, der denselben Ueberlesefehler hatte ────────
+      # ── And the `set:` path, which had the same over-read bug ───────────
       - decl: [ziel, Erweitert]
       - set: [ziel.zusatz, 7]
       - set: [ziel.notiz, "vorher"]
@@ -90,20 +90,20 @@
       - if:
           condition: { neq: [ziel.kennung, "abc"] }
           then: [{ call: [log.error, "FEHL set Vorspann kennung='${ziel.kennung}'"] }, { set: [fehler, { "+": [fehler, 1] }] }]
-      # Die eigenen Felder bleiben, was sie waren -- `set` schreibt nur den
-      # Vorspann, es legt nichts neu an.
+      # The own fields stay what they were -- `set` only writes the
+      # prefix, it creates nothing anew.
       - if:
           condition: { neq: [ziel.zusatz, 7] }
-          then: [{ call: [log.error, "FEHL set eigenes Feld ueberschrieben zusatz=${ziel.zusatz}"] }, { set: [fehler, { "+": [fehler, 1] }] }]
+          then: [{ call: [log.error, "FAIL set overwrote own field zusatz=${ziel.zusatz}"] }, { set: [fehler, { "+": [fehler, 1] }] }]
       - call: [ziel.marken.push, "noch da"]
       - if:
           condition: { neq: [ziel.marken.len, 1] }
-          then: [{ call: [log.error, "FEHL set eigene Liste len=${ziel.marken.len}"] }, { set: [fehler, { "+": [fehler, 1] }] }]
+          then: [{ call: [log.error, "FAIL set own list len=${ziel.marken.len}"] }, { set: [fehler, { "+": [fehler, 1] }] }]
 
       - if:
           condition: { gt: [fehler, 0] }
           then:
-            - call: [log.error, "test_model_init_from_base: ${fehler} Fehler"]
+            - call: [log.error, "test_model_init_from_base: ${fehler} errors"]
             - return: 1
       - call: [log.info, "test_model_init_from_base: alles gut"]
       - return: 0

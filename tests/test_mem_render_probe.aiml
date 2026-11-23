@@ -1,24 +1,24 @@
-# Render-/Prefab-Memory-Probe (headless): misst RSS-Delta je Render-Primitive über
-# eine Schleife (N und 2N).  Bildet die Client-Board-Render-Last ab.  Leckt eine
-# Primitive, ist 2N≈2·N; ist sie sauber, bleiben beide ~flach.
+# Render/prefab memory probe (headless): measures the RSS delta per render primitive over
+# a loop (N and 2N).  Models the client board render load.  If a
+# primitive leaks, 2N≈2·N; if it is clean, both stay ~flat.
 #
-# Läuft mit GL-Kontext (create_window), aber ohne echtes Sichtbar-Rendern.  Ohne
-# Display (headless CI) meldet create_window 0 → Probe wird übersprungen (kein Fehler).
+# Runs with a GL context (create_window), but without real visible rendering.  Without a
+# display (headless CI) create_window reports 0 → the probe is skipped (no error).
 #
-# Parametrisierung (Memory-Lifetime-Plan §8.1 — Primitiven ISOLIERT trennen):
-#   AIML_RENDER_PROBE = A|A0|B|BL|C|CF|all   (Default all)
-#   AIML_MEM_ITERS    = <N>                  (Default 20000; gemessen N und 2N)
-# Getrennte Primitiven:
-#   A  = instantiate + populate(interp) + destroy   (Spawn/Despawn MIT Text)
-#   A0 = instantiate + destroy OHNE populate         (reiner Spawn/Despawn)
-#   B  = set_text mit INTERPOLATION (persistente Instanz)
-#   BL = set_text mit LITERALEN (persistente Instanz) — trennt Interp vom set_text-Store
-#   C  = draw_scene einer UNVERÄNDERTEN Szene (Diagnosekontrolle, kein populate)
-#   CF = voller Frame: clear + populate + draw_scene + swap (per-Frame-Last)
+# Parametrisation (memory lifetime plan §8.1 — separate the primitives in ISOLATION):
+#   AIML_RENDER_PROBE = A|A0|B|BL|C|CF|all   (default all)
+#   AIML_MEM_ITERS    = <N>                  (default 20000; N and 2N measured)
+# Separated primitives:
+#   A  = instantiate + populate(interp) + destroy   (spawn/despawn WITH text)
+#   A0 = instantiate + destroy WITHOUT populate      (pure spawn/despawn)
+#   B  = set_text with INTERPOLATION (persistent instance)
+#   BL = set_text with LITERALS (persistent instance) — separates interp from the set_text store
+#   C  = draw_scene of an UNCHANGED scene (diagnostic control, no populate)
+#   CF = full frame: clear + populate + draw_scene + swap (per-frame load)
 #
 # Requires: manual
-#   Oeffnet ein Fenster und laeuft, bis ein MENSCH es schliesst — in der
-#   Testschleife ist das ein Halt, kein Test (run_all_tests.sh --manual).
+#   Opens a window and runs until a HUMAN closes it — in the
+#   test loop that is a halt, not a test (run_all_tests.sh --manual).
 
 - config:
     entry: main
@@ -51,8 +51,8 @@
       - call: [inst.set_child_visible, "lp_lbl", 1]
       - call: [inst.set_child_visible, "atk_lbl", 1]
 
-# populate_literal: identische set_text-Last, aber NUR Literale (keine Interpolation).
-# Trennt das Interp-Temporary (Paket C) vom set_text-Store selbst (Paket D/Runtime).
+# populate_literal: identical set_text load, but ONLY literals (no interpolation).
+# Separates the interp temporary (package C) from the set_text store itself (package D/runtime).
 - def:
     name: populate_literal
     static_off: ["same_arg"]
@@ -85,7 +85,7 @@
             - set: [racnt, { +: [racnt, 1] }]
       - return: { -: [{ call: [sys.mem_usage] }, before] }
 
-# A0: instantiate + destroy OHNE populate (reiner Spawn/Despawn-Pfad).
+# A0: instantiate + destroy WITHOUT populate (pure spawn/despawn path).
 - def:
     name: probe_inst_destroy_bare
     static_off: ["same_arg"]
@@ -134,7 +134,7 @@
             - set: [rlcnt, { +: [rlcnt, 1] }]
       - return: { -: [{ call: [sys.mem_usage] }, before] }
 
-# C: draw_scene einer UNVERÄNDERTEN Szene (kein populate) — Diagnosekontrolle.
+# C: draw_scene of an UNCHANGED scene (no populate) — diagnostic control.
 - def:
     name: probe_draw_only
     static_off: ["same_arg"]
@@ -169,7 +169,7 @@
             - set: [rfcnt, { +: [rfcnt, 1] }]
       - return: { -: [{ call: [sys.mem_usage] }, before] }
 
-# want: Probe-Selektion aus AIML_RENDER_PROBE (all → immer).
+# want: probe selection from AIML_RENDER_PROBE (all → always).
 - def:
     name: want
     static_off: ["same_arg", "str_cmp"]
@@ -202,7 +202,7 @@
 
       - decl: [held, prefab_instance, { call: [engine.instantiate, "ProbeCard"] }]
       - call: [log.info, "RENDERPROBE sel=${sel} N=${reps} 2N=${reps2} (Leck ⇔ 2N≈2·N)"]
-      # Font-/Glyph-Warmup, damit einmalige Lazy-Allokationen nicht als Leck zählen.
+      # font/glyph warm-up, so that one-time lazy allocations do not count as a leak.
       - decl: [warm, i64, { call: [probe_set_text, held, 2000] }]
 
       - if:
@@ -242,7 +242,7 @@
             - decl: [res_f2, i64, { call: [probe_frame_full, held, win, reps2] }]
             - call: [log.info, "  CF full frame (clear+draw+swap): N=${res_fn}  2N=${res_f2} bytes"]
 
-      # held VOR Window-/GL-Abbau zerstören (§8.1): sonst zählt sein Heap fälschlich mit.
+      # destroy held BEFORE tearing down the window/GL (§8.1): otherwise its heap wrongly counts too.
       - call: [engine.destroy, held]
       - call: [engine.destroy_window, win]
       - return: 0

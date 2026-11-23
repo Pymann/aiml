@@ -1,5 +1,5 @@
 # SPEC?: 04_math   # derived from the file name, to be confirmed
-# Tests für math namespace: vec2/3/4, quat, mat4, ivec2/3, Skalare, Operatoren
+# Tests for the math namespace: vec2/3/4, quat, mat4, ivec2/3, scalars, operators
 # Expected exit code: 0
 
 # ── Phase A: Konstanten ────────────────────────────────────────────────────────
@@ -364,7 +364,7 @@
 
 - print: ["Phase H: ivec OK"]
 
-# ── Phase I: min/max mit list<f32> und ptr+len ────────────────────────────────
+# ── Phase I: min/max with list<f32> and ptr+len ───────────────────────────────
 
 # list<f32>
 - decl: [vals, list<f32>]

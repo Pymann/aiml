@@ -1,12 +1,12 @@
 # SPEC?: 18_refs_and_pointers   # derived from the file name, to be confirmed
 # static-check: off
-# BUG #4: ein verschachteltes Struct-Feld (outer.inner) als Argument an einen
-# `ptr<T>`-Parameter übergeben.  Implicit-ref (struct→ptr<T>) greift bisher
-# NUR bei plain Variablen, nicht bei member-access → member wird by-value
-# geladen → Verification-Fail "Call parameter type does not match function
-# signature" (bzw. Fill propagiert nicht zurück).
+# BUG #4: pass a nested struct field (outer.inner) as an argument to a
+# `ptr<T>` parameter.  Implicit ref (struct→ptr<T>) so far applies
+# ONLY to plain variables, not to member access → the member is loaded by value
+# → verification fail "Call parameter type does not match function
+# signature" (or the fill does not propagate back).
 #
-# Erwartung nach Fix: outer.inner wird via ptr befüllt → x=42.
+# Expectation after the fix: outer.inner is filled via ptr → x=42.
 
 - model: { name: Inner, fields: [[label, string], [xval, i32]] }
 - model: { name: Outer, fields: [[tag, string], [inner, Inner]] }

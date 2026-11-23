@@ -1,10 +1,10 @@
 # SPEC: 04_1_precedence,04_math
-# spec/04_1 §3/§7a: zwei TYPISIERTE Werte verschiedener Fliesskomma-Breite in
-# einem Vergleich sind ein Übersetzungsfehler — nicht eine stille Umwandlung
-# und erst recht kein ungültiges Modul.
+# spec/04_1 §3/§7a: two TYPED values of different floating-point width in
+# a comparison are a compile error — not a silent conversion
+# and certainly not an invalid module.
 #
-# Negativtest: die Übersetzung MUSS scheitern.  Die Meldung nennt beide Typen
-# und verweist auf `cast`.
+# Negative test: the compilation MUST fail.  The message names both types
+# and points to `cast`.
 # Expected exit code: 1
 
 - def:
@@ -14,8 +14,8 @@
     body:
       - decl: [wide_val, f64, 2.75]
       - decl: [narrow_val, f32, 2.75]
-      # Hier ist nichts geraten: welche Seite umgewandelt wird, entscheidet der
-      # Autor, weil f64→f32 Genauigkeit verliert.
+      # Nothing is guessed here: which side is converted is decided by the
+      # author, because f64→f32 loses precision.
       - if:
           condition: { gt: [wide_val, narrow_val] }
           then: [{ print: ["unerreichbar"] }]

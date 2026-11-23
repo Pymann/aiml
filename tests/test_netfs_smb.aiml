@@ -1,15 +1,15 @@
 # SPEC: 63_network_filesystems
-# spec/63: Netzlaufwerke ueber die Client-Bibliothek — ohne Mount, ohne root.
+# spec/63: network drives via the client library — without a mount, without root.
 #
-# Was dieser Test BEWEIST: die Bindung traegt (dlopen, Symbole, Aufrufe), die
-# Anmeldedaten kommen aus einer DATEI und nie aus einem Argument, ein
-# unbekanntes Schema ist ein Fehler statt eines stillen Rueckfalls auf lokales
-# io, und ein Zugriff ohne Server scheitert mit Meldung statt mit Absturz.
+# What this test PROVES: the binding holds (dlopen, symbols, calls), the
+# credentials come from a FILE and never from an argument, an
+# unknown scheme is an error instead of a silent fallback to local
+# io, and an access without a server fails with a message instead of a crash.
 #
-# Was er NICHT beweist: dass Lesen und Schreiben gegen einen echten Server
-# funktionieren — dafuer fehlt ein Testserver im Testprozess (spec/63 §63.4
-# Punkt 2, offene Frage A1).  Das steht hier, damit niemand diesen Test fuer
-# mehr haelt, als er ist.
+# What it does NOT prove: that reading and writing work against a real server
+# — for that a test server in the test process is missing (spec/63 §63.4
+# item 2, open question A1).  That is written here, so that nobody takes this test
+# for more than it is.
 # Expected exit code: 0
 
 - def:
@@ -33,47 +33,47 @@
       - decl: [have_smb, i32, { call: [netfs.available] }]
       - print: ["  (libsmbclient verfuegbar: ${have_smb})"]
 
-      # ── Unbekanntes Schema ist ein FEHLER (F63-4) ───────────────────────
+      # ── an unknown scheme is an ERROR (F63-4) ───────────────────────────
       - decl: [rc_bad, i32, { call: [netfs.connect, "ftp://host/share", 0] }]
-      - set: [fails, { +: [fails, { call: [expect, "fremdes Schema wird abgelehnt", { eq: [rc_bad, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "foreign scheme is rejected", { eq: [rc_bad, 0] }] }] }]
       - decl: [err_bad, string, { call: [netfs.last_error] }]
-      - set: [fails, { +: [fails, { call: [expect, "und die Meldung nennt das Schema", { gt: [{ call: [err_bad.index_of, "smb://"] }, -1] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "and the message names the scheme", { gt: [{ call: [err_bad.index_of, "smb://"] }, -1] }] }] }]
 
-      # ── Anmeldedaten aus einer Datei (F63-6) ────────────────────────────
+      # ── credentials from a file (F63-6) ─────────────────────────────────
       - decl: [missing, i32, { call: [netfs.cred_from_file, "/tmp/gibt-es-nicht-xyz.cred"] }]
-      - set: [fails, { +: [fails, { call: [expect, "fehlende Datei gibt keinen Griff", { eq: [missing, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "missing file gives no handle", { eq: [missing, 0] }] }] }]
 
       - decl: [cred_path, path, "/tmp/aiml_netfs_test.cred"]
       - call: [io.write_file, cred_path, "user=builder\npassword=geheim\ndomain=WORKGROUP\n"]
       - decl: [cred, i32, { call: [netfs.cred_from_file, "/tmp/aiml_netfs_test.cred"] }]
-      - set: [fails, { +: [fails, { call: [expect, "Anmeldedaten aus der Datei ergeben einen Griff", { gt: [cred, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "credentials from the file give a handle", { gt: [cred, 0] }] }] }]
 
-      # Eine Datei OHNE user= ist kein brauchbarer Griff.
+      # A file WITHOUT user= is not a usable handle.
       - call: [io.write_file, cred_path, "password=nur-passwort\n"]
       - decl: [cred_bad, i32, { call: [netfs.cred_from_file, "/tmp/aiml_netfs_test.cred"] }]
-      - set: [fails, { +: [fails, { call: [expect, "Datei ohne user= wird abgelehnt", { eq: [cred_bad, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "file without user= is rejected", { eq: [cred_bad, 0] }] }] }]
       - call: [io.remove, cred_path]
 
-      # ── Ohne Bibliothek bricht nichts ab ───────────────────────────────
+      # ── without the library nothing aborts ─────────────────────────────
       - if:
           condition: { eq: [have_smb, 0] }
           then:
             - decl: [rc_nolib, i32, { call: [netfs.connect, "smb://host/share", cred] }]
-            - set: [fails, { +: [fails, { call: [expect, "ohne Bibliothek: Meldung statt Absturz", { eq: [rc_nolib, 0] }] }] }]
+            - set: [fails, { +: [fails, { call: [expect, "without the library: message instead of crash", { eq: [rc_nolib, 0] }] }] }]
           else:
-            # ── Mit Bibliothek: verbinden heisst Schema + Anmeldedaten pruefen.
-            # Der HANDSCHLAG kommt erst beim Zugriff (so ist SMB) — und genau
-            # darum fasst dieser Test KEINEN Server an: gemessen blockierte ein
-            # Zugriff auf einen nicht erreichbaren Server ueber zwei Minuten
-            # (spec/63 F63-12).  Ein haengender Test ist schlimmer als ein
-            # fehlender.
+            # ── with the library: connecting means checking scheme + credentials.
+            # The HANDSHAKE only comes on access (that is how SMB is) — and exactly
+            # that is why this test touches NO server: measured, an
+            # access to an unreachable server blocked for over two minutes
+            # (spec/63 F63-12).  A hanging test is worse than a
+            # missing one.
             - decl: [rc_conn, i32, { call: [netfs.connect, "smb://127.0.0.1/keinshare", cred] }]
-            - set: [fails, { +: [fails, { call: [expect, "smb:// wird angenommen", { eq: [rc_conn, 1] }] }] }]
+            - set: [fails, { +: [fails, { call: [expect, "smb:// is accepted", { eq: [rc_conn, 1] }] }] }]
             - call: [netfs.close]
             - decl: [after_close, string, { call: [netfs.read_file, "/egal.txt"] }]
-            - set: [fails, { +: [fails, { call: [expect, "nach close kein Zugriff", { eq: [after_close.len, 0] }] }] }]
+            - set: [fails, { +: [fails, { call: [expect, "no access after close", { eq: [after_close.len, 0] }] }] }]
             - decl: [err_closed, string, { call: [netfs.last_error] }]
-            - set: [fails, { +: [fails, { call: [expect, "und die Meldung sagt es", { gt: [{ call: [err_closed.index_of, "nicht verbunden"] }, -1] }] }] }]
+            - set: [fails, { +: [fails, { call: [expect, "and the message says so", { gt: [{ call: [err_closed.index_of, "not connected"] }, -1] }] }] }]
 
       - if:
           condition: { neq: [fails, 0] }

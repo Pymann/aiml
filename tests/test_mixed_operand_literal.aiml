@@ -1,10 +1,10 @@
 # SPEC: 04_1_precedence,04_math
-# spec/04_1 §7a: ein Literal nimmt den Typ des anderen Operanden an.
+# spec/04_1 §7a: a literal takes on the type of the other operand.
 #
-# Vorher fiel ein gemischtes Paar durch den Abgleich-Schritt und erreichte LLVM
-# als Instruktion mit zwei verschiedenen Operandentypen — die Modul-Prüfung
-# scheiterte dann mit "Both operands to FCmp instruction are not of the same
-# type!", also mit einer Meldung über den Compiler statt über die Quellzeile.
+# Before, a mixed pair fell through the matching step and reached LLVM
+# as an instruction with two different operand types — the module check
+# then failed with "Both operands to FCmp instruction are not of the same
+# type!", i.e. with a message about the compiler instead of about the source line.
 # Expected exit code: 0
 
 - def:
@@ -14,7 +14,7 @@
     body:
       - decl: [fails, i32, 0]
 
-      # ── Vergleich: f64 gegen Fliesskomma-Literal (Literal ist sonst f32) ──
+      # ── comparison: f64 against a floating-point literal (the literal is otherwise f32) ──
       - decl: [ratio, f64, 2.75]
       - if:
           condition: { gt: [ratio, 2.5] }
@@ -22,7 +22,7 @@
           else: [{ print: ["FAIL f64 > Literal"] }, { set: [fails, { +: [fails, 1] }] }]
       - if:
           condition: { neq: [ratio, 2.75] }
-          then: [{ print: ["FAIL f64 != Literal (gleiche Werte)"] }, { set: [fails, { +: [fails, 1] }] }]
+          then: [{ print: ["FAIL f64 != literal (equal values)"] }, { set: [fails, { +: [fails, 1] }] }]
 
       # Umgekehrte Reihenfolge: Literal links
       - if:
@@ -30,21 +30,21 @@
           then: []
           else: [{ print: ["FAIL Literal < f64"] }, { set: [fails, { +: [fails, 1] }] }]
 
-      # ── f32 gegen Literal muss weiter gehen ──────────────────────────────
+      # ── f32 against a literal must keep working ──────────────────────────
       - decl: [small, f32, 0.5]
       - if:
           condition: { gt: [small, 0.25] }
           then: []
           else: [{ print: ["FAIL f32 > Literal"] }, { set: [fails, { +: [fails, 1] }] }]
 
-      # ── Ganzzahl-Literal gegen Fliesskomma-Wert ──────────────────────────
+      # ── integer literal against a floating-point value ───────────────────
       - decl: [whole, f64, 3.0]
       - if:
           condition: { eq: [whole, 3] }
           then: []
           else: [{ print: ["FAIL f64 == Ganzzahl-Literal"] }, { set: [fails, { +: [fails, 1] }] }]
 
-      # ── Arithmetik, gleicher Abgleich-Schritt ────────────────────────────
+      # ── arithmetic, the same matching step ──────────────────────────────
       - decl: [sum_val, f64, { +: [ratio, 0.25] }]
       - decl: [want_three, f64, 3.0]
       - if:
@@ -57,11 +57,11 @@
           condition: { neq: [prod, want_55] }
           then: [{ print: ["FAIL f64 * Ganzzahl-Literal = ${prod}, expected 5.5"] }, { set: [fails, { +: [fails, 1] }] }]
 
-      # ── Gegenprobe: mit cast bleibt alles wie bisher moeglich ────────────
+      # ── counter-probe: with cast everything stays possible as before ────
       - if:
           condition: { neq: [ratio, { cast: [small, f64] }] }
           then: []
-          else: [{ print: ["FAIL cast-Vergleich: 2.75 darf nicht 0.5 sein"] }, { set: [fails, { +: [fails, 1] }] }]
+          else: [{ print: ["FAIL cast comparison: 2.75 must not be 0.5"] }, { set: [fails, { +: [fails, 1] }] }]
 
       - if:
           condition: { neq: [fails, 0] }

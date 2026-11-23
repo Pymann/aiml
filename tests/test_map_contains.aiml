@@ -99,7 +99,7 @@
     else:
       - print: ["OK D3: inline contains absent path key"]
 
-# ── E: contains nach remove inline ────────────────────────────────────────────
+# ── E: contains after remove inline ───────────────────────────────────────────
 
 - decl: [m_e, map<string:i32>]
 - call: [m_e.put, "x", 5]
@@ -113,8 +113,8 @@
     else:
       - print: ["OK E1: inline contains after remove"]
 
-# ── F: Kurzform if: [{ call: [m.contains, "k"] }, true] ─────────────────────
-# Exakter Repro-Fall aus dem Report — keine Zwischenvariable, Kurzform
+# ── F: short form if: [{ call: [m.contains, "k"] }, true] ────────────────────
+# The exact repro case from the report — no intermediate variable, short form
 
 - decl: [m_f, map<string:i32>]
 - call: [m_f.put, "frozen", 1]
@@ -133,8 +133,8 @@
   else:
     - print: ["OK F2: shortform if contains absent key"]
 
-# ── G: Kurzform if: [{ eq: [{ call: [m.contains, "k"] }, 1] }, true] ─────────
-# Zweiter Repro-Fall aus dem Report
+# ── G: short form if: [{ eq: [{ call: [m.contains, "k"] }, 1] }, true] ────────
+# The second repro case from the report
 
 - decl: [m_g, map<string:i32>]
 - call: [m_g.put, "frozen", 1]

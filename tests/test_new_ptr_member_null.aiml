@@ -1,11 +1,11 @@
 # SPEC: 61_memory_management
-# spec/61 §6 Regel 1: `{ new: T }` initialisiert die Felder "exactly like a
-# stack decl".  Fuer ein `ptr<T>`-Feld heisst das NULL — Regel 2 setzt es
-# zwingend voraus: die Freigabe FOLGT jedem ptr<T>-Feld, und einem nicht
-# gesetzten Feld zu folgen waere ein Sprung ins Ungewisse.
+# spec/61 §6 rule 1: `{ new: T }` initialises the fields "exactly like a
+# stack decl".  For a `ptr<T>` field that means NULL — rule 2 strictly presupposes
+# it: the release FOLLOWS every ptr<T> field, and following an unset
+# field would be a jump into the unknown.
 #
-# Anlass: ein unverdrahteter `ptr<LiveState>`-Member im cosmos-Client bestand
-# `pneq null` und riss den naechsten Aufruf mit (SIGSEGV bei addr=0x8).
+# Occasion: an unwired `ptr<LiveState>` member in the cosmos client passed
+# `pneq null` and dragged the next call down with it (SIGSEGV at addr=0x8).
 # Expected exit code: 0
 
 - class:
@@ -26,17 +26,17 @@
     return: i32
     body:
       - decl: [fails, i32, 0]
-      # 1) Auf dem Stapel
+      # 1) on the stack
       - decl: [stacked, Holder]
-      - if: { condition: { pneq: [stacked.linked, null] }, then: [{ print: ["FAIL stack: ptr-Feld ist nicht null"] }, { set: [fails, 1] }] }
-      - if: { condition: { neq: [stacked.plain, 0] }, then: [{ print: ["FAIL stack: i32-Feld ist nicht 0"] }, { set: [fails, 1] }] }
-      - if: { condition: { neq: [stacked.tag.len, 0] }, then: [{ print: ["FAIL stack: string-Feld ist nicht leer"] }, { set: [fails, 1] }] }
-      - if: { condition: { neq: [stacked.numbers.len, 0] }, then: [{ print: ["FAIL stack: Liste ist nicht leer"] }, { set: [fails, 1] }] }
-      # 2) Auf dem Heap — dieselben Vorgaben (spec/61 §6 Regel 1)
+      - if: { condition: { pneq: [stacked.linked, null] }, then: [{ print: ["FAIL stack: ptr field is not null"] }, { set: [fails, 1] }] }
+      - if: { condition: { neq: [stacked.plain, 0] }, then: [{ print: ["FAIL stack: i32 field is not 0"] }, { set: [fails, 1] }] }
+      - if: { condition: { neq: [stacked.tag.len, 0] }, then: [{ print: ["FAIL stack: string field is not empty"] }, { set: [fails, 1] }] }
+      - if: { condition: { neq: [stacked.numbers.len, 0] }, then: [{ print: ["FAIL stack: list is not empty"] }, { set: [fails, 1] }] }
+      # 2) on the heap — the same defaults (spec/61 §6 rule 1)
       - decl: [boxed, ptr<Holder>, { new: Holder }]
-      - if: { condition: { pneq: [boxed.linked, null] }, then: [{ print: ["FAIL new: ptr-Feld ist nicht null"] }, { set: [fails, 1] }] }
-      - if: { condition: { neq: [boxed.plain, 0] }, then: [{ print: ["FAIL new: i32-Feld ist nicht 0"] }, { set: [fails, 1] }] }
-      - if: { condition: { neq: [boxed.tag.len, 0] }, then: [{ print: ["FAIL new: string-Feld ist nicht leer"] }, { set: [fails, 1] }] }
-      - if: { condition: { neq: [boxed.numbers.len, 0] }, then: [{ print: ["FAIL new: Liste ist nicht leer"] }, { set: [fails, 1] }] }
+      - if: { condition: { pneq: [boxed.linked, null] }, then: [{ print: ["FAIL new: ptr field is not null"] }, { set: [fails, 1] }] }
+      - if: { condition: { neq: [boxed.plain, 0] }, then: [{ print: ["FAIL new: i32 field is not 0"] }, { set: [fails, 1] }] }
+      - if: { condition: { neq: [boxed.tag.len, 0] }, then: [{ print: ["FAIL new: string field is not empty"] }, { set: [fails, 1] }] }
+      - if: { condition: { neq: [boxed.numbers.len, 0] }, then: [{ print: ["FAIL new: list is not empty"] }, { set: [fails, 1] }] }
       - if: { condition: { eq: [fails, 0] }, then: [{ print: ["PASS new_ptr_member_null"] }, { return: 0 }] }
       - return: 1

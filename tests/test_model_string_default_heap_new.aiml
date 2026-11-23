@@ -1,9 +1,9 @@
 # SPEC: 15_models
-# Regression (Heap-Variante): spec/15_models.md §"Default Field Initialization"
-# garantiert Default-Init "für BOTH stack decls AND { new: Model } heap
-# allocations".  Der bestehende test_model_string_field_default_init deckt nur
-# den Stack-Pfad (- decl: [x, Model]).  Dieser Test deckt den HEAP-Pfad
-# ({ new: Model } → ptr): ungesetzte string-Felder müssen "" sein, nicht null.
+# Regression (heap variant): spec/15_models.md §"Default Field Initialization"
+# guarantees default init "for BOTH stack decls AND { new: Model } heap
+# allocations".  The existing test_model_string_field_default_init only covers
+# the stack path (- decl: [x, Model]).  This test covers the HEAP path
+# ({ new: Model } → ptr): unset string fields must be "", not null.
 #
 # Expected exit code: 0
 
@@ -11,9 +11,9 @@
     name: Gadget
     fields:
       - [label, string]
-      - [descr, string]                 # nie gesetzt → muss "" sein, nicht null
-      - [note,  string]                 # ebenfalls nie gesetzt
-      - [tags,  list<string>]           # Gegenprobe: list default = leer
+      - [descr, string]                 # never set → must be "", not null
+      - [note,  string]                 # never set either
+      - [tags,  list<string>]           # counter-probe: list default = empty
 
 - def:
     name: main
@@ -23,14 +23,14 @@
       - decl: [gad, ptr<Gadget>, { new: Gadget }]
       - set: [gad.label, "hello"]
 
-      # Gesetztes Feld korrekt.
+      # the set field is correct.
       - if: { condition: { neq: [gad.label.len, 5] }, then: [{ print: ["FAIL label.len=${gad.label.len}"] }, { set: [fails, { +: [fails, 1] }] }] }
-      # UNGESETZTE string-Felder (Heap): .len darf nicht crashen, = 0.
+      # UNSET string fields (heap): .len must not crash, = 0.
       - if: { condition: { neq: [gad.descr.len, 0] }, then: [{ print: ["FAIL descr.len=${gad.descr.len}"] }, { set: [fails, { +: [fails, 1] }] }] }
       - if: { condition: { neq: [gad.note.len, 0] }, then: [{ print: ["FAIL note.len=${gad.note.len}"] }, { set: [fails, { +: [fails, 1] }] }] }
-      # Gegenprobe list-Feld.
+      # counter-probe list field.
       - if: { condition: { neq: [gad.tags.len, 0] }, then: [{ print: ["FAIL tags.len=${gad.tags.len}"] }, { set: [fails, { +: [fails, 1] }] }] }
-      # Interpolation (strlen-Pfad) auf ungesetztem Heap-Feld.
+      # interpolation (strlen path) on an unset heap field.
       - decl: [joined, string, "d=[${gad.descr}]"]
       - if: { condition: { neq: [joined, "d=[]"] }, then: [{ print: ["FAIL interp='${joined}'"] }, { set: [fails, { +: [fails, 1] }] }] }
 

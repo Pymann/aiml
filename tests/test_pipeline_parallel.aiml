@@ -1,13 +1,13 @@
 # SPEC: 62_pipelines
-# spec/62 §6: Lanes laufen parallel, und das darf am ERGEBNIS nichts aendern.
+# spec/62 §6: lanes run in parallel, and that must change nothing in the RESULT.
 #
-# Freigegeben ist das erst durch die Messung in
-# tests/test_concurrent_spawn_hazard.aiml (F62-14/F62-101).  Hier wird nicht
-# Geschwindigkeit geprueft — die haengt an der Maschine — sondern die Aussage
-# von F62-98: dieselbe Pipeline mit parallel=1 und parallel=4 muss dieselben
-# Schluessel, dieselben Zaehler und denselben Ausgang liefern.  Waere das
-# anders, waere die Nebenlaeufigkeit selbst eine Eingabe, und ein Treffer
-# haenge davon ab, wie schnell die Maschine gerade war.
+# That is only cleared by the measurement in
+# tests/test_concurrent_spawn_hazard.aiml (F62-14/F62-101).  What is checked here is not
+# speed — that depends on the machine — but the statement
+# of F62-98: the same pipeline with parallel=1 and parallel=4 must deliver the same
+# keys, the same counters and the same outcome.  If that were
+# different, the concurrency itself would be an input, and a hit would
+# depend on how fast the machine happened to be.
 # Expected exit code: 0
 
 - decl: [g_events, i32, 0]
@@ -45,8 +45,8 @@
       - print: ["  FAIL ${what}"]
       - return: 1
 
-# eight_lanes: 2x2x2 = acht Lanes, ein Schritt, der ALLE Achsen deklariert —
-# damit jede Lane wirklich arbeitet und nichts trifft.
+# eight_lanes: 2x2x2 = eight lanes, one step that declares ALL axes —
+# so that every lane really works and nothing hits.
 - def:
     name: eight_lanes
     args: [[par, i32], [broken, i32]]
@@ -91,7 +91,7 @@
     body:
       - decl: [fails, i32, 0]
 
-      # ── seriell: der Bezugswert ─────────────────────────────────────────
+      # ── serial: the reference value ─────────────────────────────────────
       - set: [g_events, 0]
       - decl: [serial, pipeline, { call: [eight_lanes, 1, 0] }]
       - decl: [rc_s, i32, { call: [serial.run, count_events] }]
@@ -106,12 +106,12 @@
       - decl: [rc_p, i32, { call: [par4.run, count_events] }]
       - set: [fails, { +: [fails, { call: [expect, "parallel: derselbe Ausgang", { eq: [rc_p, rc_s] }] }] }]
       - set: [fails, { +: [fails, { call: [expect, "parallel: dieselbe Zahl Ausfuehrungen", { eq: [{ call: [par4.ran_count] }, ran_s] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "parallel: nichts getroffen, nichts doppelt", { eq: [{ call: [par4.reused_count] }, 0] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "parallel: der Beobachter sieht jede Lane genau einmal", { eq: [g_events, ev_s] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "parallel: nothing hit, nothing doubled", { eq: [{ call: [par4.reused_count] }, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "parallel: the observer sees every lane exactly once", { eq: [g_events, ev_s] }] }] }]
 
-      # ── zweiter Lauf trifft auch parallel in allen acht Lanes ──────────
+      # ── a second run also hits in all eight lanes in parallel ──────────
       - decl: [rc_p2, i32, { call: [par4.run] }]
-      - set: [fails, { +: [fails, { call: [expect, "parallel: der zweite Lauf trifft achtmal", { eq: [{ call: [par4.reused_count] }, 8] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "parallel: the second run hits eight times", { eq: [{ call: [par4.reused_count] }, 8] }] }] }]
       - set: [fails, { +: [fails, { call: [expect, "parallel: die Schluessel sind also dieselben", { eq: [rc_p2, 0] }] }] }]
 
       # ── auto (parallel = 0): ein Kern je Lane, gleiches Ergebnis ───────

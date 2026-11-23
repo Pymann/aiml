@@ -1,12 +1,12 @@
 # SPEC: 13_cast
-# spec/13 §6: eine REALZAHL in einen Ganzzahl-Slot konvertiert den WERT (Abschneiden
-# gegen Null) -- auf JEDEM Speicherpfad, so wie die Gegenrichtung in
+# spec/13 §6: a REAL NUMBER into an integer slot converts the VALUE (truncation
+# towards zero) -- on EVERY store path, just like the opposite direction in
 # tests/test_numeric_store_widening.aiml.
 #
-# Vier Pfade schrieben bis 2026-11-12 das BITMUSTER statt des Werts: Member-Store
-# (`set: [m.feld, <f32>]`), Member-Pfad beim `idx:`, list<T>-Element und dyn_array.
-# Unter Opaque Pointers ist so ein Store gueltiges IR -- der Verifier schwieg, und
-# `100.0` kam als 1120403456 im Feld an (gemessen in datacreatures: Fundvorschau).
+# Until 2026-11-12 four paths wrote the BIT PATTERN instead of the value: member store
+# (`set: [m.feld, <f32>]`), the member path in `idx:`, list<T> element and dyn_array.
+# Under opaque pointers such a store is valid IR -- the verifier stayed silent, and
+# `100.0` arrived in the field as 1120403456 (measured in datacreatures: find preview).
 # Expected exit code: 0
 
 - model: { name: Sample, fields: [[count, i32], [wide, i64]] }
@@ -53,7 +53,7 @@
       - decl: [drei, i64, 3]
       - decl: [zwei_neg, i64, -2]
 
-      # --- Pfade, die es schon konnten ---
+      # --- paths that could already do it ---
       - decl: [vom_decl, i32, ratio]
       - call: [expect, vom_decl, drei, "decl init"]
       - decl: [lokal, i32, 0]
@@ -63,20 +63,20 @@
       - idx: [feld, 0, ratio]
       - call: [expect, { at: [feld, 0] }, drei, "idx array element"]
 
-      # --- Pfade, die das Bitmuster schrieben ---
+      # --- paths that wrote the bit pattern ---
       - decl: [smp, Sample]
       - set: [smp.count, ratio]
       - call: [expect, smp.count, drei, "set member i32"]
       - set: [smp.wide, ratio]
       - call: [expect, smp.wide, drei, "set member i64"]
       - set: [smp.count, minus]
-      - call: [expect, smp.count, zwei_neg, "set member, negativ (gegen Null)"]
+      - call: [expect, smp.count, zwei_neg, "set member, negative (towards zero)"]
 
       - decl: [halter, Holder]
       - call: [halter.put, ratio]
       - call: [expect, { call: [halter.value] }, drei, "set <.member in Methode"]
       - decl: [gebaut, Sample, { call: [halter.make, ratio] }]
-      - call: [expect, gebaut.count, drei, "set member eines Rueckgabewerts"]
+      - call: [expect, gebaut.count, drei, "set member of a return value"]
 
       - decl: [zahlen, list<i32>]
       - call: [zahlen.push, 0]
@@ -86,7 +86,7 @@
       - decl: [reihen, list<Sample>]
       - call: [reihen.push, smp]
       - idx: [reihen, 0, .count, ratio]
-      - call: [expect, { at: [reihen, 0, .count] }, drei, "idx Member-Pfad"]
+      - call: [expect, { at: [reihen, 0, .count] }, drei, "idx member path"]
 
       - decl: [dyn, "dyn_array<i32>", { new_array: [i32, 4] }]
       - idx: [dyn, 0, ratio]

@@ -1,10 +1,10 @@
 # SPEC: 62_pipelines
-# spec/62 §13.1/§13.2: Laufzeit-Abbildung und Beobachter.
+# spec/62 §13.1/§13.2: runtime mapping and observer.
 #
-# Der Wirt muss WAEHREND des Laufs sehen, was passiert — anzeigen, anhalten,
-# abbrechen.  Ein Ergebnis am Ende kaeme dafuer zu spaet (F62-78).  Geprueft
-# wird deshalb: der Beobachter wird je (Schritt, Lane) gerufen, traegt die
-# Lane-Bindung und den Schluessel, und meldet beim ZWEITEN Lauf reused=1.
+# The host must see WHILE the run is going what happens — display, pause,
+# abort.  A result at the end would come too late for that (F62-78).  That is why
+# it is checked: the observer is called per (step, lane), carries the
+# lane binding and the key, and reports reused=1 on the SECOND run.
 # Expected exit code: 0
 
 - def:
@@ -66,11 +66,11 @@
       # ── Erster Lauf mit Beobachter ──────────────────────────────────────
       - decl: [rc_one, i32, { call: [pipe.run, watch] }]
       - set: [fails, { +: [fails, { call: [expect, "Lauf gelingt", { eq: [rc_one, 0] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "Beobachter je (Schritt, Lane) gerufen", { eq: [g_calls, 2] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "jeder Aufruf traegt einen Schluessel", { eq: [g_keys, 2] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "erster Lauf meldet nichts als wiederverwendet", { eq: [g_reused, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "observer called per (step, lane)", { eq: [g_calls, 2] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "every call carries a key", { eq: [g_keys, 2] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "first run reports nothing as reused", { eq: [g_reused, 0] }] }] }]
       - print: ["Lanes: ${g_lanes}"]
-      - set: [fails, { +: [fails, { call: [expect, "Bindungen sind mitgegeben", { gt: [g_lanes.len, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "bindings are passed along", { gt: [g_lanes.len, 0] }] }] }]
 
       # ── Zweiter Lauf: derselbe Schluessel → reused ──────────────────────
       - set: [g_calls, 0]
@@ -81,7 +81,7 @@
 
       # ── Ohne Beobachter laeuft es ebenso (F62-79) ───────────────────────
       - decl: [rc_three, i32, { call: [pipe.run] }]
-      - set: [fails, { +: [fails, { call: [expect, "ohne Beobachter laeuft es auch", { eq: [rc_three, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "it runs without an observer too", { eq: [rc_three, 0] }] }] }]
 
       - if:
           condition: { neq: [fails, 0] }

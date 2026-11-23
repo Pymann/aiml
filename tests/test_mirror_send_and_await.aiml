@@ -57,7 +57,7 @@
       - call: [time.sleep_ms, 80]
       - call: [client.update]
 
-      # Hier kommt der neue Builtin zum Einsatz: eine Zeile statt 25-Zeilen-Loop.
+      # This is where the new builtin comes in: one line instead of a 25-line loop.
       - decl: [req, EchoReq]
       - set: [req.message, "hello-mirror"]
       - decl: [resp, ptr<EchoResp>, { new: EchoResp }]

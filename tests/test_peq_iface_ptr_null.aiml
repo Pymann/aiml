@@ -1,16 +1,16 @@
 # SPEC?: 18_refs_and_pointers   # derived from the file name, to be confirmed
 # static-check: off
-# BUG-Repro: peq/pneq auf einem INTERFACE-Pointer (Fat-Pointer
-# AimlFatPtr_<Iface> = {obj, vtable}) gegen null lässt den Compiler mit einer
-# LLVM-Assertion crashen ("Both operands to ICmp instruction are not of the
-# same type") — peq baut ICmpEQ(struct, ptr).  peq/pneq müssten den obj-Teil
-# des Fat-Pointers extrahieren und gegen null vergleichen.
+# BUG repro: peq/pneq on an INTERFACE pointer (fat pointer
+# AimlFatPtr_<Iface> = {obj, vtable}) against null makes the compiler crash with an
+# LLVM assertion ("Both operands to ICmp instruction are not of the
+# same type") — peq builds ICmpEQ(struct, ptr).  peq/pneq would have to extract the obj part
+# of the fat pointer and compare it against null.
 #
-# Motivation: CardService.get_base(...) → ptr<CardBase>, null bei not-found;
-# der Caller braucht `peq [base, null]`.
+# Motivation: CardService.get_base(...) → ptr<CardBase>, null when not found;
+# the caller needs `peq [base, null]`.
 #
-# Erwartung nach Fix: kompiliert; ein frisch-allozierter iface-ptr ist
-# NICHT null, ein `return: null`-iface-ptr IST null.
+# Expectation after the fix: compiles; a freshly allocated iface ptr is
+# NOT null, a `return: null` iface ptr IS null.
 
 - interface: { name: Speak, methods: [[word, i32, []]] }
 - model: { name: SpkData, fields: [[num, i32]] }
