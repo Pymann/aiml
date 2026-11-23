@@ -1,100 +1,99 @@
 # Prefab Font Size Report
 
-Datum: 2026-04-02
+Date: 2026-04-02
 
-## Kurzfassung
+## Summary
 
-`font_size` fuer Prefab-Labels ist aktuell nicht korrekt wirksam.
+`font_size` for prefab labels currently does not take effect correctly.
 
-Die Werte werden zwar aus AIML eingelesen und in der Runtime gespeichert, beim Rendern aber nicht verwendet. Dadurch erscheinen Texte auf Karten effektiv alle in derselben Schriftgroesse.
+The values are read in from AIML and stored in the runtime, but not used when rendering. As a result, texts on cards effectively all appear in the same font size.
 
-## Was korrekt funktioniert
+## What works correctly
 
-- `font_size` ist in den Prefabs unterschiedlich definiert, z.B. in `CardFull` und `CardToken`.
-- Der AIML-Builder liest `font_size` korrekt aus dem Prefab-Quelltext.
-- Die Prefab-Runtime parsed und speichert `font_size` ebenfalls korrekt im Child.
+- `font_size` is defined differently in the prefabs, e.g. in `CardFull` and `CardToken`.
+- The AIML builder reads `font_size` correctly from the prefab source.
+- The prefab runtime also parses and stores `font_size` correctly in the child.
 
-## Wo der Fehler wirklich sitzt
+## Where the error really sits
 
-Der Fehler liegt nicht primaer im Compiler, sondern in der Prefab-Runtime:
+The error is not primarily in the compiler, but in the prefab runtime:
 
-- Beim Rendern von `CHILD_LABEL` wird immer nur die global gesetzte Prefab-Font benutzt.
-- `child.font_size` wird dabei ignoriert.
-- `push_text_batch(...)` arbeitet nur mit den Metriken des einmal gebackenen Font-Atlas.
+- When rendering `CHILD_LABEL`, only the globally set prefab font is ever used.
+- `child.font_size` is ignored there.
+- `push_text_batch(...)` only works with the metrics of the font atlas baked once.
 
-Praktische Folge:
+Practical consequence:
 
-- alle Prefab-Labels wirken gleich gross
-- wenn die global gesetzte Prefab-Font gross geladen wurde, wirken auch kleine Labels zu gross
+- all prefab labels look the same size
+- if the globally set prefab font was loaded large, small labels look too large as well
 
-## Warum die Karten besonders auffallen
+## Why the cards stand out in particular
 
-Im `board_screen` wird die Prefab-Font relativ gross gesetzt:
+In `board_screen` the prefab font is set relatively large:
 
 - `ui.load_font_default(24.0)`
-- danach `engine.prefab_set_font(...)`
+- then `engine.prefab_set_font(...)`
 
-Da pro Label keine eigene Groesse mehr angewendet wird, rendern die Kartenlabels mit dieser globalen Font-Metrik statt mit ihren lokalen `font_size`-Werten wie `11`, `10`, `9` oder `6`.
+Since no per-label size is applied any more, the card labels render with this global font metric instead of their local `font_size` values like `11`, `10`, `9` or `6`.
 
-## Fix einfach erklaert
+## The fix, simply explained
 
-Es gibt zwei moegliche Richtungen:
+There are two possible directions:
 
-### Option A: pro Label skalieren
+### Option A: scale per label
 
-Idee:
+Idea:
 
-- eine Basisfont wird einmal geladen, z.B. 24 px
-- beim Rendern eines Labels wird daraus ein Faktor berechnet
-- Beispiel: Label will 12 px, Basisfont ist 24 px -> Render-Scale `0.5`
+- a base font is loaded once, e.g. 24 px
+- when rendering a label a factor is computed from it
+- example: the label wants 12 px, the base font is 24 px -> render scale `0.5`
 
-Vorteile:
+Advantages:
 
-- relativ kleiner Eingriff
-- keine Font-Neubackerei fuer jede Groesse
+- a relatively small intervention
+- no re-baking of the font for every size
 
-Nachteile:
+Disadvantages:
 
-- kleine/grosse Groessen koennen optisch etwas unschaerfer werden als echte separat gebackene Fonts
+- small/large sizes can look somewhat blurrier than real, separately baked fonts
 
-## Option B: Fonts pro Groesse cachen
+## Option B: cache fonts per size
 
-Idee:
+Idea:
 
-- fuer jede benoetigte `font_size` wird eine eigene gebackene Font geladen oder gecacht
-- das Label waehlt dann die passende Font mit echter Metrik
+- for every required `font_size` a separately baked font is loaded or cached
+- the label then picks the matching font with its real metrics
 
-Vorteile:
+Advantages:
 
-- typografisch sauberer
-- exaktere Groessen und Abstaende
+- typographically cleaner
+- more exact sizes and spacing
 
-Nachteile:
+Disadvantages:
 
-- mehr Runtime-Komplexitaet
-- mehr Atlas-/Speicherverwaltung
+- more runtime complexity
+- more atlas/memory management
 
-## Empfehlung
+## Recommendation
 
-Fuer `9rooms` wuerde ich mit Option A anfangen.
+For `9rooms` I would start with option A.
 
-Grund:
+Reason:
 
-- sie behebt sofort das sichtbare Problem
-- sie ist deutlich kleiner und risikoaermer
-- falls noetig, kann spaeter immer noch auf Font-Caching pro Groesse erweitert werden
+- it fixes the visible problem immediately
+- it is considerably smaller and less risky
+- if needed, it can still be extended to font caching per size later
 
-## Aufwand
+## Effort
 
-- Option A: etwa `0.5 bis 1 Tag`
-- Option B: etwa `1 bis 2 Tage`
+- Option A: about `0.5 to 1 day`
+- Option B: about `1 to 2 days`
 
-## Status frueherer Reports
+## Status of earlier reports
 
-Ich habe keine alten Reports geloescht.
+I did not delete any old reports.
 
-Grund:
+Reason:
 
-- in `test/aiml` liegen aktuell nur die beiden vorhandenen Reports
-- ohne klare Anweisung, welche davon weg sollen, ist Loeschen unnoetig riskant
-
+- in `test/aiml` there are currently only the two existing reports
+- without a clear instruction which of them should go, deleting is needlessly risky

@@ -1,65 +1,65 @@
-# Auto-Generation von AIML Unit Tests (Mock & Stub Builder)
+# Auto-generation of AIML unit tests (mock & stub builder)
 
-Dieses Dokument bewertet die Komplexität und den theoretischen Ansatz, um aus bestehenden `.aiml` Quellcode-Dateien automatisch voll funktionsfähige, isolierte Unit-Test-Dateien (mit Mocks und gekappten Imports) zu generieren.
+This document assesses the complexity and the theoretical approach for automatically generating fully functional, isolated unit test files (with mocks and cut-off imports) from existing `.aiml` source files.
 
-## 1. Machbarkeit & Schwierigkeit
-Die Schwierigkeit ist erstaunlich **niedrig**. 
-Da AIML seinen eigenen Abstract Syntax Tree (AST) rein als YAML strukturiert, müssen wir keinen lexikalischen Analyzer oder Text-Parser (wie bei C/C++ oder Rust) von Grund auf neu entwickeln. 
+## 1. Feasibility & difficulty
+The difficulty is surprisingly **low**.
+Since AIML structures its own abstract syntax tree (AST) purely as YAML, we do not have to develop a lexical analyzer or text parser (as for C/C++ or Rust) from scratch.
 
-Ein einfaches Python-Skript, das `pyyaml` nutzt, kann die Datei laden, als geschachteltes Dictionary modifizieren und als perfektes AIML wieder auf die Festplatte schreiben.
+A simple Python script using `pyyaml` can load the file, modify it as a nested dictionary and write it back to disk as perfect AIML.
 
-## 2. Der Algorithmus (Python-basierter Test-Generator)
+## 2. The algorithm (Python-based test generator)
 
-Der Tooling-Ablauf würde in diesen 6 klaren Schritten erfolgen:
+The tooling flow would happen in these 6 clear steps:
 
-### Schritt 1: YAML AST Parsen & Isolieren
-Das Skript lädt die Original-Datei (z. B. `core/decoder.aiml`) in eine Python-Liste.
-- **Importe abschneiden**: Alle Top-Level-Listenpunkte vom Typ `{ "import": ... }` werden via `del list[i]` entfernt, um Datei-Abhängigkeiten komplett zu kappen.
+### Step 1: parse & isolate the YAML AST
+The script loads the original file (e.g. `core/decoder.aiml`) into a Python list.
+- **Cut off imports**: all top-level list items of type `{ "import": ... }` are removed via `del list[i]`, to cut file dependencies completely.
 
-### Schritt 2: "Vorhandene Symbole" inventarisieren
-Das Skript durchläuft die Top-Level-Nodes, um zu verstehen, was _wirklich_ da ist:
-- Alle gefundenen `- class: { name: "X" }` $\rightarrow$ Registriere "X"
-- Alle gefundenen `- def: { name: "Y" }` $\rightarrow$ Registriere "Y"
+### Step 2: inventory the "existing symbols"
+The script walks the top-level nodes to understand what is _really_ there:
+- every `- class: { name: "X" }` found $\rightarrow$ register "X"
+- every `- def: { name: "Y" }` found $\rightarrow$ register "Y"
 
-### Schritt 3: "Fehlende Symbole" finden (Semantic Pass)
-Nun läuft das Skript rekursiv durch alle `body`-Blöcke und Variablen-Deklarationen des ASTs:
-- Sucht Aufrufe der Art: `[call, FunktionX, ...]` oder `[obj.FunktionX]`.
-- Sucht Deklarationen der Art: `[decl, var, TypX]`.
-- **Logik**: Wenn `FunktionX` oder `TypX` weder im Inventar von Schritt 2 ist, NOCH zur AIML Standardbibliothek gehört (`sys`, `math`, `list`, `string`, `i32` ...), handelt es sich um eine abgetrennte Abhängigkeit.
+### Step 3: find the "missing symbols" (semantic pass)
+Now the script walks recursively through all `body` blocks and variable declarations of the AST:
+- Looks for calls of the kind: `[call, FunctionX, ...]` or `[obj.FunctionX]`.
+- Looks for declarations of the kind: `[decl, var, TypeX]`.
+- **Logic**: if `FunctionX` or `TypeX` is neither in the inventory from step 2 NOR part of the AIML standard library (`sys`, `math`, `list`, `string`, `i32` ...), it is a cut-off dependency.
 
-### Schritt 4: Mocks & Stubs automatisch einbauen
-Für jedes _fehlende_ Symbol baut das Skript nun oben in der YAML-Liste dynamischen Mock-Code (Dummy-Nodes) ein:
+### Step 4: build in mocks & stubs automatically
+For every _missing_ symbol the script now inserts dynamic mock code (dummy nodes) at the top of the YAML list:
 
-- **Für fehlende Klassen**:
+- **For missing classes**:
   ```yaml
   - class:
-      name: MissingDependency  # Dummy, damit der LLVM Compiler den Pointer-Typ kennt
+      name: MissingDependency  # dummy, so that the LLVM compiler knows the pointer type
       members:
-        - [dummy, i32] # Hilfsfeld, falls Struct-Size geprueft wird
+        - [dummy, i32] # helper field, in case the struct size is checked
   ```
-- **Für fehlende Funktionen**:
+- **For missing functions**:
   ```yaml
   - def:
       name: missing_function
-      args: [] # Typen können meist weggelassen/als 'any' definiert werden
+      args: [] # types can mostly be omitted/defined as 'any'
       return: void
       body:
         - print: ["Mocked missing_function executed"]
   ```
 
-### Schritt 5: Test-Skeletons generieren
-Für _jede_ in Schritt 2 inventarisierte `def` oder `method` hängt das Skript am Ende der YAML-Datei einen Testfall an:
+### Step 5: generate test skeletons
+For _every_ `def` or `method` inventoried in step 2 the script appends a test case at the end of the YAML file:
 ```yaml
 - def:
     name: test_Decoder_decode_step
     return: void
     body:
       - print: ["--- Running: test_Decoder_decode_step ---"]
-      # TODO: Manuelles Assert einbauen
+      # TODO: add a manual assert
 ```
 
-### Schritt 6: Den Runner (`main`) generieren
-Als letztes Element wird die `main`-Routine eingefügt, die eine Test-Suite bildet, den Compiler zufriedenstellt (weil `main` verlangt wird) und alle `test_*` Funktionen feuert:
+### Step 6: generate the runner (`main`)
+As the last element the `main` routine is inserted, which forms a test suite, satisfies the compiler (because `main` is required) and fires all `test_*` functions:
 ```yaml
 - def:
     name: main
@@ -71,30 +71,30 @@ Als letztes Element wird die `main`-Routine eingefügt, die eine Test-Suite bild
       - return: [0]
 ```
 
-## 3. Vorteile für unsere Phase 1 bis 3
-1. **100% Compiler-Sicherheit ohne Context**: Da fehlende Typen durch leere Dummy-`class`-Nodes gestubbed werden, meckert der Typ-Checker von `tulaiml` nicht. Es kompiliert sofort.
-2. **Blitzschnelles TDD**: Man kann Algorithmen (z. B. Matrix-Multiplikation) innerhalb einer großen Agenten-Klasse entwickeln, den Generator ausführen lassen, und das isolierte `test_tensor_minimal.aiml` in Millisekunden über `out/aiml` evaluieren.
-3. **CI/CD Hook-in**: Python kann 50 .aiml Dateien über das Skript in Sekunden in autarke Test-Suites umwandeln lassen.
+## 3. Benefits for our phases 1 to 3
+1. **100% compiler safety without context**: since missing types are stubbed by empty dummy `class` nodes, the type checker of `tulaiml` does not complain. It compiles immediately.
+2. **Lightning-fast TDD**: you can develop algorithms (e.g. matrix multiplication) inside a large agent class, run the generator, and evaluate the isolated `test_tensor_minimal.aiml` in milliseconds via `out/aiml`.
+3. **CI/CD hook-in**: Python can turn 50 .aiml files into self-contained test suites in seconds via the script.
 
-## Fazit: Lohnt sich das als Python-Skript?
-**Definitiv.** Was in klassischem C++ einen enorm komplexen Clang-AST-Matcher benötigen würde, ist in AIML nur ein **50-100 zeiliges Python-Script**, das ein simples JSON/YAML-Objekt rekursiv durchsuchen und verändern muss. Das wäre ein gigantischer Produktivitäts-Boost für unser Projekt.
+## Conclusion: is it worth it as a Python script?
+**Definitely.** What would need an enormously complex Clang AST matcher in classic C++ is in AIML just a **50-100 line Python script** that has to search and modify a simple JSON/YAML object recursively. That would be a gigantic productivity boost for our project.
 
 ---
 
-## 4. Die Königsklasse: Nativer Compiler-Support (`--generate-tests`)
+## 4. The premier class: native compiler support (`--generate-tests`)
 
-Deine Überlegung ist absolut spot-on! Anstatt ein externes Python-Skript zu pflegen, ist es paradoxerweise sogar **noch sauberer und mächtiger**, diesen Generator direkt in den `aiml` C++ Compiler einzubauen.
+Your consideration is absolutely spot-on! Instead of maintaining an external Python script, it is paradoxically even **cleaner and more powerful** to build this generator directly into the `aiml` C++ compiler.
 
-### Warum der Compiler der perfekte Ort dafür ist:
-1. **Perfektes Wissen über die Standardbibliothek:** Ein Python-Skript müsste eine hartcodierte "Whitelist" pflegen, um zu wissen, dass `[sys.env]` oder `[math.vec2]` nicht gemockt werden dürfen. Der C++ Compiler hat dieses Wissen im `SymbolResolutionPass` bereits fehlerfrei eingebaut!
-2. **Abfangen undefinierter Referenzen:** Normalerweise bricht der Compiler mit `Error: Undefined Type X` ab, wenn er ein `[decl, my_var, MissingClass]` findet. Für den Test-Modus aktivieren wir stattdessen einen `TestGenVisitor`: Sobald der Compiler bemerkt, dass ein Typ fehlt, spuckt er keinen Fehlerbruch aus, sondern injiziert kurzerhand einen neuen Dummy-Knoten in den internen C++ AST (Abstract Syntax Tree).
-3. **Nativer Export:** Dank der Implementierung von `yyjson` (aus Phase 4) hat der AIML-Compiler ohnehin einen extrem schnellen JSON-Writer an Bord. Da *valid JSON = valid YAML* ist, kann der C++ Compiler den um die Stubs und `- def: [test_...]` Skelette erweiterten internen AST am Ende einfach als formatierten Quellcode auf die Festplatte dumpen!
+### Why the compiler is the perfect place for it:
+1. **Perfect knowledge of the standard library:** a Python script would have to maintain a hard-coded "whitelist" to know that `[sys.env]` or `[math.vec2]` must not be mocked. The C++ compiler already has this knowledge built in flawlessly in the `SymbolResolutionPass`!
+2. **Catching undefined references:** normally the compiler aborts with `Error: Undefined Type X` when it finds a `[decl, my_var, MissingClass]`. For test mode we activate a `TestGenVisitor` instead: as soon as the compiler notices that a type is missing, it does not spit out an error abort but simply injects a new dummy node into the internal C++ AST (abstract syntax tree).
+3. **Native export:** thanks to the implementation of `yyjson` (from phase 4) the AIML compiler has an extremely fast JSON writer on board anyway. Since *valid JSON = valid YAML*, the C++ compiler can simply dump the internal AST, extended by the stubs and `- def: [test_...]` skeletons, to disk at the end as formatted source code!
 
-**Das C++ CLI-Interface sähe dann fantastisch einfach aus:**
+**The C++ CLI interface would then look fantastically simple:**
 ```bash
 ./out/aiml --generate-tests src/tul/model/decoder.aiml -o tests/test_decoder_minimal.aiml
 ```
 
-Die Entwicklungsaufwand in C++ für diesen `TestGeneratorPass` läge vermutlich bei realistischen **200–400 Zeilen**. Der Compiler iteriert einmal über alle Nodes, erzeugt bei Fehlen on-the-fly Dummys im System-Heap, hängt `test_`-Routinen an und schreibt den Tree in die File zurück. 
+The development effort in C++ for this `TestGeneratorPass` would probably be a realistic **200–400 lines**. The compiler iterates once over all nodes, creates dummies on the fly in the system heap when something is missing, appends `test_` routines and writes the tree back to the file.
 
-**Fazit:** Der Compiler-Ansatz ist technisch überlegen, weil er die *Single Source of Truth* (das eigene Typsystem) optimal ausnutzt, ohne Tooling-Brüche in Python zu provozieren!
+**Conclusion:** the compiler approach is technically superior, because it makes optimal use of the *single source of truth* (its own type system), without provoking tooling breaks in Python!

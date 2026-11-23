@@ -1,105 +1,105 @@
-# Fehlende AIML-Builtins fuer tul GenAI
+# Missing AIML builtins for tul GenAI
 
-Datum: 2026-04-10
+Date: 2026-04-10
 
-## Kontext
+## Context
 
-Der `tul` GenAI-Implementierungsplan benoetigt String- und Math-Operationen,
-die in AIML aktuell nicht als Builtins existieren. Ohne diese muesste jede
-Einzeloperation manuell als zeichenweise while-Schleife implementiert werden,
-was den Code unnoetig aufblaeht.
+The `tul` GenAI implementation plan needs string and math operations
+that currently do not exist as builtins in AIML. Without them every
+single operation would have to be implemented manually as a character-by-character while loop,
+which bloats the code needlessly.
 
-## Ist-Zustand: Was existiert bereits
+## Current state: what already exists
 
-String-Methoden sind in `ast_compiler_call.cpp` ab Zeile 706 hardcoded:
-- `string.substr(start)` und `string.substr(start, len)` — via strdup/strndup
+String methods are hard-coded in `ast_compiler_call.cpp` from line 706:
+- `string.substr(start)` and `string.substr(start, len)` — via strdup/strndup
 - `string.starts_with(prefix)` — via strncmp
 - `string.index_of(needle)` — via strstr
-- `string.len` — als Property (strlen)
+- `string.len` — as a property (strlen)
 
-Math-Namespace in `builtin_registry.cpp` ab Zeile 2911:
-- `math.sqrt` existiert bereits (via `sqrtf`)
-- `math.sin`, `math.cos`, `math.exp` etc. existieren
+Math namespace in `builtin_registry.cpp` from line 2911:
+- `math.sqrt` already exists (via `sqrtf`)
+- `math.sin`, `math.cos`, `math.exp` etc. exist
 
-## Fehlende String-Builtins
+## Missing string builtins
 
 ### 1. `string.lower() -> string`
 
-Alle ASCII-Grossbuchstaben in Kleinbuchstaben umwandeln.
+Convert all ASCII upper-case letters to lower case.
 
-Benoetigt fuer: Tokenizer-Normalisierung. Jede Eingabe muss vor dem Tokenisieren
-normalisiert werden.
+Needed for: tokenizer normalisation. Every input must be
+normalised before tokenizing.
 
-Implementierung: Analog zu bestehenden String-Methoden in `ast_compiler_call.cpp`:
-- C-Runtime: `aiml_string_lower(const char*) -> char*` — `strdup` + `tolower`-Loop
-- Compiler: neuer Branch `methodName == "lower"` im `className == "string"` Block
+Implementation: analogous to the existing string methods in `ast_compiler_call.cpp`:
+- C runtime: `aiml_string_lower(const char*) -> char*` — `strdup` + `tolower` loop
+- Compiler: new branch `methodName == "lower"` in the `className == "string"` block
 - JIT: `AddSymbol("aiml_string_lower", ...)`
 
 ### 2. `string.split(delimiter) -> list<string>`
 
-String an Delimiter aufteilen und als `list<string>` zurueckgeben.
+Split a string at a delimiter and return it as a `list<string>`.
 
-Benoetigt fuer: Tokenizer-Split (Whitespace), Tag-Parsing, allgemeine Textverarbeitung.
-Ohne diesen Builtin muss jeder Tokenizer eine manuelle while-Schleife mit
-`index_of` + `substr` bauen — das sind ~15 Zeilen pro Aufrufstelle.
+Needed for: tokenizer split (whitespace), tag parsing, general text processing.
+Without this builtin every tokenizer has to build a manual while loop with
+`index_of` + `substr` — that is ~15 lines per call site.
 
-Implementierung: Komplexer als andere String-Methoden wegen `list<string>` Rueckgabe.
-- C-Runtime: `aiml_string_split(const char* str, const char* delim, int32_t* out_count) -> char**`
-  Gibt Array of `char*` zurueck + Elementanzahl via out-Pointer.
-- Compiler: `initList` + fill-Loop, analog zum `io.list_dir` Pattern in `ast_compiler_call.cpp`
-  (stack-alloc AimlList, `aiml_string_split` aufrufen, Elemente per `ListImpl::push` einfuegen)
-- Rueckgabe: `list<string>` als Stack-Struct, memcpy in Ziel-Alloca (wie `visitDeclStmt` fuer listen)
+Implementation: more complex than other string methods because of the `list<string>` return.
+- C runtime: `aiml_string_split(const char* str, const char* delim, int32_t* out_count) -> char**`
+  Returns an array of `char*` + the element count via an out pointer.
+- Compiler: `initList` + fill loop, analogous to the `io.list_dir` pattern in `ast_compiler_call.cpp`
+  (stack-alloc AimlList, call `aiml_string_split`, insert elements via `ListImpl::push`)
+- Return: `list<string>` as a stack struct, memcpy into the target alloca (like `visitDeclStmt` for lists)
 - JIT: `AddSymbol("aiml_string_split", ...)`
 
 ### 3. `string.trim() -> string`
 
-Fuehrende und abschliessende Whitespace-Zeichen entfernen.
+Remove leading and trailing whitespace characters.
 
-Benoetigt fuer: Normalisierung vor Tokenisierung, robuste Eingabeverarbeitung.
+Needed for: normalisation before tokenizing, robust input processing.
 
-Implementierung:
-- C-Runtime: `aiml_string_trim(const char*) -> char*` — skip leading whitespace,
-  find last non-whitespace, `strndup(start, len)`
-- Compiler: neuer Branch `methodName == "trim"` im String-Block
+Implementation:
+- C runtime: `aiml_string_trim(const char*) -> char*` — skip leading whitespace,
+  find the last non-whitespace, `strndup(start, len)`
+- Compiler: new branch `methodName == "trim"` in the string block
 - JIT: `AddSymbol("aiml_string_trim", ...)`
 
 ### 4. `string.replace(old, new) -> string`
 
-Alle Vorkommen von `old` durch `new` ersetzen.
+Replace all occurrences of `old` by `new`.
 
-Benoetigt fuer: Satzzeichenbehandlung (z.B. Komma/Punkt entfernen oder separieren).
+Needed for: punctuation handling (e.g. removing or separating commas/full stops).
 
-Implementierung:
-- C-Runtime: `aiml_string_replace(const char*, const char* old, const char* new) -> char*`
-  Iterativ mit `strstr` + `memcpy` in wachsenden Buffer
-- Compiler: neuer Branch `methodName == "replace"` im String-Block, 2 Args
+Implementation:
+- C runtime: `aiml_string_replace(const char*, const char* old, const char* new) -> char*`
+  Iteratively with `strstr` + `memcpy` into a growing buffer
+- Compiler: new branch `methodName == "replace"` in the string block, 2 args
 - JIT: `AddSymbol("aiml_string_replace", ...)`
 
-## Prioritaet
+## Priority
 
-| Builtin | Prioritaet | Grund |
+| Builtin | Priority | Reason |
 |---------|-----------|-------|
-| `string.split` | Kritisch | Ohne das ist Tokenisierung extrem umstaendlich |
-| `string.lower` | Kritisch | Normalisierung ist Pflicht |
-| `string.trim` | Hoch | Robuste Eingabeverarbeitung |
-| `string.replace` | Mittel | Satzzeichen-Handling, kann in Phase 1 ggf. umgangen werden |
-| ~~`math.sqrt`~~ | ~~Existiert~~ | Bereits als `sqrtf` in math-Namespace registriert |
+| `string.split` | Critical | Without it tokenizing is extremely cumbersome |
+| `string.lower` | Critical | Normalisation is mandatory |
+| `string.trim` | High | Robust input processing |
+| `string.replace` | Medium | Punctuation handling, can possibly be worked around in phase 1 |
+| ~~`math.sqrt`~~ | ~~Exists~~ | Already registered as `sqrtf` in the math namespace |
 
-## Implementierungsort
+## Implementation location
 
-Alle neuen String-Methoden:
-- C-Funktionen: neue Datei `src/sys/string_runtime.h` + `src/sys/string_runtime.cpp`
-- Compiler-Branches: `src/core/ast_compiler_call.cpp` im `className == "string"` Block (ab Zeile 707)
-- JIT-Symbole: `compiler.cpp` — `AddSymbol` fuer jede neue C-Funktion
-- exodus.json: `string_runtime.cpp` in Sources aufnehmen
+All new string methods:
+- C functions: new file `src/sys/string_runtime.h` + `src/sys/string_runtime.cpp`
+- Compiler branches: `src/core/ast_compiler_call.cpp` in the `className == "string"` block (from line 707)
+- JIT symbols: `compiler.cpp` — `AddSymbol` for every new C function
+- exodus.json: add `string_runtime.cpp` to the sources
 
-## Implementierungsreihenfolge
+## Implementation order
 
-1. `string.lower` + `string.trim` (einfachste, char* -> char*, kein Listenhandling)
-2. `string.replace` (iterativer Buffer, mittelschwer)
-3. `string.split` (list-Rueckgabe, aufwaendigstes Pattern)
+1. `string.lower` + `string.trim` (simplest, char* -> char*, no list handling)
+2. `string.replace` (iterative buffer, medium difficulty)
+3. `string.split` (list return, the most elaborate pattern)
 
-## Aufwand
+## Effort
 
-Geschaetzt 2-3h fuer alle 4 Builtins inkl. Tests.
-`string.split` ist am aufwaendigsten wegen list-Rueckgabe.
+Estimated 2-3h for all 4 builtins including tests.
+`string.split` is the most elaborate because of the list return.
