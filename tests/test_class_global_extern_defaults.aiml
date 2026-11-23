@@ -1,4 +1,4 @@
-# SPEC?: 16_classes   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 16_classes   # derived from the file name, to be confirmed
 # Test: class member defaults when the global is declared `{extern: true}`
 # AND given an explicit `null` init.  This is the DataCreatures pattern
 # that broke (auth_nid stayed at 0 instead of -1).

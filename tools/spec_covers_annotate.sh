@@ -35,7 +35,7 @@ while IFS=$'\t' read -r fpath acol ncol dcol; do
     line="# SPEC: $auth"
     n_auth=$((n_auth+1))
   elif [ -n "$byname" ]; then
-    line="# SPEC?: $byname   # aus dem Dateinamen, zu bestaetigen"
+    line="# SPEC?: $byname   # derived from the file name, to be confirmed"
     n_name=$((n_name+1))
   else
     echo "$fpath" >> logs/covers_needs_human.txt

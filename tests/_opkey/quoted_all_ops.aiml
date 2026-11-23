@@ -1,4 +1,4 @@
-# Jeder symbolische Operatorschluessel, den aiml kennt, in der ZITIERTEN Form.
+# Every symbolic operator key that aiml knows, in the QUOTED form.
 - def:
     name: main
     return: i32

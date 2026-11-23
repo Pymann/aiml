@@ -1,4 +1,4 @@
-# SPEC?: 60_yaml,29_serialize,61_memory_management,24_time   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 60_yaml,29_serialize,61_memory_management,24_time   # derived from the file name, to be confirmed
 # static-check: off
 - model: {name: Entry, fields: [[name, string], [tags, list<string>], [meta, map<string:string>]]}
 - def:

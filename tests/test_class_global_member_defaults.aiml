@@ -1,4 +1,4 @@
-# SPEC?: 16_classes   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 16_classes   # derived from the file name, to be confirmed
 # Test: declared per-member default values on a class are applied when the
 # class is instantiated as a global variable.
 #

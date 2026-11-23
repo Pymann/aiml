@@ -1,4 +1,4 @@
-# SPEC?: 50_tensor_runtime   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 50_tensor_runtime   # derived from the file name, to be confirmed
 # ── Test A: grad_view — Gradient korrekt, param->data unverändert ─────────────
 
 - call: [tensor.begin_graph]

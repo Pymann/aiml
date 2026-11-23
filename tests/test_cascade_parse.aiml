@@ -1,4 +1,4 @@
-# SPEC?: 57_function_cascades   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 57_function_cascades   # derived from the file name, to be confirmed
 # Phase 1 sanity test: cascade parses + registers with type validation.
 
 # Enums referenced by the cascades below must be declared first.

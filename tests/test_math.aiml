@@ -1,4 +1,4 @@
-# SPEC?: 04_math   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 04_math   # derived from the file name, to be confirmed
 # Tests für math namespace: vec2/3/4, quat, mat4, ivec2/3, Skalare, Operatoren
 # Expected exit code: 0
 

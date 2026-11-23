@@ -1,4 +1,4 @@
-# SPEC?: 18_refs_and_pointers   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 18_refs_and_pointers   # derived from the file name, to be confirmed
 # static-check: off
 # Negative test: push(ptr<T>) into a VALUE list<T> muss ein Compile-Fehler sein.
 # Ein 8-Byte-Pointer würde in einen Value-Struct-Slot geschrieben (Rest garbage)

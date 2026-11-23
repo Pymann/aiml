@@ -1,4 +1,4 @@
-# SPEC?: 15_models,16_classes   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 15_models,16_classes   # derived from the file name, to be confirmed
 # static-check: off
 # REPRO: cross-file class composition fails.
 #

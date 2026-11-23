@@ -1,4 +1,4 @@
-# SPEC?: 10_collections   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 10_collections   # derived from the file name, to be confirmed
 # Ein KLASSEN-MEMBER als Listenindex: `{ at: [liste, <.feld] }`.
 #
 # In Tests steht dort fast immer eine lokale Variable.  Im Client steht dort ein

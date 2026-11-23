@@ -1,4 +1,4 @@
-# SPEC?: 15_models,19_inheritance   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 15_models,19_inheritance   # derived from the file name, to be confirmed
 # static-check: off
 # Der Assignment-Guard darf VERWANDTE Modelle (Inheritance) NICHT blocken:
 # ein abgeleitetes Model in ein Basis-Feld zu schreiben kopiert den geteilten

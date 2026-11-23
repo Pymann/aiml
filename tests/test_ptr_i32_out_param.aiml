@@ -1,4 +1,4 @@
-# SPEC?: 18_refs_and_pointers   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 18_refs_and_pointers   # derived from the file name, to be confirmed
 # ptr<primitive> out-param-Pattern.
 #
 # AIML 2026-06-28: `store: [ptr_var, val]` schreibt *ptr = val (C-Semantik).

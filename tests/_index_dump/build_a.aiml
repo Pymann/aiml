@@ -1,5 +1,5 @@
-# Fixture fuer tests/run_index_dump_gates.sh: Gedaechtnis A, fuenf Schluessel a0..a4,
-# checkpoint -- danach liegt a/idxswap.kvidx mit Wasserstand und Fingerabdruck.
+# Fixture for tests/run_index_dump_gates.sh: memory A, five keys a0..a4,
+# checkpoint -- afterwards a/idxswap.kvidx exists with watermark and fingerprint.
 - decl: [var_kv, Kv<string:string>]
 - set: [var_kv, { call: [db.open_kv, "idxswap", {persist: true, index_dump: true, path: "/tmp/aiml_idxswap/a/"}] }]
 - call: [var_kv.clear]

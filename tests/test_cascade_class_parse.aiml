@@ -1,4 +1,4 @@
-# SPEC?: 57_function_cascades,16_classes   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 57_function_cascades,16_classes   # derived from the file name, to be confirmed
 # M1a — `- cascade_class:` parses, registers, and validates its wiring:
 #   • exactly one of binds_cascade / binds_enum
 #   • carrier + taker required

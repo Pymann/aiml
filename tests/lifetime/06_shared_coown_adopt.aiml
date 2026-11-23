@@ -1,4 +1,4 @@
-# SPEC?: 61_memory_management,24_time   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 61_memory_management,24_time   # derived from the file name, to be confirmed
 # static-check: off
 # TIER: T2
 # CONSTRUCT: opt-in shared<T> co-ownership + {share} (§6.2).

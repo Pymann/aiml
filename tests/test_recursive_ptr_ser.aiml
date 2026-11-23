@@ -1,4 +1,4 @@
-# SPEC?: 29_serialize,18_refs_and_pointers   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 29_serialize,18_refs_and_pointers   # derived from the file name, to be confirmed
 # Regression: mutually-recursive types via ptr<> must not blow up the ser-tree
 # builder.  Owner holds ptr<Child>, Child holds a back-ref ptr<Owner>.  Building
 # @__aiml_sernodes_<Name> for either class walked Owner→ptr<Child>→Child→

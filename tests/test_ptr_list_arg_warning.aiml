@@ -1,4 +1,4 @@
-# SPEC?: 18_refs_and_pointers   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 18_refs_and_pointers   # derived from the file name, to be confirmed
 # static-check: off
 # BUG #2 (Diagnostik-Test — muss NACH Fix eine suppressible WARNING geben):
 # `ptr<list<T>>` / `ptr<map<K:V>>` als Param-Typ ist Doppel-Indirektion

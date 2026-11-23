@@ -1,4 +1,4 @@
-# SPEC?: 29_2_sys_exec   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 29_2_sys_exec   # derived from the file name, to be confirmed
 # test_exec.aiml — basic sys.exec test
 #
 # exec_target: a no-arg function that prints a line and returns 0.

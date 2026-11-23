@@ -1,4 +1,4 @@
-# SPEC?: 15_models   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 15_models   # derived from the file name, to be confirmed
 # tests/test_embedded_model_large.aiml — Repro: Grosse embedded struct + multi-level ptr-chain
 #
 # Mimt die PfJobQueue / TulTrainCfg Situation:

@@ -1,4 +1,4 @@
-# SPEC?: 49_static_analysis   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 49_static_analysis   # derived from the file name, to be confirmed
 # Second import for the 3-file project — same shape as sibling_a.
 
 - class:

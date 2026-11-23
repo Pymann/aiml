@@ -1,4 +1,4 @@
-# SPEC?: 22_exceptions   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 22_exceptions   # derived from the file name, to be confirmed
 # Test Exception Handling
 # This test verifies:
 # 1. 'throw' generates __cxa_throw

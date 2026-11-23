@@ -1,4 +1,4 @@
-# SPEC?: 04_math   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 04_math   # derived from the file name, to be confirmed
 # test_math_random.aiml — math.random + math.random_int
 
 - decl: [pass, i32, 0]

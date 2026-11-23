@@ -1,4 +1,4 @@
-# SPEC?: 13_cast   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 13_cast   # derived from the file name, to be confirmed
 # Isoliert f32→i64/i32-Konvertierung in WASM.  Erwartung: numerische Konvertierung
 # (64.0 → 64), NICHT Bit-Reinterpret (64.0-Bits = 1115619328).
 - def:

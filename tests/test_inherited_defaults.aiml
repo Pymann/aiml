@@ -1,4 +1,4 @@
-# SPEC?: 19_inheritance   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 19_inheritance   # derived from the file name, to be confirmed
 # static-check: off
 # Test: inherited defaults survive model inheritance and class model composition
 # Expected exit code: 0

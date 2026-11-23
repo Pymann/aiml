@@ -1,4 +1,4 @@
-# SPEC?: 62_pipelines   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 62_pipelines   # derived from the file name, to be confirmed
 # sys.env bleibt verboten, auch MIT assert_pure: es gibt eine aiml-Alternative
 # Requires: driver
 # (host:), also keinen Grund fuer eine Ausnahme (F62-22).

@@ -1,4 +1,4 @@
-# SPEC?: 44_2_audio   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 44_2_audio   # derived from the file name, to be confirmed
 # audio namespace test (44.2)
 #
 # Tests the AIML audio namespace built on miniaudio.

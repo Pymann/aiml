@@ -1,4 +1,4 @@
-# SPEC?: 32_4_network_websockets   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 32_4_network_websockets   # derived from the file name, to be confirmed
 # test_ws_media.aiml — end-{ at: [to, end] } for buffer.ws_recv / buffer.ws_send / ws.send_kv_blob
 #
 # A minimal media server on a spawned thread: chunked binary upload → aiondb

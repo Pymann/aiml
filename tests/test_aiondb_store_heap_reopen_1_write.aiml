@@ -1,4 +1,4 @@
-# SPEC?: 61_memory_management   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 61_memory_management   # derived from the file name, to be confirmed
 # Regression setup: write persistent Store<T> with heap-allocated fields
 # (string + list<string>) for a later reopen/read test.
 # Expected exit code: 0

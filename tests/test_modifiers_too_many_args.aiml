@@ -1,4 +1,4 @@
-# SPEC?: 03_modifiers   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 03_modifiers   # derived from the file name, to be confirmed
 - def:
     name: too_many
     args: [[var_a, i32], [var_b, i32], [var_c, i32], [var_d, i32], [var_e, i32], [var_f, i32]]

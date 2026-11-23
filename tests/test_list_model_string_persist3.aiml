@@ -1,4 +1,4 @@
-# SPEC?: 15_models,09_strings   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 15_models,09_strings   # derived from the file name, to be confirmed
 # Repro Erweiterung 2: Model mit exakt der Deck-Struktur.
 
 - model:

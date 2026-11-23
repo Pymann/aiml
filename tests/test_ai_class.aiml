@@ -1,4 +1,4 @@
-# SPEC?: 16_classes   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 16_classes   # derived from the file name, to be confirmed
 # test_ai_class.aiml — Test ai.* functions with class/model args (TUL pattern)
 - decl: [pass, i32, 0]
 - decl: [fail, i32, 0]

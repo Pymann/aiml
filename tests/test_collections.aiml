@@ -1,4 +1,4 @@
-# SPEC?: 10_collections   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 10_collections   # derived from the file name, to be confirmed
 - print: ["Testing Arrays with Hyphen Syntax..."]
 - decl: [arr, "array<i32:3>"]
 - idx: [arr, 0, 10]

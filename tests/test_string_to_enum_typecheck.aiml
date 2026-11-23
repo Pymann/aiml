@@ -1,4 +1,4 @@
-# SPEC?: 14_enums,09_strings   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 14_enums,09_strings   # derived from the file name, to be confirmed
 # static-check: off
 # BUG #5 (NEGATIV-Test — muss NACH Fix einen COMPILE-ERROR werfen):
 # Zuweisung eines String-Literals an ein Enum-Feld wird bisher still

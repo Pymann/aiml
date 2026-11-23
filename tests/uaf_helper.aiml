@@ -1,4 +1,4 @@
-# SPEC?: 61_memory_management   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 61_memory_management   # derived from the file name, to be confirmed
 - class:
     name: UafHelper
     methods:

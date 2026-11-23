@@ -1,4 +1,4 @@
-# SPEC?: 29_1_sys_bundle   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 29_1_sys_bundle   # derived from the file name, to be confirmed
 # Tests for sys.exec with new_context=true (isolated execution)
 #
 # Isolated execution compiles the Code's code_chunks into a brand-new

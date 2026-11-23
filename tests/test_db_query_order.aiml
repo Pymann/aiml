@@ -1,4 +1,4 @@
-# SPEC?: 31_db_integration   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 31_db_integration   # derived from the file name, to be confirmed
 # Test: db.query with order_by, dir, limit, offset
 # Expected exit code: 0
 

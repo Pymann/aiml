@@ -1,4 +1,4 @@
-# SPEC?: 31_db_integration   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 31_db_integration   # derived from the file name, to be confirmed
 # Regression check: reopen the persistent Kv from a separate run.
 # Run after test_aiondb_kv_reopen_1_write.aiml.
 # Expected exit code: 0

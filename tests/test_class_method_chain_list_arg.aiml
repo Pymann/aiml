@@ -1,4 +1,4 @@
-# SPEC?: 16_classes   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 16_classes   # derived from the file name, to be confirmed
 # Repro: `list<T>` (and probably any container struct) gets CORRUPTED
 # when it is passed as a class-method arg, then RE-PASSED as a class-method
 # arg by the receiver to another class-method.

@@ -1,4 +1,4 @@
-# SPEC?: 48_trace,09_strings   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 48_trace,09_strings   # derived from the file name, to be confirmed
 # Regression: string.len must declare wasm32 strlen as i32 BEFORE any concat.
 # Previously the old trace formatter masked the wrong first declaration.
 - def:

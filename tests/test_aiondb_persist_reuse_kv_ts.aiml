@@ -1,4 +1,4 @@
-# SPEC?: 31_db_integration   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 31_db_integration   # derived from the file name, to be confirmed
 # Regression test: persistent AionDB Kv and TimeSeries handles should reuse the
 # same in-process state for the same name/path, and db.checkpoint should flush
 # both handle types together.

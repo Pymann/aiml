@@ -1,4 +1,4 @@
-# SPEC?: 61_memory_management   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 61_memory_management   # derived from the file name, to be confirmed
 # Finding #4: moving the SAME owned local into two members must NOT leave them shallow-sharing
 # (the second store must deep-copy) — else free_decoded of the aggregate double-frees the shared
 # heap. Value-Two local dropped at scope exit each call; must be double-free-free under valgrind.

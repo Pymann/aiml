@@ -1,4 +1,4 @@
-# SPEC?: 32_1_network_tls   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 32_1_network_tls   # derived from the file name, to be confirmed
 # Expected exit code: 0
 
 - def:

@@ -1,4 +1,4 @@
-# SPEC?: 57_function_cascades,16_classes   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 57_function_cascades,16_classes   # derived from the file name, to be confirmed
 # Slot-carrier proof (Phase B for the ability_text port): a MODEL carrier with
 # NAMED slots (not an append-order list).  Field handlers fill their slot; the
 # CALLER assembles the sentence in an order DIFFERENT from block order — proving

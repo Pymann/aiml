@@ -1,4 +1,4 @@
-# SPEC?: 18_refs_and_pointers   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 18_refs_and_pointers   # derived from the file name, to be confirmed
 # static-check: off
 # Repro: model with MULTIPLE list<ptr<T>> fields side-by-side.
 # Bug: when var_a CreatureDetail-style model has three list<ptr<...>> fields,

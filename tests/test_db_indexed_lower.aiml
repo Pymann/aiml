@@ -1,4 +1,4 @@
-# SPEC?: 31_db_integration,45_db_indexed_fields   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 31_db_integration,45_db_indexed_fields   # derived from the file name, to be confirmed
 # AionDB db_indexed: "lower" — case-insensitive lookup.  Index stores the
 # lowercase key; original casing is preserved in the record.
 # Reference: aiml/doc/backlog/2026-06-06_aiondb_indexed_fields.md

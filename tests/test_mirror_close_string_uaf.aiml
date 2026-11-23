@@ -1,4 +1,4 @@
-# SPEC?: 44_5_mirror,09_strings   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 44_5_mirror,09_strings   # derived from the file name, to be confirmed
 # Use-After-Free repro: mirror_session.close() frees string buffers that
 # AIML user variables still hold pointers to.  The strings live inside the
 # session's deserialization arena (or similar) and are tied to the session

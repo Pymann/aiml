@@ -1,4 +1,4 @@
-# SPEC?: 15_models,18_refs_and_pointers   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 15_models,18_refs_and_pointers   # derived from the file name, to be confirmed
 - model:
     name: Buff
     fields:

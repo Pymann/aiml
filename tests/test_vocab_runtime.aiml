@@ -1,4 +1,4 @@
-# SPEC?: 24_time,44_8_vocab   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 24_time,44_8_vocab   # derived from the file name, to be confirmed
 # Test: vocab runtime — load, set_language, lookup, fallback, hot-reload.
 # Deckt Phase 1+2 der Vocab-Feature ab; Decorator kommt später separat.
 

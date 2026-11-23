@@ -1,4 +1,4 @@
-# SPEC?: 23_system   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 23_system   # derived from the file name, to be confirmed
 # static-check: off
 # Host-side entrypoint compiled with import set B (SharedCard with rarity).
 

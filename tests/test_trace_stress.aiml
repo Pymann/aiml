@@ -1,4 +1,4 @@
-# SPEC?: 48_trace   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 48_trace   # derived from the file name, to be confirmed
 # Repeated traced calls should not allocate AIML formatting strings.
 - def:
     name: trace_probe

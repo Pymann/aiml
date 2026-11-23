@@ -1,4 +1,4 @@
-# SPEC?: 29_serialize   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 29_serialize   # derived from the file name, to be confirmed
 # Repro: same vtable-list-return pattern as test_iface_list_return.aiml, but
 # the object goes through sys.serialize → sys.deserialize roundtrip first.
 # This is the closest pattern to DataCreatures (Mirror RPC = ser/deser).

@@ -1,4 +1,4 @@
-# SPEC?: 29_serialize,61_memory_management   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 29_serialize,61_memory_management   # derived from the file name, to be confirmed
 # Regression test: Deck heap serialization with list<string> in typed persistent Kv
 # Expected exit code: 0
 

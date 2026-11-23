@@ -1,4 +1,4 @@
-# SPEC?: 15_models   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 15_models   # derived from the file name, to be confirmed
 # Ein Modell, das eine LISTE VON MODELLEN als Feld hat — und eine Funktion,
 # die so ein Element mit `lifetime: producer` liefert.
 #

@@ -1,4 +1,4 @@
-# SPEC?: 61_memory_management   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 61_memory_management   # derived from the file name, to be confirmed
 # Regression test: nested Card heap serialization in typed persistent Kv
 # Expected exit code: 0
 

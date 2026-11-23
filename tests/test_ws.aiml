@@ -1,4 +1,4 @@
-# SPEC?: 32_4_network_websockets   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 32_4_network_websockets   # derived from the file name, to be confirmed
 # Tests for ws namespace + ws_handle (WebSocket RFC 6455, from scratch)
 # Expected exit code: 0
 

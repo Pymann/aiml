@@ -1,4 +1,4 @@
-# SPEC?: 14_enums,57_function_cascades   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 14_enums,57_function_cascades   # derived from the file name, to be confirmed
 # test_cascade_enumerate — cascade.count / cascade.row_at (spec 44_7).
 # Full enumeration of a cascade's rows: opcodes × enum-members × nested
 # sub-opcodes; value/alias fields = 1 representative.  Deterministic corpus:

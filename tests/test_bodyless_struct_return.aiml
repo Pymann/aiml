@@ -1,4 +1,4 @@
-# SPEC?: 02_types   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 02_types   # derived from the file name, to be confirmed
 # static-check: off
 # BUG-Repro: eine BODYLESS Interface-Methode mit STRUCT-Return-Typ (hier
 # map<string:i32>) synthetisiert als Default `UndefValue` statt eines

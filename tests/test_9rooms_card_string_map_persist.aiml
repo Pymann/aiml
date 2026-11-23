@@ -1,4 +1,4 @@
-# SPEC?: 09_strings   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 09_strings   # derived from the file name, to be confirmed
 # Regression test: approximate 9rooms Card with string-key mana maps in typed Kv.
 # Expected exit code: 0
 

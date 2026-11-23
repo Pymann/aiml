@@ -1,12 +1,12 @@
-# SPEC?: 15_models   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 15_models   # derived from the file name, to be confirmed
 # static-check: off
 # Paket 2 (doc/spec61_inline_value_model_release_plan_2026-09-24.md §2/§3): auditiert die Typ-
-# abdeckung von `aiml_ser_retain` über den BESTEHENDEN `store: [ref<Model>, at(list,i)]`-Pfad
-# (ast_compiler_stmt.cpp:4802 — release(dst) → memcpy(src) → retain). Ist die Abdeckung vollständig,
-# co-ownen dst und das Listen-Element jede Heap-Feldart mit balanciertem rc → beide Drops geben genau
-# einmal frei. Fehlt eine Feldart im retain, entsteht ein double-free (valgrind Invalid free) ODER ein
+# coverage of `aiml_ser_retain` via the EXISTING `store: [ref<Model>, at(list,i)]` path
+# (ast_compiler_stmt.cpp:4802 — release(dst) → memcpy(src) → retain). If the coverage is complete,
+# dst and the list element co-own every heap field kind with a balanced rc → both drops free exactly
+# once. If a field kind is missing in retain, a double free results (valgrind invalid free) OR a
 # Leak. Deckt: string, list<i32>, nested Value-Model (mit eigenem string+list), map<string:i32>.
-# Erwartung: PASS + valgrind 0 lost + 0 errors (validiert §3-Audit — soll GRÜN sein).
+# Expectation: PASS + valgrind 0 lost + 0 errors (validates the §3 audit — should be GREEN).
 
 - model: { name: Inner, fields: [[tag, string], [nums, list<i32>]] }
 - model: { name: Rec, fields: [[label, string], [tags, list<i32>], [mana, map<string:i32>], [inner, Inner]] }

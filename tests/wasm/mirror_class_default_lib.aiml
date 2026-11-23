@@ -1,4 +1,4 @@
-# SPEC?: 44_5_mirror,16_classes   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 44_5_mirror,16_classes   # derived from the file name, to be confirmed
 # Requires: library
 # Lib that defines the class so the extern decl in the main test matches
 # the DataCreatures setup: every file imports the lib AND declares the

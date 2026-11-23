@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
-# Operator-Schluessel in YAML-Flow-Maps -- spec/04 "Operator-Schluessel zitieren"
-# und spec/09_1 §3.5.
+# Operator keys in YAML flow maps -- spec/04 "quoting operator keys"
+# and spec/09_1 §3.5.
 #
-# Hintergrund: `{ op: [args] }` ist eine YAML-Map, `op` ein YAML-Schluessel.  Ein
-# Teil der symbolischen Operatoren kann dort nicht blank stehen.  Drei davon
-# (`&`, `&&`, `!`) werfen nicht einmal -- YAML liest Anker/Tag und liefert einen
-# LEEREN Schluessel.  In einer Interpolation war die blanke Form bis 07.11.2026
-# ganz still: `${ { %: [lauf, 40] } }` landete wortwoertlich als Text in der
-# Zeichenkette, Austritt 0.  Gemessen an 300.000 Zeilen einer Messprobe.
+# Background: `{ op: [args] }` is a YAML map, `op` a YAML key.  Some
+# of the symbolic operators cannot stand bare there.  Three of them
+# (`&`, `&&`, `!`) do not even throw -- YAML reads anchor/tag and returns an
+# EMPTY key.  In an interpolation the bare form was completely silent until 2026-11-07:
+# `${ { %: [lauf, 40] } }` ended up literally as text in the
+# string, exit 0.  Measured on 300,000 lines of a measurement probe.
 #
-# Dieser Treiber prueft nicht nur den Austrittscode, sondern den TEXT der
-# Meldung -- ein Fehler, der die Ursache nicht nennt, war genau das Problem.
+# This driver checks not only the exit code, but the TEXT of the
+# message -- an error that does not name the cause was exactly the problem.
 #
-# Aufruf aus dem aiml-Wurzelverzeichnis:  bash tests/_opkey/run.sh
+# Invoke from the aiml root directory:  bash tests/_opkey/run.sh
 set -u
 cd "$(dirname "$0")/../.."
 AIML="${AIML:-./out/aiml/aiml}"
@@ -21,100 +21,100 @@ PASS=0; FAIL=0
 W=$(mktemp -d /tmp/aiml_opkey.XXXXXX)
 trap 'rm -rf "$W"' EXIT
 
-[ -x "$AIML" ] || { echo "kein Binary unter $AIML -- zuerst 'exodus build --all'"; exit 2; }
+[ -x "$AIML" ] || { echo "no binary at $AIML -- run 'exodus build --all' first"; exit 2; }
 
 ok()  { echo "[ OK ] $1"; PASS=$((PASS+1)); }
 bad() { echo "[FAIL] $1"; FAIL=$((FAIL+1)); }
 
 lauf() { timeout 180 "$AIML" "$FIX/$1.aiml" -r > "$W/$1.out" 2>&1; echo $?; }
 
-# muss scheitern UND die Ursache nennen
+# must fail AND name the cause
 neg() {
   local name="$1" was="$2"; shift 2
   local rc; rc=$(lauf "$name")
   if [ "$rc" = "0" ]; then
-    bad "$name: Austritt 0 -- $was wurde still durchgelassen"
+    bad "$name: exit 0 -- $was was silently let through"
     sed -n '1,3p' "$W/$name.out" | sed 's/^/        /'
     return
   fi
   local fehlt=""
   for muster in "$@"; do
     grep -qF -- "$muster" "$W/$name.out" || fehlt="$fehlt
-        fehlendes Muster: $muster"
+        missing pattern: $muster"
   done
   if [ -n "$fehlt" ]; then
-    bad "$name: scheitert (rc=$rc), aber die Meldung nennt die Ursache nicht$fehlt"
+    bad "$name: fails (rc=$rc), but the message does not name the cause$fehlt"
     grep -E '^\[ERROR\]' "$W/$name.out" | head -3 | sed 's/^/        /'
   else
-    ok "$name: $was -> harter Fehler mit Ursache"
+    ok "$name: $was -> hard error with cause"
   fi
 }
 
-# muss laufen UND das Erwartete ausgeben
+# must run AND print what is expected
 pos() {
   local name="$1" was="$2"; shift 2
   local rc; rc=$(lauf "$name")
   if [ "$rc" != "0" ]; then
-    bad "$name: Austritt $rc, erwartet 0 -- $was"
+    bad "$name: exit $rc, expected 0 -- $was"
     grep -E '^\[ERROR\]' "$W/$name.out" | head -3 | sed 's/^/        /'
     return
   fi
   local fehlt=""
   for muster in "$@"; do
     grep -qF -- "$muster" "$W/$name.out" || fehlt="$fehlt
-        fehlende Ausgabe: $muster"
+        missing output: $muster"
   done
   if [ -n "$fehlt" ]; then
-    bad "$name: laeuft, aber die Ausgabe stimmt nicht$fehlt"
+    bad "$name: runs, but the output does not match$fehlt"
     grep -vE '^\[(DEBUG|INFO)\]' "$W/$name.out" | head -4 | sed 's/^/        /'
   else
     ok "$name: $was"
   fi
 }
 
-echo "---- 1. Interpolation: blanker Schluessel war still (der Befund)"
-neg interp_percent "blankes '%' in einer Expansion" \
+echo "---- 1. Interpolation: a bare key was silent (the finding)"
+neg interp_percent "bare '%' in an expansion" \
     "operator key '%' in an expansion must be quoted" "spec/09_1"
-neg interp_star "blankes '*' in einer Expansion" \
+neg interp_star "bare '*' in an expansion" \
     "operator key '*' in an expansion must be quoted" "spec/09_1"
 
-echo "---- 2. Anweisung, Wurf-Klasse: Fehler gab es, aber ohne Ursache"
-neg stmt_percent "blankes '%' in einer Anweisung" \
+echo "---- 2. Statement, throw class: there was an error, but without a cause"
+neg stmt_percent "bare '%' in a statement" \
     "operator key '%' bare" "{ \"%\": [...] }"
-neg stmt_star "blankes '*' in einer Anweisung" \
+neg stmt_star "bare '*' in a statement" \
     "operator key '*' bare" "{ \"*\": [...] }"
 
-echo "---- 3. Anweisung, Schluck-Klasse: YAML wirft NICHT"
-neg stmt_anchor "blankes '&' (Anker, leerer Schluessel)" \
+echo "---- 3. Statement, swallow class: YAML does NOT throw"
+neg stmt_anchor "bare '&' (anchor, empty key)" \
     "operator key swallowed by YAML"
-neg stmt_tilde  "blankes '~' (Null-Schluessel)" \
+neg stmt_tilde  "bare '~' (null key)" \
     "operator key swallowed by YAML"
-# Blankes '!=' wird als TAG geschluckt -- der Compiler sieht nie ein '!=' und kann
-# darum auch nicht auf 'neq' verweisen.  Zitiert bekommt man die Veraltet-Meldung.
-neg stmt_neq    "blankes '!=' (Tag, leerer Schluessel)" \
+# A bare '!=' is swallowed as a TAG -- the compiler never sees a '!=' and therefore
+# cannot point to 'neq' either.  Quoted, one gets the deprecation message.
+neg stmt_neq    "bare '!=' (tag, empty key)" \
     "operator key swallowed by YAML"
 
-neg quoted_neq_deprecated "zitiertes '!=' erreicht die Veraltet-Pruefung" \
+neg quoted_neq_deprecated "quoted '!=' reaches the deprecation check" \
     "Operator '!=' is not allowed. Use 'neq' instead."
 
-echo "---- 4. Die zitierte Form rechnet weiter"
-pos quoted_ok "zitierte Operatoren in Anweisung und Expansion" \
+echo "---- 4. The quoted form keeps computing"
+pos quoted_ok "quoted operators in statement and expansion" \
     "zitiert rest=1 prod=42 grg=1 ungl=1" \
     "expansion rest=23 prod=286" \
     "blank plus=144 minus=140 durch=13"
-pos quoted_all_ops "jeder symbolische Operator zitiert" \
+pos quoted_all_ops "every symbolic operator quoted" \
     "prod=42 rest=1 grg=1 gge=1 bde=1 ode=1 nic=1" \
     "adresse-gelesen=143"
 
-echo "---- 5. Die Grenze der Regel bleibt stehen"
-pos prose "Prosa-\${...} bleibt wortwoertlicher Text" \
-    'eine Expansion schreibt man als ${...} im Text'
-pos esc_quote_fn "escaptes Anfuehrungszeichen in einer Expansion (spec/09_1 §3.4)" \
+echo "---- 5. The limit of the rule stays in place"
+pos prose "prose \${...} stays literal text" \
+    'one writes an expansion as ${...} in the text'
+pos esc_quote_fn "escaped quotation mark in an expansion (spec/09_1 §3.4)" \
     "name: [xyz]"
-pos esc_quote_member "dasselbe als Member-Aufruf" \
+pos esc_quote_member "the same as a member call" \
     "name: [x]"
-neg bare_quote "blankes Anfuehrungszeichen beendet den Skalar" \
+neg bare_quote "a bare quotation mark ends the scalar" \
     "YAML parse error"
 
-echo "---- $PASS ok, $FAIL fehlgeschlagen"
+echo "---- $PASS ok, $FAIL failed"
 [ "$FAIL" -eq 0 ]

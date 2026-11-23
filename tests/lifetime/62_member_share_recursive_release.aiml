@@ -1,4 +1,4 @@
-# SPEC?: 61_memory_management,24_time   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 61_memory_management,24_time   # derived from the file name, to be confirmed
 # static-check: off
 # TIER: T0
 # Replacing owned container fields releases their strings/nested handles by descriptor.

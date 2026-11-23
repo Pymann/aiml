@@ -1,15 +1,15 @@
-# SPEC?: 15_models   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 15_models   # derived from the file name, to be confirmed
 # static-check: off
 # Paket 3 PROTOTYP (doc/spec61_inline_value_model_release_plan_2026-09-24.md §3): beweist die
-# CopyRetain-Mechanik ISOLIERT — eine retain-Kopie (hier via den bestehenden store-retain-Pfad,
-# ast_compiler_stmt.cpp:4802) überlebt die FREIGABE des Quell-Elements. build_and_copy legt eine
-# LOKALE list<Rec> an, kopiert rows[0] per `store` (memcpy + aiml_ser_retain) in den out-Parameter,
-# und lässt dann die Liste am Funktions-Scope-Ende droppen → aiml_list_free gibt das kind-2-
+# CopyRetain mechanics in ISOLATION — a retain copy (here via the existing store retain path,
+# ast_compiler_stmt.cpp:4802) survives the FREEING of the source element. build_and_copy creates a
+# LOCAL list<Rec>, copies rows[0] via `store` (memcpy + aiml_ser_retain) into the out parameter,
+# and then lets the list drop at the end of the function scope → aiml_list_free frees the kind-2
 # Inline-Element frei (aiml_ser_free_decoded: decref string/list/map/nested — DIESELBE Freigabe, die
-# remove/clear nutzen würden). Wenn retain vollständig ist, überlebt die Kopie im Caller mit intaktem
-# Inhalt und beide Seiten geben genau einmal frei.
-# Erwartung: PASS + valgrind 0 lost + 0 errors (Mechanik bewiesen). Wenn eine Feldart im retain fehlt:
-# double-free (Invalid free) oder Leak.
+# remove/clear would use). If retain is complete, the copy survives in the caller with intact
+# content and both sides free exactly once.
+# Expectation: PASS + valgrind 0 lost + 0 errors (mechanics proven). If a field kind is missing in retain:
+# double free (invalid free) or leak.
 
 - model: { name: Inner, fields: [[tag, string], [nums, list<i32>]] }
 - model: { name: Rec, fields: [[label, string], [tags, list<i32>], [mana, map<string:i32>], [inner, Inner]] }
@@ -26,8 +26,8 @@
       - set: [src.inner.tag, "inner-${seed}"]
       - call: [src.inner.nums.push, 99]
       - call: [rows.push, src]
-      - store: [out, { at: [rows, 0] }]  # retain-Kopie in den Caller-Slot (out überlebt rows)
-      # rows droppt hier → aiml_list_free gibt rows[0] (kind 2) frei; out muss überleben
+      - store: [out, { at: [rows, 0] }]  # retain copy into the caller slot (out survives rows)
+      # rows drops here → aiml_list_free frees rows[0] (kind 2); out must survive
 
 - def:
     name: main

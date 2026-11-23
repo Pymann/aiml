@@ -1,4 +1,4 @@
-# SPEC?: 27_channels,15_models,18_refs_and_pointers   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 27_channels,15_models,18_refs_and_pointers   # derived from the file name, to be confirmed
 # Repro: chan<ptr<Model>> must transport the pointer value, not inline model bytes.
 # Expected exit code: 0
 

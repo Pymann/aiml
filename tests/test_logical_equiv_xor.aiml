@@ -1,4 +1,4 @@
-# SPEC?: 46_log   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 46_log   # derived from the file name, to be confirmed
 - def:
     name: main
     return: i32

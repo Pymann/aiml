@@ -1,4 +1,4 @@
-# SPEC?: 31_db_integration   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 31_db_integration   # derived from the file name, to be confirmed
 # static-check: off
 # Regression: `set: [outer.inner, { call: [kv.get_copy, key] }]` — Zuweisung
 # eines kv.get_copy-Resultats DIREKT in ein verschachteltes Struct-Feld.

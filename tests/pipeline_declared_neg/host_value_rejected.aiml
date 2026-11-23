@@ -1,4 +1,4 @@
-# SPEC?: 62_pipelines   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 62_pipelines   # derived from the file name, to be confirmed
 # F62-17: `host:` traegt NAMEN, nie name=value — ein Wert im Quelltext waere
 # Requires: driver
 # ein Geheimnis im Quelltext.

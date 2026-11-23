@@ -1,4 +1,4 @@
-# SPEC?: 30_hot_reload   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 30_hot_reload   # derived from the file name, to be confirmed
 # Hot-Reload Test — sys.bundle + sys.exec version guard
 #
 # Expected output:

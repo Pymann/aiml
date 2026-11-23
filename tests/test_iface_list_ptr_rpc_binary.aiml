@@ -1,4 +1,4 @@
-# SPEC?: 18_refs_and_pointers   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 18_refs_and_pointers   # derived from the file name, to be confirmed
 # static-check: off
 # Binary-serializer roundtrip test for list<ptr<T>>.  Uses sys.bundle to
 # encode-then-decode via the same machinery RPC uses (__aiml_sernodes_*).

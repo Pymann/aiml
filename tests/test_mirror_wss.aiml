@@ -1,4 +1,4 @@
-# SPEC?: 44_5_mirror   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 44_5_mirror   # derived from the file name, to be confirmed
 # Mirror over WSS (encrypted WebSocket): host via mirror.listen_tls with a server
 # cert, client connects with wss:// and does a send_and_await echo roundtrip.
 # Proves the mirror TLS-listen path works end-to-end (traffic is TLS-encrypted).

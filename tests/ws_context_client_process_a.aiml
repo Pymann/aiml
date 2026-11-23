@@ -1,4 +1,4 @@
-# SPEC?: 23_system   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 23_system   # derived from the file name, to be confirmed
 # Requires: library
 # Client-side entrypoint compiled with import set A.  The host uses set B (SharedCard with rarity).
 

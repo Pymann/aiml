@@ -1,4 +1,4 @@
-# SPEC?: 44_5_mirror   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 44_5_mirror   # derived from the file name, to be confirmed
 # Regression test: multi-client RPC sender identification via rpc_event.peer_id.
 # Expected exit code: 0
 #

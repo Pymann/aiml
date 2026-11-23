@@ -1,4 +1,4 @@
-# SPEC?: 61_memory_management   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 61_memory_management   # derived from the file name, to be confirmed
 # Finding #7: assigning to a { const: true } local must be REJECTED at compile time
 # (the local->local model deep-copy path must honor const, not silently deep-copy).
 - model: { name: Holder, fields: [[label, string]] }

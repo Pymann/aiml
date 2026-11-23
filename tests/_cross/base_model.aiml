@@ -1,4 +1,4 @@
-# SPEC?: 15_models   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 15_models   # derived from the file name, to be confirmed
 - model:
     name: Base
     fields:

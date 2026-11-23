@@ -1,4 +1,4 @@
-# SPEC?: 10_collections   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 10_collections   # derived from the file name, to be confirmed
 # Repro: vtable indirect call returning list<string> (struct >8 bytes) corrupts
 # the data pointer.  WASM/Itanium ABI demotes struct returns >8 bytes to a
 # hidden sret out-pointer.  For DIRECT calls LLVM handles both ends.  For

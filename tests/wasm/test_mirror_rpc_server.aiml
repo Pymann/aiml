@@ -1,4 +1,4 @@
-# SPEC?: 44_5_mirror,29_serialize   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 44_5_mirror,29_serialize   # derived from the file name, to be confirmed
 # static-check: off
 # Native side of the mirror RPC WASM test.  Listens on ws://localhost:18888,
 # registers ItemImpl (sync path) which also handles RPC `cast` (rpc path).

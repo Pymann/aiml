@@ -1,4 +1,4 @@
-# SPEC?: 31_db_integration   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 31_db_integration   # derived from the file name, to be confirmed
 # Regression setup: write persistent Kv contents for a later reopen/read test.
 # Expected exit code: 0
 

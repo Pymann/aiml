@@ -1,4 +1,4 @@
-# SPEC?: 10_collections   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 10_collections   # derived from the file name, to be confirmed
 # test_list_f32_flat.aiml — Proof that list<f32> works as flat embedding storage
 # Tests all operations needed for EmbeddingTable: push, index read, index write, arithmetic
 

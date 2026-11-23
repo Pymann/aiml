@@ -1,4 +1,4 @@
-# SPEC?: 44_6_prefabs,42_path_type   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 44_6_prefabs,42_path_type   # derived from the file name, to be confirmed
 # Negative: Prefab-Spec mit Pfad-Literal in `texture:` → Compile-Hard-Error.
 # Stem-only ist strikt; Pfade in Prefab-Specs sind nicht erlaubt.
 #

@@ -1,4 +1,4 @@
-# SPEC?: 44_1_engine   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 44_1_engine   # derived from the file name, to be confirmed
 # Engine + Input + gl_mesh test
 #
 # Tests the full cross-platform abstraction layer:

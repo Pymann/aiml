@@ -1,4 +1,4 @@
-# SPEC?: 14_enums   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 14_enums   # derived from the file name, to be confirmed
 # Enum-value registration (headless smoke): a sparse, non-1-based enum must
 # register cleanly through the 3-arg aiml_prefab_register_enum(name, labels,
 # values) path at program init.  The parallel values pipe ("1|2|10|30") is what

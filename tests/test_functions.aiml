@@ -1,4 +1,4 @@
-# SPEC?: 07_functions   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 07_functions   # derived from the file name, to be confirmed
 - def:
     name: add_two
     args: [[var_a, i32], [var_b, i32]]

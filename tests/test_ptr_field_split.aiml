@@ -1,4 +1,4 @@
-# SPEC?: 18_refs_and_pointers   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 18_refs_and_pointers   # derived from the file name, to be confirmed
 # test_ptr_field_split.aiml — Repro: string.split on ptr<Model> field
 # Bug: ev.answer.split(" ") may return empty list when called on ptr field
 

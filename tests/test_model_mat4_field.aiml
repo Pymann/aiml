@@ -1,4 +1,4 @@
-# SPEC?: 15_models   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 15_models   # derived from the file name, to be confirmed
 # A mat4 / vec3 field of a local value model set from a call result keeps its value, also when
 # the model is passed as ref<T> to a method.
 # Expected exit code: 0

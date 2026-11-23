@@ -1,4 +1,4 @@
-# SPEC?: 29_serialize   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 29_serialize   # derived from the file name, to be confirmed
 - model:
     name: Ability
     fields:

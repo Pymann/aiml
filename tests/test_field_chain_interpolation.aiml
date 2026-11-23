@@ -1,4 +1,4 @@
-# SPEC?: 09_1_string_expansions   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 09_1_string_expansions   # derived from the file name, to be confirmed
 # Regression target: field/index chains inside string interpolation should work.
 # Expected exit code: 0
 

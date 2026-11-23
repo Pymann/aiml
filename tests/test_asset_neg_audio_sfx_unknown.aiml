@@ -1,4 +1,4 @@
-# SPEC?: 44_2_audio   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 44_2_audio   # derived from the file name, to be confirmed
 # Negative: audio.sfx mit string-literalem unbekanntem Stem → Compile-Hard-Error.
 #
 # AssetRoots: tests/_asset_fixtures/basic/resources/audio

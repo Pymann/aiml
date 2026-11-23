@@ -1,4 +1,4 @@
-# SPEC?: 14_enums,15_models   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 14_enums,15_models   # derived from the file name, to be confirmed
 # Requires: library
 # 9Rooms — Enums (ported from ccg_gemini/card_api/schemas.py)
 

@@ -1,4 +1,4 @@
-# SPEC?: 61_memory_management,20_free_operator,24_time   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 61_memory_management,20_free_operator,24_time   # derived from the file name, to be confirmed
 # static-check: off
 # NEGATIVE (§10): freeing a stack value (non-heap) is an error — stack values auto-release at scope.
 # EXPECT-ERROR: free of a non-heap value

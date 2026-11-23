@@ -1,4 +1,4 @@
-# Messfall: viele Zeilen, zwei indizierte Felder.  Fuer tests/measure_sidx.sh.
+# Measurement case: many rows, two indexed fields.  For tests/measure_sidx.sh.
 - model:
     name: Fakt
     fields:
@@ -21,11 +21,11 @@
         body:
           - decl: [schluessel, string, "f${lauf}"]
           - set: [zeile.fakt_id, schluessel]
-          # Viele Zeilen je Subjekt (wie im Wissensgraphen), wenige Relationen.
+          # Many rows per subject (as in the knowledge graph), few relations.
           - set: [zeile.subj, "ding_${ { /: [lauf, 20] } }"]
-          # Verschachtelte Anfuehrungszeichen in "${ { ... } }" brechen das
-          # YAML -- und "%" braucht sie, weil es als Flow-Key unquotiert
-          # ungueltig ist.  Darum herausgezogen.
+          # Nested quotation marks in "${ { ... } }" break the
+          # YAML -- and "%" needs them, because it is invalid as an unquoted flow key.
+          # Hence pulled out.
           - decl: [rest, i32, { "%": [lauf, 40] }]
           - set: [zeile.rel,  "rel_${rest}"]
           - set: [zeile.obj,  "wert fuer zeile ${lauf} mit etwas text"]

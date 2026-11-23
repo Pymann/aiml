@@ -1,9 +1,9 @@
 # SPEC: 29_2_sys_exec,29_serialize
-# Live-Test (spec/29_2 §12/§13), Empfaengerseite — AOT, kein JIT.
-# Requires: peer — wird von tests/bundle_socket/run.sh paarweise gestartet
+# Live test (spec/29_2 §12/§13), receiver side — AOT, no JIT.
+# Requires: peer — started in pairs by tests/bundle_socket/run.sh
 #
 # Zwei Durchgaenge:
-#   1. Ein Bundle: Quelltext -> Code -> sys.exec im isolierten Kontext.
+#   1. A bundle: source text -> code -> sys.exec in the isolated context.
 #   2. Bibliothek + Pipeline GETRENNT empfangen, hier mit Code.merge
 #      zusammengefuehrt und in EINEM Lauf ausgefuehrt — das ist der einzige
 #      Weg, eine Bibliothek verfuegbar zu machen, weil ein isolierter Kontext

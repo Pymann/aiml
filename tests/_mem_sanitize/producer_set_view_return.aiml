@@ -1,4 +1,4 @@
-# SPEC?: 61_memory_management   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 61_memory_management   # derived from the file name, to be confirmed
 # Isolates the 9rooms drive_ai_combat crash (load_entry_at → att_entry → aent). A PRODUCER fills an
 # owned value-model local via `set [out, {at: [view, pos]}]` (a SHALLOW struct copy sharing the
 # container element's list buffers) and returns it. The `set`-rebind suppresses out's own drop, but

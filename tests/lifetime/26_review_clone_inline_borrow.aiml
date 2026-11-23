@@ -1,4 +1,4 @@
-# SPEC?: 29_3_sys_clone,61_memory_management,24_time   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 29_3_sys_clone,61_memory_management,24_time   # derived from the file name, to be confirmed
 # static-check: off
 # TIER: T2
 # Spec 61 §5.1: clone accepts the ref returned by at/get and yields an owned value.

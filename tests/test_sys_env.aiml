@@ -1,4 +1,4 @@
-# SPEC?: 23_system   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 23_system   # derived from the file name, to be confirmed
 # Regression: sys.env must return the process environment as a populated
 # map<string:string>, not an empty stub.  (Was previously a no-op that
 # allocated an empty map — silently broke every env-var read.)

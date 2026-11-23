@@ -1,4 +1,4 @@
-# SPEC?: 32_4_network_websockets   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 32_4_network_websockets   # derived from the file name, to be confirmed
 # test_ws_poll_recv.aiml — non-blocking receive pattern for the media client.
 #
 # The browser frame loop must NOT block on the media WS: it polls

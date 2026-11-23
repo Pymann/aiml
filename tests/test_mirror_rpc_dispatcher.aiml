@@ -1,4 +1,4 @@
-# SPEC?: 44_5_mirror   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 44_5_mirror   # derived from the file name, to be confirmed
 # static-check: off
 # Regression test: RPC-Dispatch via Klassen-Handler + Interface + Dispatcher-Map
 # Expected exit code: 0

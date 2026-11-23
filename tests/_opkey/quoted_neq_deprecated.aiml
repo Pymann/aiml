@@ -1,4 +1,4 @@
-# Zitiert sieht der Compiler das '!=' und verweist auf 'neq' (spec/04).
+# Quoted, the compiler sees the '!=' and points to 'neq' (spec/04).
 # Expected exit code: 1
 - def:
     name: main

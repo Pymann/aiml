@@ -1,4 +1,4 @@
-# SPEC?: 09_strings   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 09_strings   # derived from the file name, to be confirmed
 - decl: [name, string, "OpenAI"]
 - decl: [length, i32, { call: [name.len] }]
 - print: ["Length: ${length}"]

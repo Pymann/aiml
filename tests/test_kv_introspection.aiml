@@ -1,4 +1,4 @@
-# SPEC?: 31_db_integration   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 31_db_integration   # derived from the file name, to be confirmed
 # Einblick in die geoeffneten KV-Speicher (cosmos doc/spec/99 §99.2).
 #
 # Die Betriebssicht braucht Kennzahlen, keine Inhalte: Name, Pfad, WAL-Groesse,

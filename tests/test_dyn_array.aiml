@@ -1,4 +1,4 @@
-# SPEC?: 52_arrays,53_dyn_arrays   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 52_arrays,53_dyn_arrays   # derived from the file name, to be confirmed
 # tests/test_dyn_array.aiml — dyn_array<T> feature tests
 # Expected exit code: 0
 

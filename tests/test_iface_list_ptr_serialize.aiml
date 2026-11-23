@@ -1,4 +1,4 @@
-# SPEC?: 29_serialize,18_refs_and_pointers   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 29_serialize,18_refs_and_pointers   # derived from the file name, to be confirmed
 # static-check: off
 # Symmetry probe: list<ptr<T>> roundtrip — analog to ref<T>, since the compiler
 # treats ref and ptr as equivalent opaque pointers.

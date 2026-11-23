@@ -1,4 +1,4 @@
-# SPEC?: 31_db_integration   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 31_db_integration   # derived from the file name, to be confirmed
 # Regression: var_kv.get(k) → mutate → var_kv.set(k, …) on the SAME key.
 #
 # Before the fix in src/sys/db_runtime.cpp::aiml_db_kv_set (encode-before-evict)

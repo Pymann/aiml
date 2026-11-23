@@ -1,4 +1,4 @@
-# SPEC?: 14_enums   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 14_enums   # derived from the file name, to be confirmed
 # Phase 2: enum with labels — 3 syntactic forms in one file.
 
 # 1) Compact — labels auto-derived at consumer sites, no explicit map

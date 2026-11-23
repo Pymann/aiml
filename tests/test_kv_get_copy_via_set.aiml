@@ -1,4 +1,4 @@
-# SPEC?: 31_db_integration   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 31_db_integration   # derived from the file name, to be confirmed
 # Regression test for the `set: [exp, var_kv.get_copy(...)]` deep-copy bug.
 #
 # Bug:

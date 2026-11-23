@@ -1,4 +1,4 @@
-# SPEC?: 44_5_mirror,32_4_network_websockets   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 44_5_mirror,32_4_network_websockets   # derived from the file name, to be confirmed
 # static-check: off
 # Regression test: WebSocket mirror with in-place list mutations and RPCs
 # Expected exit code: 0

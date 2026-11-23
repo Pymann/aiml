@@ -1,4 +1,4 @@
-# SPEC?: 62_pipelines,24_time   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 62_pipelines,24_time   # derived from the file name, to be confirmed
 # time ist die Uhr — in einem reinen Rumpf ein Fehler (F62-18).
 # Requires: driver
 - def:

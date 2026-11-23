@@ -1,4 +1,4 @@
-# SPEC?: 09_strings   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 09_strings   # derived from the file name, to be confirmed
 # Tests for string.substr, string.starts_with, string.index_of
 
 - decl: [pass, i32, 0]

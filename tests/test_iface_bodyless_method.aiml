@@ -1,4 +1,4 @@
-# SPEC?: 02_types   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 02_types   # derived from the file name, to be confirmed
 # static-check: off
 # Bodyless Interface-Methode: eine Klasse deklariert eine Interface-Methode
 # OHNE `body:` — das erfüllt syntaktisch das Interface (Methode existiert),

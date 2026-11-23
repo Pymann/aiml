@@ -1,4 +1,4 @@
-# SPEC?: 62_pipelines   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 62_pipelines   # derived from the file name, to be confirmed
 # Requires: driver
 # F62-9: `needs` darf nur FRUEHERE Schritte nennen; ein unbekannter Name ist
 # ein Fehler und nicht eine Kante, die stillschweigend entfaellt.

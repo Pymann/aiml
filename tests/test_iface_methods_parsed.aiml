@@ -1,4 +1,4 @@
-# SPEC?: 02_types   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 02_types   # derived from the file name, to be confirmed
 # Debug-Probe: stelle sicher dass InterfaceDecl.methods im parser befüllt wird.
 
 - interface:

@@ -1,4 +1,4 @@
-# SPEC?: 14_enums   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 14_enums   # derived from the file name, to be confirmed
 # Regression test: typed persistent Kv with map<Enum:i32> keys.
 # Expected exit code: 0
 

@@ -1,4 +1,4 @@
-# SPEC?: 44_5_mirror,32_4_network_websockets   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 44_5_mirror,32_4_network_websockets   # derived from the file name, to be confirmed
 # static-check: off
 # 9rooms real-type mirror probe: import actual models + shared GameView,
 # then sync events/trigger/reaction fields over websocket mirror.

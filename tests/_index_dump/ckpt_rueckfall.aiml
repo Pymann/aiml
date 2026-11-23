@@ -1,8 +1,8 @@
 # Fixture: schreiben, checkpoint, im SELBEN Prozess wieder lesen.  Das Gate legt
-# vor dem zweiten Lauf ein Verzeichnis an die Stelle der .kvidx -- dann scheitert
-# das Schreiben des Dumps UND sein Laden.  spec/31 §6.2.1 verlangt dafuer den
-# Rueckfall: der Ueberlauf wird aus der Liste aufgefuellt, bevor die Sperre
-# faellt.  Ohne ihn hat der Store seinen ganzen Inhalt verloren, ohne Fehler.
+# before the second run a directory in place of the .kvidx -- then
+# writing the dump fails AND so does loading it.  spec/31 §6.2.1 demands the
+# fallback for that: the overflow is refilled from the list before the lock
+# drops.  Without it the store has lost its whole content, without an error.
 - decl: [var_kv, Kv<string:string>]
 - set: [var_kv, { call: [db.open_kv, "rueck", {persist: true, index_dump: true, path: "/tmp/aiml_ckpt_rueck/"}] }]
 - decl: [var_i, i32, 0]

@@ -1,4 +1,4 @@
-# SPEC?: 29_serialize,15_models   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 29_serialize,15_models   # derived from the file name, to be confirmed
 # Ein i64-Feld in einem VERSCHACHTELTEN Modell ueber den Serialisierer und
 # zurueck.
 #

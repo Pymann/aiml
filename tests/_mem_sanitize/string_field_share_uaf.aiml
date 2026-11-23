@@ -1,4 +1,4 @@
-# SPEC?: 09_strings   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 09_strings   # derived from the file name, to be confirmed
 # pump_load pattern: a NO-INIT source model (cbr) filled by a by-ref call (decode), library built
 # from at-views sharing cbr's strings, then cbr DROPS at scope exit → frees the shared strings →
 # the persistent library dangles. (Earlier repros used init-from-call sources → not dropped → passed.)

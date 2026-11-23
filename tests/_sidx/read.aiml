@@ -1,6 +1,6 @@
-# Liest den Store und gibt aus, was der Nebenindex sagt.  Das Gate vergleicht
-# diese Zeilen -- so wird sichtbar, OB der Dump beantwortet hat (eine
-# vergiftete Datei liefert andere Schluessel) oder ob aufgefuellt wurde.
+# Reads the store and prints what the secondary index says.  The gate compares
+# these lines -- that way it becomes visible WHETHER the dump answered (a
+# poisoned file returns different keys) or whether it was refilled.
 - model:
     name: Ding
     fields:

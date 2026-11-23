@@ -1,4 +1,4 @@
-# SPEC?: 44_5_mirror,15_models   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 44_5_mirror,15_models   # derived from the file name, to be confirmed
 # Regression test: mirror RPC can carry a typed model payload over WebSocket
 # Expected exit code: 0
 

@@ -1,4 +1,4 @@
-# SPEC?: 25_config   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 25_config   # derived from the file name, to be confirmed
 - config:
     entrypoint: app_start
     version: "2.5"

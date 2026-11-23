@@ -1,6 +1,6 @@
-# Fixture: liest Gedaechtnis A.  Nach dem Unterschieben von Bs WAL muss der Dump
-# von A am Fingerabdruck scheitern und voll nachgespielt werden -- also Bs Inhalt
-# erscheinen, nicht As und erst recht kein Muell.
+# Fixture: reads memory A.  After slipping B's WAL underneath, A's dump must
+# fail on the fingerprint and be fully replayed -- so B's content must
+# appear, not A's and certainly no garbage.
 - decl: [var_kv, Kv<string:string>]
 - set: [var_kv, { call: [db.open_kv, "idxswap", {persist: true, index_dump: true, path: "/tmp/aiml_idxswap/a/"}] }]
 - decl: [anz, i32, { call: [var_kv.len] }]

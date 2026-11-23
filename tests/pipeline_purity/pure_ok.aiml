@@ -1,4 +1,4 @@
-# SPEC?: 62_pipelines   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 62_pipelines   # derived from the file name, to be confirmed
 # Reiner Rumpf: nur Rechnen und log (log ist immer erlaubt, §10.2).
 # Requires: driver
 # Keine Reinheits-Diagnose erwartet.

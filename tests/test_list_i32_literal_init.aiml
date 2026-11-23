@@ -1,4 +1,4 @@
-# SPEC?: 10_collections   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 10_collections   # derived from the file name, to be confirmed
 # A list<i32>/list<f64>/list<string> declared with a literal list keeps every element (negatives included), in a function
 # and in a class method; `at` reads back the declared values.
 # Expected exit code: 0

@@ -1,4 +1,4 @@
-# SPEC?: 62_pipelines   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 62_pipelines   # derived from the file name, to be confirmed
 # F62-110: ${mode} ist nicht deklariert (args nennt nur arch) -> im erzeugten
 # Requires: driver
 # Rumpf eine undefinierte Variable.  Der Fehler, den F62-7 verlangt, faellt

@@ -1,6 +1,6 @@
-# Gegenstueck zu ckpt_phasen.aiml: dieselben 1,6 Mio Schluessel, aber nur EIN
-# checkpoint am Ende.  Hier ist der volle Schluesselsatz im Ueberlauf unvermeidlich
-# -- das ist der Bezugswert, gegen den die phasenweise Spitze gemessen wird.
+# Counterpart to ckpt_phasen.aiml: the same 1.6 million keys, but only ONE
+# checkpoint at the end.  Here the full key set in the overflow is unavoidable
+# -- that is the reference value against which the phased peak is measured.
 - decl: [var_kv, Kv<string:string>]
 - set: [var_kv, { call: [db.open_kv, "einphasig", {persist: true, index_dump: true, path: "/tmp/aiml_ckpt_ein/"}] }]
 - call: [var_kv.clear]

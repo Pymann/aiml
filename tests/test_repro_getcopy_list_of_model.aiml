@@ -1,4 +1,4 @@
-# SPEC?: 15_models   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 15_models   # derived from the file name, to be confirmed
 # static-check: off
 # Repro-Kandidat (9rooms_v2 Card-Refactor): SIGSEGV wenn ein Struct mit
 # einem `list<Model>`-Feld (Model mit eigenem verschachtelten `list<list<i32>>`)

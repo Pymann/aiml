@@ -1,4 +1,4 @@
-# SPEC?: 15_models,18_refs_and_pointers   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 15_models,18_refs_and_pointers   # derived from the file name, to be confirmed
 # Ein Modell per `ref<>` an eine METHODE — zum Lesen und zum Aendern.
 #
 # Regression: bei einer freien Funktion trug `args: [[m, ref<MeinModell>]]`

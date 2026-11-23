@@ -1,5 +1,5 @@
-# Auch keine Testdatei: eine Einreichung mit einem FORMFEHLER (spec/62 §20.2).
-# `steplayer: own` braucht eine Wurzel, und die steht hier nicht.
+# Not a test file either: a submission with a FORM ERROR (spec/62 §20.2).
+# `steplayer: own` needs a root, and it is not given here.
 - pipeline:
     name: ctx_kaputt
     steplayer: own

@@ -1,4 +1,4 @@
-# Oeffnen und EINE Abfrage -- gemessen wird das Oeffnen, nicht die Abfrage.
+# Open and ONE query -- what is measured is the opening, not the query.
 - model:
     name: Fakt
     fields:

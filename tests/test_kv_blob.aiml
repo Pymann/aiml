@@ -1,4 +1,4 @@
-# SPEC?: 31_db_integration   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 31_db_integration   # derived from the file name, to be confirmed
 # test_kv_blob.aiml — Tests for var_kv.set_blob / var_kv.get_blob
 # Stores buffer contents as single binary blob in KV, reads back into another buffer
 

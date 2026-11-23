@@ -1,4 +1,4 @@
-# SPEC?: 15_models,09_strings   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 15_models,09_strings   # derived from the file name, to be confirmed
 # Repro: pushing a Model with a string field into list<Model> loses the
 # string content across get.  Observed in 9rooms_v2 DeckEditor:
 #   - decl: [d, Deck]           # value (nicht ptr)

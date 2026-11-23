@@ -1,4 +1,4 @@
-# SPEC?: 11_buffer   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 11_buffer   # derived from the file name, to be confirmed
 # A buffer<u8> parameter read as f32 values into a fresh buffer<f32> that is returned, repeatedly
 # (the read index advances on the caller's buffer).
 # Expected exit code: 0

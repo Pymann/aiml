@@ -1,4 +1,4 @@
-# SPEC?: 61_memory_management   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 61_memory_management   # derived from the file name, to be confirmed
 # static-check: off
 # Faithful repro of 9rooms ConnRegistry.touch: a value-model element is read from a list via `at`,
 # a STRING field is mutated, and the element is written back via `idx` — in a loop over the same

@@ -1,4 +1,4 @@
-# SPEC?: 10_collections   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 10_collections   # derived from the file name, to be confirmed
 # static-check: off
 # Phase 5: OnClick + bound list-of-cascade rows via ptr<Model> wrapper.
 # The wrapper Model owns the list; the OnClick handler holds a ptr to it.

@@ -1,4 +1,4 @@
-# SPEC?: 61_memory_management   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 61_memory_management   # derived from the file name, to be confirmed
 # Regression check: reopen the persistent Store<T> with heap fields from a separate run.
 # Run after test_aiondb_store_heap_reopen_1_write.aiml.
 # Expected exit code: 0

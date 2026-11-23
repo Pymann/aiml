@@ -1,4 +1,4 @@
-# SPEC?: 32_2_network_http_s   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 32_2_network_http_s   # derived from the file name, to be confirmed
 # Tests for http namespace + HTTP handle types
 # Expected exit code: 0
 

@@ -1,4 +1,4 @@
-# SPEC?: 31_db_integration   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 31_db_integration   # derived from the file name, to be confirmed
 # Repro-Lib: dasselbe typed-Kv wie in main + Setter über lib-eigene
 # Compilation-Unit. Schema ist absichtlich tief (mehrere nested Klassen
 # mit list<>-Feldern), um das echte DataCreature-Layout besser zu spiegeln.

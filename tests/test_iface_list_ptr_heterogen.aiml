@@ -1,4 +1,4 @@
-# SPEC?: 18_refs_and_pointers   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 18_refs_and_pointers   # derived from the file name, to be confirmed
 # static-check: off
 # Repro: model with multiple list<ptr<T>> fields where EACH field has a
 # DIFFERENT element type — matches datacreatures' CreatureDetail pattern.

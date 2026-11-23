@@ -1,4 +1,4 @@
-# SPEC?: 16_classes,30_hot_reload   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 16_classes,30_hot_reload   # derived from the file name, to be confirmed
 # Hot-Reload Test — class version guard (struct append-only re-definition)
 #
 # Expected output:

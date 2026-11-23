@@ -1,4 +1,4 @@
-# SPEC?: 08_entrypoint   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 08_entrypoint   # derived from the file name, to be confirmed
 # AOT smoke test — simple hello world
 # Requires: library
 # (Not run in JIT test suite — used by run_aot_tests.sh)

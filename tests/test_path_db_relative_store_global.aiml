@@ -1,4 +1,4 @@
-# SPEC?: 31_db_integration,42_path_type   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 31_db_integration,42_path_type   # derived from the file name, to be confirmed
 # Minimal repro for relative path + top-level Store<T> persist.
 # Expected exit code: 0
 

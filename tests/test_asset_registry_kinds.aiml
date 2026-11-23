@@ -1,4 +1,4 @@
-# SPEC?: 44_7_asset_registry   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 44_7_asset_registry   # derived from the file name, to be confirmed
 # Asset Registry: derselbe Stem in unterschiedlichen Kind-Stores (Texture +
 # Audio) koexistiert ohne Kollision.
 #

@@ -1,4 +1,4 @@
-# SPEC?: 62_pipelines   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 62_pipelines   # derived from the file name, to be confirmed
 # Berechneter Pfad: WARNUNG, kein Fehler — statisch nicht entscheidbar, und
 # Requires: driver
 # etwas anderes zu behaupten waere unehrlich (F62-20).

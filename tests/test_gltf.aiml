@@ -1,4 +1,4 @@
-# SPEC?: 43_1_gltf   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 43_1_gltf   # derived from the file name, to be confirmed
 # Tests für gltf namespace: load, scene, node, mesh, primitive, material
 # Expected exit code: 0
 

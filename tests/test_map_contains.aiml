@@ -1,4 +1,4 @@
-# SPEC?: 10_collections   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 10_collections   # derived from the file name, to be confirmed
 # Test: map.contains — inline in if-condition
 # Testet contains direkt als if-Bedingung (kein decl-Zwischenschritt).
 # Das ist der Pfad der ggf. einen anderen LLVM-Typ liefert.

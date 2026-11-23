@@ -1,4 +1,4 @@
-# SPEC?: 42_path_type   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 42_path_type   # derived from the file name, to be confirmed
 # Negative: gl.load_texture mit string-literalem Pfad der im Asset-Bundle
 # liegt → Compile-Hard-Error.  Escape-Hatch bleibt nur für runtime-Variablen
 # (z.B. User-Uploads), nicht für statische Source-Strings.

@@ -1,4 +1,4 @@
-# SPEC?: 44_7_asset_registry   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 44_7_asset_registry   # derived from the file name, to be confirmed
 # Negative: zwei verschiedene abs_paths mit demselben Stem im selben Kind-Store
 # → Scanner Hard-Error bevor IR überhaupt emittiert wird.
 # Fixture hat resources/items/sword.png + resources/icons/sword.png unter

@@ -1,4 +1,4 @@
-# SPEC?: 44_7_asset_registry   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 44_7_asset_registry   # derived from the file name, to be confirmed
 # test_asset_register.aiml — gl.register_texture / gl.has_texture (the @art:<hash>
 # asset-registry hook for dynamic card artwork).  No GL context needed — the
 # registry is just a map keyed by stem.  A ws_handle stands in as a fake texture

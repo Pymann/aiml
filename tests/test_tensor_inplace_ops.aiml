@@ -1,4 +1,4 @@
-# SPEC?: 50_tensor_runtime   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 50_tensor_runtime   # derived from the file name, to be confirmed
 # ── Test A: add_inplace — numerisch korrekt ──────────────────────────────────
 
 - decl: [var_a, tensor, { call: [tensor.ones, 2] }]

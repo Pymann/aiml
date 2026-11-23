@@ -1,4 +1,4 @@
-# SPEC?: 15_models   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 15_models   # derived from the file name, to be confirmed
 # Test: model: with primary_key + Store<T>.get_by_key
 # Expected exit code: 0
 

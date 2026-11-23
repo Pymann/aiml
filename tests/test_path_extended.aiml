@@ -1,4 +1,4 @@
-# SPEC?: 42_path_type   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 42_path_type   # derived from the file name, to be confirmed
 # Extended tests for the built-in path type.
 # Expected exit code: 0
 

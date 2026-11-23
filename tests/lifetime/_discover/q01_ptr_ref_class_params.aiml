@@ -1,4 +1,4 @@
-# SPEC?: 61_memory_management,16_classes,24_time,18_refs_and_pointers   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 61_memory_management,16_classes,24_time,18_refs_and_pointers   # derived from the file name, to be confirmed
 # static-check: off
 - model: {name: Card, fields: [[title, string], [tags, list<string>]]}
 - model: {name: Deck, fields: [[boxes, list<ptr<Card>>]]}

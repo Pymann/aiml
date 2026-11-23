@@ -1,4 +1,4 @@
-# SPEC?: 15_models,19_inheritance   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 15_models,19_inheritance   # derived from the file name, to be confirmed
 # Test: model inherits: — parent fields come first, child fields follow
 
 - model:

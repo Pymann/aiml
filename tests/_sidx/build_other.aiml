@@ -1,5 +1,5 @@
-# Ein zweiter Store mit demselben Aufbau, aber anderem Inhalt -- Quelle fuer
-# den Versuch, eine fremde .kvsidx unterzuschieben.
+# A second store with the same structure but different content -- the source for
+# the attempt to slip in a foreign .kvsidx.
 - model:
     name: Ding
     fields:

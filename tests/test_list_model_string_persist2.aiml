@@ -1,4 +1,4 @@
-# SPEC?: 15_models,09_strings   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 15_models,09_strings   # derived from the file name, to be confirmed
 # Repro Erweiterung: Model mit list<string>-Feld — verliert das Model
 # seine string-Felder beim push in list<Model>?
 #

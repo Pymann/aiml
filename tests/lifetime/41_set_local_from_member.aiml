@@ -1,4 +1,4 @@
-# SPEC?: 61_memory_management,24_time   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 61_memory_management,24_time   # derived from the file name, to be confirmed
 # static-check: off
 # TIER: T2
 # Spec 61 §5: `set: [localHandle, model.field]` reassigning a container-HANDLE local from a MEMBER

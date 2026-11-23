@@ -1,5 +1,5 @@
-# Fixture: Gedaechtnis B, ZEHN andere Schluessel, gleicher Store-Name -- damit die
-# Dateinamen passen und die WAL von B unter den Dump von A geschoben werden kann.
+# Fixture: memory B, TEN other keys, same store name -- so that the
+# file names match and B's WAL can be slipped under A's dump.
 - decl: [var_kv, Kv<string:string>]
 - set: [var_kv, { call: [db.open_kv, "idxswap", {persist: true, index_dump: true, path: "/tmp/aiml_idxswap/b/"}] }]
 - call: [var_kv.clear]

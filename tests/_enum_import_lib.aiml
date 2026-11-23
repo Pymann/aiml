@@ -1,10 +1,10 @@
-# SPEC?: 14_enums,21_namespaces   # aus dem Dateinamen, zu bestaetigen
-# Helfer-Modul (import-only, `_`-Präfix → vom Test-Runner übersprungen).
-# Definiert ein Enum, dessen Member NUR im Entry referenziert werden — testet
-# den Whole-Program-Merge (Decl im Import, Use im Entry).
+# SPEC?: 14_enums,21_namespaces   # derived from the file name, to be confirmed
+# Helper module (import-only, `_` prefix → skipped by the test runner).
+# Defines an enum whose members are referenced ONLY in the entry — tests
+# the whole-program merge (decl in the import, use in the entry).
 - enum:
     name: Weekday
     values:
-      - mon: 1       # im Entry genutzt → keine Warning
+      - mon: 1       # used in the entry → no warning
       - tue: 2       # nirgends genutzt → Warning
       - wed: 3       # nirgends genutzt → Warning

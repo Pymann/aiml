@@ -1,4 +1,4 @@
-# Fixture: oeffnet den grossen Kv und liest drei Werte -- mehr nicht.
+# Fixture: opens the big Kv and reads three values -- nothing more.
 - decl: [var_kv, Kv<string:string>]
 - set: [var_kv, { call: [db.open_kv, "gross", {persist: true, index_dump: true, path: "/tmp/aiml_idx_gross/"}] }]
 - decl: [anz, i32, { call: [var_kv.len] }]

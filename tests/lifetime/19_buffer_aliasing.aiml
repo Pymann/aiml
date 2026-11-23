@@ -1,4 +1,4 @@
-# SPEC?: 61_memory_management,11_buffer,24_time   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 61_memory_management,11_buffer,24_time   # derived from the file name, to be confirmed
 # static-check: off
 # TIER: T2
 # CONSTRUCT: buffer is a refcounted handle (§5, Option B, { at: [Class, 3] }) — resolved from the §2.1

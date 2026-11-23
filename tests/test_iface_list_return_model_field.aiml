@@ -1,4 +1,4 @@
-# SPEC?: 15_models   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 15_models   # derived from the file name, to be confirmed
 # Repro: same as test_iface_list_return.aiml but list<string> lives as a
 # model field (inherited via models:) instead of a class member.  Matches
 # DataCreatures' Item.tags pattern (tile_behaviors.aiml line 39:

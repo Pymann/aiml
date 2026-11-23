@@ -1,4 +1,4 @@
-# SPEC?: 26_concurrency   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 26_concurrency   # derived from the file name, to be confirmed
 - def:
     name: worker
     args: [[var_id, i32]]

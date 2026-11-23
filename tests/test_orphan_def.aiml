@@ -1,4 +1,4 @@
-# SPEC?: 07_functions   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 07_functions   # derived from the file name, to be confirmed
 # Test: ein verwaistes `- def:` (ohne `name:`-Feld) muss zu einem klaren
 # Compile-Fehler fuehren, NICHT still durchgehen.
 #

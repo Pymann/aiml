@@ -1,4 +1,4 @@
-# SPEC?: 61_memory_management,24_time,18_refs_and_pointers   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 61_memory_management,24_time,18_refs_and_pointers   # derived from the file name, to be confirmed
 # static-check: off
 # NEGATIVE (§6.2/§10): ref<T> → ptr<T> is forbidden — a borrow does not own.
 # EXPECT-ERROR: illegal ref<T> → ptr<T> assignment

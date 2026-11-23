@@ -1,4 +1,4 @@
-# SPEC?: 21_namespaces   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 21_namespaces   # derived from the file name, to be confirmed
 # Test: importing a library that has top-level global declarations (decl:).
 # Verifies that library-mode compilation promotes top-level decls to LLVM
 # GlobalVariables so functions in the imported file can reference them.

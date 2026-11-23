@@ -1,4 +1,4 @@
-# SPEC?: 15_models,09_strings   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 15_models,09_strings   # derived from the file name, to be confirmed
 # Regression: ungesetzte `string`-Felder eines Models müssen als LEERER String
 # ("") vorinitialisiert sein, nicht als null-Pointer.  Ein string-Feld ist ein
 # i8* und `.len` lowert zu strlen(ptr) — ein null-Feld segfaultet bei JEDEM

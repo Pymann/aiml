@@ -1,4 +1,4 @@
-# SPEC?: 62_pipelines   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 62_pipelines   # derived from the file name, to be confirmed
 # Requires: driver
 # F62-115: `per: once` mit deklarierter Achse ist ein Fehler — es gibt EIN
 # Ergebnis fuer die ganze Matrix, also kann es nicht von einer Achse haengen.

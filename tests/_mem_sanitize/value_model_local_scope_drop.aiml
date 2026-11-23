@@ -1,4 +1,4 @@
-# SPEC?: 15_models   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 15_models   # derived from the file name, to be confirmed
 # static-check: off
 # Repro for the 9rooms server per-request leak (list_cards handler).
 # Exact shape of the leaking path:

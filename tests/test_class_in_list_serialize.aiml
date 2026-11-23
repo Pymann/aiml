@@ -1,4 +1,4 @@
-# SPEC?: 29_serialize,16_classes   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 29_serialize,16_classes   # derived from the file name, to be confirmed
 # static-check: off
 # PROBE: serialisiert ein Model, das eine list<Klasse-mit-models> enthält,
 # über KV-Roundtrip?  (= die Frage ob ZoneEntry eine class sein darf, da es

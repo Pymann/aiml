@@ -1,4 +1,4 @@
-# SPEC?: 57_function_cascades,16_classes   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 57_function_cascades,16_classes   # derived from the file name, to be confirmed
 # M4 — real-world proof: render ability text for a REAL-shaped Effect cascade (nested
 # Value cascade with an i32 payload, two opcodes sharing field renderers) via a Function
 # Cascade, and diff the output against a hand-written reference function over a block

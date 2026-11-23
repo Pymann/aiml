@@ -1,5 +1,5 @@
-# Fixture: grosser EINFACHER Kv ohne db_indexed -- misst den Index-Dump isoliert,
-# ohne dass das Auffuellen von Nebenindizes die Zahlen verdeckt.
+# Fixture: big SIMPLE Kv without db_indexed -- measures the index dump in isolation,
+# without the filling of secondary indexes obscuring the numbers.
 - decl: [var_kv, Kv<string:string>]
 - set: [var_kv, { call: [db.open_kv, "gross", {persist: true, index_dump: true, path: "/tmp/aiml_idx_gross/"}] }]
 - call: [var_kv.clear]

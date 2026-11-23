@@ -1,4 +1,4 @@
-# SPEC?: 31_db_integration   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 31_db_integration   # derived from the file name, to be confirmed
 # Repro: top-level `decl: [kv, Kv<string:T>, db.open_kv]` in einem imported
 # library-file (libraryMode) lowered den db.open_kv-Aufruf auf den UNTYPED
 # Pfad (val_size=0, kein ser_nodes) statt auf den typed Pfad.

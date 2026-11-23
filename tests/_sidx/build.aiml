@@ -1,5 +1,5 @@
-# Baut den Store fuer tests/run_sidx_gates.sh: drei indizierte Felder, dann
-# checkpoint -- erst dort entstehen die .kvsidx-Dateien.
+# Builds the store for tests/run_sidx_gates.sh: three indexed fields, then
+# checkpoint -- only there are the .kvsidx files created.
 - model:
     name: Ding
     fields:

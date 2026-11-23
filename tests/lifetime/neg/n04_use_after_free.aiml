@@ -1,4 +1,4 @@
-# SPEC?: 61_memory_management,20_free_operator,24_time   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 61_memory_management,20_free_operator,24_time   # derived from the file name, to be confirmed
 # static-check: off
 # NEGATIVE (§10): using a ptr<T> after `free` is an error.
 # EXPECT-ERROR: use-after-free

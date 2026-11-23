@@ -1,4 +1,4 @@
-# SPEC?: 14_enums,21_namespaces   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 14_enums,21_namespaces   # derived from the file name, to be confirmed
 # Whole-Program-Merge: Weekday ist im importierten Modul deklariert, hier wird
 # nur `mon` referenziert → tue/wed sind build-weit ungenutzt (Warnings im
 # noCache/Object-Build).  Expected exit code: 0.

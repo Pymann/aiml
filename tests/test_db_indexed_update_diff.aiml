@@ -1,4 +1,4 @@
-# SPEC?: 31_db_integration,45_db_indexed_fields   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 31_db_integration,45_db_indexed_fields   # derived from the file name, to be confirmed
 # AionDB db_indexed: index diff on update.
 # Validates:
 #   - set() with new value: old index entry loses the id, new one gains it

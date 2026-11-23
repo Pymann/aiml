@@ -1,14 +1,14 @@
-# SPEC?: 52_arrays,15_models,61_memory_management   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 52_arrays,15_models,61_memory_management   # derived from the file name, to be confirmed
 # static-check: off
-# RED — Paket 2 §9.6 (doc/spec61_inline_value_model_release_plan_2026-09-24.md): ein Heap-ARRAY-Feld
-# (array<string:N>) in einem Model wird von serFieldSubtree auf RAWBYTES abgebildet (kein Array-
-# Zweig) → aiml_ser_retain/release sehen die String-Elemente NICHT → Leak (gemessen 6780 B/200 Iter,
-# kein double-free, reiner Leak). Ziel: Array-Feld als STRUCT-Komposition (N Element-Unterbäume mit
-# echtem Stride) im Lifecycle-Descriptor abbilden, ODER Heap-Array-Feld in den Copy/Release-Pfaden
+# RED — package 2 §9.6 (doc/spec61_inline_value_model_release_plan_2026-09-24.md): a heap ARRAY field
+# (array<string:N>) in a model is mapped to RAWBYTES by serFieldSubtree (no array
+# branch) → aiml_ser_retain/release do NOT see the string elements → leak (measured 6780 B/200 iter,
+# no double free, a pure leak). Goal: map the array field as a STRUCT composition (N element subtrees with
+# real stride) in the lifecycle descriptor, OR handle heap array fields in the copy/release paths
 # mit gezielter Diagnose ablehnen — NICHT still als RAWBYTES-„sicher" behandeln.
-# ⚠️ RISIKO: serFieldSubtree ändert Serialisierungs-Descriptoren → kann den Schema-fp/Wire verändern
-# → KV-Inkompatibilität (wie die matches-KV-FATALs). Daher separaten Lifecycle-Descriptor erwägen,
-# Wire-Layout NICHT still ändern.
+# ⚠ RISK: serFieldSubtree changes serialisation descriptors → can change the schema fp/wire
+# → KV incompatibility (like the matches KV FATALs). Hence consider a separate lifecycle descriptor,
+# do NOT change the wire layout silently.
 - model: { name: ArrRec, fields: [[names, array<string:3>], [label, string]] }
 - def:
     name: fill_out

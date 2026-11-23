@@ -1,4 +1,4 @@
-# SPEC?: 44_7_asset_registry   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 44_7_asset_registry   # derived from the file name, to be confirmed
 # Asset Registry: basic stem-lookup + cache-hit.
 # Reference: aiml/doc/backlog/2026-06-07_asset_registry_by_filename.md
 #

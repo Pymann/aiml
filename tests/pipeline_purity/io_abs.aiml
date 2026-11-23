@@ -1,4 +1,4 @@
-# SPEC?: 62_pipelines   # aus dem Dateinamen, zu bestaetigen
+# SPEC?: 62_pipelines   # derived from the file name, to be confirmed
 # Konstanter absoluter Pfad ausserhalb des Arbeitsbereichs: Fehler (F62-19).
 # Requires: driver
 - def:

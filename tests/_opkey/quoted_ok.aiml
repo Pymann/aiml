@@ -1,5 +1,5 @@
-# Die zitierte Form rechnet, und die blank erlaubten Operatoren bleiben blank
-# erlaubt -- in der Anweisung UND in der Expansion (spec/04, spec/09_1 §3.5).
+# The quoted form computes, and the operators allowed bare stay allowed
+# bare -- in the statement AND in the expansion (spec/04, spec/09_1 §3.5).
 - def:
     name: main
     return: i32

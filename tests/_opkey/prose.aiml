@@ -2,5 +2,5 @@
     name: main
     return: i32
     body:
-      - print: ["eine Expansion schreibt man als ${...} im Text"]
+      - print: ["one writes an expansion as ${...} in the text"]
       - return: 0
