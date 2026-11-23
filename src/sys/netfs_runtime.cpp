@@ -231,7 +231,7 @@ int32_t aiml_netfs_write_file(const char* rel, const char* data) {
     std::lock_guard<std::mutex> lock(g_mtx);
     if (!g_smb.handle || g_base_url.empty()) { set_error("write_file: not connected"); return -1; }
     std::string url = g_base_url + (rel && rel[0] == '/' ? rel : std::string("/") + (rel ? rel : ""));
-    // O_WRONLY|O_CREAT|O_TRUNC = 0x241 auf Linux.
+    // O_WRONLY|O_CREAT|O_TRUNC = 0x241 on Linux.
     const int fd = g_smb.open(url.c_str(), 0x241, 0644);
     if (fd < 0) { set_error("write_file: open failed for " + url); return -1; }
     const size_t len = data ? strlen(data) : 0;

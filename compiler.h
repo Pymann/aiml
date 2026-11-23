@@ -193,11 +193,11 @@ public:
     bool parseOnly = false;
     bool phaseTimes = false;
     double phaseParseMs = 0.0;    // stream parse AND AST build: one pass (§11.2)
-    double phaseReparseMs = 0.0;  // Config-Load + sourceNode-Baum: die zwei zusaetzlichen Parses
+    double phaseReparseMs = 0.0;  // config load + sourceNode tree: the two additional parses
     double phaseIrMs = 0.0;       // registerTypes / synthesize* / astCompiler.compile
-    double phaseEmitMs = 0.0;     // IR-Text schreiben bzw. Objekt-Codegen
+    double phaseEmitMs = 0.0;     // writing IR text or object codegen
     double phaseTotalMs = 0.0;    // whole compile() duration, including what is not a phase
-    void reportPhaseTimes() const;   // F70-90: Zaehler auf stderr
+    void reportPhaseTimes() const;   // F70-90: counters on stderr
     // Output directory for import .o files (used when noCache=true).
     std::string outputDir;
     // Per-instance guard: each compile root has its own "already-compiled-this-run"

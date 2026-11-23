@@ -124,8 +124,8 @@ static void emitThrowMsg(CompilerContext& ctx, const std::string& excClass,
         }
     }
 
-    // Dieselbe Notiz, die `throw` in aiml macht (ast_compiler_stmt.cpp): faengt
-    // niemand, berichtet die oberste Ebene die BEGRUENDUNG statt
+    // The same note that `throw` makes in aiml (ast_compiler_stmt.cpp): if nobody
+    // catches, the top level reports the REASON instead of
     // „(no message)" (compiler.cpp jitRun).
     if (msgPtr)
         ctx.builder.CreateCall(ctx.getFunction("aiml_note_thrown_message",
@@ -1248,7 +1248,7 @@ void registerBuiltins(CompilerContext& ctx) {
         llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
         llvm::Type* i32 = ctx.builder.getInt32Ty();
         if (args.size() < 3) {
-            LOG_ERROR(ctx.fmtLoc() + "sys.export_symbol erwartet (name, fn, level) — spec/65 F65-37");
+            LOG_ERROR(ctx.fmtLoc() + "sys.export_symbol expects (name, fn, level) — spec/65 F65-37");
             return ctx.ir_gen->getInt32(-1);
         }
         llvm::Value* nm = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
@@ -4459,7 +4459,7 @@ void registerBuiltins(CompilerContext& ctx) {
         ts.isBuiltin = true;
         SSH_M0_STR (ts, "fingerprint", "aiml_ssh_test_fingerprint")
         SSH_M0_VOID(ts, "stop",        "aiml_ssh_test_stop")
-        // serve_async() → thread_handle (i8*, Layout wie http.start_async)
+        // serve_async() → thread_handle (i8*, layout like http.start_async)
         ts.builtinMethods["serve_async"] = [](CompilerContext& ctx, llvm::Value* baseAlloca,
             AIML::AST::CallExpr*, std::function<IRValue*(AIML::AST::Expr*)>) -> IRValue* {
             llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
@@ -4668,7 +4668,7 @@ void registerBuiltins(CompilerContext& ctx) {
                 llvm::Value* nameV = static_cast<llvm::Value*>(
                     ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
                 llvm::Value* sigV = ctx.builder.CreateGlobalStringPtr(sigLit->value, "ctx_sig");
-                // Erst pruefen, dann rufen — dieselbe Pruefung wie cx.symbol.
+                // Check first, then call — the same check as cx.symbol.
                 llvm::Value* addrSlot = ctx.builder.CreateAlloca(i64t, nullptr, "call_addr");
                 llvm::Value* msgSlot  = ctx.builder.CreateAlloca(i8p,  nullptr, "call_msg");
                 llvm::Value* st = ctx.builder.CreateCall(
@@ -13834,7 +13834,7 @@ void registerBuiltins(CompilerContext& ctx) {
             // model variable. Returns 0 on success, -1 if ev.arg_kind != 1 or
             // schema mismatch. Heap fields inside `target` (strings/lists/maps)
             // are newly allocated by aiml_ser_decode and must be released by
-            // the caller via the model lifetime (currently leaked — see Stufe 1).
+            // the caller via the model lifetime (currently leaked — see stage 1).
             // decode_rpc(ev, target) → i32: transactional (spec/44_5) — a failed decode leaves the
             // target untouched; success releases its previous heap.  0 = ok, -1 = wrong type/error.
             ci.builtinMethods["decode_rpc"] = [i8p, i32](CompilerContext& ctx,

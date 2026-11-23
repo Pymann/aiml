@@ -70,7 +70,7 @@ llvm::Value* toBits(CompilerContext& ctx, const Kinds& k, llvm::Value* v) {
 
 bool expectArgs(CompilerContext& ctx, const std::string& methodName, const std::vector<llvm::Value*>& args, size_t n) {
     if (args.size() == n) return true;
-    LOG_ERROR(ctx.fmtLoc() + "hashmap." + methodName + " erwartet " + std::to_string(n) + " Argument(e), bekam " +
+    LOG_ERROR(ctx.fmtLoc() + "hashmap." + methodName + " expects " + std::to_string(n) + " argument(s), got " +
               std::to_string(args.size()));
     return false;
 }

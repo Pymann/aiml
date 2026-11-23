@@ -20,9 +20,9 @@ int main(int argc, char** argv) {
 
     bool runMode = false;
     bool emitMain = false;
-    // spec/70 §11.3 — Messschalter.  Sie aendern nichts am erzeugten Code.
-    bool phaseTimes = false;   // F70-90: Phasenzaehler auf stderr
-    bool parseOnly = false;    // F70-91: nach Parse/AST abbrechen
+    // spec/70 §11.3 — measurement switches.  They change nothing in the generated code.
+    bool phaseTimes = false;   // F70-90: phase counters on stderr
+    bool parseOnly = false;    // F70-91: stop after parse/AST
     bool noCacheFlag = false;  // F70-92: forbid __aiml_cache for this run
     bool reportPrefabs = false;
     bool checkOnly = false;   // --check: only check, report machine-readably (spec/49)

@@ -4454,7 +4454,7 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                         // in the target's own fields and crashed on the
                         // next access (SIGSEGV, measured 2026-11-21;
                         // regression tests/test_model_init_from_base.aiml, case
-                        // "Feld als Ziel").  The same ailment as in the decl path,
+                        // "field as target").  The same ailment as in the decl path,
                         // just one statement further on.
                         {
                             std::string srcTn = declaredTypeOfExpr(setStmt->value.get());
@@ -4615,7 +4615,7 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                             // be copied.  Otherwise the copy reads past the
                             // end of the source, and the garbage lands in the
                             // target's own fields -- SIGSEGV on the next
-                            // access (measured 2026-11-21, case "Feld als Ziel"
+                            // access (measured 2026-11-21, case "field as target"
                             // in tests/test_model_init_from_base.aiml).
                             {
                                 std::string srcTn = declaredTypeOfExpr(setStmt->value.get());

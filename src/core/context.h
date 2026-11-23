@@ -908,8 +908,8 @@ namespace AIML {
     // `sourceLine` (statement_builder), so fmtLoc(node) alone fell back to
     // `currentLine` — which, in an AST pass that runs after parsing, points at
     // the END of the file.  A diagnostic that names the wrong line costs exactly
-    // the time it was meant to save (gemessen 2026-10-15 am Prefab-Kindcheck:
-    // Fundstelle Zeile 29, gemeldet Zeile 120 = letzte Zeile).
+    // the time it was meant to save (measured 2026-10-15 on the prefab child check:
+    // location line 29, reported line 120 = last line).
     std::string fmtLoc(const YAML::Node& node, int fallbackLine) const {
         return fmtLoc(node, fallbackLine, -1);
     }

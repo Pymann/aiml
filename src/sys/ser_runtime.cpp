@@ -68,7 +68,7 @@ static uint64_t aiml_proc_stamp() {
         uint64_t mix = (uint64_t)(uintptr_t)&errno;                 // ASLR
         mix ^= (uint64_t)getpid() * 0x9E3779B97F4A7C15ull;          // Prozess
         mix ^= (uint64_t)std::chrono::steady_clock::now().time_since_epoch().count();
-        return mix ? mix : 0x5BAD5EEDull;                           // nie 0
+        return mix ? mix : 0x5BAD5EEDull;                           // never 0
     }();
     return stamp;
 }

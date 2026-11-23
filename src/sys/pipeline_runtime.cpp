@@ -60,7 +60,7 @@ struct CurStep {
     std::map<std::string, std::string> need_results;
     bool        status_set    = false;
     int32_t     status        = -1;
-    int         fail_reach    = -1;   // -1 keiner, 0 lane, 1 pipeline
+    int         fail_reach    = -1;   // -1 none, 0 lane, 1 pipeline
     std::string fail_msg;
 };
 thread_local CurStep g_cur;
@@ -124,7 +124,7 @@ struct PPush {
 struct PPipeline {
     std::string                                       name;
     std::vector<std::map<std::string, std::string>>   excludes;   // Teilbindungen (§4.2)
-    std::vector<std::pair<std::string, std::vector<std::string>>> params;  // Achse -> Werte
+    std::vector<std::pair<std::string, std::vector<std::string>>> params;  // axis -> values
     std::vector<PStage>                               stages;
     std::vector<PPush>                                pushes;
     // spec/62 §4.1 (F62-1): the TYPE of an axis.  It counts in the body (`jobs`
@@ -696,7 +696,7 @@ int32_t aiml_pipeline_run_observed(void* p, void* observer_raw) {
                         hitResult = it->second.result;
                     }
                 }
-                if (hit) {   // opaque trifft nie (§7)
+                if (hit) {   // opaque never hits (§7)
                     reused = 1;
                     std::lock_guard<std::mutex> g(state.mu);
                     ++pp->reused;
@@ -851,7 +851,7 @@ int32_t aiml_pipeline_run_observed(void* p, void* observer_raw) {
                         // pipeline — a failed fetch_sources makes
                         // every lane pointless, a failed build in one
                         // lane says nothing about the others.
-                        if (reach == 1) {           // pipeline: nichts startet mehr
+                        if (reach == 1) {           // pipeline: nothing starts any more
                             state.stop_all = true;
                             state.stop_rc  = rc;
                             return;

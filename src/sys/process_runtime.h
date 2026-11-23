@@ -22,6 +22,6 @@ extern "C" {
     bool aiml_process_eof(void* handle);
     void aiml_process_release(void* handle);
     const char* aiml_sys_exe_path(void);
-    // spec/23 §5.6: was die Umgebung mitbringen muss; "" = alles da.
+    // spec/23 §5.6: what the environment must bring along; "" = everything there.
     char* aiml_sys_require_tools(const char* spec);
 }

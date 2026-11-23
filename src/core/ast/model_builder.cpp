@@ -60,7 +60,7 @@ bool ModelBuilder::OnScalar(const std::string& value, const std::string& tag) {
             curDbIndexedUnique = (value == "true");
         } else if (modifierKey == "level") {   // spec/65: check, do not enforce
             int parsed = aiml::clearance::kAbsent;
-            if (aiml::clearance::parseLevel(value, "model-Feld " + currentField, parsed))
+            if (aiml::clearance::parseLevel(value, "model field " + currentField, parsed))
                 curLevel = parsed;
         } else if (modifierKey == "skip_empty") {
             curDbIndexedSkipEmpty = (value == "true");

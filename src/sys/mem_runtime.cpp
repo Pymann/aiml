@@ -99,8 +99,8 @@ int64_t aiml_sys_mem_usage(void) {
     fclose(f);
     return (int64_t)pages_rss * (int64_t)getpagesize();
 #elif defined(__EMSCRIPTEN__)
-    // WASM: es gibt kein /proc.  mallinfo().uordblks = aktuell belegte Bytes im
-    // dlmalloc-Heap → reicht, um client-seitig Wachstum/Explosion zu beobachten.
+    // WASM: there is no /proc.  mallinfo().uordblks = currently allocated bytes in the
+    // dlmalloc heap → enough to observe growth/explosion on the client side.
     struct mallinfo mi = mallinfo();
     return (int64_t)(uint32_t)mi.uordblks;
 #else

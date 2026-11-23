@@ -1427,7 +1427,7 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
                         "button", "checkbox", "radio", "slider", "dropdown",
                         "text_input", "textbox", "cascade"
                     };
-                    // Fragt jemand diese Instanz nach Zeiger-Eingabe?
+                    // Does anyone ask this instance for pointer input?
                     static const std::set<std::string> kPointerAsk = {
                         "is_hovered", "was_clicked", "child_contains",
                         "child_rect_x", "child_rect_y", "child_rect_w", "child_rect_h",

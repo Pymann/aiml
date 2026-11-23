@@ -23,7 +23,7 @@ void* aiml_yaml_value(void* node, int32_t index);
 void* aiml_yaml_get(void* node, const char* key);
 
 #ifdef __cplusplus
-/* spec/60: fehlertoleranter Lexer fuer Hervorhebung; fuellt list<i32> mit Tripeln. */
+/* spec/60: error-tolerant lexer for highlighting; fills list<i32> with triples. */
 int32_t aiml_yaml_tokens(const char* text, void* out_list);
 
 }

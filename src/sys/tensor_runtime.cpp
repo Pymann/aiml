@@ -415,7 +415,7 @@ extern "C" void* aiml_tensor_grad_view(void* tv) {
     v->data          = t->data;                              // shared, no memcpy
     v->ndim          = t->ndim;
     v->size          = t->size;
-    v->shape         = (int*)malloc(t->ndim * sizeof(int)); // eigene Shape-Kopie
+    v->shape         = (int*)malloc(t->ndim * sizeof(int)); // own shape copy
     memcpy(v->shape, t->shape, t->ndim * sizeof(int));
     v->owns_data     = 0;                                    // do NOT free data
     v->requires_grad = 1;
@@ -1987,7 +1987,7 @@ void aiml_tensor_adam_step(void* pv, void* mv, void* vv,
     // happens at least every other begin_graph: a trainer that accumulates gradients over
     // N bags and steps ONCE (spec/50 §14.1 + §15) made the state stale, begin_graph freed
     // it, and the next step read freed memory — a SIGSEGV inside adam_step, no diagnosis
-    // (gemessen 21.11.2026, prophecy_pretrain mit Stapel 64).  `keep` holds for any N.
+    // (measured 2026-11-21, prophecy_pretrain with batch 64).  `keep` holds for any N.
     m->is_param = 1;  m->keep = 1;  m->alloc_epoch = g_graph_epoch;
     v->is_param = 1;  v->keep = 1;  v->alloc_epoch = g_graph_epoch;
     if (!p->grad) return;

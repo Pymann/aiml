@@ -182,8 +182,8 @@ public:
         llvm::Value* handle = resolveValue(ctx, args[1]);
 
         llvm::Type* filePtrTy = getFilePtrTy(ctx);
-        // fseek/ftell nehmen `long`, malloc/fread `size_t` — beide sind
-        // zeigerbreit: i64 nativ, i32 auf wasm32.
+        // fseek/ftell take `long`, malloc/fread `size_t` — both are
+        // pointer-wide: i64 native, i32 on wasm32.
         llvm::Type* szTy = ctx.getSizeType();
         llvm::Type* i32Ty = ctx.builder.getInt32Ty();
 

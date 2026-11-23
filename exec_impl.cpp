@@ -12,8 +12,8 @@
 #include "exec_impl.h"
 #include "src/core/yaml_dump.h"
 #include "compiler.h"                  // AIMLCompiler (for aiml_isolated_exec)
-#include "src/sys/ctx_runtime.h"      // spec/29_2 §14a: Kontext-Griffe
-#include "src/core/clearance.h"         // spec/65 F65-36: Freigabe je Sitzung
+#include "src/sys/ctx_runtime.h"      // spec/29_2 §14a: context handles
+#include "src/core/clearance.h"         // spec/65 F65-36: clearance per session
 #include "src/core/context.h"
 #include "src/core/fptable.h"          // AIML_MAX_VERSIONS
 #include "src/core/schema_registry.h"  // AimlClassSchema, AIML_MAX_FIELDS
@@ -277,7 +277,7 @@ extern "C" int aiml_lib_load(void* raw) {
     ExecCode* code = static_cast<ExecCode*>(raw);
     std::string src = exec_chunks_to_yaml(code);
     if (src.empty()) {
-        LOG_WARNING("aiml_lib_load: leeres Bundle — nichts zu laden");
+        LOG_WARNING("aiml_lib_load: empty bundle — nothing to load");
         return 0;
     }
     auto comp = std::make_unique<AIMLCompiler>();
@@ -361,7 +361,7 @@ static int32_t aiml_ctx_exec_or_load(void* handle, void* raw, int run_entry) {
     ExecCode* code = static_cast<ExecCode*>(raw);
     std::string yaml_source = exec_chunks_to_yaml(code);
     if (yaml_source.empty()) {
-        LOG_WARNING("aiml_ctx_exec_code: leeres Bundle — nichts zu uebersetzen");
+        LOG_WARNING("aiml_ctx_exec_code: empty bundle — nothing to compile");
         return 0;
     }
 
@@ -372,7 +372,7 @@ static int32_t aiml_ctx_exec_or_load(void* handle, void* raw, int run_entry) {
     // The handle is a table entry; the instance fetches the table.
     auto* comp = static_cast<AIMLCompiler*>(aiml_ctx_compiler(handle));
     if (!comp) {
-        LOG_ERROR("aiml_ctx_exec_code: unbekannter Kontext-Griff");
+        LOG_ERROR("aiml_ctx_exec_code: unknown context handle");
         return -2;
     }
     int rc = run_entry ? comp->execInContext(yaml_source)

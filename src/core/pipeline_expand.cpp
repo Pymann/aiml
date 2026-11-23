@@ -451,7 +451,7 @@ bool expandPipelineDeclarations(const std::string& text, const std::string& wher
         for (const auto& ax : axes) { axisNames.insert(ax.name); axisTypes[ax.name] = ax.type; }
 
         std::string ctor;    // the body of the generated function <pname>()
-        std::string helpers; // die erzeugten Rumpf-/Sonden-Funktionen
+        std::string helpers; // the generated body/probe functions
         // F62-9: step names are unique, and `needs` only names EARLIER
         // steps.  Here at compile time, so that the author finds out
         // before a run notices (the runtime checks it as well).
@@ -573,7 +573,7 @@ bool expandPipelineDeclarations(const std::string& text, const std::string& wher
                 ctor += "      - decl: [" + svar + ", stage, { call: [stage.new] }]\n";
                 ctor += "      - call: [" + svar + ".set_name, \"" + yamlQuoted(sname) + "\"]\n";
 
-                // ── Vorrang aufloesen: Stufe schlaegt Pipeline (F62-151) ────
+                // ── resolve precedence: stage beats pipeline (F62-151) ─────
                 std::string stAgent = textAt(stg, "agent");
                 if (stAgent.empty()) stAgent = headAgent;
                 std::string stImage = textAt(stg, "image");
@@ -747,8 +747,8 @@ bool expandPipelineDeclarations(const std::string& text, const std::string& wher
                                 // value in the source text would be a secret in the source text.
                                 if (hname.find('=') != std::string::npos) {
                                     LOG_ERROR(where + ": pipeline '" + pname + "': step '" +
-                                              stepName + "': host nennt '" + hname +
-                                              "' — host traegt Namen, nie name=value "
+                                              stepName + "': host names '" + hname +
+                                              "' — host carries names, never name=value "
                                               "(spec/62 F62-17)");
                                     ok = false;
                                     continue;
@@ -792,9 +792,9 @@ bool expandPipelineDeclarations(const std::string& text, const std::string& wher
                             helpers += "      - if:\n";
                             helpers += "          condition: { gt: [__missing_env.len, 0] }\n";
                             helpers += "          then:\n";
-                            helpers += "            - call: [log.error, \"Stufe '" + sname +
-                                       "': Umgebung unvollstaendig —${__missing_env} (requires:, spec/62 §18.2)\"]\n";
-                            helpers += "            - throw: \"requires: Umgebung unvollstaendig —${__missing_env}\"\n";
+                            helpers += "            - call: [log.error, \"stage '" + sname +
+                                       "': environment incomplete —${__missing_env} (requires:, spec/62 §18.2)\"]\n";
+                            helpers += "            - throw: \"requires: environment incomplete —${__missing_env}\"\n";
                         }
                         if (sp["body"] && sp["body"].IsSequence())
                             helpers += bodyBlock(sp["body"], "      ");

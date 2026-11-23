@@ -76,7 +76,7 @@ inline int checkFlow(const std::map<std::string, FlowNode>& graph) {
     int bad = 0;
     for (const auto& [from, node] : graph) {
         const int lvFrom = effLevel(node.level);
-        // `grants` senkt die Schranke INNERHALB dieses Rumpfes (F65-10).
+        // `grants` lowers the barrier WITHIN this body (F65-10).
         const int floor = (node.grants >= 0 && node.grants < lvFrom) ? node.grants : lvFrom;
         for (const auto& to : node.calls) {
             auto it = graph.find(to);

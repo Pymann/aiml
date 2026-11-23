@@ -1,4 +1,4 @@
-// spec/23 §4.1 — Host-Parallelitaet: drei Fragen, drei Funktionen.
+// spec/23 §4.1 — host parallelism: three questions, three functions.
 #pragma once
 #include <cstdint>
 

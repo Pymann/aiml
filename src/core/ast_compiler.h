@@ -28,7 +28,7 @@ public:
     void synthesizeImportedGroups(Program* prog);
     void synthesizeRpcMethods(Program* prog);       // spec/44_5 §7.1: rpc: wrappers/thunks/args (before registerTypes)
     void synthesizeServices(Program* prog);
-    void synthesizeServiceBodies(Program* prog);    // spec/66 §4.3: nach registerTypes         // spec/66 §3: lift endpoints + facade (before registerTypes)
+    void synthesizeServiceBodies(Program* prog);    // spec/66 §4.3: after registerTypes         // spec/66 §3: lift endpoints + facade (before registerTypes)
     void registerTypeDecl(Node* node);
     void visitFunction(FunctionDecl* func);
     void visitTopLevel(Node* node);

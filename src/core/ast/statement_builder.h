@@ -42,7 +42,7 @@ class StatementBuilder : public StateHandler {
     bool retSeq = false;    // `return: [a, b]` -- the value was a sequence (spec/10)
     int innerSeqStart = -1; // args[] index where inner sequence elements begin
     int capturedLine = -1;  // 1-based line of this statement in the AIML source
-    int capturedColumn = -1;  // dazugehoerige Spalte (spec/49 F49-100)
+    int capturedColumn = -1;  // the associated column (spec/49 F49-100)
 public:
     StatementBuilder(Builder* b, std::string t) : StateHandler(b), type(t), capturedLine(b->currentLine), capturedColumn(b->currentColumn) {}
     bool OnSequenceStart() override;

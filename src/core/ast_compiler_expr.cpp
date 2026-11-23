@@ -772,7 +772,7 @@ IRValue* Compiler::visitCast(BinaryExpr* bin) {
     bool fromInt   = from->isIntegerTy(32) || from->isIntegerTy(64);
     bool fromFloat = from->isFloatTy() || from->isDoubleTy();
 
-    // float → Ganzzahl: dieselbe Umwandlung wie jeder Speicherpfad (coerceFloatToIntegral)
+    // float → integer: the same conversion as every store path (coerceFloatToIntegral)
     auto floatToInt = [&](llvm::Type* dst) -> IRValue* {
         return ctx.ir_gen->wrap(coerceFloatToIntegral(ctx, val, dst, to));
     };

@@ -158,9 +158,9 @@ struct AimlStore {
     std::vector<uint8_t>           view_buf;      // scratch for assembled get
 };
 
-// Position+Length im mmap'd WAL — point-into-mmap statt copy.
+// Position+length in the mmap'd WAL — point-into-mmap instead of copy.
 struct AimlKvValueLoc {
-    uint64_t offset;   // Byte-Offset im mmap (zeigt direkt auf val-Bytes)
+    uint64_t offset;   // byte offset in the mmap (points directly at the val bytes)
     uint32_t length;   // val_bytes
 };
 
@@ -188,7 +188,7 @@ struct AimlKv {
     bool        persistent = false;
     int         wal_fd     = -1;
     std::string wal_path;
-    // ── mmap-backing (Schritt 2) ──────────────────────────────────────────────
+    // ── mmap backing (step 2) ───────────────────────────────────────────────
     void*       wal_mmap      = nullptr;   // base pointer (initial KV_MMAP_RESERVE_INITIAL)
     size_t      wal_mmap_size = 0;         // grow via kv_mmap_grow
     uint64_t    wal_used      = 0;         // naechster freier Offset im WAL
@@ -200,7 +200,7 @@ struct AimlKv {
     std::string store_name;
     uint64_t    writes = 0;
     // ── Index-Dump (spec/31 §6.2.1) ────────────────────────────────────────
-    bool        index_dump = false;      // Option beim open
+    bool        index_dump = false;      // option at open
     std::string idx_path;                // <name>.kvidx
     void*       idx_mmap      = nullptr; // mapped read-only
     size_t      idx_mmap_size = 0;
@@ -1420,7 +1420,7 @@ static int kv_wal_open_with_header(const std::string& path, bool typed,
     return fd;
 }
 
-// (kv_lazy_reload removed in Schritt 5: evict no longer clears the index, so
+// (kv_lazy_reload removed in step 5: evict no longer clears the index, so
 //  reads find offsets directly and the kernel re-faults pages on access.)
 
 // Replay WAL records, starting right after the file header.
@@ -1500,7 +1500,7 @@ static uint64_t kv_idx_try_load(AimlKv* kv) {
     if (h->wal_used < sizeof(AimlKvWalHeader))       return verwerfen();
     if (h->wal_used > kv->wal_mmap_size)             return verwerfen();
 
-    // WAL-Version aus deren Header lesen.
+    // Read the WAL version from its header.
     const AimlKvWalHeader* wh = (const AimlKvWalHeader*)kv->wal_mmap;
     if (h->wal_version != wh->version)               return verwerfen();
 
@@ -1717,7 +1717,7 @@ static void kv_wal_replay_fd(AimlKv* kv) {
             off_t value_offset = lseek(kv->wal_fd, 0, SEEK_CUR);
             if (op == KV_WAL_SET_BLOB) kv->blob_only = true;
             if (kv->ser_nodes) kv_decoded_evict(kv, key);
-            // Werte ueberspringen — Index reicht; Reads pointen direkt in mmap
+            // Skip values — the index is enough; reads point directly into the mmap
             if (lseek(kv->wal_fd, val_bytes, SEEK_CUR) < 0) break;
             kv->index[key] = AimlKvValueLoc{ (uint64_t)value_offset, val_bytes };
         } else if (op == KV_WAL_DELETE) {
@@ -1960,7 +1960,7 @@ extern "C" int32_t aiml_db_kv_checkpoint(void* kv_ptr) {
         else           kv->index[k] = loc;
     }
     for (auto& [k, old_loc] : old_index) {
-        if (old_loc.offset == KV_IDX_TOMB) continue;   // Grabstein: nichts zu schreiben
+        if (old_loc.offset == KV_IDX_TOMB) continue;   // tombstone: nothing to write
         const void* old_val = (const char*)old_mmap + old_loc.offset;
         if (blob_only_save) {
             kv_wal_write_set_blob(kv, k.c_str(), old_val, old_loc.length);
@@ -2618,7 +2618,7 @@ struct AimlIterator {
     std::string ret_key;   // the last one returned, valid until the next call
 };
 
-// Naechsten lebenden Schluessel bereitstellen: Ueberlauf vor Dump.
+// Provide the next live key: overflow before dump.
 static void iter_kv_advance(AimlIterator* it) {
     it->have = false;
     AimlKv* kv = it->kv;

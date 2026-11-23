@@ -381,7 +381,7 @@ struct PrefabChild {
     int32_t     scroll_offset  = 0;   /* Popup-Scroll (# skipped rows) */
     bool        sb_dragging    = false; /* Popup-Scrollbar-Drag */
     bool        tb_drag        = false; /* textbox: body drag-to-scroll active (touch/maus) */
-    int32_t     tb_drag_off    = 0;     /* textbox: scroll_offset bei Drag-Beginn */
+    int32_t     tb_drag_off    = 0;     /* textbox: scroll_offset at drag start */
     bool        sb_dragging_x  = false;  /* textbox: the LOWER bar is being dragged */
 
     /* ── Bar/gauge runtime state + slider state ─────────────────────────── */
@@ -450,7 +450,7 @@ struct PrefabChild {
     bool        compact = false;
     bool        scrollable = false;  /* container: engine-managed row window + visible scrollbar (track+thumb, wheel+drag) */
     bool        tail = false;         /* textbox: stick to bottom as content grows (chat) */
-    bool        wrap = true;          /* spec/44_6 §5f: false = seitwaerts scrollen statt umbrechen */
+    bool        wrap = true;          /* spec/44_6 §5f: false = scroll sideways instead of wrapping */
     float       tb_off_x = 0.0f;      /* horizontal offset in pixels (only without wrapping) */
     float       tb_content_w = 0.0f;  /* width of the longest line (render intermediate) */
     float       tb_inner_w = 0.0f;    /* usable width — the input pass computes with it */
@@ -3663,7 +3663,7 @@ static void render_instance(AimlPrefabInstance* inst) {
                     for (int fit_it = 0; fit_it < 6; ++fit_it) {
                         float tw = text_width_font(fitf, ch.text.c_str());
                         if (tw <= fit_w) break;               /* fits on one line */
-                        cur_size = cur_size * (fit_w / tw) * 0.96f;  /* Marge gegen Rundung */
+                        cur_size = cur_size * (fit_w / tw) * 0.96f;  /* margin against rounding */
                         if (cur_size < min_size) cur_size = min_size;
                         AimlUIFont* nf = font_for_size(s, cur_size);
                         if (!nf) break;
@@ -5203,8 +5203,8 @@ static std::string casc_range_of(const std::string& type) {
     }
     return "";   /* value/alias/i32 → no enum range */
 }
-/* String-Listen-ABI (GenericList: {i32 size, i32 cap, void** data} mit
- * refcounted char*-Elementen; siehe string_runtime aiml_str_split_fill). */
+/* String list ABI (GenericList: {i32 size, i32 cap, void** data} with
+ * refcounted char* elements; see string_runtime aiml_str_split_fill). */
 extern "C" char* aiml_str_dup(const char* s);
 struct AimlStrListRaw { int32_t size; int32_t capacity; void** data; };
 static void casc_strlist_push(AimlStrListRaw* l, const std::string& s) {
@@ -5845,7 +5845,7 @@ static int32_t modal_block_z(float mx, float my, bool& found) {
     for (auto* inst : g_scene->instances) {
         if (!inst || !inst->visible || inst->pending_delete) continue;
         if (!inst->input_blocking) continue;
-        if (inst->parent) continue;   /* genestet: eigene lokale Koordinaten */
+        if (inst->parent) continue;   /* nested: own local coordinates */
         float ax, ay;
         get_actual_pos(inst, ax, ay);
         float sx = inst->scale_x, sy = inst->scale_y;
@@ -6489,7 +6489,7 @@ void aiml_prefab_update_hover(float mx, float my) {
                     if (ch.pressed_now && over) {
                         ch.dropdown_open = !ch.dropdown_open;
                         if (ch.dropdown_open) {
-                            /* Scroll auf selected zentrieren. */
+                            /* Centre the scroll on selected. */
                             ch.scroll_offset = std::max(0, ch.selected_index - 3);
                         }
                     }

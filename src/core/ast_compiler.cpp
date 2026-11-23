@@ -1666,7 +1666,7 @@ void Compiler::compile(Program* prog) {
     // 2026-09-11 ran the full 9rooms suite drops-on and still hit REAL failures (NOT flakiness,
     // reproduced standalone): teardown double-frees (test_ceremony_cost, test_mkp_math,
     // test_conditional_durations "free(): double free"), a SEGV (test_activate_ability), and a
-    // behavioral regression (test_creature_costs "sac1 nicht im Friedhof" — a card dropped before
+    // behavioral regression (test_creature_costs "sac1 nicht im Friedhof" [sac1 not in the graveyard] — a card dropped before
     // spec/61 lifetime drops are now the DEFAULT (paired with memV3 as the standard model,
     // decision 2026-09-21). Opt OUT for pre-feature comparison with AIML_LIFETIME_DROPS=0.
     ctx.lifetimeDropsEnabled = true;
@@ -4310,8 +4310,8 @@ void Compiler::registerTypes(Program* prog) {
         };
     }
 
-    // Inject built-in enum: YamlTok — die Arten von yaml.tokens (spec/60).
-    // Werte MUESSEN zu YamlTokKind in src/sys/yaml_runtime.cpp passen.
+    // Inject built-in enum: YamlTok — the kinds of yaml.tokens (spec/60).
+    // Values MUST match YamlTokKind in src/sys/yaml_runtime.cpp.
     if (!ctx.enums.count("YamlTok")) {
         ctx.enums["YamlTok"] = {
             {"text", 0}, {"comment", 1}, {"key", 2}, {"string", 3}, {"number", 4},
