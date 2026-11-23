@@ -1,126 +1,126 @@
-# AIML `lifetime` — Ownership-Qualifier (Design → Spec)
+# AIML `lifetime` — ownership qualifier (design → spec)
 
-Stand: 2026-09-08. Status: Design, vom Nutzer festgelegt; Grundlage für die
-Compiler-Umsetzung. Ersetzt den verworfenen „WP-C escape-analysis"-Ansatz
-(Pseudo-GC, opak) durch **explizite, compile-zeitliche Single-Owner-Semantik**.
+As of: 2026-09-08. Status: design, fixed by the user; the basis for the
+compiler implementation. Replaces the discarded "WP-C escape analysis" approach
+(pseudo-GC, opaque) by **explicit, compile-time single-owner semantics**.
 
 ## 1. Motivation
 
-Das Speicherleck entsteht, weil Heap-tragende Werte (string/list/map/model) beim
-Scope-Ende oder Überschreiben nicht freigegeben werden. Die Lösung ist **kein GC**
-(Laufzeit-Reachability, opak) und **keine Escape-Analyse** (Ganzprogramm-Inferenz,
-für Mensch/KI nicht lokal ablesbar), sondern **Ownership**: ein Wert hat genau einen
-Besitzer, dessen Tod (Scope-Ende / Überschreiben / Container-Drop) den Heap
-deterministisch zur Übersetzungszeit freigibt. Transfers sind **syntaktisch sichtbar**.
+The memory leak arises because heap-carrying values (string/list/map/model) are not
+freed at scope end or on overwrite. The solution is **no GC**
+(runtime reachability, opaque) and **no escape analysis** (whole-program inference,
+not locally readable for humans/AI), but **ownership**: a value has exactly one
+owner, whose death (scope end / overwrite / container drop) frees the heap
+deterministically at compile time. Transfers are **syntactically visible**.
 
-Effizienz: alles Compile-Zeit; `free` an bekannter Stelle (wie C++-Destruktor/Rust-
-drop), **kein** Laufzeit-Tracing, **kein** Refcount. Move = Zeiger-Transfer (zero-copy).
-Das ersetzt „nie freigeben" (OOM) durch begrenzten Speicher — netto effizienter.
+Efficiency: everything at compile time; `free` at a known place (like a C++ destructor/Rust
+drop), **no** runtime tracing, **no** refcount. Move = pointer transfer (zero-copy).
+This replaces "never free" (OOM) by bounded memory — more efficient overall.
 
-## 2. Der Qualifier
+## 2. The qualifier
 
-Am **Variablen-Decl** (wie bestehende Decl-Qualifier, z.B. `access`):
+On the **variable decl** (like existing decl qualifiers, e.g. `access`):
 
 ```
-- decl: [x, MatchSession, { lifetime: scope }, <init>]     # scope = Default, weglassbar
-- decl: [buf, MatchSession, { lifetime: persistent }]      # überlebt die Scope
-- decl: [h, FileHandle, { lifetime: consumed }, <init>]    # MUSS rausgemoved werden
+- decl: [x, MatchSession, { lifetime: scope }, <init>]     # scope = default, can be omitted
+- decl: [buf, MatchSession, { lifetime: persistent }]      # outlives the scope
+- decl: [h, FileHandle, { lifetime: consumed }, <init>]    # MUST be moved out
 ```
 
-Werte:
+Values:
 
-| Wert | Bedeutung | Drop am Scope-Ende? |
+| Value | Meaning | Drop at scope end? |
 |---|---|---|
-| **`scope`** (Default) | Owned; stirbt am Scope-Ende — außer vorher konsumiert. | ja, sofern nicht konsumiert |
-| **`persistent`** | Owned, aber an einen längerlebigen Besitzer gebunden (Member/Box/static). | nein |
-| **`consumed`** | Lineare Pflicht: MUSS genau einmal rausgemoved werden (Coding-Hilfe). | nein (Move ist Pflicht) |
+| **`scope`** (default) | Owned; dies at scope end — unless consumed before. | yes, unless consumed |
+| **`persistent`** | Owned, but bound to a longer-lived owner (member/box/static). | no |
+| **`consumed`** | Linear obligation: MUST be moved out exactly once (coding aid). | no (the move is mandatory) |
 
-Nur Heap-tragende Werte sind betroffen. Skalare (i32/f32/i64/bool/enum) haben keinen
-Heap → Qualifier bedeutungslos/ignoriert.
+Only heap-carrying values are affected. Scalars (i32/f32/i64/bool/enum) have no
+heap → the qualifier is meaningless/ignored.
 
-## 3. Ownership aus Typ + Initializer (0 Qualifier für den Normalfall)
+## 3. Ownership from type + initialiser (0 qualifiers for the normal case)
 
-Der Besitz ist für ~alle Symbole schon **lokal sichtbar**, ohne Qualifier:
+Ownership is already **locally visible** for ~all symbols, without a qualifier:
 
-- **Wertetyp `T`** (string/list/map/model) = **owned** (Default `scope`).
-- **`ptr<T>` aus `at`/`get`/`&`/Parameter** = **Borrow** — besitzt nie, wird nie
-  gedroppt, gilt nur innerhalb der Lebenszeit des Besitzers. **Borrows escapen nicht**
-  (Speichern in Member/Container = Compile-Fehler → erzwingt Copy/Move).
-- **`ptr<T>` aus `{new: T}`** = **owned box** (Default `scope`: Pointee am Scope-Ende frei).
+- **Value type `T`** (string/list/map/model) = **owned** (default `scope`).
+- **`ptr<T>` from `at`/`get`/`&`/a parameter** = **borrow** — never owns, is never
+  dropped, only valid within the owner's lifetime. **Borrows do not escape**
+  (storing into a member/container = compile error → forces copy/move).
+- **`ptr<T>` from `{new: T}`** = **owned box** (default `scope`: pointee freed at scope end).
 
-Der Qualifier ist also der **Escape-Hatch**, den man nur bei Abweichung schreibt
-(`persistent`, `consumed`) — nicht pro Deklaration.
+So the qualifier is the **escape hatch** you only write when deviating
+(`persistent`, `consumed`) — not per declaration.
 
-## 4. Konsum: push / return / consuming functions
+## 4. Consumption: push / return / consuming functions
 
-Vereinbarung: **`push` und `return` konsumieren immer** (Move). Generell gilt: jede
-**konsumierende Funktion** nimmt den Besitz ihres Arguments.
+Agreement: **`push` and `return` always consume** (move). In general: every
+**consuming function** takes ownership of its argument.
 
-- Ein **`scope`**-Local, das konsumiert wird, ist danach **moved/tot** → **kein** Drop
-  am Scope-Ende (der Default `scope` wird durch den Konsum überschrieben). Use-after-move
-  = Compile-Fehler.
-- Ein **`persistent`**-Local ist vom Konsum **ausgenommen**: die konsumierende Op
-  **kopiert** stattdessen (Original überlebt), und es wird am Scope-Ende nicht gedroppt.
-- Ein **`consumed`**-Local: siehe §5.
+- A **`scope`** local that is consumed is **moved/dead** afterwards → **no** drop
+  at scope end (the default `scope` is overridden by the consumption). Use-after-move
+  = compile error.
+- A **`persistent`** local is **exempt** from consumption: the consuming op
+  **copies** instead (the original survives), and it is not dropped at scope end.
+- A **`consumed`** local: see §5.
 
-Kopierende Gegenstücke bleiben explizit: `at_copy`, `push_from`, Zuweisung = Deep-Copy
-(Quelle behält ihres, wird normal am Scope-Ende gedroppt).
+Copying counterparts stay explicit: `at_copy`, `push_from`, assignment = deep copy
+(the source keeps its own and is dropped normally at scope end).
 
-## 5. `consumed` = lineare Coding-Hilfe
+## 5. `consumed` = linear coding aid
 
-`consumed` erzwingt, dass ein owned Wert **weitergereicht** und nicht versehentlich
-gedroppt wird (z.B. ein Handle/Resource, der übergeben werden MUSS):
+`consumed` enforces that an owned value is **passed on** and not accidentally
+dropped (e.g. a handle/resource that MUST be handed over):
 
-- Erreicht ein Pfad das Scope-Ende, **ohne** das Local konsumiert zu haben → **Warnung**
-  („consumed-Wert wird nur bedingt/nicht konsumiert").
-- Doppelter Konsum → Compile-Fehler (Use-after-move).
+- If a path reaches the scope end **without** having consumed the local → **warning**
+  ("consumed value is only conditionally/not consumed").
+- Double consumption → compile error (use-after-move).
 
-Es ist reine Diagnose-Hilfe; das Laufzeitverhalten entspricht einem konsumierten `scope`.
+It is a pure diagnostic aid; the runtime behaviour corresponds to a consumed `scope`.
 
-## 6. Kein Runtime-Drop-Flag → compile-zeit-eindeutiger Konsum
+## 6. No runtime drop flag → compile-time-unambiguous consumption
 
-Bewusste Entscheidung: **keine versteckten Runtime-Bools** (kein „drop flag"). Folge:
-der Konsum-Status muss zur Übersetzungszeit pro Kontrollfluss-Pfad eindeutig sein.
+Deliberate decision: **no hidden runtime bools** (no "drop flag"). Consequence:
+the consumption status must be unambiguous at compile time per control flow path.
 
-- Wird ein `scope`-Local in verschiedenen Branches unterschiedlich konsumiert und die
-  Branches mergen, kann der Drop ohne Flag nicht eindeutig emittiert werden → **Diagnose**:
-  „bedingter Konsum — in allen Zweigen oder in keinem konsumieren" (bzw. Konsum vor die
-  Verzweigung ziehen, oder eine Copy nutzen). Bei `consumed` ist es eine **Warnung**.
-- Das ist eine leicht striktere **Compile-Regel** statt Laufzeit-Overhead — null
-  Runtime-Kosten, lokal ablesbar. Realer Code konsumiert meist unbedingt oder symmetrisch.
+- If a `scope` local is consumed differently in different branches and the
+  branches merge, the drop cannot be emitted unambiguously without a flag → **diagnostic**:
+  "conditional consumption — consume in all branches or in none" (or pull the consumption before the
+  branch, or use a copy). For `consumed` it is a **warning**.
+- That is a slightly stricter **compile rule** instead of runtime overhead — zero
+  runtime cost, locally readable. Real code mostly consumes unconditionally or symmetrically.
 
-## 7. Was die heutige kaputte Mitte ersetzt
+## 7. What replaces today's broken middle
 
-Heute teilen `at`/`get`/`set`/`push` per flacher Kopie den Heap (zwei Besitzer) — die
-Ursache, warum Ownership bisher nicht bestimmbar war. Neu, eindeutig:
+Today `at`/`get`/`set`/`push` share the heap by shallow copy (two owners) — the
+reason why ownership could not be determined so far. New, unambiguous:
 
-| Op | Semantik |
+| Op | Semantics |
 |---|---|
-| `at`/`get` | Borrow (`ptr<T>`-View), besitzt nicht |
-| `at_copy` | owned Deep-Copy |
-| `push` | Move (Quelle konsumiert) |
-| `push_from` | Deep-Copy in den Container |
-| Zuweisung `set: [dst, src]` | Deep-Copy (bzw. Move, wenn src ein konsumierbares scope-Local ist); altes `dst` wird vorher gedroppt |
+| `at`/`get` | borrow (`ptr<T>` view), does not own |
+| `at_copy` | owned deep copy |
+| `push` | move (source consumed) |
+| `push_from` | deep copy into the container |
+| assignment `set: [dst, src]` | deep copy (or move, if src is a consumable scope local); the old `dst` is dropped first |
 
-## 8. Compiler-Aufgaben (Umsetzung, gegatet durch die Sanitizer-Harness)
+## 8. Compiler tasks (implementation, gated by the sanitizer harness)
 
-1. Ownership pro Symbol aus Typ + Initializer + Qualifier bestimmen (lokal, keine
-   Ganzprogramm-Analyse).
-2. Drop (`aiml_ser_free_decoded` / `decref` / Container-Drop) an Scope-Ausgängen für
-   owned, nicht-konsumierte Locals emittieren — pro Kontrollfluss-Pfad.
-3. Konsum an `push`/`return`/konsumierenden Funktionen als Move behandeln; Quelle als
-   moved markieren; Use-after-move diagnostizieren.
-4. `persistent`: kein Auto-Drop; Konsum → Copy.
-5. `consumed`: Warnung bei un-konsumiertem Pfad; Fehler bei Doppel-Konsum.
-6. Borrows scope-lokal halten (Speichern = Fehler).
-7. `set`/Überschreiben: RHS zuerst, altes `dst` droppen, dann übernehmen (self-assign-sicher).
+1. Determine ownership per symbol from type + initialiser + qualifier (local, no
+   whole-program analysis).
+2. Emit the drop (`aiml_ser_free_decoded` / `decref` / container drop) at scope exits for
+   owned, non-consumed locals — per control flow path.
+3. Treat consumption at `push`/`return`/consuming functions as a move; mark the source as
+   moved; diagnose use-after-move.
+4. `persistent`: no auto-drop; consumption → copy.
+5. `consumed`: warning on an unconsumed path; error on double consumption.
+6. Keep borrows scope-local (storing = error).
+7. `set`/overwrite: RHS first, drop the old `dst`, then take over (self-assign safe).
 
-Jede Iteration gegen `tests/run_memory_sanitizers.sh` (Kontrolle erkannt + Proben
-memory-safe, „definitely lost" sinkt, kein neuer Invalid-Free/UAF).
+Every iteration against `tests/run_memory_sanitizers.sh` (control detected + probes
+memory-safe, "definitely lost" goes down, no new invalid free/UAF).
 
-## 9. Abgrenzung
+## 9. Delimitation
 
-Kein GC, kein Refcount als Default (`shared` bleibt separate, seltene Ausnahme, falls je
-nötig — bewusst NICHT Teil dieses Qualifiers). Keine Escape-Analyse. Bestehende
-Wertsemantik (by-ref Listen/Maps, by-value Model/Class-Args) bleibt; neu ist nur die
-deterministische Freigabe + die sichtbaren Transfer-Regeln.
+No GC, no refcount as the default (`shared` stays a separate, rare exception, if ever
+needed — deliberately NOT part of this qualifier). No escape analysis. Existing
+value semantics (by-ref lists/maps, by-value model/class args) stay; what is new is only the
+deterministic release + the visible transfer rules.

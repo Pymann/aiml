@@ -1,118 +1,118 @@
-# Spec 61: Gegenüberstellung mit der Implementierung
+# Spec 61: comparison with the implementation
 
-Stand: 2026-09-12. Volatiler Quelltext-Review; Zeilenangaben gelten für den gelesenen Arbeitsstand.
+As of: 2026-09-12. Volatile source review; line numbers apply to the working state as read.
 
-## Umfang und Aussagegrenzen
+## Scope and limits of the statements
 
-Spec 61 wurde vollständig gelesen. Die folgenden zehn Punkte entsprechen der zuvor besprochenen Spec-Prüfung. Gegengeprüft wurden relevante Compiler-, Ownership- und Runtime-Pfade, ergänzend die Verweise auf Collections und Heap-Serialisierung.
+Spec 61 was read in full. The following ten points correspond to the spec review discussed earlier. Relevant compiler, ownership and runtime paths were cross-checked, plus the references to collections and heap serialisation.
 
-Es wurden keine Builds, Repro-Tests, Sanitizer-Läufe oder neuen Heap-Messungen durchgeführt. Aussagen über erzeugtes Verhalten sind statische Ableitungen aus dem Code. Die gemeldeten Raten von ca. 60 KB/min Server und 8 MB/min Client werden damit nicht quantitativ einzelnen Ursachen zugeordnet. Es wurden für diesen Report keine Implementierungen geändert und keine Git-Kommandos ausgeführt.
+No builds, repro tests, sanitizer runs or new heap measurements were done. Statements about generated behaviour are static derivations from the code. The reported rates of about 60 KB/min server and 8 MB/min client are therefore not quantitatively attributed to individual causes. No implementations were changed and no git commands were run for this report.
 
-**Ergebnis:** Die Implementierung ist nicht einfach unbestimmt: viele Entscheidungen sind konkret programmiert. Sie sind jedoch über Analyzer, Drop-Registrierung und einzelne Lowering-Pfade verteilt und stimmen nicht überall überein. Eine eindeutige Spec allein würde die nachfolgenden Implementierungslücken nicht beheben.
+**Result:** the implementation is not simply undetermined: many decisions are programmed concretely. However, they are spread over the analyzer, drop registration and individual lowering paths and do not agree everywhere. An unambiguous spec alone would not fix the implementation gaps below.
 
-## 1. Gegenüberstellung der zehn Spec-Punkte
+## 1. Comparison of the ten spec points
 
-Alle Codepfade sind relativ zum AIML-Projektroot angegeben. Die verlinkten Dateien sind vom Report aus erreichbar; Zeilennummern stehen separat, damit die Links auch im Markdown-Viewer funktionieren.
+All code paths are given relative to the AIML project root. The linked files are reachable from the report; line numbers are given separately so that the links also work in a markdown viewer.
 
-| Nr. | Spec-Problem | Tatsächlicher Code | Bewertung / notwendige Klärung |
+| No. | Spec problem | Actual code | Assessment / necessary clarification |
 |---|---|---|---|
-| 1 | §3 erklärt lokale Werte zu Besitzern; §3.2 nimmt gewöhnliche Funktionsrückgaben aus. | `ownership_analyzer.cpp:36–114`, `freshOwned`: feste Initializer-Muster für no-init Lists/Models, Interpolation, Model-get_copy, Producer-Calls und bestimmte Boxen. Andere Initializer bleiben nicht-owned. `ast_compiler_stmt.cpp:355–523` pflegt die Drop-Klassifikation separat. | **Konkrete Heuristik, aber doppelte Wahrheit.** Analyzer und Drop-Registrierung müssen dieselbe Klassifikationsfunktion verwenden. Bereits beobachtete Abweichung: F1. |
-| 2 | §4 sagt push/return konsumieren immer; §7 ergänzt Copy- und Branch-Ausnahmen. | `ast_compiler_call.cpp:1261–1337`: Model-push entscheidet anhand des registrierten Drops im obersten Cleanup-Frame. Member-Stores verwenden den Ownership-Plan. Calls/Returns konsumieren über `consumeLocalDrop`, `ast_compiler_stmt.cpp:1771`. | **Uneinheitliche Mechanismen.** Nicht sämtliche Transfers werden als einheitliche Operation im Datenfluss abgebildet. Der Helper entfernt Drop-Einträge aus allen Cleanup-Frames. |
-| 3 | Borrow-Escape ist laut §3/§8 Fehler, laut §7 teilweise automatische Deep-Copy; Getter dürfen Views zurückgeben. | `ast_compiler_stmt.cpp:1003–1020`: Warnung für bestimmte Pointer-/Referenzparameter, die in this-Member gespeichert werden. Andere Memberpfade kopieren Models/Container. `visitRetStmt` enthält einen konservativen Cleanup-Verzicht für unklare Rückgabeherkunft. | **Teilimplementierung, kein allgemeines Escape-Verbot.** Borrow speichern, Wert kopieren und Borrow zurückgeben brauchen getrennte Verträge. |
-| 4 | Ersetzung: RHS auswerten, Ziel freigeben, dann übernehmen – unzureichend bei Aliasing/Copy-Fehlern. | Neu vorhanden: zentraler Member-Free in `ast_compiler_stmt.cpp:1373–1385`; `emitContainerFieldFree`, `ast_compiler.cpp:3155`, prüft Adressgleichheit. `emitContainerFieldDeepCopy:3243` nullt anschließend das Ziel. Lokale Model-Zuweisung in `ast_compiler_stmt.cpp:1044–1070` beschreibt weiterhin fehlende Freigabe des alten Ziel-Heaps. | **Verbesserung bei Member-Ersetzung, aber keine allgemeine alias-sichere Ersetzung.** F2 betrifft den neuen Pfad; lokale Zuweisung bleibt separat. Fallible Copy/Commit-Vertrag fehlt. |
-| 5 | persistent benennt keinen tatsächlichen länger lebenden Owner oder Freigabeweg. | `freshOwned:37` und Drop-Registrierung schließen persistent aus. Ein konkreter Owner wird dadurch nicht gebunden. Spätere Kopien hängen vom Operations-/Typpfad ab. | **Eindeutig als Auto-Drop-Ausnahme**, nicht als vollständiger Lebenszyklus implementiert. Ein persistent-Original kann ohne später erreichbaren Eigentümer zurückbleiben. |
-| 6 | consumed wird anhand der Pointer-Repräsentation akzeptiert, obwohl diese keinen Besitz/Destruktor garantiert. | Parameterprüfung in `ast_compiler.cpp`, Bereich ab 4737: Pointer-/Byref-Prüfung und String-Parameter-Drop. Caller in `ast_compiler_call.cpp:420` entfernt lokale Drops; dieser Pfad enthält keine allgemeine Herkunftsprüfung des Arguments. | **Strukturell eindeutig, semantisch unvollständig.** Borrow-Argumente, nicht kopierbare Handles und typgerechte Destruktoren brauchen explizite Regeln. |
-| 7 | Kein Reference Counting laut §1, aber RC-Strings und decref in §3/§3.2. | `string_runtime.cpp:15–94`: RC-Header, alloc/dup, incref/decref. | **Hier ist der Code eindeutig und die Spec widersprüchlich.** Vollständige Erfassung aller Erzeuger/Transfers bleibt ein Implementierungsthema. Rohe malloc/strdup-Pointer haben nicht denselben Vertrag wie RC-Strings. |
-| 8 | Ziel-Lebensdauer und Dominanz werden mit syntaktischen Kategorien vermischt. | Model-push verwendet das oberste Cleanup-Frame. `ownership_analyzer.cpp:184–214` entscheidet Member-Transfer anhand der Quellen-Origin; eine entsprechende Ziel-Lebensdauer-/Same-Block-Prüfung fehlt dort. | **Spec-Unschärfe spiegelt sich im Code.** Die Dominanzregel gilt nicht einheitlich für Member-Stores; die tatsächliche Lebensdauer des Zielcontainers wird nicht allgemein verglichen. |
-| 9 | producer ist hauptsächlich für Call-initialisierte Deklarationen beschrieben. | Drop-Erkennung in `ast_compiler_stmt.cpp` und `freshOwned` matcht den letzten Funktionsnamensteil gegen `ctx.ownsReturnFns`. Allgemeine Owned-Expression-Temporaries sind damit nicht abgedeckt; Interpolations-Temporaries haben ein separates System. | **Implementierungslücke.** Ignorierte/nestende Producer-Calls und Transfers ohne lokale Deklaration brauchen einen Ausdrucksvertrag. Kurzname statt aufgelöster Funktionsidentität birgt Namenskollisionsrisiko. |
-| 10 | Leak-Lint würde bereits bei irgendeinem syntaktischen Transfer schweigen. | Kein entsprechender Lint im geprüften Compiler-Code gefunden. `ownership_analyzer.cpp:256` lässt allgemeine Call-Effekte ausdrücklich außerhalb der Flow-Analyse; Moves via push/return erfolgen beim Lowering. | **Noch nicht implementiert.** Bestehende Flow-Fakten sind nicht ausreichend, um alle tatsächlichen Transfers und Exits einfach abzufragen. |
+| 1 | §3 declares local values to be owners; §3.2 exempts ordinary function returns. | `ownership_analyzer.cpp:36–114`, `freshOwned`: fixed initialiser patterns for no-init lists/models, interpolation, model get_copy, producer calls and certain boxes. Other initialisers stay non-owned. `ast_compiler_stmt.cpp:355–523` maintains the drop classification separately. | **A concrete heuristic, but a double truth.** Analyzer and drop registration must use the same classification function. Divergence already observed: F1. |
+| 2 | §4 says push/return always consume; §7 adds copy and branch exceptions. | `ast_compiler_call.cpp:1261–1337`: model push decides based on the registered drop in the topmost cleanup frame. Member stores use the ownership plan. Calls/returns consume via `consumeLocalDrop`, `ast_compiler_stmt.cpp:1771`. | **Inconsistent mechanisms.** Not all transfers are represented as a uniform operation in the data flow. The helper removes drop entries from all cleanup frames. |
+| 3 | Borrow escape is an error according to §3/§8, partly an automatic deep copy according to §7; getters may return views. | `ast_compiler_stmt.cpp:1003–1020`: a warning for certain pointer/reference parameters stored into this-members. Other member paths copy models/containers. `visitRetStmt` contains a conservative cleanup waiver for unclear return origin. | **Partial implementation, no general escape ban.** Storing a borrow, copying a value and returning a borrow need separate contracts. |
+| 4 | Replacement: evaluate the RHS, free the target, then take over — insufficient for aliasing/copy errors. | New: central member free in `ast_compiler_stmt.cpp:1373–1385`; `emitContainerFieldFree`, `ast_compiler.cpp:3155`, checks address equality. `emitContainerFieldDeepCopy:3243` then nulls the target. Local model assignment in `ast_compiler_stmt.cpp:1044–1070` still describes a missing release of the old target heap. | **Improvement for member replacement, but no general alias-safe replacement.** F2 concerns the new path; local assignment stays separate. A fallible copy/commit contract is missing. |
+| 5 | persistent names no actual longer-lived owner or release route. | `freshOwned:37` and drop registration exclude persistent. No concrete owner is bound by it. Later copies depend on the operation/type path. | **Unambiguous as an auto-drop exemption**, not implemented as a complete life cycle. A persistent original can be left behind without an owner reachable later. |
+| 6 | consumed is accepted based on the pointer representation, although that guarantees no ownership/destructor. | Parameter check in `ast_compiler.cpp`, region from 4737: pointer/byref check and string parameter drop. The caller in `ast_compiler_call.cpp:420` removes local drops; this path contains no general origin check of the argument. | **Structurally unambiguous, semantically incomplete.** Borrow arguments, non-copyable handles and type-appropriate destructors need explicit rules. |
+| 7 | No reference counting according to §1, but RC strings and decref in §3/§3.2. | `string_runtime.cpp:15–94`: RC header, alloc/dup, incref/decref. | **Here the code is unambiguous and the spec contradictory.** Complete coverage of all producers/transfers remains an implementation topic. Raw malloc/strdup pointers do not have the same contract as RC strings. |
+| 8 | Target lifetime and dominance are mixed up with syntactic categories. | Model push uses the topmost cleanup frame. `ownership_analyzer.cpp:184–214` decides member transfer based on the source origin; a corresponding target lifetime/same-block check is missing there. | **Spec vagueness is mirrored in the code.** The dominance rule does not apply uniformly to member stores; the actual lifetime of the target container is not compared in general. |
+| 9 | producer is mainly described for call-initialised declarations. | Drop detection in `ast_compiler_stmt.cpp` and `freshOwned` match the last part of the function name against `ctx.ownsReturnFns`. General owned expression temporaries are not covered by that; interpolation temporaries have a separate system. | **Implementation gap.** Ignored/nested producer calls and transfers without a local declaration need an expression contract. A short name instead of a resolved function identity carries a risk of name collisions. |
+| 10 | A leak lint would already go silent at any syntactic transfer. | No such lint found in the compiler code reviewed. `ownership_analyzer.cpp:256` explicitly leaves general call effects outside the flow analysis; moves via push/return happen during lowering. | **Not implemented yet.** Existing flow facts are not sufficient to simply query all actual transfers and exits. |
 
-## 2. Konkrete Befunde
+## 2. Concrete findings
 
-### F1 — P1: Neue UI-String-Drops werden vom Ownership-Plan unterdrückt
+### F1 — P1: new UI string drops are suppressed by the ownership plan
 
-**Code:** [Drop-Registrierung](../../src/core/ast_compiler_stmt.cpp), Zeilen 448–474; [Analyzer](../../src/core/ownership_analyzer.cpp), Zeilen 55–58; [Drop-Gate](../../src/core/ownership_flow.cpp), `mayDrop`; [Runtime](../../src/sys/prefab_runtime.cpp), `aiml_prefab_text_value` / `aiml_prefab_dropdown_value`.
+**Code:** [drop registration](../../src/core/ast_compiler_stmt.cpp), lines 448–474; [analyzer](../../src/core/ownership_analyzer.cpp), lines 55–58; [drop gate](../../src/core/ownership_flow.cpp), `mayDrop`; [runtime](../../src/sys/prefab_runtime.cpp), `aiml_prefab_text_value` / `aiml_prefab_dropdown_value`.
 
-Die Runtime liefert inzwischen `aiml_str_dup` statt rohem `strdup`. `visitDeclStmt` erkennt die kurzen Namen `text_value` und `dropdown_value` als owned String-Erzeuger und registriert einen Drop mit Ownership-ID. `freshOwned` erkennt bei Strings weiterhin ausschließlich Interpolation. Der lokale Wert erhält im Plan daher Borrowed statt Owned. `mayDrop` verlangt aber Owned + Live + Resource und verweigert den Drop.
+The runtime now returns `aiml_str_dup` instead of raw `strdup`. `visitDeclStmt` recognises the short names `text_value` and `dropdown_value` as owned string producers and registers a drop with an ownership ID. For strings, `freshOwned` still recognises only interpolation. The local value therefore gets Borrowed instead of Owned in the plan. `mayDrop`, however, requires Owned + Live + Resource and refuses the drop.
 
-**Auswirkung:** In einem normal analysierten Funktionsblock kann die neue Drop-Registrierung das Getter-Leak nicht beheben. Ein fehlender Plan kann ein anderes Verhalten erzeugen, weil der normale Block-Exit dann registrierte Drops ohne diesen Gate-Check emittiert.
+**Effect:** in a normally analysed function block the new drop registration cannot fix the getter leak. A missing plan can produce different behaviour, because the normal block exit then emits registered drops without this gate check.
 
-**Vorschlag:** Gemeinsame Klassifikation mit aufgelöster Builtin-/Funktionsidentität statt zwei Listen kurzer Namen. Nicht den Gate-Check pauschal entfernen. Künftige Validierung: Getter-Ergebnis im normalen Funktionsblock und auf Return-Pfaden prüfen; derzeit kein Repro ausgeführt.
+**Proposal:** a shared classification with resolved builtin/function identity instead of two lists of short names. Do not remove the gate check across the board. Future validation: check the getter result in a normal function block and on return paths; no repro has been run so far.
 
-### F2 — P1: Selbstzuweisungs-Guard schützt nur Free, nicht die anschließende Kopie
+### F2 — P1: the self-assignment guard only protects the free, not the subsequent copy
 
-**Code:** [Compiler](../../src/core/ast_compiler.cpp), `emitContainerFieldFree:3155`, Guard gegen `dstPtr == srcPtr`, sowie `emitContainerFieldDeepCopy:3243–3270`; [Member-Store](../../src/core/ast_compiler_stmt.cpp), Bereich 1373–1432.
+**Code:** [compiler](../../src/core/ast_compiler.cpp), `emitContainerFieldFree:3155`, guard against `dstPtr == srcPtr`, as well as `emitContainerFieldDeepCopy:3243–3270`; [member store](../../src/core/ast_compiler_stmt.cpp), region 1373–1432.
 
-Bei identischen Adressen überspringt `emitContainerFieldFree` die Freigabe. Der nachfolgende Deep-Copy-Helper nullt `dstPtr` jedoch unabhängig davon und liest erst danach `srcPtr`. Bei identischen Adressen ist damit auch die Quelle bereits genullt. Eine Member-Selbstzuweisung einer Liste kann diesen Pfad erreichen: die Quelle ist ein Member und wird als DeepCopy klassifiziert; der Plain-Local-Self-Assign-Shortcut greift dort nicht.
+With identical addresses `emitContainerFieldFree` skips the release. The subsequent deep copy helper, however, nulls `dstPtr` regardless and only reads `srcPtr` afterwards. With identical addresses the source is therefore already nulled as well. A member self-assignment of a list can reach this path: the source is a member and is classified as DeepCopy; the plain local self-assign shortcut does not apply there.
 
-**Auswirkung laut Codepfad:** Datenverlust und Verlust des bisherigen Heap-Pointers bei einem erreichten identischen Quell-/Zielslot. Kein ausgeführter Laufzeit-Repro.
+**Effect according to the code path:** data loss and loss of the previous heap pointer when an identical source/target slot is reached. No runtime repro run.
 
-**Vorschlag:** Identische Quelle/Ziel als No-op über die gesamte Ersetzung behandeln. Für überlappende, aber nicht identische Quellen eine unabhängige Kopie vor der Ziel-Freigabe herstellen. Pointer-Gleichheit allein beweist keine Alias-Freiheit.
+**Proposal:** treat an identical source/target as a no-op across the whole replacement. For overlapping but not identical sources, make an independent copy before the target release. Pointer equality alone does not prove freedom from aliasing.
 
-### F3 — P1: Transfer-/Branch-Zustand und Drop-Listen bleiben getrennt
+### F3 — P1: transfer/branch state and drop lists stay separate
 
-**Code:** [Analyzer](../../src/core/ownership_analyzer.cpp), Member-Transfer um 184 und Call-Fallback um 256; [Codegen](../../src/core/ast_compiler_stmt.cpp), `consumeLocalDrop:1771`; [List-push](../../src/core/ast_compiler_call.cpp), Bereich 1261–1337.
+**Code:** [analyzer](../../src/core/ownership_analyzer.cpp), member transfer around 184 and call fallback around 256; [codegen](../../src/core/ast_compiler_stmt.cpp), `consumeLocalDrop:1771`; [list push](../../src/core/ast_compiler_call.cpp), region 1261–1337.
 
-Ein Member-Store kann einen Owned-Local als Move klassifizieren, ohne die Same-Block-Bedingung des Model-push zu prüfen. `consumeLocalDrop` entfernt passende Einträge aus sämtlichen Cleanup-Frames. Die Datenflussanalyse erfasst allgemeine Calls nicht als entsprechende Zustandsübergänge. Ein späteres `mayDrop` kann einen zuvor vollständig entfernten Drop-Eintrag nicht wiederherstellen.
+A member store can classify an owned local as a move without checking the same-block condition of model push. `consumeLocalDrop` removes matching entries from all cleanup frames. The data flow analysis does not capture general calls as corresponding state transitions. A later `mayDrop` cannot restore a drop entry that was previously removed completely.
 
-**Auswirkung:** Bedingte Transfers und unterschiedliche Operationspfade bleiben eine Quelle von Under-Drop. Eine allgemeine Use-after-move-/Merge-Fehlerdiagnostik wird dadurch nicht ersetzt. Nicht jedes denkbare Branch-Beispiel wurde ausgeführt.
+**Effect:** conditional transfers and different operation paths remain a source of under-drop. A general use-after-move/merge error diagnostic is not replaced by this. Not every conceivable branch example was run.
 
-**Vorschlag:** Transferplan und Exit-Plan müssen die gemeinsame Entscheidungsgrundlage sein; lokales Erasen einer global verwendeten Cleanup-Liste darf keine pfadabhängige Entscheidung ersetzen.
+**Proposal:** the transfer plan and the exit plan must be the shared basis for decisions; locally erasing a globally used cleanup list must not replace a path-dependent decision.
 
-### F4 — P2: Producer-Erkennung über kurze Namen statt Funktionsidentität
+### F4 — P2: producer detection via short names instead of function identity
 
-**Code:** [Analyzer](../../src/core/ownership_analyzer.cpp), `freshOwned`; [Deklarationen](../../src/core/ast_compiler_stmt.cpp), Model-/Box-/List-Producer-Erkennung; [Context](../../src/core/context.h), `ownsReturnFns`.
+**Code:** [analyzer](../../src/core/ownership_analyzer.cpp), `freshOwned`; [declarations](../../src/core/ast_compiler_stmt.cpp), model/box/list producer detection; [context](../../src/core/context.h), `ownsReturnFns`.
 
-Die Erkennung trennt den Aufrufnamen am letzten Punkt und sucht den Rest im Producer-Set. Damit kann die Ownership einer gleichnamigen Methode eines anderen Empfängertyps zugerechnet werden. Für ein irrtümlich als Producer erkanntes Getter-Ergebnis wäre ein Drop auf fremden Besitz möglich.
+The detection splits the call name at the last dot and looks the rest up in the producer set. That way the ownership of a method of the same name on another receiver type can be attributed. For a getter result wrongly recognised as a producer, a drop on foreign ownership would be possible.
 
-**Status:** Namenskollisionsrisiko aus der Implementierung; keine konkrete 9rooms-Kollision und kein Laufzeitfehler in diesem Review nachgewiesen.
+**Status:** a name collision risk from the implementation; no concrete 9rooms collision and no runtime error demonstrated in this review.
 
-**Vorschlag:** Producer-Metadaten vom aufgelösten Callee bzw. der Interface-/Funktionssignatur beziehen. Dieselbe Identität in Analyzer und Codegen verwenden.
+**Proposal:** take producer metadata from the resolved callee or the interface/function signature. Use the same identity in analyzer and codegen.
 
-## 3. Ergänzende Lifecycle- und Statusbefunde
+## 3. Additional life cycle and status findings
 
-- **Drop-Reihenfolge:** Normaler Block-Exit und unterstützte Return-Pfade durchlaufen Cleanup-Frames/Einträge rückwärts. Das ist bereits konkret implementiert, nicht grundsätzlich offen.
-- **Return-Cleanup:** `visitRetStmt` (ast_compiler_stmt.cpp ab 1590) schränkt Cleanup anhand von `safeToCleanup` ein. Bei unklarer Rückgabeherkunft werden Freigaben bewusst unterlassen. Das vollständige Ziel deterministischer Freigabe ist damit noch nicht erreicht.
-- **Exceptions:** `visitTry` / `visitThrow` (dieselbe Datei ab 2055 / 2175) enthalten keinen vollständigen Ownership-Unwind. Auch der Analyzer behandelt Try-/Throw-Strukturen nicht wie seine Block-/If-/While-/Return-Pfade.
-- **Container mit Boxen:** `aiml_list_free` (string_runtime.cpp ab 105) kennt Raw-, String- und Model-Elemente. Die Registrierung für `list<ptr<T>>` etabliert keinen allgemeinen rekursiven Owned-Box-Drop. Verschachtelte Container benötigen ebenfalls eine explizite Prüfung ihrer Deskriptoren und Drop-Kinds.
-- **Consumed-Parameter:** Der Analyzer initialisiert Parameter als Borrowed; die String-Parameter-Drop-Registrierung ist ein eigener Pfad. Daraus ergibt sich keine allgemeine Ressourcen-Ownership für alle akzeptierten Handle-Typen.
-- **Interfaces:** Die Statusbeschreibung in Spec 61 ist veraltet: Lifetime-Signaturinformationen, Interface-Dispatch-Transfers und eine Prüfung gegen inkompatible consumed-Overrides sind vorhanden. Das ist keine Behauptung vollständiger Interface-Ownership-Korrektheit.
-- **Map-/andere Drop-Abdeckung:** Vorhandene Runtime-Free-Funktionen belegen nicht automatisch vollständige Registrierung und Aufrufe für jede lokale, temporäre oder Member-Form. Diesen Unterschied muss der Implementierungsstatus sichtbar machen.
+- **Drop order:** the normal block exit and supported return paths walk cleanup frames/entries in reverse. That is already implemented concretely, not fundamentally open.
+- **Return cleanup:** `visitRetStmt` (ast_compiler_stmt.cpp from 1590) restricts cleanup based on `safeToCleanup`. For unclear return origin releases are deliberately omitted. The full goal of deterministic release is thus not reached yet.
+- **Exceptions:** `visitTry` / `visitThrow` (same file from 2055 / 2175) contain no complete ownership unwind. The analyzer also does not treat try/throw structures like its block/if/while/return paths.
+- **Containers with boxes:** `aiml_list_free` (string_runtime.cpp from 105) knows raw, string and model elements. The registration for `list<ptr<T>>` establishes no general recursive owned box drop. Nested containers likewise need an explicit check of their descriptors and drop kinds.
+- **Consumed parameters:** the analyzer initialises parameters as Borrowed; the string parameter drop registration is a separate path. No general resource ownership for all accepted handle types follows from that.
+- **Interfaces:** the status description in spec 61 is outdated: lifetime signature information, interface dispatch transfers and a check against incompatible consumed overrides are present. That is not a claim of complete interface ownership correctness.
+- **Map/other drop coverage:** existing runtime free functions do not automatically prove complete registration and calls for every local, temporary or member form. The implementation status must make this difference visible.
 
-## 4. Korrekturen gegenüber früheren Gesprächsbefunden
+## 4. Corrections relative to earlier findings in the conversation
 
-1. Der frühere pauschale Befund „Member-Zuweisung gibt den alten Inhalt nicht frei“ ist für den jetzt gelesenen Stand überholt. Zentraler Member-Free ist vorhanden; verbleibende Probleme betreffen insbesondere Alias-Schutz, abweichende lokale Zuweisungspfade und vollständige Drop-Abdeckung.
-2. UI-Getter liefern inzwischen RC-Strings und haben einen Registrierungs-Sonderfall. Der offene Befund ist der fehlende Abgleich mit dem Analyzer (F1), nicht mehr allein rohes strdup.
-3. Die ursprünglichen Server-/Client-Leakraten lassen sich aus diesen Änderungen oder dem Source-Review weder als behoben noch als unverändert bestätigen. Server-RSS und belegter WASM-Heap sind zudem unterschiedliche Messgrößen.
+1. The earlier blanket finding "member assignment does not free the old content" is outdated for the state now read. A central member free exists; remaining problems concern in particular alias protection, divergent local assignment paths and complete drop coverage.
+2. UI getters now return RC strings and have a registration special case. The open finding is the missing alignment with the analyzer (F1), no longer raw strdup alone.
+3. The original server/client leak rates can be confirmed neither as fixed nor as unchanged from these changes or the source review. Server RSS and occupied WASM heap are, moreover, different measures.
 
-## 5. Priorität für die weitere Arbeit
+## 5. Priority for further work
 
-1. F1 und F2 gezielt beheben; vorhandene Sicherheits-Gates dabei erhalten.
-2. Ownership-Klassifikation für Analyzer und Codegen vereinheitlichen, einschließlich aufgelöster Producer-/Builtin-Identität.
-3. Copy-/Move-/Replace-Entscheidungen einschließlich Branches an einen gemeinsamen Transferplan binden.
-4. Spec-Status separat vom Zielvertrag pflegen; fehlende Unterstützung nicht mit „immer sicher, höchstens Leak“ pauschal beschreiben.
-5. Danach die relevanten Laufzeitpfade mit geeigneter Speicherfehlerprüfung und Heap-Messung bestätigen. Dieser Report implementiert oder startet solche Tests nicht.
+1. Fix F1 and F2 specifically; keep the existing safety gates.
+2. Unify the ownership classification for analyzer and codegen, including resolved producer/builtin identity.
+3. Bind copy/move/replace decisions, including branches, to a shared transfer plan.
+4. Maintain the spec status separately from the target contract; do not describe missing support across the board as "always safe, at most a leak".
+5. After that, confirm the relevant runtime paths with suitable memory error checking and heap measurement. This report neither implements nor starts such tests.
 
-Dies ist kein Vorschlag, das verworfene WP-C als Ganzes wieder einzuführen. Die Befunde betreffen die bereits vorhandene Ownership-Implementierung und ihre konkreten Schnittstellen.
+This is not a proposal to reintroduce the discarded WP-C as a whole. The findings concern the existing ownership implementation and its concrete interfaces.
 
-## 6. Gelesene Quellen
+## 6. Sources read
 
 - [Spec 61](../../spec/61_lifetime_ownership.md)
-- [Ownership-Analyzer](../../src/core/ownership_analyzer.cpp)
-- [Ownership-Flow](../../src/core/ownership_flow.cpp)
-- [Statement-Codegen](../../src/core/ast_compiler_stmt.cpp)
-- [Call-Codegen](../../src/core/ast_compiler_call.cpp)
-- [Compiler / Feld-Free und Copy](../../src/core/ast_compiler.cpp)
-- [String-/Listen-Runtime](../../src/sys/string_runtime.cpp)
-- [Prefab-Runtime](../../src/sys/prefab_runtime.cpp)
+- [Ownership analyzer](../../src/core/ownership_analyzer.cpp)
+- [Ownership flow](../../src/core/ownership_flow.cpp)
+- [Statement codegen](../../src/core/ast_compiler_stmt.cpp)
+- [Call codegen](../../src/core/ast_compiler_call.cpp)
+- [Compiler / field free and copy](../../src/core/ast_compiler.cpp)
+- [String/list runtime](../../src/sys/string_runtime.cpp)
+- [Prefab runtime](../../src/sys/prefab_runtime.cpp)
 
-### Dateifingerprints beim Ablegen
+### File fingerprints at filing time
 
-Die Hashes dienen zur Erkennung späterer Änderungen; der Review ist kein atomarer Repository-Snapshot.
+The hashes serve to detect later changes; the review is not an atomic repository snapshot.
 
-Erfasst: 2026-09-12T14:13:46+02:00
+Recorded: 2026-09-12T14:13:46+02:00
 
-| Datei | SHA-256 |
+| File | SHA-256 |
 |---|---|
 | `spec/61_lifetime_ownership.md` | `768224cba95fe3273fd97432b96d84fed3c88f1f16c0bc305a10e36a79381986` |
 | `src/core/ownership_analyzer.cpp` | `d6bf58551def3dea713b19035e4c219293afa55cd4af59cea1f743a6a93b10c9` |
