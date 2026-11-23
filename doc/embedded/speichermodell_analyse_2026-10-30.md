@@ -1,168 +1,168 @@
-# Embedded-Eignung des AIML-Speichermodells
+# Embedded suitability of the AIML memory model
 
-Stand: 2026-10-30. Quellcodeanalyse des aktuellen lokalen Arbeitsstands, einschließlich vorhandener uncommitteter Änderungen. Keine Änderungen an Compiler oder Runtime; keine ARM-/Cortex-M0-Laufzeit-, Speicher- oder Echtzeitmessungen. Die Aussagen beschreiben implementierte Pfade und deren Bewertung, keine nachgewiesene Board-Unterstützung.
+As of: 2026-10-30. Source analysis of the current local working state, including existing uncommitted changes. No changes to compiler or runtime; no ARM/Cortex-M0 runtime, memory or real-time measurements. The statements describe implemented paths and their assessment, not demonstrated board support.
 
-## Ergebnis
+## Result
 
-Das ursprüngliche Embedded-Ziel ist für den elementaren Sprachkern weiterhin erreichbar: primitive Zahlen-/Bool-Typen, reine Wertmodelle und feste Arrays sind grundsätzlich geeignet. Automatische Freigaben schließen Embedded nicht aus. Entscheidend sind versteckte Allokationen, begrenzbare Speicher- und Laufzeitkosten sowie die benötigte Runtime.
+The original embedded goal is still reachable for the elementary language core: primitive number/bool types, pure value models and fixed arrays are suitable in principle. Automatic releases do not rule out embedded. What is decisive are hidden allocations, boundable memory and runtime costs, and the runtime required.
 
-Die aktuellen ENV-Schalter ergeben allerdings kein abgesichertes Profil ohne Heap. Für kleine Controller und strenge Echtzeitanforderungen fehlen eine durchgängige Bare-Metal-Portierung und eine Compilerprüfung, die dynamische Allokationen auch transitiv ausschließt.
+The current ENV switches, however, do not yield a secured heap-free profile. For small controllers and strict real-time requirements, an end-to-end bare-metal port and a compiler check that excludes dynamic allocations transitively are missing.
 
-LLVM unterstützt die relevanten ARM-Ziele. Codegenerierung allein stellt jedoch weder Startup-Code noch Zielbibliotheken, Linker-Konfiguration oder eine geeignete AIML-Runtime bereit. Cortex-M0 gehört zur Armv6-M-Familie; ARMv7 bezeichnet andere Architekturvarianten und sollte nicht als gleichbedeutendes Ziel behandelt werden.
+LLVM supports the relevant ARM targets. Code generation alone, however, provides neither startup code nor target libraries, linker configuration or a suitable AIML runtime. Cortex-M0 belongs to the Armv6-M family; ARMv7 denotes other architecture variants and should not be treated as an equivalent target.
 
-## 1. Die beiden Umgebungsvariablen
+## 1. The two environment variables
 
-Der korrekte zweite Name lautet `AIML_MEM_V3`. Für `AIML_MEMV3` wurde keine Auswertung gefunden.
+The correct second name is `AIML_MEM_V3`. No evaluation of `AIML_MEMV3` was found.
 
-Beide Schalter sind im untersuchten Compiler effektiv standardmäßig **an**:
+In the compiler examined, both switches are effectively **on** by default:
 
-- `AIML_MEM_V3`: `CompilerContext::memV3 = true`; Auswertung im Konstruktor.
-- `AIML_LIFETIME_DROPS`: Das Kontextfeld ist zunächst `false`, aber `Compiler::compile()` setzt es vor der Codegenerierung auf `true` und berücksichtigt anschließend die ENV-Variable.
+- `AIML_MEM_V3`: `CompilerContext::memV3 = true`; evaluated in the constructor.
+- `AIML_LIFETIME_DROPS`: the context field is initially `false`, but `Compiler::compile()` sets it to `true` before code generation and then takes the ENV variable into account.
 
-Auswertewerte für **aus**: leerer String, `0`, `off`, `OFF`, `false`, `FALSE`. Andere gesetzte Werte aktivieren den jeweiligen Schalter. Nicht gesetzt bedeutet beim normalen Kompilieren daher bei beiden **an**.
+Values evaluated as **off**: empty string, `0`, `off`, `OFF`, `false`, `FALSE`. Other set values activate the respective switch. Unset therefore means **on** for both in normal compilation.
 
-Die Variablen beeinflussen den erzeugten Code beim Kompilieren. Eine spätere Änderung beim Start eines bereits erzeugten Programms stellt dessen Speichermodell nicht um. Zusammengehörige Kompilationseinheiten müssen konsistente Einstellungen verwenden.
+The variables influence the generated code at compile time. A later change at the start of an already generated program does not switch its memory model. Compilation units that belong together must use consistent settings.
 
-**Dokumentationswiderspruch:** `doc/env_variables_overview.md` nennt für Lifetime-Drops noch „Default OFF“. Auch mehrere Kommentare enthalten ältere Aussagen. Für diese Analyse sind die ausführbaren Initialisierungen maßgeblich.
+**Documentation contradiction:** `doc/env_variables_overview.md` still says "default OFF" for lifetime drops. Several comments also contain older statements. For this analysis the executable initialisations are authoritative.
 
-Quellen: [context.h](../../src/core/context.h), [Compiler::compile](../../src/core/ast_compiler.cpp), [ENV-Übersicht](../env_variables_overview.md).
+Sources: [context.h](../../src/core/context.h), [Compiler::compile](../../src/core/ast_compiler.cpp), [ENV overview](../env_variables_overview.md).
 
 ### AIML_MEM_V3=1
 
-Aktiviert die neueren Darstellungs- und Ownership-Pfade:
+Activates the newer representation and ownership paths:
 
-- `list`, `map`, `buffer` und `cascade` werden in den V3-Verwaltungspfaden über referenzgezählte Handles dargestellt. Zuweisungen können dieselbe veränderliche Ressource teilen.
-- Strings werden in entsprechenden Zuweisungspfaden per Referenzzählung geteilt.
-- `ptr<T>` steht für eindeutigen Besitz, `shared<T>` für gemeinsamen referenzgezählten Besitz und `ref<T>` für nichtbesitzenden Zugriff.
-- Zusätzliche statische Prüfungen diagnostizieren erkennbare Ownership-Verstöße, beispielsweise Benutzung nach Besitzübergabe oder Freigabe. Dies ist keine vollständige Speichersicherheitsgarantie.
-- Die YAML-Anweisung `free: [p]` wird als ausführbarer AST-Knoten erzeugt. Bei einer passenden `ptr<T>`-Box werden besessene Felder bei der Freigabe berücksichtigt.
+- `list`, `map`, `buffer` and `cascade` are represented by reference-counted handles in the V3 management paths. Assignments can share the same mutable resource.
+- Strings are shared by reference counting in the corresponding assignment paths.
+- `ptr<T>` stands for unique ownership, `shared<T>` for shared reference-counted ownership and `ref<T>` for non-owning access.
+- Additional static checks diagnose recognisable ownership violations, for example use after an ownership transfer or release. This is not a complete memory safety guarantee.
+- The YAML statement `free: [p]` is produced as an executable AST node. For a matching `ptr<T>` box, owned fields are taken into account on release.
 
-Referenzzählung ist kein nachverfolgender Garbage Collector. Besitzende Zyklen werden dadurch nicht automatisch eingesammelt.
+Reference counting is not a tracing garbage collector. Owning cycles are not collected automatically by it.
 
 ### AIML_MEM_V3=0
 
-Wählt ältere Darstellungs- und Verwaltungspfade. Die V3-Containerhandles und V3-Besitzprüfungen entfallen. Weitere Einstellungen, insbesondere `AIML_MODEL_REFCOUNT`, können das Verhalten zusätzlich beeinflussen.
+Selects older representation and management paths. The V3 container handles and V3 ownership checks are dropped. Further settings, in particular `AIML_MODEL_REFCOUNT`, can influence the behaviour additionally.
 
-**Dies entfernt dynamische Allokationen nicht:** Auch ältere Containerpfade verwenden `malloc`/`realloc` für Inhalte und Wachstum.
+**This does not remove dynamic allocations:** older container paths also use `malloc`/`realloc` for contents and growth.
 
-Besonders relevant: Die YAML-Anweisung `free: [p]` wird im Parser bei ausgeschaltetem V3 verworfen und bewirkt nichts. Ein FFI-Aufruf einer ausdrücklich deklarierten C-Funktion `free` ist davon zu unterscheiden.
+Particularly relevant: with V3 switched off, the YAML statement `free: [p]` is discarded in the parser and does nothing. An FFI call of an explicitly declared C function `free` is to be distinguished from that.
 
-Quelle: [statement_builder.cpp](../../src/core/ast/statement_builder.cpp), [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp), [list_impl.cpp](../../src/core/list_impl.cpp).
+Source: [statement_builder.cpp](../../src/core/ast/statement_builder.cpp), [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp), [list_impl.cpp](../../src/core/list_impl.cpp).
 
 ### AIML_LIFETIME_DROPS=1
 
-Aktiviert wesentliche automatische Freigabe- und zugehörige Ownership-Pfade:
+Activates essential automatic release and the associated ownership paths:
 
-- Aufräumen lokaler besessener Ressourcen beim Scope-Ende, normalerweise in umgekehrter Deklarationsreihenfolge.
-- Referenzzähler vermindern; beim letzten Besitzer Ressource freigeben.
-- Aufräumen auf Rückgabepfaden unter Berücksichtigung des zurückgegebenen Besitzes.
-- Verfolgung und Freigabe temporärer Ergebnisse.
-- Zugehörige Besitzübergaben an Aufrufgrenzen, etwa bei `consumed` und unter V3 bei `ptr<T>`.
-- Verschiedene Kopier-, Überschreib- und Parameter-Verwaltungspfade.
+- Cleanup of local owned resources at scope end, normally in reverse declaration order.
+- Decrementing reference counts; releasing the resource at the last owner.
+- Cleanup on return paths, taking the returned ownership into account.
+- Tracking and releasing temporary results.
+- Associated ownership transfers at call boundaries, e.g. for `consumed` and under V3 for `ptr<T>`.
+- Various copy, overwrite and parameter management paths.
 
-`lifetime: persistent` unterdrückt gewöhnliche lokale Scope-Drops. Modulglobale Werte erhalten keinen normalen Funktions-Scope-Drop. Nichtbesitzende Referenzen werden nicht als Eigentümer freigegeben. Nicht jeder Ressourcentyp oder Exit-Pfad ist durch diese Aufzählung als vollständig geprüft anzusehen.
+`lifetime: persistent` suppresses ordinary local scope drops. Module-global values get no normal function scope drop. Non-owning references are not released as owners. Not every resource type or exit path is to be regarded as completely checked by this list.
 
 ### AIML_LIFETIME_DROPS=0
 
-Unterdrückt wesentliche automatische Freigaben, ohne die zugehörigen Allokationen zu entfernen. Lokale Heap-Ressourcen und temporäre Ergebnisse können dadurch liegen bleiben. Stack-Speicher wird weiterhin nach den normalen Funktions-/Stackregeln abgebaut.
+Suppresses essential automatic releases without removing the associated allocations. Local heap resources and temporary results can therefore be left behind. Stack memory is still dismantled according to the normal function/stack rules.
 
-Der Schalter betrifft mehr als Blockende-Freigaben: Auch bestimmte Kopier-, Überschreib- und Besitzübergabepfade sind daran gekoppelt. Abschalten kann deshalb das Verhalten ändern und ist kein allgemeiner Wechsel zu sauberer manueller Speicherverwaltung.
+The switch affects more than end-of-block releases: certain copy, overwrite and ownership transfer paths are coupled to it as well. Switching it off can therefore change behaviour and is not a general switch to clean manual memory management.
 
-Bei weiterhin aktivem V3 bleiben dessen Darstellung, Besitzdiagnosen und explizites `free:` grundsätzlich aktiv. Auch einzelne operationsbezogene Freigaben bleiben bestehen.
+With V3 still active, its representation, ownership diagnostics and explicit `free:` stay active in principle. Individual operation-related releases also remain.
 
-| MEM_V3 | LIFETIME_DROPS | Einordnung |
+| MEM_V3 | LIFETIME_DROPS | Classification |
 |---|---|---|
-| 1 | 1 | Aktueller Standard: V3 mit automatischen Freigaben |
-| 1 | 0 | V3 mit wesentlichen Lücken beim automatischen Aufräumen |
-| 0 | 1 | Ältere Speicherpfade mit automatischen Drops; YAML-`free:` wirkungslos |
-| 0 | 0 | Ältere Speicherpfade ohne automatische Drops; kein Profil ohne Heap |
+| 1 | 1 | Current default: V3 with automatic releases |
+| 1 | 0 | V3 with essential gaps in automatic cleanup |
+| 0 | 1 | Older memory paths with automatic drops; YAML `free:` has no effect |
+| 0 | 0 | Older memory paths without automatic drops; no heap-free profile |
 
-Quellen: [ast_compiler_stmt.cpp](../../src/core/ast_compiler_stmt.cpp), [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp), [ast_compiler.cpp](../../src/core/ast_compiler.cpp).
+Sources: [ast_compiler_stmt.cpp](../../src/core/ast_compiler_stmt.cpp), [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp), [ast_compiler.cpp](../../src/core/ast_compiler.cpp).
 
-## 2. Elementare Datentypen
+## 2. Elementary data types
 
-| Typgruppe | Darstellung und Verhalten | Embedded-Bewertung |
+| Type group | Representation and behaviour | Embedded assessment |
 |---|---|---|
-| Integer und `bool` | Direkte LLVM-Werte, keine eigene Heap-Allokation oder Referenzzählung | Grundsätzlich geeignet |
-| `f32`, `f64` | Direkte LLVM-Gleitkommawerte, keine eigene Heap-Allokation | Geeignet, aber Rechenkosten und benötigte Hilfsfunktionen hängen vom Ziel ab |
-| Reines Wertmodell | Felder inline als Struktur; lokale Deklaration legt Speicher an und initialisiert ihn mit null | Geeignet, wenn sämtliche Felder rekursiv ohne dynamische Ressourcen auskommen |
-| `array<T:N>` | Feste Größe, zusammenhängende Elemente; lokal Stack-Speicher | Geeignet bei passendem Elementtyp und begrenztem Stack-Bedarf |
-| `ptr<T>` | Eindeutiger Besitzer; Deklaration einer Zeigervariablen ist nicht selbst die Zielobjekt-Allokation; `{new: T}` verwendet Heap | Kontrollierbar, aber kein beliebiger nichtbesitzender Adresstyp |
-| `dyn_array<T>` | Laufzeitgröße, Heap-Allokation | Nicht mit einem festen Array gleichzusetzen |
+| Integer and `bool` | Direct LLVM values, no heap allocation or reference counting of their own | Suitable in principle |
+| `f32`, `f64` | Direct LLVM floating-point values, no heap allocation of their own | Suitable, but computing costs and required helper functions depend on the target |
+| Pure value model | Fields inline as a struct; a local declaration creates memory and initialises it with zero | Suitable if all fields recursively manage without dynamic resources |
+| `array<T:N>` | Fixed size, contiguous elements; local stack memory | Suitable with a matching element type and bounded stack requirements |
+| `ptr<T>` | Unique owner; declaring a pointer variable is not itself the allocation of the target object; `{new: T}` uses the heap | Controllable, but not an arbitrary non-owning address type |
+| `dyn_array<T>` | Runtime size, heap allocation | Not to be equated with a fixed array |
 
-### Primitive
+### Primitives
 
-Primitive Zahlen- und Bool-Werte aktivieren keine dynamische Speicherverwaltung allein durch ihre Verwendung. Auch bei eingeschaltetem V3 und Lifetime-Drops entsteht daraus keine Referenzzählung.
+Primitive number and bool values do not activate dynamic memory management merely by being used. Even with V3 and lifetime drops switched on, no reference counting arises from them.
 
-`string` gehört in dieser Bewertung ausdrücklich nicht zur Gruppe der einfachen Zahlen-/Bool-Werte: Dynamisch erzeugte Strings verwenden eigene Runtime- und Heap-Pfade.
+In this assessment `string` explicitly does not belong to the group of simple number/bool values: dynamically created strings use their own runtime and heap paths.
 
-### Modelle
+### Models
 
-Ein einfaches Wertmodell wird durch V3 **nicht pauschal zum referenzgezählten Heap-Objekt**. Enthält es nur primitive Werte, feste Arrays geeigneter Elemente und weitere reine Wertmodelle, bleibt seine Darstellung struktartig.
+A simple value model is **not turned into a reference-counted heap object across the board** by V3. If it contains only primitive values, fixed arrays of suitable elements and further pure value models, its representation stays struct-like.
 
-Die Bedingung gilt rekursiv: Ein enthaltenes Modell mit dynamischen Feldern bringt deren Verhalten mit. Containerfelder können bereits bei der Initialisierung Allokationen auslösen. Initialisierer und aufgerufene Funktionen können unabhängig vom sichtbaren Ergebnistyp dynamisch allokieren.
+The condition applies recursively: a contained model with dynamic fields brings their behaviour along. Container fields can trigger allocations already at initialisation. Initialisers and called functions can allocate dynamically regardless of the visible result type.
 
-Ein besitzendes `ptr<T>`-Feld benötigt selbst nur einen Zeigerplatz, kann aber Verantwortung für eine separat allokierte Ressource tragen. Es ist daher von einem vollständig ressourcenfreien Wertmodell zu unterscheiden.
+An owning `ptr<T>` field itself only needs space for a pointer, but can carry responsibility for a separately allocated resource. It is therefore to be distinguished from a completely resource-free value model.
 
-### Feste Arrays
+### Fixed arrays
 
-`array<T:N>` hat eine zur Compile-Zeit bekannte Kapazität und benötigt für seinen eigenen Speicher keine Heap-Allokation. Der untersuchte Schreibzugriff berechnet eine Elementadresse und speichert den Wert direkt.
+`array<T:N>` has a capacity known at compile time and needs no heap allocation for its own memory. The write access examined computes an element address and stores the value directly.
 
-Grenzen:
+Limits:
 
-- Im untersuchten Zugriffspfad wird keine automatische Bereichsprüfung erzeugt. Ungültige Indizes können Speicher beschädigen.
-- Ein festes Array macht die Ressourcen seiner Elemente nicht automatisch statisch. Arrays aus rein numerischen Werten oder reinen Wertmodellen sind die klare Ausgangsbasis.
-- Große lokale Arrays können den Stack überlasten.
-- Arrays mit besitzenden Zeigern benötigen eine gesonderte Prüfung ihrer Element-Ownership; die feste Kapazität garantiert keine vollständige automatische Elementverwaltung.
+- No automatic range check is generated in the access path examined. Invalid indices can corrupt memory.
+- A fixed array does not automatically make the resources of its elements static. Arrays of purely numeric values or pure value models are the clear starting point.
+- Large local arrays can overload the stack.
+- Arrays with owning pointers need a separate check of their element ownership; the fixed capacity does not guarantee complete automatic element management.
 
-Quellen: [Typauflösung](../../src/core/context.h), [Deklaration und Array-Schreibzugriff](../../src/core/ast_compiler_stmt.cpp), [Array-Spezifikation](../../spec/52_arrays.md).
+Sources: [type resolution](../../src/core/context.h), [declaration and array write access](../../src/core/ast_compiler_stmt.cpp), [array specification](../../spec/52_arrays.md).
 
-### ptr und nichtbesitzende Adressen
+### ptr and non-owning addresses
 
-Unter V3 bedeutet `ptr<T>` eindeutigen Besitz, einschließlich Besitzübergabe und möglicher automatischer Freigabe. `{new: T}` allokiert ein Objekt über `calloc`; bei passenden lokalen Besitzern wird dessen Freigabe registriert.
+Under V3 `ptr<T>` means unique ownership, including ownership transfer and possible automatic release. `{new: T}` allocates an object via `calloc`; for matching local owners its release is registered.
 
-Eine Adresse auf Stack-Speicher, statischen Speicher oder ein Hardware-Register darf nicht versehentlich als besitzende Heap-Box behandelt und freigegeben werden. Für nichtbesitzende Zugriffe sind semantisch `ref<T>` beziehungsweise ausdrücklich dafür vorgesehene rohe Adresszugriffe passend. Deren konkrete Eignung für MMIO ist gesondert zu prüfen: Zeigerzugriff allein garantiert insbesondere noch keine korrekte volatile-/Registerzugriffssemantik.
+An address of stack memory, static memory or a hardware register must not be accidentally treated and freed as an owning heap box. For non-owning access, `ref<T>` or raw address accesses explicitly intended for it are semantically appropriate. Their concrete suitability for MMIO must be checked separately: pointer access alone in particular does not yet guarantee correct volatile/register access semantics.
 
-Quellen: [visitNewExpr](../../src/core/ast_compiler_expr.cpp), [Scope-Drop-Registrierung](../../src/core/ast_compiler_stmt.cpp).
+Sources: [visitNewExpr](../../src/core/ast_compiler_expr.cpp), [scope drop registration](../../src/core/ast_compiler_stmt.cpp).
 
-## 3. Warum automatische Freigabe Embedded nicht ausschließt
+## 3. Why automatic release does not rule out embedded
 
-Automatische Freigabe am Scope-Ende ist mit Embedded grundsätzlich vereinbar, ähnlich C++-Destruktoren. Ein bekannter Freigabezeitpunkt garantiert allerdings keine konstante Ausführungsdauer: Die letzte Referenz auf einen großen Objektgraphen kann viele weitere Freigaben auslösen.
+Automatic release at scope end is compatible with embedded in principle, similar to C++ destructors. A known release point, however, does not guarantee a constant execution time: the last reference to a large object graph can trigger many further releases.
 
-Die wesentlichen Prüfgrößen sind:
+The essential quantities to check are:
 
-- Maximale RAM- und Stack-Belegung.
-- Begrenzbare Laufzeit von Operationen und Freigaben.
-- Implizite Allokationen, Wachstum und Fragmentierung.
-- Definiertes Verhalten bei Speichererschöpfung oder Kapazitätsüberschreitung.
-- Plattformabhängigkeiten der verwendeten Runtime.
+- Maximum RAM and stack usage.
+- Boundable runtime of operations and releases.
+- Implicit allocations, growth and fragmentation.
+- Defined behaviour on memory exhaustion or capacity overflow.
+- Platform dependencies of the runtime used.
 
-Statische Speicherbereiche und feste Kapazitäten sind für strenge Grenzen besonders geeignet. Dynamische Speicherverwaltung ist nicht für jedes Embedded-System ausgeschlossen; FreeRTOS unterstützt beispielsweise ausdrücklich statische und dynamische Allokation.
+Static memory areas and fixed capacities are particularly suitable for strict limits. Dynamic memory management is not ruled out for every embedded system; FreeRTOS, for example, explicitly supports static and dynamic allocation.
 
-Externe Einordnung: [FreeRTOS: Static vs Dynamic Memory Allocation](https://www.freertos.org/Documentation/02-Kernel/02-Kernel-features/09-Memory-management/03-Static-vs-Dynamic-memory-allocation), [Embedded Rust Book: Collections](https://docs.rust-embedded.org/book/collections/index.html).
+External classification: [FreeRTOS: Static vs Dynamic Memory Allocation](https://www.freertos.org/Documentation/02-Kernel/02-Kernel-features/09-Memory-management/03-Static-vs-Dynamic-memory-allocation), [Embedded Rust Book: Collections](https://docs.rust-embedded.org/book/collections/index.html).
 
-## 4. Konkrete Grenzen des aktuellen Gesamtstands
+## 4. Concrete limits of the current overall state
 
-Diese Befunde betreffen die Gesamtportierung, nicht die grundsätzliche Darstellung reiner Werttypen:
+These findings concern the overall port, not the basic representation of pure value types:
 
-1. **Versteckter Heap bei V3-Containern:** Schon `aiml_list_handle_new()` ruft `calloc` für eine leere Liste auf. Ausschalten der Drops verhindert diese Allokation nicht.
-2. **Hosted-Abhängigkeiten der String-Runtime:** Der Nicht-WASM-Pfad von `header_readable()` verwendet `sysconf` und `mincore`. Für Bare Metal ist eine andere Implementierung oder ein passend ausgeschlossener Runtime-Teil erforderlich.
-3. **Direkter Objekt-Ausgabepfad:** `--target` und `setTargetTriple()` sind vorhanden. `compileToObject()` setzt das Ziel jedoch erneut auf das Host-Triple. Andere Ausgabepfade sind davon zu unterscheiden; LLVM-Zielunterstützung allein behebt diese AIML-Lücke nicht.
-4. **Kein nachgewiesenes geschlossenes Profil ohne Heap:** Die beiden ENV-Schalter garantieren nicht, dass Funktionen einschließlich ihrer Aufrufketten und Feldinitialisierungen ohne dynamische Allokationen auskommen.
-5. **Kein Cortex-M0-Nachweis in dieser Analyse:** Weder erfolgreicher Board-Boot noch ABI-, MMIO-, Interrupt-, Stack- oder Laufzeitverhalten wurden hier verifiziert. Die weitreichenden Aussagen in `spec/41_os_support.md` sind deshalb nicht als Implementierungsnachweis übernommen worden.
+1. **Hidden heap with V3 containers:** already `aiml_list_handle_new()` calls `calloc` for an empty list. Switching off the drops does not prevent this allocation.
+2. **Hosted dependencies of the string runtime:** the non-WASM path of `header_readable()` uses `sysconf` and `mincore`. For bare metal a different implementation or a suitably excluded part of the runtime is required.
+3. **Direct object output path:** `--target` and `setTargetTriple()` exist. `compileToObject()`, however, sets the target back to the host triple. Other output paths are to be distinguished from this; LLVM target support alone does not fix this AIML gap.
+4. **No demonstrated closed heap-free profile:** the two ENV switches do not guarantee that functions, including their call chains and field initialisations, manage without dynamic allocations.
+5. **No Cortex-M0 proof in this analysis:** neither a successful board boot nor ABI, MMIO, interrupt, stack or runtime behaviour were verified here. The far-reaching statements in `spec/41_os_support.md` have therefore not been adopted as proof of implementation.
 
-Quellen: [string_runtime.cpp](../../src/sys/string_runtime.cpp), [compiler.cpp](../../compiler.cpp), [OS-/Bare-Metal-Spezifikation](../../spec/41_os_support.md). Hintergrund: [Clang Cross-Compilation](https://clang.llvm.org/docs/CrossCompilation.html), [Armv6-M/Cortex-M0-Ziel](https://doc.rust-lang.org/rustc/platform-support/thumbv6m-none-eabi.html).
+Sources: [string_runtime.cpp](../../src/sys/string_runtime.cpp), [compiler.cpp](../../compiler.cpp), [OS/bare-metal specification](../../spec/41_os_support.md). Background: [Clang cross-compilation](https://clang.llvm.org/docs/CrossCompilation.html), [Armv6-M/Cortex-M0 target](https://doc.rust-lang.org/rustc/platform-support/thumbv6m-none-eabi.html).
 
-## 5. Folgerung für das Zielbild
+## 5. Conclusion for the target picture
 
-Für den eingegrenzten Kern aus primitiven Werten, reinen Wertmodellen und festen Arrays ist das Embedded-Zielbild erhalten. Die automatische Ownership-Verwaltung muss dafür nicht grundsätzlich entfernt und V3 nicht durch die älteren Speicherpfade ersetzt werden.
+For the delimited core of primitive values, pure value models and fixed arrays, the embedded target picture is preserved. Automatic ownership management does not have to be removed in principle for this, nor does V3 have to be replaced by the older memory paths.
 
-Für ein belastbares kleines Embedded-Profil wären als nächste Entwicklungsschritte sinnvoll:
+For a robust small embedded profile the following would be sensible next development steps:
 
-1. Ein Compilerprofil, das dynamische Allokationen auch transitiv durch Aufrufe, Initialisierer und Felder als Fehler erkennt.
-2. Container und Strings mit fester Kapazität und definiertem Verhalten bei Überlauf, falls mehr als Arrays benötigt wird.
-3. Bei erlaubtem dynamischem Speicher ausdrücklich wählbare Pools/Arenen mit dokumentierten Grenzen.
-4. Ein durchgängiger Cross-Compile-Pfad und eine minimale Bare-Metal-Runtime.
-5. Ein reproduzierbarer Nachweis auf einem konkreten Ziel mit RAM-/Flash-, Stack- und Laufzeitmessungen.
+1. A compiler profile that recognises dynamic allocations as errors, also transitively through calls, initialisers and fields.
+2. Containers and strings with a fixed capacity and defined behaviour on overflow, if more than arrays is needed.
+3. Where dynamic memory is allowed, explicitly selectable pools/arenas with documented limits.
+4. An end-to-end cross-compile path and a minimal bare-metal runtime.
+5. A reproducible proof on a concrete target with RAM/flash, stack and runtime measurements.
 
-Dies sind Vorschläge, keine bereits vorhandenen Garantien oder implementierten Modi. Für ein strikt heapfreies Programm müssen außerdem die aufgerufenen Operationen geprüft werden; eine reine Liste seiner Variablentypen reicht als Beweis nicht aus.
+These are proposals, not existing guarantees or implemented modes. For a strictly heap-free program the operations called must also be checked; a mere list of its variable types is not sufficient as proof.
