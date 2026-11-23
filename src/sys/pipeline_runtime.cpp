@@ -1,16 +1,16 @@
-// spec/62 §13.5 — zusammengesetzte Pipelines.
+// spec/62 §13.5 — composed pipelines.
 //
-// Die Struktur entsteht zur Laufzeit, der RUMPF bleibt ein Code-Bundle: damit
-// greifen die Reinheitspruefung (am Rumpf, zur Uebersetzungszeit) und der
-// inhaltsabgeleitete Schluessel weiterhin (F62-85).
+// The structure comes into being at runtime, the BODY stays a code bundle: that way
+// the purity check (on the body, at compile time) and the
+// content-derived key still apply (F62-85).
 //
-// Zwei Dinge sind hier bewusst streng:
-//   * Die Struktur wird VOR dem ersten Schritt vollstaendig geprueft (F62-84).
-//     Ein halb gelaufener Lauf aus einer kaputten Struktur hinterliesse
-//     Cache-Eintraege fuer eine Pipeline, die es so nie gab.
-//   * Der Schluessel enthaelt nur die Achsen, die ein Schritt DEKLARIERT
-//     (use_arg, F62-86) — sonst verliert man die Wiederverwendung ueber die
-//     nicht benutzten Achsen hinweg.
+// Two things are deliberately strict here:
+//   * The structure is checked completely BEFORE the first step (F62-84).
+//     A half-run run from a broken structure would leave behind
+//     cache entries for a pipeline that never existed in that form.
+//   * The key contains only the axes a step DECLARES
+//     (use_arg, F62-86) — otherwise one loses reuse across the
+//     axes that are not used.
 #include "pipeline_runtime.h"
 #include "string_runtime.h"
 #include "../../logger.h"
@@ -28,33 +28,33 @@
 #include <string>
 #include <vector>
 
-// Inhaltsadresse eines Code-Bundles (FNV-1a der chunks), definiert in
-// src/core/code_runtime.cpp — hier der Teil des Schritt-Schluessels, der den
-// RUMPF erfasst (spec/62 F62-85).
+// Content address of a code bundle (FNV-1a of the chunks), defined in
+// src/core/code_runtime.cpp — here the part of the step key that captures the
+// BODY (spec/62 F62-85).
 extern "C" const char* aiml_code_id(void* code);
-// spec/62 F62-103: wurde der Rumpf mit `pure: true` gebuendelt (also geprueft)?
+// spec/62 F62-103: was the body bundled with `pure: true` (i.e. checked)?
 extern "C" int32_t aiml_code_is_pure(void* code);
 
 namespace {
 
 struct AimlStringList { int32_t size; int32_t capacity; char** data; };
 
-// spec/62 F62-90: was der gerade laufende Schritt ueber sich selbst sagt.
-// Thread-lokal, weil Lanes in Threads laufen duerfen (§6) — ein geteilter
-// Platz liesse zwei Lanes ihre Ergebnisse gegenseitig ueberschreiben.
+// spec/62 F62-90: what the currently running step says about itself.
+// Thread-local, because lanes may run in threads (§6) — a shared
+// slot would let two lanes overwrite each other's results.
 struct CurStep {
     bool        active        = false;
-    // §13.5e: was dieser Schritt in DIESER Lane sieht.  `declared` ist die
-    // Menge aus use_arg — eine nicht deklarierte Achse zu lesen ist ein
-    // Fehler und kein leerer Wert (F62-106), sonst entstuende ein blinder
-    // Schluessel.
+    // §13.5e: what this step sees in THIS lane.  `declared` is the
+    // set from use_arg — reading an undeclared axis is an
+    // error and not an empty value (F62-106), otherwise a blind
+    // key would arise.
     std::map<std::string, std::string> bindings;
     std::set<std::string>              declared;
     std::map<std::string, std::string> host;
     std::string                        workspace;
-    // §13.5h: was dieser Rumpf veroeffentlicht, und was er lesen DARF.
-    // `need_results` enthaelt nur die Ergebnisse der DEKLARIERTEN needs —
-    // alles andere waere ein blinder Schluessel (F62-119).
+    // §13.5h: what this body publishes, and what it MAY read.
+    // `need_results` contains only the results of the DECLARED needs —
+    // anything else would be a blind key (F62-119).
     std::string                        result;
     bool                               result_set = false;
     std::map<std::string, std::string> need_results;
@@ -65,11 +65,11 @@ struct CurStep {
 };
 thread_local CurStep g_cur;
 
-// spec/62 F62-93: die Praezedenzordnung von F62-43 — VORLAEUFIG, bis §16
-// Punkt 6 die Bedeutungen festlegt.  Hier steht sie an EINER Stelle, damit
-// genau eine Zeile zu aendern ist, wenn sie entschieden wird.  Entschieden
-// ist nur: die Ordnung ist total, und aggregiert wird durch Auswahl des
-// hoechsten Rangs, nicht durch additives Mischen.
+// spec/62 F62-93: the precedence order of F62-43 — PROVISIONAL until §16
+// item 6 fixes the meanings.  It is in ONE place here, so that
+// exactly one line has to change when it is decided.  All that is decided
+// is: the order is total, and aggregation happens by choosing the
+// highest rank, not by additive mixing.
 // StepStatus: 0 red, 1 green, 2 blue, 3 yellow, 4 cyan, 5 magenta.
 const int kStatusPrecedence[6] = { 5, 0, 1, 3, 2, 4 };
 
@@ -85,36 +85,36 @@ struct PStep {
     void*                 body = nullptr;   // Code*
     int32_t               cache = 0;        // CacheClass: 0=opaque 1=resolved 2=pure
     std::vector<std::string> args;          // deklarierte Achsen (F62-86)
-    void*                 resolve = nullptr;  // Sonde (§9); nur bei cache==resolved
+    void*                 resolve = nullptr;  // probe (§9); only with cache==resolved
     int32_t               on_fail = 0;        // 0=lane 1=pipeline 2=continue (F62-39)
-    int32_t               timeout_ms = 0;     // 0 = keine Grenze (F62-40)
+    int32_t               timeout_ms = 0;     // 0 = no limit (F62-40)
     int32_t               retry = 1;          // Versuche (F62-41)
     int32_t               status = -1;        // StepStatus, gueltig ab done (F62-44)
     int32_t               pause_before = 0;   // deklariertes Tor (F62-54)
     int32_t               per = 0;            // 0 = lane, 1 = once (§5.5)
-    std::vector<std::string> needs;            // nur fruehere Schritte (F62-9)
+    std::vector<std::string> needs;            // only earlier steps (F62-9)
 };
 
 struct PStage {
     std::string        name;
-    std::string        runs_on;      // `agent:` — WER nimmt den Schritt (F110-127)
-    // spec/62 §20.3: hier stehen die AUFGELOESTEN Werte — die Umschreibung hat
-    // den Vorrang (Stufe schlaegt Pipeline, F62-151) schon angewandt.  Ein
-    // Leser rechnet nichts nach, sonst ist er ein zweiter Parser (§20.1).
+    std::string        runs_on;      // `agent:` — WHO takes the step (F110-127)
+    // spec/62 §20.3: these are the RESOLVED values — the rewrite has already
+    // applied the precedence (stage beats pipeline, F62-151).  A
+    // reader recomputes nothing, otherwise it is a second parser (§20.1).
     std::string        steplayer;    // `own` | `none` (§18.5, F110-124/125)
     std::string        image;        // WORIN (F62-66)
     std::string        base;         // WORAUF: run:<lauf> | job:<kennung> (F62-144)
     std::string        requires_on;  // "git,gcc>=13" (§18.2, F62-126)
     std::string        shares;       // "name:/ziel:modus,…" (§18.1b, F62-136)
-    std::string        command;      // `run:` — Befehl der Scheibe 1
-    int32_t            cpu_cores = 0;   // 0 = Vorgabe des Wirts, NICHT unbegrenzt
+    std::string        command;      // `run:` — the command of slice 1
+    int32_t            cpu_cores = 0;   // 0 = host default, NOT unlimited
     int32_t            mem_mb    = 0;
     int32_t            pids_max  = 0;
     int32_t            timeout_ms = 0;  // 0 = Vorgabe des Ausfuehrenden (F62-40)
     std::vector<PStep> steps;
 };
 
-// `push:` — wohin ein Abbild geht (§18, F62-69/71).  `from` nennt die STUFE.
+// `push:` — where an image goes (§18, F62-69/71).  `from` names the STAGE.
 struct PPush {
     std::string from;
     std::string to;
@@ -127,30 +127,30 @@ struct PPipeline {
     std::vector<std::pair<std::string, std::vector<std::string>>> params;  // Achse -> Werte
     std::vector<PStage>                               stages;
     std::vector<PPush>                                pushes;
-    // spec/62 §4.1 (F62-1): der TYP einer Achse.  Er zaehlt im Rumpf (`jobs`
-    // ist ein i32, kein Umgebungs-String) und gehoert damit zur Gestalt des
-    // Laufs, die ein Wirt liest (§20.4).
+    // spec/62 §4.1 (F62-1): the TYPE of an axis.  It counts in the body (`jobs`
+    // is an i32, not an environment string) and therefore belongs to the shape of the
+    // run that a host reads (§20.4).
     std::map<std::string, std::string>                param_types;
     // Ergebniszaehler des letzten Laufs
     int32_t reused   = 0;
     int32_t ran      = 0;
-    int32_t attempts = 0;   // auch die fehlgeschlagenen (§5.6)
-    int32_t status   = -1;  // aggregiert ueber die Schritte (F62-43)
+    int32_t attempts = 0;   // including the failed ones (§5.6)
+    int32_t status   = -1;  // aggregated over the steps (F62-43)
     // §5.9: Lebenszyklus getrennt vom Ausgang (F62-44 ergaenzt).
     int32_t lifecycle    = 0;   // 0 pending 1 running 2 paused 3 done
     bool    pause_wanted = false;
     std::set<std::string> released;   // freigegebene Tore (F62-54)
     std::string workspace_root = ".aiml_pipeline";
     int32_t parallel = 1;   // gleichzeitige Lanes (§6); 0 = auto
-    // Schritt-Cache: Schluessel -> (Exit-Code, Ergebnis).  Das Ergebnis MUSS
-    // mit drin stehen (F62-120/F62-37): sonst waere ein wiederverwendeter
-    // Schritt fuer seine eigenen Nachfolger unsichtbar.  Bewusst schlicht;
-    // der echte Layer-Cache liegt beim Wirt (cosmos spec/96).
+    // Step cache: key -> (exit code, result).  The result MUST
+    // be in it (F62-120/F62-37): otherwise a reused
+    // step would be invisible to its own successors.  Deliberately plain;
+    // the real layer cache is with the host (cosmos spec/96).
     struct CacheEntry { int32_t rc = 0; std::string result; };
     std::map<std::string, CacheEntry> cache;
 };
 
-// Lane = eine vollstaendige Bindung aller Achsen.
+// Lane = a complete binding of all axes.
 using Bindings = std::map<std::string, std::string>;
 
 void expand(const std::vector<std::pair<std::string, std::vector<std::string>>>& params,
@@ -162,10 +162,10 @@ void expand(const std::vector<std::pair<std::string, std::vector<std::string>>>&
     }
 }
 
-// Bindungen als lesbarer Text, stabil sortiert (map ist geordnet).  EIN
-// Format fuer Lane-Text, Beobachter-`bindings`, Arbeitsbereichsname und den
-// Datensatz des Kontrollers (spec/62 F62-152) — zwei Formate fuer denselben
-// Begriff heissen, dass irgendwo Anzeigetext geparst wird.
+// Bindings as readable text, stably sorted (the map is ordered).  ONE
+// format for lane text, observer `bindings`, workspace name and the
+// controller's record (spec/62 F62-152) — two formats for the same
+// concept mean that display text is being parsed somewhere.
 std::string bind_text(const Bindings& b) {
     std::string out;
     for (const auto& kv : b) {
@@ -175,20 +175,20 @@ std::string bind_text(const Bindings& b) {
     return out;
 }
 
-// Schluessel eines (Schritt, Lane): Bundle-Adresse + DEKLARIERTE Bindungen,
-// laengenpraefigiert wie spec/62 §8 — ein Trennzeichen kann im Wert vorkommen.
+// Key of a (step, lane): bundle address + DECLARED bindings,
+// length-prefixed as in spec/62 §8 — a separator can occur in the value.
 std::string step_key(const PStep& st, const Bindings& bind, const std::string& resolved) {
     std::string mat;
     const char* bundle_id = aiml_code_id(st.body);
     std::string bid = bundle_id ? bundle_id : "";
     mat += std::to_string(bid.size()) + ":" + bid;
     mat += std::to_string(st.cache) + ":c";
-    for (const auto& axis : st.args) {               // bereits sortiert (std::set-artig)
+    for (const auto& axis : st.args) {               // already sorted (std::set-like)
         auto it = bind.find(axis);
         std::string pair = axis + "=" + (it == bind.end() ? "" : it->second);
         mat += std::to_string(pair.size()) + ":" + pair;
     }
-    // Sondenergebnis: leer bei pure/opaque, sonst die aufgeloeste Adresse (§9).
+    // Probe result: empty for pure/opaque, otherwise the resolved address (§9).
     mat += std::to_string(resolved.size()) + ":" + resolved;
     return mat;
 }
@@ -204,8 +204,8 @@ void  aiml_step_set_cache(void* s, int32_t c)    { if (s) static_cast<PStep*>(s)
 void  aiml_step_use_arg(void* s, const char* a)  {
     if (!s || !a) return;
     auto* st = static_cast<PStep*>(s);
-    // sortiert einfuegen: die Schluesselbildung darf nicht von der
-    // Aufrufreihenfolge abhaengen (spec/62 §8).
+    // insert sorted: key formation must not depend on the
+    // order of calls (spec/62 §8).
     std::string axis(a);
     for (const auto& have : st->args) if (have == axis) return;
     st->args.push_back(axis);
@@ -270,22 +270,22 @@ void aiml_step_add_need(void* st, const char* name) {
     if (st && name && *name) static_cast<PStep*>(st)->needs.push_back(name);
 }
 
-// F62-90: ohne laufenden Schritt ein FEHLER, kein stiller Nulleffekt — sonst
-// verschwindet ein `fail_lane` im Nichts, das ausgerechnet dann gerufen wird,
-// wenn etwas schiefgeht.
+// F62-90: without a running step this is an ERROR, not a silent no-op — otherwise
+// a `fail_lane` vanishes into nothing that is called precisely
+// when something goes wrong.
 void aiml_step_status_set(int32_t status) {
-    if (!g_cur.active) { LOG_ERROR("set_status: kein laufender Schritt"); return; }
-    if (status < 0 || status > 5) { LOG_ERROR("set_status: kein StepStatus-Wert"); return; }
+    if (!g_cur.active) { LOG_ERROR("set_status: no running step"); return; }
+    if (status < 0 || status > 5) { LOG_ERROR("set_status: not a StepStatus value"); return; }
     g_cur.status_set = true;
     g_cur.status     = status;
 }
 void aiml_step_fail_lane(const char* msg) {
-    if (!g_cur.active) { LOG_ERROR("fail_lane: kein laufender Schritt"); return; }
+    if (!g_cur.active) { LOG_ERROR("fail_lane: no running step"); return; }
     g_cur.fail_reach = 0;
     g_cur.fail_msg   = msg ? msg : "";
 }
 void aiml_step_fail_pipeline(const char* msg) {
-    if (!g_cur.active) { LOG_ERROR("fail_pipeline: kein laufender Schritt"); return; }
+    if (!g_cur.active) { LOG_ERROR("fail_pipeline: no running step"); return; }
     g_cur.fail_reach = 1;
     g_cur.fail_msg   = msg ? msg : "";
 }
@@ -295,9 +295,9 @@ void aiml_pipeline_add_exclude(void* p, const char* partial) {
     static_cast<PPipeline*>(p)->excludes.push_back(parse_partial(partial));
 }
 
-// matches: trifft die Teilbindung auf diese Lane zu?  Teilbindung heisst:
-// nur die genannten Achsen zaehlen, der Rest ist egal (§4.2) — sonst muesste
-// man jede Aussage fuer jeden Wert der uebrigen Achsen wiederholen.
+// matches: does the partial binding apply to this lane?  Partial binding means:
+// only the named axes count, the rest does not matter (§4.2) — otherwise one would have to
+// repeat every statement for every value of the remaining axes.
 static bool excluded(const std::vector<std::map<std::string, std::string>>& excludes,
                      const Bindings& bind) {
     for (const auto& ex : excludes) {
@@ -331,18 +331,18 @@ int32_t aiml_pipeline_ran_count(void* p)    { return p ? static_cast<PPipeline*>
 int32_t aiml_pipeline_attempt_count(void* p) { return p ? static_cast<PPipeline*>(p)->attempts : 0; }
 int32_t aiml_pipeline_status(void* p)        { return p ? static_cast<PPipeline*>(p)->status   : -1; }
 
-// §5.9: von aussen anhalten.  Wirkt NACH dem laufenden Schritt (F62-55) — ein
-// Rumpf hat lebende Kindprozesse, und ihn mitten im Lauf zu stoppen liesse
-// einen halb geschriebenen Arbeitsbereich zurueck, der dann gehasht und
-// spaeter als Treffer ausgeliefert wuerde.
+// §5.9: pause from outside.  Takes effect AFTER the running step (F62-55) — a
+// body has live child processes, and stopping it in the middle of the run would leave
+// a half-written workspace behind, which would then be hashed and
+// delivered later as a hit.
 void aiml_pipeline_request_pause(void* p) {
     if (p) static_cast<PPipeline*>(p)->pause_wanted = true;
 }
 void aiml_pipeline_release(void* p, const char* name) {
     if (p && name) static_cast<PPipeline*>(p)->released.insert(name);
 }
-// Fortsetzen braucht keinen eigenen Zustand (F62-56): nur das Kennzeichen
-// loeschen.  Was fortgesetzt wird, steht im Cache.
+// Resuming needs no state of its own (F62-56): only clear the
+// flag.  What is resumed is in the cache.
 void aiml_pipeline_resume(void* p) {
     if (!p) return;
     auto* pp = static_cast<PPipeline*>(p);
@@ -351,9 +351,9 @@ void aiml_pipeline_resume(void* p) {
 }
 int32_t aiml_pipeline_lifecycle(void* p) { return p ? static_cast<PPipeline*>(p)->lifecycle : 0; }
 
-// §6 / F62-98: begrenzt gleichzeitige LANES, nicht Prozesse.  Kein
-// Schluesselmaterial — zwei Laeufe mit 1 und mit 8 muessen dieselben
-// Schluessel ergeben.
+// §6 / F62-98: limits concurrent LANES, not processes.  Not
+// key material — two runs with 1 and with 8 must yield the same
+// keys.
 void aiml_pipeline_set_parallel(void* p, int32_t n) {
     if (p && n >= 0) static_cast<PPipeline*>(p)->parallel = n;
 }
@@ -362,19 +362,19 @@ void aiml_pipeline_set_workspace_root(void* p, const char* root) {
     if (p && root && *root) static_cast<PPipeline*>(p)->workspace_root = root;
 }
 
-// §13.5e: der Rumpf liest seine Lane.  Ohne laufenden Schritt ein Fehler —
-// derselbe Grundsatz wie bei set_status (F62-90): kein stiller Nulleffekt.
+// §13.5e: the body reads its lane.  Without a running step this is an error —
+// the same principle as for set_status (F62-90): no silent no-op.
 char* aiml_step_arg(const char* axis) {
-    if (!g_cur.active) { LOG_ERROR("step.arg: kein laufender Schritt"); return aiml_str_alloc(0); }
+    if (!g_cur.active) { LOG_ERROR("step.arg: no running step"); return aiml_str_alloc(0); }
     std::string name = axis ? axis : "";
-    // F62-106: nicht deklariert heisst Fehler, nicht leer.  Ein leerer Wert
-    // verstecke genau das Loch, das der Schluessel schliessen soll.
+    // F62-106: undeclared means error, not empty.  An empty value
+    // would hide exactly the hole the key is supposed to close.
     if (!g_cur.declared.count(name)) {
-        LOG_ERROR("step.arg('" + name + "'): diese Achse ist nicht mit use_arg deklariert — "
-                  "sie wuerde auf das Ergebnis wirken, ohne im Schluessel zu stehen "
+        LOG_ERROR("step.arg('" + name + "'): this axis is not declared with use_arg — "
+                  "it would act on the result without being in the key "
                   "(spec/62 F62-106)");
         g_cur.fail_reach = 0;
-        g_cur.fail_msg   = "step.arg('" + name + "') nicht deklariert";
+        g_cur.fail_msg   = "step.arg('" + name + "') not declared";
         return aiml_str_alloc(0);
     }
     auto it = g_cur.bindings.find(name);
@@ -384,27 +384,27 @@ char* aiml_step_arg(const char* axis) {
     return out;
 }
 
-// §13.5h: das Ergebnis dieses Schritts veroeffentlichen.  Eine Zahl wird
-// dezimal geschrieben — aufgezeichnet wird die serialisierte Form (F62-118).
+// §13.5h: publish the result of this step.  A number is written in
+// decimal — what is recorded is the serialised form (F62-118).
 void aiml_step_set_result(const char* value) {
-    if (!g_cur.active) { LOG_ERROR("step.set_result: kein laufender Schritt"); return; }
+    if (!g_cur.active) { LOG_ERROR("step.set_result: no running step"); return; }
     g_cur.result     = value ? value : "";
     g_cur.result_set = true;
 }
 
-// F62-119: nur ein DEKLARIERTES need darf gelesen werden.  Ein fremdes
-// Ergebnis wirkte sonst auf den Rumpf, ohne ueber input_keys im Schluessel zu
-// stehen — genau der blinde Schluessel, den §1.1 beschreibt.
+// F62-119: only a DECLARED need may be read.  A foreign
+// result would otherwise act on the body without being in the key via input_keys
+// — exactly the blind key that §1.1 describes.
 char* aiml_step_need_result(const char* name) {
-    if (!g_cur.active) { LOG_ERROR("step.need_result: kein laufender Schritt"); return aiml_str_alloc(0); }
+    if (!g_cur.active) { LOG_ERROR("step.need_result: no running step"); return aiml_str_alloc(0); }
     std::string key = name ? name : "";
     auto it = g_cur.need_results.find(key);
     if (it == g_cur.need_results.end()) {
-        LOG_ERROR("step.need_result('" + key + "'): dieser Schritt steht nicht in den needs — "
-                  "sein Ergebnis wuerde wirken, ohne im Schluessel zu stehen "
+        LOG_ERROR("step.need_result('" + key + "'): this step is not in the needs — "
+                  "its result would take effect without being in the key "
                   "(spec/62 F62-119)");
         g_cur.fail_reach = 0;
-        g_cur.fail_msg   = "step.need_result('" + key + "') nicht in needs";
+        g_cur.fail_msg   = "step.need_result('" + key + "') not in needs";
         return aiml_str_alloc(0);
     }
     char* out = aiml_str_alloc(it->second.size());
@@ -413,14 +413,14 @@ char* aiml_step_need_result(const char* name) {
 }
 
 char* aiml_step_workspace(void) {
-    if (!g_cur.active) { LOG_ERROR("step.workspace: kein laufender Schritt"); return aiml_str_alloc(0); }
+    if (!g_cur.active) { LOG_ERROR("step.workspace: no running step"); return aiml_str_alloc(0); }
     char* out = aiml_str_alloc(g_cur.workspace.size());
     if (!g_cur.workspace.empty()) memcpy(out, g_cur.workspace.data(), g_cur.workspace.size());
     return out;
 }
 
 char* aiml_step_host(const char* name) {
-    if (!g_cur.active) { LOG_ERROR("step.host: kein laufender Schritt"); return aiml_str_alloc(0); }
+    if (!g_cur.active) { LOG_ERROR("step.host: no running step"); return aiml_str_alloc(0); }
     auto it = g_cur.host.find(name ? name : "");
     const std::string val = (it != g_cur.host.end()) ? it->second : std::string();
     char* out = aiml_str_alloc(val.size());
@@ -434,8 +434,8 @@ int32_t aiml_pipeline_run_observed(void* p, void* observer_raw) {
     auto observer = reinterpret_cast<AimlStepObserver>(observer_raw);
     if (!p) return -2;
     auto* pp = static_cast<PPipeline*>(p);
-    // spec/62 F62-124a: verteilte Schluessel UEBERSETZEN, aber lokal nicht
-    // LAUFEN — hier, vor dem ersten Schritt, mit Begruendung und Weg.
+    // spec/62 F62-124a: COMPILE distributed keys, but do not RUN them
+    // locally — here, before the first step, with reasoning and the way.
     if (int32_t refused = aiml_pipeline_local_refusal(p)) return refused;
     pp->reused   = 0;
     pp->ran      = 0;
@@ -446,25 +446,25 @@ int32_t aiml_pipeline_run_observed(void* p, void* observer_raw) {
     // ── F62-84: Struktur VOLLSTAENDIG pruefen, bevor irgendetwas laeuft ──
     std::set<std::string> axes;
     for (const auto& pr : pp->params) axes.insert(pr.first);
-    // F62-9: Schrittnamen sind eindeutig, und `needs` nennt nur FRUEHERE
-    // Schritte.  Beides zusammen macht den Graphen zum DAG by construction —
-    // darum braucht es zur Laufzeit keine Zyklenpruefung.
+    // F62-9: step names are unique, and `needs` only names EARLIER
+    // steps.  Both together make the graph a DAG by construction —
+    // which is why no cycle check is needed at runtime.
     {
         std::set<std::string> seen;
         for (const auto& stg : pp->stages) {
             for (const auto& st : stg.steps) {
                 for (const auto& need : st.needs) {
                     if (!seen.count(need)) {
-                        LOG_ERROR("pipeline '" + pp->name + "': Schritt '" + st.name +
-                                  "' braucht '" + need + "' — das ist kein frueher "
-                                  "deklarierter Schritt (spec/62 F62-9)");
+                        LOG_ERROR("pipeline '" + pp->name + "': step '" + st.name +
+                                  "' needs '" + need + "' — that is not an earlier "
+                                  "declared step (spec/62 F62-9)");
                         return -1;
                     }
                 }
                 if (!seen.insert(st.name).second) {
-                    LOG_ERROR("pipeline '" + pp->name + "': der Schrittname '" + st.name +
-                              "' kommt zweimal vor — dann ist nicht entscheidbar, welchen "
-                              "Schritt ein 'needs' meint (spec/62 F62-9)");
+                    LOG_ERROR("pipeline '" + pp->name + "': the step name '" + st.name +
+                              "' occurs twice — then it cannot be decided which "
+                              "step a 'needs' means (spec/62 F62-9)");
                     return -1;
                 }
             }
@@ -473,136 +473,136 @@ int32_t aiml_pipeline_run_observed(void* p, void* observer_raw) {
     for (const auto& stg : pp->stages) {
         for (const auto& st : stg.steps) {
             if (!st.body) {
-                LOG_ERROR("pipeline '" + pp->name + "': Schritt '" + st.name + "' hat keinen Rumpf");
+                LOG_ERROR("pipeline '" + pp->name + "': step '" + st.name + "' has no body");
                 return -1;
             }
-            // F62-16: 'resolved' ohne Sonde ist sinnlos — der Schluessel haette
-            // nichts, was den beweglichen Namen aufloest, und der Schritt traefe
-            // auf ewig denselben Eintrag.
+            // F62-16: 'resolved' without a probe is pointless — the key would have
+            // nothing that resolves the moving name, and the step would hit
+            // the same entry forever.
             if (st.cache == 1 && !st.resolve) {
-                LOG_ERROR("pipeline '" + pp->name + "': Schritt '" + st.name +
-                          "' ist 'resolved', hat aber keine Sonde (set_resolve)");
+                LOG_ERROR("pipeline '" + pp->name + "': step '" + st.name +
+                          "' is 'resolved', but has no probe (set_resolve)");
                 return -1;
             }
-            // F62-16, zweite Haelfte: 'pure' DARF keine Sonde haben.  Eine
-            // Sonde loest einen beweglichen Namen auf — ein reiner Schritt hat
-            // keinen, er haengt nur an gehashten Eingaben.  Beides zugleich zu
-            // erlauben hiesse, zwei verschiedene Begruendungen fuer denselben
-            // Schluessel zu akzeptieren, und verdeckt, welche von beiden gilt.
-            // F62-103: `pure` ohne geprueften Rumpf ist eine WARNUNG, kein
-            // Fehler.  Die Laufzeit kann die Behauptung nicht nachpruefen (der
-            // Rumpf ist ein Bundle); einen Lauf abzubrechen, weil eine
-            // PRUEFUNG fehlt, machte die Pipeline zur Geisel einer Angabe, die
-            // der Autor vielleicht bewusst nicht gemacht hat.
+            // F62-16, second half: 'pure' MUST NOT have a probe.  A
+            // probe resolves a moving name — a pure step has
+            // none, it only depends on hashed inputs.  Allowing both at once
+            // would mean accepting two different justifications for the same
+            // key, and hides which of the two applies.
+            // F62-103: `pure` without a checked body is a WARNING, not an
+            // error.  The runtime cannot verify the claim (the
+            // body is a bundle); aborting a run because a
+            // CHECK is missing would make the pipeline hostage to a setting that
+            // the author may have deliberately left out.
             if (st.cache == 2 && !aiml_code_is_pure(st.body)) {
-                LOG_WARNING("pipeline '" + pp->name + "': Schritt '" + st.name +
-                            "' ist 'pure', sein Rumpf wurde aber nicht mit "
-                            "sys.bundle(..., pure: true) geprueft — 'pure' gilt hier "
-                            "unbewiesen (spec/62 F62-103)");
+                LOG_WARNING("pipeline '" + pp->name + "': step '" + st.name +
+                            "' is 'pure', but its body was not checked with "
+                            "sys.bundle(..., pure: true) — 'pure' holds here "
+                            "unproven (spec/62 F62-103)");
             }
-            // F62-115: ein `per: once`-Schritt hat KEINE Lane-Bindungen — es
-            // gibt ein Ergebnis fuer die ganze Matrix.  Eine deklarierte Achse
-            // waere ein Ergebnis, das von der Reihenfolge der Lanes abhaengt.
+            // F62-115: a `per: once` step has NO lane bindings — there is
+            // one result for the whole matrix.  A declared axis
+            // would be a result that depends on the order of the lanes.
             if (st.per == 1 && !st.args.empty()) {
-                LOG_ERROR("pipeline '" + pp->name + "': Schritt '" + st.name +
-                          "' ist 'per: once' und deklariert trotzdem Achsen — ein "
-                          "einmaliger Schritt kann nicht von einer Achse haengen "
+                LOG_ERROR("pipeline '" + pp->name + "': step '" + st.name +
+                          "' is 'per: once' and still declares axes — a "
+                          "one-off step cannot depend on an axis "
                           "(spec/62 F62-115)");
                 return -1;
             }
             if (st.cache == 2 && st.resolve) {
-                LOG_ERROR("pipeline '" + pp->name + "': Schritt '" + st.name +
-                          "' ist 'pure' und hat trotzdem eine Sonde — eine Sonde "
-                          "gehoert zu 'resolved'");
+                LOG_ERROR("pipeline '" + pp->name + "': step '" + st.name +
+                          "' is 'pure' and still has a probe — a probe "
+                          "belongs to 'resolved'");
                 return -1;
             }
-            // F62-41: retry mit 'pure' ist ein WIDERSPRUCH.  Ein reiner Schritt
-            // haengt nur an gehashten Eingaben, also muss ein zweiter Versuch
-            // genauso scheitern — wer ihn verlangt, sagt zwei Dinge auf einmal.
+            // F62-41: retry with 'pure' is a CONTRADICTION.  A pure step
+            // only depends on hashed inputs, so a second attempt must
+            // fail just the same — whoever asks for one says two things at once.
             if (st.retry > 1 && st.cache == 2) {
-                LOG_ERROR("pipeline '" + pp->name + "': Schritt '" + st.name +
-                          "' ist 'pure' und verlangt retry=" + std::to_string(st.retry) +
-                          " — ein reiner Schritt scheitert reproduzierbar");
+                LOG_ERROR("pipeline '" + pp->name + "': step '" + st.name +
+                          "' is 'pure' and asks for retry=" + std::to_string(st.retry) +
+                          " — a pure step fails reproducibly");
                 return -1;
             }
             for (const auto& a : st.args) {
                 if (!axes.count(a)) {
-                    LOG_ERROR("pipeline '" + pp->name + "': Schritt '" + st.name +
-                              "' benutzt die Achse '" + a + "', die die Pipeline nicht hat");
+                    LOG_ERROR("pipeline '" + pp->name + "': step '" + st.name +
+                              "' uses the axis '" + a + "', which the pipeline does not have");
                     return -1;
                 }
             }
         }
     }
 
-    // ── F62-4: jede exclude-Angabe muss eine Achse UND einen Wert der
-    //    Domaene nennen.  Ein Tippfehler schloesse sonst still NICHTS aus,
-    //    und die Matrix liefe groesser als gedacht, ohne dass es auffaellt.
+    // ── F62-4: every exclude entry must name an axis AND a value of its
+    //    domain.  A typo would otherwise silently exclude NOTHING,
+    //    and the matrix would run larger than intended without anyone noticing.
     for (const auto& ex : pp->excludes) {
         for (const auto& kv : ex) {
             const std::vector<std::string>* dom = nullptr;
             for (const auto& pr : pp->params) if (pr.first == kv.first) { dom = &pr.second; break; }
             if (!dom) {
-                LOG_ERROR("pipeline '" + pp->name + "': exclude nennt die Achse '" + kv.first +
-                          "', die die Pipeline nicht hat");
+                LOG_ERROR("pipeline '" + pp->name + "': exclude names the axis '" + kv.first +
+                          "', which the pipeline does not have");
                 return -1;
             }
             bool found = false;
             for (const auto& v : *dom) if (v == kv.second) { found = true; break; }
             if (!found) {
-                LOG_ERROR("pipeline '" + pp->name + "': exclude nennt fuer '" + kv.first +
-                          "' den Wert '" + kv.second + "', der nicht in ihrer Domaene steht");
+                LOG_ERROR("pipeline '" + pp->name + "': exclude names for '" + kv.first +
+                          "' the value '" + kv.second + "', which is not in its domain");
                 return -1;
             }
         }
     }
 
-    // ── Lanes aufklappen und ausfuehren ─────────────────────────────────
+    // ── Expand and execute the lanes ────────────────────────────────────
     std::vector<Bindings> all_lanes;
     expand(pp->params, 0, Bindings{}, all_lanes);
     std::vector<Bindings> lanes;
     for (const auto& b : all_lanes) if (!excluded(pp->excludes, b)) lanes.push_back(b);
 
-    // F62-5: alles ausgeschlossen ist ein Fehler, keine leere Erfolgsmeldung.
+    // F62-5: everything excluded is an error, not an empty success report.
     if (lanes.empty()) {
         LOG_ERROR("pipeline '" + pp->name + "': exclude schliesst JEDE Lane aus — nichts zu tun");
         return -1;
     }
 
-    // ── §6: Lanes sind nach Konstruktion parallel ───────────────────────
+    // ── §6: lanes are parallel by construction ─────────────────────────
     //
-    // Zwei Schloesser, und die Trennung ist der Punkt:
-    //   * `mu` schuetzt Cache, Zaehler, Status — und jeden Aufruf in
-    //     BENUTZERCODE (Beobachter, Sonde).  Der ist nicht thread-sicher
-    //     geschrieben worden und soll es nicht muessen (F62-100).
-    //   * `compile_mu` serialisiert NUR das Uebersetzen eines Rumpfs.  Ob
-    //     mehrere isolierte Uebersetzungen gleichzeitig duerfen, ist eine
-    //     Frage an LLVM und durch die Messung von F62-14 NICHT beantwortet
-    //     (F62-99).  Bis dahin: Lanes parallel, Uebersetzen nicht.
+    // Two locks, and the separation is the point:
+    //   * `mu` protects cache, counters, status — and every call into
+    //     USER CODE (observer, probe).  That was not written thread-safe
+    //     and should not have to be (F62-100).
+    //   * `compile_mu` serialises ONLY the compilation of a body.  Whether
+    //     several isolated compilations may run at the same time is a
+    //     question for LLVM and is NOT answered by the measurement of F62-14
+    //     (F62-99).  Until then: lanes in parallel, compilation not.
     struct RunState {
         std::mutex mu;
         std::mutex compile_mu;
-        bool    stop_all = false;   // on_fail=pipeline oder Pause
+        bool    stop_all = false;   // on_fail=pipeline or pause
         int32_t stop_rc  = 0;
         bool    paused   = false;
         int32_t worst_rc = 0;
-        // F62-114: der Schluessel JEDES gelaufenen Schritts, nach (Name, Lane).
-        // Lane -1 steht fuer einen `per: once`-Schritt, weil es dort nur einen
-        // gibt.  Daraus bildet ein Nachfolger seine `input_keys`.
+        // F62-114: the key of EVERY step that ran, by (name, lane).
+        // Lane -1 stands for a `per: once` step, because there is only one
+        // there.  A successor forms its `input_keys` from this.
         std::map<std::pair<std::string, int32_t>, std::string> keyOf;
-        // F62-117: Schritte, die uebersprungen werden, weil ein Schritt, den
-        // sie (transitiv) brauchen, gescheitert ist.  Uebersprungen ist NICHT
-        // gescheitert: kein Ausgang, keine Aufzeichnung.
+        // F62-117: steps that are skipped because a step they
+        // (transitively) need has failed.  Skipped is NOT
+        // failed: no outcome, no record.
         std::set<std::string> skipped;
-        // §13.5h: das Ergebnis jedes gelaufenen ODER getroffenen Schritts.
-        // Bei einem Treffer kommt es aus dem Cache (F62-120) — fuer den
-        // Nachfolger ist beides dasselbe, und genau das ist der Punkt.
+        // §13.5h: the result of every step that ran OR hit.
+        // On a hit it comes from the cache (F62-120) — for the
+        // successor both are the same, and that is exactly the point.
         std::map<std::pair<std::string, int32_t>, std::string> resultOf;
     };
     RunState state;
 
-    // Ein Durchgang ueber eine AUSWAHL von Schritten.  `lane_idx == -1` heisst
-    // `per: once`: ein Durchgang ohne Lane-Bindungen (§5.5).
+    // One pass over a SELECTION of steps.  `lane_idx == -1` means
+    // `per: once`: a pass without lane bindings (§5.5).
     using StepRef = std::pair<PStage*, PStep*>;
     auto run_steps = [&](const Bindings& bind, int32_t lane_idx,
                          const std::vector<StepRef>& plan) {
@@ -611,13 +611,13 @@ int32_t aiml_pipeline_run_observed(void* p, void* observer_raw) {
             for (auto& ref : plan) {
                 PStage& stg = *ref.first;
                 PStep&  st  = *ref.second;
-                {   // Hat eine andere Lane die Vergabe gestoppt?
+                {   // Has another lane stopped the dispatch?
                     std::lock_guard<std::mutex> g(state.mu);
                     if (state.stop_all) return;
                 }
-                // F62-117: braucht dieser Schritt etwas, das gescheitert ist?
-                // Dann startet er nicht.  Vor allem anderen, auch vor der
-                // Sonde — ein uebersprungener Schritt loest nichts auf.
+                // F62-117: does this step need something that has failed?
+                // Then it does not start.  Before everything else, even before the
+                // probe — a skipped step resolves nothing.
                 {
                     std::lock_guard<std::mutex> g(state.mu);
                     if (state.skipped.count(st.name)) continue;
@@ -626,15 +626,15 @@ int32_t aiml_pipeline_run_observed(void* p, void* observer_raw) {
                         if (state.skipped.count(need)) { blocked = true; break; }
                     if (blocked) {
                         state.skipped.insert(st.name);
-                        LOG_WARNING("pipeline '" + pp->name + "': Schritt '" + st.name +
-                                    "' uebersprungen — er braucht einen gescheiterten "
-                                    "Schritt (spec/62 F62-117)");
+                        LOG_WARNING("pipeline '" + pp->name + "': step '" + st.name +
+                                    "' skipped — it needs a failed "
+                                    "step (spec/62 F62-117)");
                         continue;
                     }
                 }
-                // §5.9 / F62-54: das deklarierte Tor.  Vor der Sonde, denn ein
-                // Tor heisst "hier wird nicht weitergearbeitet" — auch nicht
-                // aufgeloest.
+                // §5.9 / F62-54: the declared gate.  Before the probe, because a
+                // gate means "no further work here" — not even
+                // resolving.
                 if (st.pause_before && !pp->released.count(st.name)) {
                     std::lock_guard<std::mutex> g(state.mu);
                     LOG_INFO("pipeline '" + pp->name + "': angehalten vor Schritt '" +
@@ -644,11 +644,11 @@ int32_t aiml_pipeline_run_observed(void* p, void* observer_raw) {
                     state.stop_rc  = -6;
                     return;
                 }
-                // Die Sonde laeuft IMMER — auch wenn der Schritt gleich trifft.
-                // Genau das ist ihr Zweck: erst ihr Ergebnis entscheidet, OB er
-                // trifft (§9).  Wer sie beim Treffer ueberspringt, hat wieder
-                // einen beweglichen Namen im Schluessel.  Benutzercode, also
-                // unter `mu`.
+                // The probe ALWAYS runs — even if the step is about to hit.
+                // That is exactly its purpose: only its result decides WHETHER it
+                // hits (§9).  Whoever skips it on a hit has a moving
+                // name in the key again.  User code, hence
+                // under `mu`.
                 std::string resolved;
                 if (st.resolve) {
                     std::lock_guard<std::mutex> g(state.mu);
@@ -656,10 +656,10 @@ int32_t aiml_pipeline_run_observed(void* p, void* observer_raw) {
                     const char* out = fn();
                     if (out) resolved = out;
                 }
-                // F62-114: die Schluessel der `needs` gehen als `input_keys`
-                // in den eigenen Schluessel (§8) — dadurch wirkt eine Aenderung
-                // weiter oben transitiv nach unten, und eine Kette von
-                // Schritten verhaelt sich wie ein Stapel von Schichten.
+                // F62-114: the keys of the `needs` go as `input_keys`
+                // into the own key (§8) — that way a change further up
+                // propagates transitively downwards, and a chain of
+                // steps behaves like a stack of layers.
                 std::string inputKeys;
                 if (!st.needs.empty()) {
                     std::vector<std::string> ks;
@@ -700,19 +700,19 @@ int32_t aiml_pipeline_run_observed(void* p, void* observer_raw) {
                     reused = 1;
                     std::lock_guard<std::mutex> g(state.mu);
                     ++pp->reused;
-                    // F62-120: der Treffer stellt das Ergebnis wieder her,
-                    // ohne den Rumpf zu rufen.
+                    // F62-120: the hit restores the result
+                    // without calling the body.
                     state.resultOf[{st.name, lane_idx}] = hitResult;
                 } else {
-                    // F62-41: bis zu `retry` Versuche, Halt beim ersten, der
-                    // gelingt.  Gezaehlt werden ALLE Versuche (attempts), denn
-                    // sonst waere `retry` nicht beobachtbar.
-                    // §4.3 / F62-60: ein Arbeitsbereich je (Lane, Stufe), aus
-                    // deren Identitaet gebildet — so koennen gleichzeitige
-                    // Lanes einander nicht sehen oder verderben.  Absolut,
-                    // damit `cwd` im Rumpf nichts daran aendert (F62-30: es
-                    // gibt kein elternseitiges chdir, und das ist der Grund,
-                    // warum Lanes ueberhaupt in Threads laufen duerfen).
+                    // F62-41: up to `retry` attempts, stopping at the first one that
+                    // succeeds.  ALL attempts are counted (attempts), because
+                    // otherwise `retry` would not be observable.
+                    // §4.3 / F62-60: one workspace per (lane, stage), formed from
+                    // their identity — that way concurrent
+                    // lanes cannot see or spoil each other.  Absolute,
+                    // so that `cwd` in the body changes nothing about it (F62-30: there
+                    // is no parent-side chdir, and that is the reason
+                    // why lanes may run in threads at all).
                     std::string ws_root = pp->workspace_root;
                     if (!ws_root.empty() && ws_root[0] != '/') {
                         char cwdbuf[4096];
@@ -729,8 +729,8 @@ int32_t aiml_pipeline_run_observed(void* p, void* observer_raw) {
                         g_cur.bindings  = bind;
                         g_cur.workspace = ws;
                         for (const auto& axis : st.args) g_cur.declared.insert(axis);
-                        // §13.5h: nur die DEKLARIERTEN needs sind lesbar —
-                        // dieselbe Grenze, die der Schluessel zieht (F62-119).
+                        // §13.5h: only the DECLARED needs are readable —
+                        // the same boundary the key draws (F62-119).
                         {
                             std::lock_guard<std::mutex> g(state.mu);
                             for (const auto& need : st.needs) {
@@ -752,50 +752,50 @@ int32_t aiml_pipeline_run_observed(void* p, void* observer_raw) {
                             std::lock_guard<std::mutex> g(state.mu);
                             ++pp->attempts;
                         }
-                        // F62-40: die Grenze gilt dem GANZEN Schritt.  Hier
-                        // wird sie NACHTRAEGLICH festgestellt, nicht erzwungen:
-                        // den Rumpf mitten im Lauf abzubrechen hiesse, JIT-Code
-                        // in einem fremden Thread zu toeten.  Das Toeten der
-                        // Kinder (process.kill, spec/23 §5.2) gehoert zu dem
-                        // Tag, an dem die Grenze erzwungen wird; bis dahin ist
-                        // sie eine Feststellung und keine Unterbrechung — ein
-                        // Unterschied, der im Log stehen muss, damit niemand
-                        // sich auf eine Unterbrechung verlaesst.
+                        // F62-40: the limit applies to the WHOLE step.  Here
+                        // it is detected AFTERWARDS, not enforced:
+                        // aborting the body in the middle of the run would mean killing JIT code
+                        // in a foreign thread.  Killing the
+                        // children (process.kill, spec/23 §5.2) belongs to the
+                        // day on which the limit is enforced; until then it is
+                        // a finding and not an interruption — a
+                        // difference that must be in the log, so that nobody
+                        // relies on an interruption.
                         if (st.timeout_ms > 0 && elapsed > st.timeout_ms) {
-                            LOG_ERROR("pipeline '" + pp->name + "': Schritt '" + st.name +
-                                      "' ueberschritt das Zeitlimit (" + std::to_string(elapsed) +
+                            LOG_ERROR("pipeline '" + pp->name + "': step '" + st.name +
+                                      "' exceeded the time limit (" + std::to_string(elapsed) +
                                       " ms > " + std::to_string(st.timeout_ms) +
-                                      " ms) — der Lauf wurde NICHT unterbrochen (§5.6, F62-40)");
+                                      " ms) — the run was NOT interrupted (§5.6, F62-40)");
                             if (rc == 0) rc = -4;
                         }
-                        // Was der Rumpf selbst gesagt hat (F62-90).  g_cur ist
-                        // thread-lokal, darum sieht jede Lane nur ihr eigenes.
+                        // What the body itself said (F62-90).  g_cur is
+                        // thread-local, so every lane only sees its own.
                         if (g_cur.status_set) st.status = g_cur.status;
                         if (g_cur.result_set) {
                             std::lock_guard<std::mutex> g(state.mu);
                             state.resultOf[{st.name, lane_idx}] = g_cur.result;
                         }
                         if (g_cur.fail_reach >= 0) {
-                            // F62-46: ausdruecklicher Abbruch schlaegt die
-                            // Vorgabe des Schritts — der Rumpf weiss an dieser
-                            // Stelle mehr als die Deklaration.
+                            // F62-46: an explicit abort beats the
+                            // step's default — the body knows more at this
+                            // point than the declaration.
                             reach = (g_cur.fail_reach == 1) ? 1 : 0;
                             if (rc == 0) rc = -5;
-                            LOG_ERROR("pipeline '" + pp->name + "': Schritt '" + st.name +
+                            LOG_ERROR("pipeline '" + pp->name + "': step '" + st.name +
                                       "' brach ab: " + g_cur.fail_msg);
                         }
                         g_cur = CurStep{};
                         if (rc == 0) break;
                         if (attempt < st.retry)
-                            LOG_WARNING("pipeline '" + pp->name + "': Schritt '" + st.name +
+                            LOG_WARNING("pipeline '" + pp->name + "': step '" + st.name +
                                         "' Versuch " + std::to_string(attempt) + " von " +
                                         std::to_string(st.retry) + " endete mit " + std::to_string(rc));
                     }
                     std::lock_guard<std::mutex> g(state.mu);
                     if (rc == 0) ++pp->ran;
-                    // §7 / F62-92: NUR ein gelungener Versuch wird aufgezeichnet.
-                    // Einen Fehlschlag aufzuzeichnen hiesse, ihn fuer jede
-                    // weitere Lane zu wiederholen, ohne es versucht zu haben.
+                    // §7 / F62-92: ONLY a successful attempt is recorded.
+                    // Recording a failure would mean repeating it for every
+                    // further lane without having tried it.
                     if (st.cache != 0 && rc == 0) {
                         PPipeline::CacheEntry entry;
                         entry.rc = rc;
@@ -807,20 +807,20 @@ int32_t aiml_pipeline_run_observed(void* p, void* observer_raw) {
 
                 {
                     std::lock_guard<std::mutex> g(state.mu);
-                    // Automatische Farbe, wenn der Rumpf keine gesetzt hat.
-                    // Welche Farbe was bedeutet, ist offen (§16.6) — darum
-                    // steht hier nur die Zuordnung an EINER Stelle: 1 (green)
-                    // gelungen, 4 (cyan) getroffen, 0 (red) gescheitert.
+                    // Automatic colour if the body has not set one.
+                    // Which colour means what is open (§16.6) — that is why
+                    // only the assignment stands here, in ONE place: 1 (green)
+                    // succeeded, 4 (cyan) hit, 0 (red) failed.
                     int32_t st_status = (st.status >= 0) ? st.status
                                                          : ((rc != 0) ? 0 : (reused ? 4 : 1));
                     st.status  = st_status;
                     pp->status = status_max(pp->status, st_status);
 
-                    // Beobachter VOR der Fehlerbehandlung: ein fehlgeschlagener
-                    // Schritt ist das, was der Wirt am dringendsten sehen will
-                    // (F62-78).  Er bekommt eine Kopie, kein ref<> (F62-80).
-                    // Serialisiert (F62-100): die Reihenfolge ist dann nicht
-                    // die Quelltextreihenfolge, aber jeder Aufruf ist allein.
+                    // Observer BEFORE error handling: a failed
+                    // step is what the host most urgently wants to see
+                    // (F62-78).  It gets a copy, not a ref<> (F62-80).
+                    // Serialised (F62-100): the order is then not
+                    // the source order, but every call is on its own.
                     if (observer) {
                         AimlStepRun ev{};
                         ev.name      = st.name.c_str();
@@ -832,9 +832,9 @@ int32_t aiml_pipeline_run_observed(void* p, void* observer_raw) {
                         observer(&ev);
                     }
 
-                    // F62-55: eine von aussen gewuenschte Pause wirkt NACH
-                    // diesem Schritt — der Arbeitsbereich ist jetzt ein
-                    // vollstaendiger Baum, und der Schluessel ist aufgezeichnet.
+                    // F62-55: a pause requested from outside takes effect AFTER
+                    // this step — the workspace is now a
+                    // complete tree, and the key is recorded.
                     if (pp->pause_wanted && rc == 0) {
                         LOG_INFO("pipeline '" + pp->name + "': angehalten nach Schritt '" +
                                  st.name + "'");
@@ -845,12 +845,12 @@ int32_t aiml_pipeline_run_observed(void* p, void* observer_raw) {
                     }
 
                     if (rc != 0) {
-                        LOG_ERROR("pipeline '" + pp->name + "': Schritt '" + st.name +
+                        LOG_ERROR("pipeline '" + pp->name + "': step '" + st.name +
                                   "' endete mit " + std::to_string(rc));
-                        // F62-39: die Reichweite steht am Schritt, nicht an der
-                        // Pipeline — ein fehlgeschlagenes fetch_sources macht
-                        // jede Lane sinnlos, ein fehlgeschlagenes build in einer
-                        // Lane sagt ueber die anderen nichts.
+                        // F62-39: the reach is on the step, not on the
+                        // pipeline — a failed fetch_sources makes
+                        // every lane pointless, a failed build in one
+                        // lane says nothing about the others.
                         if (reach == 1) {           // pipeline: nichts startet mehr
                             state.stop_all = true;
                             state.stop_rc  = rc;
@@ -858,17 +858,17 @@ int32_t aiml_pipeline_run_observed(void* p, void* observer_raw) {
                         }
                         if (reach == 0) {           // lane
                             state.worst_rc = rc;
-                            // F62-117: bei einem `per: once`-Schritt gibt es
-                            // keine einzelne Lane, die enden koennte — statt
-                            // dessen starten genau seine Abhaengigen nicht.
+                            // F62-117: for a `per: once` step there is
+                            // no single lane that could end — instead
+                            // exactly its dependants do not start.
                             if (st.per == 1) {
                                 state.skipped.insert(st.name);
                                 continue;
                             }
                             return;
                         }
-                        // proceed: vermerkt, die Lane laeuft weiter — der Lauf
-                        // selbst gilt deshalb NICHT als gescheitert.
+                        // proceed: noted, the lane keeps running — the run
+                        // itself therefore does NOT count as failed.
                     }
                 }
             }
@@ -882,19 +882,19 @@ int32_t aiml_pipeline_run_observed(void* p, void* observer_raw) {
     }
     if (limit > static_cast<int32_t>(lanes.size())) limit = static_cast<int32_t>(lanes.size());
 
-    // ── §5.5 / F62-116: Abschnitte, getrennt an jedem `per: once`-Schritt ──
+    // ── §5.5 / F62-116: sections, split at every `per: once` step ──
     //
-    // Ein `per: once`-Schritt ist ein RIEGEL: alle Lanes erreichen ihn, er
-    // laeuft genau einmal, danach laufen die Lanes weiter.  Zwischen zwei
-    // Riegeln bleibt es bei Lane-Parallelitaet (§6) — gewartet wird nur dort,
-    // wo etwas Gemeinsames entsteht.
+    // A `per: once` step is a BARRIER: all lanes reach it, it
+    // runs exactly once, after that the lanes keep running.  Between two
+    // barriers lane parallelism stays (§6) — there is only waiting where
+    // something shared comes into being.
     //
-    // Der Plan wird in Deklarationsreihenfolge gebildet.  Das genuegt fuer
-    // `needs`, weil F62-9 nur FRUEHERE Schritte erlaubt: wer in der Reihenfolge
-    // vorn steht, ist fertig, bevor sein Nachfolger beginnt.
+    // The plan is formed in declaration order.  That is enough for
+    // `needs`, because F62-9 only allows EARLIER steps: whoever comes first in the order
+    // is finished before its successor begins.
     struct Segment {
         bool                 once = false;
-        std::vector<StepRef> steps;   // bei once genau einer
+        std::vector<StepRef> steps;   // exactly one for once
     };
     std::vector<Segment> segments;
     for (auto& stg : pp->stages) {
@@ -919,9 +919,9 @@ int32_t aiml_pipeline_run_observed(void* p, void* observer_raw) {
             }
             return;
         }
-        // Arbeitsteilung ueber einen gemeinsamen Index: so bekommt eine Lane,
-        // die lange braucht, nicht sieben weitere an den Hals, waehrend andere
-        // Threads leer laufen.
+        // Division of labour via a shared index: that way a lane
+        // that takes long does not get seven more saddled on it while other
+        // threads run idle.
         std::atomic<size_t> next{0};
         std::vector<std::thread> workers;
         workers.reserve(static_cast<size_t>(limit));
@@ -947,8 +947,8 @@ int32_t aiml_pipeline_run_observed(void* p, void* observer_raw) {
             if (state.stop_all) break;
         }
         if (seg.once) {
-            // Einmal, ohne Lane-Bindungen und einthreadig: der Riegel selbst
-            // ist die Stelle, an der nichts nebenher laufen soll.
+            // Once, without lane bindings and single-threaded: the barrier itself
+            // is the place where nothing should run alongside.
             run_steps(Bindings{}, -1, seg.steps);
         } else {
             run_lane_segment(seg.steps);
@@ -959,11 +959,11 @@ int32_t aiml_pipeline_run_observed(void* p, void* observer_raw) {
     return (state.stop_rc != 0) ? state.stop_rc : state.worst_rc;
 }
 
-// ── spec/62 §20: die uebersetzte Pipeline LESEN ─────────────────────────────
+// ── spec/62 §20: READING the compiled pipeline ──────────────────────────────
 //
-// Geschrieben wird von der Umschreibung (pipeline_expand), gelesen vom Wirt.
-// Beides geht ueber EINEN Schluesselnamen je Feld, damit die Namen in Spec,
-// Umschreibung und Leser nicht auseinanderlaufen koennen.
+// Written by the rewrite (pipeline_expand), read by the host.
+// Both go through ONE key name per field, so that the names in the spec,
+// the rewrite and the reader cannot drift apart.
 
 static std::string* stage_text(PStage* g, const std::string& key) {
     if (key == "name")       return &g->name;
@@ -991,7 +991,7 @@ static char* str_out(const std::string& val) {
     return out;
 }
 
-// Lanes dieser Pipeline, `exclude` schon abgezogen (§4.3).
+// Lanes of this pipeline, `exclude` already subtracted (§4.3).
 static std::vector<Bindings> live_lanes(PPipeline* pp) {
     std::vector<Bindings> all;
     expand(pp->params, 0, Bindings{}, all);
@@ -1028,7 +1028,7 @@ int32_t aiml_stage_step_count(void* g) {
     return g ? (int32_t)static_cast<PStage*>(g)->steps.size() : 0;
 }
 
-// nullptr bei schiefem Index: der Aufrufer (builtin_registry) wirft daraufhin.
+// nullptr for an index out of range: the caller (builtin_registry) then throws.
 void* aiml_stage_step_at(void* g, int32_t idx) {
     if (!g) return nullptr;
     auto* st = static_cast<PStage*>(g);
@@ -1084,7 +1084,7 @@ void* aiml_pipeline_stage_at(void* p, int32_t idx) {
     return &pp->stages[(size_t)idx];
 }
 
-// Der Bindungstext der i-ten Lane — dieselbe Form wie im Beobachter (F62-152).
+// The binding text of the i-th lane — the same form as in the observer (F62-152).
 char* aiml_pipeline_lane_bindings(void* p, int32_t idx) {
     if (!p) return aiml_str_alloc(0);
     std::vector<Bindings> lanes = live_lanes(static_cast<PPipeline*>(p));
@@ -1154,25 +1154,25 @@ char* aiml_pipeline_push_field(void* p, int32_t idx, const char* which) {
     return str_out(push.tag);
 }
 
-// spec/62 F62-124a: hier faellt die Ablehnung — beim LAUF, nicht beim
-// Uebersetzen.  Die Meldung nennt drei Dinge: was verlangt wird, dass hier
-// keine Laufzeit da ist, und den Weg dorthin (F62-124).
+// spec/62 F62-124a: this is where the rejection happens — at RUN time, not at
+// compile time.  The message names three things: what is requested, that there is
+// no runtime here, and the way to get there (F62-124).
 int32_t aiml_pipeline_local_refusal(void* p) {
     if (!p) return 0;
     auto* pp = static_cast<PPipeline*>(p);
     for (const auto& stg : pp->stages) {
         if (!stg.image.empty()) {
-            LOG_ERROR("pipeline '" + pp->name + "': Stufe '" + stg.name + "' verlangt das Abbild '"
-                      + stg.image + "' (spec/62 §18.1) — ein lokaler Lauf hat keine Laufzeit, "
-                      "die eine Wurzel bereitstellt.  Weg: ueber einen Wirt fahren, der Container "
-                      "kann (cosmos doc/spec/110).");
+            LOG_ERROR("pipeline '" + pp->name + "': stage '" + stg.name + "' requests the image '"
+                      + stg.image + "' (spec/62 §18.1) — a local run has no runtime "
+                      "that provides a root.  The way: run it through a host that can do "
+                      "containers (cosmos doc/spec/110).");
             return -4;
         }
     }
     if (!pp->pushes.empty()) {
-        LOG_ERROR("pipeline '" + pp->name + "': `push:` verlangt einen Ort, an den ein Abbild "
-                  "geschrieben wird (spec/62 §18.1) — ein lokaler Lauf hat keinen.  Weg: ueber "
-                  "einen Wirt fahren, der Container kann (cosmos doc/spec/110).");
+        LOG_ERROR("pipeline '" + pp->name + "': `push:` requires a place to which an image "
+                  "is written (spec/62 §18.1) — a local run has none.  The way: run it through "
+                  "a host that can do containers (cosmos doc/spec/110).");
         return -4;
     }
     return 0;
