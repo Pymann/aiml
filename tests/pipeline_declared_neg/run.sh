@@ -27,7 +27,7 @@ want undeclared_axis.aiml     "mode"
 #
 # Was hier bleibt: Formfehler, die der Uebersetzer besitzt (§20.2 F62-150).
 want old_name_rejected.aiml   "agent:"
-want unknown_key_rejected.aiml "unbekannter Schluessel"
+want unknown_key_rejected.aiml "unknown key"
 want stages_key_rejected.aiml "steps:"
 want steplayer_rejected.aiml  "steplayer"
 if [ $fails -ne 0 ]; then echo "pipeline_declared_neg FAIL ($fails)"; exit 1; fi

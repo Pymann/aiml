@@ -1,15 +1,15 @@
-// spec/62 §13.5f — deklarierte Pipelines in die zusammengesetzte Form.
+// spec/62 §13.5f — declared pipelines into the composed form.
 //
-// Erzeugt werden je Schritt eine Rumpf-Funktion, optional eine Sonden-
-// Funktion, und je Pipeline eine Funktion <name>() mit Rueckgabetyp
-// `pipeline`, die alles zusammensetzt (F62-108).
+// Generated per step are a body function, optionally a probe
+// function, and per pipeline a function <name>() with return type
+// `pipeline` that composes everything (F62-108).
 //
-// Die deklarierten Achsen erscheinen im Rumpf als lokale Variablen gleichen
-// Namens (F62-109), gelesen mit step.arg — darum schreibt man `${arch}` und
-// meint die Achse.  Ein `${NAME}`, das keine Achse und kein host-Name ist,
-// wird dadurch zu einer undefinierten Variablen, und genau das ist die
-// Pruefung, die F62-7 verlangt (F62-110) — ohne zweiten Pruefdurchlauf, der
-// mit dem ersten uneins werden koennte.
+// The declared axes appear in the body as local variables of the same
+// name (F62-109), read with step.arg — that is why one writes `${arch}` and
+// means the axis.  A `${NAME}` that is neither an axis nor a host name
+// thereby becomes an undefined variable, and exactly that is the
+// check F62-7 demands (F62-110) — without a second check pass that
+// could disagree with the first.
 #include "pipeline_expand.h"
 #include "yaml_dump.h"
 #include "../../logger.h"
@@ -27,32 +27,32 @@ namespace aiml {
 
 namespace {
 
-// Felder, die die Umschreibung NOCH NICHT abdeckt.  Sie werden abgelehnt und
-// nicht ignoriert (F62-111): ein stillschweigend verworfenes `needs:` waere
-// eine Pipeline, die in falscher Reihenfolge laeuft und dabei gruen meldet.
+// Fields that the rewrite does NOT YET cover.  They are rejected and
+// not ignored (F62-111): a silently discarded `needs:` would be
+// a pipeline that runs in the wrong order and reports green while doing so.
 const char* kUnsupportedStepFields[] = { "outputs" };
 const char* kUnsupportedStageFields[] = { "needs", "per", "outputs" };
 
-// Felder, die eine LAUFZEIT verlangen (spec/62 §18.1 F62-124).  Sie werden
-// nicht „noch nicht abgedeckt" genannt, denn das waere die falsche Auskunft:
-// die Form ist festgelegt, nur ausfuehren kann sie dieser Lauf nicht.  Ein
-// stiller Rueckfall auf das Dateisystem des Entwicklers waere schlimmer als
-// ein Lauf, der gar nicht startet — er hiesse „gegen ubuntu:24.04 gebaut" und
-// waere es nicht.
+// Fields that require a RUNTIME (spec/62 §18.1 F62-124).  They are
+// not called "not covered yet", because that would be the wrong information:
+// the form is fixed, only this run cannot execute it.  A
+// silent fallback to the developer's file system would be worse than
+// a run that does not start at all — it would be called "built against ubuntu:24.04" and
+// would not be.
 struct RuntimeField { const char* name; const char* what; };
 const RuntimeField kRuntimeFields[] = {
-    { "image", "ein Wurzel-Dateisystem" },
-    { "push",  "einen Ort, an den ein Abbild geschrieben wird" },
+    { "image", "a root file system" },
+    { "push",  "a place to which an image is written" },
 };
 
-// Wie ein Feld genannt wird, das eine Laufzeit braucht.
+// How a field that needs a runtime is reported.
 std::string runtimeFieldMessage(const std::string& where, const std::string& pname,
                                 const char* field, const char* what, const char* level) {
-    return where + ": pipeline '" + pname + "': " + level + "-Feld '" + field +
-           "' verlangt " + what + " — dieser Lauf ist LOKAL und hat keine Laufzeit "
-           "(spec/62 §18.1 F62-124).  Entweder das Feld weglassen (dann laeuft die "
-           "Pipeline gegen diesen Rechner, F62-125), oder den Lauf ueber einen Wirt "
-           "starten, der Container kann (cosmos doc/spec/110).";
+    return where + ": pipeline '" + pname + "': " + level + " field '" + field +
+           "' requires " + what + " — this run is LOCAL and has no runtime "
+           "(spec/62 §18.1 F62-124).  Either leave the field out (then the "
+           "pipeline runs against this machine, F62-125), or start the run through a host "
+           "that can do containers (cosmos doc/spec/110).";
 }
 
 std::string indentBlock(const std::string& text, const std::string& pad) {
@@ -64,7 +64,7 @@ std::string indentBlock(const std::string& text, const std::string& pad) {
     return out;
 }
 
-// Ein YAML-Teilbaum als Fluss-Text, damit er in eine erzeugte Zeile passt.
+// A YAML subtree as flow text, so that it fits into a generated line.
 std::string flowOf(const YAML::Node& node) {
     YAML::Emitter em;
     em << YAML::Flow;
@@ -73,7 +73,7 @@ std::string flowOf(const YAML::Node& node) {
     return s ? std::string(s) : std::string();
 }
 
-// Die Statements eines Rumpfs als Block-Sequenz, eingerueckt fuer `body:`.
+// The statements of a body as a block sequence, indented for `body:`.
 std::string bodyBlock(const YAML::Node& seq, const std::string& pad) {
     std::string out;
     for (const auto& item : seq) {
@@ -86,30 +86,30 @@ std::string scalarOr(const YAML::Node& node, const std::string& fallback) {
     return (node && node.IsScalar()) ? node.Scalar() : fallback;
 }
 
-// ── spec/62 §18 + §20: die verteilten Schluessel ────────────────────────────
+// ── spec/62 §18 + §20: the distributed keys ─────────────────────────────────
 //
-// Sie werden UEBERSETZT und nicht abgelehnt (F62-124a): dieselbe Datei ist
-// fuer einen Cluster gueltig, und ein Kontroller soll sie lesen statt selbst
-// zu parsen (§20.1).  Abgelehnt wird erst der lokale LAUF
+// They are COMPILED and not rejected (F62-124a): the same file is
+// valid for a cluster, and a controller should read it instead of parsing it
+// itself (§20.1).  Only the local RUN is rejected
 // (`aiml_pipeline_local_refusal`).
 //
-// Alte Namen werden beim Namen genannt (F110-127): zwei Schreibweisen fuer
-// dieselbe Sache sind die Redundanz, die spaeter niemand mehr aufloest.
+// Old names are called by name (F110-127): two spellings for
+// the same thing are the redundancy that nobody resolves later.
 struct OldName { const char* old_key; const char* now; const char* why; };
 const OldName kOldNames[] = {
     { "runs_on",   "agent",     "" },
     { "label",     "agent",     "" },
     { "runs_in",   "steplayer", "" },
-    // Nicht nur ein anderer Name, auch eine andere EINHEIT: `timeout:` zaehlt
-    // in MILLISEKUNDEN (F62-40).  Wer `timeout_s: 5` schreibt und `timeout: 5`
-    // bekommt, wartet fuenf Millisekunden — die Meldung muss die Einheit
-    // nennen, nicht nur den Namen.
-    { "timeout_s", "timeout",   " — und zwar in MILLISEKUNDEN (spec/62 F62-40)" },
+    // Not just a different name, but a different UNIT too: `timeout:` counts
+    // in MILLISECONDS (F62-40).  Whoever writes `timeout_s: 5` and gets `timeout: 5`
+    // waits five milliseconds — the message must name the unit,
+    // not just the name.
+    { "timeout_s", "timeout",   " — and in MILLISECONDS (spec/62 F62-40)" },
 };
 
-// Was auf PIPELINE-Ebene bzw. an einer STUFE stehen darf.  Eine Erlaubnisliste
-// und keine Sperrliste: ein unbekannter Schluessel ist ein Fehler (§20.5), und
-// genau das macht die Pruefung des Kontrollers entbehrlich.
+// What may stand at PIPELINE level or on a STAGE.  An allow list
+// and not a block list: an unknown key is an error (§20.5), and
+// exactly that makes the controller's check unnecessary.
 const char* kPipelineKeys[] = {
     "name", "params", "exclude", "parallel", "workspace_root", "steps", "host",
     "agent", "steplayer", "image", "base", "requires", "shares", "resources",
@@ -126,7 +126,7 @@ bool knownKey(const std::string& key, const char* const* list, size_t n) {
     return false;
 }
 
-// Text ODER Liste → eine Zeile, Komma-getrennt (`requires:`, F62-126).
+// Text OR list → one line, comma-separated (`requires:`, F62-126).
 std::string csvOf(const YAML::Node& node) {
     if (!node) return std::string();
     if (node.IsSequence()) {
@@ -140,15 +140,15 @@ std::string csvOf(const YAML::Node& node) {
     return node.IsScalar() ? node.Scalar() : std::string();
 }
 
-// `shares:` → "name:ziel:modus,…" (F62-136).  Der NAME ist ein Name, nie ein
-// Pfad: wo die Ablage liegt, weiss der Wirt — eine Pipeline, die einen Pfad
-// nennt, holt sich jedes Verzeichnis des Wirts in ihren Container.
+// `shares:` → "name:target:mode,…" (F62-136).  The NAME is a name, never a
+// path: where the storage lives is known to the host — a pipeline that names a path
+// pulls any directory of the host into its container.
 std::string sharesOf(const YAML::Node& node, const std::string& where,
                      const std::string& pname, const std::string& level, bool& ok) {
     if (!node) return std::string();
     if (!node.IsSequence()) {
-        LOG_ERROR(where + ": pipeline '" + pname + "': " + level + "-Feld 'shares' ist eine "
-                  "Liste von { name, to, mode } (spec/62 §18.1b)");
+        LOG_ERROR(where + ": pipeline '" + pname + "': " + level + " field 'shares' is a "
+                  "list of { name, to, mode } (spec/62 §18.1b)");
         ok = false;
         return std::string();
     }
@@ -158,21 +158,21 @@ std::string sharesOf(const YAML::Node& node, const std::string& where,
         const std::string dest = (row["to"]   && row["to"].IsScalar())   ? row["to"].Scalar()   : "";
         std::string mode = (row["mode"] && row["mode"].IsScalar()) ? row["mode"].Scalar() : "ro";
         if (name.empty() || dest.empty()) {
-            LOG_ERROR(where + ": pipeline '" + pname + "': " + level + "-Feld 'shares' braucht "
-                      "je Eintrag 'name' und 'to' (spec/62 §18.1b F62-136)");
+            LOG_ERROR(where + ": pipeline '" + pname + "': " + level + " field 'shares' needs "
+                      "'name' and 'to' per entry (spec/62 §18.1b F62-136)");
             ok = false;
             continue;
         }
         if (name.find('/') != std::string::npos) {
-            LOG_ERROR(where + ": pipeline '" + pname + "': Freigabe 'name: " + name + "' ist ein "
-                      "PFAD — eine Freigabe wird mit ihrem Namen genannt, den Ort kennt der Wirt "
+            LOG_ERROR(where + ": pipeline '" + pname + "': share 'name: " + name + "' is a "
+                      "PATH — a share is named by its name, the host knows the location "
                       "(spec/62 F62-136)");
             ok = false;
             continue;
         }
         if (mode != "ro" && mode != "rw") {
-            LOG_ERROR(where + ": pipeline '" + pname + "': Freigabe '" + name + "' hat 'mode: " +
-                      mode + "' — erlaubt sind 'ro' und 'rw' (spec/62 §18.1b)");
+            LOG_ERROR(where + ": pipeline '" + pname + "': share '" + name + "' has 'mode: " +
+                      mode + "' — allowed are 'ro' and 'rw' (spec/62 §18.1b)");
             ok = false;
             continue;
         }
@@ -182,7 +182,7 @@ std::string sharesOf(const YAML::Node& node, const std::string& where,
     return out;
 }
 
-// Das Ziel einer Freigabezeile ("name:ziel:modus" → "ziel").
+// The target of a share line ("name:target:mode" → "target").
 std::string shareDest(const std::string& row) {
     size_t first = row.find(':');
     if (first == std::string::npos) return row;
@@ -216,8 +216,8 @@ std::string mergeShares(const std::string& at_pipe, const std::string& at_stage)
     return out;
 }
 
-// `mem:` traegt eine EINHEIT ("512M", "8G") — ohne waere „8" zweideutig, und
-// eine Zweideutigkeit in einer Grenze ist eine Falle (F62-133).
+// `mem:` carries a UNIT ("512M", "8G") — without one "8" would be ambiguous, and
+// an ambiguity in a limit is a trap (F62-133).
 int32_t memMb(const std::string& text, const std::string& where,
               const std::string& pname, bool& ok) {
     if (text.empty()) return 0;
@@ -225,8 +225,8 @@ int32_t memMb(const std::string& text, const std::string& where,
     int32_t num = atoi(text.c_str());
     if (unit == 'G' || unit == 'g') return num * 1024;
     if (unit == 'M' || unit == 'm') return num;
-    LOG_ERROR(where + ": pipeline '" + pname + "': 'mem: " + text + "' ohne Einheit — "
-              "'512M' oder '8G' (spec/62 F62-133)");
+    LOG_ERROR(where + ": pipeline '" + pname + "': 'mem: " + text + "' without a unit — "
+              "'512M' or '8G' (spec/62 F62-133)");
     ok = false;
     return num;
 }
@@ -241,11 +241,11 @@ std::string textAt(const YAML::Node& node, const char* key) {
     return node[key].Scalar();
 }
 
-// Ein Wert, der als LITERAL in erzeugten Quelltext geht, wird MASKIERT.
-// Ohne das endet das Literal mitten im Wert und der Rest ist aiml — bei einer
-// EINGEREICHTEN Pipeline (cosmos doc/spec/96) waere das eingeschleuster Code.
-// Maskiert und nicht abgewiesen, weil ein `run:` legitim Anfuehrungszeichen
-// traegt: `--format="%h"` ist eine gewoehnliche Befehlszeile.
+// A value that goes as a LITERAL into generated source text is ESCAPED.
+// Without that the literal ends in the middle of the value and the rest is aiml — with a
+// SUBMITTED pipeline (cosmos doc/spec/96) that would be injected code.
+// Escaped and not rejected, because a `run:` legitimately carries quotation marks:
+// `--format="%h"` is an ordinary command line.
 std::string yamlQuoted(const std::string& value) {
     std::string out;
     out.reserve(value.size() + 2);
@@ -262,7 +262,7 @@ std::string yamlQuoted(const std::string& value) {
     return out;
 }
 
-// Eine Zeile `stage_N.set_attr "schluessel" "wert"`, nur wenn etwas da ist.
+// A line `stage_N.set_attr "key" "value"`, only if there is something.
 std::string attrLine(const std::string& var, const char* key, const std::string& value) {
     if (value.empty()) return std::string();
     return "      - call: [" + var + ".set_attr, \"" + std::string(key) + "\", \"" +
@@ -286,8 +286,8 @@ bool isIdent(const std::string& name) {
 } // namespace
 
 bool sourceHasPipelineDecl(const std::string& text) {
-    // Billig und vor dem Parsen: nur eine Deklaration auf oberster Ebene
-    // beginnt eine Zeile mit "- pipeline:".
+    // Cheap and before parsing: only a top-level declaration
+    // starts a line with "- pipeline:".
     std::istringstream in(text);
     std::string line;
     while (std::getline(in, line)) {
@@ -320,18 +320,18 @@ bool expandPipelineDeclarations(const std::string& text, const std::string& wher
         const YAML::Node pl = decl["pipeline"];
         const std::string pname = scalarOr(pl["name"], "");
         if (pname.empty()) {
-            LOG_ERROR(where + ": pipeline ohne Namen — der Name wird eine Funktion "
+            LOG_ERROR(where + ": pipeline without a name — the name becomes a function "
                       "(spec/62 F62-108)");
             ok = false;
             continue;
         }
-        // F62-157: der NAME einer Pipeline ist Text, die FUNKTION braucht einen
-        // Bezeichner.  Ist der Name schon einer, heisst die Funktion genau so
-        // (F62-108, so ruft man sie lokal).  Sonst entsteht ein abgeleiteter
-        // Funktionsname — `name: 9rooms_vom_stapel` faengt mit einer Ziffer an
-        // und war damit bisher gar nicht uebersetzbar, obwohl der Name voellig
-        // in Ordnung ist.  Der Wert traegt weiter den ECHTEN Namen (`pipe.name`),
-        // und ein Wirt findet die Funktion ueber `cx.names` (spec/29_2 F29_2-…i).
+        // F62-157: the NAME of a pipeline is text, the FUNCTION needs an
+        // identifier.  If the name already is one, the function is called exactly that
+        // (F62-108, that is how one calls it locally).  Otherwise a derived
+        // function name comes into being — `name: 9rooms_vom_stapel` starts with a digit
+        // and so could not be compiled at all until now, although the name is perfectly
+        // fine.  The value keeps carrying the REAL name (`pipe.name`),
+        // and a host finds the function via `cx.names` (spec/29_2 F29_2-…i).
         std::string fname = pname;
         if (!isIdent(fname)) {
             std::string safe;
@@ -340,27 +340,27 @@ bool expandPipelineDeclarations(const std::string& text, const std::string& wher
             if (safe.empty() || !(isalpha((unsigned char)safe[0]) || safe[0] == '_'))
                 safe = "pl_" + safe;
             fname = safe;
-            LOG_INFO(where + ": pipeline '" + pname + "': der Name ist kein Bezeichner — die "
-                     "erzeugte Funktion heisst '" + fname + "' (spec/62 F62-157); der Lauf "
-                     "traegt weiter den Namen '" + pname + "'");
+            LOG_INFO(where + ": pipeline '" + pname + "': the name is not an identifier — the "
+                     "generated function is called '" + fname + "' (spec/62 F62-157); the run "
+                     "keeps carrying the name '" + pname + "'");
         }
-        // Alte Namen beim Namen nennen (F110-127) — am Kopf wie an der Stufe.
+        // Call old names by name (F110-127) — at the head as at the stage.
         for (const OldName& on : kOldNames) {
             if (pl[on.old_key]) {
                 LOG_ERROR(where + ": pipeline '" + pname + "': `" + on.old_key +
-                          ":` heisst jetzt `" + on.now + ":`" + on.why + " — zwei "
-                          "Schreibweisen fuer dieselbe Sache loest spaeter niemand mehr auf "
+                          ":` is now `" + on.now + ":`" + on.why + " — two "
+                          "spellings for the same thing are never resolved later by anyone "
                           "(spec/62 §18.5)");
                 ok = false;
             }
         }
-        // F62-57: eine Pipeline hat `steps:` (darin Stufen), eine Stufe hat
-        // `steps:` (darin Schritte).  `stages:` las die Umschreibung bis zum
-        // 25.10.2026 — die Spec sagt `steps:`, also sagt es die Umschreibung.
+        // F62-57: a pipeline has `steps:` (containing stages), a stage has
+        // `steps:` (containing steps).  The rewrite read `stages:` until
+        // 2026-10-25 — the spec says `steps:`, so the rewrite says it too.
         if (pl["stages"]) {
-            LOG_ERROR(where + ": pipeline '" + pname + "': `stages:` heisst `steps:` — eine "
-                      "Pipeline listet unter `steps:` ihre Stufen, eine Stufe darunter ihre "
-                      "Schritte (spec/62 F62-57)");
+            LOG_ERROR(where + ": pipeline '" + pname + "': `stages:` is called `steps:` — a "
+                      "pipeline lists its stages under `steps:`, a stage lists its "
+                      "steps under it (spec/62 F62-57)");
             ok = false;
         }
         if (pl.IsMap()) {
@@ -368,19 +368,19 @@ bool expandPipelineDeclarations(const std::string& text, const std::string& wher
                 const std::string key = it->first.Scalar();
                 if (knownKey(key, kPipelineKeys, sizeof(kPipelineKeys)/sizeof(kPipelineKeys[0])))
                     continue;
-                if (key == "stages") continue;   // schon gemeldet
+                if (key == "stages") continue;   // already reported
                 bool is_old = false;
                 for (const OldName& on : kOldNames) if (key == on.old_key) is_old = true;
-                if (is_old) continue;            // schon gemeldet
-                LOG_ERROR(where + ": pipeline '" + pname + "': unbekannter Schluessel `" + key +
-                          ":` — was der Uebersetzer nicht kennt, ist ein Fehler und keine "
-                          "stille Wirkungslosigkeit (spec/62 §20.5)");
+                if (is_old) continue;            // already reported
+                LOG_ERROR(where + ": pipeline '" + pname + "': unknown key `" + key +
+                          ":` — what the compiler does not know is an error and not a "
+                          "silent no-op (spec/62 §20.5)");
                 ok = false;
             }
         }
 
-        // Die Kopfwerte: Vorgabe fuer jede Stufe (§20.3).  Aufgeloest wird
-        // HIER, einmal — ein Leser, der nachrechnet, ist ein zweiter Parser
+        // The head values: default for every stage (§20.3).  They are resolved
+        // HERE, once — a reader that recomputes is a second parser
         // (F62-151).
         const std::string headAgent     = textAt(pl, "agent");
         const std::string headImage     = textAt(pl, "image");
@@ -394,26 +394,26 @@ bool expandPipelineDeclarations(const std::string& text, const std::string& wher
         const int32_t     headPids      = numAt(headRes, "pids");
         const int32_t     headMem       = memMb(textAt(headRes, "mem"), where, pname, ok);
 
-        // ── Achsen ──────────────────────────────────────────────────────────
+        // ── Axes ────────────────────────────────────────────────────────────
         //
-        // spec/62 §4.1: ein Eintrag ist `[name, typ, [werte]]`.  Der TYP
-        // zaehlt (F62-1): im Rumpf ist `jobs` dann ein i32, mit dem man
-        // rechnen kann, und keine Umgebungs-Zeichenkette.  Die alte Abbildung
-        // `arch: [x86_64, arm64]` wird abgewiesen und nennt die Liste — zwei
-        // Schreibweisen fuer dieselbe Sache loest spaeter niemand mehr auf
+        // spec/62 §4.1: an entry is `[name, type, [values]]`.  The TYPE
+        // counts (F62-1): in the body `jobs` is then an i32 one can
+        // compute with, and not an environment string.  The old mapping
+        // `arch: [x86_64, arm64]` is rejected and names the list — two
+        // spellings for the same thing are never resolved later by anyone
         // (§20.5).
         struct Axis { std::string name; std::string type; std::vector<std::string> values; };
         std::vector<Axis> axes;
         if (pl["params"] && pl["params"].IsMap()) {
-            LOG_ERROR(where + ": pipeline '" + pname + "': `params:` ist eine LISTE von "
-                      "`[name, typ, [werte]]` (spec/62 §4.1), keine Abbildung "
-                      "`arch: [...]` — der Typ einer Achse zaehlt (F62-1)");
+            LOG_ERROR(where + ": pipeline '" + pname + "': `params:` is a LIST of "
+                      "`[name, type, [values]]` (spec/62 §4.1), not a mapping "
+                      "`arch: [...]` — the type of an axis counts (F62-1)");
             ok = false;
         } else if (pl["params"] && pl["params"].IsSequence()) {
             for (const auto& row : pl["params"]) {
                 if (!row.IsSequence() || row.size() < 3) {
-                    LOG_ERROR(where + ": pipeline '" + pname + "': ein `params:`-Eintrag ist "
-                              "`[name, typ, [werte]]` (spec/62 §4.1)");
+                    LOG_ERROR(where + ": pipeline '" + pname + "': a `params:` entry is "
+                              "`[name, type, [values]]` (spec/62 §4.1)");
                     ok = false;
                     continue;
                 }
@@ -423,23 +423,23 @@ bool expandPipelineDeclarations(const std::string& text, const std::string& wher
                 if (row[2].IsSequence())
                     for (const auto& v : row[2]) ax.values.push_back(v.Scalar());
                 if (ax.name.empty() || !isIdent(ax.name)) {
-                    LOG_ERROR(where + ": pipeline '" + pname + "': Achsenname '" + ax.name +
-                              "' ist kein Bezeichner — er wird im Rumpf eine lokale Variable "
+                    LOG_ERROR(where + ": pipeline '" + pname + "': axis name '" + ax.name +
+                              "' is not an identifier — it becomes a local variable in the body "
                               "(spec/62 F62-109)");
                     ok = false;
                     continue;
                 }
                 if (ax.type != "string" && ax.type != "i32" && ax.type != "i64" &&
                     ax.type != "f32" && ax.type != "bool") {
-                    LOG_ERROR(where + ": pipeline '" + pname + "': Achse '" + ax.name +
-                              "': Typ '" + ax.type + "' kann keine Domaene aus Literalen "
-                              "tragen — string, i32, i64, f32 oder bool (spec/62 F62-1)");
+                    LOG_ERROR(where + ": pipeline '" + pname + "': axis '" + ax.name +
+                              "': type '" + ax.type + "' cannot carry a domain of "
+                              "literals — string, i32, i64, f32 or bool (spec/62 F62-1)");
                     ok = false;
                     continue;
                 }
                 if (ax.values.empty()) {
-                    LOG_ERROR(where + ": pipeline '" + pname + "': Achse '" + ax.name +
-                              "' hat keine Werte — eine leere Domaene ergibt keine Lane "
+                    LOG_ERROR(where + ": pipeline '" + pname + "': axis '" + ax.name +
+                              "' has no values — an empty domain yields no lane "
                               "(spec/62 F62-2)");
                     ok = false;
                 }
@@ -450,11 +450,11 @@ bool expandPipelineDeclarations(const std::string& text, const std::string& wher
         std::map<std::string, std::string> axisTypes;
         for (const auto& ax : axes) { axisNames.insert(ax.name); axisTypes[ax.name] = ax.type; }
 
-        std::string ctor;    // der Rumpf der erzeugten Funktion <pname>()
+        std::string ctor;    // the body of the generated function <pname>()
         std::string helpers; // die erzeugten Rumpf-/Sonden-Funktionen
-        // F62-9: Schrittnamen sind eindeutig, und `needs` nennt nur FRUEHERE
-        // Schritte.  Hier zur Uebersetzungszeit, damit der Autor es erfaehrt,
-        // bevor ein Lauf es merkt (die Laufzeit prueft es ebenfalls).
+        // F62-9: step names are unique, and `needs` only names EARLIER
+        // steps.  Here at compile time, so that the author finds out
+        // before a run notices (the runtime checks it as well).
         std::set<std::string> declaredSteps;
 
         ctor += "      - decl: [pipe_obj, pipeline, { call: [pipeline.new] }]\n";
@@ -474,8 +474,8 @@ bool expandPipelineDeclarations(const std::string& text, const std::string& wher
                 for (auto it = ex.begin(); it != ex.end(); ++it) {
                     const std::string axis = it->first.Scalar();
                     if (!axisNames.count(axis)) {
-                        LOG_ERROR(where + ": pipeline '" + pname + "': exclude nennt die Achse '" +
-                                  axis + "', die die Pipeline nicht hat (spec/62 F62-4)");
+                        LOG_ERROR(where + ": pipeline '" + pname + "': exclude names the axis '" +
+                                  axis + "', which the pipeline does not have (spec/62 F62-4)");
                         ok = false;
                     }
                     if (!partial.empty()) partial += ",";
@@ -484,16 +484,16 @@ bool expandPipelineDeclarations(const std::string& text, const std::string& wher
                 ctor += "      - call: [pipe_obj.add_exclude, \"" + yamlQuoted(partial) + "\"]\n";
             }
         }
-        // `push:` — wohin ein Abbild geht.  `from` nennt eine STUFE; geprueft
-        // wird nach den Stufen (dort ist bekannt, welche es gibt).
+        // `push:` — where an image goes.  `from` names a STAGE; it is checked
+        // after the stages (there it is known which ones exist).
         std::vector<std::array<std::string,3>> pushes;
         if (pl["push"] && pl["push"].IsSequence()) {
             for (const auto& row : pl["push"]) {
                 std::array<std::string,3> one = { textAt(row, "from"), textAt(row, "to"),
                                                   textAt(row, "tag") };
                 if (one[0].empty() || one[1].empty()) {
-                    LOG_ERROR(where + ": pipeline '" + pname + "': `push:` braucht je Eintrag "
-                              "'from' (eine Stufe) und 'to' (spec/62 §18, F62-71)");
+                    LOG_ERROR(where + ": pipeline '" + pname + "': `push:` needs per entry "
+                              "'from' (a stage) and 'to' (spec/62 §18, F62-71)");
                     ok = false;
                     continue;
                 }
@@ -506,7 +506,7 @@ bool expandPipelineDeclarations(const std::string& text, const std::string& wher
             ctor += "      - call: [pipe_obj.set_workspace_root, \"" +
                     pl["workspace_root"].Scalar() + "\"]\n";
 
-        // ── Stufen und Schritte ─────────────────────────────────────────────
+        // ── Stages and steps ────────────────────────────────────────────────
         int stageNo = 0;
         std::set<std::string> declaredStages;
         if (pl["steps"] && pl["steps"].IsSequence()) {
@@ -514,16 +514,16 @@ bool expandPipelineDeclarations(const std::string& text, const std::string& wher
                 const YAML::Node stg = stWrap["stage"] ? stWrap["stage"] : stWrap;
                 for (const char* bad : kUnsupportedStageFields) {
                     if (stg[bad]) {
-                        LOG_ERROR(where + ": pipeline '" + pname + "': stage-Feld '" + bad +
-                                  "' wird noch nicht abgedeckt und darum abgelehnt "
+                        LOG_ERROR(where + ": pipeline '" + pname + "': stage field '" + bad +
+                                  "' is not covered yet and is therefore rejected "
                                   "(spec/62 F62-111)");
                         ok = false;
                     }
                 }
                 for (const OldName& on : kOldNames) {
                     if (stg[on.old_key]) {
-                        LOG_ERROR(where + ": pipeline '" + pname + "': stage-Feld `" +
-                                  on.old_key + ":` heisst jetzt `" + on.now + ":" + on.why +
+                        LOG_ERROR(where + ": pipeline '" + pname + "': stage field `" +
+                                  on.old_key + ":` is now `" + on.now + ":" + on.why +
                                   "` (spec/62 §18.5)");
                         ok = false;
                     }
@@ -537,16 +537,16 @@ bool expandPipelineDeclarations(const std::string& text, const std::string& wher
                         for (const char* bad : kUnsupportedStageFields) if (key == bad) known_bad = true;
                         for (const OldName& on : kOldNames) if (key == on.old_key) known_bad = true;
                         if (known_bad) continue;
-                        LOG_ERROR(where + ": pipeline '" + pname + "': unbekannter Schluessel `" +
-                                  key + ":` an einer Stufe (spec/62 §20.5)");
+                        LOG_ERROR(where + ": pipeline '" + pname + "': unknown key `" +
+                                  key + ":` on a stage (spec/62 §20.5)");
                         ok = false;
                     }
                 }
-                // spec/62 §18.2 (F62-126): was die Umgebung mitbringen muss.
-                // Lokal ist das die beste Stelle fuer eine Pruefung — der Lauf
-                // laeuft ja GEGEN diesen Rechner (F62-125).  Geprueft wird vor
-                // dem ersten Schritt, mit `sys.require_tools` (spec/23 §5.6),
-                // damit es EINE Pruefung gibt und nicht zwei (F23-43).
+                // spec/62 §18.2 (F62-126): what the environment must bring along.
+                // Locally this is the best place for a check — the run does
+                // run AGAINST this machine (F62-125).  It is checked before
+                // the first step, with `sys.require_tools` (spec/23 §5.6),
+                // so that there is ONE check and not two (F23-43).
                 std::string stageRequires;
                 if (stg["requires"]) {
                     if (stg["requires"].IsSequence()) {
@@ -561,13 +561,13 @@ bool expandPipelineDeclarations(const std::string& text, const std::string& wher
                 const std::string sname = scalarOr(stg["name"], "stage" + std::to_string(stageNo));
                 const std::string svar  = "stage_" + std::to_string(stageNo);
                 declaredStages.insert(sname);
-                // Eine Stufe traegt EINEN Befehl oder SCHRITTE, nie beides
-                // (cosmos F106-11): sonst ist nicht entscheidbar, was zuerst
-                // laeuft und was den Ausgang bestimmt.
+                // A stage carries ONE command or STEPS, never both
+                // (cosmos F106-11): otherwise it cannot be decided what runs first
+                // and what determines the outcome.
                 if (stg["run"] && stg["steps"]) {
-                    LOG_ERROR(where + ": pipeline '" + pname + "': Stufe '" + sname +
-                              "' hat `run:` UND `steps:` — eine Stufe traegt einen Befehl "
-                              "oder Schritte, nie beides (cosmos doc/spec/106 F106-11)");
+                    LOG_ERROR(where + ": pipeline '" + pname + "': stage '" + sname +
+                              "' has `run:` AND `steps:` — a stage carries a command "
+                              "or steps, never both (cosmos doc/spec/106 F106-11)");
                     ok = false;
                 }
                 ctor += "      - decl: [" + svar + ", stage, { call: [stage.new] }]\n";
@@ -594,28 +594,28 @@ bool expandPipelineDeclarations(const std::string& text, const std::string& wher
                 const std::string memText = textAt(stRes, "mem");
                 int32_t stMem = memText.empty() ? headMem : memMb(memText, where, pname, ok);
 
-                // `steplayer:` — OB je Stufe eine Schicht entsteht.  Die
-                // Vorgabe ERGIBT sich aus `image:` und wird nicht geraten
-                // (F110-125); widersprueechliche Angaben werden abgewiesen,
-                // statt eine davon gewinnen zu lassen.
+                // `steplayer:` — WHETHER a layer comes into being per stage.  The
+                // default FOLLOWS from `image:` and is not guessed
+                // (F110-125); contradictory settings are rejected
+                // instead of letting one of them win.
                 std::string stLayer = textAt(stg, "steplayer");
                 if (stLayer.empty()) stLayer = headLayer;
                 if (!stLayer.empty() && stLayer != "own" && stLayer != "none") {
-                    LOG_ERROR(where + ": pipeline '" + pname + "': Stufe '" + sname +
-                              "': `steplayer: " + stLayer + "` — erlaubt sind `own` (eigene "
-                              "Schicht, braucht `image:`) und `none` (auf dem Dateisystem des "
-                              "Agenten) (spec/62 §18.5)");
+                    LOG_ERROR(where + ": pipeline '" + pname + "': stage '" + sname +
+                              "': `steplayer: " + stLayer + "` — allowed are `own` (a layer of its "
+                              "own, needs `image:`) and `none` (on the agent's "
+                              "file system) (spec/62 §18.5)");
                     ok = false;
                 } else if (stLayer == "none" && !stImage.empty()) {
-                    LOG_ERROR(where + ": pipeline '" + pname + "': Stufe '" + sname +
-                              "': `steplayer: none` zusammen mit `image: " + stImage +
-                              "` — ohne Schichten gibt es keine eigene Wurzel, und mit Abbild "
-                              "gibt es Schichten (spec/62 §18.5 F110-125)");
+                    LOG_ERROR(where + ": pipeline '" + pname + "': stage '" + sname +
+                              "': `steplayer: none` together with `image: " + stImage +
+                              "` — without layers there is no root of its own, and with an image "
+                              "there are layers (spec/62 §18.5 F110-125)");
                     ok = false;
                 } else if (stLayer == "own" && stImage.empty()) {
-                    LOG_ERROR(where + ": pipeline '" + pname + "': Stufe '" + sname +
-                              "': `steplayer: own` ohne `image:` — eine eigene Schicht braucht "
-                              "eine Wurzel, auf der sie liegt (spec/62 §18.5 F62-147)");
+                    LOG_ERROR(where + ": pipeline '" + pname + "': stage '" + sname +
+                              "': `steplayer: own` without `image:` — a layer of its own needs "
+                              "a root to lie on (spec/62 §18.5 F62-147)");
                     ok = false;
                 } else if (stLayer.empty()) {
                     stLayer = stImage.empty() ? "none" : "own";
@@ -639,8 +639,8 @@ bool expandPipelineDeclarations(const std::string& text, const std::string& wher
                         const YAML::Node sp = spWrap["step"] ? spWrap["step"] : spWrap;
                         for (const char* bad : kUnsupportedStepFields) {
                             if (sp[bad]) {
-                                LOG_ERROR(where + ": pipeline '" + pname + "': step-Feld '" + bad +
-                                          "' wird noch nicht abgedeckt und darum abgelehnt "
+                                LOG_ERROR(where + ": pipeline '" + pname + "': step field '" + bad +
+                                          "' is not covered yet and is therefore rejected "
                                           "(spec/62 F62-111)");
                                 ok = false;
                             }
@@ -649,35 +649,35 @@ bool expandPipelineDeclarations(const std::string& text, const std::string& wher
                             scalarOr(sp["name"], "step" + std::to_string(stepNo));
                         const std::string cache = scalarOr(sp["cache"], "opaque");
                         if (cache != "pure" && cache != "resolved" && cache != "opaque") {
-                            LOG_ERROR(where + ": pipeline '" + pname + "': Schritt '" + stepName +
-                                      "': `cache: " + cache + "` — es gibt `pure`, `resolved` "
-                                      "und `opaque` (spec/62 §7)");
+                            LOG_ERROR(where + ": pipeline '" + pname + "': step '" + stepName +
+                                      "': `cache: " + cache + "` — there are `pure`, `resolved` "
+                                      "and `opaque` (spec/62 §7)");
                             ok = false;
                             continue;
                         }
                         const std::string perMode = scalarOr(sp["per"], "lane");
                         if (perMode != "lane" && perMode != "once") {
-                            LOG_ERROR(where + ": pipeline '" + pname + "': Schritt '" + stepName +
-                                      "': per ist 'lane' oder 'once', nicht '" + perMode +
+                            LOG_ERROR(where + ": pipeline '" + pname + "': step '" + stepName +
+                                      "': per is 'lane' or 'once', not '" + perMode +
                                       "' (spec/62 §5.5)");
                             ok = false;
                         }
-                        // F62-115: ein einmaliger Schritt kann nicht von einer
-                        // Achse haengen — es gibt EIN Ergebnis fuer die ganze
-                        // Matrix.  Die Alternative ("nimm die erste Lane") waere
-                        // ein Ergebnis, das von der Lane-Reihenfolge abhaengt.
+                        // F62-115: a one-off step cannot depend on an
+                        // axis — there is ONE result for the whole
+                        // matrix.  The alternative ("take the first lane") would be
+                        // a result that depends on the lane order.
                         if (perMode == "once" && sp["args"] && sp["args"].IsSequence() &&
                             sp["args"].size() > 0) {
-                            LOG_ERROR(where + ": pipeline '" + pname + "': Schritt '" + stepName +
-                                      "' ist 'per: once' und deklariert trotzdem Achsen — ein "
-                                      "einmaliger Schritt kann nicht von einer Achse haengen "
+                            LOG_ERROR(where + ": pipeline '" + pname + "': step '" + stepName +
+                                      "' is 'per: once' and still declares axes — a "
+                                      "one-off step cannot depend on an axis "
                                       "(spec/62 F62-115)");
                             ok = false;
                         }
                         if (!declaredSteps.insert(stepName).second) {
-                            LOG_ERROR(where + ": pipeline '" + pname + "': der Schrittname '" +
-                                      stepName + "' kommt zweimal vor — dann ist nicht "
-                                      "entscheidbar, welchen Schritt ein 'needs' meint "
+                            LOG_ERROR(where + ": pipeline '" + pname + "': the step name '" +
+                                      stepName + "' occurs twice — then it cannot be "
+                                      "decided which step a 'needs' means "
                                       "(spec/62 F62-9)");
                             ok = false;
                         }
@@ -686,9 +686,9 @@ bool expandPipelineDeclarations(const std::string& text, const std::string& wher
                             for (const auto& nd : sp["needs"]) {
                                 const std::string need = nd.Scalar();
                                 if (!declaredSteps.count(need)) {
-                                    LOG_ERROR(where + ": pipeline '" + pname + "': Schritt '" +
-                                              stepName + "' braucht '" + need + "' — das ist kein "
-                                              "frueher deklarierter Schritt (spec/62 F62-9)");
+                                    LOG_ERROR(where + ": pipeline '" + pname + "': step '" +
+                                              stepName + "' needs '" + need + "' — that is not an "
+                                              "earlier declared step (spec/62 F62-9)");
                                     ok = false;
                                     continue;
                                 }
@@ -699,25 +699,25 @@ bool expandPipelineDeclarations(const std::string& text, const std::string& wher
                                                    std::to_string(stageNo) + "_" +
                                                    std::to_string(stepNo);
 
-                        // Deklarierte Achsen + host-Namen werden zu lokalen
-                        // Variablen im Rumpf (F62-109).
+                        // Declared axes + host names become local
+                        // variables in the body (F62-109).
                         std::string prelude;
                         std::vector<std::string> declaredArgs;
                         if (sp["args"] && sp["args"].IsSequence()) {
                             for (const auto& a : sp["args"]) {
                                 const std::string axis = a.Scalar();
                                 if (!axisNames.count(axis)) {
-                                    LOG_ERROR(where + ": pipeline '" + pname + "': Schritt '" +
-                                              stepName + "' benutzt die Achse '" + axis +
-                                              "', die die Pipeline nicht hat (spec/62 F62-1)");
+                                    LOG_ERROR(where + ": pipeline '" + pname + "': step '" +
+                                              stepName + "' uses the axis '" + axis +
+                                              "', which the pipeline does not have (spec/62 F62-1)");
                                     ok = false;
                                 }
                                 declaredArgs.push_back(axis);
-                                // Die Achse erscheint im Rumpf mit ihrem
-                                // DEKLARIERTEN Typ (F62-1): `jobs` ist ein
-                                // i32, mit dem man rechnen kann.  Der Kanal
-                                // traegt Text, also wird hier gewandelt — ein
-                                // Mal, an einer Stelle.
+                                // The axis appears in the body with its
+                                // DECLARED type (F62-1): `jobs` is an
+                                // i32 one can compute with.  The channel
+                                // carries text, so it is converted here — once,
+                                // in one place.
                                 const std::string axType = axisTypes.count(axis)
                                                                ? axisTypes[axis] : "string";
                                 if (axType == "string") {
@@ -743,10 +743,10 @@ bool expandPipelineDeclarations(const std::string& text, const std::string& wher
                         if (sp["host"] && sp["host"].IsSequence()) {
                             for (const auto& h : sp["host"]) {
                                 const std::string hname = h.Scalar();
-                                // F62-17: host traegt NAMEN, nie name=value — ein
-                                // Wert im Quelltext waere ein Geheimnis im Quelltext.
+                                // F62-17: host carries NAMES, never name=value — a
+                                // value in the source text would be a secret in the source text.
                                 if (hname.find('=') != std::string::npos) {
-                                    LOG_ERROR(where + ": pipeline '" + pname + "': Schritt '" +
+                                    LOG_ERROR(where + ": pipeline '" + pname + "': step '" +
                                               stepName + "': host nennt '" + hname +
                                               "' — host traegt Namen, nie name=value "
                                               "(spec/62 F62-17)");
@@ -758,17 +758,17 @@ bool expandPipelineDeclarations(const std::string& text, const std::string& wher
                                            ", string, { call: [step.host, \"" + hname + "\"] }]\n";
                             }
                         }
-                        // F62-33/F62-121: die Ergebnisse der `needs` erscheinen als
-                        // lokale Namen gleich dem Schrittnamen — darum schreibt man
-                        // `${clone}` und meint den Wert, den `clone` veroeffentlicht
-                        // hat.  Ein Name, der schon eine Achse ist, waere zweimal
-                        // deklariert; das ist ein Fehler und keine Vorrangregel.
+                        // F62-33/F62-121: the results of the `needs` appear as
+                        // local names equal to the step name — that is why one writes
+                        // `${clone}` and means the value that `clone` has published.
+                        // A name that is already an axis would be declared twice;
+                        // that is an error and not a precedence rule.
                         for (const auto& need : needNames) {
                             if (std::find(declaredArgs.begin(), declaredArgs.end(), need) !=
                                 declaredArgs.end()) {
-                                LOG_ERROR(where + ": pipeline '" + pname + "': Schritt '" +
-                                          stepName + "': '" + need + "' ist Achse UND needs — "
-                                          "dann waere der Name im Rumpf zweimal belegt");
+                                LOG_ERROR(where + ": pipeline '" + pname + "': step '" +
+                                          stepName + "': '" + need + "' is an axis AND in needs — "
+                                          "then the name would be bound twice in the body");
                                 ok = false;
                                 continue;
                             }
@@ -783,9 +783,9 @@ bool expandPipelineDeclarations(const std::string& text, const std::string& wher
                         helpers += "    return: " + retType + "\n";
                         helpers += "    body:\n";
                         helpers += prelude;
-                        // Die Vorbedingungen der Stufe gelten vor ihrem ersten
-                        // Schritt; danach waere die Haelfte der Arbeit schon
-                        // getan, und die Meldung kaeme zu spaet (F62-126).
+                        // The stage's preconditions apply before its first
+                        // step; after that half of the work would already be
+                        // done, and the message would come too late (F62-126).
                         if (stepNo == 0 && !stageRequires.empty()) {
                             helpers += "      - decl: [__missing_env, string, { call: [sys.require_tools, \"" +
                                        stageRequires + "\"] }]\n";
@@ -802,11 +802,11 @@ bool expandPipelineDeclarations(const std::string& text, const std::string& wher
                             helpers += "      - return: 0\n";
                         helpers += "\n";
 
-                        // F62-121: aus `return: <typ>` wird eine Huelle, die den
-                        // geschriebenen Rumpf ruft und sein Ergebnis in den Kanal
-                        // legt (§13.5h).  Der Autor schreibt weiter `- return: rep`
-                        // und muss von set_result nichts wissen.  Nur fuer Typen,
-                        // die der Kanal traegt: Zeichenkette oder Zahl (F62-118).
+                        // F62-121: `return: <type>` becomes a wrapper that calls the
+                        // written body and puts its result into the channel
+                        // (§13.5h).  The author keeps writing `- return: rep`
+                        // and needs to know nothing about set_result.  Only for types
+                        // the channel carries: string or number (F62-118).
                         const bool publishable =
                             (retType == "string" || retType == "i32" || retType == "i64" ||
                              retType == "u32" || retType == "u64");
@@ -854,9 +854,9 @@ bool expandPipelineDeclarations(const std::string& text, const std::string& wher
                                     "_resolve]\n";
                         if (sp["on_fail"]) {
                             std::string reach = sp["on_fail"].Scalar();
-                            // F62-94: `continue` ist in aiml ein Schluesselwort, der
-                            // Enum-Wert heisst `proceed`.  Derselbe Begriff, zwei
-                            // Schreibweisen — hier ist die Umschreibstelle.
+                            // F62-94: `continue` is a keyword in aiml, the
+                            // enum value is called `proceed`.  The same concept, two
+                            // spellings — this is where the rewrite happens.
                             if (reach == "continue") reach = "proceed";
                             ctor += "      - call: [" + pvar + ".set_on_fail, OnFail." + reach + "]\n";
                         }
@@ -880,13 +880,13 @@ bool expandPipelineDeclarations(const std::string& text, const std::string& wher
                 ++stageNo;
             }
         }
-        // `push:` erst jetzt: `from` nennt eine STUFE, und welche es gibt,
-        // steht erst nach der Schleife fest (F62-71).
+        // `push:` only now: `from` names a STAGE, and which ones exist
+        // is only fixed after the loop (F62-71).
         for (const auto& one : pushes) {
             if (!declaredStages.count(one[0])) {
                 LOG_ERROR(where + ": pipeline '" + pname + "': `push: { from: " + one[0] +
-                          " }` nennt keine Stufe dieser Pipeline — ein Abbild ist ein "
-                          "Dateisystem, und das gehoert einer Stufe (spec/62 F62-71)");
+                          " }` names no stage of this pipeline — an image is a "
+                          "file system, and that belongs to a stage (spec/62 F62-71)");
                 ok = false;
                 continue;
             }
