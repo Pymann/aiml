@@ -454,7 +454,7 @@ struct PrefabChild {
     float       tb_off_x = 0.0f;      /* horizontal offset in pixels (only without wrapping) */
     float       tb_content_w = 0.0f;  /* width of the longest line (render intermediate) */
     float       tb_inner_w = 0.0f;    /* usable width — the input pass computes with it */
-    AimlUIFont* tb_font = nullptr;    /* dieselbe Schrift wie beim Zeichnen */
+    AimlUIFont* tb_font = nullptr;    /* the same font as when drawing */
     int32_t     tb_prev_max = -1;     /* textbox: last max scroll offset (for tail-follow detection) */
     /* text_input: multi-line?  This is decided when DRAWING (height against
      * line height, spec/44_6 §5g) — the input pass reads the same result
@@ -3480,9 +3480,9 @@ static void render_instance(AimlPrefabInstance* inst) {
             break;
         }
         case CHILD_DROPDOWN: {
-            /* Button-artiges Feld mit currentem Option-Label + "▼".  Klick
-             * cycled durch die pipe-separierte Options-Liste (siehe input
-             * loop).  Rendering: bg + label links, arrow rechts. */
+            /* Button-like field with the current option label + "▼".  A click
+             * cycles through the pipe-separated option list (see the input
+             * loop).  Rendering: bg + label on the left, arrow on the right. */
             uint32_t bg_rgba = ch.pressed_now && ch.active_color ? ch.active_color
                             : ch.hot         && ch.hover_color  ? ch.hover_color
                             :                                     ch.bg_color;

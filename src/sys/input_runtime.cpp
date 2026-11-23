@@ -1335,7 +1335,7 @@ static EM_BOOL bin_touchstart(int /*type*/, const EmscriptenTouchEvent* e, void*
     g_b->raw_mouse[0] = 1; g_b->pend_press[0] = 1;
     auto& ds = g_b->drag[0];
     ds.held = true; ds.active = false;
-    /* started/ended + pend_* bleiben stehen — siehe bin_mousedown (spec/44_0 §2.3). */
+    /* started/ended + pend_* stay — see bin_mousedown (spec/44_0 §2.3). */
     ds.origin_x = (float)mx; ds.origin_y = (float)my;
     ds.acc_x = ds.acc_y = 0.f;
     return EM_TRUE;

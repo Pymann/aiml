@@ -15,20 +15,20 @@ bool StatementBuilder::OnSequenceStart() {
     // Detect inner sequence in `decl: [name, buffer<T>, [v1, v2, ...]]`
     if (seqDepth == 2 && type == "decl" && (int)args.size() == 2)
         innerSeqStart = (int)args.size(); // always 2, but keep it explicit
-    // spec/10: dasselbe Literal auf der rechten Seite von `set: [ziel, [v1, v2, ...]]`.
-    // `expectingValue` muss hier WEG, sonst schluckt OnScalar das erste Element als
-    // skalaren Wert und der Rest fiel still weg (SIGSEGV, Backlog 13/36).
+    // spec/10: the same literal on the right-hand side of `set: [target, [v1, v2, ...]]`.
+    // `expectingValue` must GO here, otherwise OnScalar swallows the first element as a
+    // scalar value and the rest silently fell away (SIGSEGV, backlog 13/36).
     if (seqDepth == 2 && type == "set" && (int)args.size() == 1) {
         innerSeqStart = (int)args.size();
         expectingValue = false;
     }
-    // spec/10: `call: [f, [v1, v2]]` — die innere Sequenz ist EIN Listenargument.
+    // spec/10: `call: [f, [v1, v2]]` — the inner sequence is ONE list argument.
     if (seqDepth == 2 && type == "call" && !pendingCallLiteral)
         pendingCallLiteral = std::make_unique<BufferLiteralExpr>();
-    // spec/10: `return: [v1, v2]` ist ein LISTENLITERAL.  Ohne diese Fahne landeten
-    // die Elemente in `args`, `finish()` baute daraus keinen Wert, und die Funktion
-    // gab einen undefinierten Rueckgabewert zurueck: `len` war Muell und der erste
-    // Zugriff stuerzte ab (gemessen 20.11.2026 im Korpus-Erzeuger).
+    // spec/10: `return: [v1, v2]` is a LIST LITERAL.  Without this flag the
+    // elements landed in `args`, `finish()` built no value from them, and the function
+    // returned an undefined return value: `len` was garbage and the first
+    // access crashed (measured 2026-11-20 in the corpus generator).
     if (seqDepth == 1 && type == "return")
         retSeq = true;
     return true;
@@ -95,9 +95,9 @@ bool StatementBuilder::OnScalar(const std::string& value, const std::string& tag
     }
     
     if (type == "return") {
-        // `return: [a, b]` -- die Elemente gehoeren ins Listenliteral (args), NICHT
-        // einzeln in exprArg: dort gewann das letzte, und eine `list<i32>`-Funktion
-        // gab `ret i32 9` zurueck (gemessen 21.11.2026).
+        // `return: [a, b]` -- the elements belong in the list literal (args), NOT
+        // individually in exprArg: there the last one won, and a `list<i32>` function
+        // returned `ret i32 9` (measured 2026-11-21).
         if (!retSeq) exprArg = parseScalarExpr(value, tag);
     }
     
@@ -111,7 +111,7 @@ class ModifierBuilder : public StateHandler {
     bool* is_extern;
     std::string* lifetime;
     int* level;                 // spec/65 F65-19: `{ level: N }` an 4. Position
-    std::string where;          // Fundstelle fuer die Diagnose
+    std::string where;          // location for the diagnostic
     bool expectingKey = true;
     std::string currentKey;
 public:
@@ -138,7 +138,7 @@ public:
                     LOG_ERROR(builder->fmtLoc() + "decl lifetime must be scope|persistent|consumed, got '" + value + "' (spec/61 §9)");
                 }
             }
-            if (currentKey == "level") {     // spec/65: pruefen, nicht durchsetzen
+            if (currentKey == "level") {     // spec/65: check, do not enforce
                 int parsed = aiml::clearance::kAbsent;
                 if (aiml::clearance::parseLevel(value, where, parsed) && level)
                     *level = parsed;
@@ -151,10 +151,10 @@ public:
 };
 
 bool StatementBuilder::OnMapStart() {
-    // spec/10: innerhalb der inneren Sequenz eines Listen-/Buffer-Literals ist eine Map ein
-    // ELEMENT (`["P", { call: ... }]`), niemals ein Modifier-Block.  Ohne diese Abfrage
-    // schickte `args.size() >= 3` die Element-Map in den ModifierBuilder, der unbekannte
-    // Schluessel still verwirft — das Element fiel weg, ohne Warnung.
+    // spec/10: inside the inner sequence of a list/buffer literal a map is an
+    // ELEMENT (`["P", { call: ... }]`), never a modifier block.  Without this check
+    // `args.size() >= 3` sent the element map into the ModifierBuilder, which silently
+    // discards unknown keys — the element fell away without a warning.
     if (type == "decl" && args.size() >= 2 && !insideSeqLiteral()) {
         // If args size is 3, we already have Name, Type, Value. This map is Modifiers.
         // If args size is 2, it could be Value (an expr) or Modifiers.
@@ -188,10 +188,10 @@ void StatementBuilder::receiveChildNode(std::unique_ptr<Node> node) {
         } else if (type == "idx") {
             idxParts.push_back({"", std::unique_ptr<Expr>(e)});
         } else if (insideSeqLiteral()) {
-            // Element eines Listen-/Buffer-Literals: mit seiner Stelle festhalten.  In
-            // `exprArg` waere es verloren (dort steht der Initialwert des decl) — stand die
-            // Map VORN, nahm finish() sie als ganzen Initialwert und schrieb einen String in
-            // den Listen-Slot: `.len` Muell, Heap beschaedigt.
+            // Element of a list/buffer literal: keep it together with its position.  In
+            // `exprArg` it would be lost (that holds the decl's initial value) — if the
+            // map was at the FRONT, finish() took it as the whole initial value and wrote a string into
+            // the list slot: `.len` garbage, heap damaged.
             innerSeqExprs.emplace_back((int)args.size(), std::unique_ptr<Expr>(e));
         } else {
             exprArg = std::unique_ptr<Expr>(e);
@@ -203,7 +203,7 @@ std::unique_ptr<BufferLiteralExpr> StatementBuilder::buildSeqLiteral(int from) {
     auto lit = std::make_unique<BufferLiteralExpr>();
     size_t nextExpr = 0;
     for (int i = from; i <= (int)args.size(); ++i) {
-        // Alle Expressions, die VOR dem Skalar args[i] eintrafen (ihre Stelle ist <= i).
+        // All expressions that arrived BEFORE the scalar args[i] (their position is <= i).
         while (nextExpr < innerSeqExprs.size() && innerSeqExprs[nextExpr].first <= i)
             lit->elements.push_back(std::move(innerSeqExprs[nextExpr++].second));
         if (i < (int)args.size())
@@ -276,25 +276,25 @@ std::unique_ptr<Node> StatementBuilder::finish() {
          return decl;
     }
     if (type == "set" && args.size() >= 1) {
-         // Häufiger Bug-Magnet: `set: [list, idx, value]` als Index-Schreibe.
-         // set: hat NUR target + value (2 Args).  Index-Mutation ist `idx:`.
-         // 3+ scalar args sind also IMMER falsch — der Wert würde silent
-         // verschluckt und der Index nie geschrieben → Runtime-Bug ohne
-         // Compile-Hinweis.  Wir bricht hier hart ab und schlägt `idx:` vor.
-         // spec/02: GENAU [ziel, wert].  Gezaehlt werden die echten Skalare — `args.size()`
-         // war hier blind (expectingValue nimmt den zweiten Skalar vorweg), weshalb diese
-         // Pruefung nie ausloeste und das dritte Element still verschluckt wurde.
+         // Frequent bug magnet: `set: [list, idx, value]` as an index write.
+         // set: has ONLY target + value (2 args).  Index mutation is `idx:`.
+         // 3+ scalar args are therefore ALWAYS wrong — the value would be silently
+         // swallowed and the index never written → runtime bug without a
+         // compile hint.  We abort hard here and suggest `idx:`.
+         // spec/02: EXACTLY [target, value].  The real scalars are counted — `args.size()`
+         // was blind here (expectingValue takes the second scalar in advance), which is why this
+         // check never fired and the third element was silently swallowed.
          if (scalarCount >= 3 && innerSeqStart < 0) {
-             LOG_ERROR(builder->fmtLoc(capturedLine, capturedColumn) + "set: nimmt GENAU [target, value] — fuer Index-Schreiben benutze"
-                       + " idx: [container, index, value] (spec/10), fuer den ganzen Inhalt"
-                       + " set: [target, [v1, v2, ...]] (spec/10). Gesehen: "
-                       + std::to_string(scalarCount) + " Skalare, target='" + args[0].first
-                       + "'; alles ab dem dritten wuerde stillschweigend verschwinden.");
+             LOG_ERROR(builder->fmtLoc(capturedLine, capturedColumn) + "set: takes EXACTLY [target, value] — for index writes use"
+                       + " idx: [container, index, value] (spec/10), for the whole contents"
+                       + " set: [target, [v1, v2, ...]] (spec/10). Seen: "
+                       + std::to_string(scalarCount) + " scalars, target='" + args[0].first
+                       + "'; everything from the third on would silently vanish.");
              return nullptr;
          }
          if (innerSeqStart >= 0) {
-             // spec/10: Listen-/Buffer-Literal als Wert — visitSetStmt loest es in
-             // `clear` + ein `push` je Element auf, genau wie am decl.
+             // spec/10: list/buffer literal as a value — visitSetStmt resolves it into
+             // `clear` + one `push` per element, exactly as for decl.
              exprArg = buildSeqLiteral(innerSeqStart);
          } else if (!exprArg && args.size() >= 2) {
              const std::string& val = args[1].first;
@@ -315,13 +315,13 @@ std::unique_ptr<Node> StatementBuilder::finish() {
         std::unique_ptr<Expr> val;
         int depth = 1;
         if (exprArg) {
-            // store: [p, { '+': [a, b] }]  — value ist eine Map (exprArg).
-            // Optionaler depth landet dann als 2. scalar in args.
+            // store: [p, { '+': [a, b] }]  — value is a map (exprArg).
+            // An optional depth then lands as the 2nd scalar in args.
             val = std::move(exprArg);
             if (args.size() >= 2) {
                 try { depth = std::stoi(args[1].first); }
                 catch (...) {
-                    LOG_ERROR(builder->fmtLoc(capturedLine, capturedColumn) + "store: depth muss eine Integer-Konstante sein, got '"
+                    LOG_ERROR(builder->fmtLoc(capturedLine, capturedColumn) + "store: depth must be an integer constant, got '"
                               + args[1].first + "'");
                     return nullptr;
                 }
@@ -332,7 +332,7 @@ std::unique_ptr<Node> StatementBuilder::finish() {
             if (args.size() >= 3) {
                 try { depth = std::stoi(args[2].first); }
                 catch (...) {
-                    LOG_ERROR(builder->fmtLoc(capturedLine, capturedColumn) + "store: depth muss eine Integer-Konstante sein, got '"
+                    LOG_ERROR(builder->fmtLoc(capturedLine, capturedColumn) + "store: depth must be an integer constant, got '"
                               + args[2].first + "'");
                     return nullptr;
                 }
@@ -396,9 +396,9 @@ std::unique_ptr<Node> StatementBuilder::finish() {
     if (type == "return") {
          auto ret = std::make_unique<RetStmt>();
          if (exprArg) ret->value = std::move(exprArg);
-         // `return: [a, b]` / `return: []` -- die Elemente stehen in args/innerSeqExprs.
-         // Den Elementtyp bestimmt der erklaerte Rueckgabetyp (visitRetStmt setzt
-         // listLiteralArgType), darum traegt auch die leere Liste.
+         // `return: [a, b]` / `return: []` -- the elements are in args/innerSeqExprs.
+         // The element type is determined by the declared return type (visitRetStmt sets
+         // listLiteralArgType), which is why the empty list works too.
          else if (retSeq) ret->value = buildSeqLiteral(0);
          ret->sourceLine = capturedLine;
         ret->sourceColumn = capturedColumn;
@@ -458,7 +458,7 @@ std::unique_ptr<Node> StatementBuilder::finish() {
     // diagnosed above, so everything left here is an unknown key.
     {
         static const std::map<std::string, std::string> kHints = {
-            {"clearance", "clearance-self-certify: die Freigabe setzt der WIRT, nicht die Quelle (spec/65 F65-6)"},
+            {"clearance", "clearance-self-certify: the clearance is set by the HOST, not by the source (spec/65 F65-6)"},
             {"exit",     "use `call: [sys.exit, N]` (spec/23)"},
             {"continue", "aiml has no `continue`; restructure the loop body with `if:`"},
             {"break",    "aiml has no `break`; use the loop condition (spec/06)"},
@@ -470,9 +470,9 @@ std::unique_ptr<Node> StatementBuilder::finish() {
             {"var",      "use `decl: [name, type, value]`"},
             {"spawn",    "`spawn:` is an expression: `decl: [h, thread_handle, { spawn: [fn, args] }]` (spec/26)"},
         };
-        // Ein BEKANNTER Schluessel, der hier landet, ist nicht unbekannt, sondern
-        // unvollstaendig (`decl:` mit einem Argument, `call:` ohne Namen, …).
-        // Beides zu vermengen schickt den Leser in die falsche Richtung.
+        // A KNOWN key that ends up here is not unknown but
+        // incomplete (`decl:` with one argument, `call:` without a name, …).
+        // Mixing the two sends the reader in the wrong direction.
         static const std::set<std::string> kKnown = {
             "decl", "set", "store", "idx", "call", "print", "return", "throw"
         };

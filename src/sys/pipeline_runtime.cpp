@@ -565,7 +565,7 @@ int32_t aiml_pipeline_run_observed(void* p, void* observer_raw) {
 
     // F62-5: everything excluded is an error, not an empty success report.
     if (lanes.empty()) {
-        LOG_ERROR("pipeline '" + pp->name + "': exclude schliesst JEDE Lane aus — nichts zu tun");
+        LOG_ERROR("pipeline '" + pp->name + "': exclude excludes EVERY lane — nothing to do");
         return -1;
     }
 
@@ -637,7 +637,7 @@ int32_t aiml_pipeline_run_observed(void* p, void* observer_raw) {
                 // resolving.
                 if (st.pause_before && !pp->released.count(st.name)) {
                     std::lock_guard<std::mutex> g(state.mu);
-                    LOG_INFO("pipeline '" + pp->name + "': angehalten vor Schritt '" +
+                    LOG_INFO("pipeline '" + pp->name + "': paused before step '" +
                              st.name + "' (pause_before)");
                     state.paused   = true;
                     state.stop_all = true;
@@ -836,7 +836,7 @@ int32_t aiml_pipeline_run_observed(void* p, void* observer_raw) {
                     // this step — the workspace is now a
                     // complete tree, and the key is recorded.
                     if (pp->pause_wanted && rc == 0) {
-                        LOG_INFO("pipeline '" + pp->name + "': angehalten nach Schritt '" +
+                        LOG_INFO("pipeline '" + pp->name + "': paused after step '" +
                                  st.name + "'");
                         state.paused   = true;
                         state.stop_all = true;

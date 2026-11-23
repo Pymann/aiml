@@ -1,9 +1,9 @@
-// spec/29_2 §14a — `ctx`: Griffe auf lebende Compiler-Instanzen.
+// spec/29_2 §14a — `ctx`: handles on live compiler instances.
 //
-// Die Tabelle haelt die Instanzen; der Griff ist ihr Zeiger.  Freigegeben
-// wird ueber `aiml_ctx_free` (der Besitzer-Drop in aiml ruft es auf) — und
-// nicht frueher: mit dem Compiler sterben seine Engines, und mit ihnen zeigen
-// alle Adressen aus diesem Kontext ins Leere.
+// The table holds the instances; the handle is their pointer.  Freeing
+// happens via `aiml_ctx_free` (the owner drop in aiml calls it) — and
+// not earlier: with the compiler its engines die, and with them
+// all addresses from this context point into nothing.
 #include "ctx_runtime.h"
 #include "../../compiler.h"
 #include "../core/context.h"
@@ -20,12 +20,12 @@ namespace {
 
 struct CtxSlot {
     std::unique_ptr<AIMLCompiler> comp;
-    // Die Typtabelle des Kontexts: Name -> aiml-Typ bzw. Signatur, nach JEDEM
-    // Bundle fortgeschrieben.  Sie ist noetig, weil `compileFromString` den
-    // CompilerContext jedes Mal verwirft: die lebende Tabelle kennt nur, was
-    // das LETZTE Bundle uebersetzt (oder deklariert) hat.  Was der Kontext
-    // sieht, ist aber die Reihenfolge seiner Aufrufe (F29_2-…f) — also wird
-    // mitgeschrieben.  Spaeter definiert gewinnt (Neuladen, §4).
+    // The context's type table: name -> aiml type or signature, updated after EVERY
+    // bundle.  It is necessary because `compileFromString` discards the
+    // CompilerContext each time: the live table only knows what
+    // the LAST bundle compiled (or declared).  But what the context
+    // sees is the sequence of its calls (F29_2-…f) — so it is
+    // recorded as we go.  Defined later wins (reloading, §4).
     std::map<std::string, std::string> types;
 };
 
@@ -39,8 +39,8 @@ CtxSlot* slot_of(void* handle) {
     return nullptr;
 }
 
-// Zum Vergleich: Leerzeichen sind Schmuck.  Wer `fn(i32, string) -> i32`
-// schreibt, meint dasselbe wie `fn(i32,string)->i32`.
+// For comparison: whitespace is decoration.  Whoever writes `fn(i32, string) -> i32`
+// means the same as `fn(i32,string)->i32`.
 std::string squeeze(const std::string& in) {
     std::string out;
     out.reserve(in.size());
@@ -48,9 +48,9 @@ std::string squeeze(const std::string& in) {
     return out;
 }
 
-// Eine aiml-Liste, wie der Uebersetzer sie anlegt (dieselbe Form wie bei
-// `io.list_dir`): {size, capacity, data}.  Gefuellt wird mit refcounted
-// aiml-Strings.
+// An aiml list as the compiler creates it (the same form as for
+// `io.list_dir`): {size, capacity, data}.  It is filled with refcounted
+// aiml strings.
 struct AimlListRaw { int32_t size; int32_t capacity; void** data; };
 extern "C" char* aiml_str_ndup(const char* s, size_t len);
 
@@ -67,15 +67,15 @@ static void list_push(AimlListRaw* list, const std::string& text) {
     list->data[list->size++] = aiml_str_ndup(text.c_str(), text.size());
 }
 
-// Der Typ eines Symbols, wie der Kontext ihn vermerkt hat.
+// The type of a symbol as the context has noted it.
 //
-// Bei Funktionen ist das die VOLLE Signatur (F29_2-…d3): `fn(i32,string) -> i32`.
-// „Es ist eine Funktion" genuegt nicht — wer eine Adresse mit der falschen
-// Signatur ruft, bekommt keinen Fehler, sondern einen kaputten Stapel.  Der
-// Kontext kennt Argumenttypen und Rueckgabetyp, also wird beides verglichen.
+// For functions this is the FULL signature (F29_2-…d3): `fn(i32,string) -> i32`.
+// "It is a function" is not enough — whoever calls an address with the wrong
+// signature gets no error but a broken stack.  The
+// context knows argument types and return type, so both are compared.
 std::string signature_of(const CompilerContext::FunctionInfo& fi) {
-    // Die Stelligkeit kommt aus argNames: fehlt ein Typname, steht dort "?",
-    // statt dass das Argument aus der Signatur verschwindet.
+    // The arity comes from argNames: if a type name is missing, "?" stands there,
+    // instead of the argument disappearing from the signature.
     std::string sig = "fn(";
     for (size_t i = 0; i < fi.argNames.size(); ++i) {
         if (i) sig += ",";
@@ -92,7 +92,7 @@ std::string type_in_context(CompilerContext* c, const std::string& name, bool& f
     if (!c) return std::string();
     auto fit = c->functions.find(name);
     if (fit != c->functions.end()) { found = true; return signature_of(fit->second); }
-    // Globale Werte stehen in der Symboltabelle des Kontexts.
+    // Global values are in the context's symbol table.
     auto git = c->symbol_table.find(name);
     if (git != c->symbol_table.end()) {
         found = true;
@@ -126,7 +126,7 @@ void* aiml_ctx_new(void) {
         std::lock_guard<std::mutex> lock(g_ctx_mu);
         g_ctxs.push_back(std::move(slot));
     }
-    LOG_INFO("ctx: Kontext geoeffnet");
+    LOG_INFO("ctx: context opened");
     return handle;
 }
 
@@ -135,7 +135,7 @@ void aiml_ctx_free(void* handle) {
     for (auto it = g_ctxs.begin(); it != g_ctxs.end(); ++it) {
         if (it->get() == handle) {
             g_ctxs.erase(it);
-            LOG_INFO("ctx: Kontext geschlossen");
+            LOG_INFO("ctx: context closed");
             return;
         }
     }
@@ -148,7 +148,7 @@ void* aiml_ctx_compiler(void* handle) {
 
 int32_t aiml_ctx_symbol(void* handle, const char* name, const char* want_type,
                         int64_t* out_addr, const char** out_msg) {
-    static std::string s_msg;   // haelt die Begruendung fuer den Werfer
+    static std::string s_msg;   // holds the reason for the thrower
     s_msg.clear();
     if (out_msg)  *out_msg = "";
     if (out_addr) *out_addr = 0;
@@ -158,7 +158,7 @@ int32_t aiml_ctx_symbol(void* handle, const char* name, const char* want_type,
 
     CtxSlot* slot = slot_of(handle);
     if (!slot || !slot->comp || nm.empty()) {
-        s_msg = "ctx.symbol: kein Kontext oder kein Name";
+        s_msg = "ctx.symbol: no context or no name";
         if (out_msg) *out_msg = s_msg.c_str();
         return 1;
     }
@@ -175,26 +175,26 @@ int32_t aiml_ctx_symbol(void* handle, const char* name, const char* want_type,
         have = type_in_context(c, nm, found);
     }
     if (!found) {
-        s_msg = "ctx.symbol: '" + nm + "' kennt dieser Kontext nicht";
+        s_msg = "ctx.symbol: '" + nm + "' is not known to this context";
         if (out_msg) *out_msg = s_msg.c_str();
         return 1;
     }
 
     if (squeeze(want) != squeeze(have)) {
-        s_msg = "ctx.symbol: '" + nm + "' — erwartet '" + want + "', gefunden '" + have + "'";
+        s_msg = "ctx.symbol: '" + nm + "' — expected '" + want + "', found '" + have + "'";
         if (squeeze(want) == "fn")
-            s_msg += " (Funktionen brauchen die volle Signatur)";
+            s_msg += " (functions need the full signature)";
         if (out_msg) *out_msg = s_msg.c_str();
         return 2;
     }
 
     if (have.rfind("fn(", 0) == 0) {
         uint64_t addr = slot->comp->symbolAddress(nm);
-        // Gefunden in der Tabelle, aber ohne Adresse: das Bundle hat die
-        // Funktion DEKLARIERT und nie definiert.  Das ist kein Typfehler,
-        // sondern ein fehlendes Symbol — und genau so wird es gemeldet.
+        // Found in the table, but without an address: the bundle
+        // DECLARED the function and never defined it.  That is not a type error
+        // but a missing symbol — and it is reported exactly as such.
         if (!addr) {
-            s_msg = "ctx.symbol: '" + nm + "' ist deklariert, aber nirgends definiert";
+            s_msg = "ctx.symbol: '" + nm + "' is declared, but defined nowhere";
             if (out_msg) *out_msg = s_msg.c_str();
             return 1;
         }
@@ -202,11 +202,11 @@ int32_t aiml_ctx_symbol(void* handle, const char* name, const char* want_type,
         return 0;
     }
 
-    // Werte: die Adresse des Globals.  Der Leser hat den Typ genannt und er
-    // stimmt mit dem ueberein, den der Kontext vermerkt hat.
+    // Values: the address of the global.  The reader named the type and it
+    // matches the one the context has noted.
     uint64_t addr = slot->comp->symbolAddress(nm);
     if (!addr) {
-        s_msg = "ctx.symbol: '" + nm + "' hat keine Adresse";
+        s_msg = "ctx.symbol: '" + nm + "' has no address";
         if (out_msg) *out_msg = s_msg.c_str();
         return 1;
     }
@@ -214,10 +214,10 @@ int32_t aiml_ctx_symbol(void* handle, const char* name, const char* want_type,
     return 0;
 }
 
-// spec/29_2 §14b (F29_2-…i): nach TYP fragen, nicht nach Namen raten.  Der
-// Kontroller nimmt eine EINGEREICHTE Pipeline an und kennt ihren Namen nicht;
-// ihn aus dem Quelltext zu lesen heisst, den Quelltext zu lesen — also genau
-// das, was der Kontext uebernehmen soll.
+// spec/29_2 §14b (F29_2-…i): ask by TYPE, do not guess by name.  The
+// controller accepts a SUBMITTED pipeline and does not know its name;
+// reading it from the source text means reading the source text — i.e. exactly
+// what the context is supposed to take over.
 int32_t aiml_ctx_names_fill(void* handle, const char* want_type, void* list_ptr) {
     CtxSlot* slot = slot_of(handle);
     auto* list = static_cast<AimlListRaw*>(list_ptr);

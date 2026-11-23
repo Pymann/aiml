@@ -191,7 +191,7 @@ std::string shareDest(const std::string& row) {
                                                              : second - first - 1);
 }
 
-// Freigaben addieren sich, bei gleichem ZIEL gewinnt die Stufe (F62-138).
+// Shares add up; with the same TARGET the stage wins (F62-138).
 std::string mergeShares(const std::string& at_pipe, const std::string& at_stage) {
     if (at_stage.empty()) return at_pipe;
     if (at_pipe.empty())  return at_stage;

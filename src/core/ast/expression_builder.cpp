@@ -32,8 +32,8 @@ bool isKnownBinaryOperator(const std::string& op) {
 }
 
 bool isVariadicFoldBinaryOperator(const std::string& op) {
-    // spec/04_1: `+`/`*` falten, und seit 01.11.2026 auch `and`/`or` — die Faltung
-    // schachtelt BinaryExpr, der Kurzschluss je Paar bleibt also erhalten.
+    // spec/04_1: fold `+`/`*`, and since 2026-11-01 also `and`/`or` — the folding
+    // nests BinaryExpr, so the short circuit per pair is preserved.
     return op == "+" || op == "*" || op == "add" || op == "mul"
         || op == "and" || op == "&&" || op == "or" || op == "||";
 }
@@ -62,19 +62,19 @@ std::unique_ptr<AIML::AST::Expr> foldBinaryExprList(
 namespace AIML {
 namespace AST {
 
-// spec/04 "Operator-Schluessel zitieren": `&`, `&&`, `!`, `!=` und `~` sind in
-// Schluesselposition YAML-Indikatoren und WERFEN NICHT.  Was yaml-cpp daraus macht,
-// ist am Ereignisstrom gemessen (07.11.2026):
+// spec/04 "quoting operator keys": `&`, `&&`, `!`, `!=` and `~` are YAML indicators in
+// key position and DO NOT THROW.  What yaml-cpp makes of them
+// was measured on the event stream (2026-11-07):
 //
 //   { &: [12, 10] }   MapStart, SeqStart(anchor=1), 12, 10, SeqEnd, Null, MapEnd
 //   { !=: [1, 2] }    MapStart, SeqStart(tag='!=:'), 1, 2, SeqEnd, Null, MapEnd
 //   { ~: [12, 10] }   MapStart, Null, SeqStart, 12, 10, SeqEnd, MapEnd
 //
-// Bei den ersten zwei wird die SEQUENZ der Schluessel und der Wert `null` -- der
-// Operator ist vollstaendig verschwunden.  Beim dritten kommt der Schluessel als
-// Null-Skalar.  Ohne diese Meldung sah der Autor nur "Failed to evaluate value
-// expression" bzw. "Unknown binary operator: null" und nicht das fehlende
-// Anfuehrungszeichen.
+// With the first two the SEQUENCE becomes the key and the value `null` -- the
+// operator has vanished completely.  With the third the key comes as a
+// null scalar.  Without this message the author only saw "Failed to evaluate value
+// expression" or "Unknown binary operator: null" and not the missing
+// quotation marks.
 static void meldeGeschlucktenOperator(Builder* builder) {
     std::string zeilentext;
     if (!builder->sourceFile.empty() && builder->currentLine > 0) {
@@ -88,8 +88,8 @@ static void meldeGeschlucktenOperator(Builder* builder) {
     std::string welcher = blank.empty() ? std::string("an indicator character ('&', '&&', '!', '!=' or '~')")
                                         : ("the operator key '" + blank + "'");
     std::string zitiert = blank.empty() ? std::string("&") : blank;
-    // `!=` blank wird als Tag geschluckt -- zitiert liefe es in die Veraltet-Pruefung
-    // und der Autor braeuchte zwei Laeufe.  Hier gleich auf die Wortform zeigen.
+    // A bare `!=` is swallowed as a tag -- quoted it would run into the deprecation check
+    // and the author would need two runs.  Point to the word form right away here.
     auto dep = kDeprecatedOps.find(blank);
     std::string rat = (dep != kDeprecatedOps.end())
         ? ("  Write { " + dep->second + ": [...] } -- '" + blank + "' is not allowed either.")
@@ -122,12 +122,12 @@ bool ExpressionBuilder::OnMapEnd() {
 
 bool ExpressionBuilder::OnScalar(const std::string& value, const std::string& tag) {
     if (expectingKey) {
-        // spec/04 "Operator-Schluessel zitieren": `&`, `&&`, `!` und `~` sind in
-        // Schluesselposition YAML-Indikatoren.  Sie WERFEN NICHT -- yaml-cpp liest
-        // Anker/Tag/Null und liefert einen leeren bzw. `null`-Schluessel.  Ohne diese
-        // Pruefung sah der Compiler einen Operator, den niemand geschrieben hat, und
-        // meldete weiter unten etwas anderes ("Failed to evaluate value expression",
-        // "Unknown binary operator: null") -- gemessen 07.11.2026.
+        // spec/04 "quoting operator keys": `&`, `&&`, `!` and `~` are YAML indicators in
+        // key position.  They DO NOT THROW -- yaml-cpp reads
+        // anchor/tag/null and returns an empty or `null` key.  Without this
+        // check the compiler saw an operator nobody wrote, and
+        // reported something else further down ("Failed to evaluate value expression",
+        // "Unknown binary operator: null") -- measured 2026-11-07.
         if (value.empty() || (value == "null" && tag == "null")) {
             meldeGeschlucktenOperator(builder);
             return false;
@@ -149,7 +149,7 @@ bool ExpressionBuilder::OnScalar(const std::string& value, const std::string& ta
     }
     
     if (pendingListLiteral) {
-        // spec/10: Element eines Listenliterals, nicht ein weiteres Argument.
+        // spec/10: element of a list literal, not a further argument.
         if (tag == "!" || value.find("${") != std::string::npos)
             pendingListLiteral->elements.push_back(
                 value.find("${") != std::string::npos ? parseInterpolatedString(value)
@@ -181,9 +181,9 @@ bool ExpressionBuilder::OnScalar(const std::string& value, const std::string& ta
 }
 
 bool ExpressionBuilder::OnSequenceStart() {
-    // Eine Sequenz in SCHLUESSELposition kann nur heissen, dass YAML ein
-    // Indikatorzeichen gefressen hat (`{ &: [...] }` -> die Sequenz IST der
-    // Schluessel).  AIML kennt keine Sequenz als Operatorschluessel.
+    // A sequence in KEY position can only mean that YAML ate an
+    // indicator character (`{ &: [...] }` -> the sequence IS the
+    // key).  AIML knows no sequence as an operator key.
     if (op.empty() && expectingKey) {
         meldeGeschlucktenOperator(builder);
         return false;
@@ -193,8 +193,8 @@ bool ExpressionBuilder::OnSequenceStart() {
         hadSequence = true;
         return true;
     }
-    // spec/10: eine Sequenz INNERHALB der Argumentliste eines `call` ist ein Listenliteral
-    // und damit EIN Argument.  Vorher gab das `false` und die Elemente fielen einzeln durch.
+    // spec/10: a sequence INSIDE the argument list of a `call` is a list literal
+    // and therefore ONE argument.  Before, this returned `false` and the elements fell through individually.
     if (expectingArgs && op == "call" && !pendingListLiteral) {
         pendingListLiteral = std::make_unique<BufferLiteralExpr>();
         return true;
@@ -352,17 +352,17 @@ std::unique_ptr<Node> ExpressionBuilder::finish() {
         if (args.size() == 1) {
             return std::make_unique<UnaryExpr>(op, std::move(args[0]));
         }
-        // spec/04_1: ein `{ name: [...] }`, das hier ankommt und keine der Aritaeten trifft, ist
-        // UNBEKANNT.  Vorher fiel es als `nullptr` durch; der Aufrufer las das als „kein Wert" und
-        // initialisierte still mit 0 — jeder Tippfehler im Operatornamen ergab dieselbe falsche Null
-        // (Backlog-Punkt 1, `select`).  Auch ein falsch geschriebener Konstruktor landete hier:
-        // `{ vec3: [1,2,3] }` statt `{ call: [math.vec3, 1, 2, 3] }` ergab einen Nullvektor.
+        // spec/04_1: a `{ name: [...] }` that arrives here and matches none of the arities is
+        // UNKNOWN.  Before, it fell through as `nullptr`; the caller read that as "no value" and
+        // silently initialised with 0 — every typo in the operator name gave the same wrong zero
+        // (backlog item 1, `select`).  A misspelled constructor also ended up here:
+        // `{ vec3: [1,2,3] }` instead of `{ call: [math.vec3, 1, 2, 3] }` gave a zero vector.
         if (!op.empty()) {
             const std::string where = builder->fmtLoc();
             LOG_ERROR(where + "Unknown operator '" + op + "' with " + std::to_string(args.size())
-                      + " operand(s).  Bekannte Aritaeten: 1 (unaer), 2 (binaer), 2+ fuer +, *, and, or."
-                      + "  Ein Typ-Konstruktor heisst `{ call: [math.<typ>, ...] }` (spec/43_0);"
-                      + " eine dreiteilige Bedingung ist `if`/`else` (spec/05).");
+                      + " operand(s).  Known arities: 1 (unary), 2 (binary), 2+ for +, *, and, or."
+                      + "  A type constructor is written `{ call: [math.<type>, ...] }` (spec/43_0);"
+                      + " a three-part condition is `if`/`else` (spec/05).");
         }
         return nullptr;
     }
@@ -416,17 +416,17 @@ std::unique_ptr<Node> ExpressionBuilder::finish() {
     if (args.size() == 1) {
         return std::make_unique<UnaryExpr>(op, std::move(args[0]));
     }
-    // spec/04_1: ein `{ name: [...] }`, das hier ankommt und keine der Aritaeten trifft, ist
-    // UNBEKANNT.  Vorher fiel es als `nullptr` durch; der Aufrufer las das als „kein Wert" und
-    // initialisierte still mit 0 — jeder Tippfehler im Operatornamen ergab dieselbe falsche Null
-    // (Backlog-Punkt 1, `select`).  Auch ein falsch geschriebener Konstruktor landete hier:
-    // `{ vec3: [1,2,3] }` statt `{ call: [math.vec3, 1, 2, 3] }` ergab einen Nullvektor.
+    // spec/04_1: a `{ name: [...] }` that arrives here and matches none of the arities is
+    // UNKNOWN.  Before, it fell through as `nullptr`; the caller read that as "no value" and
+    // silently initialised with 0 — every typo in the operator name gave the same wrong zero
+    // (backlog item 1, `select`).  A misspelled constructor also ended up here:
+    // `{ vec3: [1,2,3] }` instead of `{ call: [math.vec3, 1, 2, 3] }` gave a zero vector.
     if (!op.empty()) {
         const std::string where = builder->fmtLoc();
         LOG_ERROR(where + "Unknown operator '" + op + "' with " + std::to_string(args.size())
-                  + " operand(s).  Bekannte Aritaeten: 1 (unaer), 2 (binaer), 2+ fuer +, *, and, or."
-                  + "  Ein Typ-Konstruktor heisst `{ call: [math.<typ>, ...] }` (spec/43_0);"
-                  + " eine dreiteilige Bedingung ist `if`/`else` (spec/05).");
+                  + " operand(s).  Known arities: 1 (unary), 2 (binary), 2+ for +, *, and, or."
+                  + "  A type constructor is written `{ call: [math.<type>, ...] }` (spec/43_0);"
+                  + " a three-part condition is `if`/`else` (spec/05).");
     }
     return nullptr;
 }
