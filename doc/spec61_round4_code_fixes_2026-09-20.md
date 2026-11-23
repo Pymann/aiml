@@ -1,27 +1,27 @@
-# Spec 61 – konkrete C++-Vorschläge für Review-Runde 4
+# Spec 61 – concrete C++ proposals for review round 4
 
-Stand: 2026-09-20. **Implementierungsvorschlag, noch kein angewendeter oder kompilierter Patch.** Die Ausschnitte zeigen die einzubauenden Änderungen; neue Hilfstypen und Funktionen sind entsprechend gekennzeichnet.
+As of: 2026-09-20. **Implementation proposal, not yet an applied or compiled patch.** The excerpts show the changes to be built in; new helper types and functions are marked accordingly.
 
-## Nachgewiesene Fehler und Abnahme
+## Demonstrated errors and acceptance
 
-| Fehler | Reproduktion | Erwartung nach dem Fix |
+| Error | Reproduction | Expectation after the fix |
 |---|---|---|
-| Interner schwacher Verweis zeigt nach Clone ins Original | [Probe 33](../tests/lifetime/33_round4_clone_internal_weak.aiml) | `duplicate.view == duplicate.owned`, Original bleibt unabhängig |
-| Tensor-Feld wird nur als Pointer kopiert | [Probe 34](../tests/lifetime/34_round4_clone_tensor_member.aiml) | Mutation des Clone-Tensors lässt Originalwert bei 1 |
-| Move innerhalb eines Initialisierers wird nicht verfolgt | [Negativprobe n12](../tests/lifetime/neg/n12_round4_move_in_initializer.aiml) | Compile-Fehler `use-after-move` |
+| An internal weak reference points into the original after a clone | [probe 33](../tests/lifetime/33_round4_clone_internal_weak.aiml) | `duplicate.view == duplicate.owned`, the original stays independent |
+| A tensor field is only copied as a pointer | [probe 34](../tests/lifetime/34_round4_clone_tensor_member.aiml) | Mutating the clone's tensor leaves the original value at 1 |
+| A move inside an initialiser is not tracked | [negative probe n12](../tests/lifetime/neg/n12_round4_move_in_initializer.aiml) | compile error `use-after-move` |
 
-Letzter vollständiger Lauf: 45 erfolgreiche Prüfungen, diese drei Fehlschläge. Getestetes Binary: 20.09.2026, 18:07 Uhr. Vor der Umsetzung Build und parallele Änderungen erneut abgleichen. Nur die betroffenen Pfade ändern; die vorhandenen Regressionstests nicht abschwächen.
+Last complete run: 45 successful checks, these three failures. Binary tested: 20.09.2026, 18:07. Before implementation, re-align the build and parallel changes. Only change the affected paths; do not weaken the existing regression tests.
 
-## 1. Gemeinsame Grundlage: eigene Beschreibungen für Clone-Semantik
+## 1. Shared basis: dedicated descriptors for clone semantics
 
-Betroffen: [ast_compiler.cpp](../src/core/ast_compiler.cpp), `serBuildSubtree`, `serFieldSubtree`, Clone-Lowering; [ser_runtime.h](../src/sys/ser_runtime.h) und [ser_runtime.cpp](../src/sys/ser_runtime.cpp).
+Affected: [ast_compiler.cpp](../src/core/ast_compiler.cpp), `serBuildSubtree`, `serFieldSubtree`, clone lowering; [ser_runtime.h](../src/sys/ser_runtime.h) and [ser_runtime.cpp](../src/sys/ser_runtime.cpp).
 
-Der aktuelle Descriptor-Builder behandelt schwache Referenzen und Tensor-Handles als `AIML_TD_RAWBYTES`. Der Clone-Walker kann dadurch weder Referenzen korrigieren noch Tensor-Daten klonen. Die gleichen Builder werden außerdem für Serialisierung und Freigabe benutzt. Deshalb die neue Semantik nicht ungeprüft in die vorhandenen Wire-Deskriptoren übernehmen.
+The current descriptor builder treats weak references and tensor handles as `AIML_TD_RAWBYTES`. The clone walker can therefore neither correct references nor clone tensor data. The same builders are also used for serialisation and release. Therefore do not take the new semantics over unchecked into the existing wire descriptors.
 
-### Vorschlag für die Builder-Schnittstelle
+### Proposal for the builder interface
 
 ```cpp
-// NEU: intern im Compiler; kein AIML-Sprachmerkmal.
+// NEW: internal to the compiler; not an AIML language feature.
 enum class DescriptorPurpose { Existing, Clone };
 
 static std::vector<AimlTypeNode> serBuildSubtree(
@@ -30,18 +30,18 @@ static std::vector<AimlTypeNode> serBuildSubtree(
     DescriptorPurpose purpose = DescriptorPurpose::Existing);
 ```
 
-`purpose` auch durch `serFieldSubtree` und sämtliche rekursiven Aufrufe reichen. Bestehende Aufrufer bleiben zunächst bei `Existing`; **alle** memV3-Clone-Einstiege, einschließlich Listen-/Map-Clone und normalem Modell-Clone, wählen `Clone`.
+Also pass `purpose` through `serFieldSubtree` and all recursive calls. Existing callers stay at `Existing` for now; **all** memV3 clone entry points, including list/map clone and normal model clone, choose `Clone`.
 
-Neue Blattarten in `AimlTDKind` ergänzen, ohne bestehende Nummern zu ändern:
+Add new leaf kinds to `AimlTDKind` without changing existing numbers:
 
 ```cpp
-// Vorschlag: aktuell endet die Enumeration bei AIML_TD_PTR_REF = 15.
-// Nummern vor dem Einbau mit dem aktuellen Header abgleichen.
-AIML_TD_WEAK_REF = 16, // Pointer-Slot; weder owning noch rekursiv zu verfolgen
-AIML_TD_TENSOR   = 17, // owned tensor-Handle; Clone über aiml_tensor_clone
+// Proposal: currently the enumeration ends at AIML_TD_PTR_REF = 15.
+// Align the numbers with the current header before building it in.
+AIML_TD_WEAK_REF = 16, // pointer slot; neither owning nor to be followed recursively
+AIML_TD_TENSOR   = 17, // owned tensor handle; clone via aiml_tensor_clone
 ```
 
-Im Builder **vor** Pointer-/Builtin-/RAWBYTES-Fallback:
+In the builder **before** the pointer/builtin/RAWBYTES fallback:
 
 ```cpp
 if (ctx.memV3 && purpose == DescriptorPurpose::Clone) {
@@ -54,36 +54,36 @@ if (ctx.memV3 && purpose == DescriptorPurpose::Clone) {
 }
 ```
 
-**Notwendige Integration:**
+**Necessary integration:**
 
-- Descriptor-Caches und LLVM-Globalnamen um den Verwendungszweck unterscheiden. Dieselbe Modellbezeichnung darf nicht versehentlich den Serialisierungsdescriptor für einen Clone liefern.
-- Rekursive `AIML_TD_PTR_REF`-Auflösungen müssen die **Clone-Variante** des referenzierten Typs erreichen. Dazu einen getrennten Clone-Registry-Pfad oder eine um den Zweck erweiterte Registry-Abfrage vorsehen. Nur den Root-Descriptor umzuschalten reicht nicht.
-- Die neuen Arten sind Blätter; Funktionen zum Verschieben von Child-Indizes dürfen deren Parameter nicht als Subtree-Indizes behandeln.
-- Clone-Deskriptoren dürfen nicht versehentlich in `enc`/`dec` landen. Dort unbekannte Arten explizit diagnostizieren; keine stillschweigende Auslassung von Feldern. Existing-/OFF-Deskriptoren und Wire-Format bleiben erhalten.
-- Normale Scope-Drop-Deskriptoren sind ein eigener Vertrag. Neue Clone-Deskriptoren nicht ungeprüft als Ersatz verwenden. Falls sie für die Freigabe teilweise erzeugter Clones dienen, müssen Weak-Ref ein No-op und Tensor ein passender Resource-Drop sein.
+- Distinguish descriptor caches and LLVM global names by purpose. The same model name must not accidentally deliver the serialisation descriptor for a clone.
+- Recursive `AIML_TD_PTR_REF` resolutions must reach the **clone variant** of the referenced type. Provide a separate clone registry path or a registry query extended by the purpose for that. Merely switching the root descriptor is not enough.
+- The new kinds are leaves; functions for shifting child indices must not treat their parameters as subtree indices.
+- Clone descriptors must not accidentally end up in `enc`/`dec`. Diagnose unknown kinds there explicitly; no silent omission of fields. Existing/OFF descriptors and the wire format are kept.
+- Normal scope drop descriptors are a separate contract. Do not use the new clone descriptors as a replacement unchecked. If they serve to release partially created clones, weak ref must be a no-op and tensor a matching resource drop.
 
-## 2. Interne schwache Referenzen nach dem Graph-Walk korrigieren
+## 2. Correct internal weak references after the graph walk
 
-### Ursache
+### Cause
 
-`serBuildSubtree` kopiert unter memV3 alle `ref<T>` als rohe Pointer. Das ist nur für **externe** schwache Ziele korrekt. Für interne Ziele verlangt §5.1 eine Umleitung zum entsprechenden Clone. Ein sofortiger Memo-Lookup reicht nicht: Das besessene Ziel kann im Feldlayout erst nach dem schwachen Verweis auftauchen.
+Under memV3 `serBuildSubtree` copies all `ref<T>` as raw pointers. That is only correct for **external** weak targets. For internal targets §5.1 requires redirection to the corresponding clone. An immediate memo lookup is not enough: the owned target can appear in the field layout only after the weak reference.
 
-### Konkreter Runtime-Vorschlag
+### Concrete runtime proposal
 
-Die bestehende Eigentümer-Memoisierung erhalten, aber um eine getrennte Adresszuordnung und ausstehende Verweiskorrekturen erweitern:
+Keep the existing owner memoisation, but extend it by a separate address mapping and pending reference corrections:
 
 ```cpp
-// NEU in ser_runtime.cpp
+// NEW in ser_runtime.cpp
 struct WeakCloneFixup {
     uint8_t* destinationSlot;
     const void* originalTarget;
 };
 
 struct CloneContext {
-    // Ersatz für die bisherige g_clone_memo-Tabelle:
+    // Replacement for the previous g_clone_memo table:
     std::unordered_map<const void*, void*> ownedMemo;
 
-    // Zieladressen für schwache Referenzen, auch auf inline gespeicherte Werte.
+    // Target addresses for weak references, also to values stored inline.
     std::unordered_map<const void*, void*> relocated;
     std::vector<WeakCloneFixup> weakFixups;
 };
@@ -95,13 +95,13 @@ static void finishWeakCloneRefs(CloneContext& context) {
         const auto found = context.relocated.find(fixup.originalTarget);
         const void* target = found != context.relocated.end()
             ? found->second : fixup.originalTarget;
-        // Kein incref: das Ergebnis bleibt eine schwache Referenz.
+        // No incref: the result stays a weak reference.
         std::memcpy(fixup.destinationSlot, &target, sizeof(target));
     }
 }
 ```
 
-Neuer `clw`-Zweig:
+New `clw` branch:
 
 ```cpp
 case AIML_TD_WEAK_REF: {
@@ -113,42 +113,42 @@ case AIML_TD_WEAK_REF: {
 }
 ```
 
-An jedem neu geklonten besessenen Heapobjekt die Zuordnung **vor der Rekursion** registrieren:
+Register the mapping for every newly cloned owned heap object **before the recursion**:
 
 ```cpp
 g_clone_ctx->ownedMemo.emplace(originalObject, clonedObject);
 g_clone_ctx->relocated.emplace(originalObject, clonedObject);
-// Erst danach dessen Inhalte mit clw(...) bearbeiten.
+// Only after that process its contents with clw(...).
 ```
 
-Dies betrifft `MODEL`, `PTR_STRUCT`, `PTR_REF` und Container-Handles. Die vorhandenen Regeln für Unique-Owner und Shared-Refcounts erhalten; insbesondere bei einem wiedergefundenen Unique-Owner nicht einfach einen zweiten besitzenden Pointer erzeugen.
+This concerns `MODEL`, `PTR_STRUCT`, `PTR_REF` and container handles. Keep the existing rules for unique owners and shared refcounts; in particular, for a unique owner found again do not simply create a second owning pointer.
 
-Zusätzlich Adressen kopierter inline Werte/Felder/Elemente in `relocated` erfassen. Dafür nur tatsächliche gültige Referent-Adressen aufnehmen, nicht pauschal beliebige Pointer-Slots als besessene Objekte interpretieren. Ein Borrow auf einen Wert oder ein Feld muss ebenfalls auf dessen neues Gegenstück zeigen können. `relocated` bleibt deshalb von `ownedMemo` getrennt.
+Additionally record the addresses of copied inline values/fields/elements in `relocated`. Only take actual valid referent addresses for that, do not interpret arbitrary pointer slots across the board as owned objects. A borrow of a value or a field must also be able to point to its new counterpart. `relocated` therefore stays separate from `ownedMemo`.
 
-Nach Abschluss des gesamten Walks genau einmal `finishWeakCloneRefs(context)` ausführen. Verschachtelte Runtime-Aufrufe müssen denselben Kontext nutzen oder den vorherigen Thread-local-Kontext per RAII wiederherstellen; das bisherige einfache Setzen auf `nullptr` genügt für Reentranz nicht.
+After completing the whole walk, run `finishWeakCloneRefs(context)` exactly once. Nested runtime calls must use the same context or restore the previous thread-local context via RAII; the previous simple setting to `nullptr` is not enough for reentrancy.
 
-### Wichtiger Compiler-Anschluss: endgültige Zieladresse
+### Important compiler hookup: final target address
 
-Für Probe 33 liegt das Ziel im Heap und bleibt stabil. Allgemein können schwache Verweise aber auf die geklonte **Wurzel als Wert** oder deren inline Felder zeigen. Der Clone darf sie dann nicht auf ein temporäres Alloca binden, dessen Inhalt danach an einen anderen Ort kopiert wird.
+For probe 33 the target lies in the heap and stays stable. In general, however, weak references can point to the cloned **root as a value** or its inline fields. The clone must then not bind them to a temporary alloca whose content is copied elsewhere afterwards.
 
-Für Deklarations-/Zuweisungsziele bevorzugt unmittelbar in den endgültigen Zielslot klonen. Bei temporären Rückgabewerten entweder stabile Ergebnisablage bis zum Ownership-Handoff verwenden oder eine explizite Relokation mit erneuter Verweiskorrektur vorsehen. Den aktuellen abschließenden Load/Store eines Modellwerts im Clone-Lowering darauf prüfen. Die Runtime allein kann diesen Adresswechsel nicht reparieren.
+For declaration/assignment targets, preferably clone directly into the final target slot. For temporary return values either use a stable result location until the ownership handoff, or provide an explicit relocation with a renewed reference correction. Check the current final load/store of a model value in clone lowering for this. The runtime alone cannot repair this address change.
 
 ### Tests
 
-- Probe 33 wird grün; Probe 28 für externe Referenzen bleibt grün.
-- Zusätzlicher Fall mit schwachem Feld **vor** dem besitzenden Feld, damit die zweite Phase wirklich benötigt wird.
-- Schwacher Verweis auf Clone-Wurzel und inline Feld; kein Verweis auf temporäre Compilerablage.
-- Null-Ref bleibt null; schwache Kanten erhöhen keinen Refcount und werden beim Drop nicht verfolgt.
+- Probe 33 turns green; probe 28 for external references stays green.
+- An additional case with the weak field **before** the owning field, so that the second phase is really needed.
+- A weak reference to the clone root and to an inline field; no reference to a temporary compiler location.
+- A null ref stays null; weak edges increase no refcount and are not followed on drop.
 
-## 3. Tensor-Felder über den Tensor-Clone kopieren
+## 3. Copy tensor fields via the tensor clone
 
-### Ursache
+### Cause
 
-Der RAWBYTES-Fallback kopiert die Tensoradresse. Ein `tensor.fill` auf dem Clone verändert dadurch die Originaldaten. Für einen Tensor existiert bereits die passende Runtime-Funktion: `void* aiml_tensor_clone(void*)` in [tensor_runtime.h](../src/sys/tensor_runtime.h).
+The RAWBYTES fallback copies the tensor address. A `tensor.fill` on the clone therefore changes the original data. For a tensor the matching runtime function already exists: `void* aiml_tensor_clone(void*)` in [tensor_runtime.h](../src/sys/tensor_runtime.h).
 
-### Konkreter Runtime-Vorschlag
+### Concrete runtime proposal
 
-Header im Clone-Runtime-Modul einbinden und den neuen Blattknoten behandeln:
+Include the header in the clone runtime module and handle the new leaf node:
 
 ```cpp
 #include "tensor_runtime.h"
@@ -159,9 +159,9 @@ case AIML_TD_TENSOR: {
     std::memcpy(&originalTensor, src, sizeof(originalTensor));
     void* clonedTensor = originalTensor
         ? aiml_tensor_clone(originalTensor) : nullptr;
-    // Bei einem nicht-null Original darf ein fehlgeschlagener Clone nicht
-    // stillschweigend als erfolgreicher Null-Wert weitergereicht werden.
-    // Hier an den festgelegten Runtime-Allokationsfehlerpfad anschließen.
+    // For a non-null original a failed clone must not be passed on
+    // silently as a successful null value.
+    // Connect to the defined runtime allocation error path here.
     std::memcpy(dst, &clonedTensor, sizeof(clonedTensor));
     if (originalTensor && clonedTensor) {
         g_clone_ctx->relocated.emplace(originalTensor, clonedTensor);
@@ -170,26 +170,26 @@ case AIML_TD_TENSOR: {
 }
 ```
 
-Dies ist ein owned Resource-Clone, kein Shared-Incref. Nicht denselben neuen Tensorhandle an mehrere Unique-Owner verteilen. Ein `ref<tensor>` bleibt ein `WEAK_REF` und wird nicht auf diesem Pfad dupliziert. Normale Modell-/Container-Rekursion muss den Tensor-Knoten erreichen; keine Sonderbehandlung ausschließlich für Top-level-`clone(tensor)` einbauen.
+This is an owned resource clone, not a shared incref. Do not hand out the same new tensor handle to several unique owners. A `ref<tensor>` stays a `WEAK_REF` and is not duplicated on this path. Normal model/container recursion must reach the tensor node; do not build in special handling exclusively for top-level `clone(tensor)`.
 
-Die vorhandene Tensor-Runtime definiert, wie Daten, Views und Metadaten geklont werden. Diese Logik wiederverwenden statt Tensor-Layouts im Serializer nachzubauen. Bei fehlschlagenden Clones müssen bereits erzeugte Resources entsprechend dem festgelegten Fehlervertrag freigegeben werden, falls die Runtime den Prozess nicht beendet.
+The existing tensor runtime defines how data, views and metadata are cloned. Reuse this logic instead of rebuilding tensor layouts in the serializer. On failing clones, already created resources must be freed according to the defined error contract, if the runtime does not terminate the process.
 
-**Tests:** Probe 34 wird grün; Probe 14 bleibt grün. Zusätzlich Null-Tensorfeld und Tensor in verschachteltem Modell prüfen. Scope-Drop der Clones unter ASan auf doppelte Freigaben/UAF prüfen; die automatische Resource-Freigabe darf nicht durch manuelle Freigaben im Test verdeckt werden.
+**Tests:** probe 34 turns green; probe 14 stays green. Additionally check a null tensor field and a tensor in a nested model. Check the scope drop of the clones under ASan for double frees/UAF; the automatic resource release must not be hidden by manual releases in the test.
 
-## 4. Ownership-Effekte aller Call-Ausdrücke auswerten
+## 4. Evaluate the ownership effects of all call expressions
 
-Betroffen: [borrow_check.cpp](../src/core/borrow_check.cpp), `scanUses`, `exprStmt`, `stmt(DeclStmt)`.
+Affected: [borrow_check.cpp](../src/core/borrow_check.cpp), `scanUses`, `exprStmt`, `stmt(DeclStmt)`.
 
-### Ursache
+### Cause
 
-`stmt(DeclStmt)` ruft `scanUses` auf. Dessen `CallExpr`-Zweig prüft lediglich die Argumente auf Reads. Die tatsächliche Move-Logik liegt nur im separaten `exprStmt`-Pfad. Daher unterscheiden sich semantisch identische Calls danach, ob ihr Ergebnis gespeichert wird.
+`stmt(DeclStmt)` calls `scanUses`. Its `CallExpr` branch only checks the arguments for reads. The actual move logic lies only in the separate `exprStmt` path. Semantically identical calls therefore differ depending on whether their result is stored.
 
-### Konkrete Extraktion der Call-Effekte
+### Concrete extraction of the call effects
 
-Die bereits vorhandenen Transferregeln in einen gemeinsamen Helper verschieben. Beispiel für den Teil der freien Funktionsaufrufe:
+Move the already existing transfer rules into a shared helper. Example for the part of free function calls:
 
 ```cpp
-// NEU: Methode von BorrowChecker.
+// NEW: method of BorrowChecker.
 void applyFunctionCallMoves(const CallExpr& call, int line) {
     const auto fit = ctx.functions.find(call.functionName);
     if (fit == ctx.functions.end()) return;
@@ -208,7 +208,7 @@ void applyFunctionCallMoves(const CallExpr& call, int line) {
 }
 ```
 
-Der bestehende `CallExpr`-Zweig von `scanUses` wird zu:
+The existing `CallExpr` branch of `scanUses` becomes:
 
 ```cpp
 if (auto* call = dynamic_cast<const CallExpr*>(e)) {
@@ -220,32 +220,32 @@ if (auto* call = dynamic_cast<const CallExpr*>(e)) {
 }
 ```
 
-**Der Helper darf nicht zusätzlich im alten `exprStmt`-Pfad aufgerufen werden.** Andernfalls würde derselbe Call doppelt verschieben und fälschlich `use-after-move` melden. `exprStmt` daher so umbauen, dass jeder Call genau einmal die gemeinsame Ausdrucksauswertung durchläuft. Bestehende Sonderbehandlung von `free` erhalten; Container-Moves und Borrow-Invalidierung ebenfalls in eindeutig einmal angewendete Call-Effekte auslagern.
+**The helper must not additionally be called in the old `exprStmt` path.** Otherwise the same call would move twice and wrongly report `use-after-move`. Therefore rebuild `exprStmt` so that every call runs through the shared expression evaluation exactly once. Keep the existing special handling of `free`; move container moves and borrow invalidation out into call effects that are applied unambiguously once as well.
 
-Der Name `scanUses` ist dann missverständlich; nach der funktionalen Korrektur in beispielsweise `analyzeExpr` umbenennen. Vorhandene Tests auf Move-Zustände dürfen nicht selbst noch einmal den gesamten Ausdruck auswerten.
+The name `scanUses` is then misleading; after the functional correction rename it, for example to `analyzeExpr`. Existing tests on move states must not themselves evaluate the whole expression once more.
 
-### Integrationsgrenzen
+### Integration limits
 
-- Die gezeigte Funktionsauflösung entspricht dem vorhandenen Code. Bei Methoden/Namensräumen dieselbe aufgelöste Signatur wie im Call-Lowering verwenden; keinen neuen Kurzname-Heuristikpfad einführen.
-- Initialisierer, Zuweisungs-RHS, Rückgabeausdrücke und verschachtelte Argumente müssen durch den gemeinsamen Pfad laufen.
-- Die Auswertungsreihenfolge muss dem Lowering entsprechen. Bei Kurzschlussoperatoren werden Effekte eines eventuell nicht ausgeführten Operanden mit den bestehenden Flow-Zuständen zusammengeführt; nicht blind beide Seiten als unbedingt ausgeführt behandeln.
-- Der dargestellte Fix verfolgt vorhandene `ptr`-Locals. Nicht behaupten, damit seien alle Aggregate, Ressourcen oder komplexen LValues automatisch abgedeckt.
+- The function resolution shown corresponds to the existing code. For methods/namespaces use the same resolved signature as in call lowering; do not introduce a new short-name heuristic path.
+- Initialisers, assignment RHSs, return expressions and nested arguments must run through the shared path.
+- The evaluation order must correspond to lowering. For short-circuit operators, effects of an operand that may not be executed are merged with the existing flow states; do not blindly treat both sides as executed unconditionally.
+- The fix shown tracks existing `ptr` locals. Do not claim that all aggregates, resources or complex lvalues are automatically covered by it.
 
-**Tests:** n12 wird korrekt abgelehnt; n11 bleibt korrekt abgelehnt. Zusätzlicher positiver Kontrollfall: derselbe Initialisierer-Aufruf ohne spätere Owner-Verwendung kompiliert und läuft. Weiterhin prüfen: `ref<T>`-Argument bleibt benutzbar, verschachtelter besitzender Call wird erfasst und ein Call wird nicht doppelt als Move verarbeitet.
+**Tests:** n12 is correctly rejected; n11 stays correctly rejected. An additional positive control case: the same initialiser call without a later use of the owner compiles and runs. Further check: a `ref<T>` argument stays usable, a nested owning call is captured and a call is not processed twice as a move.
 
-## 5. Reihenfolge und Verifikation
+## 5. Order and verification
 
-1. Aktuellen Diff und Buildstand prüfen; parallele Änderungen erhalten.
-2. Den unabhängig lösbaren Call-Checker-Fix umsetzen und gezielt testen.
-3. Clone-Descriptor-Zweck und neue Blattarten einführen, einschließlich rekursiver Registry-Auflösung.
-4. Tensor-Clone und zweiphasige Weak-Ref-Korrektur samt endgültiger Zielablage integrieren.
-5. Compiler und Runtime frisch bauen; anschließend:
+1. Check the current diff and build state; keep parallel changes.
+2. Implement the independently solvable call checker fix and test it specifically.
+3. Introduce the clone descriptor purpose and the new leaf kinds, including recursive registry resolution.
+4. Integrate the tensor clone and the two-phase weak ref correction including the final target location.
+5. Build compiler and runtime freshly; then:
 
 ```bash
 ONLY=round4 bash tests/lifetime/run_lifetime.sh
 bash tests/lifetime/run_lifetime.sh
 ```
 
-Danach die geänderten Speicherpfade mit einem frisch gebauten ASan-Binary prüfen. Den vorhandenen OFF-/Serialisierungsbetrieb gezielt kontrollieren, weil Typbeschreibungen gemeinsam verwendete Infrastruktur sind. Alle vorherigen Regressionstests müssen weiter bestehen.
+After that check the changed memory paths with a freshly built ASan binary. Check the existing OFF/serialisation operation specifically, because type descriptors are shared infrastructure. All previous regression tests must continue to pass.
 
-**Abschlusskriterium:** Probes 33 und 34 bestehen, n12 scheitert mit der vorgesehenen Diagnose, die bisher erfolgreichen 45 Prüfungen bleiben erfolgreich, und die neuen Kontrollfälle decken Feldreihenfolge, Null-Werte sowie einmalige Call-Effekte ab.
+**Completion criterion:** probes 33 and 34 pass, n12 fails with the intended diagnostic, the 45 checks successful so far stay successful, and the new control cases cover field order, null values and one-time call effects.
