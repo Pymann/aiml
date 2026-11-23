@@ -15,77 +15,77 @@
 # Until 2026-10-29 `at`/`get` read past the end silently (garbage or 0).
 - decl: [scores, list<i32>]
 
-# List-Literal-Init: [v1, v2, ...] als 3. Element des decl. Der Compiler emittiert einen push
-# pro Element. Numerische Elemente werden in den Elementtyp konvertiert (spec/13, z.B. -1 → i32,
-# 2 → f64); alle anderen Elementtypen (string, Modelle, …) werden genau wie bei `push` übernommen
-# (spec/61). `[]` ist für jeden Elementtyp die leere Liste.
+# List literal init: [v1, v2, ...] as the 3rd element of the decl. The compiler emits one push
+# per element. Numeric elements are converted to the element type (spec/13, e.g. -1 → i32,
+# 2 → f64); all other element types (string, models, …) are taken over exactly as with `push`
+# (spec/61). `[]` is the empty list for every element type.
 - decl: [ring_x, list<i32>, [0, 1, 1, 1, 0, -1, -1, -1]]
 - decl: [kinds, list<string>, ["beast", "wraith", "construct"]]
 
-# Ein Element darf eine BELIEBIGE Expression sein, genau wie ein Map-Literal-Wert weiter
-# unten und genau wie das Argument von `push` — ein `{ call: ... }`, ein Rechenausdruck, eine
-# Interpolation. Bis 2026-11-04 fiel eine Expression als Element still weg: der Parser sammelte
-# nur die SKALARE der Sequenz, und die Map landete im Wert-Slot des decl. Stand sie hinten, war
-# die Liste ein Element kuerzer; stand sie VORN, nahm der decl sie als ganzen Initialwert und
-# schrieb einen String in den Listen-Slot — ab da war `.len` Muell und der Heap beschaedigt.
-# Beides ohne Warnung. Gekostet hat es in cai zwei Protokoll-Schichten: `["P", {call: …}]`
-# schrieb nur "P", beim Zurueckspielen fielen 731 und 736 Propositionen auf EINEN sha256-
-# Schluessel zusammen (aus beiden Schichten wurde eine einzige Zeile), waehrend die Fakten
-# derselben Schichten korrekt zusammenfuehrten — der Fehler war unsichtbar, solange man nur
-# auf die Faktenzahl sah. Netz: tests/test_call_in_list_literal.aiml.
+# An element may be an ARBITRARY expression, just like a map literal value further
+# down and just like the argument of `push` — a `{ call: ... }`, an arithmetic expression, an
+# interpolation. Until 2026-11-04 an expression as an element was silently dropped: the parser only
+# collected the SCALARS of the sequence, and the map ended up in the value slot of the decl. If it was at the end,
+# the list was one element shorter; if it was at the FRONT, the decl took it as the whole initial value and
+# wrote a string into the list slot — from then on `.len` was garbage and the heap damaged.
+# Both without a warning. In cai it cost two log layers: `["P", {call: …}]`
+# wrote only "P", on replay 731 and 736 propositions collapsed onto ONE sha256
+# key (the two layers became a single row), while the facts
+# of the same layers merged correctly — the bug was invisible as long as one only
+# looked at the fact count. Safety net: tests/test_call_in_list_literal.aiml.
 - decl: [tags, list<string>, ["P", { call: [serialize_row, row] }, "${name}"]]
 - decl: [ratios, list<f64>, [1.0, { "/": [sum, count] }]]
 
-# Zuweisen geht genauso: `set: [liste, [v1, v2, ...]]` ERSETZT den Inhalt — der Compiler
-# emittiert ein `clear` und danach einen `push` pro Element, mit denselben Umwandlungen wie
-# beim decl. `[]` leert die Liste. Gilt ebenso fuer ein Member (`set: [<.names, ["a", "b"]]`)
-# und fuer buffer<T>. Bis 2026-10-31 nahm `set` nur das ERSTE Element (der Rest fiel still
-# weg) und schrieb es in den Container-Slot — kaputte Liste, dann SIGSEGV; `[]` uebersetzte
-# gar nicht.
+# Assignment works the same way: `set: [list, [v1, v2, ...]]` REPLACES the content — the compiler
+# emits a `clear` and then one `push` per element, with the same conversions as
+# for the decl. `[]` empties the list. Applies equally to a member (`set: [<.names, ["a", "b"]]`)
+# and to buffer<T>. Until 2026-10-31 `set` only took the FIRST element (the rest was silently
+# dropped) and wrote it into the container slot — broken list, then SIGSEGV; `[]` did not
+# compile at all.
 - set: [kinds, ["golem", "spirit"]]
 - set: [kinds, []]
 
-# Als AUFRUFARGUMENT ist ein Listenliteral EIN Argument: der Compiler legt dafuer eine
-# frische Liste an und fuellt sie. Der Elementtyp kommt aus dem PARAMETERTYP — nur so ist
-# `[]` bestimmbar; sonst wird er aus dem ersten Element abgeleitet. Bis 01.11.2026 wurde das
-# Literal in Einzelargumente aufgefaechert und erst die LLVM-Verifikation meldete
+# As a CALL ARGUMENT a list literal is ONE argument: the compiler creates a
+# fresh list for it and fills it. The element type comes from the PARAMETER TYPE — only that way is
+# `[]` determinable; otherwise it is derived from the first element. Until 2026-11-01 the
+# literal was fanned out into individual arguments and only LLVM verification reported
 # "Incorrect number of arguments".
 - set: [num, { call: [count_items, [1, 2, 3]] }]
 - set: [num, { call: [count_items, []] }]
 
-# Als RUECKGABEWERT gilt dasselbe: `return: [a, b]` gibt eine frische Liste zurueck, und
-# den Elementtyp gibt der ERKLAERTE Rueckgabetyp (`return: list<f32>` macht aus `[1, 2]`
-# zwei Brueche, nicht zwei ganze Zahlen) -- darum traegt auch `return: []`.  Der Behaelter
-# wird an den Aufrufer uebergeben, nicht am Rueckgabepfad freigegeben (spec/61 §6.2).
-# Bis 21.11.2026 landeten die Elemente im Argumentspeicher des Parsers, der Rumpf bekam
-# gar keinen Wert, und die Funktion gab einen UNDEFINIERTEN Rueckgabewert zurueck: `len`
-# war Muell (gemessen 1768256100) und der erste Zugriff stuerzte ab.
+# The same applies as a RETURN VALUE: `return: [a, b]` returns a fresh list, and
+# the element type is given by the DECLARED return type (`return: list<f32>` turns `[1, 2]`
+# into two floats, not two integers) -- that is why `return: []` works too.  The container
+# is handed to the caller, not freed on the return path (spec/61 §6.2).
+# Until 2026-11-21 the elements ended up in the parser's argument storage, the body got
+# no value at all, and the function returned an UNDEFINED return value: `len`
+# was garbage (measured 1768256100) and the first access crashed.
 # Test: tests/test_return_list_literal.aiml.
 - return: ["eins", "zwei"]
 - return: []
 
-# WANN eine Folge hinter `return:` ein Listenliteral ist, entscheidet der erklaerte
-# Rueckgabetyp -- `return: [{ "+": [x, 1] }]` ist die ueberall gebrauchte Schreibweise
-# fuer EINEN Wert:
-#   Rueckgabetyp list<T>/buffer, ein Element mit genau diesem Typ  -> Durchlass
-#   Rueckgabetyp list<T>/buffer, ein Element aus einem AUFRUF      -> Durchlass
-#   Rueckgabetyp list<T>/buffer, sonst                             -> Listenliteral
-#   anderer Rueckgabetyp, genau ein Element                        -> Durchlass
-#   anderer Rueckgabetyp, LEER (`return: []`)                      -> blankes Verlassen
-#   anderer Rueckgabetyp, mehrere Elemente                         -> FEHLER
-# Der vorletzte Fall war vorher still: das LETZTE Element gewann, eine i32-Funktion gab
-# `ret i32 9` zurueck.  Test: tests/test_return_list_no_list_error.aiml.
+# WHETHER a sequence after `return:` is a list literal is decided by the declared
+# return type -- `return: [{ "+": [x, 1] }]` is the notation used everywhere
+# for ONE value:
+#   return type list<T>/buffer, one element of exactly this type    -> pass-through
+#   return type list<T>/buffer, one element from a CALL             -> pass-through
+#   return type list<T>/buffer, otherwise                           -> list literal
+#   other return type, exactly one element                          -> pass-through
+#   other return type, EMPTY (`return: []`)                         -> bare exit
+#   other return type, several elements                             -> ERROR
+# The second-to-last case used to be silent: the LAST element won, an i32 function returned
+# `ret i32 9`.  Test: tests/test_return_list_no_list_error.aiml.
 #
-# Die Aufruf-Zeile kam am 21.11.2026 dazu: der Typ eines Aufrufs ist an dieser
-# Stelle nicht bestimmbar, und `return: [{ call: [bytes.concat, ...] }]` in einer
-# `buffer<u8>`-Funktion wurde als Behaelterliteral gelesen, dessen Elementtyp
-# niemand kennt -- neun Tests fielen (test_bytes, test_pipeline_*).  Ein Aufruf
-# liefert fast immer den fertigen Behaelter, also gilt Durchlass; wer wirklich
-# einen Behaelter MIT einem berechneten Element will, schreibt ihn in eine
-# Variable und gibt die zurueck.
-- return: [{ "+": [wert, 1] }]      # i32-Funktion: der Wert selbst
-- return: [innen]                   # list<string>-Funktion, `innen` ist list<string>: Durchlass
-- return: []                        # void-Funktion: einfach heraus (118 Stellen im Korpus)
+# The call row was added on 2026-11-21: the type of a call cannot be determined at this
+# point, and `return: [{ call: [bytes.concat, ...] }]` in a
+# `buffer<u8>` function was read as a container literal whose element type
+# nobody knows -- nine tests failed (test_bytes, test_pipeline_*).  A call
+# almost always returns the finished container, so pass-through applies; whoever really
+# wants a container WITH a computed element writes it into a
+# variable and returns that.
+- return: [{ "+": [wert, 1] }]      # i32 function: the value itself
+- return: [innen]                   # list<string> function, `innen` is list<string>: pass-through
+- return: []                        # void function: simply leave (118 places in the corpus)
 
 # Reading and WRITING one element.  There is no `list.set` method: a write is the `idx:`
 # STATEMENT, the same form as for an array above.  `insert`/`remove` are for changing the
@@ -116,11 +116,11 @@
 - call: [scores.extend, more]    # append value-copies of another list<i32>
                                  # (self.extend(self) is defined; realloc-safe).
                                  # A different list<U> is a compile error.
-                                 # Refcounted elements (string, Modelle, verschachtelte
-                                 # Container) werden MIT-BESESSEN: jede angehaengte Kopie
-                                 # bekommt ein incref (spec/61 §5.4), wie bei `slice`.
-                                 # Sonst haelt das Ziel freigegebene Zeiger, sobald die
-                                 # Quelle stirbt.
+                                 # Refcounted elements (string, models, nested
+                                 # containers) become CO-OWNED: every appended copy
+                                 # gets an incref (spec/61 §5.4), as with `slice`.
+                                 # Otherwise the target holds freed pointers as soon as the
+                                 # source dies.
 - call: [scores.reverse]         # in-place reverse
 - call: [scores.sort]            # in-place ascending, stable, O(n log n) (F10-20)
 - call: [scores.sort_desc]       # in-place descending
@@ -145,16 +145,16 @@
 # Note: The ':' inside '<>' is the type separator, not YAML key syntax.
 - decl: [users, map<string:i32>]
 
-# Map-Literal-Init: {key: value, ...} als 3. Element des decl.  Compiler emittiert
-# einen .put-Call pro Eintrag.  Key-Typen: string, i32, i64, enum.  Values dürfen
-# beliebige Expressions sein (Literale, calls, ...).
+# Map literal init: {key: value, ...} as the 3rd element of the decl.  The compiler emits
+# one .put call per entry.  Key types: string, i32, i64, enum.  Values may
+# be arbitrary expressions (literals, calls, ...).
 - decl: [scores, map<string:i32>, {alice: 1, bob: 2, charlie: 3}]
 
-# Enum-typed keys: das Literal nutzt die Enum-VALUE-Namen als Schlüssel; der
-# Compiler löst sie beim Emit direkt in die zugehörige i32-Konstante auf.
-# Vorteil ggü. `map<i32:i32>` mit reinen Zahl-Keys: (1) Review-freundlich —
-# man sieht sofort was gemeint ist, (2) Typo-Safety — unbekannter Enum-Wert
-# → Compile-Error statt still falscher Zahl.
+# Enum-typed keys: the literal uses the enum VALUE names as keys; the
+# compiler resolves them directly into the corresponding i32 constant at emit time.
+# Advantage over `map<i32:i32>` with plain number keys: (1) review-friendly —
+# one sees immediately what is meant, (2) typo safety — an unknown enum value
+# → compile error instead of a silently wrong number.
 - enum: { name: Color, values: [red, green, blue] }
 - decl: [weight, map<Color:i32>, {red: 100, green: 200, blue: 300}]
 - set: [wg, { call: [weight.get, Color.green] }]   # → 200
@@ -162,7 +162,7 @@
 - call: [users.put, "alice", 1]
 - set: [val, { call: [users.get, "alice"] }]   # returns i32 or null pointer if missing
 - call: [users.remove, "alice"]                # raises MissingKeyError if key not found
-- call: [users.clear]                          # alle Eintraege; Kapazitaet bleibt, sofort wieder nutzbar
+- call: [users.clear]                          # all entries; capacity stays, immediately reusable
 - set: [len, users.len]
 - decl: [names, list<string>, { call: [users.keys] }]   # map<string:V> only: every key, byte order (F10-22)
 
