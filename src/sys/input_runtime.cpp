@@ -431,10 +431,10 @@ static void glfw_mbtn_cb(GLFWwindow*, int btn, int action, int /*mods*/) {
         auto& ds = g_input->drag[btn];
         ds.held               = true;
         ds.active             = false;
-        /* started/ended NICHT loeschen: glfwPollEvents arbeitet alle Ereignisse
-         * einer Luecke am Frame-Anfang in einem Rutsch ab, ein Release+Druck in
-         * derselben Luecke verlor damit den Drop (spec/44_0 §2.3 — Kanten werden
-         * aufbewahrt, nicht verworfen).  aiml_input_update raeumt sie auf. */
+        /* Do NOT clear started/ended: glfwPollEvents processes all events of
+         * a gap at the start of the frame in one go, so a release+press in
+         * the same gap lost the drop (spec/44_0 §2.3 — edges are
+         * kept, not discarded).  aiml_input_update cleans them up. */
         ds.origin_x = (float)g_input->curr_pos_x;
         ds.origin_y = (float)g_input->curr_pos_y;
         ds.acc_x = 0.f;
@@ -482,16 +482,16 @@ extern "C" void aiml_input_post_mouse_up(int32_t btn) {
     glfw_mbtn_cb(nullptr, (int)btn, GLFW_RELEASE, 0);
 }
 
-/* spec/44_0 §8.3a: die *_pending-Varianten.  Die Ereignis-Schicht (pend_*)
- * gibt es nur im Browser-Zweig -- dort schreiben die DOM-Handler dorthin und
- * `update()` uebernimmt die Kante in den naechsten Frame.  Hier schreiben die
- * GLFW-Rueckrufe die frame-sichtbaren Slots selbst; es gibt keine zweite
- * Schicht, in die man injizieren koennte.  "Tut, was der Ereignis-Handler tut"
- * heisst nativ also genau das, was post_mouse_* schon tut.
+/* spec/44_0 §8.3a: the *_pending variants.  The event layer (pend_*)
+ * only exists in the browser branch -- there the DOM handlers write into it and
+ * `update()` carries the edge over into the next frame.  Here the
+ * GLFW callbacks write the frame-visible slots themselves; there is no second
+ * layer one could inject into.  "Does what the event handler does"
+ * therefore means natively exactly what post_mouse_* already does.
  *
- * Sie trotzdem hier zu haben ist der Punkt: ein Programm, das sie ruft, muss
- * auf JEDER Plattform linken (Android hat sie als no-op).  Vorher fehlten sie
- * nur in diesem Zweig, und der Fehler fiel erst beim Linken auf. */
+ * Having them here anyway is the point: a program that calls them must
+ * link on EVERY platform (Android has them as no-ops).  Before, they were missing
+ * only in this branch, and the error only showed up at link time. */
 extern "C" void aiml_input_post_mouse_move_pending(float x, float y) {
     aiml_input_post_mouse_move(x, y);
 }
@@ -503,12 +503,12 @@ extern "C" void aiml_input_post_mouse_up_pending(int32_t btn) {
 }
 /* spec/44_0 §8.2: abort the active press on button 0 without a release latch. */
 /* spec/44_0 §2.1: a key held while the window loses focus can never be released
- * TO US — the keyup goes to whoever has focus now.  Ohne dieses Aufräumen bleibt
- * die Taste für immer unten, und jede `key_down`-Abfrage meldet sie weiter: eine
- * Kamera an `key_down("E")` dreht dann den Rest der Sitzung (datacreatures,
- * 15.11.2026).  Für Tasten gibt es keinen Cancel-Kanal wie für die Maus, also
- * wird der Fokusverlust als RELEASE gemeldet -- das kleinere Übel, denn wer
- * "gehalten" aus Flanken mitführt, bliebe sonst ohne jedes Ereignis hängen. */
+ * TO US — the keyup goes to whoever has focus now.  Without this cleanup the
+ * key stays down forever, and every `key_down` query keeps reporting it: a
+ * camera on `key_down("E")` then rotates for the rest of the session (datacreatures,
+ * 2026-11-15).  For keys there is no cancel channel as for the mouse, so
+ * the focus loss is reported as a RELEASE -- the lesser evil, because whoever
+ * tracks "held" from edges would otherwise hang without any event at all. */
 static void release_keys_on_focus_loss(void) {
     if (!g_input) return;
     for (int k = 0; k < AIML_MAX_KEYS; k++) {
@@ -520,7 +520,7 @@ static void release_keys_on_focus_loss(void) {
 
 /* GLFW focus callback: a button held while the window loses focus can never be
  * completed — cancel it (spec/44_0 §2.2) instead of leaving it stuck down.
- * Dasselbe gilt für gehaltene Tasten (§2.1). */
+ * The same applies to held keys (§2.1). */
 static void glfw_focus_cb(GLFWwindow* /*w*/, int focused) {
     if (!g_input || focused) return;
     for (int b = 0; b < AIML_MAX_MOUSE; b++) {
@@ -549,9 +549,9 @@ extern "C" void aiml_input_post_scroll(float dx, float dy) {
     if (!g_input) return;
     glfw_scroll_cb(nullptr, (double)dx, (double)dy);
 }
-/* spec/44_0 §8.2: das Fenster verliert den Fokus -- jeder laufende Druck wird
- * abgebrochen, jede gehaltene Taste freigegeben.  Damit ist §2.1 pruefbar,
- * ohne ein zweites Fenster zu oeffnen. */
+/* spec/44_0 §8.2: the window loses focus -- every running press is
+ * cancelled, every held key released.  That makes §2.1 testable
+ * without opening a second window. */
 extern "C" void aiml_input_post_focus_lost(void) {
     if (!g_input) return;
     glfw_focus_cb(nullptr, 0);
@@ -614,14 +614,14 @@ void aiml_input_init(void* win_handle) {
 
     glfwSetScrollCallback  (glfw, glfw_scroll_cb);
 #ifndef __EMSCRIPTEN__
-    /* Tastatur: im Browser besitzt sie der eigene Backend-Pfad (bin_keydown /
-     * bin_keypress auf dem window-Target, siehe unten) — der liefert kanonische
-     * Tastennamen, die Zwischenablage und das paste-Ereignis.  Registrierte man
-     * hier ZUSAETZLICH die GLFW-Rueckrufe, meldete jeder Tastendruck ZWEI
-     * Ereignisse: der Cursor sprang pro Pfeiltaste zwei Zeichen weit und ein
-     * getipptes Zeichen erschien doppelt (gemeldet 2026-10-15 am cosmos-
-     * Quelltextfeld; nativ fiel es nie auf, weil es dort nur diese eine Quelle
-     * gibt).  EINE Quelle je Ereignis — sonst zaehlt jemand doppelt. */
+    /* Keyboard: in the browser it is owned by its own backend path (bin_keydown /
+     * bin_keypress on the window target, see below) — that delivers canonical
+     * key names, the clipboard and the paste event.  If one ADDITIONALLY registered
+     * the GLFW callbacks here, every key press reported TWO
+     * events: the cursor jumped two characters per arrow key and a
+     * typed character appeared twice (reported 2026-10-15 on the cosmos
+     * source text field; natively it never showed, because there is only this one source
+     * there).  ONE source per event — otherwise someone counts twice. */
     glfwSetKeyCallback     (glfw, glfw_key_cb);
     glfwSetCharCallback    (glfw, glfw_char_cb);
 #endif
@@ -1073,19 +1073,19 @@ struct BrowserDrag {
     bool  pend_started;
     bool  pend_ended;
     bool  pend_cancelled;
-    /* Wo das Loslassen stattfand.  Der gelatchte Rand allein genuegt nicht: er
-     * wird evtl. erst im naechsten Frame gemeldet, und bis dahin steht der
-     * Cursor woanders — ohne diese Position landete der Drop am neuen
-     * Druckpunkt (falsches Ziel) statt am Loslasspunkt (spec/44_0 §2.3). */
+    /* Where the release took place.  The latched edge alone is not enough: it
+     * may only be reported in the next frame, and by then the
+     * cursor is somewhere else — without this position the drop landed at the new
+     * press point (wrong target) instead of at the release point (spec/44_0 §2.3). */
     float pend_end_x;
     float pend_end_y;
     float end_x;
     float end_y;
-    /* Wo der Drag BEGANN, gelatcht mit der started-Kante.  `origin_*` allein
-     * genuegt nicht: das wird von JEDEM neuen Druck sofort ueberschrieben,
-     * waehrend die Kante erst im naechsten Frame gemeldet wird.  Bei
-     * "Druecken A -> ziehen -> loslassen -> Druecken B" in einer Luecke
-     * zeigte origin_* dann auf B, und die Aufnahme griff an B statt an A. */
+    /* Where the drag BEGAN, latched with the started edge.  `origin_*` alone
+     * is not enough: it is overwritten immediately by EVERY new press,
+     * while the edge is only reported in the next frame.  With
+     * "press A -> drag -> release -> press B" in one gap,
+     * origin_* then pointed to B, and the pickup grabbed at B instead of at A. */
     float pend_start_x;
     float pend_start_y;
     float start_x;
@@ -1165,10 +1165,10 @@ static void bin_event_xy(double clientX, double clientY, double* out_x, double* 
     *out_y = (clientY - rectT) * sy;
 }
 
-/* spec/44_0 §2: kanonisch ist 0=links, 1=RECHTS, 2=Mitte (die GLFW-Reihenfolge,
- * die der native Pfad einhaelt).  DOM `MouseEvent.button` nummeriert 0=links,
- * 1=Mitte, 2=rechts.  Dieser Adapter reichte den DOM-Index unveraendert durch,
- * womit im WASM-Build 1 und 2 gegenueber der Spec getauscht waren. */
+/* spec/44_0 §2: canonical is 0=left, 1=RIGHT, 2=middle (the GLFW order,
+ * which the native path keeps).  DOM `MouseEvent.button` numbers 0=left,
+ * 1=middle, 2=right.  This adapter passed the DOM index through unchanged,
+ * which swapped 1 and 2 relative to the spec in the WASM build. */
 static inline int dom_btn_to_aiml(int dom_btn) {
     switch (dom_btn) {
         case 0:  return 0;   /* links  */
@@ -1208,22 +1208,22 @@ static EM_BOOL bin_mousedown(int /*type*/, const EmscriptenMouseEvent* e, void* 
     g_b->curr_pos_x = mx; g_b->curr_pos_y = my;
     auto& ds = g_b->drag[b];
     ds.held = true; ds.active = false;
-    /* Auch started/ended_this_frame bleiben stehen: das sind die Werte DIESES
-     * Frames, und spec/44_0 §2.3 sagt, sie gelten fuer den ganzen Frame (jeder
-     * Leser sieht denselben Wert).  Ein mitten im Frame eintreffender Druck
-     * haette sie sonst fuer den Rest des Frames genullt — der Drop wuerde
-     * schon im LAUFENDEN Frame verschwinden, noch vor dem Latch.
-     * `aiml_input_update` setzt sie am Frame-Anfang aus den pend_* neu.
+    /* started/ended_this_frame stay as well: those are THIS
+     * frame's values, and spec/44_0 §2.3 says they hold for the whole frame (every
+     * reader sees the same value).  A press arriving in the middle of the frame
+     * would otherwise have zeroed them for the rest of the frame — the drop would
+     * vanish already in the RUNNING frame, even before the latch.
+     * `aiml_input_update` sets them anew from the pend_* at the start of the frame.
      *
-     * pend_started/ended/cancelled werden ebenfalls bewusst nicht geloescht.
-     * Es sind noch nicht ausgelieferte Kanten: die DOM-Handler laufen zwischen
-     * den Frames UND mitten im Frame (jeder blockierende Netzaufruf pollt mit
-     * emscripten_sleep und gibt an die JS-Ereignisschleife ab).  Loeschte ein
-     * neuer Druck sie, verschwaende ein Release+Druck innerhalb desselben
-     * Frames den Drop ersatzlos — der Benutzer zieht, laesst los, drueckt
-     * ungeduldig nochmal, und der Drop ist weg.  spec/44_0 §2.3 sagt dazu
-     * normativ: aufbewahrt und im naechsten Frame gemeldet, nicht verworfen.
-     * `aiml_input_update` leert sie beim Ausliefern, das genuegt. */
+     * pend_started/ended/cancelled are also deliberately not cleared.
+     * They are edges not yet delivered: the DOM handlers run between
+     * frames AND in the middle of a frame (every blocking network call polls with
+     * emscripten_sleep and yields to the JS event loop).  If a
+     * new press cleared them, a release+press within the same
+     * frame would lose the drop without replacement — the user drags, releases, presses
+     * again impatiently, and the drop is gone.  spec/44_0 §2.3 says on this
+     * normatively: kept and reported in the next frame, not discarded.
+     * `aiml_input_update` clears them on delivery, that is enough. */
     ds.origin_x = (float)mx; ds.origin_y = (float)my;
     ds.acc_x = ds.acc_y = 0.f;
     return EM_TRUE;
@@ -1246,10 +1246,10 @@ static EM_BOOL bin_mouseup(int /*type*/, const EmscriptenMouseEvent* e, void* /*
 }
 static void bin_cancel_press(int btn);   /* defined with the touch handlers below */
 
-/* spec/44_0 §2.1: gehaltene Tasten beim Fokusverlust freigeben.  Das `keyup`
- * geht an das Fenster, das den Fokus JETZT hat -- ohne dieses Aufraeumen bleibt
- * `raw_keys` fuer immer gesetzt, und eine Kamera an `key_down("E")` dreht den
- * Rest der Sitzung (datacreatures, 15.11.2026). */
+/* spec/44_0 §2.1: release held keys on focus loss.  The `keyup`
+ * goes to the window that has the focus NOW -- without this cleanup
+ * `raw_keys` stays set forever, and a camera on `key_down("E")` rotates for the
+ * rest of the session (datacreatures, 2026-11-15). */
 static void bin_release_keys(void) {
     if (!g_b) return;
     for (int k = 0; k < AIML_MAX_KEYS; k++) {
@@ -1271,26 +1271,26 @@ static EM_BOOL bin_touchcancel(int /*type*/, const EmscriptenTouchEvent* /*e*/, 
 }
 /* Focus loss / tab hidden with a button still held: same reasoning — the press
  * cannot be completed, so cancel it instead of leaving it stuck down. */
-/* spec/44_0 §2.2 nennt als Abbruchquelle "WINDOW focus loss / tab becoming
- * hidden".  Ein Element INNERHALB der Seite, das den Fokus verliert, ist das
- * nicht -- und genau das kam hier an: beim Klick auf einen Knopf gibt das
- * versteckte Tastatur-Feld (aiml_web_kbd, siehe unten) seinen Fokus ab.  Der
- * Abbruch setzte raw_mouse[0]=0, und bin_mouseup meldet die Freigabe NUR,
- * wenn raw_mouse gesetzt war -- der erste Knopfdruck nach jeder Texteingabe
- * fiel damit ersatzlos aus.  Im DataCreatures-Login hiess das: tippen,
- * klicken, nichts geschieht; erst der zweite Klick zaehlte.
+/* spec/44_0 §2.2 names as a cancel source "WINDOW focus loss / tab becoming
+ * hidden".  An element INSIDE the page that loses focus is
+ * not that -- and that is exactly what arrived here: when a button is clicked, the
+ * hidden keyboard field (aiml_web_kbd, see below) gives up its focus.  The
+ * cancellation set raw_mouse[0]=0, and bin_mouseup reports the release ONLY
+ * if raw_mouse was set -- so the first button press after every text input
+ * was lost without replacement.  In the DataCreatures login that meant: type,
+ * click, nothing happens; only the second click counted.
  *
- * Darum zweifach abgesichert: die Anmeldung unten faengt nicht mehr in der
- * Capture-Phase (blur steigt nicht auf, ein Element-Blur erreicht das Fenster
- * also gar nicht mehr), und falls ein Browser ihn doch zustellt, wird er hier
- * am Knotennamen erkannt und uebergangen. */
+ * Hence two safeguards: the registration below no longer catches in the
+ * capture phase (blur does not bubble, so an element blur no longer reaches the window
+ * at all), and if a browser does deliver it anyway, it is recognised here
+ * by the node name and skipped. */
 static EM_BOOL bin_blur(int /*type*/, const EmscriptenFocusEvent* e, void* /*ud*/) {
     if (e && e->nodeName[0]) {
         const char* n = e->nodeName;
         if (strcmp(n, "INPUT")    == 0 || strcmp(n, "TEXTAREA") == 0 ||
             strcmp(n, "SELECT")   == 0 || strcmp(n, "BUTTON")   == 0 ||
             strcmp(n, "CANVAS")   == 0 || strcmp(n, "A")        == 0)
-            return EM_FALSE;   /* Element-Fokus, nicht Fensterfokus */
+            return EM_FALSE;   /* element focus, not window focus */
     }
     for (int b = 0; b < AIML_MAX_MOUSE; b++) bin_cancel_press(b);
     bin_release_keys();
@@ -1378,8 +1378,8 @@ static EM_BOOL bin_touchend(int /*type*/, const EmscriptenTouchEvent* /*e*/, voi
 /* Forward declaration — defined further below in this same WASM section. */
 static int32_t name_to_slot(const char* k);
 
-/* Ziel des 'paste'-Listeners (in aiml_input_init registriert, gefüllt von JS,
- * ausgelesen von aiml_input_paste_ready). */
+/* Target of the 'paste' listener (registered in aiml_input_init, filled by JS,
+ * read by aiml_input_paste_ready). */
 static char g_em_paste_buf[65536];
 
 /* Stash a string in the persistent backing store and return a stable ptr. */
@@ -1389,16 +1389,16 @@ static const char* bin_keep_string(const char* s) {
     return g_b->key_strings.back().c_str();
 }
 
-/* JS-Tastennamen auf den NATIVEN Kanon bringen (vgl. glfw_key_to_name):
- * Buchstaben GROSS, ArrowX → X, " " → Space, Control/Shift/Alt → LCtrl/LShift/
- * LAlt.  Ohne das schlägt jedes strcmp(key, "C") / "Left" / … im Browser fehl —
- * genau daran waren Ctrl+C/Ctrl+V/Ctrl+A und die Pfeiltasten in text_input
- * wirkungslos, während sie nativ funktionierten. */
+/* Bring JS key names to the NATIVE canon (cf. glfw_key_to_name):
+ * letters UPPER-case, ArrowX → X, " " → Space, Control/Shift/Alt → LCtrl/LShift/
+ * LAlt.  Without that every strcmp(key, "C") / "Left" / … fails in the browser —
+ * that is exactly why Ctrl+C/Ctrl+V/Ctrl+A and the arrow keys in text_input
+ * had no effect, while they worked natively. */
 static const char* bin_key_canon(const char* k) {
     if (!k || !k[0]) return "";
     if (!k[1]) {
         if (k[0] >= 'a' && k[0] <= 'z') {
-            static char up[2];                    /* wie glfw_key_to_name: nicht thread-safe */
+            static char up[2];                    /* like glfw_key_to_name: not thread-safe */
             up[0] = (char)(k[0] - 32); up[1] = '\0';
             return up;
         }
@@ -1415,9 +1415,9 @@ static const char* bin_key_canon(const char* k) {
     return k;
 }
 
-/* Modifier-Zustand aus den Event-Flags übernehmen.  Verlässlicher als die
- * keydown/keyup-Paare: hält der Nutzer Ctrl schon, BEVOR das Canvas den Fokus
- * bekommt, fehlt dessen keydown sonst für immer. */
+/* Take over the modifier state from the event flags.  More reliable than the
+ * keydown/keyup pairs: if the user already holds Ctrl BEFORE the canvas gets the focus,
+ * its keydown is otherwise missing forever. */
 static void bin_sync_mods(const EmscriptenKeyboardEvent* e) {
     if (!g_b) return;
     const char* names[6] = {"lctrl", "rctrl", "lshift", "rshift", "lalt", "ralt"};
@@ -1430,12 +1430,12 @@ static void bin_sync_mods(const EmscriptenKeyboardEvent* e) {
     }
 }
 
-/* Später definiert (Clipboard-Block) — hier schon gebraucht. */
+/* Defined later (clipboard block) — already needed here. */
 extern "C" void aiml_input_clipboard_set(const char* s);
 
-/* Was ein Ctrl+C im fokussierten Widget kopieren würde — implementiert in
- * prefab_runtime.cpp.  Der Browser braucht die Antwort SYNCHRON innerhalb der
- * Tasten-Interaktion (siehe unten), die aiml-Frameschleife läuft erst später. */
+/* What a Ctrl+C in the focused widget would copy — implemented in
+ * prefab_runtime.cpp.  The browser needs the answer SYNCHRONOUSLY within the
+ * key interaction (see below); the aiml frame loop only runs later. */
 extern "C" const char* aiml_focused_copy_text(void);
 
 static EM_BOOL bin_keydown(int /*type*/, const EmscriptenKeyboardEvent* e, void* /*ud*/) {
@@ -1443,19 +1443,19 @@ static EM_BOOL bin_keydown(int /*type*/, const EmscriptenKeyboardEvent* e, void*
     bin_sync_mods(e);
     const char* canon = bin_key_canon(e->key);
     bool single = (canon[0] != '\0' && canon[1] == '\0');
-    /* Ctrl+C/Ctrl+X: der Clipboard-Write MUSS hier passieren, nicht später in
-     * der Frameschleife — Firefox verlangt für writeText eine laufende
-     * Nutzer-Interaktion, und execCommand('copy') ebenso.  Wir lesen dazu den
-     * aktuellen Auswahl-Zustand des fokussierten Widgets. */
+    /* Ctrl+C/Ctrl+X: the clipboard write MUST happen here, not later in
+     * the frame loop — Firefox requires a running user interaction for writeText,
+     * and so does execCommand('copy').  For that we read the
+     * current selection state of the focused widget. */
     if (e->ctrlKey && single && (canon[0] == 'C' || canon[0] == 'X')) {
         const char* sel = aiml_focused_copy_text();
         if (sel && *sel) {
             aiml_input_clipboard_set(sel);
-            /* Die Browser-Standardaktion unterdrücken: sie würde die (leere)
-             * Seiten-Auswahl des Canvas kopieren und unsere gerade geschriebene
-             * Ablage wieder überschreiben.  Das "C"/"X" wird trotzdem
-             * eingereiht, damit die aiml-Seite ihren Zustand mitführt.
-             * Bei Ctrl+V NICHT unterdrücken — sonst bleibt das 'paste'-Event aus. */
+            /* Suppress the browser's default action: it would copy the canvas's (empty)
+             * page selection and overwrite the clipboard we just
+             * wrote.  The "C"/"X" is still
+             * queued, so that the aiml side keeps its state in step.
+             * Do NOT suppress on Ctrl+V — otherwise the 'paste' event does not come. */
             AimlInputEvent cev = {};
             cev.type = "key_down";
             cev.key  = bin_keep_string(canon);
@@ -1465,9 +1465,9 @@ static EM_BOOL bin_keydown(int /*type*/, const EmscriptenKeyboardEvent* e, void*
             return EM_TRUE;
         }
     }
-    /* Ctrl+V: NICHT einreihen.  Der Browser liefert den Inhalt erst im
-     * anschliessenden 'paste'-Event; ein jetzt eingereihtes "V" würde den
-     * ALTEN Ablage-Inhalt einfügen.  Der paste-Handler reicht das "V" nach. */
+    /* Ctrl+V: do NOT queue.  The browser only delivers the content in the
+     * subsequent 'paste' event; a "V" queued now would paste the
+     * OLD clipboard content.  The paste handler supplies the "V" afterwards. */
     if (e->ctrlKey && single && canon[0] == 'V') {
         int vslot = name_to_slot(canon);
         if (vslot >= 0) { if (!g_b->raw_keys[vslot]) g_b->pend_kpress[vslot] = 1; g_b->raw_keys[vslot] = 1; }
@@ -1623,15 +1623,15 @@ EM_JS(void, aiml_web_kbd_open, (int is_secret, int is_numeric, int is_email), {
         var ZWSP = String.fromCharCode(0x200b);
         var reset = function () { el.value = ZWSP; try { el.setSelectionRange(1, 1); } catch (e) {} };
         el._composing = false;
-        /* Kam diese Eingabe von einer ECHTEN Taste?  Dann hat der Fenster-
-         * keydown-Handler (bin_keydown) sie schon eingereiht, und die Bruecke
-         * muss schweigen — sonst loescht eine Ruecktaste ZWEI Zeichen und ein
-         * Pfeil springt um zwei Stellen.  Gemeldet am Konsolen-Quelltextfeld
-         * von cosmos: „die ruecktaste loeschte immer 2 zeichen" (2026-10-18).
+        /* Did this input come from a REAL key?  Then the window
+         * keydown handler (bin_keydown) has already queued it, and the bridge
+         * must stay silent — otherwise a backspace deletes TWO characters and an
+         * arrow jumps two places.  Reported on the console source text field
+         * of cosmos: "backspace always deleted 2 characters" (2026-10-18).
          *
-         * 'Unidentified'/'Process' zaehlen NICHT als echte Taste: genau die
-         * melden Soft-Keyboards und IMEs, und dort ist die Bruecke die einzige
-         * Quelle. */
+         * 'Unidentified'/'Process' do NOT count as a real key: exactly those
+         * are reported by soft keyboards and IMEs, and there the bridge is the only
+         * source. */
         el._hwkey = false;
         el.addEventListener('keydown', function (e) {
             el._hwkey = (e.key && e.key !== 'Unidentified' && e.key !== 'Process' && !e.isComposing);
@@ -1646,14 +1646,14 @@ EM_JS(void, aiml_web_kbd_open, (int is_secret, int is_numeric, int is_email), {
         el.addEventListener('beforeinput', function (e) {
             if (el._composing) return;               /* commit handled at compositionend */
             var t = e.inputType;
-            /* Das DOM-Feld ist nur ein DURCHGANG, nie ein Textspeicher: jede
-             * Eingabe wird abgefangen und der Wachposten wiederhergestellt.
-             * Ohne das driftet `el.value` und die naechste Ruecktaste meldet
-             * sich gar nicht mehr. */
+            /* The DOM field is only a PASSAGE, never a text store: every
+             * input is intercepted and the sentinel restored.
+             * Without that `el.value` drifts and the next backspace no longer
+             * reports at all. */
             e.preventDefault();
             var ctrl_op = (t === 'insertLineBreak' || t === 'insertParagraph' ||
                            t === 'deleteContentBackward' || t === 'deleteContentForward');
-            if (ctrl_op && el._hwkey) { reset(); return; }   /* bin_keydown hat sie schon */
+            if (ctrl_op && el._hwkey) { reset(); return; }   /* bin_keydown already has it */
             if (t === 'insertText' || t === 'insertFromPaste' ||
                 t === 'insertReplacementText' || t === 'insertFromComposition') {
                 if (e.data) pushText(e.data);
@@ -1700,23 +1700,23 @@ void aiml_input_init(void* /*win*/) {
     emscripten_set_touchmove_callback  (EMSCRIPTEN_EVENT_TARGET_WINDOW, nullptr, EM_TRUE, bin_touchmove);
     emscripten_set_touchend_callback   (EMSCRIPTEN_EVENT_TARGET_WINDOW, nullptr, EM_TRUE, bin_touchend);
     emscripten_set_touchcancel_callback(EMSCRIPTEN_EVENT_TARGET_WINDOW, nullptr, EM_TRUE, bin_touchcancel);
-    /* OHNE Capture: `blur` steigt nicht auf, ein Fenster-Blur wird aber am
-     * Fenster selbst ausgeloest.  Mit Capture fing dieser Handler jeden
-     * Element-Blur der Seite mit ab (siehe bin_blur). */
+    /* WITHOUT capture: `blur` does not bubble, but a window blur is
+     * fired on the window itself.  With capture this handler also caught every
+     * element blur of the page (see bin_blur). */
     emscripten_set_blur_callback       (EMSCRIPTEN_EVENT_TARGET_WINDOW, nullptr, EM_FALSE, bin_blur);
     /* Keyboard goes on the window target — canvas elements need explicit
      * tabindex to receive key events, but window always works. */
     emscripten_set_keydown_callback (EMSCRIPTEN_EVENT_TARGET_WINDOW, nullptr, EM_TRUE, bin_keydown);
     emscripten_set_keyup_callback   (EMSCRIPTEN_EVENT_TARGET_WINDOW, nullptr, EM_TRUE, bin_keyup);
     emscripten_set_keypress_callback(EMSCRIPTEN_EVENT_TARGET_WINDOW, nullptr, EM_TRUE, bin_keypress);
-    /* Einfügen: der Browser gibt den Ablage-Inhalt NUR im 'paste'-Event heraus
-     * (navigator.clipboard.readText ist asynchron und damit aus einer
-     * synchronen Abfrage nicht nutzbar).  Der Handler legt den Text ab und
-     * reicht das "V" nach, das bin_keydown bewusst nicht eingereiht hat. */
-    /* `document` existiert nur im Browser.  Ohne die Abfrage reisst
-     * input.init die ganze Anwendung in jeder DOM-freien Umgebung
-     * (node/ENVIRONMENT=node) mit "ReferenceError: document is not defined"
-     * ab — und zwar bevor irgendetwas davon gebraucht wird. */
+    /* Paste: the browser hands out the clipboard content ONLY in the 'paste' event
+     * (navigator.clipboard.readText is asynchronous and therefore not usable from a
+     * synchronous query).  The handler stores the text and
+     * supplies the "V" that bin_keydown deliberately did not queue. */
+    /* `document` only exists in the browser.  Without the check
+     * input.init tears down the whole application in every DOM-free environment
+     * (node/ENVIRONMENT=node) with "ReferenceError: document is not defined"
+     * — and that before any of it is even needed. */
     EM_ASM({
         if (typeof document === 'undefined') return;
         var buf = $0;
@@ -1727,7 +1727,7 @@ void aiml_input_init(void* /*win*/) {
                 stringToUTF8(txt, buf, cap);
                 Module._aiml_input_paste_ready();
                 ev.preventDefault();
-            } catch (err) { /* keine Ablage-Rechte → nichts einfügen */ }
+            } catch (err) { /* no clipboard rights → paste nothing */ }
         });
     }, g_em_paste_buf, (int)sizeof(g_em_paste_buf));
     /* Register per-frame update with the engine — same hook as desktop. */
@@ -1764,8 +1764,8 @@ void aiml_input_update(void) {
         ds.started_this_frame   = ds.pend_started;
         ds.ended_this_frame     = ds.pend_ended;
         ds.cancelled_this_frame = ds.pend_cancelled;
-        /* Position MIT dem Rand latchen, sonst gehoert sie beim Ausliefern
-         * schon zur naechsten Geste. */
+        /* Latch the position WITH the edge, otherwise by delivery time it already
+         * belongs to the next gesture. */
         if (ds.pend_started) { ds.start_x = ds.pend_start_x; ds.start_y = ds.pend_start_y; }
         if (ds.pend_ended) { ds.end_x = ds.pend_end_x; ds.end_y = ds.pend_end_y; }
         ds.pend_started = ds.pend_ended = ds.pend_cancelled = false;
@@ -1847,11 +1847,11 @@ extern "C" void aiml_input_post_mouse_move(float x, float y) {
 }
 extern "C" void aiml_input_post_mouse_down(int32_t btn) {
     if (!g_b || btn < 0 || btn >= AIML_MAX_MOUSE) return;
-    /* raw = gehalten (ueberlebt das naechste Snapshot), curr + frame_press =
-     * JETZT sichtbar.  pend_press bleibt bewusst 0: sonst feuerte die Kante
-     * zweimal — jetzt und nach dem naechsten update.  Damit gilt derselbe
-     * Frame-Vertrag wie auf dem Desktop (spec/44_0 §8.3): injizieren, lesen,
-     * beim naechsten update weg. */
+    /* raw = held (survives the next snapshot), curr + frame_press =
+     * visible NOW.  pend_press deliberately stays 0: otherwise the edge would fire
+     * twice — now and after the next update.  That way the same
+     * frame contract applies as on the desktop (spec/44_0 §8.3): inject, read,
+     * gone at the next update. */
     g_b->raw_mouse[btn] = 1;
     g_b->curr_mouse[btn] = 1;
     g_b->frame_press[btn] = 1;
@@ -1875,26 +1875,26 @@ extern "C" void aiml_input_post_mouse_up(int32_t btn) {
     }
     ds.held = false; ds.active = false;
 }
-/* ── Injektion in die EREIGNIS-Schicht (spec/44_0 §8.4) ─────────────────────
+/* ── Injection into the EVENT layer (spec/44_0 §8.4) ───────────────────────
  *
- * Die drei Hooks oben schreiben die FRAME-sichtbaren Slots: injizieren, lesen,
- * beim naechsten update weg.  Damit ist aber genau die Schicht unerreichbar,
- * um die es in §2.3 geht — die `pend_*`-Schicht, in der die DOM-Handler
- * zwischen den Frames UND mitten im Frame schreiben.  Die Zusicherung „eine
- * waehrend eines Frames entstandene Kante wird aufbewahrt und im naechsten
- * Frame gemeldet" war deshalb von aussen nicht pruefbar.
+ * The three hooks above write the FRAME-visible slots: inject, read,
+ * gone at the next update.  But that makes exactly the layer unreachable
+ * that §2.3 is about — the `pend_*` layer, into which the DOM handlers
+ * write between frames AND in the middle of a frame.  The promise "an
+ * edge created during a frame is kept and reported in the next
+ * frame" was therefore not testable from outside.
  *
- * Diese Varianten tun genau das, was `bin_mousedown`/`bin_mouseup`/
- * `bin_mousemove` tun.  Ein Test kann damit eine echte Ereignisfolge
- * nachspielen — insbesondere Release UND Druck in derselben Luecke — und danach
- * mit `input.update()` pruefen, was ausgeliefert wird. */
+ * These variants do exactly what `bin_mousedown`/`bin_mouseup`/
+ * `bin_mousemove` do.  A test can thereby replay a real event sequence
+ * — in particular release AND press in the same gap — and afterwards
+ * check with `input.update()` what is delivered. */
 extern "C" void aiml_input_post_mouse_down_pending(int32_t btn) {
     if (!g_b || btn < 0 || btn >= AIML_MAX_MOUSE) return;
     g_b->raw_mouse[btn] = 1;
     g_b->pend_press[btn] = 1;
     auto& ds = g_b->drag[btn];
     ds.held = true; ds.active = false;
-    /* pend_* und started/ended_this_frame bleiben stehen — wie bin_mousedown. */
+    /* pend_* and started/ended_this_frame stay — like bin_mousedown. */
     ds.origin_x = (float)g_b->curr_pos_x; ds.origin_y = (float)g_b->curr_pos_y;
     ds.acc_x = ds.acc_y = 0.f;
 }
@@ -1927,8 +1927,8 @@ extern "C" void aiml_input_post_mouse_move_pending(float x, float y) {
     }
 }
 
-/* spec/44_0 §8.2: Fokusverlust -- Druck abbrechen UND gehaltene Tasten
- * freigeben (§2.1).  Der Abbruch steht weiter unten, darum die Vorab-Ansage. */
+/* spec/44_0 §8.2: focus loss -- cancel the press AND release held keys
+ * (§2.1).  The cancellation is further below, hence the forward declaration. */
 extern "C" void aiml_input_post_touch_cancel(void);
 extern "C" void aiml_input_post_focus_lost(void) {
     if (!g_b) return;
@@ -1952,8 +1952,8 @@ extern "C" void aiml_input_post_touch_cancel(void) {
 }
 extern "C" void aiml_input_post_scroll(float dx, float dy) {
     if (!g_b) return;
-    /* scroll_this ist der Wert, den dieser Frame sieht; accum wuerde erst beim
-     * naechsten update gedrained (gleiche Begruendung wie bei den Tasten). */
+    /* scroll_this is the value this frame sees; accum would only be
+     * drained at the next update (same reasoning as for the keys). */
     g_b->scroll_this_x += dx;
     g_b->scroll_this_y += dy;
 }
@@ -2143,7 +2143,7 @@ void    aiml_input_drag_set_threshold(float t) { if (g_b) g_b->drag_threshold = 
  * needs a secure context (https or localhost) and a user gesture (a button
  * click or Ctrl+C qualifies), with a textarea + execCommand fallback. */
 static std::string g_em_clipboard;
-/* Vom paste-Listener gerufen: Inhalt übernehmen und das "V" nachreichen. */
+/* Called from the paste listener: take over the content and supply the "V". */
 extern "C" EMSCRIPTEN_KEEPALIVE void aiml_input_paste_ready(void) {
     if (!g_b) return;
     g_em_paste_buf[sizeof(g_em_paste_buf) - 1] = '\0';
@@ -2180,7 +2180,7 @@ extern "C" void        aiml_input_clipboard_set(const char* s) {
 
 #else /* __ANDROID__ */
 
-/* spec/44_0 §8: Injektion auf dieser Plattform nicht umgesetzt. */
+/* spec/44_0 §8: injection not implemented on this platform. */
 void aiml_input_post_mouse_move(float, float) {}
 void aiml_input_post_mouse_down(int32_t) {}
 void aiml_input_post_mouse_up  (int32_t) {}
