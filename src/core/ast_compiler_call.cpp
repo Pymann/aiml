@@ -445,8 +445,8 @@ IRValue* Compiler::visitCall(CallExpr* call) {
             return visitSysCodeFromCall(call);
         }
         if (baseName == "sys" && methodName == "lib_load") {
-            // spec/29_2 §15: Bibliothek EINMAL uebersetzen; spaetere sys.exec
-            // bekommen nur noch ihre Deklarationen.
+            // spec/29_2 §15: compile the library ONCE; later sys.exec calls
+            // only get its declarations.
             auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
             auto* i32 = ctx.builder.getInt32Ty();
             if (call->args.empty()) return ctx.ir_gen->getInt32(-2);
@@ -481,11 +481,11 @@ IRValue* Compiler::visitCall(CallExpr* call) {
             // For db.query: capture the store argument's type so order_by can look up field offsets.
             if (methodName == "query" && !call->args.empty()) {
                 if (auto* var = dynamic_cast<AIML::AST::VariableExpr*>(call->args[0].get())) {
-                    // Ein KLASSENMITGLIED (`<.laden`) ist auch eine VariableExpr,
-                    // aber resolveVariable kennt es nicht -- der Typ blieb leer,
-                    // und damit fiel weder `order_by` noch die Store-Pruefung
-                    // unten auf.  Darum erst am Mitglied nachsehen, dann am
-                    // Symbol (spec/31 §4.1).
+                    // A CLASS MEMBER (`<.laden`) is a VariableExpr too,
+                    // but resolveVariable does not know it -- the type stayed empty,
+                    // and so neither `order_by` nor the store check
+                    // below noticed.  That is why the member is looked at first, then the
+                    // symbol (spec/31 §4.1).
                     std::string field;
                     if (var->name.rfind("<.", 0) == 0)         field = var->name.substr(2);
                     else if (var->name.rfind("this.", 0) == 0) field = var->name.substr(5);
@@ -555,9 +555,9 @@ IRValue* Compiler::visitCall(CallExpr* call) {
                     }
                 }
             }
-            // spec/31 §6.2.1: ohne WAL gibt es keine Offsets, auf die ein Dump
-            // zeigen koennte.  Das faellt hier auf und nicht erst zur Laufzeit,
-            // sonst glaubt der Aufrufer, er haette den Gewinn.
+            // spec/31 §6.2.1: without a WAL there are no offsets a dump
+            // could point to.  This is noticed here and not only at runtime,
+            // otherwise the caller believes he has the gain.
             if (ctx.dbOpenIndexDump && !ctx.dbOpenPersist)
                 LOG_ERROR(ctx.fmtLoc(call->sourceNode) + "db." + methodName
                     + ": index_dump: true braucht persist: true (spec/31 §6.2.1)");
@@ -673,11 +673,11 @@ IRValue* Compiler::visitCall(CallExpr* call) {
 
         // Dispatch any registered namespace (sys, io, time, path, and future ones)
         if (ctx.namespaces.count(baseName)) {
-            // spec/62 §10.2 / F62-102: aufzeichnen, WELCHES Builtin dieser
-            // Rumpf ruft.  Die Reinheitspruefung passiert beim Buendeln, also
-            // spaeter — hier ist die einzige Stelle, an der Namensraum,
-            // Funktion, Ort UND ein konstantes erstes Argument zusammen
-            // vorliegen (F62-19 vs F62-20 haengt genau am letzten).
+            // spec/62 §10.2 / F62-102: record WHICH builtin this
+            // body calls.  The purity check happens at bundling time, i.e.
+            // later — this is the only place where namespace,
+            // function, location AND a constant first argument are all
+            // available together (F62-19 vs F62-20 hinges on exactly the last).
             if (!ctx.bundleTrackingTarget.empty() &&
                 ctx.functions.count(ctx.bundleTrackingTarget)) {
                 CompilerContext::FunctionInfo::BuiltinUse use;
@@ -692,29 +692,29 @@ IRValue* Compiler::visitCall(CallExpr* call) {
                 }
                 ctx.functions[ctx.bundleTrackingTarget].referencedBuiltins.push_back(use);
             }
-            // spec/65 F65-35/F65-12: Builtins sind von Grund auf zu.  Geprueft wird
-            // nur, was wirklich ein Builtin-Namensraum IST — ein Namensraum des
-            // Nutzers geht hier unberuehrt durch.
+            // spec/65 F65-35/F65-12: builtins are closed from the ground up.  Only
+            // what really IS a builtin namespace is checked — a user's
+            // namespace passes through here untouched.
             if (aiml::clearance::restricted() && ctx.namespaces.count(baseName) &&
                 !aiml::clearance::builtinReachable(baseName, methodName)) {
                 LOG_ERROR(ctx.fmtLoc(call->sourceNode) +
                           "clearance-builtin: `" + baseName + "." + methodName +
-                          "` ist fuer diese Sitzung nicht erreichbar (Freigabe " +
+                          "` is not reachable for this session (clearance " +
                           std::to_string(aiml::clearance::sessionClearance()) +
                           ", Level " + std::to_string(aiml::clearance::builtinLevel(baseName, methodName)) +
-                          ").  Builtins sind von Grund auf zu; der Wirt oeffnet sie "
-                          "ausdruecklich (spec/65 F65-35).");
+                          ").  Builtins are closed from the ground up; the host opens them "
+                          "explicitly (spec/65 F65-35).");
             }
-            // spec/23 §5.1: `sys.exe` nimmt argv als `list<string>`.  Ein String als
-            // erstes Argument ist in LLVM ebenfalls ein `i8*` und rutschte daher durch
-            // die Zeiger-Weiche des Builtins; die Laufzeit las ihn als `GenericList*`
-            // und stuerzte ab (SIGSEGV, gemessen 16.10.2026).  Lieber laut scheitern.
+            // spec/23 §5.1: `sys.exe` takes argv as `list<string>`.  A string as
+            // the first argument is an `i8*` in LLVM as well and therefore slipped through
+            // the builtin's pointer switch; the runtime read it as a `GenericList*`
+            // and crashed (SIGSEGV, measured 2026-10-16).  Better to fail loudly.
             //
-            // Geprueft wird, was statisch bekannt ist: ein Literal ist nie eine Liste
-            // (Listenliterale gibt es nur als `decl`-Initialisierer, spec/10), und bei
-            // einer Variablen steht der deklarierte Typ im Symbol.  Ein zusammen-
-            // gesetzter Ausdruck bleibt ungeprueft — lieber keine Diagnose als eine
-            // falsche.
+            // What is statically known is checked: a literal is never a list
+            // (list literals only exist as `decl` initialisers, spec/10), and for
+            // a variable the declared type is in the symbol.  A compound
+            // expression stays unchecked — better no diagnostic than a
+            // wrong one.
             if (baseName == "sys" && methodName == "exe" && !call->args.empty()) {
                 std::string arg_type;
                 if (dynamic_cast<AIML::AST::LiteralExpr*>(call->args[0].get())) {
@@ -726,11 +726,11 @@ IRValue* Compiler::visitCall(CallExpr* call) {
                 }
                 if (!arg_type.empty() && arg_type.rfind("list<", 0) != 0) {
                     LOG_ERROR(ctx.fmtLoc(call->sourceNode) +
-                              "sys.exe erwartet argv als `list<string>` (spec/23 §5.1), "
-                              "bekommen: '" + arg_type + "'.  Ein String ist ebenfalls ein "
-                              "Zeiger und wuerde zur Laufzeit als Liste gelesen — Absturz. "
-                              "Richtig: `decl: [argv, list<string>, [\"prog\", \"arg\"]]` und "
-                              "dann `call: [sys.exe, argv]`.");
+                              "sys.exe expects argv as `list<string>` (spec/23 §5.1), "
+                              "got: '" + arg_type + "'.  A string is a pointer "
+                              "too and would be read as a list at runtime — crash. "
+                              "Correct: `decl: [argv, list<string>, [\"prog\", \"arg\"]]` and "
+                              "then `call: [sys.exe, argv]`.");
                 }
             }
             // spec/68: under memV3 a call that returns buffer<u8> yields a buffer
@@ -832,8 +832,8 @@ IRValue* Compiler::visitCall(CallExpr* call) {
     const auto callSignature = resolveCallSignature(funcName);
     std::vector<IRValue*> argVals;
     for (size_t i = 0; i < call->args.size(); ++i) {
-        // spec/10: ein Listenliteral als Argument braucht den Parametertyp — nur so ist `[]`
-        // typisierbar (Backlog-Punkt 3).  Der Hinweis gilt genau fuer dieses Argument.
+        // spec/10: a list literal as an argument needs the parameter type — only that way is `[]`
+        // typeable (backlog item 3).  The hint applies to exactly this argument.
         const bool isListLit = dynamic_cast<AIML::AST::BufferLiteralExpr*>(call->args[i].get()) != nullptr;
         if (isListLit && i < callSignature.parameterTypes.size())
             ctx.listLiteralArgType = callSignature.parameterTypes[i];
@@ -1033,16 +1033,16 @@ IRValue* Compiler::visitCall(CallExpr* call) {
     // Normal Call — prefer indirect call via fptable_current for hot-reload support
     IRValue* callRes = nullptr;
     CompilerContext::FunctionInfo* funcInfo = resolveFunction(funcName);
-    // spec/29_2 §16: gerufene Funktion beim gerade uebersetzten Rumpf vermerken,
-    // damit sys.bundle sie mitnimmt.  Gleiche Mechanik wie referencedTypes:
-    // bundleTrackingTarget zeigt auf die Funktion, die gerade entsteht.
+    // spec/29_2 §16: note the called function on the body being compiled right now,
+    // so that sys.bundle takes it along.  Same mechanism as referencedTypes:
+    // bundleTrackingTarget points to the function that is being created.
     if (funcInfo && !ctx.bundleTrackingTarget.empty() &&
         ctx.bundleTrackingTarget != funcName &&
         ctx.functions.count(ctx.bundleTrackingTarget)) {
         ctx.functions[ctx.bundleTrackingTarget].referencedFuncs.insert(funcName);
     }
-    // spec/66 §5.6: ein Aufruf von `<Service>_<endpoint>` oder `<Service>__describe`
-    // zaehlt als Benutzung des Service.
+    // spec/66 §5.6: a call of `<Service>_<endpoint>` or `<Service>__describe`
+    // counts as a use of the service.
     if (!ctx.inServiceSynthFn)
         for (const auto& sd : ctx.serviceDecls)
             if (funcName.rfind(sd.first + "_", 0) == 0) ctx.serviceUses.insert(sd.first);
@@ -1112,15 +1112,15 @@ IRValue* Compiler::visitCall(CallExpr* call) {
                     actualTy   = actualVal->getType();
                 }
             }
-            // spec/58 §5.2 + spec/61 §8: ein interface-typisierter Parameter
-            // (ptr<Iface> wie ref<Iface>) ist ein FAT POINTER {obj, vtable}.  Ein
-            // konkreter Klassenzeiger muss hier aufwärtsgewandelt werden.  Fehlte
-            // das, kam das Objekt als nackter Zeiger an, der Aufgerufene las die
-            // vtable von der falschen Stelle und der erste Interface-Aufruf
-            // dereferenzierte null — Absturz in jitRun (addr=nil), bzw. bei
-            // ref<Iface> ein IR-Verifier-Fehler.  Nur EINGEBAUTE Interfaces
-            // (mirror.RpcHandler) funktionierten, weil sie einen anderen Pfad
-            // nehmen; jedes selbst deklarierte `- interface:` stürzte ab.
+            // spec/58 §5.2 + spec/61 §8: an interface-typed parameter
+            // (ptr<Iface> as well as ref<Iface>) is a FAT POINTER {obj, vtable}.  A
+            // concrete class pointer must be upcast here.  When that was
+            // missing, the object arrived as a bare pointer, the callee read the
+            // vtable from the wrong place and the first interface call
+            // dereferenced null — crash in jitRun (addr=nil), or with
+            // ref<Iface> an IR verifier error.  Only BUILT-IN interfaces
+            // (mirror.RpcHandler) worked, because they take a different path;
+            // every self-declared `- interface:` crashed.
             if (auto* fatTy = llvm::dyn_cast<llvm::StructType>(expectedTy)) {
                 if (actualTy->isPointerTy() && fatTy->hasName() &&
                     fatTy->getName().startswith("AimlFatPtr_")) {
@@ -1314,33 +1314,33 @@ IRValue* Compiler::visitCall(CallExpr* call) {
     }
 
     if (!callRes) {
-        // spec/65 F65-4/F65-5/F65-12: in einer eingeschraenkten Sitzung entscheidet
-        // die Export-Tabelle des Wirts, nicht die Abwesenheit einer Deklaration.
-        // Ein verweigertes Symbol wird als VERWEIGERT gemeldet und nicht als
-        // „unbekannt" — eine irrefuehrende Diagnose ist schlimmer als eine
-        // Absage, und verbergen muss hier nichts (F65-16: Level sind nicht geheim).
+        // spec/65 F65-4/F65-5/F65-12: in a restricted session the host's export
+        // table decides, not the absence of a declaration.
+        // A denied symbol is reported as DENIED and not as
+        // "unknown" — a misleading diagnostic is worse than a
+        // refusal, and nothing needs hiding here (F65-16: levels are not secret).
         if (aiml::clearance::restricted()) {
             const int lvl = aiml::clearance::exportedLevel(funcName);
             const int own = aiml::clearance::sessionClearance();
             if (lvl == aiml::clearance::kAbsent) {
                 LOG_ERROR(ctx.fmtLoc(call->sourceNode) +
-                          "clearance-denied: `" + funcName + "` ist nicht erreichbar — der "
-                          "Wirt bietet es nicht an (Auslassen gewaehrt nie, spec/65 F65-5). "
-                          "Entweder ein Tippfehler, oder es gehoert nicht zur angebotenen "
-                          "Oberflaeche.");
+                          "clearance-denied: `" + funcName + "` is not reachable — the "
+                          "host does not offer it (omission never grants, spec/65 F65-5). "
+                          "Either a typo, or it does not belong to the offered "
+                          "surface.");
             } else if (own > lvl) {
                 LOG_ERROR(ctx.fmtLoc(call->sourceNode) +
-                          "clearance-denied: `" + funcName + "` liegt auf Level " +
-                          std::to_string(lvl) + ", diese Sitzung hat Freigabe " +
-                          std::to_string(own) + " (spec/65 F65-4: erreichbar ist nur, was "
-                          "`Freigabe <= Level` erfuellt).");
+                          "clearance-denied: `" + funcName + "` is at level " +
+                          std::to_string(lvl) + ", this session has clearance " +
+                          std::to_string(own) + " (spec/65 F65-4: only what satisfies "
+                          "`clearance <= level` is reachable).");
             } else {
                 LOG_ERROR(ctx.fmtLoc(call->sourceNode) +
-                          "clearance: `" + funcName + "` ist freigegeben (Level " +
-                          std::to_string(lvl) + "), aber der Wirt hat keine SIGNATUR dafuer "
-                          "angemeldet — ohne sie kann der Aufruf nicht uebersetzt werden "
-                          "(spec/65 F65-24: Signatur und Adresse sind die zweite Haelfte "
-                          "der Uebergabe).");
+                          "clearance: `" + funcName + "` is cleared (level " +
+                          std::to_string(lvl) + "), but the host has registered no SIGNATURE for it "
+                          "— without it the call cannot be compiled "
+                          "(spec/65 F65-24: signature and address are the second half "
+                          "of the handover).");
             }
             return nullptr;
         }
@@ -1413,9 +1413,9 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
     IRValue* baseAlloca = sym->ir_alloca_inst ? sym->ir_alloca_inst : ctx.ir_gen->wrap(sym->alloca_inst);
     IRType* baseElemTy = sym->ir_element_type ? sym->ir_element_type : ctx.ir_gen->wrapType(sym->element_type);
 
-    // list/map by-ref args: alloca enthält einen pointer auf das echte struct,
-    // nicht das struct selbst.  Method-dispatch erwartet baseAlloca = ptr-to-struct,
-    // also einmal deref.  Spec/22_call_semantics.md.
+    // list/map by-ref args: the alloca contains a pointer to the real struct,
+    // not the struct itself.  Method dispatch expects baseAlloca = ptr-to-struct,
+    // so deref once.  Spec/22_call_semantics.md.
     if (sym->is_byref_arg) {
         auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
         llvm::Value* allocaRaw = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca));
@@ -1563,7 +1563,7 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                 return ctx.ir_gen->wrap(loaded);
             }
 
-            // LLVM verbietet Namens-Suffix auf void-Calls, daher Name nur bei non-void.
+            // LLVM forbids a name suffix on void calls, so only name non-void ones.
             llvm::Value* res = callOrInvoke(ctx, fnTy, fnPtr, callArgs,
                 retTy->isVoidTy() ? "" : "iface_call");
             finishCallArguments(call, evaluatedArgs);
@@ -2373,11 +2373,11 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                      " value before push(), or use list<ptr<" + listElemName + ">>.");
                  return nullptr;
              }
-             // Interface-Upcast für push(ptr<Concrete>) wenn list-elem = ptr<Interface>.
-             // Ohne diesen Schritt landet ein 8-byte class-ptr in einem 16-byte
-             // fat-pointer slot — die folgenden 8 bytes (vtable) sind garbage,
-             // beim späteren `at` + dispatch korrupt der Heap.
-             // Spiegelt das identische Pattern in map.put unten.
+             // Interface upcast for push(ptr<Concrete>) when list elem = ptr<Interface>.
+             // Without this step an 8-byte class ptr lands in a 16-byte
+             // fat-pointer slot — the following 8 bytes (vtable) are garbage,
+             // and the later `at` + dispatch corrupts the heap.
+             // Mirrors the identical pattern in map.put below.
              if (llvmListElemType && llvmListElemType->isStructTy() &&
                  llvm::cast<llvm::StructType>(llvmListElemType)->hasName() &&
                  llvm::cast<llvm::StructType>(llvmListElemType)->getName().startswith("AimlFatPtr_")) {
@@ -3078,8 +3078,8 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
              } else if (inlineModelVal && valVal && valVal->getType()->isPointerTy()) {
                  valVal = ctx.builder.CreateLoad(ctx.classes.find(vName)->second.type, valVal, "put_val");
              }
-             // Interface-Upcast für put(key, ptr<Concrete>) wenn V = ptr<Interface>.
-             // Zentralisiert in Compiler::buildInterfaceUpcast.
+             // Interface upcast for put(key, ptr<Concrete>) when V = ptr<Interface>.
+             // Centralised in Compiler::buildInterfaceUpcast.
              if (vTy->isStructTy() && llvm::cast<llvm::StructType>(vTy)->hasName() &&
                  llvm::cast<llvm::StructType>(vTy)->getName().startswith("AimlFatPtr_")) {
                  // a variable, a member or a fresh `{ new: Concrete }` (declaredTypeOfExpr)
@@ -3134,8 +3134,8 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                  && (tgt == "ref<" + vName + ">" || tgt == "ptr<" + vName + ">");
              return ctx.ir_gen->wrap(MapImpl::get(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), keyVal, vTy, mapStructTy, slotView));
          } else if (methodName == "clear") {
-             // spec/10: leert die map.  Der Schluesseltyp steckt nur im Typnamen (die
-             // remove-Variante bekommt ihn ueber ihr Argument), also hier ableiten.
+             // spec/10: empties the map.  The key type is only in the type name (the
+             // remove variant gets it via its argument), so derive it here.
              std::string kName = (colon == std::string::npos) ? inner : inner.substr(0, colon);
              llvm::Type* kTy = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(kName)));
              if (!kTy || kName == "string") kTy = ctx.builder.getInt8Ty()->getPointerTo();
@@ -3544,10 +3544,10 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                     aimlTrackStringTemp(ctx, owned);
                 return ctx.ir_gen->wrap(owned); // string: owned char*
             }
-            // spec/31: ein fehlender Schluessel gibt `null` zurueck.  Der Skalar-Pfad lud bis
-            // 01.11.2026 ungeprueft davon → SIGSEGV (Backlog-Punkt 4), waehrend der
-            // String-Pfad ueber aiml_str_dup schon null-sicher war und "" lieferte.
-            // Jetzt liefert ein Fehltreffer den Nullwert des Typs (0 bzw. 0.0).
+            // spec/31: a missing key returns `null`.  Until 2026-11-01 the scalar path loaded
+            // from it unchecked → SIGSEGV (backlog item 4), while the
+            // string path via aiml_str_dup was already null-safe and returned "".
+            // Now a miss returns the type's zero value (0 or 0.0).
             auto loadScalarOrZero = [&](llvm::Type* ty, const char* name) -> IRValue* {
                 llvm::Function* parent = ctx.builder.GetInsertBlock()->getParent();
                 auto* hitBB  = llvm::BasicBlock::Create(ctx.context, "kv_hit", parent);
@@ -4289,12 +4289,12 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                  if (expectedSt->hasName() &&
                      expectedSt->getName().startswith("AimlFatPtr_") &&
                      i < call->args.size()) {
-                     // declaredTypeOfExpr statt resolveVariable: so greift der
-                     // Upcast auch bei GEPUNKTETEM Zugriff — insbesondere auf
-                     // eine classgroup-Instanz (`grp.handler`), deren Typ in
-                     // keinem Symbol steht, sondern im Member der Container-
-                     // Klasse.  Ohne das kam die Instanz als nackter Zeiger an
-                     // und der IR-Verifier schlug fehl (Fat Pointer erwartet).
+                     // declaredTypeOfExpr instead of resolveVariable: that way the
+                     // upcast also applies to DOTTED access — in particular to
+                     // a classgroup instance (`grp.handler`), whose type is in
+                     // no symbol but in the member of the container
+                     // class.  Without that the instance arrived as a bare pointer
+                     // and the IR verifier failed (fat pointer expected).
                      const std::string srcTy =
                          declaredTypeOfExpr(call->args[i].get());
                      if (!srcTy.empty()) {
@@ -4407,14 +4407,14 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
              // sub-expression must be decref'd at statement end (see the free-function path). A
              // consuming decl/set/push/return removes it via consumeStringTemp first.
              //
-             // Gefragt wird die KLASSE DES EMPFAENGERS, nicht der blosse
-             // Methodenname: `stringProducerFns` ist flach nach Namen
-             // verschluesselt, und gleichnamige Methoden in verschiedenen
-             // Klassen sind der Normalfall (`render`, `init`, `run`, `size`).
-             // Vorher genuegte EINE string-liefernde `render`-Methode
-             // irgendwo in der Uebersetzungseinheit, damit ein VOID-Aufruf
-             // `screen.render` als String-Temporaere verfolgt wurde — und der
-             // Compiler stuerzte in createEntryAlloca ab (SIGSEGV, gemessen
+             // What is asked is the RECEIVER'S CLASS, not the bare
+             // method name: `stringProducerFns` is keyed flat by name,
+             // and methods of the same name in different
+             // classes are the normal case (`render`, `init`, `run`, `size`).
+             // Before, ONE string-returning `render` method
+             // anywhere in the compilation unit was enough for a VOID call
+             // `screen.render` to be tracked as a string temporary — and the
+             // compiler crashed in createEntryAlloca (SIGSEGV, measured
              // 2026-10-12; tests/test_same_method_name_two_classes.aiml).
              bool producerHere = false;
              if (sym && !sym->className.empty() && ctx.classes.count(sym->className)) {
@@ -4427,9 +4427,9 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
              } else {
                  producerHere = ctx.stringProducerFns.count(methodName) > 0;
              }
-             // Zusaetzlich die Schranke am Wert selbst: ein void-Aufruf hat
-             // nichts zu verfolgen.  Eine Namensauflösung kann irren, ein
-             // Absturz darf daraus nicht werden.
+             // In addition, the guard on the value itself: a void call has
+             // nothing to track.  A name resolution can be wrong, but that must
+             // never turn into a crash.
              if (ctx.lifetimeDropsEnabled && producerHere
                  && !func->getReturnType()->isVoidTy()
                  && raw->getType()->isPointerTy()
@@ -4439,10 +4439,10 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
          return callResult;
     }
 
-    // Folgemeldung unterdruecken, wenn der TYP der Variablen schon als
-    // unbekannt gemeldet wurde: sonst erzeugt ein einziger Typfehler eine
-    // Meldung je Methodenaufruf, und die eigentliche Ursache geht darin unter
-    // (gemessen: 5 Typfehler -> 8 Folgefehler).  spec/49.
+    // Suppress the follow-up message if the TYPE of the variable was already
+    // reported as unknown: otherwise a single type error produces one
+    // message per method call, and the actual cause gets lost in them
+    // (measured: 5 type errors -> 8 follow-up errors).  spec/49.
     if (Symbol* baseSym = resolveVariable(baseName)) {
         if (ctx.unknownTypeNames.count(baseSym->typeName))
             return ctx.ir_gen->getInt32(0);
@@ -4490,12 +4490,12 @@ IRValue* Compiler::visitSysSerializeCall(const std::string& method, CallExpr* ca
         }
 
         llvm::Value* stylePtr = nullptr;
-        // spec/29 §5.2a: der Stil darf als ZWEITES Argument stehen —
-        // `sys.serialize(wert, stil)` —, nicht nur hinter einem ausdruecklichen
-        // Typnamen.  Bis 18.10.2026 wurde die Kurzform STILL verworfen: kein
-        // Fehler, nur keine Wirkung (gemessen an `pretty` wie an `bare`).
-        // Mehrdeutig ist das nicht: ein JsonStyle ist eine Variable dieses Typs,
-        // ein Typname ein Literal.
+        // spec/29 §5.2a: the style may be the SECOND argument —
+        // `sys.serialize(value, style)` —, not only after an explicit
+        // type name.  Until 2026-10-18 the short form was SILENTLY discarded: no
+        // error, just no effect (measured with `pretty` as well as `bare`).
+        // This is not ambiguous: a JsonStyle is a variable of that type,
+        // a type name a literal.
         bool styleIsSecondArg = false;
         if (call->args.size() == 2) {
             if (auto* maybeStyle = dynamic_cast<VariableExpr*>(call->args.back().get())) {
@@ -4655,14 +4655,14 @@ IRValue* Compiler::visitSysSerializeCall(const std::string& method, CallExpr* ca
 namespace {
 
 // DFS post-order: dependencies are inserted before the node that references them.
-// spec/65 F65-38: von einem EXPORTIERTEN Symbol traegt ein Buendel die Signatur, nicht den
-// Rumpf.  Nimmt es den Rumpf mit (so wie fuer jede andere gerufene Funktion, spec/29_2 §16),
-// bekommt das Skript eine KOPIE und fuehrt sie mit dem Level der Sitzung aus — die
-// Zugriffspruefung haette dann nichts mehr zu verweigern und saehe nur noch aus wie Schutz.
+// spec/65 F65-38: for an EXPORTED symbol a bundle carries the signature, not the
+// body.  If it takes the body along (as for every other called function, spec/29_2 §16),
+// the script gets a COPY and runs it with the session's level — the
+// access check would then have nothing left to deny and would only look like protection.
 //
-// Die erzeugte Form ist `extern: "C"`, weil genau dafuer die Zulassung aus F65-13 das Tor ist:
-// der Name muss in der Export-Tabelle stehen, sonst lehnt die eingeschraenkte Sitzung ihn ab.
-// Die Adresse hat der Wirt per `sys.export_symbol` angemeldet (F65-37).
+// The generated form is `extern: "C"`, because that is exactly what the admission from F65-13 is the gate for:
+// the name must be in the export table, otherwise the restricted session rejects it.
+// The host registered the address via `sys.export_symbol` (F65-37).
 static std::string exportedDeclYaml(const std::string& name,
                                     const CompilerContext::FunctionInfo& fi) {
     std::string out = "- extern: \"C\"\n  defs:\n    - def:\n        name: " + name + "\n";
@@ -4691,15 +4691,15 @@ static void dfsCollect(CompilerContext& ctx,
     if (ctx.functions.count(name)) {
         auto& fi = ctx.functions[name];
         for (auto& dep : fi.referencedTypes) dfsCollect(ctx, dep, visited, result, missing, funcNames);
-        // spec/29_2 §16: auch gerufenen Funktionen folgen — sonst ist das
-        // Bundle unvollstaendig und faellt erst beim Empfaenger auf.
-        // Kopie, weil dfsCollect ctx.functions veraendern kann.
+        // spec/29_2 §16: follow called functions too — otherwise the
+        // bundle is incomplete and that only shows up at the receiver.
+        // A copy, because dfsCollect can modify ctx.functions.
         std::set<std::string> callees = fi.referencedFuncs;
         for (auto& dep : callees) {
-            // F65-38: exportiertes Symbol -> Signatur statt Rumpf, und NICHT absteigen.
-            // Kriterium ist das `level:` am `def` — NICHT die Export-Tabelle: `sys.bundle`
-            // laeuft zur UEBERSETZUNGSZEIT, `sys.export_symbol` zur Laufzeit; die Tabelle ist
-            // hier noch leer.  Ein `def` mit Level gehoert zur angebotenen Oberflaeche.
+            // F65-38: exported symbol -> signature instead of body, and do NOT descend.
+            // The criterion is the `level:` on the `def` — NOT the export table: `sys.bundle`
+            // runs at COMPILE TIME, `sys.export_symbol` at runtime; the table is
+            // still empty here.  A `def` with a level belongs to the offered surface.
             if (ctx.functions.count(dep) &&
                 ctx.functions[dep].clearance_level != aiml::clearance::kAbsent) {
 
@@ -4711,10 +4711,10 @@ static void dfsCollect(CompilerContext& ctx,
             }
             dfsCollect(ctx, dep, visited, result, missing, funcNames);
         }
-        // spec/29_2 §22: auch den benutzten GLOBALEN folgen.  Ohne das meldet
-        // der Empfaenger "Undefined variable", sobald eine mitgebuendelte
-        // Funktion eine globale Variable anfasst — gemessen mit einer
-        // Controller-Hilfsfunktion, die einen Zaehler fuehrt.
+        // spec/29_2 §22: follow the GLOBALS used as well.  Without that the
+        // receiver reports "Undefined variable" as soon as a bundled
+        // function touches a global variable — measured with a
+        // controller helper function that keeps a counter.
         std::set<std::string> globals = fi.referencedGlobals;
         for (const auto& gname : globals) {
             if (!visited.insert("global:" + gname).second) continue;
@@ -4724,10 +4724,10 @@ static void dfsCollect(CompilerContext& ctx,
         }
         if (funcNames) funcNames->push_back(name);
         if (!fi.sourceYaml.empty()) result.push_back(fi.sourceYaml);
-        // spec/29_2 §18: eine gerufene Funktion OHNE hinterlegte Quelle kann
-        // nicht mitgebuendelt werden — der Empfaenger bekaeme "Unknown
-        // function".  Hier ist der einzige Punkt, an dem das noch zur BAUZEIT
-        // sichtbar ist.
+        // spec/29_2 §18: a called function WITHOUT stored source cannot
+        // be bundled along — the receiver would get "Unknown
+        // function".  This is the only point at which that is still visible at
+        // BUILD TIME.
         else if (missing) missing->insert(name);
     } else if (ctx.classes.count(name)) {
         auto& ci = ctx.classes[name];
@@ -4761,9 +4761,9 @@ static std::vector<std::string> collectCodeChunks(CompilerContext& ctx,
     return result;
 }
 
-// spec/62 §10.2 / F62-102: die Reinheitspruefung.  Sie laeuft beim BUENDELN,
-// weil das die Stelle ist, an der der Compiler den Rumpf in der Hand hat —
-// `set_cache(CacheClass.pure)` steht erst zur Laufzeit fest (§13.5d).
+// spec/62 §10.2 / F62-102: the purity check.  It runs at BUNDLING time,
+// because that is the place where the compiler has the body in hand —
+// `set_cache(CacheClass.pure)` is only fixed at runtime (§13.5d).
 static void checkBundlePurity(CompilerContext& ctx, AIML::AST::CallExpr* call,
                               const std::string& selector,
                               const std::vector<std::string>& funcNames,
@@ -4778,42 +4778,42 @@ static void checkBundlePurity(CompilerContext& ctx, AIML::AST::CallExpr* call,
                 case aiml::PurityVerdict::Allowed:
                     break;
                 case aiml::PurityVerdict::NeedsAssert:
-                    // F62-22: das eine erlaubte unreine Ding — aber nur mit der
-                    // Unterschrift.  Der Compiler kann nicht in ein Programm
-                    // sehen, also muss ein Mensch dafuer einstehen.
+                    // F62-22: the one permitted impure thing — but only with a
+                    // signature.  The compiler cannot see into a program,
+                    // so a human has to vouch for it.
                     if (!assertPure)
                         LOG_ERROR(where + "sys.bundle('" + selector + "', pure: true): '" +
-                                  what + "' in einem reinen Rumpf verlangt assert_pure: true " +
-                                  "(spec/62 F62-22) — niemand kann in ein Programm sehen.");
+                                  what + "' in a pure body requires assert_pure: true " +
+                                  "(spec/62 F62-22) — nobody can see into a program.");
                     break;
                 case aiml::PurityVerdict::IoConstOutside:
-                    // F62-19: ein konstanter absoluter Pfad macht das Ergebnis
-                    // wirtsabhaengig, und das ist statisch entscheidbar.
+                    // F62-19: a constant absolute path makes the result
+                    // host-dependent, and that is statically decidable.
                     LOG_ERROR(where + "sys.bundle('" + selector + "', pure: true): '" +
-                              what + "' auf den festen Pfad '" + use.firstArgLiteral +
-                              "' ausserhalb des Arbeitsbereichs (spec/62 F62-19).");
+                              what + "' on the fixed path '" + use.firstArgLiteral +
+                              "' outside the workspace (spec/62 F62-19).");
                     break;
                 case aiml::PurityVerdict::IoComputed:
-                    // F62-20: NICHT entscheidbar — darum Warnung.  Etwas
-                    // anderes zu behaupten waere unehrlich.
+                    // F62-20: NOT decidable — hence a warning.  Claiming
+                    // anything else would be dishonest.
                     LOG_WARNING(where + "sys.bundle('" + selector + "', pure: true): '" +
-                                what + "' mit berechnetem Pfad — statisch nicht entscheidbar, " +
-                                "ob er im Arbeitsbereich liegt (spec/62 F62-20).");
+                                what + "' with a computed path — not statically decidable " +
+                                "whether it lies in the workspace (spec/62 F62-20).");
                     break;
                 case aiml::PurityVerdict::Impure:
                     LOG_ERROR(where + "sys.bundle('" + selector + "', pure: true): '" +
-                              what + "' ist unrein (spec/62 F62-18) — ein unklassifiziertes " +
-                              "Builtin gilt ebenfalls als unrein.");
+                              what + "' is impure (spec/62 F62-18) — an unclassified " +
+                              "builtin counts as impure as well.");
                     break;
             }
         }
     }
 }
 
-// spec/29_2 §18: Vollstaendigkeitspruefung.  Ein Bundle, dem eine gerufene
-// Funktion fehlt, faellt sonst erst beim EMPFAENGER auf ("Unknown function"),
-// nachdem es schon ueber die Leitung ging.  Hier ist der letzte Punkt, an dem
-// der Autor es erfaehrt — und `--check` sammelt die Warnung ein (spec/49).
+// spec/29_2 §18: completeness check.  A bundle that lacks a called
+// function otherwise only shows up at the RECEIVER ("Unknown function"),
+// after it has already gone over the wire.  This is the last point at which
+// the author finds out — and `--check` collects the warning (spec/49).
 static void warnIfIncomplete(CompilerContext& ctx, AIML::AST::CallExpr* call,
                              const std::string& selector,
                              const std::set<std::string>& missing) {
@@ -4821,8 +4821,8 @@ static void warnIfIncomplete(CompilerContext& ctx, AIML::AST::CallExpr* call,
     std::string names;
     for (const auto& m : missing) { names += " "; names += m; }
     LOG_WARNING(ctx.fmtLoc(call->sourceNode) + "sys.bundle('" + selector +
-                "'): unvollstaendig — gerufene Funktion(en) ohne hinterlegte Quelle:" +
-                names + ".  Der Empfaenger meldet dafuer 'Unknown function'.");
+                "'): incomplete — called function(s) without stored source:" +
+                names + ".  The receiver reports 'Unknown function' for them.");
 }
 
 // FNV-1a 32-bit hash, returned as 8-char hex string.
@@ -4871,9 +4871,9 @@ IRValue* Compiler::visitSysBundleCall(CallExpr* call) {
         std::vector<std::string> chunks = collectCodeChunks(ctx, selector, &missing, &bundledFuncs);
         warnIfIncomplete(ctx, call, selector, missing);
 
-        // spec/62 §13.5d: `pure: true` loest die Pruefungen aus §10.2 aus.
-        // Ohne die Angabe prueft niemand etwas — dann ist `cache: pure` eine
-        // Behauptung ohne Deckung (F62-103 macht daraus eine Laufzeitwarnung).
+        // spec/62 §13.5d: `pure: true` triggers the checks from §10.2.
+        // Without it nobody checks anything — then `cache: pure` is a
+        // claim without backing (F62-103 turns that into a runtime warning).
         {
             bool wantPure = false, assertPure = false;
             if (call->args.size() >= 2) {
@@ -4886,8 +4886,8 @@ IRValue* Compiler::visitSysBundleCall(CallExpr* call) {
             }
             if (wantPure) {
                 checkBundlePurity(ctx, call, selector, bundledFuncs, assertPure);
-                // F62-103: vermerken, DASS geprueft wurde — die Laufzeit warnt
-                // sonst bei `cache: pure` ueber eine unbewiesene Behauptung.
+                // F62-103: note THAT it was checked — otherwise the runtime warns
+                // about an unproven claim with `cache: pure`.
                 llvm::Value* pureId = ctx.builder.CreateGlobalStringPtr(fnv1a_hex(
                     [&]{ std::string all; for (auto& c : chunks) all += c; return all; }()), "b_pid");
                 ctx.builder.CreateCall(ctx.getFunction("aiml_code_mark_pure",
@@ -5024,12 +5024,12 @@ IRValue* Compiler::visitSysExecCall(CallExpr* call) {
     // Emit call to __aiml_code_exec(i8*) → i32 via CodeImpl::exec
     llvm::Value* codePtr = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(codeVal));
 
-    // spec/65 F65-36: die optionalen Argumente 2..4 sind die RICHTLINIE dieser Sitzung, in
-    // der Reihenfolge der F65-26-Tabelle: clearance, create_level, replace_level.  Sie gehoert
-    // an die Ausfuehrung, nicht an das Buendel — derselbe Code muss fuer zwei Nutzer mit
-    // verschiedenen Rechten laufen koennen.  Fehlende hintere Werte sind 0, also NIEMAND
-    // (F65-22): wer nichts sagt, darf nichts schreiben.  Jeder ist ein gewoehnlicher
-    // Ausdruck, weil eine Konsole die Richtlinie je Nutzer zur Laufzeit bildet.
+    // spec/65 F65-36: the optional arguments 2..4 are this session's POLICY, in
+    // the order of the F65-26 table: clearance, create_level, replace_level.  It belongs
+    // to the execution, not to the bundle — the same code must be able to run for two users with
+    // different rights.  Missing trailing values are 0, i.e. NOBODY
+    // (F65-22): whoever says nothing may write nothing.  Each is an ordinary
+    // expression, because a console forms the policy per user at runtime.
     if (call->args.size() >= 2) {
         if (call->args.size() > 4) {
             LOG_ERROR(ctx.fmtLoc() + "sys.exec: hoechstens (pkg, clearance, create_level, replace_level) — "
@@ -5043,7 +5043,7 @@ IRValue* Compiler::visitSysExecCall(CallExpr* call) {
             IRValue* v = visitExpression(call->args[i].get());
             if (!v) {
                 LOG_ERROR(std::string("sys.exec: Argument `") + kWhich[i - 1] +
-                          "` nicht auswertbar — spec/65 F65-36");
+                          "` cannot be evaluated — spec/65 F65-36");
                 return ctx.ir_gen->getInt32(-1);
             }
             llvm::Value* iv = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(v));
@@ -5403,10 +5403,10 @@ IRValue* Compiler::visitDbRunSystem(CallExpr* call) {
 }
 
 // ── sys.code_from (spec/29_2 §13) ─────────────────────────────────────────────
-// Gegenstueck zu pkg.toString(): baut aus aiml-Quelltext wieder ein Code-Objekt,
-// damit ein Bundle ueber eine Verbindung reisen kann.  Optionen spiegeln
-// sys.bundle absichtlich — `context: true` ist das einzige, was in einem
-// AOT-Binary laeuft (spec/29_2 §11).
+// Counterpart to pkg.toString(): builds a code object again from aiml source text,
+// so that a bundle can travel over a connection.  The options deliberately mirror
+// sys.bundle — `context: true` is the only one that runs in an
+// AOT binary (spec/29_2 §11).
 IRValue* Compiler::visitSysCodeFromCall(CallExpr* call) {
     if (call->args.empty()) {
         LOG_ERROR(ctx.fmtLoc(call->sourceNode) +
