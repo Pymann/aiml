@@ -1,135 +1,135 @@
-# DELTA, Replika-Ownership und WS9: konkreter Implementierungsplan
+# DELTA, replica ownership and WS9: concrete implementation plan
 
-Stand: 2026-10-03. Status: **Entwurf zur Implementierung, kein implementierter Fix**.
-Ergänzt Abschnitt 11 von `rpc_implementation_fix_plan_2026-10-02.md`.
+As of: 2026-10-03. Status: **draft for implementation, not an implemented fix**.
+Supplements section 11 of `rpc_implementation_fix_plan_2026-10-02.md`.
 
-Die Snippets sind konkrete Änderungsvorschläge. Neu eingeführte Funktionen sind
-als solche bezeichnet; sie sind nicht als bereits verfügbare APIs zu verstehen.
-Zeilennummern sind Orientierungen, Funktionsnamen die stabilen Suchanker.
+The snippets are concrete change proposals. Newly introduced functions are
+marked as such; they are not to be understood as already available APIs.
+Line numbers are orientation, function names the stable search anchors.
 
-## 1. Festgelegtes Verhalten
+## 1. Defined behaviour
 
-1. DELTA wird vollständig, begrenzt und transaktional decodiert. Keine teilweise
-   Übernahme bei Fehlern; Schemaabweichung ist kein erfolgreicher Snapshot.
-2. Mirror **borgt** das vom AIML-Aufrufer initialisierte Objekt. Registrierung
-   und Session-Ende zerstören dessen Felder nicht. Das Objekt muss bis
-   Unregister/Close leben. Der normale AIML-Lifetime-Pfad bleibt Eigentümer.
-3. Bereitschaft wird durch einen erfolgreich übernommenen Snapshot angezeigt,
-   nicht durch REGISTER, eine Pointerbelegung oder die Zahl der `update`-Aufrufe.
-4. Der WS9-Test wartet auf Snapshot + erwartete Werte und beendet den Host erst
-   nach einer expliziten Empfangsbestätigung des Clients.
-5. Modellversionsmigration bleibt außerhalb dieses Fixes. Gleiche Wire-Schemata
-   aus verschiedenen Compiler-Kontexten sind unterstützt; verschiedene Schemata
-   werden abgewiesen.
+1. DELTA is decoded completely, bounded and transactionally. No partial
+   takeover on errors; a schema deviation is not a successful snapshot.
+2. Mirror **borrows** the object initialised by the AIML caller. Registration
+   and session end do not destroy its fields. The object must live until
+   unregister/close. The normal AIML lifetime path stays the owner.
+3. Readiness is indicated by a successfully taken-over snapshot,
+   not by REGISTER, a pointer assignment or the number of `update` calls.
+4. The WS9 test waits for a snapshot + expected values and only ends the host
+   after an explicit receipt confirmation from the client.
+5. Model version migration stays outside this fix. Identical wire schemas
+   from different compiler contexts are supported; different schemas
+   are rejected.
 
-## 2. Änderungsmatrix
+## 2. Change matrix
 
-| Datei / Anker im aktuellen Stand | Änderung |
+| File / anchor in the current state | Change |
 | --- | --- |
-| `src/sys/ser_runtime.cpp`: `aiml_ser_encode`, `aiml_ser_rpc_fp`, `aiml_ser_decode_sized_tx` (~1539) | explizite Wire-Encode-API und zwingende Envelope-/Schema-Prüfung für DELTA |
-| `src/sys/ser_runtime.h:92` | neue Deklarationen und eindeutiger Ownership-Vertrag |
-| `src/sys/mirror_runtime.cpp`: `AimlMirrorRegistered` (~163) | Snapshot-Zähler und Fehlerstatus statt `has_decoded` als Ownership-Schalter |
-| `mirror_packet_length` (~440) | markiertes DELTA-Format erkennen, unbekannte Flags ablehnen |
-| `send_delta_to_peer` (~520), `send_delta_pkt` (~545), `session_update` (~1126), `register_id_typed` (~1312) | einheitliches Encoding inklusive Dirty-Tracking |
-| `process_packet`, DELTA (~590), Pending-Blob-Apply (~1287) | gemeinsamer transaktionaler Apply-Helper |
-| `PKT_UNREGISTER` (~674), `session_close` (~1057), `session_unregister` (~1234) | nur Registrierungsressourcen freigeben, alle Lookup-Einträge entfernen |
-| `src/core/builtin_registry.cpp`: `MIRROR_FIND_OBJ_PTR`, `register`, `register_id` (~9920–10065) | echtes langlebiges Objekt binden; alle serialisierbaren Modelle typisiert registrieren; Status-Builtins |
-| `src/core/ast_compiler.cpp`: `initClassContainerMembers` (~131), globale Initialisierung (~1595/~1783) | Anfangszustand untersuchen und gezielt an der belegten Ursache korrigieren |
-| `src/core/ast_compiler_stmt.cpp`: Modellinitialisierung (~1711), Defaults (~2078), ScopeDrop | genau einmal gültig initialisieren und später korrekt freigeben |
-| `tests/test_mirror_ws_9rooms_imports.aiml` | Zustandsmaschine, ACK, keine ungeschützten Host-Global-Reads |
-| `tests/ws_context_*`, `test_mirror_ws_shared_module_context_mismatch` | positive Kontext- und negative Schema-Regression trennen |
+| `src/sys/ser_runtime.cpp`: `aiml_ser_encode`, `aiml_ser_rpc_fp`, `aiml_ser_decode_sized_tx` (~1539) | explicit wire encode API and a mandatory envelope/schema check for DELTA |
+| `src/sys/ser_runtime.h:92` | new declarations and an unambiguous ownership contract |
+| `src/sys/mirror_runtime.cpp`: `AimlMirrorRegistered` (~163) | snapshot counter and error status instead of `has_decoded` as an ownership switch |
+| `mirror_packet_length` (~440) | recognise the marked DELTA format, reject unknown flags |
+| `send_delta_to_peer` (~520), `send_delta_pkt` (~545), `session_update` (~1126), `register_id_typed` (~1312) | uniform encoding including dirty tracking |
+| `process_packet`, DELTA (~590), pending blob apply (~1287) | a shared transactional apply helper |
+| `PKT_UNREGISTER` (~674), `session_close` (~1057), `session_unregister` (~1234) | only free registration resources, remove all lookup entries |
+| `src/core/builtin_registry.cpp`: `MIRROR_FIND_OBJ_PTR`, `register`, `register_id` (~9920–10065) | bind the real long-lived object; register all serialisable models typed; status builtins |
+| `src/core/ast_compiler.cpp`: `initClassContainerMembers` (~131), global initialisation (~1595/~1783) | investigate the initial state and correct it specifically at the proven cause |
+| `src/core/ast_compiler_stmt.cpp`: model initialisation (~1711), defaults (~2078), ScopeDrop | initialise validly exactly once and release correctly later |
+| `tests/test_mirror_ws_9rooms_imports.aiml` | state machine, ACK, no unprotected host global reads |
+| `tests/ws_context_*`, `test_mirror_ws_shared_module_context_mismatch` | separate the positive context regression from the negative schema regression |
 
-## 3. Zuerst den Anfangszustand isolieren (Commit 1)
+## 3. Isolate the initial state first (commit 1)
 
-Die ursprüngliche Initialisierungsursache ist noch nicht bewiesen. Kein pauschales
-`memset` und keine erneute Initialisierung in `register_id` einbauen: beides kann
-lebende Strings/Container überschreiben und Leaks verdecken.
+The original initialisation cause is not yet proven. Do not build in a blanket
+`memset` or a renewed initialisation in `register_id`: both can
+overwrite live strings/containers and hide leaks.
 
-### 3.1 Minimaltest vor jeder Mirror-Operation
+### 3.1 Minimal test before any mirror operation
 
-Neues `tests/test_mirror_replica_defaults.aiml` mit demselben Modell wie der
-Problemfall: String ohne Default, String mit Default, Liste, Map, verschachteltes
-Modell. Vor dem ersten Netzwerkaufruf `.len`/Defaults prüfen, dann serialisieren
-und Scope verlassen. Varianten: lokale Variable, importiertes Global,
-`ptr<Model>`, aktivierte Refcount-Repräsentation. Bestehende Refcount-Schalter
-verwenden; keine neue Modellrepräsentation für Mirror einführen.
+New `tests/test_mirror_replica_defaults.aiml` with the same model as the
+problem case: a string without a default, a string with a default, a list, a map, a nested
+model. Before the first network call, check `.len`/defaults, then serialise
+and leave the scope. Variants: local variable, imported global,
+`ptr<Model>`, enabled refcount representation. Use the existing refcount switches;
+do not introduce a new model representation for mirror.
 
-Erzeugtes LLVM-IR auf diese Reihenfolge prüfen:
+Check the generated LLVM IR for this order:
 
 ```cpp
-// Soll-Reihenfolge im bestehenden Value-Modell-Konstruktionspfad.
-// Nur bei ERSTKONSTRUKTION, nicht bei register_id oder bei jedem DELTA.
+// Target order in the existing value model construction path.
+// Only on FIRST CONSTRUCTION, not on register_id or on every DELTA.
 ctx.builder.CreateStore(llvm::Constant::getNullValue(modelTy), objectAddr);
 initClassContainerMembers(objectAddr, modelName);
-// Explizite Defaults nur einmal anwenden; vorhandene String-Decrefs beachten.
-// Anschließend ScopeDrop für dieselbe Adresse und denselben Deskriptor.
+// Apply explicit defaults only once; respect existing string decrefs.
+// Afterwards a ScopeDrop for the same address and the same descriptor.
 ```
 
-`initClassContainerMembers` initialisiert Strings und Container bereits. Deshalb
-zuerst überprüfen, ob der Aufruf fehlt, durch einen späteren Store überschrieben
-wird oder auf die falsche Adresse zeigt. Bei Globals prüfen, dass der Initializer
-vor Start eines Host-Threads ausgeführt wird. Bei `ptr<>`/Refcount-Modellen muss
-Mirror die Objektadresse erhalten, nicht die Adresse des Pointer-Slots.
+`initClassContainerMembers` already initialises strings and containers. Therefore
+first check whether the call is missing, is overwritten by a later store
+or points to the wrong address. For globals, check that the initializer
+runs before a host thread starts. For `ptr<>`/refcount models, mirror must
+receive the object address, not the address of the pointer slot.
 
-### 3.2 Temporäre Receiver ausschließen
+### 3.2 Exclude temporary receivers
 
-`MIRROR_FIND_OBJ_PTR` erzeugt derzeit für manche Ausdrücke ein temporäres Alloca.
-Eine langlebige Registrierung darf dieses temporäre Objekt nicht behalten.
-Makro durch einen gemeinsamen Helper für beide Builtins ersetzen:
+`MIRROR_FIND_OBJ_PTR` currently creates a temporary alloca for some expressions.
+A long-lived registration must not keep this temporary object.
+Replace the macro with a shared helper for both builtins:
 
 ```cpp
-// Neuer Compiler-Helper, schematische Signatur (Symbol-Lookup wiederverwenden).
+// New compiler helper, schematic signature (reuse symbol lookup).
 struct MirrorObjectBinding {
     llvm::Value* address;
     std::string modelType;
     uint64_t size;
 };
 // resolveMirrorObjectBinding(ctx, expr):
-// - nur nachweislich adressierbares, bis Unregister/Close lebendes Objekt;
-// - Symbol-Typ normalisieren (ptr/ref/Refcount);
-// - bei Pointer-Slot genau einmal laden;
-// - Größe aus DataLayout und konkretem Modelltyp;
-// - temporäre Modellwerte ablehnen, niemals still reg_tmp registrieren.
+// - only a provably addressable object that lives until unregister/close;
+// - normalise the symbol type (ptr/ref/refcount);
+// - load exactly once for a pointer slot;
+// - size from the DataLayout and the concrete model type;
+// - reject temporary model values, never silently register reg_tmp.
 ```
 
-Bei initialisierten Value-Modellen gilt: Registrierung nimmt keine zusätzliche
-Eigentümerschaft an Heapfeldern an. Bei expliziten Pointer-/Borrow-Varianten
-Lifetime-Analyse so erweitern, dass ein Objekt nicht vor der Registrierung endet.
-Komplexe nicht belegbare Lebensdauern mindestens mit klarer Diagnose begrenzen.
+For initialised value models: registration takes no additional
+ownership of heap fields. For explicit pointer/borrow variants,
+extend the lifetime analysis so that an object does not end before the registration.
+At least bound complex, unprovable lifetimes with a clear diagnostic.
 
-**Gate:** Default-/Teardown-Test unter ASan bzw. bestehendem Memory-Sanitizer
-muss bestehen, bevor in Commit 3 `release_old = 1` verbindlich wird.
+**Gate:** the default/teardown test under ASan or the existing memory sanitizer
+must pass before `release_old = 1` becomes binding in commit 3.
 
-## 4. Ein markiertes, schemageprüftes DELTA-Format (Commit 2)
+## 4. A marked, schema-checked DELTA format (commit 2)
 
-### 4.1 Wireformat und Kompatibilität
+### 4.1 Wire format and compatibility
 
-Für `PKT_DELTA` wird `reserved = 2` definiert:
+For `PKT_DELTA`, `reserved = 2` is defined:
 
 ```text
 [net_id:u32 LE][type=0x01:u8][format=2:u8]
 [payload_len:u32 LE][wire_magic:u32 LE][schema_fp:u32 LE][encoded fields...]
 ```
 
-Wiederverwendung des vorhandenen strukturellen RPC-Envelopes
-(`0xA1F5C0DF`, Fingerprint, Payload), ausdrücklich auch für DELTA dokumentiert.
-Keine Änderung persistierter KV-Blobs. Der Marker unterscheidet neue DELTAs von
-alten ungetaggten `reserved=1`-Paketen.
+Reuse of the existing structural RPC envelope
+(`0xA1F5C0DF`, fingerprint, payload), explicitly documented for DELTA too.
+No change to persisted KV blobs. The marker distinguishes new DELTAs from
+old untagged `reserved=1` packets.
 
-Dies ist ein **koordiniertes Client-/Server-Upgrade**. Alte Binaries sind nicht
-kompatibel und können Marker 2 als Raw-Daten fehlinterpretieren. Deployment daher
-nur mit gemeinsam aktualisierten Peers. Ein Mischbetrieb ist nicht Teil dieses
-Fixes; falls benötigt, muss vorher eine separate DELTA-Capability ausgehandelt
-werden. RPC-Version 3 allein beweist keine Unterstützung von DELTA-Format 2.
-Kein automatisches Best-effort-Fallback.
+This is a **coordinated client/server upgrade**. Old binaries are not
+compatible and can misinterpret marker 2 as raw data. Deployment therefore
+only with jointly updated peers. Mixed operation is not part of this
+fix; if needed, a separate DELTA capability must be negotiated
+beforehand. RPC version 3 alone does not prove support for DELTA format 2.
+No automatic best-effort fallback.
 
-Für Modelle auf dem neuen typisierten Pfad werden `reserved=0/1` abgewiesen.
-Raw-DELTA bleibt allenfalls für die explizite Legacy-C-API; es wird nicht als
-schemaüberprüft oder plattformunabhängig dokumentiert.
+For models on the new typed path, `reserved=0/1` are rejected.
+Raw DELTA remains at most for the explicit legacy C API; it is not documented as
+schema-checked or platform-independent.
 
-### 4.2 Serializer-APIs
+### 4.2 Serializer APIs
 
-Neue Deklarationen hinter `AimlTypeNode` in `ser_runtime.h`:
+New declarations behind `AimlTypeNode` in `ser_runtime.h`:
 
 ```cpp
 char* aiml_ser_encode_wire(const void* obj,
@@ -139,8 +139,8 @@ int aiml_ser_decode_delta_tx(const char* blob, size_t blob_size,
                             const AimlTypeNode* nodes, int32_t n_nodes);
 ```
 
-Implementierung in `ser_runtime.cpp`; nutzt den vorhandenen Envelope-Modus und
-stellt ihn auch bei C++-Exceptions wieder her:
+Implementation in `ser_runtime.cpp`; uses the existing envelope mode and
+restores it even on C++ exceptions:
 
 ```cpp
 extern "C" char* aiml_ser_encode_wire(const void* obj,
@@ -152,7 +152,7 @@ extern "C" char* aiml_ser_encode_wire(const void* obj,
     return aiml_ser_encode(obj, nodes, n);
 }
 
-// Private Hilfsfunktion in ser_runtime.cpp.
+// Private helper function in ser_runtime.cpp.
 static uint32_t wire_u32(const uint8_t* p) {
     return uint32_t(p[0]) | (uint32_t(p[1]) << 8)
          | (uint32_t(p[2]) << 16) | (uint32_t(p[3]) << 24);
@@ -167,54 +167,54 @@ extern "C" int aiml_ser_decode_delta_tx(
     if (size_t(wire_u32(b)) != len - 4) return -1;
     if (wire_u32(b + 4) != AIML_RPC_MAGIC) return -2;
     if (wire_u32(b + 8) != aiml_ser_rpc_fp(nodes, n)) return -2;
-    // Vorbedingung: out ist ein vollständig initialisiertes, besessenes Modell.
+    // Precondition: out is a completely initialised, owned model.
     return aiml_ser_decode_sized_tx(blob, len, out, out_size, nodes, n, 1);
 }
 ```
 
-`aiml_ser_decode_sized_tx` liefert bereits vollständigen Konsum, Budget-/Depth-
-Grenzen und einen temporären Decode. Die hier zusätzliche zwingende Magic-Prüfung
-ist nötig, weil der bestehende allgemeine Decoder Legacy-Blobs akzeptiert.
+`aiml_ser_decode_sized_tx` already provides complete consumption, budget/depth
+limits and a temporary decode. The additional mandatory magic check here
+is necessary because the existing general decoder accepts legacy blobs.
 
-**Schema-Grenzen ausdrücklich prüfen:** Der aktuelle Fingerprint beschreibt
-Serializer-Kinds, nicht Feldnamen oder alle semantischen Typen (`i32`/`f32`
-teilen einen Kind). Er ist kein Authentifizierungsmechanismus. Für diesen Fix
-wird Wire-Schema-Kompatibilität garantiert, keine beliebige semantische
-Modellgleichheit. Rekursive Deskriptoren (`PTR_REF`) dürfen nicht einfach nur nach
-lokaler Type-ID verglichen werden: kanonisch auflösen oder für Sync zunächst
-mit Diagnose ablehnen. Gleiches gilt für nicht serialisierbare Ressourcen.
+**Check the schema limits explicitly:** the current fingerprint describes
+serializer kinds, not field names or all semantic types (`i32`/`f32`
+share a kind). It is not an authentication mechanism. For this fix,
+wire schema compatibility is guaranteed, not arbitrary semantic
+model equality. Recursive descriptors (`PTR_REF`) must not simply be compared
+by local type ID: resolve them canonically or, for sync, reject them for now
+with a diagnostic. The same applies to non-serialisable resources.
 
-### 4.3 Alle Sender-/Vergleichspfade gemeinsam umstellen
+### 4.3 Switch all sender/comparison paths together
 
-In `send_delta_to_peer`, `send_delta_pkt`, Dirty-Tracking von `session_update`
-und Initialisierung von `shadow_blob` in `register_id_typed`:
+In `send_delta_to_peer`, `send_delta_pkt`, the dirty tracking of `session_update`
+and the initialisation of `shadow_blob` in `register_id_typed`:
 
 ```cpp
 char* blob = aiml_ser_encode_wire(reg->obj_ptr, reg->ser_nodes, reg->ser_n);
-if (!blob) return; // Im update-Loop: continue.
+if (!blob) return; // In the update loop: continue.
 const size_t len = size_t(read_u32_le(
     reinterpret_cast<const uint8_t*>(blob))) + 4;
-// len gegen dieselbe Frame-Obergrenze wie beim Empfang prüfen.
+// Check len against the same frame upper limit as on receipt.
 std::vector<uint8_t> pkt(6 + len);
 write_u32_le(pkt.data(), uint32_t(reg->net_id));
 pkt[4] = PKT_DELTA;
 pkt[5] = 2;
 memcpy(pkt.data() + 6, blob, len);
-// Senden + vorhandene Shadow-Ownership übernehmen oder blob freigeben.
+// Send + take over the existing shadow ownership or free blob.
 ```
 
-Nach Möglichkeit ein einziges `encode_delta(reg)`/`make_delta_packet` für alle
-vier Stellen einführen. Dirty-Tracking muss exakt denselben Blob vergleichen,
-der später gesendet wird; sonst erzeugt allein der neue Header Dauersynchronisation.
+If possible, introduce a single `encode_delta(reg)`/`make_delta_packet` for all
+four places. Dirty tracking must compare exactly the same blob
+that is sent later; otherwise the new header alone produces permanent synchronisation.
 
-Compiler-Builtins `register` und `register_id`: Bedingung
-`hasHeapFields && serNodesVar` durch `serialisierbares Modell && serNodesVar`
-ersetzen. Auch reine Zahlenmodelle erhalten Format 2 und Schema-Prüfung.
-Nicht serialisierbare Modelle diagnostizieren, nicht auf Raw-Memcpy ausweichen.
+Compiler builtins `register` and `register_id`: replace the condition
+`hasHeapFields && serNodesVar` with `serialisable model && serNodesVar`.
+Pure number models also get format 2 and the schema check.
+Diagnose non-serialisable models, do not fall back to a raw memcpy.
 
 ### 4.4 Parser
 
-In `mirror_packet_length`, `case PKT_DELTA`, explizite Flags verwenden:
+In `mirror_packet_length`, `case PKT_DELTA`, use explicit flags:
 
 ```cpp
 if (d[5] == 2) {
@@ -222,36 +222,36 @@ if (d[5] == 2) {
     const uint32_t payload = read_u32_le(d + 6);
     if (payload < 8 || payload > kMaxRpcFrame) return PKT_INVALID;
     t = 10 + size_t(payload);
-    // Bestehender gemeinsamer Tail prüft vollständiges Paket und WS-Restbytes.
+    // The existing shared tail checks the complete packet and WS remaining bytes.
 } else if (d[5] == 0) {
-    // Expliziter bisheriger Raw-Legacy-Zweig, nicht als Fallback für typed.
+    // Explicit previous raw legacy branch, not as a fallback for typed.
 } else {
-    return PKT_INVALID; // einschließlich ungetaggtem Format 1 im neuen Protokoll
+    return PKT_INVALID; // including untagged format 1 in the new protocol
 }
 ```
 
-Raw→typed auch in `process_packet` abweisen, damit ein manipulierter Marker
-nicht Heap-Pointer durch `memcpy` überschreiben kann. Typed→untyped ebenfalls
-ablehnen. Pending-Daten speichern zusätzlich das Format; Marker 0 darf für eine
-später typisiert gebundene Replika nicht versehentlich zum Anfangszustand werden.
+Also reject raw→typed in `process_packet`, so that a manipulated marker
+cannot overwrite heap pointers through `memcpy`. Likewise reject typed→untyped.
+Pending data additionally stores the format; marker 0 must not accidentally become the initial state
+for a replica that is bound typed later.
 
-## 5. Ein gemeinsamer Apply-Pfad und eindeutige Ownership (Commit 3)
+## 5. A shared apply path and unambiguous ownership (commit 3)
 
-### 5.1 Registrierungszustand
+### 5.1 Registration state
 
-`AimlMirrorRegistered` erweitern, `has_decoded` als Ownership-Indikator entfernen:
+Extend `AimlMirrorRegistered`, remove `has_decoded` as an ownership indicator:
 
 ```cpp
-uint64_t snapshot_revision = 0; // lokale Anzahl erfolgreich übernommener DELTAs
-int32_t last_decode_error = 0;  // 0=kein Fehler, -1=Decode, -2=Schema/Format
+uint64_t snapshot_revision = 0; // local number of successfully taken-over DELTAs
+int32_t last_decode_error = 0;  // 0=no error, -1=decode, -2=schema/format
 uint8_t pending_format = 0;
 ```
 
-Ein Decode-Fehler nach einem gültigen Snapshot lässt Revision und Modell
-unverändert. `last_decode_error` wird gesetzt; beim nächsten Erfolg gelöscht.
-Revision ist lokal und kein Wire-Versionszähler; Überlauf kontrolliert behandeln.
+A decode error after a valid snapshot leaves revision and model
+unchanged. `last_decode_error` is set; it is cleared on the next success.
+The revision is local and not a wire version counter; handle overflow in a controlled way.
 
-### 5.2 Apply-Helper in mirror_runtime.cpp, vor process_packet
+### 5.2 Apply helper in mirror_runtime.cpp, before process_packet
 
 ```cpp
 static int apply_typed_delta(AimlMirrorRegistered& reg,
@@ -274,13 +274,13 @@ static int apply_typed_delta(AimlMirrorRegistered& reg,
 }
 ```
 
-Im Live-DELTA-Zweig bisheriges Free/Memset/Decode vollständig ersetzen:
+In the live DELTA branch, completely replace the previous free/memset/decode:
 
 ```cpp
 if (reg->ser_nodes) {
     if (reserved != 2) {
         reg->last_decode_error = -2;
-        return; // kein Raw-Fallback und keine Weiterleitung dieses Fehlers
+        return; // no raw fallback and no forwarding of this error
     }
     const int rc = apply_typed_delta(*reg, data + 6, size_t(data_len - 6));
     if (rc != 0) {
@@ -288,21 +288,21 @@ if (reg->ser_nodes) {
         return;
     }
 } else {
-    // Nur tatsächlich untypisierte Objekte dürfen den Raw-Zweig erreichen.
+    // Only actually untyped objects may reach the raw branch.
 }
 ```
 
-Host-Relay darf einen lokal verworfenen Snapshot nicht trotzdem weiterleiten.
-Bei Host-Platzhaltern ohne eigenes Schema lediglich begrenzte Weiterleitung
-vorsehen; die endgültige Schema-Prüfung erfolgt beim typisiert gebundenen
-Empfänger. Nicht behaupten, der Host habe solche Payloads bereits validiert.
+The host relay must not forward a locally discarded snapshot anyway.
+For host placeholders without an own schema, provide only bounded forwarding;
+the final schema check happens at the typed-bound
+receiver. Do not claim that the host has already validated such payloads.
 
-### 5.3 Pending-Snapshot beim Binden
+### 5.3 Pending snapshot at binding
 
-Nach `obj_ptr`, `obj_size`, `ser_nodes`, `ser_n` und neuem Shadow:
+After `obj_ptr`, `obj_size`, `ser_nodes`, `ser_n` and the new shadow:
 
 ```cpp
-// s->by_ptr vor Apply/Status-Abfrage setzen.
+// Set s->by_ptr before the apply/status query.
 s->by_ptr[obj] = existing;
 if (existing->pending_blob) {
     const int rc = existing->pending_format == 2
@@ -318,13 +318,13 @@ if (existing->pending_blob) {
 }
 ```
 
-Kein Flag auf Erfolg setzen, falls Apply fehlschlägt. Vorliegende Defaults bleiben
-lesbar. Bei Allokationsfehler für Pending-Buffer alten Pointer/Länge konsistent
-halten; nicht nach einem fehlgeschlagenen `malloc` eine alte Länge stehen lassen.
+Do not set a success flag if the apply fails. Existing defaults stay
+readable. On an allocation failure for the pending buffer, keep the old pointer/length
+consistent; do not leave an old length standing after a failed `malloc`.
 
-### 5.4 Gemeinsames Freigeben einer Registrierung
+### 5.4 Shared release of a registration
 
-Neuer Helper, aufgerufen von lokalem Unregister, Remote-UNREGISTER und Close:
+A new helper, called from local unregister, remote UNREGISTER and close:
 
 ```cpp
 static void erase_registration(AimlMirrorSession& s, AimlMirrorRegistered* reg) {
@@ -338,26 +338,26 @@ static void erase_registration(AimlMirrorSession& s, AimlMirrorRegistered* reg) 
     free(reg->shadow);
     free(reg->shadow_blob);
     free(reg->pending_blob);
-    // obj_ptr und dessen Felder gehören dem AIML-Aufrufer.
+    // obj_ptr and its fields belong to the AIML caller.
     delete reg;
 }
 
-// session_close: keine Iterator-Invalidierung in der bestehenden range-for.
+// session_close: no iterator invalidation in the existing range-for.
 while (!s->by_net_id.empty())
     erase_registration(*s, s->by_net_id.begin()->second);
 ```
 
-`send_unregister_pkt` vor lokalem Entfernen senden; Remote-UNREGISTER nicht
-noch einmal als neuer lokaler Unregister broadcasten. Der bisherige Remote-Pfad
-muss insbesondere den veralteten `by_ptr`-Eintrag und RPC-Objektlookup beseitigen.
+Send `send_unregister_pkt` before the local removal; do not broadcast a remote UNREGISTER
+again as a new local unregister. The previous remote path
+must in particular remove the stale `by_ptr` entry and the RPC object lookup.
 
-Tests müssen beweisen, dass Modellfelder nach Close/Unregister noch lesbar sind
-und beim Scope-Ende genau einmal freigegeben werden. Das unterscheidet gültige
-Borrow-Semantik von bloßem Unterdrücken eines Double-Free.
+Tests must prove that model fields are still readable after close/unregister
+and are released exactly once at the end of the scope. That distinguishes valid
+borrow semantics from merely suppressing a double free.
 
-## 6. Bereitschaft und Fehler aus AIML beobachten (Commit 4)
+## 6. Observe readiness and errors from AIML (commit 4)
 
-Neue Runtime-APIs in `mirror_runtime.h/.cpp`:
+New runtime APIs in `mirror_runtime.h/.cpp`:
 
 ```cpp
 uint64_t aiml_mirror_session_snapshot_revision(void* session, int32_t net_id);
@@ -372,23 +372,23 @@ uint64_t aiml_mirror_session_snapshot_revision(void* session, int32_t id) {
 
 int32_t aiml_mirror_session_snapshot_error(void* session, int32_t id) {
     auto* s = static_cast<AimlMirrorSession*>(session);
-    if (!s) return -3; // ungültige Session/Registrierung
+    if (!s) return -3; // invalid session/registration
     const auto it = s->by_net_id.find(id);
     return it == s->by_net_id.end() ? -3 : it->second->last_decode_error;
 }
 ```
 
-0 Revision bedeutet noch kein erfolgreich angewandter Remote-Snapshot, auch für
-lokale Owner; es ist kein Fehler. Kombination mit `snapshot_error` unterscheidet
-Warten und Ablehnung. Zugriff nur aus dem Session-Thread, keine implizite
-Thread-Sicherheit versprechen.
+Revision 0 means no successfully applied remote snapshot yet, also for
+local owners; it is not an error. The combination with `snapshot_error` distinguishes
+waiting from rejection. Access only from the session thread; do not promise implicit
+thread safety.
 
-In `builtin_registry.cpp`, bei `mirror_session` neben `has_event`:
+In `builtin_registry.cpp`, at `mirror_session` next to `has_event`:
 
 ```cpp
 ci.builtinMethods["snapshot_revision"] = [i8p, i32, i64](CompilerContext& ctx,
     llvm::Value* base, AIML::AST::CallExpr* call, EvalFn evalExpr) -> IRValue* {
-    // Arity-/i32-Prüfung über bestehende Compiler-Diagnostik vornehmen.
+    // Perform the arity/i32 check via the existing compiler diagnostics.
     if (call->args.size() != 1) {
         LOG_ERROR(ctx.fmtLoc() + "snapshot_revision expects net_id: i32");
         return ctx.ir_gen->wrap(ctx.builder.getInt64(0));
@@ -399,28 +399,28 @@ ci.builtinMethods["snapshot_revision"] = [i8p, i32, i64](CompilerContext& ctx,
         ctx.getFunction("aiml_mirror_session_snapshot_revision", i64, {i8p, i32}),
         {s, id}));
 };
-// snapshot_error analog, Rückgabetyp i32; Argumenttyp vor CreateCall validieren.
+// snapshot_error analogously, return type i32; validate the argument type before CreateCall.
 ```
 
-Den AIML-Rückgabetyp von `snapshot_revision` als `u64` in Typinferenz/Metadaten
-führen; LLVM verwendet dafür `i64`. Falls das bestehende Builtin-System zusätzliche
-Return-Metadaten verlangt, dort ebenfalls eintragen. Keine neue Event-ABI nötig.
+Carry the AIML return type of `snapshot_revision` as `u64` in type inference/metadata;
+LLVM uses `i64` for it. If the existing builtin system requires additional
+return metadata, enter it there too. No new event ABI needed.
 
-## 7. WS9-Test in einen Handshake umbauen (Commit 5)
+## 7. Rebuild the WS9 test into a handshake (commit 5)
 
-### 7.1 Host: REGISTER bindet nur, DELTA macht bereit
+### 7.1 Host: REGISTER only binds, DELTA makes ready
 
-In `test_mirror_ws_9rooms_imports.aiml` `client_info_nid` und `bound_ci` separat
-führen. Im bisherigen `object_registered`-Zweig nur ID speichern und binden:
+In `test_mirror_ws_9rooms_imports.aiml`, keep `client_info_nid` and `bound_ci` separately.
+In the previous `object_registered` branch, only store the ID and bind:
 
 ```yaml
 - set: [client_info_nid, cev.net_id]
 - call: [sess.register_id, g_ws9_server_client_info, client_info_nid]
 - set: [bound_ci, 1]
-# Kein sleep, kein got_ci=1 an dieser Stelle.
+# No sleep, no got_ci=1 at this point.
 ```
 
-Nach jedem `sess.update` in der Wait-Schleife:
+After every `sess.update` in the wait loop:
 
 ```yaml
 - if:
@@ -435,50 +435,50 @@ Nach jedem `sess.update` in der Wait-Schleife:
       - if:
           condition: { gt: [{ call: [sess.snapshot_revision, client_info_nid] }, 0] }
           then:
-            # Alle drei ClientInfo-Felder prüfen; bei Abweichung Fehler.
+            # Check all three ClientInfo fields; error on deviation.
             - set: [got_ci, 1]
 ```
 
-Erst nach `got_ci` View mit `round=7`, Namen, HP und Handgröße füllen. Timeout
-endet mit Fehler, statt mit einem leeren Namen weiterzulaufen.
+Only after `got_ci` fill the view with `round=7`, names, HP and hand size. A timeout
+ends with an error instead of continuing with an empty name.
 
-### 7.2 Client: vollständigen View prüfen und bestätigen
+### 7.2 Client: check and confirm the complete view
 
-Client wartet auf positive View-Revision UND alle erwarteten View-Felder.
-Erst danach `client.send_rpc(0, "ws9_view_received", 7)` senden. Der Host pumpt
-bis zu diesem ACK und kontrolliert Methode, `arg` und den aus der Verbindung
-stammenden erwarteten `peer_id`. Das ACK dient nur diesem One-Way-Testhandshake,
-nicht als Ersatz für die vorhandene Request-ID-Korrelation allgemeiner RPCs.
+The client waits for a positive view revision AND all expected view fields.
+Only then send `client.send_rpc(0, "ws9_view_received", 7)`. The host pumps
+until this ACK and checks the method, `arg` and the expected `peer_id` coming from
+the connection. The ACK only serves this one-way test handshake,
+not as a substitute for the existing request ID correlation of general RPCs.
 
-Danach Host `sess.close`; Client wartet auf `host_th.join`, prüft seine eigenen
-Modelle weiterhin und schließt seine Session. Host-Felder ausschließlich im
-Host-Thread prüfen. Die bisherigen Client-Reads von
-`g_ws9_server_client_info` und `ws9server.client_info_seen` entfernen. Hostfehler
-beenden den Test oder werden über einen synchronisierten Kanal gemeldet; keine
-ungeschützte globale Erfolgsvariable einführen.
+Then the host does `sess.close`; the client waits for `host_th.join`, keeps checking its own
+models and closes its session. Check host fields exclusively in the
+host thread. Remove the previous client reads of
+`g_ws9_server_client_info` and `ws9server.client_info_seen`. Host errors
+end the test or are reported via a synchronised channel; do not introduce an
+unprotected global success variable.
 
-Ein vorhandener monotoner Zeitgeber oder ein kleiner gemeinsamer Testhelfer
-liefert Deadlines für Connect, REGISTER, Snapshot und ACK. Falls ein AIML-Builtin
-hierfür fehlt, vor Testumbau ergänzen (C++ `steady_clock` auf Millisekunden).
-Sleep bleibt höchstens die Poll-Taktung. Jede Timeoutmeldung benennt Phase,
-Netz-ID, Revision und Decode-Fehler.
+An existing monotonic timer or a small shared test helper
+provides deadlines for connect, REGISTER, snapshot and ACK. If an AIML builtin
+is missing for this, add it before the test rebuild (C++ `steady_clock` in milliseconds).
+Sleep stays at most the poll pacing. Every timeout message names the phase,
+net ID, revision and decode error.
 
-## 8. Gezielte Regressionen statt alleiniger Wiederholung (Commit 6)
+## 8. Targeted regressions instead of mere repetition (commit 6)
 
-Neue C++-Suite in bestehende Runtime-Testinfrastruktur integrieren; falls kein
-geeigneter Target existiert, ein eigenes kleines Target mit Produktionsobjekten
-anlegen. Keine dauerhafte `#include "mirror_runtime.cpp"`-Testlösung. Private
-Apply-/Parserlogik ggf. in ein internes Modul auslagern.
+Integrate a new C++ suite into the existing runtime test infrastructure; if no
+suitable target exists, create a small target of its own with production objects.
+No permanent `#include "mirror_runtime.cpp"` test solution. If needed, move private
+apply/parser logic into an internal module.
 
-### 8.1 Transaktionalität (C++-Testskizze)
+### 8.1 Transactionality (C++ test sketch)
 
 ```cpp
-// Testfixture initialisiert OldState mit verwalteten Strings/Containern.
-// encodeWire(model) ruft die neue aiml_ser_encode_wire-API auf.
+// The test fixture initialises OldState with managed strings/containers.
+// encodeWire(model) calls the new aiml_ser_encode_wire API.
 const auto before = encodeWire(target);
 const auto revision = registration.snapshot_revision;
 auto bad = encodeWire(source);
-bad.pop_back(); // innerer Längenpräfix passt nicht mehr
+bad.pop_back(); // the inner length prefix no longer matches
 EXPECT_NE(applyDelta(registration, bad), 0);
 EXPECT_EQ(encodeWire(target), before);
 EXPECT_EQ(registration.snapshot_revision, revision);
@@ -489,106 +489,106 @@ EXPECT_EQ(registration.snapshot_revision, revision + 1);
 EXPECT_EQ(registration.last_decode_error, 0);
 ```
 
-`applyDelta` ist hier ein Fixture-Adapter auf den Produktions-Apply-Pfad; die
-Testnamen/-Makros sind an das tatsächlich vorhandene Framework anzupassen.
-Zusätzlich beschädigte Payload mit formal korrekter äußerer Länge und Fehler
-nach der ersten String-Allokation testen: das deckt Partial-Heap-Cleanup ab.
+`applyDelta` here is a fixture adapter onto the production apply path; the
+test names/macros are to be adapted to the actually existing framework.
+Additionally test a damaged payload with a formally correct outer length and an error
+after the first string allocation: that covers partial heap clean-up.
 
-### 8.2 Pflichtfälle
+### 8.2 Mandatory cases
 
-| Fall | Erwartung |
+| Case | Expectation |
 | --- | --- |
-| erstes DELTA defekt | Defaults unverändert, Revision 0, Fehler sichtbar |
-| gültig → defekt → gültig | Zustand/Revision ändern sich nur bei Erfolg |
-| DELTA vor REGISTER-Bindung | Pending und Live-Apply haben identische Semantik |
-| gleiches Wire-Schema, andere Importsets | erfolgreicher Sync |
-| `SharedCard` mit/ohne `rarity`, mindestens 2 Elemente | Ablehnung in beiden Richtungen, keine Teilübernahme |
-| Raw- oder ungetaggtes DELTA an typed Modell | Ablehnung ohne Heap-Pointer-Mutation |
-| Close/Unregister vor/nach erstem Snapshot | Objekt bleibt lesbar; ScopeDrop ohne Leak/Double-Free |
-| Remote-UNREGISTER | keine hängenden `by_ptr`-/RPC-Lookup-Einträge |
-| unverändertes Owner-Modell nach Initialsync | kein wiederholter Send allein wegen Headerunterschied |
-| WS9: DELTA 100–250 ms nach REGISTER | Test wartet korrekt und besteht |
-| WS9: Snapshot fehlt/ist defekt oder ACK fehlt | begrenztes, phasengenaues Scheitern |
-| native↔wasm32, identisches Schema | gleiche Fingerprints trotz Pointer-/Offsetunterschieden |
+| first DELTA defective | defaults unchanged, revision 0, error visible |
+| valid → defective → valid | state/revision only change on success |
+| DELTA before the REGISTER binding | pending and live apply have identical semantics |
+| same wire schema, different import sets | successful sync |
+| `SharedCard` with/without `rarity`, at least 2 elements | rejection in both directions, no partial takeover |
+| raw or untagged DELTA to a typed model | rejection without heap pointer mutation |
+| close/unregister before/after the first snapshot | object stays readable; ScopeDrop without leak/double free |
+| remote UNREGISTER | no dangling `by_ptr`/RPC lookup entries |
+| unchanged owner model after the initial sync | no repeated send merely because of a header difference |
+| WS9: DELTA 100–250 ms after REGISTER | the test waits correctly and passes |
+| WS9: snapshot missing/defective or ACK missing | bounded, phase-exact failure |
+| native↔wasm32, identical schema | the same fingerprints despite pointer/offset differences |
 
-Für deterministische Verzögerung einen Test-Proxy oder ausschließlich im
-Test-Build aktivierten Send-Hook verwenden. Dieser hält DELTA-Frames zurück,
-lässt REGISTER durch und gibt DELTA erst nach einem Testsignal frei. Keine
-Produktions-Sleeps ergänzen. Auch Pending-Fall erzwingen: DELTA vor lokaler
-Bindung vollständig zustellen.
+For a deterministic delay, use a test proxy or a send hook enabled only in the
+test build. It holds back DELTA frames,
+lets REGISTER through and only releases DELTA after a test signal. Do not add
+production sleeps. Also force the pending case: deliver DELTA completely before the local
+binding.
 
-Danach WS9 50–100-mal seriell ausführen, mit sauberem Host-Shutdown pro Lauf;
-optional mit CPU-Last wiederholen. Der feste Testport verbietet parallele Läufe
-gegen denselben Port. Ausgangsbefund: zuvor 16/16 grün, gemeldeter sporadischer
-Fehler noch nicht dynamisch reproduziert.
+Then run WS9 50–100 times serially, with a clean host shutdown per run;
+optionally repeat under CPU load. The fixed test port forbids parallel runs
+against the same port. Initial finding: previously 16/16 green, the reported sporadic
+failure not yet reproduced dynamically.
 
-## 9. Abschluss und Reihenfolge
+## 9. Completion and order
 
-1. Default-/Lifetime-Reproduktion und belegte Initialisierungsursache beheben.
-2. Wire-Envelope, Parser und alle Sender-/Dirty-Tracking-Stellen zusammen ändern.
-3. Transaktionalen Apply und Borrow-Ownership einschließlich Close/Unregister.
-4. Snapshot-Revision/-Fehler-Builtins und deren Compiler-Typisierung.
-5. Mismatch-Test auf Ablehnung umstellen, positiven Kontext-Test ergänzen,
-   WS9-Handshake implementieren.
-6. Sanitizer-, Native-, deterministische Delay- und WASM-Tests durchführen;
-   anschließend Spec und Implementierungsstatus aktualisieren.
+1. Fix the default/lifetime reproduction and the proven initialisation cause.
+2. Change the wire envelope, parser and all sender/dirty tracking places together.
+3. Transactional apply and borrow ownership including close/unregister.
+4. Snapshot revision/error builtins and their compiler typing.
+5. Switch the mismatch test to rejection, add a positive context test,
+   implement the WS9 handshake.
+6. Run sanitizer, native, deterministic delay and WASM tests;
+   then update the spec and implementation status.
 
-Jeder Zwischenschritt muss kompilieren; bis Sender und Empfänger gemeinsam
-umgestellt sind, den neuen Formatpfad nicht als auslieferbar markieren.
-Fertig erst, wenn Initialisierung ohne Netzwerk korrekt ist, Fehlpakete den
-Zustand unverändert lassen, Session-Ende Borrow-Objekte nicht zerstört und der
-verzögerte WS9-Test auf tatsächliche Zustandsübernahme wartet.
+Every intermediate step must compile; until sender and receiver are switched
+together, do not mark the new format path as shippable.
+Done only when initialisation without a network is correct, faulty packets leave the
+state unchanged, session end does not destroy borrowed objects and the
+delayed WS9 test waits for the actual state takeover.
 
-## 10. Umsetzungsstand
+## 10. Implementation status
 
-### Commit 1 – Befund Anfangszustand (2026-10-03)
+### Commit 1 – initial state finding (2026-10-03)
 
-Test: `tests/test_mirror_replica_defaults.aiml` (+ `mirror_replica_defaults_lib.aiml`). Modell mit
-String ohne/mit Default, `list<string>`, `map<string:i32>`, verschachteltem Modell, `list<Model>`,
-Skalar-Default; Varianten lokal, importiertes Global, Hauptdatei-Global, `ptr<>`, `shared<>`.
+Test: `tests/test_mirror_replica_defaults.aiml` (+ `mirror_replica_defaults_lib.aiml`). A model with
+a string without/with a default, `list<string>`, `map<string:i32>`, a nested model, `list<Model>`,
+a scalar default; variants local, imported global, main file global, `ptr<>`, `shared<>`.
 
-- Defaults vor jedem Netzwerkaufruf korrekt, JSON identisch über die Varianten.
-- `decode_rpc` (transaktional, `release_old = 1`) in jede Default-Variante: korrekt.
-- Replika-Bindung aller Varianten, Snapshot übernommen.
-- Experiment: DELTA-Live- und Pending-Pfad auf `decode_sized_tx(…, release_old = 1)` umgestellt →
-  komplette Mirror-Testreihe ohne Crash (Fehler nur: Close-Lesbarkeit im neuen Test, Mismatch-Test
-  lehnt korrekt ab); AOT+Valgrind für den neuen Test, WS9-Imports, WS9-GameView, list_mutation:
+- Defaults correct before any network call, JSON identical across the variants.
+- `decode_rpc` (transactional, `release_old = 1`) into every default variant: correct.
+- Replica binding of all variants, snapshot taken over.
+- Experiment: switched the DELTA live and pending paths to `decode_sized_tx(…, release_old = 1)` →
+  the complete mirror test series without a crash (failures only: close readability in the new test, the mismatch test
+  rejects correctly); AOT+Valgrind for the new test, WS9 imports, WS9 GameView, list_mutation:
   0 invalid, 0 definitely/indirectly lost.
 
-**Ergebnis: nicht reproduziert** (nicht „behoben“). Der früher beobachtete Crash trat vor dem
-`MIRROR_FIND_OBJ_PTR`-Fix (ptr-Slot statt Objektadresse, AP6) auf; ein Zusammenhang ist plausibel,
-aber nicht belegt. Offen bleibt die Ownership beim Close (Felder danach leer) → Commit 3.
+**Result: not reproduced** (not "fixed"). The previously observed crash occurred before the
+`MIRROR_FIND_OBJ_PTR` fix (ptr slot instead of object address, AP6); a connection is plausible,
+but not proven. What remains open is the ownership at close (fields empty afterwards) → commit 3.
 
-### Commits 2–6 – umgesetzt (2026-10-03)
+### Commits 2–6 – implemented (2026-10-03)
 
-- **Spec** 44_5 §4 (Objekte, Borrow-Ownership, Readiness, `snapshot_revision`/`snapshot_error`),
-  §10 (DELTA-Format 2, Regeln, kein Mischbetrieb, optionaler Produktions-Test-Hook
-  `AIML_MIRROR_TEST_HOLD_DELTA`), §11.1 (Dirty-Tracking vergleicht den gesendeten Blob);
+- **Spec** 44_5 §4 (objects, borrow ownership, readiness, `snapshot_revision`/`snapshot_error`),
+  §10 (DELTA format 2, rules, no mixed operation, optional production test hook
+  `AIML_MIRROR_TEST_HOLD_DELTA`), §11.1 (dirty tracking compares the sent blob);
   spec/23 `time.mono_ms`.
-- **Serializer**: `aiml_ser_encode_wire`, `aiml_ser_decode_delta_tx` (Magic + Fingerprint
-  zwingend, dann `decode_sized_tx(…, release_old = 1)`), `aiml_ser_wire_syncable`;
-  `aiml_ser_decode_bounded` (Best-effort) entfernt.
+- **Serializer**: `aiml_ser_encode_wire`, `aiml_ser_decode_delta_tx` (magic + fingerprint
+  mandatory, then `decode_sized_tx(…, release_old = 1)`), `aiml_ser_wire_syncable`;
+  `aiml_ser_decode_bounded` (best effort) removed.
 - **Mirror**: `has_decoded` → `snapshot_revision`/`last_decode_error`/`pending_format`;
-  `build_delta`/`make_delta_packet` für alle Sendepfade, Dirty-Tracking auf demselben Blob;
-  Parser: Format 2 mit `payload_len`, Format 0 nur raw, alles andere (inkl. altem Format 1)
-  ungültiger Frame; `apply_typed_delta` für Live- und Pending-Pfad; Raw↔typed abgewiesen;
-  Host leitet nur Akzeptiertes bzw. Platzhalter weiter; `erase_registration` für Unregister,
-  Remote-UNREGISTER und Close (keine Feldfreigabe mehr); Deskriptoren mit PTR_REF/Ressourcen
-  werden mit Diagnose nicht registriert.
-- **Compiler**: `register`/`register_id` typisiert für jedes Modell mit Deskriptor (auch reine
-  Zahlenmodelle), sonst Compile-Fehler; temporärer Wert → Compile-Fehler (neg n27);
-  Builtins `snapshot_revision` (i64/u64) und `snapshot_error` (i32).
+  `build_delta`/`make_delta_packet` for all send paths, dirty tracking on the same blob;
+  parser: format 2 with `payload_len`, format 0 only raw, everything else (incl. the old format 1)
+  an invalid frame; `apply_typed_delta` for the live and pending path; raw↔typed rejected;
+  the host only forwards what was accepted or placeholders; `erase_registration` for unregister,
+  remote UNREGISTER and close (no more field release); descriptors with PTR_REF/resources
+  are not registered, with a diagnostic.
+- **Compiler**: `register`/`register_id` typed for every model with a descriptor (also pure
+  number models), otherwise a compile error; temporary value → compile error (neg n27);
+  builtins `snapshot_revision` (i64/u64) and `snapshot_error` (i32).
 - **Tests**: `test_mirror_replica_defaults`, `test_mirror_delta_reject`,
-  `test_mirror_number_model`, WS9 als Handshake (+ `_delayed` mit Halte-Hook),
-  `shared_module_context_mismatch` (Ablehnung in beide Richtungen, 2 Karten) +
-  `shared_module_context_same`, Format-1-Fall in `test_mirror_rpc_malformed`,
-  C++-Unit `tests/unit/test_mirror_delta.cpp` (Binary `out-test/aiml-tests/aiml-tests`).
-- **Ergebnisse**: Mirror-Reihe 34/34; AOT+Valgrind (8 Tests + WS9 im Halte-Modus) 0/0;
-  Unit-Test inkl. Valgrind 0/0; WS9 100× seriell (abwechselnd normal/Halte-Modus) 100/100;
+  `test_mirror_number_model`, WS9 as a handshake (+ `_delayed` with the hold hook),
+  `shared_module_context_mismatch` (rejection in both directions, 2 cards) +
+  `shared_module_context_same`, the format 1 case in `test_mirror_rpc_malformed`,
+  C++ unit `tests/unit/test_mirror_delta.cpp` (binary `out-test/aiml-tests/aiml-tests`).
+- **Results**: mirror series 34/34; AOT+Valgrind (8 tests + WS9 in hold mode) 0/0;
+  unit test incl. Valgrind 0/0; WS9 100× serially (alternating normal/hold mode) 100/100;
   native↔WASM (`tools/run_wasm_mirror_test.sh`, `…_multifile_test.sh`) PASS.
-- **Nebenbefund (Regression aus cdcba60)**: TCP-Empfangspuffer `uint8_t chunk[65536]` auf dem
-  Stack → Stack-Overflow im WASM-`session.update` (64 KiB Stack). Behoben: direkt in `peer->rx`.
-  WASM-Skripte starten den Server jetzt erst nach dem Client-Build (vorher Timing-Fehler);
-  Multifile-Client spec-konform `ref<Tagged>` statt `ptr<Tagged>`.
-- **Nicht abgedeckt**: negativer WS9-Fall „Snapshot/ACK fehlt“ nur über die Deadlines im Test,
-  kein eigener Fehlertest; Modellversions-Migration bewusst außerhalb.
+- **Side finding (regression from cdcba60)**: TCP receive buffer `uint8_t chunk[65536]` on the
+  stack → stack overflow in the WASM `session.update` (64 KiB stack). Fixed: directly into `peer->rx`.
+  The WASM scripts now only start the server after the client build (previously a timing error);
+  the multifile client spec-conformantly uses `ref<Tagged>` instead of `ptr<Tagged>`.
+- **Not covered**: the negative WS9 case "snapshot/ACK missing" only via the deadlines in the test,
+  no failure test of its own; model version migration deliberately outside.
