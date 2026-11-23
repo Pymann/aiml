@@ -64,14 +64,14 @@ namespace AIML {
         // must be deep-copied so the caller does not double-free the aliased buffer with the
         // container's own drop (9rooms load_entry_at / creature-cost helpers → drive_ai_combat).
         bool is_view_alias = false;
-        // spec/61 §7: ein Wertmodell-Lokal, das aus einem ANDEREN LOKAL kopiert wurde
-        // (`decl: [kopie, Model, original]`).  Die Kopie ist member-weise: Skalare sind
-        // unabhaengig, String-/Container-Felder sind INCREF'd geteilt.  Ohne das incref
-        // teilen beide einen Puffer mit rc=1, und der naechste Member-Store der Kopie gibt
-        // den String des ORIGINALS frei (gefunden am Cache-Schluessel in cosmos,
-        // doc/spec/92 Befund 5; Probe tests/test_value_model_copy_share.aiml).  Getrennt
-        // von is_view_alias, weil dieses zusaetzlich das Escape-Verhalten (Deep-Copy bei
-        // return/store) steuert — eine Kopie braucht das nicht, sie ist schon eigenstaendig.
+        // spec/61 §7: a value-model local that was copied from ANOTHER LOCAL
+        // (`decl: [copy, Model, original]`).  The copy is member-wise: scalars are
+        // independent, string/container fields are shared INCREF'd.  Without the incref
+        // both share a buffer with rc=1, and the next member store of the copy frees
+        // the ORIGINAL's string (found on the cache key in cosmos,
+        // doc/spec/92 finding 5; probe tests/test_value_model_copy_share.aiml).  Separate
+        // from is_view_alias, because that one additionally controls the escape behaviour (deep copy on
+        // return/store) — a copy does not need that, it is already independent.
         bool is_copy_retain = false;
         llvm::AllocaInst* excRecordSlot = nullptr;
         bool paramOwnsRef = false;   // spec/61 §8: a value-model/shared param retained its own refs (moves like a local)   // catch var: its caught exception record slot (spec/61 §9.3)
@@ -116,8 +116,8 @@ namespace AIML {
             // to move a `consumed` argument out of the caller (drop the caller's ownership).
             std::vector<std::string> argLifetimes;
             AccessLevel access = AccessLevel::Public;
-            // spec/65 F65-9: Level/Gateway der Funktion, aus FunctionDecl uebernommen.
-            // -1 = keine Annotation (NICHT Level 0, siehe F65-5/F65-22).
+            // spec/65 F65-9: level/gateway of the function, taken over from FunctionDecl.
+            // -1 = no annotation (NOT level 0, see F65-5/F65-22).
             int clearance_level  = -1;
             int clearance_grants = -1;
             uint64_t version = 1;             // Latest version (updated by visitTopLevel re-def)
@@ -125,14 +125,14 @@ namespace AIML {
             int fptable_index = -1;           // Index in __aiml_fptable / fptable_current (-1 = not in table)
             std::string sourceYaml;           // YAML dump of the function AST node (for sys.bundle)
             std::set<std::string> referencedTypes; // User-defined types referenced in the body
-            // spec/29_2 §16: benutzerdefinierte Funktionen, die dieser Rumpf AUFRUFT.
-            // Ohne das war ein Bundle unvollstaendig — der Empfaenger meldete
-            // "Unknown function", nachdem es schon unterwegs war.
+            // spec/29_2 §16: user-defined functions that this body CALLS.
+            // Without that a bundle was incomplete — the receiver reported
+            // "Unknown function" after it was already on its way.
             std::set<std::string> referencedFuncs;
-            // spec/62 §10.2: welche eingebauten Funktionen dieser Rumpf ruft.
-            // Gebraucht fuer die Reinheitspruefung beim Buendeln (F62-102); die
-            // Stelle und ein konstantes erstes Argument stehen dabei, weil
-            // F62-19/F62-20 genau daran unterscheiden.
+            // spec/62 §10.2: which built-in functions this body calls.
+            // Needed for the purity check at bundling time (F62-102); the
+            // location and a constant first argument are recorded too, because
+            // F62-19/F62-20 distinguish exactly by those.
             struct BuiltinUse {
                 std::string ns;
                 std::string fn;
@@ -141,9 +141,9 @@ namespace AIML {
                 bool        firstArgIsLiteral = false;
             };
             std::vector<BuiltinUse> referencedBuiltins;
-            // spec/29_2 §22: welche GLOBALEN dieser Rumpf anfasst.  Ohne das ist ein
-            // Bundle unvollstaendig, sobald eine mitgebuendelte Funktion eine
-            // globale Variable liest oder schreibt (gemessen: 'Undefined variable').
+            // spec/29_2 §22: which GLOBALS this body touches.  Without that a
+            // bundle is incomplete as soon as a bundled function reads or writes a
+            // global variable (measured: 'Undefined variable').
             std::set<std::string> referencedGlobals;
             bool deprecated = false;          // meta: [deprecated] → warn at each call site
             bool ownsReturn = false;          // spec/61 return-ownership: returns an owned heap box
@@ -283,9 +283,9 @@ namespace AIML {
         // modelRefcount above — every context, incl. header-only sub-compilers, must agree). Under
         // this gate the compiler emits the spec/61 target behavior incrementally (first: string
         // assignment = share/incref, §4). Default OFF → deployed/OFF path byte-identical.
-        // spec/65 F65-22: die Freigabe JETZT lesen, nicht erst wenn eine Annotation
-        // vorkommt — eine ungueltige AIML_CLEARANCE muss auch eine Quelle OHNE `level:`
-        // zum Scheitern bringen, sonst faellt sie still auf vertrauenswuerdig zurueck.
+        // spec/65 F65-22: read the clearance NOW, not only when an annotation
+        // occurs — an invalid AIML_CLEARANCE must make a source WITHOUT `level:`
+        // fail too, otherwise it silently falls back to trusted.
         (void)aiml::clearance::sessionClearance();
         if (const char* mv = std::getenv("AIML_MEM_V3")) {
             std::string s = mv;
@@ -307,7 +307,7 @@ namespace AIML {
         jsInfo.members["indent"] = indentMember;
         jsInfo.members["newline"] = newlineMember;
         StructMember bareMember; bareMember.index = 3; bareMember.type = i32; bareMember.typeName = "i32";
-        jsInfo.members["bare"] = bareMember;   // spec/29 §5.2a: Ausgabe ohne __type
+        jsInfo.members["bare"] = bareMember;   // spec/29 §5.2a: output without __type
         StructMember leanMember; leanMember.index = 4; leanMember.type = i32; leanMember.typeName = "i32";
         jsInfo.members["skip_empty"] = leanMember;   // spec/29 §5.2c: Leeres weglassen
         classes["JsonStyle"] = std::move(jsInfo);
@@ -341,23 +341,23 @@ namespace AIML {
     // For now, we'll assume the new members are added alongside the existing structure.
 
     llvm::LLVMContext& context;
-    // spec/29_2 §15: ZEIGER, nicht Referenz — damit ein Kontext nacheinander
-    // mehrere Module bedienen kann (Bibliothek laden, dann Pipelines dagegen).
-    // Eine Referenz liess sich nicht neu binden; das war der Grund, warum ein
-    // wiederverwendbarer Kontext bisher nicht ging.
+    // spec/29_2 §15: a POINTER, not a reference — so that one context can serve
+    // several modules one after another (load a library, then pipelines against it).
+    // A reference could not be rebound; that was the reason why a
+    // reusable context did not work until now.
     llvm::Module* modulePtr;
     llvm::Module& module() const { return *modulePtr; }
 
-    /// spec/61 §5.7: die Schrittweite EINES zeigergrossen Element-Slots — ein
-    /// String, ein Modell-Handle, eine `ptr<T>`-Box, ein verschachtelter
-    /// Container.  8 auf x86_64, **4 auf wasm32**, und immer aus dem ZIEL-
-    /// DataLayout, nie aus `sizeof(...)` des Wirts (der ist stets 64-bit).
+    /// spec/61 §5.7: the stride of ONE pointer-sized element slot — a
+    /// string, a model handle, a `ptr<T>` box, a nested
+    /// container.  8 on x86_64, **4 on wasm32**, and always from the TARGET
+    /// DataLayout, never from the host's `sizeof(...)` (which is always 64-bit).
     ///
-    /// EINE benannte Groesse statt eines Literals an jeder Fundstelle: die
-    /// Literale `8` liefen auseinander und kosteten am 2026-10-15 den
-    /// WASM-Client (list<string>.clear lief mit doppelter Schrittweite ueber
-    /// das Ende, Firefox: "index out of bounds").  Wer eine neue Stelle mit
-    /// Zeiger-Slots schreibt, nimmt diese Funktion.
+    /// ONE named size instead of a literal at every site: the
+    /// literals `8` drifted apart and on 2026-10-15 cost the
+    /// WASM client (list<string>.clear ran past the end with double the stride,
+    /// Firefox: "index out of bounds").  Whoever writes a new site with
+    /// pointer slots uses this function.
     int64_t ptrStride() const {
         return (int64_t)module().getDataLayout().getPointerSize();
     }
@@ -370,18 +370,18 @@ namespace AIML {
     // call signature matches the target's libc.
     llvm::Type*  getSizeType()              { return builder.getIntNTy(module().getDataLayout().getPointerSizeInBits()); }
     llvm::Value* getSizeConst(uint64_t v)   { return llvm::ConstantInt::get(getSizeType(), v); }
-    // Einen Integer auf die size_t-Breite des Ziels bringen: breiter abschneiden,
-    // schmaler vorzeichenlos erweitern.  Ein i64 aus dem Frontend passt sonst
-    // nicht in ein wasm32-`malloc(i32)`.
+    // Bring an integer to the target's size_t width: truncate if wider,
+    // zero-extend if narrower.  Otherwise an i64 from the frontend does
+    // not fit into a wasm32 `malloc(i32)`.
     llvm::Value* toSizeType(llvm::Value* v) {
         llvm::Type* st = getSizeType();
         return v->getType() == st ? v : builder.CreateZExtOrTrunc(v, st, "as_size");
     }
 
-    // spec/22 + spec/61 §9.3: der Ausnahme-Record ist {Objekt, Free-Thunk, Typ-Tag}
-    // — drei Zeiger.  Groesse und Feldabstaende kommen aus dem Datenlayout, nie
-    // fest 24/8/16: auf wasm32 ist ein Zeiger 4 Byte, feste Abstaende schreiben
-    // Thunk und Tag dort ins Leere.
+    // spec/22 + spec/61 §9.3: the exception record is {object, free thunk, type tag}
+    // — three pointers.  Size and field offsets come from the data layout, never
+    // fixed 24/8/16: on wasm32 a pointer is 4 bytes, fixed offsets write
+    // thunk and tag into nothing there.
     llvm::StructType* getExcRecordType() {
         llvm::PointerType* p = llvm::PointerType::getUnqual(context);
         return llvm::StructType::get(context, {p, p, p});
@@ -389,16 +389,16 @@ namespace AIML {
     uint64_t getExcRecordSize() {
         return module().getDataLayout().getTypeAllocSize(getExcRecordType());
     }
-    // Feld des Ausnahme-Records: 0 = Objekt, 1 = Free-Thunk, 2 = Typ-Tag.
+    // Field of the exception record: 0 = object, 1 = free thunk, 2 = type tag.
     llvm::Value* excRecordField(llvm::Value* rec, unsigned idx, const char* name = "") {
         return builder.CreateStructGEP(getExcRecordType(), rec, idx, name);
     }
 
-    // spec/22: `__cxa_throw` nimmt an Stelle 2 ein std::type_info.  aiml waehlt den
-    // Handler selbst (Typ-Tag im Record, catch-all-Klausel), aber der Zeiger darf
-    // nicht null sein: Emscriptens JS-`__cxa_throw` liest ihn sofort, um die Meldung
-    // zu bauen, und griff bei null aus dem Speicher ("memory access out of bounds").
-    // Erzeugt dasselbe __class_type_info-Paar {vtable+2, Typname} wie clang.
+    // spec/22: `__cxa_throw` takes a std::type_info in position 2.  aiml selects the
+    // handler itself (type tag in the record, catch-all clause), but the pointer must
+    // not be null: Emscripten's JS `__cxa_throw` reads it immediately to build the message,
+    // and with null it accessed outside memory ("memory access out of bounds").
+    // Produces the same __class_type_info pair {vtable+2, type name} as clang.
     llvm::Constant* getExcTypeInfo(const std::string& className) {
         llvm::PointerType* p = llvm::PointerType::getUnqual(context);
         const std::string mangled = std::to_string(className.size()) + className;
@@ -409,7 +409,7 @@ namespace AIML {
         auto* nameGV = new llvm::GlobalVariable(module(), nameInit->getType(), true,
             llvm::GlobalValue::LinkOnceODRLinkage, nameInit, "_ZTS" + mangled);
 
-        // Der type_info-Zeiger steht zwei Slots hinter dem Vtable-Anfang (Itanium-ABI).
+        // The type_info pointer sits two slots after the start of the vtable (Itanium ABI).
         llvm::Constant* vtable = llvm::cast<llvm::Constant>(
             module().getOrInsertGlobal("_ZTVN10__cxxabiv117__class_type_infoE", p));
         llvm::Constant* vptr = llvm::ConstantExpr::getGetElementPtr(
@@ -649,10 +649,10 @@ namespace AIML {
     std::map<std::string, std::map<std::string, int>> enums; // Enum Registry
     std::map<std::string, std::map<int, std::string>> enumLabels; // enum name → id → display label
     std::map<std::string, std::string> enumSources;          // enum name → YAML source (for sys.bundle)
-    // spec/29_2 §22: Quelltext jedes Top-Level-`decl`, damit sys.bundle eine
-    // benutzte globale Variable mitschicken kann.  Ohne das ist ein Bundle
-    // unvollstaendig, sobald eine mitgebuendelte Funktion eine Globale anfasst
-    // (gemessen: "Undefined variable (set target)").
+    // spec/29_2 §22: source text of every top-level `decl`, so that sys.bundle can send
+    // along a global variable that is used.  Without that a bundle is
+    // incomplete as soon as a bundled function touches a global
+    // (measured: "Undefined variable (set target)").
     std::map<std::string, std::string> globalSources;        // global var → YAML source
 
     /// Unused-enumerator analysis (spec/49): every enum member declared in THIS
@@ -730,30 +730,30 @@ namespace AIML {
     /// children still gets an (empty) entry, so `.count(name)` answers the
     /// Tier-1 "is this a known prefab?" question.  See spec/44_8_prefab_static.md.
     std::map<std::string, std::set<std::string>> prefabDecls;
-    // ── Tier 4, Eingabe-Erreichbarkeit (spec/44_8) ──────────────────────
-    // Die Pruefung laeuft als GANZPROGRAMM-Durchgang wie Tier 3: ein Prefab
-    // wird in einer Datei deklariert und oft in einer anderen bedient, also
-    // waere eine Pruefung je Modul falsch-positiv.  Darum eine Registratur,
-    // die wie prefabDecls ueber die Sub-Compiler hochgemischt wird.
+    // ── Tier 4, input reachability (spec/44_8) ──────────────────────────
+    // The check runs as a WHOLE-PROGRAM pass like Tier 3: a prefab
+    // is declared in one file and often operated in another, so
+    // a per-module check would be a false positive.  Hence a registry
+    // that is merged upwards across the sub-compilers like prefabDecls.
     std::map<std::string, aiml::prefab::Meta> prefabMeta;
-    // Name -> Instanzmethoden, die irgendwo auf einer seiner Instanzen gerufen
-    // werden (nicht nur Kind-Methoden): set_input_transparent ist der Notausgang
-    // von F44_8-1, die Lese-Methoden entscheiden F44_8-5 und F44_8-6.
+    // Name -> instance methods that are called somewhere on one of its instances
+    // (not only child methods): set_input_transparent is the escape hatch
+    // of F44_8-1, the read methods decide F44_8-5 and F44_8-6.
     std::map<std::string, std::set<std::string>> prefabInstMethods;
-    // Name -> ein Kindname wurde NICHT als Literal uebergeben.  Dann ist die
-    // Lese-Analyse unvollstaendig (Tier-2-Grenze) und F44_8-6 schweigt.
+    // Name -> a child name was NOT passed as a literal.  Then the
+    // read analysis is incomplete (Tier 2 limit) and F44_8-6 stays silent.
     std::set<std::string> prefabDynamicChild;
-    // Name -> Kindnamen, deren Sichtbarkeit zur LAUFZEIT gesetzt wird
-    // (set_child_visible).  Gestapelte Alternativen sind in echtem Code so
-    // gebaut, nicht mit `visible: false` -- ohne diesen Notausgang meldet
-    // F44_8-4 jeden Stapel (gemessen an 9rooms: AckDot, LoginScene,
-    // CardEditorScene, zusammen 22 Fehlalarme).
+    // Name -> child names whose visibility is set at RUNTIME
+    // (set_child_visible).  Stacked alternatives are built this way in real code,
+    // not with `visible: false` -- without this escape hatch
+    // F44_8-4 reports every stack (measured on 9rooms: AckDot, LoginScene,
+    // CardEditorScene, 22 false alarms in total).
     std::map<std::string, std::set<std::string>> prefabVisibleManaged;
 
-    // Name -> fertiges Ortspraefix der Deklaration ("datei:zeile:spalte: ").
-    // Die Tote-Prefab-Warnung faellt erst im Ganzprogramm-Durchgang an, wo der
-    // AST-Knoten laengst weg ist -- ohne diesen Merker nennt sie bestenfalls
-    // die Datei (spec/49 F49-100).
+    // Name -> finished location prefix of the declaration ("file:line:column: ").
+    // The dead-prefab warning only arises in the whole-program pass, where the
+    // AST node is long gone -- without this marker it names at best
+    // the file (spec/49 F49-100).
     std::map<std::string, std::string> prefabDeclLoc;
 
     /// Prefab names instantiated (via engine.instantiate("<literal>")) anywhere
@@ -769,9 +769,9 @@ namespace AIML {
     /// sets, so the top-level build can refuse a service nothing touches.
     std::map<std::string, std::string> serviceDecls;
     std::set<std::string> serviceUses;
-    /// Laeuft gerade ein von der Service-Synthese erzeugter Rumpf?  Ein Aufruf aus
-    /// ihm heraus zaehlt nicht als Benutzung — sonst haelt der generierte Dispatch
-    /// seinen eigenen Service am Leben und §5.6 findet nie etwas.
+    /// Is a body generated by the service synthesis running right now?  A call from
+    /// within it does not count as a use — otherwise the generated dispatch keeps
+    /// its own service alive and §5.6 never finds anything.
     bool inServiceSynthFn = false;
 
     /// Prefab-report mode (`--prefab-report`): when set, checkPrefabUsage also
@@ -884,9 +884,9 @@ namespace AIML {
         if (node.IsDefined()) {
             int ln = node.Mark().line;
             if (ln >= 0) {
-                /* file:line:col — die Spalte lag schon in Mark() bereit und wurde
-                 * nie ausgegeben, also konnte ein Werkzeug einen Befund nur der
-                 * Zeile zuordnen, nicht dem Token (cosmos spec/98 F98-9). */
+                /* file:line:col — the column was already available in Mark() and was
+                 * never printed, so a tool could only map a finding to the
+                 * line, not to the token (cosmos spec/98 F98-9). */
                 loc += ":" + std::to_string(ln + 1);
                 int cl = node.Mark().column;
                 if (cl >= 0) loc += ":" + std::to_string(cl + 1);
@@ -914,10 +914,10 @@ namespace AIML {
         return fmtLoc(node, fallbackLine, -1);
     }
 
-    // Mit Spalte: ein Statement traegt seine Position seit spec/49 F49-100 als
-    // sourceLine UND sourceColumn (gesetzt, wo capturedLine gesetzt wird).  Ohne
-    // den Spalten-Rueckfall meldete jeder Check, der ueber einen AST-Knoten ohne
-    // YAML-Marke laeuft, Spalte 0 -- das war der "column is partial"-Punkt.
+    // With column: since spec/49 F49-100 a statement carries its position as
+    // sourceLine AND sourceColumn (set where capturedLine is set).  Without
+    // the column fallback every check that runs over an AST node without a
+    // YAML mark reported column 0 -- that was the "column is partial" item.
     std::string fmtLoc(const YAML::Node& node, int fallbackLine,
                        int fallbackColumn) const {
         if (node.IsDefined() && node.Mark().line >= 0) return fmtLoc(node);
@@ -969,20 +969,20 @@ namespace AIML {
     // getLLVMType uses this to record transitive type dependencies for sys.bundle.
     std::string bundleTrackingTarget;
 
-    // Typnamen, die nicht aufgeloest werden konnten.  resolveType meldet den
-    // Fehler und faellt auf i32 zurueck, damit die Uebersetzung weiterlaeuft —
-    // sonst stuende nur der erste Fehler je Datei.  Der Preis ist eine
-    // KASKADE: jede Methode auf so einer Variablen meldet erneut.  Wer hier
-    // eintraegt, erlaubt den Folgemeldungen, zu schweigen (spec/49).
+    // Type names that could not be resolved.  resolveType reports the
+    // error and falls back to i32, so that compilation continues —
+    // otherwise there would only be the first error per file.  The price is a
+    // CASCADE: every method on such a variable reports again.  Whoever registers
+    // here allows the follow-up messages to stay silent (spec/49).
     std::set<std::string> unknownTypeNames;
-    // Variablen, deren Typ nicht aufgeloest werden konnte.
+    // Variables whose type could not be resolved.
     std::set<std::string> unknownTypedVars;
 
     // When non-empty, the type name of the current set-statement target variable.
     // Used by sys.deserialize to infer the type without an explicit second argument.
     std::string deserializeTargetType;
-    // spec/10: erwarteter Typ eines Listenliterals als Aufrufargument (`list<T>`).  Ohne den
-    // waere `[]` nicht typisierbar; bei nicht-leeren Literalen dient er als Gegenprobe.
+    // spec/10: expected type of a list literal as a call argument (`list<T>`).  Without it
+    // `[]` would not be typeable; for non-empty literals it serves as a cross-check.
     std::string listLiteralArgType;
 
     // Set by visitCall before dispatching db namespace functions when a
@@ -1484,8 +1484,8 @@ namespace AIML {
         if (typeName == "socket_handle") return llvm::Type::getInt8Ty(context)->getPointerTo(); // AimlSocket*
         if (typeName == "tls_socket_handle") return llvm::Type::getInt8Ty(context)->getPointerTo(); // AimlTlsSocket*
         if (typeName == "ws_handle") return llvm::Type::getInt8Ty(context)->getPointerTo();          // AimlWs*
-        // spec/29_2 §14a: der Kontext als Wert — ein Griff auf eine lebende
-        // Compiler-Instanz (AIMLCompiler*), undurchsichtig wie ssh_session.
+        // spec/29_2 §14a: the context as a value — a handle on a live
+        // compiler instance (AIMLCompiler*), opaque like ssh_session.
         if (typeName == "ctx_handle")  return llvm::Type::getInt8Ty(context)->getPointerTo();     // AIMLCompiler*
         if (typeName == "ssh_session") return llvm::Type::getInt8Ty(context)->getPointerTo();     // AimlSshSession* (spec/32_6)
         if (typeName == "ssh_channel") return llvm::Type::getInt8Ty(context)->getPointerTo();     // AimlSshChannel*
@@ -1611,24 +1611,24 @@ namespace AIML {
         if (typeName == "Code")
             return llvm::Type::getInt8Ty(context)->getPointerTo();
 
-        // spec/62 §13.5: zusammensetzbare Pipelines — ebenfalls opake Handles.
-        // Die Struktur waechst (Schritte, Achsen), also traegt sie kein Struct.
+        // spec/62 §13.5: composable pipelines — opaque handles as well.
+        // The structure grows (steps, axes), so no struct carries it.
         if (typeName == "step" || typeName == "stage" || typeName == "pipeline")
             return llvm::Type::getInt8Ty(context)->getPointerTo();
 
-        // spec/29_2 §14a: der Kontext als Wert — ein Griff auf eine lebende
-        // Compiler-Instanz.  Opak aus demselben Grund: was dahinter liegt,
-        // gehoert dem Compiler, nicht dem Programm, das ihn benutzt.
+        // spec/29_2 §14a: the context as a value — a handle on a live
+        // compiler instance.  Opaque for the same reason: what lies behind it
+        // belongs to the compiler, not to the program that uses it.
         if (typeName == "ctx_handle")
             return llvm::Type::getInt8Ty(context)->getPointerTo();
 
-        // Nur EINMAL je Name melden: derselbe unbekannte Typ taucht in einer
-        // Datei typischerweise mehrfach auf (decl, Argument, Rueckgabe).
+        // Report only ONCE per name: the same unknown type typically shows up
+        // several times in a file (decl, argument, return).
         if (!unknownTypeNames.count(typeName)) {
             unknownTypeNames.insert(typeName);
             LOG_ERROR(fmtLoc() + "Unknown Type: '" + typeName + "'");
         }
-        return llvm::Type::getInt32Ty(context); // Ersatz, damit es weitergeht
+        return llvm::Type::getInt32Ty(context); // substitute, so that things carry on
     }
 
     // Helper to declare external C functions
