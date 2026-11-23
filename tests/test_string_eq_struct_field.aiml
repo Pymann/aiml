@@ -3,18 +3,18 @@
 #   "eq / neq semantics: For `string` pointers: byte-by-byte content
 #    comparison (like strcmp)"
 #
-# Vor 2026-06-08: resolveTypeName erkannte nur VariableExpr/LiteralExpr.
-# Member-Access auf string-Felder (z.B. `struct.field`) bekam leeren
-# typeName → eq:[a.field, b.field] fiel auf Pointer-Identity zurück
-# statt auf strcmp.  Datacreatures-Repro: terrain-Lookup in cockpit-Hover
-# (zone.terrain_id vs terrain.terrain_id, gleicher String aber verschiedene
-# Allocations) → match schlug fehl → location-tooltip leer.
+# Before 2026-06-08: resolveTypeName only recognised VariableExpr/LiteralExpr.
+# Member access on string fields (e.g. `struct.field`) got an empty
+# typeName → eq:[a.field, b.field] fell back to pointer identity
+# instead of strcmp.  Datacreatures repro: terrain lookup in the cockpit hover
+# (zone.terrain_id vs terrain.terrain_id, the same string but different
+# allocations) → the match failed → the location tooltip was empty.
 #
-# Fix: resolveTypeName splittet dotted-Namen + resolvePropertyWritePtr
-# liefert den propTypeName, so dass visitStringCompare angesprungen wird.
+# Fix: resolveTypeName splits dotted names + resolvePropertyWritePtr
+# returns the propTypeName, so that visitStringCompare is jumped to.
 #
-# Bei Regression: Pointer-Identity → a.str_field != b.str_field weil
-# unterschiedliche String-Allocations → exit 1 (FAIL).
+# On regression: pointer identity → a.str_field != b.str_field because of
+# different string allocations → exit 1 (FAIL).
 
 - model:
     name: Holder
@@ -28,9 +28,9 @@
       - decl: [first,  Holder]
       - decl: [second, Holder]
       - set: [first.str_field, "regression_match"]
-      # Per Konstruktion eine separate Allocation mit gleichem Inhalt:
-      # String-Interpolation baut einen frischen Buffer (siehe StringUtils::
-      # concat).  Pointer-Identity-Vergleich würde hier scheitern.
+      # By construction a separate allocation with the same content:
+      # string interpolation builds a fresh buffer (see StringUtils::
+      # concat).  A pointer identity comparison would fail here.
       - decl: [prefix, string, "regression_"]
       - decl: [suffix, string, "match"]
       - set: [second.str_field, "${prefix}${suffix}"]

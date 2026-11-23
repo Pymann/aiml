@@ -1,16 +1,16 @@
 # SPEC: 44_6_prefabs
-# spec/44_6 §5g + Widget-Tabelle: ein MEHRZEILIGES `text_input` hat „a movable
-# cursor, text selection (mouse drag)".  Fuer mehrzeilige Felder war das nicht
-# eingeloest: der Render-Pass legte genau EINEN Cursor-Halt an (Byte 0), also
-# sprang jeder Klick an den Dokumentanfang — und mit `gutter: true` lag die
-# Spalte zusaetzlich um die Breite der Nummernspalte daneben.
+# spec/44_6 §5g + widget table: a MULTI-LINE `text_input` has "a movable
+# cursor, text selection (mouse drag)".  For multi-line fields that was not
+# delivered: the render pass created exactly ONE cursor stop (byte 0), so
+# every click jumped to the start of the document — and with `gutter: true` the
+# column was additionally off by the width of the number column.
 #
-# Gemeldet am Quelltextfeld von cosmos: „in das textboxfeld fuer pipeline
-# schaffe ich es nicht das label zu enden, der cursor macht gar nicht, was die
-# tastatur sagt" (2026-10-15).
+# Reported on the cosmos source text field: "in the pipeline text box
+# I cannot get to the end of the label, the cursor does not do at all what the
+# keyboard says" (2026-10-15).
 #
-# Geprueft wird das, was der Mensch tut: in eine BESTIMMTE Zeile klicken und
-# tippen — das Zeichen muss DORT landen, nicht am Anfang.
+# What is checked is what the human does: click into a SPECIFIC line and
+# type — the character must land THERE, not at the start.
 #
 # Requires: display
 # Expected exit code: 0
@@ -41,23 +41,23 @@
 
       - decl: [scene, prefab_instance, { call: [engine.instantiate, "EditorScene"] }]
       - call: [scene.set_pos, 0.0, 0.0]
-      # Vier klar unterscheidbare Zeilen.  Zeile 3 ist das Ziel.
+      # Four clearly distinguishable lines.  Line 3 is the target.
       - call: [scene.set_text, "code_input", "eins\nzwei\nDRITTE\nvier"]
 
       - decl: [box_x, f32, { call: [scene.child_rect_x, "code_input"] }]
       - decl: [box_y, f32, { call: [scene.child_rect_y, "code_input"] }]
       - decl: [box_w, f32, { call: [scene.child_rect_w, "code_input"] }]
-      - if: { condition: { lt: [box_w, 1.0] }, then: [{ print: ["FAIL Widget nicht gefunden"] }, { return: 1 }] }
+      - if: { condition: { lt: [box_w, 1.0] }, then: [{ print: ["FAIL widget not found"] }, { return: 1 }] }
 
-      # Einen Rahmen zeichnen, damit die Cursor-Karte steht.
+      # Draw a frame, so that the cursor map is in place.
       - call: [engine.swap, win]
       - call: [engine.draw_scene]
       - call: [engine.swap, win]
 
-      # Zwei Ziele, beide OHNE Kenntnis der Schriftmetrik:
-      #   A) ganz oben rechts  → Ende der ERSTEN Zeile
-      #   B) weit unten rechts → Ende der LETZTEN sichtbaren Zeile
-      # Vor dem Fix landete beides am Dokumentanfang (ein einziger Halt, Byte 0).
+      # Two targets, both WITHOUT knowledge of the font metrics:
+      #   A) top right         → end of the FIRST line
+      #   B) far bottom right  → end of the LAST visible line
+      # Before the fix both landed at the start of the document (a single stop, byte 0).
       - decl: [aim_x, f32, { +: [box_x, { -: [box_w, 20.0] }] }]
       - decl: [aim_y, f32, { +: [box_y, 8.0] }]
 
@@ -86,12 +86,12 @@
           then:
             - if:
                 condition: { gt: [{ call: [got_a.index_of, "Xeins"] }, -1] }
-                then: [{ print: ["FAIL Klick landete am DOKUMENTANFANG statt am Ende von Zeile 1"] }]
+                then: [{ print: ["FAIL click landed at the START OF THE DOCUMENT instead of at the end of line 1"] }]
                 else: [{ print: ["FAIL A: '${got_a}' expected '${want_a}'"] }]
             - call: [engine.destroy_window, win]
             - return: 1
 
-      # B) weit unten: die letzte sichtbare Zeile
+      # B) far down: the last visible line
       - decl: [low_y, f32, { +: [box_y, 150.0] }]
       - call: [engine.swap, win]
       - call: [input.post_mouse_move, aim_x, low_y]
@@ -116,7 +116,7 @@
       - if:
           condition: { eq: [got_b, want_b] }
           then:
-            - print: ["PASS multiline_click: Klick trifft Zeile UND Spalte (auch mit Gutter)"]
+            - print: ["PASS multiline_click: click hits line AND column (also with gutter)"]
             - call: [engine.destroy_window, win]
             - return: 0
       - print: ["FAIL B: '${got_b}' expected '${want_b}'"]

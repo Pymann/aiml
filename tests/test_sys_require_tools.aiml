@@ -1,10 +1,10 @@
 # SPEC: 23_system §5.6
-# `sys.require_tools`: was die Umgebung mitbringen muss — in EINER Antwort.
+# `sys.require_tools`: what the environment must bring along — in ONE answer.
 #
-# Geprueft wird gegen Dinge, die es auf jedem Linux gibt (`sh`), und gegen
-# einen Namen, den es sicher nicht gibt.  Und die Reihenfolge der Antwort:
-# ALLES Fehlende, nicht das erste (F23-40) — sonst braucht ein Nutzer drei
-# Laeufe fuer drei fehlende Pakete.
+# Checked against things that exist on every Linux (`sh`), and against
+# a name that certainly does not exist.  And the order of the answer:
+# EVERYTHING missing, not the first (F23-40) — otherwise a user needs three
+# runs for three missing packages.
 #
 # Expected exit code: 0
 
@@ -36,31 +36,31 @@
     body:
       - decl: [fails, i32, 0]
 
-      # Da: die Shell gibt es ueberall.
+      # present: the shell exists everywhere.
       - decl: [ok_one, string, { call: [sys.require_tools, "sh"] }]
       - set: [fails, { +: [fails, { call: [expect, "vorhandenes Werkzeug → leere Antwort", { eq: [ok_one.len, 0] }] }] }]
 
-      # Nicht da — und der Name steht in der Antwort.
+      # not present — and the name is in the answer.
       - decl: [miss_one, string, { call: [sys.require_tools, "gibtesnicht_xyz"] }]
-      - set: [fails, { +: [fails, { call: [expect, "fehlendes Werkzeug wird genannt", { call: [has_text, miss_one, "gibtesnicht_xyz"] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "missing tool is named", { call: [has_text, miss_one, "gibtesnicht_xyz"] }] }] }]
 
-      # ALLES Fehlende, nicht das erste (F23-40).
+      # EVERYTHING missing, not the first (F23-40).
       - decl: [miss_two, string, { call: [sys.require_tools, "gibtesnicht_a,sh,gibtesnicht_b"] }]
-      - set: [fails, { +: [fails, { call: [expect, "beide fehlenden stehen drin", { '&&': [{ call: [has_text, miss_two, "gibtesnicht_a"] }, { call: [has_text, miss_two, "gibtesnicht_b"] }] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "das vorhandene nicht", { eq: [{ call: [has_text, miss_two, "sh"] }, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "both missing ones are in it", { '&&': [{ call: [has_text, miss_two, "gibtesnicht_a"] }, { call: [has_text, miss_two, "gibtesnicht_b"] }] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "the present one is not", { eq: [{ call: [has_text, miss_two, "sh"] }, 0] }] }] }]
 
-      # Version: geprueft wird gegen `python3`, weil es eine Zahl ausgibt.
-      # `sh` taugt dafuer NICHT: dash kennt kein `--version` und gilt dann
-      # berechtigterweise als unerfuellt (F23-42) — die Pruefung raet nicht.
+      # Version: checked against `python3`, because it prints a number.
+      # `sh` is NO good for this: dash knows no `--version` and then rightly
+      # counts as unsatisfied (F23-42) — the check does not guess.
       - decl: [ver_ok, string, { call: [sys.require_tools, "python3>=3"] }]
       - set: [fails, { +: [fails, { call: [expect, "erfuellte Mindestversion schweigt", { eq: [ver_ok.len, 0] }] }] }]
       - decl: [ver_bad, string, { call: [sys.require_tools, "python3>=9999"] }]
-      - set: [fails, { +: [fails, { call: [expect, "verfehlte Mindestversion wird genannt", { call: [has_text, ver_bad, "python3>=9999"] }] }] }]
-      # Und der Fall ohne Zahl: genannt, nicht geraten (F23-42).
+      - set: [fails, { +: [fails, { call: [expect, "missed minimum version is named", { call: [has_text, ver_bad, "python3>=9999"] }] }] }]
+      # And the case without a number: named, not guessed (F23-42).
       - decl: [ver_none, string, { call: [sys.require_tools, "sh>=1"] }]
-      - set: [fails, { +: [fails, { call: [expect, "ohne Versionsausgabe gilt es als unerfuellt", { call: [has_text, ver_none, "sh>=1"] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "without a version output it counts as unsatisfied", { call: [has_text, ver_none, "sh>=1"] }] }] }]
 
-      # Leere Angabe: nichts zu pruefen, nichts zu melden.
+      # Empty setting: nothing to check, nothing to report.
       - decl: [nix, string, { call: [sys.require_tools, ""] }]
       - set: [fails, { +: [fails, { call: [expect, "leere Anforderung = leere Antwort", { eq: [nix.len, 0] }] }] }]
 

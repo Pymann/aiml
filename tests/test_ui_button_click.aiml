@@ -1,25 +1,25 @@
 # SPEC: 44_3_ui,44_0_input
-# spec/44_3 §4.2 + §7: nimmt `ui.button` einen injizierten Klick an?
+# spec/44_3 §4.2 + §7: does `ui.button` accept an injected click?
 #
-# Fuer Prefab-Widgets beantwortet das test_input_injection_click.aiml; fuer die
-# Sofort-UI gab es nichts -- `test_ui.aiml` ist eine Vorfuehrung, die auf einen
-# Menschen wartet.  Der Unterschied ist nicht akademisch: in einem Spiel stand
-# 2026-11-11 die Frage, ob eine Bedienung ueber der 3D-Szene mit `ui.button`
-# gebaut werden kann (sie zeichnet NACH `engine.draw_scene`, Prefabs nicht).
-# Ich hatte das verneint -- auf Grund einer Probe, die `input.init` vergass und
-# in der darum jedes `input.post_*` ein No-op war (spec/44_0 §8.2).  Dieser
-# Test haelt die richtige Antwort fest.
+# For prefab widgets test_input_injection_click.aiml answers that; for the
+# immediate-mode UI there was nothing -- `test_ui.aiml` is a demo that waits for a
+# human.  The difference is not academic: in a game the question came up
+# 2026-11-11 whether a control over the 3D scene can be built with `ui.button`
+# (it draws AFTER `engine.draw_scene`, prefabs do not).
+# I had said no -- on the basis of a probe that forgot `input.init` and
+# in which therefore every `input.post_*` was a no-op (spec/44_0 §8.2).  This
+# test records the right answer.
 #
-# Geprueft:
-#   1. Druck ALLEIN ist noch kein Klick (der Knopf meldet beim Loslassen)
-#   2. Loslassen ueber dem Knopf meldet 1
-#   3. derselbe Ablauf NEBEN dem Knopf meldet nichts (sonst waere 2. wertlos)
+# Checked:
+#   1. a press ALONE is not yet a click (the button reports on release)
+#   2. releasing over the button reports 1
+#   3. the same sequence NEXT TO the button reports nothing (otherwise 2. would be worthless)
 # Requires: display
 # Expected exit code: 0
 
-# Zeichnet EINEN Knopf in die rechte obere Zelle und meldet, ob er in diesem
-# Bild geklickt wurde.  Gitter: rechte Spalte 200 px breit, obere Zeile 90 px
-# hoch -- der Knopf sitzt also bei x 200..400, y 0..~27.
+# Draws ONE button into the top right cell and reports whether it was clicked in this
+# frame.  Grid: right column 200 px wide, top row 90 px
+# high -- so the button sits at x 200..400, y 0..~27.
 - def:
     name: knopf_bild
     args: [[win, window_handle]]
@@ -50,25 +50,25 @@
       - decl: [font, ui_font, { call: [ui.load_font_default, 16.0] }]
       - call: [ui.set_default_font, font]
 
-      # ── 1. Zeigen und druecken -- noch kein Klick ────────────────────────
-      # Injiziert wird NACH dem Swap, der die Latches leert (spec/44_0 §8.3).
+      # ── 1. point and press -- not a click yet ────────────────────────────
+      # Injection happens AFTER the swap, which clears the latches (spec/44_0 §8.3).
       - call: [engine.swap, win]
       - call: [input.post_mouse_move, 300.0, 12.0]
       - decl: [bild1, i32, { call: [knopf_bild, win] }]
-      - if: { condition: { neq: [bild1, 0] }, then: [{ print: ["FAIL blosses Zeigen meldet schon einen Klick"] }, { return: 1 }] }
+      - if: { condition: { neq: [bild1, 0] }, then: [{ print: ["FAIL merely pointing already reports a click"] }, { return: 1 }] }
 
       - call: [engine.swap, win]
       - call: [input.post_mouse_move, 300.0, 12.0]
       - call: [input.post_mouse_down, 0]
       - decl: [bild2, i32, { call: [knopf_bild, win] }]
-      - if: { condition: { neq: [bild2, 0] }, then: [{ print: ["FAIL Druck allein meldet schon einen Klick"] }, { return: 1 }] }
+      - if: { condition: { neq: [bild2, 0] }, then: [{ print: ["FAIL a press alone already reports a click"] }, { return: 1 }] }
 
-      # ── 2. Loslassen ueber dem Knopf ─────────────────────────────────────
+      # ── 2. release over the button ───────────────────────────────────────
       - call: [engine.swap, win]
       - call: [input.post_mouse_move, 300.0, 12.0]
       - call: [input.post_mouse_up, 0]
       - decl: [bild3, i32, { call: [knopf_bild, win] }]
-      - if: { condition: { neq: [bild3, 1] }, then: [{ print: ["FAIL Loslassen ueber dem Knopf meldet keinen Klick"] }, { return: 1 }] }
+      - if: { condition: { neq: [bild3, 1] }, then: [{ print: ["FAIL releasing over the button reports no click"] }, { return: 1 }] }
 
       # ── 3. Gegenprobe: derselbe Ablauf daneben ───────────────────────────
       - call: [engine.swap, win]
@@ -79,7 +79,7 @@
       - call: [input.post_mouse_move, 40.0, 240.0]
       - call: [input.post_mouse_up, 0]
       - decl: [bild5, i32, { call: [knopf_bild, win] }]
-      - if: { condition: { "||": [{ neq: [bild4, 0] }, { neq: [bild5, 0] }] }, then: [{ print: ["FAIL Klick NEBEN dem Knopf meldet einen Treffer"] }, { return: 1 }] }
+      - if: { condition: { "||": [{ neq: [bild4, 0] }, { neq: [bild5, 0] }] }, then: [{ print: ["FAIL click NEXT TO the button reports a hit"] }, { return: 1 }] }
 
       - call: [engine.destroy_window, win]
       - print: ["OK ui.button nimmt injizierte Klicks an"]

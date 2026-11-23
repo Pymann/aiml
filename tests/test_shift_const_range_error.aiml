@@ -1,7 +1,7 @@
 # SPEC: 04_1_precedence
-# Backlog-Punkt 2: `{ shl: [6, -4] }` lieferte undefinierten Muell (gemessen 372022024),
-# weil das C-UB durchschlug. Eine KONSTANTE Schiebeweite ausserhalb [0, Breite) ist
-# statisch erkennbar und daher ein Uebersetzungsfehler.
+# Backlog item 2: `{ shl: [6, -4] }` delivered undefined garbage (measured 372022024),
+# because the C UB came through. A CONSTANT shift amount outside [0, width) is
+# statically recognisable and therefore a compile error.
 # Expected exit code: 1
 
 - def:

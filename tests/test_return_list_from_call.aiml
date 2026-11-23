@@ -1,7 +1,7 @@
 # SPEC?: 10_collections   # derived from the file name, to be confirmed
-# Repro: direkte Return-Expression mit list-erzeugendem Builtin schlägt fehl.
+# Repro: a direct return expression with a list-producing builtin fails.
 #
-# Beobachtet im DataCreatures itemgen-Refactor (model.aiml::load_vocab_list):
+# Observed in the DataCreatures itemgen refactor (model.aiml::load_vocab_list):
 #   - def:
 #       name: load_vocab_list
 #       return: list<string>
@@ -12,12 +12,12 @@
 #     ret ptr %split_alloca
 #     %list_string = type { i32, i32, ptr }
 #
-# Ursache: visitRetStmt nimmt `val` von visitExpression direkt und ruft
-# `createRet(val)`.  Wenn val ein alloca-Pointer auf einen list-struct ist
-# und der Return-Type ein struct ist, fehlt der `load <struct>, ptr` davor.
+# Cause: visitRetStmt takes `val` directly from visitExpression and calls
+# `createRet(val)`.  If val is an alloca pointer to a list struct
+# and the return type is a struct, the `load <struct>, ptr` before it is missing.
 #
-# Workaround (im itemgen vorhanden): zwischen-decl, dann return varname.
-# Wir wollen den Wurzel-Fix.
+# Workaround (present in itemgen): an intermediate decl, then return varname.
+# We want the root fix.
 
 - def:
     name: split_pipe

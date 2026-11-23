@@ -1,12 +1,12 @@
 # SPEC: 44_8_prefab_static,44_8_vocab
-# Negative test: engine.instantiate("<Name>") mit einem Namen, für den KEIN
-# `- prefab:` deklariert (oder importiert) ist.  Das erzeugt zur Laufzeit eine
-# unsichtbare Null-Instanz (silent no-op) und MUSS daher ein HARTER Compiler-
-# Fehler sein — siehe spec/44_8 (Tier 1: instantiate-known).
+# Negative test: engine.instantiate("<Name>") with a name for which NO
+# `- prefab:` is declared (or imported).  At runtime that produces an
+# invisible null instance (silent no-op) and MUST therefore be a HARD compiler
+# error — see spec/44_8 (Tier 1: instantiate-known).
 #
 # Expected exit code: 1
 #
-# Diagnostic-Form:
+# Diagnostic form:
 #   ...: engine.instantiate("NoSuchPrefab") refers to an unknown prefab — no
 #   `- prefab:` with that name is declared or imported in this module. ...
 

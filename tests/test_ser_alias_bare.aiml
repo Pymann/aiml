@@ -1,16 +1,16 @@
 # SPEC: 29_serialize, 15_models
-# Fremde JSON-Formate lesen und schreiben (spec/29 §5.2a/§5.2b, spec/15 Aliasse).
+# Reading and writing foreign JSON formats (spec/29 §5.2a/§5.2b, spec/15 aliases).
 #
-# Zwei Zusagen, die cosmos braucht, um OCI-Bundles zu lesen (cosmos doc/spec/110
-# F110-13/F110-15), und die bis heute nur zufaellig galten:
-#   1. `sys.deserialize` verlangt KEIN `__type` — den Typ nennt der Aufrufer.
-#   2. Ein Feld-Alias ueberbrueckt fremde Namen, die aimls Drei-Zeichen-Regel
-#      nicht erfuellen (`id`).
-# Dazu die neue Option `JsonStyle.bare`, die `__type` beim Schreiben weglaesst.
+# Two promises that cosmos needs to read OCI bundles (cosmos doc/spec/110
+# F110-13/F110-15), and which until today only held by chance:
+#   1. `sys.deserialize` demands NO `__type` — the caller names the type.
+#   2. A field alias bridges foreign names that do not satisfy aiml's three-character rule
+#      (`id`).
+# Plus the new option `JsonStyle.bare`, which leaves out `__type` when writing.
 #
 # Expected exit code: 0
 
-# Alles, was leer sein KANN: ein Kasten, der ganz wegfallen soll (F29-19).
+# Everything that CAN be empty: a box that should drop out completely (F29-19).
 - model:
     name: LeanBox
     fields:
@@ -21,7 +21,7 @@
     name: ContainerState
     fields:
       - [ociVersion, string]
-      # Heisst draussen `id` — drinnen waere das ein zu kurzer Name (spec/15).
+      # Is called `id` outside — inside that would be too short a name (spec/15).
       - [ident,      string, "", { alias: "id" }]
       - [status,     string]
       - [pid,        i32]
@@ -65,71 +65,71 @@
       - set: [val.status, "created"]
       - set: [val.pid, 4711]
 
-      # ── 1. Schreiben: der Alias steht draussen, der echte Name nicht ─────
+      # ── 1. writing: the alias is outside, the real name is not ─────────────
       - decl: [plain_out, string, { call: [sys.serialize, val] }]
       - call: [log.info, "  normal: ${plain_out}"]
-      - set: [fails, { +: [fails, { call: [expect, "Alias wird geschrieben", { call: [has_text, plain_out, "\"id\":\"rt-1\""] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "der interne Name nicht", { eq: [{ call: [has_text, plain_out, "ident"] }, 0] }] }] }]
-      # Ohne Stil bleibt alles wie bisher — die Aenderung darf nichts umwerfen.
-      - set: [fails, { +: [fails, { call: [expect, "ohne Stil bleibt __type erhalten", { call: [has_text, plain_out, "__type"] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "alias is written", { call: [has_text, plain_out, "\"id\":\"rt-1\""] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "the internal name is not", { eq: [{ call: [has_text, plain_out, "ident"] }, 0] }] }] }]
+      # Without a style everything stays as before — the change must not upset anything.
+      - set: [fails, { +: [fails, { call: [expect, "without a style __type is kept", { call: [has_text, plain_out, "__type"] }] }] }]
 
-      # ── 2. JsonStyle.bare: ohne __type ──────────────────────────────────
+      # ── 2. JsonStyle.bare: without __type ───────────────────────────────
       - decl: [bare_style, JsonStyle]
       - set: [bare_style.bare, 1]
-      # Die KURZFORM `sys.serialize(wert, stil)` — ohne ausdruecklichen Typnamen.
-      # Sie wurde bis 18.10.2026 still verworfen (F29-17): kein Fehler, keine
-      # Wirkung.  Darum steht sie hier als eigene Pruefung, nicht nur als
-      # Nebenwirkung von `bare`.
+      # The SHORT FORM `sys.serialize(value, style)` — without an explicit type name.
+      # Until 2026-10-18 it was silently discarded (F29-17): no error, no
+      # effect.  That is why it stands here as a check of its own, not just as a
+      # side effect of `bare`.
       - decl: [pretty_style, JsonStyle]
       - set: [pretty_style.pretty, 1]
       - decl: [pretty_out, string, { call: [sys.serialize, val, pretty_style] }]
       - set: [fails, { +: [fails, { call: [expect, "Kurzform: pretty wirkt (F29-17)", { call: [has_text, pretty_out, "\n"] }] }] }]
       - decl: [bare_out, string, { call: [sys.serialize, val, bare_style] }]
       - call: [log.info, "  bare:   ${bare_out}"]
-      - set: [fails, { +: [fails, { call: [expect, "bare laesst __type weg", { eq: [{ call: [has_text, bare_out, "__type"] }, 0] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "und behaelt die Nutzdaten", { call: [has_text, bare_out, "\"status\":\"created\""] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "bare leaves out __type", { eq: [{ call: [has_text, bare_out, "__type"] }, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "and keeps the payload", { call: [has_text, bare_out, "\"status\":\"created\""] }] }] }]
 
-      # ── 3. Lesen: fremdes JSON ohne __type, mit fremdem Namen ───────────
+      # ── 3. reading: foreign JSON without __type, with a foreign name ─────────
       - decl: [foreign, string, "{\"ociVersion\":\"1.0.2\",\"id\":\"rt-9\",\"status\":\"running\",\"pid\":99}"]
       - decl: [back, ContainerState, { call: [sys.deserialize, foreign, "ContainerState"] }]
-      - set: [fails, { +: [fails, { call: [expect, "fremdes JSON ohne __type wird gelesen (F29-15)", { eq: [back.status, "running"] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "Alias ordnet sich dem Feld zu", { eq: [back.ident, "rt-9"] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "foreign JSON without __type is read (F29-15)", { eq: [back.status, "running"] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "alias maps onto the field", { eq: [back.ident, "rt-9"] }] }] }]
       - set: [fails, { +: [fails, { call: [expect, "Zahlen kommen mit", { eq: [back.pid, 99] }] }] }]
 
-      # ── 4. Rundreise ueber die bare-Form ────────────────────────────────
+      # ── 4. round trip via the bare form ─────────────────────────────────
       - decl: [round, ContainerState, { call: [sys.deserialize, bare_out, "ContainerState"] }]
-      - set: [fails, { +: [fails, { call: [expect, "bare-Form liest sich zurueck", { eq: [round.ident, "rt-1"] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "bare form reads back", { eq: [round.ident, "rt-1"] }] }] }]
       - set: [fails, { +: [fails, { call: [expect, "mit allen Feldern", { eq: [round.pid, 4711] }] }] }]
 
-      # ── 5. Unbekannte Schluessel stoeren nicht (F29-16) ─────────────────
+      # ── 5. unknown keys do not disturb (F29-16) ─────────────────────────
       - decl: [extra, string, "{\"id\":\"rt-7\",\"status\":\"stopped\",\"annotations\":{\"a\":\"b\"},\"unbekannt\":42}"]
       - decl: [tolerant, ContainerState, { call: [sys.deserialize, extra, "ContainerState"] }]
-      - set: [fails, { +: [fails, { call: [expect, "unbekannte Schluessel werden uebergangen", { eq: [tolerant.ident, "rt-7"] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "fehlende Felder behalten ihren Vorgabewert", { eq: [tolerant.pid, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "unknown keys are skipped", { eq: [tolerant.ident, "rt-7"] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "missing fields keep their default value", { eq: [tolerant.pid, 0] }] }] }]
 
-      # ── 5b. Map-FELD eines Modells (spec/29 Zeile 112) ──────────────────
-      # „Nested map field → JSON object inline" ist eine ZUSAGE der Spec, war
-      # aber nie geprueft: kein Korpus-Test serialisierte ein Modell mit
-      # gefuelltem map-Feld.  Gefunden beim OCI-Wandler (cosmos §110.25), wo
-      # `annotations` still leer blieb — stiller Datenverlust.
+      # ── 5b. map FIELD of a model (spec/29 line 112) ─────────────────────
+      # "Nested map field → JSON object inline" is a PROMISE of the spec, but was
+      # never checked: no corpus test serialised a model with a
+      # filled map field.  Found on the OCI converter (cosmos §110.25), where
+      # `annotations` silently stayed empty — silent data loss.
       - decl: [mapped, ContainerState]
       - set: [mapped.status, "created"]
       - call: [mapped.tags.put, "ort", "hier"]
       - call: [log.info, "  map-feld len=${mapped.tags.len}"]
       - decl: [map_out, string, { call: [sys.serialize, mapped] }]
       - call: [log.info, "  map:    ${map_out}"]
-      - set: [fails, { +: [fails, { call: [expect, "Map-Feld wird mit Inhalt geschrieben", { call: [has_text, map_out, "\"tags\":{\"ort\":\"hier\"}"] }] }] }]
-      # Und die Gegenprobe: eine Map als EIGENER Wert (spec/29 Zeile 109).
+      - set: [fails, { +: [fails, { call: [expect, "map field is written with content", { call: [has_text, map_out, "\"tags\":{\"ort\":\"hier\"}"] }] }] }]
+      # And the counter-probe: a map as a value of its OWN (spec/29 line 109).
       - decl: [solo, map<string:string>]
       - call: [solo.put, "ort", "hier"]
       - decl: [solo_out, string, { call: [sys.serialize, solo, "map<string:string>"] }]
       - call: [log.info, "  solo:   ${solo_out}"]
-      - set: [fails, { +: [fails, { call: [expect, "Map als eigener Wert", { call: [has_text, solo_out, "\"ort\":\"hier\""] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "map as a value of its own", { call: [has_text, solo_out, "\"ort\":\"hier\""] }] }] }]
 
-      # ── 6. skip_empty: Leeres weglassen (§5.2c) ─────────────────────────
-      # Der Grund steht in cosmos doc/spec/110 §110.25: ein OCI-Image mit
-      # `"variant":""` und `"annotations":{}` ist fuer fremde Leser Ballast —
-      # und `"Entrypoint":[]` heisst dort etwas anderes als „nicht gesetzt".
+      # ── 6. skip_empty: leave out what is empty (§5.2c) ──────────────────
+      # The reason is in cosmos doc/spec/110 §110.25: an OCI image with
+      # `"variant":""` and `"annotations":{}` is ballast for foreign readers —
+      # and `"Entrypoint":[]` means something different there than "not set".
       - decl: [lean_val, ContainerState]
       - set: [lean_val.ociVersion, "1.0.2"]
       - set: [lean_val.ident, "rt-2"]
@@ -142,17 +142,17 @@
       - set: [lean_style.skip_empty, 1]
       - decl: [lean_out, string, { call: [sys.serialize, lean_val, lean_style] }]
       - call: [log.info, "  lean:   ${lean_out}"]
-      - set: [fails, { +: [fails, { call: [expect, "leerer String faellt weg", { eq: [{ call: [has_text, lean_out, "label"] }, 0] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "leere Map faellt weg", { eq: [{ call: [has_text, lean_out, "tags"] }, 0] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "leeres Modell faellt weg (F29-19)", { eq: [{ call: [has_text, lean_out, "box"] }, 0] }] }] }]
-      # 0 ist ein WERT, kein Fehlen — wer ihn weglaesst, aendert Daten (F29-18).
-      - set: [fails, { +: [fails, { call: [expect, "0 bleibt stehen (F29-18)", { call: [has_text, lean_out, "\"pid\":0"] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "Gefuelltes bleibt", { call: [has_text, lean_out, "\"status\":\"running\""] }] }] }]
-      # Ein leeres Array-ELEMENT bleibt: sonst verschiebt sich alles dahinter (F29-20).
-      - set: [fails, { +: [fails, { call: [expect, "leeres Array-Element bleibt (F29-20)", { call: [has_text, lean_out, "[\"\",\"da\"]"] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "empty string drops out", { eq: [{ call: [has_text, lean_out, "label"] }, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "empty map drops out", { eq: [{ call: [has_text, lean_out, "tags"] }, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "empty model drops out (F29-19)", { eq: [{ call: [has_text, lean_out, "box"] }, 0] }] }] }]
+      # 0 is a VALUE, not an absence — whoever leaves it out changes data (F29-18).
+      - set: [fails, { +: [fails, { call: [expect, "0 stays (F29-18)", { call: [has_text, lean_out, "\"pid\":0"] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "what is filled stays", { call: [has_text, lean_out, "\"status\":\"running\""] }] }] }]
+      # An empty array ELEMENT stays: otherwise everything after it shifts (F29-20).
+      - set: [fails, { +: [fails, { call: [expect, "empty array element stays (F29-20)", { call: [has_text, lean_out, "[\"\",\"da\"]"] }] }] }]
       - decl: [lean_back, ContainerState, { call: [sys.deserialize, lean_out, "ContainerState"] }]
-      - set: [fails, { +: [fails, { call: [expect, "liest sich zurueck (F29-21)", { eq: [lean_back.ident, "rt-2"] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "weggelassenes Feld = Vorgabewert", { eq: [lean_back.label.len, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "reads back (F29-21)", { eq: [lean_back.ident, "rt-2"] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "omitted field = default value", { eq: [lean_back.label.len, 0] }] }] }]
 
       - if:
           condition: { neq: [fails, 0] }

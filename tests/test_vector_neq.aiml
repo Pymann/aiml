@@ -1,6 +1,6 @@
 # SPEC: 43_0_math,39_overloading
-# Backlog-Punkt 7: `{ neq: [a, b] }` auf vec2/3/4 meldete "Cannot apply eq/neq to struct
-# type without __eq__". `eq` ging. Jetzt ist `neq` die Negation von `eq`.
+# Backlog item 7: `{ neq: [a, b] }` on vec2/3/4 reported "Cannot apply eq/neq to struct
+# type without __eq__". `eq` worked. Now `neq` is the negation of `eq`.
 # Expected exit code: 0
 
 - import: "tests/_cross/check.aiml"

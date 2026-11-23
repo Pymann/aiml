@@ -1,18 +1,18 @@
 # SPEC: 44_6_prefabs §5h
 # Requires: display
-# Regression fuer `payload_scroll` + `cascade_flow` (spec/44_6 §5h).
+# Regression for `payload_scroll` + `cascade_flow` (spec/44_6 §5h).
 #
-# Was dieser Test BELEGT:
-#   1. Beide Schluessel kommen DEKLARATIV durch — sie waren nur im JSON-Loader
-#      des Runtimes verdrahtet, deklariert also ein "unknown attribute"-Fehler.
-#      Genau die Luecke, vor der §4 warnt (min/scrollable/tail hatten sie schon).
-#   2. Eine tiefe Kaskade (4 Felder, 130 breit → 200+4*134 = 736 > Zeilenbreite
-#      520) laeuft mit payload_scroll NICHT mehr aus der Zeile: die Zeile wird
-#      zum Clip-Viewport, der Balken wird gezeichnet, nichts stuerzt ab.
-#   3. `cascade_flow: vertical` wird akzeptiert und gezeichnet.
+# What this test PROVES:
+#   1. Both keys come through DECLARATIVELY — they were only wired into the runtime's
+#      JSON loader, so declared they were an "unknown attribute" error.
+#      Exactly the gap §4 warns about (min/scrollable/tail already had it).
+#   2. A deep cascade (4 fields, 130 wide → 200+4*134 = 736 > row width
+#      520) no longer runs out of the row with payload_scroll: the row becomes
+#      a clip viewport, the bar is drawn, nothing crashes.
+#   3. `cascade_flow: vertical` is accepted and drawn.
 #
-# NICHT interaktiv: endlich viele Frames, dann Fenster zu (eine blockierende
-# Schleife haelt die ganze Suite auf).
+# NOT interactive: a finite number of frames, then the window closes (a blocking
+# loop holds up the whole suite).
 
 - config:
     entry: main
@@ -27,8 +27,8 @@
     nodes:
       - fixed: [1, VALUE]
 
-# deal_damage hat 4 Felder (Owner, Target, Value-Kaskade, Value) → die Kette ist
-# breiter als die Zeile, genau der Fall, den §5h beschneiden soll.
+# deal_damage has 4 fields (owner, target, value cascade, value) → the chain is
+# wider than the row, exactly the case §5h is meant to clip.
 - cascade:
     name: DmgCode
     nodes:
@@ -46,8 +46,8 @@
           border_color: 0x88AACCFF, border_width: 1.0, corner_radius: 3.0,
           options: "---", label: "?" }
 
-# Zeile 520 breit: 200 Dropdown + 6 Abstand lassen 314 fuer die Kette (4*134=536)
-# → ueberhaengt, der Balken muss erscheinen.  34 hoch: unten 6 px fuer den Balken.
+# row 520 wide: 200 dropdown + 6 spacing leave 314 for the chain (4*134=536)
+# → overhangs, the bar must appear.  34 high: 6 px at the bottom for the bar.
 - prefab:
     name: PsRow
     width: 520
@@ -59,8 +59,8 @@
           bg_color: 0x223040FF, border_color: 0x88AACCFF, border_width: 1.0,
           corner_radius: 3.0, color: 0xFFFFFFFF, font_size: 10 }
 
-# Gegenprobe: dieselbe Kaskade mit senkrechtem Fluss — payload_scroll ist dort
-# wirkungslos und darf nichts kaputt machen.
+# Counter-probe: the same cascade with vertical flow — payload_scroll has no
+# effect there and must not break anything.
 - prefab:
     name: PsRowVertical
     width: 520
@@ -82,7 +82,7 @@
       - call: [row_h.set_pos, 20.0, 20.0]
       - decl: [row_v, prefab_instance, { call: [engine.instantiate, "PsRowVertical"] }]
       - call: [row_v.set_pos, 20.0, 120.0]
-      # Beide auf deal_damage stellen → 4 Payload-Felder, Kette ueberhaengt.
+      # set both to deal_damage → 4 payload fields, the chain overhangs.
       - call: [row_h.set_dropdown_index, "dmg_dd", 0]
       - call: [row_v.set_dropdown_index, "dmg_dd", 0]
       - decl: [frames, i32, 0]
@@ -102,5 +102,5 @@
           then:
             - print: ["FAIL Auswahl verloren: h=${sel_h} v=${sel_v}"]
             - return: 1
-      - print: ["PASS payload_scroll: deklarativ akzeptiert, 12 Frames ohne Absturz"]
+      - print: ["PASS payload_scroll: accepted declaratively, 12 frames without a crash"]
       - return: 0

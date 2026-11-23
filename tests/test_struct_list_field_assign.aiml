@@ -1,8 +1,8 @@
 # SPEC?: 10_collections,02_types   # derived from the file name, to be confirmed
-# Repro: assignment einer list<string>-Variable in ein list<string>-Struct-
-# Feld macht shallow copy → der data-Pointer ist dangling sobald die Quelle
-# out-of-scope geht.  Symptom in der realen App: beim Serialisieren der
-# struct kommt eine list-Header mit garbage count.
+# Repro: assigning a list<string> variable into a list<string> struct
+# field makes a shallow copy → the data pointer dangles as soon as the source
+# goes out of scope.  Symptom in the real app: when serialising the
+# struct a list header with a garbage count comes out.
 
 - model:
     name: Box
@@ -27,7 +27,7 @@
 
 - decl: [g_box, Box, { call: [make_box, g_src] }]
 
-# Lese-Pfad: lokal kopieren, len + Inhalt prüfen.
+# read path: copy locally, check len + content.
 - decl: [out_lst, list<string>, g_box.lst]
 - decl: [var_n, i32, out_lst.len]
 - if:

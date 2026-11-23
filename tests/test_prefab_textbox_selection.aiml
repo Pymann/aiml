@@ -1,8 +1,8 @@
 # SPEC: 44_0_input,44_6_prefabs
-# spec/44_6 §5f: textbox-Auswahl.  Prüft den Teil, der OHNE Maus prüfbar ist:
-# select_all markiert den ganzen Inhalt, selection liefert ihn zurück, und das
-# Ergebnis lässt sich in die Zwischenablage legen.  Die Maus-Auswahl selbst
-# (Ziehen über umgebrochene Zeilen) braucht ein Fenster und echte Klicks.
+# spec/44_6 §5f: textbox selection.  Checks the part that can be checked WITHOUT a mouse:
+# select_all marks the whole content, selection returns it, and the
+# result can be put into the clipboard.  Mouse selection itself
+# (dragging across wrapped lines) needs a window and real clicks.
 # Requires: display
 # Expected exit code: 0
 
@@ -26,44 +26,44 @@
       - call: [gl.init]
       - call: [ui.init]
       - call: [engine.prefab_scene_init, 400, 300]
-      - call: [input.init, win]      # ohne das kein Fenster-Clipboard (spec/44_0 §2.5)
+      - call: [input.init, win]      # without that no window clipboard (spec/44_0 §2.5)
       - decl: [font, ui_font, { call: [ui.load_font_default, 12.0] }]
       - if: { condition: { neq: [font, null] }, then: [{ call: [engine.prefab_set_font, font] }] }
 
       - decl: [scene, prefab_instance, { call: [engine.instantiate, "SelScene"] }]
       - call: [scene.set_pos, 0.0, 0.0]
 
-      # Mehrzeiliger Inhalt mit Umbruch — genau der Fall, der bisher nicht ging.
+      # multi-line content with wrapping — exactly the case that did not work before.
       - decl: [body, string, "b9bbe4c3becfb6d8.a52823d31f8c64f737b53eba95b8dd\nzweite Zeile mit mehreren Woertern\ndritte"]
       - call: [scene.set_text, "log_box", body]
 
-      # Ohne Auswahl: leer
+      # without a selection: empty
       - decl: [none_sel, string, { call: [scene.selection, "log_box"] }]
       - if: { condition: { neq: [none_sel.len, 0] }, then: [{ print: ["FAIL leere Auswahl: '${none_sel}'"] }, { return: 1 }] }
 
-      # select_all markiert den GESAMTEN Quelltext — verbatim, mit Zeilenumbrüchen
+      # select_all marks the WHOLE source text — verbatim, with line breaks
       - call: [scene.select_all, "log_box"]
       - decl: [all_sel, string, { call: [scene.selection, "log_box"] }]
-      - if: { condition: { neq: [all_sel, body] }, then: [{ print: ["FAIL select_all liefert '${all_sel}'"] }, { return: 1 }] }
+      - if: { condition: { neq: [all_sel, body] }, then: [{ print: ["FAIL select_all returns '${all_sel}'"] }, { return: 1 }] }
 
-      # ... und landet in der Zwischenablage (Fenster vorhanden → echtes Clipboard)
+      # ... and lands in the clipboard (window present → real clipboard)
       - call: [input.clipboard_set, all_sel]
       - decl: [clip, string, { call: [input.clipboard_get] }]
       - if: { condition: { neq: [clip, body] }, then: [{ print: ["FAIL clipboard: '${clip}'"] }, { return: 1 }] }
 
-      # text_input kann es weiterhin auch
+      # text_input can still do it as well
       - call: [scene.set_text, "name_input", "hallo welt"]
       - call: [scene.select_all, "name_input"]
       - decl: [in_sel, string, { call: [scene.selection, "name_input"] }]
       - if: { condition: { neq: [in_sel, "hallo welt"] }, then: [{ print: ["FAIL input-Auswahl: '${in_sel}'"] }, { return: 1 }] }
 
-      # Fokus wandert mit: die textbox ist nicht mehr markiert
+      # the focus moves along: the textbox is no longer selected
       - decl: [box_after, string, { call: [scene.selection, "log_box"] }]
-      - if: { condition: { neq: [box_after.len, 0] }, then: [{ print: ["FAIL Auswahl blieb nach Fokuswechsel: '${box_after}'"] }, { return: 1 }] }
+      - if: { condition: { neq: [box_after.len, 0] }, then: [{ print: ["FAIL selection stayed after focus change: '${box_after}'"] }, { return: 1 }] }
 
-      # Ein unbekannter Child-Name wirft wie bei allen Widget-Methoden
-      # (find_child ist absichtlich laut — fast immer ein Tippfehler); daher
-      # hier kein Negativfall.
+      # An unknown child name throws as with all widget methods
+      # (find_child is deliberately loud — almost always a typo); hence
+      # no negative case here.
 
       - call: [engine.destroy_window, win]
       - print: ["PASS prefab_textbox_selection"]

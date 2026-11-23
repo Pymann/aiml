@@ -1,17 +1,17 @@
 # SPEC?: 50_tensor_runtime   # derived from the file name, to be confirmed
-# Repro: tensor.reshape ist nicht autograd-tracked.
+# Repro: tensor.reshape is not autograd-tracked.
 #
-# Beobachtung in DataCreatures/itemgen:
+# Observation in DataCreatures/itemgen:
 #   logits_2d = matmul(...)               # shape [1, K], requires_grad
 #   logits_1d = tensor.reshape(logits_2d, K)
 #   loss = -log(softmax(logits_1d))[target]
 #   tensor.backward(loss)
 #
-# → Parameter-grads bleiben null, Modell lernt nicht.  Ursache: reshape
-# macht keinen record_node und unterbricht damit den compute-graph.
+# → parameter grads stay null, the model does not learn.  Cause: reshape
+# does no record_node and thereby interrupts the compute graph.
 #
-# Erwarteter Status nach Fix: param.grad != null und nicht-trivial nach
-# backward durch eine reshape-Kante.
+# Expected status after the fix: param.grad != null and non-trivial after
+# backward through a reshape edge.
 
 - call: [tensor.begin_graph]
 
@@ -26,7 +26,7 @@
 
 - call: [tensor.backward, loss]
 
-# Expected: jeder Eintrag in d(loss)/d(var_w) = 2.0 (weil var_w[i,j] → 2*var_w[i,j] → sum).
+# Expected: every entry in d(loss)/d(var_w) = 2.0 (because var_w[i,j] → 2*var_w[i,j] → sum).
 - decl: [var_wg, tensor, { call: [var_w.grad] }]
 - if:
     condition: { eq: [var_wg, null] }

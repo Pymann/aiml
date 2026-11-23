@@ -1,9 +1,9 @@
-# SPEC: 26_concurrency — kann man eine DYNAMISCHE Anzahl Threads verwalten?
-# Ein Worker-Pool, dessen Groesse zur Laufzeit aus der Last folgt, braucht
-# thread_handles in einem Container (sonst nur fest verdrahtete Variablen).
-#   - list<thread_handle> deklarieren und per push fuellen
-#   - jeden Handle wieder herausholen und joinen
-#   - alle Worker haben wirklich gelaufen (Zaehler unter einem Lock)
+# SPEC: 26_concurrency — can one manage a DYNAMIC number of threads?
+# A worker pool whose size follows from the load at runtime needs
+# thread_handles in a container (otherwise only hard-wired variables).
+#   - declare list<thread_handle> and fill it via push
+#   - take every handle out again and join it
+#   - all workers really ran (counter under a lock)
 # Expected exit code: 0
 
 - class:
@@ -62,6 +62,6 @@
       - if:
           condition: { eq: [fails, 0] }
           then:
-            - print: ["PASS test_thread_handle_list: ${want} Threads via list<thread_handle> gespawnt und gejoint"]
+            - print: ["PASS test_thread_handle_list: ${want} threads spawned and joined via list<thread_handle>"]
             - return: 0
       - return: 1

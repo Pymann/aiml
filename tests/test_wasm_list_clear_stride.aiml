@@ -1,15 +1,15 @@
 # SPEC: 61_memory_management
-# Regressionstest (spec/61 §5.7): `clear()` / `pop()` muessen zeigergrosse
-# Element-Slots mit der ZIEL-Schrittweite freigeben — 8 auf x86_64, 4 auf wasm32.
+# Regression test (spec/61 §5.7): `clear()` / `pop()` must free pointer-sized
+# element slots with the TARGET stride — 8 on x86_64, 4 on wasm32.
 #
-# Anlass: `classifyListElem` setzte fuer string / Modell-Handle / ptr<T> hart
-# `elemSize = 8`.  Auf wasm32 lief clear() damit mit doppelter Schrittweite ueber
-# das Pufferende und dereferenzierte Datenmuell als String-Zeiger — der
-# cosmos-WASM-Client starb daran (Firefox: "index out of bounds").  Nativ fiel
-# nichts auf: dort IST die Schrittweite 8.
+# Occasion: `classifyListElem` hard-set `elemSize = 8` for string / model handle / ptr<T>.
+# On wasm32 clear() therefore ran past the end of the buffer with double the stride
+# and dereferenced data garbage as a string pointer — the
+# cosmos WASM client died of it (Firefox: "index out of bounds").  Natively
+# nothing showed: there the stride IS 8.
 #
-# Darum gehoert dieser Test in die WASM-Liste (tests/wasm_tests.list).  Genug
-# Elemente, damit die doppelte Schrittweite ueber das Ende laeuft.
+# That is why this test belongs in the WASM list (tests/wasm_tests.list).  Enough
+# elements so that the double stride runs past the end.
 # Expected exit code: 0
 
 - model:
@@ -36,7 +36,7 @@
     body:
       - decl: [fails, i32, 0]
 
-      # 1) list<string>: der Fall, der den Client riss.
+      # 1) list<string>: the case that tore down the client.
       - decl: [names, list<string>]
       - decl: [six, i32, 0]
       - while:
@@ -46,11 +46,11 @@
             - set: [six, { +: [six, 1] }]
       - set: [fails, { +: [fails, { call: [expect, "128 Strings", { eq: [names.len, 128] }] }] }]
       - call: [names.clear]
-      - set: [fails, { +: [fails, { call: [expect, "clear auf list<string> ueberlebt", { eq: [names.len, 0] }] }] }]
-      # Derselbe Puffer wird wiederverwendet: ein zu grosser Schritt beim clear
-      # haette hier schon fremden Speicher freigegeben.
+      - set: [fails, { +: [fails, { call: [expect, "clear on list<string> survives", { eq: [names.len, 0] }] }] }]
+      # The same buffer is reused: too large a step in clear
+      # would already have freed foreign memory here.
       - call: [names.push, "danach"]
-      - set: [fails, { +: [fails, { call: [expect, "Puffer nach clear wieder nutzbar", { eq: [names.len, 1] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "buffer usable again after clear", { eq: [names.len, 1] }] }] }]
 
       # 2) pop() mit verworfenem Ergebnis — gleiche Freigabe, letzter Slot.
       - decl: [more, list<string>]
@@ -66,9 +66,9 @@
           body:
             - call: [more.pop]
             - set: [qix, { +: [qix, 1] }]
-      - set: [fails, { +: [fails, { call: [expect, "64x pop auf list<string> ueberlebt", { eq: [more.len, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "64x pop on list<string> survives", { eq: [more.len, 0] }] }] }]
 
-      # 3) list<Model> mit Heap-Feld: Element-Freigabe ueber die Deskriptoren.
+      # 3) list<Model> with a heap field: element release via the descriptors.
       - decl: [rows, list<StrideRow>]
       - decl: [mix, i32, 0]
       - while:
@@ -80,7 +80,7 @@
             - call: [rows.push, row]
             - set: [mix, { +: [mix, 1] }]
       - set: [fails, { +: [fails, { call: [expect, "96 Modelle", { eq: [rows.len, 96] }] }] }]
-      # Vor dem clear lesen: die Inhalte muessen heil sein (Schrittweite beim at).
+      # Read before the clear: the contents must be intact (stride in at).
       - decl: [bad, i32, 0]
       - decl: [vix, i32, 0]
       - while:
@@ -91,7 +91,7 @@
             - set: [vix, { +: [vix, 1] }]
       - set: [fails, { +: [fails, { call: [expect, "jedes Modell liegt an seinem Platz", { eq: [bad, 0] }] }] }]
       - call: [rows.clear]
-      - set: [fails, { +: [fails, { call: [expect, "clear auf list<Model> ueberlebt", { eq: [rows.len, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "clear on list<Model> survives", { eq: [rows.len, 0] }] }] }]
 
       - if:
           condition: { eq: [fails, 0] }

@@ -1,14 +1,14 @@
 # SPEC?: 16_classes   # derived from the file name, to be confirmed
-# Zwei Klassen mit GLEICHNAMIGER Methode, aber verschiedenem Rueckgabetyp.
+# Two classes with a method of THE SAME NAME, but a different return type.
 #
-# Regression: der Compiler loeste den Rueckgabetyp ueber den blanken
-# Methodennamen auf statt ueber die Klasse des Empfaengers.  Traf er dabei die
-# string-liefernde Variante, behandelte er den void-Aufruf als String-Temporaere
-# und stuerzte in createEntryAlloca ab (SIGSEGV, gefunden 2026-10-12 an
-# cosmos: RunsScreen.render ist void, MatrixView.render liefert string).
+# Regression: the compiler resolved the return type via the bare
+# method name instead of via the receiver's class.  If it hit the
+# string-returning variant, it treated the void call as a string temporary
+# and crashed in createEntryAlloca (SIGSEGV, found 2026-10-12 on
+# cosmos: RunsScreen.render is void, MatrixView.render returns string).
 #
-# Gleichnamige Methoden in verschiedenen Klassen sind der Normalfall — `render`,
-# `init`, `run`, `size`.  Ein Absturz ist nie eine zulaessige Antwort.
+# Methods of the same name in different classes are the normal case — `render`,
+# `init`, `run`, `size`.  A crash is never a permissible answer.
 # Expected exit code: 0
 
 - class:
@@ -51,14 +51,14 @@
       - decl: [maker, ptr<TextMaker>, { new: TextMaker }]
       - decl: [screen, ptr<SilentScreen>, { new: SilentScreen }]
 
-      # Der void-Aufruf: hier stuerzte der Compiler ab.
+      # The void call: this is where the compiler crashed.
       - call: [screen.render]
       - call: [screen.render]
       - set: [fails, { +: [fails, { call: [expect, "void-Methode laeuft zweimal", { eq: [screen.draw_count, 2] }] }] }]
 
-      # Und die gleichnamige string-Methode der anderen Klasse liefert ihren Wert.
+      # And the other class's string method of the same name returns its value.
       - decl: [txt, string, { call: [maker.render] }]
-      - set: [fails, { +: [fails, { call: [expect, "string-Methode liefert ihren Wert", { eq: [txt, "gerendert"] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "string method returns its value", { eq: [txt, "gerendert"] }] }] }]
 
       - if:
           condition: { neq: [fails, 0] }

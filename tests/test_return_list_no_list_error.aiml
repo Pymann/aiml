@@ -1,6 +1,6 @@
-# Negativtest (spec/10): MEHRERE Werte in `return: [...]`, aber der Rueckgabetyp ist
-# keine Liste.  Vorher gewann still das LETZTE Element -- die Funktion gab 9 zurueck,
-# und niemand sagte etwas.  Das muss ein harter Fehler sein.
+# Negative test (spec/10): SEVERAL values in `return: [...]`, but the return type is
+# not a list.  Before, the LAST element silently won -- the function returned 9,
+# and nobody said anything.  That must be a hard error.
 - def:
     name: drei_werte
     args: []
@@ -14,5 +14,5 @@
     return: i32
     body:
       - decl: [wert, i32, { call: [drei_werte] }]
-      - call: [log.info, "nie erreicht: ${wert}"]
+      - call: [log.info, "never reached: ${wert}"]
       - return: 0

@@ -1,9 +1,9 @@
 # SPEC: 02_types
-# spec/02: ein Container-Ziel nimmt keinen Skalar. Vorher landete der Skalar im
-# Container-Slot → `.len` las Muell, dann SIGSEGV.
+# spec/02: a container target takes no scalar. Before, the scalar landed in the
+# container slot → `.len` read garbage, then SIGSEGV.
 #
-# Negativtest: die Uebersetzung MUSS scheitern, und die Meldung MUSS die Alternativen
-# nennen (push fuer ein Element, Literal fuer den ganzen Inhalt).
+# Negative test: the compilation MUST fail, and the message MUST name the alternatives
+# (push for one element, a literal for the whole content).
 # Expected exit code: 1
 
 - def:

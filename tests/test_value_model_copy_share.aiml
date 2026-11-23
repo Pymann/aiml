@@ -1,11 +1,11 @@
-# SPEC: 61_memory §7 — eine Wertmodell-Kopie ist member-weise, mit incref je
-# String-/Container-Feld.  Ohne das incref teilen Kopie und Original einen
-# Puffer mit rc=1; der naechste Member-Store gibt ihn frei und das ORIGINAL
-# zeigt ins Leere.
+# SPEC: 61_memory §7 — a value model copy is member-wise, with an incref per
+# string/container field.  Without the incref copy and original share a
+# buffer with rc=1; the next member store frees it and the ORIGINAL
+# points into nothing.
 #
-# Gefunden beim Cache-Schluessel in cosmos (doc/spec/92 Befund 5): zwei Aufrufe
-# mit demselben Schritt ergaben verschiedene Schluessel, weil ein Feld nach einer
-# Kopie Muell las.
+# Found on the cache key in cosmos (doc/spec/92 finding 5): two calls
+# with the same step gave different keys, because a field read garbage after a
+# copy.
 # Expected exit code: 0
 
 - model:
@@ -43,12 +43,12 @@
       - set: [fehler, { +: [fehler, { call: [zeigt, "Original direkt", "${erst.ers}|${erst.zwe}", "aaa|bbb"] }] }]
       - set: [fehler, { +: [fehler, { call: [zeigt, "Original by value", { call: [liest, erst] }, "3:aaa|3:bbb"] }] }]
 
-      # Eine Kopie, nichts geaendert.
+      # one copy, nothing changed.
       - decl: [unberuehrt, Tragbar, erst]
       - set: [fehler, { +: [fehler, { call: [zeigt, "Kopie direkt", "${unberuehrt.ers}|${unberuehrt.zwe}", "aaa|bbb"] }] }]
       - set: [fehler, { +: [fehler, { call: [zeigt, "Kopie by value", { call: [liest, unberuehrt] }, "3:aaa|3:bbb"] }] }]
 
-      # Eine Kopie, EIN Feld neu gesetzt — der Kern des Befunds.
+      # one copy, ONE field set anew — the core of the finding.
       - decl: [geaendert, Tragbar, erst]
       - set: [geaendert.zwe, "ccc"]
       - set: [fehler, { +: [fehler, { call: [zeigt, "Kopie+set direkt", "${geaendert.ers}|${geaendert.zwe}", "aaa|ccc"] }] }]
@@ -56,8 +56,8 @@
       - set: [fehler, { +: [fehler, { call: [zeigt, "Original danach", "${erst.ers}|${erst.zwe}", "aaa|bbb"] }] }]
       - set: [fehler, { +: [fehler, { call: [zeigt, "Original danach by value", { call: [liest, erst] }, "3:aaa|3:bbb"] }] }]
 
-      # Und die Lesefunktion muss zweimal dasselbe sagen — ein Schluessel, der
-      # sich bei jedem Lesen bewegt, ist kein Schluessel.
+      # And the read function must say the same twice — a key that
+      # moves on every read is not a key.
       - decl: [zuerst, string, { call: [liest, geaendert] }]
       - decl: [danach, string, { call: [liest, geaendert] }]
       - set: [fehler, { +: [fehler, { call: [zeigt, "zweimal gelesen", danach, zuerst] }] }]

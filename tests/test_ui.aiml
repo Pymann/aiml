@@ -1,10 +1,10 @@
 # SPEC: 44_1_engine
 # UI namespace test (44.3)
 #
-# Verwendet engine.running(win) als Loop-Bedingung.
-# Schließen des Fensters beendet automatisch die Schleife.
+# Uses engine.running(win) as the loop condition.
+# Closing the window ends the loop automatically.
 #
-# Empfehlung für Browser-Kompatibilität: engine.run(win, update, render)
+# Recommendation for browser compatibility: engine.run(win, update, render)
 # (see spec/44_1_engine.md §4.1)
 #
 # Requires: display
@@ -12,8 +12,8 @@
 # Expected exit code: 0
 #
 # Requires: manual
-#   Oeffnet ein Fenster und laeuft, bis ein MENSCH es schliesst — in der
-#   Testschleife ist das ein Halt, kein Test (run_all_tests.sh --manual).
+#   Opens a window and runs until a HUMAN closes it — in the
+#   test loop that is a halt, not a test (run_all_tests.sh --manual).
 
 # ── Setup ─────────────────────────────────────────────────────────────────────
 
@@ -44,7 +44,7 @@
   then:
     - call: [sl_style.set_track, track_tex]
 
-# Geteilter Zustand für den Loop
+# shared state for the loop
 - decl: [progress,    f32, 0.0]
 - decl: [click_count, i32, 0]
 - decl: [slider_val,  f32, 0.5]
@@ -58,13 +58,13 @@
 - decl: [cols, buffer<f32>, [0.4, 0.6]]
 - decl: [rows, buffer<f32>, [1.0]]
 
-- print: ["Setup OK — schließe das Fenster zum Beenden"]
+- print: ["Setup OK — close the window to quit"]
 
 # ── Loop via engine.running — exit on window close ────────────────────────────
 #
-# Cross-Platform-Alternative (Desktop + Browser + Android):
+# Cross-platform alternative (desktop + browser + Android):
 #   - call: [engine.run, win, update, render]
-# (benötigt def: update + def: render mit Zugriff auf globale Variablen)
+# (needs def: update + def: render with access to global variables)
 
 - while:
     condition: { call: [engine.running, win] }

@@ -1,20 +1,20 @@
 # SPEC: 49_static_analysis,49_static_off
-# Unused-enumerator analysis (spec/49): Enum-Mitglieder, die deklariert aber nie
-# als `Enum.Member` referenziert werden, erzeugen eine nicht-blockierende
-# Compiler-WARNUNG.  Der Build läuft weiter (Exit 0).
+# Unused-enumerator analysis (spec/49): enum members that are declared but never
+# referenced as `Enum.Member` produce a non-blocking
+# compiler WARNING.  The build continues (exit 0).
 #
-# Color: 3 Member, nur `red` referenziert  → 2 Warnings (green, blue).
-# Dir:   2 Member, beide referenziert       → 0 Warnings.
+# Color: 3 members, only `red` referenced  → 2 warnings (green, blue).
+# Dir:   2 members, both referenced        → 0 warnings.
 #
-# Verifikation (Warnungstext auf stdout) via run_all_tests-Wrapper nicht möglich
-# (das Harness prüft nur Exit-Codes) → separat gegrept.  Expected exit code: 0
+# Verification (warning text on stdout) is not possible via the run_all_tests wrapper
+# (the harness only checks exit codes) → grepped separately.  Expected exit code: 0
 
 - enum:
     name: Color
     values:
       - red:   1
-      - green: 2       # nie referenziert → Warning erwartet
-      - blue:  3       # nie referenziert → Warning erwartet
+      - green: 2       # never referenced → warning expected
+      - blue:  3       # never referenced → warning expected
 
 - enum:
     name: Dir

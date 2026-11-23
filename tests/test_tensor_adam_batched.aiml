@@ -1,19 +1,19 @@
-# spec/50 §14.1/§15: wem gehoert der Adam-Zustand (m, v) zwischen den Schritten?
+# spec/50 §14.1/§15: who owns the Adam state (m, v) between the steps?
 #
-# Zwei Faelle, zwei Zustaendigkeiten:
+# Two cases, two responsibilities:
 #
-#  (1) Der erste Schritt kommt erst NACH mehreren `begin_graph` (ein Trainer,
-#      der Gradienten ueber einen Stapel sammelt).  Bis dahin sind m/v nichts
-#      als eigene Tensoren und werden eingesammelt -- der Aufrufer MUSS sie mit
-#      `keep` kennzeichnen, wie jeden anderen Tensor vor der Schleife.
+#  (1) The first step only comes AFTER several `begin_graph` (a trainer
+#      that accumulates gradients over a batch).  Until then m/v are nothing
+#      but tensors of their own and are collected -- the caller MUST mark them with
+#      `keep`, like every other tensor before the loop.
 #
-#  (2) Nach einem Schritt folgt eine lange Strecke ohne Schritt (eine
-#      MESSSCHLEIFE: viele `begin_graph`, kein backward).  Hier ist die
-#      Laufzeit zustaendig: `adam_step` kennzeichnet m/v als `keep`.  Vorher
-#      hielt sie nur die Epoche frisch, der Zustand veraltete nach zwei
-#      Durchgaengen und der naechste Schritt las freigegebenen Speicher
-#      (SIGSEGV in adam_step, 21.11.2026 am Chance-Kopf: 6856 Messzeilen
-#      zwischen Epoche 1 und 2).
+#  (2) After a step a long stretch without a step follows (a
+#      MEASUREMENT LOOP: many `begin_graph`, no backward).  Here the
+#      runtime is responsible: `adam_step` marks m/v as `keep`.  Before,
+#      it only kept the epoch fresh, the state went stale after two
+#      passes and the next step read freed memory
+#      (SIGSEGV in adam_step, 2026-11-21 on the chance head: 6856 measurement rows
+#      between epoch 1 and 2).
 
 - def:
     name: main
@@ -22,7 +22,7 @@
     body:
       - decl: [fehlt, i32, 0]
 
-      # ── Fall 2: Schritt, dann lange Messstrecke, dann Schritt ─────────────
+      # ── case 2: step, then a long measurement stretch, then step ────────────
       - decl: [gew, tensor, { call: [tensor.randn_ex, 0.0, 0.1, 4, 3] }]
       - call: [gew.set_requires_grad, 1]
       - decl: [mom, tensor, { call: [tensor.zeros, 4, 3] }]
@@ -43,7 +43,7 @@
       - call: [tensor.adam_step, gew, mom, vel, 0.05, 0.9, 0.999, 0.00000001, 1]
       - call: [gew.zero_grad]
 
-      # Messstrecke: 50 Durchgaenge, kein Schritt.
+      # measurement stretch: 50 passes, no step.
       - decl: [mess, i32, 0]
       - while:
           condition: { lt: [mess, 50] }
@@ -53,7 +53,7 @@
             - decl: [aus_m, tensor, { call: [tensor.matmul, ein, gew] }]
             - decl: [feh_m, tensor, { call: [tensor.sub, aus_m, ziel] }]
 
-      # Hier starb es: m/v waren eingesammelt und freigegeben.
+      # This is where it died: m/v had been collected and freed.
       - call: [tensor.begin_graph]
       - decl: [aus2, tensor, { call: [tensor.matmul, ein, gew] }]
       - decl: [feh2, tensor, { call: [tensor.sub, aus2, ziel] }]
@@ -65,10 +65,10 @@
       - if:
           condition: { gte: [verlust_zwei, verlust_erst] }
           then:
-            - call: [log.error, "FEHL Messstrecke: ${verlust_erst} -> ${verlust_zwei}"]
+            - call: [log.error, "FAIL measurement stretch: ${verlust_erst} -> ${verlust_zwei}"]
             - set: [fehlt, { "+": [fehlt, 1] }]
-      # Ein genullter Impuls waere ein frisch angelegter Ersatz -- also der alte
-      # Fehler ohne Absturz.
+      # A zeroed momentum would be a freshly created substitute -- i.e. the old
+      # bug without a crash.
       - decl: [m_null, i32, 0]
       - decl: [pos_m, i32, 0]
       - while:
@@ -80,10 +80,10 @@
       - if:
           condition: { eq: [m_null, 12] }
           then:
-            - call: [log.error, "FEHL der Impuls ist leer -- m/v wurden ersetzt"]
+            - call: [log.error, "FAIL the momentum is empty -- m/v were replaced"]
             - set: [fehlt, { "+": [fehlt, 1] }]
 
-      # ── Fall 1: Stapel, erster Schritt erst nach 8 Durchgaengen ───────────
+      # ── case 1: batch, first step only after 8 passes ─────────────────────
       - decl: [gew_b, tensor, { call: [tensor.randn_ex, 0.0, 0.1, 4, 3] }]
       - call: [gew_b.set_requires_grad, 1]
       - decl: [mom_b, tensor, { call: [tensor.zeros, 4, 3] }]
@@ -122,5 +122,5 @@
             - set: [fehlt, { "+": [fehlt, 1] }]
 
       - if: { condition: { gt: [fehlt, 0] }, then: [{ return: 1 }] }
-      - call: [log.info, "test_tensor_adam_batched: alles gut (Messstrecke ${verlust_erst}->${verlust_zwei}, Stapel ${erste_summe}->${letzte_summe})"]
+      - call: [log.info, "test_tensor_adam_batched: all good (measurement stretch ${verlust_erst}->${verlust_zwei}, batch ${erste_summe}->${letzte_summe})"]
       - return: 0

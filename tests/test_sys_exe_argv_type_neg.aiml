@@ -2,17 +2,17 @@
 # Expected exit code: 1
 # static-check: off
 #
-# Negativ (spec/23 §5.1): `sys.exe` nimmt argv als `list<string>`.
+# Negative (spec/23 §5.1): `sys.exe` takes argv as `list<string>`.
 #
-# Bis 17.10.2026 war ein String als erstes Argument KEIN Fehler, sondern ein
-# SIGSEGV: ein String ist in LLVM ebenfalls ein `i8*`, rutschte daher durch die
-# Zeiger-Weiche des Builtins und wurde von der Laufzeit als `GenericList*`
-# gelesen.  Gefunden, weil eine eigene Probe das Argument falsch herum hatte —
-# ein Absturz ist die falsche Antwort auf einen Typfehler.
+# Until 2026-10-17 a string as the first argument was NOT an error but a
+# SIGSEGV: a string is an `i8*` in LLVM too, so it slipped through the
+# builtin's pointer switch and was read by the runtime as a `GenericList*`.
+# Found because a probe of our own had the argument the wrong way round —
+# a crash is the wrong answer to a type error.
 #
-# Zwei Faelle, beide muessen eine Diagnose geben:
-#   1. ein String-Literal
-#   2. eine Variable mit falschem deklarierten Typ
+# Two cases, both must give a diagnostic:
+#   1. a string literal
+#   2. a variable with a wrong declared type
 
 - def:
     name: main

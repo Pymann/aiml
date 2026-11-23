@@ -1,11 +1,11 @@
 # SPEC: 44_6_prefabs
-# Ein unbekanntes Prefab-Attribut muss den Bau ABBRECHEN (spec/44_6 §4).
+# An unknown prefab attribute must ABORT the build (spec/44_6 §4).
 #
-# Anlass: im cosmos-Client stand `password: true` an den Eingabefeldern fuer
-# SSH- und sudo-Passwort.  Der Maskierungs-Schluessel heisst `secret`, also
-# wurde `password` beim Parsen stillschweigend verworfen — die Passwoerter
-# standen im Klartext auf dem Schirm.  YAML nahm die Zeile an, niemand
-# widersprach.  Seitdem ist ein unbekanntes Attribut ein Compile-Fehler.
+# Occasion: in the cosmos client `password: true` stood on the input fields for
+# SSH and sudo passwords.  The masking key is called `secret`, so
+# `password` was silently discarded during parsing — the passwords
+# were on the screen in plain text.  YAML accepted the line, nobody
+# objected.  Since then an unknown attribute is a compile error.
 # Expected exit code: 1
 
 - prefab:

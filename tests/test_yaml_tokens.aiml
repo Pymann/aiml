@@ -1,8 +1,8 @@
 # SPEC: 60_yaml
-# spec/60 yaml.tokens — fehlertoleranter Lexer fuer Hervorhebung.
-# Geprueft wird vor allem der VERTRAG: vollstaendig, ueberschneidungsfrei,
-# zeilenlokal, und niemals ein Fehlschlag — denn der halb getippte Zustand ist
-# der Normalfall, nicht der Ausnahmefall.
+# spec/60 yaml.tokens — error-tolerant lexer for highlighting.
+# Above all the CONTRACT is checked: complete, non-overlapping,
+# line-local, and never a failure — because the half-typed state is
+# the normal case, not the exception.
 # Expected exit code: 0
 
 - def:
@@ -16,7 +16,7 @@
       - print: ["  FAIL ${what}"]
       - return: 1
 
-# kind_at: die Art des Tokens, das Byte `pos` enthaelt; -1 wenn keines.
+# kind_at: the kind of the token that contains byte `pos`; -1 if none.
 - def:
     name: kind_at
     args: [[toks, list<i32>], [pos, i32]]
@@ -34,8 +34,8 @@
             - set: [idx, { +: [idx, 3] }]
       - return: -1
 
-# covered: Summe der Token-Laengen plus Zwischenraum muss den Text ergeben;
-# zugleich duerfen sich Tokens nicht ueberschneiden und nicht rueckwaerts gehen.
+# covered: the sum of the token lengths plus whitespace must give the text;
+# at the same time tokens must not overlap and must not go backwards.
 - def:
     name: covered_ok
     args: [[toks, list<i32>], [total, i32]]
@@ -62,38 +62,38 @@
     body:
       - decl: [fails, i32, 0]
 
-      # ── Grundfall: Schluessel, Wert, Kommentar ───────────────────────────
+      # ── basic case: key, value, comment ─────────────────────────────────
       - decl: [src, string, "name: build_matrix  # ein Kommentar\n"]
       - decl: [toks, list<i32>, { call: [yaml.tokens, src] }]
       - set: [fails, { +: [fails, { call: [expect, "Tripel-Vielfaches von 3", { eq: [{ '%': [toks.len, 3] }, 0] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "ueberschneidungsfrei und in Reihenfolge", { call: [covered_ok, toks, src.len] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "'name' ist ein Schluessel", { eq: [{ call: [kind_at, toks, 0] }, YamlTok.key] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "':' ist Interpunktion", { eq: [{ call: [kind_at, toks, 4] }, YamlTok.punct] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "'#' beginnt einen Kommentar", { eq: [{ call: [kind_at, toks, 20] }, YamlTok.comment] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "non-overlapping and in order", { call: [covered_ok, toks, src.len] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "'name' is a key", { eq: [{ call: [kind_at, toks, 0] }, YamlTok.key] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "':' is punctuation", { eq: [{ call: [kind_at, toks, 4] }, YamlTok.punct] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "'#' starts a comment", { eq: [{ call: [kind_at, toks, 20] }, YamlTok.comment] }] }] }]
 
-      # ── Zeilenlokal: kein Token ueberspannt ein \n ───────────────────────
+      # ── line-local: no token spans a \n ───────────────────────────────────
       - decl: [two, string, "a: 1\nb: 2\n"]
       - decl: [tk2, list<i32>, { call: [yaml.tokens, two] }]
-      - set: [fails, { +: [fails, { call: [expect, "kein Token am \\n (Zeile 1 endet)", { eq: [{ call: [kind_at, tk2, 4] }, -1] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "zweite Zeile hat eigenen Schluessel", { eq: [{ call: [kind_at, tk2, 5] }, YamlTok.key] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "no token at \\n (line 1 ends)", { eq: [{ call: [kind_at, tk2, 4] }, -1] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "second line has its own key", { eq: [{ call: [kind_at, tk2, 5] }, YamlTok.key] }] }] }]
 
-      # ── Fehlertoleranz: abgeschnittener Schluessel ──────────────────────
-      # Der haeufigste Zustand waehrend des Tippens.  Ein Parser liefert hier
-      # NICHTS; der Lexer muss trotzdem faerben.
+      # ── error tolerance: truncated key ───────────────────────────────────
+      # The most common state while typing.  A parser delivers NOTHING
+      # here; the lexer must colour anyway.
       - decl: [half, string, "pipeline:\n  nam"]
       - decl: [tk3, list<i32>, { call: [yaml.tokens, half] }]
-      - set: [fails, { +: [fails, { call: [expect, "halber Text liefert Tokens", { gt: [tk3.len, 0] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "halber Text bleibt ueberschneidungsfrei", { call: [covered_ok, tk3, half.len] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "half text delivers tokens", { gt: [tk3.len, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "half text stays non-overlapping", { call: [covered_ok, tk3, half.len] }] }] }]
 
-      # ── Fehlertoleranz: nicht geschlossener String ──────────────────────
+      # ── error tolerance: unclosed string ─────────────────────────────────
       - decl: [unq, string, "name: \"offen\nnext: 1\n"]
       - decl: [tk4, list<i32>, { call: [yaml.tokens, unq] }]
-      - set: [fails, { +: [fails, { call: [expect, "offener String endet an der Zeile", { eq: [{ call: [kind_at, tk4, 6] }, YamlTok.string] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "naechste Zeile wird wieder normal gelesen", { eq: [{ call: [kind_at, tk4, 13] }, YamlTok.key] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "open string ends at the line", { eq: [{ call: [kind_at, tk4, 6] }, YamlTok.string] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "next line is read normally again", { eq: [{ call: [kind_at, tk4, 13] }, YamlTok.key] }] }] }]
 
-      # ── Leerer Text ist kein Fehler ─────────────────────────────────────
+      # ── empty text is not an error ───────────────────────────────────────
       - decl: [tk5, list<i32>, { call: [yaml.tokens, ""] }]
-      - set: [fails, { +: [fails, { call: [expect, "leerer Text liefert leere Liste", { eq: [tk5.len, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "empty text delivers an empty list", { eq: [tk5.len, 0] }] }] }]
 
       # ── Arten ───────────────────────────────────────────────────────────
       - decl: [kinds, string, "- [a, 1, true, 'q', &anc, !tag]\n"]
@@ -104,18 +104,18 @@
       - set: [fails, { +: [fails, { call: [expect, "Anker erkannt", { eq: [{ call: [kind_at, tk6, 20] }, YamlTok.anchor] }] }] }]
       - set: [fails, { +: [fails, { call: [expect, "Tag erkannt", { eq: [{ call: [kind_at, tk6, 26] }, YamlTok.tag] }] }] }]
 
-      # ── Negative Zahl ───────────────────────────────────────────────────
-      # Regression: der Skalar-Zweig ruecke bei fuehrendem '-' nicht vor (das '-'
-      # ist Interpunktion) und drehte endlos — jede Quelle mit `-1` liess den
-      # Lexer haengen, entgegen dem "Never fails"-Vertrag von spec/60.
+      # ── negative number ──────────────────────────────────────────────────
+      # Regression: the scalar branch did not advance on a leading '-' (the '-'
+      # is punctuation) and spun forever — every source with `-1` made the
+      # lexer hang, contrary to the "Never fails" contract of spec/60.
       - decl: [negs, string, "gt: [open, -1]\n"]
       - decl: [tk7, list<i32>, { call: [yaml.tokens, negs] }]
       - set: [fails, { +: [fails, { call: [expect, "negative Zahl erkannt", { eq: [{ call: [kind_at, tk7, 11] }, YamlTok.number] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "negative Zahl: Ziffer gehoert zum Token", { eq: [{ call: [kind_at, tk7, 12] }, YamlTok.number] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "negative number: the digit belongs to the token", { eq: [{ call: [kind_at, tk7, 12] }, YamlTok.number] }] }] }]
       - set: [fails, { +: [fails, { call: [expect, "negative Zahl: ueberschneidungsfrei", { call: [covered_ok, tk7, negs.len] }] }] }]
       - decl: [bare, string, "-1\n"]
       - decl: [tk8, list<i32>, { call: [yaml.tokens, bare] }]
-      - set: [fails, { +: [fails, { call: [expect, "blosses -1 liefert ein Token", { eq: [{ call: [kind_at, tk8, 0] }, YamlTok.number] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "a bare -1 delivers a token", { eq: [{ call: [kind_at, tk8, 0] }, YamlTok.number] }] }] }]
 
       - if:
           condition: { neq: [fails, 0] }

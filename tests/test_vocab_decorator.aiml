@@ -1,7 +1,7 @@
 # SPEC?: 55_decorators,44_8_vocab   # derived from the file name, to be confirmed
 # Test: `decorator: [vocab]` wraps string returns with vocab.lookup.
-# Deckt Phase 3 der Vocab-Feature ab.  Decorators werden zur Compile-Zeit
-# angewandt — kein runtime-Overhead wenn die Liste leer ist.
+# Covers phase 3 of the vocab feature.  Decorators are applied at compile time
+# — no runtime overhead when the list is empty.
 
 - decl: [var_ok, i32, 1]
 
@@ -20,7 +20,7 @@
     body:
       - return: "Draw"
 
-# ── B: Decorated Composer nutzt bereits übersetzte Fragmente ─────────────
+# ── B: decorated composer uses already translated fragments ──────────────
 
 - def:
     name: card_word
@@ -34,15 +34,15 @@
     return: string
     decorator: [vocab]
     body:
-      # Beide Aufrufe returnen bereits übersetzte Fragmente (vocab-decorator
-      # wickelt sie ein).  Die zusammengesetzte Phrase "Ziehen Karte" ist
-      # NICHT im vocab.json → decorator wraps sie ein, bleibt aber die
-      # Konkatenation weil kein Match.
+      # Both calls return already translated fragments (the vocab decorator
+      # wraps them).  The composed phrase "Ziehen Karte" is
+      # NOT in vocab.json → the decorator wraps it, but it stays the
+      # concatenation because there is no match.
       - decl: [verb, string, { call: [draw_verb] }]
       - decl: [noun, string, { call: [card_word] }]
       - return: "${verb} ${noun}"
 
-# ── C: Undecorated Kontrollfunktion — kein Vocab-Wrapping ────────────────
+# ── C: undecorated control function — no vocab wrapping ──────────────────
 
 - def:
     name: raw_draw

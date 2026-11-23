@@ -1,9 +1,9 @@
 # SPEC?: 18_refs_and_pointers   # derived from the file name, to be confirmed
-# ptr<primitive> out-param-Pattern.
+# ptr<primitive> out-param pattern.
 #
-# AIML 2026-06-28: `store: [ptr_var, val]` schreibt *ptr = val (C-Semantik).
-# `set: [ptr_var, val]` bleibt rebind (C `p = v`).  Spec/12_pointers.md.
-# Damit funktioniert das natürliche out-param-Pattern:
+# AIML 2026-06-28: `store: [ptr_var, val]` writes *ptr = val (C semantics).
+# `set: [ptr_var, val]` stays a rebind (C `p = v`).  Spec/12_pointers.md.
+# That makes the natural out-param pattern work:
 #
 # - def: write_out
 #     args: [[out, ptr<i32>]]
@@ -11,7 +11,7 @@
 #
 # - decl: [val, i32, 0]
 # - call: [write_out, {'&': [val]}]
-# # nach Call: val == 5
+# # after the call: val == 5
 
 - def:
     name: write_out

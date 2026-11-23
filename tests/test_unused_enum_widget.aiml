@@ -1,7 +1,7 @@
 # SPEC: 49_static_analysis,49_static_off
-# Unused-enum V2 (spec/49 §18.2): ein `enum: T`-Dropdown-Binding zählt als
-# reflektive Ganz-Enum-Nutzung → KEINE unused-Warnung für Flavor, obwohl kein
-# Flavor.Member im Code steht.  Kontrast: Unbound bleibt ungenutzt und würde warnen.
+# Unused enum V2 (spec/49 §18.2): an `enum: T` dropdown binding counts as a
+# reflective whole-enum use → NO unused warning for Flavor, although no
+# Flavor.Member appears in the code.  Contrast: Unbound stays unused and would warn.
 
 - enum:
     name: Flavor

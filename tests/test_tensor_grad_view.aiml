@@ -1,5 +1,5 @@
 # SPEC?: 50_tensor_runtime   # derived from the file name, to be confirmed
-# ── Test A: grad_view — Gradient korrekt, param->data unverändert ─────────────
+# ── Test A: grad_view — gradient correct, param->data unchanged ──────────────
 
 - call: [tensor.begin_graph]
 
@@ -73,7 +73,7 @@
 
 - print: ["PASS B: grad_view == clone gradient (${gv2})"]
 
-# ── Test C: Zwei Views auf denselben Daten — getrennte grad-Buffer ────────────
+# ── Test C: two views on the same data — separate grad buffers ──────────────
 
 - call: [tensor.begin_graph]
 
@@ -108,7 +108,7 @@
 - call: [tensor.thread_cleanup]
 - print: ["PASS C: two views have separate grad buffers, no double-free"]
 
-# ── Test D: begin_graph nach View-Erzeugung — View überlebt ──────────────────
+# ── Test D: begin_graph after creating the view — the view survives ──────────
 
 - call: [tensor.begin_graph]
 

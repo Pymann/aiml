@@ -1,12 +1,12 @@
 # SPEC: 49_static_analysis,49_static_off
-# Positive test (Warnung, kein Fehler): eine Variable wird GENAU EINMAL gegen
-# ein String-Literal verglichen.  Das ist erlaubt, produziert aber eine
-# Compiler-WARNUNG mit Hinweis auf reguläre Ausdrücke (siehe spec/49 §16).
-# Die Kompilierung läuft normal durch (exit 0).
+# Positive test (warning, not an error): a variable is compared EXACTLY ONCE against
+# a string literal.  That is allowed, but produces a
+# compiler WARNING with a hint at regular expressions (see spec/49 §16).
+# The compilation runs through normally (exit 0).
 #
 # Expected exit code: 0
 #
-# Diagnostic-Form (Warning):
+# Diagnostic form (warning):
 #   ...: variable 'kind' is compared against a string literal — consider a
 #   regular expression for string matching.
 

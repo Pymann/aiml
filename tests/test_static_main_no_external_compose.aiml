@@ -5,7 +5,7 @@
 #
 # Expected exit code: 1
 #
-# Diagnostic-Form (siehe spec/49 §7):
+# Diagnostic form (see spec/49 §7):
 #   <path>: project spans 3 AIML files; `main` must instantiate at
 #   least one class declared in another file. Without external
 #   composition the extra files are dead weight ...

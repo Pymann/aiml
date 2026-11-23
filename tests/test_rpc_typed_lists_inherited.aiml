@@ -1,19 +1,19 @@
 # SPEC: 45_db_indexed_fields,45_heap_serialization
 # static-check: off
-# Minimal-RPC-Test: Response mit MEHREREN `list<DerivedData>`, wobei
-# DerivedData via `inherits:` von einem gemeinsamen Header erbt — übertragen
-# über den ECHTEN binären Mirror-RPC-Pfad (send_and_await + set_result).
+# Minimal RPC test: a response with SEVERAL `list<DerivedData>`, where
+# DerivedData inherits from a common header via `inherits:` — transferred
+# over the REAL binary mirror RPC path (send_and_await + set_result).
 #
-# Motivation (9rooms_v2 Card-Refactor Phase C): das Wire-Format trägt die
-# Karten als 7 homogene `list<XData>` (XData inherits CardHeader) statt als
-# `ptr<CardBase>` (nicht serialisierbar, spec/45 §8) oder fetten Envelope.
-# Dieser Test beweist ISOLIERT, dass genau dieses Muster den binären
-# RPC-Wire übersteht: geerbte Header-Felder + typ-eigene Felder, mehrere
-# heterogene typed Listen in einer Response.
+# Motivation (9rooms_v2 card refactor phase C): the wire format carries the
+# cards as 7 homogeneous `list<XData>` (XData inherits CardHeader) instead of as
+# `ptr<CardBase>` (not serialisable, spec/45 §8) or a fat envelope.
+# This test proves in ISOLATION that exactly this pattern survives the binary
+# RPC wire: inherited header fields + type-specific fields, several
+# heterogeneous typed lists in one response.
 #
 # Expected exit code: 0
 
-# ── Gemeinsamer Header + zwei erbende Subtypen (analog CardHeader/CreatureData)
+# ── common header + two inheriting subtypes (analogous to CardHeader/CreatureData)
 - model:
     name: HeaderData
     fields:
@@ -70,7 +70,7 @@
                             then:
                               - decl: [resp, BundleResp]
                               - set: [resp.success, 1]
-                              # zwei Beasts
+                              # two beasts
                               - decl: [beast0, BeastData]
                               - set: [beast0.uid,   "b0"]
                               - set: [beast0.kind,  1]
@@ -85,7 +85,7 @@
                               - set: [beast1.atk,   9]
                               - set: [beast1.hpv,   3]
                               - call: [resp.beasts.push, beast1]
-                              # ein Fuel
+                              # one fuel
                               - decl: [fuel0, FuelData]
                               - set: [fuel0.uid,   "f0"]
                               - set: [fuel0.kind,  3]
@@ -118,7 +118,7 @@
       - if: { condition: { eq: [got, 0] }, then: [{ print: ["FAIL send_and_await timed out"] }, { call: [sys.exit, 1] }] }
       - if: { condition: { neq: [resp.success, 1] }, then: [{ print: ["FAIL success=${resp.success}"] }, { set: [fails, { +: [fails, 1] }] }] }
 
-      # Beasts: Anzahl + geerbte (label) + typ-eigene (atk/hpv) Felder
+      # beasts: count + inherited (label) + type-specific (atk/hpv) fields
       - if: { condition: { neq: [resp.beasts.len, 2] }, then: [{ print: ["FAIL beasts.len=${resp.beasts.len} want 2"] }, { call: [sys.exit, 1] }] }
       - decl: [bea0, BeastData, { at: [resp.beasts, 0] }]
       - decl: [bea1, BeastData, { at: [resp.beasts, 1] }]
@@ -128,7 +128,7 @@
       - if: { condition: { neq: [bea1.label, "Wyrm"] }, then: [{ print: ["FAIL b1.label='${bea1.label}'"] }, { set: [fails, { +: [fails, 1] }] }] }
       - if: { condition: { neq: [bea1.atk, 9] }, then: [{ print: ["FAIL b1.atk=${bea1.atk}"] }, { set: [fails, { +: [fails, 1] }] }] }
 
-      # Fuels: geerbte (label) + typ-eigene (color)
+      # fuels: inherited (label) + type-specific (color)
       - if: { condition: { neq: [resp.fuels.len, 1] }, then: [{ print: ["FAIL fuels.len=${resp.fuels.len} want 1"] }, { call: [sys.exit, 1] }] }
       - decl: [fue0, FuelData, { at: [resp.fuels, 0] }]
       - if: { condition: { neq: [fue0.label, "FireSource"] }, then: [{ print: ["FAIL f0.label='${fue0.label}'"] }, { set: [fails, { +: [fails, 1] }] }] }

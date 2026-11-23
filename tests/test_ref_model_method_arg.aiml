@@ -1,14 +1,14 @@
 # SPEC?: 15_models,18_refs_and_pointers   # derived from the file name, to be confirmed
-# Ein Modell per `ref<>` an eine METHODE — zum Lesen und zum Aendern.
+# A model via `ref<>` to a METHOD — for reading and for changing.
 #
-# Regression: bei einer freien Funktion trug `args: [[m, ref<MeinModell>]]`
-# schon immer, bei einer Methode scheiterte die IR-Pruefung mit "Call parameter
-# type does not match function signature".  Der Aufrufer uebergibt in beiden
-# Faellen einen WERT; die Adresse nimmt der Compiler.
+# Regression: for a free function `args: [[m, ref<MeinModell>]]` always
+# worked, for a method the IR check failed with "Call parameter
+# type does not match function signature".  The caller passes a VALUE in both
+# cases; the compiler takes the address.
 #
-# Gefunden 2026-10-13 beim Zuteiler in cosmos, dort umgangen ("Liste statt
-# Modell").  Diese Umgehung soll nicht das Muster werden: eine Klasse muss ein
-# Modell entgegennehmen koennen.
+# Found 2026-10-13 on the allocator in cosmos, worked around there ("list instead of
+# model").  That workaround should not become the pattern: a class must be able to
+# take a model.
 # Expected exit code: 0
 
 - model:
@@ -23,7 +23,7 @@
       - [left,  Counter]
       - [right, Counter]
 
-# Dasselbe als FREIE Funktion — die ging schon vorher.
+# The same as a FREE function — that already worked before.
 - def:
     name: bump_free
     args: [[counter, ref<Counter>], [by_amount, i32]]
@@ -35,7 +35,7 @@
     members:
       - [calls, i32]
     methods:
-      # Lesen ueber ref<>
+      # reading via ref<>
       - def:
           name: read_ticks
           access: public
@@ -45,7 +45,7 @@
             - set: [<.calls, { +: [<.calls, 1] }]
             - return: counter.ticks
 
-      # AENDERN ueber ref<> — der eigentliche Punkt: sieht der Aufrufer es?
+      # CHANGING via ref<> — the actual point: does the caller see it?
       - def:
           name: bump
           access: public
@@ -54,7 +54,7 @@
             - set: [<.calls, { +: [<.calls, 1] }]
             - set: [counter.ticks, { +: [counter.ticks, by_amount] }]
 
-      # Auch ein String-Feld, damit nicht nur Zahlen geprueft sind.
+      # A string field as well, so that not only numbers are checked.
       - def:
           name: rename
           access: public
@@ -85,28 +85,28 @@
       - set: [one.name, "erster"]
       - set: [one.ticks, 5]
 
-      # Freie Funktion: war schon in Ordnung, steht als Vergleich hier.
+      # free function: was already fine, stands here for comparison.
       - call: [bump_free, one, 3]
       - set: [fails, { +: [fails, { call: [expect, "freie Funktion aendert durch ref<>", { eq: [one.ticks, 8] }] }] }]
 
-      # Methode, lesend — hier scheiterte die IR-Pruefung.
+      # method, reading — this is where the IR check failed.
       - decl: [seen, i32, { call: [bumper.read_ticks, one] }]
       - set: [fails, { +: [fails, { call: [expect, "Methode liest durch ref<>", { eq: [seen, 8] }] }] }]
 
-      # Methode, aendernd: der Aufrufer MUSS es sehen.
+      # method, changing: the caller MUST see it.
       - call: [bumper.bump, one, 4]
       - set: [fails, { +: [fails, { call: [expect, "Methode aendert durch ref<> (Zahl)", { eq: [one.ticks, 12] }] }] }]
       - call: [bumper.rename, one, "umbenannt"]
       - set: [fails, { +: [fails, { call: [expect, "Methode aendert durch ref<> (Zeichenkette)", { eq: [one.name, "umbenannt"] }] }] }]
 
-      # Ein Modell IN einem Modell: die Adresse muss auch aus einem Feld kommen.
+      # A model IN a model: the address must also come from a field.
       - decl: [pair, Pair]
       - set: [pair.left.ticks, 100]
       - call: [bumper.bump, pair.left, 7]
-      - set: [fails, { +: [fails, { call: [expect, "auch ein Feld-Modell wird geaendert", { eq: [pair.left.ticks, 107] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "und das Nachbarfeld bleibt unberuehrt", { eq: [pair.right.ticks, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "a field model is changed too", { eq: [pair.left.ticks, 107] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "and the neighbouring field stays untouched", { eq: [pair.right.ticks, 0] }] }] }]
 
-      - set: [fails, { +: [fails, { call: [expect, "die Methode wurde dreimal gerufen", { eq: [bumper.calls, 3] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "the method was called three times", { eq: [bumper.calls, 3] }] }] }]
 
       - if:
           condition: { neq: [fails, 0] }

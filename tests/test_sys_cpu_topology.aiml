@@ -1,10 +1,10 @@
 # SPEC: 23_system (§4.1 core_count / logical_thread_count / quota_thread_count)
-# Test: Host-Parallelitaet — drei Funktionen, drei Fragen.
-#   - alle >= 1 (nie 0 → eine Sizing-Formel darf nie durch 0 teilen)
-#   - core_count <= logical_thread_count (SMT kann nur mehr, nie weniger)
-#   - quota_thread_count <= logical_thread_count (ein Quota deckelt, hebt nicht an)
-#   - deterministisch innerhalb eines Prozesses (Werte sind prozessweit gecacht)
-#   - die Spec-Sizing-Formel liefert >= 1 und <= cap
+# Test: host parallelism — three functions, three questions.
+#   - all >= 1 (never 0 → a sizing formula must never divide by 0)
+#   - core_count <= logical_thread_count (SMT can only add, never subtract)
+#   - quota_thread_count <= logical_thread_count (a quota caps, it does not raise)
+#   - deterministic within a process (values are cached process-wide)
+#   - the spec sizing formula delivers >= 1 and <= cap
 # Expected exit code: 0
 
 - def:
@@ -36,24 +36,24 @@
       - decl: [threads, i32, { call: [sys.logical_thread_count] }]
       - decl: [budget,  i32, { call: [sys.quota_thread_count] }]
 
-      # Untergrenze 1 — normativ, damit Sizing nie durch 0 teilt.
+      # lower bound 1 — normative, so that sizing never divides by 0.
       - call: [expect_ge, "core_count >= 1", cores, 1, {'&': [fails]}]
       - call: [expect_ge, "logical_thread_count >= 1", threads, 1, {'&': [fails]}]
       - call: [expect_ge, "quota_thread_count >= 1", budget, 1, {'&': [fails]}]
 
-      # Verhaeltnisse: SMT kann nur mehr Threads als Kerne liefern, ein Quota deckelt.
+      # relations: SMT can only deliver more threads than cores, a quota caps.
       - call: [expect_le, "core_count <= logical_thread_count", cores, threads, {'&': [fails]}]
       - call: [expect_le, "quota_thread_count <= logical_thread_count", budget, threads, {'&': [fails]}]
 
-      # Prozessweit gecacht → zweiter Aufruf gibt denselben Wert.
+      # cached process-wide → the second call returns the same value.
       - decl: [again, i32, { call: [sys.logical_thread_count] }]
       - if:
           condition: { neq: [again, threads] }
           then:
-            - print: ["FAIL logical_thread_count nicht deterministisch: ${threads} dann ${again}"]
+            - print: ["FAIL logical_thread_count not deterministic: ${threads} then ${again}"]
             - set: [fails, { +: [fails, 1] }]
 
-      # Sizing-Formel aus spec/23 §4.1: ein Worker je 4 Einheiten, gedeckelt.
+      # sizing formula from spec/23 §4.1: one worker per 4 units, capped.
       - decl: [units, i32, 9]
       - decl: [want, i32, { /: [{ +: [units, 3] }, 4] }]
       - decl: [workers, i32, want]
@@ -64,7 +64,7 @@
       - if:
           condition: { '&&': [{ gte: [budget, 3] }, { neq: [workers, 3] }] }
           then:
-            - print: ["FAIL ceil(9/4) expected 3 Worker, ist ${workers}"]
+            - print: ["FAIL ceil(9/4) expected 3 workers, is ${workers}"]
             - set: [fails, { +: [fails, 1] }]
 
       - if:
@@ -72,5 +72,5 @@
           then:
             - print: ["PASS test_sys_cpu_topology: ${cores} Kerne, ${threads} logische Threads, Budget ${budget} → ${workers} Worker"]
             - return: 0
-      - print: ["FAIL test_sys_cpu_topology: ${fails} Fehler"]
+      - print: ["FAIL test_sys_cpu_topology: ${fails} errors"]
       - return: 1

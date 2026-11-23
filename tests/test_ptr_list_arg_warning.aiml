@@ -1,19 +1,19 @@
 # SPEC?: 18_refs_and_pointers   # derived from the file name, to be confirmed
 # static-check: off
-# BUG #2 (Diagnostik-Test — muss NACH Fix eine suppressible WARNING geben):
-# `ptr<list<T>>` / `ptr<map<K:V>>` als Param-Typ ist Doppel-Indirektion
-# (Listen/Maps sind schon by-ref) → SIGSEGV zur Laufzeit.  Bisher kompiliert
-# es klaglos und crasht erst beim .push.
+# BUG #2 (diagnostic test — must give a suppressible WARNING AFTER the fix):
+# `ptr<list<T>>` / `ptr<map<K:V>>` as a param type is double indirection
+# (lists/maps are already by-ref) → SIGSEGV at runtime.  So far it compiles
+# without complaint and only crashes on .push.
 #
-# Erwartung NACH Fix: WARNING beim Kompilieren ("ptr<list>/ptr<map> param —
-# lists/maps are already by-ref; double indirection"), abschaltbar.
-# Das Programm läuft trotzdem (Warning ist nicht-fatal) — hier rufen wir die
-# Funktion NICHT auf, um den Crash zu vermeiden; wir prüfen nur die Meldung.
-# Manuell verifizieren (Warning in der Compiler-Ausgabe).
+# Expectation AFTER the fix: a WARNING when compiling ("ptr<list>/ptr<map> param —
+# lists/maps are already by-ref; double indirection"), can be switched off.
+# The program still runs (the warning is non-fatal) — here we do NOT call the
+# function, to avoid the crash; we only check the message.
+# Verify manually (warning in the compiler output).
 
 - def:
     name: drain_bad
-    args: [[out, ptr<list<string>>]]     # <-- soll WARNING auslösen
+    args: [[out, ptr<list<string>>]]     # <-- should trigger a WARNING
     body:
       - call: [out.push, "x"]
 

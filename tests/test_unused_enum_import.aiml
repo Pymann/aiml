@@ -1,7 +1,7 @@
 # SPEC?: 14_enums,21_namespaces   # derived from the file name, to be confirmed
-# Whole-Program-Merge: Weekday ist im importierten Modul deklariert, hier wird
-# nur `mon` referenziert → tue/wed sind build-weit ungenutzt (Warnings im
-# noCache/Object-Build).  Expected exit code: 0.
+# Whole-program merge: Weekday is declared in the imported module, here
+# only `mon` is referenced → tue/wed are unused build-wide (warnings in the
+# noCache/object build).  Expected exit code: 0.
 - import: "tests/_enum_import_lib.aiml"
 
 - def:

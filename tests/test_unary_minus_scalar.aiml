@@ -1,11 +1,11 @@
 # SPEC: 04_math,04_1_precedence
-# spec/04_1 §"`-` — Unary Negation" + spec/04_math §Operator Arity: `-` nimmt zwei Operanden
-# als Subtraktion und EINEN als Negation, fuer i32/i64/f32/f64. `/` und `%` gibt es nur
-# binaer. Fuer Vektoren ist dieselbe unaere Form in spec/43_0 und spec/39 definiert.
+# spec/04_1 §"`-` — Unary Negation" + spec/04_math §Operator Arity: `-` takes two operands
+# as subtraction and ONE as negation, for i32/i64/f32/f64. `/` and `%` exist only
+# as binary. For vectors the same unary form is defined in spec/43_0 and spec/39.
 #
-# Die unaere Form war nur fuer Vektoren getestet (tests/test_math.aiml), fuer Skalare nicht —
-# und spec/04_math behauptete bis 31.10.2026, `-` sei streng binaer. Der Test haelt beide
-# Seiten zusammen.
+# The unary form was only tested for vectors (tests/test_math.aiml), not for scalars —
+# and until 2026-10-31 spec/04_math claimed that `-` was strictly binary. The test holds both
+# sides together.
 # Expected exit code: 0
 
 - import: "tests/_cross/check.aiml"
@@ -23,14 +23,14 @@
     body:
       - decl: [chk, ptr<Checker>, { new: Checker }]
 
-      # i32: Literal, Variable, und das Zusammenspiel mit der Subtraktion.
+      # i32: literal, variable, and the interplay with subtraction.
       - decl: [num, i32, 7]
       - decl: [negi, i32, { -: [num] }]
       - call: [chk.expect_i, "i32 Negation", negi, -7]
       - decl: [diff, i32, { -: [num, 2] }]
       - call: [chk.expect_i, "i32 Subtraktion bleibt binaer", diff, 5]
 
-      # Negation einer bereits negativen Zahl.
+      # negation of an already negative number.
       - decl: [back, i32, { -: [negi] }]
       - call: [chk.expect_i, "doppelte Negation", back, 7]
 
@@ -39,13 +39,13 @@
       - decl: [negbig, i64, { -: [big] }]
       - call: [chk.expect_i, "i64 Negation", negbig, -4000000000]
 
-      # f32/f64 ueber den Vergleich mit der Subtraktion von 0.
+      # f32/f64 via comparison with the subtraction from 0.
       - decl: [flt, f64, 2.5]
       - decl: [negf, f64, { -: [flt] }]
       - decl: [zerof, f64, { +: [negf, flt] }]
       - call: [chk.expect_i, "f64 Negation hebt sich auf", { cast: [zerof, i32] }, 0]
 
-      # Negation eines Aufrufergebnisses — der Operand ist nicht nur eine Variable.
+      # negation of a call result — the operand is not just a variable.
       - decl: [negcall, i32, { -: [{ call: [twice, 4] }] }]
       - call: [chk.expect_i, "Negation eines Aufrufergebnisses", negcall, -8]
 

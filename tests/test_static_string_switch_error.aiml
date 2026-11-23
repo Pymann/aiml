@@ -1,12 +1,12 @@
 # SPEC: 49_static_analysis,49_static_off
-# Negative test: dieselbe Variable ('kind') wird MEHRFACH gegen String-
-# Literale verglichen.  Das ist ein hand-gerolltes String-Switch und muss
-# ein HARTER Compiler-Fehler sein — mit Hinweis auf enum / polymorphe
-# Programmierung (siehe spec/49 §16).
+# Negative test: the same variable ('kind') is compared SEVERAL times against string
+# literals.  That is a hand-rolled string switch and must be
+# a HARD compiler error — with a hint at enum / polymorphic
+# programming (see spec/49 §16).
 #
 # Expected exit code: 1
 #
-# Diagnostic-Form:
+# Diagnostic form:
 #   ...: variable 'kind' is compared against string literals 2 times — this
 #   hand-rolled string switch should be an enum or polymorphic dispatch.
 

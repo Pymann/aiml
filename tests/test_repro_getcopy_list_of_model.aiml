@@ -1,14 +1,14 @@
 # SPEC?: 15_models   # derived from the file name, to be confirmed
 # static-check: off
-# Repro-Kandidat (9rooms_v2 Card-Refactor): SIGSEGV wenn ein Struct mit
-# einem `list<Model>`-Feld (Model mit eigenem verschachtelten `list<list<i32>>`)
-# via kv.get_copy gelesen und dann in eine Liste eines ptr-Params gepusht wird.
+# Repro candidate (9rooms_v2 card refactor): SIGSEGV when a struct with
+# a `list<Model>` field (a model with its own nested `list<list<i32>>`)
+# is read via kv.get_copy and then pushed into a list of a ptr param.
 #
-# Analog zu CardHeader.active_abilities: list<ActiveAbility> (ActiveAbility
-# trägt list<list<i32>>).  repro3 (list<i32>) crasht NICHT — Verdacht: der
-# Trigger ist das list<Model>-mit-Nested-List-Feld im gepushten Struct.
+# Analogous to CardHeader.active_abilities: list<ActiveAbility> (ActiveAbility
+# carries list<list<i32>>).  repro3 (list<i32>) does NOT crash — suspicion: the
+# trigger is the list<Model>-with-nested-list field in the pushed struct.
 #
-# Erwartung nach Fix: exit 0.
+# Expectation after the fix: exit 0.
 
 - model: { name: Ability, fields: [[trigger, list<list<i32>>], [effects, list<list<i32>>]] }
 - model: { name: Hdr, fields: [[uid, string], [owner, string], [abils, list<Ability>]] }

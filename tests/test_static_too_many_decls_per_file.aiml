@@ -5,7 +5,7 @@
 #
 # Expected exit code: 1
 #
-# Diagnostic-Form (siehe spec/49 §6):
+# Diagnostic form (see spec/49 §6):
 #   <path>: file declares 4 top-level types (3 model, 1 class, 0 interface).
 #   Maximum is 3; split this file into smaller modules.
 

@@ -1,9 +1,9 @@
 # SPEC: 10_collections
-# spec/10: `set: [liste, [v1, v2, ...]]` ersetzt den Inhalt (clear + push je Element).
-# Bis 2026-10-31 sah der Parser die innere Sequenz nur bei `decl`: bei `set` wurde das ERSTE
-# Element als Wert verbraucht, der Rest fiel still weg, und der Skalar landete im
-# Container-Slot → `.len` las Muell, dann SIGSEGV. `set: [x, []]` uebersetzte gar nicht
-# ("Failed to evaluate value expression"). Backlog-Punkte 13 und 36.
+# spec/10: `set: [list, [v1, v2, ...]]` replaces the content (clear + push per element).
+# Until 2026-10-31 the parser only saw the inner sequence for `decl`: for `set` the FIRST
+# element was consumed as the value, the rest silently fell away, and the scalar landed in the
+# container slot → `.len` read garbage, then SIGSEGV. `set: [x, []]` did not compile at all
+# ("Failed to evaluate value expression"). Backlog items 13 and 36.
 # Expected exit code: 0
 
 - import: "tests/_cross/check.aiml"
@@ -27,7 +27,7 @@
     body:
       - decl: [chk, ptr<Checker>, { new: Checker }]
 
-      # 1) Der gemeldete Minimalfall: Literal auf eine lokale Liste.
+      # 1) the reported minimal case: a literal onto a local list.
       - decl: [pick, list<string>, []]
       - set: [pick, ["x", "y"]]
       - call: [chk.expect_i, "set-Literal: Laenge", pick.len, 2]
@@ -41,15 +41,15 @@
       - call: [chk.expect_i, "Variablen-Elemente: Laenge", pick.len, 2]
       - call: [chk.expect_s, "Variablen-Elemente: Element 1", { at: [pick, 1] }, "zwei"]
 
-      # 3) Ersetzen, nicht anhaengen: eine kuerzere Zuweisung verkuerzt die Liste.
+      # 3) replace, not append: a shorter assignment shortens the list.
       - set: [pick, ["nur_eins"]]
       - call: [chk.expect_i, "Ersetzen statt Anhaengen", pick.len, 1]
 
-      # 4) Leeres Literal — uebersetzte vorher nicht.
+      # 4) empty literal — did not compile before.
       - set: [pick, []]
       - call: [chk.expect_i, "leeres Literal leert die Liste", pick.len, 0]
 
-      # 5) Zahlen werden in den Elementtyp umgewandelt (spec/13), wie beim decl.
+      # 5) numbers are converted into the element type (spec/13), as for decl.
       - decl: [nums, list<i32>, []]
       - set: [nums, [1, -2, 3]]
       - call: [chk.expect_i, "i32-Literal: Laenge", nums.len, 3]

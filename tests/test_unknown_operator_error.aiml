@@ -1,9 +1,9 @@
 # SPEC: 04_1_precedence
-# Backlog-Punkt 1: `select` gibt es nicht. Bis 01.11.2026 uebersetzte der Compiler es
-# STILL und lieferte 0 — damit erzeugt jeder Tippfehler im Operatornamen dieselbe falsche
-# Null. Ein unbekannter Operator MUSS ein Uebersetzungsfehler sein.
+# Backlog item 1: `select` does not exist. Until 2026-11-01 the compiler compiled it
+# SILENTLY and returned 0 — so every typo in the operator name produces the same wrong
+# zero. An unknown operator MUST be a compile error.
 #
-# Negativtest: die Uebersetzung MUSS scheitern und den Operatornamen nennen.
+# Negative test: the compilation MUST fail and name the operator.
 # Expected exit code: 1
 
 - def:

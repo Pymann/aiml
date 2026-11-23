@@ -3,10 +3,10 @@
 # map<string:string>, not an empty stub.  (Was previously a no-op that
 # allocated an empty map — silently broke every env-var read.)
 #
-# BEIDE Schreibweisen werden geprueft.  spec/23 dokumentiert sys.env als
-# PROPERTY; genau die kompilierte bis 2026-10-21 zu einem NULLPOINTER, waehrend
-# nur die Call-Form getestet war — `set: [m, sys.env]` lief durch und der erste
-# Lesezugriff segfaultete (addr=(nil)).  Deshalb hier zuerst die Property-Form.
+# BOTH notations are checked.  spec/23 documents sys.env as a
+# PROPERTY; exactly that compiled to a NULL POINTER until 2026-10-21, while
+# only the call form was tested — `set: [m, sys.env]` ran through and the first
+# read access segfaulted (addr=(nil)).  That is why the property form comes first here.
 
 - def:
     name: main
@@ -19,18 +19,18 @@
       - if:
           condition: { le: [prop_count, 0] }
           then:
-            - print: ["FAIL: sys.env (Property-Form) leer (count=${prop_count})"]
+            - print: ["FAIL: sys.env (property form) empty (count=${prop_count})"]
             - call: [sys.exit, 1]
       - if:
           condition: { neq: [{ call: [prop_env.contains, "PATH"] }, 1] }
           then:
-            - print: ["FAIL: sys.env (Property-Form) ohne PATH"]
+            - print: ["FAIL: sys.env (property form) without PATH"]
             - call: [sys.exit, 1]
       - decl: [prop_path, string, { call: [prop_env.get, "PATH"] }]
       - if:
           condition: { le: [prop_path.len, 0] }
           then:
-            - print: ["FAIL: sys.env (Property-Form) PATH leer"]
+            - print: ["FAIL: sys.env (property form) PATH empty"]
             - call: [sys.exit, 1]
 
       # 2) Call-Form.

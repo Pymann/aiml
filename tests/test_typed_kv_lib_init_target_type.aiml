@@ -1,37 +1,37 @@
 # SPEC?: 31_db_integration   # derived from the file name, to be confirmed
-# Repro: top-level `decl: [kv, Kv<string:T>, db.open_kv]` in einem imported
-# library-file (libraryMode) lowered den db.open_kv-Aufruf auf den UNTYPED
-# Pfad (val_size=0, kein ser_nodes) statt auf den typed Pfad.
+# Repro: a top-level `decl: [kv, Kv<string:T>, db.open_kv]` in an imported
+# library file (libraryMode) lowered the db.open_kv call onto the UNTYPED
+# path (val_size=0, no ser_nodes) instead of the typed path.
 #
-# Ursache: ast_compiler.cpp::Compiler::compile() im libraryMode-Branch ruft
-# `visitExpression(decl->initialValue)` ohne `ctx.deserializeTargetType` zu
-# setzen — der db.open_kv-Builtin liest das Feld um vName aus
-# "Kv<string:T>" zu extrahieren.  Ohne den Set landet vName = "string" und
-# die hasHeap-Logik fällt zurück auf den untyped open.
+# Cause: ast_compiler.cpp::Compiler::compile() in the libraryMode branch calls
+# `visitExpression(decl->initialValue)` without setting `ctx.deserializeTargetType`
+# — the db.open_kv builtin reads that field to extract vName from
+# "Kv<string:T>".  Without the set, vName = "string" and
+# the hasHeap logic falls back to the untyped open.
 #
-# Symptom in DataCreatures (2026-06-02): server_main öffnet
-# creatures.kvwal als typed (val_size=432, ser_nodes für DataCreature),
-# imported discovery.aiml öffnet dieselbe Kv als untyped (val_size=0).
-# Beide treffen denselben Singleton-Cache; erste-Open gewinnt.  Wenn
-# discovery's lib_init zuerst läuft, registriert der KV als untyped.
-# Spätere creatures.get aus server_main liefert raw bytes anstatt
-# deserialisierte Struct → strlen() auf einer als char* interpretierten
-# i32+i32-Liste-Header-Sequenz → SIGSEGV.
+# Symptom in DataCreatures (2026-06-02): server_main opens
+# creatures.kvwal as typed (val_size=432, ser_nodes for DataCreature),
+# the imported discovery.aiml opens the same Kv as untyped (val_size=0).
+# Both hit the same singleton cache; the first open wins.  If
+# discovery's lib_init runs first, the KV registers as untyped.
+# A later creatures.get from server_main returns raw bytes instead of the
+# deserialised struct → strlen() on an i32+i32 list header sequence interpreted as char*
+# → SIGSEGV.
 #
-# Fix: in libraryMode auch `ctx.deserializeTargetType = decl->typeName`
-# vor `visitExpression(init)` setzen (mirror visitDeclStmt).
+# Fix: in libraryMode also set `ctx.deserializeTargetType = decl->typeName`
+# before `visitExpression(init)` (mirror visitDeclStmt).
 
 - import: "tests/lib_typed_kv_lib_init.aiml"
 
-# Main öffnet dasselbe Kv — der Singleton-Cache muss mit beiden den
-# selben (typed!) Eintrag liefern.
+# Main opens the same Kv — the singleton cache must deliver the
+# same (typed!) entry with both.
 - decl: [tkv_main, Kv<string:TKVHeavy>, { call: [db.open_kv, "tkv_repro.kvwal", {persist: true, path: "/tmp/aiml_tkv_repro/"}] }]
 
 - call: [lib_put, "id-1", "alpha"]
 
-# Mit dem Bug lesen wir hier nicht den TKVHeavy struct sondern die rohen
-# Bytes vom untyped open → var_t.var_k wäre ein garbage-Pointer → crash beim
-# string-interpolate von ${var_t.var_k}.
+# With the bug we do not read the TKVHeavy struct here but the raw
+# bytes from the untyped open → var_t.var_k would be a garbage pointer → crash on
+# string-interpolating ${var_t.var_k}.
 - decl: [var_t, TKVHeavy, { call: [tkv_main.get_copy, "id-1"] }]
 
 - if:

@@ -1,10 +1,10 @@
 # SPEC: 02_types
-# spec/02: `set` nimmt GENAU [ziel, wert]. Ein drittes Element ist ein Uebersetzungsfehler —
-# vorher wurde es still verschluckt: `set: [nums, 0, 99]` wies 0 zu und warf 99 weg, ohne
-# jede Meldung. Die vorhandene Pruefung war toter Code (sie verlangte !exprArg, das durch
-# `expectingValue` immer belegt war).
+# spec/02: `set` takes EXACTLY [target, value]. A third element is a compile error —
+# before, it was silently swallowed: `set: [nums, 0, 99]` assigned 0 and threw 99 away, without
+# any message. The existing check was dead code (it demanded !exprArg, which was always
+# occupied by `expectingValue`).
 #
-# Negativtest: die Uebersetzung MUSS scheitern, und die Meldung MUSS auf `idx:` verweisen.
+# Negative test: the compilation MUST fail, and the message MUST point to `idx:`.
 # Expected exit code: 1
 
 - def:

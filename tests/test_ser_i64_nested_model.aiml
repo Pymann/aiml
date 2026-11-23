@@ -1,11 +1,11 @@
 # SPEC?: 29_serialize,15_models   # derived from the file name, to be confirmed
-# Ein i64-Feld in einem VERSCHACHTELTEN Modell ueber den Serialisierer und
-# zurueck.
+# An i64 field in a NESTED model through the serialiser and
+# back.
 #
-# Gefunden 2026-10-13: `ClusterView.live.taken_ms` (i64, im verschachtelten
-# Modell) kam nach sys.deserialize falsch an, waehrend Listen und Zeichenketten
-# daneben stimmten.  Ein stiller Zahlenfehler ueber die Leitung ist die
-# unangenehmste Sorte: nichts stuerzt ab, alles sieht aus wie Daten.
+# Found 2026-10-13: `ClusterView.live.taken_ms` (i64, in the nested
+# model) arrived wrongly after sys.deserialize, while lists and strings
+# next to it were right.  A silent number error over the wire is the
+# most unpleasant kind: nothing crashes, everything looks like data.
 # Expected exit code: 0
 
 - model:
@@ -47,7 +47,7 @@
       - decl: [fails, i32, 0]
       - decl: [big, i64, 1760000000000]
 
-      # 1) i64 direkt im obersten Modell — der Vergleichsfall.
+      # 1) i64 directly in the top-level model — the comparison case.
       - decl: [flat, Stamped]
       - set: [flat.label, "flach"]
       - set: [flat.taken_ms, big]
@@ -55,9 +55,9 @@
       - decl: [flat_wire, string, { call: [sys.serialize, flat] }]
       - decl: [flat_back, Stamped, { call: [sys.deserialize, flat_wire, "Stamped"] }]
       - set: [fails, { +: [fails, { call: [expect, "i64 im obersten Modell", { eq: [flat_back.taken_ms, big] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "und das i32 daneben", { eq: [flat_back.count, 7] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "and the i32 next to it", { eq: [flat_back.count, 7] }] }] }]
 
-      # 2) i64 in einem VERSCHACHTELTEN Modell — hier ging es schief.
+      # 2) i64 in a NESTED model — this is where it went wrong.
       - decl: [nested, Wrapper]
       - set: [nested.title, "huelle"]
       - set: [nested.inner.label, "innen"]
@@ -68,9 +68,9 @@
       - set: [fails, { +: [fails, { call: [expect, "Zeichenkette im verschachtelten Modell", { eq: [nested_back.inner.label, "innen"] }] }] }]
       - set: [fails, { +: [fails, { call: [expect, "i64 im verschachtelten Modell", { eq: [nested_back.inner.taken_ms, big] }] }] }]
       - set: [fails, { +: [fails, { call: [expect, "i32 im verschachtelten Modell", { eq: [nested_back.inner.count, 9] }] }] }]
-      - print: ["  (verschachtelt: taken_ms=${nested_back.inner.taken_ms}, erwartet ${big})"]
+      - print: ["  (nested: taken_ms=${nested_back.inner.taken_ms}, expected ${big})"]
 
-      # 3) Dasselbe mit einer Liste hinter dem verschachtelten Modell.
+      # 3) The same with a list after the nested model.
       - decl: [mixed, WrapperWithList]
       - set: [mixed.title, "huelle2"]
       - set: [mixed.inner.label, "innen2"]
@@ -83,10 +83,10 @@
       - set: [fails, { +: [fails, { call: [expect, "i64 mit Liste dahinter", { eq: [mixed_back.inner.taken_ms, big] }] }] }]
       - set: [fails, { +: [fails, { call: [expect, "die Liste dahinter kommt an", { eq: [mixed_back.notes.len, 2] }] }] }]
 
-      # ── 4) Der BINAERE Weg: typisierter KV-Speicher (ser_encode/ser_decode),
-      # derselbe Weg, den auch Mirror-RPC nimmt.  JSON und binaer sind zwei
-      # verschiedene Strecken — ein Fehler auf der einen sagt nichts ueber die
-      # andere.
+      # ── 4) The BINARY route: typed KV store (ser_encode/ser_decode),
+      # the same route that mirror RPC takes too.  JSON and binary are two
+      # different routes — an error on one says nothing about the
+      # other.
       - decl: [db_path, path, "/tmp/aiml_ser_i64/"]
       - decl: [store, Kv<string:Stamped>]
       - set: [store, { call: [db.open_kv, "ser_i64_demo", { persist: true, path: db_path }] }]
@@ -100,7 +100,7 @@
       - set: [fails, { +: [fails, { call: [expect, "binaer: Zeichenkette kommt an", { eq: [from_store.label, "binaer"] }] }] }]
       - set: [fails, { +: [fails, { call: [expect, "binaer: i64 kommt an", { eq: [from_store.taken_ms, big] }] }] }]
       - set: [fails, { +: [fails, { call: [expect, "binaer: i32 dahinter kommt an", { eq: [from_store.count, 13] }] }] }]
-      - print: ["  (binaer: taken_ms=${from_store.taken_ms}, erwartet ${big})"]
+      - print: ["  (binary: taken_ms=${from_store.taken_ms}, expected ${big})"]
 
       - if:
           condition: { neq: [fails, 0] }

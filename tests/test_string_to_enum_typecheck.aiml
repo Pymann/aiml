@@ -1,13 +1,13 @@
 # SPEC?: 14_enums,09_strings   # derived from the file name, to be confirmed
 # static-check: off
-# BUG #5 (NEGATIV-Test — muss NACH Fix einen COMPILE-ERROR werfen):
-# Zuweisung eines String-Literals an ein Enum-Feld wird bisher still
-# akzeptiert (enum ist i32 → geht durch string→int-Coercion → atoi("x")=0),
-# statt einen Typfehler zu werfen.  Footgun bei der CardType-Migration.
+# BUG #5 (NEGATIVE test — must throw a COMPILE ERROR AFTER the fix):
+# assigning a string literal to an enum field is so far silently
+# accepted (enum is i32 → goes through string→int coercion → atoi("x")=0),
+# instead of throwing a type error.  A footgun in the CardType migration.
 #
-# Erwartung NACH Fix: Compile-Error "cannot assign string to enum-typed ...".
-# Vor Fix: kompiliert, kind=0 (still falsch).  Manuell verifizieren
-# (kein PASS/FAIL-Suite-Test, da Compile-Error erwünscht ist).
+# Expectation AFTER the fix: compile error "cannot assign string to enum-typed ...".
+# Before the fix: compiles, kind=0 (silently wrong).  Verify manually
+# (not a PASS/FAIL suite test, because a compile error is desired).
 
 - enum: { name: Kind, values: [[none, 0], [alpha, 1], [beta, 2]] }
 - model: { name: Thing, fields: [[kind, Kind]] }
@@ -17,6 +17,6 @@
     return: i32
     body:
       - decl: [thing, Thing]
-      - set: [thing.kind, "alpha"]          # <-- soll Compile-Error werfen
+      - set: [thing.kind, "alpha"]          # <-- should throw a compile error
       - call: [log.info, "thing.kind=${thing.kind}"]
       - return: 0

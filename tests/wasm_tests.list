@@ -19,10 +19,10 @@ tests/lifetime/61_member_handle_share.aiml
 tests/lifetime/62_member_share_recursive_release.aiml
 tests/test_input_injection_wasm.aiml
 tests/test_input_focus_lost_keys_wasm.aiml
-# spec/44_0 §2.3 + §8.3a: Ereignis-Schicht, Kante ueberlebt einen neuen Druck
+# spec/44_0 §2.3 + §8.3a: event layer, the edge survives a new press
 tests/test_input_pending_layer_wasm.aiml
 tests/test_wasm_list_clear_stride.aiml
 
-# spec/10 F10-23 — der Bounds-Check traegt die Wurfstelle in jede Funktion mit
-# `at`/`get`; sie muss auf wasm32 uebersetzbar und linkbar bleiben.
+# spec/10 F10-23 — the bounds check puts the throw site into every function with
+# `at`/`get`; it must stay compilable and linkable on wasm32.
 tests/test_builtin_throw_after_list_alloc.aiml

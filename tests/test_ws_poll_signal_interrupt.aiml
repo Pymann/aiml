@@ -1,21 +1,21 @@
-# SPEC: 44_5_mirror §8 (Wann ein Peer als getrennt gilt) + 32_4 §5
+# SPEC: 44_5_mirror §8 (when a peer counts as disconnected) + 32_4 §5
 #
-# Ein Signal ist kein Verbindungsverlust.  `aiml_ws_poll` rechnete
+# A signal is not a connection loss.  `aiml_ws_poll` computed
 #
 #     int r = ::poll(&pfd, 1, timeout_ms);
 #     return r > 0 ? 1 : (r == 0 ? 0 : -1);
 #
-# und lieferte damit -1, sobald irgendein Signal den Prozess traf -- poll(2)
-# wird von SA_RESTART NICHT fortgesetzt, was aiml an `sys.catch_signals` sogar
-# selbst anmerkt.  Der Mirror machte aus diesem -1 ein `peer_disconnected`,
-# und zwar WORTLOS: eine gesunde Sitzung verschwand ohne eine Zeile Begruendung
-# (datacreatures, 15.11. und 20.11.2026, Server lief jeweils weiter).
+# and so returned -1 as soon as any signal hit the process -- poll(2)
+# is NOT resumed by SA_RESTART, which aiml even notes itself on `sys.catch_signals`.
+# The mirror turned this -1 into a `peer_disconnected`,
+# and SILENTLY: a healthy session vanished without a single line of reason
+# (datacreatures, 2026-11-15 and 2026-11-20, the server kept running each time).
 #
-# Geprueft wird das Verhalten, nicht der Wettlauf: ein blockierendes
-# ws.poll(2000) wird nach ~300 ms von SIGUSR1 getroffen.
-#   vorher:  poll kehrt bei ~300 ms mit -1 zurueck (Fehler)
-#   jetzt:   poll laeuft seine 2000 ms aus und meldet 0 (nichts da),
-#            und die Verbindung traegt danach noch Daten.
+# The behaviour is checked, not the race: a blocking
+# ws.poll(2000) is hit by SIGUSR1 after ~300 ms.
+#   before:  poll returns at ~300 ms with -1 (error)
+#   now:     poll runs out its 2000 ms and reports 0 (nothing there),
+#            and the connection still carries data afterwards.
 #
 # Expected exit code: 0
 
@@ -29,12 +29,12 @@
       - if:
           condition: { peq: [srv, null] }
           then:
-            - print: ["FAIL: listen auf 127.0.0.1:19907 fehlgeschlagen"]
+            - print: ["FAIL: listen on 127.0.0.1:19907 failed"]
             - return: []
       - set: [g_srv_bereit, 1]
       - decl: [conn, ws_handle, { call: [ws.accept, srv] }]
-      # Absichtlich STILL: erst nach dem Ablauf des Pollfensters kommt etwas.
-      # So misst der Test wirklich den Zeitgeber und nicht ankommende Daten.
+      # Deliberately SILENT: only after the poll window has expired does something come.
+      # That way the test really measures the timer and not arriving data.
       - call: [time.sleep_ms, 2600]
       - call: [ws.send, conn, "nach dem Signal"]
       - call: [time.sleep_ms, 300]
@@ -43,9 +43,9 @@
 - decl: [pass, i32, 0]
 - decl: [fail, i32, 0]
 
-# Ohne Handler kein EINTR: ein Signal mit Vorgabe-Behandlung unterbricht
-# keinen Systemaufruf.  catch_signals setzt genau den Handler, den eine echte
-# Anwendung auch setzt (spec/23 §5.7).
+# Without a handler no EINTR: a signal with default handling does not interrupt
+# a system call.  catch_signals sets exactly the handler that a real
+# application sets too (spec/23 §5.7).
 - decl: [fang, i32, { call: [sys.catch_signals, "USR1"] }]
 - if:
     condition: { neq: [fang, 0] }
@@ -66,11 +66,11 @@
 - if:
     condition: { peq: [cli, null] }
     then:
-      - print: ["FAIL: connect auf 127.0.0.1:19907 fehlgeschlagen"]
+      - print: ["FAIL: connect to 127.0.0.1:19907 failed"]
       - set: [fail, { +: [fail, 1] }]
 
-# Ein Kind schickt dem eigenen Prozess nach 300 ms SIGUSR1 -- $PPID ist der
-# Test selbst, weil sys.exe direkt aus ihm heraus startet.
+# A child sends the own process SIGUSR1 after 300 ms -- $PPID is the
+# test itself, because sys.exe starts directly out of it.
 - decl: [argv, list<string>]
 - call: [argv.push, "sh"]
 - call: [argv.push, "-c"]
@@ -81,39 +81,39 @@
 - decl: [erg, i32, { call: [ws.poll, cli, 2000] }]
 - decl: [dauer, i64, { -: [{ call: [time.mono_ms] }, beginn] }]
 
-- print: ["ws.poll(2000) → ${erg} nach ${dauer} ms"]
+- print: ["ws.poll(2000) → ${erg} after ${dauer} ms"]
 
-# Das Signal ist auch wirklich angekommen -- sonst prueft der Test nichts.
+# The signal really arrived too -- otherwise the test checks nothing.
 - decl: [sig, i32, { call: [sys.caught_signal] }]
 - if:
     condition: { eq: [sig, 0] }
     then:
-      - print: ["FAIL: kein Signal angekommen — der Test hat seinen Gegenstand verfehlt"]
+      - print: ["FAIL: no signal arrived — the test missed its subject"]
       - set: [fail, { +: [fail, 1] }]
     else: [{ set: [pass, { +: [pass, 1] }] }]
 
 - if:
     condition: { eq: [erg, -1] }
     then:
-      - print: ["FAIL: ws.poll meldete Fehler (-1) — das Signal gilt als Verbindungsverlust"]
+      - print: ["FAIL: ws.poll reported an error (-1) — the signal counts as a connection loss"]
       - set: [fail, { +: [fail, 1] }]
     else: [{ set: [pass, { +: [pass, 1] }] }]
 
-# Das Pollfenster muss AUSGELAUFEN sein; ein Abbruch bei ~300 ms ist genau der
-# Fehler, um den es geht.
+# The poll window must have RUN OUT; an abort at ~300 ms is exactly the
+# bug this is about.
 - if:
     condition: { lt: [dauer, 1900] }
     then:
-      - print: ["FAIL: ws.poll kehrte nach ${dauer} ms zurueck, zugesagt waren 2000"]
+      - print: ["FAIL: ws.poll returned after ${dauer} ms, 2000 were promised"]
       - set: [fail, { +: [fail, 1] }]
     else: [{ set: [pass, { +: [pass, 1] }] }]
 
-# Und die Verbindung lebt: der Server sendet nach 2600 ms, das muss ankommen.
+# And the connection lives: the server sends after 2600 ms, that must arrive.
 - decl: [erg2, i32, { call: [ws.poll, cli, 2000] }]
 - if:
     condition: { neq: [erg2, 1] }
     then:
-      - print: ["FAIL: nach dem Signal kam nichts mehr durch (poll → ${erg2})"]
+      - print: ["FAIL: nothing got through any more after the signal (poll → ${erg2})"]
       - set: [fail, { +: [fail, 1] }]
     else:
       - decl: [txt, string, { call: [ws.recv, cli] }]
@@ -121,7 +121,7 @@
           condition: { eq: [txt, "nach dem Signal"] }
           then: [{ set: [pass, { +: [pass, 1] }] }]
           else:
-            - print: ["FAIL: falsche Nutzlast nach dem Signal: '${txt}'"]
+            - print: ["FAIL: wrong payload after the signal: '${txt}'"]
             - set: [fail, { +: [fail, 1] }]
 
 - call: [ws.close, cli]

@@ -1,12 +1,12 @@
 # SPEC: 49_static_analysis,49_static_off
-# Negativ-Test (spec/49 §2a): ein unbekannter Statement-Schluessel MUSS ein
-# harter Fehler sein.  Vorher verschwand das Statement lautlos — der Quelltext
-# sagte, was passieren soll, und es passierte einfach nicht.  Genau so blieb
-# `exit:` 54× im Korpus wirkungslos (FAIL-Zweige lieferten 0).
+# Negative test (spec/49 §2a): an unknown statement key MUST be a
+# hard error.  Before, the statement vanished silently — the source text
+# said what should happen, and it simply did not happen.  Exactly that way
+# `exit:` stayed ineffective 54× in the corpus (FAIL branches returned 0).
 #
 # Expected exit code: 1
 #
-# Diagnostic-Form:
+# Diagnostic form:
 #   ...: unknown statement 'continue' — not an aiml statement ...
 - class:
     name: Zaehler
