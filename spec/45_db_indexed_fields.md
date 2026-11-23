@@ -192,226 +192,226 @@ legitimate, supported thing to declare.
 
 ### Persistence — `index_dump: true` (spec/31 §6.2.1)
 
-Die V1-Fassung hielt Nebenindizes **nur im Speicher**: bei jedem `db.open_kv`
-baut `aiml_db_index_backfill` sie aus dem Haupt-Kv neu auf und dekodiert dafuer
-jede Zeile, um EIN Feld zu lesen.  Das war richtig gewaehlt — es braucht keine
-Marke im Nutzer-Schluesselraum und kann nie veralten —, aber bei einem grossen
-Kv ist es der dominierende Teil des Oeffnens.  Gemessen an cai (5,83 Mio Fakten,
-6 indizierte Felder, 06.11.2026):
+The V1 version kept secondary indexes **only in memory**: on every `db.open_kv`,
+`aiml_db_index_backfill` rebuilds them from the main Kv and for that decodes
+every row to read ONE field.  That was the right choice — it needs no
+marker in the user key space and can never go stale — but for a large
+Kv it is the dominant part of opening.  Measured on cai (5.83 million facts,
+6 indexed fields, 2026-11-06):
 
-| Beim Oeffnen | Zeit | Speicher |
+| On open | Time | Memory |
 | --- | --- | --- |
-| Primaerindex, mit Dump (spec/31 §6.2.1) | 0,12 s | 720 MB Datei-Abbildung |
-| Nebenindizes auffuellen | ~250 s | 1867 MB **anonym** |
+| Primary index, with dump (spec/31 §6.2.1) | 0.12 s | 720 MB file mapping |
+| Filling the secondary indexes | ~250 s | 1867 MB **anonymous** |
 
-Der Primaerindex-Dump hat also sein Versprechen gehalten und dabei sichtbar
-gemacht, wo die Last wirklich liegt.
+So the primary index dump kept its promise and in doing so made visible
+where the load really lies.
 
-**`index_dump: true` deckt beide Indexarten ab** — den Primaerindex der WAL und
-jeden `db_indexed`-Nebenindex desselben Stores.  Es gibt dafuer kein eigenes
-Schluesselwort: ein Nebenindex ist ein Index dieses Stores, und wer den Index
-mitspeichern laesst, will ihn ganz.  Ohne `index_dump` bleibt es beim
-V1-Verhalten, unveraendert.
+**`index_dump: true` covers both kinds of index** — the primary index of the WAL and
+every `db_indexed` secondary index of the same store.  There is no separate
+keyword for it: a secondary index is an index of this store, and whoever has the index
+stored along wants all of it.  Without `index_dump` the V1 behaviour remains,
+unchanged.
 
-#### Datei `<name>__<feld>.kvsidx`
+#### File `<name>__<field>.kvsidx`
 
-Eine Datei je (Store, Feld), nicht eine gemeinsame: die Felder werden einzeln
-geoeffnet, und ein beschaedigter oder veralteter Nebenindex soll nur sein
-eigenes Feld neu aufbauen lassen, nicht die anderen mitreissen.
+One file per (store, field), not a shared one: the fields are opened
+individually, and a damaged or stale secondary index should only make its
+own field rebuild, not drag the others along.
 
 ```
-Kopf (64 Byte)
+Header (64 bytes)
   char     magic[8]    "AIMLKVSX"
   uint32   version     1
-  uint32   flags       Bit 0: unique,  Bit 1: mode == "lower"
+  uint32   flags       bit 0: unique,  bit 1: mode == "lower"
   uint64   wal_dev     \
-  uint64   wal_ino      |  Stempel der Haupt-WAL, genau wie
+  uint64   wal_ino      |  stamp of the main WAL, exactly as in
   uint64   wal_used     |  spec/31 §6.2.1
   uint64   wal_fp      /
-  uint32   val_count   verschiedene Feldwerte
-  uint32   key_count   Paare (Feldwert, kv-Schluessel)
+  uint32   val_count   distinct field values
+  uint32   key_count   pairs (field value, kv key)
   uint64   reserved    0
 
-val_count x Feldwert-Eintrag (16 Byte, nach dem NORMALISIERTEN Wert sortiert)
-  uint32   val_off, val_len     Stelle im Stringblock
-  uint32   key_first, key_cnt   Fenster im Schluesselfeld
+val_count x field-value entry (16 bytes, sorted by the NORMALISED value)
+  uint32   val_off, val_len     position in the string block
+  uint32   key_first, key_cnt   window into the key array
 
-key_count x Schluessel-Eintrag (8 Byte, in Einfuegereihenfolge)
+key_count x key entry (8 bytes, in insertion order)
   uint32   key_off, key_len
 
-Stringblock: Feldwerte und kv-Schluessel, jeder mit abschliessender 0
+String block: field values and kv keys, each with a terminating 0
 ```
 
-Sortiert wird nach dem **normalisierten** Feldwert, also nach `idx_normalize`
-(bei `db_indexed: "lower"` die kleingeschriebene Form), denn genau damit sucht
-die Abfrage.  Schreiben und Suchen muessen dieselbe Ordnung verwenden —
-`kv_idx_cmp` —, sonst findet die binaere Suche nichts, und zwar still.
+Sorting is by the **normalised** field value, i.e. by `idx_normalize`
+(for `db_indexed: "lower"` the lower-cased form), because that is exactly what
+the query searches with.  Writing and searching must use the same order —
+`kv_idx_cmp` — otherwise the binary search finds nothing, and does so silently.
 
-Die Strings tragen eine **abschliessende 0**, obwohl ihre Laenge daneben steht.
-Das kostet ein Byte je String und erspart einen Fehler, der beim Primaerindex
-schon einmal zugeschlagen hat: `finding_by` gibt einen `const char*` direkt
-zurueck, und ein Aufrufer liest ihn als C-String bis zur 0.  Ohne Terminator
-muesste jeder Rueckgabepfad kopieren oder laeuft ueber das Ende.
+The strings carry a **terminating 0**, although their length is stored next to them.
+That costs one byte per string and spares a bug that already struck once in the primary index:
+`finding_by` returns a `const char*` directly,
+and a caller reads it as a C string up to the 0.  Without a terminator
+every return path would have to copy or would run past the end.
 
-Fuer `unique: true` ist `key_cnt` immer 1.  Das Format bleibt dasselbe — ein
-Layout weniger ist ein Fehlerpfad weniger.
+For `unique: true`, `key_cnt` is always 1.  The format stays the same — one
+layout fewer is one error path fewer.
 
-#### Oeffnen
+#### Opening
 
-`aiml_db_index_open_for_kv` versucht die Datei zu laden, sobald der Store
-`index_dump` traegt.  Angenommen wird sie nur, wenn **alles** stimmt:
+`aiml_db_index_open_for_kv` tries to load the file as soon as the store
+carries `index_dump`.  It is accepted only if **everything** matches:
 
-1. `magic` und `version`,
-2. `flags` gleich der Deklaration — wird aus `db_indexed: true` ein
-   `unique: true` oder ein `"lower"`, ist der alte Dump unbrauchbar,
-3. `wal_dev`/`wal_ino` gleich der heutigen Haupt-WAL (ein Checkpoint tauscht
-   die Inode),
-4. `wal_used` gleich dem heutigen Wasserstand,
-5. `wal_fp` gleich dem Fingerabdruck ueber genau diesen Bereich,
-6. alle Offsets und Fenster innerhalb der Datei.
+1. `magic` and `version`,
+2. `flags` equal to the declaration — if `db_indexed: true` becomes
+   `unique: true` or `"lower"`, the old dump is unusable,
+3. `wal_dev`/`wal_ino` equal to today's main WAL (a checkpoint swaps
+   the inode),
+4. `wal_used` equal to today's high-water mark,
+5. `wal_fp` equal to the fingerprint over exactly this range,
+6. all offsets and windows within the file.
 
-Scheitert ein Punkt, wird die Datei verworfen und das Feld voll aufgefuellt —
-wie in V1.  Der Dump ist **nie** maßgebend gegenueber der WAL: jeder Zweifel
-kostet Zeit, nie Richtigkeit.
+If one point fails, the file is discarded and the field is filled completely —
+as in V1.  The dump is **never** authoritative over the WAL: every doubt
+costs time, never correctness.
 
-Laedt der Dump, meldet der Index das, und `aiml_db_index_backfill` kehrt sofort
-zurueck.  Die erzeugte IR bleibt damit unveraendert — `open_for_kv` dann
-`backfill`, wie bisher.
+If the dump loads, the index reports that, and `aiml_db_index_backfill` returns
+immediately.  The generated IR therefore stays unchanged — `open_for_kv` then
+`backfill`, as before.
 
-Anders als beim Primaerindex gibt es **keinen Ueberlauf-Pfad**: der Stempel ist
-nur dann gueltig, wenn die WAL Byte fuer Byte dieselbe ist, aus der der Index
-gebaut wurde.  Ein Nebenindex laesst sich nicht einfach nachspielen, weil ein
-spaeteres `kv.set` auf einen schon vorhandenen Schluessel auch dessen ALTEN
-Feldwert aus dem Index nehmen muesste, und der alte Wert steht nur an der alten
-Stelle der WAL.  Das waere ein zweiter, feinerer Pfad fuer einen Gewinn, den
-niemand gemessen hat.
+Unlike the primary index there is **no overflow path**: the stamp is
+only valid if the WAL is byte for byte the same one the index was
+built from.  A secondary index cannot simply be replayed, because a
+later `kv.set` on an existing key would also have to take its OLD
+field value out of the index, and the old value is only at the old
+place in the WAL.  That would be a second, finer path for a gain that
+nobody has measured.
 
-#### Schreiben beim Lesen — Kopie je Feldwert
+#### Writing while reading — copy per field value
 
-Nach dem Laden liegt der Index in der Datei-Abbildung und wird von dort
-beantwortet.  Ein `kv.set` oder `kv.delete` darf ihn aber weiter aendern.  Dafuer
-gilt: beim ERSTEN Eingriff in einen Feldwert wird dessen Fenster aus dem Dump in
-den Speicher-Index (`map_1n` bzw. `map_unique`) kopiert und der Feldwert als
-"im Speicher gefuehrt" vermerkt; danach gilt fuer ihn nur noch der
-Speicher-Index.  Ein Feldwert, den niemand angefasst hat, kostet weiterhin kein
-anonymes Byte.
+After loading, the index lives in the file mapping and is answered from
+there.  But a `kv.set` or `kv.delete` may still change it.  For that the rule is:
+on the FIRST change to a field value, its window is copied from the dump into
+the memory index (`map_1n` or `map_unique`) and the field value is marked as
+"kept in memory"; from then on only the memory index applies to it.  A field value
+that nobody has touched still costs no
+anonymous byte.
 
-Eine Abfrage schaut also: Feldwert im Speicher gefuehrt → Speicher-Index;
-sonst → binaere Suche im Dump.  Beide Wege sind nie gleichzeitig gueltig, und
-damit gibt es keinen Fall, in dem ein Schluessel doppelt oder gar nicht kommt.
+A query therefore looks: field value kept in memory → memory index;
+otherwise → binary search in the dump.  The two paths are never valid at the same time, and
+so there is no case in which a key comes twice or not at all.
 
-#### Geschrieben wird beim Checkpoint
+#### Writing happens at checkpoint time
 
-`db.checkpoint` ist der eine Moment, in dem der Store absichtlich in einen
-haltbaren, geschlossenen Zustand gebracht wird; dort entsteht auch der
-Primaerindex-Dump (spec/31 §6.2.1, Schritt 8).  Direkt danach schreibt jeder
-Nebenindex dieses Stores seine Datei, mit dem Stempel der eben umbenannten WAL.
+`db.checkpoint` is the one moment in which the store is deliberately brought into a
+durable, closed state; that is also where the
+primary index dump is produced (spec/31 §6.2.1, step 8).  Directly afterwards every
+secondary index of this store writes its file, with the stamp of the just renamed WAL.
 
-Folgen, die man kennen muss:
+Consequences one needs to know:
 
-- Ein Store, der beschrieben aber **nie** gecheckpointet wird, hat keinen
-  Nebenindex-Dump.  Das naechste Oeffnen fuellt auf — V1-Verhalten, kein
-  Rueckschritt.
-- Der Checkpoint wird **teurer**: er muss die Indizes durchlaufen und die
-  Feldwerte sortieren.  Das ist der bewusste Tausch — einmal schreiben, viele
-  Male guenstig oeffnen.  Wer einen Store nur fuellt und einmal liest, gewinnt
-  nichts.
-- `kv.clear` leert die Nebenindizes UND loescht ihre Dateien.  Das Leeren gilt
-  auch ohne `index_dump`: die Indizes haengen am Store-Zeiger, nicht an der
-  Datei, und ein geleerter Store darf keine Treffer mehr liefern.  Das Loeschen
-  der Datei, weil ein liegengebliebener Dump den geleerten Store beim naechsten
-  Oeffnen wieder bevoelkern wuerde -- der Stempel faellt zwar ohnehin darauf,
-  aber sich auf eine Pruefung zu verlassen, wo Loeschen eindeutig ist, waere
-  nachlaessig.
+- A store that is written to but **never** checkpointed has no
+  secondary index dump.  The next open fills it — V1 behaviour, no
+  step back.
+- The checkpoint becomes **more expensive**: it has to traverse the indexes and sort the
+  field values.  That is the deliberate trade — write once, open cheaply many
+  times.  Whoever only fills a store and reads it once gains
+  nothing.
+- `kv.clear` empties the secondary indexes AND deletes their files.  The emptying applies
+  without `index_dump` too: the indexes hang on the store pointer, not on the
+  file, and an emptied store must not return hits any more.  The file is deleted
+  because a leftover dump would repopulate the emptied store on the next
+  open -- the stamp would catch it anyway,
+  but relying on a check where deleting is unambiguous would be
+  careless.
 
-#### Kompatibilitaet — keine Migration
+#### Compatibility — no migration
 
-| Lage | Verhalten |
+| Situation | Behaviour |
 | --- | --- |
-| Alte WAL, kein `.kvsidx` | Volles Auffuellen, wie V1 |
-| `.kvsidx` da, WAL inzwischen geschrieben | Stempel faellt → volles Auffuellen |
-| `.kvsidx` beschaedigt oder fremde Version | Verworfen → volles Auffuellen |
-| `index_dump` wieder abgeschaltet | Datei bleibt liegen, wird nicht gelesen |
+| Old WAL, no `.kvsidx` | full fill, as in V1 |
+| `.kvsidx` present, WAL written in the meantime | stamp fails → full fill |
+| `.kvsidx` damaged or a foreign version | discarded → full fill |
+| `index_dump` switched off again | file stays, is not read |
 
-Es gibt nichts zu migrieren und kein Format zu heben: die Datei ist reine
-abgeleitete Zwischenablage.  Wer sie loescht, verliert Zeit, nie Daten.
+There is nothing to migrate and no format to upgrade: the file is a purely
+derived scratch store.  Whoever deletes it loses time, never data.
 
-#### Gemessen (07.11.2026)
+#### Measured (2026-11-07)
 
-Ein `Kv<string:Fakt>` mit 300 000 Zeilen und zwei indizierten Feldern --
-`subj` mit 15 000 verschiedenen Werten (kleine Buckets) und `rel` mit 40
-(Buckets von 7500).  Gemessen wird oeffnen, `len` und zwei `findings_by`;
-`tests/measure_sidx.sh` wiederholt jede Messung:
+A `Kv<string:Fakt>` with 300,000 rows and two indexed fields --
+`subj` with 15,000 distinct values (small buckets) and `rel` with 40
+(buckets of 7500).  What is measured is opening, `len` and two `findings_by`;
+`tests/measure_sidx.sh` repeats every measurement:
 
-| Oeffnen | Zeit | RSS |
+| Open | Time | RSS |
 | --- | --- | --- |
-| mit beiden Dumps | **0,12 s** | **98 MB** |
-| ohne Nebenindex-Dump (Primaerindex-Dump da) | 1,45 s | 171 MB |
-| ohne jeden Dump | 1,82 s | 189 MB |
+| with both dumps | **0.12 s** | **98 MB** |
+| without secondary index dump (primary index dump present) | 1.45 s | 171 MB |
+| without any dump | 1.82 s | 189 MB |
 
-Der Nebenindex-Dump nimmt also 1,33 s und 73 MB ab -- hier das Zwoelffache an
-Zeit und 43 % des Speichers.  Platz kostet er: 4,7 MB (`rel`) und 5,1 MB
-(`subj`) neben einer 33,5-MB-WAL, grob 16 Byte je Paar plus die Strings.
+So the secondary index dump removes 1.33 s and 73 MB -- here twelve times the
+time and 43 % of the memory.  It costs space: 4.7 MB (`rel`) and 5.1 MB
+(`subj`) next to a 33.5 MB WAL, roughly 16 bytes per pair plus the strings.
 
-#### Gemessen an cai (07.11.2026)
+#### Measured on cai (2026-11-07)
 
-Diese Zahlen gelten fuer dieses Modell.  Darum nachgemessen am echten
-Wissensgraphen von `cai` -- auf einer Kopie von `out/n0511_alles`, 3,7 GB WAL
-ueber 10 Stores, davon 13 indizierte Felder (4 allein auf `v2_fakten`:
+These numbers apply to this model.  Hence re-measured on the real
+knowledge graph of `cai` -- on a copy of `out/n0511_alles`, 3.7 GB WAL
+across 10 stores, with 13 indexed fields (4 on `v2_fakten` alone:
 `rel`, `subj`, `obj`, `rel_subj`):
 
 | | |
 |---|---|
-| Dinge | 3.549.716 |
-| Namen | 6.480.381 |
-| Fakten | 5.797.217 |
-| Propositionen | 2.295.484 |
-| Relationen | 42.886 |
+| Things | 3,549,716 |
+| Names | 6,480,381 |
+| Facts | 5,797,217 |
+| Propositions | 2,295,484 |
+| Relations | 42,886 |
 
-Gemessen wird `cai2 graph stats` -- oeffnen, Zaehler, Relationsnamen.  Jede
-Zeile ist ein ganzer Prozessstart:
+What is measured is `cai2 graph stats` -- opening, counters, relation names.  Every
+row is a whole process start:
 
-| Zustand | Zeit | RSS |
+| State | Time | RSS |
 | --- | --- | --- |
-| kein Dump (so liegen die Gedaechtnisse heute) | 251 s | 19,3 GB |
-| nur Primaerindex-Dump (`.kvidx`, §6.2.1) | 230 s | 18,1 GB |
-| **beide Dumps** | **3,7 s** (warm 0,70 s) | **4,2 GB** |
+| no dump (how the memories are stored today) | 251 s | 19.3 GB |
+| only primary index dump (`.kvidx`, §6.2.1) | 230 s | 18.1 GB |
+| **both dumps** | **3.7 s** (warm 0.70 s) | **4.2 GB** |
 
-Das Ergebnis kehrt die Erwartung um: der **Primaerindex**-Dump nimmt hier fast
-nichts ab (251 → 230 s, 8 %).  Der ganze Gewinn liegt am **Nebenindex**-Dump,
-230 s → 3,7 s und 18,1 → 4,2 GB.  Der Grund steht in §6.2.1: den Primaerindex
-baut ein WAL-Durchlauf, `aiml_db_index_backfill` dagegen **dekodiert jede
-Zeile** einmal, nur um ein Feld zu lesen.  Das ist die Zeit, und es ist der
-Speicher.
+The result reverses the expectation: the **primary index** dump removes almost
+nothing here (251 → 230 s, 8 %).  The whole gain lies with the **secondary index** dump,
+230 s → 3.7 s and 18.1 → 4.2 GB.  The reason is in §6.2.1: the primary index is
+built by one WAL pass, whereas `aiml_db_index_backfill` **decodes every
+row** once, just to read one field.  That is the time, and it is the
+memory.
 
-Platz kostet er: 3,6 GB `.kvsidx` neben 1,2 GB `.kvidx` und 3,7 GB WAL (je
-Store: `fakten` 1,4 GB, `namen` 960 MB, `props` 954 MB, `dinge` 302 MB).  Der
-Nebenindex-Dump ist hier also **groesser als der Primaerindex-Dump** -- er traegt
-je Paar den Feldwert UND den kv-Schluessel, waehrend `.kvidx` nur Schluessel
-plus `(offset, length)` haelt.
+It costs space: 3.6 GB of `.kvsidx` next to 1.2 GB of `.kvidx` and 3.7 GB of WAL (per
+store: `fakten` 1.4 GB, `namen` 960 MB, `props` 954 MB, `dinge` 302 MB).  The
+secondary index dump is therefore **larger than the primary index dump** here -- it carries
+the field value AND the kv key per pair, while `.kvidx` only holds keys
+plus `(offset, length)`.
 
-Einmalige Kosten: ein Checkpoint-Durchlauf schreibt alle 22 Dateien und brauchte
-7:34 (21,7 GB RSS), weil er die Indizes erst baut.  Ein vorhandenes Gedaechtnis
-bekommt die Dateien also **beim Checkpoint, nicht beim Oeffnen**.
+One-off cost: a checkpoint pass writes all 22 files and took
+7:34 (21.7 GB RSS), because it first builds the indexes.  An existing memory
+therefore gets the files **at checkpoint time, not on open**.
 
-Die Gegenprobe, ohne die keine der Zahlen etwas heisst: die Ausgabe von
-`graph stats` ist mit und ohne Nebenindex-Dump **byte-gleich** (`cmp`), und die
-schnelle Messung wurde nach der langsamen wiederholt, damit die Reihenfolge im
-Seitencache sie nicht erklaert.
+The cross-check without which none of the numbers means anything: the output of
+`graph stats` is **byte-identical** with and without the secondary index dump (`cmp`), and the
+fast measurement was repeated after the slow one, so that the order in the
+page cache does not explain it.
 
-Und die Pruefung, ohne die eine gute Zahl nichts bedeutet: `tests/run_sidx_gates.sh`
-Gate 3 **vergiftet** eine gueltige Datei (ein Schluessel im Stringblock
-umgeschrieben, Stempel unberuehrt) und verlangt, dass der vergiftete Wert
-herauskommt.  Ein gruener Unit-Test allein beweist nichts -- faellt der
-Stempel, fuellt der Store still auf, und alles stimmt trotzdem.
+And the check without which a good number means nothing: `tests/run_sidx_gates.sh`
+gate 3 **poisons** a valid file (a key in the string block
+rewritten, stamp untouched) and demands that the poisoned value
+comes out.  A green unit test alone proves nothing -- if the
+stamp fails, the store silently refills, and everything is right anyway.
 
-#### Was der Dump NICHT loest
+#### What the dump does NOT solve
 
-- Das erste Fuellen eines Stores — da gibt es noch nichts zu laden.
-- Zusammengesetzte Indizes, Bereichsabfragen: unveraendert ausser Umfang.
-- Den Speicher der **Schreibseite**: wer viele verschiedene Feldwerte anfasst,
-  kopiert sie einzeln in den Speicher-Index und landet am Ende dort, wo V1
-  angefangen hat.  Der Dump ist fuer lesende Oeffnungen gebaut.
+- The first fill of a store — there is nothing to load yet.
+- Composite indexes, range queries: unchanged except in scope.
+- The memory of the **write side**: whoever touches many distinct field values
+  copies them one by one into the memory index and ends up where V1
+  started.  The dump is built for reading opens.
 
 ## C-API (`src/sys/db_runtime.h`)
 
@@ -428,9 +428,9 @@ void  aiml_db_index_backfill(void* kv, void* idx, int32_t field_offset, int32_t 
 
 `field_tag` for backfill: `0`=string, `1`=i32, `2`=i64, `3`=list<string>.
 
-`aiml_db_index_backfill` kehrt ohne Arbeit zurueck, wenn der Index seinen Dump
-geladen hat (siehe Persistence) — der Dump IST das Ergebnis des Auffuellens,
-gestempelt auf dieselben WAL-Bytes.
+`aiml_db_index_backfill` returns without doing any work if the index has loaded its dump
+(see Persistence) — the dump IS the result of the fill,
+stamped onto the same WAL bytes.
 
 ## Out-of-Scope (V1)
 
@@ -447,9 +447,9 @@ gestempelt auf dieselben WAL-Bytes.
 unique, lower mode, update-diff, reopen-survival (write+read pair),
 backfill on first-time enable (write+read pair).  All passing.
 
-`tests/test_kv_sidx_*.aiml` — der Nebenindex-Dump: Schreiben mit Checkpoint,
-Lesen aus dem Dump, Aenderung nach dem Laden (Kopie je Feldwert), `unique` und
-`"lower"`, beschaedigte Datei, Stempelbruch durch einen Schreibzugriff ohne
-Checkpoint, `kv.clear`.  Dazu `tests/run_sidx_gates.sh` fuer das, was eine
-einzelne .aiml-Datei nicht pruefen kann (Dateien zwischen zwei Laeufen
-vertauschen, Groesse und Zeit messen).
+`tests/test_kv_sidx_*.aiml` — the secondary index dump: writing with checkpoint,
+reading from the dump, change after loading (copy per field value), `unique` and
+`"lower"`, damaged file, stamp break through a write without
+checkpoint, `kv.clear`.  Plus `tests/run_sidx_gates.sh` for what a
+single .aiml file cannot check (swapping files between two runs,
+measuring size and time).

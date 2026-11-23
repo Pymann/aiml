@@ -15,7 +15,7 @@
     height: 280
     texture: "assets/frame.png"
     draggable: true
-    input_transparent: false      # Standard; true = Instanzen nehmen keine Eingabe
+    input_transparent: false      # default; true = instances take no input
     children:
       - { name: title, type: label, pos_x: 100, pos_y: 250, anchor: center, font_size: 11, color: 0xFFFFFF }
       - { name: art,   type: sprite, pos_x: 15, pos_y: 100, width: 170, height: 120 }
