@@ -53,9 +53,9 @@ static void emitThrow(CompilerContext& ctx, const std::string& excClass) {
             "__cxa_throw", ctx.module());
     }
 
-    // spec/61 §9.3 record layout {object, free thunk, Typ-Tag}; ein Laufzeit-Wurf hat
-    // kein Objekt und keinen Thunk, aber sehr wohl einen NAMEN — spec/22 listet die
-    // eingebauten Ausnahmen, und ohne Tag koennte kein `catch` sie nach Typ waehlen.
+    // spec/61 §9.3 record layout {object, free thunk, type tag}; a runtime throw has
+    // no object and no thunk, but it does have a NAME — spec/22 lists the
+    // built-in exceptions, and without a tag no `catch` could select them by type.
     llvm::Value* excAlloc = ctx.builder.CreateCall(allocFn,
         {ctx.getSizeConst(ctx.getExcRecordSize())}, "exc_alloc");
     ctx.builder.CreateStore(llvm::ConstantPointerNull::get(ptrTy),
@@ -79,13 +79,13 @@ static void emitThrow(CompilerContext& ctx, const std::string& excClass) {
     ctx.builder.CreateUnreachable();
 }
 
-// Wie emitThrow, aber mit BEGRUENDUNG: der Wurf traegt ein echtes Objekt,
-// dessen Feld `message` auf den uebergebenen Text zeigt.  Ohne das steht an
-// Stelle [0] ein Nullzeiger — und ein `catch`, das `ex.message` liest, faellt
-// um (gemessen 25.10.2026 beim Bau von `ctx`, spec/29_2 §14a).
-// `codeVal` (i32, optional) fuellt ein ZWEITES Feld, wo die Ausnahmeklasse eines hat:
-// spec/33_2 §6.4 gibt ZimError neben `message` einen `code`, damit ein Handler nach Grund
-// verzweigen kann, ohne den Text zu lesen.
+// Like emitThrow, but with a REASON: the throw carries a real object
+// whose field `message` points to the given text.  Without this there is a
+// null pointer at position [0] — and a `catch` that reads `ex.message` falls
+// over (measured 2026-10-25 while building `ctx`, spec/29_2 §14a).
+// `codeVal` (i32, optional) fills a SECOND field where the exception class has one:
+// spec/33_2 §6.4 gives ZimError a `code` next to `message`, so that a handler can branch
+// on the reason without reading the text.
 static void emitThrowMsg(CompilerContext& ctx, const std::string& excClass,
                          llvm::Value* msgPtr, llvm::Value* codeVal = nullptr) {
     llvm::PointerType* ptrTy = llvm::PointerType::getUnqual(ctx.context);
@@ -103,16 +103,16 @@ static void emitThrowMsg(CompilerContext& ctx, const std::string& excClass,
             "__cxa_throw", ctx.module());
     }
 
-    // Das Objekt: die eingebaute Ausnahmeklasse traegt genau ein Feld
-    // (`message`, ein String) — siehe die Registrierung in ast_compiler.cpp.
+    // The object: the built-in exception class carries exactly one field
+    // (`message`, a string) — see the registration in ast_compiler.cpp.
     llvm::Value* obj = llvm::ConstantPointerNull::get(ptrTy);
     auto it = ctx.classes.find(excClass);
     if (msgPtr && it != ctx.classes.end()) {
         if (auto* st = llvm::dyn_cast_or_null<llvm::StructType>(it->second.type)) {
             uint64_t sz = ctx.module().getDataLayout().getTypeAllocSize(st);
-            // size_t, nicht fest i64: auf wasm32 deklariert der uebrige Code
-            // `malloc(i32)` (ctx.getSizeType()), und eine abweichende Breite
-            // macht das ganze Modul ungueltig.
+            // size_t, not a fixed i64: on wasm32 the rest of the code declares
+            // `malloc(i32)` (ctx.getSizeType()), and a different width
+            // makes the whole module invalid.
             llvm::Function* mallocFn = ctx.getFunction("malloc", ptrTy, {ctx.getSizeType()});
             obj = ctx.builder.CreateCall(mallocFn, {ctx.getSizeConst(sz)}, "exc_obj");
             ctx.builder.CreateStore(msgPtr,
@@ -153,7 +153,7 @@ static void emitThrowMsg(CompilerContext& ctx, const std::string& excClass,
     ctx.builder.CreateUnreachable();
 }
 
-// Wie emitGuard, nur mit Begruendung.
+// Like emitGuard, only with a reason.
 static llvm::BasicBlock* emitGuardMsg(CompilerContext& ctx, llvm::Value* flag,
                                       const std::string& throwLabel,
                                       const std::string& continueLabel,
@@ -170,7 +170,7 @@ static llvm::BasicBlock* emitGuardMsg(CompilerContext& ctx, llvm::Value* flag,
     return continueBB;
 }
 
-// Wie emitGuardMsg, nur traegt der Wurf zusaetzlich einen Code (ZimError, spec/33_2 §6.4).
+// Like emitGuardMsg, only the throw additionally carries a code (ZimError, spec/33_2 §6.4).
 static llvm::BasicBlock* emitGuardMsgCode(CompilerContext& ctx, llvm::Value* flag,
                                           const std::string& throwLabel,
                                           const std::string& continueLabel,
@@ -591,7 +591,7 @@ void registerBuiltins(CompilerContext& ctx) {
         jsInfo.members["pretty"]  = mk(i32, 0, "i32");
         jsInfo.members["indent"]  = mk(p,   1, "string");
         jsInfo.members["newline"] = mk(p,   2, "string");
-        jsInfo.members["bare"]    = mk(i32, 3, "i32");   // spec/29 §5.2a: ohne __type
+        jsInfo.members["bare"]    = mk(i32, 3, "i32");   // spec/29 §5.2a: without __type
         jsInfo.members["skip_empty"] = mk(i32, 4, "i32");   // spec/29 §5.2c: Leeres weglassen
         // spec/61 §7/§6.1: JsonStyle was already registered (context.h) and registerTypes built its
         // heap-field RELEASE metadata (hasHeapFields + serNodes) before compile→registerBuiltins runs.
@@ -904,8 +904,8 @@ void registerBuiltins(CompilerContext& ctx) {
         };
 
         // cascade.type_range(type: string) → list<i32>
-        //   Mögliche Werte eines Feld-Typs: enum→Member-Werte, cascade→Sub-Node-
-        //   IDs, value/alias→leer.  Serialisierbar (sys.serialize).
+        //   Possible values of a field type: enum→member values, cascade→sub-node
+        //   IDs, value/alias→empty.  Serialisable (sys.serialize).
         cas.builtinFuncs["type_range"] = [](CompilerContext& ctx,
                                             const std::vector<IRValue*>& args) -> IRValue* {
             auto* i32   = ctx.builder.getInt32Ty();
@@ -929,9 +929,9 @@ void registerBuiltins(CompilerContext& ctx) {
         };
 
         // cascade.describe(cascade: string, opcodes?: list<i32>) → list<string>
-        //   Datentyp-Kombinationen der Opcodes (opcodes leer/fehlt → ALLE).
-        //   Element 0 = Opcode-Enum-Name (z.B. "EffectCode"); danach je Opcode
-        //   eine Zeile "[id]node [range]Type …".
+        //   Data type combinations of the opcodes (opcodes empty/missing → ALL).
+        //   Element 0 = opcode enum name (e.g. "EffectCode"); after that one
+        //   line per opcode "[id]node [range]Type …".
         cas.builtinFuncs["describe"] = [](CompilerContext& ctx,
                                           const std::vector<IRValue*>& args) -> IRValue* {
             auto* i32   = ctx.builder.getInt32Ty();
@@ -1123,9 +1123,9 @@ void registerBuiltins(CompilerContext& ctx) {
             ctx.builder.getInt64Ty(), {});
         return ctx.ir_gen->wrap(ctx.builder.CreateCall(f));
     };
-    // spec/23 §4.1 — Host-Parallelitaet: drei Fragen, drei Funktionen.  Call-Form
-    // only; eine Property-Form waere genau der sys.env-Fehler (dokumentierte
-    // Property, emittierter Nullpointer) noch einmal.
+    // spec/23 §4.1 — host parallelism: three questions, three functions.  Call form
+    // only; a property form would be exactly the sys.env bug (documented
+    // property, emitted null pointer) once more.
     sys.builtinFuncs["core_count"] = [](CompilerContext& ctx, const std::vector<IRValue*>&) -> IRValue* {
         llvm::Function* f = ctx.getFunction("aiml_sys_core_count",
             ctx.builder.getInt32Ty(), {});
@@ -1236,14 +1236,14 @@ void registerBuiltins(CompilerContext& ctx) {
     };
 
     // spec/65 F65-37: sys.export_symbol(name, fn, level) → i32
-    // Der Wirt bietet ein eigenes Symbol an.  EIN Aufruf fuer beide Haelften der
-    // Uebergabe: Adresse (AddSymbol, damit der JIT auflöst) und Name+Level (die
-    // Export-Tabelle, aus der die Zugriffspruefung liest).  Zwei Aufrufe waeren zwei
-    // Listen, die driften (F65-23).
+    // The host offers a symbol of its own.  ONE call for both halves of the
+    // handover: address (AddSymbol, so that the JIT resolves it) and name+level (the
+    // export table the access check reads from).  Two calls would be two
+    // lists that drift (F65-23).
     //
-    // Kein eigener Waechter noetig: `sys` ist als Namensraum zu (F65-35), eine
-    // eingeschraenkte Sitzung wird schon an der Dispatch-Stelle mit `clearance-builtin`
-    // abgelehnt.  Ein Skript, das sich selbst exportieren koennte, setzte sein eigenes Level.
+    // No guard of its own needed: `sys` is closed as a namespace (F65-35), a
+    // restricted session is already refused at the dispatch point with `clearance-builtin`.
+    // A script that could export itself would set its own level.
     sys.builtinFuncs["export_symbol"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
         llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
         llvm::Type* i32 = ctx.builder.getInt32Ty();
@@ -1262,11 +1262,11 @@ void registerBuiltins(CompilerContext& ctx) {
         return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {nm, fp, lv}));
     };
 
-    // spec/65 F65-32: die Richtlinie der Sitzung ist LESBAR, nie schreibbar.  Ein Setzer
-    // waere Selbstbeglaubigung (F65-6) — das Skript erteilte sich selbst ein Recht.  Lesen
-    // ist harmlos (Level sind nicht geheim, F65-16) und noetig, damit ein Skript eine
-    // brauchbare Meldung geben kann statt an einer Compiler-Diagnose zu scheitern.
-    // Der Namensraum bleibt in `clearance_builtins.h` ZU; nur diese drei sind offen.
+    // spec/65 F65-32: the session's policy is READABLE, never writable.  A setter
+    // would be self-certification (F65-6) — the script would grant itself a right.  Reading
+    // is harmless (levels are not secret, F65-16) and necessary so that a script can give a
+    // usable message instead of failing on a compiler diagnostic.
+    // The namespace stays CLOSED in `clearance_builtins.h`; only these three are open.
     {
         auto& clr = ctx.namespaces["clearance"];
         auto reader = [](const char* rt) {
@@ -1316,9 +1316,9 @@ void registerBuiltins(CompilerContext& ctx) {
         return ownedStringResult(ctx, ctx.builder.CreateCall(
             ctx.getFunction("aiml_sys_format_fixed", p, {d, i32Ty}), {val, dec}));
     };
-    // spec/23 §5.6: sys.require_tools(csv) → "" oder ALLES Fehlende.  Ein Ort
-    // fuer diese Frage (F23-43): `requires:` (spec/62 §18.2) und der cosmos-
-    // Agent rufen denselben Code, statt zwei Pruefungen zu pflegen.
+    // spec/23 §5.6: sys.require_tools(csv) → "" or EVERYTHING that is missing.  One place
+    // for this question (F23-43): `requires:` (spec/62 §18.2) and the cosmos
+    // agent call the same code instead of maintaining two checks.
     sys.builtinFuncs["require_tools"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
         auto* p = llvm::PointerType::get(ctx.context, 0);
         llvm::Value* spec = args.empty()
@@ -1668,10 +1668,10 @@ void registerBuiltins(CompilerContext& ctx) {
         return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {f}));
     };
 
-    // spec/23: io.read_line(f) → eine Zeile OHNE Umbruch.  `io.read` ist ein Blocklesen und
-    // bricht nicht am Zeilenende ab (Backlog-Punkt 6).  Das Ergebnis ist ein OWNED String
-    // (aiml_str_dup in der Laufzeit) und wird als String-Temp verbucht, damit ein
-    // verbrauchendes decl/set es uebernimmt und ein unbenutztes am Satzende freigegeben wird.
+    // spec/23: io.read_line(f) → one line WITHOUT the line break.  `io.read` is a block read and
+    // does not stop at the end of the line (backlog item 6).  The result is an OWNED string
+    // (aiml_str_dup in the runtime) and is booked as a string temp, so that a
+    // consuming decl/set takes it over and an unused one is freed at the end of the statement.
     io.builtinFuncs["read_line"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
         llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
         if (args.empty()) return ctx.ir_gen->wrap(ctx.builder.CreateGlobalStringPtr(""));
@@ -2725,27 +2725,27 @@ void registerBuiltins(CompilerContext& ctx) {
     ctx.classes["Code"] = std::move(codeInfo);
 
     // -----------------------------------------------------------------------
-    // spec/62 §13.5: step / stage / pipeline — zusammensetzbare Pipelines.
-    // Opake i8*-Handles wie Code/process/path; die Struktur waechst, also
-    // traegt sie kein Struct.  Der RUMPF eines Schritts ist ein Code-Bundle
-    // (F62-85), damit Reinheitspruefung und inhaltsabgeleiteter Schluessel
-    // erhalten bleiben.
+    // spec/62 §13.5: step / stage / pipeline — composable pipelines.
+    // Opaque i8* handles like Code/process/path; the structure grows, so
+    // no struct carries it.  The BODY of a step is a code bundle
+    // (F62-85), so that the purity check and the content-derived key
+    // are preserved.
     // -----------------------------------------------------------------------
     {
         auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
         auto* i32 = ctx.builder.getInt32Ty();
         auto* vd  = ctx.builder.getVoidTy();
 
-        // Hilfslambdas: Methode mit (string) / (i32) / (handle) / () Signatur.
-        // Ein Argument, das sich nicht uebersetzen liess, ist nullptr — der
-        // Fehler steht dann schon im Protokoll.  Weiterzurechnen hiesse,
-        // `getType()` auf nullptr zu rufen: der Uebersetzer stirbt an der
-        // Eingabe, die er gerade bemaengelt hat (gemessen 25.10.2026 mit
-        // `cache: haeufig`).  Also: hier anhalten.
+        // Helper lambdas: method with (string) / (i32) / (handle) / () signature.
+        // An argument that could not be compiled is nullptr — the
+        // error is then already in the log.  Computing on would mean
+        // calling `getType()` on nullptr: the compiler dies on the
+        // input it is currently complaining about (measured 2026-10-25 with
+        // `cache: haeufig`).  So: stop here.
         auto argOrNull = [](CompilerContext& ctx, AIML::IRValue* rv,
                             const char* what) -> llvm::Value* {
             llvm::Value* got = rv ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(rv)) : nullptr;
-            if (!got) LOG_ERROR(std::string(what) + ": das Argument liess sich nicht uebersetzen");
+            if (!got) LOG_ERROR(std::string(what) + ": the argument could not be compiled");
             return got;
         };
         auto mkStr = [argOrNull](const char* cfn) {
@@ -2798,12 +2798,12 @@ void registerBuiltins(CompilerContext& ctx) {
             };
         };
 
-        // ── spec/62 §20.4: die LESER ────────────────────────────────────────
+        // ── spec/62 §20.4: the READERS ──────────────────────────────────────
         //
-        // Je Feld ein benannter Leser, der den Schluesselnamen mitbringt — so
-        // steht der Name EINMAL in der Spec, einmal in der Umschreibung und
-        // einmal hier, und ein Tippfehler ist ein Uebersetzungsfehler statt
-        // einer leeren Zeichenkette.
+        // One named reader per field, which brings the key name along — that way
+        // the name is ONCE in the spec, once in the rewrite and
+        // once here, and a typo is a compile error instead of
+        // an empty string.
         auto mkGetStr = [](const char* cfn) {
             return [cfn](CompilerContext& ctx, llvm::Value* base,
                          AIML::AST::CallExpr*, auto) -> IRValue* {
@@ -2893,8 +2893,8 @@ void registerBuiltins(CompilerContext& ctx) {
                     ctx.getFunction(cfn, i8p, {i8p, i32, i8p}), {self, idx, kv}));
             };
         };
-        // (i32) -> Griff (stage/step).  nullptr heisst: Index schief — und das
-        // ist ein Programmfehler des Lesers, also wird geworfen (F62-154).
+        // (i32) -> handle (stage/step).  nullptr means: index out of range — and that
+        // is a programming error of the reader, so it throws (F62-154).
         auto mkIdxHandle = [](const char* cfn, const char* what) {
             return [cfn, what](CompilerContext& ctx, llvm::Value* base,
                                AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
@@ -2922,7 +2922,7 @@ void registerBuiltins(CompilerContext& ctx) {
         stepInfo.builtinMethods["set_body"]  = mkHandle("aiml_step_set_body");
         stepInfo.builtinMethods["set_cache"] = mkI32("aiml_step_set_cache");
         stepInfo.builtinMethods["use_arg"]   = mkStr("aiml_step_use_arg");
-        // spec/62 §5.6 — Reichweite, Zeitgrenze, Versuche (kein Schluesselmaterial, F62-91).
+        // spec/62 §5.6 — reach, time limit, attempts (not key material, F62-91).
         stepInfo.builtinMethods["set_on_fail"] = mkI32("aiml_step_set_on_fail");
         stepInfo.builtinMethods["set_timeout"] = mkI32("aiml_step_set_timeout");
         stepInfo.builtinMethods["set_retry"]   = mkI32("aiml_step_set_retry");
@@ -2931,8 +2931,8 @@ void registerBuiltins(CompilerContext& ctx) {
         // spec/62 §5.5 / §13.5g
         stepInfo.builtinMethods["set_per"]   = mkI32("aiml_step_set_per");
         stepInfo.builtinMethods["add_need"]  = mkStr("aiml_step_add_need");
-        // spec/62 §9: set_resolve(fn) — fn ist ein Funktionsname, wir brauchen
-        // seine Adresse (wie bei pipeline.run(beobachter)).
+        // spec/62 §9: set_resolve(fn) — fn is a function name, we need
+        // its address (as with pipeline.run(observer)).
         stepInfo.builtinMethods["set_resolve"] = [](CompilerContext& ctx, llvm::Value* base,
             AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
             (void)evalExpr;
@@ -2946,7 +2946,7 @@ void registerBuiltins(CompilerContext& ctx) {
                     fnPtr = ctx.builder.CreateBitCast(it->second.func, i8p, "probe_fn");
                 if (!fnPtr) {
                     LOG_ERROR(ctx.fmtLoc(call->sourceNode) +
-                              "step.set_resolve: '" + var->name + "' ist keine bekannte Funktion");
+                              "step.set_resolve: '" + var->name + "' is not a known function");
                     return nullptr;
                 }
             }
@@ -2968,8 +2968,8 @@ void registerBuiltins(CompilerContext& ctx) {
         stageInfo.builtinMethods["set_name"]    = mkStr("aiml_stage_set_name");
         stageInfo.builtinMethods["set_runs_on"] = mkStr("aiml_stage_set_runs_on");
         stageInfo.builtinMethods["add_step"]    = mkHandle("aiml_stage_add_step");
-        // Die verteilten Schluessel (spec/62 §18): geschrieben von der
-        // Umschreibung, gelesen vom Wirt (§20.4).
+        // The distributed keys (spec/62 §18): written by the
+        // rewrite, read by the host (§20.4).
         stageInfo.builtinMethods["set_attr"]  = [](CompilerContext& ctx, llvm::Value* base,
             AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
             auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
@@ -3042,8 +3042,8 @@ void registerBuiltins(CompilerContext& ctx) {
         pipeInfo.builtinMethods["push_from"]        = mkIdxKeyStr("aiml_pipeline_push_field", "from");
         pipeInfo.builtinMethods["push_to"]          = mkIdxKeyStr("aiml_pipeline_push_field", "to");
         pipeInfo.builtinMethods["push_tag"]         = mkIdxKeyStr("aiml_pipeline_push_field", "tag");
-        // run() oder run(beobachter) — spec/62 §13.2.  Der Beobachter ist eine
-        // Funktion (StepRun) -> void; ohne ihn laeuft es ebenso (F62-79).
+        // run() or run(observer) — spec/62 §13.2.  The observer is a
+        // function (StepRun) -> void; without it, it runs just the same (F62-79).
         pipeInfo.builtinMethods["run"] = [](CompilerContext& ctx, llvm::Value* base,
             AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
             auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
@@ -3053,7 +3053,7 @@ void registerBuiltins(CompilerContext& ctx) {
                 return ctx.ir_gen->wrap(ctx.builder.CreateCall(
                     ctx.getFunction("aiml_pipeline_run", i32, {i8p}), {self}));
             }
-            // Argument ist ein FUNKTIONSNAME; wir brauchen seine Adresse.
+            // The argument is a FUNCTION NAME; we need its address.
             llvm::Value* fnPtr = nullptr;
             if (auto* var = dynamic_cast<AIML::AST::VariableExpr*>(call->args[0].get())) {
                 if (auto* fi = ctx.functions.count(var->name) ? &ctx.functions[var->name] : nullptr) {
@@ -3061,7 +3061,7 @@ void registerBuiltins(CompilerContext& ctx) {
                 }
                 if (!fnPtr) {
                     LOG_ERROR(ctx.fmtLoc(call->sourceNode) +
-                              "pipeline.run: '" + var->name + "' ist keine bekannte Funktion");
+                              "pipeline.run: '" + var->name + "' is not a known function");
                     return ctx.ir_gen->getInt32(-1);
                 }
             }
@@ -3096,12 +3096,12 @@ void registerBuiltins(CompilerContext& ctx) {
                 llvm::Type::getVoidTy(ctx.context), {i8p}), {self});
             return nullptr;
         };
-        // add_param(axis, list<string>) oder add_param(axis, typ, list<string>).
+        // add_param(axis, list<string>) or add_param(axis, type, list<string>).
         //
-        // spec/62 §4.1: eine Achse HAT einen Typ (F62-1) — die deklarierte Form
-        // erzeugt die dreistellige Fassung.  Zusammengesetzt (§13.5) bleibt die
-        // zweistellige: dort liest der Rumpf `step.arg` selbst, also ist der Typ
-        // `string`.  Ein Zusatzargument, kein zweites Format.
+        // spec/62 §4.1: an axis HAS a type (F62-1) — the declared form
+        // produces the three-argument version.  Composed (§13.5) it stays
+        // two-argument: there the body reads `step.arg` itself, so the type is
+        // `string`.  An extra argument, not a second format.
         pipeInfo.builtinMethods["add_param"] = [](CompilerContext& ctx, llvm::Value* base,
             AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
             auto* i8p   = ctx.builder.getInt8Ty()->getPointerTo();
@@ -3124,8 +3124,8 @@ void registerBuiltins(CompilerContext& ctx) {
                 ctx.builder.getVoidTy(), {i8p, i8p, i8p, ptrTy}), {self, axis, type, lst});
             return nullptr;
         };
-        // spec/62 §13.1: StepRun — was der Beobachter bekommt.
-        // Layout MUSS zu AimlStepRun in pipeline_runtime.h passen.
+        // spec/62 §13.1: StepRun — what the observer gets.
+        // The layout MUST match AimlStepRun in pipeline_runtime.h.
         {
             auto* pTy  = llvm::PointerType::get(ctx.context, 0);
             auto* i32t = ctx.builder.getInt32Ty();
@@ -3159,11 +3159,11 @@ void registerBuiltins(CompilerContext& ctx) {
         ctx.namespaces["stage"].builtinFuncs["new"]    = mkNew("aiml_stage_new");
         ctx.namespaces["pipeline"].builtinFuncs["new"] = mkNew("aiml_pipeline_new");
 
-        // spec/62 §5.7 / F62-90: was der Rumpf ueber seinen eigenen Ausgang
-        // sagt.  Im Namensraum `step`, weil ein Schritt-Rumpf hier eine
-        // gewoehnliche Funktion ist und auch im gewoehnlichen Kontext
-        // mituebersetzt wird — ein Name, der nur im Rumpf existierte, waere
-        // dort 'Unknown function'.  Die WIRKUNG haengt am laufenden Schritt.
+        // spec/62 §5.7 / F62-90: what the body says about its own outcome.
+        // In the namespace `step`, because a step body is an
+        // ordinary function here and is also compiled in the ordinary context
+        // — a name that only existed in the body would be
+        // 'Unknown function' there.  The EFFECT depends on the running step.
         ctx.namespaces["step"].builtinFuncs["set_status"] =
             [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
                 auto* i32t = ctx.builder.getInt32Ty();
@@ -3183,7 +3183,7 @@ void registerBuiltins(CompilerContext& ctx) {
                 return nullptr;
             };
         };
-        // spec/62 §13.5e: wie ein Rumpf seine Lane sieht.
+        // spec/62 §13.5e: how a body sees its lane.
         auto mkStrRet = [](const char* cfn, bool takesName) {
             return [cfn, takesName](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
                 auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
@@ -3203,8 +3203,8 @@ void registerBuiltins(CompilerContext& ctx) {
         ctx.namespaces["step"].builtinFuncs["host"]      = mkStrRet("aiml_step_host", true);
         ctx.namespaces["step"].builtinFuncs["workspace"] = mkStrRet("aiml_step_workspace", false);
         ctx.namespaces["step"].builtinFuncs["need_result"] = mkStrRet("aiml_step_need_result", true);
-        // spec/62 F62-118: eine Zahl wird dezimal veroeffentlicht — aufgezeichnet
-        // wird die serialisierte Form, und die ist Text.
+        // spec/62 F62-118: a number is published in decimal — what is recorded
+        // is the serialised form, and that is text.
         ctx.namespaces["step"].builtinFuncs["set_result"] =
             [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
                 auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
@@ -3416,10 +3416,10 @@ void registerBuiltins(CompilerContext& ctx) {
     {
         auto& yaml = ctx.namespaces["yaml"];
 
-        // spec/60: yaml.tokens(text) → list<i32>, Tripel (start, len, kind).
-        // Fehlertoleranter Lexer fuer Hervorhebung — kein Parser (cosmos
-        // spec/98 F98-4/F98-5).  Listen-Rueckgabe wie cascade.field_indices:
-        // unter memV3 ein Heap-Handle, sonst ein Entry-Alloca.
+        // spec/60: yaml.tokens(text) → list<i32>, triples (start, len, kind).
+        // Error-tolerant lexer for highlighting — not a parser (cosmos
+        // spec/98 F98-4/F98-5).  List return like cascade.field_indices:
+        // under memV3 a heap handle, otherwise an entry alloca.
         yaml.builtinFuncs["tokens"] = [](CompilerContext& ctx,
                                          const std::vector<IRValue*>& args) -> IRValue* {
             auto* i32   = ctx.builder.getInt32Ty();
@@ -3587,7 +3587,7 @@ void registerBuiltins(CompilerContext& ctx) {
             return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {src, dst}));
         };
 
-        // io.set_exec(path, on) → i32: Ausführbar-Bit setzen (on != 0) oder entfernen.
+        // io.set_exec(path, on) → i32: set (on != 0) or remove the executable bit.
         io.builtinFuncs["set_exec"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
             llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
             llvm::Type* i32 = ctx.builder.getInt32Ty();
@@ -3612,7 +3612,7 @@ void registerBuiltins(CompilerContext& ctx) {
             return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {tgt, lnk}));
         };
 
-        // io.is_symlink(path) → i32: ist der Pfad selbst ein Link (folgt ihm nicht)?
+        // io.is_symlink(path) → i32: is the path itself a link (does not follow it)?
         io.builtinFuncs["is_symlink"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
             llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
             llvm::Type* i32 = ctx.builder.getInt32Ty();
@@ -3622,7 +3622,7 @@ void registerBuiltins(CompilerContext& ctx) {
             return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {v}));
         };
 
-        // io.read_link(path) → string: Linkziel ("" wenn kein Link / Fehler).
+        // io.read_link(path) → string: link target ("" if not a link / error).
         io.builtinFuncs["read_link"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
             llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
             llvm::Function* f = ctx.getFunction("aiml_io_read_link", i8p, {i8p});
@@ -3635,7 +3635,7 @@ void registerBuiltins(CompilerContext& ctx) {
             return ctx.ir_gen->wrap(owned);
         };
 
-        // io.link(src, dst) → i32: harter Link (0 = ok, -1 = Fehler/Grenze/Ziel existiert).
+        // io.link(src, dst) → i32: hard link (0 = ok, -1 = error/boundary/target exists).
         io.builtinFuncs["link"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
             llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
             llvm::Type* i32 = ctx.builder.getInt32Ty();
@@ -4348,8 +4348,8 @@ void registerBuiltins(CompilerContext& ctx) {
 
     // ── SSH (spec/32_6): ssh_session / ssh_channel / ssh_test_server ─────────
     {
-        // Hilfsmakros: eine Methode auf dem geladenen i8* aus dem alloca.
-        // `baseAlloca` muss geladen werden (Muster wie ws_handle oben).
+        // Helper macros: a method on the i8* loaded from the alloca.
+        // `baseAlloca` must be loaded (pattern as for ws_handle above).
 #define SSH_M0_I32(cls, mName, cName) \
         cls.builtinMethods[mName] = [](CompilerContext& ctx, llvm::Value* baseAlloca, \
             AIML::AST::CallExpr*, std::function<IRValue*(AIML::AST::Expr*)>) -> IRValue* { \
@@ -4432,8 +4432,8 @@ void registerBuiltins(CompilerContext& ctx) {
         SSH_M0_I32 (ch, "is_eof",       "aiml_ssh_ch_is_eof")
         SSH_M0_I32 (ch, "exit_code",    "aiml_ssh_ch_exit_code")
         SSH_M0_VOID(ch, "close",        "aiml_ssh_ch_close")
-        // write_buffer(buf) → i32: der buffer<u8> wird hier zerlegt
-        // (ExtractValue {4} = Daten, {0} = Länge — wie bei hash.sha256).
+        // write_buffer(buf) → i32: the buffer<u8> is taken apart here
+        // (ExtractValue {4} = data, {0} = length — as for hash.sha256).
         ch.builtinMethods["write_buffer"] = [](CompilerContext& ctx, llvm::Value* baseAlloca,
             AIML::AST::CallExpr* call, std::function<IRValue*(AIML::AST::Expr*)> evalExpr) -> IRValue* {
             llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
@@ -4475,15 +4475,15 @@ void registerBuiltins(CompilerContext& ctx) {
 #undef SSH_M1STR_I32
 #undef SSH_M1I32_STR
 
-        // ── ctx: der Kontext als eigener Namensraum (spec/29_2 §14a) ────────
+        // ── ctx: the context as a namespace of its own (spec/29_2 §14a) ────────
         //
-        // `ctx.new` gibt eine lebende Compiler-Instanz; `cx.exec` faehrt
-        // Bundles darin, und spaetere sehen, was fruehere definiert haben.
-        // Der Grund ist die Grundlast: ein frischer Kontext kostet ~96 ms,
-        // unabhaengig davon, wie wenig er tut (§15).
+        // `ctx.new` gives a live compiler instance; `cx.exec` runs
+        // bundles in it, and later ones see what earlier ones defined.
+        // The reason is the base cost: a fresh context costs ~96 ms,
+        // regardless of how little it does (§15).
         //
-        // KEINE Sicherheitsgrenze (F29_2-…e): Prozess, Adressraum und die
-        // dynamische Symboltabelle sind geteilt.
+        // NOT a security boundary (F29_2-…e): process, address space and the
+        // dynamic symbol table are shared.
         {
             CompilerContext::ClassInfo cxi;
             cxi.name      = "ctx_handle";
@@ -4497,7 +4497,7 @@ void registerBuiltins(CompilerContext& ctx) {
                 llvm::Type* i32 = ctx.builder.getInt32Ty();
                 llvm::Value* self = ctx.builder.CreateLoad(i8p, baseAlloca, "cx");
                 if (call->args.empty()) {
-                    LOG_ERROR(ctx.fmtLoc() + "cx.exec: ohne Bundle gibt es nichts auszufuehren");
+                    LOG_ERROR(ctx.fmtLoc() + "cx.exec: without a bundle there is nothing to execute");
                     return ctx.ir_gen->getInt32(-2);
                 }
                 llvm::Value* code = static_cast<llvm::Value*>(
@@ -4507,9 +4507,9 @@ void registerBuiltins(CompilerContext& ctx) {
                     {self, code}, "ctx_rc"));
             };
 
-            // cx.load(bundle) → i32: uebersetzen und einhaengen, OHNE zu
-            // laufen (F29_2-…n).  Fuer einen Wirt, der fremden Quelltext
-            // pruefen und LESEN will — ausfuehren tut ihn der Agent.
+            // cx.load(bundle) → i32: compile and link in, WITHOUT
+            // running (F29_2-…n).  For a host that wants to check and READ foreign source text
+            // — running it is the agent's job.
             cxi.builtinMethods["load"] = [](CompilerContext& ctx, llvm::Value* baseAlloca,
                 AIML::AST::CallExpr* call,
                 std::function<AIML::IRValue*(AIML::AST::Expr*)> evalExpr) -> AIML::IRValue* {
@@ -4517,7 +4517,7 @@ void registerBuiltins(CompilerContext& ctx) {
                 llvm::Type* i32 = ctx.builder.getInt32Ty();
                 llvm::Value* self = ctx.builder.CreateLoad(i8p, baseAlloca, "cx");
                 if (call->args.empty()) {
-                    LOG_ERROR(ctx.fmtLoc() + "cx.load: ohne Bundle gibt es nichts zu uebersetzen");
+                    LOG_ERROR(ctx.fmtLoc() + "cx.load: without a bundle there is nothing to compile");
                     return ctx.ir_gen->getInt32(-2);
                 }
                 llvm::Value* code = static_cast<llvm::Value*>(
@@ -4527,9 +4527,9 @@ void registerBuiltins(CompilerContext& ctx) {
                     {self, code}, "ctx_load_rc"));
             };
 
-            // cx.symbol(name, typ) → i64.  Der Typ wird GENANNT und zur
-            // Laufzeit geprueft (F29_2-…d); passt er nicht, wird geworfen —
-            // und nur dann.  Zwei Fehler, zwei Ausnahmen (F29_2-…d2).
+            // cx.symbol(name, type) → i64.  The type is NAMED and
+            // checked at runtime (F29_2-…d); if it does not match, it throws —
+            // and only then.  Two errors, two exceptions (F29_2-…d2).
             cxi.builtinMethods["symbol"] = [](CompilerContext& ctx, llvm::Value* baseAlloca,
                 AIML::AST::CallExpr* call,
                 std::function<AIML::IRValue*(AIML::AST::Expr*)> evalExpr) -> AIML::IRValue* {
@@ -4574,8 +4574,8 @@ void registerBuiltins(CompilerContext& ctx) {
                 llvm::Value* want = call->args.empty()
                     ? ctx.builder.CreateGlobalStringPtr("")
                     : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
-                // spec/61 §5: ein eigener Listen-GRIFF, kein Stack-Alloca —
-                // der Scope-Drop wuerde sonst Stapelspeicher freigeben.
+                // spec/61 §5: a list HANDLE of its own, not a stack alloca —
+                // the scope drop would otherwise free stack memory.
                 llvm::Value* lst = ctx.memV3
                     ? static_cast<llvm::Value*>(ctx.builder.CreateCall(
                           ctx.getFunction("aiml_list_handle_new", i8p, {}), {}, "ctx_names_h"))
@@ -4589,8 +4589,8 @@ void registerBuiltins(CompilerContext& ctx) {
             };
 
             // cx.errors() → list<string>.  spec/29_2 §14b (F29_2-…l): `-3`
-            // heisst „ging nicht" und ist fuer einen Wirt wertlos, der einem
-            // Menschen sagen muss, WAS falsch war.
+            // means "did not work" and is worthless to a host that has to tell a
+            // human WHAT was wrong.
             cxi.builtinMethods["errors"] = [](CompilerContext& ctx, llvm::Value* baseAlloca,
                 AIML::AST::CallExpr*,
                 std::function<AIML::IRValue*(AIML::AST::Expr*)>) -> AIML::IRValue* {
@@ -4609,10 +4609,10 @@ void registerBuiltins(CompilerContext& ctx) {
                 return ctx.ir_gen->wrap(lst);
             };
 
-            // cx.call(name, "fn() -> T") — rufen, was der Kontext uebersetzt
-            // hat (F29_2-…j).  Die SIGNATUR muss ein Literal sein: aus ihr
-            // entsteht der Aufruftyp, und der steht zur Uebersetzungszeit fest.
-            // Der NAME darf berechnet sein — ihn kennt erst der Lauf.
+            // cx.call(name, "fn() -> T") — call what the context has compiled
+            // (F29_2-…j).  The SIGNATURE must be a literal: the call type
+            // comes from it, and that is fixed at compile time.
+            // The NAME may be computed — only the run knows it.
             cxi.builtinMethods["call"] = [](CompilerContext& ctx, llvm::Value* baseAlloca,
                 AIML::AST::CallExpr* call,
                 std::function<AIML::IRValue*(AIML::AST::Expr*)> evalExpr) -> AIML::IRValue* {
@@ -4620,31 +4620,31 @@ void registerBuiltins(CompilerContext& ctx) {
                 llvm::Type* i32t = ctx.builder.getInt32Ty();
                 llvm::Type* i64t = ctx.builder.getInt64Ty();
                 if (call->args.size() < 2) {
-                    LOG_ERROR(ctx.fmtLoc() + "cx.call: Name und volle Signatur, z.B. "
+                    LOG_ERROR(ctx.fmtLoc() + "cx.call: name and full signature, e.g. "
                               "cx.call(\"demo\", \"fn() -> pipeline\") (spec/29_2 F29_2-…j)");
                     return nullptr;
                 }
                 auto* sigLit = dynamic_cast<AIML::AST::LiteralExpr*>(call->args[1].get());
                 if (!sigLit) {
-                    LOG_ERROR(ctx.fmtLoc() + "cx.call: die Signatur muss hier woertlich stehen — aus ihr "
-                              "entsteht der Aufruftyp (spec/29_2 F29_2-…j)");
+                    LOG_ERROR(ctx.fmtLoc() + "cx.call: the signature must be written literally here — the call type "
+                              "comes from it (spec/29_2 F29_2-…j)");
                     return nullptr;
                 }
-                // "fn(<argtypen>) -> <rueckgabe>", Leerzeichen zaehlen nicht.
+                // "fn(<argtypes>) -> <return>", whitespace does not count.
                 std::string sig;
                 for (char ch : sigLit->value) if (ch != ' ' && ch != '\t') sig += ch;
                 size_t open_at = sig.find('('), close_at = sig.find(')');
                 size_t arrow_at = sig.find("->");
                 if (sig.compare(0, 3, "fn(") != 0 || close_at == std::string::npos ||
                     arrow_at == std::string::npos || arrow_at < close_at) {
-                    LOG_ERROR(ctx.fmtLoc() + "cx.call: '" + sigLit->value + "' ist keine Signatur — erwartet "
-                              "wird 'fn(<argtypen>) -> <rueckgabe>' (spec/29_2 F29_2-…d3)");
+                    LOG_ERROR(ctx.fmtLoc() + "cx.call: '" + sigLit->value + "' is not a signature — expected "
+                              "is 'fn(<argtypes>) -> <return>' (spec/29_2 F29_2-…d3)");
                     return nullptr;
                 }
                 const std::string argPart = sig.substr(open_at + 1, close_at - open_at - 1);
                 const std::string retName = sig.substr(arrow_at + 2);
                 if (!argPart.empty()) {
-                    LOG_ERROR(ctx.fmtLoc() + "cx.call: Argumente sind noch nicht umgesetzt — heute nur "
+                    LOG_ERROR(ctx.fmtLoc() + "cx.call: arguments are not implemented yet — today only "
                               "'fn() -> T' (spec/29_2 F29_2-…j)");
                     return nullptr;
                 }
@@ -4658,9 +4658,9 @@ void registerBuiltins(CompilerContext& ctx) {
                     if (cls != ctx.classes.end() && cls->second.isBuiltin) retTy = i8p;
                 }
                 if (!retTy) {
-                    LOG_ERROR(ctx.fmtLoc() + "cx.call: Rueckgabetyp '" + retName + "' kann hier nicht "
-                              "entgegengenommen werden — void, i32, i64, string oder eine "
-                              "eingebaute Griffklasse (spec/29_2 F29_2-…j)");
+                    LOG_ERROR(ctx.fmtLoc() + "cx.call: return type '" + retName + "' cannot be "
+                              "received here — void, i32, i64, string or a "
+                              "built-in handle class (spec/29_2 F29_2-…j)");
                     return nullptr;
                 }
 
@@ -4697,9 +4697,9 @@ void registerBuiltins(CompilerContext& ctx) {
                 return ctx.ir_gen->wrap(got);
             };
 
-            // cx.close(): ausdrueckliches Schliessen.  Danach sind alle
-            // Adressen aus diesem Kontext ungueltig — deshalb ist es eine
-            // Handlung und kein Nebeneffekt.
+            // cx.close(): explicit closing.  Afterwards all
+            // addresses from this context are invalid — that is why it is an
+            // action and not a side effect.
             // cx.use_packages(path) → i32: the package table for `@name/…` imports
             // of THIS context (spec/21 §3.1); "" = default lookup.  0 = set.
             cxi.builtinMethods["use_packages"] = [](CompilerContext& ctx, llvm::Value* baseAlloca,
@@ -5312,10 +5312,10 @@ void registerBuiltins(CompilerContext& ctx) {
     // db.open_vec("n", d)  → VecStore
     // db.begin/commit/rollback/checkpoint → stubs (i32 0)
     {
-        // ── netfs: Netzlaufwerke ohne Mount und ohne root (spec/63) ─────
-        // Gebunden ueber dlopen (F63-1/§63.2): aiml bekommt keine
-        // Bauabhaengigkeit auf Samba, und fehlt die Bibliothek, gibt es eine
-        // klare Meldung statt eines Linkfehlers bei jedem Build.
+        // ── netfs: network drives without a mount and without root (spec/63) ─
+        // Bound via dlopen (F63-1/§63.2): aiml gets no
+        // build dependency on Samba, and if the library is missing there is a
+        // clear message instead of a link error on every build.
         {
             auto& netfs = ctx.namespaces["netfs"];
             auto* i8p   = ctx.builder.getInt8Ty()->getPointerTo();
@@ -5384,10 +5384,10 @@ void registerBuiltins(CompilerContext& ctx) {
 
         auto& db = ctx.namespaces["db"];
 
-        // ── Einblick in die GEOEFFNETEN Speicher (cosmos doc/spec/99 §99.2) ──
-        // Nur Kennzahlen, nie Inhalte (F99-7).  `open_writes` ist ein Zaehler
-        // und kein Zeitstempel: zwei Schnappschuesse verglichen sagen "bewegt
-        // sich", ohne auf dem Schreibpfad die Uhr zu lesen.
+        // ── Insight into the OPEN stores (cosmos doc/spec/99 §99.2) ──────────
+        // Only metrics, never contents (F99-7).  `open_writes` is a counter
+        // and not a timestamp: two snapshots compared say "it is moving"
+        // without reading the clock on the write path.
         db.builtinFuncs["open_count"] =
             [](CompilerContext& ctx, const std::vector<IRValue*>&) -> IRValue* {
                 return ctx.ir_gen->wrap(ctx.builder.CreateCall(
@@ -5565,10 +5565,10 @@ void registerBuiltins(CompilerContext& ctx) {
                         ? ctx.dbOpenBasePathVal
                         : llvm::ConstantPointerNull::get(
                               llvm::PointerType::getUnqual(ctx.context));
-                    // Getrennte _idx-Einsprungpunkte statt geaenderter Signatur:
-                    // getFunction prueft Signaturen NICHT (erster Deklarierer
-                    // gewinnt), und aiml_db_kv_open_persist wird auch in
-                    // tensor_runtime.cpp deklariert.
+                    // Separate _idx entry points instead of a changed signature:
+                    // getFunction does NOT check signatures (the first declarer
+                    // wins), and aiml_db_kv_open_persist is also declared in
+                    // tensor_runtime.cpp.
                     if (ctx.dbOpenIndexDump) {
                         llvm::Function* f = ctx.getFunction("aiml_db_kv_open_typed_persist_idx",
                             i8p, {i8p, i64, i8p, i8p, i32, i32});
@@ -5747,9 +5747,9 @@ void registerBuiltins(CompilerContext& ctx) {
         };
 
         // db.set_path(path) → void
-        // Setzt den globalen AionDB-Root. Nachfolgende open_* Calls mit
-        // relativem `path:` haengen ihren Sub-Pfad an diesen Root an.
-        // Wird durch AIONDB_PATH env-var ueberschrieben.
+        // Sets the global AionDB root. Subsequent open_* calls with a
+        // relative `path:` append their sub-path to this root.
+        // Overridden by the AIONDB_PATH env var.
         db.builtinFuncs["set_path"] = [](CompilerContext& ctx,
                 const std::vector<IRValue*>& args) -> IRValue* {
             if (args.empty()) return ctx.ir_gen->getInt32(0);
@@ -5763,9 +5763,9 @@ void registerBuiltins(CompilerContext& ctx) {
         };
 
         // db.get_path() → string
-        // Gibt den aktuell aufgeloesten AionDB-Root mit Trailing-Slash zurueck.
-        // Single Source of Truth — verwendet die gleiche Resolution wie jeder
-        // open_*-Call (env > set_path > "./aiondb/").
+        // Returns the currently resolved AionDB root with a trailing slash.
+        // Single source of truth — uses the same resolution as every
+        // open_* call (env > set_path > "./aiondb/").
         db.builtinFuncs["get_path"] = [](CompilerContext& ctx,
                 const std::vector<IRValue*>& /*args*/) -> IRValue* {
             llvm::Type* i8p = llvm::PointerType::getUnqual(ctx.context);
@@ -5799,18 +5799,18 @@ void registerBuiltins(CompilerContext& ctx) {
 
             llvm::Value* storeVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
 
-            // spec/31 §4.1: db.query arbeitet auf einem Store<T> (db.open).
-            // Ein Kv (db.open_kv) hat ein anderes Innenleben -- der Aufruf
-            // uebersetzte bisher SAUBER und las dann Unsinn: im
-            // DataCreatures-Server ein SIGSEGV beim Hochfahren
-            // (aiml_db_store_is_active, addr=0x3f800000 -- das Bitmuster von
-            // 1.0f als Zeiger benutzt), in einer kleinen Probe stumm eine
-            // leere Liste.  Beides ist dieselbe Verwechslung, und beide
-            // Male faellt sie erst zur Laufzeit auf.
+            // spec/31 §4.1: db.query works on a Store<T> (db.open).
+            // A Kv (db.open_kv) has different internals -- the call
+            // used to compile CLEANLY and then read nonsense: in the
+            // DataCreatures server a SIGSEGV at startup
+            // (aiml_db_store_is_active, addr=0x3f800000 -- the bit pattern of
+            // 1.0f used as a pointer), in a small probe silently an
+            // empty list.  Both are the same mix-up, and both
+            // times it only shows up at runtime.
             if (ctx.dbQueryStoreType.rfind("Kv<", 0) == 0) {
-                LOG_ERROR(ctx.fmtLoc() + "db.query erwartet einen Store<T> (db.open), bekommen hat es "
-                    + ctx.dbQueryStoreType + " (db.open_kv).  Ein Kv wird mit `.iter` durchlaufen "
-                    "oder mit `.get` gelesen -- db.query sieht seine Eintraege nicht.");
+                LOG_ERROR(ctx.fmtLoc() + "db.query expects a Store<T> (db.open), but it got "
+                    + ctx.dbQueryStoreType + " (db.open_kv).  A Kv is iterated with `.iter` "
+                    "or read with `.get` -- db.query does not see its entries.");
                 return ctx.ir_gen->getInt32(0);
             }
 
@@ -7905,8 +7905,8 @@ void registerBuiltins(CompilerContext& ctx) {
         };
 
         REG_HASH1B("sha256",       "aiml_hash_sha256")
-        /* hash.sha256_file(path) → string: streamt die Datei (1 MiB-Blöcke), damit
-         * grosse Artefakte ohne RAM-Spitze inhaltsadressiert werden können. */
+        /* hash.sha256_file(path) → string: streams the file (1 MiB blocks), so that
+         * large artefacts can be content-addressed without a RAM peak. */
         REG_HASH1("sha256_file",   "aiml_sha256_file")
         REG_HASH1B("sha512",       "aiml_hash_sha512")
         REG_HASH1B("sha3_256",     "aiml_hash_sha3_256")
@@ -9251,10 +9251,10 @@ void registerBuiltins(CompilerContext& ctx) {
             gltf.builtinFuncs["load"] = [](CompilerContext& ctx,
                 const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
                 auto* p = llvm::PointerType::get(ctx.context, 0);
-                // spec/44_7: ein String-LITERAL, das im Asset-Bundle liegt, ist
-                // ein Fehler — dieselbe Regel wie bei gl.load_texture.  Ein fester
-                // Pfad bricht, sobald jemand das Arbeitsverzeichnis wechselt oder
-                // nach WASM baut.  Dynamische Pfade (Kommandozeile) bleiben erlaubt.
+                // spec/44_7: a string LITERAL that lies in the asset bundle is
+                // an error — the same rule as for gl.load_texture.  A fixed
+                // path breaks as soon as someone changes the working directory or
+                // builds for WASM.  Dynamic paths (command line) stay allowed.
                 if (!args.empty() && ctx.currentCall && !ctx.currentCall->args.empty()) {
                     if (auto* lit = dynamic_cast<AIML::AST::LiteralExpr*>(
                             ctx.currentCall->args[0].get())) {
@@ -9279,9 +9279,9 @@ void registerBuiltins(CompilerContext& ctx) {
                 return ctx.ir_gen->wrap(scenePtr);
             };
 
-            // gltf.model(stem) → gltf_scene (Asset-Register, spec/44_7).  Der Stem
-            // wird im Mesh-Store nachgeschlagen, geladen wird mit demselben Loader.
-            // Literal-Stems werden zur Uebersetzungszeit geprueft (wie gl.tex).
+            // gltf.model(stem) → gltf_scene (asset registry, spec/44_7).  The stem
+            // is looked up in the mesh store, loading uses the same loader.
+            // Literal stems are checked at compile time (like gl.tex).
             gltf.builtinFuncs["model"] = [](CompilerContext& ctx,
                 const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
                 auto* p = llvm::PointerType::get(ctx.context, 0);
@@ -9862,9 +9862,9 @@ void registerBuiltins(CompilerContext& ctx) {
                     ctx.getFunction("aiml_asset_get_texture", p, {p}), {arg}));
             };
 
-            // gl.font(stem, size) → ui_font (spec/44_7).  Stem-literal-check
-            // wie gl.tex; size darf dynamisch sein.  Backend: aiml_ui_load_font
-            // via Asset-Resolver mit per-(stem,size) Cache.
+            // gl.font(stem, size) → ui_font (spec/44_7).  Stem literal check
+            // like gl.tex; size may be dynamic.  Backend: aiml_ui_load_font
+            // via the asset resolver with a per-(stem,size) cache.
             gl.builtinFuncs["font"] = [](CompilerContext& ctx,
                 const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
                 auto* p    = llvm::PointerType::get(ctx.context, 0);
@@ -10294,8 +10294,8 @@ void registerBuiltins(CompilerContext& ctx) {
         };
 
         // engine.window_size(win) → ivec2 (spec/44_1 §2); _x/_y/_xf/_yf are scalar shortcuts.
-        // engine.window_pos(win) → ivec2: Fensterposition auf dem Bildschirm.
-        // Fuer die Umrechnung Widget-Fläche → Bildschirmkoordinate (spec/44_0 §8.5).
+        // engine.window_pos(win) → ivec2: window position on the screen.
+        // For converting a widget area → screen coordinate (spec/44_0 §8.5).
         eng.builtinFuncs["window_pos"] = [](CompilerContext& ctx,
             const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
             auto* p = llvm::PointerType::get(ctx.context, 0);
@@ -10556,8 +10556,8 @@ void registerBuiltins(CompilerContext& ctx) {
                 ctx.builder.getVoidTy(), {i8p}), {inst});
             return nullptr;
         };
-        // engine.is_alive(inst) → i32  (1 = noch in der Szene, 0 = zerstört/null;
-        // safe mit stale handle, dereferenziert nicht)
+        // engine.is_alive(inst) → i32  (1 = still in the scene, 0 = destroyed/null;
+        // safe with a stale handle, does not dereference)
         eng.builtinFuncs["is_alive"] = [](CompilerContext& ctx,
             const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
             auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
@@ -10620,9 +10620,9 @@ void registerBuiltins(CompilerContext& ctx) {
                 ctx.getFunction("aiml_prefab_get_dragged", i8p, {}), {}));
         };
         // engine.mouse_design_x() / engine.mouse_design_y() → f32
-        // Cursor-Position in DESIGN-Koordinaten (= Pixel / rel_scale).  set_pos et al.
-        // arbeiten in Design-Koords, input.mouse_pos_* liefert World/Pixel — dies
-        // kapselt die Umrechnung an einer Stelle (Runtime kennt rel_scale).
+        // Cursor position in DESIGN coordinates (= pixels / rel_scale).  set_pos et al.
+        // work in design coords, input.mouse_pos_* returns world/pixels — this
+        // encapsulates the conversion in one place (the runtime knows rel_scale).
         eng.builtinFuncs["mouse_design_x"] = [](CompilerContext& ctx,
             const std::vector<AIML::IRValue*>&) -> AIML::IRValue* {
             auto* f32 = ctx.builder.getFloatTy();
@@ -10657,11 +10657,11 @@ void registerBuiltins(CompilerContext& ctx) {
         // engine.layout_hflow(items: list<prefab_instance>, x, y, gap)
         // engine.layout_vflow(items: list<prefab_instance>, x, y, gap)
         // engine.layout_stack(items: list<prefab_instance>, x, y, dx, dy, z_step)
-        // Spec 44_6 §Layout — sibling auto-arrange.  items wird als
-        // AimlList* (i8*) durchgereicht; das Runtime liest size/data.
-        // Helper: list<prefab_instance>-Struct → (data_ptr i8*, count i32).
-        // Akzeptiert sowohl Struct-Value (locale list-Variable) als auch
-        // Pointer-to-Struct (class-member list, durch `<.X` ref-loaded).
+        // Spec 44_6 §Layout — sibling auto-arrange.  items is passed through as
+        // AimlList* (i8*); the runtime reads size/data.
+        // Helper: list<prefab_instance> struct → (data_ptr i8*, count i32).
+        // Accepts both a struct value (local list variable) and
+        // pointer-to-struct (class member list, ref-loaded via `<.X`).
         auto extractListDataCount = [](CompilerContext& ctx, AIML::IRValue* listArg,
                                        llvm::Value*& out_data, llvm::Value*& out_count) {
             auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
@@ -10746,9 +10746,9 @@ void registerBuiltins(CompilerContext& ctx) {
             return nullptr;
         };
         // engine.update_drag_gesture(mx, my) -> i32 (spec/44_6)
-        // Nimmt am DRUCKPUNKT auf, sobald die Bewegungsschwelle fällt, statt am
-        // Cursor dieses Frames sobald die Taste gedrückt gefunden wird.
-        // 0 keine, 1 Kandidat, 2 zieht, 3 losgelassen, 4 abgebrochen.
+        // Picks up at the PRESS POINT as soon as the movement threshold is crossed, instead of at
+        // this frame's cursor as soon as the button is found pressed.
+        // 0 none, 1 candidate, 2 dragging, 3 released, 4 cancelled.
         eng.builtinFuncs["update_drag_gesture"] = [](CompilerContext& ctx,
             const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
             auto* f32 = ctx.builder.getFloatTy();
@@ -10762,8 +10762,8 @@ void registerBuiltins(CompilerContext& ctx) {
                 {mx, my}));
         };
         // engine.text_width(text) -> f32 (spec/44_6)
-        // Breite in der Prefab-Schrift, inklusive der Inline-Marken-Regeln.
-        // Macht Zentrierung/Umbruch und die Marken ueberhaupt pruefbar.
+        // Width in the prefab font, including the inline marker rules.
+        // Makes centring/wrapping and the markers checkable at all.
         eng.builtinFuncs["text_width"] = [](CompilerContext& ctx,
             const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
             auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
@@ -10794,8 +10794,8 @@ void registerBuiltins(CompilerContext& ctx) {
             return nullptr;
         };
         // engine.prefab_set_font(font)
-        // engine.prefab_trace_hits(on) — Treffer-Spur (spec/44_6).  Aus per
-        // Default; an für UI-Tests, damit das aufgeloeste Ziel im Log steht.
+        // engine.prefab_trace_hits(on) — hit trace (spec/44_6).  Off by
+        // default; on for UI tests, so that the resolved target is in the log.
         eng.builtinFuncs["prefab_trace_hits"] = [](CompilerContext& ctx,
             const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
             llvm::Value* on = args.empty() ? ctx.builder.getInt32(0)
@@ -10932,8 +10932,8 @@ void registerBuiltins(CompilerContext& ctx) {
         PI_I32_SETTER("set_z", "aiml_prefab_set_z")
         PI_I32_SETTER("set_visible", "aiml_prefab_set_visible")
         PI_I32_SETTER("set_draggable", "aiml_prefab_set_draggable")
-        // spec/44_6: durchklickbar — von hit_test/update_hover uebersprungen,
-        // bleibt aber sichtbar (trennt "zeichnet" von "nimmt Eingabe").
+        // spec/44_6: click-through — skipped by hit_test/update_hover,
+        // but stays visible (separates "draws" from "takes input").
         PI_I32_SETTER("set_input_transparent", "aiml_prefab_set_input_transparent")
         PI_I32_GETTER("get_input_transparent", "aiml_prefab_get_input_transparent")
         PI_I32_SETTER("set_input_blocking", "aiml_prefab_set_input_blocking")
@@ -11260,7 +11260,7 @@ void registerBuiltins(CompilerContext& ctx) {
             return ctx.ir_gen->wrap(own);
         };
 
-        // select_all(child_name) → markiert den ganzen Inhalt + Fokus (spec/44_6 §5f)
+        // select_all(child_name) → selects the whole content + focus (spec/44_6 §5f)
         ci.builtinMethods["select_all"] = [](CompilerContext& ctx, llvm::Value* base,
             AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
             auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
@@ -11270,12 +11270,12 @@ void registerBuiltins(CompilerContext& ctx) {
             return nullptr;
         };
 
-        // selection(child_name) → string (markierter Text, "" wenn nichts markiert)
+        // selection(child_name) → string (selected text, "" if nothing is selected)
         ci.builtinMethods["selection"] = [](CompilerContext& ctx, llvm::Value* base,
             AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
             auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
             llvm::Value* name = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
-            // spec/61 §4: runtime liefert ein frisches dup → owned statement temp.
+            // spec/61 §4: the runtime returns a fresh dup → owned statement temp.
             llvm::Value* own = ctx.builder.CreateCall(ctx.getFunction("aiml_prefab_selection", i8p, {i8p, i8p}), {base, name});
             if (ctx.lifetimeDropsEnabled && !ctx.stmtTempStack.empty()) AIML::AST::aimlTrackStringTemp(ctx, own);
             return ctx.ir_gen->wrap(own);
@@ -11326,11 +11326,11 @@ void registerBuiltins(CompilerContext& ctx) {
         PREFAB_RECT_METHOD("child_rect_y", "aiml_prefab_child_rect_y")
         PREFAB_RECT_METHOD("child_rect_w", "aiml_prefab_child_rect_w")
         PREFAB_RECT_METHOD("child_rect_h", "aiml_prefab_child_rect_h")
-        // child_design_x/y/w/h(child_name) → f32: dasselbe Rechteck in DESIGN-
-        // Koordinaten (1280x720).  child_rect_* ist SCREEN-Raum; set_pos/x/y
-        // erwarten Design-Raum.  Wer eine Instanz neben ein Kind stellt
-        // (Tooltip, Sprechblase), braucht diese Variante — sonst verschiebt
-        // die Fenster-Skalierung das Ergebnis.
+        // child_design_x/y/w/h(child_name) → f32: the same rectangle in DESIGN
+        // coordinates (1280x720).  child_rect_* is SCREEN space; set_pos/x/y
+        // expect design space.  Whoever places an instance next to a child
+        // (tooltip, speech bubble) needs this variant — otherwise
+        // the window scaling shifts the result.
         PREFAB_RECT_METHOD("child_design_x", "aiml_prefab_child_design_x")
         PREFAB_RECT_METHOD("child_design_y", "aiml_prefab_child_design_y")
         PREFAB_RECT_METHOD("child_design_w", "aiml_prefab_child_design_w")
@@ -11806,9 +11806,9 @@ void registerBuiltins(CompilerContext& ctx) {
                 ctx.getFunction("aiml_input_clipboard_get", i8p, {}), {}));
         };
 
-        // input.post_* — Eingabe-Injektion (spec/44_0 §8).  Geht durch dieselben
-        // Callbacks wie ein echtes Ereignis; ein Testtreiber braucht sie, um eine
-        // Oberfläche zu bedienen (spec/44_9).
+        // input.post_* — input injection (spec/44_0 §8).  Goes through the same
+        // callbacks as a real event; a test driver needs it to operate a
+        // UI (spec/44_9).
         inp.builtinFuncs["post_mouse_move"] = [](CompilerContext& ctx,
             const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
             auto* f32 = ctx.builder.getFloatTy();
@@ -11823,7 +11823,7 @@ void registerBuiltins(CompilerContext& ctx) {
                 ctx.builder.getVoidTy(), {f32, f32}), {num(0), num(1)});
             return nullptr;
         };
-        /* spec/44_0 §8.4: dieselbe Signatur, aber in die EREIGNIS-Schicht. */
+        /* spec/44_0 §8.4: the same signature, but into the EVENT layer. */
         inp.builtinFuncs["post_mouse_move_pending"] = [](CompilerContext& ctx,
             const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
             auto* f32 = ctx.builder.getFloatTy();
@@ -11903,8 +11903,8 @@ void registerBuiltins(CompilerContext& ctx) {
         INP_POST_STR("post_text",     "aiml_input_post_text")
 #undef INP_POST_STR
 
-        // input.os_* — OS-Ebenen-Injektion ueber XTEST (spec/44_0 §8.5).
-        // Koordinaten sind BILDSCHIRM-Koordinaten, nicht Fenster-Pixel.
+        // input.os_* — OS-level injection via XTEST (spec/44_0 §8.5).
+        // Coordinates are SCREEN coordinates, not window pixels.
         inp.builtinFuncs["os_available"] = [](CompilerContext& ctx,
             const std::vector<AIML::IRValue*>&) -> AIML::IRValue* {
             return ctx.ir_gen->wrap(ctx.builder.CreateCall(
@@ -14580,7 +14580,7 @@ void registerBuiltins(CompilerContext& ctx) {
             return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {tPtr}));
         };
 
-        // t.grad_view() → tensor  (shared data, eigener grad — kein memcpy)
+        // t.grad_view() → tensor  (shared data, its own grad — no memcpy)
         ci.builtinMethods["grad_view"] = [](CompilerContext& ctx, llvm::Value* tPtr,
             AIML::AST::CallExpr*, std::function<IRValue*(AIML::AST::Expr*)>) -> IRValue* {
             auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
