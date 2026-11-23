@@ -1,126 +1,126 @@
-# Spec 61 — Implementierungsplan für Container-Leaks und Speicherfehler
+# Spec 61 — implementation plan for container leaks and memory errors
 
-Stand: 2026-09-29. **Implementierungsplan; Regressionstests im Review ergänzt, Compiler-/Runtime-Fixes noch offen.** Gelesener AIML-HEAD: `be736b3`, mit bereits vorhandenen uncommitteten Änderungen. Maßgeblich für diesen Auftrag ist die aktuelle [Spec 61](../spec/61_memory_management.md), einschließlich ihres DRAFT-Status; der ältere v2-Entwurf mit genereller Modell-Referenzsemantik ist nicht die Grundlage.
+As of: 2026-09-29. **Implementation plan; regression tests added in the review, compiler/runtime fixes still open.** AIML HEAD read: `be736b3`, with existing uncommitted changes. Authoritative for this task is the current [spec 61](../spec/61_memory_management.md), including its DRAFT status; the older v2 draft with general model reference semantics is not the basis.
 
-## 1. Ziel und belegter Ausgangspunkt
+## 1. Goal and documented starting point
 
-Sechs Befunde aus der freien Leak-Suche schließen: vier Leak-Klassen sowie `list<string>.insert`-UAF und der Scope-Abbau-Crash einer Map mit verschachtelten Containerwerten. Danach müssen die betroffenen Operationen die Besitzregeln der Spec erfüllen, richtige Inhalte liefern und ohne verlorene Allokationen oder ungültige Speicherzugriffe enden.
+Close six findings from the open leak search: four leak classes as well as the `list<string>.insert` UAF and the scope teardown crash of a map with nested container values. After that the affected operations must fulfil the ownership rules of the spec, deliver correct contents and end without lost allocations or invalid memory accesses.
 
-Die Untersuchung nutzte den vorhandenen Compiler und `libaiml`, native AOT-Repros und Valgrind mit `AIML_MEM_V3=1`, `AIML_LIFETIME_DROPS=1`. Kein frischer Compilerbuild, kein WASM-Nachweis. Vor Implementierung daher P0 ausführen. Die angegebenen Bytezahlen sind historische Messungen auf x86_64, keine ABI-Vorgaben.
+The investigation used the existing compiler and `libaiml`, native AOT repros and Valgrind with `AIML_MEM_V3=1`, `AIML_LIFETIME_DROPS=1`. No fresh compiler build, no WASM proof. Therefore run P0 before implementation. The byte counts given are historical measurements on x86_64, not ABI requirements.
 
-Artefakte der Untersuchung: `/tmp/aiml-leak-audit-20260929/REPORT.md`, `results.json`, `provenance.json`; pro Repro `main.aiml` und vollständiges `valgrind.log`. `/tmp` ist nicht dauerhaft: P0 übernimmt die Quellen und Befundbelege ins Projekt.
+Artifacts of the investigation: `/tmp/aiml-leak-audit-20260929/REPORT.md`, `results.json`, `provenance.json`; per repro `main.aiml` and the complete `valgrind.log`. `/tmp` is not permanent: P0 takes the sources and evidence of the findings into the project.
 
-| ID | Befund / vorhandene Repros | Ergebnis bei 200 Durchläufen | Spec-Vertrag |
+| ID | Finding / existing repros | Result at 200 runs | Spec contract |
 |---|---|---:|---|
-| B1 | `map_nested_control`, `map_nested_self_put` | Invalid read + SIGSEGV beim Scope-Abbau | §5, §5.7: Werte sind Handles; konsistente Strides/Deskriptoren |
-| B2 | `list_string_insert` | 200 Invalid reads beim Listenabbau | §4, §5.4: Insert besitzt eine eigene Stringreferenz |
-| B3 | `map_shared_control` | 3.200 B direkt + 3.800 B indirekt verloren | §5, §6.2: Shared-Values unabhängig vom Keytyp decrefen |
-| B4 | `map_nested_remove`, `map_model_remove` | 8.000 B bzw. 3.800 B insgesamt verloren | §5.4, §5.7, §7: Entfernen gibt den Wert nach seiner Klasse frei |
-| B5 | `map_model_replace` | 3.400 B direkt verloren | §5.5, §7: Quelle sichern, altes Modell droppen, neuen Wert installieren |
-| B6 | `list_pop_bound`, `list_pop_arg` | jeweils 3.490 B direkt verloren | §5.4, §8: Pop überträgt Besitz auf das Ergebnis |
+| B1 | `map_nested_control`, `map_nested_self_put` | Invalid read + SIGSEGV at scope teardown | §5, §5.7: values are handles; consistent strides/descriptors |
+| B2 | `list_string_insert` | 200 invalid reads at list teardown | §4, §5.4: insert owns a string reference of its own |
+| B3 | `map_shared_control` | 3,200 B direct + 3,800 B indirect lost | §5, §6.2: decref shared values regardless of the key type |
+| B4 | `map_nested_remove`, `map_model_remove` | 8,000 B and 3,800 B lost in total | §5.4, §5.7, §7: removing frees the value according to its class |
+| B5 | `map_model_replace` | 3,400 B direct lost | §5.5, §7: secure the source, drop the old model, install the new value |
+| B6 | `list_pop_bound`, `list_pop_arg` | 3,490 B direct lost each | §5.4, §8: pop transfers ownership to the result |
 
-Gegenproben: `map_model_control`, `map_string_control`, `map_shared_string_key_control`, `list_nested_control`, `list_pop_discard` waren 0 definite / 0 indirect und ohne Valgrind-Fehler. Die Map ohne `remove` ist wegen B1 ausdrücklich keine grüne Gegenprobe für B4. `list_nested_remove_value` wurde vom Compiler abgelehnt und zählt nicht als Leak.
+Counter-probes: `map_model_control`, `map_string_control`, `map_shared_string_key_control`, `list_nested_control`, `list_pop_discard` were 0 definite / 0 indirect and without Valgrind errors. The map without `remove` is explicitly not a green counter-probe for B4 because of B1. `list_nested_remove_value` was rejected by the compiler and does not count as a leak.
 
-## 2. Verbindliche Implementierungsregeln
+## 2. Binding implementation rules
 
-1. **Typ bestimmt Besitz (§2.1, §4–§7).** Strings, Containerhandles und `shared<T>` werden geteilt; `ptr<T>` wird bewegt; `ref<T>` bleibt nicht-owning; Value-Modelle behalten Inline-Wertsemantik mit rekursiven Feldoperationen. Keine globale Umstellung von Modellen auf Referenzsemantik.
-2. **Ein Ergebnis besitzt genau die Referenzen, die seine Freigabe später abgibt.** Benannte kopierbare Quellen behalten ihren Drop. Ein tatsächlich übernommenes owned Temporary verliert seine Cleanup-Pflicht genau einmal. `producer` bezeichnet zusätzliche Frische und ist nicht Voraussetzung für Ownership eines `pop`-Ergebnisses (§9.2).
-3. **Secure-before-release (§5.5).** RHS einmal auswerten, neue Referenz sichern bzw. Movequelle zur Laufzeit leeren, dann altes Ziel freigeben, dann speichern. Slotidentität und gleiche Handlewerte in unterschiedlichen Slots unterscheiden (§5.7). Kein pauschales `oldHandle == newHandle → skip release`, wenn bereits eine neue Referenz übernommen wurde.
-4. **Gemeinsame Slot-Klassifikation (§5.7).** Physischer LLVM-Speichertyp, Stride, Retain/Release und Serializer-Deskriptor stimmen überein. Containerwert ist ein Pointer-Slot, nicht der Inline-Header und nicht die Adresse eines Handle-Slots. Pointergröße aus LLVM DataLayout, niemals fest `8` für wasm32.
-5. **Rekursive Freigabe (§6.1, §7).** Inline-Modell: Felder freigeben, nicht den Inline-Slot selbst. Shared-Objekt: decref. Unique-Box: Release der Felder und Shell. Weak-Ref: kein Release. Verschachtelter Container: decref mit korrektem innerem Deskriptor.
-6. **Keine Kaschierung.** Kein Abschalten von Drops, keine zusätzlichen `persistent`-Annotationen, keine pauschalen Deep-Copies/`clone`, keine Valgrind-Suppression für diese Befunde. Stringkopien im berührten memV3-Store teilen nach §4; `str_dup` ist kein allgemeiner Ownership-Fix.
+1. **The type determines ownership (§2.1, §4–§7).** Strings, container handles and `shared<T>` are shared; `ptr<T>` is moved; `ref<T>` stays non-owning; value models keep inline value semantics with recursive field operations. No global switch of models to reference semantics.
+2. **A result owns exactly the references that its later release gives up.** Named copyable sources keep their drop. An owned temporary that is actually taken over loses its cleanup obligation exactly once. `producer` denotes additional freshness and is not a precondition for ownership of a `pop` result (§9.2).
+3. **Secure-before-release (§5.5).** Evaluate the RHS once, secure the new reference or empty the move source at runtime, then free the old target, then store. Distinguish slot identity from equal handle values in different slots (§5.7). No blanket `oldHandle == newHandle → skip release` when a new reference has already been taken over.
+4. **Shared slot classification (§5.7).** Physical LLVM storage type, stride, retain/release and serializer descriptor agree. A container value is a pointer slot, not the inline header and not the address of a handle slot. Pointer size from the LLVM DataLayout, never a fixed `8` for wasm32.
+5. **Recursive release (§6.1, §7).** Inline model: free the fields, not the inline slot itself. Shared object: decref. Unique box: release the fields and the shell. Weak ref: no release. Nested container: decref with the correct inner descriptor.
+6. **No covering up.** No switching off of drops, no additional `persistent` annotations, no blanket deep copies/`clone`, no Valgrind suppression for these findings. String copies in the touched memV3 store share per §4; `str_dup` is not a general ownership fix.
 
-Die Arbeit schließt die sechs Befunde und die direkt gemeinsam verwendeten Store-/Release-Pfade. Sie eröffnet keine neue GC-/Zyklenarchitektur und ändert weder die Regeln für Container-Keys noch die Semantik von `get_copy`/`clone`. Legacy-OFF/v2-Pfade werden getrennt gehalten und dürfen nicht versehentlich das memV3-Layout erhalten.
+The work closes the six findings and the store/release paths directly used together. It opens no new GC/cycle architecture and changes neither the rules for container keys nor the semantics of `get_copy`/`clone`. Legacy OFF/v2 paths are kept separate and must not accidentally get the memV3 layout.
 
-## 3. Arbeitspakete und Reihenfolge
+## 3. Work packages and order
 
-Empfohlene Folge: **P0 → P1 → P2 → P3 → P4 → P5 → P6**. P2 und der eng isolierte P3 hängen fachlich nur von P0 ab; die Reihenfolge priorisiert die Safety-Fehler. Gemeinsame Helper entstehen nur in der für diese Operationen benötigten Form, kein vorgezogener Komplettumbau der Compiler-IR.
+Recommended sequence: **P0 → P1 → P2 → P3 → P4 → P5 → P6**. P2 and the narrowly isolated P3 depend technically only on P0; the order prioritises the safety errors. Shared helpers only come about in the form needed for these operations, no premature complete rework of the compiler IR.
 
-### P0 — Baseline und dauerhafte Regressionen
+### P0 — baseline and permanent regressions
 
-**Dateien:** neue Probes in `tests/lifetime/`, `tests/run_lifetime_leak_gates.sh`, bei Bedarf `tests/run_memory_sanitizers.sh`; Befundquellen/-logs unter einem neuen `doc/analysis/container_leak_audit_2026-09-29/`-Verzeichnis.
+**Files:** new probes in `tests/lifetime/`, `tests/run_lifetime_leak_gates.sh`, if needed `tests/run_memory_sanitizers.sh`; finding sources/logs under a new `doc/analysis/container_leak_audit_2026-09-29/` directory.
 
-- Compiler und native Runtime aus demselben aktuellen Quellstand bauen, dann die Repros erneut AOT kompilieren/linken. HEAD, Arbeitsbaum-Diff, Flags und Binary-Hashes gemeinsam aufzeichnen; historische Logs behalten.
-- Alle sechs Befunde und die fünf sauberen Gegenproben übernehmen. Aussagekräftige Namen verwenden; Nummern erst bei Umsetzung nach Sichtung freier Plätze vergeben. Bereits vorhandene Probes 86/87 und ihre Änderungen erhalten.
-- Jeden Repro um Inhalts-/Lebensdauerassertions ergänzen: Map nach Entfernung kürzer, nicht entfernte Werte intakt, neues Modell nach Ersatz sichtbar, Pop gibt den erwarteten Text zurück, Insert bewahrt Reihenfolge und Inhalt auch nach Ende des Quellscopes.
-- Neue offene Tests zunächst in einem vom normalen Lifetime-Glob nicht erfassten Unterordner halten und im Leak-Gate explizit als RED melden. Mit dem jeweiligen Fix nach GREEN und in die reguläre Auswahl übernehmen. Ein grüner Gesamtstatus darf die noch offenen Befunde nicht als behoben ausweisen.
-- Die derzeitigen GREEN-Fälle sowie den nativen Lifetime-/Safety-Stand festhalten. Fremde, vorher bestehende Fehler getrennt dokumentieren; keinen vorhandenen GREEN-Fall nach RED verschieben, um diese Arbeit durchzubekommen.
+- Build compiler and native runtime from the same current source state, then AOT compile/link the repros again. Record HEAD, working tree diff, flags and binary hashes together; keep the historical logs.
+- Take over all six findings and the five clean counter-probes. Use meaningful names; only assign numbers at implementation time after looking for free slots. Keep the existing probes 86/87 and their changes.
+- Extend every repro with content/lifetime assertions: map shorter after removal, values not removed intact, new model visible after replacement, pop returns the expected text, insert preserves order and content even after the end of the source scope.
+- Keep new open tests at first in a subdirectory not covered by the normal lifetime glob and report them explicitly as RED in the leak gate. Move them to GREEN and into the regular selection with the respective fix. A green overall status must not report the still open findings as fixed.
+- Record the current GREEN cases as well as the native lifetime/safety state. Document foreign, pre-existing failures separately; do not move any existing GREEN case to RED to get this work through.
 
-**P0 fertig:** Jeder gemeldete Fehler ist mit frisch gebautem Toolchain-Paar reproduziert oder seine Abweichung konkret erklärt. Dauerhafte Reproquellen und Vorher-Logs existieren. Keine Aussage über einen historischen Crash allein aus dem heutigen Code ableiten.
+**P0 done:** every reported error is reproduced with a freshly built toolchain pair or its deviation is explained concretely. Permanent repro sources and before logs exist. Do not derive a statement about a historical crash from today's code alone.
 
-### P1 — B1: verschachtelte Map-Werte mit einheitlichem Layout
+### P1 — B1: nested map values with a uniform layout
 
-**Dateien/Funktionen:** `context.h` Typauflösung, `ast_compiler_call.cpp` Map-Dispatch, `ast_compiler_stmt.cpp::emitMapHandleDecl`, `map_impl.{h,cpp}`, `ast_compiler.cpp::elemHandleSerNodes` und dessen Deskriptor-Builder, `string_runtime.cpp::aiml_map_free`, bei nachgewiesenem Bedarf `ser_runtime.cpp`.
+**Files/functions:** `context.h` type resolution, `ast_compiler_call.cpp` map dispatch, `ast_compiler_stmt.cpp::emitMapHandleDecl`, `map_impl.{h,cpp}`, `ast_compiler.cpp::elemHandleSerNodes` and its descriptor builder, `string_runtime.cpp::aiml_map_free`, if demonstrably needed `ser_runtime.cpp`.
 
-**Diagnoseschritt:** B1 ist als Crash bestätigt, die erste falsche Speicherung noch nicht abschließend lokalisiert. Für den Minimalfall die erzeugte IR und die Laufzeitwerte abgleichen: tatsächlicher Handle, Map-Value-Slot, gespeicherte Bytes, Stride, Root-Offset und Root-Kind des Deskriptors. Sowohl Header-statt-Handle-Speicherung als auch falscher Slot/Deskriptor sind zu prüfen. Nicht allein die spätere Fault-Stelle mit Nullchecks behandeln.
+**Diagnostic step:** B1 is confirmed as a crash, the first wrong store has not yet been conclusively located. For the minimal case compare the generated IR and the runtime values: actual handle, map value slot, stored bytes, stride, root offset and root kind of the descriptor. Both header-instead-of-handle storage and a wrong slot/descriptor are to be checked. Do not treat only the later fault site with null checks.
 
-**Implementierung:**
+**Implementation:**
 
-1. Eine zentrale Klassifikation für Container-Element-/Value-Slots verwenden bzw. gezielt ergänzen. Vorgeschlagenes internes Ergebnis: `storageType`, `stride`, Besitzklasse und Release-/Retain-Metadaten. Das ist ein Schnittstellenentwurf, kein behaupteter bestehender Helper.
-2. `map<K:list<U>>`, `map<K:map<X:Y>>` und `map<K:buffer>` allokieren und adressieren Pointer-Slots. `put/get/remove`, Wachstum, Decl-/Scope-Abbau und Serializer verwenden dieselbe Klassifikation. `MapImpl::put` darf die Slotgröße nicht unkontrolliert aus dem zufälligen LLVM-Typ der RHS ableiten.
-3. Receiver-Headerpointer, Handlewert und Adresse eines Handle-Slots explizit auseinanderhalten. Ein Inline-Struct im memV3-Container-Value-Store ist ein Codegen-Vertragsfehler mit Diagnose, kein Anlass für einen stillen Bitcast/Fallback.
-4. Deskriptor für einen Containerwert ist auf dessen Handle-Slot gerootet (`*_PTR`, passender Offset); die Runtime erhält die Adresse genau dieses Slots. Für Inline-Modelle bleibt der Modell-Deskriptor auf den Inline-Bytes gerootet.
-5. Derselbe Vertrag gilt für native 64 Bit und wasm32. Gemeinsam mit dem Layout alle betroffenen Größen-/Stride-Konstanten ersetzen, ohne unbegründet die gesamte ABI umzubauen.
+1. Use, or specifically add, one central classification for container element/value slots. Proposed internal result: `storageType`, `stride`, ownership class and release/retain metadata. That is an interface draft, not a claimed existing helper.
+2. `map<K:list<U>>`, `map<K:map<X:Y>>` and `map<K:buffer>` allocate and address pointer slots. `put/get/remove`, growth, decl/scope teardown and serializer use the same classification. `MapImpl::put` must not derive the slot size uncontrolled from the incidental LLVM type of the RHS.
+3. Keep the receiver header pointer, the handle value and the address of a handle slot explicitly apart. An inline struct in the memV3 container value store is a codegen contract error with a diagnostic, not a reason for a silent bitcast/fallback.
+4. The descriptor for a container value is rooted on its handle slot (`*_PTR`, matching offset); the runtime gets the address of exactly this slot. For inline models the model descriptor stays rooted on the inline bytes.
+5. The same contract applies to native 64-bit and wasm32. Replace all affected size/stride constants together with the layout, without rebuilding the whole ABI without reason.
 
-**P1-Abnahme:** einfache verschachtelte Map ohne Crash und ohne Leak; Self-put zunächst ohne ungültige Speicherzugriffe. Seine vollständige Referenzbilanz wird in P4 abgenommen. Inhalt nach `get`, mehrere Keys, mindestens zwei Wachstumsschritte; Alias bleibt nach Drop der äußeren Map gültig. `list`, `map`, `buffer` als Value, numerische und String-Keys. `copy/clone` und serialisierter Roundtrip als Regression für die berührten Layoutpfade. Falls der Self-put danach einen Referenzleck zeigt, P4 muss ihn schließen; B1-Safety und finaler Leakstatus getrennt berichten.
+**P1 acceptance:** a simple nested map without a crash and without a leak; self-put at first without invalid memory accesses. Its complete reference balance is accepted in P4. Content after `get`, several keys, at least two growth steps; an alias stays valid after the drop of the outer map. `list`, `map`, `buffer` as a value, numeric and string keys. `copy/clone` and a serialised round trip as a regression for the touched layout paths. If the self-put then shows a reference leak, P4 must close it; report B1 safety and the final leak status separately.
 
-### P2 — B2: `list.insert` erwirbt Elementbesitz
+### P2 — B2: `list.insert` acquires element ownership
 
-**Dateien/Funktionen:** `ast_compiler_call.cpp` Insert-/Push-Dispatch, `list_impl.{h,cpp}::insert`, bestehende String-/Modell-/Container-Retain-Helfer und Ownership-Transferregistrierung.
+**Files/functions:** `ast_compiler_call.cpp` insert/push dispatch, `list_impl.{h,cpp}::insert`, existing string/model/container retain helpers and ownership transfer registration.
 
-1. Push und Insert auf denselben typgesteuerten Vorbereitungsschritt für ein einzufügendes Element führen. Der Primitive zum Schieben/Speichern bekommt einen bereits gesicherten Wert und dessen korrekten Speichertyp.
-2. Benannter String: incref; owned String-Temporary: Referenz übernehmen und Temporary-Cleanup konsumieren. Literal/immortales Leerstring über den vorhandenen gültigen Stringvertrag behandeln. Keine neue direkte Header-Probe auf beliebigen Pointern einführen.
-3. Dasselbe Prinzip bei bereits unterstützten Elementklassen sichern: Container-/Shared-Handles retain/adopt, kopierbare Modelle member-wise retain, echte Unique-Moves mit geleerter Quelle. Keine rohe Bytekopie eines nichttrivialen Modells als Ownership-Ersatz.
-4. Quelle **vor** Realloc oder Verschieben sichern. Bei `insert(..., at(sameList,...))` kann der Quellslot ungültig werden; gesicherten Handle bzw. unabhängigen temporären Value-Slot verwenden. Provisorisch erworbener Besitz muss auch bei einem vorhandenen Fehler-/Ablehnungspfad aufgeräumt werden.
+1. Route push and insert through the same type-driven preparation step for an element to be inserted. The primitive for shifting/storing gets an already secured value and its correct storage type.
+2. Named string: incref; owned string temporary: take over the reference and consume the temporary cleanup. Treat literals/the immortal empty string via the existing valid string contract. Do not introduce any new direct header probe on arbitrary pointers.
+3. Secure the same principle for the element classes already supported: container/shared handles retain/adopt, copyable models member-wise retain, real unique moves with an emptied source. No raw byte copy of a non-trivial model as a substitute for ownership.
+4. Secure the source **before** realloc or shifting. With `insert(..., at(sameList,...))` the source slot can become invalid; use a secured handle or an independent temporary value slot. Provisionally acquired ownership must also be cleaned up on an existing error/rejection path.
 
-**Abnahme:** ursprünglicher UAF-Repro grün; lokale Quelle lebt länger/kürzer als Liste; Quelle danach lesbar; frische Interpolation, Literal und Pop-Ergebnis; Einfügen am Anfang/in der Mitte/am Ende, mit und ohne Wachstum, Quelle aus derselben Liste. Bei gemeinsam berührten Typen mindestens je eine Container-/Shared-/Value-Model-Probe sowie bestehende Unique-Move-Negativtests.
+**Acceptance:** the original UAF repro green; the local source lives longer/shorter than the list; the source readable afterwards; a fresh interpolation, a literal and a pop result; inserting at the beginning/in the middle/at the end, with and without growth, a source from the same list. For types touched together, at least one container/shared/value model probe each as well as the existing unique-move negative tests.
 
-### P3 — B3: Map-Scope-Release unabhängig vom Keytyp
+### P3 — B3: map scope release regardless of the key type
 
-**Datei/Funktion:** `src/sys/string_runtime.cpp::aiml_map_free`.
+**File/function:** `src/sys/string_runtime.cpp::aiml_map_free`.
 
-- Äußeres Schleifengate korrigieren: alle unterstützten Value-Arten mit Release-Pflicht müssen den Durchlauf erreichen. Konkret fehlt heute `valKind == 3`, wenn `keyKind != 1`. Besser einen klaren `valueNeedsRelease`-Prädikat/Switch verwenden als Key-Ownership als Stellvertreter.
-- Innere Shared-Release-Operation beibehalten: pro lebendem Slot genau ein `aiml_model_decref`; keine zusätzliche Freigabe beim noch vorhandenen Mitbesitzer.
-- Nullwerte und leere Maps bleiben gültig; skalare Values lösen keinen Objekt-Release aus. Dense Iteration `[0,size)` bleibt erhalten.
+- Correct the outer loop gate: all supported value kinds with a release obligation must reach the pass. Concretely, today `valKind == 3` is missing when `keyKind != 1`. Better to use a clear `valueNeedsRelease` predicate/switch than key ownership as a proxy.
+- Keep the inner shared release operation: exactly one `aiml_model_decref` per live slot; no additional release for a co-owner that still exists.
+- Null values and empty maps stay valid; scalar values trigger no object release. Dense iteration `[0,size)` is kept.
 
-**Abnahme:** Integer-, Enum- und String-Key mit `shared<Item>`; 200 und 400 Wiederholungen jeweils 0/0 B; mehrere Keys, Map-Wachstum, leere Map und noch lebender externer Shared-Besitzer. Quelle bleibt nach Map-Drop lesbar, letzter Besitzer gibt die Felder und Shell frei.
+**Acceptance:** integer, enum and string keys with `shared<Item>`; 200 and 400 repetitions each 0/0 B; several keys, map growth, an empty map and an external shared owner still alive. The source stays readable after the map drop, the last owner frees the fields and the shell.
 
-### P4 — B4/B5: typgerechtes Remove und sicheres Ersetzen
+### P4 — B4/B5: type-appropriate remove and safe replace
 
-**Dateien/Funktionen:** `ast_compiler_call.cpp` Map-Dispatch, `map_impl.{h,cpp}::put/remove`, gemeinsame Slot-Klassifikation aus P1, bestehende rekursive Modell-Release-/Retain-Helfer; bei geändertem Moveverhalten Ownership-Analyzer und Cleanup-Verwaltung im selben Paket.
+**Files/functions:** `ast_compiler_call.cpp` map dispatch, `map_impl.{h,cpp}::put/remove`, the shared slot classification from P1, existing recursive model release/retain helpers; with changed move behaviour, the ownership analyzer and cleanup management in the same package.
 
 **Remove:**
 
-1. Value-Ownership-/Release-Metadaten übergeben; `bool valIsString` reicht nicht. Für jeden gefundenen Eintrag den Key und Value nach ihrer Klasse freigeben. Der aktuelle Key-String-Release bleibt genau einmal bestehen.
-2. Value freigeben **vor** Shift und Size-Reduktion. Durch `memmove` verschobene Einträge werden bewegt, nicht kopiert: weder incref noch zusätzlicher Drop der alten Byteposition. Den nun unbenutzten Tail-Slot bei owning Typen in leeren Zustand setzen, ohne ein zweites Release.
-3. Fehlender Key ist No-op. Erster/mittlerer/letzter Eintrag werden symmetrisch behandelt. Falls der Such-Key in den zu löschenden Daten lebt, darf er nach Release nicht mehr verwendet werden.
+1. Pass value ownership/release metadata; `bool valIsString` is not enough. For every entry found, free the key and the value according to their class. The current key string release stays, exactly once.
+2. Free the value **before** the shift and the size reduction. Entries shifted by `memmove` are moved, not copied: neither an incref nor an additional drop of the old byte position. Set the now unused tail slot to an empty state for owning types, without a second release.
+3. A missing key is a no-op. First/middle/last entry are treated symmetrically. If the search key lives in the data being deleted, it must not be used after the release.
 
-**Put / Replace:**
+**Put / replace:**
 
-1. Vor dem Update die Quelle nach Spec sichern: benannte kopierbare Werte teilen; owned Temporaries übernehmen; Unique-Moves Quelle zur Laufzeit leeren. Pauschales `consumeLocalDrop` für alle Nicht-Strings durch den tatsächlichen Transfervertrag ersetzen. **Append und Update im selben Paket** auf diesen Vertrag umstellen: übernimmt der Caller künftig SHARE statt MOVE, müssen beide Store-Zweige exakt die gesicherte Referenz erhalten; bloßes Release-old im Update reicht nicht. Keine Cleanup-Liste auf einer nur bedingt ausgeführten Route global ausräumen.
-2. Im gefundenen Value-Slot den alten Wert mit genau derselben Klassifikation wie Remove/Scope-Abbau freigeben und erst danach den gesicherten neuen Wert speichern. Inline-Modelle rekursiv droppen; Shared-Values decrefen; Containerhandles decrefen. Den existierenden Key nicht neu übernehmen. Ein vor der Key-Suche gesicherter neuer Key-Temporary muss im Update-/Fehlerpfad regulär freigegeben werden; nur Append übernimmt den neuen Keybesitz.
-3. Aktuelles String-Update ebenfalls auf secure-before-release ausrichten: es darf bei einer aliasenden RHS nicht erst den alten String freigeben und danach dessen Inhalt lesen. Nach §4 durch Retain/Adopt teilen, nicht durch Deep-Copy reparieren.
-4. Pointergleichheit allein überspringt keine bereits fällige Besitzbilanz. Bereits gesicherte neue Referenz plus alte Slotreferenz: alte freigeben, neue installieren, auch bei gleichem Referenten. Nur **identischer Quell-/Zielslot** erlaubt den echten frühen No-op. Unterschiedliche Slots mit gleichem Handle und Move müssen Quellslot plus überschüssige Referenz korrekt abbauen.
-5. Quell- und Zielslots nicht über RHS-Aufrufe hinweg halten, die dieselbe Map vergrößern können. Einen Value aus einem bestehenden Map-Slot vor einem potentiellen Realloc materialisieren/sichern; Zielposition nach mutierenden Ausdrücken gemäß bestehender Evaluationsreihenfolge neu auflösen.
+1. Before the update, secure the source per the spec: share named copyable values; take over owned temporaries; empty unique-move sources at runtime. Replace the blanket `consumeLocalDrop` for all non-strings by the actual transfer contract. **Switch append and update over to this contract in the same package**: if the caller takes SHARE instead of MOVE in future, both store branches must receive exactly the secured reference; merely releasing the old one in the update is not enough. Do not clear a cleanup list globally on a route that is only executed conditionally.
+2. In the value slot found, free the old value with exactly the same classification as remove/scope teardown and only then store the secured new value. Drop inline models recursively; decref shared values; decref container handles. Do not take over the existing key anew. A new key temporary secured before the key lookup must be freed regularly in the update/error path; only append takes over the new key ownership.
+3. Also align the current string update with secure-before-release: with an aliasing RHS it must not first free the old string and then read its content. Share by retain/adopt per §4, do not repair by deep copy.
+4. Pointer equality alone does not skip an ownership balance that is already due. An already secured new reference plus the old slot reference: free the old one, install the new one, even for the same referent. Only an **identical source/target slot** allows the real early no-op. Different slots with the same handle and a move must correctly dismantle the source slot plus the surplus reference.
+5. Do not hold source and target slots across RHS calls that can grow the same map. Materialise/secure a value from an existing map slot before a potential realloc; re-resolve the target position after mutating expressions according to the existing evaluation order.
 
-**Abnahme:** ursprüngliche Modell-/Container-Remove- und Modell-Replace-Repros 0/0 B; wiederholtes Replace, Update nach Wachstum, gleiche/verschiedene Keys, gleiche/verschiedene Handlewerte, `put(k,get(k))`, eine Quelle aus einem anderen Slot derselben Map, Quelle aus einem Feld des alten Modells. Inhalts- und Aliasassertions sowie lebender Mitbesitzer nach Remove/Replace. Mindestens string, verschachtelter Container, shared, kopierbares Modell mit String+Container+Nested-Model-Feldern. Unterstützte Unique-/Weak-Value-Routen positiv/negativ gegen §6.2 prüfen; nicht unterstützte Typen dürfen nicht still als triviale Pointer durchfallen.
+**Acceptance:** the original model/container remove and model replace repros 0/0 B; repeated replace, update after growth, same/different keys, same/different handle values, `put(k,get(k))`, a source from another slot of the same map, a source from a field of the old model. Content and alias assertions as well as a live co-owner after remove/replace. At least string, nested container, shared, a copyable model with string+container+nested-model fields. Check supported unique/weak value routes positively/negatively against §6.2; unsupported types must not silently fall through as trivial pointers.
 
-### P5 — B6: Pop-Ergebnisse als owned Resultate behandeln
+### P5 — B6: treat pop results as owned results
 
-**Dateien/Funktionen:** `ast_compiler_call.cpp` Pop-Dispatch und Call-Argumentpfade, `list_impl.cpp::pop`, `ast_compiler_stmt.cpp` Decl/Set/Return/Statement-Cleanup; bestehende Owned-Temporary-Verwaltung in Compiler/Context. Mit den uncommitteten Arbeiten an container-return/producers (Probes 86/87) abstimmen, keine zweite konkurrierende Temporary-Liste einführen.
+**Files/functions:** `ast_compiler_call.cpp` pop dispatch and call argument paths, `list_impl.cpp::pop`, `ast_compiler_stmt.cpp` decl/set/return/statement cleanup; existing owned temporary management in compiler/context. Coordinate with the uncommitted work on container return/producers (probes 86/87), do not introduce a second competing temporary list.
 
-1. `pop` entfernt den Slot und liefert dessen **bestehenden Besitz**: kein zusätzliches incref bei der Extraktion, kein decref des ausgegebenen Elements. Es ist keine geliehene `.get`-Rückgabe und benötigt keine `producer`-Namensheuristik.
-2. String-Pop beim Erzeugen des Ergebnisses als owned Temporary registrieren. Für andere unterstützte nichttriviale Pop-Typen den passenden typisierten Ergebnis-/Cleanup-Vertrag verwenden; Aggregate brauchen bei adressbasiertem Drop einen stabilen temporären Slot.
-3. `decl`/`set` übernimmt den owned String genau einmal, ohne Borrow-Retain; `set` gibt das alte Ziel nach §5.5 frei. Als gewöhnliches Call-Argument bleibt das Temporary bis zum Ende seiner Nutzung gültig und wird danach freigegeben; zusätzliche Parameter-/Callee-Referenzen müssen separat ausgeglichen sein. Ein konsumierender Parameter übernimmt den Besitz.
-4. Weitergabe an Return, Push, Insert oder Map-Put übernimmt bzw. teilt nach Zielvertrag. Genau ein Cleanup ist zu konsumieren; keine vorzeitige Freigabe innerhalb verschachtelter Ausdrücke. Ein Ausdruck, der zwei Pops enthält, erzeugt zwei getrennte Besitzpflichten.
-5. Direkt verworfenes Pop entweder durch denselben Resultat-Drop oder den bestehenden `aiml_list_pop_free`-Spezialpfad behandeln, niemals beides. Bedingungen, Return, `break`/`continue` und vorzeitige Blockausgänge dürfen Temporary-Cleanup nicht überspringen.
-6. Vorhandenes Verhalten bei leerer Liste gesondert absichern; dieser Leak-Fix erfindet keine neue Empty-Pop-Semantik. Ein ungültiger Pop darf nicht als grüne Leakprobe durchgehen.
+1. `pop` removes the slot and returns its **existing ownership**: no additional incref on extraction, no decref of the returned element. It is not a borrowed `.get` return and needs no `producer` name heuristic.
+2. Register a string pop as an owned temporary when producing the result. For other supported non-trivial pop types use the matching typed result/cleanup contract; aggregates need a stable temporary slot for an address-based drop.
+3. `decl`/`set` takes over the owned string exactly once, without a borrow retain; `set` frees the old target per §5.5. As an ordinary call argument the temporary stays valid until the end of its use and is freed afterwards; additional parameter/callee references must be balanced separately. A consuming parameter takes over ownership.
+4. Passing on to return, push, insert or map put takes over or shares per the target contract. Exactly one cleanup is to be consumed; no premature release inside nested expressions. An expression containing two pops creates two separate ownership obligations.
+5. Handle a directly discarded pop either by the same result drop or by the existing `aiml_list_pop_free` special path, never both. Conditions, return, `break`/`continue` and early block exits must not skip temporary cleanup.
+6. Secure the existing behaviour for an empty list separately; this leak fix does not invent new empty-pop semantics. An invalid pop must not pass as a green leak probe.
 
-**Abnahme:** gebunden, Rebind, Argument einer freien Funktion/einer Methode, direkt verworfen, Return-Weitergabe, erneutes Push/Insert, Interpolation und verschachtelter Call; 200/400 Iterationen mit korrektem Text und 0/0 B. Container-/Shared-/Value-Model-/Unique-Pop gezielt prüfen, soweit vom Compiler unterstützt, damit die neue Klassifikation keinen String-Sondervertrag für alle Typen erzeugt.
+**Acceptance:** bound, rebind, argument of a free function/a method, directly discarded, passing on by return, re-push/insert, interpolation and a nested call; 200/400 iterations with the correct text and 0/0 B. Check container/shared/value model/unique pop specifically, as far as supported by the compiler, so that the new classification does not create a string special contract for all types.
 
-### P6 — Integration und endgültige Abnahme
+### P6 — integration and final acceptance
 
-**Verfügbare Runner (vom AIML-Projektroot):**
+**Available runners (from the AIML project root):**
 
 ```bash
 AIML_MEM_V3=1 AIML_LIFETIME_DROPS=1 bash tests/run_lifetime_leak_gates.sh
@@ -128,45 +128,45 @@ AIML_MEM_V3=1 AIML_LIFETIME_DROPS=1 bash tests/run_memory_sanitizers.sh
 MODE=spec61 bash tests/lifetime/run_lifetime.sh
 ```
 
-Gezielte neue Probes außerdem über `run_wasm_tests.sh` mit expliziter Dateiliste und frisch gebauter passender wasm32-Runtime ausführen. Der Runner existiert; eine native Valgrind-Messung ersetzt weder WASM-Ausführung noch dessen gesonderte Leak-Messung. Die native AOT-Abnahme und JIT-Lifetime-Ausführung sind beide nötig.
+Also run the targeted new probes via `run_wasm_tests.sh` with an explicit file list and a freshly built matching wasm32 runtime. The runner exists; a native Valgrind measurement replaces neither WASM execution nor its separate leak measurement. Both the native AOT acceptance and the JIT lifetime execution are needed.
 
-- Alle sechs Befunde müssen feste GREEN-Regressionen werden. Der gezielte strikte Runner `python3 tests/lifetime/container_leaks/run.py` muss Exit 0 liefern. Das bestehende Leak-Gate meldet RED-Fälle nur; dessen Exit 0 allein genügt daher nicht als Abnahme dieser Arbeit. Je Paket zuerst gezielte Probes; nach Integration die vorhandenen GREEN-Leakfälle und Safety-Suite vollständig. Den zum Umsetzungszeitpunkt vorhandenen Status fremder Fälle erhalten. Im Review stehen 86/87 bereits in GREEN; deren unveränderte Tests weiter absichern. Der neue Fall 88 ist fremde laufende Arbeit. Keine Rückstufung oder Überschreibung dieser Änderungen.
-- Pro Leakprobe: nativer Exit 0 plus Inhaltsassertions, **0 definite / 0 indirect**, kein Invalid read/write/free und vollständiger Valgrind-Lauf. Build-/Linkfehler, Signalabbruch, Timeout oder fehlendes Werkzeug/Log sind kein PASS. Keine abweichenden Leak-Schwellen wegen der historischen Bytezahlen.
-- Bei 200 und 400 Durchläufen weiterhin 0/0 B. Zusätzlich einen längeren wiederholten Ablauf mit begrenztem Bestand nach Warm-up prüfen, um dauerhaft erreichbare, aber unkontrolliert wachsende Referenzen zu entdecken. RSS allein ist kein eindeutiger Leakbeweis; Live-Allokationen nach abgeschlossenem Besitzerabbau verwenden.
-- WASM: richtige Inhalte, Alias-Semantik, Scope-Enden und Wachstum für die neuen Fälle. Pointer-Strides/Deskriptoren explizit in wasm32 prüfen. Wenn die Umgebung fehlt, als ausstehende Plattformabnahme ausweisen.
-- Wegen der gemeinsamen Compilerpfade abschließend betroffene 9rooms-Szenarien (Mana-Map, Event-Log-Liste, wiederholte Modell-/Containerupdates) mit den tatsächlichen Deployment-Flags prüfen; konkreten App-/Browser-Runner bei Umsetzung ermitteln. Keine Browserabnahme allein aus einem Node-Test ableiten.
-- Änderungen an Runtime-Signaturen synchron in nativer und WASM-Registrierung/Exports durchführen. Keine neu gebauten Compiler gegen eine alte Runtime testen oder ausliefern.
+- All six findings must become fixed GREEN regressions. The targeted strict runner `python3 tests/lifetime/container_leaks/run.py` must return exit 0. The existing leak gate only reports RED cases; its exit 0 alone is therefore not enough as acceptance of this work. Per package, targeted probes first; after integration the existing GREEN leak cases and the safety suite completely. Keep the status of foreign cases as it is at implementation time. In the review 86/87 are already GREEN; keep securing their unchanged tests. The new case 88 is foreign ongoing work. No downgrading or overwriting of these changes.
+- Per leak probe: native exit 0 plus content assertions, **0 definite / 0 indirect**, no invalid read/write/free and a complete Valgrind run. Build/link errors, signal abort, timeout or a missing tool/log are not a PASS. No deviating leak thresholds because of the historical byte counts.
+- Still 0/0 B at 200 and 400 runs. Additionally check a longer repeated run with a bounded population after warm-up, to discover references that are permanently reachable but grow uncontrolled. RSS alone is not clear proof of a leak; use live allocations after the complete owner teardown.
+- WASM: correct contents, alias semantics, scope ends and growth for the new cases. Check pointer strides/descriptors explicitly in wasm32. If the environment is missing, report it as a pending platform acceptance.
+- Because of the shared compiler paths, finally check the affected 9rooms scenarios (mana map, event log list, repeated model/container updates) with the actual deployment flags; determine the concrete app/browser runner at implementation time. Do not derive a browser acceptance from a node test alone.
+- Carry out changes to runtime signatures synchronously in native and WASM registration/exports. Do not test or ship newly built compilers against an old runtime.
 
-## 4. Fertig-Kriterium und geplante Liefergegenstände
+## 4. Done criterion and planned deliverables
 
-- [ ] P0: dauerhafte Repros, frische Baseline und unveränderte historische Belege.
-- [ ] P1: erster falscher B1-Layout-/Deskriptorpfad belegt und korrigiert; native/WASM-Stride-Regeln konsistent.
-- [ ] P2: Insert sichert eigenen Elementbesitz vor Growth/Shift.
-- [ ] P3: Shared-Map-Abbau für alle erlaubten Keytypen korrekt.
-- [ ] P4: Remove und Replace geben alle unterstützten Value-Arten richtig frei, einschließlich Self-Alias.
-- [ ] P5: Pop-Ergebnisse werden übernommen oder genau einmal gedroppt, auf allen getesteten Ausgängen.
-- [ ] P6: neue Fälle GREEN; bisherige GREEN-Fälle ohne Regression; Plattform-/Integrationsstatus belegt.
+- [ ] P0: permanent repros, a fresh baseline and unchanged historical evidence.
+- [ ] P1: the first wrong B1 layout/descriptor path demonstrated and corrected; native/WASM stride rules consistent.
+- [ ] P2: insert secures its own element ownership before growth/shift.
+- [ ] P3: shared map teardown correct for all allowed key types.
+- [ ] P4: remove and replace free all supported value kinds correctly, including self-alias.
+- [ ] P5: pop results are taken over or dropped exactly once, on all tested exits.
+- [ ] P6: new cases GREEN; previous GREEN cases without regression; platform/integration status documented.
 
-Lieferung: kleine zusammenhängende Compiler-/Runtime-Änderungen pro Paket, dauerhafte Repros mit Inhaltsprüfungen, registrierte Leak-/Safety-Gates und ein abschließender Vorher-/Nachher-Bericht. Paketstatus erst dann abhaken, wenn seine Tests ausgeführt wurden. Kein Anspruch, damit alle Speicherfehler der Sprache oder alle noch offenen Spec-61-Migrationspunkte zu lösen.
-
-
-## 5. Review vom 2026-09-29 und vorhandene Beweistests
-
-**Review-Korrekturen:**
-
-1. **P1/P4-Abhängigkeit:** Die ursprüngliche P1-Abnahme verlangte bereits vollständige Self-put-Leakfreiheit, obwohl P4 erst die Besitzbilanz beim Ersetzen korrigiert. P1 beseitigt die Layout-/Safety-Ursache; der Self-put-Fall wird erst nach P4 endgültig GREEN.
-2. **Gate-Aussage:** Der vorhandene Runner meldet RED, gibt dafür aber keinen Fehlerstatus zurück. Der ergänzte gezielte Runner prüft ausschließlich den Zielvertrag und endet bei jedem Leak, Safety-/Build-/Assertionfehler ungleich 0. Historische Fehler sind Metadaten, keine erlaubten XFAILs. Vollständige Logs bleiben erhalten.
-3. **Store-Vertrag vollständig:** Änderungen am pauschalen Move-Unterdrücken betreffen Append UND Update sowie nicht übernommene Key-Temporaries. Beide Zweige müssen gemeinsam auf denselben Erwerb-/Transfervertrag umgestellt werden.
-4. **Status fremder Arbeit:** 86/87 sind inzwischen GREEN, 88 wurde unabhängig neu angelegt. Diese Tests und Änderungen bleiben erhalten; der ältere RED-Verweis wurde korrigiert.
-5. **Abdeckung ist nicht Gesamtmigration:** Die neuen Minimaltests beweisen die sechs ursprünglichen Befunde und sichern Kontrollen; zusätzlich entstand B7 (Modell-Get-Borrow-Crash). Die größere Alias-/WASM-/Integrationstestmatrix in P1–P6 bleibt Teil der späteren Implementierung. P0 insgesamt bleibt bis zur vollständigen bestehenden Suite-Baseline offen.
-
-Dauerhafte Quellen: [Container-Leak-Tests](../tests/lifetime/container_leaks/README.md).
-Gemessene Ergebnisse und Binary-Hashes: [Review-Befunde](analysis/container_leak_audit_2026-09-29/README.md).
-Die neuen Quellen enthalten Inhalts-/Größenassertions. Leakfreiheit wird separat von Valgrind geprüft; ein normales Exit 0 beweist sie ausdrücklich nicht. Der Defaultlauf testet N=200 und N=400 mit konstanten String-Payloads, damit sich verlorene Bytes ohne Änderung der Stringlänge vergleichen lassen.
+Delivery: small coherent compiler/runtime changes per package, permanent repros with content checks, registered leak/safety gates and a final before/after report. Only tick off a package status once its tests have been run. No claim to solve all memory errors of the language or all still open spec 61 migration points with this.
 
 
-### Review-Nachtrag B7: Map-Modell-Get als Borrow
+## 5. Review of 2026-09-29 and existing proof tests
 
-Die ergänzte Feld-Leseassertion `decl [view, ref<Item>, {call: [index.get, "key"]}]; view.text` crasht bereits nach einmaligem Put, ohne Remove/Replace. Valgrind meldet in `strcmp` eine Adresse aus den Textbytes (`payload=...`), kein Leak. Dauerhafter isolierter Test: `map_model_get_borrow.aiml`. Die ursprünglichen B5-/Kontrolltests behalten nur ihre Größenassertion, damit der frühere Get-Crash den Leak-Nachweis nicht verhindert.
+**Review corrections:**
 
-**P1b, vor vollständiger P4-Inhaltsabnahme:** Nach §5.4 muss der Zugriff auf einen Value-Model-Slot eine Borrow-View liefern; die Bindung an `Model` materialisiert per §7, die Bindung an `ref<Model>` behält die Slotadresse. `ast_compiler_call.cpp` Map-get-Dispatch und `map_impl.cpp::get` darauf prüfen, ob ein by-value Struct-Load als Slotadresse verwendet wird. Die genaue Korrektur mit erzeugter IR belegen, nicht pauschal für skalare/String-/Container-Get-Ergebnisse denselben Rückgabetyp ändern. Regressionen: ref-Bindung + Feldlesen, Value-Bindung + materialisierter Besitzer, unveränderte skalare und owning Handle-Reads; Borrow nicht über invaliderende Map-Mutationen halten. B7 wird separat nach GREEN überführt. Es ist eine zusätzliche Safety-Voraussetzung für die im Plan geforderten Modell-Inhaltsassertions, kein Nachweis weiterer verlorener Bytes.
+1. **P1/P4 dependency:** the original P1 acceptance already required complete self-put leak freedom, although only P4 corrects the ownership balance on replacement. P1 removes the layout/safety cause; the self-put case only becomes finally GREEN after P4.
+2. **Gate statement:** the existing runner reports RED, but returns no error status for it. The added targeted runner checks only the target contract and ends with non-zero on every leak, safety/build/assertion error. Historical failures are metadata, not allowed XFAILs. Complete logs are kept.
+3. **Store contract complete:** changes to the blanket move suppression affect append AND update as well as key temporaries not taken over. Both branches must be switched over together to the same acquisition/transfer contract.
+4. **Status of foreign work:** 86/87 are now GREEN, 88 was newly created independently. These tests and changes are kept; the older RED reference was corrected.
+5. **Coverage is not the overall migration:** the new minimal tests prove the six original findings and secure controls; in addition B7 came about (model get borrow crash). The larger alias/WASM/integration test matrix in P1–P6 remains part of the later implementation. P0 as a whole stays open until the complete existing suite baseline.
+
+Permanent sources: [container leak tests](../tests/lifetime/container_leaks/README.md).
+Measured results and binary hashes: [review findings](analysis/container_leak_audit_2026-09-29/README.md).
+The new sources contain content/size assertions. Leak freedom is checked separately by Valgrind; a normal exit 0 explicitly does not prove it. The default run tests N=200 and N=400 with constant string payloads, so that lost bytes can be compared without a change in string length.
+
+
+### Review addendum B7: map model get as a borrow
+
+The added field read assertion `decl [view, ref<Item>, {call: [index.get, "key"]}]; view.text` already crashes after a single put, without remove/replace. Valgrind reports an address made of the text bytes (`payload=...`) in `strcmp`, not a leak. Permanent isolated test: `map_model_get_borrow.aiml`. The original B5/control tests keep only their size assertion, so that the earlier get crash does not prevent the leak proof.
+
+**P1b, before the complete P4 content acceptance:** per §5.4, access to a value model slot must return a borrow view; binding to `Model` materialises per §7, binding to `ref<Model>` keeps the slot address. Check the map get dispatch in `ast_compiler_call.cpp` and `map_impl.cpp::get` for whether a by-value struct load is used as a slot address. Demonstrate the exact correction with the generated IR, do not change the return type the same way across the board for scalar/string/container get results. Regressions: ref binding + field read, value binding + materialised owner, unchanged scalar and owning handle reads; do not hold a borrow across invalidating map mutations. B7 is moved to GREEN separately. It is an additional safety precondition for the model content assertions required in the plan, not proof of further lost bytes.
