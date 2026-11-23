@@ -1,17 +1,17 @@
-# AIML Unit-Test-Generator: Konkreter Implementierungsplan
+# AIML Unit Test Generator: Concrete Implementation Plan
 
-Dieses Dokument konkretisiert den Ansatz aus `aiml_unit_test_implement.md` zu einem umsetzbaren Plan.
+This document turns the approach from `aiml_unit_test_implement.md` into an actionable plan.
 
-Ziel ist **nicht** ein magischer Vollautomat, der inhaltlich korrekte Tests errät. Ziel ist ein
-**sicherer Generator für isolierte Test-Harnesses**, der:
+The goal is **not** a magical fully automatic tool that guesses semantically correct tests. The goal is a
+**safe generator for isolated test harnesses** that:
 
-1. eine AIML-Datei analysiert,
-2. externe Abhängigkeiten kontrolliert stubbt,
-3. aufrufbare Test-Skelette erzeugt,
-4. deterministisch kompiliert,
-5. und spätere manuelle Assertions oder Golden-Checks sauber vorbereitet.
+1. analyses an AIML file,
+2. stubs external dependencies in a controlled way,
+3. generates callable test skeletons,
+4. compiles deterministically,
+5. and cleanly prepares later manual assertions or golden checks.
 
-## 1. Zielbild
+## 1. Target picture
 
 CLI:
 
@@ -19,49 +19,49 @@ CLI:
 ./out/aiml -t src/foo/bar.aiml -o tests/test_bar_generated.aiml
 ```
 
-Erwartetes Ergebnis:
+Expected result:
 
-- alle `import`-Abhängigkeiten werden im generierten Testartefakt gekappt oder explizit ersetzt
-- fehlende Klassen/Funktionen werden als **kompilierbare Stubs** ergänzt
-- für öffentlich aufrufbare `def`-Blöcke und Klassenmethoden entstehen `test_*`-Skelette
-- ein `main`-Runner ruft alle generierten Tests deterministisch auf
-- der Generator produziert **valide AIML-Ausgabe**
+- all `import` dependencies are cut or explicitly replaced in the generated test artefact
+- missing classes/functions are added as **compilable stubs**
+- `test_*` skeletons are created for publicly callable `def` blocks and class methods
+- a `main` runner calls all generated tests deterministically
+- the generator produces **valid AIML output**
 
-Nicht-Ziel in MVP:
+Non-goals in the MVP:
 
-- automatische semantisch richtige Assertions
-- perfektes Mocking von Seiteneffekten
-- vollständige Erkennung aller nativen Laufzeitverträge
-- automatische Konstruktion sinnvoller Testdaten für jede beliebige Signatur
+- automatic semantically correct assertions
+- perfect mocking of side effects
+- complete detection of all native runtime contracts
+- automatic construction of sensible test data for any arbitrary signature
 
-## 2. Technische Entscheidung
+## 2. Technical decision
 
-Empfehlung: **nativ im Compiler**, nicht als separates Python-Tool.
+Recommendation: **native in the compiler**, not as a separate Python tool.
 
-Begründung:
+Rationale:
 
-- Der Compiler kennt bereits das echte Symbolsystem.
-- Builtins, Namespaces, Klassen, Modelle und Methoden sind bereits in der Auflösungsschicht vorhanden.
-- Fehler wie „fehlendes Symbol vs. builtin“ müssen nicht in zweiter Logik nachgebaut werden.
-- Der gleiche AST kann für Analyse, Stub-Injektion und Export verwendet werden.
+- The compiler already knows the real symbol system.
+- Builtins, namespaces, classes, models and methods already exist in the resolution layer.
+- Errors such as "missing symbol vs. builtin" do not have to be rebuilt in a second logic.
+- The same AST can be used for analysis, stub injection and export.
 
-Pragmatischer Rollout:
+Pragmatic rollout:
 
-1. interner Compiler-Pass
-2. CLI-Flag `--generate-tests`
-3. Export als `.aiml`
-4. erst danach optional Hilfsskript für Batch-Generierung
+1. internal compiler pass
+2. CLI flag `--generate-tests`
+3. export as `.aiml`
+4. only afterwards, optionally, a helper script for batch generation
 
-## 3. Architektur
+## 3. Architecture
 
-Es werden fünf neue Bausteine eingeführt.
+Five new building blocks are introduced.
 
 ### 3.1 `TestGenConfig`
 
-Kleine Konfiguration für den Pass:
+A small configuration for the pass:
 
-- Eingabedatei
-- Ausgabedatei
+- input file
+- output file
 - `strip_imports: bool`
 - `generate_method_tests: bool`
 - `stub_missing_symbols: bool`
@@ -70,319 +70,319 @@ Kleine Konfiguration für den Pass:
 
 ### 3.2 `SymbolInventory`
 
-Sammlung aller in der Quelldatei selbst definierten Symbole:
+Collection of all symbols defined in the source file itself:
 
-- Klassen
-- Modelle
-- Interfaces
-- freie `def`
-- Klassenmethoden
-- Namespaces/FQN-Namen
+- classes
+- models
+- interfaces
+- free `def`
+- class methods
+- namespaces/FQN names
 
 ### 3.3 `MissingSymbolReport`
 
-Ergebnis des Analysepasses:
+Result of the analysis pass:
 
-- fehlende Typen
-- fehlende freie Funktionen
-- fehlende methodisch referenzierte Member, soweit belastbar erkennbar
-- nicht-stubbfähige Referenzen als Warnungen
+- missing types
+- missing free functions
+- missing members referenced as methods, as far as reliably detectable
+- non-stubbable references as warnings
 
-Wichtig:
-Nicht jede unbekannte Method-Chain darf blind gestubbt werden. `obj.foo.bar()` kann ohne Typwissen
-nicht sicher rekonstruiert werden. Solche Fälle müssen in MVP als **Warnung** markiert werden, nicht
-als automatisch „gelöst“.
+Important:
+Not every unknown method chain may be stubbed blindly. `obj.foo.bar()` cannot be reconstructed
+safely without type knowledge. In the MVP such cases must be marked as a **warning**, not
+automatically "solved".
 
 ### 3.4 `GeneratedTestPlan`
 
-Beschreibung der zu emittierenden Tests:
+Description of the tests to emit:
 
 - `test_<function>`
 - `test_<class>_<method>`
-- optional `smoke_<type>` für Konstruktion/Init
+- optionally `smoke_<type>` for construction/init
 
 ### 3.5 `TestAstEmitter`
 
-Baut aus Original-AST plus Stubs plus Test-Skeletten die finale Datei.
+Builds the final file from the original AST plus stubs plus test skeletons.
 
-## 4. Implementierungsphasen
+## 4. Implementation phases
 
-## Phase 1: CLI und Exportpfad
+## Phase 1: CLI and export path
 
-Ziel:
-Das Tool akzeptiert `--generate-tests`, lädt AIML, und schreibt einen unveränderten AST wieder aus.
+Goal:
+The tool accepts `--generate-tests`, loads AIML, and writes an unchanged AST back out.
 
-Arbeitspakete:
+Work packages:
 
-1. CLI-Flag in der bestehenden `main`/Argumentlogik ergänzen
-2. Dateiladen und Parse-Pfad wiederverwenden
-3. JSON/YAML-Emitter-Pfad für AST-Export festziehen
-4. Ausgabe in Datei `-o ...`
+1. add the CLI flag to the existing `main`/argument logic
+2. reuse the file loading and parse path
+3. pin down the JSON/YAML emitter path for the AST export
+4. output to the file given by `-o ...`
 
-Definition of Done:
+Definition of done:
 
-- `./out/aiml --generate-tests file.aiml -o out.aiml` erzeugt eine Datei
-- erzeugte Datei ist parsebar
-- Roundtrip ohne inhaltliche Änderung funktioniert für einfache Testdateien
+- `./out/aiml --generate-tests file.aiml -o out.aiml` creates a file
+- the created file is parseable
+- a roundtrip without content changes works for simple test files
 
-Risiko:
+Risk:
 
-- Exportformat darf keine semantisch relevanten YAML-Strukturen zerstören
+- the export format must not destroy semantically relevant YAML structures
 
-## Phase 2: Symbolinventar
+## Phase 2: symbol inventory
 
-Ziel:
-Der Compiler kann eine Datei ohne Imports inventarisieren.
+Goal:
+The compiler can inventory a file without imports.
 
-Arbeitspakete:
+Work packages:
 
-1. Top-Level-Nodes sammeln:
+1. collect top-level nodes:
    - `class`
    - `model`
    - `interface`
    - `def`
    - `namespace`
-2. Methoden pro Klasse inventarisieren
-3. FQN-Auflösung für lokale Datei definieren
-4. Builtin-Symbole explizit aus dem bestehenden Compilerkontext abfragen, nicht doppelt pflegen
+2. inventory the methods per class
+3. define FQN resolution for the local file
+4. query builtin symbols explicitly from the existing compiler context, do not maintain them twice
 
-Definition of Done:
+Definition of done:
 
-- Für eine gegebene Datei kann der Pass alle lokal definierten Symbole als Report ausgeben
-- Builtins werden nicht als „fehlend“ markiert
+- for a given file, the pass can output all locally defined symbols as a report
+- builtins are not marked as "missing"
 
-## Phase 3: Referenzanalyse
+## Phase 3: reference analysis
 
-Ziel:
-Der Compiler findet belastbar die **wirklich relevanten** externen Referenzen.
+Goal:
+The compiler reliably finds the **really relevant** external references.
 
-Arbeitspakete:
+Work packages:
 
-1. Rekursiver AST-Walk über:
+1. recursive AST walk over:
    - `decl`
    - `set`
    - `return`
    - `if` / `while` / `try`
    - `call`
    - `new`
-   - Member-/Method-Chains
-2. Referenzklassen trennen:
-   - Typreferenz
-   - Funktionsreferenz
-   - Konstruktorreferenz
-   - Method-Chain-Referenz
-3. Conservative Mode:
-   - Nur Referenzen stubbbar markieren, die sicher klassifizierbar sind
-   - Ambige Chains nur warnen
+   - member/method chains
+2. separate the reference classes:
+   - type reference
+   - function reference
+   - constructor reference
+   - method chain reference
+3. conservative mode:
+   - only mark references as stubbable that can be classified safely
+   - only warn for ambiguous chains
 
-Definition of Done:
+Definition of done:
 
-- `MissingSymbolReport` unterscheidet sicher zwischen:
-  - lokal vorhanden
+- `MissingSymbolReport` reliably distinguishes between:
+  - present locally
   - builtin
-  - sicher fehlend
-  - unklar/warnend
+  - definitely missing
+  - unclear/warning
 
-Wichtige Abgrenzung:
+Important delimitation:
 
-Der ursprüngliche Plan ist hier zu optimistisch. „Fehlende Symbole finden“ ist nicht nur ein
-einfacher rekursiver YAML-Scan, sobald Member-Chains und Methoden ohne vollständige Typinformation
-im Spiel sind. In MVP muss dieser Pass deshalb bewusst konservativ sein.
+The original plan is too optimistic here. "Finding missing symbols" is not just a
+simple recursive YAML scan as soon as member chains and methods without complete type information
+come into play. In the MVP this pass must therefore be deliberately conservative.
 
-## Phase 4: Stub-Generierung
+## Phase 4: stub generation
 
-Ziel:
-Aus sicher fehlenden Referenzen werden minimale, kompilierbare Stubs.
+Goal:
+Definitely missing references become minimal, compilable stubs.
 
-Arbeitspakete:
+Work packages:
 
-1. Typ-Stubs:
-   - fehlende `class` mit kleinem Dummy-Member
-   - fehlende `model` optional ebenfalls als Dummy-Struct
-2. Funktions-Stubs:
-   - Name
-   - generische leere Arg-Liste nur dann, wenn die Signatur wirklich unbekannt ist
-   - besser: Parameteranzahl aus Callsite ableiten
-3. Rückgabetypen:
-   - `void` nur für echte Statement-Calls
-   - für expression-context Calls muss ein Platzhaltertyp gewählt werden
-4. Stub-Namenskonvention:
-   - Originalname beibehalten
-   - optional Kommentar/Metadaten `AUTO-GENERATED STUB`
+1. type stubs:
+   - a missing `class` with a small dummy member
+   - a missing `model` optionally likewise as a dummy struct
+2. function stubs:
+   - name
+   - a generic empty arg list only if the signature is really unknown
+   - better: derive the parameter count from the call site
+3. return types:
+   - `void` only for real statement calls
+   - for expression context calls a placeholder type must be chosen
+4. stub naming convention:
+   - keep the original name
+   - optionally a comment/metadata `AUTO-GENERATED STUB`
 
-Definition of Done:
+Definition of done:
 
-- fehlende einfache Klassen/Funktionen werden kompilierbar ergänzt
-- Ausdruckskontexte erzeugen keine offensichtlichen Typbrüche
+- missing simple classes/functions are added in a compilable form
+- expression contexts do not produce obvious type breaks
 
-Wichtiger Punkt:
+Important point:
 
-Die Behauptung aus dem Ursprungsdokument „Typen können meist weggelassen werden“ ist für die
-Compilerrealität zu locker. Für Ausdruckskontexte braucht der Generator einen brauchbaren
-Rückgabetyp, sonst produziert er nur andere Compilerfehler.
+The claim from the original document "types can mostly be omitted" is too loose for the
+compiler reality. For expression contexts the generator needs a usable
+return type, otherwise it only produces other compiler errors.
 
-## Phase 5: Import-Isolation
+## Phase 5: import isolation
 
-Ziel:
-Generierte Testdateien sind bewusst isoliert.
+Goal:
+Generated test files are deliberately isolated.
 
-Arbeitspakete:
+Work packages:
 
-1. Alle Top-Level-Imports standardmäßig entfernen
-2. Optionaler Modus `--keep-imports` für spätere Integrationstests
-3. Originaldateipfad als Kommentar/Metadatum in Testdatei schreiben
-4. Warnblock erzeugen, wenn gekappte Imports nicht vollständig stubbbar waren
+1. remove all top-level imports by default
+2. an optional `--keep-imports` mode for later integration tests
+3. write the original file path as a comment/metadata into the test file
+4. generate a warning block if cut imports could not be stubbed completely
 
-Definition of Done:
+Definition of done:
 
-- generierte Datei enthält keine produktiven Imports im Default-Modus
-- Compiler meldet stattdessen nur noch echte Generatorlücken
+- in the default mode the generated file contains no productive imports
+- instead, the compiler only reports real generator gaps
 
-## Phase 6: Test-Skeleton-Erzeugung
+## Phase 6: test skeleton generation
 
-Ziel:
-Alle lokal testbaren Ziele bekommen ein konsistentes `test_*`-Gerüst.
+Goal:
+All locally testable targets get a consistent `test_*` scaffold.
 
-Arbeitspakete:
+Work packages:
 
-1. Freie Funktionen:
+1. free functions:
    - `test_<name>`
-2. Klassenmethoden:
+2. class methods:
    - `test_<class>_<method>`
-3. Testbody-MVP:
-   - Start-Print
-   - TODO-Print oder Kommentar
-   - optional minimaler Smoke-Call
-4. Problematische Ziele überspringen:
-   - private Methoden
-   - generierte/native Bindings ohne sichere Aufrufbarkeit
+3. test body MVP:
+   - start print
+   - TODO print or comment
+   - optionally a minimal smoke call
+4. skip problematic targets:
+   - private methods
+   - generated/native bindings without safe callability
 
-Definition of Done:
+Definition of done:
 
-- generierte Datei enthält für jeden geeigneten Kandidaten ein testbares Skelett
-- Namenskollisionen werden vermieden
+- the generated file contains a testable skeleton for every suitable candidate
+- name collisions are avoided
 
-Empfehlung:
+Recommendation:
 
-In MVP zuerst nur **Smoke-Skeletons**, noch keine Auto-Assertions. Ein halbkorrekter Assert-Generator
-ist gefährlicher als ein ehrlicher Teststub.
+In the MVP, first only **smoke skeletons**, no auto assertions yet. A half-correct assert generator
+is more dangerous than an honest test stub.
 
-## Phase 7: `main`-Runner und Ergebnisaggregation
+## Phase 7: `main` runner and result aggregation
 
-Ziel:
-Die generierte Datei ist direkt ausführbar.
+Goal:
+The generated file is directly executable.
 
-Arbeitspakete:
+Work packages:
 
-1. `main` erzeugen, falls nicht vorhanden
-2. alle `test_*` in stabiler Reihenfolge aufrufen
-3. einfacher Exitcode:
-   - `0`, wenn alle Testfunktionen durchlaufen
-   - `1`, wenn Generator selbst einen fatalen TODO-Block markieren will
-4. optional später:
-   - Zähler `passed/failed/skipped`
+1. generate `main` if not present
+2. call all `test_*` in a stable order
+3. a simple exit code:
+   - `0` if all test functions run through
+   - `1` if the generator itself wants to mark a fatal TODO block
+4. optionally later:
+   - `passed/failed/skipped` counters
 
-Definition of Done:
+Definition of done:
 
-- generierte Tests lassen sich direkt kompilieren und starten
+- generated tests can be compiled and started directly
 
-## Phase 8: Validierung und Compiler-Regressionstests
+## Phase 8: validation and compiler regression tests
 
-Ziel:
-Der Generator selbst bekommt eigene Tests.
+Goal:
+The generator itself gets its own tests.
 
-Pflichttests:
+Mandatory tests:
 
-1. einfache freie Funktion ohne Abhängigkeit
-2. Datei mit Importen
-3. Datei mit fehlender Klasse
-4. Datei mit fehlender freier Funktion
-5. Datei mit expression-call, der Nicht-`void` braucht
-6. Datei mit Klassenmethoden
-7. Datei mit `try/catch`
-8. Datei mit Member-Chain, die nur als Warnung endet
-9. Golden-Output-Test für stabile Emission
+1. a simple free function without dependencies
+2. a file with imports
+3. a file with a missing class
+4. a file with a missing free function
+5. a file with an expression call that needs non-`void`
+6. a file with class methods
+7. a file with `try/catch`
+8. a file with a member chain that only ends as a warning
+9. a golden output test for stable emission
 
-Definition of Done:
+Definition of done:
 
-- Generatorpfad ist selbst regressionstestbar
-- Output ist ausreichend stabil für Golden-Vergleiche
+- the generator path itself is regression-testable
+- the output is stable enough for golden comparisons
 
-## 5. Konkrete Implementierungsorte im Compiler
+## 5. Concrete implementation places in the compiler
 
-Wahrscheinliche Eingriffspunkte:
+Probable intervention points:
 
-- CLI-/Argumentparser in der Compiler-`main`
-- AST-Parse-Pfad wiederverwenden
-- Symbolauflösung/Builtin-Registry lesen, nicht kopieren
-- neuer Pass z. B. `TestGeneratorPass`
-- AST-Export über vorhandenen JSON/YAML-Writer
+- the CLI/argument parser in the compiler `main`
+- reuse the AST parse path
+- read the symbol resolution/builtin registry, do not copy it
+- a new pass, e.g. `TestGeneratorPass`
+- AST export via the existing JSON/YAML writer
 
-Sinnvolle neue Dateien:
+Sensible new files:
 
 - `src/core/test_generator_pass.h`
 - `src/core/test_generator_pass.cpp`
 - `src/core/test_generator_types.h`
 - `tests/test_generate_unit_tests_*.aiml`
 
-## 6. Reihenfolge fuer die reale Umsetzung
+## 6. Order for the real implementation
 
-Empfohlene Reihenfolge:
+Recommended order:
 
-1. CLI + AST-Export
-2. Symbolinventar
+1. CLI + AST export
+2. symbol inventory
 3. MissingSymbolReport
-4. einfache Typ-/Funktions-Stubs
-5. Test-Skelett-Generator
-6. `main`-Runner
-7. Golden-Tests
-8. erst danach anspruchsvollere Expression-/Method-Chain-Fälle
+4. simple type/function stubs
+5. test skeleton generator
+6. `main` runner
+7. golden tests
+8. only afterwards more demanding expression/method chain cases
 
-Das ist wichtig, damit der Generator früh nutzbar wird, ohne zu früh „smart“ werden zu wollen.
+This is important so that the generator becomes usable early without wanting to become "smart" too early.
 
-## 7. Sicherheitsgewinn fuer die Entwicklung
+## 7. Safety gain for development
 
-Der Generator verbessert die Entwicklungssicherheit auf drei Ebenen:
+The generator improves development safety on three levels:
 
-1. Schneller isolierter Kompiliertest einzelner AIML-Bausteine
-2. Frühere Sichtbarkeit von API-/Typschnittstellenproblemen
-3. Standardisierte Test-Harnesses statt ad-hoc Testdateien
+1. a fast isolated compile test of individual AIML building blocks
+2. earlier visibility of API/type interface problems
+3. standardised test harnesses instead of ad-hoc test files
 
-Der eigentliche Sicherheitsgewinn kommt aber **nicht** von automatisch erfundenen Assertions,
-sondern von:
+The actual safety gain, however, does **not** come from automatically invented assertions,
+but from:
 
-- reproduzierbarer Isolation
-- konsistenten Stubs
-- stabilem Test-Runtime-Entrypoint
-- und späteren gezielten manuellen Assertions
+- reproducible isolation
+- consistent stubs
+- a stable test runtime entry point
+- and later targeted manual assertions
 
-## 8. Bewusste Nicht-Ziele in MVP
+## 8. Deliberate non-goals in the MVP
 
-Diese Punkte sollten ausdrücklich **nicht** im ersten Wurf gelöst werden:
+These points should explicitly **not** be solved in the first cut:
 
-- automatische semantische Testfallgenerierung
-- intelligente Mock-Rueckgaben aus Quelltextinterpretation
-- vollständige Inferenz aller Method-Signaturen
-- Abdeckung privater/intern gekapselter Methoden
-- Snapshot-/Golden-Assertions auf inhaltliche Programmausgaben
+- automatic semantic test case generation
+- intelligent mock returns from source code interpretation
+- complete inference of all method signatures
+- coverage of private/internally encapsulated methods
+- snapshot/golden assertions on program output content
 
-## 9. Definition of Done fuer das Gesamtfeature
+## 9. Definition of done for the whole feature
 
-Das Feature ist erst fertig, wenn:
+The feature is only done when:
 
-1. `--generate-tests` für einfache AIML-Dateien stabil läuft
-2. generierte Dateien ohne Imports kompilieren
-3. fehlende einfache Typen/Funktionen automatisch gestubbt werden
-4. `test_*`-Skelette plus `main` korrekt emittiert werden
-5. der Generator selbst eigene Regressionstests hat
-6. Warnfälle explizit als Warnfälle gemeldet statt still falsch „gelöst“ werden
+1. `--generate-tests` runs stably for simple AIML files
+2. generated files compile without imports
+3. missing simple types/functions are stubbed automatically
+4. `test_*` skeletons plus `main` are emitted correctly
+5. the generator itself has its own regression tests
+6. warning cases are reported explicitly as warning cases instead of being silently "solved" wrongly
 
-## 10. Nächster konkreter Schritt
+## 10. Next concrete step
 
-Direkt sinnvoll ist jetzt:
+What makes sense right now:
 
-1. `Phase 1` und `Phase 2` bauen
-2. einen ersten Debug-Report `--generate-tests --dump-symbols`
-3. dann an einer kleinen Datei wie `tul/math/matrix.aiml` oder einer reinen Core-Testdatei validieren
+1. build `Phase 1` and `Phase 2`
+2. a first debug report `--generate-tests --dump-symbols`
+3. then validate on a small file such as `tul/math/matrix.aiml` or a pure core test file
 
-So bleibt der erste Wurf klein, aber belastbar.
+That keeps the first cut small, but reliable.
