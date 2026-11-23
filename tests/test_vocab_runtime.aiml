@@ -5,7 +5,7 @@
 - decl: [var_ok, i32, 1]
 - decl: [rc_load, i32, 0]
 
-# ── A: Basic load + lookup in verschiedenen Sprachen ─────────────────────
+# ── A: basic load + lookup in different languages ───────────────────────
 
 - decl: [langs, string, '{"0":"en","1":"de","2":"fr"}']
 - decl: [voc,   string, '{"Save Card":["Save Card","Karte speichern","Sauvegarder"],"Reset":["Reset","Zuruecksetzen","Reinit"]}']
@@ -108,7 +108,7 @@
       - print: ["FAIL D2: 0='${code_0}' 1='${code_1}' 2='${code_2}'"]
       - set: [var_ok, 0]
 
-# ── E: Sortierung by index — unsortierte Keys im JSON ────────────────────
+# ── E: sorting by index — unsorted keys in the JSON ──────────────────────
 
 - decl: [langs_unsorted, string, '{"2":"fr","0":"en","1":"de"}']
 - set: [rc_load, { call: [vocab.load, langs_unsorted, "{}"] }]

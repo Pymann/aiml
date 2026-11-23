@@ -1,11 +1,11 @@
 # SPEC?: 15_models   # derived from the file name, to be confirmed
 # static-check: off
-# Paket 3 PROTOTYP (doc/spec61_inline_value_model_release_plan_2026-09-24.md §3): beweist die
+# Package 3 PROTOTYPE (doc/spec61_inline_value_model_release_plan_2026-09-24.md §3): proves the
 # CopyRetain mechanics in ISOLATION — a retain copy (here via the existing store retain path,
 # ast_compiler_stmt.cpp:4802) survives the FREEING of the source element. build_and_copy creates a
 # LOCAL list<Rec>, copies rows[0] via `store` (memcpy + aiml_ser_retain) into the out parameter,
 # and then lets the list drop at the end of the function scope → aiml_list_free frees the kind-2
-# Inline-Element frei (aiml_ser_free_decoded: decref string/list/map/nested — DIESELBE Freigabe, die
+# inline element (aiml_ser_free_decoded: decref string/list/map/nested — THE SAME release that
 # remove/clear would use). If retain is complete, the copy survives in the caller with intact
 # content and both sides free exactly once.
 # Expectation: PASS + valgrind 0 lost + 0 errors (mechanics proven). If a field kind is missing in retain:
@@ -18,7 +18,7 @@
     name: build_and_copy
     args: [[out, ref<Rec>], [seed, i32]]
     body:
-      - decl: [rows, list<Rec>]          # LOKALE Quelle — droppt am Funktions-Ende (kind-2-Release)
+      - decl: [rows, list<Rec>]          # LOCAL source — drops at the end of the function (kind-2 release)
       - decl: [src, Rec]
       - set: [src.label, "survivor-${seed}"]
       - call: [src.tags.push, seed]
@@ -39,7 +39,7 @@
           condition: { lt: [itr, 200] }
           body:
             - decl: [dst, Rec]
-            - call: [build_and_copy, dst, itr]     # dst = retain-Kopie; Quell-Liste bereits gedropt
+            - call: [build_and_copy, dst, itr]     # dst = retain copy; source list already dropped
             - if: { condition: { neq: [dst.label, "survivor-${itr}"] }, then: [{ print: ["FAIL dst.label: ${dst.label}"] }, { return: 1 }] }
             - if: { condition: { neq: [dst.inner.tag, "inner-${itr}"] }, then: [{ print: ["FAIL dst.inner.tag: ${dst.inner.tag}"] }, { return: 1 }] }
             - decl: [tgv, i32, { at: [dst.tags, 0] }]

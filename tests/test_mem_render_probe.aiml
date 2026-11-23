@@ -102,7 +102,7 @@
             - set: [rzcnt, { +: [rzcnt, 1] }]
       - return: { -: [{ call: [sys.mem_usage] }, before] }
 
-# B: persistente Instanz, set_text mit INTERPOLATION je Iteration.
+# B: persistent instance, set_text with INTERPOLATION per iteration.
 - def:
     name: probe_set_text
     static_off: ["same_arg"]
@@ -118,7 +118,7 @@
             - set: [rbcnt, { +: [rbcnt, 1] }]
       - return: { -: [{ call: [sys.mem_usage] }, before] }
 
-# BL: persistente Instanz, set_text mit LITERALEN je Iteration.
+# BL: persistent instance, set_text with LITERALS per iteration.
 - def:
     name: probe_set_text_literal
     static_off: ["same_arg"]

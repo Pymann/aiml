@@ -25,7 +25,7 @@
 - call: [var_h.var_xs.push, 20]
 - call: [var_h.var_xs.push, 30]
 
-# Variante A: bare-variable, funktioniert
+# variant A: bare variable, works
 - decl: [xs_local, list<i32>, var_h.var_xs]
 - decl: [var_a0, i32, { at: [xs_local, 0] }]
 - if:

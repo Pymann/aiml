@@ -17,7 +17,7 @@
             - print: ["FAIL kinds_tex_null"]
             - call:  [sys.exit, 1]
 
-      # "golem.wav" → audio-store, gleicher Stem, separat
+      # "golem.wav" → audio store, same stem, separate
       - decl: [sfx, audio_handle, { call: [audio.sfx, "golem"] }]
       - if:
           condition: { eq: [sfx, null] }

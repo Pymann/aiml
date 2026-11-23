@@ -1,5 +1,5 @@
 # static-check: off
-# Reproduziert datacreatures CreatureDetail JSON-roundtrip (proxy for the
+# Reproduces the datacreatures CreatureDetail JSON roundtrip (proxy for the
 # binary roundtrip — same sernode generator).  Uses heap-allocated
 # behavior objects with models: composition.
 

@@ -18,7 +18,7 @@
       - [seq,        i32,    0]   # monotonically increasing sequence counter
       - [kind,       string, ""]  # "phase_start"|"card_played"|"attack_declared"|...
       - [text,       string, ""]  # readable display text
-      - [actor_slot, i32,   -1]   # 0=Spieler 1, 1=Spieler 2, -1=System
+      - [actor_slot, i32,   -1]   # 0=player 1, 1=player 2, -1=system
       - [phase,      i32,    0]
       - [round,      i32,    0]
       - [source_iid, string, ""]  # IID of the triggering card (empty if not relevant)

@@ -24,10 +24,10 @@
     name: main
     return: i32
     body:
-      # gleiches Level: erlaubt
+      # same level: allowed
       - decl: [same, i32, 0, { level: 2 }]
       - set: [same, { call: [read_secret] }]
-      # strenger: erlaubt
+      # stricter: allowed
       - decl: [tighter, i32, 0, { level: 0 }]
       - set: [tighter, { call: [read_secret] }]
       # literal into an annotated local: no restricted origin, no violation

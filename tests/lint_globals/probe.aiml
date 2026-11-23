@@ -6,7 +6,7 @@
 - decl: [MAX_TRIES, i32, 5, { const: true }]
 - decl: [GREETING, string, "hallo", { const: true }]
 
-# 2. schreibbares Primitiv — warnt (geteilter veraenderlicher Zustand).
+# 2. writable primitive — warns (shared mutable state).
 - decl: [g_counter, i32, 0]
 
 # 3. owning global — warns with a reason (passing it on moves the ownership).

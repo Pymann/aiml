@@ -59,7 +59,7 @@
       - set: [hit_purl, { call: [post_body.index_of, "pkg:conan/zlib"] }]
       - if: { condition: { lt: [hit_purl, 0] }, then: [{ print: ["FAIL post body=${post_body}"] }, { set: [bad, 1] }] }
 
-      # Pfadparameter-Quelle
+      # path parameter source
       - decl: [get_url, url]
       - set: [get_url, { call: [http.parse_url, "http://127.0.0.1:23191/api/v1/releases/rel-42"] }]
       - decl: [get_resp, http_response_handle]

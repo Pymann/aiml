@@ -12,8 +12,8 @@
     return: i32
     body:
       - decl: [bar, Bar]
-      - set: [bar.num, 5]                 # externer direkter WRITE
-      - decl: [rdv, i32, bar.num]          # externer direkter READ
+      - set: [bar.num, 5]                 # external direct WRITE
+      - decl: [rdv, i32, bar.num]          # external direct READ
       - if:
           condition: { eq: [rdv, 5] }
           then: [{ print: ["PASS direct field access on class works: rdv=5"] }]

@@ -22,7 +22,7 @@
       - if: { condition: { peq: [font, null] }, then: [{ call: [log.error, "FAIL no font"] }, { return: 1 }] }
       - call: [engine.prefab_set_font, font]
 
-      # ── 1. Messung funktioniert ueberhaupt ──────────────────────────────
+      # ── 1. measurement works at all ──────────────────────────────────────
       - decl: [plain_w, f32, { call: [engine.text_width, "Angriff abgelehnt"] }]
       - if:
           condition: { le: [plain_w, 0.0] }

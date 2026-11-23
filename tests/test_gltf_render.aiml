@@ -248,7 +248,7 @@
       - call: [shader.uniform_i32,  "tex", 0]   # sampler2D 'tex' → texture slot 0
       # bind the texture to slot 0, then issue the indexed draw call
       - call: [gl.bind_texture, gltex, 0]
-      - call: [gl.draw_elements, vao, icnt]      # GL_TRIANGLES, icnt Indizes
+      - call: [gl.draw_elements, vao, icnt]      # GL_TRIANGLES, icnt indices
       - call: [glfwSwapBuffers, win]
       - call: [glfwPollEvents]
       - call: [time.sleep_ms, 33]

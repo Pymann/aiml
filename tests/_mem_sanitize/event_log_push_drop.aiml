@@ -1,7 +1,7 @@
 # SPEC?: 46_log   # derived from the file name, to be confirmed
 # Mirrors 9rooms event-log (sources/match/event_log.aiml log_event): a helper takes a string
 # PARAM and pushes it into a model's list<string>; callers invoke it with an INTERPOLATION TEMP
-# ("${a} attacks ${b}"). The live regression was "event-logs komisch bis kaputt": list<string>.push
+# ("${a} attacks ${b}"). The live regression was "event logs weird to broken": list<string>.push
 # stored the borrowed param pointer raw (no dup, no incref for a plain param), while the caller's
 # interpolation temp was freed at its own statement end → the list held a dangling pointer → the
 # log rendered garbage/empty. A robust container OWNS its string elements (dup on push), so the

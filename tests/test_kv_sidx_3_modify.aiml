@@ -64,7 +64,7 @@
       - decl: [tr_sae, list<string>, { call: [dinge.findings_by, "name", "Saege"] }]
       - set: [bad, { +: [bad, { call: [pruef_zahl, tr_sae.len, 0, "after-rehang name=Saege"] }] }]
 
-      # (3) Loeschen: bbb raus.
+      # (3) delete: bbb out.
       - call: [dinge.delete, "bbb"]
       - decl: [tr_del, list<string>, { call: [dinge.findings_by, "name", "Hammer"] }]
       - set: [bad, { +: [bad, { call: [pruef_zahl, tr_del.len, 3, "after-delete name=Hammer"] }] }]

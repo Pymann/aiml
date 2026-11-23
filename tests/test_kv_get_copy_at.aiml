@@ -110,7 +110,7 @@
       - if: { condition: { neq: [ok3, 0] }, then: [{ print: ["FAIL 6: missing key returned ${ok3} (exp 0)"] }, { set: [fails, { +: [fails, 1] }] }] }
       - if: { condition: { neq: [svc.work.name, "world"] }, then: [{ print: ["FAIL 7: missing key mutated buffer (name=${svc.work.name})"] }, { set: [fails, { +: [fails, 1] }] }] }
 
-      # ── F3: korrupter/abgeschnittener Blob → -1, Puffer sicher genullt ─────
+      # ── F3: corrupt/truncated blob → -1, buffer safely zeroed ─────────────
       - call: [svc.write_corrupt, "bad"]
       - decl: [okc, i32, { call: [svc.fetch_into, "bad"] }]
       - if: { condition: { neq: [okc, -1] }, then: [{ print: ["FAIL 9: corrupt blob returned ${okc} (exp -1)"] }, { set: [fails, { +: [fails, 1] }] }] }

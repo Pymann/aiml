@@ -52,7 +52,7 @@
     args: []
     return: i32
     body:
-      # T1: Kv<string:i32> — Writer in Funktion A, Reader in Funktion B
+      # T1: Kv<string:i32> — writer in function A, reader in function B
       - call: [kv_writer, "test_kv_i32", "answer", 42]
       - decl: [var_v, i32, { call: [kv_reader, "test_kv_i32", "answer"] }]
       - if:
@@ -62,7 +62,7 @@
             - call: [sys.exit, 1]
       - print: ["T1 PASS: Kv<string:i32> singleton-by-name (cross-function)"]
 
-      # T2: Kv<string:string> — gleicher Name, unterschiedliche Funktionen
+      # T2: Kv<string:string> — same name, different functions
       - call: [kv_writer_str, "test_kv_str", "greeting", "hello"]
       - decl: [var_s, string, { call: [kv_reader_str, "test_kv_str", "greeting"] }]
       - if:

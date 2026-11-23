@@ -30,7 +30,7 @@
       - decl: [rc_missing, i32, { call: [io.set_exec, "${dir}/gibts_nicht", 1] }]
       - if: { condition: { eq: [rc_missing, 0] }, then: [{ print: ["FAIL set_exec on a missing file"] }, { return: 1 }] }
 
-      # ── Symlink anlegen, erkennen, Ziel lesen ───────────────────────────
+      # ── create a symlink, recognise it, read the target ─────────────────
       - decl: [link_path, string, "${dir}/zeiger"]
       - decl: [rc_ln, i32, { call: [io.symlink, "skript.sh", link_path] }]
       - if: { condition: { neq: [rc_ln, 0] }, then: [{ print: ["FAIL symlink rc=${rc_ln}"] }, { return: 1 }] }
@@ -53,7 +53,7 @@
       - decl: [dang_target, string, { call: [io.read_link, dangling] }]
       - if: { condition: { neq: [dang_target, "entsteht_erst"] }, then: [{ print: ["FAIL dangling Ziel"] }, { return: 1 }] }
 
-      # bestehendes Ziel → -1
+      # existing target → -1
       - decl: [rc_twice, i32, { call: [io.symlink, "skript.sh", link_path] }]
       - if: { condition: { eq: [rc_twice, 0] }, then: [{ print: ["FAIL symlink onto an existing path"] }, { return: 1 }] }
 

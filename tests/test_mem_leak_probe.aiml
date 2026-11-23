@@ -79,7 +79,7 @@
                 condition: { lt: [ccnt, iters] }
                 body:
                   - decl: [mrec, Rec, { call: [<.store.get_copy, "k"] }]
-                  - idx: [mrec.nums, 0, ccnt]        # Skalar ersetzen → Payload konstant
+                  - idx: [mrec.nums, 0, ccnt]        # replace a scalar → payload constant
                   - call: [<.store.set, "k", mrec]
                   - set: [ccnt, { +: [ccnt, 1] }]
             - return: { -: [{ call: [sys.mem_usage] }, before] }

@@ -52,7 +52,7 @@
                   - set: [row.nam, { at: [names, idx] }]
                   - set: [row.kind, idx]
                   - set: [tot, { +: [tot, row.nam.len] }]
-                  # (b) Modell per ref weitergeben, Callee kopiert es
+                  # (b) pass the model on by ref, the callee copies it
                   - set: [tot, { +: [tot, { call: [consume_row, {'&': [row]}] }] }]
                   # (c) rebind the field → the old at value must be freed
                   - set: [row.nam, { at: [names, 0] }]

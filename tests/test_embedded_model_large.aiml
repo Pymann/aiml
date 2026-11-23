@@ -68,7 +68,7 @@
       # read n_workers from the embedded struct via a 3-level chain
       - decl: [var_n, i32, var_wh.queue.cfg.var_b6]
       - print: ["  [worker] var_b6=${var_n}"]
-      # Empfange Job-Index, bis Sentinel
+      # receive a job index, until the sentinel
       - decl: [var_fi, i32, { call: [var_wh.queue.var_ch.recv] }]
       - while:
           condition: { ">=": [var_fi, 0] }
@@ -95,7 +95,7 @@
             - call: [sys.exit, 1]
       - print: ["T1 PASS: new BigQueue embedded fields default 0"]
 
-      # T2: BigCfg struct kopieren
+      # T2: copy the BigCfg struct
       - decl: [var_c, BigCfg]
       - set: [var_c.var_a0, 100]
       - set: [var_c.var_a1, 200]

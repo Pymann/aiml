@@ -383,7 +383,7 @@
     name: Invoke
     implements: OnClick
     members:
-      - [handler, fn(ClickCtx)]                 # Methoden-Referenz
+      - [handler, fn(ClickCtx)]                 # method reference
     methods:
       - def:
           name: fire

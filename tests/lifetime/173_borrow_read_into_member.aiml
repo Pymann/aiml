@@ -65,7 +65,7 @@
       - call: [names.put, "key", "pushed_value"]
       - call: [out.push, { call: [names.get, "key"] }]
 
-# 4) map.get -> idx: (Listenelement ueberschreiben)
+# 4) map.get -> idx: (overwrite a list element)
 - def:
     name: map_into_idx
     static_off: ["same_arg"]

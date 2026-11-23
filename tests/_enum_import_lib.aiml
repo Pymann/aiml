@@ -6,5 +6,5 @@
     name: Weekday
     values:
       - mon: 1       # used in the entry → no warning
-      - tue: 2       # nirgends genutzt → Warning
-      - wed: 3       # nirgends genutzt → Warning
+      - tue: 2       # used nowhere → warning
+      - wed: 3       # used nowhere → warning

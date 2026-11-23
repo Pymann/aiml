@@ -9,7 +9,7 @@
 - decl: [var_e,   f32, math.E]
 - print: ["PI=${var_pi}  TAU=${tau}  E=${var_e}"]
 
-# ── Phase B: Skalare Funktionen ───────────────────────────────────────────────
+# ── Phase B: scalar functions ─────────────────────────────────────────────────
 
 - decl: [rad, f32, { call: [math.to_radians, 180.0] }]
 - decl: [deg, f32, { call: [math.to_degrees, 3.14159] }]

@@ -47,7 +47,7 @@
     return: i32
     body: [{ return: 0 }]
 
-# Sonde des gemeinsamen Schritts: macht seinen Schluessel beweglich.
+# Probe of the shared step: makes its key movable.
 - def:
     name: head_probe
     return: { type: string, lifetime: producer }

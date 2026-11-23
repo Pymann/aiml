@@ -1,6 +1,6 @@
 # SPEC?: 15_models   # derived from the file name, to be confirmed
 # static-check: off
-# RED bis Paket 5 — doc/spec61_inline_value_model_release_plan_2026-09-24.md §1/§7.
+# RED until package 5 — doc/spec61_inline_value_model_release_plan_2026-09-24.md §1/§7.
 # Contract (spec 61 §5.4): a value binding `decl copy = at(list,i)` (model) is an OWN inline
 # copy whose string/container fields are retained. It MUST survive removal/realloc of the source slot with
 # INTACT content — no shared view that after the remove shift points to another element

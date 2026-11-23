@@ -39,7 +39,7 @@
 - model:
     name: CreatureView
     fields:
-      - [iid,    string]   # Instanz-ID (eindeutig, z.B. "ABC-123")
+      - [iid,    string]   # instance ID (unique, e.g. "ABC-123")
       - [cid,    string]   # Card-Definition-ID (z.B. "fire-dragon")
       - [name,   string]
       - [room,   i32]     # room 1..5
@@ -65,7 +65,7 @@
       - [effect_count,   i32,    0]       # number of active fx slots (dirty detection)
       - [effects,        list<RuntimeEffectView>]  # runtime effects (for the UI)
 
-# Bewegungszustand-Lookup: state-int as string ("1"-"4") → passives-map-key
+# movement state lookup: state int as string ("1"-"4") → passives map key
 - decl: [g_mov_state_names, map<string:string>]
 - def:
     name: init_mov_state_names
@@ -98,7 +98,7 @@
       - [equipped_to_iid, string]  # IID of the creature that carries this item ("" = not equipped)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# ManaPool — 10 Manafarben pro Spieler
+# ManaPool — 10 mana colours per player
 # FEUER=0, LICHT=1, SCHATTEN=2, WALD=3, ERDE=4,
 # FROST=5, LUFT=6, STERNE=7, WASSER=8, AMORPH=9
 # ══════════════════════════════════════════════════════════════════════════════
@@ -169,7 +169,7 @@
       - [combat_attacker, string, ""]
       - [var_me,             PlayerView]
       - [opp,            PlayerView]
-      # Fallen-Fenster (Sprint 5): 1 = Counter-Window offen, trap_window_ms = verbleibende Zeit
+      # trap window (sprint 5): 1 = counter window open, trap_window_ms = remaining time
       - [trap_window,    i32, 0]
       - [trap_window_ms, i32, 0]
       # Event history — latest events (max. 5, ring buffer, sprint_event_1)
@@ -180,7 +180,7 @@
       - [trigger_seq_counter,    i32, 0]
       - [active_trigger_count,   i32, 0]
       - [active_triggers,        list<TriggerEventView>]
-      # Reaktionsfenster — aktuell offenes Counter-Fenster (sprint_task_3)
+      # reaction window — currently open counter window (sprint_task_3)
       - [reaction_state,         ReactionStateView]
       - [reactable_triggers,     list<TriggerEventView>]   # last 3 counterable triggers
       # Interaction state — open while a targeting action is active

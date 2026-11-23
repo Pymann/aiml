@@ -21,6 +21,6 @@
 - decl: [rcc, i32, { call: [db.checkpoint] }]
 - print: ["checkpoint rc=${rcc}"]
 
-# Dump zerstoeren: falsches Magic, zu kurz, unbrauchbar.
+# Destroy the dump: wrong magic, too short, unusable.
 - call: [io.write_file, "/tmp/aiml_kvidx_kaputt_20261106/idxkaputt.kvidx", "MUELL"]
 - print: ["Phase 3 ok: .kvidx ueberschrieben"]

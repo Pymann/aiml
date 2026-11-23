@@ -24,7 +24,7 @@
           condition: { neq: [ratio, 2.75] }
           then: [{ print: ["FAIL f64 != literal (equal values)"] }, { set: [fails, { +: [fails, 1] }] }]
 
-      # Umgekehrte Reihenfolge: Literal links
+      # reversed order: literal on the left
       - if:
           condition: { lt: [2.5, ratio] }
           then: []

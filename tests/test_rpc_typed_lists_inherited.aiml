@@ -38,7 +38,7 @@
     name: QueryReq
     fields: [[who, string]]
 
-# Response mit ZWEI homogenen typed Listen (heterogene Subtypen getrennt).
+# Response with TWO homogeneous typed lists (heterogeneous subtypes separated).
 - model:
     name: BundleResp
     fields:

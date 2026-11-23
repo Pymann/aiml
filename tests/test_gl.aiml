@@ -3,7 +3,7 @@
 # only checks compile-time aspects (constants, type detection).
 # Expected exit code: 0
 
-# ── Phase A: GL-Konstanten (Compile-Zeit i32) ─────────────────────────────
+# ── Phase A: GL constants (compile-time i32) ──────────────────────────────
 
 - decl: [tri, i32, gl.TRIANGLES]
 - decl: [lin, i32, gl.LINES]
@@ -26,7 +26,7 @@
 
 - print: ["Phase A OK"]
 
-# ── Phase B: Textur-Konstanten ─────────────────────────────────────────────
+# ── Phase B: texture constants ────────────────────────────────────────────
 
 - decl: [rep, i32, gl.REPEAT]
 - decl: [cte, i32, gl.CLAMP_TO_EDGE]

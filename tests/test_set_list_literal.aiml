@@ -55,7 +55,7 @@
       - call: [chk.expect_i, "i32 literal: length", nums.len, 3]
       - call: [chk.expect_i, "i32-Literal: negatives Element", { at: [nums, 1] }, -2]
 
-      # 6) Member-Zuweisung = Backlog-Punkt 13 (war SIGSEGV in aiml_list_handle_incref).
+      # 6) member assignment = backlog point 13 (was SIGSEGV in aiml_list_handle_incref).
       - decl: [box, ptr<Holder>, { new: Holder }]
       - decl: [filled, i32, { call: [box.fill] }]
       - call: [chk.expect_i, "member literal: length in the method", filled, 2]

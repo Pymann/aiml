@@ -68,7 +68,7 @@
       - decl: [big_size, i64, { call: [io.file_size, big_path] }]
       - if: { condition: { neq: [big_size, 3145728] }, then: [{ print: ["FAIL large size ${big_size}"] }, { return: 1 }] }
       - decl: [got_big, string, { call: [hash.sha256_file, big_path] }]
-      # 3 MiB Nullbytes — bekannter Vektor
+      # 3 MiB of zero bytes — a known vector
       - decl: [want_big, string, "bbd05cf6097ac9b1f89ea29d2542c1b7b67ee46848393895f5a9e43fa1f621e5"]
       - if: { condition: { neq: [got_big, want_big] }, then: [{ print: ["FAIL gross: ${got_big}"] }, { return: 1 }] }
 

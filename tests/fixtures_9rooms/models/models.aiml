@@ -58,7 +58,7 @@
       - [spell_type, SpellType]   # sorcery|ceremony|enchantment|incantation
       - [equip_cost, i32]
       - [provides,   map<string:i32>]  # mana produced per turn (mana cards)
-      - [skp_cost,   i32]                 # Schicksalspunkte cost (fate cards)
+      - [skp_cost,   i32]                 # fate points cost (fate cards)
       - [duration,   i32]                 # DurationType (fate/spell cards)
       - [room_effect, i32]                # RoomEffect (fate cards)
       - [created_at, i64]

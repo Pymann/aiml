@@ -29,7 +29,7 @@
       - print: ["FAIL: A1 len=${blen} expected 16"]
       - set: [fail, { +: [fail, 1] }]
 
-# seek(0) + sequentiell zuruecklesen
+# seek(0) + read back sequentially
 - call: [buf.seek, 0]
 - decl: [var_v0, f32, { call: [buf.read, f32] }]
 - decl: [var_v1, f32, { call: [buf.read, f32] }]
@@ -124,7 +124,7 @@
 - decl: [emb, buffer]
 - call: [emb.alloc, 524288]
 
-# Schreibe 131072 Nullen sequentiell
+# write 131072 zeros sequentially
 - decl: [var_i, i32, 0]
 - while:
     condition: { "<": [var_i, 131072] }
@@ -217,7 +217,7 @@
       - print: ["FAIL: G1 dynamic seek -> ${dyn_val} expected 7.77"]
       - set: [fail, { +: [fail, 1] }]
 
-# ── Phase H: tolerance Operator selbst testen ─────────────────────────────
+# ── Phase H: test the tolerance operator itself ───────────────────────────
 - decl: [var_ta, f32, 1.0]
 - decl: [var_tb, f32, 1.0005]
 - if:
@@ -250,7 +250,7 @@
       - print: ["FAIL: H3 tolerance with negatives"]
       - set: [fail, { +: [fail, 1] }]
 
-# Exakte Gleichheit
+# exact equality
 - if:
     condition: { tolerance: [5.0, 5.0, 0.0] }
     then:

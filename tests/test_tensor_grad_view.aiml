@@ -32,7 +32,7 @@
 - call: [tensor.thread_cleanup]
 - print: ["PASS A: grad correct, param unchanged"]
 
-# ── Test B: Vergleich grad_view vs clone — numerisch identischer Gradient ─────
+# ── Test B: compare grad_view vs clone — numerically identical gradient ───────
 
 - call: [tensor.begin_graph]
 
