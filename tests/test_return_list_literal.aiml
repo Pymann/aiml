@@ -123,5 +123,5 @@
           then:
             - call: [log.error, "test_return_list_literal: ${fehler} errors"]
             - return: 1
-      - call: [log.info, "test_return_list_literal: alles gut"]
+      - call: [log.info, "test_return_list_literal: all good"]
       - return: 0

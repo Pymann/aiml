@@ -112,7 +112,7 @@
       - decl: [got_x86, string, { call: [io.read_file, p_x86] }]
       - decl: [got_arm, string, { call: [io.read_file, p_arm] }]
       - set: [fails, { +: [fails, { call: [expect, "lane x86_64 saw the producer's value", { eq: [got_x86, "commit-42"] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "Lane arm64 ebenso", { eq: [got_arm, "commit-42"] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "lane arm64 likewise", { eq: [got_arm, "commit-42"] }] }] }]
 
       # ── F62-120: the hit restores the value ───────────────────────────
       # The same pipeline (the cache hangs on the instance).  The consumer's

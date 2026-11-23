@@ -67,7 +67,7 @@ if [ -f "$HOSTSRC" ] && { [ ! -f "$HOSTLIB" ] || [ "$HOSTSRC" -nt "$HOSTLIB" ]; 
 fi
 
 pass=0; fail=0; pend=0
-echo "── spec/65 Clearance-Labor (STAGE=$STAGE) ──"
+echo "── spec/65 clearance lab (STAGE=$STAGE) ──"
 for f in tests/clearance/[0-9]*.aiml; do
   [ -e "$f" ] || continue
   base=$(basename "$f")

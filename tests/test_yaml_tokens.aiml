@@ -95,7 +95,7 @@
       - decl: [tk5, list<i32>, { call: [yaml.tokens, ""] }]
       - set: [fails, { +: [fails, { call: [expect, "empty text delivers an empty list", { eq: [tk5.len, 0] }] }] }]
 
-      # ── Arten ───────────────────────────────────────────────────────────
+      # ── Kinds ───────────────────────────────────────────────────────────
       - decl: [kinds, string, "- [a, 1, true, 'q', &anc, !tag]\n"]
       - decl: [tk6, list<i32>, { call: [yaml.tokens, kinds] }]
       - set: [fails, { +: [fails, { call: [expect, "number recognised", { eq: [{ call: [kind_at, tk6, 6] }, YamlTok.number] }] }] }]

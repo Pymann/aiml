@@ -24,7 +24,7 @@
     models: [FooData]
     implements: [Named]
     methods:
-      # echte Impl:
+      # real impl:
       - def: { name: get_label, return: string, args: [], body: [{ return: <.fid }] }
       # bodyless — no-op void:
       - def: { name: do_thing, return: void, args: [[amount, i32]] }

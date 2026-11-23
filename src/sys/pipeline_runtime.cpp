@@ -846,7 +846,7 @@ int32_t aiml_pipeline_run_observed(void* p, void* observer_raw) {
 
                     if (rc != 0) {
                         LOG_ERROR("pipeline '" + pp->name + "': step '" + st.name +
-                                  "' endete mit " + std::to_string(rc));
+                                  "' ended with " + std::to_string(rc));
                         // F62-39: the reach is on the step, not on the
                         // pipeline — a failed fetch_sources makes
                         // every lane pointless, a failed build in one

@@ -31,9 +31,9 @@
       - call: [io.close, fh_small]
       - decl: [got_small, string, { call: [hash.sha256_file, small_path] }]
       - decl: [want_small, string, { call: [hash.sha256, body] }]
-      - if: { condition: { neq: [got_small, want_small] }, then: [{ print: ["FAIL klein: ${got_small} != ${want_small}"] }, { return: 1 }] }
+      - if: { condition: { neq: [got_small, want_small] }, then: [{ print: ["FAIL small: ${got_small} != ${want_small}"] }, { return: 1 }] }
       - decl: [vector_abc, string, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"]
-      - if: { condition: { neq: [got_small, vector_abc] }, then: [{ print: ["FAIL Vektor abc"] }, { return: 1 }] }
+      - if: { condition: { neq: [got_small, vector_abc] }, then: [{ print: ["FAIL vector abc"] }, { return: 1 }] }
 
       # ── binary-safe: 0x00 in the content must not truncate ──────────────
       # buffer.write_to writes length-aware (spec/11), io.write would stop at the NUL.

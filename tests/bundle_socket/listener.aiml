@@ -34,7 +34,7 @@
       - decl: [server, socket_handle, { call: [net.socket, "tcp"] }]
       - call: [net.bind, server, "127.0.0.1", 47811]
       - call: [net.listen, server]
-      - print: ["listener bereit"]
+      - print: ["listener ready"]
       - decl: [fails, i32, 0]
 
       # ── Pass 1: a single bundle ─────────────────────────────────────────

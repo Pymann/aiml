@@ -150,7 +150,7 @@
             - set: [rdcnt, { +: [rdcnt, 1] }]
       - return: { -: [{ call: [sys.mem_usage] }, before] }
 
-# CF: voller Frame — clear + populate + draw_scene + swap je Iteration.
+# CF: full frame — clear + populate + draw_scene + swap per iteration.
 - def:
     name: probe_frame_full
     static_off: ["same_arg"]
@@ -201,7 +201,7 @@
       - decl: [reps2, i32, { '*': [reps, 2] }]
 
       - decl: [held, prefab_instance, { call: [engine.instantiate, "ProbeCard"] }]
-      - call: [log.info, "RENDERPROBE sel=${sel} N=${reps} 2N=${reps2} (Leck ⇔ 2N≈2·N)"]
+      - call: [log.info, "RENDERPROBE sel=${sel} N=${reps} 2N=${reps2} (leak ⇔ 2N≈2·N)"]
       # font/glyph warm-up, so that one-time lazy allocations do not count as a leak.
       - decl: [warm, i64, { call: [probe_set_text, held, 2000] }]
 

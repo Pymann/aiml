@@ -1017,7 +1017,7 @@
       - print: ["library: ${lib_bytes} bytes of source text"]
 
       - decl: [dump, string, { call: [lib.toString] }]
-      - print: ["--- Bundle-Anfang ---"]
+      - print: ["--- bundle start ---"]
       - print: [dump]
       - print: ["--- Bundle-Ende ---"]
       - decl: [has_c1, i32, { call: [lib.contains, "lib_calc_1"] }]

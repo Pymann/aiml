@@ -70,7 +70,7 @@
       - if:
           condition: { eq: [fails, 0] }
           then:
-            - print: ["PASS test_sys_cpu_topology: ${cores} Kerne, ${threads} logische Threads, Budget ${budget} → ${workers} Worker"]
+            - print: ["PASS test_sys_cpu_topology: ${cores} cores, ${threads} logical threads, budget ${budget} → ${workers} workers"]
             - return: 0
       - print: ["FAIL test_sys_cpu_topology: ${fails} errors"]
       - return: 1

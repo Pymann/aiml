@@ -64,13 +64,13 @@
       - call: [input.post_focus_lost]
       - if:
           condition: { neq: [{ call: [input.key_down, "e"] }, 0] }
-          then: [{ call: [log.error, "FAIL e klebt"] }, { return: 1 }]
+          then: [{ call: [log.error, "FAIL e sticks"] }, { return: 1 }]
       - if:
           condition: { neq: [{ call: [input.key_down, "w"] }, 0] }
-          then: [{ call: [log.error, "FAIL w klebt"] }, { return: 1 }]
+          then: [{ call: [log.error, "FAIL w sticks"] }, { return: 1 }]
       - if:
           condition: { neq: [{ call: [input.key_down, "lshift"] }, 0] }
-          then: [{ call: [log.error, "FAIL lshift klebt"] }, { return: 1 }]
+          then: [{ call: [log.error, "FAIL lshift sticks"] }, { return: 1 }]
 
       # ── afterwards everything is normal again ────────────────────────────
       - call: [input.update]

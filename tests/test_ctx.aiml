@@ -35,7 +35,7 @@
     body:
       # Sees the function from the FIRST bundle of the same context.
       - decl: [got, i32, { call: [lib_sieben] }]
-      - print: ["nutzt_lib sah ${got}"]
+      - print: ["nutzt_lib saw ${got}"]
       - return: { -: [got, 7] }
 
 - def:

@@ -225,7 +225,7 @@
                     - decl: [ergebnis, i32, { call: [<.pruefe_eine, alt] }]
                     - if: [{ neq: [ergebnis, 0] }, true]
                       then:
-                        - print: ["FAIL D runde ${row}"]
+                        - print: ["FAIL D round ${row}"]
                         - return: ergebnis
                 - set: [row, { +: [row, 1] }]
             # and two more fresh keys without cache pressure

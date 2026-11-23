@@ -45,7 +45,7 @@
       - decl: [var_kv, "Kv<string:string>", { call: [db.open_kv, kv_name, {persist: false}] }]
       - return: [{ call: [var_kv.get, key] }]
 
-# ─── Haupt-Test ───────────────────────────────────────────────────────────────
+# ─── Main test ───────────────────────────────────────────────────────────────
 
 - def:
     name: main

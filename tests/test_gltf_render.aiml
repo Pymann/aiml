@@ -235,7 +235,7 @@
 - while:
     condition: { lt: [frame, 300] }
     body:
-      # Rotation um Y-Achse: 0.02 rad/Frame ≈ 1.15°/Frame → ~313° in 300 Frames
+      # rotation around the Y axis: 0.02 rad/frame ≈ 1.15°/frame → ~313° in 300 frames
       - set: [model, { call: [math.mat4_rotate_y, angle] }]
       # MVP = proj × view × model (right to left: first model, then view, then proj)
       - set: [mvp, { "*": [proj, view] }]

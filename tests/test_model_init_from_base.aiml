@@ -105,5 +105,5 @@
           then:
             - call: [log.error, "test_model_init_from_base: ${fehler} errors"]
             - return: 1
-      - call: [log.info, "test_model_init_from_base: alles gut"]
+      - call: [log.info, "test_model_init_from_base: all good"]
       - return: 0

@@ -159,7 +159,7 @@
 - model:
     name: GameView
     fields:
-      # Spiel-Meta
+      # game meta
       - [round,          i32, 0]
       - [phase,          i32, 0]
       - [active,         i32, 0]
@@ -254,7 +254,7 @@
             - return: [{ call: [var_v.opp.creatures.get, var_n] }]
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Interaction helpers — Host-Seite
+# Interaction helpers — host side
 # ══════════════════════════════════════════════════════════════════════════════
 
 # Resets all interaction fields (targeting window closed).
