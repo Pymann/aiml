@@ -1,536 +1,536 @@
-# Implementierungsplan: sichere Freigabe von inline list<Model>-Elementen
+# Implementation plan: safe release of inline list<Model> elements
 
-Stand: 24.09.2026. Status: Plan, keine Implementierung. Zielkonfiguration: `AIML_MEM_V3=1`, `AIML_LIFETIME_DROPS=1`. Quellstellen beziehen sich auf den beim Erstellen gelesenen Arbeitsstand, nicht ausschließlich auf HEAD.
+As of: 24.09.2026. Status: plan, no implementation. Target configuration: `AIML_MEM_V3=1`, `AIML_LIFETIME_DROPS=1`. Source locations refer to the working state read while writing this, not exclusively to HEAD.
 
-## 1. Entscheidung nach aktueller Spec
+## 1. Decision according to the current spec
 
-Die Formulierung „braucht Escape-Analyse (Views deep-copyen)“ beschreibt den historischen Workaround, aber nicht mehr den korrekten Zielvertrag. Spec 61 §5.4, Zeilen 749–764, verlangt ausdrücklich:
+The wording "needs escape analysis (deep-copy views)" describes the historical workaround, but no longer the correct target contract. Spec 61 §5.4, lines 749–764, explicitly requires:
 
-- Bindung an `Model`: eigene inline Value-Kopie, deren string/container/shared-Felder retained werden. Keine rekursive Duplikation der Container. Die Kopie überlebt Entfernung und Reallokation des äußeren Listen-Slots.
-- Bindung an `ref<Model>`: echte nicht besitzende View auf den Slot. Nach dessen Freigabe oder einer relevanten Verschiebung/Reallokation darf sie nicht mehr benutzt werden.
-- Move-only Model (ptr/unique-resource-Feld, auch transitiv): keine implizite Value-Kopie. Borrow, expliziter Clone soweit klonbar oder besitzende Extraktion verwenden.
-- `remove`/`clear`: Elementbesitz freigeben. `pop`/`take`: Besitz in das Ergebnis verschieben; ein verworfenes Ergebnis am Ausdrucksende freigeben.
+- Binding to `Model`: an own inline value copy whose string/container/shared fields are retained. No recursive duplication of the containers. The copy survives removal and reallocation of the outer list slot.
+- Binding to `ref<Model>`: a real non-owning view of the slot. After it is freed or after a relevant shift/reallocation it must no longer be used.
+- Move-only model (ptr/unique resource field, also transitively): no implicit value copy. Use a borrow, an explicit clone as far as clonable, or an owning extraction.
+- `remove`/`clear`: release element ownership. `pop`/`take`: move ownership into the result; release a discarded result at the end of the expression.
 
-**Empfehlung:** Ownership bei der Value-Materialisierung richtig herstellen und Borrows getrennt analysieren. Kein automatisches Deep-Clone von `ref<Model>` vor einer Mutation: Das würde die Bedeutung einer expliziten View ändern. Tiefe Unabhängigkeit bleibt `clone` vorbehalten.
+**Recommendation:** establish ownership correctly at value materialisation and analyse borrows separately. No automatic deep clone of `ref<Model>` before a mutation: that would change the meaning of an explicit view. Deep independence stays reserved for `clone`.
 
-Damit muss keine vollständige interprozedurale Escape-Analyse fertig sein, bevor eindeutig besitzende inline Elemente sicher freigegeben werden können. Lokal erkennbare ungültige Borrows brauchen Diagnosen; unbekannte externe Effekte sind eine ausdrücklich zu behandelnde Analysegrenze, kein Freibrief für automatische Kopien.
+This means that a complete interprocedural escape analysis does not have to be finished before unambiguously owning inline elements can be released safely. Locally recognisable invalid borrows need diagnostics; unknown external effects are an analysis boundary to be handled explicitly, not a licence for automatic copies.
 
-## 2. Aktuelle C++-Ansatzpunkte
+## 2. Current C++ starting points
 
-| Datei / Stelle | Befund / geplante Änderung |
+| File / place | Finding / planned change |
 |---|---|
-| `src/core/context.h:58–65` | `Symbol::is_view_alias` ist ein syntaktisches bool, ohne Owner/Invalidierungszustand. Nicht als alleinige Ownership-Quelle weiterverwenden. |
-| `src/core/ownership_flow.h` | `OwnFact`, `Origin`, `Transfer`, `OwnershipPlan` vorhanden. Value-Materialisierung und Borrow-Provenienz hier ausdrücklich abbilden. |
-| `src/core/ownership_analyzer.cpp` | Flow-Analyse erweitern; Alias-Ketten, Verzweigungen und Schleifen berücksichtigen. |
-| `src/core/ast_compiler_stmt.cpp:1302–1332` | Widersprüchliche alte Kommentare und View-Markierung bei Value-Deklarationen. Durch typgesteuerte Materialisierung ersetzen. |
-| `src/core/ast_compiler.cpp:6004ff` | `emitLValueAddress`: Adresse inline gespeicherter Elemente; Grundlage für echte `ref<Model>` und Copy-Quelle. |
-| `src/core/ast_compiler_stmt.cpp:2237ff,2382ff,3554ff,4570ff` | Alte Deep-Copy-Sonderpfade für set/return/idx gegen aktuellen Share-Vertrag konsolidieren. |
-| `src/core/ast_compiler_stmt.cpp:4790–4827` | `store` besitzt bereits bit-copy + `aiml_ser_retain`; Reihenfolge derzeit release vor copy/retain, daher auch auf Unterobjekt-/indirektes Aliasing prüfen. |
-| `src/core/ast_compiler_call.cpp:1545ff` | Value-Model push: dieselbe Copy-/Move-Klassifikation einsetzen; keine pauschale Deep-Copy-Entscheidung. |
-| `src/core/ast_compiler_call.cpp:1850–1861` | Expliziter Deferred-Kommentar bei remove; clear ohne Elementtyp-Freigabe. Erst nach gesicherten Value-Kopien aktivieren. |
-| `src/core/list_impl.cpp:129,240,327` | pop, clear, remove: rohe Speicheroperationen von Ownership-Aktionen trennen. |
-| `src/sys/ser_runtime.cpp:802–844`, `ser_runtime.h:140` | `aiml_ser_retain` existiert. Als Basis für member-wise Retain verwenden, Typabdeckung prüfen. |
+| `src/core/context.h:58–65` | `Symbol::is_view_alias` is a syntactic bool, without owner/invalidation state. Do not keep using it as the sole source of ownership. |
+| `src/core/ownership_flow.h` | `OwnFact`, `Origin`, `Transfer`, `OwnershipPlan` exist. Represent value materialisation and borrow provenance here explicitly. |
+| `src/core/ownership_analyzer.cpp` | Extend the flow analysis; take alias chains, branches and loops into account. |
+| `src/core/ast_compiler_stmt.cpp:1302–1332` | Contradictory old comments and view marking for value declarations. Replace with type-driven materialisation. |
+| `src/core/ast_compiler.cpp:6004ff` | `emitLValueAddress`: address of inline stored elements; basis for a real `ref<Model>` and the copy source. |
+| `src/core/ast_compiler_stmt.cpp:2237ff,2382ff,3554ff,4570ff` | Consolidate old deep copy special paths for set/return/idx against the current share contract. |
+| `src/core/ast_compiler_stmt.cpp:4790–4827` | `store` already has bit copy + `aiml_ser_retain`; the order is currently release before copy/retain, so check it for sub-object/indirect aliasing too. |
+| `src/core/ast_compiler_call.cpp:1545ff` | Value model push: use the same copy/move classification; no blanket deep copy decision. |
+| `src/core/ast_compiler_call.cpp:1850–1861` | Explicit deferred comment at remove; clear without element type release. Activate only after value copies are secured. |
+| `src/core/list_impl.cpp:129,240,327` | pop, clear, remove: separate raw memory operations from ownership actions. |
+| `src/sys/ser_runtime.cpp:802–844`, `ser_runtime.h:140` | `aiml_ser_retain` exists. Use it as the basis for member-wise retain, check type coverage. |
 
-Zeilennummern sind Navigationshilfen; Funktionsnamen bleiben die maßgeblichen Anker. Der vorhandene Deferred-Kommentar ist keine verbindliche Designentscheidung gegenüber der neueren Spec.
+Line numbers are navigation aids; function names remain the authoritative anchors. The existing deferred comment is not a binding design decision with respect to the newer spec.
 
-## 3. Gemeinsame C++-Primitive zuerst
+## 3. Shared C++ primitives first
 
-In `ast_compiler.h` deklarieren, im passenden Compiler-Implementierungsmodul definieren. Namen unten sind Vorschläge, keine bestehenden APIs:
+Declare in `ast_compiler.h`, define in the matching compiler implementation module. The names below are proposals, not existing APIs:
 
 ```cpp
 enum class ValueTransfer { CopyRetain, Move, ExplicitClone };
 
-// Erzeugt einen gesicherten besitzenden Wert in einer temporären Storage.
-// Prüft Copy-Fähigkeit; wertet die Quelle genau einmal aus.
+// Creates a secured owning value in temporary storage.
+// Checks copyability; evaluates the source exactly once.
 llvm::Value* prepareOwnedModelValue(Expr* source,
                                    const std::string& modelType,
                                    ValueTransfer transfer);
 
-// Gibt Felder frei, niemals den inline Model-Slot selbst.
+// Releases fields, never the inline model slot itself.
 void emitValueModelRelease(llvm::Value* address,
                            const std::string& modelType);
 
-// Veröffentlicht bereits gesicherten Besitz am Ziel; kein weiteres retain.
+// Publishes already secured ownership at the target; no further retain.
 void commitOwnedModelValue(llvm::Value* destination,
                           llvm::Value* prepared,
                           const std::string& modelType);
 ```
 
-CopyRetain-Lowering, schematisch:
+CopyRetain lowering, schematically:
 
 ```cpp
-// src ist noch gültig; tmp besitzt keine vorherigen Ressourcen.
+// src is still valid; tmp owns no previous resources.
 memcpy(tmp, src, sizeof(Model));
 aiml_ser_retain(tmp, modelNodes, nodeCount);
-// Erst nach dem Retain darf alter Zielbesitz verschwinden:
+// Only after the retain may old target ownership disappear:
 aiml_ser_free_decoded(dst, modelNodes, nodeCount);
 memcpy(dst, tmp, sizeof(Model));
-// tmp wurde nach dst verschoben: kein zweiter Drop.
+// tmp was moved into dst: no second drop.
 ```
 
-Bei Initialisierung entfällt release(dst); bei exakter Copy-Selbstzuweisung darf die gesamte Operation entfallen. Bei überlappenden/indirekt aliasierenden Quellen bleibt die temporäre Sicherung notwendig. Keine Quelladresse nach möglichem Ziel-Drop oder Listen-Realloc erneut dereferenzieren. Move braucht denselben Schutz sowie rechtzeitiges Invalidieren der Quell-Ownership; Transfer aus einer nur geborgten View ist verboten. Auch Move-Selbstzuweisung und der Fall, dass die Quelle in einem freizugebenden Zielunterobjekt liegt, erhalten eigene Tests.
+On initialisation, release(dst) is omitted; on an exact copy self-assignment the whole operation may be omitted. With overlapping/indirectly aliasing sources, the temporary backup stays necessary. Do not dereference a source address again after a possible target drop or list realloc. Move needs the same protection plus timely invalidation of the source ownership; transfer out of a merely borrowed view is forbidden. Move self-assignment and the case that the source lies in a target sub-object to be released also get their own tests.
 
-`aiml_ser_retain` ist vor Benutzung über alle zulässigen Felder zu auditieren: strings/path, Container-Handles, shared, Class-5-Ressourcen, eingebettete Value-Modelle und Arrays. `ref` bleibt schwach. Unique-Felder werden nicht durch Retain kopierbar. Fehlende Deskriptoren oder nicht unterstützte Eigentumsklassen dürfen nicht still auf flaches memcpy zurückfallen. Gegebenenfalls typspezifische Retain/Release-Emission ergänzen; Serialisierung allein ist kein vollständiger Lifecycle-Vertrag für OS/GPU-Ressourcen.
+`aiml_ser_retain` must be audited before use across all permissible fields: strings/path, container handles, shared, class 5 resources, embedded value models and arrays. `ref` stays weak. Unique fields do not become copyable through retain. Missing descriptors or unsupported ownership classes must not silently fall back to a shallow memcpy. Add type-specific retain/release emission if needed; serialisation alone is not a complete lifecycle contract for OS/GPU resources.
 
-## 4. Value-Materialisierung vereinheitlichen
+## 4. Unify value materialisation
 
-In dieser Reihenfolge auf die gemeinsamen Primitive umstellen:
+Switch to the shared primitives in this order:
 
-1. `decl: [copy, Model, at/get(...)]` und Kopie aus einem anderen Value-Local: CopyRetain, eigenes OwnershipId, normaler Scope-Drop.
-2. set, Member-Assignment, `store` in einen Out-Parameter und idx-Ersatz: Quelle sichern, alten Besitz releasen, neuen Besitz übernehmen.
-3. Return-by-value: geborgene Quelle materialisieren, eigene Quelle gemäß Transferplan bewegen. Callee liefert genau einen Besitz; Caller adoptiert ihn. Keine zusätzlichen unbalancierten retains.
-4. push/insert/extend/slice und weitere elementkopierende Operationen: CopyRetain oder Move nach Typ und Transferplan. Bei Copy vor einem möglichen Realloc der Quellliste sichern (`list.push(at(list,i))`).
-5. Temporäre Ergebnisse: einheitliche Registrierung und Konsumierung. `pop`-Ergebnis darf auch bei Call-Verschachtelung oder Verwerfen weder verschwinden noch doppelt gedroppt werden.
+1. `decl: [copy, Model, at/get(...)]` and a copy from another value local: CopyRetain, own OwnershipId, normal scope drop.
+2. set, member assignment, `store` into an out parameter and idx replacement: secure the source, release old ownership, take over new ownership.
+3. Return by value: materialise a borrowed source, move an own source according to the transfer plan. The callee delivers exactly one ownership; the caller adopts it. No additional unbalanced retains.
+4. push/insert/extend/slice and further element-copying operations: CopyRetain or Move by type and transfer plan. For a copy, secure before a possible realloc of the source list (`list.push(at(list,i))`).
+5. Temporary results: uniform registration and consumption. A `pop` result must neither disappear nor be dropped twice, even with call nesting or when discarded.
 
-Semantiktests müssen unterscheiden: `copy.cards.push(...)` verändert den gemeinsam gehaltenen Container; `copy.scalar = ...` oder das Ersetzen von `copy.cards` verändert nur die Kopie. Wer einen inline Slot selbst verändern will, bindet `ref<Model>`. Spielcode, der bisher von unbeabsichtigtem Scalar-Write-through einer Value-Kopie abhing, muss gezielt angepasst werden.
+Semantic tests must distinguish: `copy.cards.push(...)` changes the jointly held container; `copy.scalar = ...` or replacing `copy.cards` changes only the copy. Whoever wants to change an inline slot itself binds `ref<Model>`. Game code that previously depended on unintended scalar write-through of a value copy must be adapted specifically.
 
-## 5. Ownership- und Borrow-Analyse
+## 5. Ownership and borrow analysis
 
-`Transfer` um eine explizite Retain-Copy-Aktion erweitern; DeepCopy für explizite Clone-Semantik getrennt halten. `Origin::SharedView` darf nicht als Ersatz für einen materialisierten besitzenden Value dienen. Ressourcenidentität geteilter Felder von Besitz des äußeren inline Aggregats unterscheiden: zwei Aggregate können dieselben Container-Felder jeweils mit eigenem rc halten.
+Extend `Transfer` with an explicit retain-copy action; keep DeepCopy separate for explicit clone semantics. `Origin::SharedView` must not serve as a substitute for a materialised owning value. Distinguish the resource identity of shared fields from ownership of the outer inline aggregate: two aggregates can each hold the same container fields with their own rc.
 
-Für echte Borrows Provenienz vorsehen, etwa:
+Provide provenance for real borrows, for example:
 
 ```cpp
 struct BorrowOrigin {
     std::set<ResourceId> ownerResources;
-    // Zusätzlich Element-/Memberpfad und InlineSlot vs Pointee.
+    // Additionally the element/member path and InlineSlot vs. pointee.
 };
-// An Ownership-Fakten/Expressions anbinden, nicht bloß an Variablennamen.
+// Attach to ownership facts/expressions, not merely to variable names.
 ```
 
-Datenfluss muss unterstützen:
+The data flow must support:
 
-- Alias-Ketten und Zuweisungen propagieren; Materialisierung trennt Slot-Borrow von besitzender Kopie.
-- Beim CFG-Merge Owner-Mengen vereinigen; nach Mutation auf nur einem Pfad nicht unconditionally valid annehmen. Schleifen bis Fixpunkt analysieren.
-- Bei inline Elementen remove/insert (Shift), clear, Ersetzen des betroffenen Slots, Owner-Drop und mögliche Reallokation modellieren. Shared Container-Aliase referenzieren denselben Owner; Mutation über Alias invalidiert ebenfalls.
-- Nur spätere Benutzung eines invalidierten Borrows beanstanden; ein bereits unbenutzter Borrow darf remove nicht pauschal verbieten.
-- Call-Effekte typisiert zusammenfassen: may-reallocate/may-remove/may-retain, Return-Borrow-Anker. Bei unbekannten Effekten keine falsche Sicherheitsgarantie; bestehende Spec-Diagnostik/Migrationsregeln beachten und verbleibende Grenzen dokumentieren.
-- Borrow-Return nur bei ausreichend langlebigem Anker; Borrow auf callee-local oder lokales temporäres Copy-Ergebnis ablehnen.
+- Propagating alias chains and assignments; materialisation separates a slot borrow from an owning copy.
+- At CFG merges, unite the owner sets; after a mutation on only one path, do not assume unconditionally valid. Analyse loops to a fixed point.
+- For inline elements, model remove/insert (shift), clear, replacing the affected slot, owner drop and possible reallocation. Shared container aliases reference the same owner; a mutation via an alias invalidates too.
+- Only object to a later use of an invalidated borrow; an already unused borrow must not prohibit remove wholesale.
+- Summarise call effects in a typed way: may-reallocate/may-remove/may-retain, return borrow anchors. With unknown effects, no false safety guarantee; observe the existing spec diagnostics/migration rules and document the remaining limits.
+- Borrow return only with a sufficiently long-lived anchor; reject a borrow on a callee local or a local temporary copy result.
 
-Kein verzögertes automatisches Deep-Copy bei „Escape“ eines expliziten ref: entweder vom Zielvertrag erlaubte Value-Materialisierung oder Diagnose. Dadurch bleibt die Bedeutung von Mutation durch eine View erhalten.
+No delayed automatic deep copy on "escape" of an explicit ref: either a value materialisation permitted by the target contract, or a diagnostic. That preserves the meaning of mutation through a view.
 
-## 6. Elementfreigabe aktivieren
+## 6. Activate element release
 
-Erst nachdem Materialisierungs-/Transferpfade unter Tests bestehen:
+Only after the materialisation/transfer paths pass under tests:
 
-- **remove(i):** Argumente genau einmal auswerten, bestehenden Bounds-Vertrag vor Speicherzugriff durchsetzen, entferntes Model member-wise releasen, Rest mit Struct-Stride memmove verschieben, len vermindern. Letzte nun inaktive Slotkopie nicht nochmals releasen; optional ohne Drop nullen. Kein free(slot).
-- **clear():** alle aktiven Slots genau einmal releasen, danach len=0. Speicherreserve darf bestehen bleiben. Zweites clear ist wirkungslos.
-- **pop()/take():** Inline-Wert in besitzendes Ergebnis verschieben, Slot aus dem aktiven Bereich entfernen, keine Elementfreigabe im Transferpfad. Verworfene Ergebnisse anschließend durch temporären Drop releasen.
-- **idx/replace:** vorbereitete Quelle vor Release des alten Slots; dieselben gemeinsamen Primitive wie set/store. Keine erneute Deep-Copy als Sonderfall.
-- **finaler List-Drop:** aktive Elemente genau einmal releasen; bereits entfernte Slots bleiben unsichtbar. Vorhandene Runtime-Deskriptoren mit denselben Klassenregeln abgleichen.
+- **remove(i):** evaluate arguments exactly once, enforce the existing bounds contract before memory access, release the removed model member-wise, shift the rest with the struct stride via memmove, decrement len. Do not release the last now-inactive slot copy again; optionally zero it without a drop. No free(slot).
+- **clear():** release all active slots exactly once, then len=0. The memory reserve may remain. A second clear has no effect.
+- **pop()/take():** move the inline value into an owning result, remove the slot from the active range, no element release in the transfer path. Release discarded results afterwards via a temporary drop.
+- **idx/replace:** prepared source before releasing the old slot; the same shared primitives as set/store. No renewed deep copy as a special case.
+- **final list drop:** release active elements exactly once; already removed slots stay invisible. Reconcile existing runtime descriptors with the same class rules.
 
-Entscheidung nach Review (§9.7): Der Runtime-Dispatcher `free_list_elem_at` wird für remove/clear/pop-discard/final-drop vereinheitlicht; ListImpl/Codegen übergibt Typklassifikation und steuert Copy-/Move-Transfers. Keinen zweiten unabhängigen Release-Walker für remove, clear und finalen Drop etablieren. Beide möglichen Schichten nicht gleichzeitig droppen lassen.
+Decision after review (§9.7): the runtime dispatcher `free_list_elem_at` is unified for remove/clear/pop-discard/final-drop; ListImpl/codegen passes the type classification and controls copy/move transfers. Do not establish a second independent release walker for remove, clear and final drop. Do not let both possible layers drop at the same time.
 
-## 7. Tests vor Produktivumschaltung
+## 7. Tests before switching production on
 
-Neue Tests unter `aiml/tests/lifetime/`, freie Nummern bei Umsetzung bestimmen. Reale Client-Reproduktionen weiterhin unter `9rooms_v2/leak_probes/`.
+New tests under `aiml/tests/lifetime/`; determine free numbers at implementation time. Real client reproductions continue under `9rooms_v2/leak_probes/`.
 
-| Testfall | Erwartung |
+| Test case | Expectation |
 |---|---|
-| Value aus at/get binden, Ursprung remove/clear/drop, Kopie lesen | gültige Inhalte; beide Drops balanciert |
-| Kopie enthält string, list, map, nested Model, array | rekursives Retain/Release korrekt |
-| Mutation gemeinsamer Container-Felder, Scalar-/Feldersatz getrennt prüfen | Share-Semantik und unabhängiger äußerer Value |
-| Mehrere Kopien, Alias-Kette, Branch-Merge, Loop | kein Leak/UAF, Drop auf jedem tatsächlich besitzenden Pfad |
-| ref aus at, inline remove/insert/realloc, danach ref benutzen | negative Diagnose bei lokal sichtbarer Invalidierung |
-| remove über zweiten Listen-Handle-Alias | gleiche Invalidierung wie über ursprünglichen Handle |
-| Value überlebt Wachstum, echter ref wird nicht benutzt | positive Kontrolle gegen zu strenge Borrow-Diagnose |
-| remove erstes/mittleres/letztes Element, clear zweimal | survivors korrekt, keine doppelte Freigabe |
-| pop gebunden, verworfen, an Funktion weitergereicht | genau ein übertragener Besitz / ein temporärer Drop |
-| idx/store Selbstzuweisung und überlappende Quelle | secure-before-release, keine zerstörte Quelle |
-| push(at(sameList,i)) mit erzwungenem Wachstum | Sicherung vor Realloc, valider Inhalt |
-| Move-only Model kopieren, auch verschachtelt | Compilefehler; ref/pop erlaubt |
-| Return und Out-Param über Modulgrenze | Caller/Callee zählen Besitz konsistent |
+| bind a value from at/get, remove/clear/drop the origin, read the copy | valid contents; both drops balanced |
+| the copy contains string, list, map, nested model, array | recursive retain/release correct |
+| mutation of shared container fields, check scalar/field replacement separately | share semantics and an independent outer value |
+| several copies, alias chain, branch merge, loop | no leak/UAF, drop on every actually owning path |
+| ref from at, inline remove/insert/realloc, then use the ref | negative diagnostic on locally visible invalidation |
+| remove via a second list handle alias | same invalidation as via the original handle |
+| value survives growth, a real ref is not used | positive control against an overly strict borrow diagnostic |
+| remove first/middle/last element, clear twice | survivors correct, no double release |
+| pop bound, discarded, passed on to a function | exactly one transferred ownership / one temporary drop |
+| idx/store self-assignment and an overlapping source | secure-before-release, no destroyed source |
+| push(at(sameList,i)) with forced growth | backup before realloc, valid content |
+| copy a move-only model, also nested | compile error; ref/pop allowed |
+| return and out param across a module boundary | caller/callee count ownership consistently |
 
-Vorhandene Tests zwingend einbeziehen: `tests/lifetime/45_store_view_outparam.aiml` (prüft explizit Aliasing), `37_nested_replace_remove.aiml`, `neg/n08_invalidated_borrow.aiml`, `neg/n13_move_only_value_copy_from_at.aiml`.
+Existing tests must be included: `tests/lifetime/45_store_view_outparam.aiml` (explicitly checks aliasing), `37_nested_replace_remove.aiml`, `neg/n08_invalidated_borrow.aiml`, `neg/n13_move_only_value_copy_from_at.aiml`.
 
-9rooms-Regressionsfälle: `test/unit/test_effect_processor.aiml`, `test_effect_death_on_destroy.aiml`, `test_mana_pick.aiml` und `test/integration/test_enchantment_picker.aiml`. Diese sichern gerade die zuvor durch Deep-Copy veränderte Spiellogik ab.
+9rooms regression cases: `test/unit/test_effect_processor.aiml`, `test_effect_death_on_destroy.aiml`, `test_mana_pick.aiml` and `test/integration/test_enchantment_picker.aiml`. These secure exactly the game logic previously changed by deep copy.
 
-Native Assertion-Läufe plus Valgrind unter beiden aktivierten Flags. Kleinprobe und 1000 Wiederholungen vergleichen: 0 definite/indirect Verluste im isolierten Zielpfad, keine invalid reads/writes/free. Erreichbare Runtime-Registries separat behandeln. Das bestehende `tests/run_memory_sanitizers.sh` nutzt `--errors-for-leak-kinds=none`; dessen Safety-PASS genügt ausdrücklich nicht als Leak-Abnahme. Zusätzlich Leak-Zahlen als harte Gate-Bedingung prüfen. Anschließend WASM-Compile/Client-Smoke für Struct-Layout/Stride und die volle relevante AIML-/9rooms-Suite.
+Native assertion runs plus Valgrind under both enabled flags. Compare a small probe and 1000 repetitions: 0 definite/indirect losses in the isolated target path, no invalid reads/writes/frees. Handle reachable runtime registries separately. The existing `tests/run_memory_sanitizers.sh` uses `--errors-for-leak-kinds=none`; its safety PASS is explicitly not enough as leak acceptance. Additionally check leak numbers as a hard gate condition. Then a WASM compile/client smoke test for struct layout/stride and the full relevant AIML/9rooms suite.
 
-## 8. Umsetzungspakete und Abnahme
+## 8. Implementation packages and acceptance
 
-1. **Vertrag + rote Tests:** aktuelle Spec-Materialisierung als Autorität dokumentieren; Tests für Share-Semantik, remove/clear und temporäre pop-Drops erstellen. Bestehende Deferred-Kommentare kennzeichnen.
-2. **Gemeinsame Retain/Release/Move-Primitive:** Runtime-Typabdeckung und Alias-Reihenfolge testen.
-3. **Value-Ownership konsolidieren:** decl/set/store/return/idx und Container-Copy-Sinks umstellen; alte syntaktische View-Heuristiken für Value-Kopien entfernen. OwnershipPlan und Codegen müssen denselben Vertrag verwenden.
-4. **Borrow-Analyse:** echte ref-Provenienz, Mutationseffekte und negative Tests. Keine unbekannten Fälle durch versteckte Deep-Copies überdecken.
-5. **remove/clear/pop-Lifecycle einschalten:** erst jetzt Deferred-Lücke schließen; Leak-Gate plus bisherige Double-Free-Regressionsfälle müssen bestehen.
-6. **Gesamtabnahme:** relevante AIML-/9rooms-Tests, Valgrind, WASM; Kommentare/Spec-Implementierungsnotizen aktualisieren. Keine breitflächige Drop-Unterdrückung als „Fix“ akzeptieren.
+1. **Contract + red tests:** document the current spec materialisation as the authority; create tests for share semantics, remove/clear and temporary pop drops. Mark the existing deferred comments.
+2. **Shared retain/release/move primitives:** test runtime type coverage and alias order.
+3. **Consolidate value ownership:** switch decl/set/store/return/idx and container copy sinks; remove old syntactic view heuristics for value copies. OwnershipPlan and codegen must use the same contract.
+4. **Borrow analysis:** real ref provenance, mutation effects and negative tests. Do not cover up unknown cases with hidden deep copies.
+5. **Switch on the remove/clear/pop lifecycle:** only now close the deferred gap; the leak gate plus the previous double-free regression cases must pass.
+6. **Overall acceptance:** relevant AIML/9rooms tests, Valgrind, WASM; update comments/spec implementation notes. Do not accept broad drop suppression as a "fix".
 
-Der sicherheitskritische Abhängigkeitspfad ist 1 → 2 → 3 → 5. Borrow-Analyse läuft als eigenes Paket mit, und lokal bekannte ungültige Borrows müssen spätestens zur Gesamtabnahme diagnostiziert werden. Der Umfang ist mittel bis groß, weil dieselbe Value-Ownership über alle Erzeuger und Senken gelten muss; ein isolierter free-Aufruf im remove-Zweig ist nicht ausreichend.
+The safety-critical dependency path is 1 → 2 → 3 → 5. Borrow analysis runs alongside as a package of its own, and locally known invalid borrows must be diagnosed by the overall acceptance at the latest. The scope is medium to large, because the same value ownership must apply across all producers and sinks; an isolated free call in the remove branch is not enough.
 
 ---
 
-## 9. Offene Umsetzungsfragen (Claude, 2026-09-24 — zum Review/Nachtragen)
+## 9. Open implementation questions (Claude, 2026-09-24 — for review/additions)
 
-Ich habe den Plan gegen den aktuellen Code gelesen. Unten die Stellen, an denen ich **unsicher bin, WIE oder WO** zu implementieren ist — bitte reviewen und die Design-Entscheidung eintragen. Legende: 🔴 = Kernrisiko / Entscheidung zwingend vor Umsetzung, 🟡 = konkrete Codestelle/Verfahren unklar. Verifiziertes Positivum vorab: **`aiml_ser_retain`/`ret()` [`src/sys/ser_runtime.cpp:805–847`] deckt STRING/STRUCT(rekursiv)/LIST_PTR/MAP_PTR/BUFFER_PTR/MODEL/PTR_REF(shared) bereits korrekt ab; unique ptr/tensor werden korrekt NICHT increft.** Paket 2 ist damit größtenteils vorhanden.
+I read the plan against the current code. Below are the places where I am **unsure HOW or WHERE** to implement — please review and enter the design decision. Legend: 🔴 = core risk / decision mandatory before implementation, 🟡 = concrete code location/procedure unclear. A verified positive up front: **`aiml_ser_retain`/`ret()` [`src/sys/ser_runtime.cpp:805–847`] already covers STRING/STRUCT(recursive)/LIST_PTR/MAP_PTR/BUFFER_PTR/MODEL/PTR_REF(shared) correctly; unique ptr/tensor are correctly NOT incref'd.** Package 2 is therefore largely in place.
 
-### 9.1 🔴 View-in-place-Mutation ist die eigentliche Hürde — nicht das Retain
-Der AKTUELLE Vertrag [`src/core/ast_compiler_stmt.cpp:1355–1377`]: `decl x = Model {at/get/first/last}` setzt `sym.is_view_alias = true` = **geteilte VIEW**, und `x = at(..); apply_buff(x)` **mutiert die QUELLE**. Der Kommentar bei 1355–1358 sagt ausdrücklich, dass Deep-Copy-at-decl bereits **zurückgenommen** wurde, weil 9rooms (enchantment_picker, effect_processor) genau auf diese In-place-View-Mutation baut. CopyRetain (§4) macht `x` zu einer eigenständigen co-owned Kopie → `apply_buff(x)` mutiert dann die KOPIE, nicht die Quelle.
-> ⚠️ ENTSCHEIDUNG NÖTIG: Werden alle „`decl m = Model at(..)` + danach `mutate(m)`"-Stellen verbindlich auf `ref<Model>` migriert (Plan §4 sagt das, aber es ist eine beobachtbare Verhaltensänderung im ganzen Spiel)? Wenn ja, brauche ich (a) deine Bestätigung des neuen Vertrags und (b) am besten eine kuratierte Liste der betroffenen Stellen (mein grep-Startpunkt: `decl:` mit Value-Model-Typ + AtExpr/`.get`/`.first`/`.last`-Init, danach ein Aufruf/`set` auf dieselbe Variable). **Das ist die risikoreichste Änderung — exakt die Klasse „breiter ABI-Eingriff", die beim String-Auto-Detect zu einer In-Game-Regression führte, die Leak/Sanitizer NICHT gefangen haben.**
+### 9.1 🔴 View in-place mutation is the actual hurdle — not the retain
+The CURRENT contract [`src/core/ast_compiler_stmt.cpp:1355–1377`]: `decl x = Model {at/get/first/last}` sets `sym.is_view_alias = true` = **shared VIEW**, and `x = at(..); apply_buff(x)` **mutates the SOURCE**. The comment at 1355–1358 says explicitly that deep-copy-at-decl was already **reverted**, because 9rooms (enchantment_picker, effect_processor) relies on exactly this in-place view mutation. CopyRetain (§4) makes `x` an independent co-owned copy → `apply_buff(x)` then mutates the COPY, not the source.
+> ⚠️ DECISION NEEDED: are all "`decl m = Model at(..)` + then `mutate(m)`" places migrated bindingly to `ref<Model>` (plan §4 says so, but it is an observable behaviour change across the whole game)? If yes, I need (a) your confirmation of the new contract and (b) ideally a curated list of the affected places (my grep starting point: `decl:` with a value model type + an AtExpr/`.get`/`.first`/`.last` init, followed by a call/`set` on the same variable). **This is the riskiest change — exactly the "broad ABI intervention" class that led to an in-game regression with the string auto-detect, which leak/sanitizer did NOT catch.**
 
 
-**Antwort / Entscheidung (Codex, 24.09.2026):** Der Zielvertrag aus der aktuellen Spec bleibt verbindlich: `Model` materialisiert einen eigenen Value, `ref<Model>` bindet den Slot. Eine pauschale Migration aller mutierenden Aufrufe auf ref ist jedoch **nicht** nötig. Die Annahme „CopyRetain mutiert nur die Kopie“ gilt für Scalar-/Feldersatz, nicht für Mutation des über ein Feld gemeinsam gehaltenen Containers. Genau dieser Unterschied erklärt, warum ein früherer Deep-Copy-Versuch regressieren konnte, ohne dass CopyRetain dieselbe Regression verursachen muss.
+**Answer / decision (Codex, 24.09.2026):** the target contract from the current spec stays binding: `Model` materialises an own value, `ref<Model>` binds the slot. A blanket migration of all mutating calls to ref is, however, **not** necessary. The assumption "CopyRetain mutates only the copy" holds for scalar/field replacement, not for mutation of the container held jointly via a field. Exactly this difference explains why an earlier deep copy attempt could regress without CopyRetain having to cause the same regression.
 
-Drei Fälle getrennt behandeln:
+Handle three cases separately:
 
-1. Containerinhalt ändern (`m.buffs.push`, `m.pool.put`): CopyRetain erhält die gemeinsame Sichtbarkeit; Value-Bindung kann bleiben.
-2. Scalar-/Stringfeld setzen oder Containerfeld neu binden, anschließend `idx`-Writeback: Value-Bindung kann ebenfalls bleiben. Writeback schreibt die geänderten Felder zurück; Quelle davor sichern. Voraussetzung: Zielindex bezeichnet noch den beabsichtigten Eintrag.
-3. Scalar-/Feldersatz soll ohne Writeback sofort den ursprünglichen Slot ändern: auf `ref<Model>` migrieren und die gesamte Benutzungsdauer auf Shift/Realloc/remove prüfen. Bei struktureller Mutation stattdessen Value behalten und über stabile Identität erneut lokalisieren; keinen Borrow darüber hinweg halten.
+1. Changing container content (`m.buffs.push`, `m.pool.put`): CopyRetain preserves the shared visibility; the value binding can stay.
+2. Setting a scalar/string field or rebinding a container field, followed by an `idx` write-back: the value binding can likewise stay. The write-back writes the changed fields back; secure the source beforehand. Precondition: the target index still denotes the intended entry.
+3. Scalar/field replacement should change the original slot immediately without a write-back: migrate to `ref<Model>` and check the entire usage period for shift/realloc/remove. With a structural mutation, keep the value instead and relocate it via a stable identity; do not hold a borrow across it.
 
-**Kuratierte, am Quelltext geprüfte Startliste** (Pfade relativ zu `9rooms_v2`, keine behauptete vollständige Migrationsliste):
+**Curated start list, checked against the source** (paths relative to `9rooms_v2`, not a claimed complete migration list):
 
-| Stelle | Beobachtung / Entscheidung |
+| Place | Observation / decision |
 |---|---|
-| `sources/cards/effect_processor_base.aiml:547–585`, `buff_zone` | `ent = at(zone,idx)`, `add_buff(ent,buff)`, danach `idx(zone,idx,ent)`. Value + CopyRetain beibehalten; vorhandener Writeback deckt Scalar-Änderungen ab. Regressionstest enchantment_picker zwingend. |
-| `sources/match/buff_ops.aiml:276–295`, `gc_zone_inplay` | `gent` wird über `remove_buff(&gent,...)` geändert und mit `idx` zurückgeschrieben. Value beibehalten; innere buff-Liste darf sich ändern, äußerer Zone-Slot bleibt bis Writeback stabil. |
-| `sources/match/buff_ops.aiml:164–173`, `remove_buff` | `buf = at(zen.buffs,idx)` wird gelesen, anschließend Ursprung entfernt. Gerade hier ist besitzendes CopyRetain sinnvoll; **nicht** automatisch zu ref machen. |
-| `sources/match/card_pick_helpers.aiml:28–30`, `revive_place_one` | `rp_d2`, `place_card_at(&rp_d2,...)`, danach `idx(mat.players,...)`: Value + Writeback behalten. |
-| `sources/cards/effect_handlers.aiml:519–525`, `do_apply_buff` | `ctrl`/`opp` dienen hier zum Lesen der IDs. Keine ref-Migration erforderlich. |
-| `client/card_editor_base.aiml:492–495` | `src_ab` wird in eine neue Ability übertragen. Copy-/Clone-Absicht des Editors separat testen; keine Write-through-View erforderlich. |
+| `sources/cards/effect_processor_base.aiml:547–585`, `buff_zone` | `ent = at(zone,idx)`, `add_buff(ent,buff)`, then `idx(zone,idx,ent)`. Keep value + CopyRetain; the existing write-back covers scalar changes. The enchantment_picker regression test is mandatory. |
+| `sources/match/buff_ops.aiml:276–295`, `gc_zone_inplay` | `gent` is changed via `remove_buff(&gent,...)` and written back with `idx`. Keep the value; the inner buff list may change, the outer zone slot stays stable until the write-back. |
+| `sources/match/buff_ops.aiml:164–173`, `remove_buff` | `buf = at(zen.buffs,idx)` is read, then the origin is removed. Exactly here, an owning CopyRetain makes sense; do **not** automatically make it a ref. |
+| `sources/match/card_pick_helpers.aiml:28–30`, `revive_place_one` | `rp_d2`, `place_card_at(&rp_d2,...)`, then `idx(mat.players,...)`: keep value + write-back. |
+| `sources/cards/effect_handlers.aiml:519–525`, `do_apply_buff` | `ctrl`/`opp` serve to read the IDs here. No ref migration required. |
+| `client/card_editor_base.aiml:492–495` | `src_ab` is transferred into a new ability. Test the editor's copy/clone intent separately; no write-through view required. |
 
-Für die vollständige Inventur bei Implementierung einen AST-basierten Bericht über Value-at/get/first/last-Bindungen und die aufgerufenen mutierenden Parameter erzeugen. Grep allein kann Callee-Schreibeffekte und Writebacks nicht beweisen. Bislang ist aus den geprüften Kernstellen **keine pauschale Pflichtmigration** belegt. Behavior-Tests zusätzlich zu Leak-Tests sind die Freigabebedingung; der Plan autorisiert keinen ungetesteten Massenersatz.
+For the complete inventory at implementation time, generate an AST-based report over value at/get/first/last bindings and the mutating parameters called. Grep alone cannot prove callee write effects and write-backs. So far, **no blanket mandatory migration** has been proven from the checked core places. Behaviour tests in addition to leak tests are the release condition; the plan does not authorise an untested mass replacement.
 
-### 9.2 🟡 Wo genau CopyRetain bei `decl` emittieren
-Bei [`ast_compiler_stmt.cpp:1359–1377`] wird HEUTE nur das Flag gesetzt, keine Kopie; die Materialisierung passiert erst an Escape-Punkten (unten). Unklar: soll `prepareOwnedModelValue`/CopyRetain HIER bei decl emittiert werden (memcpy in eigenen Slot + `aiml_ser_retain`, is_view_alias für Value entfällt), oder bleibt die „escape-time"-Struktur und nur die Kopie-Art wird getauscht (deep-copy → retain)? Ich weiß nicht, welchen der beiden Wege du willst.
-
-
-**Antwort / Entscheidung:** CopyRetain erfolgt **bei der Value-Bindung**, nicht erst am Escape. Das Metadatenstück bei 1359–1377 klassifiziert nur; die IR-Emission gehört in den tatsächlichen Initialisierungs-/Store-Pfad von `visitDeclStmt`, nach einmaliger Auswertung des Initializers und vor Veröffentlichung des fertigen Werts. Die existierenden Pointer-vs-Struct-Initialisierungspfade zusammenführen: Slot-Adresse auflösen oder einmalig spillen → temporäre Value-Kopie → retain → in lokalen Zielslot übernehmen. Anschließend `Owned/Live` und genau einen Scope-Drop registrieren.
-
-Für einen uninitialisierten Zielslot kein release; wurden durch einen bestehenden Initialisierungspfad bereits leere Container erzeugt, müssen diese vor Überschreiben freigegeben oder ihre unnötige Erzeugung vermieden werden. Nicht zugleich im Flag-Abschnitt und im späteren Store kopieren. Eigene producer/pop/clone-Ergebnisse werden adoptiert, nicht zusätzlich retained. `ref<Model>` bleibt der getrennte LValue-/Borrow-Pfad. Dieser frühe Besitzaufbau ist nötig, damit remove **vor** einem späteren Escape bereits sicher ist.
-
-### 9.3 🟡 Welche der Deep-Copy-Sinks werden CopyRetain, welche bleiben `clone`?
-`aiml_ser_deep_copy` wird an vielen Stellen emittiert: [`ast_compiler_stmt.cpp:1192, 1960, 2254, 2274, 2313, 2471, 2603, 3111, 3135, 3576`] (set/return/idx/member) und der Value-Model-**push** [`ast_compiler_call.cpp:1545ff`] (heute MOVE-wenn-movable, sonst Deep-Copy). Plan §4: Value-Materialisierung → CopyRetain, aber explizites `{clone}` → Deep-Copy behalten.
-> ⚠️ Ich brauche pro Sink die Zuordnung **Value-Materialisierung (→ retain)** vs. **explizites clone (→ deep-copy bleibt)** — sonst rate ich. Bitte die Liste durchgehen und markieren.
+### 9.2 🟡 Where exactly to emit CopyRetain at `decl`
+At [`ast_compiler_stmt.cpp:1359–1377`] TODAY only the flag is set, no copy; materialisation only happens at escape points (below). Unclear: should `prepareOwnedModelValue`/CopyRetain be emitted HERE at decl (memcpy into an own slot + `aiml_ser_retain`, is_view_alias dropped for values), or does the "escape-time" structure stay and only the kind of copy is swapped (deep copy → retain)? I do not know which of the two ways you want.
 
 
-**Antwort / Entscheidung:** Keine globale Ersetzung nach Funktionsnamen. Zuordnung anhand der aktuell gelesenen Zweigbedingungen (Zeilen können sich verschieben):
+**Answer / decision:** CopyRetain happens **at the value binding**, not only at the escape. The metadata piece at 1359–1377 only classifies; the IR emission belongs in the actual initialisation/store path of `visitDeclStmt`, after evaluating the initializer once and before publishing the finished value. Merge the existing pointer-vs-struct initialisation paths: resolve the slot address or spill once → temporary value copy → retain → take over into the local target slot. Then register `Owned/Live` and exactly one scope drop.
 
-| `ast_compiler_stmt.cpp` / Sink | Entscheidung |
+For an uninitialised target slot, no release; if empty containers were already created by an existing initialisation path, they must be released before overwriting, or their unnecessary creation avoided. Do not copy both in the flag section and in the later store. Own producer/pop/clone results are adopted, not additionally retained. `ref<Model>` stays the separate lvalue/borrow path. This early ownership setup is necessary so that remove is already safe **before** a later escape.
+
+### 9.3 🟡 Which of the deep copy sinks become CopyRetain, which stay `clone`?
+`aiml_ser_deep_copy` is emitted in many places: [`ast_compiler_stmt.cpp:1192, 1960, 2254, 2274, 2313, 2471, 2603, 3111, 3135, 3576`] (set/return/idx/member) and the value model **push** [`ast_compiler_call.cpp:1545ff`] (today MOVE-if-movable, otherwise deep copy). Plan §4: value materialisation → CopyRetain, but explicit `{clone}` → keep deep copy.
+> ⚠️ I need, per sink, the assignment **value materialisation (→ retain)** vs. **explicit clone (→ deep copy stays)** — otherwise I am guessing. Please go through the list and mark it.
+
+
+**Answer / decision:** no global replacement by function name. Assignment based on the currently read branch conditions (lines may shift):
+
+| `ast_compiler_stmt.cpp` / sink | Decision |
 |---|---|
-| 1192: `ctx.kvGetCalled`, Decode-Cache → neue MODL-Shell | **Vorläufig behalten, eigener KV/Refcount-Adapter**, kein inline-list-Sink. Nicht als expliziten clone fehlklassifizieren. Umstellung erfordert eigenen Cache-Eviction-/Mutate-set-Test und Prüfung des KV-Vertrags. |
-| 1960/1962: decl mit `ctx.kvGetCopy` | **Explizite unabhängige KV-Kopie behalten**. Nicht automatisch CopyRetain. |
-| 2254/2274: lokale Model-Zuweisung | **CopyRetain**, inklusive release-alt nach Sicherung; 2254 ist Kommentar, kein eigener Aufruf. |
-| 2313: set aus `at` | **CopyRetain**. |
-| 2471: set aus View/Member/Accessor | **CopyRetain**; Herkunft künftig aus Ownership-Fakten statt Namensheuristik. |
-| 2603: set mit `ctx.kvGetCopy` | **Unabhängige KV-Kopie behalten**, alten Zielbesitz trotzdem korrekt ersetzen. |
-| 3111: `memberDeepCopy` aus Borrow/Value | **CopyRetain**; Plan-Aktion umbenennen/umklassifizieren. |
-| 3135: gemischtes `ctx.kvGetCopy || memberDeepCopy` | **Zweig aufteilen**: explizites KV-copy bleibt unabhängig, gewöhnliche Value-Zuweisung wird CopyRetain; ein besitzendes Ergebnis wird Move/Adopt. |
-| 3576: return `kv.get_copy` | **Unabhängige KV-Kopie behalten**. Dies ist im aktuellen Stand nicht der normale View-Return! |
-| 3655: normaler Value-Return aus View | **CopyRetain**; bereits besitzendes Local/Temp gemäß Transferplan Move/Adopt. |
-| 4662: inline Model idx-Ersatz | **CopyRetain oder Move**, immer Quelle sichern vor release-alt. |
-| 4790ff: Value-`store` | Bereits Share; über gemeinsamen Helper Reihenfolge korrigieren, damit auch indirektes Aliasing sicher ist. |
-| 4850: `ctx.isRefcountModel`-Pointee-Store | **Separater Refcount-Pointee-Zweig**, in diesem inline-Paket nicht blind ändern. Kein Beleg für expliziten clone; eigener Folgetest/Vertragsabgleich erforderlich. |
-| `ast_compiler_call.cpp:1545ff`, `pushDeepCopyModel` | **CopyRetain für kopierbare geborgte Quelle; Move für nachweislich besitzende Quelle**. Quelle vor Realloc sichern. Bereits verschobene Quelle ist Fehler, kein Copy-Fallback. |
+| 1192: `ctx.kvGetCalled`, decode cache → new MODL shell | **Keep for now, own KV/refcount adapter**, not an inline list sink. Do not misclassify as an explicit clone. Switching requires its own cache eviction/mutate-set test and a check of the KV contract. |
+| 1960/1962: decl with `ctx.kvGetCopy` | **Keep the explicit independent KV copy**. Not automatically CopyRetain. |
+| 2254/2274: local model assignment | **CopyRetain**, including release-old after securing; 2254 is a comment, not a call of its own. |
+| 2313: set from `at` | **CopyRetain**. |
+| 2471: set from view/member/accessor | **CopyRetain**; origin in future from ownership facts instead of a name heuristic. |
+| 2603: set with `ctx.kvGetCopy` | **Keep the independent KV copy**, nevertheless replace old target ownership correctly. |
+| 3111: `memberDeepCopy` from borrow/value | **CopyRetain**; rename/reclassify the plan action. |
+| 3135: mixed `ctx.kvGetCopy || memberDeepCopy` | **Split the branch**: explicit KV copy stays independent, ordinary value assignment becomes CopyRetain; an owning result becomes move/adopt. |
+| 3576: return `kv.get_copy` | **Keep the independent KV copy**. In the current state this is not the normal view return! |
+| 3655: normal value return from a view | **CopyRetain**; an already owning local/temp move/adopt per the transfer plan. |
+| 4662: inline model idx replacement | **CopyRetain or move**, always secure the source before release-old. |
+| 4790ff: value `store` | Already share; correct the order via the shared helper so that indirect aliasing is safe too. |
+| 4850: `ctx.isRefcountModel` pointee store | **Separate refcount pointee branch**, do not change blindly in this inline package. No evidence of an explicit clone; own follow-up test/contract reconciliation required. |
+| `ast_compiler_call.cpp:1545ff`, `pushDeepCopyModel` | **CopyRetain for a copyable borrowed source; move for a provably owning source**. Secure the source before realloc. An already moved source is an error, not a copy fallback. |
 
-Echte `{clone}`-/`sys.clone`-Pfade, unter anderem `emitContainerCloneDeep` und `visitCloneExpr`, behalten tiefe Graph-Kopie. Die expliziten KV-Copy-Pfade bleiben ebenfalls unabhängig, ohne sie semantisch mit dem vollständigen Clone-Walker gleichzusetzen. `1192` und `4850` sind bewusst abgegrenzte Adapter, keine Freigabe zum ungeprüften Erhalten beliebiger Deep-Copies in normalen Value-Sinks. Tests müssen beide Adapter getrennt von der inline-Abnahme abdecken, falls ein Zieltest sie benutzt.
+Real `{clone}`/`sys.clone` paths, among them `emitContainerCloneDeep` and `visitCloneExpr`, keep the deep graph copy. The explicit KV copy paths likewise stay independent, without equating them semantically with the complete clone walker. `1192` and `4850` are deliberately delimited adapters, not a release for keeping arbitrary deep copies in normal value sinks unchecked. Tests must cover both adapters separately from the inline acceptance, if a target test uses them.
 
-### 9.4 🟡 `is_view_alias` — entfernen oder durch Provenienz ersetzen?
-Konsumiert an [`ast_compiler_stmt.cpp:2475` (reset nach unabhängiger Kopie), `3229`, `3633`] u.a. Es trennt heute NICHT sauber Borrow (`ref`) von Value-View. Plan §3 will „alte syntaktische View-Heuristiken für Value-Kopien entfernen" + §5 echte `BorrowOrigin`-Provenienz. Unklar: `is_view_alias` komplett durch den OwnershipPlan (§5) ersetzen, oder für den reinen `ref<Model>`-Borrow behalten und nur den Value-Zweig herauslösen?
-
-
-**Antwort / Entscheidung:** Ziel ist **Entfernung des bool als semantischer Ownership-Quelle**, kein Umwidmen zu „ref-Flag“. Bei materialisierten Values entfällt es. Echte ref-Borrows benötigen Owner-/Pfad-Provenienz und Gültigkeit im OwnershipPlan; der deklarierte ref-Typ kennzeichnet bereits die Referenzform. Ein bool kann weder Alias-Ketten noch CFG-Merges korrekt abbilden.
-
-In einem Zwischencommit darf das Feld für noch nicht umgestellte Legacy-Zweige existieren, aber nicht die Freigabe neuer CopyRetain-Values unterdrücken. Sämtliche Leser (einschließlich consume/drop/return, nicht nur die drei genannten Zeilen) auf Fakten umstellen; danach Feld und veraltete Kommentare löschen. Für unbekannte Fakten Diagnose/ausdrücklich begrenzten Legacy-Pfad nutzen, nicht Value versehentlich als nicht besitzend behandeln.
-
-### 9.5 🟡 Move-only-Modell-Prädikat fehlt — wo ansiedeln?
-Kein Prädikat erkennt „Model hat (auch transitiv) ein unique `ptr<T>`-Box- oder `tensor`-Feld" → nicht implizit value-kopierbar. `ret()` überspringt unique korrekt [`ser_runtime.cpp:826–833`], aber der **Compiler muss die Value-Kopie solcher Modelle ablehnen** (sonst teilt die Kopie eine nicht-besessene Ressource → double-free/UAF). Vorschlag: `ctx.isMoveOnlyModel(typeName)` via serNodes-Walk (PTR_STRUCT=10 / TENSOR + PTR_REF param2==0). Unklar: an welchen Sinks prüfen (decl/push/set/return) und welche exakte Diagnose-Formulierung/„static_off"-Escape du willst. Vorhandener Negativtest-Anker: `tests/lifetime/neg/n13_move_only_value_copy_from_at.aiml`.
+### 9.4 🟡 `is_view_alias` — remove or replace with provenance?
+Consumed at [`ast_compiler_stmt.cpp:2475` (reset after an independent copy), `3229`, `3633`] among others. Today it does NOT cleanly separate a borrow (`ref`) from a value view. Plan §3 wants to "remove old syntactic view heuristics for value copies" + §5 real `BorrowOrigin` provenance. Unclear: replace `is_view_alias` completely by the OwnershipPlan (§5), or keep it for the pure `ref<Model>` borrow and only extract the value branch?
 
 
-**Antwort / Korrektur:** Das Prädikat fehlt nicht vollständig: `modelIsMoveOnly` existiert als statischer Helper in `ast_compiler_stmt.cpp:923–943`; geprüft werden `ptr<...>`, `tensor` und transitiv verschachtelte User-Modelle. Es wird bereits bei decl und set benutzt (u.a. 959 und 2208). Es fehlt seine **vollständige Typabdeckung und sinkübergreifende Nutzung**.
+**Answer / decision:** the goal is **removing the bool as a semantic source of ownership**, not repurposing it into a "ref flag". For materialised values it is dropped. Real ref borrows need owner/path provenance and validity in the OwnershipPlan; the declared ref type already marks the reference form. A bool can represent neither alias chains nor CFG merges correctly.
 
-Entscheidung: aus dem lokalen Helper einen gemeinsamen semantischen Type-Trait, z.B. `CompilerContext::isCopyableValue(type)`, ableiten. Über deklarierte Membertypen und zentrale Ressourcenklassifikation laufen, **nicht** über Serialisierungs-TD als alleinige Wahrheit: RAWBYTES kann Lifecycle-Information verlieren. Arrays rekursiv prüfen, dyn_array und sämtliche Class-4-Ressourcen als unique klassifizieren. ref/shared sowie rc-Container bleiben kopierbare Handles; `list<ptr<T>>` als Model-Feld macht das Model nicht selbst move-only, weil nur das Listen-Handle kopiert wird. Value-Nesting rekursiv und mit Zyklusguard, Traits erst nach abgeschlossener Typregistrierung cachen.
+In an intermediate commit the field may exist for not yet converted legacy branches, but must not suppress the release of new CopyRetain values. Switch all readers (including consume/drop/return, not only the three lines named) to facts; then delete the field and outdated comments. For unknown facts use a diagnostic/an explicitly bounded legacy path, do not accidentally treat a value as non-owning.
 
-Prüfung zentral vor jedem CopyRetain und zusätzlich in den AST-Checks für decl, set, Member/idx/store, push/insert/extend/slice, get_copy und Value-Argument/Return aus geborgter Quelle. Ein nachgewiesener Besitz-Move braucht keine Copy-Fähigkeit. Diagnosevorschlag: `Cannot copy move-only model 'M': field 'M.child.resource' owns a unique resource. Bind ref<M>, transfer an owned value, or use clone if supported.` **Kein static_off-Escape** für diese Ownership-Verletzung; statische Style-Abschaltung darf keine doppelte Unique-Ownership erzeugen. clone selbst prüft Klonbarkeit gesondert.
-
-### 9.6 🟡 Arrays-of-Heap als Model-Feld — existiert das?
-Es gibt **kein `AIML_TD_ARRAY`** (nur RAWBYTES=9 für value-only). `array<string:N>`/`array<Model:N>` als Model-Feld wäre von `ret()`/Release nicht erfasst. Unklar: existiert das überhaupt als Feldtyp, und wenn ja, in welcher TD-Kodierung? Falls unterstützt → retain/release-Zweig ergänzen; falls nicht → als „nicht unterstützt" dokumentieren.
+### 9.5 🟡 The move-only model predicate is missing — where to put it?
+No predicate recognises "the model has (also transitively) a unique `ptr<T>` box or `tensor` field" → not implicitly value-copyable. `ret()` correctly skips unique [`ser_runtime.cpp:826–833`], but the **compiler must reject the value copy of such models** (otherwise the copy shares a non-owned resource → double free/UAF). Proposal: `ctx.isMoveOnlyModel(typeName)` via a serNodes walk (PTR_STRUCT=10 / TENSOR + PTR_REF param2==0). Unclear: at which sinks to check (decl/push/set/return) and which exact diagnostic wording/"static_off" escape you want. Existing negative test anchor: `tests/lifetime/neg/n13_move_only_value_copy_from_at.aiml`.
 
 
-**Antwort / Befund:** Arrays existieren in der Typauflösung: `CompilerContext::getLLVMType`, `context.h:955ff`, erzeugt den LLVM-Arraytyp. `serFieldSubtree` in `ast_compiler.cpp` hat dagegen aktuell keinen Array-Zweig und fällt für diesen Typ auf RAWBYTES zurück (3469–3474). `ret()` hat folglich keine Elementinformation. Der vorhandene Test `tests/lifetime/13_array_dynarray_cascade_map_buffer.aiml` verwendet ein **lokales** `array<string:3>`; er beweist nicht den Lifecycle eines Model-Felds. Es ist daher eine Descriptor-Lücke, keine belastbare Aussage „Arrays sind als Feld nicht unterstützt“. Ein Model-Feld-Compile-/Lifecycle-Test ist als erstes zu ergänzen; diese Untersuchung hat ihn noch nicht ausgeführt.
+**Answer / correction:** the predicate is not completely missing: `modelIsMoveOnly` exists as a static helper in `ast_compiler_stmt.cpp:923–943`; it checks `ptr<...>`, `tensor` and transitively nested user models. It is already used at decl and set (among others 959 and 2208). What is missing is its **complete type coverage and use across all sinks**.
 
-Entscheidung für dieses Paket: für feste Array-Felder die vorhandene STRUCT-Komposition im Lifecycle-Deskriptor verwenden: flach N (bei mehreren Dimensionen Produkt) Element-Unterbäume mit tatsächlichem LLVM-Stride/Offsets erzeugen; Unterbaum-Indizes korrekt verschieben. Retain/Release können so über vorhandene STRUCT-Rekursion laufen, ohne einen neuen TD-Enum-Wert und sämtliche Walker gleichzeitig zu verändern. Diese Darstellung ausschließlich für Lifecycle einsetzen, falls die bestehende Wire-/Clone-Repräsentation davon abweicht; bestehende Serialization-Layouts nicht still verändern. Bei fehlender sauberer Trennung eigenen Lifecycle-Descriptor einführen. Große Arrays können später einen kompakten ARRAY-Knoten bekommen.
+Decision: derive a shared semantic type trait from the local helper, e.g. `CompilerContext::isCopyableValue(type)`. Walk over declared member types and the central resource classification, **not** over the serialisation TD as the sole truth: RAWBYTES can lose lifecycle information. Check arrays recursively, classify dyn_array and all class 4 resources as unique. ref/shared as well as rc containers stay copyable handles; `list<ptr<T>>` as a model field does not make the model itself move-only, because only the list handle is copied. Value nesting recursively and with a cycle guard; cache traits only after type registration is complete.
 
-POD-Arrays brauchen keinen Retain. Arrays mit Unique-Elementen machen das umschließende Value-Model move-only; Release muss dennoch jedes Element abarbeiten. Bis die Feld-Lifecycle-Unterstützung nachgewiesen ist, solche Heap-Array-Felder in den neuen Copy/Release-Pfaden mit gezielter Fehlermeldung ablehnen statt RAWBYTES als „sicher“ zu behandeln. Vollständige Abnahme umfasst die Array-Feldtests; bloßes Dokumentieren der Lücke erfüllt sie nicht.
+Check centrally before every CopyRetain and additionally in the AST checks for decl, set, member/idx/store, push/insert/extend/slice, get_copy and value argument/return from a borrowed source. A proven ownership move needs no copyability. Proposed diagnostic: `Cannot copy move-only model 'M': field 'M.child.resource' owns a unique resource. Bind ref<M>, transfer an owned value, or use clone if supported.` **No static_off escape** for this ownership violation; a static style switch-off must not create double unique ownership. clone itself checks clonability separately.
 
-### 9.7 🟡 Element-Release-Lifecycle nicht verdoppeln (Abgleich mit meinem bereits gebauten Teil-Fix)
-Ich habe für die SICHEREN Kinds bereits gebaut: `free_list_elem_at` + `aiml_list_clear_elems` + `aiml_list_pop_free` [`src/sys/string_runtime.cpp`], `Compiler::classifyListElem` [`ast_compiler_stmt.cpp`], sowie `clear`/`pop`-Verdrahtung [`ast_compiler_call.cpp`] — **elemKind 2 (Value-Model-inline) ist dort bewusst ÜBERSPRUNGEN** (`skipInlineValueModel`). `remove` gibt elemKind 4/5 bereits frei [`ast_compiler_call.cpp:1802–1848`]; der finale List-Drop macht elemKind 2 via `aiml_list_free` [`string_runtime.cpp:192–195`].
-> ⚠️ Plan §6 will EINEN einheitlichen Walker. Unklar: (a) elemKind 2 in `free_list_elem_at` einfach aktivieren, sobald Paket 3 steht? (b) wie remove/clear/pop/final-drop denselben Element-Lifecycle teilen, OHNE dass final-drop (`aiml_list_free`) und ein neuer Walker dasselbe Element doppelt releasen? Ich bin unsicher, ob ich `aiml_list_free`s elemKind-2-Zweig auf `free_list_elem_at` umstelle oder beide getrennt lasse.
-
-
-**Antwort / Entscheidung:** Den vorhandenen `free_list_elem_at` als **einzigen Element-Release-Dispatcher** weiterverwenden und auch `aiml_list_free` darauf umstellen. Vorwärtsdeklaration/Position anpassen. Das ist ein Runtime-Refactoring, keine zweite Freigabeschicht.
-
-- Final-drop: über die zu diesem Zeitpunkt aktiven Slots laufen, Dispatcher einmal pro Slot aufrufen, danach ausschließlich Datenbuffer freigeben und Header nullen. Wrapper `aiml_list_handle_decref` gibt bei rc 0 anschließend die Handle-Shell frei.
-- clear: dieselbe aktive Range releasen, len=0, Buffer behalten. Danach sieht final-drop keine aktiven Elemente mehr.
-- remove: einen Runtime-Einstieg mit Bounds-Prüfung, Dispatcher für genau den entfernten Slot und danach Shift/len-- verwenden. Bisherige C++-Codegen-Sonderfreigaben für denselben Kind entfernen, sobald dieser Einstieg benutzt wird; kein zusätzliches inline-decref davor. Inaktiven Tail nicht erneut droppen.
-- pop-discard: vorhandenen `aiml_list_pop_free` als optimierten Drop des extrahierten Ergebnisses behalten. Gebundener/weitergereichter pop überträgt Besitz und ruft den Dispatcher **nicht** am Listen-Slot auf.
-
-Während Migration ist `skipInlineValueModel` nur beim vorzeitigen Leeren aktiv; final-drop behält seine bisherige Kind-2-Freigabe. Nach bestandener Materialisierung/Transfer-Abnahme Kind 2 überall freigeben und den Skip-Schalter entfernen. Logging für Kind 3 sowie Stride für Kind 6 erhalten. Kind 6 ist weiterhin nur shallow für die konkrete Interface-Implementierung; die Vereinheitlichung behebt diese separate Destruktorlücke nicht.
-
-**Kommentarfehler im Teil-Fix korrigieren:** „inline field heap is left to eventual list scope-drop“ trifft nach clear/pop nicht zu: Die verkleinerte len verhindert gerade, dass final-drop diese Slots noch besucht. Das aktuelle Skip ist ein bewusstes Leak, keine spätere Freigabe. Double-free wird durch den aktiven Bereich und eindeutige Zuständigkeit vermieden, nicht durch zwei unabhängig laufende Walker.
-
-### 9.8 🟡 pop-discard in verschachteltem/Call-Kontext
-Mein `ctx.popResultDiscarded`-Flag [`context.h` + `visitExprStmt` in `ast_compiler_stmt.cpp`] fängt nur den DIREKTEN `call: [l.pop]`-Statement-Fall. Plan §5.5 will einheitliche Temp-Registrierung/Konsumierung (auch `foo(l.pop())`, tief verworfen). Die `stmtTempStack`-Maschinerie ist heute **string-only** [`ast_compiler_stmt.cpp:181–213`]. Unklar: typisierten owned-Temp-Stack (Model/Handle) einführen, oder reicht der Direkt-Statement-Fall? (Für elemKind 2 ist pop ohnehin erst nach Paket 3 sicher.)
+### 9.6 🟡 Arrays of heap values as a model field — does that exist?
+There is **no `AIML_TD_ARRAY`** (only RAWBYTES=9 for value-only). `array<string:N>`/`array<Model:N>` as a model field would not be covered by `ret()`/release. Unclear: does that exist as a field type at all, and if so, in which TD encoding? If supported → add a retain/release branch; if not → document as "not supported".
 
 
-**Antwort / Entscheidung:** Für die vollständige Abnahme genügt der Direkt-Statement-Fall nicht. Einen **typisierten Owned-Temp-Stack** einführen; vorhandene string-Temps darin integrieren oder zunächst über eine gemeinsame Schnittstelle anbinden. Ein Temp-Eintrag braucht eigene Identität, Storage/SSA-Wert, Typ/Lifecycle-Aktion, Live/Consumed-Zustand und die Auswertungsregion. Nicht nur ein globales bool.
+**Answer / finding:** arrays exist in type resolution: `CompilerContext::getLLVMType`, `context.h:955ff`, creates the LLVM array type. `serFieldSubtree` in `ast_compiler.cpp`, on the other hand, currently has no array branch and falls back to RAWBYTES for this type (3469–3474). `ret()` consequently has no element information. The existing test `tests/lifetime/13_array_dynarray_cascade_map_buffer.aiml` uses a **local** `array<string:3>`; it does not prove the lifecycle of a model field. It is therefore a descriptor gap, not a reliable statement "arrays are not supported as a field". A model field compile/lifecycle test is to be added first; this investigation has not run it yet.
 
-`foo(l.pop())` ist nicht automatisch ein konsumierender Call: leiht foo den Parameter, bleibt der Temp bis nach dem Call besitzend und wird danach gedroppt. Übernimmt foo Ownership, wird der Temp als consumed markiert und nicht beim Caller gedroppt. Ein zurückgelieferter Borrow darf den nötigen Anker nicht verlieren; ein Return-by-value wird separat adoptiert. Gleiches gilt für verschachtelte Calls und weggeworfene äußere Resultate.
+Decision for this package: for fixed array fields, use the existing STRUCT composition in the lifecycle descriptor: generate N (for several dimensions the product) element subtrees flat with the actual LLVM stride/offsets; shift subtree indices correctly. Retain/release can thus run via the existing STRUCT recursion without changing a new TD enum value and all walkers at the same time. Use this representation exclusively for lifecycle, in case the existing wire/clone representation differs from it; do not silently change existing serialisation layouts. Without a clean separation, introduce a lifecycle descriptor of its own. Large arrays can get a compact ARRAY node later.
 
-Temps in umgekehrter Erzeugungsreihenfolge am Ende der **tatsächlich ausgeführten** Full-Expression freigeben; Bedingungen/Short-circuit/Return/early-exit brauchen eigene Cleanup-Kanten. Übergabe an decl/return/push markiert genau den betreffenden Temp als übernommen. Quellen genau einmal auswerten. `ctx.popResultDiscarded` darf vorläufig als optimierter Direktfall bleiben, aber darf dann keinen zusätzlichen Owned-Temp-Drop erzeugen; nach Vereinheitlichung als unnötigen Zustand entfernen oder aus dem Temp-/Expression-Plan ableiten. Tests für borrowed/consumed Calls und Branches sind Pflicht.
+POD arrays need no retain. Arrays with unique elements make the enclosing value model move-only; release must nevertheless process every element. Until the field lifecycle support is proven, reject such heap array fields in the new copy/release paths with a targeted error message instead of treating RAWBYTES as "safe". Complete acceptance includes the array field tests; merely documenting the gap does not fulfil it.
 
-### 9.9 🟡 Leak-Gate — Sanitizer-Suite genügt nicht (ich stimme dem Plan zu)
-Plan §7 sagt korrekt: `tests/run_memory_sanitizers.sh` läuft mit `--errors-for-leak-kinds=none` → dessen PASS ist nur Memory-Safety, KEINE Leak-Abnahme. Ich habe bisher auf diesem PASS + separaten `definitely lost`-Probes aufgesetzt. Unklar: willst du ein hartes Leak-Zahlen-Gate direkt in `run_memory_sanitizers.sh` (pro Probe `definitely+indirectly == 0`), oder ein separates Skript? Das würde auch meine bisherigen Fixes rückwirkend absichern.
+### 9.7 🟡 Do not duplicate the element release lifecycle (reconciliation with my already built partial fix)
+For the SAFE kinds I have already built: `free_list_elem_at` + `aiml_list_clear_elems` + `aiml_list_pop_free` [`src/sys/string_runtime.cpp`], `Compiler::classifyListElem` [`ast_compiler_stmt.cpp`], as well as the `clear`/`pop` wiring [`ast_compiler_call.cpp`] — **elemKind 2 (value model inline) is deliberately SKIPPED there** (`skipInlineValueModel`). `remove` already releases elemKind 4/5 [`ast_compiler_call.cpp:1802–1848`]; the final list drop does elemKind 2 via `aiml_list_free` [`string_runtime.cpp:192–195`].
+> ⚠️ Plan §6 wants ONE uniform walker. Unclear: (a) simply activate elemKind 2 in `free_list_elem_at` once package 3 is in place? (b) how remove/clear/pop/final-drop share the same element lifecycle WITHOUT final-drop (`aiml_list_free`) and a new walker releasing the same element twice? I am unsure whether to switch `aiml_list_free`'s elemKind 2 branch to `free_list_elem_at` or keep both separate.
 
-**Antwort / Entscheidung:** **Separates hartes Gate** `tests/run_lifetime_leak_gates.sh` anlegen; vorhandenen Safety-Runner nicht global auf Null-Leaks umstellen. Er enthält absichtliche Fehlerkontrollen und Tests mit anderer Messmethodik. CI/Abnahme ruft beide auf.
 
-Das Leak-Gate führt eine explizite Liste isolierter Lifetime-/9rooms-Probes aus: memV3 und Drops aktiv, nativer Assertion-Lauf erfolgreich, danach Valgrind mit `--leak-check=full --show-leak-kinds=definite,indirect --errors-for-leak-kinds=definite,indirect --error-exitcode=99`. Vollständigen Bericht und Prozessstatus prüfen; fehlender Bericht, Signal, Buildfehler oder nicht installierter Valgrind im verpflichtenden CI-Job sind Fehler, kein PASS. Für maschinenlesbare Auswertung XML verwenden. Definite/indirect müssen 0 sein; beide Kategorien nicht doppelt aus den Detailrecords aufsummieren (indirekte Verluste können im Definite-Record bereits enthalten sein). Für das Gate genügt schon das Vorhandensein einer dieser Leak-Arten als Fehler.
+**Answer / decision:** keep using the existing `free_list_elem_at` as the **sole element release dispatcher** and switch `aiml_list_free` to it too. Adjust the forward declaration/position. This is a runtime refactoring, not a second release layer.
 
-Historische rote Probes getrennt als reproduzierbare Befunde halten. Erst nach bestandenem Fix in die Liste der erwarteten Null-Leak-Probes aufnehmen; sichere bereits behobene Kinds jetzt aufnehmen. Kontrollen beweisen, dass das Gate einen absichtlichen Leak tatsächlich ablehnt. 10/1000-Läufe für Wachstumsnachweis weiter dokumentieren, still-reachable nicht pauschal als Verlust zählen. Compiler-/Runtime-Stand und vollständige Logs als Artefakte speichern. Die bestehenden Dateien unter `9rooms_v2/leak_probes` bleiben die projektbezogenen Reproduktionen.
+- Final drop: walk over the slots active at that point, call the dispatcher once per slot, then free only the data buffer and zero the header. The wrapper `aiml_list_handle_decref` then frees the handle shell at rc 0.
+- clear: release the same active range, len=0, keep the buffer. Afterwards final drop sees no active elements any more.
+- remove: use a runtime entry with a bounds check, the dispatcher for exactly the removed slot and then shift/len--. Remove previous C++ codegen special releases for the same kind as soon as this entry is used; no additional inline decref before it. Do not drop the inactive tail again.
+- pop-discard: keep the existing `aiml_list_pop_free` as an optimised drop of the extracted result. A bound/passed-on pop transfers ownership and does **not** call the dispatcher on the list slot.
+
+During migration, `skipInlineValueModel` is only active for premature clearing; final drop keeps its previous kind 2 release. After the materialisation/transfer acceptance passes, release kind 2 everywhere and remove the skip switch. Keep the logging for kind 3 and the stride for kind 6. Kind 6 continues to be only shallow for the concrete interface implementation; the unification does not fix this separate destructor gap.
+
+**Correct the comment error in the partial fix:** "inline field heap is left to eventual list scope-drop" does not hold after clear/pop: the reduced len prevents exactly that final drop still visits these slots. The current skip is a deliberate leak, not a later release. Double free is avoided by the active range and unambiguous responsibility, not by two independently running walkers.
+
+### 9.8 🟡 pop-discard in a nested/call context
+My `ctx.popResultDiscarded` flag [`context.h` + `visitExprStmt` in `ast_compiler_stmt.cpp`] only catches the DIRECT `call: [l.pop]` statement case. Plan §5.5 wants uniform temp registration/consumption (also `foo(l.pop())`, deeply discarded). The `stmtTempStack` machinery is **string-only** today [`ast_compiler_stmt.cpp:181–213`]. Unclear: introduce a typed owned temp stack (model/handle), or is the direct statement case enough? (For elemKind 2, pop is only safe after package 3 anyway.)
+
+
+**Answer / decision:** for complete acceptance, the direct statement case is not enough. Introduce a **typed owned temp stack**; integrate the existing string temps into it or connect them via a shared interface at first. A temp entry needs its own identity, storage/SSA value, type/lifecycle action, live/consumed state and the evaluation region. Not just a global bool.
+
+`foo(l.pop())` is not automatically a consuming call: if foo borrows the parameter, the temp stays owning until after the call and is dropped afterwards. If foo takes ownership, the temp is marked consumed and not dropped at the caller. A returned borrow must not lose the necessary anchor; a return by value is adopted separately. The same applies to nested calls and discarded outer results.
+
+Release temps in reverse creation order at the end of the **actually executed** full expression; conditions/short-circuit/return/early exit need their own clean-up edges. Hand-over to decl/return/push marks exactly the respective temp as taken over. Evaluate sources exactly once. `ctx.popResultDiscarded` may stay for now as an optimised direct case, but must then not produce an additional owned temp drop; after unification, remove it as unnecessary state or derive it from the temp/expression plan. Tests for borrowed/consumed calls and branches are mandatory.
+
+### 9.9 🟡 Leak gate — the sanitizer suite is not enough (I agree with the plan)
+Plan §7 says correctly: `tests/run_memory_sanitizers.sh` runs with `--errors-for-leak-kinds=none` → its PASS is only memory safety, NOT leak acceptance. So far I have built on this PASS + separate `definitely lost` probes. Unclear: do you want a hard leak count gate directly in `run_memory_sanitizers.sh` (per probe `definitely+indirectly == 0`), or a separate script? That would also retroactively secure my previous fixes.
+
+**Answer / decision:** create a **separate hard gate** `tests/run_lifetime_leak_gates.sh`; do not switch the existing safety runner globally to zero leaks. It contains deliberate error controls and tests with a different measurement methodology. CI/acceptance calls both.
+
+The leak gate runs an explicit list of isolated lifetime/9rooms probes: memV3 and drops active, a successful native assertion run, then Valgrind with `--leak-check=full --show-leak-kinds=definite,indirect --errors-for-leak-kinds=definite,indirect --error-exitcode=99`. Check the complete report and the process status; a missing report, a signal, a build error or Valgrind not being installed in the mandatory CI job are errors, not a PASS. Use XML for machine-readable evaluation. Definite/indirect must be 0; do not sum both categories twice from the detail records (indirect losses can already be contained in the definite record). For the gate, the mere presence of one of these leak kinds is already an error.
+
+Keep historical red probes separately as reproducible findings. Only add them to the list of expected zero-leak probes after the fix passes; add already fixed safe kinds now. Controls prove that the gate actually rejects a deliberate leak. Keep documenting 10/1000 runs as proof of growth, do not count still-reachable as a loss wholesale. Store the compiler/runtime state and complete logs as artefacts. The existing files under `9rooms_v2/leak_probes` remain the project-related reproductions.
 
 ---
 
-## 10. Umsetzungsstand + geplante nächste Schritte (Claude, 2026-09-24 — zum Review)
+## 10. Implementation status + planned next steps (Claude, 2026-09-24 — for review)
 
-Dieser Abschnitt hält präzise fest, was tatsächlich umgesetzt/committet wurde, welche empirischen Befunde vorliegen, und was ich als nächstes vorhabe. Alle Commits: aiml branch `mem-v3-compiler`, 9rooms branch `memv3`.
+This section records precisely what was actually implemented/committed, which empirical findings exist, and what I plan to do next. All commits: aiml branch `mem-v3-compiler`, 9rooms branch `memv3`.
 
-### 10.1 Erledigt + committet (sicher, verifiziert)
+### 10.1 Done + committed (safe, verified)
 
-**A. Zwei separate Leak-Klassen behoben (nicht der inline-Value-Model-Fall — das sind die *anderen*, sicheren Kinds):**
-- **owned-String-Return** (§6.2 T1): `retStrFieldOfOwnedModel` in visitRetStmt (incref Feld + Owner voll droppen, gekoppelt → nie double-free) + neues `currentFunctionOwnsReturn`-Flag. 9rooms-Quellen als `producer` markiert (pid_for/nick_for/nick_for_pid/resolve_token/resolve_token_pid; client avatar_initial/join_pipe/card_sig/zone_sig/board_content_sig/take_edit_card_id). — aiml `196b2c1`, 9rooms `585341c`.
-- **pop(verworfen)/clear Element-Release** für die SICHEREN Kinds (1 string / 3 refcount-model / 4 ptr<T>-box / 5 nested-container-handle / 6 iface): Runtime `free_list_elem_at` + `aiml_list_clear_elems` + `aiml_list_pop_free`; Compiler `classifyListElem` + clear/pop-Verdrahtung + `popResultDiscarded`-Flag. **elemKind 2 (Value-Model-inline) bewusst ÜBERSPRUNGEN.** — aiml `196b2c1`.
-- Beide valgrind-verifiziert (Standalone + 9rooms leak_probes 0-lost), mem-sanitizer memory-safe, Korpus 422/461 (kein neuer Regress). Regressionsprobes `erf` + `pcr` in run_memory_sanitizers.sh.
+**A. Two separate leak classes fixed (not the inline value model case — these are the *other*, safe kinds):**
+- **owned string return** (§6.2 T1): `retStrFieldOfOwnedModel` in visitRetStmt (incref the field + fully drop the owner, coupled → never a double free) + a new `currentFunctionOwnsReturn` flag. 9rooms sources marked as `producer` (pid_for/nick_for/nick_for_pid/resolve_token/resolve_token_pid; client avatar_initial/join_pipe/card_sig/zone_sig/board_content_sig/take_edit_card_id). — aiml `196b2c1`, 9rooms `585341c`.
+- **pop(discarded)/clear element release** for the SAFE kinds (1 string / 3 refcount model / 4 ptr<T> box / 5 nested container handle / 6 iface): runtime `free_list_elem_at` + `aiml_list_clear_elems` + `aiml_list_pop_free`; compiler `classifyListElem` + clear/pop wiring + the `popResultDiscarded` flag. **elemKind 2 (value model inline) deliberately SKIPPED.** — aiml `196b2c1`.
+- Both valgrind-verified (standalone + 9rooms leak_probes 0 lost), mem-sanitizer memory-safe, corpus 422/461 (no new regression). Regression probes `erf` + `pcr` in run_memory_sanitizers.sh.
 
-**B. Verworfener Auto-Detect (String-Return-Klassifikator):** breite Auto-Klassifikation verursachte eine 9rooms-Client-Navigations-Regression (Deck→Card-Editor), die Leak/Sanitizer NICHT fingen → DISABLED belassen (`classifyOwnedStringReturn`, `[[maybe_unused]]`). Lehre: breite Ownership-ABI-Änderungen brauchen ein Game+Client-VERHALTENS-Gate.
+**B. Rejected auto-detect (string return classifier):** the broad auto-classification caused a 9rooms client navigation regression (deck → card editor) that leak/sanitizer did NOT catch → left DISABLED (`classifyOwnedStringReturn`, `[[maybe_unused]]`). Lesson: broad ownership ABI changes need a game+client BEHAVIOUR gate.
 
-**C. Array-Feld-Diagnose (§9.6):** deduplizierte Warnung im serFieldSubtree-RAWBYTES-Fallback für Heap-Element-Array-Model-Felder (kein fp-Risiko; POD/lokale Arrays unbetroffen). — aiml `96bc6fa`.
+**C. Array field diagnostic (§9.6):** a deduplicated warning in the serFieldSubtree RAWBYTES fallback for heap element array model fields (no fp risk; POD/local arrays unaffected). — aiml `96bc6fa`.
 
-**D. Deferred-Kommentare markiert** (ast_compiler_call.cpp remove ~1873, ast_compiler_stmt.cpp decl ~1355, string_runtime.cpp free_list_elem_at) + Kommentarfehler korrigiert (§9.7: „left to scope-drop" war falsch → bewusster Leak).
+**D. Deferred comments marked** (ast_compiler_call.cpp remove ~1873, ast_compiler_stmt.cpp decl ~1355, string_runtime.cpp free_list_elem_at) + comment error corrected (§9.7: "left to scope-drop" was wrong → deliberate leak).
 
-### 10.2 Paket 1 + 2 + Prototyp — Befunde
+### 10.2 Package 1 + 2 + prototype — findings
 
-- **Paket 1 (rote Vertrags-Tests, `tests/_inline_model_red/`, vom Korpus ausgeschlossen):** `49_value_survives_remove` (Content GRÜN, Leak RED 47+16 B), `50_share_semantics` (**bereits GRÜN** — container-shared + scalar-independent stimmt schon). **Re-Scoping-Befund:** Share-Semantik + Content sind bereits korrekt; die einzige Lücke ist der elemKind-2-Release-LEAK. Content ist nur grün, WEIL remove/clear kind-2 nicht freigibt (der Leak hält die View gültig) → naives Release ohne CopyRetain bricht den Content → beweist Sequenz 3→5.
-- **Paket 2 (Retain/Release-Audit):** `p2_retain_coverage` GRÜN (0 lost, 0 errors, 200 Iter) → `aiml_ser_retain` co-owned string/list/map/nested-model korrekt über den store-retain-Pfad. `p2_array_field_leak_RED` RED (6780 B) → §9.6-Lücke bestätigt. `modelIsMoveOnly` existiert (ast_compiler_stmt.cpp:923). → **Runtime-Primitive sind vorhanden + korrekt.**
-- **Paket 3 Prototyp (`p3_copyretain_survives_source_drop`, GRÜN):** eine retain-Kopie überlebt die kind-2-Freigabe des Quell-Elements (aiml_list_free scope-drop = dieselbe `aiml_ser_free_decoded` wie remove/clear) balanciert, intakter Inhalt über alle Feldarten. — aiml `9195ddb`. **→ Mechanik risikofrei bewiesen.**
+- **Package 1 (red contract tests, `tests/_inline_model_red/`, excluded from the corpus):** `49_value_survives_remove` (content GREEN, leak RED 47+16 B), `50_share_semantics` (**already GREEN** — container-shared + scalar-independent already holds). **Re-scoping finding:** share semantics + content are already correct; the only gap is the elemKind 2 release LEAK. Content is only green BECAUSE remove/clear do not release kind 2 (the leak keeps the view valid) → a naive release without CopyRetain breaks the content → proves the sequence 3→5.
+- **Package 2 (retain/release audit):** `p2_retain_coverage` GREEN (0 lost, 0 errors, 200 iterations) → `aiml_ser_retain` handles co-owned string/list/map/nested model correctly via the store retain path. `p2_array_field_leak_RED` RED (6780 B) → §9.6 gap confirmed. `modelIsMoveOnly` exists (ast_compiler_stmt.cpp:923). → **The runtime primitives exist + are correct.**
+- **Package 3 prototype (`p3_copyretain_survives_source_drop`, GREEN):** a retain copy survives the kind 2 release of the source element (aiml_list_free scope drop = the same `aiml_ser_free_decoded` as remove/clear) balanced, with intact content across all field kinds. — aiml `9195ddb`. **→ Mechanism proven risk-free.**
 
-### 10.3 Paket-3-Umsetzungsversuch „Stage A" (decl-only) — VERWORFEN
+### 10.3 Package 3 implementation attempt "Stage A" (decl-only) — REJECTED
 
-Versuch: CopyRetain nur am `decl copy = at(..)`-Init (memcpy → `aiml_ser_retain` + owned-Drop + `is_view_alias=false`), Escape-Sinks unverändert. **Ergebnis: mem-sanitizer FAIL (1 Check).** → **Empirischer Beweis: decl allein reicht NICHT.** Die Escape-Pfade (set/idx/return/push) tragen eigene is_view_alias-/deep-copy-Logik; eine owned+retain-Kopie am decl widerspricht ihnen (doppeltes retain/copy oder falscher Move → double-free/Imbalance). Reverted, grüner Stand + mem-sanitizer PASS bestätigt. — aiml `26caacc` (Doku).
+Attempt: CopyRetain only at the `decl copy = at(..)` init (memcpy → `aiml_ser_retain` + owned drop + `is_view_alias=false`), escape sinks unchanged. **Result: mem-sanitizer FAIL (1 check).** → **Empirical proof: decl alone is NOT enough.** The escape paths (set/idx/return/push) carry their own is_view_alias/deep copy logic; an owned+retain copy at decl contradicts them (double retain/copy or a wrong move → double free/imbalance). Reverted, green state + mem-sanitizer PASS confirmed. — aiml `26caacc` (docs).
 
-### 10.4 Exposure (ROI + Blast-Radius)
+### 10.4 Exposure (ROI + blast radius)
 
-elemKind-2 (`list<Value-Model>` mit Heap) betrifft die **Kern-Strukturen**: `list<ZoneEntry>` 93×, `list<MockCard>` 55×, `list<ActiveAbility>` 30×, `list<PlayerState>`/`Deck`/`ForumThread`/… → **hoher Nutzen ABER hoher Blast-Radius.** `list<ptr<Model>>` (elemKind 4, schon gefixt) ist selten (ActiveAbility 5×, CardBehavior 3×).
+elemKind 2 (`list<value model>` with heap) concerns the **core structures**: `list<ZoneEntry>` 93×, `list<MockCard>` 55×, `list<ActiveAbility>` 30×, `list<PlayerState>`/`Deck`/`ForumThread`/… → **high benefit BUT high blast radius.** `list<ptr<Model>>` (elemKind 4, already fixed) is rare (ActiveAbility 5×, CardBehavior 3×).
 
-### 10.5 WAS ICH VORHABE — koordinierter Multi-Sink-Paket-3-Umbau (Reihenfolge + Gate)
+### 10.5 WHAT I PLAN — a coordinated multi-sink package 3 rebuild (order + gate)
 
-Kein isolierter Patch mehr. Die Value-Materialisierung muss über ALLE Sinks mit EINEM Ownership-Fakt konsolidiert werden. Geplante Reihenfolge (jeder Schritt einzeln gegatet, Revert bei jeder Regression):
+No more isolated patch. Value materialisation must be consolidated across ALL sinks with ONE ownership fact. Planned order (each step gated individually, revert on any regression):
 
-1. **Gemeinsames Primitiv** `emitValueModelCopyRetain(dstAddr, srcAddr, type)` (memcpy + `aiml_ser_retain`, move-only via `modelIsMoveOnly` ablehnen) + `emitValueModelRelease` (bereits `aiml_ser_free_decoded`). EIN Helfer, den alle Sinks nutzen.
-2. **`is_view_alias` durch Ownership-Fakt ersetzen** (§9.4): die Sinks decl(1991)/set(2313,2471)/idx(4662)/return(3655)/push(ast_compiler_call.cpp:1545)/store(4790) ALLE gleichzeitig auf CopyRetain umstellen; kein Sink darf zusätzlich deep-copyen/retainen (sonst Imbalance wie Stage A). Reihenfolge secure-before-release (src retainen BEVOR dst-Release), auch indirektes Aliasing (§3).
-3. **elemKind-2-Release aktivieren** (`skipInlineValueModel=false`; remove/clear/pop/final-drop über EINEN Dispatcher `free_list_elem_at`, §9.7).
-4. **Gate pro Schritt:** mem-sanitizer (memory-safe) + Korpus (422/461) + `tests/lifetime` spec61 + die roten Tests (49 muss GRÜN werden: Content + 0 lost) + **hartes Leak-Zahlen-Gate** (§7, `run_lifetime_leak_gates.sh`) + 9rooms-Regressions (effect_processor/effect_death/mana_pick/enchantment_picker) + **Game+Client-Build + In-Game-Verhaltenstest** (Combat/Board/Deck-Editor). Erst wenn ALLE grün → nächster Sink.
-5. **Move-only + Array-Felder:** `isCopyableValue`-Trait (§9.5) an jedem CopyRetain-Sink prüfen (Diagnose statt stillem Leak); Array-Feld-Lifecycle-Descriptor (§9.6) separat, wegen fp-Risiko eigener Pass.
+1. **Shared primitive** `emitValueModelCopyRetain(dstAddr, srcAddr, type)` (memcpy + `aiml_ser_retain`, reject move-only via `modelIsMoveOnly`) + `emitValueModelRelease` (already `aiml_ser_free_decoded`). ONE helper that all sinks use.
+2. **Replace `is_view_alias` with an ownership fact** (§9.4): switch the sinks decl(1991)/set(2313,2471)/idx(4662)/return(3655)/push(ast_compiler_call.cpp:1545)/store(4790) ALL to CopyRetain at the same time; no sink may additionally deep copy/retain (otherwise imbalance as in Stage A). Order secure-before-release (retain src BEFORE the dst release), also for indirect aliasing (§3).
+3. **Activate the elemKind 2 release** (`skipInlineValueModel=false`; remove/clear/pop/final-drop via ONE dispatcher `free_list_elem_at`, §9.7).
+4. **Gate per step:** mem-sanitizer (memory-safe) + corpus (422/461) + `tests/lifetime` spec61 + the red tests (49 must become GREEN: content + 0 lost) + **hard leak count gate** (§7, `run_lifetime_leak_gates.sh`) + 9rooms regressions (effect_processor/effect_death/mana_pick/enchantment_picker) + **game+client build + in-game behaviour test** (combat/board/deck editor). Only when ALL are green → next sink.
+5. **Move-only + array fields:** check the `isCopyableValue` trait (§9.5) at every CopyRetain sink (diagnostic instead of a silent leak); array field lifecycle descriptor (§9.6) separately, in its own pass because of the fp risk.
 
-**Offene Rest-Leaks (separat, nicht Teil dieses Plans):** Server ~540 B/Zyklus in `handle_validate` (Model-Geschwister-Teardown bei Whole-Model-`return out`, Repro `_mem_sanitize/handle_validate_sibling.aiml`) — andere Klasse, Fix offen.
+**Open residual leaks (separate, not part of this plan):** server ~540 B/cycle in `handle_validate` (model sibling teardown on a whole-model `return out`, repro `_mem_sanitize/handle_validate_sibling.aiml`) — a different class, fix open.
 
-**Empfehlung:** Der Multi-Sink-Umbau (10.5 Schritte 1-3) ist ein fokussierter Einzelauftrag mit dem vollen Gate aus Schritt 4 — nicht am Ende einer langen Session, sondern als dedizierte Sitzung, weil jede Zwischenstufe die Kern-Strukturen berührt.
+**Recommendation:** the multi-sink rebuild (10.5 steps 1-3) is a focused single assignment with the full gate from step 4 — not at the end of a long session, but as a dedicated session, because every intermediate stage touches the core structures.
 
 
 ---
 
-## 11. Review der Fehleranalyse und Neuplanung (Codex, 24.09.2026)
+## 11. Review of the error analysis and replanning (Codex, 24.09.2026)
 
-**Urteil: Richtung sinnvoll, §10.5 in der jetzigen Reihenfolge noch nicht umsetzungsreif.** Der gemeinsame Ownership-Vertrag ist richtig. Zu korrigieren sind die Beweisstärke der Stage-A-Erklärung, die Position der Typ-Sicherheitsprüfungen, der Umgang mit mehreren legitimen Besitzreferenzen und die widersprüchlichen Zwischen-Gates. Dieses Review präzisiert §10; historische Berichte oben bleiben erhalten.
+**Verdict: the direction makes sense, §10.5 in its current order is not yet ready for implementation.** The shared ownership contract is right. What needs correcting are the strength of evidence for the Stage A explanation, the position of the type safety checks, the handling of several legitimate ownership references and the contradictory intermediate gates. This review refines §10; the historical reports above are preserved.
 
-### 11.1 Verifikation und reproduzierte Ergebnisse
+### 11.1 Verification and reproduced results
 
-Geprüfter Quellstand: HEAD `362349f`; die genannten AIML-Commits `196b2c1`, `96bc6fa`, `9195ddb`, `26caacc` sind vorhanden. Code bestätigt: String-Autoklassifikation an den Aufrufstellen auskommentiert, Kind-2-Skip bei clear/pop aktiv, Array-Feld-Warnung vorhanden. `26caacc` enthält ausschließlich die Dokumentation des verworfenen Versuchs, nicht dessen Patch oder Fehlertrace.
+Checked source state: HEAD `362349f`; the named AIML commits `196b2c1`, `96bc6fa`, `9195ddb`, `26caacc` exist. The code confirms: the string auto-classification is commented out at the call sites, the kind 2 skip is active for clear/pop, the array field warning exists. `26caacc` contains exclusively the documentation of the rejected attempt, not its patch or error trace.
 
-Alle fünf vorhandenen Probes unverändert neu nach native Object kompiliert, mit g++ gegen die vorhandene libaiml gelinkt, nativ und unter Valgrind 3.22.0 ausgeführt. Beide Flags waren jeweils 1. **Kein kompletter Compiler-Neubuild, keine erneute vollständige Korpus-/Client-Abnahme.** Die Binäridentität ist deshalb separat festgehalten:
+All five existing probes recompiled unchanged into native objects, linked with g++ against the existing libaiml, run natively and under Valgrind 3.22.0. Both flags were 1 in each case. **No complete compiler rebuild, no renewed complete corpus/client acceptance.** The binary identity is therefore recorded separately:
 
 - Compiler SHA256: `ec1b66547c4aebc50e74c0cc2c448bd44be3ae74803a519b6d133c61ed774c7b`
 - libaiml SHA256: `233596daaad53729ba867d10ea5abead2fcd6036295333809f66b23349451d9d`
-- Rohlogs dauerhaft: [analysis/inline_value_model_review_2026-09-24](analysis/inline_value_model_review_2026-09-24/). Temporäre Kompilate: `/tmp/inline-plan-review-wp17hded/`.
+- Raw logs permanently: [analysis/inline_value_model_review_2026-09-24](analysis/inline_value_model_review_2026-09-24/). Temporary compiled files: `/tmp/inline-plan-review-wp17hded/`.
 
-| Probe | Native Exit | Definitely / indirectly lost | Valgrind Exit |
+| Probe | Native exit | Definitely / indirectly lost | Valgrind exit |
 |---|---:|---:|---:|
 | 49_value_survives_remove | 0 | 47 / 16 B | 99 |
 | 50_share_semantics | 0 | **16 / 0 B** | 99 |
-| p2_retain_coverage, 200 Iterationen | 0 | 0 / 0 B | 0 |
-| p3_copyretain_survives_source_drop, 200 Iterationen | 0 | 0 / 0 B | 0 |
+| p2_retain_coverage, 200 iterations | 0 | 0 / 0 B | 0 |
+| p3_copyretain_survives_source_drop, 200 iterations | 0 | 0 / 0 B | 0 |
 | p2_array_field_leak_RED | 0 | 6780 / 0 B | 99 |
 
-Die gemeldeten Valgrind-Fehler in diesen roten Läufen sind Leak-Records; die Logs zeigen keine Invalid-read/write/free-Meldungen. Verwendet wurde `--leak-check=full --show-leak-kinds=definite,indirect --errors-for-leak-kinds=definite,indirect --error-exitcode=99`. Build- und Native-Logs liegen jeweils beim Valgrind-Log.
+The Valgrind errors reported in these red runs are leak records; the logs show no invalid read/write/free messages. Used: `--leak-check=full --show-leak-kinds=definite,indirect --errors-for-leak-kinds=definite,indirect --error-exitcode=99`. Build and native logs are located next to each Valgrind log.
 
-### 11.2 Priorisierte Befunde
+### 11.2 Prioritised findings
 
-**P1 — Stage-A-Ursache nicht nachgewiesen (§10.3).** Ein fehlgeschlagener Check belegt die Regression dieses Versuchs, aber nicht „alle Sinks müssen gleichzeitig geändert werden“. Im dokumentierten Stand fehlen Testname, Fehlerart, Trace, reproduzierbarer Patch und minimaler Gegenfall. „Doppeltes retain/copy oder falscher Move“ sind alternative Hypothesen. Ein zusätzlicher Retain für einen zusätzlichen Besitzer ist korrekt; eine separat besitzende Deep-Copy kann semantisch falsch oder teuer sein, verursacht aber nicht allein dadurch Double-free.
+**P1 — the Stage A cause is not proven (§10.3).** One failed check proves the regression of this attempt, but not "all sinks must be changed at the same time". The documented state lacks the test name, error kind, trace, a reproducible patch and a minimal counter-case. "Double retain/copy or a wrong move" are alternative hypotheses. An additional retain for an additional owner is correct; a separately owning deep copy can be semantically wrong or expensive, but does not by itself cause a double free.
 
-Vor einem breiteren Umbau Stage-A-Patch in isoliertem Checkout rekonstruieren/sichern, exakten roten Check mit Baseline vergleichen und auf Minimalprobe reduzieren. Besonders `ownership_analyzer.cpp::freshOwned`, `StatementPlan` und `mayDrop` gegen `visitDeclStmt::modelOwnedInit`/Cleanup-Registrierung abgleichen: ein IR-Retain plus registrierter Drop genügt nicht, wenn die Flow-Fakten den Drop verweigern oder einen Move falsch klassifizieren. Das ist eine konkrete Prüfrichtung, **keine hier bewiesene Fehlerursache**. Falls der ursprüngliche Versuch nicht rekonstruierbar ist, als nicht kausal geklärte Regression dokumentieren; die Multi-Sink-Architekturentscheidung davon unabhängig begründen.
+Before a broader rebuild, reconstruct/secure the Stage A patch in an isolated checkout, compare the exact red check with the baseline and reduce it to a minimal probe. In particular, reconcile `ownership_analyzer.cpp::freshOwned`, `StatementPlan` and `mayDrop` against `visitDeclStmt::modelOwnedInit`/clean-up registration: an IR retain plus a registered drop is not enough if the flow facts refuse the drop or misclassify a move. This is a concrete direction to check, **not a cause of error proven here**. If the original attempt cannot be reconstructed, document it as a regression whose cause has not been clarified; justify the multi-sink architecture decision independently of it.
 
-**P1 — Typ-/Lifecycle-Sicherheit kommt in §10.5 zu spät.** Schritt 5 (`isCopyableValue`, Array-Unterstützung) darf nicht erst nach CopyRetain und Kind-2-Freigabe kommen. Der vorhandene `modelIsMoveOnly` ist weiterhin auf ptr/tensor/Value-Nesting begrenzt. RAWBYTES-Array-Felder besitzen keine sichere Retain/Release-Abdeckung. Vor jedem neuen Materialisierungspfad getrennt prüfen: (a) semantisch kopierbar und (b) Lifecycle vollständig unterstützt. Ein kopierbares Array mit fehlendem Descriptor erfüllt nur (a). Für noch nicht unterstützte Typen gezielter Compilefehler oder klar isolierter alter Pfad ohne neue Freigabegarantie; Warnung allein ist keine Sicherheitsvoraussetzung. Array-Lifecycle darf separat implementiert werden, aber nicht nachträglich als Voraussetzung für bereits aktivierte allgemeine Freigaben behandelt werden.
+**P1 — type/lifecycle safety comes too late in §10.5.** Step 5 (`isCopyableValue`, array support) must not come only after CopyRetain and the kind 2 release. The existing `modelIsMoveOnly` is still limited to ptr/tensor/value nesting. RAWBYTES array fields have no safe retain/release coverage. Before every new materialisation path, check separately: (a) semantically copyable and (b) lifecycle completely supported. A copyable array with a missing descriptor fulfils only (a). For types not yet supported, a targeted compile error or a clearly isolated old path without a new release guarantee; a warning alone is not a safety precondition. Array lifecycle may be implemented separately, but must not be treated retroactively as a precondition for already activated general releases.
 
-**P1 — „ALLE Sinks auf CopyRetain“ und „kein zusätzlicher Retain“ sind zu pauschal (§10.5.2).** Jeder Sink braucht dieselbe Transferentscheidung, nicht zwingend dieselbe Aktion:
+**P1 — "ALL sinks to CopyRetain" and "no additional retain" are too sweeping (§10.5.2).** Every sink needs the same transfer decision, not necessarily the same action:
 
-| Quelle / Verwendung | Aktion |
+| Source / use | Action |
 |---|---|
-| kopierbare geborgte Quelle → neuer Value-Besitzer | CopyRetain |
-| bestehender besitzender Value bleibt beim Caller und wird zusätzlich gespeichert | CopyRetain für den zusätzlichen Besitzer |
-| tatsächlicher Besitztransfer eines Locals/Temps | Move/Adopt, Quelle invalidieren, genau einen Cleanup konsumieren |
-| echter ref-Borrow | kein Besitz-Retain und kein Owner-Drop |
-| explizites clone / unabhängige KV-Copy | vorhandenen unabhängigen Copy-Vertrag erhalten |
+| copyable borrowed source → new value owner | CopyRetain |
+| an existing owning value stays with the caller and is additionally stored | CopyRetain for the additional owner |
+| actual ownership transfer of a local/temp | move/adopt, invalidate the source, consume exactly one clean-up |
+| real ref borrow | no ownership retain and no owner drop |
+| explicit clone / independent KV copy | keep the existing independent copy contract |
 
-Die Invariante lautet: **jede neu entstehende Besitzreferenz hat genau einen Retain oder einen übernommenen Besitz; jeder auslaufende Besitz genau einen Release.** Nicht „höchstens ein Retain pro Ausdruckskette“. Insbesondere `decl copy=at(...); push(copy)` benötigt je nach Copy-/Move-Vertrag unterschiedliche Aktionen. Die sinkweise Ausnahmetabelle §9.3 bleibt maßgeblich.
+The invariant is: **every newly arising ownership reference has exactly one retain or one taken-over ownership; every expiring ownership exactly one release.** Not "at most one retain per expression chain". In particular, `decl copy=at(...); push(copy)` needs different actions depending on the copy/move contract. The per-sink exception table §9.3 remains authoritative.
 
-**P1 — Temp-/Call-Ownership und echte Borrows fehlen in der verkürzten Neuplanung.** §10.5 nennt die wesentlichen Stores, aber übernimmt §9.8 sowie §5 nicht ausreichend in seine Freigabevoraussetzungen. `foo(rows.pop())`, ein verworfenes äußeres Ergebnis, Return/early-exit und Bedingungen müssen typisierte Temp-Cleanups besitzen. Call-Parameter unterscheiden Borrow, Value-Copy und Konsum. Bindungen `ref<Model>` dürfen durch remove/clear/Shift nicht unbemerkt zu UAF werden. Vor allgemeiner Kind-2-Aktivierung mindestens lokal beweisbare Invalidierungen diagnostizieren und entsprechende Negativtests ausführen. Vollständige interprozedurale Analyse kann begrenzt bleiben; die Grenze muss ausdrücklich dokumentiert sein.
+**P1 — temp/call ownership and real borrows are missing in the shortened replanning.** §10.5 names the essential stores, but does not adequately carry §9.8 and §5 over into its release preconditions. `foo(rows.pop())`, a discarded outer result, return/early exit and conditions must have typed temp clean-ups. Call parameters distinguish borrow, value copy and consumption. Bindings `ref<Model>` must not unnoticeably become a UAF through remove/clear/shift. Before a general kind 2 activation, diagnose at least locally provable invalidations and run the corresponding negative tests. A complete interprocedural analysis may stay limited; the limit must be documented explicitly.
 
-**P2 — „einzige Lücke ist Release-Leak“ und „risikofrei bewiesen“ überzeichnen die Tests (§10.2).** Test 50 verliert **16 Byte**, obwohl er weder remove noch clear benutzt. Der Trace zeigt `aiml_str_dup` im main; im Quelltext wird `copy.label = "changed"` gesetzt. Damit besteht bereits ein weiterer Verlustpfad innerhalb der unbalancierten Value-Kopie. Der konkrete Drop-Pfad ist beim Fix zu prüfen; ein reiner remove-Patch reicht für diesen Test nicht.
+**P2 — "the only gap is the release leak" and "proven risk-free" overstate the tests (§10.2).** Test 50 loses **16 bytes**, although it uses neither remove nor clear. The trace shows `aiml_str_dup` in main; in the source, `copy.label = "changed"` is set. So there is already another loss path within the unbalanced value copy. The concrete drop path is to be checked at fix time; a pure remove patch is not enough for this test.
 
-Die P2/P3-Prototypen bestätigen den getesteten store-Retain-Pfad für bestimmte Felder. P3 prüft nach Quell-Drop label, inner.tag und tags[0], aber nicht mana-Inhalt und inner.nums; shared/Class-5/Arrays/Move-only/Call-Temps sind damit ebenfalls nicht vollständig abgedeckt. Korrekte Formulierung: „Mechanik für die getesteten Feldarten und den store-Pfad bestätigt; Integration und weitere Klassen offen“. Map-Inhalt, inner.nums, Wechsel der Drop-Reihenfolge und Selbst-/Unterobjekt-Aliasing als Assertions ergänzen.
+The P2/P3 prototypes confirm the tested store retain path for certain fields. After the source drop, P3 checks label, inner.tag and tags[0], but not the mana content and inner.nums; shared/class 5/arrays/move-only/call temps are therefore not completely covered either. Correct wording: "mechanism confirmed for the tested field kinds and the store path; integration and further classes open". Add map content, inner.nums, a change of drop order and self/sub-object aliasing as assertions.
 
-**P2 — Modell der bisherigen View ist ungenau.** Die Headerkommentare von Test 49/50 behaupten, ein Shift ändere den gelesenen äußeren Slot bzw. String-Assignment schreibe durch. Der aktuelle decl-Pfad kopiert jedoch bereits Struct-Bytes in lokale Storage (`ast_compiler_stmt.cpp`, gewöhnlicher memcpy-Zweig um 1990ff), ohne dabei vollständigen eigenen Member-Besitz zu materialisieren. Zu unterscheiden sind also (1) eigenständige Struct-Bytes mit ungesicherten Feldreferenzen und (2) echte ref auf einen Slot. Testheader an beobachteten Istzustand anpassen; kein pauschales „copy-on-write-at-set“ als Erklärung verwenden, solange nicht im jeweiligen Pfad belegt.
+**P2 — the model of the previous view is inaccurate.** The header comments of tests 49/50 claim that a shift changes the read outer slot or that a string assignment writes through. The current decl path, however, already copies struct bytes into local storage (`ast_compiler_stmt.cpp`, ordinary memcpy branch around 1990ff), without materialising complete own member ownership in the process. So one must distinguish (1) independent struct bytes with unsecured field references and (2) a real ref to a slot. Adapt the test headers to the observed actual state; do not use a blanket "copy-on-write-at-set" as an explanation as long as it is not proven in the respective path.
 
-**P2 — Gate-Reihenfolge widerspricht sich (§10.5.2–4).** Einerseits sollen alle Sinks gleichzeitig wechseln, andererseits „erst alle grün → nächster Sink“. Zudem kann Test 49 vor Aktivierung des Element-Release weiterhin erwartbar leaken; „alle Zieltests müssen nach jedem Vorbereitungsschritt grün sein“ blockiert den geplanten Ablauf. Tests nach Entwicklungsphase kennzeichnen: Baseline-Erhaltung, neue Helper-/Transfer-Tests, erwartete rote Zieltests, abschließendes Null-Leak-Gate. Koordinierter Endzustand kann aus kleinen überprüfbaren Commits bestehen. Kein teilkonvertierter Zustand wird als neue produktive Semantik ausgeliefert.
+**P2 — the gate order contradicts itself (§10.5.2–4).** On the one hand all sinks are to switch at the same time, on the other "only when all are green → next sink". Moreover, test 49 can still be expected to leak before the element release is activated; "all target tests must be green after every preparation step" blocks the planned flow. Mark tests by development phase: baseline preservation, new helper/transfer tests, expected red target tests, the final zero-leak gate. A coordinated end state can consist of small verifiable commits. No partially converted state is shipped as new productive semantics.
 
-**P2 — 422/461 ist kein hinreichendes Regression-Gate.** Dieselbe Anzahl grüner Tests kann neue Fehler bei gleichzeitig behobenen alten Fehlern verbergen. Identische Testauswahl und Flags, Vergleich der konkreten Status pro Test, Exitcodes und keine neuen Skips verlangen. Existierende Fehlschläge namentlich baselinen. Das angekündigte `tests/run_lifetime_leak_gates.sh` existiert beim Review noch nicht; daher vor dem nächsten Umsetzungsversuch als Harness bereitstellen. Client-Verhaltensprüfung konkret als Szenarien mit Soll-Ergebnis und Evidenz definieren (Deck→Card-Editor→zurück, Änderung speichern/neu öffnen, Buff anwenden/ablaufen lassen, Board-Zustand). Ein Client-Build allein erfüllt sie nicht.
+**P2 — 422/461 is not a sufficient regression gate.** The same number of green tests can hide new failures with simultaneously fixed old ones. Require an identical test selection and flags, a comparison of the concrete status per test, exit codes and no new skips. Baseline existing failures by name. The announced `tests/run_lifetime_leak_gates.sh` does not exist yet at review time; so provide it as a harness before the next implementation attempt. Define the client behaviour check concretely as scenarios with an expected result and evidence (deck → card editor → back, save a change/reopen, apply a buff/let it expire, board state). A client build alone does not fulfil it.
 
-**P2 — Array-Warnung ist nützlich, aber keine vollständige Diagnose (§10.1.C).** `serFieldSubtree` trennt den Array-Elementtyp aktuell am ersten `:`; bei `array<map<string:i32>:N>` liegt dieser innerhalb des Elementtyps. ptr/shared/tensor/path/Class-5 sind nicht vollständig in `elemHeap` enthalten; spätere Typregistrierung kann den hasHeapFields-Befund beeinflussen. Gemeinsamen verschachtelungsfesten Typ-Parser und Lifecycle-Trait nutzen. Die deduplizierende Menge ist funktionsstatisch/prozessweit; für verlässliche Diagnosen besser pro CompilerContext/Compile-Run. Die Warnung verändert hier zwar keine Deskriptorbytes, deckt aber nicht alle gefährlichen Typen ab. Kein Sicherheitsnachweis aus ihrem Ausbleiben ableiten.
+**P2 — the array warning is useful, but not a complete diagnostic (§10.1.C).** `serFieldSubtree` currently splits the array element type at the first `:`; with `array<map<string:i32>:N>` it lies within the element type. ptr/shared/tensor/path/class 5 are not completely contained in `elemHeap`; later type registration can influence the hasHeapFields finding. Use a shared nesting-proof type parser and lifecycle trait. The deduplicating set is function-static/process-wide; for reliable diagnostics, better per CompilerContext/compile run. The warning does not change any descriptor bytes here, but does not cover all dangerous types. Do not derive any proof of safety from its absence.
 
-### 11.3 Verbesserte Neuplanung (ersetzt die Reihenfolge aus §10.5)
+### 11.3 Improved replanning (replaces the order from §10.5)
 
-1. **Belege und Baseline sichern.** Stage-A-Failure isolieren oder die ungeklärte Ursache ausdrücklich festhalten. Test 50 in die Leak-Ziele aufnehmen. Historische README-/Testkommentare korrigieren. Compiler, Runtime, Flags und Teststatus pro Fall speichern.
-2. **Harness und Typvoraussetzungen vorziehen.** Hartes Leak-Gate erstellen; `isCopyableValue` plus gesonderte Lifecycle-Abdeckung zentralisieren. Unsupported-Array-/Unique-Fälle vor neuen Copy-Pfaden abfangen. Wire-/Lifecycle-Descriptor-Trennung vor Array-Arbeit festlegen.
-3. **Gemeinsame Transferprimitive ohne breite Aktivierung.** CopyRetain / Move / Borrow / Clone explizit unterscheiden. API mit Quell- und Zielzustand, einmaliger Evaluation und eindeutigem Cleanup-Token statt nacktem memcpy-Helper. Source sichern → retain bzw. move-invalidieren → release-old → commit; Self-/Unterobjekt-Alias und möglichen Realloc testen. Bestehenden store-Pfad damit absichern.
-4. **OwnershipPlan und Codegen gemeinsam migrieren.** Pro vollständiger Produzent-Verbraucher-Kette decl→set/store/idx/return/push und Call-Übergaben umstellen, einschließlich `freshOwned`, mayDrop, temp cleanup und Branch-Merges. Alte und neue Konvention dürfen sich nicht unmarkiert mischen. Nicht jedes Retain eliminieren; Referenzbilanz pro Besitzer prüfen. Neue Pfade vor Auslieferung vollständig über die relevante Matrix abdecken.
-5. **Borrows und Temp-Lifetime absichern.** Lokal erkennbare Invalidierung über Containeraliase, verworfene/weitergereichte pop-Ergebnisse, Return/early-exit und Short-circuit testen. Kein temporärer Owner darf vor dem letzten gültigen Borrow-Verbrauch droppen.
-6. **Kind-2-Release aktivieren und Dispatcher vereinheitlichen.** Vorhandenen `free_list_elem_at` auch für final-drop und remove nutzen, bisherige doppelte Spezialpfade entfernen. pop-transfer und pop-discard trennen; len/aktive Slots verhindern erneuten Drop. Erst jetzt Null-Leak-Ziele 49 und 50 sowie clear/pop/remove-Matrix verbindlich grün fordern.
-7. **Gesamtabnahme gegen Baseline und Spielverhalten.** Kein neuer Korpusfehler/Skip, komplette relevante Lifetime-Safety- und Leak-Gates, genannte 9rooms-Regressionen, WASM-Build und dokumentierter Client-/Combat-Smoke. Nicht ausführbare Gates bleiben ausdrücklich offen; keine Freigabe allein aufgrund nativer Prototypen.
+1. **Secure evidence and baseline.** Isolate the Stage A failure or record the unclarified cause explicitly. Add test 50 to the leak targets. Correct historical README/test comments. Store the compiler, runtime, flags and test status per case.
+2. **Bring the harness and type preconditions forward.** Create the hard leak gate; centralise `isCopyableValue` plus separate lifecycle coverage. Catch unsupported array/unique cases before new copy paths. Settle the wire/lifecycle descriptor separation before array work.
+3. **Shared transfer primitives without broad activation.** Distinguish CopyRetain / move / borrow / clone explicitly. An API with source and target state, one-time evaluation and an unambiguous clean-up token instead of a bare memcpy helper. Secure source → retain or move-invalidate → release-old → commit; test self/sub-object aliasing and a possible realloc. Secure the existing store path with it.
+4. **Migrate OwnershipPlan and codegen together.** Switch per complete producer-consumer chain decl→set/store/idx/return/push and call hand-overs, including `freshOwned`, mayDrop, temp clean-up and branch merges. The old and new conventions must not mix unmarked. Do not eliminate every retain; check the reference balance per owner. Cover new paths completely via the relevant matrix before shipping.
+5. **Secure borrows and temp lifetime.** Test locally recognisable invalidation via container aliases, discarded/passed-on pop results, return/early exit and short-circuit. No temporary owner may drop before the last valid borrow use.
+6. **Activate the kind 2 release and unify the dispatcher.** Use the existing `free_list_elem_at` for final drop and remove too, remove previous duplicate special paths. Separate pop-transfer and pop-discard; len/active slots prevent a repeated drop. Only now require zero-leak targets 49 and 50 as well as the clear/pop/remove matrix bindingly green.
+7. **Overall acceptance against the baseline and game behaviour.** No new corpus failure/skip, the complete relevant lifetime safety and leak gates, the named 9rooms regressions, the WASM build and a documented client/combat smoke test. Gates that cannot be run stay explicitly open; no release based on native prototypes alone.
 
-**Abgrenzung:** Die früher berichteten 422/461, die Deck-Editor-Regression, der konkrete Stage-A-Fehler und der Serververlust von ~540 B/Zyklus wurden in diesem Review nicht erneut reproduziert. Sie bleiben Berichte aus §10 und dürfen nicht als hier unabhängig bestätigte Kausalnachweise gelesen werden. Die fünf oben aufgeführten Probe-Ergebnisse wurden dagegen neu gemessen. Es wurden keine Compiler-/Runtime-Fixes vorgenommen.
+**Delimitation:** the previously reported 422/461, the deck editor regression, the concrete Stage A failure and the server loss of ~540 B/cycle were not reproduced again in this review. They remain reports from §10 and must not be read as causal evidence independently confirmed here. The five probe results listed above, on the other hand, were measured anew. No compiler/runtime fixes were made.
 
 ---
 
-## 12. CopyRetain-Umsetzungsversuch — Befunde (Claude, Nacht 2026-09-24/25)
+## 12. CopyRetain implementation attempt — findings (Claude, night of 2026-09-24/25)
 
-Ernsthafter Umsetzungsversuch der decl-CopyRetain (Codex §11.3). Ergebnis: **kein committable-grüner Stand erreicht; reverted.** Die Befunde (verifiziert, wertvoll für die Fertigstellung):
+A serious implementation attempt of the decl CopyRetain (Codex §11.3). Result: **no committable green state reached; reverted.** The findings (verified, valuable for completion):
 
-1. **Stage A (CopyRetain an JEDEM struct-memcpy-from-pointer-Init, ast_compiler_stmt.cpp ~1991) → mem-sanitizer FAIL.** Isolierte Ursache: die Probe `producer_set_view_return` leakt 22,9 MB, weil der Init dort auch **Producer-Call-Ergebnisse** (`decl brd = make_board(idx)`, owns_return) trifft — die sind BEREITS owned/adoptiert; ein zusätzliches `aiml_ser_retain` über-increft sie. Bestätigt Codex P1: „producer/pop/clone-Ergebnisse werden adoptiert, nicht retained".
+1. **Stage A (CopyRetain at EVERY struct-memcpy-from-pointer init, ast_compiler_stmt.cpp ~1991) → mem-sanitizer FAIL.** Isolated cause: the probe `producer_set_view_return` leaks 22.9 MB, because the init there also hits **producer call results** (`decl brd = make_board(idx)`, owns_return) — these are ALREADY owned/adopted; an additional `aiml_ser_retain` over-increfs them. Confirms Codex P1: "producer/pop/clone results are adopted, not retained".
 
-2. **Stage B (CopyRetain nur wenn `sym.is_view_alias`, d.h. echter at/get/member-View) → mem-sanitizer PASS.** Das Gate schließt Producer/clone/owns-return korrekt aus; `producer_set_view_return` passt wieder; KEINE Escape-double-frees (alle Escape-Probes grün). Das view-gated retain ist also memory-safe.
+2. **Stage B (CopyRetain only if `sym.is_view_alias`, i.e. a real at/get/member view) → mem-sanitizer PASS.** The gate correctly excludes producer/clone/owns-return; `producer_set_view_return` passes again; NO escape double frees (all escape probes green). The view-gated retain is therefore memory-safe.
 
-3. **ABER: `aiml_ser_retain` wird für `decl copy = at(rows,0)` GAR NICHT emittiert** (objdump: 0 Vorkommen im test-50-.o). D.h. der at-View-Value-Model-decl **erreicht den 1991-struct-memcpy-from-pointer-Zweig NICHT** (dort ist `initRaw->isPointerTy()` offenbar false für at-Value-Model-Elemente, oder ein anderer Store greift). → **Meine CopyRetain-Stelle ist die falsche.** Stage B war für die eigentlichen Views ein No-op (traf nur Producer-decls, die es korrekt skippt). Deshalb blieben 49/50 unverändert rot.
+3. **BUT: `aiml_ser_retain` is NOT emitted at all for `decl copy = at(rows,0)`** (objdump: 0 occurrences in the test 50 .o). I.e. the at-view value model decl does **NOT reach the 1991 struct-memcpy-from-pointer branch** (there, `initRaw->isPointerTy()` is apparently false for at value model elements, or a different store applies). → **My CopyRetain location is the wrong one.** For the actual views, Stage B was a no-op (it only hit producer decls, which it correctly skips). That is why 49/50 stayed red unchanged.
 
-4. **freshOwned-View-Fall + `CompilerContext::isMoveOnlyModel` (geteilt Codegen↔Analyzer) sind korrekt formuliert + bereit**, aber INERT ohne das retain im richtigen Pfad (freshOwned gated nur einen REGISTRIERTEN Drop; ohne CopyRetain-Block wird kein Drop registriert → harmlos, aber wirkungslos).
+4. **The freshOwned view case + `CompilerContext::isMoveOnlyModel` (shared codegen↔analyzer) are correctly formulated + ready**, but INERT without the retain in the right path (freshOwned only gates a REGISTERED drop; without the CopyRetain block no drop is registered → harmless, but without effect).
 
-**Konkreter nächster Schritt (für die Fertigstellung):** den echten Materialisierungs-Pfad für `decl <value-model> = {at/get/first/last}` finden — prüfen, was `visitExpression(AtExpr)` für ein Value-Model-Element zurückgibt (Element-ADRESSE als Pointer vs. geladener Wert) und wo der Store in den decl-Slot passiert. CopyRetain (memcpy + `aiml_ser_retain` + owned-Drop-Registrierung, gated auf is_view_alias && !isMoveOnlyModel) DORT platzieren; freshOwned-View-Fall dann wieder aktivieren (muss exakt matchen). Danach das Gate aus §11.3 Schritt 4-7 (inkl. Game+Client-Verhaltenstest — headless NICHT möglich). Bis dahin bleibt elemKind-2-Release deferred; die sicheren Kinds (1/3/4/5/6) + owned-String-Return sind bereits committet + grün.
+**Concrete next step (for completion):** find the real materialisation path for `decl <value-model> = {at/get/first/last}` — check what `visitExpression(AtExpr)` returns for a value model element (element ADDRESS as a pointer vs. a loaded value) and where the store into the decl slot happens. Place CopyRetain (memcpy + `aiml_ser_retain` + owned drop registration, gated on is_view_alias && !isMoveOnlyModel) THERE; then reactivate the freshOwned view case (must match exactly). Afterwards the gate from §11.3 steps 4-7 (including the game+client behaviour test — NOT possible headless). Until then the elemKind 2 release stays deferred; the safe kinds (1/3/4/5/6) + the owned string return are already committed + green.
 
-Verifikations-Artefakte dieser Nacht: `tests/run_lifetime_leak_gates.sh` (hartes Leak-Gate, committet), rote Ziele 49 (47/16 B) / 50 (16 B, Feld-Reassignment auf View) / p2_array (6780 B) reproduzierbar; GREEN-Prototypen p2/p3 0/0.
+Verification artefacts of this night: `tests/run_lifetime_leak_gates.sh` (hard leak gate, committed), red targets 49 (47/16 B) / 50 (16 B, field reassignment on a view) / p2_array (6780 B) reproducible; GREEN prototypes p2/p3 0/0.
 
-## 13. String-KV `get_copy`/`get` Per-Call-Leak — GEFIXT (Claude, Nacht 2026-09-24/25)
+## 13. String KV `get_copy`/`get` per-call leak — FIXED (Claude, night of 2026-09-24/25)
 
-Nach dem CopyRetain-Revert Directive 2 („suche weiter nach leaks, headless in 9rooms") verfolgt. Der
-`handle_validate`-Server-Residual (~540 B/Request, Stack `aiml_str_dup ← handle_validate ←
-resolve_token_pid`, 22 B/Call) isoliert reproduziert und behoben.
+After the CopyRetain revert, directive 2 ("keep looking for leaks, headless in 9rooms") was pursued. The
+`handle_validate` server residual (~540 B/request, stack `aiml_str_dup ← handle_validate ←
+resolve_token_pid`, 22 B/call) was reproduced in isolation and fixed.
 
-**Repro (isoliert):** `decl val = kvs.get_copy(k)` auf einem `Kv<string:string>` in einer 500er-Schleife →
-`definitely lost: 11.384 bytes in 501 blocks` (= 500 Per-Call-Blöcke à 22 B + 1× open_kv-Handle).
+**Repro (isolated):** `decl val = kvs.get_copy(k)` on a `Kv<string:string>` in a loop of 500 →
+`definitely lost: 11,384 bytes in 501 blocks` (= 500 per-call blocks of 22 B + 1× open_kv handle).
 
-**Ursache (Doppel-Ownership).** Ein string-wertiges Kv `get`/`get_copy` (valSize==0) senkt in
-[ast_compiler_call.cpp:2488](../src/core/ast_compiler_call.cpp#L2488) zu `aiml_db_kv_get` (mmap-Borrow)
-+ `aiml_str_dup` (owned, rc=1, „kv_get_own"). Dieser dup wurde aber **nicht** als owned string-temp
-registriert. Die managed-string-Init-Store-Normalisierung
-([ast_compiler_stmt.cpp:1765](../src/core/ast_compiler_stmt.cpp#L1765)) sah daraufhin `ownedTemp=false`
-→ behandelte ihn als Borrow → **zusätzliches `aiml_str_incref` (rc=2)** (memV3-Zweig 1770-1772). Nur
-EIN scope-drop-`decref` (kind-1, [1490](../src/core/ast_compiler_stmt.cpp#L1490)) → rc bleibt 1 →
-22 B/Call geleakt. Der `set`-Consume-Pfad ([2407](../src/core/ast_compiler_stmt.cpp#L2407)) hatte
-dieselbe Wurzel (Borrow → COPY-dup statt MOVE → kv_get_own leakt).
+**Cause (double ownership).** A string-valued Kv `get`/`get_copy` (valSize==0) lowers in
+[ast_compiler_call.cpp:2488](../src/core/ast_compiler_call.cpp#L2488) to `aiml_db_kv_get` (mmap borrow)
++ `aiml_str_dup` (owned, rc=1, "kv_get_own"). This dup, however, was **not** registered as an owned string temp.
+The managed string init store normalisation
+([ast_compiler_stmt.cpp:1765](../src/core/ast_compiler_stmt.cpp#L1765)) therefore saw `ownedTemp=false`
+→ treated it as a borrow → **an additional `aiml_str_incref` (rc=2)** (memV3 branch 1770-1772). Only
+ONE scope drop `decref` (kind 1, [1490](../src/core/ast_compiler_stmt.cpp#L1490)) → rc stays 1 →
+22 B/call leaked. The `set` consume path ([2407](../src/core/ast_compiler_stmt.cpp#L2407)) had
+the same root (borrow → COPY dup instead of MOVE → kv_get_own leaks).
 
-**Fix.** Die `kv_get_own`-dup auf `ctx.stmtTempStack.back()` registrieren (gated
-`lifetimeDropsEnabled && !stmtTempStack.empty()`), analog zum producer-Method-Pfad
-([ast_compiler_call.cpp:3296](../src/core/ast_compiler_call.cpp#L3296)). Damit MOVEd ein konsumierender
-decl/set/push/return den owned ref (adopt rc=1, ein Drop) via `consumeStringTemp`, und ein transienter
-Gebrauch wird am stmt-Ende ein einziges Mal decref'd. **Kein Double-Free-Pfad** eingeführt: der
-kv_get_own-ref wurde vorher in KEINEM Pfad decref'd (immer Leak, nie Double-Free) → jetzt exakt einmal.
+**Fix.** Register the `kv_get_own` dup on `ctx.stmtTempStack.back()` (gated
+`lifetimeDropsEnabled && !stmtTempStack.empty()`), analogous to the producer method path
+([ast_compiler_call.cpp:3296](../src/core/ast_compiler_call.cpp#L3296)). That way a consuming
+decl/set/push/return MOVEs the owned ref (adopt rc=1, one drop) via `consumeStringTemp`, and a transient
+use is decref'd exactly once at the end of the stmt. **No double free path** introduced: the
+kv_get_own ref was previously decref'd in NO path (always a leak, never a double free) → now exactly once.
 
-**Verifiziert (isoliert, valgrind):**
-- `decl val = get_copy` × 500 → Per-Call-Leak **0** (vorher 500 Blöcke). Rest: 1× 583 B open_kv-Handle.
-- `set slot = get_copy` × 300 → Per-Call-Leak **0**, **keine** Invalid read/write/free (kein
-  Double-Free durch den MOVE). Rest: dasselbe 1× 583 B open_kv-Handle.
+**Verified (isolated, valgrind):**
+- `decl val = get_copy` × 500 → per-call leak **0** (previously 500 blocks). Remainder: 1× 583 B open_kv handle.
+- `set slot = get_copy` × 300 → per-call leak **0**, **no** invalid read/write/free (no
+  double free through the MOVE). Remainder: the same 1× 583 B open_kv handle.
 - Test [tests/_inline_model_red/51_stringkv_getcopy_no_leak.aiml](../tests/_inline_model_red/51_stringkv_getcopy_no_leak.aiml)
-  (funktional, Korpus): PASS, total==2600.
+  (functional, corpus): PASS, total==2600.
 
-**Wirksam in Produktion:** `lifetimeDropsEnabled` default true
-([ast_compiler.cpp:1360](../src/core/ast_compiler.cpp#L1360)); deployter Server läuft
+**Effective in production:** `lifetimeDropsEnabled` default true
+([ast_compiler.cpp:1360](../src/core/ast_compiler.cpp#L1360)); the deployed server runs
 `AIML_LIFETIME_DROPS=1` (exodus-*.json).
 
-**⚠️ KORREKTUR (nach tieferer Analyse): dieser Fix schließt den `handle_validate`-Residual NUR TEILWEISE.**
-Er behebt das einfache Muster `decl x = stringkv.get_copy(k)` (x wird gelesen/weitergereicht). Der
-DOMINANTE `handle_validate`-Server-Leak (Stack `str_dup ← handle_validate ← resolve_token_pid`) ist
-aber ein ZWEITER, davon unabhängiger, PRE-EXISTING Bug im value-model-Member-Store — siehe §14. Mein
-get_copy-Fix ist trotzdem korrekt, verifiziert und sicher (0 Per-Call-Leak, kein Double-Free), nur
-eben nicht die vollständige handle_validate-Lösung.
+**⚠️ CORRECTION (after deeper analysis): this fix closes the `handle_validate` residual ONLY PARTIALLY.**
+It fixes the simple pattern `decl x = stringkv.get_copy(k)` (x is read/passed on). The
+DOMINANT `handle_validate` server leak (stack `str_dup ← handle_validate ← resolve_token_pid`), however, is
+a SECOND, independent, PRE-EXISTING bug in the value model member store — see §14. My
+get_copy fix is nevertheless correct, verified and safe (0 per-call leak, no double free), just
+not the complete handle_validate solution.
 
-**Verbleibend (NICHT in diesem Fix, separat):** der einmalige `aiml_db_kv_open_persist`-Handle-Leak
-(~583 B je geöffnetem Kv, [db_runtime.cpp:1298](../src/sys/db_runtime.cpp#L1298)) — ein `Kv<>`-decl-local
-bekommt keinen scope-drop, der das Kv-Objekt (`delete kv`) freigibt; es gibt noch keine `close`-Methode.
-Konstant (skaliert nicht mit Requests), daher niedrigere Priorität als der Per-Call-Leak. Kandidat für
-einen eigenen Fix (Kv-Lifetime / `close`-Operator).
+**Remaining (NOT in this fix, separate):** the one-off `aiml_db_kv_open_persist` handle leak
+(~583 B per opened Kv, [db_runtime.cpp:1298](../src/sys/db_runtime.cpp#L1298)) — a `Kv<>` decl local
+gets no scope drop that frees the Kv object (`delete kv`); there is no `close` method yet.
+Constant (does not scale with requests), therefore lower priority than the per-call leak. A candidate for
+a fix of its own (Kv lifetime / `close` operator).
 
-**Gate-Status (COMMITTED):** mem-sanitizer PASS (44/44 Probes correct + memory-safe), Korpus 422 pass /
-1 pre-existing unrelated fail (`test_model_inherits_hetero_list` — `list<any>` base-slice-Crash, BEWIESEN
-inert ggü. meiner Änderung: das .o des Tests enthält keinen `aiml_db_kv_get`/`kv_get_own`-Bezug),
-Game + Client bauen sauber mit neuer ABI. 9rooms-Verhaltenstest-Suite lief mit. → committet.
+**Gate status (COMMITTED):** mem-sanitizer PASS (44/44 probes correct + memory-safe), corpus 422 pass /
+1 pre-existing unrelated fail (`test_model_inherits_hetero_list` — `list<any>` base slice crash, PROVEN
+inert with respect to my change: the test's .o contains no `aiml_db_kv_get`/`kv_get_own` reference),
+game + client build cleanly with the new ABI. The 9rooms behaviour test suite ran along. → committed.
 
-## 14. Value-Model String-Member-Store Leak (der EIGENTLICHE handle_validate-Residual) — ✅ GEFIXT + GEGATET (Claude, 2026-09-25)
+## 14. Value model string member store leak (the ACTUAL handle_validate residual) — ✅ FIXED + GATED (Claude, 2026-09-25)
 
-> **STATUS-UPDATE (nach dem Fix):** Root Cause gefunden UND behoben. Der unten dokumentierte
-> Analyzer-vs-Codegen-Mismatch war die Ursache. **Fix:** [ownership_analyzer.cpp:264](../src/core/ownership_analyzer.cpp#L264)
-> — ein managed-string-Member-Store-Source wird jetzt als `Transfer::DeepCopy` (Share) statt `Move`
-> klassifiziert, so bleibt der scope-drop der Quelle erhalten (spiegelt die plain-local-rebind-
-> Ausnahme). Verifiziert: `share.aiml` (KV-frei) 8.800/400 → **0 lost, 0 invalid**; `handle_validate_sibling`
-> 11.000/500 → per-call **0** (nur die 2 einmaligen KV-Handles bleiben); KEIN Invalid read/write/free.
-> Gates: mem-sanitizer PASS (44/44), Korpus 422/1-preexisting, Leak-Gate 0 (neuer GREEN-Test
+> **STATUS UPDATE (after the fix):** root cause found AND fixed. The analyzer-vs-codegen mismatch
+> documented below was the cause. **Fix:** [ownership_analyzer.cpp:264](../src/core/ownership_analyzer.cpp#L264)
+> — a managed string member store source is now classified as `Transfer::DeepCopy` (share) instead of `Move`,
+> so the source's scope drop is preserved (mirrors the plain local rebind
+> exception). Verified: `share.aiml` (KV-free) 8,800/400 → **0 lost, 0 invalid**; `handle_validate_sibling`
+> 11,000/500 → per-call **0** (only the 2 one-off KV handles remain); NO invalid read/write/free.
+> Gates: mem-sanitizer PASS (44/44), corpus 422/1 pre-existing, leak gate 0 (new GREEN test
 > [tests/_inline_model_red/52_model_strfield_share_no_leak.aiml](../tests/_inline_model_red/52_model_strfield_share_no_leak.aiml)),
-> Game+Client bauen sauber. 9rooms-Verhaltenssuite: 8 Fails, ALLE als PRE-EXISTING bewiesen (Baseline
-> ohne den Fix = identische Fails: 5 JIT-Compile-Timeouts rc=124 + 3 alte Game-Logik-Bugs
-> reaction_state/soulmage_defense/trigger_stage2, u.a. ein pre-existing garbage-iid-UAF im Game-Code)
-> → 0 Regressionen. **Der handle_validate-Server-Residual ist damit geschlossen.** Die folgende
-> Analyse ist der Befund VOR dem Fix (historisch, erklärt die Root Cause):
+> game+client build cleanly. 9rooms behaviour suite: 8 fails, ALL proven PRE-EXISTING (baseline
+> without the fix = identical fails: 5 JIT compile timeouts rc=124 + 3 old game logic bugs
+> reaction_state/soulmage_defense/trigger_stage2, among them a pre-existing garbage-iid UAF in the game code)
+> → 0 regressions. **The handle_validate server residual is thereby closed.** The following
+> analysis is the finding BEFORE the fix (historical, explains the root cause):
 
-Beim Verifizieren des get_copy-Fixes gegen den echten `handle_validate`-Repro
+While verifying the get_copy fix against the real `handle_validate` repro
 ([tests/_mem_sanitize/handle_validate_sibling.aiml](../tests/_mem_sanitize/handle_validate_sibling.aiml))
-entdeckt: der dominante Server-Leak (Stack `str_dup ← handle_validate ← resolve_token_pid`, 22 B/Req)
-ist NICHT der get_copy-decl, sondern der **value-model String-Member-Store** `set: [out.email, eml]`
-gefolgt von `return out` (producer). **KV-UNABHÄNGIG** minimal reproduziert
-(`scratchpad/share.aiml`: ein Model mit `[msg, string]`, `set out.msg = sib` wobei `sib` ein OWNED
-string-local (Interpolation, danach gelesen → Share erzwungen), lokal gedroppt → **8.800 B in 400
-Blöcken = 22 B/Call**). Auch rein lokal (nicht returned) reproduzierbar (`scratchpad/loc.aiml`).
+it was discovered: the dominant server leak (stack `str_dup ← handle_validate ← resolve_token_pid`, 22 B/req)
+is NOT the get_copy decl, but the **value model string member store** `set: [out.email, eml]`
+followed by `return out` (producer). Reproduced minimally **KV-INDEPENDENTLY**
+(`scratchpad/share.aiml`: a model with `[msg, string]`, `set out.msg = sib` where `sib` is an OWNED
+string local (interpolation, read afterwards → share forced), dropped locally → **8,800 B in 400
+blocks = 22 B/call**). Also reproducible purely locally (not returned) (`scratchpad/loc.aiml`).
 
-**Ref-Trace (gdb, 1 Iteration, loc-Variante mit get_copy):**
-- `sib`-Buffer A = `0x…318`, per `aiml_str_dup` (kv_get_own) erzeugt, rc=1.
-- `set out.msg = sib` → `aiml_str_incref(A)` (rc=2), `out.msg = A` (Share; Member-Store-incref für
-  VariableExpr/managed-string-Quellen, [ast_compiler_stmt.cpp:3195](../src/core/ast_compiler_stmt.cpp#L3195)).
-- `aiml_ser_free_decoded(out)` decreft A EINMAL (rc 2→1).
-- **Es fehlt der ZWEITE decref von A** (der scope-drop von `sib`): im Trace decreft der sib-Slot-Drop
-  einen ANDEREN Buffer (`0x…338`/`0x…3c8`), nicht A → A bleibt bei rc=1 → **Leak**.
+**Ref trace (gdb, 1 iteration, loc variant with get_copy):**
+- `sib` buffer A = `0x…318`, created via `aiml_str_dup` (kv_get_own), rc=1.
+- `set out.msg = sib` → `aiml_str_incref(A)` (rc=2), `out.msg = A` (share; member store incref for
+  VariableExpr/managed string sources, [ast_compiler_stmt.cpp:3195](../src/core/ast_compiler_stmt.cpp#L3195)).
+- `aiml_ser_free_decoded(out)` decrefs A ONCE (rc 2→1).
+- **The SECOND decref of A is missing** (the scope drop of `sib`): in the trace, the sib slot drop decrefs
+  a DIFFERENT buffer (`0x…338`/`0x…3c8`), not A → A stays at rc=1 → **leak**.
 
-**Vertrag (der Member-Store-incref-Kommentar bei 3168/3195 nennt ihn selbst):** `sib` rc1 → incref rc2;
-der DEST-Model-Drop decreft (→ rc1); `sib`s EIGENER scope-drop decreft (→ rc0). Balanciert NUR, wenn
-`sib`s Drop A trifft. Befund: `sib`s Drop trifft A NICHT (Slot-Mapping-Diskrepanz — vermutlich wird
-`sib`s Slot nach dem Share fälschlich genullt/als moved behandelt, ODER `consumeStringTemp`/Init-Store
-hat den Slot-Inhalt vom incref'ten Buffer entkoppelt). **Root Cause noch nicht endgültig gepinnt.**
+**Contract (the member store incref comment at 3168/3195 names it itself):** `sib` rc1 → incref rc2;
+the DEST model drop decrefs (→ rc1); `sib`'s OWN scope drop decrefs (→ rc0). Balanced ONLY if
+`sib`'s drop hits A. Finding: `sib`'s drop does NOT hit A (slot mapping discrepancy — presumably `sib`'s
+slot is wrongly zeroed/treated as moved after the share, OR `consumeStringTemp`/the init store
+decoupled the slot content from the incref'd buffer). **Root cause not yet finally pinned down.**
 
-**Warum getrennt behandelt + NICHT heute Nacht spekulativ gefixt:** Das ist exakt der value-model-
-Ownership/Teardown-Bereich, der in §12 (CopyRetain) und beim früheren Auto-Detect-Revert
-([[owned-return-and-pop-clear-leaks]]) Regressionen erzeugte, die Leak/Sanitizer NICHT fingen (nur der
-Game-Verhaltenstest). Ein Fix hier braucht: (1) exakte Root-Cause (Slot-null-Stelle im set-Pfad
-lokalisieren), (2) mem-sanitizer + Korpus + Leak-Gate, (3) Game+Client-VERHALTENStest. Bis dahin bleibt
-er dokumentiert + offen. Expositionsanalyse (§10.4-Stil): `set model.strfield = <string-local>` ist im
-9rooms-Servercode SEHR häufig (jeder RPC-Handler, der Resp-Modelle füllt) → hoher Wert, aber hoher
-Blast-Radius. **Nächster Schritt:** die Slot-null-/Move-Behandlung im managed-string-set-Member-Pfad
-([ast_compiler_stmt.cpp:2402](../src/core/ast_compiler_stmt.cpp#L2402) ff.) instrumentieren, prüfen
-warum `sib`s Slot beim Drop nicht A hält.
+**Why handled separately + NOT fixed speculatively tonight:** this is exactly the value model
+ownership/teardown area that, in §12 (CopyRetain) and with the earlier auto-detect revert
+([[owned-return-and-pop-clear-leaks]]), produced regressions that leak/sanitizer did NOT catch (only the
+game behaviour test). A fix here needs: (1) the exact root cause (locate the slot-zeroing place in the set path),
+(2) mem-sanitizer + corpus + leak gate, (3) a game+client BEHAVIOUR test. Until then it stays
+documented + open. Exposure analysis (§10.4 style): `set model.strfield = <string-local>` is VERY frequent in
+the 9rooms server code (every RPC handler that fills response models) → high value, but a high
+blast radius. **Next step:** instrument the slot-zeroing/move handling in the managed string set member path
+([ast_compiler_stmt.cpp:2402](../src/core/ast_compiler_stmt.cpp#L2402) ff.), check
+why `sib`'s slot does not hold A at the drop.
 
-**Verbleibend (NICHT in diesem Fix, separat):** der einmalige `aiml_db_kv_open_persist`-Handle-Leak
-(~583 B je geöffnetem Kv, [db_runtime.cpp:1298](../src/sys/db_runtime.cpp#L1298)) — ein `Kv<>`-decl-local
-bekommt keinen scope-drop, der das Kv-Objekt (`delete kv`) freigibt; es gibt noch keine `close`-Methode.
-Konstant (skaliert nicht mit Requests), daher niedrigere Priorität. Kandidat für einen eigenen Fix.
+**Remaining (NOT in this fix, separate):** the one-off `aiml_db_kv_open_persist` handle leak
+(~583 B per opened Kv, [db_runtime.cpp:1298](../src/sys/db_runtime.cpp#L1298)) — a `Kv<>` decl local
+gets no scope drop that frees the Kv object (`delete kv`); there is no `close` method yet.
+Constant (does not scale with requests), therefore lower priority. A candidate for a fix of its own.
