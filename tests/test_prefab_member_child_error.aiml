@@ -1,13 +1,13 @@
 # SPEC: 44_8_prefab_static,44_8_vocab
-# Negativ-Test (Tier 2b, spec/44_8): die Szene liegt in einem KLASSEN-MEMBER,
-# gebunden in `init`, adressiert in `render` — die vorherrschende Schreibweise
-# jedes Bildschirms.  Der Kindname existiert nicht.  Zur Laufzeit wirft
-# find_child; im WASM-Build (Ausnahmen aus) bricht die ganze Anwendung ab.
-# Muss daher ein HARTER Compiler-Fehler sein.
+# Negative test (Tier 2b, spec/44_8): the scene lives in a CLASS MEMBER,
+# bound in `init`, addressed in `render` — the predominant notation of
+# every screen.  The child name does not exist.  At runtime find_child
+# throws; in the WASM build (exceptions off) the whole application aborts.
+# So it must be a HARD compiler error.
 #
 # Expected exit code: 1
 #
-# Diagnostic-Form:
+# Diagnostic form:
 #   ...: '<.scene'.set_text("does_not_exist") addresses an unknown child of
 #   prefab 'MenuPanel' — no child with that name is declared ...
 

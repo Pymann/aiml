@@ -112,18 +112,18 @@
       # ── a second run also hits in all eight lanes in parallel ──────────
       - decl: [rc_p2, i32, { call: [par4.run] }]
       - set: [fails, { +: [fails, { call: [expect, "parallel: the second run hits eight times", { eq: [{ call: [par4.reused_count] }, 8] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "parallel: die Schluessel sind also dieselben", { eq: [rc_p2, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "parallel: so the keys are the same", { eq: [rc_p2, 0] }] }] }]
 
-      # ── auto (parallel = 0): ein Kern je Lane, gleiches Ergebnis ───────
+      # ── auto (parallel = 0): one core per lane, the same result ─────────
       - decl: [auto_p, pipeline, { call: [eight_lanes, 0, 0] }]
       - decl: [rc_a, i32, { call: [auto_p.run] }]
       - set: [fails, { +: [fails, { call: [expect, "auto: derselbe Ausgang", { eq: [rc_a, 0] }] }] }]
       - set: [fails, { +: [fails, { call: [expect, "auto: dieselbe Zahl Ausfuehrungen", { eq: [{ call: [auto_p.ran_count] }, 8] }] }] }]
 
-      # ── on_fail=pipeline bremst auch parallel: nicht alle acht laufen ──
+      # ── on_fail=pipeline also brakes in parallel: not all eight run ───────
       - decl: [broke, pipeline, { call: [eight_lanes, 4, 1] }]
       - decl: [rc_b, i32, { call: [broke.run] }]
-      - set: [fails, { +: [fails, { call: [expect, "parallel: der Fehlschlag kommt an", { neq: [rc_b, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "parallel: the failure arrives", { neq: [rc_b, 0] }] }] }]
       - set: [fails, { +: [fails, { call: [expect, "parallel: on_fail=pipeline stoppt die Vergabe", { lt: [{ call: [broke.attempt_count] }, 8] }] }] }]
 
       - if:

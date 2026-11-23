@@ -1,21 +1,21 @@
 # SPEC: 62_pipelines
-# spec/62 §13.5h: der Ergebniskanal — Datenfluss von Schritt zu Schritt.
+# spec/62 §13.5h: the result channel — data flow from step to step.
 #
-# Der Kern ist F62-120: ein TREFFER muss das Ergebnis wiederherstellen, ohne
-# den Rumpf zu rufen.  Sonst waere ein wiederverwendeter Schritt fuer seine
-# eigenen Nachfolger unsichtbar — sie bekaemen nichts und muessten neu laufen,
-# womit die Wiederverwendung genau dort entfaellt, wo sie am meisten wert ist.
+# The core is F62-120: a HIT must restore the result without
+# calling the body.  Otherwise a reused step would be invisible to its
+# own successors — they would get nothing and would have to rerun,
+# so the reuse would drop out exactly where it is worth the most.
 #
-# Ausserdem F62-119: ein Ergebnis zu lesen, das NICHT in den eigenen `needs`
-# steht, ist ein Fehler — es wirkte sonst auf das Ergebnis, ohne ueber
-# input_keys im Schluessel zu stehen (blinder Schluessel).
+# Also F62-119: reading a result that is NOT in one's own `needs`
+# is an error — otherwise it would affect the result without being in the key
+# via input_keys (blind key).
 # Expected exit code: 0
 
 - decl: [g_round, string, "r1"]
 
-# Sonde des VERBRAUCHERS: macht nur SEINEN Schluessel beweglich, nicht den des
-# Erzeugers.  Damit trifft der Erzeuger im zweiten Lauf, waehrend der
-# Verbraucher frisch laufen MUSS — genau die Lage, die F62-120 beschreibt.
+# The CONSUMER's probe: only makes ITS key move, not the
+# producer's.  That way the producer hits in the second run, while the
+# consumer MUST run fresh — exactly the situation F62-120 describes.
 - def:
     name: round_probe
     return: { type: string, lifetime: producer }
@@ -33,13 +33,13 @@
     return: i32
     body:
       - decl: [got, string, { call: [step.need_result, "producer"] }]
-      # In der ZUSAMMENGESETZTEN Form gibt es kein ${workspace}: die lokalen
-      # Namen erzeugt nur die Umschreibung der deklarierten Form (F62-109).
+      # In the COMPOSED form there is no ${workspace}: the local
+      # names are only produced by the rewrite of the declared form (F62-109).
       - decl: [work_dir, string, { call: [step.workspace] }]
       - call: [io.write_file, "${work_dir}/seen.txt", got]
       - return: 0
 
-# Liest ein Ergebnis, das nicht in den eigenen needs steht (F62-119).
+# Reads a result that is not in its own needs (F62-119).
 - def:
     name: consume_blind
     return: i32
@@ -58,8 +58,8 @@
       - print: ["  FAIL ${what}"]
       - return: 1
 
-# chain: ein einmaliger Erzeuger, ein Verbraucher je Lane.
-#   linked=0 -> der Verbraucher deklariert den needs NICHT (F62-119)
+# chain: a one-off producer, one consumer per lane.
+#   linked=0 -> the consumer does NOT declare the needs (F62-119)
 - def:
     name: chain_pipe
     args: [[linked, i32]]
@@ -102,37 +102,37 @@
     body:
       - decl: [fails, i32, 0]
 
-      # ── der Wert kommt beim Nachfolger an ──────────────────────────────
+      # ── the value arrives at the successor ─────────────────────────────
       - decl: [pipe, pipeline, { call: [chain_pipe, 1] }]
       - decl: [rc_one, i32, { call: [pipe.run] }]
-      - set: [fails, { +: [fails, { call: [expect, "der Lauf gelingt", { eq: [rc_one, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "the run succeeds", { eq: [rc_one, 0] }] }] }]
       - decl: [p_x86, string, "logs/results_ws/results/arch=x86_64/flow/seen.txt"]
       - decl: [p_arm, string, "logs/results_ws/results/arch=arm64/flow/seen.txt"]
-      - set: [fails, { +: [fails, { call: [expect, "der Verbraucher hat geschrieben", { call: [io.exists, p_x86] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "the consumer wrote", { call: [io.exists, p_x86] }] }] }]
       - decl: [got_x86, string, { call: [io.read_file, p_x86] }]
       - decl: [got_arm, string, { call: [io.read_file, p_arm] }]
-      - set: [fails, { +: [fails, { call: [expect, "Lane x86_64 sah den Wert des Erzeugers", { eq: [got_x86, "commit-42"] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "lane x86_64 saw the producer's value", { eq: [got_x86, "commit-42"] }] }] }]
       - set: [fails, { +: [fails, { call: [expect, "Lane arm64 ebenso", { eq: [got_arm, "commit-42"] }] }] }]
 
-      # ── F62-120: der Treffer stellt den Wert wieder her ────────────────
-      # Dieselbe Pipeline (der Cache haengt an der Instanz).  Die Sonde des
-      # Verbrauchers liefert etwas Neues -> nur ER laeuft neu; der Erzeuger
-      # trifft.  Trotzdem muss sein Wert beim Verbraucher ankommen.
+      # ── F62-120: the hit restores the value ───────────────────────────
+      # The same pipeline (the cache hangs on the instance).  The consumer's
+      # probe delivers something new -> only IT reruns; the producer
+      # hits.  Nevertheless its value must arrive at the consumer.
       - call: [io.remove, p_x86]
       - call: [io.remove, p_arm]
-      - set: [fails, { +: [fails, { call: [expect, "die Dateien sind vorher weg", { eq: [{ call: [io.exists, p_x86] }, false] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "the files are gone beforehand", { eq: [{ call: [io.exists, p_x86] }, false] }] }] }]
       - set: [g_round, "r2"]
       - decl: [rc_two, i32, { call: [pipe.run] }]
       - set: [fails, { +: [fails, { call: [expect, "zweiter Lauf gelingt", { eq: [rc_two, 0] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "der Erzeuger TRAF (lief nicht erneut)", { eq: [{ call: [pipe.reused_count] }, 1] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "the producer HIT (did not run again)", { eq: [{ call: [pipe.reused_count] }, 1] }] }] }]
       - set: [fails, { +: [fails, { call: [expect, "die beiden Verbraucher liefen neu", { eq: [{ call: [pipe.ran_count] }, 2] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "und bekamen den Wert aus dem Cache", { eq: [{ call: [io.read_file, p_x86] }, "commit-42"] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "and got the value from the cache", { eq: [{ call: [io.read_file, p_x86] }, "commit-42"] }] }] }]
 
-      # ── F62-119: ohne needs ist das Lesen ein Fehler ───────────────────
+      # ── F62-119: without needs reading is an error ─────────────────────
       - decl: [blind, pipeline, { call: [chain_pipe, 0] }]
       - call: [blind.set_workspace_root, "logs/results_ws3"]
       - decl: [rc_blind, i32, { call: [blind.run] }]
-      - set: [fails, { +: [fails, { call: [expect, "Lesen ohne needs wird abgelehnt", { neq: [rc_blind, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "reading without needs is rejected", { neq: [rc_blind, 0] }] }] }]
 
       - if:
           condition: { neq: [fails, 0] }

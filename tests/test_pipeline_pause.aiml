@@ -1,15 +1,15 @@
 # SPEC: 62_pipelines
-# spec/62 §5.9: Anhalten am Schritt-Rand und Fortsetzen aus dem Cache.
+# spec/62 §5.9: pausing at the step boundary and resuming from the cache.
 #
-# Der Kern ist F62-56: Fortsetzen braucht KEINEN eigenen Zustand.  Was ein
-# resume fortsetzt, ist die Menge der schon aufgezeichneten (Schritt, Lane) —
-# also der Cache.  Darum wird hier geprueft, dass ein fortgesetzter Lauf die
-# erledigten Schritte TRIFFT statt sie zu wiederholen; waere das nicht so,
-# muesste man einen Fortsetzungszustand bauen, und genau das will §5.9 nicht.
+# The core is F62-56: resuming needs NO state of its own.  What a
+# resume continues is the set of already recorded (step, lane) —
+# i.e. the cache.  That is why it is checked here that a resumed run HITS the
+# finished steps instead of repeating them; if that were not so,
+# one would have to build a resume state, and that is exactly what §5.9 does not want.
 #
-# Zwei Wege ins Anhalten, beide verlangt:
-#   pause_before   -> im Quelltext erklaert, ein Freigabe-Tor (F62-54)
-#   request_pause  -> von aussen, wirkt NACH dem laufenden Schritt (F62-55)
+# Two ways into pausing, both required:
+#   pause_before   -> declared in the source text, a release gate (F62-54)
+#   request_pause  -> from outside, takes effect AFTER the running step (F62-55)
 # Expected exit code: 0
 
 - decl: [g_seen, i32, 0]
@@ -36,7 +36,7 @@
       - print: ["  FAIL ${what}"]
       - return: 1
 
-# Beobachter, der von AUSSEN anhaelt: nach dem ersten Schritt (F62-97).
+# Observer that pauses from OUTSIDE: after the first step (F62-97).
 - def:
     name: pause_after_first
     args: [[event, ref<StepRun>]]
@@ -75,40 +75,40 @@
     body:
       - decl: [fails, i32, 0]
 
-      # ── deklariertes Tor: der Lauf haelt VOR dem zweiten Schritt ────────
+      # ── declared gate: the run stops BEFORE the second step ────────────
       - decl: [gated, pipeline, { call: [two_steps, 1] }]
       - decl: [rc_g1, i32, { call: [gated.run] }]
-      - set: [fails, { +: [fails, { call: [expect, "Tor: der Lauf meldet 'angehalten'", { eq: [rc_g1, -6] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "Tor: der Lebenszyklus ist paused", { eq: [{ call: [gated.lifecycle] }, Lifecycle.paused] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "Tor: der erste Schritt lief", { eq: [{ call: [gated.ran_count] }, 1] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "gate: the run reports 'paused'", { eq: [rc_g1, -6] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "gate: the life cycle is paused", { eq: [{ call: [gated.lifecycle] }, Lifecycle.paused] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "gate: the first step ran", { eq: [{ call: [gated.ran_count] }, 1] }] }] }]
 
-      # ── Freigabe + Fortsetzen: der erledigte Schritt TRIFFT ────────────
+      # ── release + resume: the finished step HITS ──────────────────────
       - call: [gated.release, "two"]
       - call: [gated.resume]
       - decl: [rc_g2, i32, { call: [gated.run] }]
-      - set: [fails, { +: [fails, { call: [expect, "Freigabe: der Lauf kommt durch", { eq: [rc_g2, 0] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "Fortsetzen: der erledigte Schritt trifft", { eq: [{ call: [gated.reused_count] }, 1] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "Fortsetzen: nur der offene Schritt laeuft", { eq: [{ call: [gated.ran_count] }, 1] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "Fortsetzen: der Lebenszyklus ist done", { eq: [{ call: [gated.lifecycle] }, Lifecycle.done] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "release: the run gets through", { eq: [rc_g2, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "resume: the finished step hits", { eq: [{ call: [gated.reused_count] }, 1] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "resume: only the open step runs", { eq: [{ call: [gated.ran_count] }, 1] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "resume: the life cycle is done", { eq: [{ call: [gated.lifecycle] }, Lifecycle.done] }] }] }]
 
-      # ── ohne Tor laeuft dieselbe Pipeline durch ────────────────────────
+      # ── without a gate the same pipeline runs through ───────────────────
       - decl: [plain, pipeline, { call: [two_steps, 0] }]
       - decl: [rc_p, i32, { call: [plain.run] }]
-      - set: [fails, { +: [fails, { call: [expect, "ohne Tor: der Lauf kommt durch", { eq: [rc_p, 0] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "ohne Tor: beide Schritte liefen", { eq: [{ call: [plain.ran_count] }, 2] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "without a gate: the run gets through", { eq: [rc_p, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "without a gate: both steps ran", { eq: [{ call: [plain.ran_count] }, 2] }] }] }]
 
-      # ── von aussen: der Beobachter haelt NACH dem ersten Schritt an ────
+      # ── from outside: the observer pauses AFTER the first step ─────────
       - set: [g_seen, 0]
       - decl: [outer, pipeline, { call: [two_steps, 0] }]
       - set: [g_pipe_handle, outer]
       - decl: [rc_o1, i32, { call: [outer.run, pause_after_first] }]
-      - set: [fails, { +: [fails, { call: [expect, "von aussen: der Lauf meldet 'angehalten'", { eq: [rc_o1, -6] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "von aussen: erst NACH dem laufenden Schritt", { eq: [g_seen, 1] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "von aussen: der erste Schritt ist erledigt", { eq: [{ call: [outer.ran_count] }, 1] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "from outside: the run reports 'paused'", { eq: [rc_o1, -6] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "from outside: only AFTER the running step", { eq: [g_seen, 1] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "from outside: the first step is finished", { eq: [{ call: [outer.ran_count] }, 1] }] }] }]
       - call: [outer.resume]
       - decl: [rc_o2, i32, { call: [outer.run] }]
       - set: [fails, { +: [fails, { call: [expect, "von aussen: fortgesetzt kommt er durch", { eq: [rc_o2, 0] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "von aussen: der erledigte Schritt trifft", { eq: [{ call: [outer.reused_count] }, 1] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "from outside: the finished step hits", { eq: [{ call: [outer.reused_count] }, 1] }] }] }]
 
       - if:
           condition: { neq: [fails, 0] }

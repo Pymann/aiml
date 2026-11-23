@@ -1,9 +1,9 @@
 # SPEC: 44_6_prefabs
-# spec/44_6: eine Pfeiltaste bewegt den Cursor um GENAU ein Zeichen.
+# spec/44_6: an arrow key moves the cursor by EXACTLY one character.
 #
-# Gemeldet am cosmos-Quelltextfeld (2026-10-15): „es springt bei jeder
-# pfeiltaste immer 2 zeichen".  Geprueft wird das Einzige, was man von aussen
-# sehen kann: WO ein danach getipptes Zeichen landet.
+# Reported on the cosmos source text field (2026-10-15): "it always jumps 2
+# characters with every arrow key".  What is checked is the only thing that can be
+# seen from outside: WHERE a character typed afterwards lands.
 #
 # Requires: display
 # Expected exit code: 0
@@ -47,9 +47,9 @@
       - call: [scene.set_text, "one_input", "abcdef"]
       - call: [scene.focus, "one_input"]
       - call: [step_frame, win]
-      # Cursor steht nach set_text bei 0.  Zweimal nach RECHTS muss GENAU zwei
-      # Zeichen weit sein: 'ab|cdef'.  Springt eine Taste zwei Zeichen, landet
-      # das X bei 'abcd|ef' — daran ist der Fehler eindeutig zu erkennen.
+      # After set_text the cursor is at 0.  Twice to the RIGHT must be EXACTLY two
+      # characters: 'ab|cdef'.  If a key jumps two characters, the X lands
+      # at 'abcd|ef' — that is how the bug can be recognised unambiguously.
       - call: [input.post_key_down, "right"]
       - call: [input.post_key_up, "right"]
       - call: [step_frame, win]
@@ -62,7 +62,7 @@
       - if:
           condition: { neq: [got_one, "abXcdef"] }
           then:
-            - print: ["FAIL einzeilig: '${got_one}' expected 'abXcdef' (zwei Rechtspfeile = zwei Zeichen)"]
+            - print: ["FAIL single-line: '${got_one}' expected 'abXcdef' (two right arrows = two characters)"]
             - call: [engine.destroy_window, win]
             - return: 1
 
@@ -79,9 +79,9 @@
       - if:
           condition: { eq: [got_many, "aYbcdef\nzweite"] }
           then:
-            - print: ["PASS caret_arrows: eine Pfeiltaste bewegt genau ein Zeichen"]
+            - print: ["PASS caret_arrows: one arrow key moves exactly one character"]
             - call: [engine.destroy_window, win]
             - return: 0
-      - print: ["FAIL mehrzeilig: '${got_many}' expected 'aYbcdef\nzweite' (ein Rechtspfeil = ein Zeichen)"]
+      - print: ["FAIL multi-line: '${got_many}' expected 'aYbcdef\nzweite' (one right arrow = one character)"]
       - call: [engine.destroy_window, win]
       - return: 1

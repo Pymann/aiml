@@ -1,28 +1,28 @@
 # SPEC: 29_2_sys_exec,29_serialize,62_pipelines
-# spec/62 §7/§9: die Wiederverwendungsklassen und die Sonde.
+# spec/62 §7/§9: the reuse classes and the probe.
 #
-# Der Kern ist nicht "Treffer funktioniert", sondern dass KEIN falscher Treffer
-# entsteht.  Drei Klassen, drei Verhalten:
-#   pure      -> trifft bei gleichen Eingaben
-#   opaque    -> trifft NIE (§7)
-#   resolved  -> die Sonde laeuft IMMER, ihr Ergebnis steht im Schluessel;
-#                aendert es sich, laeuft der Schritt neu (§9)
+# The core is not "a hit works", but that NO wrong hit
+# arises.  Three classes, three behaviours:
+#   pure      -> hits with equal inputs
+#   opaque    -> NEVER hits (§7)
+#   resolved  -> the probe ALWAYS runs, its result is in the key;
+#                if it changes, the step reruns (§9)
 # Expected exit code: 0
 
 - decl: [g_probe_runs, i32, 0]
 - decl: [g_head,       string, "commit-aaa"]
 
-# Der Rumpf darf KEINE globale Variable des Aufrufers anfassen: er laeuft im
-# isolierten Kontext, und ein Bundle traegt Code, keinen Prozesszustand
-# (spec/29_2 §13).  Gezaehlt wird deshalb ueber ran_count/reused_count, die
-# die Laufzeit AUSSERHALB des Kontexts fuehrt.
+# The body must NOT touch any global variable of the caller: it runs in the
+# isolated context, and a bundle carries code, not process state
+# (spec/29_2 §13).  That is why counting is done via ran_count/reused_count, which
+# the runtime keeps OUTSIDE the context.
 - def:
     name: work_body
     return: i32
     body:
       - return: 0
 
-# Die Sonde: billig, laeuft jedes Mal, liefert die aufgeloeste Adresse.
+# The probe: cheap, runs every time, returns the resolved address.
 - def:
     name: head_probe
     return: { type: string, lifetime: producer }
@@ -76,34 +76,34 @@
       - decl: [op_pipe, pipeline, { call: [one_step_pipe, CacheClass.opaque, 0] }]
       - decl: [rc_o1, i32, { call: [op_pipe.run] }]
       - decl: [rc_o2, i32, { call: [op_pipe.run] }]
-      - set: [fails, { +: [fails, { call: [expect, "opaque trifft nie", { eq: [{ call: [op_pipe.reused_count] }, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "opaque never hits", { eq: [{ call: [op_pipe.reused_count] }, 0] }] }] }]
       - set: [fails, { +: [fails, { call: [expect, "opaque laeuft beide Male", { eq: [{ call: [op_pipe.ran_count] }, 1] }] }] }]
 
       # ── resolved: Sonde laeuft IMMER ───────────────────────────────────
       - set: [g_probe_runs, 0]
       - decl: [res_pipe, pipeline, { call: [one_step_pipe, CacheClass.resolved, 1] }]
       - decl: [rc_r1, i32, { call: [res_pipe.run] }]
-      - set: [fails, { +: [fails, { call: [expect, "resolved: erster Lauf fuehrt aus", { eq: [{ call: [res_pipe.ran_count] }, 1] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "resolved: first run executes", { eq: [{ call: [res_pipe.ran_count] }, 1] }] }] }]
       - decl: [rc_r2, i32, { call: [res_pipe.run] }]
       - set: [fails, { +: [fails, { call: [expect, "Sonde lief BEIDE Male", { eq: [g_probe_runs, 2] }] }] }]
       - set: [fails, { +: [fails, { call: [expect, "gleiche Adresse -> Treffer", { eq: [{ call: [res_pipe.reused_count] }, 1] }] }] }]
 
-      # ── Adresse aendert sich -> Schritt laeuft neu ──────────────────────
+      # ── the address changes -> the step reruns ──────────────────────────
       - set: [g_head, "commit-bbb"]
       - decl: [rc_r3, i32, { call: [res_pipe.run] }]
-      - set: [fails, { +: [fails, { call: [expect, "neue Adresse -> Schritt laeuft neu", { eq: [{ call: [res_pipe.ran_count] }, 1] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "und trifft dabei NICHT", { eq: [{ call: [res_pipe.reused_count] }, 0] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "Sonde lief auch beim dritten Mal", { eq: [g_probe_runs, 3] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "new address -> step reruns", { eq: [{ call: [res_pipe.ran_count] }, 1] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "and does NOT hit while doing so", { eq: [{ call: [res_pipe.reused_count] }, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "probe ran the third time too", { eq: [g_probe_runs, 3] }] }] }]
 
-      # ── resolved ohne Sonde ist ein FEHLER (F62-16) ─────────────────────
+      # ── resolved without a probe is an ERROR (F62-16) ───────────────────
       - decl: [no_probe, pipeline, { call: [one_step_pipe, CacheClass.resolved, 0] }]
       - decl: [rc_np, i32, { call: [no_probe.run] }]
-      - set: [fails, { +: [fails, { call: [expect, "resolved ohne Sonde wird abgelehnt", { neq: [rc_np, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "resolved without a probe is rejected", { neq: [rc_np, 0] }] }] }]
 
-      # ── und 'pure' MIT Sonde ist ebenso ein Fehler (F62-16, zweite Haelfte)
+      # ── and 'pure' WITH a probe is an error as well (F62-16, second half)
       - decl: [pure_probe, pipeline, { call: [one_step_pipe, CacheClass.pure, 1] }]
       - decl: [rc_pp, i32, { call: [pure_probe.run] }]
-      - set: [fails, { +: [fails, { call: [expect, "pure MIT Sonde wird abgelehnt", { neq: [rc_pp, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "pure WITH a probe is rejected", { neq: [rc_pp, 0] }] }] }]
 
       - if:
           condition: { neq: [fails, 0] }

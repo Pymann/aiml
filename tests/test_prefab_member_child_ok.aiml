@@ -1,21 +1,21 @@
 # SPEC: 44_8_prefab_static,44_8_vocab
-# Positiv-Test (Tier 2b, spec/44_8): der Member-Check darf bei korrekter
-# Verwendung nicht anschlagen — und er darf NICHT raten, wo er nichts beweisen
-# kann.  Zwei Fälle in einer Datei:
+# Positive test (Tier 2b, spec/44_8): the member check must not fire with correct
+# use — and it must NOT guess where it cannot prove anything.
+# Two cases in one file:
 #
-#   1. `<.scene` ist eindeutig an AlphaPanel gebunden; set_text/child_clicked/
-#      text_value mit deklarierten Kindnamen → kein Fehler.
-#   2. `<.dual` wird an ZWEI verschiedene Prefabs gebunden (init: AlphaPanel,
-#      switch_over: BetaPanel).  Damit ist statisch nicht entscheidbar, welches
-#      Prefab dort liegt → das Feld wird NICHT verfolgt, und `beta_lbl` (nur in
-#      BetaPanel) darf nicht als unbekanntes Kind gemeldet werden.  Ein Check,
-#      der hier rät, meldet Falsches und wird abgeschaltet.
+#   1. `<.scene` is unambiguously bound to AlphaPanel; set_text/child_clicked/
+#      text_value with declared child names → no error.
+#   2. `<.dual` is bound to TWO different prefabs (init: AlphaPanel,
+#      switch_over: BetaPanel).  So it is not statically decidable which
+#      prefab lies there → the field is NOT tracked, and `beta_lbl` (only in
+#      BetaPanel) must not be reported as an unknown child.  A check
+#      that guesses here reports wrong things and gets switched off.
 #
 # Expected exit code: 0
 #
-# Der GL-Pfad ist hinter einer zur Laufzeit falschen Bedingung geparkt bzw. wird
-# nie gerufen: die statischen Checks lesen die AST unabhängig von
-# Erreichbarkeit → headless-tauglich.
+# The GL path is parked behind a condition that is false at runtime or is
+# never called: the static checks read the AST regardless of
+# reachability → headless-capable.
 
 - prefab:
     name: AlphaPanel
@@ -52,11 +52,11 @@
           name: render
           return: i32
           body:
-            # Fall 1: eindeutiges Feld, deklarierte Kinder — schreibend und lesend.
+            # case 1: unambiguous field, declared children — writing and reading.
             - call: [<.scene.set_text, "alpha_lbl", "hallo"]
             - decl: [txt, string, { call: [<.scene.text_value, "alpha_inp"] }]
             - if: { condition: { eq: [{ call: [<.scene.child_clicked, "alpha_btn"] }, 1] }, then: [{ return: 1 }] }
-            # Fall 2: mehrdeutiges Feld — der Check muss schweigen.
+            # case 2: ambiguous field — the check must stay silent.
             - call: [<.dual.set_text, "beta_lbl", "welt"]
             - return: 0
 
@@ -71,5 +71,5 @@
           then:
             - call: [scr.init]
             - decl: [hit, i32, { call: [scr.render] }]
-      - call: [log.info, "PASS prefab_member_child_ok: Member-Kindnamen akzeptiert, mehrdeutiges Feld nicht geraten"]
+      - call: [log.info, "PASS prefab_member_child_ok: member child names accepted, ambiguous field not guessed"]
       - return: 0

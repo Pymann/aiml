@@ -1,12 +1,12 @@
 # SPEC: 44_8_prefab_static,44_8_vocab
-# Negativ-Test (Tier 2b, spec/44_8): die LESENDEN Kindmethoden.  Ein Tippfehler
-# in child_clicked ergibt einen stumm toten Knopf (kein Wurf, keine Meldung —
-# ein fehlendes Kind heisst schlicht „nicht geklickt"), einer in text_value ein
-# stumm leeres Eingabefeld.  Genau deshalb muss der Compiler es sagen.
+# Negative test (Tier 2b, spec/44_8): the READING child methods.  A typo
+# in child_clicked gives a silently dead button (no throw, no message —
+# a missing child simply means "not clicked"), one in text_value a
+# silently empty input field.  That is exactly why the compiler must say so.
 #
 # Expected exit code: 1
 #
-# Diagnostic-Form:
+# Diagnostic form:
 #   ...: '<.form'.child_clicked("send_bttn") addresses an unknown child of
 #   prefab 'FormPanel' — ...
 
@@ -31,7 +31,7 @@
           name: poll
           return: i32
           body:
-            # Tippfehler: das Kind heisst send_btnx.  Ohne Check: toter Knopf.
+            # typo: the child is called send_btnx.  Without the check: a dead button.
             - if: { condition: { eq: [{ call: [<.form.child_clicked, "send_bttn"] }, 1] }, then: [{ return: 1 }] }
             - return: 0
 

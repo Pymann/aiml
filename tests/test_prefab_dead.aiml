@@ -1,31 +1,31 @@
 # SPEC: 44_8_prefab_static,44_8_vocab
-# Positive test (Tier 3, dead-prefab): ein deklariertes Prefab, das NIRGENDS
-# instanziiert wird, erzeugt eine Compiler-WARNUNG (kein Fehler) — die
-# Kompilierung läuft normal durch.  Ein genutztes Prefab wird NICHT gemeldet.
-# Siehe spec/44_8 (Tier 3).
+# Positive test (Tier 3, dead prefab): a declared prefab that is NEVER
+# instantiated produces a compiler WARNING (not an error) — the
+# compilation runs through normally.  A used prefab is NOT reported.
+# See spec/44_8 (Tier 3).
 #
 # Expected exit code: 0
 #
-# Diagnostic-Form (Warning), nur für "Dead":
+# Diagnostic form (warning), only for "Dead":
 #   prefab 'DeadBox' is declared but never instantiated in this build — no
 #   engine.instantiate("Dead") anywhere. ...
 #
-# "UsedBox" wird hinter einer zur Laufzeit falschen Bedingung instanziiert; der
-# statische Walk sieht das Literal unabhängig von Erreichbarkeit → keine
-# Dead-Warnung für "UsedBox" (headless-tauglich, GL wird nie angefasst).
+# "UsedBox" is instantiated behind a condition that is false at runtime; the
+# static walk sees the literal regardless of reachability → no
+# dead warning for "UsedBox" (headless-capable, GL is never touched).
 
 - prefab:
     name: UsedBox
     width: 100
     height: 40
     children:
-      # `spawn: ListRow` instantiiert das Row-Prefab deklarativ pro Listen-Element —
-      # ein Use, obwohl es NIE via engine.instantiate("Row") aufgerufen wird.
+      # `spawn: ListRow` instantiates the row prefab declaratively per list element —
+      # a use, although it is NEVER called via engine.instantiate("Row").
       - { name: list_box, type: container, x: 0, y: 20, width: 100, height: 20,
           spawn: ListRow, layout: vflow, gap: 2 }
       - { name: title, type: label, x: 0, y: 0, width: 100, height: 20 }
 
-# Nur über spawn: referenziert → darf NICHT als tot gemeldet werden.
+# referenced only via spawn: → must NOT be reported as dead.
 - prefab:
     name: ListRow
     width: 100
@@ -49,5 +49,5 @@
           condition: { eq: [flag, 1] }
           then:
             - decl: [inst, prefab_instance, { call: [engine.instantiate, "UsedBox"] }]
-      - print: ["PASS prefab_dead: 'UsedBox' (instantiate) + 'ListRow' (spawn) genutzt → keine Warnung; nur 'DeadBox' → Warnung"]
+      - print: ["PASS prefab_dead: 'UsedBox' (instantiate) + 'ListRow' (spawn) used → no warning; only 'DeadBox' → warning"]
       - return: 0

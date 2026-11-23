@@ -1,18 +1,18 @@
 # SPEC: 44_6_prefabs
-# spec/44_6 §8.1: engine.draw_scene_upto(z) zeichnet nur die Instanzen unter z,
-# das abschliessende draw_scene den Rest -- jede Instanz GENAU EINMAL.
+# spec/44_6 §8.1: engine.draw_scene_upto(z) only draws the instances below z,
+# the concluding draw_scene the rest -- every instance EXACTLY ONCE.
 #
-# Geprueft wird am Pixel, nicht am Zustand.  Beide Flaechen sind halb
-# durchsichtig; dadurch ist das Ergebnis eine Rechnung, die jeden Fehler
-# sichtbar macht:
-#   * eine Schicht gar nicht gezeichnet  -> Farbe fehlt
-#   * eine Schicht ZWEIMAL gezeichnet    -> zu hell (0.5 statt 0.25 Restanteil)
-#   * Reihenfolge vertauscht             -> andere Mischung
+# Checked on the pixel, not on the state.  Both areas are half
+# transparent; that makes the result a calculation that makes every error
+# visible:
+#   * a layer not drawn at all          -> colour missing
+#   * a layer drawn TWICE               -> too bright (0.5 instead of 0.25 remainder)
+#   * order swapped                     -> different mix
 #
-# Rechnung bei Clear = schwarz, unten = rot mit a=0.5, oben = blau mit a=0.5:
-#   nach unten:            rot*0.5                 -> (128,  0,  0)
-#   nach oben:  blau*0.5 + (128,0,0)*0.5           -> ( 64,  0,128)
-# Wird unten zweimal gezeichnet, steht dort 191 statt 128 und danach 95 statt 64.
+# Calculation with clear = black, bottom = red with a=0.5, top = blue with a=0.5:
+#   after bottom:          red*0.5                 -> (128,  0,  0)
+#   after top:  blue*0.5 + (128,0,0)*0.5           -> ( 64,  0,128)
+# If the bottom is drawn twice, there is 191 instead of 128 and afterwards 95 instead of 64.
 # Requires: display
 # Expected exit code: 0
 
@@ -36,7 +36,7 @@
 
 - decl: [fehl, i32, 0]
 
-# Ein Kanal des Pixels in der Mitte.  kanal: 0=R 1=G 2=B
+# One channel of the pixel in the middle.  kanal: 0=R 1=G 2=B
 - def:
     name: kanal_mitte
     args: [[kanal, i32]]
@@ -45,7 +45,7 @@
       - decl: [pixel, buffer<u8>, { call: [gl.read_rgba8, 32, 32, 1, 1] }]
       - return: { cast: [{ call: [pixel.get, kanal] }, i32] }
 
-# Toleranz 6, weil die Mischung in 8 Bit rundet.
+# tolerance 6, because the mix rounds in 8 bits.
 - def:
     name: pruefe
     args: [[was, string], [ist, i32], [soll, i32]]
@@ -56,42 +56,42 @@
           condition: { gt: [abst, 6] }
           then:
             - set: [fehl, { "+": [fehl, 1] }]
-            - print: ["FAIL ${was}: ist ${ist}, soll ${soll}"]
+            - print: ["FAIL ${was}: is ${ist}, should be ${soll}"]
 
 - def:
     name: main
     return: i32
     body:
       - decl: [win, window_handle, { call: [engine.create_window, 64, 64, "draw_upto"] }]
-      - if: { condition: { eq: [win, null] }, then: [{ print: ["FAIL kein Fenster"] }, { return: 1 }] }
+      - if: { condition: { eq: [win, null] }, then: [{ print: ["FAIL no window"] }, { return: 1 }] }
       - call: [engine.prefab_scene_init, 64, 64]
       - decl: [unten, prefab_instance, { call: [engine.instantiate, "UntenRot"] }]
       - call: [unten.set_z, 5]
       - decl: [oben, prefab_instance, { call: [engine.instantiate, "ObenBlau"] }]
       - call: [oben.set_z, 50]
 
-      # ── 1. Die ganze Szene in einem Zug: der Sollwert, gegen den sich die
-      #       Teilzeichnung messen muss.
+      # ── 1. the whole scene in one go: the target value against which the
+      #       partial drawing must measure itself.
       - call: [gl.clear_all, 0.0, 0.0, 0.0, 1.0]
       - call: [engine.draw_scene]
       - call: [pruefe, "ganz: rot", { call: [kanal_mitte, 0] }, 64]
       - call: [pruefe, "ganz: blau", { call: [kanal_mitte, 2] }, 128]
 
-      # ── 2. Geteilt.  Nach der unteren Haelfte steht NUR das Rot da -- das
-      #       Blau wartet noch.
+      # ── 2. split.  After the lower half ONLY the red is there -- the
+      #       blue is still waiting.
       - call: [gl.clear_all, 0.0, 0.0, 0.0, 1.0]
       - call: [engine.draw_scene_upto, 10]
       - call: [pruefe, "geteilt, untere Haelfte: rot", { call: [kanal_mitte, 0] }, 128]
       - call: [pruefe, "geteilt, untere Haelfte: noch kein blau", { call: [kanal_mitte, 2] }, 0]
 
-      # ── 3. Der Rest.  Das Ergebnis MUSS dem ungeteilten Zug aus 1 gleichen:
-      #       jede Instanz genau einmal.
+      # ── 3. the rest.  The result MUST equal the unsplit pass from 1:
+      #       every instance exactly once.
       - call: [engine.draw_scene]
       - call: [pruefe, "geteilt, fertig: rot wie ungeteilt", { call: [kanal_mitte, 0] }, 64]
       - call: [pruefe, "geteilt, fertig: blau wie ungeteilt", { call: [kanal_mitte, 2] }, 128]
 
-      # ── 4. Mehrere Schnitte im selben Frame, und ein Schnitt UNTER allem
-      #       (zeichnet nichts) sowie einer UEBER allem (zeichnet beide).
+      # ── 4. several cuts in the same frame, and a cut BELOW everything
+      #       (draws nothing) as well as one ABOVE everything (draws both).
       - call: [gl.clear_all, 0.0, 0.0, 0.0, 1.0]
       - call: [engine.draw_scene_upto, 0]
       - call: [pruefe, "Schnitt unter allem: nichts gezeichnet", { call: [kanal_mitte, 0] }, 0]
@@ -100,13 +100,13 @@
       - call: [engine.draw_scene_upto, 999]
       - call: [pruefe, "dann alles: blau", { call: [kanal_mitte, 2] }, 128]
       - call: [pruefe, "dann alles: rot gemischt", { call: [kanal_mitte, 0] }, 64]
-      # draw_scene schliesst den Frame abst und darf NICHTS mehr hinzufuegen.
+      # draw_scene concludes the frame and must add NOTHING more.
       - call: [engine.draw_scene]
       - call: [pruefe, "Abschluss zeichnet nicht doppelt: rot", { call: [kanal_mitte, 0] }, 64]
       - call: [pruefe, "Abschluss zeichnet nicht doppelt: blau", { call: [kanal_mitte, 2] }, 128]
 
-      # ── 5. Nach dem Abschluss ist die Marke zurueckgesetzt: der naechste
-      #       Frame zeichnet wieder die ganze Szene.
+      # ── 5. after the conclusion the mark is reset: the next
+      #       frame draws the whole scene again.
       - call: [gl.clear_all, 0.0, 0.0, 0.0, 1.0]
       - call: [engine.draw_scene]
       - call: [pruefe, "naechster Frame wieder vollstaendig: rot", { call: [kanal_mitte, 0] }, 64]

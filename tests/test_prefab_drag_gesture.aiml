@@ -1,23 +1,23 @@
 # SPEC: 44_6_prefabs,44_0_input
-# spec/44_6 "engine.update_drag_gesture — Aufnehmen am Druckpunkt".
+# spec/44_6 "engine.update_drag_gesture — pick up at the press point".
 #
-# Die zwei Fehlerklassen, die mit engine.update_drag unvermeidbar sind und die
-# dieser Test festnagelt:
-#   A) Aufnahme an der falschen Karte.  update_drag ist pegelgesteuert und pickt
-#      mit der Mausposition DIESES Frames.  Browser-Callbacks schreiben die
-#      Position live, Tastenflanken erst beim Frame-Snapshot (spec/44_0 §7.1) —
-#      die Flanke gehoert also zu einer aelteren Position.  Bei bewegter Maus
-#      greift update_drag die Karte, die JETZT unter dem Cursor liegt.
-#      update_drag_gesture nimmt am drag_origin auf, also am Druckpunkt.
-#   B) Ein Tipp wird zum Drag.  Ohne Schwelle ist jeder Klick ein Mini-Drag.
+# The two error classes that are unavoidable with engine.update_drag and that
+# this test nails down:
+#   A) pickup at the wrong card.  update_drag is level-triggered and picks
+#      with THIS frame's mouse position.  Browser callbacks write the
+#      position live, key edges only at the frame snapshot (spec/44_0 §7.1) —
+#      so the edge belongs to an older position.  With a moving mouse
+#      update_drag grabs the card that is under the cursor NOW.
+#      update_drag_gesture picks up at drag_origin, i.e. at the press point.
+#   B) a tap becomes a drag.  Without a threshold every click is a mini drag.
 #
-# Geprueft wird in dieser Reihenfolge:
-#   1. Druck ohne Bewegung = Kandidat (1), KEIN Drag
-#   2. Bewegung ueber die Schwelle = zieht (2) und zwar die Karte am Druckpunkt,
-#      auch wenn der Cursor inzwischen ueber einer anderen Karte steht
-#   3. Loslassen meldet genau einmal "losgelassen" (3); get_drag_source nennt
-#      im selben Frame noch die Quelle
-#   4. Gegenprobe Abbruch: meldet (4) und NICHT (3)
+# Checked in this order:
+#   1. press without movement = candidate (1), NO drag
+#   2. movement beyond the threshold = drags (2), namely the card at the press point,
+#      even if the cursor is over another card by now
+#   3. release reports "released" (3) exactly once; get_drag_source still names
+#      the source in the same frame
+#   4. counter-probe cancel: reports (4) and NOT (3)
 # Requires: display
 # Expected exit code: 0
 
@@ -48,8 +48,8 @@
       - call: [engine.prefab_scene_init, 400, 300]
       - call: [input.init, win]
 
-      # Karte A links (20,50), Karte B rechts (200,50) — weit auseinander, damit
-      # "Druckpunkt" und "aktueller Cursor" eindeutig verschiedene Karten sind.
+      # Card A on the left (20,50), card B on the right (200,50) — far apart, so that
+      # "press point" and "current cursor" are unambiguously different cards.
       - decl: [card_a, prefab_instance, { call: [engine.instantiate, "GestureCardA"] }]
       - call: [card_a.set_pos, 20.0, 50.0]
       - call: [card_a.set_draggable, 1]
@@ -63,38 +63,38 @@
       - decl: [b_mid_x, f32, 240.0]
       - decl: [b_mid_y, f32, 100.0]
 
-      # ── 1. Druck ohne Bewegung = Kandidat, kein Drag ────────────────────
+      # ── 1. press without movement = candidate, no drag ──────────────────
       - call: [engine.swap, win]
       - call: [input.post_mouse_move, a_mid_x, a_mid_y]
       - decl: [g_idle, i32, { call: [engine.update_drag_gesture, a_mid_x, a_mid_y] }]
-      - if: { condition: { neq: [g_idle, 0] }, then: [{ call: [log.error, "FAIL ohne Druck Zustand ${g_idle}, expected 0"] }, { return: 1 }] }
+      - if: { condition: { neq: [g_idle, 0] }, then: [{ call: [log.error, "FAIL without a press state ${g_idle}, expected 0"] }, { return: 1 }] }
 
       - call: [engine.swap, win]
       - call: [input.post_mouse_down, 0]
       - decl: [g_press, i32, { call: [engine.update_drag_gesture, a_mid_x, a_mid_y] }]
       - if:
           condition: { neq: [g_press, 1] }
-          then: [{ call: [log.error, "FAIL Druck ohne Bewegung gab Zustand ${g_press}, expected 1 (Kandidat) — ein Tipp darf kein Drag sein"] }, { return: 1 }]
+          then: [{ call: [log.error, "FAIL press without movement gave state ${g_press}, expected 1 (candidate) — a tap must not be a drag"] }, { return: 1 }]
       - if:
           condition: { pneq: [{ call: [engine.get_dragged] }, null] }
-          then: [{ call: [log.error, "FAIL Tipp hat bereits einen Drag gestartet"] }, { return: 1 }]
+          then: [{ call: [log.error, "FAIL tap already started a drag"] }, { return: 1 }]
 
-      # ── 2. Ueber die Schwelle: Karte am DRUCKPUNKT wird gezogen ─────────
-      # Der Cursor steht jetzt ueber Karte B.  Aufgenommen werden muss trotzdem
-      # Karte A, weil dort gedrueckt wurde.
+      # ── 2. beyond the threshold: the card at the PRESS POINT is dragged ──
+      # The cursor is now over card B.  Nevertheless card A
+      # must be picked up, because that is where the press happened.
       - call: [engine.swap, win]
       - call: [input.post_mouse_move, b_mid_x, b_mid_y]
       - decl: [g_drag, i32, { call: [engine.update_drag_gesture, b_mid_x, b_mid_y] }]
       - if:
           condition: { neq: [g_drag, 2] }
-          then: [{ call: [log.error, "FAIL nach Bewegung Zustand ${g_drag}, expected 2 (zieht)"] }, { return: 1 }]
+          then: [{ call: [log.error, "FAIL after movement state ${g_drag}, expected 2 (drags)"] }, { return: 1 }]
       - decl: [picked, prefab_instance, { call: [engine.get_dragged] }]
       - if:
           condition: { peq: [picked, null] }
-          then: [{ call: [log.error, "FAIL kein Drag nach Ueberschreiten der Schwelle"] }, { return: 1 }]
+          then: [{ call: [log.error, "FAIL no drag after exceeding the threshold"] }, { return: 1 }]
       - if:
           condition: { pneq: [picked, card_a] }
-          then: [{ call: [log.error, "FAIL es wurde die Karte unter dem CURSOR aufgenommen, nicht die am Druckpunkt"] }, { return: 1 }]
+          then: [{ call: [log.error, "FAIL the card under the CURSOR was picked up, not the one at the press point"] }, { return: 1 }]
 
       # ── 3. Loslassen = genau einmal "losgelassen" ──────────────────────
       - call: [engine.swap, win]
@@ -106,14 +106,14 @@
       - decl: [src, prefab_instance, { call: [engine.get_drag_source] }]
       - if:
           condition: { pneq: [src, card_a] }
-          then: [{ call: [log.error, "FAIL get_drag_source nennt im Drop-Frame nicht die Quelle"] }, { return: 1 }]
+          then: [{ call: [log.error, "FAIL get_drag_source does not name the source in the drop frame"] }, { return: 1 }]
       - call: [engine.swap, win]
       - decl: [g_after, i32, { call: [engine.update_drag_gesture, b_mid_x, b_mid_y] }]
       - if:
           condition: { eq: [g_after, 3] }
-          then: [{ call: [log.error, "FAIL Drop wurde zweimal gemeldet — ein Drop pro Geste"] }, { return: 1 }]
+          then: [{ call: [log.error, "FAIL drop was reported twice — one drop per gesture"] }, { return: 1 }]
 
-      # ── 4. Gegenprobe: Abbruch meldet 4, nicht 3 ───────────────────────
+      # ── 4. counter-probe: cancel reports 4, not 3 ──────────────────────
       - call: [engine.swap, win]
       - call: [input.post_mouse_move, a_mid_x, a_mid_y]
       - call: [engine.update_drag_gesture, a_mid_x, a_mid_y]
@@ -125,7 +125,7 @@
       - decl: [g_drag2, i32, { call: [engine.update_drag_gesture, b_mid_x, b_mid_y] }]
       - if:
           condition: { neq: [g_drag2, 2] }
-          then: [{ call: [log.error, "FAIL zweite Geste zieht nicht (${g_drag2})"] }, { return: 1 }]
+          then: [{ call: [log.error, "FAIL second gesture does not drag (${g_drag2})"] }, { return: 1 }]
       - call: [engine.swap, win]
       - call: [input.post_touch_cancel]
       - decl: [g_cancel, i32, { call: [engine.update_drag_gesture, b_mid_x, b_mid_y] }]
@@ -134,19 +134,19 @@
           then: [{ call: [log.error, "FAIL Abbruch gab Zustand ${g_cancel}, expected 4"] }, { return: 1 }]
       - if:
           condition: { pneq: [{ call: [engine.get_dragged] }, null] }
-          then: [{ call: [log.error, "FAIL Drag laeuft nach dem Abbruch weiter"] }, { return: 1 }]
+          then: [{ call: [log.error, "FAIL drag continues after the cancel"] }, { return: 1 }]
 
-      # ── 5. NACH dem Abbruch muss die naechste Geste wieder ziehen ───────
-      # Diese Probe fehlte zuerst und haette einen echten Fehler verdeckt: die
-      # Abbruch-Flanke wurde im nativen Zweig nie geleert, also meldete
-      # drag_cancelled dauerhaft 1 und update_drag_gesture brach JEDEN weiteren
-      # Drag sofort ab — Symptom: ab dem ersten Abbruch gar nichts mehr ziehbar.
+      # ── 5. AFTER the cancel the next gesture must drag again ────────────
+      # This probe was missing at first and would have hidden a real bug: the
+      # cancel edge was never cleared in the native branch, so
+      # drag_cancelled permanently reported 1 and update_drag_gesture immediately aborted EVERY further
+      # drag — symptom: from the first cancel on nothing could be dragged at all.
       - call: [engine.swap, win]
       - call: [input.post_mouse_move, a_mid_x, a_mid_y]
       - decl: [g_recover, i32, { call: [engine.update_drag_gesture, a_mid_x, a_mid_y] }]
       - if:
           condition: { eq: [g_recover, 4] }
-          then: [{ call: [log.error, "FAIL Abbruch-Flanke klebt — jeder weitere Drag wird sofort abgebrochen"] }, { return: 1 }]
+          then: [{ call: [log.error, "FAIL cancel edge sticks — every further drag is aborted immediately"] }, { return: 1 }]
       - call: [engine.swap, win]
       - call: [input.post_mouse_down, 0]
       - call: [engine.update_drag_gesture, a_mid_x, a_mid_y]
@@ -155,7 +155,7 @@
       - decl: [g_drag3, i32, { call: [engine.update_drag_gesture, b_mid_x, b_mid_y] }]
       - if:
           condition: { neq: [g_drag3, 2] }
-          then: [{ call: [log.error, "FAIL dritte Geste zieht nach dem Abbruch nicht (${g_drag3})"] }, { return: 1 }]
+          then: [{ call: [log.error, "FAIL third gesture does not drag after the cancel (${g_drag3})"] }, { return: 1 }]
 
       - call: [engine.destroy_window, win]
       - call: [log.info, "PASS prefab_drag_gesture"]

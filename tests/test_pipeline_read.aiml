@@ -1,14 +1,14 @@
 # SPEC: 62_pipelines
-# spec/62 §20.4: die uebersetzte Pipeline LESEN.  Ein Kontroller bekommt die
-# Gestalt des Laufs aus dem Wert — nicht aus dem Quelltext (§20.1).
+# spec/62 §20.4: READ the compiled pipeline.  A controller gets the
+# shape of the run from the value — not from the source text (§20.1).
 #
-# Geprueft wird vor allem das, was der Uebersetzer VORHER tut (§20.3):
-#   * Lanes gebildet, Bindungstext in der kanonischen Form (F62-152)
-#   * Vorrang aufgeloest: Stufe schlaegt Pipeline (F62-151)
-#   * `shares:` addieren sich (F62-138)
-#   * `steplayer` hergeleitet: mit `image:` ist es `own` (F110-125)
-#   * die verteilten Schluessel UEBERSETZEN (F62-124a) — abgelehnt wird erst
-#     beim lokalen Lauf, siehe tests/test_pipeline_local_refuses.aiml
+# Above all what the compiler does BEFOREHAND is checked (§20.3):
+#   * lanes formed, binding text in the canonical form (F62-152)
+#   * precedence resolved: stage beats pipeline (F62-151)
+#   * `shares:` add up (F62-138)
+#   * `steplayer` derived: with `image:` it is `own` (F110-125)
+#   * the distributed keys COMPILE (F62-124a) — rejection only happens
+#     at the local run, see tests/test_pipeline_local_refuses.aiml
 # Expected exit code: 0
 
 - pipeline:
@@ -59,7 +59,7 @@
       - if:
           condition: { eq: [got, want] }
           then: [{ print: ["  ok   ${what}"] }, { return: 0 }]
-      - print: ["  FAIL ${what}: '${got}' statt '${want}'"]
+      - print: ["  FAIL ${what}: '${got}' instead of '${want}'"]
       - return: 1
 
 - def:
@@ -69,15 +69,15 @@
     body:
       - decl: [bad, i32, 0]
       - set: [bad, { +: [bad, { call: [expect_str, "der Name", { call: [pipe.name] }, "lese_demo"] }] }]
-      - set: [bad, { +: [bad, { call: [expect, "zwei Lanes", { eq: [{ call: [pipe.lane_count] }, 2] }] }] }]
-      - set: [bad, { +: [bad, { call: [expect, "zwei Stufen je Lane", { eq: [{ call: [pipe.stage_count] }, 2] }] }] }]
+      - set: [bad, { +: [bad, { call: [expect, "two lanes", { eq: [{ call: [pipe.lane_count] }, 2] }] }] }]
+      - set: [bad, { +: [bad, { call: [expect, "two stages per lane", { eq: [{ call: [pipe.stage_count] }, 2] }] }] }]
       - set: [bad, { +: [bad, { call: [expect_str, "Bindungstext der ersten Lane", { call: [pipe.lane_bindings, 0] }, "arch=x86_64"] }] }]
       - set: [bad, { +: [bad, { call: [expect_str, "Bindungstext der zweiten Lane", { call: [pipe.lane_bindings, 1] }, "arch=arm64"] }] }]
-      - set: [bad, { +: [bad, { call: [expect, "eine Achse", { eq: [{ call: [pipe.axis_count] }, 1] }] }] }]
+      - set: [bad, { +: [bad, { call: [expect, "one axis", { eq: [{ call: [pipe.axis_count] }, 1] }] }] }]
       - set: [bad, { +: [bad, { call: [expect_str, "ihr Name", { call: [pipe.axis_name, 0] }, "arch"] }] }]
-      - set: [bad, { +: [bad, { call: [expect, "ihre Domaene hat zwei Werte", { eq: [{ call: [pipe.axis_value_count, 0] }, 2] }] }] }]
+      - set: [bad, { +: [bad, { call: [expect, "its domain has two values", { eq: [{ call: [pipe.axis_value_count, 0] }, 2] }] }] }]
       - set: [bad, { +: [bad, { call: [expect_str, "der erste Wert", { call: [pipe.axis_value, 0, 0] }, "x86_64"] }] }]
-      - set: [bad, { +: [bad, { call: [expect, "ein push-Ziel", { eq: [{ call: [pipe.push_count] }, 1] }] }] }]
+      - set: [bad, { +: [bad, { call: [expect, "one push target", { eq: [{ call: [pipe.push_count] }, 1] }] }] }]
       - set: [bad, { +: [bad, { call: [expect_str, "es nennt die Stufe", { call: [pipe.push_from, 0] }, "bauen"] }] }]
       - set: [bad, { +: [bad, { call: [expect_str, "und das Ziel", { call: [pipe.push_to, 0] }, "oci:deploy/oci/demo"] }] }]
       - set: [bad, { +: [bad, { call: [expect_str, "und die Marke", { call: [pipe.push_tag, 0] }, "nightly"] }] }]
@@ -111,11 +111,11 @@
       - decl: [bad, i32, 0]
       - set: [bad, { +: [bad, { call: [expect_str, "Stufe 2 heisst pruefen", { call: [stg.name] }, "pruefen"] }] }]
       - set: [bad, { +: [bad, { call: [expect_str, "ihr agent schlaegt den der Pipeline", { call: [stg.agent] }, "arm64"] }] }]
-      - set: [bad, { +: [bad, { call: [expect, "ihre Zeitgrenze schlaegt die der Pipeline", { eq: [{ call: [stg.timeout_ms] }, 1000] }] }] }]
-      - set: [bad, { +: [bad, { call: [expect, "ihr cpu schlaegt das der Pipeline", { eq: [{ call: [stg.cpu_cores] }, 2] }] }] }]
-      - set: [bad, { +: [bad, { call: [expect, "mem bleibt geerbt", { eq: [{ call: [stg.mem_mb] }, 2048] }] }] }]
+      - set: [bad, { +: [bad, { call: [expect, "its time limit beats the pipeline's", { eq: [{ call: [stg.timeout_ms] }, 1000] }] }] }]
+      - set: [bad, { +: [bad, { call: [expect, "its cpu beats the pipeline's", { eq: [{ call: [stg.cpu_cores] }, 2] }] }] }]
+      - set: [bad, { +: [bad, { call: [expect, "mem stays inherited", { eq: [{ call: [stg.mem_mb] }, 2048] }] }] }]
       - set: [bad, { +: [bad, { call: [expect_str, "ihr requires schlaegt das der Pipeline", { call: [stg.requires] }, "ctest"] }] }]
-      # F62-138: Freigaben ADDIEREN sich — Pipeline zuerst, dann die Stufe.
+      # F62-138: shares ADD UP — pipeline first, then the stage.
       - set: [bad, { +: [bad, { call: [expect_str, "shares addieren sich", { call: [stg.shares] }, "quellen:/mnt/quellen:ro,artefakte:/mnt/out:rw"] }] }]
       - return: bad
 
@@ -125,7 +125,7 @@
     return: i32
     body:
       - decl: [fails, i32, 0]
-      # F62-108: die Deklaration fuehrt nichts aus — erst der Aufruf baut sie.
+      # F62-108: the declaration executes nothing — only the call builds it.
       - decl: [pipe, pipeline, { call: [lese_demo] }]
       - set: [fails, { +: [fails, { call: [lies_kopf, pipe] }] }]
       - decl: [one, stage, { call: [pipe.stage_at, 0] }]

@@ -1,15 +1,15 @@
 # SPEC: 62_pipelines §18.2, 23_system §5.6
-# `requires:` an einer Stufe — LOKAL geprueft, bevor der erste Schritt laeuft.
+# `requires:` on a stage — checked LOCALLY before the first step runs.
 #
-# Der Fall, den das loest: eine Pipeline laeuft auf einem Rechner, dem ein
-# Werkzeug fehlt, und faellt nach fuenf Minuten mit einer Meldung ueber eine
-# fehlende Header-Datei um.  Hier faellt es in der ersten Sekunde auf, mit
-# NAMEN (F62-126).
+# The case this solves: a pipeline runs on a machine that lacks a
+# tool, and falls over after five minutes with a message about a
+# missing header file.  Here it is noticed in the first second, with
+# NAMES (F62-126).
 #
-# Geprueft wird die erfuellte Richtung (die Pipeline laeuft durch): die
-# Gegenrichtung wirft, und ein geworfener Fehler in einer deklarierten Pipeline
-# ist ein eigener Testfall — hier zaehlt, dass die Pruefung den Lauf NICHT
-# aufhaelt, wenn alles da ist.
+# The satisfied direction is checked (the pipeline runs through): the
+# opposite direction throws, and a thrown error in a declared pipeline
+# is a test case of its own — here what counts is that the check does NOT
+# hold the run up when everything is there.
 #
 # Expected exit code: 0
 
@@ -24,7 +24,7 @@
                 name: sagen
                 return: i32
                 body:
-                  - print: ["Stufe lief — Umgebung war vollstaendig"]
+                  - print: ["stage ran — environment was complete"]
                   - return: 0
 
 - def:
@@ -32,16 +32,16 @@
     static_off: ["str_cmp"]
     return: i32
     body:
-      # F62-108: die Deklaration fuehrt nichts aus — erst der Aufruf baut sie.
+      # F62-108: the declaration executes nothing — only the call builds it.
       - decl: [pipe, pipeline, { call: [req_demo] }]
       - decl: [res, i32, { call: [pipe.run] }]
       - if:
           condition: { neq: [res, 0] }
           then: [{ print: ["FAIL: Lauf endete mit ${res}"] }, { return: 1 }]
-      # Und die Pruefung selbst, direkt: was fehlt, wird genannt.
+      # And the check itself, directly: what is missing is named.
       - decl: [miss, string, { call: [sys.require_tools, "gibtesnicht_zzz,sh"] }]
       - if:
           condition: { eq: [{ call: [miss.index_of, "gibtesnicht_zzz"] }, -1] }
-          then: [{ print: ["FAIL: fehlendes Werkzeug wurde nicht genannt"] }, { return: 1 }]
+          then: [{ print: ["FAIL: missing tool was not named"] }, { return: 1 }]
       - print: ["test_pipeline_requires PASS"]
       - return: 0

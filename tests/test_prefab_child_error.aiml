@@ -1,12 +1,12 @@
 # SPEC: 44_8_prefab_static,44_8_vocab
-# Negative test (Tier 2, child-known): v.set_text("<child>", …) mit einem
-# Child-Namen, der NICHT in der `children:`-Liste des Prefabs deklariert ist,
-# aus dem v instanziiert wurde.  Zur Laufzeit → find_child NULL → silent no-op;
-# muss daher ein HARTER Compiler-Fehler sein.  Siehe spec/44_8.
+# Negative test (Tier 2, child-known): v.set_text("<child>", …) with a
+# child name that is NOT declared in the `children:` list of the prefab
+# from which v was instantiated.  At runtime → find_child NULL → silent no-op;
+# so it must be a HARD compiler error.  See spec/44_8.
 #
 # Expected exit code: 1
 #
-# Diagnostic-Form:
+# Diagnostic form:
 #   ...: 'inst'.set_text("does_not_exist") addresses an unknown child of prefab
 #   'Panel' — no child with that name is declared in its `children:` list. ...
 

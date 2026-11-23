@@ -1,23 +1,23 @@
 # SPEC: 44_6_prefabs
-# Eine zum Loeschen markierte Instanz darf keine Eingabe mehr nehmen, und die
-# Szene darf nach dem Freigeben keine Referenz auf sie behalten.
+# An instance marked for deletion must not take any more input, and the
+# scene must not keep a reference to it after it has been freed.
 #
-# Die Luecke: `destroy` raeumt genestete Kinder nicht sofort weg, sondern setzt
-# sie auf parent=null + pending_delete; der Sweep am Frame-Ende gibt sie frei und
-# markiert IHRE Kinder genauso.  Damit existiert ein Kind der zweiten Ebene
-# EINEN ganzen Frame als Waise: top-level (parent==null), sichtbar, und
-# `hit_test` fragte `pending_delete` nicht ab — die Waise konnte also den Hover
-# an sich nehmen, obwohl sie schon tot ist.  Sie rendert dabei an rohen lokalen
-# Koordinaten, taucht also irgendwo am Fensterursprung auf.  Gibt der naechste
-# Sweep sie frei, zeigte `g_scene->hovered` auf freigegebenen Speicher, und der
-# naechste `update_hover` schrieb dort hinein (`hovered->hovered = false`).
+# The gap: `destroy` does not clean up nested children immediately, but sets
+# them to parent=null + pending_delete; the sweep at the end of the frame frees them and
+# marks THEIR children the same way.  So a second-level child exists
+# for ONE whole frame as an orphan: top-level (parent==null), visible, and
+# `hit_test` did not query `pending_delete` — so the orphan could take the hover
+# although it is already dead.  It renders at raw local
+# coordinates, so it shows up somewhere at the window origin.  When the next
+# sweep frees it, `g_scene->hovered` pointed to freed memory, and the
+# next `update_hover` wrote into it (`hovered->hovered = false`).
 #
-# Geprueft wird in dieser Reihenfolge:
-#   1. Ausgangslage: der Enkel ist genestet und NICHT hit-testbar (sonst wuerde
-#      Schritt 3 auch bei kaputtem Nesting gruen)
-#   2. nach destroy+Sweep lebt der Enkel noch (Waisen-Frame) ...
-#   3. ... nimmt aber keinen Hover: get_hovered bleibt null
-#   4. nach dem zweiten Sweep haelt die Szene keine Hover-Referenz mehr
+# Checked in this order:
+#   1. starting point: the grandchild is nested and NOT hit-testable (otherwise
+#      step 3 would also be green with broken nesting)
+#   2. after destroy+sweep the grandchild still lives (orphan frame) ...
+#   3. ... but takes no hover: get_hovered stays null
+#   4. after the second sweep the scene holds no hover reference any more
 # Requires: display
 # Expected exit code: 0
 
@@ -56,8 +56,8 @@
       - call: [engine.prefab_scene_init, 400, 300]
       - call: [input.init, win]
 
-      # root → row → leaf.  Die lokale Position des Enkels ist gleichzeitig seine
-      # Waisen-Position, denn eine Waise rendert an rohen lokalen Koordinaten.
+      # root → row → leaf.  The grandchild's local position is at the same time its
+      # orphan position, because an orphan renders at raw local coordinates.
       - decl: [root, prefab_instance, { call: [engine.instantiate, "DoomRoot"] }]
       - call: [root.set_pos, 10.0, 10.0]
       - call: [root.set_z, 5]
@@ -70,33 +70,33 @@
       - decl: [probe_x, f32, 230.0]
       - decl: [probe_y, f32, 200.0]
 
-      # ── 1. Ausgangslage: genestet, also nicht hit-testbar ───────────────
+      # ── 1. starting point: nested, so not hit-testable ────────────────
       - call: [engine.draw_scene]
       - decl: [hit_nested, prefab_instance, { call: [engine.hit_test, probe_x, probe_y] }]
       - if:
           condition: { peq: [hit_nested, leaf] }
-          then: [{ call: [log.error, "FAIL genesteter Enkel ist hit-testbar — Nesting kaputt, der Test waere wertlos"] }, { return: 1 }]
+          then: [{ call: [log.error, "FAIL nested grandchild is hit-testable — nesting broken, the test would be worthless"] }, { return: 1 }]
 
-      # ── 2. destroy + Sweep: der Enkel lebt noch als Waise ──────────────
+      # ── 2. destroy + sweep: the grandchild still lives as an orphan ─────
       - call: [engine.destroy, root]
       - call: [engine.draw_scene]
 
-      # ── 3. ... nimmt aber keinen Hover mehr ────────────────────────────
+      # ── 3. ... but takes no hover any more ─────────────────────────────
       - call: [engine.swap, win]
       - call: [input.post_mouse_move, probe_x, probe_y]
       - call: [engine.update_hover, probe_x, probe_y]
       - decl: [hov_doomed, prefab_instance, { call: [engine.get_hovered] }]
       - if:
           condition: { pneq: [hov_doomed, null] }
-          then: [{ call: [log.error, "FAIL eine zum Loeschen markierte Waise hat den Hover genommen"] }, { return: 1 }]
+          then: [{ call: [log.error, "FAIL an orphan marked for deletion took the hover"] }, { return: 1 }]
 
-      # ── 4. zweiter Sweep gibt die Waise frei — keine Referenz bleibt ───
+      # ── 4. the second sweep frees the orphan — no reference remains ─────
       - call: [engine.draw_scene]
       - call: [engine.update_hover, probe_x, probe_y]
       - decl: [hov_after, prefab_instance, { call: [engine.get_hovered] }]
       - if:
           condition: { pneq: [hov_after, null] }
-          then: [{ call: [log.error, "FAIL die Szene haelt nach dem Freigeben noch eine Hover-Referenz"] }, { return: 1 }]
+          then: [{ call: [log.error, "FAIL the scene still holds a hover reference after freeing"] }, { return: 1 }]
 
       - call: [engine.destroy_window, win]
       - call: [log.info, "PASS prefab_doomed_no_hover"]

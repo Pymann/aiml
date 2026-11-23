@@ -1,11 +1,11 @@
 # SPEC: 44_6_prefabs
-# spec/44_6 §5g: ein `text_input` nimmt Tastendruecke des FOKUSSIERTEN Feldes —
-# einer je Druck.  Gemeldet am Konsolen-Quelltextfeld von cosmos: „die ruecktaste
-# loeschte immer 2 zeichen" (2026-10-18).
+# spec/44_6 §5g: a `text_input` takes key presses of the FOCUSED field —
+# one per press.  Reported on the cosmos console source text field: "backspace
+# always deleted 2 characters" (2026-10-18).
 #
-# Geprueft wird die ZAHL: ein Backspace, ein Zeichen weniger.  Ohne diesen Test
-# ist ein doppelt eingereihtes Ereignis unsichtbar — das Feld sieht bei jedem
-# Einzeldruck „irgendwie falsch" aus, aber nichts ist messbar.
+# What is checked is the NUMBER: one backspace, one character less.  Without this test
+# a doubly queued event is invisible — on every single press the field looks
+# "somehow wrong", but nothing is measurable.
 #
 # Requires: display
 # Expected exit code: 0
@@ -21,7 +21,7 @@
           bg_color: 0x0D1218FF, border_color: 0x2D3642FF, border_width: 1.0,
           color: 0xDDE6F0FF }
 
-# Ein Rahmen so, wie der Wirt ihn fahrt: Maus-Pipeline, dann zeichnen.
+# A frame as the host drives it: mouse pipeline, then draw.
 - def:
     name: one_frame
     args: [[win, window_handle], [pos_x, f32], [pos_y, f32]]
@@ -51,10 +51,10 @@
       - decl: [box_x, f32, { call: [scene.child_rect_x, "code_input"] }]
       - decl: [box_y, f32, { call: [scene.child_rect_y, "code_input"] }]
       - decl: [box_w, f32, { call: [scene.child_rect_w, "code_input"] }]
-      - if: { condition: { lt: [box_w, 1.0] }, then: [{ print: ["FAIL Widget nicht gefunden"] }, { return: 1 }] }
+      - if: { condition: { lt: [box_w, 1.0] }, then: [{ print: ["FAIL widget not found"] }, { return: 1 }] }
       - call: [one_frame, win, 0.0, 0.0]
 
-      # Hinter das letzte Zeichen klicken: ganz rechts in der ersten Zeile.
+      # Click behind the last character: far right in the first line.
       - decl: [aim_x, f32, { +: [box_x, { -: [box_w, 20.0] }] }]
       - decl: [aim_y, f32, { +: [box_y, 8.0] }]
       - call: [input.post_mouse_move, aim_x, aim_y]
@@ -64,36 +64,36 @@
       - call: [input.post_mouse_up, 0]
       - call: [one_frame, win, aim_x, aim_y]
 
-      # Ein Druck, ein Rahmen.
+      # One press, one frame.
       - call: [input.post_key_down, "backspace"]
       - call: [one_frame, win, aim_x, aim_y]
       - call: [input.post_key_up, "backspace"]
       - call: [one_frame, win, aim_x, aim_y]
       - decl: [after_one, string, { call: [scene.text_value, "code_input"] }]
-      - print: ["nach einem Backspace: '${after_one}' (${after_one.len} Zeichen)"]
+      - print: ["after one backspace: '${after_one}' (${after_one.len} characters)"]
       - if:
           condition: { neq: [after_one, "abcde"] }
           then:
-            - print: ["FAIL ein Backspace loescht nicht genau EIN Zeichen: '${after_one}' statt 'abcde'"]
+            - print: ["FAIL one backspace does not delete exactly ONE character: '${after_one}' instead of 'abcde'"]
             - call: [engine.destroy_window, win]
             - return: 1
 
-      # Und noch einer — damit ein Fehler nicht nur am ersten Druck haengt.
+      # And one more — so that an error does not only hang on the first press.
       - call: [input.post_key_down, "backspace"]
       - call: [one_frame, win, aim_x, aim_y]
       - call: [input.post_key_up, "backspace"]
       - call: [one_frame, win, aim_x, aim_y]
       - decl: [after_two, string, { call: [scene.text_value, "code_input"] }]
-      - print: ["nach zwei Backspace: '${after_two}' (${after_two.len} Zeichen)"]
+      - print: ["after two backspaces: '${after_two}' (${after_two.len} characters)"]
       - if:
           condition: { neq: [after_two, "abcd"] }
           then:
-            - print: ["FAIL zwei Backspace loeschen nicht genau ZWEI Zeichen: '${after_two}' statt 'abcd'"]
+            - print: ["FAIL two backspaces do not delete exactly TWO characters: '${after_two}' instead of 'abcd'"]
             - call: [engine.destroy_window, win]
             - return: 1
 
-      # Dasselbe fuer Entfernen: der Cursor steht am Ende, also darf NICHTS
-      # verschwinden — ein Delete am Textende ist ein Nicht-Ereignis.
+      # The same for delete: the cursor is at the end, so NOTHING may
+      # disappear — a delete at the end of the text is a non-event.
       - call: [input.post_key_down, "delete"]
       - call: [one_frame, win, aim_x, aim_y]
       - call: [input.post_key_up, "delete"]
@@ -106,30 +106,30 @@
             - call: [engine.destroy_window, win]
             - return: 1
 
-      # ── Eingabetaste im MEHRZEILIGEN Feld (spec/44_6 §5g) ───────────────
-      # Ein Code-Feld, in dem man keine Zeile anfangen kann, ist kein Editor.
-      # Vor dem Fix (2026-10-18) tat Enter hier GAR NICHTS.
+      # ── Enter key in the MULTI-LINE field (spec/44_6 §5g) ───────────────
+      # A code field in which one cannot start a line is not an editor.
+      # Before the fix (2026-10-18) Enter did NOTHING AT ALL here.
       - call: [input.post_key_down, "enter"]
       - call: [one_frame, win, aim_x, aim_y]
       - call: [input.post_key_up, "enter"]
       - call: [one_frame, win, aim_x, aim_y]
       - decl: [after_ret, string, { call: [scene.text_value, "code_input"] }]
-      - print: ["nach Enter: '${after_ret}' (${after_ret.len} Zeichen)"]
+      - print: ["after Enter: '${after_ret}' (${after_ret.len} characters)"]
       - if:
           condition: { neq: [after_ret, "abcd\n"] }
           then:
-            - print: ["FAIL Enter macht im mehrzeiligen Feld keine neue Zeile: '${after_ret}'"]
+            - print: ["FAIL Enter makes no new line in the multi-line field: '${after_ret}'"]
             - call: [engine.destroy_window, win]
             - return: 1
-      # Und genau EINE: ein zweiter Umbruch je Druck waere dieselbe Dopplung
-      # wie bei der Ruecktaste.
+      # And exactly ONE: a second line break per press would be the same doubling
+      # as with the backspace key.
       - call: [input.post_text, "x"]
       - call: [one_frame, win, aim_x, aim_y]
       - decl: [after_x, string, { call: [scene.text_value, "code_input"] }]
       - if:
           condition: { neq: [after_x, "abcd\nx"] }
           then:
-            - print: ["FAIL nach Enter landet das Zeichen nicht in der neuen Zeile: '${after_x}'"]
+            - print: ["FAIL after Enter the character does not land in the new line: '${after_x}'"]
             - call: [engine.destroy_window, win]
             - return: 1
 
