@@ -1,15 +1,15 @@
 # 65 — Symbol Clearance (Levels) [PROPOSAL]
 
-> Status: PROPOSAL, **alle Schritte 2 bis 8 gebaut** (17.10.2026) und gemessen (Labor
-> `tests/clearance/` bei `STAGE=writedown`: 12 positive, 25 negative Proben gruen).
-> **Ausstehend sind zwei**, und zwar nicht wegen dieses Kapitels: `clearance-create` ist
-> gebaut, aber unerreichbar, solange spec/29_2 §4.3 (dynamisches Nachladen) fehlt — siehe §9
-> Schritt 7.
-> **Zwei Teile sind opt-in und bleiben es:** die Flusspruefung (F65-17) und die
-> Write-down-Regel (F65-34), beide an `AIML_STATIC_CLEARANCE`.  Fuer Write-down ist die
-> Auflage „nach Messung am Korpus" NICHT erfuellt: der Korpus benutzt `level:` an keiner
-> Stelle, ein Lauf zeigt also nur, dass die Regel nichts zu sehen hat.  Die benannten
-> Grenzen stehen in §9 Schritt 8, nicht im Code versteckt.
+> Status: PROPOSAL, **all steps 2 to 8 built** (2026-10-17) and measured (lab
+> `tests/clearance/` with `STAGE=writedown`: 12 positive, 25 negative probes green).
+> **Two are outstanding**, and not because of this chapter: `clearance-create` is
+> built but unreachable as long as spec/29_2 §4.3 (dynamic reloading) is missing — see §9
+> step 7.
+> **Two parts are opt-in and stay that way:** the flow check (F65-17) and the
+> write-down rule (F65-34), both behind `AIML_STATIC_CLEARANCE`.  For write-down the
+> requirement "after measuring on the corpus" is NOT met: the corpus uses `level:` nowhere,
+> so a run only shows that the rule has nothing to look at.  The named
+> limits are in §9 step 8, not hidden in the code.
 >
 >
 > Derived from `doc/analysis/symbol_clearance_2026-10-16.md`, which holds the
@@ -241,10 +241,10 @@ replace_level  0 … 255     may it REPLACE existing host symbols?          (cle
 
 Both of the latter default to `0`, which under F65-22 means **nobody**.
 
-Die drei gehen **zusammen am `sys.exec`** hinaus, in der Reihenfolge dieser Tabelle (F65-36)
-— nicht ueber drei Umgebungsvariablen, denn drei getrennte Hebel fuer eine Entscheidung sind
-die Drift aus F65-23.  Die Umgebung bleibt die prozessweite Vorgabe und darf nur
-verschaerfen (F65-32).
+The three go out **together on `sys.exec`**, in the order of this table (F65-36)
+— not via three environment variables, because three separate levers for one decision are
+the drift from F65-23.  The environment remains the process-wide default and may only
+tighten (F65-32).
 
 **An earlier draft of this requirement was wrong, and the acceptance probes are what exposed it.**
 It read "may this session DEFINE new symbols", with the default `0` forbidding all definition.
@@ -305,82 +305,82 @@ and is allowed, since levels are not secret (F65-16). The environment lever of F
 `create_level`/`replace_level` with the same restriction: it may only make a session **stricter**,
 never looser, and never lift it out of a restriction the host imposed.
 
-## 5c. Wie ein Wirt anbietet — die zwei fehlenden Sprachmittel
+## 5c. How a host offers — the two missing language features
 
-§5a sagt, dass Signatur und Adresse die zweite Haelfte der Uebergabe sind (F65-24).  Gebaut ist
-bisher nur die erste: Name und Level.  Fuer die zweite fehlen zwei Sprachmittel, und ihr
-Fehlen ist der Grund, warum die drei `host`-Proben nicht laufen koennen.
+§5a says that signature and address are the second half of the handover (F65-24).  So far
+only the first is built: name and level.  Two language features are missing for the second, and their
+absence is the reason why the three `host` probes cannot run.
 
-**F65-36: Die Freigabe gehoert an die AUSFUEHRUNG, nicht an das Buendel.**
+**F65-36: The clearance belongs to the EXECUTION, not to the bundle.**
 
 ```yaml
 - decl: [pkg, Code, { call: [sys.bundle, "user_script", { context: true }] }]
-- decl: [rc,  i32,  { call: [sys.exec, pkg, 7] }]         # nur Freigabe: 7, nichts schreiben
-- decl: [rc2, i32,  { call: [sys.exec, pkg, 7, 7, 0] }]   # ... darf anlegen, nicht ersetzen
+- decl: [rc,  i32,  { call: [sys.exec, pkg, 7] }]         # clearance only: 7, write nothing
+- decl: [rc2, i32,  { call: [sys.exec, pkg, 7, 7, 0] }]   # ... may create, not replace
 ```
 
-Die drei Werte der Richtlinie aus F65-26 stehen **in der Reihenfolge jener Tabelle** —
-`clearance`, `create_level`, `replace_level` — und sie reisen zusammen, als ein Vorgang.
-Fehlende hintere Werte sind `0`, was nach F65-22 **niemand** heisst: wer nichts sagt, darf
-nichts schreiben (fail closed).  Jeder der drei ist ein gewoehnlicher Ausdruck und kein
-Literal, weil eine Konsole die Richtlinie **je Nutzer zur Laufzeit** bildet; eine
-Richtlinie, die nur als Literal in der Quelle stehen koennte, waere fuer den eigentlichen
-Fall unbrauchbar.
+The three values of the policy from F65-26 are **in the order of that table** —
+`clearance`, `create_level`, `replace_level` — and they travel together, as one operation.
+Missing trailing values are `0`, which under F65-22 means **nobody**: whoever says nothing may
+write nothing (fail closed).  Each of the three is an ordinary expression and not a
+literal, because a console forms the policy **per user at runtime**; a
+policy that could only appear as a literal in the source would be useless for the actual
+case.
 
-Ein Buendel ist **Code**, eine Sitzung ist eine **Handlung**.  Derselbe Code muss fuer zwei
-Nutzer mit verschiedenen Freigaben ausfuehrbar sein — die Richtlinie an das `Code`-Objekt zu
-haengen wuerde das verbieten, obwohl genau das der Fall ist, um den es geht.
+A bundle is **code**, a session is an **action**.  The same code must be executable for two
+users with different clearances — attaching the policy to the `Code` object
+would forbid that, although that is exactly the case at stake.
 
-(Die erste Fassung dieser Anforderung stellte die Freigabe an `sys.bundle`, mit der Begruendung,
-das `Code`-Objekt beschreibe die Sitzung, weil es schon `context` traegt.  Das war falsch
-herum: `context` beschreibt, WIE uebersetzt wird, und ist eine Eigenschaft des Codes; die
-Freigabe beschreibt, WER ausfuehrt.  Nebenbei haette es ein sechstes Feld in einer Struktur
-gebraucht, deren Layout an drei Stellen gespiegelt ist — LLVM-Struct, C-Struct in `exec_impl`
-und `__aiml_code_new` —, wo eine Abweichung still falsche Daten liest.)
+(The first version of this requirement put the clearance on `sys.bundle`, reasoning that
+the `Code` object describes the session because it already carries `context`.  That was the wrong
+way round: `context` describes HOW it is compiled and is a property of the code; the
+clearance describes WHO executes.  Incidentally, it would have needed a sixth field in a structure
+whose layout is mirrored in three places — LLVM struct, C struct in `exec_impl`
+and `__aiml_code_new` — where a mismatch silently reads wrong data.)
 
-`AIML_CLEARANCE`, `AIML_CREATE_LEVEL` und `AIML_REPLACE_LEVEL` bleiben die Vorgabe des
-Prozesses und der Hebel fuer Proben (F65-20); die Argumente an `sys.exec` gelten fuer diese
-eine Sitzung und duerfen nur STRENGER sein als die Vorgabe.  „Strenger" laeuft bei den beiden
-Schreibrechten in die ANDERE Richtung als bei der Freigabe, weil die Vergleiche
-gegenlaeufig sind (`clearance <= create_level`): strenger ist dort die KLEINERE Zahl, und 0
-ist das Minimum, also niemand.  Eine nicht gesetzte Umgebungsvariable ist deshalb keine 0,
-sondern „keine Vorgabe" — sonst waere das Recht nie erteilbar, nur abschaltbar.
-Damit kann `sessionClearance()` seinen prozessweiten Zwischenspeicher nicht behalten: eine
-Freigabe, die einmal gelesen und gemerkt wird, ist keine Eigenschaft einer Sitzung.
+`AIML_CLEARANCE`, `AIML_CREATE_LEVEL` and `AIML_REPLACE_LEVEL` remain the
+process default and the lever for probes (F65-20); the arguments to `sys.exec` apply to this
+one session and may only be STRICTER than the default.  For the two write rights, "stricter" runs
+in the OPPOSITE direction from the clearance, because the comparisons are
+reversed (`clearance <= create_level`): there, stricter is the SMALLER number, and 0
+is the minimum, i.e. nobody.  An unset environment variable is therefore not 0
+but "no default" — otherwise the right could never be granted, only switched off.
+This means `sessionClearance()` cannot keep its process-wide cache: a
+clearance that is read once and remembered is not a property of a session.
 
-**F65-39: Eine Adresse kommt auf ZWEI Wegen, und der zweite ist der fuer eine Konsole.**
-`sys.export_symbol` (F65-37) setzt voraus, dass der Wirt den Code beim **Uebersetzen** schon
-hatte — er meldet einen eigenen `def` an.  Ein Wirt, der **fremden** Quelltext uebersetzen
-laesst, kann das nicht: er IST der Uebersetzer und kennt das Skript erst zur Laufzeit.  Fuer
-ihn gilt:
+**F65-39: An address comes by TWO routes, and the second is the one for a console.**
+`sys.export_symbol` (F65-37) presupposes that the host already had the code at **compile time**
+— it registers a `def` of its own.  A host that has **foreign** source text compiled
+cannot do that: it IS the compiler and only knows the script at runtime.  For
+it the following applies:
 
-| | Name + Level | Adresse |
+| | Name + level | Address |
 |---|---|---|
-| eigener Code (F65-37) | `sys.export_symbol` | derselbe Aufruf |
-| fremder Quelltext | Export-Tabelle (`AIML_EXPORTS`) | vorgeladene Bibliothek im Prozess |
+| own code (F65-37) | `sys.export_symbol` | the same call |
+| foreign source text | export table (`AIML_EXPORTS`) | library preloaded into the process |
 
-Beide Haelften aus F65-24 sind damit auch im zweiten Fall da, nur aus zwei Quellen — und das
-ist hier richtig, nicht die Drift aus F65-23: die **Politik** steht an einer Stelle (der
-Tabelle), die Adresse ist eine Eigenschaft des Prozesses.  Entscheidend ist die Richtung:
-die Zulassung haengt an der TABELLE, nicht an der Auffindbarkeit des Symbols.  Sonst waere
-jede Bibliothek, die ein Wirt fuer sich selbst laedt, automatisch sein Angebot an jeden
-Nutzer.
+Both halves from F65-24 are thus present in the second case too, only from two sources — and that
+is right here, not the drift from F65-23: the **policy** is in one place (the
+table), the address is a property of the process.  What matters is the direction:
+admission depends on the TABLE, not on whether the symbol can be found.  Otherwise
+every library a host loads for itself would automatically be its offer to every
+user.
 
-Gemessen 17.10.2026: `14_extern_preloaded_callable` (Level 7 angeboten, Freigabe 7 → Aufruf
-liefert 42) und `neg/n28_preloaded_symbol_too_low` (dieselbe Bibliothek, Symbol auf Level 2
-→ `clearance-denied`, obwohl die Adresse im Prozess liegt).  Probe `08` belegte nur die
-Zulassung und rief nie auf — die halbe Anforderung.
+Measured 2026-10-17: `14_extern_preloaded_callable` (level 7 offered, clearance 7 → call
+returns 42) and `neg/n28_preloaded_symbol_too_low` (the same library, symbol at level 2
+→ `clearance-denied`, although the address is in the process).  Probe `08` only demonstrated
+admission and never called — half the requirement.
 
-**F65-40: Ein zugelassenes `extern` ohne aufloesbares Symbol stuerzt heute ab.**  Gemessen
-am selben Tag: dieselbe Probe ohne `LD_PRELOAD` endet mit **SIGSEGV**, nicht mit einer
-Diagnose — der Aufruf geht auf eine nicht aufgeloeste Adresse.  Das ist kein
-Clearance-Loch (die Zulassung hat korrekt entschieden), aber fuer einen Wirt, der fremden
-Quelltext uebersetzt, ist es eines: eine vergessene oder falsch gepfadete Bibliothek nimmt
-den Prozess mit, statt dem Nutzer zu sagen, was fehlt.  Gehoert geprueft, wo die
-`extern`-Zulassung ohnehin schon entscheidet — dort ist der Name bekannt und `dlsym` eine
-Zeile.  **Noch nicht gebaut**, und das steht hier, statt in einem Absturzbericht aufzutauchen.
+**F65-40: An admitted `extern` without a resolvable symbol crashes today.**  Measured
+on the same day: the same probe without `LD_PRELOAD` ends with **SIGSEGV**, not with a
+diagnostic — the call goes to an unresolved address.  That is not a
+clearance hole (admission decided correctly), but for a host that compiles foreign
+source text it is one: a forgotten or wrongly pathed library takes
+the process down instead of telling the user what is missing.  It should be checked where the
+`extern` admission already decides anyway — there the name is known and `dlsym` is one
+line.  **Not built yet**, and that is stated here instead of turning up in a crash report.
 
-**F65-37: `sys.export_symbol(name, fn, level)` — eine Zeile, ein Aufruf.**
+**F65-37: `sys.export_symbol(name, fn, level)` — one line, one call.**
 
 ```yaml
 - def: { name: read_status, level: 7, return: i32, body: [{ return: [3] }] }
@@ -389,50 +389,50 @@ Zeile.  **Noch nicht gebaut**, und das steht hier, statt in einem Absturzbericht
 - call: [sys.export_symbol, "read_status", fpr, 7]
 ```
 
-Der Aufruf macht beide Haelften in einem Zug: er meldet die **Adresse** an
-(`DynamicLibrary::AddSymbol`, damit der JIT den Namen aufloest) und traegt **Name und Level** in
-die Export-Tabelle (§5a).  Zwei getrennte Aufrufe waeren zwei Listen, die driften — genau das
-verbietet F65-23.  Die Adresse kommt aus einem Funktionszeiger auf den eigenen `def` (spec/12_1),
-nicht aus `dlsym`: so braucht es kein `-rdynamic`, und bei einem statischen Build funktioniert es
-ueberhaupt nur so (gemessen: 0 von 38 aiml-Funktionen stehen in `.dynsym`).
+The call does both halves in one go: it registers the **address**
+(`DynamicLibrary::AddSymbol`, so that the JIT resolves the name) and enters **name and level** in
+the export table (§5a).  Two separate calls would be two lists that drift — exactly what
+F65-23 forbids.  The address comes from a function pointer to the own `def` (spec/12_1),
+not from `dlsym`: that way no `-rdynamic` is needed, and with a static build it is the only
+way it works at all (measured: 0 of 38 aiml functions are in `.dynsym`).
 
-**Nur im vertrauenswuerdigen Zustand.** In einer eingeschraenkten Sitzung ist
-`sys.export_symbol` abzulehnen (`clearance-builtin`): ein Skript, das sich selbst exportieren
-darf, setzt sein eigenes Level — Selbstbeglaubigung in ihrer schaedlichsten Form.  Das `level`
-dieses Aufrufs ist deshalb auch nicht an das `level:` des `def` gebunden: der Wirt entscheidet,
-was er anbietet, und darf weniger anbieten als die Funktion traegt.
+**Only in the trusted state.** In a restricted session
+`sys.export_symbol` must be refused (`clearance-builtin`): a script that may export itself
+sets its own level — self-certification in its most harmful form.  The `level`
+of this call is therefore also not bound to the `level:` of the `def`: the host decides
+what it offers and may offer less than the function carries.
 
-**F65-38: Ein Buendel traegt von einem exportierten Symbol die DEKLARATION, nicht den Rumpf.**
-`sys.bundle` nimmt heute die Quelltexte der gerufenen Funktionen mit (`referencedFuncs`,
-spec/29_2 §16) — sonst meldete der Empfaenger „Unknown function".  Fuer ein Symbol aus der
-Export-Tabelle ist das aber falsch: das Skript bekaeme eine **Kopie** und wuerde sie im eigenen
-Kontext ausfuehren, mit dem Level der Sitzung statt dem des Wirts.  Die Zugriffspruefung liefe
-dann ins Leere, weil es nichts mehr zu verweigern gibt.
+**F65-38: A bundle carries the DECLARATION of an exported symbol, not the body.**
+`sys.bundle` today takes along the source texts of the called functions (`referencedFuncs`,
+spec/29_2 §16) — otherwise the receiver would report "Unknown function".  For a symbol from the
+export table that is wrong, though: the script would get a **copy** and execute it in its own
+context, with the session's level instead of the host's.  The access check would
+then run into nothing, because there would be nothing left to refuse.
 
-**Das Kriterium ist das `level:` am `def`, nicht die Export-Tabelle.**  Das sieht nach einer
-Feinheit aus und ist der Kern: `sys.bundle` laeuft zur **UEBERSETZUNGSZEIT**,
-`sys.export_symbol` zur **Laufzeit**.  Wer beim Buendeln die Tabelle befragt, befragt sie leer —
-gemessen am 17.10.2026 an `09_host_exports_callable`: der Rumpf wurde mitgebuendelt, und in der
-eingeschraenkten Sitzung schlug sein `level:` als Selbstbeglaubigung an (F65-27).  Ein Umweg
-ueber die Tabelle ist hier nicht moeglich, weil sie zu diesem Zeitpunkt noch nicht existiert.
+**The criterion is the `level:` on the `def`, not the export table.**  That looks like a
+subtlety and is the core: `sys.bundle` runs at **COMPILE TIME**,
+`sys.export_symbol` at **runtime**.  Whoever consults the table at bundling time consults it empty —
+measured on 2026-10-17 on `09_host_exports_callable`: the body was bundled along, and in the
+restricted session its `level:` triggered as self-certification (F65-27).  A detour
+via the table is not possible here, because at this point it does not exist yet.
 
-Darum: traegt ein gerufener `def` ein `level:`, gehoert er zur angebotenen Oberfläche, und der
-Wirt buendelt seine Signatur statt seines Rumpfs.  Was der Wirt dann tatsaechlich anbietet,
-entscheidet `sys.export_symbol` zur Laufzeit — er darf WENIGER anbieten als die Annotation
-sagt (F65-37), und was er nicht anbietet, scheitert beim Empfaenger an der `extern`-Zulassung.
-Die beiden Zeitpunkte sind damit klar getrennt: die Annotation sagt „gehoert zur Oberfläche",
-die Tabelle sagt „ist jetzt erreichbar, und auf welchem Level".
+Therefore: if a called `def` carries a `level:`, it belongs to the offered surface, and the
+host bundles its signature instead of its body.  What the host then actually offers
+is decided by `sys.export_symbol` at runtime — it may offer LESS than the annotation
+says (F65-37), and what it does not offer fails at the receiver at the `extern` admission.
+The two points in time are thus clearly separated: the annotation says "belongs to the surface",
+the table says "is reachable now, and at which level".
 
-Urspruenglicher Text (das Kriterium war falsch): steht ein gerufener Name in der Export-Tabelle
-Darum: steht ein gerufener Name in der Export-Tabelle, buendelt der Wirt seine Signatur und
-nicht seinen Rumpf.  Das ist dieselbe Trennung wie in F65-24 (Signatur ueber eine Deklaration,
-Adresse ueber `AddSymbol`) — und es ist der Grund, warum ein exportiertes Symbol beim
-Aufrufer AUSFUEHRBAR ist, ohne dass er es LESEN kann.
+Original text (the criterion was wrong): if a called name is in the export table
+Therefore: if a called name is in the export table, the host bundles its signature and
+not its body.  That is the same separation as in F65-24 (signature via a declaration,
+address via `AddSymbol`) — and it is the reason why an exported symbol is EXECUTABLE for the
+caller without the caller being able to READ it.
 
-**Was damit NICHT kommt.** Die Signatur reist weiter ueber eine Deklaration, nicht ueber dieses
-Builtin — der Wirt gibt dem Skript eine Datei mit `- extern: "C"`-Deklarationen der angebotenen
-Namen, und die `extern`-Zulassung aus F65-13 ist genau das Tor dafuer.  Eine Signatur in einen
-String zu kodieren waere eine zweite Typsprache neben aiml; das Deklarationsmittel gibt es schon
+**What does NOT come with this.** The signature still travels via a declaration, not via this
+builtin — the host gives the script a file with `- extern: "C"` declarations of the offered
+names, and the `extern` admission from F65-13 is exactly the gate for this.  Encoding a signature in a
+string would be a second type language next to aiml; the declaration mechanism already exists
 (`compileDeclarationsOnly`, spec/29_2 §15).
 
 ## 6. What a restricted dialect must drop, or this chapter is decoration
@@ -529,20 +529,20 @@ storage is allowed to hold. This is the heaviest part of the chapter — it need
 a body, not just the call graph of F65-9 — and it is therefore **last** in §9 and opt-in like
 F65-17 until it has been measured on the corpus.
 
-**Zwei Bedeutungen, die auseinandergehalten werden muessen**, sonst ist die Regel in einem
-Zwischenschritt umgangen:
+**Two meanings that must be kept apart**, otherwise the rule is bypassed in an
+intermediate step:
 
-- Das `level:` einer Lokalen ist die **Schranke fuer das Speichern** — was darf hier hinein.
-- Was eine Lokale **traegt**, ist das Strengste, was je hineingeschrieben wurde, und das
-  reist weiter.  Eine Lokale OHNE Annotation traegt darum ebenfalls ein Level, sobald ein
-  eingeschraenkter Wert hineinlaeuft; sonst wuerde `tmp = read_secret()` die Herkunft
-  vergessen und `open_log = tmp` waere erlaubt.  Genau diese zwei Zeilen sind die
-  naheliegendste Umgehung, nicht die Zuweisung aus dem Beispiel oben.
+- The `level:` of a local is the **bound for storing** — what may go in here.
+- What a local **carries** is the strictest thing ever written into it, and that
+  travels on.  A local WITHOUT an annotation therefore also carries a level as soon as a
+  restricted value flows into it; otherwise `tmp = read_secret()` would forget the origin
+  and `open_log = tmp` would be allowed.  Exactly these two lines are the
+  most obvious bypass, not the assignment from the example above.
 
-Ohne Annotation und ohne eingeschraenkte Herkunft traegt eine Lokale **kein** Level — nicht
-Level 0.  Das ist der Unterschied zu F65-5: dort ist 0 die fail-closed-Vorgabe fuer den
-ZUGRIFF, hier wuerde 0 bedeuten, dass jedes Literal in jede annotierte Lokale ein Verstoss
-waere.  Eine Regel, die jedes Programm bricht, schuetzt nichts.
+Without an annotation and without a restricted origin, a local carries **no** level — not
+level 0.  That is the difference from F65-5: there 0 is the fail-closed default for
+ACCESS, here 0 would mean that every literal into every annotated local would be a violation.
+A rule that breaks every program protects nothing.
 
 **F65-35: Builtins are closed from the ground up.** Every builtin namespace and function is
 level `0` unless the table (§5 checkpoint 2) explicitly raises it. Earlier drafts of this chapter
@@ -554,135 +554,135 @@ F65-26 for the write side. One rule, three places, no exceptions to remember.
 ## 9. Order of implementation
 
 1. This chapter, then acceptance tests (`tests/clearance/`), then code — in that order.
-2. ✅ **gebaut 17.10.2026** — Parse + validate `level:`/`grants:` everywhere; enforce nothing
-   (F65-17 second sentence).  Validierung an einer Stelle: `src/core/clearance.h`; getragen in
-   `DeclStmt`, `FunctionDecl`, `StructMember` und den sieben Typformen.
-3. ✅ **gebaut 17.10.2026** — flow check as an opt-in spec/49 rule, with path diagnostics
-   (F65-9, F65-11): `src/core/clearance_flow.h`, Gesamtlauf nach `astCompiler.compile`.
-   Grenze: nur Kanten INNERHALB einer Datei (importierte Funktionen stehen als Deklaration
-   ohne Level in `ctx.functions` und werden uebersprungen, sonst Falsch-Positive).
-   Datei-uebergreifend braucht die Propagation wie bei den Enum-Mengen — offen.
-4. ✅ **gebaut 17.10.2026** — die Sitzung selbst: Freigabe aus dem Wirt (`AIML_CLEARANCE`,
-   F65-20), Gueltigkeit 1…255 mit `invalid-clearance` (F65-22), und Selbstbeglaubigung
-   abgelehnt — `level:`/`grants:` in eingeschraenkter Quelle sowie ein Top-Level `clearance:`
-   (F65-6, F65-27).  Das ist der Teil, der ohne Wirt pruefbar ist.
-5. ✅ **gebaut 17.10.2026** — die Waechter, die keinen Wirt brauchen:
-   - **Builtin-Tabelle** (F65-35) in `src/core/clearance_builtins.h`, Form wie `purity.h`
-     (Vorgabe je Namensraum, Ausnahmen je Funktion).  Offen sind die **reinen** Namensraeume
-     `math`, `hash`, `enums`, `compress`, `cascade` plus `log` — ohne Ausgabe ist eine Konsole
-     keine.  Alles andere ist 0.  Geprueft wird am **Namensraum**, nicht an der einzelnen
-     Funktion: `sys.irgendwas` wird daher auch dann abgefangen, wenn es nur ueber den
-     gemangelten C-Namen (`sys_irgendwas`) erreichbar waere.
-   - **Dialekt** (F65-14) in `visitCast`: ein `cast:` auf einen Zeiger, oder von einem Zeiger
-     auf eine Ganzzahl, ist in einer eingeschraenkten Sitzung ein Fehler.
-   - **`extern`-Zulassung** (F65-13) in `commitFunc`: derzeit ist die zulaessige Menge **leer**,
-     weil die Export-Tabelle (§5a) noch nicht existiert — jedes `extern` in einer
-     eingeschraenkten Sitzung wird abgelehnt.  Das wird von selbst weniger streng, sobald es
-     eine Tabelle gibt, und ist bis dahin die richtige Richtung (fail closed).
+2. ✅ **built 2026-10-17** — Parse + validate `level:`/`grants:` everywhere; enforce nothing
+   (F65-17 second sentence).  Validation in one place: `src/core/clearance.h`; carried in
+   `DeclStmt`, `FunctionDecl`, `StructMember` and the seven type forms.
+3. ✅ **built 2026-10-17** — flow check as an opt-in spec/49 rule, with path diagnostics
+   (F65-9, F65-11): `src/core/clearance_flow.h`, a whole-program pass after `astCompiler.compile`.
+   Limit: only edges WITHIN one file (imported functions are in `ctx.functions` as declarations
+   without a level and are skipped, otherwise false positives).
+   Across files it needs propagation as for the enum sets — open.
+4. ✅ **built 2026-10-17** — the session itself: clearance from the host (`AIML_CLEARANCE`,
+   F65-20), validity 1…255 with `invalid-clearance` (F65-22), and self-certification
+   refused — `level:`/`grants:` in restricted source as well as a top-level `clearance:`
+   (F65-6, F65-27).  That is the part that can be checked without a host.
+5. ✅ **built 2026-10-17** — the guards that need no host:
+   - **Builtin table** (F65-35) in `src/core/clearance_builtins.h`, shaped like `purity.h`
+     (default per namespace, exceptions per function).  Open are the **pure** namespaces
+     `math`, `hash`, `enums`, `compress`, `cascade` plus `log` — without output a console is
+     not one.  Everything else is 0.  The check is made on the **namespace**, not on the individual
+     function: `sys.anything` is therefore caught even if it would only be reachable via the
+     mangled C name (`sys_anything`).
+   - **Dialect** (F65-14) in `visitCast`: a `cast:` to a pointer, or from a pointer
+     to an integer, is an error in a restricted session.
+   - **`extern` admission** (F65-13) in `commitFunc`: currently the admissible set is **empty**,
+     because the export table (§5a) does not exist yet — every `extern` in a
+     restricted session is refused.  That becomes less strict by itself as soon as there is
+     a table, and until then it is the right direction (fail closed).
 
-   **Zwei Grenzen, bewusst und nicht zufaellig:**
-   (a) **Methoden auf Werten sind nicht erfasst.**  Der Waechter sitzt am Dispatch fuer
-   Namensraum-Builtins (`ns.fn`); `.push`, `.len`, `.split` gehen dort nicht durch.  Das ist
-   Absicht — sie sind Sprachmittel, keine Faehigkeiten — aber es ist eine Entscheidung, und
-   wer sie aendern will, muss sie hier aendern.
-   (b) **Der Dialekt-Waechter deckt `cast:` ab, nicht alles aus F65-14.**  Rohes
-   Buffer-Indizieren ausserhalb der geprueften Formen ist offen.  `cast:` ist der Hauptweg,
-   ueber den ein Wert zum Zeiger wird — „Hauptweg" ist aber nicht „alle".
-   Builtin-Tabelle (F65-35) und die `extern`-Zulassung (F65-13).
-6a. ✅ **gebaut 17.10.2026** — die Export-Tabelle mit Name und Level (`AIML_EXPORTS`, eine
-   Zeile je Symbol).  Damit entstehen die Zugriffspruefung F65-4/F65-5 und die
-   `extern`-Zulassung F65-13 — beide lesen dieselbe Tabelle (F65-23).  Ein verweigertes
-   Symbol wird als VERWEIGERT gemeldet, nicht als „unbekannt" (F65-12).
-6b. ✅ **gebaut 17.10.2026** — Signatur und Adresse (F65-24), und damit kann ein Skript ein
-   Wirts-Symbol AUFRUFEN.  Die beiden Haelften der Uebergabe gehen in EINEM Aufruf hinaus,
-   damit Name, Level und Adresse nicht auseinanderlaufen koennen: `sys.export_symbol`
-   (F65-37) nimmt Name, Funktionszeiger (`fn<…>`, spec/12_1) und Level, prueft das Level,
-   meldet die Adresse per `AddSymbol` an und schreibt denselben Eintrag in die Tabelle aus
+   **Two limits, deliberate and not accidental:**
+   (a) **Methods on values are not covered.**  The guard sits at the dispatch for
+   namespace builtins (`ns.fn`); `.push`, `.len`, `.split` do not pass through there.  That is
+   intentional — they are language features, not capabilities — but it is a decision, and
+   whoever wants to change it must change it here.
+   (b) **The dialect guard covers `cast:`, not everything from F65-14.**  Raw
+   buffer indexing outside the checked forms is open.  `cast:` is the main route
+   by which a value becomes a pointer — but "main route" is not "all routes".
+   Builtin table (F65-35) and the `extern` admission (F65-13).
+6a. ✅ **built 2026-10-17** — the export table with name and level (`AIML_EXPORTS`, one
+   line per symbol).  This gives rise to the access check F65-4/F65-5 and the
+   `extern` admission F65-13 — both read the same table (F65-23).  A refused
+   symbol is reported as REFUSED, not as "unknown" (F65-12).
+6b. ✅ **built 2026-10-17** — signature and address (F65-24), and with that a script can CALL a
+   host symbol.  The two halves of the handover go out in ONE call,
+   so that name, level and address cannot drift apart: `sys.export_symbol`
+   (F65-37) takes name, function pointer (`fn<…>`, spec/12_1) and level, checks the level,
+   registers the address via `AddSymbol` and writes the same entry into the table from
    6a — `src/sys/clearance_runtime.cpp`.
-   Die Freigabe haengt am `sys.exec(pkg, clearance)` (F65-36) und nicht in der Umgebung:
-   ein Buendel ist Code, eine Sitzung ist ein Vorgang.  Dass `pushSessionClearance` nur
-   verschaerfen kann, ist die Regel dahinter.
-   Ein exportiertes Symbol wird DEKLARIERT gebuendelt statt als Rumpf kopiert (F65-38) —
-   sonst liefe die Zugriffspruefung gegen die mitgereiste Kopie und nicht gegen das Angebot
-   des Wirts.  Kriterium ist das `level:` am `def` zur **Uebersetzungszeit**, nicht die
-   Export-Tabelle: `sys.bundle` laeuft beim Uebersetzen, `sys.export_symbol` erst zur
-   Laufzeit, die Tabelle ist beim Buendeln also noch leer.  Die Proben haben das erzwungen.
-   Die drei `# NEEDS: host`-Proben (02, 03, 05) laufen jetzt gegen diese Vorrichtung statt
-   ihre Symbole selbst mit `level:` zu definieren; `UMBAU NOETIG` ist weg.
-   Urspruenglicher Text dieses Punktes (die Reihenfolge-Korrektur, die die Proben erzwungen
-   haben): eine Zeile je angebotenem Symbol mit Adresse, Signatur und Level
-   (F65-23, F65-24).  **Erst hier kann die Zugriffspruefung aus F65-4/F65-5 ueberhaupt
-   entstehen** — vorher gibt es keine Wirts-Symbole, die ein Level tragen.
+   The clearance hangs on `sys.exec(pkg, clearance)` (F65-36) and not in the environment:
+   a bundle is code, a session is an operation.  That `pushSessionClearance` can only
+   tighten is the rule behind it.
+   An exported symbol is bundled DECLARED instead of copied as a body (F65-38) —
+   otherwise the access check would run against the copy that travelled along and not against the host's
+   offer.  The criterion is the `level:` on the `def` at **compile time**, not the
+   export table: `sys.bundle` runs at compile time, `sys.export_symbol` only at
+   runtime, so the table is still empty at bundling time.  The probes forced this.
+   The three `# NEEDS: host` probes (02, 03, 05) now run against this mechanism instead of
+   defining their symbols themselves with `level:`; `UMBAU NOETIG` is gone.
+   Original text of this item (the order correction that the probes forced):
+   one line per offered symbol with address, signature and level
+   (F65-23, F65-24).  **Only here can the access check from F65-4/F65-5 come into
+   being at all** — before this there are no host symbols that carry a level.
 
-   Das ist eine Korrektur der Reihenfolge, und die Abnahmeproben haben sie erzwungen: die
-   Proben zur Verweigerung (`clearance-denied`) wollten ein Symbol „auf Level 2, das ich nicht
-   erreichen darf".  Eine einzelne Datei hat kein solches Symbol — und seit F65-27 darf sie
-   sich auch keines schreiben.  Die Zugriffspruefung ohne Export-Tabelle zu bauen hiesse, sie
-   gegen die eigenen Definitionen des Skripts zu richten, wo sie nichts schuetzt.
-7. ✅ **gebaut 17.10.2026** — die Schreibseite (§5b).  Sie sitzt an der einen Stelle, an der
-   fremder Code in die Tabelle des Wirts gelangt: `tryHotReload` in `exec_impl.cpp`, hinter
-   der Abzweigung in den isolierten Kontext.  Damit ist F65-31 baulich erfuellt und nicht
-   durch eine Pruefung — eine isolierte Sitzung erreicht die Schreibseite gar nicht.
-   - **Die Richtlinie** als Dreier (F65-26) in `clearance.h`: `pushSessionPolicy` /
-     `popSessionPolicy`, und `mayCreate()`/`mayReplace()` als die zwei Fragen.  Die Umgebung
-     bleibt prozessweite Vorgabe und darf nur verschaerfen (F65-32) — bei den Schreibrechten
-     nach UNTEN, weil der Vergleich gegenlaeufig ist.  „Nicht gesetzt" ist deshalb nicht 0,
-     sondern `kPolicyUnset`: waere es 0, koennte die Umgebung das Recht nur abschalten und
-     nie erteilen.
-   - **Die Reihenfolge** der Pruefungen ist der Inhalt von F65-29: zuerst `replace_level`,
-     DANN entscheidet die Version, ob sich etwas aendert.  Ein `version:` im Buendel erteilt
-     kein Recht, es ist Eingabe.
-   - **Der Kollisionsfehler** (F65-30) ersetzt den stillen Skip-Zweig — aber nur in einer
-     eingeschraenkten Sitzung; fuer Code aus derselben Quelle bleibt spec/29_2 §4.2 gueltig.
-   - **Die Leser** (F65-32): `clearance.level`/`create_level`/`replace_level`.  Der
-     Namensraum `clearance` ist in der Builtin-Tabelle ZU und nur diese drei sind offen, damit
-     ein Griff nach einem Setzer `clearance-builtin` nennt und nicht „unbekannte Funktion".
+   This is a correction of the order, and the acceptance probes forced it: the
+   probes for refusal (`clearance-denied`) wanted a symbol "at level 2 that I may not
+   reach".  A single file has no such symbol — and since F65-27 it may not
+   write one for itself either.  Building the access check without an export table would mean pointing it
+   at the script's own definitions, where it protects nothing.
+7. ✅ **built 2026-10-17** — the write side (§5b).  It sits at the one place where
+   foreign code gets into the host's table: `tryHotReload` in `exec_impl.cpp`, behind
+   the branch into the isolated context.  F65-31 is thus fulfilled by construction and not
+   by a check — an isolated session never reaches the write side at all.
+   - **The policy** as a triple (F65-26) in `clearance.h`: `pushSessionPolicy` /
+     `popSessionPolicy`, and `mayCreate()`/`mayReplace()` as the two questions.  The environment
+     remains the process-wide default and may only tighten (F65-32) — for the write rights
+     DOWNWARDS, because the comparison is reversed.  "Not set" is therefore not 0
+     but `kPolicyUnset`: if it were 0, the environment could only switch the right off and
+     never grant it.
+   - **The order** of the checks is the content of F65-29: first `replace_level`,
+     THEN the version decides whether anything changes.  A `version:` in the bundle grants
+     no right, it is input.
+   - **The collision error** (F65-30) replaces the silent skip branch — but only in a
+     restricted session; for code from the same source spec/29_2 §4.2 remains valid.
+   - **The readers** (F65-32): `clearance.level`/`create_level`/`replace_level`.  The
+     namespace `clearance` is CLOSED in the builtin table and only these three are open, so that
+     reaching for a setter reports `clearance-builtin` and not "unknown function".
 
-   **Befund 17.10.2026: `clearance-create` ist gebaut und heute UNERREICHBAR.**  Nicht wegen
-   eines Fehlers im Waechter, sondern wegen der Sprachmittel: `sys.bundle` nimmt den NAMEN
-   einer Funktion, die der Wirt selbst uebersetzt hat (spec/29_2 §16).  Damit traegt jedes
-   Buendel einen Namen, den der Wirt SCHON HAT, und landet im ERSETZEN-Zweig — gemessen an
-   `fresh_helper`, das mit `clearance-replace` abgelehnt wurde, obwohl die Probe das Anlegen
-   meinte.  Ein NEUER Name im Buendel setzt voraus, dass ein Wirt fremden Code mit einem
-   fremden Namen annehmen kann, und das ist spec/29_2 §4.3 („dynamic loading not yet
-   supported"), nicht dieses Kapitel.
-   Der Waechter bleibt stehen: fail closed ist dann richtig, wenn §4.3 kommt, und ein Gate,
-   das erst mit dem Feature entsteht, wird beim Bau des Features vergessen.  Die beiden Proben
-   stehen auf `# NEEDS: dynload` und melden AUSSTEHEND — die Anforderung ist spezifiziert und
-   ungeprueft, und das steht da, statt von einem fehlenden Test angedeutet zu werden.
-   **F65-27** haengt am selben Punkt: ohne §4.3 wird ein angelegtes Symbol nie aufrufbar, sein
-   Level also nie beobachtbar.  Wer §4.3 baut, muss beides dort einloesen.
-8. ✅ **gebaut 17.10.2026** — die Write-down-Regel (F65-34) in `src/core/clearance_writedown.h`,
-   ein Vorwaertsdurchlauf ueber den AST je Rumpf.  Sie haengt am GLEICHEN Hebel wie die
-   Flusspruefung (`AIML_STATIC_CLEARANCE`) und an derselben Stelle in `compiler.cpp`: beides
-   ist derselbe Wunsch („pruefe die Privilegien statisch"), also ein Schalter und nicht zwei.
-   Zwei Karten je Rumpf, weil eine Lokale zwei Bedeutungen hat: `bound` ist die Schranke aus
-   `level:`, `carried` ist das Strengste, was je hineinlief.
+   **Finding 2026-10-17: `clearance-create` is built and UNREACHABLE today.**  Not because of
+   a bug in the guard, but because of the language features: `sys.bundle` takes the NAME
+   of a function the host compiled itself (spec/29_2 §16).  So every
+   bundle carries a name the host ALREADY HAS, and ends up in the REPLACE branch — measured on
+   `fresh_helper`, which was refused with `clearance-replace`, although the probe meant
+   creation.  A NEW name in the bundle presupposes that a host can accept foreign code with a
+   foreign name, and that is spec/29_2 §4.3 ("dynamic loading not yet
+   supported"), not this chapter.
+   The guard stays in place: fail closed is right for when §4.3 comes, and a gate
+   that only comes into being with the feature gets forgotten when the feature is built.  The two probes
+   are on `# NEEDS: dynload` and report PENDING — the requirement is specified and
+   unchecked, and that is written down instead of being hinted at by a missing test.
+   **F65-27** hinges on the same point: without §4.3 a created symbol never becomes callable, so its
+   level is never observable.  Whoever builds §4.3 must redeem both there.
+8. ✅ **built 2026-10-17** — the write-down rule (F65-34) in `src/core/clearance_writedown.h`,
+   a forward pass over the AST per body.  It hangs on the SAME lever as the
+   flow check (`AIML_STATIC_CLEARANCE`) and in the same place in `compiler.cpp`: both
+   are the same wish ("check the privileges statically"), so one switch and not two.
+   Two maps per body, because a local has two meanings: `bound` is the bound from
+   `level:`, `carried` is the strictest thing that ever flowed in.
 
-   **Sechs Grenzen, benannt statt angedeutet** — alle folgen unmittelbar aus der Form des
-   Durchlaufs, sind also gelesen und nicht vermutet:
-   (a) **Nur innerhalb einer Datei**, wie die Flusspruefung und aus demselben Grund: eine
-   importierte Deklaration traegt kein Level.
-   (b) **Ein Vorwaertsdurchlauf in Textreihenfolge.**  Eine Rueckwaertskante kann einen Fluss
-   verdecken: steht in einem `while` das Lesen VOR dem Schreiben, das die Herkunft setzt, wird
-   es nicht gesehen.  Ein Fixpunkt ueber Schleifen waere das Richtige und ist nicht gebaut.
-   (c) **Eine unannotierte Huellfunktion wascht.**  `exprLevel` nimmt das Level einer Funktion
-   aus der Tabelle; eine Funktion ohne `level:` steht nicht darin, ihr Rueckgabewert traegt also
-   nichts.  Und F65-9 greift hier nicht: fuer einen unannotierten Aufrufer (Level 0) ist
-   `level(callee) >= 0` immer wahr.  Das Loch zu schliessen braucht Rueckgabe-Level ueber
-   Funktionsgrenzen — interprozedural, und damit ein eigener Schritt.
-   (d) **Parameter tragen kein Level.**  Nur `decl`-Schranken und Globale.
-   (e) **Member-Ziele sind nicht erfasst.**  `bound` ist nach dem Namen aus der `decl`
-   geschluesselt; ein Ziel mit Punktpfad trifft keinen Eintrag.
-   (f) **Container-Elemente werden am Behaelter gemessen**, nicht je Element — `idx:` prueft
-   gegen das Level des Behaelters.
+   **Six limits, named instead of hinted at** — all follow directly from the shape of the
+   pass, so they are read off and not guessed:
+   (a) **Only within one file**, like the flow check and for the same reason: an
+   imported declaration carries no level.
+   (b) **One forward pass in text order.**  A back edge can hide a flow:
+   if in a `while` the read comes BEFORE the write that sets the origin,
+   it is not seen.  A fixpoint over loops would be the right thing and is not built.
+   (c) **An unannotated wrapper function launders.**  `exprLevel` takes the level of a function
+   from the table; a function without `level:` is not in it, so its return value carries
+   nothing.  And F65-9 does not apply here: for an unannotated caller (level 0)
+   `level(callee) >= 0` is always true.  Closing the hole needs return levels across
+   function boundaries — interprocedural, and therefore a step of its own.
+   (d) **Parameters carry no level.**  Only `decl` bounds and globals.
+   (e) **Member targets are not covered.**  `bound` is keyed by the name from the `decl`;
+   a target with a dotted path hits no entry.
+   (f) **Container elements are measured on the container**, not per element — `idx:` checks
+   against the level of the container.
 
-   **Und die Auflage aus diesem Punkt ist NICHT erfuellt:** „nach Messung am Korpus" kann die
-   Regel heute nicht einloesen, denn der Korpus benutzt den Modifier `level:` an keiner
-   einzigen Stelle (gemessen 17.10.2026: die zwei Treffer in `tests/` sind Kommentartext).
-   Ein Durchlauf mit gesetztem Hebel zeigt also nur, dass die Regel nichts zu sehen hat — und
-   das ist kein Beleg, dass sie leise ist.  Sie bleibt darum **opt-in**, und wer sie zur
-   Vorgabe machen will, braucht zuerst einen Korpus, der sie benutzt.
+   **And the requirement from this item is NOT met:** "after measuring on the corpus" cannot be
+   redeemed by the rule today, because the corpus uses the modifier `level:` in not a
+   single place (measured 2026-10-17: the two hits in `tests/` are comment text).
+   A run with the lever set therefore only shows that the rule has nothing to look at — and
+   that is no evidence that it is quiet.  It therefore stays **opt-in**, and whoever wants to make it
+   the default first needs a corpus that uses it.
 
 Two prerequisites sit **outside** this chapter and belong to whoever builds the first console:
 
@@ -690,9 +690,9 @@ Two prerequisites sit **outside** this chapter and belong to whoever builds the 
   16.10.2026) — a console would otherwise cache compiled scripts under `rev_unknown`;
 - one process per user (F65-25), because the compiler keeps one JIT context at a time.
 
-(Der letzte Absatz dieses Abschnitts nannte die Write-down-Regel noch als offen; sie ist
-Punkt 8 oben und seit 17.10.2026 gebaut — opt-in, mit der dort benannten unerfuellten
-Auflage.)
+(The last paragraph of this section still listed the write-down rule as open; it is
+item 8 above and has been built since 2026-10-17 — opt-in, with the unmet
+requirement named there.)
 
 Neither is a clearance problem, and neither may be discovered after the fact.
 
