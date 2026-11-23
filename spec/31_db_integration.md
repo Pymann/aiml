@@ -388,14 +388,14 @@ AionDB avoids runtime parsing entirely. There are two query modes:
 
 ### 4.1 `db.query` — Single-Store Queries
 
-> **Nur `Store<T>`.** `db.query` arbeitet auf einem Store (`db.open`), nicht
-> auf einem `Kv<K:V>` (`db.open_kv`) — die beiden haben verschiedenes
-> Innenleben. Ein `Kv` als erstes Argument ist seit 2026-11-12 ein
-> **Übersetzungsfehler**. Vorher übersetzte der Aufruf sauber und las zur
-> Laufzeit Unsinn: einmal ein SIGSEGV (`aiml_db_store_is_active`, Adresse
-> `0x3f800000` — das Bitmuster von `1.0f`, als Zeiger benutzt), einmal stumm
-> eine leere Liste. Ein `Kv` wird mit `.iter` durchlaufen oder mit `.get`
-> gelesen. Netz: `tests/test_db_query_on_kv_error.aiml`.
+> **`Store<T>` only.** `db.query` works on a store (`db.open`), not
+> on a `Kv<K:V>` (`db.open_kv`) — the two have different
+> internals. A `Kv` as the first argument has been a **compile error**
+> since 2026-11-12. Before that the call compiled cleanly and read nonsense at
+> runtime: once a SIGSEGV (`aiml_db_store_is_active`, address
+> `0x3f800000` — the bit pattern of `1.0f`, used as a pointer), once silently
+> an empty list. A `Kv` is iterated with `.iter` or read with `.get`.
+> Safety net: `tests/test_db_query_on_kv_error.aiml`.
 
 The `{where: ...}` argument takes a **function**, not a string.
 The function is compiled to a function pointer and called per element —
@@ -524,16 +524,16 @@ Both `Store<T>` and `Kv<K,V>` are **mmap-backed**:
 - **`Kv<K,V>`** maps the WAL file itself (sparse-extended to an initial
   reserve of 16 MB; `mremap`'d to grow). All values live exclusively in
   the WAL, the in-process index holds only `(offset, length)` per key.
-  Mit `index_dump: true` liegt dieser Index auf der Platte statt im Prozess —
-  siehe §6.2.1.
+  With `index_dump: true` this index lives on disk instead of in the process —
+  see §6.2.1.
   `kv.get` returns a pointer into the mmap'd region for blob/string/fixed
   modes — true zero-copy.
 
-**Fehlender Schlüssel.**  `kv.get` auf einen Schlüssel, den es nicht gibt, liefert den
-Nullwert des Werttyps: `0` für `i32`/`i64`, `0.0` für `f32`/`f64`, `""` für `string`, einen
-Nullzeiger für ein Modell.  Bis 01.11.2026 lud der Zahl-Pfad ungeprüft vom Nullzeiger und
-stürzte ab (SIGSEGV), während `Kv<string:string>` bereits `""` lieferte.  Wer zwischen
-„fehlt" und „steht auf 0" unterscheiden muss, fragt vorher `kv.has(key)`.
+**Missing key.**  `kv.get` on a key that does not exist returns the
+zero value of the value type: `0` for `i32`/`i64`, `0.0` for `f32`/`f64`, `""` for `string`, a
+null pointer for a model.  Until 2026-11-01 the number path loaded from the null pointer unchecked and
+crashed (SIGSEGV), while `Kv<string:string>` already returned `""`.  Whoever needs to distinguish
+"missing" from "set to 0" asks `kv.has(key)` first.
 
 The operating system manages which pages are RAM-resident and which are
 on disk. AionDB does not implement paging itself.
@@ -545,275 +545,275 @@ on disk. AionDB does not implement paging itself.
 
 ### 6.2.1 Index-Dump — `index_dump: true`
 
-Der Index aus §6.2 liegt **nur im Prozess** und wird bei jedem `open` aus der WAL
-neu aufgebaut.  Fuer kleine Stores ist das die schnellere Wahl.  Mit der Groesse
-kippt die Rechnung, und zwar in beide Richtungen gleichzeitig.  Gemessen am
-Wissensgraphen von `cai` (06.11.2026, 3,02 Mio Wikipedia-Artikel):
+The index from §6.2 lives **only in the process** and is rebuilt from the WAL
+on every `open`.  For small stores that is the faster choice.  As size grows
+the calculation tips, and in both directions at once.  Measured on the
+knowledge graph of `cai` (2026-11-06, 3.02 million Wikipedia articles):
 
 | | |
 |---|---|
-| Schluessel ueber alle Stores | 18.166.149 |
-| Schluesselbytes | 713 MB |
-| WAL sichtbar | 5,53 GB |
-| Index **im RAM** | **19,5 GB** (434 Byte je Schluessel) |
-| Aufbauzeit je Prozessstart | **~5 min** |
+| Keys across all stores | 18,166,149 |
+| Key bytes | 713 MB |
+| WAL visible | 5.53 GB |
+| Index **in RAM** | **19.5 GB** (434 bytes per key) |
+| Build time per process start | **~5 min** |
 
-Die 434 Byte je Schluessel sind `unordered_map`-Aufwand — Bucket-Array,
-Knotenzeiger, `std::string`-Kopf, Allokator-Rundung — fuer eine Nutzlast von
-Schluessel plus `(offset, length)`.  Dazu kam: eine Abfrage auf diesem Store
-brauchte 63 s auf einer Scherbe, davon **63 s Aufbau und praktisch 0 s Abfrage**
-(`graph stats`, `ask` und ein Namensschlag waren bis auf 2 % gleich schnell).
+The 434 bytes per key are `unordered_map` overhead — bucket array,
+node pointers, `std::string` header, allocator rounding — for a payload of
+key plus `(offset, length)`.  On top of that: a query on this store
+took 63 s on one shard, of which **63 s were setup and practically 0 s the query**
+(`graph stats`, `ask` and a name lookup were equally fast to within 2 %).
 
-**`index_dump: true`** legt den Index neben der WAL ab und benutzt ihn von dort,
-**ohne ihn in eine Hashmap zu laden**:
+**`index_dump: true`** stores the index next to the WAL and uses it from there,
+**without loading it into a hash map**:
 
 ```aiml
 - decl: [kv, Kv<string:string>, { call: [db.open_kv, "namen", {persist: true, index_dump: true}] }]
 # → namen.kvwal  +  namen.kvidx
 ```
 
-Die Vorgabe ist `false`; bestehende Stores verhalten sich unveraendert.
-`index_dump` ohne `persist: true` ist ein Fehler: ohne WAL gibt es keine Offsets,
-auf die ein Dump zeigen koennte.
+The default is `false`; existing stores behave unchanged.
+`index_dump` without `persist: true` is an error: without a WAL there are no offsets
+a dump could point to.
 
-#### Datei `<name>.kvidx`
+#### File `<name>.kvidx`
 
-Header 64 Byte, dann ein nach Schluesselbytes **sortiertes** Eintragsfeld, dann
-der Schluesselblock:
+A 64-byte header, then an entry array **sorted** by key bytes, then
+the key block:
 
-| Feld | Breite | Bedeutung |
+| Field | Width | Meaning |
 |---|---|---|
 | `magic` | 8 | `"AIMLKVIX"` |
-| `version` | 4 | Formatversion |
-| `wal_version` | 4 | `version` der zugehoerigen WAL |
-| `val_size` | 8 | `val_size` der zugehoerigen WAL |
-| `wal_used` | 8 | **Wasserstand**: Stand der WAL beim Schreiben des Dumps |
-| `wal_dev` | 8 | `st_dev` der WAL beim Schreiben des Dumps |
-| `wal_ino` | 8 | `st_ino` der WAL beim Schreiben des Dumps |
-| `wal_fp` | 8 | **Fingerabdruck** des beschriebenen WAL-Bereichs (s. u.) |
-| `count` | 8 | Zahl der Eintraege |
-| je Eintrag: `val_off` | 8 | Offset des Werts **in der WAL** |
-| je Eintrag: `key_off` | 4 | Offset im Schluesselblock |
-| je Eintrag: `val_len` | 4 | Wertlaenge |
-| je Eintrag: `key_len` | 4 | Schluessellaenge |
-| je Eintrag: Polsterung | 4 | Ausrichtung auf 24 Byte |
+| `version` | 4 | format version |
+| `wal_version` | 4 | `version` of the associated WAL |
+| `val_size` | 8 | `val_size` of the associated WAL |
+| `wal_used` | 8 | **high-water mark**: state of the WAL when the dump was written |
+| `wal_dev` | 8 | `st_dev` of the WAL when the dump was written |
+| `wal_ino` | 8 | `st_ino` of the WAL when the dump was written |
+| `wal_fp` | 8 | **fingerprint** of the described WAL range (see below) |
+| `count` | 8 | number of entries |
+| per entry: `val_off` | 8 | offset of the value **in the WAL** |
+| per entry: `key_off` | 4 | offset in the key block |
+| per entry: `val_len` | 4 | value length |
+| per entry: `key_len` | 4 | key length |
+| per entry: padding | 4 | alignment to 24 bytes |
 
-Bewusst 24 Byte und **kein** `pack(1)`: ein gepackter Eintrag brauchte
-unausgerichtete 64-Bit-Zugriffe mitten im mmap.  Die vier Byte Polsterung sind
-billiger als diese Klasse von Fehlern.
+Deliberately 24 bytes and **no** `pack(1)`: a packed entry would need
+unaligned 64-bit accesses in the middle of the mmap.  The four bytes of padding are
+cheaper than this class of bugs.
 
-Fuer die Messung oben: 18,17 Mio × 24 Byte + 713 MB Schluessel = **1,11 GB**
-gegen 19,5 GB im RAM, und die Datei ist **datei-gebunden**, also vom Kernel
-rueckgewinnbar — anders als die anonymen 19,5 GB heute.
+For the measurement above: 18.17 million × 24 bytes + 713 MB of keys = **1.11 GB**
+against 19.5 GB in RAM, and the file is **file-backed**, so it can be reclaimed by the kernel
+— unlike today's anonymous 19.5 GB.
 
-#### Oeffnen
+#### Opening
 
-1. `.kvidx` mmappen.  Ist sie unbrauchbar, wird sie **ignoriert** und §6.2 gilt
-   unveraendert (voller Replay).  Der Dump ist nie maßgebend gegenueber der WAL.
-   Unbrauchbar heisst:
-   - `magic` falsch, oder `version`/`wal_version`/`val_size` passen nicht zur WAL;
-   - `wal_dev`/`wal_ino` weichen vom `fstat` der WAL ab — die **WAL-Datei wurde
-     ersetzt**, also sind alle Offsets im Dump wertlos;
-   - `wal_used` liegt **hinter** dem Ende der WAL-Daten;
-   - `wal_fp` passt nicht zum Fingerabdruck des beschriebenen Bereichs (s. u.).
+1. mmap the `.kvidx`.  If it is unusable, it is **ignored** and §6.2 applies
+   unchanged (full replay).  The dump is never authoritative over the WAL.
+   Unusable means:
+   - `magic` is wrong, or `version`/`wal_version`/`val_size` do not match the WAL;
+   - `wal_dev`/`wal_ino` differ from the `fstat` of the WAL — the **WAL file was
+     replaced**, so all offsets in the dump are worthless;
+   - `wal_used` lies **beyond** the end of the WAL data;
+   - `wal_fp` does not match the fingerprint of the described range (see below).
 
-   Die Inode-Pruefung ist der tragende Teil, und sie ist kein Zufallsfund:
-   `kv.checkpoint` schreibt die WAL als Temp-Datei und zieht sie per `rename`
-   herueber (§6.3).  Die Inode wechselt also **genau dann**, wenn sich die Offsets
-   verschieben.  Ein `fstat` genuegt; ein Pruefwert ueber die Daten waere so teuer
-   wie der Replay, den wir vermeiden wollen.
+   The inode check is the load-bearing part, and it is not a lucky find:
+   `kv.checkpoint` writes the WAL as a temp file and moves it over with `rename`
+   (§6.3).  So the inode changes **exactly when** the offsets
+   shift.  One `fstat` is enough; a checksum over the data would be as expensive
+   as the replay we want to avoid.
 
-   Der Restfall ist eine **wiederverwendete Inode** nach einem Checkpoint durch
-   ein fremdes Binary.  Den deckt der Wasserstand ab: eine Verdichtung entfernt
-   veraltete Saetze, das Datenende liegt danach **vor** dem Wasserstand, und der
-   Dump fliegt raus.  Entfernt die Verdichtung nichts, bleiben die Saetze in
-   gleicher Reihenfolge an gleicher Stelle — dann ist der Dump weiter richtig.
+   The remaining case is a **reused inode** after a checkpoint by
+   a foreign binary.  The high-water mark covers that: a compaction removes
+   stale records, the end of the data then lies **before** the high-water mark, and the
+   dump is thrown out.  If the compaction removes nothing, the records stay in the
+   same order at the same place — then the dump is still correct.
 
-#### Fingerabdruck `wal_fp`
+#### Fingerprint `wal_fp`
 
-Inode und Wasserstand allein genuegen nicht.  `cp quelle ziel` **behaelt die
-Inode des Ziels**: wer eine einzelne `.kvwal` aus einem Backup zuruecklegt,
-haette eine fremde WAL unter einem gueltig aussehenden Dump, und bei einer
-groesseren Datei greift auch der Wasserstand nicht.  Darum bindet der Dump sich
-an den **Inhalt des Bereichs, den er beschreibt**:
+Inode and high-water mark alone are not enough.  `cp source target` **keeps the
+target's inode**: whoever puts back a single `.kvwal` from a backup
+would have a foreign WAL under a valid-looking dump, and with a
+larger file the high-water mark does not help either.  The dump therefore binds itself
+to the **content of the range it describes**:
 
-- Bereich ist `[sizeof(AimlKvWalHeader), wal_used)` — also genau das, worauf die
-  Eintraege zeigen.  **Anhaengen aendert ihn nicht**, denn das passiert hinter
-  dem Wasserstand; der Ueberlauf-Pfad bleibt damit nutzbar.
-- Bis 64 KiB Bereichslaenge wird er ganz gehasht.  Darueber 16 Stichproben von
-  je 4 KiB an den Offsets `start + floor(i * (len - 4096) / 15)` fuer `i = 0..15`.
-- Hash ist FNV-1a 64, begonnen mit `wal_used` als Startwert.
+- The range is `[sizeof(AimlKvWalHeader), wal_used)` — exactly what the
+  entries point to.  **Appending does not change it**, because that happens beyond
+  the high-water mark; the overflow path therefore stays usable.
+- Up to 64 KiB of range length it is hashed in full.  Above that, 16 samples of
+  4 KiB each at the offsets `start + floor(i * (len - 4096) / 15)` for `i = 0..15`.
+- The hash is FNV-1a 64, seeded with `wal_used`.
 
-Das kostet hoechstens 64 KiB Lesen, ist reproduzierbar und faellt bei
-Austausch, Rueckkopieren und Teilbeschaedigung auf.  Ein Beweis ist es nicht —
-ein Hash bleibt ein Hash; die Zusage lautet: **ein falscher Dump fuehrt nie zu
-falschen Daten, sondern wird verworfen**, und die drei Pruefungen zusammen
-machen ein Durchkommen unwahrscheinlich genug, um den Replay zu sparen.
-2. **Nur den WAL-Rest ab `wal_used`** nachspielen, in einen kleinen
-   Ueberlauf-Index im RAM.  Er traegt, was seit dem Dump geschrieben wurde,
-   einschliesslich Tombstones fuer `kv.delete`.
-3. Kein Aufbau ueber den Dump-Teil: `kv.get` sucht **binaer im mmap**, O(log n).
+This costs at most 64 KiB of reading, is reproducible and detects
+replacement, copying back and partial damage.  It is not a proof —
+a hash remains a hash; the promise is: **a wrong dump never leads to
+wrong data, it is discarded**, and the three checks together
+make getting through unlikely enough to save the replay.
+2. Replay **only the WAL remainder from `wal_used`** into a small
+   overflow index in RAM.  It carries what has been written since the dump,
+   including tombstones for `kv.delete`.
+3. No build-up over the dump part: `kv.get` searches **binary in the mmap**, O(log n).
 
-**Suchreihenfolge:** erst der Ueberlauf-Index (neuer), dann der Dump.  Ein
-Tombstone im Ueberlauf verdeckt einen Dump-Eintrag — sonst wuerde ein
-geloeschter Schluessel nach dem Neustart wieder auftauchen.
+**Lookup order:** first the overflow index (newer), then the dump.  A
+tombstone in the overflow hides a dump entry — otherwise a
+deleted key would reappear after a restart.
 
-#### Schreiben
+#### Writing
 
-Der Dump entsteht **ausschliesslich bei `kv.checkpoint`** (§6.3), und nur bei
-`index_dump: true`.  Das passt dorthin: der Checkpoint schreibt die WAL neu,
-**alle Offsets aendern sich**, ein Dump von vorher waere falsch.  Darum gilt
-auch: `kv.checkpoint` und `kv.clear` schreiben den Dump neu oder loeschen ihn —
-sie duerfen ihn nie stehen lassen.
+The dump is produced **exclusively by `kv.checkpoint`** (§6.3), and only with
+`index_dump: true`.  That is the right place: the checkpoint rewrites the WAL,
+**all offsets change**, a dump from before would be wrong.  Hence also:
+`kv.checkpoint` and `kv.clear` rewrite or delete the dump —
+they must never leave it in place.
 
-Bewusst **nicht** beim Freigeben des Stores, aus zwei Gruenden.  Erstens waere
-der Ueberlauf-Pfad dann nie in Betrieb und damit nicht pruefbar: jedes
-Prozessende faltete ihn ein.  Zweitens ist ein stilles Gigabyte Schreiblast beim
-Beenden eine Ueberraschung, die niemand bestellt hat.  Folge, ausdruecklich:
-**ein Store, der nie checkpointet, bekommt nie einen Dump** und verhaelt sich
-wie §6.2.  Wer den Gewinn will, ruft `kv.checkpoint`.
+Deliberately **not** when the store is released, for two reasons.  First,
+the overflow path would then never be in use and therefore not testable: every
+process exit would fold it in.  Second, a silent gigabyte of write load on
+exit is a surprise nobody ordered.  Consequence, explicitly:
+**a store that never checkpoints never gets a dump** and behaves
+like §6.2.  Whoever wants the gain calls `kv.checkpoint`.
 
-#### Nach dem Checkpoint gibt der Store den RAM-Index her
+#### After the checkpoint the store gives up its RAM index
 
-Der Checkpoint muss jeden Schluessel in die Hand nehmen: er schreibt die WAL neu,
-also entsteht fuer jeden Eintrag ein neuer Offset, und aus genau diesen Offsets
-besteht der neue Dump.  Was er NICHT darf, ist den vollstaendigen Schluesselsatz
-danach liegen lassen.  Er sammelt die Paare `(Schluessel, Ort)` darum in einer
-**Liste**, schreibt daraus den Dump, laedt ihn (§"Oeffnen") und steht hinterher
-da wie ein frisch geoeffneter Store: Dump gemappt, Ueberlauf leer.
+The checkpoint has to handle every key: it rewrites the WAL,
+so every entry gets a new offset, and the new dump consists of exactly these offsets.
+What it must NOT do is leave the complete key set lying around
+afterwards.  It therefore collects the pairs `(key, location)` in a
+**list**, writes the dump from it, loads it (§"Opening") and afterwards stands
+there like a freshly opened store: dump mapped, overflow empty.
 
-Zwei Gruende, beide gerechnet:
+Two reasons, both calculated:
 
-- Eine Liste kostet grob **60 Byte je Schluessel**, die `unordered_map` des
-  Ueberlaufs **434** (die Rechnung steht am Anfang von §6.2.1).  Der Checkpoint
-  ist damit nicht nur hinterher billiger, sondern auch waehrend seiner Laufzeit.
-- Ohne das Abgeben ist **periodisches Checkpointen kein Mittel**, einen langen
-  Schreiblauf im Speicher zu begrenzen — es hebt ihn im Gegenteil dauerhaft, weil
-  der Ueberlauf danach alles traegt.  Genau dieses Mittel braucht aber jeder
-  Neuaufbau eines grossen Gedaechtnisses aus Protokollen.
+- A list costs roughly **60 bytes per key**, the overflow's `unordered_map`
+  **434** (the calculation is at the start of §6.2.1).  The checkpoint
+  is therefore not only cheaper afterwards but also while it runs.
+- Without giving it up, **periodic checkpointing is no means** of bounding a long
+  write run in memory — on the contrary, it raises it permanently, because
+  the overflow then carries everything.  But exactly this means is needed by every
+  rebuild of a large memory from logs.
 
-**Der Rueckfall ist Pflicht.** Scheitert das Schreiben des Dumps oder seine
-Pruefung beim Laden, muss der Store den Ueberlauf aus der Liste auffuellen,
-bevor er die Sperre abgibt.  Ein Store mit leerem Ueberlauf und ohne gueltigen
-Dump haette seinen ganzen Inhalt verloren, ohne dass eine Zeile fehlt — der
-teuerste Fehler, den dieser Abschnitt zulaesst.  Ohne `index_dump: true` gibt es
-keine Liste: dort bleibt der Ueberlauf der Index, wie in §6.2.
+**The fallback is mandatory.** If writing the dump or checking it on load
+fails, the store must fill the overflow from the list
+before it releases the lock.  A store with an empty overflow and no valid
+dump would have lost its entire content without a single line missing — the
+most expensive error this section allows.  Without `index_dump: true` there is
+no list: there the overflow remains the index, as in §6.2.
 
-#### Zusammenspiel
+#### Interplay
 
 | | |
 |---|---|
-| `db.kv_evict` (§6.6) | wirkt jetzt auch auf den Index, weil er datei-gebunden ist.  Bisher hiess es dort ausdruecklich „keep index", und genau der Index war der groessere Posten. |
-| `db.reload_kv` (§6.5) | liest den Dump neu und spielt den Rest ab Wasserstand nach, statt die ganze WAL. |
-| `decoded_cache` (§6.7.3) | unberuehrt; die 1024er Grenze gilt weiter. |
-| Zeigerverträge (§6.7) | unveraendert: Werte kommen weiter aus dem WAL-mmap. |
+| `db.kv_evict` (§6.6) | now also affects the index, because it is file-backed.  Previously it said explicitly "keep index" there, and the index was precisely the bigger item. |
+| `db.reload_kv` (§6.5) | rereads the dump and replays the remainder from the high-water mark, instead of the whole WAL. |
+| `decoded_cache` (§6.7.3) | unaffected; the limit of 1024 still applies. |
+| Pointer contracts (§6.7) | unchanged: values still come from the WAL mmap. |
 
-#### Kompatibilitaet — keine Migration
+#### Compatibility — no migration
 
-Das **WAL-Format bleibt unveraendert**.  `index_dump` legt eine zusaetzliche
-Datei an und ruehrt Header und Satzaufbau der WAL nicht an.  Darum gibt es
-nichts zu migrieren, in keiner Richtung:
+The **WAL format stays unchanged**.  `index_dump` creates an additional
+file and does not touch the WAL's header or record layout.  So there is
+nothing to migrate, in either direction:
 
-| Fall | Verhalten |
+| Case | Behaviour |
 |---|---|
-| alte WAL, neues Binary mit `index_dump: true` | keine `.kvidx` vorhanden → voller Replay (§6.2); der Dump entsteht beim naechsten Checkpoint |
-| neue WAL **mit** `.kvidx`, altes Binary | `.kvidx` ist dem alten Binary unbekannt und wird nicht angefasst → voller Replay, korrekt |
-| altes Binary **schreibt** an die WAL an | Inode bleibt, Daten wachsen → das neue Binary spielt den Rest ab Wasserstand nach |
-| altes Binary macht `checkpoint` | Inode wechselt → Dump wird verworfen → voller Replay |
-| Gedaechtnis kopiert, verschoben, aus einem Backup geholt | Inode wechselt → Dump wird verworfen → voller Replay |
+| old WAL, new binary with `index_dump: true` | no `.kvidx` present → full replay (§6.2); the dump is created at the next checkpoint |
+| new WAL **with** `.kvidx`, old binary | `.kvidx` is unknown to the old binary and is not touched → full replay, correct |
+| old binary **appends** to the WAL | inode stays, data grows → the new binary replays the remainder from the high-water mark |
+| old binary does a `checkpoint` | inode changes → dump is discarded → full replay |
+| memory copied, moved, restored from a backup | inode changes → dump is discarded → full replay |
 
-Eine verwaiste oder fremde `.kvidx` kann also nie zu falschen Daten fuehren,
-sondern hoechstens zu einem langsamen Start.  Sie darf jederzeit geloescht
-werden; sie wird beim naechsten Checkpoint neu geschrieben.
+An orphaned or foreign `.kvidx` can therefore never lead to wrong data,
+at most to a slow start.  It may be deleted at any time;
+it is rewritten at the next checkpoint.
 
-#### Wer ueber einen persistenten Kv laeuft
+#### Whoever iterates over a persistent Kv
 
-**Jede** Aufzaehlung aller Eintraege muss Ueberlauf UND Dump zusammenfassen und
-die vom Ueberlauf verdeckten Dump-Schluessel auslassen.  `kv->index` allein ist
-mit Dump **nicht** der Inhalt des Stores, sondern nur das, was seit dem letzten
-Checkpoint geschrieben wurde -- bei einem frisch geoeffneten Store also nichts,
-und nach einem `kv.checkpoint` ebenfalls nichts (§"Nach dem Checkpoint").
+**Every** enumeration of all entries must merge overflow AND dump and
+skip the dump keys hidden by the overflow.  With a dump, `kv->index` alone is
+**not** the content of the store, only what has been written since the last
+checkpoint -- for a freshly opened store therefore nothing,
+and after a `kv.checkpoint` also nothing (§"After the checkpoint").
 
-Das ist keine theoretische Warnung.  Das Auffuellen der Nebenindizes
-(`db_indexed`, spec/45) lief ueber `kv->index` und baute damit einen **leeren**
-Index: `findings_by` fand nichts, waehrend `kv.len` und `kv.get` korrekt blieben.
-Am cai-Wissensgraphen gemessen: **0 statt 682593** exportierter Fakten, ohne
-Fehlermeldung.  Gefunden wurde es nicht von den Unit-Tests, sondern vom
-Vergleich eines vollen Exports mit und ohne Dump.
+This is not a theoretical warning.  Filling the secondary indexes
+(`db_indexed`, spec/45) went through `kv->index` and thereby built an **empty**
+index: `findings_by` found nothing, while `kv.len` and `kv.get` stayed correct.
+Measured on the cai knowledge graph: **0 instead of 682593** exported facts, without
+an error message.  It was found not by the unit tests but by
+comparing a full export with and without the dump.
 
-Regressionsprobe: `tests/test_kv_index_dump_5_indexed_write.aiml` +
-`_6_read.aiml` (Phase 6 faellt, wenn das Auffuellen wieder den Ueberlauf liest).
+Regression probe: `tests/test_kv_index_dump_5_indexed_write.aiml` +
+`_6_read.aiml` (phase 6 fails if the filling reads the overflow again).
 
-#### Gemessen (06./07.11.2026)
+#### Measured (2026-11-06/07)
 
-Isoliert, an einem einfachen `Kv<string:string>` mit 2 Mio Schluesseln (ohne
-`db_indexed`, damit nichts anderes die Zahlen verdeckt):
+In isolation, on a plain `Kv<string:string>` with 2 million keys (without
+`db_indexed`, so that nothing else obscures the numbers):
 
-| Store oeffnen + drei Werte lesen | Zeit | RSS |
+| Open the store + read three values | Time | RSS |
 |---|---|---|
-| Replay ueber den mmap-Zeiger | 1,60 s | 395 MB |
-| **mit Index-Dump** | **0,12 s** | **128 MB** |
+| Replay via the mmap pointer | 1.60 s | 395 MB |
+| **with index dump** | **0.12 s** | **128 MB** |
 
-Also 13× schneller und 3× weniger Speicher; der Dump kostete dort 79 MB neben
-128 MB WAL.  Grob **0,8 s und ~135 Byte je Million Schluessel**, die wegfallen.
+That is 13× faster and 3× less memory; the dump there cost 79 MB next to
+128 MB of WAL.  Roughly **0.8 s and ~135 bytes per million keys** are saved.
 
-Am Replay selbst, vorher und nachher (cai-Teilgraph s06, 5,83 Mio Schluessel):
-`read()` je Feld 63,62 s → mmap-Zeiger 39,32 s.
+On the replay itself, before and after (cai subgraph s06, 5.83 million keys):
+`read()` per field 63.62 s → mmap pointer 39.32 s.
 
-**Treue** ist an echten Daten geprueft: nach Checkpoint und Dump sind
-Schluesselmengen und Werte aller 5,83 Mio Eintraege von s06 bytegleich mit dem
-Original (sechs Stores, 0 Abweichungen).
+**Fidelity** was checked on real data: after checkpoint and dump, the
+key sets and values of all 5.83 million entries of s06 are byte-identical to the
+original (six stores, 0 deviations).
 
-#### Wo der Gewinn verschwindet
+#### Where the gain disappears
 
-Am cai-Wissensgraphen (18,17 Mio Schluessel) sank die Oeffnungszeit nur von
-275,9 s auf 261,7 s.  Das passt genau zur isolierten Messung — 0,8 s je Mio
-Schluessel sind bei 18,17 Mio eben 14 s -- und zeigt, dass dort etwas ANDERES
-dominiert: das Auffuellen der `db_indexed`-Nebenindizes (spec/45) dekodiert bei
-jedem Oeffnen jede Zeile und baut die Nebenindizes im RAM neu auf.  Gemessen am
-geoeffneten s06: 1867 MB anonym (Nebenindizes) gegen 720 MB Datei-Abbildung
-(der Dump).  Der Index-Dump nimmt dem Oeffnen den Primaerindex ab; wer die
-Nebenindizes nicht ebenfalls haltbar macht, merkt davon wenig.
+On the cai knowledge graph (18.17 million keys) the open time only dropped from
+275.9 s to 261.7 s.  That fits the isolated measurement exactly — 0.8 s per million
+keys are just 14 s at 18.17 million -- and shows that something ELSE
+dominates there: filling the `db_indexed` secondary indexes (spec/45) decodes
+every row on every open and rebuilds the secondary indexes in RAM.  Measured on the
+opened s06: 1867 MB anonymous (secondary indexes) against 720 MB file mapping
+(the dump).  The index dump takes the primary index off the open; whoever does not
+make the secondary indexes durable as well notices little of it.
 
-Daraus folgt der zweite Teil: `index_dump: true` macht AUCH die
-`db_indexed`-Nebenindizes haltbar, je Feld eine Datei `<name>__<feld>.kvsidx`.
-Format, Stempel und Grenzen stehen in spec/45 "Persistence" — ein eigenes
-Schluesselwort gibt es dafuer nicht, weil ein Nebenindex ein Index dieses
-Stores ist.
+From this follows the second part: `index_dump: true` ALSO makes the
+`db_indexed` secondary indexes durable, one file `<name>__<field>.kvsidx` per field.
+Format, stamps and limits are in spec/45 "Persistence" — there is no separate
+keyword for this, because a secondary index is an index of this
+store.
 
-**Nachgemessen am 07.11.2026**, nachdem es den Nebenindex-Dump gibt — dieselbe
-Art Gedaechtnis (`out/n0511_alles`, 3,7 GB WAL, 5,8 Mio Fakten), ein ganzer
-`cai2 graph stats`-Start je Zeile:
+**Re-measured on 2026-11-07**, after the secondary index dump existed — the same
+kind of memory (`out/n0511_alles`, 3.7 GB WAL, 5.8 million facts), one whole
+`cai2 graph stats` start per row:
 
-| Zustand | Zeit | RSS |
+| State | Time | RSS |
 |---|---|---|
-| kein Dump | 251 s | 19,3 GB |
-| nur `.kvidx` | 230 s | 18,1 GB |
-| `.kvidx` + `.kvsidx` | **3,7 s** | **4,2 GB** |
+| no dump | 251 s | 19.3 GB |
+| only `.kvidx` | 230 s | 18.1 GB |
+| `.kvidx` + `.kvsidx` | **3.7 s** | **4.2 GB** |
 
-Die Vorhersage dieses Abschnitts trifft also zu, und zwar deutlicher als
-erwartet: der Primaerindex-Dump allein nimmt **8 %** ab, die Nebenindizes den
-Rest.  Die Reihenfolge der Arbeit war damit falsch herum — wer nur §6.2.1
-umsetzt, hat an einem solchen Store so gut wie nichts gewonnen.  Zahlen,
-Dateigroessen und die Gegenproben stehen in spec/45 "Gemessen an cai".
+So the prediction of this section holds, and more clearly than
+expected: the primary index dump alone removes **8 %**, the secondary indexes the
+rest.  The order of the work was therefore the wrong way round — whoever only implements §6.2.1
+has gained practically nothing on such a store.  Numbers,
+file sizes and the cross-checks are in spec/45 "Measured on cai".
 
-Warnung aus eigener Erfahrung: die erste Messung ergab hier 0,06 s und 212 MB.
-Das war der Stand MIT dem Nebenindex-Fehler von oben -- das Auffuellen tat
-nichts, und der Fehler hat seine eigene Bestzahl erzeugt.  Wer eine
-ueberraschend gute Zahl sieht, prueft zuerst, ob noch alles getan wird.
+A warning from our own experience: the first measurement here gave 0.06 s and 212 MB.
+That was the state WITH the secondary index bug from above -- the filling did
+nothing, and the bug produced its own best figure.  Whoever sees a
+surprisingly good number first checks whether everything is still being done.
 
-Zweitens, und unabhaengig vom Dump: der Dump laeuft **sortiert** statt in
-Hash-Reihenfolge.  Wer sich -- bewusst oder nicht -- auf die Reihenfolge einer
-Aufzaehlung verlassen hat, sieht andere Ergebnisse.  In cai hing daran die
-Dimensionswahl fuer Relationen ohne Schemaeintrag ("der zuerst gesehene
-gewinnt"): 729 von 9240 Relationen entschieden sich anders.  Nicht der Dump war
-falsch, sondern die Annahme, eine `unordered_map` habe eine Reihenfolge.
+Second, and independently of the dump: the dump iterates **sorted** instead of in
+hash order.  Whoever -- knowingly or not -- relied on the order of an
+enumeration sees different results.  In cai the choice of dimension for relations
+without a schema entry depended on it ("the first one seen
+wins"): 729 of 9240 relations decided differently.  It was not the dump that was
+wrong, but the assumption that an `unordered_map` has an order.
 
-#### Was der Dump NICHT loest
+#### What the dump does NOT solve
 
-Der Aufbau des Ueberlauf-Index ist weiter O(WAL-Rest).  Wer viel schreibt und
-selten checkpointet, zahlt beim Oeffnen wieder.  Der Dump verschiebt die Kosten
-auf den Checkpoint, er schafft sie nicht ab.
+Building the overflow index is still O(WAL remainder).  Whoever writes a lot and
+checkpoints rarely pays again on open.  The dump shifts the cost
+to the checkpoint, it does not abolish it.
 
 ### 6.3 Checkpoint
 
@@ -840,18 +840,18 @@ start of the next checkpoint.
 > are **invalid** afterwards (the underlying mmap is replaced). Re-fetch
 > them via `kv.get` after the checkpoint.
 
-### 6.4 Storage Root — `db.set_path` und `AIONDB_PATH`
+### 6.4 Storage Root — `db.set_path` and `AIONDB_PATH`
 
-Bis 2026-04-30 nutzte AionDB einen festen Default `./aiondb/` relativ zum
-Working-Directory. Das fuehrt zu zwei Problemen:
+Until 2026-04-30 AionDB used a fixed default `./aiondb/` relative to the
+working directory. That leads to two problems:
 
-1. **IDE-Watcher** scannen das Projekt-Verzeichnis und ersticken an den
-   sparse-extended `.kvwal`-Dateien (apparent size MB-GB pro File).
-2. **Mehrere Tools** im selben Repo schreiben in dasselbe `aiondb/`,
-   was zu Verwechslungen fuehrt.
+1. **IDE watchers** scan the project directory and choke on the
+   sparse-extended `.kvwal` files (apparent size MB–GB per file).
+2. **Several tools** in the same repo write into the same `aiondb/`,
+   which leads to mix-ups.
 
-`db.set_path` setzt einen globalen Speicher-Root, der von allen
-nachfolgenden `db.open*`-Aufrufen genutzt wird:
+`db.set_path` sets a global storage root that is used by all
+subsequent `db.open*` calls:
 
 ```aiml
 - call: [db.set_path, "/home/user/.cache/myproject/aiondb"]
@@ -862,59 +862,59 @@ nachfolgenden `db.open*`-Aufrufen genutzt wird:
 # → /home/user/.cache/myproject/aiondb/runs/trajectory.kvwal
 ```
 
-#### Resolution-Reihenfolge
+#### Resolution order
 
-Wird **bei jedem** `open_*` Aufruf neu evaluiert:
+Re-evaluated on **every** `open_*` call:
 
-1. **`AIONDB_PATH` env var** (dominiert immer)
-2. via `db.set_path()` gesetzter Wert
-3. Fallback `./aiondb/`
+1. **`AIONDB_PATH` env var** (always dominates)
+2. the value set via `db.set_path()`
+3. fallback `./aiondb/`
 
-Anschliessend wird das `path:` Argument der `open`-Funktion angehangen:
+Then the `path:` argument of the `open` function is appended:
 
-| `path:` Argument | Verhalten |
+| `path:` argument | Behaviour |
 |---|---|
-| nicht gesetzt / leer | nur Root nutzen |
-| relativer Pfad (`"sub/dir/"`) | Root + Sub-Pfad anhaengen |
-| absoluter Pfad (`"/tmp/..."`) | as-is, Root wird ignoriert (backward-compat fuer Tests) |
+| not set / empty | use the root only |
+| relative path (`"sub/dir/"`) | append root + sub-path |
+| absolute path (`"/tmp/..."`) | as-is, root is ignored (backward-compat for tests) |
 
-Das Verzeichnis wird beim `open` **angelegt, einschliesslich aller Zwischenebenen**.  Bis
-2026-10-15 war das ein einstufiges `mkdir`: ein `path: "sub/dir/"` schlug beim ersten
-Oeffnen mit `ENOENT` fehl, der open-Pfad lief weiter, und der Store blieb still leer.  Das
-Beispiel `runs/trajectory.kvwal` zwei Absaetze weiter oben war damit unbelegt.
+The directory is **created on `open`, including all intermediate levels**.  Until
+2026-10-15 this was a single-level `mkdir`: a `path: "sub/dir/"` failed on the first
+open with `ENOENT`, the open path carried on, and the store stayed silently empty.  The
+example `runs/trajectory.kvwal` two paragraphs above was therefore unsupported.
 
-#### Beispiele
+#### Examples
 
 ```bash
-# Tul-Programm setzt Default im AIML-Code:
+# Tul program sets the default in AIML code:
 # - call: [db.set_path, "/home/user/.cache/tul"]
 
-# Programm-Default verwenden:
+# Use the program default:
 ./tul_train ...
 # → /home/user/.cache/tul/...
 
-# Ueberschreiben via env var:
+# Override via env var:
 AIONDB_PATH=/data/aiml/run42 ./tul_train ...
 # → /data/aiml/run42/...
 ```
 
-#### Designziele
+#### Design goals
 
-- **Programmatischer Default** im AIML-Code via `db.set_path` — Apps wie
-  `tul_train` koennen einen sinnvollen Default-Pfad einprogrammieren
-  (z.B. unter `~/.cache/`), ohne dass jedes CLI-Aufruf einen Pfad
-  mitgeben muss.
-- **Operative Override** via env var ohne Source-Aenderung —
-  fuer Container, CI, Multi-Run-Setups.
-- **Test-Kompatibilitaet** durch absolute-Path-Pass-Through —
-  bestehende Tests die `/tmp/aiml_test_xyz/` nutzen funktionieren
-  unveraendert.
-- **IDE-Friendly Default-Layout** — wenn der Root ausserhalb des
-  Workspace liegt, sieht kein File-Watcher die Sparse-Files.
+- **Programmatic default** in AIML code via `db.set_path` — apps such as
+  `tul_train` can build in a sensible default path
+  (e.g. under `~/.cache/`), without every CLI call having to pass
+  a path.
+- **Operational override** via env var without a source change —
+  for containers, CI, multi-run setups.
+- **Test compatibility** through absolute-path pass-through —
+  existing tests that use `/tmp/aiml_test_xyz/` work
+  unchanged.
+- **IDE-friendly default layout** — if the root is outside the
+  workspace, no file watcher sees the sparse files.
 
-> **Hinweis:** `db.set_path` aendert nur den Default fuer **zukuenftige**
-> open-Aufrufe. Bereits geoeffnete Stores behalten ihren urspruenglich
-> gewaehlten Pfad.
+> **Note:** `db.set_path` only changes the default for **future**
+> open calls. Stores that are already open keep the path they
+> originally chose.
 
 ### 6.5 Cross-Process Sync — db.reload_kv
 
@@ -950,8 +950,8 @@ open, and subsequent reads transparently re-fault the pages from disk.
 
 ```aiml
 - call: [db.kv_evict, kv]      # release mmap pages, keep index + handle
-#                              # mit index_dump: true ist der Index selbst
-#                              # datei-gebunden und wird mit freigegeben (§6.2.1)
+#                              # with index_dump: true the index itself is
+#                              # file-backed and is released as well (§6.2.1)
 - decl: [v, string, { call: [kv.get, "k"] }]   # works — page faults in
 ```
 
@@ -1236,66 +1236,66 @@ start:
 The merge's `mp.base_store` points to `build_store_name(cfg.pf_db_tag, "tul_transformer")`
 which is guaranteed to have weights after this call.
 
-### 6.10 Die Typisierung gehoert dem Store, nicht dem Oeffner
+### 6.10 The typing belongs to the store, not to whoever opens it
 
-Ein `Kv<K:V>` wird von seiner **ersten** Oeffnung typisiert.  `db.open_kv` fuehrt
-eine Registratur je `(Verzeichnis, Name)`; jede weitere Oeffnung desselben Stores
-im selben Prozess bekommt **denselben** Handle zurueck -- mit der `val_size` und
-dem Deskriptor der ersten Oeffnung (§6.4 bestimmt das Verzeichnis).
+A `Kv<K:V>` is typed by its **first** open.  `db.open_kv` keeps
+a registry per `(directory, name)`; every further open of the same store
+in the same process gets **the same** handle back -- with the `val_size` and
+the descriptor of the first open (§6.4 determines the directory).
 
-Daraus folgt eine normative Regel:
+This leads to a normative rule:
 
-> **Jede Oeffnung eines Stores muss denselben Werttyp verlangen.**  Weicht eine
-> spaetere Oeffnung in `val_size`, in der Typisierung (typisiert vs. roh) oder im
-> Schema-Fingerabdruck des Deskriptors ab, ist das ein **Programmierfehler**.  Die
-> Laufzeit meldet ihn beim Oeffnen laut und bricht ab; sie darf den abweichenden
-> Oeffner nicht stillschweigend bedienen.
+> **Every open of a store must request the same value type.**  If a
+> later open differs in `val_size`, in typing (typed vs. raw) or in the
+> schema fingerprint of the descriptor, that is a **programming error**.  The
+> runtime reports it loudly on open and aborts; it must not silently serve the
+> deviating opener.
 
-Der Grund, warum das nicht tiefer abgefangen werden kann: `kv.get` dekodiert mit
-dem Deskriptor des **Handles** und gibt einen Zeiger auf den dekodierten Satz
-zurueck; die Aufrufstelle liest ihn als ihren eigenen **deklarierten** Typ.  Der
-Fingerabdruck, der jeden KV-Blob schuetzt (§7, `aiml_ser_decode`), kann das nicht
-sehen -- Blob und Handle passen ja zusammen, nur der Leser passt nicht.  Ohne
-Wache am Oeffnen liest der abweichende Leser die Bytes eines fremden Satzaufbaus:
-`has` sagt 1, der Satz sieht plausibel aus, und der erste Zeichenketten-Zeiger,
-der auf Nicht-Zeiger-Bytes faellt, stuerzt beim Weitergeben ab
+The reason this cannot be caught deeper down: `kv.get` decodes with
+the descriptor of the **handle** and returns a pointer to the decoded record;
+the call site reads it as its own **declared** type.  The
+fingerprint that protects every KV blob (§7, `aiml_ser_decode`) cannot
+see this -- blob and handle do match, only the reader does not.  Without a
+guard at open, the deviating reader reads the bytes of a foreign record layout:
+`has` says 1, the record looks plausible, and the first string pointer
+that lands on non-pointer bytes crashes when passed on
 (`aiml_ser_encode` <- `aiml_ser_deep_copy`).
 
-Dazu traegt der WAL-Kopf (§6.8) `flags` (typisiert) und `val_size` der
-**erzeugenden** Oeffnung.  Beim Oeffnen einer vorhandenen Datei werden beide mit
-dem Verlangten verglichen; eine Abweichung wird **gemeldet, aber nicht** zum
-Abbruch gemacht -- ein angehaengtes Feld (§7, Schema-Evolution) aendert `val_size`
-zulaessig, und der Blob-Fingerabdruck sagt dann beim Lesen, was zu tun ist.
+In addition, the WAL header (§6.8) carries `flags` (typed) and `val_size` of the
+**creating** open.  When an existing file is opened, both are compared with
+what is requested; a deviation is **reported, but not** turned into an
+abort -- an appended field (§7, schema evolution) changes `val_size`
+legitimately, and the blob fingerprint then says what to do on read.
 
-**Wo die Regel beisst.**  Beim Global stehen Name und Typ in *einer* Zeile:
+**Where the rule bites.**  For a global, name and type are on *one* line:
 
 ```aiml
 - decl: [disc_enemies_kv, Kv<string:Enemy>, { call: [db.open_kv, "disc_enemies", {persist: true}] }]
 ```
 
-Zieht man den Zustand nach spec/58 in eine Klasse oder eine classgroup-Instanz,
-stehen sie an **zwei** Stellen -- der Typ im Klassenkoerper, der Name im
-Konstruktor:
+If the state is moved into a class or a classgroup instance as per spec/58,
+they are in **two** places -- the type in the class body, the name in the
+constructor:
 
 ```aiml
 - class:
     name: WeltSpeicher
     members:
-      - [feinde, Kv<string:Enemy>]        # Typ hier
+      - [feinde, Kv<string:Enemy>]        # type here
     methods:
       - def:
           name: oeffne
           body:
-            - set: [<.feinde, { call: [db.open_kv, "disc_enemies", {persist: true}] }]   # Name hier
+            - set: [<.feinde, { call: [db.open_kv, "disc_enemies", {persist: true}] }]   # name here
 ```
 
-Das ist zulaessig und richtig typisiert (eine Probe ueber Global, Klassenmitglied,
-classgroup-Instanz, Gruppenmethode und Zwei-Schritt-Leihe zeigt in allen fuenf
-Wegen den typisierten Oeffnungsaufruf).  Waehrend einer **schrittweisen**
-Migration oeffnen aber Global und Mitglied denselben Store, und ein vertauschtes
-Paar (Name des einen Stores, Typ des anderen) ist dann genau der Fall oben: kein
-Compiler-Fehler, kein Laufzeit-Wort, ein fremd gelesener Satz.  Gefunden am
-11.11.2026 in datacreatures (abgebrochener Repository-Pilot), nachgestellt in
+That is admissible and correctly typed (a probe across global, class member,
+classgroup instance, group method and two-step borrow shows the typed open call
+on all five paths).  During a **step-by-step**
+migration, however, global and member open the same store, and a swapped
+pair (name of one store, type of the other) is then exactly the case above: no
+compiler error, not a word at runtime, a record read as something foreign.  Found on
+2026-11-11 in datacreatures (an aborted repository pilot), reproduced in
 `tests/kv_typ_divergenz/`.
 
 ---
@@ -1732,10 +1732,10 @@ for more ambitious storage-engine work.
 - **Compression**: LZ4 or Zstandard for rarely used pages (cold storage).
 - **Reactive queries**: `db.subscribe(query, callback)` — called when the result set changes.
 
-## Einblick in geöffnete Speicher
+## Insight into open stores
 
-Für eine Betriebssicht (cosmos `doc/spec/99` §99.2) gibt `db` Kennzahlen der **geöffneten
-persistenten** Speicher heraus — nie Inhalte.
+For an operations view (cosmos `doc/spec/99` §99.2), `db` hands out metrics of the **open
+persistent** stores — never contents.
 
 ```yaml
 - decl: [count, i32, { call: [db.open_count] }]
@@ -1746,13 +1746,13 @@ persistenten** Speicher heraus — nie Inhalte.
 - decl: [wrts,  i64,    { call: [db.open_writes, idx] }]
 ```
 
-- Gezeigt werden nur **geöffnete** Speicher: ein Speicher, den niemand geöffnet hat, ist kein
-  Betriebszustand, sondern eine Datei.
-- `open_writes` ist ein **Zähler**, kein Zeitstempel.  Ein Zeitstempel kostete je Schreibvorgang
-  einen Uhrzugriff auf dem heißen Pfad; die Sicht vergleicht ohnehin zwei Schnappschüsse, und die
-  Differenz sagt „bewegt sich", während der Schnappschuss-Zeitpunkt sagt, wie alt die Aussage ist.
-- Ein Index außerhalb des Bereichs liefert Leeres bzw. `0` — kein Absturz, keine Ausnahme
+- Only **open** stores are shown: a store that nobody has opened is not
+  operational state but a file.
+- `open_writes` is a **counter**, not a timestamp.  A timestamp would cost a clock access
+  on the hot path for every write; the view compares two snapshots anyway, and the
+  difference says "it is moving", while the snapshot time says how old the statement is.
+- An index out of range returns empty or `0` — no crash, no exception
   (`tests/test_kv_introspection.aiml`).
-- **Keine Werte.**  Eine Oberfläche, die KV-Inhalte zeigt, zeigt früher oder später ein Geheimnis,
-  und die Begründung „nur für Diagnose" hält bis zum ersten Bildschirmfoto in einem Ticket.
+- **No values.**  A UI that shows KV contents will sooner or later show a secret,
+  and the justification "only for diagnostics" holds until the first screenshot in a ticket.
 
