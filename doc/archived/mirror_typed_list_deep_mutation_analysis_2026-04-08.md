@@ -1,369 +1,369 @@
 # Mirror Typed List Deep-Mutation Analysis
 
-Datum: 2026-04-08
+Date: 2026-04-08
 
-## Fragestellung
+## Question
 
-Decken die vorhandenen AIML-Repro-Tests den vermuteten Mirror-Bug fuer `list<Effect>`-artige Felder bereits ab?
+Do the existing AIML repro tests already cover the suspected mirror bug for `list<Effect>`-like fields?
 
-Kurzantwort: nein, nicht den wahrscheinlichsten Fehlerfall.
+Short answer: no, not the most likely failure case.
 
-## Kernbefund
+## Core finding
 
-Der aktuell wahrscheinlichste Fehler im C++-Mirror-Pfad ist kein genereller `list<struct>`-Encode/Decode-Defekt, sondern die Dirty-Erkennung fuer typed Mirror-Objekte mit Heap-Feldern.
+The currently most likely bug in the C++ mirror path is not a general `list<struct>` encode/decode defect, but the dirty detection for typed mirror objects with heap fields.
 
-In [src/sys/mirror_runtime.cpp](../../src/sys/mirror_runtime.cpp#L819) wird Dirty-State nur per flachem `memcmp(reg->obj_ptr, reg->shadow, reg->obj_size)` erkannt.
+In [src/sys/mirror_runtime.cpp](../../src/sys/mirror_runtime.cpp#L819), dirty state is detected only via a flat `memcmp(reg->obj_ptr, reg->shadow, reg->obj_size)`.
 
-Das ist fuer folgende Felder strukturell unzureichend:
+That is structurally insufficient for the following fields:
 - `string`
 - `list<T>`
 - `map<K:V>`
-- allgemein alle Heap-Felder in typed Modellen
+- in general all heap fields in typed models
 
-Wenn sich nur der Inhalt hinter einem stabilen Pointer aendert, aber die aeussere Inline-Struktur gleich bleibt, sieht der Mirror kein Dirty-Delta.
+If only the content behind a stable pointer changes, but the outer inline structure stays the same, the mirror sees no dirty delta.
 
-Typischer Problemfall fuer `list<Effect>`:
-- Liste existiert bereits
-- `len` bleibt gleich
-- `capacity` bleibt gleich
-- `data*` bleibt gleich
-- aber ein vorhandenes Element wird in-place geaendert, z. B. `effects-0.duration = 2`
+Typical problem case for `list<Effect>`:
+- the list already exists
+- `len` stays the same
+- `capacity` stays the same
+- `data*` stays the same
+- but an existing element is changed in place, e.g. `effects-0.duration = 2`
 
-Dann bleibt das top-level `memcmp` sehr wahrscheinlich unveraendert, obwohl die semantischen Daten anders sind.
+Then the top-level `memcmp` very probably stays unchanged, although the semantic data is different.
 
-## Was die vorhandenen Tests wirklich abdecken
+## What the existing tests really cover
 
 ### 1. `tests/test_mirror_ws_list_mutation.aiml`
 
-Deckt ab:
-- Mutation skalare Felder ueber Pointer auf Listenelemente, z. B. `p1.hp`, `p1.is_active`
-- `remove` und `push` auf einer Liste
-- `push` auf einer Top-Level-Liste
-- Ersetzen eines nested Struct-Felds (`root.match`)
+Covers:
+- mutation of scalar fields via pointers to list elements, e.g. `p1.hp`, `p1.is_active`
+- `remove` and `push` on a list
+- `push` on a top-level list
+- replacing a nested struct field (`root.match`)
 
-Deckt nicht ab:
-- in-place Mutation eines bereits existierenden Listenelements bei gleichbleibender Listenstruktur
-- Beispiel: `z0.cards-1.order_idx = 99` ohne `push/remove`
-- Beispiel: `participant.flags-0.enabled = 1` ohne Aenderung von `flags.len`
+Does not cover:
+- in-place mutation of an already existing list element with an unchanged list structure
+- example: `z0.cards-1.order_idx = 99` without `push/remove`
+- example: `participant.flags-0.enabled = 1` without changing `flags.len`
 
-Befund:
-- der Test beweist, dass Strukturmutationen erkannt werden
-- er beweist nicht, dass Deep-Mutationen hinter stabilem `data*` erkannt werden
+Finding:
+- the test proves that structural mutations are detected
+- it does not prove that deep mutations behind a stable `data*` are detected
 
-Referenz:
+Reference:
 - [tests/test_mirror_ws_list_mutation.aiml](../../tests/test_mirror_ws_list_mutation.aiml)
 
 ### 2. `tests/test_mirror_ws_list_mutation_poll.aiml`
 
-Deckt denselben Fall wie oben ab, nur robuster gegen Timing/Frame-Drain.
+Covers the same case as above, just more robust against timing/frame drain.
 
-Deckt nicht ab:
-- denselben kritischen Deep-Mutation-Fall ebenfalls nicht
+Does not cover:
+- the same critical deep mutation case either
 
-Referenz:
+Reference:
 - [tests/test_mirror_ws_list_mutation_poll.aiml](../../tests/test_mirror_ws_list_mutation_poll.aiml)
 
 ### 3. `tests/test_mirror_ws_events_tail_fields.aiml`
 
-Deckt ab:
-- `list<model>` vor weiteren Sync-Feldern
-- anschliessende Tail-Felder nach Listen
-- `push` auf `events` und `active_triggers`
+Covers:
+- `list<model>` before further sync fields
+- subsequent tail fields after lists
+- `push` on `events` and `active_triggers`
 - nested struct `reaction_state`
 
-Das ist ein guter Test gegen einen alten "tail fields after list"-Layout-/Decode-Bug.
+That is a good test against an old "tail fields after list" layout/decode bug.
 
-Deckt nicht ab:
-- in-place Aenderung eines bestehenden `events`- oder `active_triggers`-Elements
-- Beispiel: `root.events-0.text = "changed"`
-- Beispiel: `root.active_triggers-0.code = 99`
+Does not cover:
+- in-place change of an existing `events` or `active_triggers` element
+- example: `root.events-0.text = "changed"`
+- example: `root.active_triggers-0.code = 99`
 
-Referenz:
+Reference:
 - [tests/test_mirror_ws_events_tail_fields.aiml](../../tests/test_mirror_ws_events_tail_fields.aiml)
 
 ### 4. `tests/test_mirror_ws_9rooms_gameview_events.aiml`
 
-Deckt ab:
-- echte 9rooms-Modelle
+Covers:
+- real 9rooms models
 - `GameView.events`, `active_triggers`, `reactable_triggers`
 - `reaction_state`
-- mehrere `push`-Operationen auf Listen echter View-Modelle
+- several `push` operations on lists of real view models
 
-Das ist der naechste existierende Test an eurem echten GameView-Pfad.
+That is the closest existing test to your real GameView path.
 
-Deckt nicht ab:
-- in-place Mutation eines bestehenden Eintrags in `events`
-- in-place Mutation eines bestehenden Eintrags in `active_triggers`
-- in-place Mutation eines bestehenden Eintrags in `reactable_triggers`
+Does not cover:
+- in-place mutation of an existing entry in `events`
+- in-place mutation of an existing entry in `active_triggers`
+- in-place mutation of an existing entry in `reactable_triggers`
 
-Beispiele, die aktuell nicht getestet werden:
+Examples that are currently not tested:
 - `v.events-0.text = "changed"`
 - `v.active_triggers-0.resolved = 1`
 - `v.reactable_triggers-0.expired = 1`
 
-Referenz:
+Reference:
 - [tests/test_mirror_ws_9rooms_gameview_events.aiml](../../tests/test_mirror_ws_9rooms_gameview_events.aiml)
 
 ### 5. `tests/test_mirror_rpc_model_ws.aiml`
 
-Deckt ab:
-- typed RPC-Payload Decode eines Modells mit `list<string>`
+Covers:
+- typed RPC payload decode of a model with `list<string>`
 
-Deckt nicht ab:
-- Mirror-Dirty-Tracking eines bereits registrierten typed Sync-Objekts
-- also nicht das eigentliche Problem der periodischen Delta-Erkennung
+Does not cover:
+- mirror dirty tracking of an already registered typed sync object
+- i.e. not the actual problem of periodic delta detection
 
-Referenz:
+Reference:
 - [tests/test_mirror_rpc_model_ws.aiml](../../tests/test_mirror_rpc_model_ws.aiml)
 
-## Analyse der wahrscheinlichen Ursache im C++-Code
+## Analysis of the likely cause in the C++ code
 
-### Dirty-Erkennung ist shallow
+### Dirty detection is shallow
 
-In [src/sys/mirror_runtime.cpp](../../src/sys/mirror_runtime.cpp#L819) gilt:
+In [src/sys/mirror_runtime.cpp](../../src/sys/mirror_runtime.cpp#L819):
 
-- dirty wenn `memcmp(obj_ptr, shadow, obj_size) != 0`
+- dirty if `memcmp(obj_ptr, shadow, obj_size) != 0`
 
-In [src/sys/mirror_runtime.cpp](../../src/sys/mirror_runtime.cpp#L321) wird der Shadow danach ebenfalls nur per `memcpy` aktualisiert.
+In [src/sys/mirror_runtime.cpp](../../src/sys/mirror_runtime.cpp#L321) the shadow is afterwards likewise updated only via `memcpy`.
 
-Das bedeutet:
-- vergleicht wird nur die Inline-Struktur des Root-Modells
-- nicht die rekursiv serialisierte Bedeutung
-- nicht die Inhalte hinter Heap-Pointern
+That means:
+- only the inline structure of the root model is compared
+- not the recursively serialised meaning
+- not the contents behind heap pointers
 
-### Typed Encode/Decode wirkt fuer `list<struct>` selbst konsistent
+### Typed encode/decode looks consistent for `list<struct>` itself
 
-Der eigentliche Runtime-Codec in [src/sys/ser_runtime.cpp](../../src/sys/ser_runtime.cpp) sieht fuer `AIML_TD_LIST` normal aus:
-- Encode iteriert ueber `count` und `elem_size`
-- Decode alloziert Liste neu und decodiert rekursiv pro Element
-- `list<struct>` und nested lists sind im Code ausdruecklich vorgesehen
+The actual runtime codec in [src/sys/ser_runtime.cpp](../../src/sys/ser_runtime.cpp) looks normal for `AIML_TD_LIST`:
+- encode iterates over `count` and `elem_size`
+- decode allocates the list anew and decodes recursively per element
+- `list<struct>` and nested lists are explicitly provided for in the code
 
-Das spricht gegen die pauschale These "Mirror kann list<Effect> nicht serialisieren".
+That argues against the blanket thesis "the mirror cannot serialise list<Effect>".
 
-Praeziser ist:
-- Mirror serialisiert `list<Effect>` wahrscheinlich dann korrekt, wenn ueberhaupt ein Delta ausgeloest wird
-- der Fehler ist wahrscheinlich, dass bestimmte Deep-Mutationen gar kein Delta ausloesen
+More precisely:
+- the mirror probably serialises `list<Effect>` correctly whenever a delta is triggered at all
+- the bug is probably that certain deep mutations do not trigger a delta at all
 
-## Bewertung der bestehenden Testabdeckung
+## Assessment of the existing test coverage
 
-Aktueller Stand:
-- `list<struct>` Roundtrip: teilweise gut abgedeckt
-- Listen vor/nach Tail-Feldern: abgedeckt
-- echte 9rooms-Eventlisten im Mirror: abgedeckt
-- Deep-Mutation eines existierenden Listenelements: nicht abgedeckt
+Current state:
+- `list<struct>` roundtrip: partly well covered
+- lists before/after tail fields: covered
+- real 9rooms event lists in the mirror: covered
+- deep mutation of an existing list element: not covered
 
-Damit fehlt genau der Test, der die aktuelle Hauptvermutung entweder bestaetigt oder sauber widerlegt.
+So exactly the test is missing that either confirms or cleanly refutes the current main suspicion.
 
-## Konkrete Luecke fuer `list<Effect>`
+## Concrete gap for `list<Effect>`
 
-Wenn euer reales Problem `list<Effect>` oder `list<PendingEffect>` betrifft, dann fehlt mindestens ein Test nach diesem Muster:
+If your real problem concerns `list<Effect>` or `list<PendingEffect>`, then at least one test of this pattern is missing:
 
-1. Host registriert typed Modell mit `list<Effect>` und mindestens 1 Eintrag
-2. Client registriert Replica und bestaetigt Initialzustand
-3. Host mutiert kein `push/remove`, sondern ein Feld des existierenden Elements
-4. Host ruft nur normale `sess.update`-Ticks auf
-5. Client prueft, ob genau diese Deep-Mutation angekommen ist
+1. The host registers a typed model with `list<Effect>` and at least 1 entry
+2. The client registers a replica and confirms the initial state
+3. The host does not mutate via `push/remove`, but a field of the existing element
+4. The host only calls normal `sess.update` ticks
+5. The client checks whether exactly this deep mutation arrived
 
-Beispielhafte kritische Aenderungen:
+Exemplary critical changes:
 - `effects-0.amount = 7`
 - `effects-0.kind = "poison"`
 - `effects-0.remaining_turns = 2`
 - `pending_effects-0.resolved = 1`
 
-## Schlussfolgerung
+## Conclusion
 
-Die vorhandenen Repro-Tests sind nicht nutzlos, aber sie decken den wahrscheinlichsten Fehlerfall noch nicht ab.
+The existing repro tests are not useless, but they do not yet cover the most likely failure case.
 
-Sie zeigen:
-- typed `list<model>` Decode funktioniert in mehreren Faellen
-- mehrere reale 9rooms-Listenpfade funktionieren fuer `push/remove` und Feldersatz
+They show:
+- typed `list<model>` decode works in several cases
+- several real 9rooms list paths work for `push/remove` and field replacement
 
-Sie zeigen nicht:
-- dass Deep-Mutationen in bestehenden Listenelementen bei unveraenderter Listenstruktur im Mirror dirty werden
+They do not show:
+- that deep mutations in existing list elements with an unchanged list structure become dirty in the mirror
 
-Genau dort ist die aktuelle Testluecke.
+That is exactly where the current test gap is.
 
-## Empfohlener naechster Schritt
+## Recommended next step
 
-Der naechste sinnvolle Test ist ein minimaler WS-Mirror-Repro mit:
+The next sensible test is a minimal WS mirror repro with:
 - `model EffectLite`
 - `model Root { effects: list<EffectLite> }`
-- Initialzustand mit 1-2 Effekten
-- danach nur `effects-0.some_field = new_value`
-- keine `push/remove`
+- an initial state with 1-2 effects
+- afterwards only `effects-0.some_field = new_value`
+- no `push/remove`
 
-Wenn dieser Test fehlschlaegt, ist die Ursache praktisch bestaetigt:
+If this test fails, the cause is practically confirmed:
 - shallow dirty tracking in `mirror_runtime.cpp`
-- nicht primaer `aiml_ser_encode/decode`
+- not primarily `aiml_ser_encode/decode`
 
-## Nachtrag aus 9rooms-Laufzeitlogs
+## Addendum from 9rooms runtime logs
 
-Die frischen 9rooms-Logs schaerfen den Befund deutlich nach: Dort scheitert nicht nur eine Deep-Mutation, sondern ein reales Mirror-Delta wird auf dem Client beim Decode verworfen.
+The fresh 9rooms logs sharpen the finding considerably: there, not only a deep mutation fails, but a real mirror delta is discarded on the client during decode.
 
-Konkrete Indizien aus dem Repro-Match:
-- Der Angriff von `Canopy Viper` laeuft serverseitig durch und feuert `ON_HIT`.
-- `execute_decoded_effect(...)` wird fuer den Trefferpfad ausgefuehrt.
-- `view_sync_creatures(...)` prueft direkt danach fuer das Ziel `iid=36` den Status `200`.
-- Der Host sendet danach ein typed Delta mit `blob=2498`.
-- Der Client verwirft genau dieses Paket mit `ser_decode failed (schema mismatch?)`.
+Concrete indications from the repro match:
+- The attack of `Canopy Viper` goes through on the server side and fires `ON_HIT`.
+- `execute_decoded_effect(...)` is executed for the hit path.
+- `view_sync_creatures(...)` checks status `200` for the target `iid=36` directly afterwards.
+- The host then sends a typed delta with `blob=2498`.
+- The client discards exactly this packet with `ser_decode failed (schema mismatch?)`.
 
-Siehe dazu:
-- `test/9rooms/frontend_logs.txt` um den Angriff bei `20:13:19`
-- `test/9rooms/logs.txt` mit
+See:
+- `test/9rooms/frontend_logs.txt` around the attack at `20:13:19`
+- `test/9rooms/logs.txt` with
   - `absurd LIST count=2079857120 idx=14 off=336 esz=56`
   - `ser_decode failed (schema mismatch?) — discarding packet`
 
-Wichtige Einordnung:
-- Der bisherige Report-Fokus auf shallow dirty tracking bleibt plausibel, ist aber fuer den 9rooms-Fall nicht mehr vollstaendig.
-- Im 9rooms-Fall gibt es harte Laufzeitevidenz fuer einen Decode-/Schema-Fehler auf dem Replica-Client.
-- Dieser Fehler tritt bereits vor dem `Canopy Viper`-Treffer mehrfach auf; der Status-Effekt macht ihn nur sichtbar.
+Important classification:
+- The previous report focus on shallow dirty tracking remains plausible, but is no longer complete for the 9rooms case.
+- In the 9rooms case there is hard runtime evidence for a decode/schema error on the replica client.
+- This error already occurs several times before the `Canopy Viper` hit; the status effect only makes it visible.
 
-Damit gibt es aktuell zwei realistische Fehlerklassen, die getrennt getestet werden muessen:
-1. Deep-Mutationen werden nicht dirty und daher nie gesendet.
-2. Gesendete typed Deltas mit mehreren Listen-/Tail-Feldern werden auf dem Client unter bestimmten realen Schemata falsch decodiert.
+So there are currently two realistic error classes that must be tested separately:
+1. Deep mutations do not become dirty and are therefore never sent.
+2. Sent typed deltas with several list/tail fields are decoded wrongly on the client under certain real schemas.
 
-## Praezisierung des Zielbilds fuer neue Tests
+## Refinement of the target picture for new tests
 
-Die bisherige Testluecke ist deshalb zweigeteilt:
+The previous test gap is therefore split in two:
 
-### A. Dirty-Tracking-Repro
+### A. Dirty tracking repro
 
-Ein Minimaltest muss weiterhin pruefen:
-- bestehende `list<model>`
-- kein `push/remove`
-- nur Feldmutation eines existierenden Elements
-- Erwartung: Delta kommt trotzdem an
+A minimal test must still check:
+- an existing `list<model>`
+- no `push/remove`
+- only a field mutation of an existing element
+- expectation: the delta still arrives
 
-Dieser Test beantwortet die Frage:
-- erkennt der Mirror Deep-Mutationen ueberhaupt als dirty?
+This test answers the question:
+- does the mirror recognise deep mutations as dirty at all?
 
-### B. Decode-/Schema-Repro mit 9rooms-naher Struktur
+### B. Decode/schema repro with a 9rooms-like structure
 
-Ein zweiter Test muss gezielt den 9rooms-Befund nachstellen:
-- mehrere Listen gleicher Elementfamilie oder aehnlicher Layout-Komplexitaet
-- Listen gefolgt von weiteren Listen und Tail-Feldern
-- verschachtelte Struct-Felder zwischen bzw. nach Listen
-- mehrere Updates nacheinander, nicht nur Initialzustand
-- Client muss nach jedem Update weiter decodieren koennen
+A second test must specifically recreate the 9rooms finding:
+- several lists of the same element family or of similar layout complexity
+- lists followed by further lists and tail fields
+- nested struct fields between or after lists
+- several updates in a row, not only the initial state
+- the client must be able to keep decoding after every update
 
-Dieser Test beantwortet die Frage:
-- kippt der Replica-Decode bei einem bestimmten Feldlayout oder Update-Muster?
+This test answers the question:
+- does the replica decode tip over at a certain field layout or update pattern?
 
-## Konkrete Testkandidaten
+## Concrete test candidates
 
 ### 1. `test_mirror_ws_list_deep_element_mutation.aiml`
 
-Zweck:
-- isolierter Repro fuer die urspruengliche Hauptvermutung `list<Effect>` / Deep-Mutation
+Purpose:
+- an isolated repro for the original main suspicion `list<Effect>` / deep mutation
 
-Minimalmodell:
+Minimal model:
 - `EffectLite { code, amount, remaining_turns, key }`
 - `Root { tick, effects: list<EffectLite> }`
 
-Ablauf:
-1. Host registriert `Root` mit 2 Effekten.
-2. Client verbindet und bestaetigt Initialzustand.
-3. Host aendert nur `effects-0.remaining_turns` und `effects-1.amount`.
-4. Keine Listenlaenge aendert sich.
-5. Client muss die neuen Feldwerte sehen.
+Flow:
+1. The host registers `Root` with 2 effects.
+2. The client connects and confirms the initial state.
+3. The host changes only `effects-0.remaining_turns` and `effects-1.amount`.
+4. No list length changes.
+5. The client must see the new field values.
 
-Fehlschlag bedeutet:
-- Dirty-Tracking ist shallow und verpasst Deep-Mutationen.
+A failure means:
+- dirty tracking is shallow and misses deep mutations.
 
 ### 2. `test_mirror_ws_gameview_tail_decode_repro.aiml`
 
-Zweck:
-- isolierter Repro fuer `absurd LIST count ... off=336 esz=56` / Client-Decode-Discard
+Purpose:
+- an isolated repro for `absurd LIST count ... off=336 esz=56` / client decode discard
 
-Minimalmodell, stark an 9rooms orientiert:
+Minimal model, closely oriented on 9rooms:
 - `EventLite`
 - `TriggerLite`
 - `ReactionLite`
-- `PlayerLite` mit mindestens einer `list<CreatureLite>`
-- `GameViewTailRepro` mit dieser Reihenfolge:
-  - skalare Meta-Felder
+- `PlayerLite` with at least one `list<CreatureLite>`
+- `GameViewTailRepro` in this order:
+  - scalar meta fields
   - `me`, `opp`
   - `event_seq`, `event_count`, `events`
   - `trigger_seq_counter`, `active_trigger_count`, `active_triggers`
   - `reaction_state`, `reactable_triggers`
-  - 2-3 Tail-Felder danach
+  - 2-3 tail fields afterwards
 
-Wichtig:
-- `EventLite` und `TriggerLite` sollten Strings plus mehrere `i32` enthalten, damit der Element-Layout-Footprint nicht zu trivial ist.
-- `CreatureLite` sollte mindestens ein `map<string:i32>` oder eine weitere Heap-Struktur tragen, damit `PlayerLite` 9rooms-aehnlicher wird.
+Important:
+- `EventLite` and `TriggerLite` should contain strings plus several `i32`, so that the element layout footprint is not too trivial.
+- `CreatureLite` should carry at least one `map<string:i32>` or another heap structure, so that `PlayerLite` becomes more 9rooms-like.
 
-Ablauf:
-1. Host registriert Initialzustand mit je 1 Event/Trigger/Reactable.
-2. Client registriert Replica.
-3. Host fuehrt mehrere aufeinanderfolgende Updates aus:
+Flow:
+1. The host registers the initial state with 1 event/trigger/reactable each.
+2. The client registers the replica.
+3. The host performs several consecutive updates:
    - `events.push(...)`
    - `active_triggers.push(...)`
    - `reactable_triggers.push(...)`
    - `reaction_state.window_prompt = ...`
-   - Tail-Feld aendern
-4. Nach jedem Schritt muss der Client erfolgreich `update` + Feldpruefung bestehen.
+   - change a tail field
+4. After every step the client must pass `update` + the field check successfully.
 
-Fehlschlag bedeutet:
-- nicht nur Dirty-Tracking, sondern echter typed Decode-/Schemaschaden im Replica-Pfad.
+A failure means:
+- not only dirty tracking, but real typed decode/schema damage in the replica path.
 
 ### 3. `test_mirror_ws_9rooms_gameview_events_mutate_existing.aiml`
 
-Zweck:
-- existierenden 9rooms-nahen Test gezielt erweitern statt nur neue Minimaltests daneben zu legen
+Purpose:
+- extend the existing 9rooms-like test specifically instead of only putting new minimal tests next to it
 
-Aenderungen gegen den aktuellen Test:
-- nach erfolgreichem Initialsync keine neuen `push`es zuerst
-- stattdessen in-place Mutationen:
+Changes compared to the current test:
+- after a successful initial sync, no new `push`es first
+- instead in-place mutations:
   - `v.events-0.text = "Round start updated"`
   - `v.active_triggers-0.resolved = 1`
   - `v.reactable_triggers-0.expired = 1`
   - `v.reaction_state.window_prompt = "Updated"`
-- erst danach zusaetzlich ein `push` auf alle drei Listen
+- only afterwards additionally a `push` on all three lists
 
-Warum dieser Test wichtig ist:
-- er prueft dieselbe Modellfamilie wie der reale 9rooms-Fall
-- er trennt sauber `in-place mutate` von `push`
-- er zeigt, ob der bestehende Test nur deshalb gruen ist, weil er nur Strukturwachstum prueft
+Why this test is important:
+- it checks the same model family as the real 9rooms case
+- it cleanly separates `in-place mutate` from `push`
+- it shows whether the existing test is green only because it checks only structural growth
 
-## Empfohlene Reihenfolge fuer die Implementierung
+## Recommended order for the implementation
 
 1. `test_mirror_ws_list_deep_element_mutation.aiml`
-- billigster und scharfster Test fuer die Dirty-Tracking-Hypothese
+- the cheapest and sharpest test for the dirty tracking hypothesis
 
-2. Erweiterung von `test_mirror_ws_9rooms_gameview_events.aiml`
-- geringster Zusatzaufwand auf bestehender echter Modellbasis
+2. Extension of `test_mirror_ws_9rooms_gameview_events.aiml`
+- the smallest additional effort on an existing real model base
 
 3. `test_mirror_ws_gameview_tail_decode_repro.aiml`
-- gezielter Layout-/Decode-Repro, falls 1 und 2 den Packet-Discard nicht alleine sichtbar machen
+- a targeted layout/decode repro, in case 1 and 2 do not make the packet discard visible on their own
 
-## Aktualisierte Schlussfolgerung
+## Updated conclusion
 
-Der vorhandene Report bleibt im Kern richtig, aber nach den 9rooms-Logs ist er zu eng gefasst.
+The existing report remains right at its core, but after the 9rooms logs it is too narrowly framed.
 
-Aktueller Gesamtbefund:
-- Es fehlt weiterhin ein harter Repro fuer Deep-Mutation ohne Listenstruktur-Aenderung.
-- Zusaetzlich gibt es nun reale Evidenz fuer einen Replica-Decode-Fehler bei einem 9rooms-nahen typed Modell mit mehreren Listenfeldern.
-- Fuer die Fehlersuche brauchen wir daher mindestens zwei Repros: einen fuer Dirty-Tracking und einen fuer den Decode-/Schema-Pfad.
+Current overall finding:
+- A hard repro for deep mutation without a list structure change is still missing.
+- In addition, there is now real evidence of a replica decode error for a 9rooms-like typed model with several list fields.
+- For the bug hunt we therefore need at least two repros: one for dirty tracking and one for the decode/schema path.
 
 
-## Testergebnisse nach Implementierung der neuen Repros
+## Test results after implementing the new repros
 
-Ausgefuehrte Tests:
+Executed tests:
 - `tests/test_mirror_ws_list_deep_element_mutation.aiml`
 - `tests/test_mirror_ws_9rooms_gameview_events.aiml`
 - `tests/test_mirror_ws_gameview_tail_decode_repro.aiml`
 
-Ergebnis:
+Result:
 - `test_mirror_ws_list_deep_element_mutation.aiml`: PASS
 - `test_mirror_ws_9rooms_gameview_events.aiml`: PASS
 - `test_mirror_ws_gameview_tail_decode_repro.aiml`: FAIL
 
-Wichtige Interpretation:
-- Die reine Hypothese "in-place Mutation eines list<model>-Elements wird generell nicht dirty" ist in der minimalistischen Form zu grob. Der neue Deep-Mutation-Test geht grün.
-- Die erweiterte 9rooms-Event-/Trigger-Liste geht ebenfalls grün. Ein reiner `events/active_triggers/reactable_triggers`-Pfad reicht also nicht, um den realen Fehler zu reproduzieren.
-- Der neue 9rooms-nahe `GameView`-Tail-Repro faellt jedoch reproduzierbar aus. Der Client sieht Meta-Felder, Eventlisten und Tail-Felder korrekt, aber `CreatureView.passives` fehlt auf der Replica.
+Important interpretation:
+- The pure hypothesis "in-place mutation of a list<model> element generally does not become dirty" is too coarse in its minimalist form. The new deep mutation test goes green.
+- The extended 9rooms event/trigger list goes green as well. A pure `events/active_triggers/reactable_triggers` path is therefore not enough to reproduce the real bug.
+- The new 9rooms-like `GameView` tail repro, however, fails reproducibly. The client sees meta fields, event lists and tail fields correctly, but `CreatureView.passives` is missing on the replica.
 
-Konkreter Fehlbefund aus dem roten Test:
+Concrete failure finding from the red test:
 - `round=1`
 - `me.creatures.len=2`
 - `opp.creatures.len=2`
@@ -375,12 +375,12 @@ Konkreter Fehlbefund aus dem roten Test:
 - `interaction_mode=''`
 - FAIL: `opp1 missing frozen passive`
 
-Das ist fachlich sehr nah am 9rooms-Symptom:
-- Der Spielzustand an sich kommt an.
-- Auch Event-/Trigger-/Tail-Teile kommen an.
-- Aber die `passives`-Map in `CreatureView` kommt nicht verlaesslich auf der Replica an.
+That is very close to the 9rooms symptom in substance:
+- The game state as such arrives.
+- Event/trigger/tail parts arrive as well.
+- But the `passives` map in `CreatureView` does not arrive reliably on the replica.
 
-Aktualisierte Prioritaet fuer die Fehlersuche:
-1. `map<string:i32>` in nested `list<CreatureView>` / `PlayerView.creatures` Mirror-Pfad untersuchen.
-2. Fokus auf reale `GameView -> PlayerView -> list<CreatureView> -> passives`-Kette, nicht mehr primaer auf generische `list<Effect>`-Deep-Mutation.
-3. Zusaetzlich pruefen, ob der Fehler ein Replica-Decode-Problem oder ein Host-Encode-/Layout-Problem fuer `map<string:i32>` in diesem konkreten nesting ist.
+Updated priority for the bug hunt:
+1. Investigate the `map<string:i32>` in the nested `list<CreatureView>` / `PlayerView.creatures` mirror path.
+2. Focus on the real `GameView -> PlayerView -> list<CreatureView> -> passives` chain, no longer primarily on generic `list<Effect>` deep mutation.
+3. Additionally check whether the bug is a replica decode problem or a host encode/layout problem for `map<string:i32>` in this concrete nesting.

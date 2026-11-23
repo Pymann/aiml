@@ -1,167 +1,167 @@
 # Static Analysis Rule Implementation Plan
 
-Datum: 2026-04-09
+Date: 2026-04-09
 
-## Ziel
+## Goal
 
-Weitere statische Strukturregeln fuer AIML einfuehren, ohne die laufende
-9rooms-Entwicklung unnötig zu stören.
+Introduce further static structure rules for AIML without disturbing the ongoing
+9rooms development unnecessarily.
 
-Der Plan priorisiert:
+The plan prioritises:
 
-- minimale Compiler-Eingriffe
-- klare Regeldefinitionen
-- testbare, lokale AST-Analysen
-- kontrollierte Einfuehrung mit moeglichen Escape-Hatches ueber `static_off`
-
----
-
-## Ausgangslage
-
-Bereits implementiert:
-
-- Dateigroesse Warning ab `1000` Zeilen
-- Dateigroesse Hard Error ab `1500` Zeilen
-- Funktionsgroesse Hard Error ab `301` Zeilen
-- `static_off: ["lines"]` zum lokalen Abschalten der Funktionslinienregel
-
-Relevante Implementierungsorte:
-
-- statische Strukturdiagnostik in [compiler.cpp](../../compiler.cpp)
-- AST-Struktur in [ast_nodes.h](../../src/core/ast_nodes.h)
-- Statement-Dispatch in [ast_compiler_stmt.cpp](../../src/core/ast_compiler_stmt.cpp)
-
-Wichtiger Architekturpunkt:
-
-- Die neue Static Analysis sollte weiterhin vor oder parallel zum eigentlichen
-  Codegen in `compiler.cpp` stattfinden.
-- Neue Regeln sollten nicht in `visitDeclStmt`, `visitIfStmt`, `visitWhileStmt`
-  oder andere IR-nahe Codepfade gemischt werden.
+- minimal compiler interventions
+- clear rule definitions
+- testable, local AST analyses
+- a controlled introduction with possible escape hatches via `static_off`
 
 ---
 
-## Kandidatenregeln
+## Starting point
 
-### 1. Maximale lokale Variablenzahl pro Funktion
+Already implemented:
 
-Technische Schwierigkeit: niedrig bis mittel
+- file size warning from `1000` lines
+- file size hard error from `1500` lines
+- function size hard error from `301` lines
+- `static_off: ["lines"]` to switch off the function line rule locally
 
-Was gezaehlt werden kann:
+Relevant implementation places:
 
-- alle `DeclStmt` im Funktionskoerper
-- inklusive verschachtelter Bloecke
-- exklusive Funktionsargumente
-- exklusive Klassenmember
-- Catch-Variablen optional, aber besser zunaechst exklusive
+- static structure diagnostics in [compiler.cpp](../../compiler.cpp)
+- AST structure in [ast_nodes.h](../../src/core/ast_nodes.h)
+- statement dispatch in [ast_compiler_stmt.cpp](../../src/core/ast_compiler_stmt.cpp)
 
-Warum die Regel sinnvoll ist:
+Important architecture point:
 
-- viele lokale Variablen sind fuer KI-gestuetzte Bearbeitung unguenstig
-- die Regel misst echte kognitive Last besser als reine Dateigroesse
+- The new static analysis should still take place before or in parallel with the actual
+  codegen in `compiler.cpp`.
+- New rules should not be mixed into `visitDeclStmt`, `visitIfStmt`, `visitWhileStmt`
+  or other IR-level code paths.
 
-Empfohlene Erstsemantik:
+---
 
-- zaehle nur `DeclStmt`
-- keine Sonderfaelle fuer Typen
-- kein Scope-Gewicht, reine Anzahl
+## Candidate rules
 
-### 2. Maximale Verschachtelungstiefe
+### 1. Maximum number of local variables per function
 
-Technische Schwierigkeit: niedrig
+Technical difficulty: low to medium
 
-Was gezaehlt werden kann:
+What can be counted:
+
+- all `DeclStmt` in the function body
+- including nested blocks
+- excluding function arguments
+- excluding class members
+- catch variables optional, but better excluded at first
+
+Why the rule makes sense:
+
+- many local variables are unfavourable for AI-assisted editing
+- the rule measures real cognitive load better than pure file size
+
+Recommended initial semantics:
+
+- count only `DeclStmt`
+- no special cases for types
+- no scope weighting, a pure count
+
+### 2. Maximum nesting depth
+
+Technical difficulty: low
+
+What can be counted:
 
 - `if`
 - `while`
 - `try`
 
-Optional spaeter:
+Optionally later:
 
-- `catch` als eigener Level
-- tiefere Ausdrucksverschachtelung separat
+- `catch` as a level of its own
+- deeper expression nesting separately
 
-Warum die Regel sinnvoll ist:
+Why the rule makes sense:
 
-- hohe Nesting-Tiefe ist eine direkte Lesbarkeits- und Wartungsbarriere
-- die AST-Struktur dafuer ist bereits vorhanden
+- high nesting depth is a direct readability and maintenance barrier
+- the AST structure for it already exists
 
-Empfohlene Erstsemantik:
+Recommended initial semantics:
 
-- Starttiefe `0`
-- beim Betreten von `if`, `while`, `try` `+1`
-- Maximum ueber den gesamten Funktionskoerper bilden
+- starting depth `0`
+- `+1` on entering `if`, `while`, `try`
+- take the maximum over the whole function body
 
-### 3. Maximale Statement-Anzahl pro Funktion
+### 3. Maximum number of statements per function
 
-Technische Schwierigkeit: niedrig bis mittel
+Technical difficulty: low to medium
 
 Status:
 
-- nicht erste Prioritaet
-- kann spaeter als robustere Strukturmetrik neben der Zeilenregel dienen
+- not the first priority
+- can later serve as a more robust structure metric alongside the line rule
 
-Warum spaeter:
+Why later:
 
-- Zeilenregel existiert bereits
-- Variablenzahl und Nesting-Tiefe liefern erst einmal mehr neuen Nutzen
+- the line rule already exists
+- variable count and nesting depth deliver more new value first
 
 ---
 
-## Empfohlene Einfuehrungsreihenfolge
+## Recommended introduction order
 
 ### Phase 1
 
-Nur Plan, Spezifikation und gezielte Tests vorbereiten.
+Only prepare the plan, the specification and targeted tests.
 
-Keine produktive Aktivierung neuer Regeln.
+No productive activation of new rules.
 
-Ziel:
+Goal:
 
-- 9rooms nicht blockieren
-- Semantik praezise festlegen
-- Repro-Tests vorab haben
+- do not block 9rooms
+- define the semantics precisely
+- have repro tests in advance
 
 ### Phase 2
 
-Nesting-Tiefe implementieren.
+Implement nesting depth.
 
-Warum zuerst:
+Why first:
 
-- kleinster Eingriff
-- klarste Semantik
-- einfachster AST-Walk
-- niedrigstes Risiko fuer unerwartete Seiteneffekte
+- smallest intervention
+- clearest semantics
+- simplest AST walk
+- lowest risk of unexpected side effects
 
 ### Phase 3
 
-Lokale Variablenzahl implementieren.
+Implement the local variable count.
 
-Warum danach:
+Why afterwards:
 
-- ebenfalls lokal im AST bestimmbar
-- etwas mehr Designklaerung noetig als bei Nesting
+- likewise determinable locally in the AST
+- needs somewhat more design clarification than nesting
 
 ### Phase 4
 
 Optional:
 
-- Statement-Anzahl
-- weitere Strukturmetriken
-- ggf. Warning- und Error-Stufen differenzieren
+- statement count
+- further structure metrics
+- possibly differentiate warning and error levels
 
 ---
 
-## Konkretes Zieldesign
+## Concrete target design
 
-## A. Neue Analysehelfer in `compiler.cpp`
+## A. New analysis helpers in `compiler.cpp`
 
-Analoge Struktur wie heute bei:
+Structure analogous to today's:
 
 - `maxStmtSourceLine(...)`
 - `maxBlockSourceLine(...)`
 - `logAimlFunctionSizeDiagnostic(...)`
 
-Neu hinzufuegen:
+Add:
 
 - `countDeclsInStmt(...)`
 - `countDeclsInBlock(...)`
@@ -170,199 +170,199 @@ Neu hinzufuegen:
 - `logAimlFunctionVarCountDiagnostic(...)`
 - `logAimlFunctionNestingDiagnostic(...)`
 
-Wichtig:
+Important:
 
-- reine AST-Funktionen
-- keine Abhaengigkeit vom IR-Generator
-- keine Seiteneffekte
+- pure AST functions
+- no dependency on the IR generator
+- no side effects
 
-## B. `static_off` erweitern
+## B. Extend `static_off`
 
-Aktuell existiert:
+Currently exists:
 
 - `"lines"`
 
-Empfohlene neue Keys:
+Recommended new keys:
 
 - `"vars"`
 - `"nesting"`
 
-Semantik:
+Semantics:
 
-- `"vars"` deaktiviert nur die Variablenanzahl-Regel
-- `"nesting"` deaktiviert nur die Verschachtelungstiefen-Regel
+- `"vars"` disables only the variable count rule
+- `"nesting"` disables only the nesting depth rule
 
-Nicht empfehlen:
+Not recommended:
 
-- ein globales `"all"`
-- dateiweite Abschaltungen
-- projektweite Abschaltungen
+- a global `"all"`
+- file-wide switch-offs
+- project-wide switch-offs
 
-## C. Compilerdiagnostik
+## C. Compiler diagnostics
 
-Format analog zu bestehenden Meldungen:
+Format analogous to existing messages:
 
-Beispiele:
+Examples:
 
 ```text
 ...:42: AIML function 'foo' has too many local declarations (37). Maximum is 32.
 ...:42: AIML function 'foo' is nested too deeply (6). Maximum is 4.
 ```
 
-Wichtig:
+Important:
 
-- Meldung immer mit Datei und Funktionsstartzeile
-- Regelname in Text klar benennen
-
----
-
-## Empfohlene Schwellwerte fuer die erste Version
-
-Noch nicht sofort aktivieren, sondern zuerst gegen reale Codebasis messen.
-
-Vorschlag fuer Startwerte:
-
-- lokale Variablenzahl Warning ab `24`, Hard Error ab `32`
-- Nesting-Tiefe Warning ab `4`, Hard Error ab `6`
-
-Warum konservativ:
-
-- 9rooms und bestehende AIML-Tests sollen nicht sofort kollabieren
-- erst reale Verteilung messen, dann haerter drehen
-
-Wenn maximale Schonung fuer 9rooms priorisiert wird:
-
-- zunaechst nur Warnings
-- Hard Errors erst nach einer Aufraeumphase
+- always report with the file and the function start line
+- name the rule clearly in the text
 
 ---
 
-## Empfohlene Einfuehrungsstrategie ohne 9rooms-Störung
+## Recommended thresholds for the first version
 
-### Stufe 1: Nur Analysefunktionen + Tests
+Do not activate right away, but first measure against the real code base.
 
-Implementieren:
+Proposed starting values:
 
-- AST-Walker fuer `decl`-Anzahl
-- AST-Walker fuer Nesting-Tiefe
-- noch keine aktive Compilerdiagnostik
+- local variable count warning from `24`, hard error from `32`
+- nesting depth warning from `4`, hard error from `6`
 
-Zweck:
+Why conservative:
 
-- Logik isoliert verifizieren
-- Null Risiko fuer 9rooms
+- 9rooms and the existing AIML tests should not collapse immediately
+- measure the real distribution first, then tighten
 
-### Stufe 2: Opt-in Logging hinter Debug-Schalter
+If maximum leniency for 9rooms is prioritised:
 
-Moeglichkeit:
-
-- bei gesetztem Debug-Flag nur `LOG_DEBUG` oder `LOG_WARNING`
-- noch keine Build-Blockade
-
-Zweck:
-
-- reale Messwerte aus 9rooms und AIML-Suite sammeln
-
-### Stufe 3: Warnings aktivieren
-
-Nach Datensichtung:
-
-- zuerst nur Warning-Stufen aktivieren
-- kein Hard Error
-
-Zweck:
-
-- Problemstellen sichtbar machen
-- 9rooms weiter entwickeln lassen
-
-### Stufe 4: Hard Errors aktivieren
-
-Erst wenn:
-
-- groesste Ausreisser bereinigt sind
-- `static_off`-Ausnahmen gezielt gesetzt wurden
-- Tests stabil bleiben
+- warnings only at first
+- hard errors only after a clean-up phase
 
 ---
 
-## Testplan
+## Recommended introduction strategy without disturbing 9rooms
 
-### 1. Unit-nahe Compiler-Repros
+### Stage 1: only analysis functions + tests
 
-Neue kleine AIML-Testfaelle:
+Implement:
 
-- Funktion mit vielen `decl` innerhalb flacher Struktur
-- Funktion mit `decl` in verschachtelten `if`/`while`
-- Funktion mit tiefer Nesting-Kette
-- Funktion knapp unter und knapp ueber dem Grenzwert
-- Funktion mit `static_off: ["vars"]`
-- Funktion mit `static_off: ["nesting"]`
+- AST walker for the `decl` count
+- AST walker for the nesting depth
+- no active compiler diagnostics yet
 
-### 2. Negativ-/Positiv-Paare
+Purpose:
 
-Beispiele:
+- verify the logic in isolation
+- zero risk for 9rooms
+
+### Stage 2: opt-in logging behind a debug switch
+
+Possibility:
+
+- with the debug flag set, only `LOG_DEBUG` or `LOG_WARNING`
+- no build blocking yet
+
+Purpose:
+
+- collect real measurements from 9rooms and the AIML suite
+
+### Stage 3: activate warnings
+
+After reviewing the data:
+
+- activate only the warning levels at first
+- no hard error
+
+Purpose:
+
+- make problem spots visible
+- let 9rooms keep developing
+
+### Stage 4: activate hard errors
+
+Only when:
+
+- the biggest outliers are cleaned up
+- `static_off` exceptions have been set deliberately
+- the tests stay stable
+
+---
+
+## Test plan
+
+### 1. Unit-level compiler repros
+
+New small AIML test cases:
+
+- a function with many `decl` within a flat structure
+- a function with `decl` in nested `if`/`while`
+- a function with a deep nesting chain
+- a function just below and just above the threshold
+- a function with `static_off: ["vars"]`
+- a function with `static_off: ["nesting"]`
+
+### 2. Negative/positive pairs
+
+Examples:
 
 - `test_static_analysis_vars_ok.aiml`
 - `test_static_analysis_vars_fail.aiml`
 - `test_static_analysis_nesting_ok.aiml`
 - `test_static_analysis_nesting_fail.aiml`
 
-### 3. Suite-Schutz
+### 3. Suite protection
 
-Nach jeder Aktivierungsstufe:
+After every activation stage:
 
 - `./run_all_tests.sh --no-build`
 
-Und fuer reale Auswirkungen:
+And for real effects:
 
-- gezielte Builds der betroffenen 9rooms-Ziele
-
----
-
-## Offene Designfragen
-
-Vor Implementierung final klaeren:
-
-1. Zaehlen Funktionsargumente zur Variablenzahl?
-Empfehlung: nein
-
-2. Zaehlt `catchVar` als lokale Variable?
-Empfehlung: zunaechst nein
-
-3. Zaehlt `else` als eigener Nesting-Level?
-Empfehlung: nein, nur das umschliessende `if`
-
-4. Zaehlt `try` und `catch` zusammen als ein Level oder getrennt?
-Empfehlung: zunaechst ein Level fuer `try`
-
-5. Sollen neue Regeln sofort Hard Errors sein?
-Empfehlung: nein
+- targeted builds of the affected 9rooms targets
 
 ---
 
-## Minimaler Implementierungsschnitt
+## Open design questions
 
-Wenn nur ein kleiner, risikoarmer erster Schritt gewuenscht ist:
+To settle finally before implementation:
 
-1. Nesting-Tiefen-Analyse implementieren
-2. `static_off: ["nesting"]` vorsehen
-3. noch keine aktive Error-Regel
-4. nur Tests und optionales Debug-Logging
+1. Do function arguments count towards the variable count?
+Recommendation: no
 
-Das ist der kleinste sinnvolle Einstieg mit minimaler Gefahr fuer 9rooms.
+2. Does `catchVar` count as a local variable?
+Recommendation: no, at first
+
+3. Does `else` count as a nesting level of its own?
+Recommendation: no, only the enclosing `if`
+
+4. Do `try` and `catch` count together as one level or separately?
+Recommendation: one level for `try` at first
+
+5. Should new rules be hard errors immediately?
+Recommendation: no
 
 ---
 
-## Empfehlung
+## Minimal implementation cut
 
-Konkrete Empfehlung fuer das naechste Arbeitspaket:
+If only a small, low-risk first step is wanted:
 
-1. Spec fuer neue Regelkeys in `49_static_analysis.md` noch nicht erweitern
-2. zuerst Mess- und Analysefunktionen implementieren
-3. nur Nesting-Tiefe als ersten Pilot bauen
-4. Variablenzahl direkt danach
-5. neue Regeln anfangs nur als Warning oder Debug-Metrik laufen lassen
-6. Hard Errors erst nach Sicht auf reale 9rooms-Ausreisser aktivieren
+1. implement the nesting depth analysis
+2. provide `static_off: ["nesting"]`
+3. no active error rule yet
+4. only tests and optional debug logging
 
-Damit bleibt die 9rooms-Entwicklung beweglich, waehrend die Static-Analysis
-schrittweise ausgebaut wird.
+That is the smallest sensible entry with minimal danger for 9rooms.
+
+---
+
+## Recommendation
+
+Concrete recommendation for the next work package:
+
+1. do not extend the spec for new rule keys in `49_static_analysis.md` yet
+2. implement the measurement and analysis functions first
+3. build only the nesting depth as the first pilot
+4. the variable count directly afterwards
+5. let new rules run only as a warning or debug metric at first
+6. activate hard errors only after looking at real 9rooms outliers
+
+That keeps 9rooms development agile while the static analysis
+is expanded step by step.
