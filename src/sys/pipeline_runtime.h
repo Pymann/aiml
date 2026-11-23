@@ -3,12 +3,12 @@
 
 #include <cstdint>
 
-// spec/62 §13.5: pipeline / stage / step als zusammensetzbare Werte.
+// spec/62 §13.5: pipeline / stage / step as composable values.
 //
-// Der RUMPF eines Schritts ist ein Code-Bundle (F62-85) — also uebersetzter,
-// geprueefter Quelltext mit Inhaltsadresse.  Zusammengesetzt wird nur die
-// STRUKTUR: welche Stufen, welche Achsen, welche Bindungen.  Deshalb bleiben
-// Reinheitspruefung (am Rumpf) und inhaltsabgeleiteter Schluessel erhalten.
+// The BODY of a step is a code bundle (F62-85) — i.e. compiled,
+// checked source text with a content address.  Only the STRUCTURE is
+// composed: which stages, which axes, which bindings.  That is why the
+// purity check (on the body) and the content-derived key are preserved.
 extern "C" {
 
 void*   aiml_step_new(void);
@@ -16,41 +16,41 @@ void    aiml_step_set_name(void* step, const char* name);
 void    aiml_step_set_body(void* step, void* code);       // Code*
 void    aiml_step_set_cache(void* step, int32_t cls);
 void    aiml_step_use_arg(void* step, const char* axis);
-// spec/62 §9: die Sonde.  Sie laeuft VOR der Schluesselbildung, JEDES Mal,
-// und ihr Ergebnis geht in den Schluessel — so wird aus einem beweglichen
-// Namen (Branch, Paketversion) eine feste Adresse.
+// spec/62 §9: the probe.  It runs BEFORE the key is formed, EVERY time,
+// and its result goes into the key — that way a moving name
+// (branch, package version) becomes a fixed address.
 typedef const char* (*AimlResolveFn)(void);
 void    aiml_step_set_resolve(void* step, void* fn);
-// spec/62 §5.6: Reichweite eines Fehlschlags, Zeitgrenze, Versuche.  Keines
-// der drei ist Schluesselmaterial (F62-91) — alle beschreiben den FEHLSCHLAG,
-// aufgezeichnet wird nur ein gelungener Versuch.
+// spec/62 §5.6: reach of a failure, time limit, attempts.  None
+// of the three is key material (F62-91) — all describe the FAILURE,
+// only a successful attempt is recorded.
 void    aiml_step_set_on_fail(void* step, int32_t reach);   // 0=lane 1=pipeline 2=continue
-void    aiml_step_set_timeout(void* step, int32_t ms);      // 0 = keine Grenze
+void    aiml_step_set_timeout(void* step, int32_t ms);      // 0 = no limit
 void    aiml_step_set_retry(void* step, int32_t tries);
 int32_t aiml_step_status(void* step);
 // spec/62 §5.9: deklariertes Tor (F62-54).  Kein Schluesselmaterial (F62-96).
 void    aiml_step_set_pause_before(void* step, int32_t on);
-// spec/62 §5.5: `per: lane` (0, Vorgabe) oder `per: once` (1).  Kein
-// Schluesselmaterial, begrenzt aber was im Schluessel stehen darf (F62-115).
+// spec/62 §5.5: `per: lane` (0, default) or `per: once` (1).  Not
+// key material, but it limits what may be in the key (F62-115).
 void    aiml_step_set_per(void* step, int32_t per);
-// spec/62 §5.1/F62-9: nur fruehere Schritte.  Schluesselmaterial ueber
-// input_keys (F62-114) — Reihenfolge und Fehlerreichweite, kein Datenfluss
+// spec/62 §5.1/F62-9: only earlier steps.  Key material via
+// input_keys (F62-114) — order and failure reach, no data flow
 // (F62-113).
 void    aiml_step_add_need(void* step, const char* name);
 
-// spec/62 §5.7 / F62-90: der Rumpf setzt seinen Ausgang selbst.  Wirkung nur
-// bei laufendem Schritt (thread-lokal, Lanes duerfen in Threads laufen).
+// spec/62 §5.7 / F62-90: the body sets its own outcome.  Effect only
+// while a step is running (thread-local, lanes may run in threads).
 void    aiml_step_status_set(int32_t status);
 void    aiml_step_fail_lane(const char* msg);
 void    aiml_step_fail_pipeline(const char* msg);
-// spec/62 §13.5e: wie ein Rumpf seine Lane sieht.  Aus demselben thread-
-// lokalen Platz wie der Status — ein Bundle traegt keinen Zustand des
-// Aufrufers (F62-89).  Rueckgaben sind refcounted aiml-Strings.
+// spec/62 §13.5e: how a body sees its lane.  From the same thread-local
+// place as the status — a bundle carries no state of the
+// caller (F62-89).  Return values are refcounted aiml strings.
 char*   aiml_step_arg(const char* axis);
 char*   aiml_step_workspace(void);
 char*   aiml_step_host(const char* name);
-// spec/62 §13.5h: Ergebniskanal.  Veroeffentlichen und lesen; gelesen werden
-// darf nur ein DEKLARIERTES need (F62-119).
+// spec/62 §13.5h: result channel.  Publish and read; only a DECLARED need
+// may be read (F62-119).
 void    aiml_step_set_result(const char* value);
 char*   aiml_step_need_result(const char* name);
 
@@ -61,24 +61,24 @@ void    aiml_stage_add_step(void* stage, void* step);
 
 void*   aiml_pipeline_new(void);
 void    aiml_pipeline_set_name(void* pipe, const char* name);
-// spec/62 §4.1: Achse MIT Typ ([name, typ, [werte]]).  Der Typ zaehlt im
-// Rumpf (F62-1) und ist darum Teil der Gestalt, die ein Wirt liest.
+// spec/62 §4.1: axis WITH type ([name, type, [values]]).  The type counts in the
+// body (F62-1) and is therefore part of the shape a host reads.
 void    aiml_pipeline_add_param(void* pipe, const char* axis, const char* type,
                                 const void* values); // values: list<string>
 void    aiml_pipeline_add_stage(void* pipe, void* stage);
-// spec/62 §4.2: Teilbindung als Text, "achse=wert[,achse=wert...]".
-// Textform, weil eine Teilbindung dasselbe Format hat wie die `bindings` des
-// Beobachters (§13.1) — ein Format fuer denselben Begriff, statt zweier.
+// spec/62 §4.2: partial binding as text, "axis=value[,axis=value...]".
+// Text form, because a partial binding has the same format as the observer's
+// `bindings` (§13.1) — one format for the same concept, instead of two.
 void    aiml_pipeline_add_exclude(void* pipe, const char* partial);
 int32_t aiml_pipeline_lane_count(void* pipe);
-// Beobachter: wird je (Schritt, Lane) gerufen.  Die Felder entsprechen dem
-// StepRun-Struct der aiml-Seite (spec/62 §13.1) — Reihenfolge MUSS passen.
+// Observer: called per (step, lane).  The fields correspond to the
+// StepRun struct on the aiml side (spec/62 §13.1) — the order MUST match.
 struct AimlStepRun {
     const char* name;
     const char* bindings;    // "arch=arm64,mode=debug"
     const char* step_key;
     int32_t     lane;
-    int32_t     reused;      // 1 = Treffer, Rumpf nicht gelaufen
+    int32_t     reused;      // 1 = hit, body did not run
     int32_t     exit_code;
 };
 typedef void (*AimlStepObserver)(struct AimlStepRun*);
@@ -87,38 +87,38 @@ int32_t aiml_pipeline_run(void* pipe);
 int32_t aiml_pipeline_run_observed(void* pipe, void* observer);
 int32_t aiml_pipeline_reused_count(void* pipe);
 int32_t aiml_pipeline_ran_count(void* pipe);
-// Versuche einschliesslich der fehlgeschlagenen (§5.6): nur so ist `retry`
-// ueberhaupt messbar — ran_count zaehlt gelungene Ausfuehrungen.
+// Attempts including the failed ones (§5.6): only that way is `retry`
+// measurable at all — ran_count counts successful executions.
 int32_t aiml_pipeline_attempt_count(void* pipe);
 int32_t aiml_pipeline_status(void* pipe);
-// spec/62 §5.9: Anhalten am Schritt-Rand, Fortsetzen aus dem Cache (F62-95).
+// spec/62 §5.9: stopping at the step boundary, resuming from the cache (F62-95).
 void    aiml_pipeline_request_pause(void* pipe);
 void    aiml_pipeline_release(void* pipe, const char* step_name);
 void    aiml_pipeline_resume(void* pipe);
 int32_t aiml_pipeline_lifecycle(void* pipe);   // 0 pending 1 running 2 paused 3 done
 // spec/62 §6: gleichzeitige Lanes; 0 = auto.  Kein Schluesselmaterial (F62-98).
 void    aiml_pipeline_set_parallel(void* pipe, int32_t n);
-// spec/62 §4.3: ein Arbeitsbereich je (Lane, Stufe).  Kein Schluesselmaterial
-// (F62-107) — sonst ueberlebte kein Treffer einen Umzug des Projekts.
+// spec/62 §4.3: one workspace per (lane, stage).  Not key material
+// (F62-107) — otherwise no hit would survive moving the project.
 void    aiml_pipeline_set_workspace_root(void* pipe, const char* root);
 
-// ── spec/62 §20: lesen, was uebersetzt wurde ────────────────────────────────
+// ── spec/62 §20: reading what was compiled ──────────────────────────────────
 //
-// Geschrieben von der Umschreibung (`pipeline_expand`), gelesen von einem
-// Wirt.  Je Feld EIN Schluesselname, damit Spec, Umschreibung und Leser nicht
-// auseinanderlaufen: "name", "agent", "steplayer", "image", "base",
-// "requires", "shares", "command" als Text; "cpu", "mem", "pids", "timeout"
-// als Zahl (0 = Vorgabe des Wirts, NICHT unbegrenzt).
+// Written by the rewrite (`pipeline_expand`), read by a
+// host.  ONE key name per field, so that spec, rewrite and reader do not
+// drift apart: "name", "agent", "steplayer", "image", "base",
+// "requires", "shares", "command" as text; "cpu", "mem", "pids", "timeout"
+// as a number (0 = host default, NOT unlimited).
 //
-// Die Werte sind AUFGELOEST (F62-151): den Vorrang Stufe-vor-Pipeline hat die
-// Umschreibung schon angewandt.  Ein Leser, der nachrechnet, ist ein zweiter
-// Parser (§20.1).
+// The values are RESOLVED (F62-151): the rewrite has already applied the
+// stage-over-pipeline precedence.  A reader that recomputes is a second
+// parser (§20.1).
 void    aiml_stage_set_attr(void* stage, const char* key, const char* value);
 void    aiml_stage_set_limit(void* stage, const char* key, int32_t value);
 char*   aiml_stage_attr(void* stage, const char* key);
 int32_t aiml_stage_limit(void* stage, const char* key);
 int32_t aiml_stage_step_count(void* stage);
-// nullptr bei schiefem Index — der Aufrufer wirft dann (F62-154).
+// nullptr on a bad index — the caller then throws (F62-154).
 void*   aiml_stage_step_at(void* stage, int32_t idx);
 
 char*   aiml_step_attr(void* step, const char* key);   // name | cache | per
@@ -129,8 +129,8 @@ void    aiml_pipeline_add_push(void* pipe, const char* from, const char* to, con
 char*   aiml_pipeline_name_of(void* pipe);
 int32_t aiml_pipeline_stage_count(void* pipe);
 void*   aiml_pipeline_stage_at(void* pipe, int32_t idx);
-// Bindungstext der i-ten Lane, `exclude` schon abgezogen — dieselbe Form wie
-// im Beobachter und im Arbeitsbereichsnamen (F62-152).
+// Binding text of the i-th lane, with `exclude` already subtracted — the same form as
+// in the observer and in the workspace name (F62-152).
 char*   aiml_pipeline_lane_bindings(void* pipe, int32_t idx);
 int32_t aiml_pipeline_axis_count(void* pipe);
 char*   aiml_pipeline_axis_name(void* pipe, int32_t idx);
@@ -140,8 +140,8 @@ char*   aiml_pipeline_axis_value(void* pipe, int32_t axis, int32_t vix);
 int32_t aiml_pipeline_push_count(void* pipe);
 char*   aiml_pipeline_push_field(void* pipe, int32_t idx, const char* which); // from|to|tag
 
-// spec/62 F62-124a: 0 = lokal laufbar, -4 = abgelehnt (die Meldung steht im
-// Protokoll und nennt drei Dinge).  `aiml_pipeline_run` ruft es selbst.
+// spec/62 F62-124a: 0 = runnable locally, -4 = rejected (the message is in the
+// log and names three things).  `aiml_pipeline_run` calls it itself.
 int32_t aiml_pipeline_local_refusal(void* pipe);
 
 } // extern "C"

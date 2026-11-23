@@ -1,13 +1,13 @@
-// netfs_runtime.cpp — Netzlaufwerke ueber Client-Bibliotheken (spec/63).
+// netfs_runtime.cpp — network drives via client libraries (spec/63).
 //
-// Weg A aus §63.1: das Protokoll laeuft IM PROZESS, ohne Mount und ohne root.
-// Das ist der Normalweg, weil ein Agent nicht als root laeuft (cosmos
-// doc/spec/94) und ein Kernel-Mount genau das verlangte.
+// Route A from §63.1: the protocol runs IN THE PROCESS, without a mount and without root.
+// That is the normal route, because an agent does not run as root (cosmos
+// doc/spec/94) and a kernel mount would demand exactly that.
 //
-// Gebunden wird ueber **dlopen**, nicht ueber den Linker: sonst haette jedes
-// aiml-Programm eine Bauabhaengigkeit auf Samba, auch wenn es nie ein
-// Netzlaufwerk anfasst.  Fehlt die Bibliothek, gibt es eine klare Meldung
-// statt eines Linkfehlers bei jedem Build.
+// Binding is done via **dlopen**, not via the linker: otherwise every
+// aiml program would have a build dependency on Samba, even if it never touches a
+// network drive.  If the library is missing, there is a clear message
+// instead of a link error on every build.
 #include "string_runtime.h"
 
 #include <dlfcn.h>
@@ -46,9 +46,9 @@ struct SmbApi {
     bool initialised = false;
 };
 
-// Anmeldedaten.  Sie liegen NUR hier und werden nie protokolliert, nie in ein
-// Argument geschrieben (spec/63 F63-6) — dieselbe Regel wie beim
-// Enrollment-Token und beim sudo-Passwort.
+// Credentials.  They live ONLY here and are never logged, never written into an
+// argument (spec/63 F63-6) — the same rule as for the
+// enrollment token and the sudo password.
 struct Cred {
     std::string domain;
     std::string user;
@@ -63,8 +63,8 @@ std::string       g_last_error;
 
 void set_error(const std::string& msg) { g_last_error = msg; }
 
-// Die Rueckfrage von libsmbclient.  Sie bekommt, was im Griff steht — und
-// niemand sonst sieht es.
+// The callback of libsmbclient.  It gets what is in the handle — and
+// nobody else sees it.
 void auth_cb(const char*, const char*,
              char* wg, int wglen, char* un, int unlen, char* pw, int pwlen) {
     std::lock_guard<std::mutex> lock(g_mtx);
@@ -84,11 +84,11 @@ void auth_cb(const char*, const char*,
 
 bool load_smb() {
     if (g_smb.handle) return true;
-    // Der Name mit SONAME, nicht der Entwickler-Symlink: letzterer kommt aus
-    // einem -dev-Paket, das auf einem Knoten nicht installiert sein muss.
+    // The name with SONAME, not the developer symlink: the latter comes from
+    // a -dev package that need not be installed on a node.
     g_smb.handle = dlopen("libsmbclient.so.0", RTLD_NOW | RTLD_LOCAL);
     if (!g_smb.handle) {
-        set_error(std::string("libsmbclient nicht ladbar: ") + (dlerror() ? dlerror() : "?"));
+        set_error(std::string("libsmbclient cannot be loaded: ") + (dlerror() ? dlerror() : "?"));
         return false;
     }
     auto sym = [&](const char* n) { return dlsym(g_smb.handle, n); };
@@ -101,7 +101,7 @@ bool load_smb() {
     g_smb.write    = (fn_smbc_write)    sym("smbc_write");
     g_smb.close    = (fn_smbc_close)    sym("smbc_close");
     if (!g_smb.init || !g_smb.opendir || !g_smb.open) {
-        set_error("libsmbclient geladen, aber Symbole fehlen");
+        set_error("libsmbclient loaded, but symbols are missing");
         dlclose(g_smb.handle);
         g_smb.handle = nullptr;
         return false;
@@ -109,8 +109,8 @@ bool load_smb() {
     return true;
 }
 
-// Der Verzeichniseintrag von libsmbclient.  Nur die Felder, die wir lesen —
-// das Layout ist seit SMBCLIENT_0.1.0 stabil.
+// The directory entry of libsmbclient.  Only the fields we read —
+// the layout has been stable since SMBCLIENT_0.1.0.
 struct smbc_dirent_head {
     unsigned int smbc_type;
     unsigned int dirlen;
@@ -126,14 +126,14 @@ std::string g_base_url;   // "smb://host/share"
 
 extern "C" {
 
-// Anmeldedaten aus einer Datei: Zeilen "user=", "password=", "domain=".
-// Aus einer DATEI und nicht aus einer Zeichenkette im Quelltext (F63-6): was
-// in argv steht, steht in der Prozessliste des Knotens.
+// Credentials from a file: lines "user=", "password=", "domain=".
+// From a FILE and not from a string in the source text (F63-6): what
+// is in argv is in the node's process list.
 int32_t aiml_netfs_cred_from_file(const char* path) {
     std::lock_guard<std::mutex> lock(g_mtx);
-    if (!path) { set_error("cred_from_file: kein Pfad"); return 0; }
+    if (!path) { set_error("cred_from_file: no path"); return 0; }
     FILE* f = fopen(path, "r");
-    if (!f) { set_error(std::string("cred_from_file: nicht lesbar: ") + path); return 0; }
+    if (!f) { set_error(std::string("cred_from_file: not readable: ") + path); return 0; }
     Cred c;
     char line[1024];
     while (fgets(line, sizeof(line), f)) {
@@ -147,23 +147,23 @@ int32_t aiml_netfs_cred_from_file(const char* path) {
         else if (k == "domain" || k == "workgroup") c.domain = v;
     }
     fclose(f);
-    if (c.user.empty()) { set_error("cred_from_file: kein user= in der Datei"); return 0; }
+    if (c.user.empty()) { set_error("cred_from_file: no user= in the file"); return 0; }
     g_creds.push_back(c);
     return (int32_t)g_creds.size();
 }
 
-// Verbinden heisst hier: Schema pruefen, Bibliothek laden, Anmeldedaten
-// aktivieren.  Ein Protokoll-Handshake passiert erst beim ersten Zugriff —
-// das ist bei SMB auch so, und etwas anderes zu behaupten waere eine
-// Scheinsicherheit.
+// Connecting here means: check the scheme, load the library, activate the
+// credentials.  A protocol handshake only happens on the first access —
+// that is the case with SMB too, and claiming anything else would be
+// false security.
 int32_t aiml_netfs_connect(const char* url, int32_t cred) {
     std::lock_guard<std::mutex> lock(g_mtx);
-    if (!url) { set_error("connect: keine URL"); return 0; }
+    if (!url) { set_error("connect: no URL"); return 0; }
     const std::string u(url);
     if (u.rfind("smb://", 0) != 0) {
-        // F63-4: unbekanntes Schema ist ein FEHLER, kein Rueckfall auf lokales
-        // io — ein stiller Rueckfall schriebe ins falsche Dateisystem.
-        set_error("connect: nur smb:// wird unterstuetzt, nicht '" + u + "'");
+        // F63-4: an unknown scheme is an ERROR, not a fallback to local
+        // io — a silent fallback would write into the wrong file system.
+        set_error("connect: only smb:// is supported, not '" + u + "'");
         return 0;
     }
     if (!load_smb()) return 0;
@@ -185,15 +185,15 @@ char* aiml_netfs_last_error(void) {
     return out;
 }
 
-// Auflisten.  Rueckgabe als ein String mit "\n" je Eintrag — bewusst schlicht,
-// damit der erste Schritt ohne Listen-ABI auskommt; die Liste kommt, wenn der
-// Testserver steht (spec/63 §63.4 Punkt 2).
+// Listing.  Returned as one string with "\n" per entry — deliberately plain,
+// so that the first step gets by without a list ABI; the list comes when the
+// test server is in place (spec/63 §63.4 item 2).
 char* aiml_netfs_list(const char* rel) {
     std::lock_guard<std::mutex> lock(g_mtx);
-    if (!g_smb.handle || g_base_url.empty()) { set_error("list: nicht verbunden"); return aiml_str_alloc(0); }
+    if (!g_smb.handle || g_base_url.empty()) { set_error("list: not connected"); return aiml_str_alloc(0); }
     std::string url = g_base_url + (rel && *rel ? (rel[0] == '/' ? rel : std::string("/") + rel) : "");
     const int dh = g_smb.opendir(url.c_str());
-    if (dh < 0) { set_error("list: opendir fehlgeschlagen fuer " + url); return aiml_str_alloc(0); }
+    if (dh < 0) { set_error("list: opendir failed for " + url); return aiml_str_alloc(0); }
     std::string out;
     while (void* raw = g_smb.readdir((unsigned)dh)) {
         auto* de = static_cast<smbc_dirent_head*>(raw);
@@ -210,10 +210,10 @@ char* aiml_netfs_list(const char* rel) {
 
 char* aiml_netfs_read_file(const char* rel) {
     std::lock_guard<std::mutex> lock(g_mtx);
-    if (!g_smb.handle || g_base_url.empty()) { set_error("read_file: nicht verbunden"); return aiml_str_alloc(0); }
+    if (!g_smb.handle || g_base_url.empty()) { set_error("read_file: not connected"); return aiml_str_alloc(0); }
     std::string url = g_base_url + (rel && rel[0] == '/' ? rel : std::string("/") + (rel ? rel : ""));
     const int fd = g_smb.open(url.c_str(), 0 /*O_RDONLY*/, 0);
-    if (fd < 0) { set_error("read_file: open fehlgeschlagen fuer " + url); return aiml_str_alloc(0); }
+    if (fd < 0) { set_error("read_file: open failed for " + url); return aiml_str_alloc(0); }
     std::string data;
     char buf[65536];
     for (;;) {
@@ -229,11 +229,11 @@ char* aiml_netfs_read_file(const char* rel) {
 
 int32_t aiml_netfs_write_file(const char* rel, const char* data) {
     std::lock_guard<std::mutex> lock(g_mtx);
-    if (!g_smb.handle || g_base_url.empty()) { set_error("write_file: nicht verbunden"); return -1; }
+    if (!g_smb.handle || g_base_url.empty()) { set_error("write_file: not connected"); return -1; }
     std::string url = g_base_url + (rel && rel[0] == '/' ? rel : std::string("/") + (rel ? rel : ""));
     // O_WRONLY|O_CREAT|O_TRUNC = 0x241 auf Linux.
     const int fd = g_smb.open(url.c_str(), 0x241, 0644);
-    if (fd < 0) { set_error("write_file: open fehlgeschlagen fuer " + url); return -1; }
+    if (fd < 0) { set_error("write_file: open failed for " + url); return -1; }
     const size_t len = data ? strlen(data) : 0;
     const ssize_t n = len ? g_smb.write(fd, data, len) : 0;
     g_smb.close(fd);
@@ -247,8 +247,8 @@ void aiml_netfs_close(void) {
     g_active_cred = 0;
 }
 
-// Ist ein Netz-Protokoll ueberhaupt verfuegbar?  Damit kann ein Programm
-// entscheiden, statt an einer Fehlermeldung zu scheitern.
+// Is a network protocol available at all?  That way a program can
+// decide instead of failing on an error message.
 int32_t aiml_netfs_available(void) {
     std::lock_guard<std::mutex> lock(g_mtx);
     return load_smb() ? 1 : 0;
