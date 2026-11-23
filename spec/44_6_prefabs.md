@@ -22,21 +22,21 @@
       - { name: bg,    type: rect, pos_x: 0, pos_y: 0, width: 200, height: 280, color: 0x1A1A2E }
 ```
 
-**Prefab-Schlüssel.**
+**Prefab keys.**
 
-| Schlüssel | Wirkung |
+| Key | Effect |
 |---|---|
-| `name` | Registrierungsname für `engine.instantiate` |
-| `width` / `height` | Maße in Design-Koordinaten |
-| `texture` | optionale Grundtextur |
-| `draggable` | `true` = ganze Instanz ziehbar |
-| `input_transparent` | `true` = **jede** Instanz dieses Prefabs nimmt keine Eingabe (§Durchklickbar) |
+| `name` | registration name for `engine.instantiate` |
+| `width` / `height` | dimensions in design coordinates |
+| `texture` | optional base texture |
+| `draggable` | `true` = whole instance draggable |
+| `input_transparent` | `true` = **every** instance of this prefab takes no input (§click-through) |
 
-`input_transparent` am Prefab ist der Ort für Dekoration: Schadenszahlen,
-Blitze, Rahmen, Banner. Setzt man es stattdessen pro `engine.instantiate`, ist
-es eine Zeile, die man beim nächsten Effekt vergisst — und dann stiehlt die
-Dekoration wieder den Hover. Die Instanzmethode `set_input_transparent` bleibt
-und überschreibt den Prefab-Wert für diese eine Instanz (in beide Richtungen).
+`input_transparent` on the prefab is the place for decoration: damage numbers,
+flashes, frames, banners. Setting it per `engine.instantiate` instead makes it
+a line that is forgotten on the next effect — and then the decoration steals the
+hover again. The instance method `set_input_transparent` remains
+and overrides the prefab value for this one instance (in both directions).
 
 > **Position keys.** Children accept either **`x`/`y`** (legacy short form) or
 > **`pos_x`/`pos_y`** (recommended). Both are aliased by the parser. New code
@@ -161,7 +161,7 @@ Opaque handle (`i8*`) to a live prefab instance.
 | `engine.prefab_scene_init(w: i32, h: i32)` | Initialize the scene (shader, quad VAO, projection). Call after GL context + `ui.init()`. |
 | `engine.prefab_set_font(font: ui_font)` | Set font for label children. |
 | `engine.instantiate(name: string) -> prefab_instance` | Create a new instance of a registered prefab. |
-| `engine.destroy(inst: prefab_instance)` | Remove the instance from the scene and free it. Genestete Kinder werden **nicht** sofort frei, sondern zum Löschen markiert und beim nächsten `draw_scene` aufgeräumt — siehe „Sterbende Instanzen nehmen keine Eingabe". |
+| `engine.destroy(inst: prefab_instance)` | Remove the instance from the scene and free it. Nested children are **not** freed immediately, but marked for deletion and cleaned up at the next `draw_scene` — see "Dying instances take no input". |
 | `engine.draw_scene()` | Render all visible instances in Z-order. Call after `gl.clear_all()`, before `engine.swap()`. Ends the frame: dropdown popups, the dead-instance sweep and the partial-draw watermark (§8.1) all happen here. |
 | `engine.draw_scene_upto(z: i32)` | Render only the instances **below** `z` and leave the rest for a later call — the hook for putting your own drawing (3D, raw GL) **inside** the Z-order. See §8.1. |
 
@@ -206,7 +206,7 @@ Opaque handle (`i8*`) to a live prefab instance.
 | `.child_focused(child)` | `(string) -> i32` | (text_input) `1` if input has keyboard focus, else `0` |
 | `.child_rect_x(child)` / `.child_rect_y(child)` | `(string) -> f32` | Top-left of the child's hit rect in SCREEN coordinates, window scaling applied — the inverse of `child_contains`, which only tests a point you already have. `-1` if the child does not exist. |
 | `.child_rect_w(child)` / `.child_rect_h(child)` | `(string) -> f32` | Width / height of the hit rect in screen coordinates. `-1` if the child does not exist. |
-| `.child_design_x(child)` / `.child_design_y(child)` / `.child_design_w(child)` / `.child_design_h(child)` | `(string) -> f32` | Dasselbe Rechteck in **DESIGN**-Koordinaten (1280×720), also durch die Fenster-Skalierung geteilt. `-1` wenn das Kind nicht existiert. |
+| `.child_design_x(child)` / `.child_design_y(child)` / `.child_design_w(child)` / `.child_design_h(child)` | `(string) -> f32` | The same rectangle in **DESIGN** coordinates (1280×720), i.e. divided by the window scaling. `-1` if the child does not exist. |
 | `.is_checked(child)` | `(string) -> i32` | (checkbox) `1` if box is currently checked, else `0` |
 | `.set_checked(child, v)` | `(string, i32) -> void` | (checkbox) Programmatically set state (no callbacks fired) |
 | `.set_bar_value(child, value)` | `(string, f32) -> void` | (bar) Set current value. |
@@ -645,7 +645,7 @@ worth of room instead of covering the last line.
 | `selection` | `scene.selection(child) -> string` | The marked text, `""` when nothing is marked. |
 
 ```yaml
-# "Kopieren"-Button: Auswahl (oder alles) in die Zwischenablage
+# "Copy" button: selection (or everything) to the clipboard
 - call: [<.scene.select_all, "token_box"]
 - call: [input.clipboard_set, { call: [<.scene.selection, "token_box"] }]
 ```
@@ -770,9 +770,9 @@ referenced from children by name.
       u_noise:        { tex: "resources/textures/noise.png" }
 ```
 
-### Uniform-Typ Detection
+### Uniform type detection
 
-| YAML | GLSL | Beispiel |
+| YAML | GLSL | Example |
 |------|------|---------|
 | `0.6` | `float` | `u_intensity: 0.6` |
 | `[a, b]` | `vec2` | `u_facet_freq: [28.0, 22.0]` |
@@ -781,34 +781,34 @@ referenced from children by name.
 | `{ int: N }` | `int` | `u_count: { int: 42 }` |
 | `{ tex: "path" }` | `sampler2D` | `u_noise: { tex: "noise.png" }` |
 
-### Built-in Uniforms (immer verfügbar — keine Decl im Material nötig)
+### Built-in uniforms (always available — no declaration needed in the material)
 
-| Uniform | GLSL | Beschreibung |
+| Uniform | GLSL | Description |
 |---------|------|-------------|
 | `u_proj` | `mat4` | Orthographic projection matrix |
 | `u_tex` | `sampler2D` | White-Tex slot (slot 0) |
 | `u_mode` | `int` | Render mode passed from DrawBatch |
-| `u_time` | `float` | Sekunden seit erstem Frame |
+| `u_time` | `float` | Seconds since the first frame |
 
-### Built-in Varyings (vom geteilten Vertex-Shader)
+### Built-in varyings (from the shared vertex shader)
 
-| Varying | GLSL | Beschreibung |
+| Varying | GLSL | Description |
 |---------|------|-------------|
-| `v_uv` | `vec2` | UV [0,1] über den Quad |
-| `v_color` | `vec4` | Fill-Farbe vom Widget (bg/hover/active) |
-| `v_quad` | `vec2` | (width, height) in Pixeln |
+| `v_uv` | `vec2` | UV [0,1] across the quad |
+| `v_color` | `vec4` | Fill colour of the widget (bg/hover/active) |
+| `v_quad` | `vec2` | (width, height) in pixels |
 | `v_style` | `vec2` | (corner_radius, border_width) |
-| `v_bcolor` | `vec4` | Border-Farbe |
+| `v_bcolor` | `vec4` | Border colour |
 
-### Shader-Datei-Format
+### Shader file format
 
-User-Shader liefern nur `void main()` + eigene `uniform`-Decls. Das Runtime
-prepends automatisch:
-- `#version 300 es / 330 core` (plattformabhängig)
+User shaders supply only `void main()` + their own `uniform` declarations. The runtime
+automatically prepends:
+- `#version 300 es / 330 core` (platform-dependent)
 - `precision highp float;` (GLES)
-- alle Built-in `in`/`uniform`/`out` Decls
+- all built-in `in`/`uniform`/`out` declarations
 
-Beispiel `crystal_vein.frag`:
+Example `crystal_vein.frag`:
 
 ```glsl
 uniform vec4  u_tint;
@@ -816,13 +816,13 @@ uniform float u_vein_density;
 uniform float u_vein_glow;
 
 void main() {
-    // v_uv, v_color, v_quad usw. sind bereits in-scope
+    // v_uv, v_color, v_quad etc. are already in scope
     float pulse = 0.5 + 0.5 * sin(u_time * u_vein_density);
     out_color = vec4(v_color.rgb + u_tint.rgb * (u_vein_glow * pulse), v_color.a);
 }
 ```
 
-### Referenz aus einem Prefab-Child
+### Reference from a prefab child
 
 ```aiml
 - prefab:
@@ -835,10 +835,8 @@ void main() {
           on_click: handle_submit }
 ```
 
-Materialien werden beim Instantiate per Name aufgelöst. Bei `null` (unbekannter
-Name) fällt das Widget still auf den default-Shader zurück.
-
----
+Materials are resolved by name on instantiate. On `null` (unknown
+name) the widget silently falls back to the default shader.
 
 ## 5b. Callbacks
 
@@ -1065,133 +1063,133 @@ direction to the partner instance.
 
 Hit-test iterates in reverse Z-order (top-to-bottom).
 
-#### Durchklickbar: `set_input_transparent`
+#### Click-through: `set_input_transparent`
 
 | Instance Method | Signature | Description |
 |-----------------|-----------|-------------|
-| `.set_input_transparent(on)` | `(i32) -> void` | `1` = diese Instanz wird von `engine.hit_test` und `engine.update_hover` **übersprungen**; Eingabe trifft, was darunter liegt. `0` (Standard) = bisheriges Verhalten. |
-| `.get_input_transparent()` | `-> i32` | aktueller Wert |
+| `.set_input_transparent(on)` | `(i32) -> void` | `1` = this instance is **skipped** by `engine.hit_test` and `engine.update_hover`; input hits whatever lies beneath. `0` (default) = previous behaviour. |
+| `.get_input_transparent()` | `-> i32` | current value |
 
-Bis hierher gab es nur zwei Eigenschaften, `visible` und `draggable`, und daraus
-folgte eine Lücke: **eine rein dekorative Instanz kann Eingabe stehlen.**
-`hit_test` liefert die oberste *sichtbare* Instanz, ohne zu fragen, ob sie
-überhaupt bedient werden will — und `update_hover` setzt `hovered` nur auf
-dieses eine Ergebnis. Eine große Vorschau, ein Banner oder ein Rahmen über einer
-Karte macht die Karte damit unerreichbar: sie wird nie `is_hovered`, also
-greifen `was_clicked`, Zielauswahl und jede hover-getriebene Logik darunter
-nicht mehr. Sichtbarkeit abzuschalten ist kein Ersatz — dann ist die Vorschau
-auch weg.
+Until now there were only two properties, `visible` and `draggable`, and that
+left a gap: **a purely decorative instance can steal input.**
+`hit_test` returns the topmost *visible* instance without asking whether it
+wants to be operated at all — and `update_hover` sets `hovered` only on
+this one result. A large preview, a banner or a frame over a
+card thereby makes the card unreachable: it never becomes `is_hovered`, so
+`was_clicked`, target selection and any hover-driven logic beneath it
+no longer take effect. Switching visibility off is no substitute — then the preview
+is gone too.
 
-`set_input_transparent(1)` trennt „wird gezeichnet" von „nimmt Eingabe": die
-Instanz bleibt sichtbar und zeichnet normal, wird aber beim Treffer-Test
-übersprungen.
+`set_input_transparent(1)` separates "is drawn" from "takes input": the
+instance stays visible and draws normally, but is skipped in the hit
+test.
 
 ```yaml
-- call: [preview.set_input_transparent, 1]   # Vorschau zeigt, blockiert aber nicht
+- call: [preview.set_input_transparent, 1]   # preview shows, but does not block
 ```
 
-Gilt für `hit_test` und `update_hover`. Der Drag-Start (`update_drag`,
-`update_drag_gesture`) prüft ohnehin nur `draggable`, ist also nicht betroffen.
+Applies to `hit_test` and `update_hover`. The drag start (`update_drag`,
+`update_drag_gesture`) only checks `draggable` anyway, so it is not affected.
 
 #### Modal: `set_input_blocking`
 
 | Instance Method | Signature | Description |
 |-----------------|-----------|-------------|
-| `.set_input_blocking(on)` | `(i32) -> void` | `1` = diese Instanz **blockiert** Eingabe für alles mit kleinerem `z`, solange der Cursor in ihrer Fläche liegt. `0` (Standard) = bisheriges Verhalten. |
-| `.get_input_blocking()` | `-> i32` | aktueller Wert |
+| `.set_input_blocking(on)` | `(i32) -> void` | `1` = this instance **blocks** input for everything with a smaller `z`, as long as the cursor is within its area. `0` (default) = previous behaviour. |
+| `.get_input_blocking()` | `-> i32` | current value |
 
-Das ist das Gegenstück zu `set_input_transparent` und schließt die umgekehrte
-Lücke. `hit_test` arbitriert schon über `z`, der **Widget**-Durchlauf aber
-nicht: der läuft bewusst über *alle* Instanzen, damit eine transparente Platte
-ihre eigenen Widgets durchlässt. Folge war, dass ein Vollbild-Overlay den Hover
-korrekt sperrte, **die Buttons darunter aber weiter klickbar blieben** — ein
-Klick in den Dialog löste zusätzlich aus, was darunter lag.
+This is the counterpart of `set_input_transparent` and closes the opposite
+gap. `hit_test` already arbitrates by `z`, but the **widget** pass
+does not: it deliberately runs over *all* instances, so that a transparent panel
+lets its own widgets through. The consequence was that a full-screen overlay correctly
+blocked the hover, **but the buttons beneath it remained clickable** — a
+click into the dialog additionally triggered whatever lay beneath.
 
 ```yaml
-- call: [leave_confirm.set_input_blocking, 1]   # echter Modal-Dialog
+- call: [leave_confirm.set_input_blocking, 1]   # real modal dialog
 ```
 
-Normativ:
+Normative:
 
-- Maßgeblich ist die **oberste sichtbare** blockierende Instanz, deren Fläche
-  den Cursor enthält. Widgets von Instanzen mit kleinerem `z` erhalten weder
-  Klick noch Tastatur-Fokus.
-- Die blockierende Instanz selbst und alles mit **gleichem oder größerem** `z`
-  bleibt bedienbar — ein Dialog kann also eigene Buttons haben, und ein noch
-  höheres Overlay sperrt wiederum ihn.
-- Blockiert wird nur **innerhalb der Fläche** der Instanz. Ein Vollbild-Dim
-  sperrt damit alles, ein kleines Panel nur, was es verdeckt.
-- Unsichtbare, durchklickbare und zum Löschen markierte Instanzen blockieren
-  nicht.
-- Auch der **Drag-Start** ist gesperrt: `update_drag` / `update_drag_gesture`
-  nehmen unter einer blockierenden Instanz nichts auf. Sonst hieße „blockiert
-  Eingabe darunter" nur „blockiert Klicks", und die Auswahl — die
-  Nicht-Draggbares überspringt — griffe durch den Dialog hindurch nach der
-  Karte darunter.
+- What counts is the **topmost visible** blocking instance whose area
+  contains the cursor. Widgets of instances with a smaller `z` receive neither
+  clicks nor keyboard focus.
+- The blocking instance itself and everything with an **equal or greater** `z`
+  remains operable — so a dialog can have its own buttons, and an even
+  higher overlay in turn blocks it.
+- Blocking happens only **within the area** of the instance. A full-screen dim
+  thereby blocks everything, a small panel only what it covers.
+- Invisible, click-through and deletion-marked instances do not
+  block.
+- The **drag start** is blocked too: `update_drag` / `update_drag_gesture`
+  pick up nothing beneath a blocking instance. Otherwise "blocks
+  input beneath" would only mean "blocks clicks", and the selection — which
+  skips non-draggables — would reach through the dialog for the
+  card beneath.
 
 Canonical: `tests/test_prefab_input_blocking.aiml`.
 
-#### Sterbende Instanzen nehmen keine Eingabe
+#### Dying instances take no input
 
-Eine Instanz wird nicht immer sofort freigegeben. `destroy` gibt die Instanz
-selbst frei, markiert ihre genesteten Kinder aber nur zum Löschen und löst deren
-Elternbindung — sie werden erst im Aufräumschritt am Ende des nächsten
-`draw_scene` freigegeben. Dasselbe gilt für Zeilen, die eine `bind_list` beim
-Schrumpfen oder Umschalten aufgibt.
+An instance is not always freed immediately. `destroy` frees the instance
+itself, but only marks its nested children for deletion and detaches their
+parent binding — they are only freed in the cleanup step at the end of the next
+`draw_scene`. The same applies to rows that a `bind_list` gives up when
+shrinking or switching.
 
-Daraus folgt normativ:
+It follows normatively:
 
-- Eine zum Löschen markierte Instanz nimmt **keine Eingabe** mehr: `hit_test`
-  überspringt sie (sie wird also nicht `hovered`, `was_clicked` wird nicht wahr,
-  und `engine.get_hovered` nennt sie nicht), **und** ihre Widget-Kinder nehmen
-  weder Klicks noch den Tastatur-Fokus an. Der Fokus ist der wichtigere Teil:
-  er **klebt** bis zum nächsten Klick woanders, überlebt also die Freigabe.
-- Beim Freigeben verliert die Szene **jede** Referenz auf die Instanz:
-  `hovered`, die gezogene Instanz, die Drag-Quelle und der Tastatur-Fokus.
+- An instance marked for deletion takes **no input** any more: `hit_test`
+  skips it (so it does not become `hovered`, `was_clicked` does not become true,
+  and `engine.get_hovered` does not name it), **and** its widget children accept
+  neither clicks nor keyboard focus. The focus is the more important part:
+  it **sticks** until the next click elsewhere, so it outlives the free.
+- When freeing, the scene drops **every** reference to the instance:
+  `hovered`, the dragged instance, the drag source and the keyboard focus.
 
-Beides ist nötig, weil ein Kind der zweiten Ebene genau **einen Frame** als
-Waise überlebt: elternlos, also top-level, und sichtbar. Ohne die erste Regel
-konnte diese Waise den Hover an sich nehmen, obwohl sie schon tot ist — und sie
-zeichnet in diesem Zustand an rohen lokalen Koordinaten, taucht also irgendwo am
-Fensterursprung auf. Ohne die zweite Regel zeigte der Hover- bzw. Fokuszeiger
-danach auf freigegebenen Speicher; beim Fokus ist das besonders heikel, weil er
-**klebt**, bis woanders geklickt wird.
+Both are necessary because a second-level child survives exactly **one frame** as an
+orphan: parentless, therefore top-level, and visible. Without the first rule
+this orphan could take the hover although it is already dead — and in this state it
+draws at raw local coordinates, so it turns up somewhere at the
+window origin. Without the second rule the hover or focus pointer would point
+to freed memory afterwards; with the focus that is particularly delicate, because it
+**sticks** until a click elsewhere.
 
 Canonical: `tests/test_prefab_doomed_no_hover.aiml`.
 
-Das Modell hat damit drei der vier unabhängigen Eigenschaften: **nimmt selbst
-Eingabe** (`input_transparent`), **blockiert Eingabe darunter**
-(`input_blocking`, siehe unten) und **ist ziehbar** (`draggable`).
+The model thus has three of the four independent properties: **takes input
+itself** (`input_transparent`), **blocks input beneath**
+(`input_blocking`, see below) and **is draggable** (`draggable`).
 
-> **Offen (vierte Eigenschaft):** „akzeptiert diesen Drop-Typ" fehlt weiter —
-> welche Ablage auf welcher Fläche erlaubt ist, entscheidet der Anwendungscode
-> im Drop-Handler, nicht die Engine.
+> **Open (fourth property):** "accepts this drop type" is still missing —
+> which drop is allowed on which surface is decided by the application code
+> in the drop handler, not by the engine.
 
-#### Treffer-Reihenfolge: wann `set_z` wirkt
+#### Hit order: when `set_z` takes effect
 
-Die Z-Reihenfolge, nach der `hit_test` (und der Drag-Start in
-`engine.update_drag`) die Instanzen durchläuft, wird **von `engine.draw_scene`
-hergestellt** — dort wird die Instanzliste als Seiteneffekt stabil nach
-`z_order` sortiert. `.set_z(z)` schreibt nur das Feld und sortiert **nicht**.
-Daraus folgt für den aktuellen Stand:
+The Z-order in which `hit_test` (and the drag start in
+`engine.update_drag`) traverses the instances is **established by `engine.draw_scene`**
+— there the instance list is stably sorted by
+`z_order` as a side effect. `.set_z(z)` only writes the field and does **not** sort.
+For the current state this means:
 
-- Ein `set_z` wirkt für Treffer- und Drag-Prüfung erst **nach dem nächsten
-  `draw_scene`**, also einen Frame später. Wer im selben Frame eine Karte
-  hochzieht (`set_z`) und dann `hit_test` ruft, bekommt die **alte** Ordnung.
-- Eine Instanz, die nach dem letzten `draw_scene` erzeugt wurde, hängt am
-  **Listenende** und ist damit für den Rückwärtslauf *oberste* Instanz —
-  unabhängig von ihrem `z`. Wer eine Szene neu aufbaut und im selben Frame
-  Treffer prüft, prüft gegen die Erzeugungsreihenfolge, nicht gegen `z`.
-- Bei **gleichem** `z` entscheidet die Einfügereihenfolge (`stable_sort`), also
-  die Reihenfolge der `engine.instantiate`-Aufrufe. Flächen, die als Drop-Ziel
-  dienen und sich überlappen können, brauchen deshalb **ausdrücklich
-  verschiedene** `z`-Werte; sich auf die Erzeugungsreihenfolge zu verlassen ist
-  nicht zugesichert.
+- A `set_z` takes effect for hit and drag checks only **after the next
+  `draw_scene`**, i.e. one frame later. Whoever raises a card in the same frame
+  (`set_z`) and then calls `hit_test` gets the **old** order.
+- An instance created after the last `draw_scene` is appended at the
+  **end of the list** and is therefore the *topmost* instance for the reverse pass —
+  regardless of its `z`. Whoever rebuilds a scene and checks hits in the same frame
+  checks against creation order, not against `z`.
+- With **equal** `z` the insertion order decides (`stable_sort`), i.e.
+  the order of the `engine.instantiate` calls. Surfaces that serve as drop targets
+  and can overlap therefore need **explicitly
+  different** `z` values; relying on creation order is
+  not guaranteed.
 
-> **Offen:** Eine Dirty-Markierung bei `set_z` (und beim Erzeugen), die
-> `hit_test`/`update_drag` bei Bedarf selbst sortieren lässt, würde alle drei
-> Punkte beseitigen und `set_z` sofort wirksam machen. Bis dahin gilt der Stand
-> oben.
+> **Open:** A dirty mark on `set_z` (and on creation) that lets
+> `hit_test`/`update_drag` sort by themselves when needed would remove all three
+> points and make `set_z` take effect immediately. Until then the state
+> above applies.
 
 ### Hover Tracking
 
@@ -1239,78 +1237,78 @@ as it sets the hover state and mouse button snapshot for the current frame.
 
 Only instances with `draggable = true` and `visible = 1` are considered for dragging.
 
-#### Abbruch: `update_drag` beendet den Drag ohne Drop
+#### Cancellation: `update_drag` ends the drag without a drop
 
-`update_drag` wertet zusätzlich die **Cancel-Flanke** aus
-(`input.mouse_cancelled(0)`, spec/44_0 §2.2 — abgebrochener Touch, zweiter
-Finger, Fokusverlust). Ein Cancel
+`update_drag` additionally evaluates the **cancel edge**
+(`input.mouse_cancelled(0)`, spec/44_0 §2.2 — cancelled touch, second
+finger, loss of focus). A cancel
 
-- setzt die gezogene Instanz auf ihren Ursprung zurück (wie `cancel_drag`),
-- räumt `engine.get_dragged()` auf **null**,
-- erzeugt **keinen** Release-Übergang.
+- resets the dragged instance to its origin (like `cancel_drag`),
+- clears `engine.get_dragged()` to **null**,
+- produces **no** release transition.
 
-Damit greift das verbreitete Drop-Muster von selbst richtig: wer den Drop am
-Übergang „vorher gezogen, jetzt nicht mehr" erkennt, muss zusätzlich fragen, ob
-die Geste *vollendet* wurde:
+This makes the common drop pattern work correctly by itself: whoever detects the drop at the
+transition "dragged before, not any more" must additionally ask whether
+the gesture was *completed*:
 
 ```yaml
 - decl: [pre, prefab_instance, { call: [engine.get_dragged] }]
 - call: [engine.update_drag, mx, my, btn, rel]
 - decl: [post, prefab_instance, { call: [engine.get_dragged] }]
-# Drop NUR bei echtem Release — ein Cancel darf keinen Spielzug auslösen.
+# Drop ONLY on a real release — a cancel must not trigger a move.
 - if:
     condition: { '&&': [{ neq: [pre, null] }, { '&&': [{ peq: [post, null] }, { eq: [{ call: [input.mouse_cancelled, 0] }, 0] }] }] }
     then: [{ call: [handle_drop, pre] }]
 ```
 
-Ohne diese Zusatzbedingung ist ein Abbruch von einem Loslassen nicht zu
-unterscheiden und löst die Drop-Aktion aus — in einem Spiel ein Zug, den
-niemand gemacht hat. Die `input.drag_cancelled(btn)`-Abfrage (spec/44_0 §2.4)
-ist das Gegenstück auf der Eingabeschicht.
+Without this extra condition a cancel cannot be told apart from a release
+and triggers the drop action — in a game, a move that
+nobody made. The `input.drag_cancelled(btn)` query (spec/44_0 §2.4)
+is the counterpart on the input layer.
 
-#### `engine.update_drag_gesture` — Aufnehmen am Druckpunkt
+#### `engine.update_drag_gesture` — pick-up at the press point
 
 | Call | Return | Description |
 |------|--------|-------------|
-| `engine.update_drag_gesture(mx, my)` | `i32` | Gestenzustand dieses Frames (Tabelle unten). Alternative zu `update_drag`, die die Gestenmaschine aus spec/44_0 §2.4 benutzt. |
-| `engine.get_drag_source()` | `prefab_instance` | Die Instanz, die diese Geste aufgenommen hat — auch noch im Drop-/Abbruch-Frame, wenn `get_dragged()` schon `null` ist. |
+| `engine.update_drag_gesture(mx, my)` | `i32` | Gesture state of this frame (table below). Alternative to `update_drag` that uses the gesture machine from spec/44_0 §2.4. |
+| `engine.get_drag_source()` | `prefab_instance` | The instance that picked up this gesture — still in the drop/cancel frame, when `get_dragged()` is already `null`. |
 
-Rückgabewerte:
+Return values:
 
-| Wert | Bedeutung |
+| Value | Meaning |
 |---|---|
-| `0` | keine Geste |
-| `1` | gedrückt, Schwelle noch nicht überschritten (**Kandidat**, noch kein Drag) |
-| `2` | zieht |
-| `3` | **in diesem Frame losgelassen** → Drop ausführen |
-| `4` | **in diesem Frame abgebrochen** → nichts ausführen |
+| `0` | no gesture |
+| `1` | pressed, threshold not yet exceeded (**candidate**, no drag yet) |
+| `2` | dragging |
+| `3` | **released in this frame** → perform the drop |
+| `4` | **cancelled in this frame** → perform nothing |
 
-Der Unterschied zu `update_drag` ist, *wann* und *wo* aufgenommen wird:
+The difference from `update_drag` is *when* and *where* the pick-up happens:
 
 | | `update_drag` | `update_drag_gesture` |
 |---|---|---|
-| Auslöser | Taste ist **gedrückt** (Pegel) | `input.drag_started(0)` (Flanke, nach Schwelle) |
-| Aufnahmepunkt | Mausposition **dieses Frames** | `input.drag_origin_*` = **Druckpunkt** |
-| Tippen (Press ohne Bewegung) | startet einen Drag | bleibt Kandidat (`1`), kein Drag |
-| Abbruch | nur über `input.mouse_cancelled` im Aufrufer | eigener Rückgabewert `4` |
+| Trigger | button is **down** (level) | `input.drag_started(0)` (edge, after threshold) |
+| Pick-up point | mouse position **of this frame** | `input.drag_origin_*` = **press point** |
+| Tap (press without movement) | starts a drag | stays a candidate (`1`), no drag |
+| Cancel | only via `input.mouse_cancelled` in the caller | its own return value `4` |
 
-Das behebt zwei Fehlerklassen, die mit `update_drag` unvermeidbar sind:
+This fixes two classes of bugs that are unavoidable with `update_drag`:
 
-1. **Aufnahme an der falschen Karte.** Browser-Callbacks schreiben die
-   Mausposition live, Tastenflanken erst beim Frame-Snapshot (spec/44_0 §7.1) —
-   die Flanke gehört deshalb zu einer *älteren* Position als die, die derselbe
-   Frame liest. Bei bewegter Maus nimmt der Pegel-Trigger die Karte auf, die
-   *jetzt* unter dem Cursor liegt, nicht die, auf die gedrückt wurde. Der
-   Druckpunkt aus `drag_origin_*` hat dieses Problem nicht.
-2. **Tippen wird zum Drag.** Ohne Schwelle ist jeder Klick auf ein
-   ziehbares Element ein Mini-Drag; Anwendungen unterscheiden Tap und Drop
-   dann nachträglich an der Bewegungsdistanz, also erst, nachdem der Drag schon
-   gelaufen ist. Die Schwelle (`input.drag_set_threshold`, Default 5 px) trennt
-   beides **vorher**.
+1. **Pick-up on the wrong card.** Browser callbacks write the
+   mouse position live, button edges only at the frame snapshot (spec/44_0 §7.1) —
+   so the edge belongs to an *older* position than the one the same
+   frame reads. With a moving mouse the level trigger picks up the card that is
+   *now* under the cursor, not the one that was pressed. The
+   press point from `drag_origin_*` does not have this problem.
+2. **A tap becomes a drag.** Without a threshold every click on a
+   draggable element is a mini drag; applications then distinguish tap and drop
+   after the fact by movement distance, i.e. only after the drag has already
+   run. The threshold (`input.drag_set_threshold`, default 5 px) separates
+   the two **beforehand**.
 
 ```yaml
 - decl: [gst, i32, { call: [engine.update_drag_gesture, mx, my] }]
-# 3 = losgelassen → Drop.  4 = abgebrochen → NICHTS tun.
+# 3 = released → drop.  4 = cancelled → do NOTHING.
 - if:
     condition: { eq: [gst, 3] }
     then:
@@ -1318,9 +1316,9 @@ Das behebt zwei Fehlerklassen, die mit `update_drag` unvermeidbar sind:
       - call: [handle_drop, src]
 ```
 
-`update_drag` bleibt unverändert gültig; beide Wege greifen auf denselben
-`engine.get_dragged()`-Zustand zu, dürfen aber **nicht im selben Frame
-gemischt** werden (sie würden sich die Aufnahme gegenseitig wegnehmen).
+`update_drag` remains valid unchanged; both ways access the same
+`engine.get_dragged()` state, but must **not be mixed in the same
+frame** (they would take the pick-up away from each other).
 
 ---
 
@@ -1344,50 +1342,50 @@ gemischt** werden (sie würden sich die Aufnahme gegenseitig wegnehmen).
 Sprites and base textures are drawn as textured quads,
 labels as text, rects as solid-color quads.
 
-### 8.1 Eine eigene Schicht in die Z-Ordnung einhängen
+### 8.1 Hooking a layer of your own into the Z-order
 
-`draw_scene` zeichnet die Prefabs in **einem** Durchgang. Wer dazwischen selbst
-zeichnen will — ein 3D-Modell, rohes GL —, konnte das lange nur **davor** oder
-**danach** tun, und beides ist falsch, sobald es Fenster gibt: davor deckt der
-Hintergrund (negatives `z`) das eigene Bild zu, danach liegt es über **jedem**
-Fenster und scheint durch halbdurchsichtige Flächen hindurch.
+`draw_scene` draws the prefabs in **one** pass. Whoever wants to draw in between
+themselves — a 3D model, raw GL — could for a long time only do so **before** or
+**after**, and both are wrong as soon as there are windows: before, the
+background (negative `z`) covers the own picture, after, it lies over **every**
+window and shows through semi-transparent surfaces.
 
-`engine.draw_scene_upto(z)` zeichnet nur die Instanzen mit `z_order < z` und
-merkt sich, wie weit es gekommen ist. Das abschließende `engine.draw_scene()`
-zeichnet den **Rest** — jede Instanz genau einmal:
+`engine.draw_scene_upto(z)` draws only the instances with `z_order < z` and
+remembers how far it got. The concluding `engine.draw_scene()`
+draws the **rest** — every instance exactly once:
 
 ```aiml
 - call: [gl.clear_all, 0.05, 0.05, 0.1, 1.0]
-- call: [engine.draw_scene_upto, 10]   # Hintergrund (z=-10) und Bühne (z=5)
-- call: [zeichne_modell]               # die eigene Schicht, hier bei z=10
-- call: [engine.draw_scene]            # Fenster (z=50+) und alles darüber
+- call: [engine.draw_scene_upto, 10]   # background (z=-10) and stage (z=5)
+- call: [zeichne_modell]               # the own layer, here at z=10
+- call: [engine.draw_scene]            # windows (z=50+) and everything above
 - call: [engine.swap, win]
 ```
 
-Regeln:
+Rules:
 
-- **`draw_scene` beendet den Frame.** Nur dort laufen die Dropdown-Popups
-  (zweiter Pass, immer oben), der Sweep der sterbenden Instanzen und das
-  Zurücksetzen der Marke. Wer `draw_scene_upto` aufruft und `draw_scene`
-  weglässt, sieht die oberen Schichten nicht und räumt nichts auf.
-- **Die Z-Sortierung passiert beim ERSTEN Zeichenaufruf des Frames**, damit
-  alle Teilzeichnungen desselben Frames dieselbe Ordnung sehen. Ein `set_z`
-  zwischen zwei Teilzeichnungen wirkt erst im nächsten Frame.
-- **Halb-offenes Intervall.** `draw_scene_upto(10)` zeichnet `z < 10`, nicht
-  `z <= 10`. Mehrere eigene Schichten sind erlaubt: `upto(10)`, zeichnen,
-  `upto(60)`, zeichnen, `draw_scene`.
-- **Ohne `draw_scene_upto` ändert sich nichts.** Ein `draw_scene` ohne
-  vorangehende Teilzeichnung zeichnet die ganze Szene wie immer.
-- **Blending und Tiefentest nimmt die Engine sich zurück**, bei JEDER
-  Teilzeichnung, nicht nur einmal pro Frame. Eine eigene 3D-Schicht schaltet
-  den Tiefentest ein und leert den Tiefenpuffer; bliebe das stehen, fiele die
-  restliche UI durch den Tiefentest und wäre unsichtbar. Darauf muss der
-  Aufrufer also nicht achten.
-- **Den Viewport stellt der Aufrufer zurück.** Er geht nicht in den GL-Zustand
-  ein, den die Engine setzt, sondern bestimmt die Projektion, die beim ersten
-  Zeichenaufruf des Frames aus ihm abgeleitet wird. Wer für seine Schicht ein
-  Teilrechteck setzt, setzt danach wieder das ganze Fenster — sonst wird der
-  Rest des Frames in dieses Rechteck geklemmt.
+- **`draw_scene` ends the frame.** Only there do the dropdown popups run
+  (second pass, always on top), the sweep of dying instances and the
+  reset of the watermark. Whoever calls `draw_scene_upto` and leaves out `draw_scene`
+  does not see the upper layers and cleans nothing up.
+- **Z-sorting happens on the FIRST draw call of the frame**, so that
+  all partial draws of the same frame see the same order. A `set_z`
+  between two partial draws only takes effect in the next frame.
+- **Half-open interval.** `draw_scene_upto(10)` draws `z < 10`, not
+  `z <= 10`. Several own layers are allowed: `upto(10)`, draw,
+  `upto(60)`, draw, `draw_scene`.
+- **Without `draw_scene_upto` nothing changes.** A `draw_scene` without
+  a preceding partial draw draws the whole scene as always.
+- **The engine takes back blending and depth test**, on EVERY
+  partial draw, not just once per frame. A 3D layer of your own switches
+  the depth test on and clears the depth buffer; if that stayed, the
+  remaining UI would fail the depth test and be invisible. So the
+  caller does not have to watch out for this.
+- **The caller restores the viewport.** It is not part of the GL state
+  the engine sets, but determines the projection derived from it on the first
+  draw call of the frame. Whoever sets a sub-rectangle for their layer sets the
+  whole window again afterwards — otherwise the
+  rest of the frame is clamped into this rectangle.
 
 ---
 
@@ -1510,22 +1508,22 @@ An unknown name falls back to the scene font, so a missing asset degrades to the
 instead of drawing nothing.  One global font cannot serve both a proportional interface and a
 monospace code box, which is why this is per child rather than per scene.
 
-## Nachtrag: `set_bg_color` / `set_border_color` fehlten in der Methodenliste
+## Addendum: `set_bg_color` / `set_border_color` were missing from the method list
 
-Beide existieren seit längerem (`aiml_prefab_set_bg_color`, `aiml_prefab_set_border_color`, als
-Instanzmethoden registriert), standen aber nicht in der Tabelle der Kind-Setter.  Folge beim
-Bauen der cosmos-Hülle: `set_color` wurde genommen, weil es das einzig sichtbare war — und das
-setzt bei einem `rect` die meist transparente `color`, nicht die sichtbare Füllung `bg_color`, und
-bei einem `button` die Textfarbe statt des Rahmens.  Der Aufruf tat also nichts Erkennbares.
+Both have existed for some time (`aiml_prefab_set_bg_color`, `aiml_prefab_set_border_color`, registered as
+instance methods), but were not in the table of child setters.  The consequence while
+building the cosmos shell: `set_color` was used because it was the only one visible — and that
+sets, for a `rect`, the mostly transparent `color`, not the visible fill `bg_color`, and
+for a `button` the text colour instead of the border.  So the call did nothing recognisable.
 
-| Methode | Wirkung |
+| Method | Effect |
 |---|---|
-| `.set_color(child, rgba)` | `color` — Sprite-Tint, Rect-Solid, **Label-/Button-Textfarbe** |
-| `.set_bg_color(child, rgba)` | `bg_color` — die sichtbare Füllung eines `rect`/Buttons |
-| `.set_border_color(child, rgba)` | `border_color` — Rahmen/Strich |
+| `.set_color(child, rgba)` | `color` — sprite tint, rect solid, **label/button text colour** |
+| `.set_bg_color(child, rgba)` | `bg_color` — the visible fill of a `rect`/button |
+| `.set_border_color(child, rgba)` | `border_color` — frame/stroke |
 
-Bei einem `rect` ist die Füllung `bg_color` und `color` üblicherweise 0; wer eine Fläche umfärben
-will, braucht `set_bg_color`.
+For a `rect` the fill is `bg_color` and `color` is usually 0; whoever wants to recolour a surface
+needs `set_bg_color`.
 
 
 ## 5g. Code fields: multi-line editing, gutter, colour runs
@@ -1547,59 +1545,59 @@ Numbers count **source** lines (`\n`-separated), not wrapped display lines: a lo
 wraps three times keeps one number, because the number has to match what a compiler reports
 (cosmos `doc/spec/98` F98-9).
 
-### Ein Druck, ein Zeichen (behoben 2026-10-18)
+### One press, one character (fixed 2026-10-18)
 
-Dieselbe Familie wie die Klick-Positionierung, eine Ebene tiefer: das Feld **war** richtig,
-die Ereignis-Schlange nicht.  Im Web reihte die versteckte DOM-Brücke für die mobile
-Tastatur Steuertasten ein zweites Mal ein, die der Fenster-`keydown`-Handler schon
-eingereiht hatte — gemessen am Konsolenfeld von cosmos: `Delete`, `Enter` und die
-Pfeiltasten **doppelt**, also ein Zeichen zu viel gelöscht und zwei Stellen gesprungen.
+The same family as click positioning, one level deeper: the field **was** correct,
+the event queue was not.  On the web, the hidden DOM bridge for the mobile
+keyboard queued control keys a second time that the window `keydown` handler had already
+queued — measured on the cosmos console field: `Delete`, `Enter` and the
+arrow keys **twice**, i.e. one character too many deleted and two positions jumped.
 
-Die Regel steht jetzt in spec/44_0 §3.1 (ein Druck = genau ein Ereignis) samt der
-Zuständigkeit: die DOM-Brücke spricht nur, wenn keine benannte Hardware-Taste im Flug ist
-(Soft-Keyboard, IME, Autokorrektur).  Nachweis: `tests/test_prefab_backspace.aiml` zählt,
-was ein Druck bewirkt — strukturell ist so ein Fehler unsichtbar.
+The rule is now in spec/44_0 §3.1 (one press = exactly one event) together with the
+responsibility: the DOM bridge only speaks when no named hardware key is in flight
+(soft keyboard, IME, autocorrect).  Evidence: `tests/test_prefab_backspace.aiml` counts
+what one press does — structurally, such a bug is invisible.
 
-### Die Eingabetaste im mehrzeiligen Feld (behoben 2026-10-18)
+### The Enter key in a multi-line field (fixed 2026-10-18)
 
-Beim Nachmessen fiel ein zweiter Widerspruch auf: diese Tabelle und §5g sagen mehrzeiliges
-**Bearbeiten** zu, aber `Enter` fügte nie einen Zeilenumbruch ein — es rief nur `on_change`.
-In einem Code-Feld heißt das: man kann keine neue Zeile anfangen.  Der Quelltext musste
-eingefügt werden, um mehr als eine Zeile zu haben.
+While re-measuring, a second contradiction came up: this table and §5g promise multi-line
+**editing**, but `Enter` never inserted a line break — it only called `on_change`.
+In a code field that means: one cannot start a new line.  The source text had to be
+pasted in to have more than one line.
 
-Jetzt gilt die Unterscheidung, die das Feld ohnehin schon trifft:
+Now the distinction applies that the field already makes anyway:
 
-| Feldart | `Enter` |
+| Field kind | `Enter` |
 |---|---|
-| einzeilig (< ~1.8 Zeilenhöhen) | ruft `on_change` — das Abschicken |
-| mehrzeilig | fügt `\n` an der Schreibmarke ein (ersetzt eine Auswahl) |
+| single-line (< ~1.8 line heights) | calls `on_change` — the submit |
+| multi-line | inserts `\n` at the caret (replaces a selection) |
 
-Mehrzeilig-oder-nicht wird beim **Zeichnen** entschieden (Höhe gegen Zeilenhöhe) und auf dem
-Kind vermerkt (`ti_multiline`); der Eingabe-Pass liest dasselbe Ergebnis, statt die
-Entscheidung ein zweites Mal zu treffen.
+Multi-line or not is decided at **draw** time (height against line height) and noted on the
+child (`ti_multiline`); the input pass reads the same result instead of making the
+decision a second time.
 
-### Klick-Positionierung (behoben 2026-10-15)
+### Click positioning (fixed 2026-10-15)
 
-Die Widget-Tabelle verspricht für `text_input` „a movable cursor, text **selection** (mouse
-drag…)".  Für **mehrzeilige** Felder war das nicht eingelöst: der Render-Pass legte genau
-**einen** Cursor-Halt an (Byte 0) mit dem Kommentar „multi-line click-positioning falls back
-to the start".  Jeder Klick sprang also an den Dokumentanfang — in einem Code-Feld heißt das,
-dass Tippen und Löschen irgendwo passieren, nur nicht dort, wo der Zeiger steht.
+The widget table promises for `text_input` "a movable cursor, text **selection** (mouse
+drag…)".  For **multi-line** fields this was not kept: the render pass created exactly
+**one** cursor stop (byte 0) with the comment "multi-line click-positioning falls back
+to the start".  Every click therefore jumped to the start of the document — in a code field that means
+that typing and deleting happen somewhere, just not where the pointer is.
 
-Jetzt baut der Render-Pass dieselbe **2D-Karte** wie die Textbox (§5f): Cursor-Halte je
-sichtbarer Zeile, dazu die Zeilen-Oberkanten.  Der Eingabe-Pass bestimmt daraus erst die
-**Zeile** aus `y`, dann die **Spalte** aus `x` — eine reine x-Suche über alle Zeilen würde
-fast immer in der falschen Zeile landen.
+Now the render pass builds the same **2D map** as the text box (§5f): cursor stops per
+visible line, plus the line tops.  From that the input pass first determines the
+**line** from `y`, then the **column** from `x` — a pure x search across all lines would
+almost always land in the wrong line.
 
-**Der Startpunkt enthält die Gutter-Breite.**  Mit `gutter: true` wird der Text um die
-Nummernspalte nach rechts gezeichnet; eine Karte ohne diesen Versatz liegt um genau diese
-Breite daneben — der Cursor stünde sichtbar neben dem Zeichen, das man angeklickt hat.
-Im `secret`-Modus wird die Karte **nicht** gebaut: dort sind die gezeichneten Zeichen Punkte,
-deren Breiten nichts über die Bytes des Textes aussagen.
+**The starting point includes the gutter width.**  With `gutter: true` the text is drawn shifted right by the
+number column; a map without this offset is off by exactly this
+width — the cursor would visibly sit next to the character that was clicked.
+In `secret` mode the map is **not** built: there the drawn characters are dots,
+whose widths say nothing about the bytes of the text.
 
-Regressionstest: `tests/test_prefab_multiline_click.aiml` — klickt rechts in die erste und
-danach weit unten in die letzte Zeile und prüft, **wo** das getippte Zeichen landet.  Ohne den
-Fix meldet er „Klick landete am DOKUMENTANFANG".
+Regression test: `tests/test_prefab_multiline_click.aiml` — clicks to the right in the first and
+then far down in the last line and checks **where** the typed character lands.  Without the
+fix it reports "Klick landete am DOKUMENTANFANG".
 
 ### Colour runs
 
@@ -1630,48 +1628,48 @@ Bytes not covered by a run keep the field's `color`.  Runs are applied in order;
 the later one wins.  A run that reaches past the end of the text is clipped rather than refused —
 a highlighter running one frame behind an edit must not be an error.
 
-## Farb-Läufe gelten auch für `textbox`
+## Colour runs apply to `textbox` too
 
-`set_color_runs` wirkte zunächst nur im Eingabefeld (`text_input`, §5g) — dort entstand es für die
-Syntax-Hervorhebung.  Das war eine Einschränkung des Zeichners, keine der Sache: **Farbe ist eine
-Eigenschaft von Text, nicht von Editierbarkeit.**  Eine Statusspalte in einer Anzeige braucht sie
-genauso (cosmos `doc/spec/97` F97-17: die Farbe trägt den Status, der Text nennt ihn trotzdem).
+`set_color_runs` at first only worked in the input field (`text_input`, §5g) — that is where it was created for
+syntax highlighting.  That was a limitation of the renderer, not of the concept: **colour is a
+property of text, not of editability.**  A status column in a display needs it
+just as much (cosmos `doc/spec/97` F97-17: the colour carries the status, the text still names it).
 
-Seit 2026-10-12 zeichnet auch `textbox` die Läufe, mit derselben Regel: je Byte gilt der zuletzt
-gesetzte Lauf, gleichfarbige Nachbarn werden in einem Zug gezeichnet, und die Byte-Offsets beziehen
-sich auf den **Quelltext** der Box, nicht auf die umgebrochene Zeile.  Ohne Läufe bleibt der
-schnelle Pfad (eine Charge für alle sichtbaren Zeilen) unverändert.
+Since 2026-10-12 `textbox` draws the runs too, with the same rule: per byte the last
+set run applies, same-coloured neighbours are drawn in one go, and the byte offsets refer
+to the box's **source text**, not to the wrapped line.  Without runs the
+fast path (one batch for all visible lines) stays unchanged.
 
 
-- **F44_6-…: Ein Rollbalken, den nichts bewegt, ist ein Bild.**  Das mehrzeilige `text_input`
-  ZEICHNETE seit jeher einen senkrechten Balken, hatte aber keinerlei Eingabe dafür: kein Rad,
-  kein Ziehen am Griff.  Schlimmer, der Versatz wurde in **jedem** Rahmen zum Cursor
-  zurückgezogen (und bei fehlendem Fokus auf Zeile 0 gesetzt) — selbst wer ihn bewegt hätte,
-  wäre sofort zurückgerissen worden.  Gemeldet am 22.10.2026 am Quelltext-Feld einer Pipeline.
-  Jetzt gilt dieselbe Regel wie in der Textbox: dem Cursor folgt die Ansicht nur, wenn der
-  Cursor sich **bewegt hat**; danach gehört sie dem Leser (`ti_free_scroll`).  Rad, Shift+Rad
-  (waagerecht) und das Ziehen am Griff wirken, und ein Klick auf den Balken setzt **keinen**
-  Cursor und markiert nichts — sonst zieht jedes Rollen Text mit.
+- **F44_6-…: A scrollbar that nothing moves is a picture.**  The multi-line `text_input`
+  had always DRAWN a vertical bar, but had no input for it at all: no wheel,
+  no dragging the handle.  Worse, the offset was pulled back to the cursor in **every** frame
+  (and set to line 0 when focus was missing) — even someone who had moved it
+  would have been yanked back immediately.  Reported on 2026-10-22 on the source field of a pipeline.
+  Now the same rule applies as in the text box: the view follows the cursor only when the
+  cursor **has moved**; after that it belongs to the reader (`ti_free_scroll`).  Wheel, Shift+wheel
+  (horizontal) and dragging the handle work, and a click on the bar sets **no**
+  cursor and selects nothing — otherwise every scroll drags text along.
 
-### Screen- vs Design-Koordinaten bei Kind-Rechtecken
+### Screen vs design coordinates for child rectangles
 
-`child_rect_*` liefert **Screen**-Pixel (Fenster-Skalierung eingerechnet) — richtig
-für Treffertests und Cursor-Positionen. `set_pos`/`x`/`y` einer Instanz erwarten
-aber **Design**-Pixel (1280×720). Wer eine Instanz neben ein Kind stellen will
-(Tooltip, Sprechblase, Hinweis-Pfeil), mischte damit zwangsläufig zwei Räume:
-bei einem Fenster ≠ 1280×720 landet die Instanz um den Skalierungsfaktor
-verschoben — und zwar umso weiter, je weiter rechts/unten das Ziel liegt.
+`child_rect_*` returns **screen** pixels (window scaling included) — right
+for hit tests and cursor positions. But `set_pos`/`x`/`y` of an instance expect
+**design** pixels (1280×720). Whoever wanted to place an instance next to a child
+(tooltip, speech bubble, hint arrow) therefore inevitably mixed two spaces:
+with a window ≠ 1280×720 the instance lands shifted by the scaling factor
+— and the further right/down the target is, the further off.
 
-Dafür gibt es `child_design_*`. Regel: **Treffer/Cursor → `child_rect_*`,
-Platzieren → `child_design_*`.**
+That is what `child_design_*` is for. Rule: **hit/cursor → `child_rect_*`,
+placing → `child_design_*`.**
 
 ```yaml
-# Sprechblase rechts neben ein Eingabefeld stellen:
+# Place a speech bubble to the right of an input field:
 - decl: [rect_x, f32, { call: [<.scene.child_design_x, "name_input"] }]
 - decl: [rect_w, f32, { call: [<.scene.child_design_w, "name_input"] }]
 - call: [<.bubble.set_pos, { +: [{ +: [rect_x, rect_w] }, 16.0] }, 100.0]
 ```
 
-Aufgefallen 2026-10-25 an der Tour-Sprechblase in 9rooms: sie stand bei
-skaliertem Fenster weit neben dem Namensfeld, weil `child_rect_*` Screen- und
-`set_pos` Design-Koordinaten sind.
+Noticed on 2026-10-25 on the tour speech bubble in 9rooms: with a scaled
+window it stood far away from the name field, because `child_rect_*` are screen and
+`set_pos` design coordinates.
