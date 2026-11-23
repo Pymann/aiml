@@ -1,33 +1,33 @@
 # Compiler Logs Without AIML Source Locations
 
-Datum: 2026-03-30
+Date: 2026-03-30
 
-## Ziel
+## Goal
 
-Diese Liste identifiziert Log-/Diagnostikstellen im AIML-Projekt, die aktuell keine AIML-Datei/Zeile in der Meldung tragen. Fokus sind vor allem Compiler- und Semantikfehler, bei denen eine AIML-Quelle erwartet wird.
+This list identifies log/diagnostic sites in the AIML project that currently carry no AIML file/line in the message. The focus is above all on compiler and semantic errors where an AIML source is expected.
 
-## Methodik
+## Methodology
 
-- Durchsucht wurden `compiler.cpp`, `src/core`, `src/sys`.
-- Gesucht wurden `LOG_ERROR`, `LOG_WARNING`, `LOG_WARN`, `LOG_INFO`.
-- Als "mit AIML-Location" zaehlen hier primaer Stellen, die `ctx.fmtLoc(...)` oder `fmtLoc()` direkt in die Nachricht voranstellen.
-- Infrastruktur-/Runtime-Logs ohne AIML-Quelle sind separat markiert; die sind nicht zwingend falsch, aber fuer Compilerdiagnostik nicht ausreichend.
+- Searched were `compiler.cpp`, `src/core`, `src/sys`.
+- Searched for `LOG_ERROR`, `LOG_WARNING`, `LOG_WARN`, `LOG_INFO`.
+- "With AIML location" here primarily counts sites that prepend `ctx.fmtLoc(...)` or `fmtLoc()` directly to the message.
+- Infrastructure/runtime logs without an AIML source are marked separately; they are not necessarily wrong, but not sufficient for compiler diagnostics.
 
-## Grobe Zahlen
+## Rough figures
 
-- Gefundene Log-Stellen insgesamt: `152`
-- Davon direkt mit `fmtLoc(...)`/`fmtLoc()`: `12`
+- Log sites found in total: `152`
+- Of those directly with `fmtLoc(...)`/`fmtLoc()`: `12`
 
-Das Delta ist groesser als der echte Handlungsbedarf, weil etliche Logs absichtlich LLVM-/Runtime-/Cache-Logs sind. Die fuer `sprint_task_17` relevanten Luecken liegen vor allem in den AST-/Semantik-Dateien.
+The delta is larger than the real need for action, because quite a few logs are deliberately LLVM/runtime/cache logs. The gaps relevant for `sprint_task_17` lie above all in the AST/semantic files.
 
-## Prioritaet A: Echte Compilerdiagnostics ohne AIML-Datei/Zeile
+## Priority A: real compiler diagnostics without an AIML file/line
 
-Diese Stellen sollten bevorzugt auf `ctx.fmtLoc(node)` oder mindestens `ctx.fmtLoc()` umgestellt werden.
+These sites should preferably be switched to `ctx.fmtLoc(node)` or at least `ctx.fmtLoc()`.
 
 ### `src/core/ast_compiler_expr.cpp`
 
 - `112`: `Null LLVM value evaluated for initialization of member: ...`
-  Fix: `ctx.fmtLoc(<expr/member node>)` voranstellen.
+  Fix: `ctx.fmtLoc(<expr/member node>)` prepend.
 - `115`: `Failed to compile AST expression for initialization of member: ...`
   Fix: `ctx.fmtLoc(<expr/member node>)`.
 - `122`: `Unknown class for new: ...`
@@ -56,7 +56,7 @@ Diese Stellen sollten bevorzugt auf `ctx.fmtLoc(node)` oder mindestens `ctx.fmtL
 ### `src/core/ast_compiler_stmt.cpp`
 
 - `43`: `Variable shadowing is not allowed: ...`
-  Fix: `ctx.fmtLoc(decl->sourceNode)` oder `ctx.fmtLoc()`.
+  Fix: `ctx.fmtLoc(decl->sourceNode)` or `ctx.fmtLoc()`.
 - `268`: `Failed to evaluate value expression for assignment to: ...`
   Fix: `ctx.fmtLoc(stmt->sourceNode)`.
 - `274`: `Cannot assign to const variable ...`
@@ -87,7 +87,7 @@ Diese Stellen sollten bevorzugt auf `ctx.fmtLoc(node)` oder mindestens `ctx.fmtL
 - `681`: `Unknown type ... for field ... in model ...`
   Fix: `ctx.fmtLoc(fieldNode)`.
 - `999`: `Variable shadowing is not allowed: function argument ...`
-  Fix: `ctx.fmtLoc(fn->sourceNode)` oder arg-node.
+  Fix: `ctx.fmtLoc(fn->sourceNode)` or the arg node.
 - `1085`: `Undefined enum variant: ...`
   Fix: `ctx.fmtLoc(expr/source node)`.
 - `1147`: `Dash-index on non-list field: ...`
@@ -182,13 +182,13 @@ Diese Stellen sollten bevorzugt auf `ctx.fmtLoc(node)` oder mindestens `ctx.fmtL
 
 ### `src/core/utils.cpp`
 
-Diese Datei erzeugt viele Semantikfehler, hat aber aktuell keinen expliziten Node-Kontext im Log.
+This file produces many semantic errors, but currently has no explicit node context in the log.
 
 - `13`, `41`, `44`, `49`, `64`, `67`, `76`, `82`, `98`, `134`, `146`, `226`, `257`
-  Fix: Funktionssignaturen erweitern, damit ein `CompilerContext&` plus optional `const YAML::Node*` oder `sourceLine` mitgegeben werden kann. Dann `ctx.fmtLoc(...)` voranstellen.
+  Fix: extend the function signatures so that a `CompilerContext&` plus optionally a `const YAML::Node*` or `sourceLine` can be passed along. Then prepend `ctx.fmtLoc(...)`.
 
-Anmerkung:
-- Hier reicht nicht nur ein String-Prefix. Der Call-Stack muss den Source-Kontext bis in die Utility-Helfer weiterreichen.
+Note:
+- A string prefix alone is not enough here. The call stack must pass the source context down into the utility helpers.
 
 ### `src/core/context.h`
 
@@ -197,15 +197,15 @@ Anmerkung:
 - `452`: `Separator ':' not found in map type content: ...`
 
 Fix:
-- Falls aus Benutzer-AIML ausloesbar: `fmtLoc()`/`fmtLoc(node)` voranstellen.
-- Falls interne Invariante: explizit als interner Compilerfehler markieren, z. B. `internal compiler error`.
+- If it can be triggered from user AIML: prepend `fmtLoc()`/`fmtLoc(node)`.
+- If it is an internal invariant: mark it explicitly as an internal compiler error, e.g. `internal compiler error`.
 
 ### `src/core/expression_builder.cpp`
 
 - `50`: `Operator '...' is not allowed. Use '...' instead.`
 
 Fix:
-- Builder traegt bereits Linieninformationen; hier sollte der aktuelle Builder-Kontext mit Datei/Zeile in die Fehlermeldung einfliesen.
+- The builder already carries line information; here the current builder context with file/line should flow into the error message.
 
 ### `src/core/string_utils.h`
 
@@ -214,23 +214,23 @@ Fix:
 - `280`: `Unmatched brace in expression: ...`
 
 Fix:
-- Falls diese Pfade aus AIML-Quelltext stammen, SourceLoc bis in den String-Expansion-Kontext weiterreichen.
-- Sonst zumindest den umgebenden Selector/Funktionsnamen mitgeben.
+- If these paths come from AIML source, pass the SourceLoc down into the string expansion context.
+- Otherwise at least pass along the surrounding selector/function name.
 
 ### `src/core/builtin_registry.cpp`
 
 - `2010`: `db.query: predicate function '...' not found`
 
 Fix:
-- `CompilerContext` oder Call-Site-Node bis in die Builtin-Aufloesung weiterreichen und `ctx.fmtLoc(call->sourceNode)` verwenden.
+- Pass the `CompilerContext` or the call site node down into the builtin resolution and use `ctx.fmtLoc(call->sourceNode)`.
 
-## Prioritaet B: Frontend-Compiler/Driver-Logs ohne AIML-Location
+## Priority B: frontend compiler/driver logs without an AIML location
 
-Diese Stellen sind teils berechtigt ohne AIML-Zeile, sollten aber, wo moeglich, den betroffenen AIML-Dateinamen oder Importpfad tragen.
+These sites are partly justified without an AIML line, but should carry the affected AIML file name or import path where possible.
 
 ### `compiler.cpp`
 
-Stellen ohne AIML-Datei/Zeile:
+Sites without an AIML file/line:
 
 - `227`: `Failed to parse import signatures: ...`
 - `239`: `Could not open file: ...`
@@ -242,24 +242,24 @@ Stellen ohne AIML-Datei/Zeile:
 - `1743`: `Import source not found: ...`
 
 Fix:
-- Dateipfad der betroffenen AIML-Datei immer explizit in die Diagnose.
-- Wo ein YAML-Node vorhanden ist, spaeter auf `DiagnosticLoc` umstellen.
+- Always put the file path of the affected AIML file explicitly into the diagnostic.
+- Where a YAML node is present, switch to `DiagnosticLoc` later.
 
-Nicht zwingend mit AIML-Zeile noetig, aber klar als Infrastruktur markieren:
+Not necessarily needed with an AIML line, but mark clearly as infrastructure:
 
 - `72`, `511`, `666`, `684`, `692`, `704`, `711`, `719`, `725`, `733`
 - `1599`, `1610`, `1617`, `1624`, `1639`, `1646`, `1655`, `1662`
 - `1749`, `1793`, `1801`, `1803`
 
-Empfehlung:
-- Diese Logs nicht mit `fmtLoc()` mischen, sondern in der Meldung sauber unterscheiden:
+Recommendation:
+- Do not mix these logs with `fmtLoc()`, but distinguish them cleanly in the message:
   - `AIML compile error: ...`
   - `LLVM/JIT error: ...`
   - `Import cache info: ...`
 
-## Prioritaet C: Runtime-/System-Logs ohne AIML-Location
+## Priority C: runtime/system logs without an AIML location
 
-Diese Logs sind aktuell nicht das Hauptproblem von `sprint_task_17`, weil sie keine direkten Compilerdiagnostics sind.
+These logs are currently not the main problem of `sprint_task_17`, because they are not direct compiler diagnostics.
 
 ### `src/sys/process_runtime.cpp`
 
@@ -277,43 +277,43 @@ Diese Logs sind aktuell nicht das Hauptproblem von `sprint_task_17`, weil sie ke
 
 - `29`, `33`, `98`, `163`, `266`
 
-Bewertung:
-- Kein Bug im engeren Sinn, solange diese Meldungen als Runtime-/Systemfehler verstanden werden.
-- Wenn langfristig AIML-Stacktraces/Diagnostics ausgebaut werden, sollten diese Pfade zumindest Funktionskontext oder Aufrufer benennen.
+Assessment:
+- Not a bug in the narrower sense, as long as these messages are understood as runtime/system errors.
+- If AIML stack traces/diagnostics are expanded in the long term, these paths should at least name the function context or the caller.
 
-## Konkrete Bugfix-Strategie
+## Concrete bug fix strategy
 
-### Stufe 1: Schnelle Compiler-Diagnostics
+### Stage 1: quick compiler diagnostics
 
-Direkt umstellen auf `ctx.fmtLoc(...)` in:
+Switch directly to `ctx.fmtLoc(...)` in:
 
 - `src/core/ast_compiler_expr.cpp`
 - `src/core/ast_compiler_stmt.cpp`
 - `src/core/ast_compiler.cpp`
 - `src/core/ast_compiler_call.cpp`
 
-Das bringt sofort den groessten Gewinn.
+That brings the biggest gain immediately.
 
-### Stufe 2: Utility-/Builtin-Kontext nachziehen
+### Stage 2: follow up with utility/builtin context
 
-Refactor fuer:
+Refactor for:
 
 - `src/core/utils.cpp`
 - `src/core/builtin_registry.cpp`
 - `src/core/string_utils.h`
 
-Hier reicht ein lokaler Stringfix nicht. Der Source-Kontext muss architektonisch mitgereicht werden.
+A local string fix is not enough here. The source context must be passed along architecturally.
 
-### Stufe 3: Driver vs. Diagnostics trennen
+### Stage 3: separate driver vs. diagnostics
 
-In `compiler.cpp` sollten Logs in zwei Klassen gesplittet werden:
+In `compiler.cpp` logs should be split into two classes:
 
-- echte Benutzerdiagnostics mit AIML-Datei/Zeile
-- Infrastruktur-/LLVM-/Cache-Logs ohne AIML-Zeile, aber klar gekennzeichnet
+- real user diagnostics with an AIML file/line
+- infrastructure/LLVM/cache logs without an AIML line, but clearly marked
 
-## Wichtigste erste Kandidaten fuer direkte Umsetzung
+## Most important first candidates for direct implementation
 
-Wenn nur die schlimmsten Stellen zuerst gefixt werden sollen:
+If only the worst places are to be fixed first:
 
 1. `src/core/ast_compiler_expr.cpp`
 2. `src/core/ast_compiler_stmt.cpp`
@@ -321,4 +321,4 @@ Wenn nur die schlimmsten Stellen zuerst gefixt werden sollen:
 4. `src/core/ast_compiler.cpp`
 5. `src/core/utils.cpp`
 
-Diese fuenf Bereiche erklaeren den groessten Teil der heute "ortlosen" AIML-Compilerfehler.
+These five areas explain most of today's "location-less" AIML compiler errors.
