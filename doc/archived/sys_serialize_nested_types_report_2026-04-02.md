@@ -1,301 +1,301 @@
 # AIML sys.serialize / sys.deserialize Nested Types Report
 
-Datum: 2026-04-02
+Date: 2026-04-02
 
-## Kurzfazit
+## Short conclusion
 
-Verschachtelte Datentypen sind aktuell nur teilweise robust.
+Nested data types are currently only partly robust.
 
-Es gibt zwei getrennte Serialisierungspfade:
+There are two separate serialisation paths:
 
-- JSON-basierter Pfad fuer `sys.serialize` / `sys.deserialize` in [serialize_impl.cpp](../../src/core/serialize_impl.cpp)
-- binaerer Descriptor-Pfad `aiml_ser_*` in [ser_runtime.cpp](../../src/sys/ser_runtime.cpp)
+- the JSON-based path for `sys.serialize` / `sys.deserialize` in [serialize_impl.cpp](../../src/core/serialize_impl.cpp)
+- the binary descriptor path `aiml_ser_*` in [ser_runtime.cpp](../../src/sys/ser_runtime.cpp)
 
-Der JSON-Pfad ist fuer einige wichtige Nested-Faelle brauchbar:
+The JSON path is usable for some important nested cases:
 
-- struct mit nested struct
-- struct mit `list<T>`
-- struct mit `list<struct>`
-- struct mit `list<list<primitive>>`
+- struct with a nested struct
+- struct with `list<T>`
+- struct with `list<struct>`
+- struct with `list<list<primitive>>`
 
-Er ist aber nicht allgemein rekursiv korrekt. Insbesondere Maps sind der groesste Schwachpunkt.
+But it is not generally recursively correct. Maps in particular are the biggest weak point.
 
-Der binaere Descriptor-Pfad ist konzeptionell generischer und fuer `struct/list/map` deutlich naeher an echter Rekursion, hat aber eigene offene Punkte bei `buffer<T>` und bei der Fehlerhaertung.
+The binary descriptor path is conceptually more generic and much closer to real recursion for `struct/list/map`, but has its own open points with `buffer<T>` and with error hardening.
 
-## Verifizierte Laufzeitbefunde
+## Verified runtime findings
 
-Positiv verifiziert:
+Verified positively:
 
-- [test_serialize_struct.aiml](../../tests/test_serialize_struct.aiml) laeuft erfolgreich
-- [test_serialize_card.aiml](../../tests/test_serialize_card.aiml) laeuft erfolgreich
-- [test_serialize_ext.aiml](../../tests/test_serialize_ext.aiml) laeuft erfolgreich
+- [test_serialize_struct.aiml](../../tests/test_serialize_struct.aiml) runs successfully
+- [test_serialize_card.aiml](../../tests/test_serialize_card.aiml) runs successfully
+- [test_serialize_ext.aiml](../../tests/test_serialize_ext.aiml) runs successfully
 
-Damit ist aktuell konkret belegt:
+So it is currently concretely demonstrated that:
 
-- `list<struct>` funktioniert fuer den JSON-Pfad
-- `list<list<i32>>` funktioniert fuer den JSON-Pfad
-- ein Card-aehnlicher Nested-Fall mit `list<Ability>` und `Ability.effects: list<list<i32>>` funktioniert
+- `list<struct>` works for the JSON path
+- `list<list<i32>>` works for the JSON path
+- a card-like nested case with `list<Ability>` and `Ability.effects: list<list<i32>>` works
 
-Negativ verifiziert:
+Verified negatively:
 
-- `map<string:list<i32>>` im JSON-Pfad fuehrt zu einem Laufzeitcrash
-- `map<ManaColor:i32>` im JSON-Pfad fuehrt zu einem Laufzeitcrash
+- `map<string:list<i32>>` in the JSON path leads to a runtime crash
+- `map<ManaColor:i32>` in the JSON path leads to a runtime crash
 
-Diese beiden Repros habe ich lokal direkt mit dem aktuellen AIML-Binary gefahren.
+I ran these two repros locally, directly with the current AIML binary.
 
 ## Findings
 
-### Kritisch: JSON-Maps sind faktisch nur fuer string->primitive/string implementiert
+### Critical: JSON maps are effectively only implemented for string->primitive/string
 
-Die JSON-Schicht behauptet Rekursion, implementiert sie bei Maps aber nicht sauber.
+The JSON layer claims recursion, but does not implement it cleanly for maps.
 
-Belege:
+Evidence:
 
-- Map-Schreibpfad fuer struct-Felder kennt nur `string`, `i64`, `f32`, `f64`, sonst faellt alles auf `i32` zurueck in [serialize_impl.cpp](../../src/core/serialize_impl.cpp#L252)
-- Top-Level-Map-Schreibpfad hat dieselbe Einschraenkung in [serialize_impl.cpp](../../src/core/serialize_impl.cpp#L489)
-- Map-Lesepfad fuer struct-Felder kennt nur primitive/string-Werte in [serialize_impl.cpp](../../src/core/serialize_impl.cpp#L714)
-- Top-Level-Map-Lesepfad hat dieselbe Einschraenkung in [serialize_impl.cpp](../../src/core/serialize_impl.cpp#L900)
+- the map write path for struct fields only knows `string`, `i64`, `f32`, `f64`, everything else falls back to `i32` in [serialize_impl.cpp](../../src/core/serialize_impl.cpp#L252)
+- the top-level map write path has the same restriction in [serialize_impl.cpp](../../src/core/serialize_impl.cpp#L489)
+- the map read path for struct fields only knows primitive/string values in [serialize_impl.cpp](../../src/core/serialize_impl.cpp#L714)
+- the top-level map read path has the same restriction in [serialize_impl.cpp](../../src/core/serialize_impl.cpp#L900)
 
-Folge:
+Consequence:
 
 - `map<string:list<i32>>`
 - `map<string:struct>`
 - `map<string:map<...>>`
 
-sind trotz `isSerializable(...)` in der JSON-Schicht nicht korrekt umgesetzt und koennen crashen oder falsch serialisieren.
+are not implemented correctly in the JSON layer despite `isSerializable(...)` and can crash or serialise wrongly.
 
-### Kritisch: JSON-Maps ignorieren den Key-Typ und behandeln Keys effektiv als `string`
+### Critical: JSON maps ignore the key type and effectively treat keys as `string`
 
-Die JSON-Schicht liest und schreibt Map-Keys als `i8*`/String.
+The JSON layer reads and writes map keys as `i8*`/string.
 
-Belege:
+Evidence:
 
-- Beim Schreiben wird `kp` immer als `i8pT` gelesen in [serialize_impl.cpp](../../src/core/serialize_impl.cpp#L284) und [serialize_impl.cpp](../../src/core/serialize_impl.cpp#L535)
-- Beim Lesen wird fuer Maps hart `ctx.getLLVMType("string")` als Key-Typ verwendet in [serialize_impl.cpp](../../src/core/serialize_impl.cpp#L716) und [serialize_impl.cpp](../../src/core/serialize_impl.cpp#L906)
+- When writing, `kp` is always read as `i8pT` in [serialize_impl.cpp](../../src/core/serialize_impl.cpp#L284) and [serialize_impl.cpp](../../src/core/serialize_impl.cpp#L535)
+- When reading, `ctx.getLLVMType("string")` is hard-coded as the key type for maps in [serialize_impl.cpp](../../src/core/serialize_impl.cpp#L716) and [serialize_impl.cpp](../../src/core/serialize_impl.cpp#L906)
 
-Folge:
+Consequence:
 
-- `map<ManaColor:i32>` ist im JSON-Pfad strukturell inkonsistent
-- der Laufzeitcrash fuer den Repro mit Enum-Key-Map ist damit technisch erklaerbar
+- `map<ManaColor:i32>` is structurally inconsistent in the JSON path
+- the runtime crash for the repro with an enum key map is thereby technically explainable
 
-Das ist auch deshalb problematisch, weil [test_serialize_card.aiml](../../tests/test_serialize_card.aiml) bereits `map<ManaColor:i32>` benutzt, aber nur den Deserialize-only-Fall ohne Roundtrip oder Map-Inhaltstest abdeckt.
+That is also problematic because [test_serialize_card.aiml](../../tests/test_serialize_card.aiml) already uses `map<ManaColor:i32>`, but only covers the deserialize-only case without a round trip or a map content test.
 
-### Hoch: `isSerializable()` ist fuer den JSON-Pfad zu permissiv
+### High: `isSerializable()` is too permissive for the JSON path
 
-`isSerializable()` erlaubt rekursiv `list<T>` und `map<K:V>`, solange der Value-Typ rekursiv serialisierbar ist, siehe [serialize_impl.cpp](../../src/core/serialize_impl.cpp#L958).
+`isSerializable()` recursively allows `list<T>` and `map<K:V>` as long as the value type is recursively serialisable, see [serialize_impl.cpp](../../src/core/serialize_impl.cpp#L958).
 
-Das passt nicht zur echten JSON-Implementierung, die:
+That does not match the real JSON implementation, which:
 
-- bei Lists nur `list<primitive>`, `list<struct>`, `list<list<primitive>>` sichtbar behandelt
-- bei Maps nur primitive/string-Werte korrekt behandelt
+- for lists visibly only handles `list<primitive>`, `list<struct>`, `list<list<primitive>>`
+- for maps only handles primitive/string values correctly
 
-Folge:
+Consequence:
 
-- Der Compiler akzeptiert Typen, die der Laufzeitpfad nicht robust verarbeiten kann.
-- Das fuehrt zu Abstuerzen statt zu sauberen Compilerfehlern.
+- The compiler accepts types that the runtime path cannot process robustly.
+- That leads to crashes instead of clean compiler errors.
 
-### Hoch: Nested-Lists sind im JSON-Pfad nur eine Ebene tief speziell implementiert
+### High: nested lists are only specially implemented one level deep in the JSON path
 
-Es gibt gezielte Sonderfaelle fuer `list<list<T>>`, aber keine allgemeine rekursive Listen-Implementierung.
+There are targeted special cases for `list<list<T>>`, but no general recursive list implementation.
 
-Belege:
+Evidence:
 
-- Schreibpfad: Sonderfall `isListType(elemTn)` in [serialize_impl.cpp](../../src/core/serialize_impl.cpp#L183) und [serialize_impl.cpp](../../src/core/serialize_impl.cpp#L424)
-- Lesepfad: derselbe Sonderfall in [serialize_impl.cpp](../../src/core/serialize_impl.cpp#L668) und [serialize_impl.cpp](../../src/core/serialize_impl.cpp#L850)
+- write path: special case `isListType(elemTn)` in [serialize_impl.cpp](../../src/core/serialize_impl.cpp#L183) and [serialize_impl.cpp](../../src/core/serialize_impl.cpp#L424)
+- read path: the same special case in [serialize_impl.cpp](../../src/core/serialize_impl.cpp#L668) and [serialize_impl.cpp](../../src/core/serialize_impl.cpp#L850)
 
-Folge:
+Consequence:
 
-- `list<list<list<i32>>>` ist nicht als generischer Fall abgesichert
-- `list<list<struct>>` ist ebenfalls nicht sauber ersichtlich unterstuetzt
+- `list<list<list<i32>>>` is not secured as a generic case
+- `list<list<struct>>` is not visibly supported cleanly either
 
-### Mittel: Spec und Implementierung laufen beim JSON-Pfad auseinander
+### Medium: spec and implementation diverge for the JSON path
 
-Die Spec beschreibt Nested-Maps und Nested-Lists deutlich allgemeiner, siehe [29_serialize.md](../../spec/29_serialize.md#L90).
+The spec describes nested maps and nested lists much more generally, see [29_serialize.md](../../spec/29_serialize.md#L90).
 
-Die echte Implementierung ist enger:
+The real implementation is narrower:
 
-- Map-Keys praktisch `string`
-- Map-Werte praktisch primitive/string
-- Listen nur mit begrenzten Sonderfaellen verschachtelt
+- map keys practically `string`
+- map values practically primitive/string
+- lists nested only with limited special cases
 
-Das fuehrt zu einer false sense of support.
+That leads to a false sense of support.
 
-### Mittel: Binary Descriptor-Pfad ist fuer `struct/list/map` generischer, aber `buffer<T>` ist nicht tief serialisiert
+### Medium: the binary descriptor path is more generic for `struct/list/map`, but `buffer<T>` is not serialised deeply
 
-Im binaeren Pfad werden `struct`, `list` und `map` rekursiv ueber `enc/dec/fre` traversiert, siehe [ser_runtime.cpp](../../src/sys/ser_runtime.cpp#L147), [ser_runtime.cpp](../../src/sys/ser_runtime.cpp#L157) und [ser_runtime.cpp](../../src/sys/ser_runtime.cpp#L171).
+In the binary path `struct`, `list` and `map` are traversed recursively via `enc/dec/fre`, see [ser_runtime.cpp](../../src/sys/ser_runtime.cpp#L147), [ser_runtime.cpp](../../src/sys/ser_runtime.cpp#L157) and [ser_runtime.cpp](../../src/sys/ser_runtime.cpp#L171).
 
-Bei `buffer<T>` wird aber nur ein Rohbyteblock kopiert:
+For `buffer<T>`, however, only a raw byte block is copied:
 
-- Encode macht `w_raw(...)` in [ser_runtime.cpp](../../src/sys/ser_runtime.cpp#L189)
-- Decode macht `memcpy(...)` in [ser_runtime.cpp](../../src/sys/ser_runtime.cpp#L309)
-- Free traversiert `buffer` aber rekursiv ueber Elemente in [ser_runtime.cpp](../../src/sys/ser_runtime.cpp#L401)
+- encode does `w_raw(...)` in [ser_runtime.cpp](../../src/sys/ser_runtime.cpp#L189)
+- decode does `memcpy(...)` in [ser_runtime.cpp](../../src/sys/ser_runtime.cpp#L309)
+- free, however, traverses `buffer` recursively over its elements in [ser_runtime.cpp](../../src/sys/ser_runtime.cpp#L401)
 
-Folge:
+Consequence:
 
-- `buffer<primitive>` ist plausibel ok
-- `buffer<string>` oder `buffer<struct-with-heap>` ist inkonsistent und sehr wahrscheinlich falsch
+- `buffer<primitive>` is plausibly ok
+- `buffer<string>` or `buffer<struct-with-heap>` is inconsistent and very probably wrong
 
-### Mittel: Binary Decode validiert nur List-Counts hart
+### Medium: binary decode only validates list counts hard
 
-Listen haben eine Absurditaetspruefung in [ser_runtime.cpp](../../src/sys/ser_runtime.cpp#L264).
+Lists have a sanity check in [ser_runtime.cpp](../../src/sys/ser_runtime.cpp#L264).
 
-Maps und Buffer haben keine vergleichbare harte Count/Size-Pruefung:
+Maps and buffers have no comparable hard count/size check:
 
-- Map in [ser_runtime.cpp](../../src/sys/ser_runtime.cpp#L287)
-- Buffer in [ser_runtime.cpp](../../src/sys/ser_runtime.cpp#L309)
+- map in [ser_runtime.cpp](../../src/sys/ser_runtime.cpp#L287)
+- buffer in [ser_runtime.cpp](../../src/sys/ser_runtime.cpp#L309)
 
-Folge:
+Consequence:
 
-- kaputte oder manipulierte Blobs koennen unnoetig grosse Allokationen ausloesen
+- broken or manipulated blobs can trigger needlessly large allocations
 
-### Niedrig: Debug-Ausgabe ist noch in der Binary-Decode-Implementierung aktiv
+### Low: debug output is still active in the binary decode implementation
 
-In [ser_runtime.cpp](../../src/sys/ser_runtime.cpp#L248) gibt es noch `fprintf(stderr, "[ser-pos] ...")`.
+In [ser_runtime.cpp](../../src/sys/ser_runtime.cpp#L248) there is still `fprintf(stderr, "[ser-pos] ...")`.
 
-Das ist fuer Produktivpfade noisig und sollte raus oder hinter ein Debug-Flag.
+That is noisy for production paths and should go or be put behind a debug flag.
 
-## Aktueller Supportstand
+## Current support state
 
 ### JSON `sys.serialize/sys.deserialize`
 
-Robust bzw. praktisch bestaetigt:
+Robust or practically confirmed:
 
 - primitive
 - enum
-- struct/class/model mit primitiven Feldern
+- struct/class/model with primitive fields
 - nested struct
 - `list<primitive>`
 - `list<struct>`
 - `list<list<primitive>>`
 
-Nur teilweise oder nicht robust:
+Only partly or not robust:
 
-- `map<string:primitive>`: eher ja
-- `map<non-string-key:V>`: nein
-- `map<string:struct/list/map>`: nein
-- `list<list<struct>>`: unklar und nicht generisch
-- `list<map<...>>`: nein
-- `buffer<T>`: ueber `sys.serialize` aktuell gar nicht als echter JSON-Typpfad vorgesehen
+- `map<string:primitive>`: rather yes
+- `map<non-string-key:V>`: no
+- `map<string:struct/list/map>`: no
+- `list<list<struct>>`: unclear and not generic
+- `list<map<...>>`: no
+- `buffer<T>`: currently not intended at all as a real JSON type path via `sys.serialize`
 
 ### Binary `aiml_ser_*`
 
-Robust wirkend:
+Appearing robust:
 
 - struct
 - nested struct
-- list rekursiv
-- map rekursiv
+- list recursively
+- map recursively
 
-Offen/problematisch:
+Open/problematic:
 
-- `buffer<T>` nur shallow
-- fehlende harte Plausibilitaetschecks fuer Map/Buffer-Groessen
-- Rest-Debug-Ausgaben
+- `buffer<T>` only shallow
+- missing hard plausibility checks for map/buffer sizes
+- leftover debug output
 
-## Empfohlene Fix-Reihenfolge
+## Recommended fix order
 
-### Phase 1: JSON-Map-Pfad sofort absichern
+### Phase 1: secure the JSON map path immediately
 
-Aufwand:
+Effort:
 
-- etwa 0.5 bis 1 Tag
+- about 0.5 to 1 day
 
-Inhalt:
+Content:
 
-- `isSerializable()` fuer den JSON-Pfad an die echte Implementierung anpassen
-- `sys.serialize/sys.deserialize` fuer nicht unterstuetzte Map-Formen als Compilerfehler ablehnen
-- mindestens diese Typen vorerst blocken:
-  - `map<K:V>` mit `K != string`
-  - `map<string:V>` falls `V` nicht primitive/string ist
+- align `isSerializable()` for the JSON path with the real implementation
+- reject unsupported map forms as compiler errors for `sys.serialize/sys.deserialize`
+- block at least these types for now:
+  - `map<K:V>` with `K != string`
+  - `map<string:V>` if `V` is not primitive/string
 
-Nutzen:
+Benefit:
 
-- verhindert die aktuell belegten Laufzeitcrashs sofort
+- prevents the currently demonstrated runtime crashes immediately
 
-### Phase 2: JSON-Maps wirklich rekursiv machen
+### Phase 2: make JSON maps really recursive
 
-Aufwand:
+Effort:
 
-- etwa 1.5 bis 3 Tage
+- about 1.5 to 3 days
 
-Inhalt:
+Content:
 
-- Key-Typ sauber parsen statt implizit `string`
-- Map-Werte analog zu Lists rekursiv serialisieren/deserialisieren
-- Unterstuetzung fuer:
+- parse the key type cleanly instead of implicitly `string`
+- serialise/deserialise map values recursively, analogous to lists
+- support for:
   - `map<string:list<T>>`
   - `map<string:struct>`
-  - optional `map<string:map<...>>`
+  - optionally `map<string:map<...>>`
 
-Nutzen:
+Benefit:
 
-- bringt den JSON-Pfad auf das Niveau, das Spec und `isSerializable()` derzeit andeuten
+- brings the JSON path up to the level that the spec and `isSerializable()` currently suggest
 
-### Phase 3: JSON-List-Rekursion verallgemeinern
+### Phase 3: generalise JSON list recursion
 
-Aufwand:
+Effort:
 
-- etwa 1 bis 2 Tage
+- about 1 to 2 days
 
-Inhalt:
+Content:
 
-- die harten Sonderfaelle `list<struct>` und `list<list<T>>` durch einen allgemeinen rekursiven Emitter/Reader ersetzen
+- replace the hard special cases `list<struct>` and `list<list<T>>` by a general recursive emitter/reader
 
-Nutzen:
+Benefit:
 
-- weniger ad-hoc-Code
-- besseres Verhalten fuer tiefer verschachtelte Listen
+- less ad hoc code
+- better behaviour for more deeply nested lists
 
-### Phase 4: Binary `buffer<T>` sauber definieren
+### Phase 4: define binary `buffer<T>` cleanly
 
-Aufwand:
+Effort:
 
-- etwa 0.5 bis 1.5 Tage
+- about 0.5 to 1.5 days
 
-Es gibt zwei saubere Optionen:
+There are two clean options:
 
-- `buffer<T>` auf POD/raw-bytes beschraenken und alles andere compile-time ablehnen
-- oder `buffer<T>` rekursiv wie `list<T>` serialisieren
+- restrict `buffer<T>` to POD/raw bytes and reject everything else at compile time
+- or serialise `buffer<T>` recursively like `list<T>`
 
-Mein Vorschlag:
+My proposal:
 
-- kurzfristig: nicht-POD `buffer<T>` hart verbieten
+- short term: hard-forbid non-POD `buffer<T>`
 
-### Phase 5: Binary Decode haerten
+### Phase 5: harden binary decode
 
-Aufwand:
+Effort:
 
-- etwa 0.25 bis 0.5 Tag
+- about 0.25 to 0.5 days
 
-Inhalt:
+Content:
 
-- Count-/Size-Limits fuer Map und Buffer
-- Rest-Debug-`fprintf` entfernen
+- count/size limits for map and buffer
+- remove the leftover debug `fprintf`
 
-## Empfehlung
+## Recommendation
 
-Die wichtigste Sofortmassnahme ist nicht "mehr Features", sondern das Schliessen der falschen Freigaben im JSON-Pfad.
+The most important immediate measure is not "more features", but closing the wrong permissions in the JSON path.
 
-Mein pragmatischer Vorschlag:
+My pragmatic proposal:
 
-1. JSON-Maps sofort auf den wirklich unterstuetzten Bereich einschränken
-2. erst danach echte rekursive Map-Unterstuetzung bauen
-3. parallel den Binary-Pfad nur noch fuer die Typen erlauben, die dort wirklich tief korrekt serialisiert werden
+1. Restrict JSON maps immediately to the range that is really supported
+2. only after that build real recursive map support
+3. in parallel only allow the binary path for the types that are really serialised deeply and correctly there
 
-## Einschätzung
+## Assessment
 
-Wenn du nur einen sicheren Stand willst:
+If you only want a safe state:
 
-- 0.5 bis 1 Tag fuer Guardrails und Compilerfehler
+- 0.5 to 1 day for guardrails and compiler errors
 
-Wenn du echten guten Nested-Type-Support im JSON-Pfad willst:
+If you want really good nested type support in the JSON path:
 
-- grob 2.5 bis 4.5 Tage insgesamt
+- roughly 2.5 to 4.5 days in total
 
-## Methodik
+## Methodology
 
-Das ist eine Kombination aus:
+This is a combination of:
 
-- statischer Codeanalyse
-- Laufzeittests der vorhandenen Serialisierungs-Tests
-- zwei zusaetzlichen Crash-Repros fuer problematische Map-Faelle
+- static code analysis
+- runtime tests of the existing serialisation tests
+- two additional crash repros for problematic map cases
