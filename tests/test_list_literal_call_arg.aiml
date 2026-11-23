@@ -33,7 +33,7 @@
     return: i32
     body:
       - decl: [chk, ptr<Checker>, { new: Checker }]
-      - call: [chk.expect_i, "drei Zahlen", { call: [count_items, [1, 2, 3]] }, 3]
+      - call: [chk.expect_i, "three numbers", { call: [count_items, [1, 2, 3]] }, 3]
       - call: [chk.expect_i, "leeres Literal", { call: [count_items, []] }, 0]
       - call: [chk.expect_s, "Strings", { call: [join_words, ["a", "b"]] }, "ab"]
       - if: { condition: { gt: [chk.fails, 0] }, then: [{ print: ["FAIL list_literal_call_arg (${chk.fails})"] }, { return: 1 }] }

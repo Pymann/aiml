@@ -66,7 +66,7 @@
 
       # ── no axis declared: once for the whole matrix ─────────────────────
       - decl: [p_none, pipeline, { call: [two_axis, 0] }]
-      - set: [fails, { +: [fails, { call: [expect, "2x2 ergibt vier Lanes", { eq: [{ call: [p_none.lane_count] }, 4] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "2x2 gives four lanes", { eq: [{ call: [p_none.lane_count] }, 4] }] }] }]
       - decl: [rc_n, i32, { call: [p_none.run] }]
       - set: [fails, { +: [fails, { call: [expect, "without axes: the run succeeds", { eq: [rc_n, 0] }] }] }]
       - set: [fails, { +: [fails, { call: [expect, "without axes: executed ONCE", { eq: [{ call: [p_none.ran_count] }, 1] }] }] }]
@@ -83,7 +83,7 @@
       - decl: [p_both, pipeline, { call: [two_axis, 2] }]
       - decl: [rc_b, i32, { call: [p_both.run] }]
       - set: [fails, { +: [fails, { call: [expect, "both axes: the run succeeds", { eq: [rc_b, 0] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "beide Achsen: jede Lane laeuft einzeln", { eq: [{ call: [p_both.ran_count] }, 4] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "both axes: every lane runs individually", { eq: [{ call: [p_both.ran_count] }, 4] }] }] }]
       - set: [fails, { +: [fails, { call: [expect, "both axes: nothing is shared", { eq: [{ call: [p_both.reused_count] }, 0] }] }] }]
 
       # ── the core of §5.2 as ONE comparison: the same body, the same

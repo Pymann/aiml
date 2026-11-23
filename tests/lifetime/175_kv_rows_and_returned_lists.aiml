@@ -170,7 +170,7 @@
                 - return: 3
             - if: [{ neq: [{ call: [dinge.get, 0] }, erwartet] }, true]
               then:
-                - print: ["FAIL B Inhalt k-${nummer}"]
+                - print: ["FAIL B content k-${nummer}"]
                 - return: 4
             # A: return of a fresh list<Model>, assignment to a bound local
             - decl: [tref, Treffer, { call: [<.loese, "wort-${nummer}", "wort-${nummer}"] }]
@@ -184,7 +184,7 @@
                 - return: 6
             - if: [{ neq: [{ call: [tref.dinge.get, 0] }, erwartet] }, true]
               then:
-                - print: ["FAIL A Inhalt k-${nummer}"]
+                - print: ["FAIL A content k-${nummer}"]
                 - return: 7
             - if: [{ neq: [tref.sorte, "titel"] }, true]
               then:
@@ -198,7 +198,7 @@
                 - return: 9
             - if: [{ neq: [{ call: [tref2.dinge.get, 0] }, erwartet] }, true]
               then:
-                - print: ["FAIL A2 Inhalt k-${nummer}"]
+                - print: ["FAIL A2 content k-${nummer}"]
                 - return: 10
             # C again, after all deep_copy passes
             - decl: [drei, string, { call: [<.anzeige, nummer] }]

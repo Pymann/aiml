@@ -107,7 +107,7 @@
       - set: [fails, { +: [fails, { call: [expect, "from outside: the first step is finished", { eq: [{ call: [outer.ran_count] }, 1] }] }] }]
       - call: [outer.resume]
       - decl: [rc_o2, i32, { call: [outer.run] }]
-      - set: [fails, { +: [fails, { call: [expect, "von aussen: fortgesetzt kommt er durch", { eq: [rc_o2, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "from outside: resumed it gets through", { eq: [rc_o2, 0] }] }] }]
       - set: [fails, { +: [fails, { call: [expect, "from outside: the finished step hits", { eq: [{ call: [outer.reused_count] }, 1] }] }] }]
 
       - if:

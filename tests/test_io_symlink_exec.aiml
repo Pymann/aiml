@@ -26,7 +26,7 @@
       - if: { condition: { neq: [rc_off, 0] }, then: [{ print: ["FAIL set_exec off rc=${rc_off}"] }, { return: 1 }] }
       - if: { condition: { eq: [{ call: [io.can_exec, plain] }, true] }, then: [{ print: ["FAIL still executable"] }, { return: 1 }] }
       # the content stays untouched
-      - if: { condition: { neq: [{ call: [io.read_file, plain] }, "#!/bin/sh\necho hi\n"] }, then: [{ print: ["FAIL Inhalt veraendert"] }, { return: 1 }] }
+      - if: { condition: { neq: [{ call: [io.read_file, plain] }, "#!/bin/sh\necho hi\n"] }, then: [{ print: ["FAIL content changed"] }, { return: 1 }] }
       - decl: [rc_missing, i32, { call: [io.set_exec, "${dir}/gibts_nicht", 1] }]
       - if: { condition: { eq: [rc_missing, 0] }, then: [{ print: ["FAIL set_exec on a missing file"] }, { return: 1 }] }
 

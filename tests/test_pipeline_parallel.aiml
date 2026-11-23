@@ -97,15 +97,15 @@
       - decl: [rc_s, i32, { call: [serial.run, count_events] }]
       - decl: [ran_s, i32, { call: [serial.ran_count] }]
       - decl: [ev_s, i32, g_events]
-      - set: [fails, { +: [fails, { call: [expect, "seriell: acht Lanes laufen durch", { eq: [rc_s, 0] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "seriell: acht Ausfuehrungen", { eq: [ran_s, 8] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "serial: eight lanes run through", { eq: [rc_s, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "serial: eight executions", { eq: [ran_s, 8] }] }] }]
 
-      # ── parallel: gleiches Ergebnis, gleiche Zaehler ────────────────────
+      # ── parallel: the same result, the same counters ────────────────────
       - set: [g_events, 0]
       - decl: [par4, pipeline, { call: [eight_lanes, 4, 0] }]
       - decl: [rc_p, i32, { call: [par4.run, count_events] }]
-      - set: [fails, { +: [fails, { call: [expect, "parallel: derselbe Ausgang", { eq: [rc_p, rc_s] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "parallel: dieselbe Zahl Ausfuehrungen", { eq: [{ call: [par4.ran_count] }, ran_s] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "parallel: the same outcome", { eq: [rc_p, rc_s] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "parallel: the same number of executions", { eq: [{ call: [par4.ran_count] }, ran_s] }] }] }]
       - set: [fails, { +: [fails, { call: [expect, "parallel: nothing hit, nothing doubled", { eq: [{ call: [par4.reused_count] }, 0] }] }] }]
       - set: [fails, { +: [fails, { call: [expect, "parallel: the observer sees every lane exactly once", { eq: [g_events, ev_s] }] }] }]
 
@@ -117,8 +117,8 @@
       # ── auto (parallel = 0): one core per lane, the same result ─────────
       - decl: [auto_p, pipeline, { call: [eight_lanes, 0, 0] }]
       - decl: [rc_a, i32, { call: [auto_p.run] }]
-      - set: [fails, { +: [fails, { call: [expect, "auto: derselbe Ausgang", { eq: [rc_a, 0] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "auto: dieselbe Zahl Ausfuehrungen", { eq: [{ call: [auto_p.ran_count] }, 8] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "auto: the same outcome", { eq: [rc_a, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "auto: the same number of executions", { eq: [{ call: [auto_p.ran_count] }, 8] }] }] }]
 
       # ── on_fail=pipeline also brakes in parallel: not all eight run ───────
       - decl: [broke, pipeline, { call: [eight_lanes, 4, 1] }]

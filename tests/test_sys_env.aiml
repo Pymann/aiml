@@ -55,5 +55,5 @@
           then:
             - print: ["FAIL: sys.env PATH value is empty"]
             - call: [sys.exit, 1]
-      - print: ["sys.env OK — Property ${prop_count} vars, Call ${count} vars, PATH beide aufgeloest"]
+      - print: ["sys.env OK — property ${prop_count} vars, call ${count} vars, PATH resolved in both"]
       - return: 0

@@ -35,7 +35,7 @@
       - if:
           condition: { neq: [{ +: [same, tighter] }, 84] }
           then:
-            - call: [log.error, "Summe falsch: ${same}+${tighter}"]
+            - call: [log.error, "sum wrong: ${same}+${tighter}"]
             - return: [1]
       - call: [log.info, "PASS 13 Write-down: erlaubte Richtungen ${open_num}"]
       - return: [0]

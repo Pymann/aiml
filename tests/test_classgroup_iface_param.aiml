@@ -84,7 +84,7 @@
 
       # 1) direct call of the group method (known to work)
       - decl: [direct, i32, { call: [grp.hello.greet] }]
-      - if: { condition: { neq: [direct, 21] }, then: [{ print: ["FAIL direkt: ${direct}"] }, { return: 1 }] }
+      - if: { condition: { neq: [direct, 21] }, then: [{ print: ["FAIL direct: ${direct}"] }, { return: 1 }] }
 
       # 2) as ptr<Iface> to a free function
       - decl: [via_fn, i32, { call: [via_free_function, grp.hello] }]

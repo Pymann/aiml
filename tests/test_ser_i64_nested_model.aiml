@@ -97,9 +97,9 @@
       - set: [to_store.count, 13]
       - call: [store.set, "eins", to_store]
       - decl: [from_store, Stamped, { call: [store.get_copy, "eins"] }]
-      - set: [fails, { +: [fails, { call: [expect, "binaer: Zeichenkette kommt an", { eq: [from_store.label, "binaer"] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "binaer: i64 kommt an", { eq: [from_store.taken_ms, big] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "binaer: i32 dahinter kommt an", { eq: [from_store.count, 13] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "binary: the string arrives", { eq: [from_store.label, "binaer"] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "binary: i64 arrives", { eq: [from_store.taken_ms, big] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "binary: the i32 after it arrives", { eq: [from_store.count, 13] }] }] }]
       - print: ["  (binary: taken_ms=${from_store.taken_ms}, expected ${big})"]
 
       - if:

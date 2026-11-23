@@ -50,7 +50,7 @@
     args: []
     return: i32
     body:
-      # Mimik von main.aiml'var_s load_train_cfg pattern.
+      # Mimics main.aiml's load_train_cfg pattern.
       - decl: [cfg, ReproToolCfg]
       - call: [sys.arg_dump, cfg]
       - set: [cfg.config, "/tmp/x.json"]

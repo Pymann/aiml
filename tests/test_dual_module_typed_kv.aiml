@@ -26,7 +26,7 @@
 
 - call: [lib_put_thing, "id-A"]
 
-# Lies via Main's get_copy → decode mit MAIN's ser_nodes (lib hat geschrieben).
+# Read via main's get_copy → decode with MAIN's ser_nodes (lib wrote it).
 - decl: [var_t, ReproOuter, { call: [repro_kv.get_copy, "id-A"] }]
 
 - if:
@@ -69,7 +69,7 @@
     condition: { neq: [var_t.flags.len, 3] }
     then: [{ print: ["FAIL: flags.len=${var_t.flags.len}"] }, { call: [sys.exit, 1] }]
 
-# Umgekehrt: schreibe via Main, lies via Main — full round trip.
+# The other way round: write via main, read via main — full round trip.
 - decl: [obj2, ReproOuter]
 - set: [obj2.outer_id, "id-B"]
 - set: [obj2.mid.mid_id, "mid-B"]

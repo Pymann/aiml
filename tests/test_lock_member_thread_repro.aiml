@@ -44,7 +44,7 @@
       - print: ["stage0 prepare ok"]
 
       - call: [box.bump, 10]
-      - print: ["stage1 direkt: hits=${box.hits}"]
+      - print: ["stage1 direct: hits=${box.hits}"]
 
       - decl: [th_one, thread_handle, { spawn: [run_bump, box, 10] }]
       - call: [th_one.join]

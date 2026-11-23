@@ -11,7 +11,7 @@
       - print: ["   remote_task runs at the receiver"]
       - return: 0
 
-# ── Durchgang 2: "Bibliothek" + Pipeline, die sie benutzt ───────────────
+# ── Pass 2: "library" + a pipeline that uses it ───────────────────────
 - def:
     name: lib_greet
     return: i32
@@ -43,7 +43,7 @@
       - call: [net.send_string, sock_one, wire_one]
       - decl: [ans_one, string, { call: [net.recv_string, sock_one, 256] }]
       - call: [net.close, sock_one]
-      - print: ["1) Antwort: ${ans_one}"]
+      - print: ["1) answer: ${ans_one}"]
       - if: { condition: { neq: [ans_one, "ok"] }, then: [{ set: [fails, { +: [fails, 1] }] }] }
 
       # Bundle library and pipeline separately and send them one after the other.
@@ -53,13 +53,13 @@
       - decl: [wire_pipe, string, { call: [pipe_pkg.toString] }]
       - decl: [sock_two, socket_handle, { call: [net.socket, "tcp"] }]
       - decl: [conn_two, i32, { call: [net.connect, sock_two, "127.0.0.1", 47811] }]
-      - print: ["2) sende Bibliothek ${wire_lib.len} + Pipeline ${wire_pipe.len} Bytes"]
+      - print: ["2) sending library ${wire_lib.len} + pipeline ${wire_pipe.len} bytes"]
       - call: [net.send_string, sock_two, wire_lib]
       - call: [time.sleep_ms, 150]
       - call: [net.send_string, sock_two, wire_pipe]
       - decl: [ans_two, string, { call: [net.recv_string, sock_two, 256] }]
       - call: [net.close, sock_two]
-      - print: ["2) Antwort: ${ans_two}"]
+      - print: ["2) answer: ${ans_two}"]
       - if: { condition: { neq: [ans_two, "ok"] }, then: [{ set: [fails, { +: [fails, 1] }] }] }
 
       - if: { condition: { neq: [fails, 0] }, then: [{ print: ["sender FAIL (${fails})"] }, { return: 1 }] }

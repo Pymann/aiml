@@ -46,10 +46,10 @@
       - decl: [fh_bin, file_handle, { call: [io.open, bin_path, "wb"] }]
       - decl: [wrote, i32, { call: [bytes.write_to, fh_bin] }]
       - call: [io.close, fh_bin]
-      - if: { condition: { neq: [wrote, 3] }, then: [{ print: ["FAIL binaer geschrieben ${wrote}"] }, { return: 1 }] }
+      - if: { condition: { neq: [wrote, 3] }, then: [{ print: ["FAIL written binary ${wrote}"] }, { return: 1 }] }
       - decl: [got_bin, string, { call: [hash.sha256_file, bin_path] }]
       - decl: [want_bin, string, { call: [hash.sha256, bytes] }]
-      - if: { condition: { neq: [got_bin, want_bin] }, then: [{ print: ["FAIL binaer: ${got_bin} != ${want_bin}"] }, { return: 1 }] }
+      - if: { condition: { neq: [got_bin, want_bin] }, then: [{ print: ["FAIL binary: ${got_bin} != ${want_bin}"] }, { return: 1 }] }
 
       # ── larger than one block: 3 MiB, covers the block boundaries ───────
       # 1 MiB is the internal block size; three blocks check update() across boundaries.
@@ -72,7 +72,7 @@
       - decl: [want_big, string, "bbd05cf6097ac9b1f89ea29d2542c1b7b67ee46848393895f5a9e43fa1f621e5"]
       - if: { condition: { neq: [got_big, want_big] }, then: [{ print: ["FAIL gross: ${got_big}"] }, { return: 1 }] }
 
-      # ── gleicher Inhalt, anderer Name → gleiche Adresse (Dedup-Grundlage) ─
+      # ── same content, different name → same address (dedup basis) ─────
       - decl: [copy_path, string, "${dir}/kopie.txt"]
       - decl: [fh_copy, file_handle, { call: [io.open, copy_path, "wb"] }]
       - call: [io.write, fh_copy, body]

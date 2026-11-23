@@ -102,7 +102,7 @@
           condition: { neq: [{ call: [over.is_hovered] }, 0] }
           then: [{ call: [log.error, "FAIL click-through overlay reports itself as hovered"] }, { return: 1 }]
 
-      # ── 4. zurueckgeschaltet faengt es wieder ──────────────────────────
+      # ── 4. switched back, it catches again ───────────────────────────────
       - call: [over.set_input_transparent, 0]
       - decl: [hit_again, prefab_instance, { call: [engine.hit_test, probe_x, probe_y] }]
       - if:

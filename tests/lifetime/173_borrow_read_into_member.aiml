@@ -76,7 +76,7 @@
       - call: [out.push, "placeholder"]
       - idx: [out, { -: [out.len, 1] }, { call: [names.get, "key"] }]
 
-# 5) map.get -> map.put (andere Map)
+# 5) map.get -> map.put (another map)
 - def:
     name: map_into_map
     args: [[out, map<string:string>]]
@@ -85,7 +85,7 @@
       - call: [names.put, "key", "copied_value"]
       - call: [out.put, "key", { call: [names.get, "key"] }]
 
-# 6) Gegenprobe: OWNED Quellen (Interpolation, Literal) ins Modellfeld
+# 6) counter-probe: OWNED sources (interpolation, literal) into the model field
 - def:
     name: owned_into_field
     static_off: ["same_arg"]

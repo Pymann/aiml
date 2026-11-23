@@ -72,12 +72,12 @@
       - print: ["Lanes: ${g_lanes}"]
       - set: [fails, { +: [fails, { call: [expect, "bindings are passed along", { gt: [g_lanes.len, 0] }] }] }]
 
-      # ── Zweiter Lauf: derselbe Schluessel → reused ──────────────────────
+      # ── second run: the same key → reused ───────────────────────────────
       - set: [g_calls, 0]
       - set: [g_reused, 0]
       - decl: [rc_two, i32, { call: [pipe.run, watch] }]
       - set: [fails, { +: [fails, { call: [expect, "zweiter Lauf gelingt", { eq: [rc_two, 0] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "zweiter Lauf meldet beide als wiederverwendet", { eq: [g_reused, 2] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "second run reports both as reused", { eq: [g_reused, 2] }] }] }]
 
       # ── Ohne Beobachter laeuft es ebenso (F62-79) ───────────────────────
       - decl: [rc_three, i32, { call: [pipe.run] }]

@@ -1,6 +1,6 @@
 # Requires: driver
-# Gegenprobe: skalare Defaults an Klassenmembern bleiben unberuehrt vom
-# Listen-Check.
+# Counter-probe: scalar defaults on class members stay untouched by the
+# list check.
 - class:
     name: Probe
     members:

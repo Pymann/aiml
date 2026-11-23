@@ -1,4 +1,4 @@
-# Fixture: schreiben, checkpoint, im SELBEN Prozess wieder lesen.  Das Gate legt
+# Fixture: write, checkpoint, read again in the SAME process.  The gate puts
 # before the second run a directory in place of the .kvidx -- then
 # writing the dump fails AND so does loading it.  spec/31 §6.2.1 demands the
 # fallback for that: the overflow is refilled from the list before the lock

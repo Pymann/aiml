@@ -92,7 +92,7 @@
             - call: [sys.exit, 1]
       - print: ["T4 PASS: embedded field as by-value function arg"]
 
-      # T5: sub-field direkt setzen (var_r.origin.var_x = 7)
+      # T5: set a sub-field directly (var_r.origin.var_x = 7)
       - set: [var_r.origin.var_x, 7]
       - if:
           condition: { neq: [var_r.origin.var_x, 7] }

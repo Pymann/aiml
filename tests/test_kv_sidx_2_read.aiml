@@ -63,7 +63,7 @@
       - if: [{ call: [tr_ham.contains, "bbb"] }, true]
         then:
           - set: [hat_bbb, 1]
-      - set: [bad, { +: [bad, { call: [pruef_zahl, { +: [hat_aaa, hat_bbb] }, 2, "Hammer sind aaa+bbb"] }] }]
+      - set: [bad, { +: [bad, { call: [pruef_zahl, { +: [hat_aaa, hat_bbb] }, 2, "Hammer are aaa+bbb"] }] }]
 
       # unique: one key, and "" if there is none.
       - decl: [sku_drei, string, { call: [dinge.finding_by, "sku", "S3"] }]
@@ -73,7 +73,7 @@
             - print: ["FAIL read: sku=S3 gives '${sku_drei}', expected 'ccc'"]
             - set: [bad, { +: [bad, 1] }]
       - decl: [sku_neun, string, { call: [dinge.finding_by, "sku", "S9"] }]
-      - set: [bad, { +: [bad, { call: [pruef_zahl, sku_neun.len, 0, "sku=S9 leer"] }] }]
+      - set: [bad, { +: [bad, { call: [pruef_zahl, sku_neun.len, 0, "sku=S9 empty"] }] }]
 
       - if:
           condition: { neq: [bad, 0] }

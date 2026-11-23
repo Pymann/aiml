@@ -96,13 +96,13 @@
           condition: { pneq: [picked, card_a] }
           then: [{ call: [log.error, "FAIL the card under the CURSOR was picked up, not the one at the press point"] }, { return: 1 }]
 
-      # ── 3. Loslassen = genau einmal "losgelassen" ──────────────────────
+      # ── 3. release = exactly once "released" ─────────────────────────────
       - call: [engine.swap, win]
       - call: [input.post_mouse_up, 0]
       - decl: [g_drop, i32, { call: [engine.update_drag_gesture, b_mid_x, b_mid_y] }]
       - if:
           condition: { neq: [g_drop, 3] }
-          then: [{ call: [log.error, "FAIL Loslassen gab Zustand ${g_drop}, expected 3"] }, { return: 1 }]
+          then: [{ call: [log.error, "FAIL release gave state ${g_drop}, expected 3"] }, { return: 1 }]
       - decl: [src, prefab_instance, { call: [engine.get_drag_source] }]
       - if:
           condition: { pneq: [src, card_a] }

@@ -98,11 +98,11 @@
       # ── Arten ───────────────────────────────────────────────────────────
       - decl: [kinds, string, "- [a, 1, true, 'q', &anc, !tag]\n"]
       - decl: [tk6, list<i32>, { call: [yaml.tokens, kinds] }]
-      - set: [fails, { +: [fails, { call: [expect, "Zahl erkannt", { eq: [{ call: [kind_at, tk6, 6] }, YamlTok.number] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "Schluesselwort erkannt", { eq: [{ call: [kind_at, tk6, 9] }, YamlTok.keyword] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "einfache Anfuehrung erkannt", { eq: [{ call: [kind_at, tk6, 15] }, YamlTok.string] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "Anker erkannt", { eq: [{ call: [kind_at, tk6, 20] }, YamlTok.anchor] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "Tag erkannt", { eq: [{ call: [kind_at, tk6, 26] }, YamlTok.tag] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "number recognised", { eq: [{ call: [kind_at, tk6, 6] }, YamlTok.number] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "keyword recognised", { eq: [{ call: [kind_at, tk6, 9] }, YamlTok.keyword] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "single quote recognised", { eq: [{ call: [kind_at, tk6, 15] }, YamlTok.string] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "anchor recognised", { eq: [{ call: [kind_at, tk6, 20] }, YamlTok.anchor] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "tag recognised", { eq: [{ call: [kind_at, tk6, 26] }, YamlTok.tag] }] }] }]
 
       # ── negative number ──────────────────────────────────────────────────
       # Regression: the scalar branch did not advance on a leading '-' (the '-'
@@ -110,9 +110,9 @@
       # lexer hang, contrary to the "Never fails" contract of spec/60.
       - decl: [negs, string, "gt: [open, -1]\n"]
       - decl: [tk7, list<i32>, { call: [yaml.tokens, negs] }]
-      - set: [fails, { +: [fails, { call: [expect, "negative Zahl erkannt", { eq: [{ call: [kind_at, tk7, 11] }, YamlTok.number] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "negative number recognised", { eq: [{ call: [kind_at, tk7, 11] }, YamlTok.number] }] }] }]
       - set: [fails, { +: [fails, { call: [expect, "negative number: the digit belongs to the token", { eq: [{ call: [kind_at, tk7, 12] }, YamlTok.number] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "negative Zahl: ueberschneidungsfrei", { call: [covered_ok, tk7, negs.len] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "negative number: non-overlapping", { call: [covered_ok, tk7, negs.len] }] }] }]
       - decl: [bare, string, "-1\n"]
       - decl: [tk8, list<i32>, { call: [yaml.tokens, bare] }]
       - set: [fails, { +: [fails, { call: [expect, "a bare -1 delivers a token", { eq: [{ call: [kind_at, tk8, 0] }, YamlTok.number] }] }] }]

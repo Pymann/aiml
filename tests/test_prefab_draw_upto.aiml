@@ -75,44 +75,44 @@
       - call: [gl.clear_all, 0.0, 0.0, 0.0, 1.0]
       - call: [engine.draw_scene]
       - call: [pruefe, "ganz: rot", { call: [kanal_mitte, 0] }, 64]
-      - call: [pruefe, "ganz: blau", { call: [kanal_mitte, 2] }, 128]
+      - call: [pruefe, "whole: blue", { call: [kanal_mitte, 2] }, 128]
 
       # ── 2. split.  After the lower half ONLY the red is there -- the
       #       blue is still waiting.
       - call: [gl.clear_all, 0.0, 0.0, 0.0, 1.0]
       - call: [engine.draw_scene_upto, 10]
-      - call: [pruefe, "geteilt, untere Haelfte: rot", { call: [kanal_mitte, 0] }, 128]
-      - call: [pruefe, "geteilt, untere Haelfte: noch kein blau", { call: [kanal_mitte, 2] }, 0]
+      - call: [pruefe, "split, lower half: red", { call: [kanal_mitte, 0] }, 128]
+      - call: [pruefe, "split, lower half: no blue yet", { call: [kanal_mitte, 2] }, 0]
 
       # ── 3. the rest.  The result MUST equal the unsplit pass from 1:
       #       every instance exactly once.
       - call: [engine.draw_scene]
-      - call: [pruefe, "geteilt, fertig: rot wie ungeteilt", { call: [kanal_mitte, 0] }, 64]
-      - call: [pruefe, "geteilt, fertig: blau wie ungeteilt", { call: [kanal_mitte, 2] }, 128]
+      - call: [pruefe, "split, finished: red as unsplit", { call: [kanal_mitte, 0] }, 64]
+      - call: [pruefe, "split, finished: blue as unsplit", { call: [kanal_mitte, 2] }, 128]
 
       # ── 4. several cuts in the same frame, and a cut BELOW everything
       #       (draws nothing) as well as one ABOVE everything (draws both).
       - call: [gl.clear_all, 0.0, 0.0, 0.0, 1.0]
       - call: [engine.draw_scene_upto, 0]
-      - call: [pruefe, "Schnitt unter allem: nichts gezeichnet", { call: [kanal_mitte, 0] }, 0]
+      - call: [pruefe, "cut below everything: nothing drawn", { call: [kanal_mitte, 0] }, 0]
       - call: [engine.draw_scene_upto, 10]
-      - call: [pruefe, "dann die untere: rot", { call: [kanal_mitte, 0] }, 128]
+      - call: [pruefe, "then the lower one: red", { call: [kanal_mitte, 0] }, 128]
       - call: [engine.draw_scene_upto, 999]
-      - call: [pruefe, "dann alles: blau", { call: [kanal_mitte, 2] }, 128]
-      - call: [pruefe, "dann alles: rot gemischt", { call: [kanal_mitte, 0] }, 64]
+      - call: [pruefe, "then everything: blue", { call: [kanal_mitte, 2] }, 128]
+      - call: [pruefe, "then everything: red mixed", { call: [kanal_mitte, 0] }, 64]
       # draw_scene concludes the frame and must add NOTHING more.
       - call: [engine.draw_scene]
-      - call: [pruefe, "Abschluss zeichnet nicht doppelt: rot", { call: [kanal_mitte, 0] }, 64]
-      - call: [pruefe, "Abschluss zeichnet nicht doppelt: blau", { call: [kanal_mitte, 2] }, 128]
+      - call: [pruefe, "conclusion does not draw twice: red", { call: [kanal_mitte, 0] }, 64]
+      - call: [pruefe, "conclusion does not draw twice: blue", { call: [kanal_mitte, 2] }, 128]
 
       # ── 5. after the conclusion the mark is reset: the next
       #       frame draws the whole scene again.
       - call: [gl.clear_all, 0.0, 0.0, 0.0, 1.0]
       - call: [engine.draw_scene]
-      - call: [pruefe, "naechster Frame wieder vollstaendig: rot", { call: [kanal_mitte, 0] }, 64]
-      - call: [pruefe, "naechster Frame wieder vollstaendig: blau", { call: [kanal_mitte, 2] }, 128]
+      - call: [pruefe, "next frame complete again: red", { call: [kanal_mitte, 0] }, 64]
+      - call: [pruefe, "next frame complete again: blue", { call: [kanal_mitte, 2] }, 128]
 
       - call: [engine.destroy_window, win]
       - if: { condition: { neq: [fehl, 0] }, then: [{ print: ["FAIL draw_scene_upto: ${fehl}"] }, { return: 1 }] }
-      - print: ["PASS prefab_draw_upto: Teilzeichnung, Rest, mehrere Schnitte, Marke zurueckgesetzt"]
+      - print: ["PASS prefab_draw_upto: partial drawing, rest, several cuts, mark reset"]
       - return: 0

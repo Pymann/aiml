@@ -60,7 +60,7 @@
       - set: [weit.zahl, 99]
       - if:
           condition: { neq: [basis.zahl, 7] }
-          then: [{ call: [log.error, "FEHL Original veraendert zahl=${basis.zahl}"] }, { set: [fehler, { "+": [fehler, 1] }] }]
+          then: [{ call: [log.error, "FAIL original changed zahl=${basis.zahl}"] }, { set: [fehler, { "+": [fehler, 1] }] }]
 
       # ── the same with a POINTER as the source ───────────────────────────
       - decl: [basis_zgr, ptr<Grund>, { new: Grund }]

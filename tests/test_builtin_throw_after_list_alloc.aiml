@@ -63,5 +63,5 @@
             - call: [log.info, "FAIL: Begruendung '${reason}' expected 'index 5 of 2'"]
             - return: 1
 
-      - call: [log.info, "OK: gefangen mit '${reason}'"]
+      - call: [log.info, "OK: caught with '${reason}'"]
       - return: 0

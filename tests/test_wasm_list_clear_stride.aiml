@@ -52,7 +52,7 @@
       - call: [names.push, "danach"]
       - set: [fails, { +: [fails, { call: [expect, "buffer usable again after clear", { eq: [names.len, 1] }] }] }]
 
-      # 2) pop() mit verworfenem Ergebnis — gleiche Freigabe, letzter Slot.
+      # 2) pop() with a discarded result — the same release, last slot.
       - decl: [more, list<string>]
       - decl: [pix, i32, 0]
       - while:

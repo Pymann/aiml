@@ -28,7 +28,7 @@
       - decl: [negi, i32, { -: [num] }]
       - call: [chk.expect_i, "i32 Negation", negi, -7]
       - decl: [diff, i32, { -: [num, 2] }]
-      - call: [chk.expect_i, "i32 Subtraktion bleibt binaer", diff, 5]
+      - call: [chk.expect_i, "i32 subtraction stays binary", diff, 5]
 
       # negation of an already negative number.
       - decl: [back, i32, { -: [negi] }]
@@ -43,11 +43,11 @@
       - decl: [flt, f64, 2.5]
       - decl: [negf, f64, { -: [flt] }]
       - decl: [zerof, f64, { +: [negf, flt] }]
-      - call: [chk.expect_i, "f64 Negation hebt sich auf", { cast: [zerof, i32] }, 0]
+      - call: [chk.expect_i, "f64 negation cancels out", { cast: [zerof, i32] }, 0]
 
       # negation of a call result — the operand is not just a variable.
       - decl: [negcall, i32, { -: [{ call: [twice, 4] }] }]
-      - call: [chk.expect_i, "Negation eines Aufrufergebnisses", negcall, -8]
+      - call: [chk.expect_i, "negation of a call result", negcall, -8]
 
       - if: { condition: { gt: [chk.fails, 0] }, then: [{ print: ["FAIL unary_minus_scalar (${chk.fails})"] }, { return: 1 }] }
       - print: ["PASS unary_minus_scalar"]

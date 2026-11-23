@@ -80,7 +80,7 @@
       - print: ["FAIL D first accumulation buf[0]=${buf0_a} (expected 7.0)"]
       - call: [sys.exit, 1]
 
-# Puffer nullen + zweite Akkumulation
+# zero the buffer + second accumulation
 - call: [tensor.fill, buf, 0.0]
 - decl: [var_y, tensor, { call: [tensor.ones, 2] }]
 - call: [tensor.fill, var_y, 4.0]

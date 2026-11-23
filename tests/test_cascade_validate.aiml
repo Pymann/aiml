@@ -19,7 +19,7 @@
     nodes:
       - on_attack:  [5, OwnerRef]
       - on_played:  [9, OwnerRef, CardKind]
-      - on_move:    [4, Zone, CardKind]   # verschachtelte Cascade + Enum
+      - on_move:    [4, Zone, CardKind]   # nested cascade + enum
 
 - def:
     name: chk
@@ -44,21 +44,21 @@
     body:
       # ── valid: on_played [9, opponent(2), creature(1)] → -1
       - decl: [ok_played, list<i32>, { call: [row3, 9, 2, 1] }]
-      - call: [chk, { call: [cascade.validate, "Trig", ok_played] }, -1, "on_played gültig"]
+      - call: [chk, { call: [cascade.validate, "Trig", ok_played] }, -1, "on_played valid"]
 
       # ── valid: on_attack [5, player(1)] → -1  (arity: exactly 1 field)
       - decl: [ok_attack, list<i32>]
       - call: [ok_attack.push, 5]
       - call: [ok_attack.push, 1]
-      - call: [chk, { call: [cascade.validate, "Trig", ok_attack] }, -1, "on_attack gültig"]
+      - call: [chk, { call: [cascade.validate, "Trig", ok_attack] }, -1, "on_attack valid"]
 
       # ── CardKind 9 invalid → bad-index 2
       - decl: [bad_kind, list<i32>, { call: [row3, 9, 2, 9] }]
-      - call: [chk, { call: [cascade.validate, "Trig", bad_kind] }, 2, "CardKind ungültig → idx 2"]
+      - call: [chk, { call: [cascade.validate, "Trig", bad_kind] }, 2, "CardKind invalid → idx 2"]
 
       # ── OwnerRef 99 invalid → bad-index 1
       - decl: [bad_owner, list<i32>, { call: [row3, 9, 99, 1] }]
-      - call: [chk, { call: [cascade.validate, "Trig", bad_owner] }, 1, "OwnerRef ungültig → idx 1"]
+      - call: [chk, { call: [cascade.validate, "Trig", bad_owner] }, 1, "OwnerRef invalid → idx 1"]
 
       # ── unbekannte Node-id 7 → bad-index 0
       - decl: [bad_id, list<i32>, { call: [row3, 7, 1, 1] }]
@@ -82,7 +82,7 @@
       - call: [nest_ok.push, 2]   # Zone.in_deck
       - call: [nest_ok.push, 1]   # its CardKind = creature
       - call: [nest_ok.push, 2]   # outer CardKind = spell
-      - call: [chk, { call: [cascade.validate, "Trig", nest_ok] }, -1, "verschachtelte Cascade gültig"]
+      - call: [chk, { call: [cascade.validate, "Trig", nest_ok] }, -1, "nested cascade valid"]
 
       # ── nested cascade with an invalid inner enum: [4, 2, 9, 2] → idx 2
       - decl: [nest_bad, list<i32>]
@@ -90,7 +90,7 @@
       - call: [nest_bad.push, 2]   # Zone.in_deck
       - call: [nest_bad.push, 9]   # inner CardKind invalid!
       - call: [nest_bad.push, 2]
-      - call: [chk, { call: [cascade.validate, "Trig", nest_bad] }, 2, "verschachtelt: inneres Enum ungültig → idx 2"]
+      - call: [chk, { call: [cascade.validate, "Trig", nest_bad] }, 2, "nested: inner enum invalid → idx 2"]
 
       # ── unbekannte Cascade → -2
       - call: [chk, { call: [cascade.validate, "Nope", ok_played] }, -2, "unbekannte Cascade → -2"]

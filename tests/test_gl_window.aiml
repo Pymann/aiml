@@ -29,7 +29,7 @@
 - call: [glfwWindowHint, 139267, 3]   # GLFW_CONTEXT_VERSION_MINOR = 3
 - call: [glfwWindowHint, 139272, 204801]  # GLFW_OPENGL_PROFILE = GLFW_OPENGL_CORE_PROFILE
 
-- decl: [win, ptr, { call: [glfwCreateWindow, 800, 600, "AIML — weißer Würfel", null, null] }]
+- decl: [win, ptr, { call: [glfwCreateWindow, 800, 600, "AIML — white cube", null, null] }]
 
 - if: [{ eq: [win, null] }, true]
   then:

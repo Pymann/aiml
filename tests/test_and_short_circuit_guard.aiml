@@ -34,7 +34,7 @@
           condition: { '&&': [{ pneq: [host.link, null] }, { gt: [{ call: [host.link.get_value] }, 0] }] }
           then: [{ set: [hits, 1] }]
       - if: { condition: { neq: [hits, 0] }, then: [{ print: ["FAIL: branch ran although the pointer is null"] }, { return: 1 }] }
-      # Dieselbe Wache in Wortform.
+      # The same guard in word form.
       - decl: [hits_word, i32, 0]
       - if:
           condition: { and: [{ pneq: [host.link, null] }, { gt: [{ call: [host.link.get_value] }, 0] }] }

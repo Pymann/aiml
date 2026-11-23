@@ -20,8 +20,8 @@
       # link: both names point to the same content
       - decl: [rc_link, i32, { call: [io.link, src, dst] }]
       - if: { condition: { neq: [rc_link, 0] }, then: [{ print: ["FAIL link rc=${rc_link}"] }, { return: 1 }] }
-      - if: { condition: { eq: [{ call: [io.is_file, dst] }, false] }, then: [{ print: ["FAIL Ziel fehlt"] }, { return: 1 }] }
-      - if: { condition: { neq: [{ call: [io.read_file, dst] }, "inhalt"] }, then: [{ print: ["FAIL Inhalt"] }, { return: 1 }] }
+      - if: { condition: { eq: [{ call: [io.is_file, dst] }, false] }, then: [{ print: ["FAIL target missing"] }, { return: 1 }] }
+      - if: { condition: { neq: [{ call: [io.read_file, dst] }, "inhalt"] }, then: [{ print: ["FAIL content"] }, { return: 1 }] }
       # the same content address — it IS the same content, not a copy.
       # Do NOT compare two call results directly: eq/neq on two pointers
       # without a resolvable type falls back to pointer identity (the compiler warns).

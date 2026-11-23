@@ -127,7 +127,7 @@
           body:
             - call: [client.update]
             - set: [got_two, { call: [client.take_response, id_two, kept] }]
-            - if: { condition: { lt: [got_two, 0] }, then: [{ call: [cancel_fail, "zweite Antwort war undekodierbar"] }] }
+            - if: { condition: { lt: [got_two, 0] }, then: [{ call: [cancel_fail, "second response could not be decoded"] }] }
             - call: [time.sleep_ms, 5]
             - set: [wait_two, { +: [wait_two, 1] }]
       - if: { condition: { neq: [got_two, 1] }, then: [{ call: [cancel_fail, "second response did not arrive — the cancel removed too much"] }] }

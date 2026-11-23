@@ -42,13 +42,13 @@
       - if:
           condition: { neq: [ham.len, 2] }
           then:
-            - print: ["FAIL write: name=Hammer ergibt ${ham.len}, expected 2"]
+            - print: ["FAIL write: name=Hammer gives ${ham.len}, expected 2"]
             - return: 1
       - decl: [wer, list<string>, { call: [dinge.findings_by, "tag", "werkzeug"] }]
       - if:
           condition: { neq: [wer.len, 2] }
           then:
-            - print: ["FAIL write: tag=werkzeug ergibt ${wer.len}, expected 2"]
+            - print: ["FAIL write: tag=werkzeug gives ${wer.len}, expected 2"]
             - return: 1
       - decl: [sku_zwei, string, { call: [dinge.finding_by, "sku", "S2"] }]
       - if:

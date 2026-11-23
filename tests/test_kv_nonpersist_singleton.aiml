@@ -72,7 +72,7 @@
             - call: [sys.exit, 1]
       - print: ["T2 PASS: Kv<string:string> singleton-by-name (cross-function)"]
 
-      # T3: Mehrere Keys in derselben KV (schreibe in Funktion, lese direkt)
+      # T3: several keys in the same KV (write in a function, read directly)
       - call: [kv_writer, "test_kv_multi", "var_n", 10]
       - call: [kv_writer, "test_kv_multi", "var_x", 99]
       - decl: [var_n, i32, { call: [kv_reader, "test_kv_multi", "var_n"] }]

@@ -150,7 +150,7 @@
     body:
       - decl: [fails, i32, 0]
 
-      # ── on_fail: lane (Vorgabe) ─────────────────────────────────────────
+      # ── on_fail: lane (default) ─────────────────────────────────────────
       - set: [g_b_runs, 0]
       - decl: [p_lane, pipeline, { call: [two_stage, OnFail.lane, CacheClass.opaque, 1] }]
       - decl: [rc_l, i32, { call: [p_lane.run, on_step] }]

@@ -16,11 +16,11 @@
 
       - decl: [diff, i32, 0]
       - if: { condition: { neq: [vone, vtwo] }, then: [{ set: [diff, 1] }] }
-      - call: [chk.expect_i, "verschiedene vec3 sind neq", diff, 1]
+      - call: [chk.expect_i, "different vec3 are neq", diff, 1]
 
       - decl: [same, i32, 0]
       - if: { condition: { neq: [vone, vsame] }, then: [{ set: [same, 1] }] }
-      - call: [chk.expect_i, "gleiche vec3 sind NICHT neq", same, 0]
+      - call: [chk.expect_i, "equal vec3 are NOT neq", same, 0]
 
       - decl: [twod, vec2, { call: [math.vec2, 1.0, 2.0] }]
       - decl: [twod_b, vec2, { call: [math.vec2, 9.0, 2.0] }]

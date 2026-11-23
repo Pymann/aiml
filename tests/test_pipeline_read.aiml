@@ -68,19 +68,19 @@
     return: i32
     body:
       - decl: [bad, i32, 0]
-      - set: [bad, { +: [bad, { call: [expect_str, "der Name", { call: [pipe.name] }, "lese_demo"] }] }]
+      - set: [bad, { +: [bad, { call: [expect_str, "the name", { call: [pipe.name] }, "lese_demo"] }] }]
       - set: [bad, { +: [bad, { call: [expect, "two lanes", { eq: [{ call: [pipe.lane_count] }, 2] }] }] }]
       - set: [bad, { +: [bad, { call: [expect, "two stages per lane", { eq: [{ call: [pipe.stage_count] }, 2] }] }] }]
-      - set: [bad, { +: [bad, { call: [expect_str, "Bindungstext der ersten Lane", { call: [pipe.lane_bindings, 0] }, "arch=x86_64"] }] }]
-      - set: [bad, { +: [bad, { call: [expect_str, "Bindungstext der zweiten Lane", { call: [pipe.lane_bindings, 1] }, "arch=arm64"] }] }]
+      - set: [bad, { +: [bad, { call: [expect_str, "binding text of the first lane", { call: [pipe.lane_bindings, 0] }, "arch=x86_64"] }] }]
+      - set: [bad, { +: [bad, { call: [expect_str, "binding text of the second lane", { call: [pipe.lane_bindings, 1] }, "arch=arm64"] }] }]
       - set: [bad, { +: [bad, { call: [expect, "one axis", { eq: [{ call: [pipe.axis_count] }, 1] }] }] }]
-      - set: [bad, { +: [bad, { call: [expect_str, "ihr Name", { call: [pipe.axis_name, 0] }, "arch"] }] }]
+      - set: [bad, { +: [bad, { call: [expect_str, "its name", { call: [pipe.axis_name, 0] }, "arch"] }] }]
       - set: [bad, { +: [bad, { call: [expect, "its domain has two values", { eq: [{ call: [pipe.axis_value_count, 0] }, 2] }] }] }]
-      - set: [bad, { +: [bad, { call: [expect_str, "der erste Wert", { call: [pipe.axis_value, 0, 0] }, "x86_64"] }] }]
+      - set: [bad, { +: [bad, { call: [expect_str, "the first value", { call: [pipe.axis_value, 0, 0] }, "x86_64"] }] }]
       - set: [bad, { +: [bad, { call: [expect, "one push target", { eq: [{ call: [pipe.push_count] }, 1] }] }] }]
-      - set: [bad, { +: [bad, { call: [expect_str, "es nennt die Stufe", { call: [pipe.push_from, 0] }, "bauen"] }] }]
-      - set: [bad, { +: [bad, { call: [expect_str, "und das Ziel", { call: [pipe.push_to, 0] }, "oci:deploy/oci/demo"] }] }]
-      - set: [bad, { +: [bad, { call: [expect_str, "und die Marke", { call: [pipe.push_tag, 0] }, "nightly"] }] }]
+      - set: [bad, { +: [bad, { call: [expect_str, "it names the stage", { call: [pipe.push_from, 0] }, "bauen"] }] }]
+      - set: [bad, { +: [bad, { call: [expect_str, "and the target", { call: [pipe.push_to, 0] }, "oci:deploy/oci/demo"] }] }]
+      - set: [bad, { +: [bad, { call: [expect_str, "and the tag", { call: [pipe.push_tag, 0] }, "nightly"] }] }]
       - return: bad
 
 - def:
@@ -89,18 +89,18 @@
     return: i32
     body:
       - decl: [bad, i32, 0]
-      - set: [bad, { +: [bad, { call: [expect_str, "Stufe 1 heisst bauen", { call: [stg.name] }, "bauen"] }] }]
-      - set: [bad, { +: [bad, { call: [expect_str, "sie erbt agent", { call: [stg.agent] }, "x86_64"] }] }]
-      - set: [bad, { +: [bad, { call: [expect_str, "sie erbt image", { call: [stg.image] }, "ubuntu-base"] }] }]
-      - set: [bad, { +: [bad, { call: [expect_str, "steplayer kommt aus image (F110-125)", { call: [stg.steplayer] }, "own"] }] }]
-      - set: [bad, { +: [bad, { call: [expect_str, "sie erbt base", { call: [stg.base] }, "job:vorlauf"] }] }]
-      - set: [bad, { +: [bad, { call: [expect_str, "sie erbt requires als eine Zeile", { call: [stg.requires] }, "git,gcc"] }] }]
-      - set: [bad, { +: [bad, { call: [expect_str, "sie erbt shares", { call: [stg.shares] }, "quellen:/mnt/quellen:ro"] }] }]
-      - set: [bad, { +: [bad, { call: [expect_str, "ihr Befehl", { call: [stg.command] }, "make -j4"] }] }]
-      - set: [bad, { +: [bad, { call: [expect, "sie erbt die Zeitgrenze", { eq: [{ call: [stg.timeout_ms] }, 60000] }] }] }]
-      - set: [bad, { +: [bad, { call: [expect, "sie erbt cpu", { eq: [{ call: [stg.cpu_cores] }, 4] }] }] }]
-      - set: [bad, { +: [bad, { call: [expect, "sie erbt mem", { eq: [{ call: [stg.mem_mb] }, 2048] }] }] }]
-      - set: [bad, { +: [bad, { call: [expect, "sie erbt pids", { eq: [{ call: [stg.pids_max] }, 512] }] }] }]
+      - set: [bad, { +: [bad, { call: [expect_str, "stage 1 is called bauen", { call: [stg.name] }, "bauen"] }] }]
+      - set: [bad, { +: [bad, { call: [expect_str, "it inherits agent", { call: [stg.agent] }, "x86_64"] }] }]
+      - set: [bad, { +: [bad, { call: [expect_str, "it inherits image", { call: [stg.image] }, "ubuntu-base"] }] }]
+      - set: [bad, { +: [bad, { call: [expect_str, "steplayer comes from image (F110-125)", { call: [stg.steplayer] }, "own"] }] }]
+      - set: [bad, { +: [bad, { call: [expect_str, "it inherits base", { call: [stg.base] }, "job:vorlauf"] }] }]
+      - set: [bad, { +: [bad, { call: [expect_str, "it inherits requires as one line", { call: [stg.requires] }, "git,gcc"] }] }]
+      - set: [bad, { +: [bad, { call: [expect_str, "it inherits shares", { call: [stg.shares] }, "quellen:/mnt/quellen:ro"] }] }]
+      - set: [bad, { +: [bad, { call: [expect_str, "its command", { call: [stg.command] }, "make -j4"] }] }]
+      - set: [bad, { +: [bad, { call: [expect, "it inherits the time limit", { eq: [{ call: [stg.timeout_ms] }, 60000] }] }] }]
+      - set: [bad, { +: [bad, { call: [expect, "it inherits cpu", { eq: [{ call: [stg.cpu_cores] }, 4] }] }] }]
+      - set: [bad, { +: [bad, { call: [expect, "it inherits mem", { eq: [{ call: [stg.mem_mb] }, 2048] }] }] }]
+      - set: [bad, { +: [bad, { call: [expect, "it inherits pids", { eq: [{ call: [stg.pids_max] }, 512] }] }] }]
       - return: bad
 
 - def:
@@ -109,14 +109,14 @@
     return: i32
     body:
       - decl: [bad, i32, 0]
-      - set: [bad, { +: [bad, { call: [expect_str, "Stufe 2 heisst pruefen", { call: [stg.name] }, "pruefen"] }] }]
-      - set: [bad, { +: [bad, { call: [expect_str, "ihr agent schlaegt den der Pipeline", { call: [stg.agent] }, "arm64"] }] }]
+      - set: [bad, { +: [bad, { call: [expect_str, "stage 2 is called pruefen", { call: [stg.name] }, "pruefen"] }] }]
+      - set: [bad, { +: [bad, { call: [expect_str, "its agent beats the pipeline's", { call: [stg.agent] }, "arm64"] }] }]
       - set: [bad, { +: [bad, { call: [expect, "its time limit beats the pipeline's", { eq: [{ call: [stg.timeout_ms] }, 1000] }] }] }]
       - set: [bad, { +: [bad, { call: [expect, "its cpu beats the pipeline's", { eq: [{ call: [stg.cpu_cores] }, 2] }] }] }]
       - set: [bad, { +: [bad, { call: [expect, "mem stays inherited", { eq: [{ call: [stg.mem_mb] }, 2048] }] }] }]
-      - set: [bad, { +: [bad, { call: [expect_str, "ihr requires schlaegt das der Pipeline", { call: [stg.requires] }, "ctest"] }] }]
+      - set: [bad, { +: [bad, { call: [expect_str, "its requires beats the pipeline's", { call: [stg.requires] }, "ctest"] }] }]
       # F62-138: shares ADD UP — pipeline first, then the stage.
-      - set: [bad, { +: [bad, { call: [expect_str, "shares addieren sich", { call: [stg.shares] }, "quellen:/mnt/quellen:ro,artefakte:/mnt/out:rw"] }] }]
+      - set: [bad, { +: [bad, { call: [expect_str, "shares add up", { call: [stg.shares] }, "quellen:/mnt/quellen:ro,artefakte:/mnt/out:rw"] }] }]
       - return: bad
 
 - def:

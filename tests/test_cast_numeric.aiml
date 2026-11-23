@@ -94,7 +94,7 @@
           condition: { neq: [neg_wide, -7] }
           then: [{ print: ["FAIL i32→i64 negative: ${neg_wide}, expected -7"] }, { set: [fails, { +: [fails, 1] }] }]
 
-      # ── bool → Zahl ─────────────────────────────────────────────────────
+      # ── bool → number ───────────────────────────────────────────────────
       - decl: [yes_val, bool, true]
       - decl: [no_val, bool, false]
       - decl: [b_i32, i32, { cast: [yes_val, i32] }]
@@ -115,7 +115,7 @@
           condition: { neq: [b_f64, want_one] }
           then: [{ print: ["FAIL bool→f64: ${b_f64}"] }, { set: [fails, { +: [fails, 1] }] }]
 
-      # ── Zahl → bool ─────────────────────────────────────────────────────
+      # ── number → bool ───────────────────────────────────────────────────
       - decl: [i32_true, bool, { cast: [src_i32, bool] }]
       - if:
           condition: { neq: [i32_true, true] }
@@ -180,6 +180,6 @@
 
       - if:
           condition: { neq: [fails, 0] }
-          then: [{ print: ["cast_numeric FAIL — ${fails} Zelle(n) falsch"] }, { return: 1 }]
+          then: [{ print: ["cast_numeric FAIL — ${fails} cell(s) wrong"] }, { return: 1 }]
       - print: ["PASS cast_numeric"]
       - return: 0

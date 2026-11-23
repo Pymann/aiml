@@ -24,7 +24,7 @@
       - if:
           condition: { eq: [{ call: [zeichen.lower] }, { call: [zeichen.upper] }] }
           then:
-            - print: ["FAIL lower==upper ergab gleich"]
+            - print: ["FAIL lower==upper gave equal"]
             - set: [fails, { +: [fails, 1] }]
       - if:
           condition: { neq: [{ call: [zeichen.lower] }, { call: [zeichen.upper] }] }
@@ -51,13 +51,13 @@
             - print: ["FAIL builtin against local gave unequal"]
             - set: [fails, { +: [fails, 1] }]
 
-      # trim/substr als zweite Builtin-Paarung.
+      # trim/substr as a second builtin pairing.
       - decl: [roh, string, "  abc  "]
       - if:
           condition: { eq: [{ call: [roh.trim] }, { call: [gleich.trim] }] }
           then: []
           else:
-            - print: ["FAIL trim-Paarung ergab ungleich"]
+            - print: ["FAIL trim pairing gave unequal"]
             - set: [fails, { +: [fails, 1] }]
 
       - if:

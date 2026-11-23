@@ -62,8 +62,8 @@
       - [vis_enabled, i32, 0]
       - [vis_stride, i32, 50]
 
-# Viele Helper-Funktionen mit vielen print-Statements — simuliert
-# train_transformer.aiml's grosse Anzahl anonymer rodata-Strings.
+# Many helper functions with many print statements — simulates
+# train_transformer.aiml's large number of anonymous rodata strings.
 
 - def:
     name: helper_a

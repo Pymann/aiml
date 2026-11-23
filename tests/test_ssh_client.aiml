@@ -78,10 +78,10 @@
       - decl: [got_rc, i32, { call: [ch_ok.exit_code] }]
       - if:
           condition: { lt: [{ call: [got_out.index_of, "auf-stdout"] }, 0] }
-          then: [{ print: ["FAIL stdout fehlt ('${got_out}')"] }, { set: [fails, { +: [fails, 1] }] }]
+          then: [{ print: ["FAIL stdout missing ('${got_out}')"] }, { set: [fails, { +: [fails, 1] }] }]
       - if:
           condition: { lt: [{ call: [got_err.index_of, "auf-stderr"] }, 0] }
-          then: [{ print: ["FAIL stderr fehlt ('${got_err}')"] }, { set: [fails, { +: [fails, 1] }] }]
+          then: [{ print: ["FAIL stderr missing ('${got_err}')"] }, { set: [fails, { +: [fails, 1] }] }]
       # The separation is the point: stderr must NOT show up in stdout.
       - if:
           condition: { gt: [{ call: [got_out.index_of, "auf-stderr"] }, -1] }

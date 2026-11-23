@@ -44,7 +44,7 @@
           body:
             - decl: [fresh, Row]
             - set: [fresh.name, "zeile-${fill}"]
-            - set: [fresh.note, "eine laengere Bemerkung, damit der Heap wirklich benutzt wird ${fill}"]
+            - set: [fresh.note, "a longer remark, so that the heap is really used ${fill}"]
             - set: [fresh.count, fill]
             - call: [rows.push, fresh]
             - set: [fill, { +: [fill, 1] }]

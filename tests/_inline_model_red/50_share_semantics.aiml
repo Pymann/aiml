@@ -1,9 +1,9 @@
 # SPEC?: 15_models   # derived from the file name, to be confirmed
 # static-check: off
-# RED bis Paket 3/5 — doc/spec61_inline_value_model_release_plan_2026-09-24.md §4/§9.1.
+# RED until package 3/5 — doc/spec61_inline_value_model_release_plan_2026-09-24.md §4/§9.1.
 # Contract (spec 61 §5.4): a value copy SHARES its container fields (retain = incref of the handle),
 # but has INDEPENDENT scalar/string fields.
-#   copy.tags.push(x)  → im Quell-Element sichtbar (geteilter Container).
+#   copy.tags.push(x)  → visible in the source element (shared container).
 #   copy.label = "..."  → NOT visible in the source element (independent scalar/string field).
 # Whoever wants to change the slot itself binds ref<Model>.
 #
@@ -23,7 +23,7 @@
       - call: [src.tags.push, 1]
       - call: [rows.push, src]
       - decl: [copy, Rec, { at: [rows, 0] }]
-      - call: [copy.tags.push, 2]          # geteilter Container → in rows[0] sichtbar
+      - call: [copy.tags.push, 2]          # shared container → visible in rows[0]
       - set: [copy.label, "changed"]        # independent string field → NOT visible in rows[0]
       - decl: [chk, Rec, { at: [rows, 0] }]
       - if: { condition: { neq: [chk.tags.len, 2] }, then: [{ print: ["FAIL shared container not visible: len=${chk.tags.len}"] }, { return: 1 }] }

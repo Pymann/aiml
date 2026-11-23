@@ -36,7 +36,7 @@
             - if:
                 condition: { neq: [<.liste.len, 1] }
                 then:
-                  - print: ["FAIL push ergab len=${<.liste.len}"]
+                  - print: ["FAIL push gave len=${<.liste.len}"]
                   - set: [fehler, { +: [fehler, 1] }]
             - return: fehler
 

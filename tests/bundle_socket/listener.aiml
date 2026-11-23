@@ -51,13 +51,13 @@
       # ── Pass 2: library + pipeline separately, merged here ──────────────
       - decl: [conn_two, socket_handle, { call: [net.accept, server] }]
       - decl: [lib_wire, string, { call: [recv_text, conn_two] }]
-      - print: ["2) Bibliothek: ${lib_wire.len} Bytes"]
+      - print: ["2) library: ${lib_wire.len} bytes"]
       - decl: [pipe_wire, string, { call: [recv_text, conn_two] }]
       - print: ["2) Pipeline:   ${pipe_wire.len} Bytes"]
 
       - decl: [lib_pkg, Code, { call: [sys.code_from, lib_wire, { context: true }] }]
       - decl: [pipe_pkg, Code, { call: [sys.code_from, pipe_wire, { start: "run_pipeline", context: true }] }]
-      # Reihenfolge zaehlt: start_call erbt vom ERSTEN Operanden.
+      # Order matters: start_call inherits from the FIRST operand.
       - decl: [job_two, Code, { call: [pipe_pkg.merge, lib_pkg] }]
       - decl: [rc_two, i32, { call: [sys.exec, job_two] }]
       - print: ["2) sys.exec rc=${rc_two}"]

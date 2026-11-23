@@ -60,7 +60,7 @@
 
       # ── Kreuzprodukt ────────────────────────────────────────────────────
       - decl: [full, pipeline, { call: [build_three] }]
-      - set: [fails, { +: [fails, { call: [expect, "2x2x2 ergibt acht Lanes", { eq: [{ call: [full.lane_count] }, 8] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "2x2x2 gives eight lanes", { eq: [{ call: [full.lane_count] }, 8] }] }] }]
 
       # ── exclude as a partial binding: two lanes drop out ─────────────────
       - decl: [cut, pipeline, { call: [build_three] }]

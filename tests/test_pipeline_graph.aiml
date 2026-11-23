@@ -133,11 +133,11 @@
     body:
       - decl: [fails, i32, 0]
 
-      # ── per: once laeuft EINMAL, die Lane-Schritte je Lane ──────────────
+      # ── per: once runs ONCE, the lane steps per lane ───────────────────
       - set: [g_once_runs, 0]
       - set: [g_lane_runs, 0]
       - decl: [pipe, pipeline, { call: [graph_pipe, 0, 0, 1] }]
-      - set: [fails, { +: [fails, { call: [expect, "2x2 ergibt vier Lanes", { eq: [{ call: [pipe.lane_count] }, 4] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "2x2 gives four lanes", { eq: [{ call: [pipe.lane_count] }, 4] }] }] }]
       - decl: [rc_one, i32, { call: [pipe.run, count_steps] }]
       - set: [fails, { +: [fails, { call: [expect, "the run succeeds", { eq: [rc_one, 0] }] }] }]
       - set: [fails, { +: [fails, { call: [expect, "the shared step ran ONCE", { eq: [g_once_runs, 1] }] }] }]

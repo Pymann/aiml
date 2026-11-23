@@ -30,7 +30,7 @@
       # 1) the reported minimal case: a literal onto a local list.
       - decl: [pick, list<string>, []]
       - set: [pick, ["x", "y"]]
-      - call: [chk.expect_i, "set-Literal: Laenge", pick.len, 2]
+      - call: [chk.expect_i, "set literal: length", pick.len, 2]
       - call: [chk.expect_s, "set-Literal: Element 0", { at: [pick, 0] }, "x"]
       - call: [chk.expect_s, "set-Literal: Element 1", { at: [pick, 1] }, "y"]
 
@@ -38,12 +38,12 @@
       - decl: [one, string, "eins"]
       - decl: [two, string, "zwei"]
       - set: [pick, [one, two]]
-      - call: [chk.expect_i, "Variablen-Elemente: Laenge", pick.len, 2]
+      - call: [chk.expect_i, "variable elements: length", pick.len, 2]
       - call: [chk.expect_s, "Variablen-Elemente: Element 1", { at: [pick, 1] }, "zwei"]
 
       # 3) replace, not append: a shorter assignment shortens the list.
       - set: [pick, ["nur_eins"]]
-      - call: [chk.expect_i, "Ersetzen statt Anhaengen", pick.len, 1]
+      - call: [chk.expect_i, "replacing instead of appending", pick.len, 1]
 
       # 4) empty literal — did not compile before.
       - set: [pick, []]
@@ -52,14 +52,14 @@
       # 5) numbers are converted into the element type (spec/13), as for decl.
       - decl: [nums, list<i32>, []]
       - set: [nums, [1, -2, 3]]
-      - call: [chk.expect_i, "i32-Literal: Laenge", nums.len, 3]
+      - call: [chk.expect_i, "i32 literal: length", nums.len, 3]
       - call: [chk.expect_i, "i32-Literal: negatives Element", { at: [nums, 1] }, -2]
 
       # 6) Member-Zuweisung = Backlog-Punkt 13 (war SIGSEGV in aiml_list_handle_incref).
       - decl: [box, ptr<Holder>, { new: Holder }]
       - decl: [filled, i32, { call: [box.fill] }]
-      - call: [chk.expect_i, "Member-Literal: Laenge in der Methode", filled, 2]
-      - call: [chk.expect_i, "Member-Literal: von aussen sichtbar", box.names.len, 2]
+      - call: [chk.expect_i, "member literal: length in the method", filled, 2]
+      - call: [chk.expect_i, "member literal: visible from outside", box.names.len, 2]
       - call: [chk.expect_s, "Member-Literal: Element 0", { at: [box.names, 0] }, "Knoten"]
 
       - if: { condition: { gt: [chk.fails, 0] }, then: [{ print: ["FAIL set_list_literal (${chk.fails})"] }, { return: 1 }] }

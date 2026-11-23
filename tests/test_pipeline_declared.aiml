@@ -86,7 +86,7 @@
       - decl: [got_one, string, { call: [io.read_file, p_one] }]
       - decl: [got_two, string, { call: [io.read_file, p_two] }]
       - set: [fails, { +: [fails, { call: [expect, "and its own axis values", { eq: [got_one, "x86_64-debug-commit-xyz"] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "die andere Lane ebenso", { eq: [got_two, "arm64-debug-commit-xyz"] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "the other lane likewise", { eq: [got_two, "arm64-debug-commit-xyz"] }] }] }]
       - set: [fails, { +: [fails, { call: [expect, "the return value of the shared step arrived", { gt: [got_one.len, 15] }] }] }]
 
       # The excluded lane does not exist.

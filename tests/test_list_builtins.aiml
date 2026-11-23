@@ -1,6 +1,6 @@
 # SPEC?: 10_collections   # derived from the file name, to be confirmed
 # test_list_builtins — contains/index_of/count/extend/remove_value (M1)
-# + reverse/sort/sort_desc/shuffle (M2).  Bei erster Abweichung: print + exit 1.
+# + reverse/sort/sort_desc/shuffle (M2).  At the first deviation: print + exit 1.
 
 - def:
     name: check
@@ -82,7 +82,7 @@
       - call: [strs.push, "alpha"]
       - call: [strs.push, "beta"]
       - decl: [part, string, "al"]
-      - decl: [needle, string, "${part}pha"]      # eigener Pointer, gleicher Inhalt
+      - decl: [needle, string, "${part}pha"]      # own pointer, same content
       - call: [check, "str_contains", { call: [strs.contains, needle] }, 1]
       - call: [check, "str_index",    { call: [strs.index_of, "beta"] }, 1]
       - call: [check, "str_miss",     { call: [strs.contains, "gamma"] }, 0]

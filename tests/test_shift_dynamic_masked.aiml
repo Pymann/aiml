@@ -18,9 +18,9 @@
     return: i32
     body:
       - decl: [chk, ptr<Checker>, { new: Checker }]
-      - call: [chk.expect_i, "i32: 68 maskiert auf 4", { call: [shift_by, 6, 68] }, 96]
-      - call: [chk.expect_i, "i32: 0 schiebt nicht", { call: [shift_by, 6, 0] }, 6]
-      - call: [chk.expect_i, "i32: 31 ist noch gueltig", { call: [shift_by, 1, 31] }, -2147483648]
+      - call: [chk.expect_i, "i32: 68 masked to 4", { call: [shift_by, 6, 68] }, 96]
+      - call: [chk.expect_i, "i32: 0 does not shift", { call: [shift_by, 6, 0] }, 6]
+      - call: [chk.expect_i, "i32: 31 is still valid", { call: [shift_by, 1, 31] }, -2147483648]
       - if: { condition: { gt: [chk.fails, 0] }, then: [{ print: ["FAIL shift_dynamic (${chk.fails})"] }, { return: 1 }] }
       - print: ["PASS shift_dynamic_masked"]
       - return: 0

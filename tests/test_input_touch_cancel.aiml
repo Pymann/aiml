@@ -120,7 +120,7 @@
           condition: { '||': [{ gt: [back_y, 50.5] }, { lt: [back_y, 49.5] }] }
           then: [{ call: [log.error, "FAIL card y after the cancel ${back_y}, expected 50"] }, { return: 1 }]
 
-      # ── 4. Gegenprobe: echtes Loslassen MUSS als Release gelten ─────────
+      # ── 4. counter-probe: a real release MUST count as a release ─────────
       - call: [engine.swap, win]
       - call: [input.post_mouse_move, card_mx, card_my]
       - call: [engine.update_drag, card_mx, card_my, { call: [input.mouse_button, 0] }, { call: [input.mouse_released, 0] }]

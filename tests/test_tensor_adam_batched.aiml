@@ -118,7 +118,7 @@
       - if:
           condition: { gte: [letzte_summe, erste_summe] }
           then:
-            - call: [log.error, "FEHL Stapel: ${erste_summe} -> ${letzte_summe}"]
+            - call: [log.error, "FAIL batch: ${erste_summe} -> ${letzte_summe}"]
             - set: [fehlt, { "+": [fehlt, 1] }]
 
       - if: { condition: { gt: [fehlt, 0] }, then: [{ return: 1 }] }

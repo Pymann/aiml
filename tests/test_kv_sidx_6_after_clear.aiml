@@ -35,7 +35,7 @@
       - if:
           condition: { neq: [tag_wert.len, 0] }
           then:
-            - print: ["FAIL after_clear: tag=werkzeug ergibt ${tag_wert.len}, expected 0"]
+            - print: ["FAIL after_clear: tag=werkzeug gives ${tag_wert.len}, expected 0"]
             - return: 1
 
       - print: ["sidx after-clear PASS"]

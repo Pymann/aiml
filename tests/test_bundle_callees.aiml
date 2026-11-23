@@ -51,11 +51,11 @@
       # text search, and bundle_root MENTIONS mid_level in its call (§17).
       # Only the second level is therefore meaningful, and what matters
       # anyway is whether it RUNS.
-      - set: [fails, { +: [fails, { call: [expect, "Bundle enthaelt die zweite Ebene", { call: [pkg.contains, "deep_leaf"] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "bundle contains the second level", { call: [pkg.contains, "deep_leaf"] }] }] }]
 
       - decl: [rcx, i32, { call: [sys.exec, pkg] }]
       - print: ["sys.exec rc=${rcx}"]
-      - set: [fails, { +: [fails, { call: [expect, "isolierter Lauf findet beide Ebenen", { eq: [rcx, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "isolated run finds both levels", { eq: [rcx, 0] }] }] }]
 
       - if:
           condition: { neq: [fails, 0] }

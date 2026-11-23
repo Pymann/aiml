@@ -16,7 +16,7 @@
 - class:
     name: Consumer
     members:
-      - [dep, ptr<Dep>]          # FEHLER: owning ptr als sees-Ziel
+      - [dep, ptr<Dep>]          # ERROR: owning ptr as a sees target
     methods:
       - def: { name: read_dep, return: i32, body: [{ return: { call: [<.dep.get_v] } }] }
 

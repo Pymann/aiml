@@ -118,7 +118,7 @@
       - decl: [raw, string, { call: [raw_draw] }]
       - if:
           condition: { eq: [raw, "Draw"] }
-          then: [{ print: ["OK C1: undecorated bleibt 'Draw'"] }]
+          then: [{ print: ["OK C1: undecorated stays 'Draw'"] }]
           else:
             - print: ["FAIL C1: raw='${raw}'"]
             - set: [var_ok, 0]

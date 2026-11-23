@@ -25,13 +25,13 @@
       - decl: [res, i32, 0]
 
       - if: { condition: { and: [true, true, true] }, then: [{ set: [res, 1] }] }
-      - call: [chk.expect_i, "and mit drei wahren", res, 1]
+      - call: [chk.expect_i, "and with three true ones", res, 1]
       - set: [res, 0]
       - if: { condition: { and: [true, false, true] }, then: [{ set: [res, 1] }] }
-      - call: [chk.expect_i, "and mit einem falschen", res, 0]
+      - call: [chk.expect_i, "and with one false one", res, 0]
       - set: [res, 0]
       - if: { condition: { or: [false, false, true] }, then: [{ set: [res, 1] }] }
-      - call: [chk.expect_i, "or mit einem wahren", res, 1]
+      - call: [chk.expect_i, "or with one true one", res, 1]
       - set: [res, 0]
       - if: { condition: { and: [true, true, true, true] }, then: [{ set: [res, 1] }] }
       - call: [chk.expect_i, "and mit vier Operanden", res, 1]
@@ -39,7 +39,7 @@
       # short circuit: after the first false one tally must not run any more.
       - set: [g_calls, 0]
       - if: { condition: { and: [{ call: [tally, 0] }, { call: [tally, 1] }, { call: [tally, 1] }] }, then: [{ set: [res, 9] }] }
-      - call: [chk.expect_i, "and bricht nach dem ersten falschen ab", g_calls, 1]
+      - call: [chk.expect_i, "and stops after the first false one", g_calls, 1]
 
       - if: { condition: { gt: [chk.fails, 0] }, then: [{ print: ["FAIL logic_fold (${chk.fails})"] }, { return: 1 }] }
       - print: ["PASS logic_fold_operands"]

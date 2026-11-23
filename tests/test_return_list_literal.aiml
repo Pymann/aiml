@@ -94,13 +94,13 @@
       - decl: [mitte, i32, { at: [zahl_liste, 1] }]
       - if:
           condition: { "||": [{ neq: [zahl_liste.len, 3] }, { neq: [mitte, 8] }] }
-          then: [{ call: [log.error, "FEHL Zahlen: ${zahl_liste.len} / ${mitte}"] }, { set: [fehler, { "+": [fehler, 1] }] }]
+          then: [{ call: [log.error, "FAIL numbers: ${zahl_liste.len} / ${mitte}"] }, { set: [fehler, { "+": [fehler, 1] }] }]
 
       - decl: [bruch_liste, list<f32>, { call: [brueche] }]
       - decl: [erster_bruch, f32, { at: [bruch_liste, 0] }]
       - if:
           condition: { "||": [{ neq: [bruch_liste.len, 2] }, { gt: [{ call: [math.abs, { "-": [erster_bruch, 1.0] }] }, 0.001] }] }
-          then: [{ call: [log.error, "FEHL Brueche: ${bruch_liste.len} / ${erster_bruch}"] }, { set: [fehler, { "+": [fehler, 1] }] }]
+          then: [{ call: [log.error, "FAIL fractions: ${bruch_liste.len} / ${erster_bruch}"] }, { set: [fehler, { "+": [fehler, 1] }] }]
 
       - decl: [mix, list<string>, { call: [gemischt, "beweglich"] }]
       - decl: [mix_zwei, string, { at: [mix, 1] }]

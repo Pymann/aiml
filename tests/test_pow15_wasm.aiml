@@ -27,7 +27,7 @@
       - decl: [pw2, i64, { call: [pow15_i, 2797] }]
       - print: ["pow15(2797) = ${pw2} (expected ~148000)"]
       - if: { condition: { '||': [{ lt: [pw2, 145000] }, { gt: [pw2, 151000] }] }, then: [{ set: [fails, { +: [fails, 1] }] }] }
-      # f32→i64 via set direkt
+      # f32→i64 via set directly
       - decl: [rval, i64, 0]
       - decl: [fval, f32, 4624.0]
       - set: [rval, fval]

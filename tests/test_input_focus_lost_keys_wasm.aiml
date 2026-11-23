@@ -43,7 +43,7 @@
       # hang without any event at all.
       - if:
           condition: { neq: [{ call: [input.key_released, "q"] }, 1] }
-          then: [{ call: [log.error, "FAIL Loslass-Flanke fehlt"] }, { return: 1 }]
+          then: [{ call: [log.error, "FAIL release edge missing"] }, { return: 1 }]
 
       # ── and it stays up ──────────────────────────────────────────────────
       - decl: [bild, i32, 0]
@@ -54,9 +54,9 @@
             - call: [input.update]
             - if:
                 condition: { neq: [{ call: [input.key_down, "q"] }, 0] }
-                then: [{ call: [log.error, "FAIL q wieder unten in Bild ${bild}"] }, { return: 1 }]
+                then: [{ call: [log.error, "FAIL q down again in frame ${bild}"] }, { return: 1 }]
 
-      # ── Mehrere Tasten zugleich ──────────────────────────────────────────
+      # ── several keys at once ─────────────────────────────────────────────
       - call: [input.update]
       - call: [input.post_key_down, "e"]
       - call: [input.post_key_down, "w"]

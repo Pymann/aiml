@@ -1011,10 +1011,10 @@
     body:
       - decl: [fails, i32, 0]
 
-      # Bibliothek buendeln (lib_answer zieht die 60 lib_calc_* transitiv mit).
+      # Bundle the library (lib_answer pulls the 60 lib_calc_* along transitively).
       - decl: [lib, Code, { call: [sys.bundle, "lib_answer"] }]
       - decl: [lib_bytes, i64, { call: [lib.size] }]
-      - print: ["Bibliothek: ${lib_bytes} Bytes Quelltext"]
+      - print: ["library: ${lib_bytes} bytes of source text"]
 
       - decl: [dump, string, { call: [lib.toString] }]
       - print: ["--- Bundle-Anfang ---"]
@@ -1027,21 +1027,21 @@
       - print: ["lib_load registrierte ${nsym} Symbole"]
       - set: [fails, { +: [fails, { call: [expect, "lib_load registers more than one function", { gt: [nsym, 1] }] }] }]
 
-      # Weg A: Pipeline OHNE Bibliothek im Bundle (nutzt die geladene).
+      # Route A: pipeline WITHOUT the library in the bundle (uses the loaded one).
       - decl: [one, Code, { call: [sys.bundle, "pipe_one", { context: true }] }]
       - decl: [t_a, i64, { call: [time.mono_ms] }]
       - decl: [rc_a, i32, { call: [sys.exec, one] }]
       - decl: [ms_a, i64, { -: [{ call: [time.mono_ms] }, t_a] }]
-      - print: ["A) lib_load-Weg: rc=${rc_a} in ${ms_a} ms"]
+      - print: ["A) lib_load route: rc=${rc_a} in ${ms_a} ms"]
       - set: [fails, { +: [fails, { call: [expect, "A laeuft", { eq: [rc_a, 0] }] }] }]
 
-      # Weg B: dieselbe Pipeline MIT mitgebuendelter Bibliothek (§14).
+      # Route B: the same pipeline WITH the library bundled along (§14).
       - decl: [two, Code, { call: [sys.bundle, "pipe_two", { context: true }] }]
       - decl: [merged, Code, { call: [two.merge, lib] }]
       - decl: [t_b, i64, { call: [time.mono_ms] }]
       - decl: [rc_b, i32, { call: [sys.exec, merged] }]
       - decl: [ms_b, i64, { -: [{ call: [time.mono_ms] }, t_b] }]
-      - print: ["B) merge-Weg:    rc=${rc_b} in ${ms_b} ms"]
+      - print: ["B) merge route:    rc=${rc_b} in ${ms_b} ms"]
       - set: [fails, { +: [fails, { call: [expect, "B laeuft", { eq: [rc_b, 0] }] }] }]
 
       - print: ["difference: ${ms_b} ms (merge) against ${ms_a} ms (lib_load)"]

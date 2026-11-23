@@ -95,7 +95,7 @@
 
       # method, changing: the caller MUST see it.
       - call: [bumper.bump, one, 4]
-      - set: [fails, { +: [fails, { call: [expect, "Methode aendert durch ref<> (Zahl)", { eq: [one.ticks, 12] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "method changes through ref<> (number)", { eq: [one.ticks, 12] }] }] }]
       - call: [bumper.rename, one, "umbenannt"]
       - set: [fails, { +: [fails, { call: [expect, "Methode aendert durch ref<> (Zeichenkette)", { eq: [one.name, "umbenannt"] }] }] }]
 

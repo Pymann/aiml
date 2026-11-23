@@ -101,7 +101,7 @@
       - if:
           condition: { neq: [res_this, 1] }
           then:
-            - print: ["FAIL eq mit this.-Schreibweise ergab false (res=${res_this})"]
+            - print: ["FAIL eq with the this. notation gave false (res=${res_this})"]
             - set: [fails, { +: [fails, 1] }]
 
       - decl: [res_lit, i32, { call: [tgr.eq_member_literal] }]
@@ -115,7 +115,7 @@
       - if:
           condition: { neq: [tgr.tag_name, tgr.skip_tag] }
           then:
-            - print: ["FAIL eq von aussen (obj.feld) ergab ungleich"]
+            - print: ["FAIL eq from outside (obj.feld) gave unequal"]
             - set: [fails, { +: [fails, 1] }]
 
       - if:

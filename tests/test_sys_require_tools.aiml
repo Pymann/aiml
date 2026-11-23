@@ -38,7 +38,7 @@
 
       # present: the shell exists everywhere.
       - decl: [ok_one, string, { call: [sys.require_tools, "sh"] }]
-      - set: [fails, { +: [fails, { call: [expect, "vorhandenes Werkzeug → leere Antwort", { eq: [ok_one.len, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "present tool → empty answer", { eq: [ok_one.len, 0] }] }] }]
 
       # not present — and the name is in the answer.
       - decl: [miss_one, string, { call: [sys.require_tools, "gibtesnicht_xyz"] }]
@@ -62,7 +62,7 @@
 
       # Empty setting: nothing to check, nothing to report.
       - decl: [nix, string, { call: [sys.require_tools, ""] }]
-      - set: [fails, { +: [fails, { call: [expect, "leere Anforderung = leere Antwort", { eq: [nix.len, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "empty requirement = empty answer", { eq: [nix.len, 0] }] }] }]
 
       - if:
           condition: { neq: [fails, 0] }

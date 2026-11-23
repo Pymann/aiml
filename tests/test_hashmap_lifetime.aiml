@@ -63,7 +63,7 @@
       - decl: [total, i64, { call: [sum_table, squares, 100] }]
       - if: [{ neq: [total, 328350] }, true]
         then:
-          - print: ["FAIL 2: Summe = ${total}, expected 328350"]
+          - print: ["FAIL 2: sum = ${total}, expected 328350"]
           - set: [var_ok, 0]
 
       # many short-lived tables (scope drop in the loop)

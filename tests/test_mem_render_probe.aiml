@@ -36,7 +36,7 @@
       - { name: atk_lbl,     type: label, x: 50, y: 140,width: 40,  height: 16, font_size: 11, color: 0xFFCC88 }
       - { name: art_img,     type: sprite,x: 6, y: 46,  width: 126, height: 90 }
 
-# populate (INTERPOLATION): simuliert populate_card_full — set_text mit dyn-Strings.
+# populate (INTERPOLATION): simulates populate_card_full — set_text with dyn strings.
 - def:
     name: populate
     static_off: ["same_arg"]

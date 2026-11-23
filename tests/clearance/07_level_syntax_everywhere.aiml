@@ -74,7 +74,7 @@
       - if:
           condition: { neq: [{ +: [got, plain_one] }, 3] }
           then:
-            - call: [log.error, "Summe falsch: ${got}+${plain_one}"]
+            - call: [log.error, "sum wrong: ${got}+${plain_one}"]
             - return: [1]
       - call: [log.info, "PASS 07 level-Syntax in allen Formen angenommen"]
       - return: [0]

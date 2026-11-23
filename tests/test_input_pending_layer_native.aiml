@@ -44,7 +44,7 @@
           condition: { neq: [{ call: [input.mouse_button, 0] }, 1] }
           then: [{ print: ["FAIL down_pending: button does not count as held"] }, { return: 1 }]
 
-      # Loslassen -- ebenfalls sofort sichtbar.
+      # release -- also immediately visible.
       - call: [input.post_mouse_up_pending, 0]
       - if:
           condition: { neq: [{ call: [input.mouse_released, 0] }, 1] }
@@ -67,5 +67,5 @@
           then: [{ print: ["FAIL cursor jumps to ${bleibt_x} after the frame"] }, { return: 1 }]
 
       - call: [engine.destroy_window, win]
-      - print: ["OK input pending layer (nativ = frame-sichtbar)"]
+      - print: ["OK input pending layer (native = frame-visible)"]
       - return: 0

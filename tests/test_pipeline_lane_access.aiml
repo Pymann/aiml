@@ -82,13 +82,13 @@
       - decl: [pipe, pipeline, { call: [two_arch, 0] }]
       - decl: [rc_run, i32, { call: [pipe.run] }]
       - set: [fails, { +: [fails, { call: [expect, "the run succeeds", { eq: [rc_run, 0] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "beide Lanes liefen", { eq: [{ call: [pipe.ran_count] }, 2] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "both lanes ran", { eq: [{ call: [pipe.ran_count] }, 2] }] }] }]
 
       # Every lane has its own workspace with ITS value in it.
       - decl: [p_x86, string, "logs/pipeline_ws/lanes/arch=x86_64,mode=debug/mark/marker.txt"]
       - decl: [p_arm, string, "logs/pipeline_ws/lanes/arch=arm64,mode=debug/mark/marker.txt"]
-      - set: [fails, { +: [fails, { call: [expect, "Lane x86_64 hat ihr Verzeichnis", { call: [io.exists, p_x86] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "Lane arm64 hat ihr Verzeichnis", { call: [io.exists, p_arm] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "lane x86_64 has its directory", { call: [io.exists, p_x86] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "lane arm64 has its directory", { call: [io.exists, p_arm] }] }] }]
       - decl: [got_x86, string, { call: [io.read_file, p_x86] }]
       - decl: [got_arm, string, { call: [io.read_file, p_arm] }]
       - set: [fails, { +: [fails, { call: [expect, "x86_64 saw its own value", { eq: [got_x86, "x86_64"] }] }] }]

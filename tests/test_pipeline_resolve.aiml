@@ -77,7 +77,7 @@
       - decl: [rc_o1, i32, { call: [op_pipe.run] }]
       - decl: [rc_o2, i32, { call: [op_pipe.run] }]
       - set: [fails, { +: [fails, { call: [expect, "opaque never hits", { eq: [{ call: [op_pipe.reused_count] }, 0] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "opaque laeuft beide Male", { eq: [{ call: [op_pipe.ran_count] }, 1] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "opaque runs both times", { eq: [{ call: [op_pipe.ran_count] }, 1] }] }] }]
 
       # ── resolved: Sonde laeuft IMMER ───────────────────────────────────
       - set: [g_probe_runs, 0]

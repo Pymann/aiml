@@ -102,7 +102,7 @@
       - if:
           condition: { neq: [after_del, "abcd"] }
           then:
-            - print: ["FAIL Delete am Textende aendert etwas: '${after_del}'"]
+            - print: ["FAIL delete at the end of the text changes something: '${after_del}'"]
             - call: [engine.destroy_window, win]
             - return: 1
 

@@ -94,7 +94,7 @@
       - decl: [back, ContainerState, { call: [sys.deserialize, foreign, "ContainerState"] }]
       - set: [fails, { +: [fails, { call: [expect, "foreign JSON without __type is read (F29-15)", { eq: [back.status, "running"] }] }] }]
       - set: [fails, { +: [fails, { call: [expect, "alias maps onto the field", { eq: [back.ident, "rt-9"] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "Zahlen kommen mit", { eq: [back.pid, 99] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "numbers come along", { eq: [back.pid, 99] }] }] }]
 
       # ── 4. round trip via the bare form ─────────────────────────────────
       - decl: [round, ContainerState, { call: [sys.deserialize, bare_out, "ContainerState"] }]

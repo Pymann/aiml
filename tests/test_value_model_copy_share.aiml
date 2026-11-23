@@ -40,27 +40,27 @@
       - decl: [erst, Tragbar]
       - set: [erst.ers, "aaa"]
       - set: [erst.zwe, "bbb"]
-      - set: [fehler, { +: [fehler, { call: [zeigt, "Original direkt", "${erst.ers}|${erst.zwe}", "aaa|bbb"] }] }]
+      - set: [fehler, { +: [fehler, { call: [zeigt, "original directly", "${erst.ers}|${erst.zwe}", "aaa|bbb"] }] }]
       - set: [fehler, { +: [fehler, { call: [zeigt, "Original by value", { call: [liest, erst] }, "3:aaa|3:bbb"] }] }]
 
       # one copy, nothing changed.
       - decl: [unberuehrt, Tragbar, erst]
-      - set: [fehler, { +: [fehler, { call: [zeigt, "Kopie direkt", "${unberuehrt.ers}|${unberuehrt.zwe}", "aaa|bbb"] }] }]
+      - set: [fehler, { +: [fehler, { call: [zeigt, "copy directly", "${unberuehrt.ers}|${unberuehrt.zwe}", "aaa|bbb"] }] }]
       - set: [fehler, { +: [fehler, { call: [zeigt, "Kopie by value", { call: [liest, unberuehrt] }, "3:aaa|3:bbb"] }] }]
 
       # one copy, ONE field set anew — the core of the finding.
       - decl: [geaendert, Tragbar, erst]
       - set: [geaendert.zwe, "ccc"]
-      - set: [fehler, { +: [fehler, { call: [zeigt, "Kopie+set direkt", "${geaendert.ers}|${geaendert.zwe}", "aaa|ccc"] }] }]
+      - set: [fehler, { +: [fehler, { call: [zeigt, "copy+set directly", "${geaendert.ers}|${geaendert.zwe}", "aaa|ccc"] }] }]
       - set: [fehler, { +: [fehler, { call: [zeigt, "Kopie+set by value", { call: [liest, geaendert] }, "3:aaa|3:ccc"] }] }]
-      - set: [fehler, { +: [fehler, { call: [zeigt, "Original danach", "${erst.ers}|${erst.zwe}", "aaa|bbb"] }] }]
-      - set: [fehler, { +: [fehler, { call: [zeigt, "Original danach by value", { call: [liest, erst] }, "3:aaa|3:bbb"] }] }]
+      - set: [fehler, { +: [fehler, { call: [zeigt, "original afterwards", "${erst.ers}|${erst.zwe}", "aaa|bbb"] }] }]
+      - set: [fehler, { +: [fehler, { call: [zeigt, "original afterwards by value", { call: [liest, erst] }, "3:aaa|3:bbb"] }] }]
 
       # And the read function must say the same twice — a key that
       # moves on every read is not a key.
       - decl: [zuerst, string, { call: [liest, geaendert] }]
       - decl: [danach, string, { call: [liest, geaendert] }]
-      - set: [fehler, { +: [fehler, { call: [zeigt, "zweimal gelesen", danach, zuerst] }] }]
+      - set: [fehler, { +: [fehler, { call: [zeigt, "read twice", danach, zuerst] }] }]
 
       - if: { condition: { eq: [fehler, 0] }, then: [{ call: [log.info, "test_value_model_copy_share PASS"] }, { return: 0 }] }
       - call: [log.info, "test_value_model_copy_share FAIL (${fehler})"]

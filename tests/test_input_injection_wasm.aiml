@@ -57,7 +57,7 @@
           condition: { neq: [held2, 1] }
           then: [{ print: ["FAIL mouse_button(0)=${held2} after update — hold lost"] }, { return: 1 }]
 
-      # ── Loslassen ────────────────────────────────────────────────────────
+      # ── release ──────────────────────────────────────────────────────────
       - call: [input.post_mouse_up, 0]
       - decl: [rel, i32, { call: [input.mouse_released, 0] }]
       - decl: [held3, i32, { call: [input.mouse_button, 0] }]
@@ -127,7 +127,7 @@
           then: [{ call: [log.error, "FAIL drag_started=${d_start} after exceeding the threshold"] }, { return: 1 }]
       - if:
           condition: { neq: [d_act, 1] }
-          then: [{ call: [log.error, "FAIL drag_active=${d_act} waehrend des Drags"] }, { return: 1 }]
+          then: [{ call: [log.error, "FAIL drag_active=${d_act} during the drag"] }, { return: 1 }]
       - call: [input.update]
       - decl: [d_start2, i32, { call: [input.drag_started, 0] }]
       - decl: [d_act2,   i32, { call: [input.drag_active, 0] }]
@@ -147,7 +147,7 @@
           then: [{ call: [log.error, "FAIL drag_ended=${d_end} after the release"] }, { return: 1 }]
       - if:
           condition: { neq: [d_can, 0] }
-          then: [{ call: [log.error, "FAIL Loslassen meldete zusaetzlich drag_cancelled"] }, { return: 1 }]
+          then: [{ call: [log.error, "FAIL release additionally reported drag_cancelled"] }, { return: 1 }]
       # The drop carries its OWN position (spec/44_0 §2.3).  Reason:
       # the ended edge may only be reported in the next frame, and by
       # then the cursor is somewhere else — whoever then resolves the drop via mouse_pos_*

@@ -51,7 +51,7 @@
       - if:
           condition: { eq: [{ eq: [var_c.name, "Saege"] }, 0] }
           then:
-            - print: ["FAIL: Zeile wc.name='${var_c.name}', expected 'Saege'"]
+            - print: ["FAIL: row wc.name='${var_c.name}', expected 'Saege'"]
             - return: 1
 
       - print: ["Phase 6 ok: secondary index and rows come from the dump"]

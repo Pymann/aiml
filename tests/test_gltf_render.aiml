@@ -119,7 +119,7 @@
 - call: [glfwWindowHint, 139272, 204801]  # GLFW_OPENGL_PROFILE = CORE
 
 # null, null = no fullscreen monitor, no shared GL context
-- decl: [win, ptr, { call: [glfwCreateWindow, 800, 600, "AIML — texturierter Würfel", null, null] }]
+- decl: [win, ptr, { call: [glfwCreateWindow, 800, 600, "AIML — textured cube", null, null] }]
 - if: [{ eq: [win, null] }, true]
   then:
     - print: ["FAIL: glfwCreateWindow failed"]

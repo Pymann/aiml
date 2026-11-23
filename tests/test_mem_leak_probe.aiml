@@ -237,7 +237,7 @@
       - decl: [reps, i32, 20000]
       - if: { condition: { gt: [{ call: [envm.contains, "AIML_MEM_ITERS"] }, 0] }, then: [{ decl: [itxt, string, { call: [envm.get, "AIML_MEM_ITERS"] }] }, { set: [reps, { call: [itxt.to_int] }] }] }
       - decl: [reps2, i32, { '*': [reps, 2] }]
-      - call: [log.info, "MEMPROBE sel=${sel} N=${reps} 2N=${reps2} (Leck ⇔ 2N≈2·N; sauber ⇔ beide≈0)"]
+      - call: [log.info, "MEMPROBE sel=${sel} N=${reps} 2N=${reps2} (leak ⇔ 2N≈2·N; clean ⇔ both≈0)"]
       # warm-up, so that one-time lazy allocations do not count as a leak.
       - decl: [warm, i64, { call: [svc.probe_get_copy, 2000] }]
 

@@ -72,14 +72,14 @@
       - decl: [adr, i64, { call: [kontext.symbol, "lib_sieben", "fn() -> i32"] }]
       - if:
           condition: { le: [adr, 0] }
-          then: [{ print: ["  FAIL Adresse von lib_sieben fehlt"] }, { set: [fails, { +: [fails, 1] }] }]
+          then: [{ print: ["  FAIL address of lib_sieben missing"] }, { set: [fails, { +: [fails, 1] }] }]
           else: [{ print: ["  ok   Symbol mit passender Signatur"] }]
 
       # Whitespace does not count: the same signature, written differently.
       - decl: [adr2, i64, { call: [kontext.symbol, "lib_summe", "fn(i32,i32)->i32"] }]
       - if:
           condition: { le: [adr2, 0] }
-          then: [{ print: ["  FAIL Adresse von lib_summe fehlt"] }, { set: [fails, { +: [fails, 1] }] }]
+          then: [{ print: ["  FAIL address of lib_summe missing"] }, { set: [fails, { +: [fails, 1] }] }]
           else: [{ print: ["  ok   argument types in the signature"] }]
 
       # A bare "fn" is too little (…d3).
