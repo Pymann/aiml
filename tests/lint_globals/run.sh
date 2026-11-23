@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Der Globals-Lint (spec/21 §6.2 Regel 5): WAS warnt, was nicht, und dass er
-# sich abschalten laesst.  Als Treiber, weil eine Warnung den Rueckgabewert
-# nicht aendert — ueber `# Expected exit code` waere sie nicht pruefbar.
+# The globals lint (spec/21 §6.2 rule 5): WHAT warns, what does not, and that it
+# can be switched off.  As a driver, because a warning does not change the return
+# value — via `# Expected exit code` it could not be checked.
 set -uo pipefail
 cd "$(dirname "$0")/../.."
 AIML=./out/aiml/aiml
@@ -16,15 +16,15 @@ check() { # name, bedingung
 AIML_LINT_GLOBALS=1 $AIML "$PROBE" > "$LOG" 2>&1
 warn() { grep -c "module-level global '$1'" "$LOG"; }
 
-check "const i32 warnt NICHT"        "$([ "$(warn MAX_TRIES)" = "0" ] && echo 1)"
-check "const string warnt NICHT"     "$([ "$(warn GREETING)"  = "0" ] && echo 1)"
-check "schreibbares i32 warnt"       "$([ "$(warn g_counter)" -ge "1" ] && echo 1)"
-check "besitzendes ptr<> warnt"      "$([ "$(warn g_box)"     -ge "1" ] && echo 1)"
-check "ptr<>-Warnung nennt den Grund" \
+check "const i32 does NOT warn"     "$([ "$(warn MAX_TRIES)" = "0" ] && echo 1)"
+check "const string does NOT warn"     "$([ "$(warn GREETING)"  = "0" ] && echo 1)"
+check "writable i32 warns"          "$([ "$(warn g_counter)" -ge "1" ] && echo 1)"
+check "owning ptr<> warns"          "$([ "$(warn g_box)"     -ge "1" ] && echo 1)"
+check "ptr<> warning names the reason" \
     "$(grep -q "g_box.*OWNS its value" "$LOG" && echo 1)"
 
 AIML_LINT_GLOBALS=0 $AIML "$PROBE" > "$LOG.off" 2>&1
-check "AIML_LINT_GLOBALS=0 schweigt" \
+check "AIML_LINT_GLOBALS=0 stays silent" \
     "$([ "$(grep -c 'module-level global' "$LOG.off")" = "0" ] && echo 1)"
 
 [ "$fails" = "0" ] && { echo "lint_globals PASS"; exit 0; }

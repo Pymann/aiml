@@ -1,32 +1,32 @@
 #!/usr/bin/env bash
-# run.sh — Proben zu spec/65 (Symbol-Clearance).
+# run.sh — probes for spec/65 (symbol clearance).
 #
-#   bash tests/clearance/run.sh              # bewertet STAGE=step2 (Vorgabe)
-#   STAGE=step3 bash tests/clearance/run.sh  # + opt-in Flusspruefung
-#   STAGE=session ...                                  # + eingeschraenkte Sitzung
-#   STAGE=host ...                                     # + Proben, die einen Wirt brauchen
-#   STAGE=write ...                                    # + Schreibseite (create/replace/collision)
-#   ONLY=07 ...                                        # nur passende Proben
+#   bash tests/clearance/run.sh              # evaluates STAGE=step2 (default)
+#   STAGE=step3 bash tests/clearance/run.sh  # + opt-in flow check
+#   STAGE=session ...                                  # + restricted session
+#   STAGE=host ...                                     # + probes that need a host
+#   STAGE=write ...                                    # + write side (create/replace/collision)
+#   ONLY=07 ...                                        # only matching probes
 #
-# Jede Probe nennt im Kopf, welchen Umsetzungsschritt sie braucht:
-#   # NEEDS: step2   -> Syntax annehmen + `level`/`grants` validieren (immer an)
-#   # NEEDS: step3   -> opt-in Flusspruefung (AIML_STATIC_CLEARANCE)
-#   # NEEDS: session -> eingeschraenkte Sitzung, allein pruefbar (AIML_CLEARANCE)
-#   # NEEDS: exports -> braucht die Export-Tabelle des Wirts (AIML_EXPORTS), aber keine
-#                      aufrufbaren Adressen — die Erwartung ist eine Diagnose
-#   # NEEDS: host    -> braucht einen WIRT mit AUFRUFBAREN Symbolen (Signatur + Adresse),
-#                      und `level:` in eigener Quelle ist Selbstbeglaubigung (F65-27)
-#   # NEEDS: write   -> die SCHREIBSEITE (§5b): `create_level`/`replace_level`, der
-#                      Kollisionsfehler und die Hot-Reload-Berechtigung (F65-26 … F65-32)
-#   # NEEDS: writedown -> die Write-down-Regel (F65-34), Wertfluss IM Rumpf
-#   # NEEDS: dynload -> braucht spec/29_2 §4.3 (dynamisches Nachladen).  Nicht dieses
-#                      Kapitel: `sys.bundle` kann nur eine Funktion buendeln, die der Wirt
-#                      SELBST uebersetzt hat — ein NEUER Name ist damit nicht ins Buendel
-#                      zu bekommen, und der `clearance-create`-Zweig bleibt unerreichbar.
-# Proben oberhalb von STAGE werden als AUSSTEHEND gemeldet und zaehlen NICHT
-# als Fehlschlag — sonst waere das Labor dauerhaft rot und damit wertlos.
+# Every probe states in its header which implementation step it needs:
+#   # NEEDS: step2   -> accept the syntax + validate `level`/`grants` (always on)
+#   # NEEDS: step3   -> opt-in flow check (AIML_STATIC_CLEARANCE)
+#   # NEEDS: session -> restricted session, checkable on its own (AIML_CLEARANCE)
+#   # NEEDS: exports -> needs the host's export table (AIML_EXPORTS), but no
+#                      callable addresses — the expectation is a diagnostic
+#   # NEEDS: host    -> needs a HOST with CALLABLE symbols (signature + address),
+#                      and `level:` in one's own source is self-certification (F65-27)
+#   # NEEDS: write   -> the WRITE SIDE (§5b): `create_level`/`replace_level`, the
+#                      collision error and the hot-reload permission (F65-26 … F65-32)
+#   # NEEDS: writedown -> the write-down rule (F65-34), value flow INSIDE the body
+#   # NEEDS: dynload -> needs spec/29_2 §4.3 (dynamic loading).  Not this
+#                      chapter: `sys.bundle` can only bundle a function the host
+#                      compiled ITSELF — a NEW name cannot get into the bundle that way,
+#                      and the `clearance-create` branch stays unreachable.
+# Probes above STAGE are reported as PENDING and do NOT count
+# as a failure — otherwise the lab would be permanently red and thus worthless.
 #
-# Sitzung je Probe (vom Wirt gesetzt, nie aus der Quelle — spec/65 F65-6):
+# Session per probe (set by the host, never from the source — spec/65 F65-6):
 #   # CLEARANCE: none|<1..255>   # CREATE-LEVEL: N   # REPLACE-LEVEL: N
 #   # STATIC-CLEARANCE: on
 set -uo pipefail
@@ -44,9 +44,9 @@ session_env() {
   cr=$(grep -m1 -oE '^# CREATE-LEVEL: *[0-9]+'  "$f" | awk '{print $3}')
   rp=$(grep -m1 -oE '^# REPLACE-LEVEL: *[0-9]+' "$f" | awk '{print $3}')
   ex=$(grep -m1 -oE '^# EXPORTS: *[^ ]+' "$f" | awk '{print $3}')
-  # F65-24 zweiter Weg: die ADRESSE kommt aus einer vorgeladenen Bibliothek, nicht aus
-  # `sys.export_symbol`.  Das ist der Weg eines Wirts, der fremden Quelltext uebersetzen
-  # laesst — er kennt das Skript erst zur Laufzeit (cosmos doc/spec/108 F108-9).
+  # F65-24 second route: the ADDRESS comes from a preloaded library, not from
+  # `sys.export_symbol`.  That is the route of a host that lets foreign source be
+  # compiled — it only learns the script at runtime (cosmos doc/spec/108 F108-9).
   pl=$(grep -m1 -oE '^# PRELOAD: *[^ ]+' "$f" | awk '{print $3}')
   st=$(grep -m1 -oE '^# STATIC-CLEARANCE: *on'  "$f")
   [ -n "${cl:-}" ] && [ "$cl" != "none" ] && echo "AIML_CLEARANCE=$cl"
@@ -58,12 +58,12 @@ session_env() {
 }
 needs_of() { grep -m1 -oE '^# NEEDS: *[a-z0-9]+' "$1" | awk '{print $3}'; }
 
-# Die Wirts-Bibliothek fuer die PRELOAD-Proben: einmal bauen, nicht je Probe.  gcc vom
-# System ist dafuer in Ordnung (Nutzer-Entscheid 2026-10-16).
+# The host library for the PRELOAD probes: build once, not per probe.  The system's
+# gcc is fine for this (user decision 2026-10-16).
 HOSTLIB=tests/clearance/fixtures/libclearance_host.so
 HOSTSRC=tests/clearance/fixtures/host_lib.c
 if [ -f "$HOSTSRC" ] && { [ ! -f "$HOSTLIB" ] || [ "$HOSTSRC" -nt "$HOSTLIB" ]; }; then
-  gcc -shared -fPIC -o "$HOSTLIB" "$HOSTSRC" || echo "  !! Wirts-Bibliothek nicht baubar"
+  gcc -shared -fPIC -o "$HOSTLIB" "$HOSTSRC" || echo "  !! host library cannot be built"
 fi
 
 pass=0; fail=0; pend=0
@@ -75,7 +75,7 @@ for f in tests/clearance/[0-9]*.aiml; do
   need=$(needs_of "$f"); [ -z "$need" ] && need=step2
   mapfile -t sess < <(session_env "$f")
   if [ "$(rank "$need")" -gt "$WANT" ]; then
-    pend=$((pend+1)); printf "  ..   %-42s AUSSTEHEND (braucht %s)\n" "$base" "$need"; continue
+    pend=$((pend+1)); printf "  ..   %-42s PENDING (needs %s)\n" "$base" "$need"; continue
   fi
   out=$(env "${sess[@]}" "$AIML" "$f" -r 2>&1); rc=$?
   line=$(echo "$out" | grep -E "PASS|FAIL|error:" | head -1)
@@ -91,20 +91,20 @@ for f in tests/clearance/neg/*.aiml; do
   need=$(needs_of "$f"); [ -z "$need" ] && need=step2
   want=$(grep -m1 -oE '# EXPECT-ERROR: .*' "$f" | sed 's/# EXPECT-ERROR: //')
   if [ "$(rank "$need")" -gt "$WANT" ]; then
-    pend=$((pend+1)); printf "  ..   %-42s AUSSTEHEND (braucht %s)\n" "$base" "$need"; continue
+    pend=$((pend+1)); printf "  ..   %-42s PENDING (needs %s)\n" "$base" "$need"; continue
   fi
   mapfile -t sess < <(session_env "$f")
   out=$(env "${sess[@]}" "$AIML" "$f" -r 2>&1); rc=$?
   if [ $rc -eq 0 ]; then
-    nfail=$((nfail+1)); printf "  FAIL %-42s ANGENOMMEN, erwartet: %s\n" "$base" "$want"
+    nfail=$((nfail+1)); printf "  FAIL %-42s ACCEPTED, expected: %s\n" "$base" "$want"
   elif echo "$out" | grep -qF "$want"; then
-    npass=$((npass+1)); printf "  ok   %-42s abgelehnt: %s\n" "$base" "$want"
+    npass=$((npass+1)); printf "  ok   %-42s rejected: %s\n" "$base" "$want"
   else
     nfail=$((nfail+1))
-    printf "  FAIL %-42s falscher Grund (erwartet %s): %s\n" "$base" "$want" \
+    printf "  FAIL %-42s wrong reason (expected %s): %s\n" "$base" "$want" \
            "$(echo "$out" | grep -E 'error:' | head -1)"
   fi
 done
 
-echo "── positiv $pass ok / $fail fail · negativ $npass ok / $nfail fail · ausstehend $pend ──"
+echo "── positive $pass ok / $fail fail · negative $npass ok / $nfail fail · pending $pend ──"
 [ $fail -eq 0 ] && [ $nfail -eq 0 ]

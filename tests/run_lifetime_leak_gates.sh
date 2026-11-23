@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# spec/61 §7 hartes Leak-Zahlen-Gate (doc/spec61_inline_value_model_release_plan_2026-09-24.md §11.2).
+# spec/61 §7 hard leak-count gate (doc/spec61_inline_value_model_release_plan_2026-09-24.md §11.2).
 #
-# Ergänzt run_memory_sanitizers.sh (das mit --errors-for-leak-kinds=none NUR Memory-Safety prüft,
-# KEINE Leak-Abnahme). Hier: jede GREEN-Probe wird nativ AOT kompiliert, gegen libaiml gelinkt und
-# unter Valgrind mit --error-exitcode=99 ausgeführt; definite ODER indirect > 0 (bzw. jeder valgrind-
-# Fehler / Buildfehler / fehlendes valgrind) ist ein FAIL. Beide Flags aktiv (AIML_MEM_V3=1,
-# AIML_LIFETIME_DROPS=1). RED-Ziele werden separat als bekannte offene Befunde gelistet (nicht
-# gatend), bis der jeweilige Fix steht — dann in GREEN verschieben.
+# Complements run_memory_sanitizers.sh (which with --errors-for-leak-kinds=none checks ONLY memory safety,
+# NO leak acceptance). Here: every GREEN probe is compiled natively AOT, linked against libaiml and
+# run under Valgrind with --error-exitcode=99; definite OR indirect > 0 (or any valgrind
+# error / build error / missing valgrind) is a FAIL. Both flags active (AIML_MEM_V3=1,
+# AIML_LIFETIME_DROPS=1). RED targets are listed separately as known open findings (not
+# gating) until the respective fix lands — then move them to GREEN.
 #
-# Nutzung:  bash tests/run_lifetime_leak_gates.sh   (ONLY=<teilstring> = nur passende Probes)
-# CI/Abnahme ruft dieses Skript UND run_memory_sanitizers.sh.
+# Usage:  bash tests/run_lifetime_leak_gates.sh   (ONLY=<substring> = only matching probes)
+# CI/acceptance runs this script AND run_memory_sanitizers.sh.
 set -u
 cd "$(dirname "$0")/.."
 AIML="${AIML_BIN:-out/aiml/aiml}"

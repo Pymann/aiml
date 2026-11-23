@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# spec/62 §5.5/§13.5g — die Graph-Pruefungen.  Negativfaelle, also wird die
-# Diagnose von `--check` geprueft und kein Programmlauf.
+# spec/62 §5.5/§13.5g — the graph checks.  Negative cases, so the
+# diagnostic of `--check` is checked and not a program run.
 set -uo pipefail
 cd "$(dirname "$0")/../.."
 BIN="./out/aiml/aiml"
@@ -10,9 +10,9 @@ want() {
     local file="$1" needle="$2" out
     out=$("$BIN" --check "$DIR/$file" 2>&1 | grep -v "shorter than 3 characters")
     if printf '%s\n' "$out" | grep -q "$needle"; then
-        echo "  ok   $file: abgelehnt mit '$needle'"
+        echo "  ok   $file: rejected with '$needle'"
     else
-        echo "  FAIL $file: erwartet '$needle'"
+        echo "  FAIL $file: expected '$needle'"
         printf '%s\n' "$out" | sed 's/^/        /' | head -4
         fails=$((fails+1))
     fi

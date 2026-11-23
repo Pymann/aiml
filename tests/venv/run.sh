@@ -183,8 +183,8 @@ MANY="$WORK/many"; mkdir -p "$MANY"; cp "$TOOL/hallo.aiml" "$MANY/"
 cp "$TOOL/exodus.json" "$MANY/exodus-gut.json"
 # A source that does not compile.  A source that is MISSING would not do: exodus
 # reports errorlevel 0 for a configuration whose sources resolve to nothing and
-# writes no artifact (gemeldet 2026-10-31).
-printf -- '- def:\n    name: main\n    return: i32\n    body:\n      - das ist kein aiml\n' > "$MANY/kaputt.aiml"
+# writes no artifact (reported 2026-10-31).
+printf -- '- def:\n    name: main\n    return: i32\n    body:\n      - this is not aiml\n' > "$MANY/kaputt.aiml"
 sed 's|"sources": \["hallo.aiml"\]|"sources": ["kaputt.aiml"]|; s|"name": "werkzeug"|"name": "kaputt"|' \
   "$TOOL/exodus.json" > "$MANY/exodus-kaputt.json"
 V5="$WORK/v5"; "$AIML" venv "$V5" > /dev/null 2>&1
@@ -277,7 +277,7 @@ for v in 0.1.0 0.2.0; do
 done
 # a project in kontor that is no aiml tool: no aiml.tool.json in its archive
 mkdir -p "$SRV/exodus/fremd/1.0.0" "$SRC/fremd-1.0.0"
-printf 'nur Text\n' > "$SRC/fremd-1.0.0/README"
+printf 'just text\n' > "$SRC/fremd-1.0.0/README"
 cp "$TOOL/exodus.json" "$SRV/exodus/fremd/1.0.0/exodus.json"
 pack "$SRC" "$SRV/exodus/fremd/1.0.0/package" "fremd-1.0.0"
 # an archive that is no single tree

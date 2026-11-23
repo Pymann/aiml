@@ -1,30 +1,30 @@
 #!/usr/bin/env bash
-# run.sh — spec/31: der decoded_cache eines typisierten Kv ist auf 1024 Eintraege begrenzt,
-# und ein Lesen liefert nie einen Slot, den dieselbe Verdraengung schon freigegeben hat.
+# run.sh — spec/31: the decoded_cache of a typed Kv is limited to 1024 entries,
+# and a read never returns a slot that the same eviction has already freed.
 #
-# Zwei Prozesse ueber dieselbe WAL: der erste legt 1200 Zeilen an (mehr als das
-# Cache-Fenster), der zweite oeffnet sie wieder.  Beim Oeffnen fuellt der Backfill der
-# db_indexed-Felder den Cache mit allen 1200 Zeilen; danach schlaegt beim ersten
-# Cache-Miss die Verdraengung zu.
+# Two processes over the same WAL: the first creates 1200 rows (more than the
+# cache window), the second opens it again.  On opening, the backfill of the
+# db_indexed fields fills the cache with all 1200 rows; after that the eviction
+# strikes at the first cache miss.
 #
-# Das ist der cai-Absturz vom 2026-11-04 (SIGSEGV in __strlen_avx2 <- enc <-
-# aiml_ser_deep_copy <- cai.wissen.Aufloesung_eintraege) in klein.  rc >= 128 ist
-# deshalb ein eigener Fehlerfall: ein Absturz ist hier das erwartete FALSCHE Verhalten.
+# This is the cai crash of 2026-11-04 (SIGSEGV in __strlen_avx2 <- enc <-
+# aiml_ser_deep_copy <- cai.wissen.Aufloesung_eintraege) in miniature.  rc >= 128 is
+# therefore a failure case of its own: a crash is the expected WRONG behaviour here.
 set -uo pipefail
-cd "$(dirname "$0")/../.."                 # → aiml-Projektwurzel
+cd "$(dirname "$0")/../.."                 # → aiml project root
 AIML="${AIML:-out/aiml/aiml}"
 CACHE="${AIML_CACHE:-__aiml_cache}/kv_decoded_cache"
 WAL="${TMPDIR:-/tmp}/aiml_test_kvcache"
 PROBE=tests/kv_decoded_cache/probe_reopen_read.aiml
 
-echo "── Kv decoded_cache: begrenzt, und ein Lesen gibt keinen freigegebenen Slot zurueck ──"
+echo "── Kv decoded_cache: bounded, and a read returns no freed slot ──"
 rm -rf "$WAL"
 fail=0
 
-lauf() {   # $1 = Beschriftung
+lauf() {   # $1 = label
     out=$(AIML_CACHE="$CACHE" AIML_MEM_V3=1 "$AIML" "$PROBE" -r 2>&1); rc=$?
     if [ $rc -ge 128 ]; then
-        printf "  FAIL [%s] stuerzte mit rc=%d ab (Signal %d)\n" "$1" "$rc" "$((rc-128))"
+        printf "  FAIL [%s] crashed with rc=%d (signal %d)\n" "$1" "$rc" "$((rc-128))"
         echo "$out" | grep -iE "crash|signal|backtrace" | head -3 | sed 's/^/        /'
         fail=1; return 1
     fi
@@ -37,7 +37,7 @@ lauf() {   # $1 = Beschriftung
     return 0
 }
 
-lauf "1. Lauf: anlegen" && lauf "2. Lauf: wieder oeffnen und lesen"
+lauf "run 1: create" && lauf "run 2: reopen and read"
 
 rm -rf "$WAL" "$CACHE"
 if [ $fail -ne 0 ]; then echo "── kv_decoded_cache FAILED ──"; exit 1; fi

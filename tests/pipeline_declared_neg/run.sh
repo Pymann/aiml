@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# spec/62 §13.5f — was die Umschreibung ABLEHNEN muss.  Negativfaelle, also
-# wird die Diagnose von `--check` geprueft und nicht ein Programmlauf.
+# spec/62 §13.5f — what the rewrite must REJECT.  Negative cases, so
+# the diagnostic of `--check` is checked and not a program run.
 set -uo pipefail
 cd "$(dirname "$0")/../.."
 BIN="./out/aiml/aiml"
@@ -10,9 +10,9 @@ want() {
     local file="$1" needle="$2" out
     out=$("$BIN" --check "$DIR/$file" 2>&1 | grep -v "shorter than 3 characters")
     if printf '%s\n' "$out" | grep -q "$needle"; then
-        echo "  ok   $file: abgelehnt mit '$needle'"
+        echo "  ok   $file: rejected with '$needle'"
     else
-        echo "  FAIL $file: erwartet '$needle'"
+        echo "  FAIL $file: expected '$needle'"
         printf '%s\n' "$out" | sed 's/^/        /' | head -4
         fails=$((fails+1))
     fi
@@ -20,12 +20,12 @@ want() {
 want needs_rejected.aiml      "needs"
 want host_value_rejected.aiml "host"
 want undeclared_axis.aiml     "mode"
-# spec/62 §18.1: `image:`/`push:` werden UEBERSETZT und erst beim LAUF
-# abgelehnt (F62-124a) — dieselbe Datei ist fuer einen Cluster gueltig, und
-# ein Kontroller soll sie lesen koennen (§20.1).  Die Ablehnung haelt
+# spec/62 §18.1: `image:`/`push:` are COMPILED and only rejected at RUN
+# time (F62-124a) — the same file is valid for a cluster, and
+# a controller should be able to read it (§20.1).  The rejection is held by
 # tests/test_pipeline_local_refuses.aiml.
 #
-# Was hier bleibt: Formfehler, die der Uebersetzer besitzt (§20.2 F62-150).
+# What stays here: form errors that the compiler owns (§20.2 F62-150).
 want old_name_rejected.aiml   "agent:"
 want unknown_key_rejected.aiml "unknown key"
 want stages_key_rejected.aiml "steps:"

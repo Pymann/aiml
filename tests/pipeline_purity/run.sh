@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
-# spec/62 §10.2 — die Reinheitspruefung.  Jeder Fall ist eine kleine Datei;
-# geprueft wird die DIAGNOSE von `--check` (spec/49), nicht ein Programmlauf:
-# ein Fehler bei der Uebersetzung laesst sich nicht ausfuehren.
+# spec/62 §10.2 — the purity check.  Every case is a small file;
+# what is checked is the DIAGNOSTIC of `--check` (spec/49), not a program run:
+# an error at compile time cannot be executed.
 set -uo pipefail
 cd "$(dirname "$0")/../.."
 BIN="./out/aiml/aiml"
 DIR="tests/pipeline_purity"
 fails=0
 
-# want <datei> <severity|none> <textstueck>
+# want <file> <severity|none> <text fragment>
 want() {
     local file="$1" sev="$2" needle="${3:-}"
     local out
     out=$("$BIN" --check "$DIR/$file" 2>&1)
-    # Namenslaenge u.ae. sind hier nicht das Thema
+    # name length etc. are not the topic here
     out=$(printf '%s\n' "$out" | grep -v "shorter than 3 characters")
     if [ "$sev" = "none" ]; then
         if printf '%s\n' "$out" | grep -qE "^(error|warning)[[:space:]].*(reinheit|purity|pure)"; then
@@ -21,14 +21,14 @@ want() {
             printf '%s\n' "$out" | sed 's/^/        /' | head -3
             fails=$((fails+1))
         else
-            echo "  ok   $file: keine Reinheits-Diagnose"
+            echo "  ok   $file: no purity diagnostic"
         fi
         return
     fi
     if printf '%s\n' "$out" | grep -q "^$sev	.*$needle"; then
-        echo "  ok   $file: $sev mit '$needle'"
+        echo "  ok   $file: $sev with '$needle'"
     else
-        echo "  FAIL $file: erwartet $sev mit '$needle'"
+        echo "  FAIL $file: expected $sev with '$needle'"
         printf '%s\n' "$out" | sed 's/^/        /' | head -4
         fails=$((fails+1))
     fi

@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# run.sh — jede Diagnose hat dieselbe Form (spec/49, Regeln F49-100..106).
+# run.sh — every diagnostic has the same form (spec/49, rules F49-100..106).
 #
-# Zwei Mengen, mit Absicht:
-#   strict/  jede Meldung MUSS Datei, Zeile, Spalte, Namen und Regelverweis
-#            tragen; ein Rueckschritt hier macht die Suite rot.
-#   survey   der Rest des Korpus wird nur GEZAEHLT und gemeldet, damit der Stand
-#            in jedem Lauf sichtbar ist statt jedes Mal neu entdeckt zu werden.
+# Two sets, on purpose:
+#   strict/  every message MUST carry file, line, column, name and rule
+#            reference; a regression here turns the suite red.
+#   survey   the rest of the corpus is only COUNTED and reported, so that the state
+#            is visible in every run instead of being rediscovered each time.
 #
-# Die Proben markieren ihre Fundstelle mit `# <<HERE` selbst -- eine
-# handgezaehlte Zeilennummer im Test verrottet beim ersten Einruecken.
+# The probes mark their location themselves with `# <<HERE` -- a
+# hand-counted line number in the test rots at the first re-indent.
 set -uo pipefail
 cd "$(dirname "$0")/../.."
 AIML="${AIML:-out/aiml/aiml}"
@@ -27,56 +27,56 @@ for probe in "$DIR"/strict/*.aiml; do
     n=$(printf '%s' "$recs" | grep -c . || true)
 
     if [ "$n" -ne 1 ]; then
-        bad "[$base] $n Meldungen statt genau einer"
+        bad "[$base] $n messages instead of exactly one"
         printf '%s\n' "$recs" | head -3 | sed 's/^/        /'
         continue
     fi
 
     IFS=$'\t' read -r sev file line col origin msg <<<"$recs"
 
-    [ "$file" = "$probe" ]  && ok "[$base] Datei genannt" \
-                            || bad "[$base] Datei='$file' statt '$probe' (F49-100)"
-    [ "$line" = "$want_line" ] && ok "[$base] Zeile $line ist die Fundstelle" \
-                               || bad "[$base] Zeile=$line, Fundstelle ist $want_line (F49-100/103)"
-    [ "${col:-0}" -gt 0 ]   && ok "[$base] Spalte $col" \
-                            || bad "[$base] Spalte=0 — die YAML-Marke kennt sie (F49-100)"
+    [ "$file" = "$probe" ]  && ok "[$base] file named" \
+                            || bad "[$base] file='$file' instead of '$probe' (F49-100)"
+    [ "$line" = "$want_line" ] && ok "[$base] line $line is the location" \
+                               || bad "[$base] line=$line, location is $want_line (F49-100/103)"
+    [ "${col:-0}" -gt 0 ]   && ok "[$base] column $col" \
+                            || bad "[$base] column=0 — the YAML mark knows it (F49-100)"
     case "$msg" in
-        *"$want_txt"*) ok "[$base] Meldung nennt den Befund" ;;
-        *) bad "[$base] Meldung ohne '$want_txt': $msg" ;;
+        *"$want_txt"*) ok "[$base] message names the finding" ;;
+        *) bad "[$base] message without '$want_txt': $msg" ;;
     esac
-    # F49-102 verlangt den Namen des Dings, um das es geht.  Ein Syntaxfehler
-    # hat keines -- Proben mit `# NO-NAME` sagen das und begruenden es.
+    # F49-102 requires the name of the thing at issue.  A syntax error
+    # has none -- probes with `# NO-NAME` say so and give the reason.
     if grep -q '^# NO-NAME' "$probe"; then
-        ok "[$base] ohne Symbolnamen, begruendet in der Probe"
+        ok "[$base] without symbol name, justified in the probe"
     else
         case "$msg" in
-            *"'"*"'"*) ok "[$base] Name in Anfuehrungszeichen (F49-102)" ;;
-            *) bad "[$base] Meldung nennt keinen Namen (F49-102): $msg" ;;
+            *"'"*"'"*) ok "[$base] name in quotes (F49-102)" ;;
+            *) bad "[$base] message names no name (F49-102): $msg" ;;
         esac
     fi
-    # F49-104 gilt fuer CHECKS.  Ein Syntaxfehler setzt keine Regel durch,
-    # sondern stellt fest, dass die Form gebrochen ist -- Proben mit `# NO-RULE`
-    # sind davon ausgenommen, und die Ausnahme steht in der Probe, nicht hier.
+    # F49-104 applies to CHECKS.  A syntax error does not enforce a rule,
+    # it states that the form is broken -- probes with `# NO-RULE`
+    # are exempt, and the exemption is in the probe, not here.
     if grep -q '^# NO-RULE' "$probe"; then
-        ok "[$base] ohne Regelverweis, begruendet in der Probe"
+        ok "[$base] without rule reference, justified in the probe"
     else
         case "$msg" in
             *"(spec/"*) ok "[$base] Regelverweis (F49-104)" ;;
-            *) bad "[$base] kein (spec/...)-Verweis (F49-104): $msg" ;;
+            *) bad "[$base] no (spec/...) reference (F49-104): $msg" ;;
         esac
     fi
     case "$msg" in
-        *"	"*) bad "[$base] Meldung enthaelt einen Tabulator (F49-105)" ;;
-        *) ok "[$base] einzeilig, kein Tabulator (F49-105)" ;;
+        *"	"*) bad "[$base] message contains a tab (F49-105)" ;;
+        *) ok "[$base] single line, no tab (F49-105)" ;;
     esac
     case "$msg" in
-        line\ [0-9]*|*"line "[0-9]*:*) bad "[$base] Ort steht als Prosa in der Meldung (F49-100)" ;;
+        line\ [0-9]*|*"line "[0-9]*:*) bad "[$base] location is written as prose in the message (F49-100)" ;;
         *) : ;;
     esac
 done
 
-# ── survey: der Stand im uebrigen Korpus, nur gezaehlt ───────────────────────
-echo "── Deckung im uebrigen Korpus (nur Messung, kein Urteil) ──"
+# ── survey: the state in the rest of the corpus, only counted ───────────────
+echo "── coverage in the rest of the corpus (measurement only, no verdict) ──"
 tot=0; with=0
 for probe in $(ls tests/*neg*.aiml tests/*/neg_*.aiml tests/*/n[0-9][0-9]_*.aiml 2>/dev/null | head -60); do
     while IFS=$'\t' read -r sev file line col origin msg; do
@@ -87,9 +87,9 @@ for probe in $(ls tests/*neg*.aiml tests/*/neg_*.aiml tests/*/n[0-9][0-9]_*.aiml
     done < <("$AIML" "$probe" --check 2>/dev/null | grep -E "^(error|warning)	" || true)
 done
 if [ "$tot" -gt 0 ]; then
-    printf "  %d von %d Meldungen tragen Datei und Zeile (%d %%)\n" "$with" "$tot" $((with*100/tot))
+    printf "  %d of %d messages carry file and line (%d %%)\n" "$with" "$tot" $((with*100/tot))
 else
-    printf "  keine Meldungen eingesammelt\n"
+    printf "  no messages collected\n"
 fi
 
 [ $fail -eq 0 ] && echo "── diagnostics PASS ──" || echo "── diagnostics FAIL ──"
