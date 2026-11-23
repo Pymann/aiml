@@ -692,26 +692,26 @@ memory of the SSH work).
   spawner: one thread starts all processes, the lanes wait for their results.  That keeps the
   concurrency of the *work* while serializing only the few microseconds of process creation.
 
-#### Das Messergebnis (2026-10-11)
+#### The measurement (2026-10-11)
 
-`tests/test_concurrent_spawn_hazard.aiml` ist diese Messung: **acht Threads starten je zwoelf
-Prozesse**, also 96 Starts mit maximaler Ueberlappung, jedes Kind mit **eigenen** Pipes
-(`capture: true`).  Geprueft wird nicht die Geschwindigkeit, sondern dass jeder Start gelingt,
-jeder Exit-Code richtig ankommt und **keine Ausgabe in einen fremden Thread wandert** — die
-Deskriptor-Haelfte der Gefahr, die cosmos beim geerbten Listener schon getroffen hat.
+`tests/test_concurrent_spawn_hazard.aiml` is this measurement: **eight threads each start twelve
+processes**, i.e. 96 starts with maximum overlap, each child with its **own** pipes
+(`capture: true`).  What is checked is not speed but that every start succeeds,
+every exit code arrives correctly and **no output wanders into a foreign thread** — the
+descriptor half of the hazard that cosmos already hit with the inherited listener.
 
-Drei Laeufe: `96/96` gelungen, `0` fehlgeschlagen, `0` vertauscht, ~12 ms.
+Three runs: `96/96` succeeded, `0` failed, `0` swapped, ~12 ms.
 
-- **F62-101** `parallel > 1` ist damit **freigegeben**, mit zwei Auflagen, die aus der Messung
-  folgen und nicht aus einem Argument:
-  - Ein Schritt, dessen Ausgabe gelesen wird, laeuft mit `capture: true`.  Ohne das erbt das Kind
-    stdout des Elternprozesses, und mehrere Lanes schreiben in denselben Strom — beim ersten
-    Messversuch sah das wie `96` vertauschte Ausgaben aus und war in Wahrheit die fehlende Pipe.
-    Der Unterschied ist wichtig: die Gefahr ist nicht, dass Pipes versagen, sondern dass gar
-    keine da sind.
-  - Die Messung gilt fuer `sys.exe` aus Threads.  Sie sagt **nichts** darueber, ob mehrere
-    isolierte Uebersetzungen (`sys.exec`, §13) gleichzeitig laufen duerfen — das ist LLVM-Zustand,
-    nicht Prozess-Zustand, und braucht eine eigene Messung (F62-99).
+- **F62-101** `parallel > 1` is therefore **cleared**, with two requirements that follow from the
+  measurement and not from an argument:
+  - A step whose output is read runs with `capture: true`.  Without it the child inherits
+    the parent process's stdout, and several lanes write into the same stream — in the first
+    measurement attempt this looked like `96` swapped outputs and was in truth the missing pipe.
+    The difference matters: the hazard is not that pipes fail, but that there are none
+    at all.
+  - The measurement applies to `sys.exe` from threads.  It says **nothing** about whether several
+    isolated compilations (`sys.exec`, §13) may run at the same time — that is LLVM state,
+    not process state, and needs a measurement of its own (F62-99).
 
 ## 7. Reuse Classes
 
@@ -803,18 +803,18 @@ Its contract:
 - A thrown exception fails the step.  It never degrades to "run anyway", because a failed
   resolution means the key is unknown, and an unknown key must not hit — otherwise "I could not
   check" turns silently into "nothing has changed".
-- **F62-89** Die Sonde läuft im Kontext des **Aufrufers**, der Rumpf im **isolierten** Kontext.
-  Gemessen beim Schreiben von `tests/test_pipeline_resolve.aiml`: eine globale Variable, die die
-  Sonde hochzählt, wirkt; dieselbe Zuweisung im Rumpf meldet `Undefined variable`, weil ein Bundle
-  Code trägt und keinen Prozesszustand (`spec/29_2` §13).  Das ist beabsichtigt und nützlich — die
-  Sonde darf den Zustand des Wirts lesen (Konfiguration, Netzwerk, Arbeitskopie), der Rumpf nicht.
-  Was ein Rumpf vom Wirt **doch** sieht, steht in `spec/29_2` §22: eingebaute Funktionen ja,
-  Wirts-Funktionen als mitgebuendelte **Kopie**, globale Variablen nur als frisch initialisierte
-  Deklaration — und Dateien, Datenbank und Prozessrechte **geteilt**.  Die Trennung ist
-  lexikalisch und keine Sandbox (F29_2-22b); eine Pipeline, deren Quelltext von aussen kommt, ist
-  darum dieselbe Fehlerklasse wie eine Remote-Shell.
-  Wer im Rumpf zählen oder messen will, nimmt die Laufzeit-Zähler (`ran_count`/`reused_count`,
-  §13.1) oder den Beobachter (§13.2) — beide leben außerhalb des isolierten Kontexts.
+- **F62-89** The probe runs in the **caller's** context, the body in the **isolated** context.
+  Measured while writing `tests/test_pipeline_resolve.aiml`: a global variable that the
+  probe increments takes effect; the same assignment in the body reports `Undefined variable`, because a bundle
+  carries code and no process state (`spec/29_2` §13).  That is intended and useful — the
+  probe may read the host's state (configuration, network, working copy), the body may not.
+  What a body **does** see of the host is stated in `spec/29_2` §22: built-in functions yes,
+  host functions as a bundled **copy**, global variables only as a freshly initialised
+  declaration — and files, database and process rights **shared**.  The separation is
+  lexical and not a sandbox (F29_2-22b); a pipeline whose source text comes from outside is
+  therefore the same class of error as a remote shell.
+  Whoever wants to count or measure in the body uses the runtime counters (`ran_count`/`reused_count`,
+  §13.1) or the observer (§13.2) — both live outside the isolated context.
 
 ```yaml
       - step:
@@ -893,14 +893,14 @@ Namespace defaults, overridable per function:
   `cwd`, `temp_dir`, `current_exe`, `config_dir` — each answers a question about *this host*.
 - `yaml`: `parse`, `dump` and the accessors are pure; `parse_file` falls under the `io` rule.
 - `log` is always permitted: log output is not part of the result.
-- **F62-112** `step` ist **rein** (der Namensraum aus §13.5e/§5.7).  `step.arg` und `step.host`
-  lesen genau das, was ohnehin im Schluessel steht — die **deklarierten** Achsen und Wirtswerte
-  (§8); sie unrein zu nennen hiesse, die Schluesselvollstaendigkeit gegen sich selbst zu wenden.
-  `step.workspace` ist aus Lane und Stufe abgeleitet und damit je Lane festgelegt (F62-107).
-  `step.set_status`, `step.fail_lane` und `step.fail_pipeline` sagen etwas ueber den **Ausgang**,
-  nicht ueber das Ergebnis, und ein Fehlschlag wird nicht aufgezeichnet (F62-92).  Aufgefallen
-  beim Umschreiben der deklarierten Form: ihre erzeugten Rumpfe lesen ihre Achsen mit `step.arg`,
-  und ein reiner Schritt waere damit unmoeglich geworden.
+- **F62-112** `step` is **pure** (the namespace from §13.5e/§5.7).  `step.arg` and `step.host`
+  read exactly what is in the key anyway — the **declared** axes and host values
+  (§8); calling them impure would turn key completeness against itself.
+  `step.workspace` is derived from lane and stage and is therefore fixed per lane (F62-107).
+  `step.set_status`, `step.fail_lane` and `step.fail_pipeline` say something about the **outcome**,
+  not about the result, and a failure is not recorded (F62-92).  Noticed
+  while rewriting the declared form: its generated bodies read their axes with `step.arg`,
+  and a pure step would otherwise have become impossible.
 
 `io` cannot be banned — writing files is what a build step is for.  Instead:
 
@@ -1150,18 +1150,18 @@ it out.
     name: Lane
     fields:
       - [bindings,  map<string:string>]   # arch=arm64, compiler=clang, …
-      - [workspace, string]               # je (Lane, Stage), F62-60
+      - [workspace, string]               # per (lane, stage), F62-60
       - [state,     i32]                  # pending | running | paused | done (§5.9)
-      - [status,    i32]                  # StepStatus, gültig ab done (§5.7)
+      - [status,    i32]                  # StepStatus, valid from done (§5.7)
 
 - model:
     name: StepRun
     fields:
       - [name,        string]
-      - [lane,        i32]                # Index in die Lane-Liste
+      - [lane,        i32]                # index into the lane list
       - [step_key,    string]             # §8
-      - [output_tree, string]             # "" = nichts erzeugt
-      - [reused,      i32]                # 1 = Treffer, Rumpf nicht gelaufen
+      - [output_tree, string]             # "" = nothing produced
+      - [reused,      i32]                # 1 = hit, body did not run
       - [state,       i32]
       - [status,      i32]
       - [exit_code,   i32]
@@ -1169,83 +1169,83 @@ it out.
       - [ended_ms,    i64]
 ```
 
-- **F62-76** Diese Modelle sind die **einzige** Schnittstelle zwischen einem laufenden Lauf und
-  seinem Wirt.  Ein Wirt liest sie; er baut sie nicht.  Was er damit tut — in eine Datenbank
-  schreiben, über Mirror pushen, in einer Szene zeichnen — ist seine Sache (cosmos
+- **F62-76** These models are the **only** interface between a running run and
+  its host.  A host reads them; it does not build them.  What it does with them — write them into a database,
+  push them over Mirror, draw them in a scene — is its own business (cosmos
   `doc/spec/96`/`97`/`98`).
-- **F62-77** Sie sind **serialisierbar** (`spec/29`), aus demselben Grund wie ein Rückgabewert
-  (F62-34): ein Lauf, der verteilt stattfindet, muss seinen Zustand über die Leitung geben können.
+- **F62-77** They are **serialisable** (`spec/29`), for the same reason as a return value
+  (F62-34): a run that takes place distributed must be able to hand its state over the wire.
 
-### 13.2 Wie der Wirt sie bekommt
+### 13.2 How the host gets them
 
-- **F62-78** `run_<name>` nimmt einen optionalen **Beobachter**: eine Funktion, die bei jedem
-  Zustandswechsel eines Schritts mit dem aktuellen `StepRun` gerufen wird.
+- **F62-78** `run_<name>` takes an optional **observer**: a function called with the current
+  `StepRun` on every state change of a step.
 
   ```yaml
   - def:
       name: on_step
-      args: [[run, ref<StepRun>]]          # ref<>, nicht StepRun und nicht ptr<>
+      args: [[run, ref<StepRun>]]          # ref<>, not StepRun and not ptr<>
       body: [ { call: [push_to_ui, run] } ]
 
   - decl: [rc, i32, { call: [pipe.run, on_step] }]
   ```
 
-  **`ref<StepRun>`, und das ist keine Stilfrage.**  Gemessen: `StepRun` als Wert liest Müll (die
-  Laufzeit übergibt einen Zeiger, die Signatur erwartet einen Wert), und `ptr<StepRun>` **stürzt
-  ab** — `ptr<T>` bedeutet Besitz, also gibt der Empfänger beim Verlassen des Scopes einen Struct
-  frei, der der Laufzeit gehört (`__libc_free` im Rückweg).  `ref<T>` ist die Leihgabe
-  (`spec/61` §6.2) und das einzig Richtige.
+  **`ref<StepRun>`, and that is not a matter of style.**  Measured: `StepRun` as a value reads garbage (the
+  runtime passes a pointer, the signature expects a value), and `ptr<StepRun>` **crashes**
+  — `ptr<T>` means ownership, so the receiver frees, on leaving the scope, a struct
+  that belongs to the runtime (`__libc_free` on the way back).  `ref<T>` is the borrow
+  (`spec/61` §6.2) and the only correct choice.
 
-  Ein Beobachter statt eines Rückgabewerts, weil der Wirt **während** des Laufs reagieren muss —
-  anhalten, anzeigen, abbrechen.  Ein Ergebnis am Ende käme für alles davon zu spät.
-- **F62-79** Ohne Beobachter läuft die Pipeline ebenso; der lokale JIT-Lauf (§12) braucht keinen.
-  Der Beobachter ist eine Erweiterung, keine Voraussetzung.
-- **F62-80** Der Beobachter darf den Lauf **nicht** verändern.  Technisch bekommt er ein
-  `ref<StepRun>` (siehe oben — ein Wert liest Müll, ein `ptr<>` führt zu einer fremden Freigabe),
-  aber der Wert lebt **nur für die Dauer des Aufrufs**: er wird je Ereignis neu gebaut.  Wer
-  hineinschreibt, ändert nichts — und genau das ist gemeint.  Steuerung läuft über die Wirtsseite
-  (anhalten/fortsetzen/abbrechen, cosmos `doc/spec/96` §96.11), nicht über ein Modell.
+  An observer instead of a return value, because the host has to react **during** the run —
+  pause, display, abort.  A result at the end would come too late for all of that.
+- **F62-79** Without an observer the pipeline runs just the same; the local JIT run (§12) needs none.
+  The observer is an extension, not a prerequisite.
+- **F62-80** The observer must **not** change the run.  Technically it gets a
+  `ref<StepRun>` (see above — a value reads garbage, a `ptr<>` leads to a foreign free),
+  but the value lives **only for the duration of the call**: it is rebuilt for each event.  Whoever
+  writes into it changes nothing — and that is exactly what is intended.  Control goes through the host side
+  (pause/resume/abort, cosmos `doc/spec/96` §96.11), not through a model.
 
-### 13.3 Zwei Formen: deklariert und zusammengesetzt
+### 13.3 Two forms: declared and composed
 
-Es gibt **zwei** Wege zu einer Pipeline, und sie unterscheiden sich nicht im Ergebnis, sondern
-darin, wann die Struktur feststeht.
+There are **two** ways to a pipeline, and they differ not in the result but
+in when the structure is fixed.
 
-| | **deklariert** (`- pipeline:`) | **zusammengesetzt** (`pipeline`-Typ, §13.5) |
+| | **declared** (`- pipeline:`) | **composed** (`pipeline` type, §13.5) |
 |---|---|---|
-| Struktur | Quelltext | zur Laufzeit gebaut |
-| Matrix | aufgeklappt beim Übersetzen (§4) | aufgeklappt beim Start des Laufs |
-| Struktur-Prüfungen (§10.1) | Compile-Fehler | Fehler beim Start, **bevor** ein Schritt läuft |
-| Rumpf-Prüfungen (§10.2, Purity) | Compile-Fehler | **ebenso Compile-Fehler** — der Rumpf ist ein `Code`-Bundle |
-| Schlüssel (§8) | Hash des geschriebenen Rumpfs | Hash des Bundle-Inhalts (`AimlCode.id`) |
+| Structure | source text | built at runtime |
+| Matrix | expanded at compile time (§4) | expanded at the start of the run |
+| Structure checks (§10.1) | compile error | error at start, **before** any step runs |
+| Body checks (§10.2, purity) | compile error | **also a compile error** — the body is a `Code` bundle |
+| Key (§8) | hash of the written body | hash of the bundle content (`AimlCode.id`) |
 
-**Der Punkt, an dem die Grenze verläuft, ist der Rumpf, nicht die Struktur.**  Ein
-zusammengesetzter Schritt bekommt seinen Rumpf als `Code` (`sys.bundle`), also als übersetzten,
-geprüften Quelltext mit Inhaltsadresse.  Deshalb bleiben die beiden Eigenschaften erhalten, auf
-die es ankommt: die Reinheitsprüfung greift (sie prüft den Rumpf) und der Cache-Schlüssel ist
-inhaltsabgeleitet (er hasht den Rumpf).
+**The point where the line runs is the body, not the structure.**  A
+composed step gets its body as `Code` (`sys.bundle`), i.e. as compiled,
+checked source text with a content address.  This is why the two properties that matter
+are preserved: the purity check applies (it checks the body) and the cache key is
+content-derived (it hashes the body).
 
-Was wirklich verloren geht, ist eines: **die Struktur-Prüfung wandert von der Bauzeit zum
-Laufbeginn.**  Ein Tippfehler in einem Parameternamen, ein `resolved` ohne Sonde, ein `exclude`
-auf eine Achse, die es nicht gibt — das meldet der deklarierte Weg beim Übersetzen, der
-zusammengesetzte beim Start.  Früher wäre besser; "bevor irgendein Schritt läuft" ist die
-nächstbeste Stelle und deutlich besser als mitten im Lauf.
+What is really lost is one thing: **the structure check moves from build time to the
+start of the run.**  A typo in a parameter name, a `resolved` without a probe, an `exclude`
+on an axis that does not exist — the declared way reports these at compile time, the
+composed way at start.  Earlier would be better; "before any step runs" is the
+next-best place and much better than in the middle of the run.
 
-- **F62-81** Beide Formen münden in **dieselbe** Ausführung und dieselben Laufzeit-Modelle
-  (§13.1).  Es gibt keinen zweiten Executor und keinen laxeren Pfad; ein zusammengesetzter Lauf
-  wird genauso gecacht, beobachtet und gesteuert wie ein deklarierter.
-- **F62-84** Eine zusammengesetzte Pipeline wird beim Start **vollständig geprüft** und schlägt
-  fehl, bevor ein Schritt läuft.  Teilweise ausgeführte Läufe aus einer fehlerhaften Struktur sind
-  ausgeschlossen — sie hinterließen Cache-Einträge für eine Pipeline, die es so nie gab.
+- **F62-81** Both forms lead to the **same** execution and the same runtime models
+  (§13.1).  There is no second executor and no laxer path; a composed run
+  is cached, observed and controlled exactly like a declared one.
+- **F62-84** A composed pipeline is **fully checked** at start and fails
+  before any step runs.  Partially executed runs from a faulty structure are
+  ruled out — they would leave cache entries behind for a pipeline that never existed in that form.
 
-### 13.5 Die Typen `pipeline`, `stage`, `step`
+### 13.5 The types `pipeline`, `stage`, `step`
 
 ```yaml
 - decl: [bld, step, { call: [step.new] }]
 - call: [bld.set_name, "build"]
 - call: [bld.set_body, { call: [sys.bundle, "do_build", { context: true }] }]   # Code
 - call: [bld.set_cache, CacheClass.pure]
-- call: [bld.use_arg, "mode"]                              # nur deklarierte Achsen (§5.2)
+- call: [bld.use_arg, "mode"]                              # only declared axes (§5.2)
 
 - decl: [cmp, stage, { call: [stage.new] }]
 - call: [cmp.set_name, "compile"]
@@ -1254,296 +1254,295 @@ nächstbeste Stelle und deutlich besser als mitten im Lauf.
 
 - decl: [pipe, pipeline, { call: [pipeline.new] }]
 - call: [pipe.set_name, "generated"]
-- call: [pipe.add_param, "arch", arch_values]              # list<string> zur Laufzeit
+- call: [pipe.add_param, "arch", arch_values]              # list<string> at runtime
 - call: [pipe.add_stage, cmp]
 - decl: [rc, i32, { call: [pipe.run] }]                    # optional: pipe.run(on_step)
 ```
 
-#### 13.5a `on_fail`, `timeout`, `retry` und der Status in der zusammengesetzten Form
+#### 13.5a `on_fail`, `timeout`, `retry` and the status in the composed form
 
 ```yaml
-- call: [bld.set_on_fail, OnFail.pipeline]      # §5.6, Vorgabe: OnFail.lane
-- call: [bld.set_timeout, 60000]                # ms, ganzer Schritt (F62-40); 0 = keiner
-- call: [bld.set_retry, 3]                      # Versuche (F62-41), Vorgabe 1
-- decl: [st, i32, { call: [bld.status] }]       # StepStatus, gueltig ab done (§13.1)
-- decl: [lst, i32, { call: [pipe.status] }]     # aggregiert ueber die Lanes (F62-43)
+- call: [bld.set_on_fail, OnFail.pipeline]      # §5.6, default: OnFail.lane
+- call: [bld.set_timeout, 60000]                # ms, whole step (F62-40); 0 = none
+- call: [bld.set_retry, 3]                      # attempts (F62-41), default 1
+- decl: [st, i32, { call: [bld.status] }]       # StepStatus, valid from done (§13.1)
+- decl: [lst, i32, { call: [pipe.status] }]     # aggregated over the lanes (F62-43)
 ```
 
-- **F62-90** Die drei Funktionen aus §5.7 (`set_status`, `fail_lane`, `fail_pipeline`) sind in der
-  **deklarierten** Form generiert (F62-45), in der **zusammengesetzten** Form dagegen eingebaute
-  Funktionen im Namensraum `step`: `step.set_status`, `step.fail_lane`, `step.fail_pipeline`.  Sie
-  schreiben auf einen laufzeitseitigen Platz fuer den *gerade laufenden Schritt* — thread-lokal,
-  denn Lanes duerfen in Threads laufen (§6).
-  Der Namensraum ist kein Schoenheitsfehler, sondern erzwungen, und das ist beim Implementieren
-  aufgefallen: ein Schritt-Rumpf ist in dieser Form eine **gewoehnliche Funktion**, die
-  `sys.bundle` nur *zusaetzlich* einsammelt — sie wird also auch im gewoehnlichen Kontext
-  mituebersetzt.  Ein Name, der "nur im Schritt-Rumpf" existiert, scheitert genau dort mit
-  `Unknown function`.  Darum ein Name, der ueberall aufloest, dessen **Wirkung** aber an einen
-  laufenden Schritt gebunden ist: ohne laufenden Schritt ist der Aufruf ein Fehler und kein
-  stiller Nulleffekt.  Dass die deklarierte Form die blossen Namen behalten kann (F62-45), bleibt
-  richtig — dort generiert der Compiler den Rumpf samt Praeambel und weiss, dass es ein Rumpf ist.
-- **F62-94** Der dritte Wert von `on_fail` heisst in der zusammengesetzten Form `OnFail.proceed`,
-  nicht `OnFail.continue`: `continue` ist in aiml ein Schluesselwort (Schleifen), und ein
-  Enum-Glied kann nicht so heissen.  In der **deklarierten** Form bleibt es beim Attributwert
-  `continue` aus §5.6 — dort ist es Text in einer Abbildung und kollidiert mit nichts.  Derselbe
-  Begriff, zwei Schreibweisen, weil die eine Stelle Grammatik ist und die andere nicht.
-- **F62-91** *(F62-64-Pflicht: Schluesselmaterial?)*  `on_fail`, `timeout` und `retry` sind
-  **kein** Schluesselmaterial — alle drei beschreiben, was bei einem **Fehlschlag** geschieht, und
-  aufgezeichnet wird ausschliesslich ein **gelungener** Versuch (§7, F62-41).  Zwei Schritte, die
-  sich nur in diesen Feldern unterscheiden, liefern bei Erfolg dasselbe Ergebnis; sie zu trennen
-  wuerde Wiederverwendung ohne Gegenwert kosten.  Gegenprobe: `timeout` ist deshalb kein
-  Schluesselmaterial, weil ein Ablauf den Schritt **scheitern** laesst (F62-40) und ein
-  gescheiterter Schritt nichts aufzeichnet — nicht, weil die Zeit unwichtig waere.
-- **F62-92** `fail_lane` und `fail_pipeline` verhindern die Aufzeichnung; ein blosses `set_status`
-  verhindert sie **nicht**.  Grund: welche Farben "Fehlschlag" bedeuten, ist offen (§16 Punkt 6) —
-  die Aufzeichnung an eine offene Bedeutung zu binden, hiesse eine Entscheidung zu treffen, die
-  hier ausdruecklich nicht getroffen ist.  Wer einen Lauf nicht aufgezeichnet haben will, sagt es
-  mit `fail_lane`, und das heisst es unabhaengig von jeder Farbdeutung.
-#### 13.5g `per:` und `needs:` — Reihenfolge, Fehlerreichweite, Ergebnisse
+- **F62-90** The three functions from §5.7 (`set_status`, `fail_lane`, `fail_pipeline`) are generated in the
+  **declared** form (F62-45), whereas in the **composed** form they are built-in
+  functions in the namespace `step`: `step.set_status`, `step.fail_lane`, `step.fail_pipeline`.  They
+  write to a runtime-side slot for the *currently running step* — thread-local,
+  because lanes may run in threads (§6).
+  The namespace is not a cosmetic flaw but forced, and that was noticed during implementation:
+  in this form a step body is an **ordinary function** that
+  `sys.bundle` merely collects *in addition* — so it is also compiled
+  in the ordinary context.  A name that exists "only in the step body" fails exactly there with
+  `Unknown function`.  Hence a name that resolves everywhere, but whose **effect** is bound to a
+  running step: without a running step the call is an error and not a
+  silent no-op.  That the declared form can keep the bare names (F62-45) remains
+  correct — there the compiler generates the body including the preamble and knows that it is a body.
+- **F62-94** The third value of `on_fail` is called `OnFail.proceed` in the composed form,
+  not `OnFail.continue`: `continue` is a keyword in aiml (loops), and an
+  enum member cannot have that name.  In the **declared** form it stays the attribute value
+  `continue` from §5.6 — there it is text in a mapping and collides with nothing.  The same
+  concept, two spellings, because one place is grammar and the other is not.
+- **F62-91** *(F62-64 obligation: key material?)*  `on_fail`, `timeout` and `retry` are
+  **not** key material — all three describe what happens on a **failure**, and
+  only a **successful** attempt is ever recorded (§7, F62-41).  Two steps that
+  differ only in these fields deliver the same result on success; separating them
+  would cost reuse with nothing in return.  Cross-check: `timeout` is not key material
+  because an expiry makes the step **fail** (F62-40) and a
+  failed step records nothing — not because the time would be unimportant.
+- **F62-92** `fail_lane` and `fail_pipeline` prevent recording; a bare `set_status`
+  does **not** prevent it.  Reason: which colours mean "failure" is open (§16 item 6) —
+  binding recording to an open meaning would mean making a decision that is
+  explicitly not made here.  Whoever does not want a run recorded says so
+  with `fail_lane`, and that means it independently of any colour interpretation.
+#### 13.5g `per:` and `needs:` — order, failure reach, results
 
 ```yaml
-- call: [clone.set_per, Per.once]            # §5.5: einmal fuer die ganze Matrix
-- call: [build.add_need, "clone"]            # §5.1/F62-9: nur fruehere Schritte
+- call: [clone.set_per, Per.once]            # §5.5: once for the whole matrix
+- call: [build.add_need, "clone"]            # §5.1/F62-9: only earlier steps
 ```
 
-Die Trennung ist nicht Bequemlichkeit, sondern eine **gemessene Grenze**: `aiml_exec_code` gibt
-einen **Status** zurueck, nicht den Wert des Rumpfs (`tests/test_bundle_exec_semantics.aiml`:
-`return 7` im Bundle ergibt `rc=0`).  In der zusammengesetzten Form ist der Rueckgabewert eines
-Schritts damit **nicht abholbar**, und F62-33 (die Werte der `needs` als weitere Argumente) ist
-nicht etwa unfertig, sondern durch die heutige ABI ausgeschlossen.
+The separation is not convenience but a **measured limit**: `aiml_exec_code` returns
+a **status**, not the value of the body (`tests/test_bundle_exec_semantics.aiml`:
+`return 7` in the bundle yields `rc=0`).  In the composed form the return value of a
+step is therefore **not retrievable**, and F62-33 (the values of the `needs` as further arguments) is
+not unfinished but ruled out by today's ABI.
 
-- **F62-113** In der zusammengesetzten Form bedeutet `needs` **Reihenfolge, Fehlerreichweite und
-  Ergebniszugriff** (§13.5h) — aber nicht Argumentuebergabe: der Rueckgabewert eines Rumpfs
-  erreicht den Nachfolger nicht als Argument, sondern ueber den Ergebniskanal, und wer ihn als
-  Argument erwartet, bekommt nichts.  Daneben bleibt der **Arbeitsbereich** (§4.3) der Weg fuer
-  alles, was keine Zeichenkette ist: Dateien.
-- **F62-114** *(F62-64-Pflicht: Schluesselmaterial?)*  `needs` **ist** Schluesselmaterial, und
-  zwar ueber `input_keys` (§8): der Schluessel eines Schritts enthaelt die Schluessel seiner
-  `needs`.  Damit wirkt eine Aenderung weiter oben transitiv nach unten — das ist, was eine Kette
-  von Schritten erst wie ein Stapel von Schichten verhalten laesst.  Gegenprobe: liesse man es
-  weg, traefe ein Nachfolger seinen alten Eintrag, obwohl sein Vorgaenger neu gelaufen ist, und
-  der Arbeitsbereich unter ihm waere ein anderer.
-- **F62-115** *(F62-64-Pflicht)*  `per` ist **kein** Schluesselmaterial, begrenzt aber, was im
-  Schluessel stehen DARF: ein `per: once`-Schritt hat **keine** Lane-Bindungen, weil es ein
-  Ergebnis fuer die ganze Matrix gibt.  Ein `per: once` mit deklarierten Achsen (`use_arg`) ist
-  darum ein **Fehler** und nicht etwa "nimmt die erste Lane" — letzteres waere ein Ergebnis, das
-  von der Reihenfolge der Lanes abhaengt.
-- **F62-116** Die Ausfuehrung wird an jedem `per: once`-Schritt zu einem **Riegel**: alle Lanes
-  erreichen ihn, er laeuft genau einmal, danach laufen die Lanes weiter.  Zwischen zwei Riegeln
-  bleibt es bei Lane-Parallelitaet (§6) — der Riegel ist die einzige Stelle, an der gewartet wird,
-  weil er die einzige Stelle ist, an der etwas Gemeinsames entsteht.
-#### 13.5h Der Ergebniskanal — Datenfluss ohne Aenderung der JIT-ABI
+- **F62-113** In the composed form `needs` means **order, failure reach and
+  result access** (§13.5h) — but not argument passing: the return value of a body
+  reaches the successor not as an argument but via the result channel, and whoever expects it as an
+  argument gets nothing.  Besides that, the **workspace** (§4.3) remains the way for
+  everything that is not a string: files.
+- **F62-114** *(F62-64 obligation: key material?)*  `needs` **is** key material, namely
+  via `input_keys` (§8): the key of a step contains the keys of its
+  `needs`.  A change further up therefore propagates transitively downwards — that is what makes a chain
+  of steps behave like a stack of layers in the first place.  Cross-check: if it were
+  left out, a successor would hit its old entry although its predecessor ran anew, and
+  the workspace beneath it would be a different one.
+- **F62-115** *(F62-64 obligation)*  `per` is **not** key material, but it limits what MAY be in the
+  key: a `per: once` step has **no** lane bindings, because there is one
+  result for the whole matrix.  A `per: once` with declared axes (`use_arg`) is
+  therefore an **error** and does not "take the first lane" — the latter would be a result that
+  depends on the order of the lanes.
+- **F62-116** At every `per: once` step the execution becomes a **barrier**: all lanes
+  reach it, it runs exactly once, after that the lanes continue.  Between two barriers
+  lane parallelism (§6) remains — the barrier is the only place where there is waiting,
+  because it is the only place where something shared comes into being.
+#### 13.5h The result channel — data flow without changing the JIT ABI
 
-F62-113 hielt fest, dass der Rueckgabewert eines Rumpfs nicht abholbar ist: der erzeugte
-Einsprungpunkt ruft die Startfunktion und verwirft ihr Ergebnis, und `aiml_exec_code` liefert
-einen **Status**.  Daraus folgt aber **nicht**, dass es keinen Datenfluss geben kann — nur, dass er
-nicht ueber den Rueckgabewert laufen muss.  Ein Rumpf laeuft im selben Prozess wie die Laufzeit;
-er kann sein Ergebnis **veroeffentlichen**, genauso wie er schon seinen Status setzt (F62-90).
+F62-113 recorded that the return value of a body is not retrievable: the generated
+entry point calls the start function and discards its result, and `aiml_exec_code` returns
+a **status**.  But it does **not** follow that there can be no data flow — only that it
+does not have to go through the return value.  A body runs in the same process as the runtime;
+it can **publish** its result, just as it already sets its status (F62-90).
 
 ```yaml
           body:
-            - call: [step.set_result, head_commit]      # veroeffentlichen
+            - call: [step.set_result, head_commit]      # publish
             - return: 0
-          # im Nachfolger, der `clone` in needs hat:
+          # in the successor that has `clone` in needs:
             - decl: [commit, string, { call: [step.need_result, "clone"] }]
 ```
 
-- **F62-118** Ergebnisse sind **Zeichenketten** — die serialisierte Form (F62-34).  `step.set_result`
-  nimmt auch eine Zahl und schreibt sie dezimal; gelesen wird immer eine Zeichenkette.  Grund: der
-  Wert muss neben dem Schluessel **aufgezeichnet** werden koennen, und was aufgezeichnet wird, ist
-  serialisiert.  Ein Modell geht ueber `sys.serialize`/`sys.deserialize` (`spec/29`) durch denselben
-  Kanal; dass das heute der Autor schreibt und nicht der Compiler, ist der Rest der Luecke.
-- **F62-119** `step.need_result(name)` ist ein **Fehler**, wenn `name` nicht in den `needs` des
-  rufenden Schritts steht — nicht eine leere Zeichenkette.  Dieselbe Begruendung wie bei F62-106:
-  ein Ergebnis, das auf den Rumpf wirkt, ohne ueber `needs` im Schluessel zu stehen (`input_keys`,
-  F62-114), waere ein **blinder Schluessel**.  Der Kanal ist damit nicht nur bequem, sondern genau
-  so weit geoeffnet, wie der Schluessel reicht.
-- **F62-120** Ein Treffer stellt das Ergebnis **wieder her**, ohne den Rumpf zu rufen (F62-37).
-  Der Cache haelt deshalb `(Status, Ergebnis)` und nicht nur den Status.  Ohne das waere ein
-  wiederverwendeter Schritt fuer seine eigenen Nachfolger unsichtbar — sie bekaemen nichts und
-  muessten neu laufen, was die Wiederverwendung dort wieder aufheben wuerde, wo sie am meisten
-  wert ist.
-- **F62-121** In der **deklarierten** Form veroeffentlicht der Compiler: aus
-  `return: <typ>` wird ein Huelle-Rumpf, der den geschriebenen Rumpf ruft und sein Ergebnis in den
-  Kanal legt.  Der Autor schreibt also weiterhin `- return: rep` (§5.3) und muss von `set_result`
-  nichts wissen; F62-33 ist damit in der deklarierten Form **erfuellt**, soweit der Typ eine
-  Zeichenkette oder eine Zahl ist.  Umgekehrt erscheinen die Ergebnisse der `needs` als **lokale
-  Namen gleich dem Schrittnamen** (wie die Achsen, F62-109) — darum schreibt man `${clone}` und
-  meint, was `clone` veroeffentlicht hat.  Ein Name, der gleichzeitig Achse und `needs` ist, waere
-  im Rumpf zweimal belegt und ist ein **Fehler**, keine Vorrangregel.
+- **F62-118** Results are **strings** — the serialised form (F62-34).  `step.set_result`
+  also takes a number and writes it in decimal; what is read is always a string.  Reason: the
+  value must be **recordable** next to the key, and what is recorded is
+  serialised.  A model goes through the same channel via `sys.serialize`/`sys.deserialize` (`spec/29`);
+  that the author writes this today and not the compiler is what remains of the gap.
+- **F62-119** `step.need_result(name)` is an **error** if `name` is not in the `needs` of the
+  calling step — not an empty string.  The same reasoning as for F62-106:
+  a result that affects the body without being in the key via `needs` (`input_keys`,
+  F62-114) would be a **blind key**.  The channel is thus not only convenient but opened exactly
+  as far as the key reaches.
+- **F62-120** A hit **restores** the result without calling the body (F62-37).
+  The cache therefore holds `(status, result)` and not just the status.  Without that, a
+  reused step would be invisible to its own successors — they would get nothing and
+  would have to run anew, which would cancel the reuse exactly where it is worth
+  the most.
+- **F62-121** In the **declared** form the compiler publishes: from
+  `return: <type>` a wrapper body is made that calls the written body and puts its result into the
+  channel.  The author therefore still writes `- return: rep` (§5.3) and does not need to know anything
+  about `set_result`; F62-33 is thus **fulfilled** in the declared form, as far as the type is a
+  string or a number.  Conversely, the results of the `needs` appear as **local
+  names equal to the step name** (like the axes, F62-109) — that is why one writes `${clone}` and
+  means what `clone` published.  A name that is both an axis and a `needs` would be
+  bound twice in the body and is an **error**, not a precedence rule.
 
-- **F62-117** Scheitert ein `per: once`-Schritt mit `on_fail: lane`, werden genau die Schritte
-  **uebersprungen**, die ihn (transitiv) brauchen — sie starten nicht.  Schritte, die ihn nicht
-  brauchen, laufen weiter.  Die Reichweite folgt damit dem Graphen und nicht einer Vermutung
-  (F62-39).  Ein uebersprungener Schritt ist nicht gescheitert: er hat keinen Ausgang und wird
-  nicht aufgezeichnet.
+- **F62-117** If a `per: once` step fails with `on_fail: lane`, exactly the steps that
+  (transitively) need it are **skipped** — they do not start.  Steps that do not
+  need it continue to run.  The reach thus follows the graph and not a guess
+  (F62-39).  A skipped step has not failed: it has no outcome and is
+  not recorded.
 
-#### 13.5e Wie ein Rumpf seine Lane sieht
+#### 13.5e How a body sees its lane
 
-In der deklarierten Form bekommt ein Rumpf die deklarierten Achsen als **Argumente**, dazu
-`workspace` und `host_env` (§5.2).  In der zusammengesetzten Form ist der Rumpf ein Bundle, das
-ohne Argumente gerufen wird — `use_arg` erklaert bisher nur, was in den **Schluessel** geht.  Damit
-waere die Matrix wirkungslos: jede Lane fuehrte denselben Rumpf aus, ohne zu wissen, welche Lane
-sie ist.  Aufgefallen beim Implementieren von §10.
+In the declared form a body gets the declared axes as **arguments**, plus
+`workspace` and `host_env` (§5.2).  In the composed form the body is a bundle that is
+called without arguments — so far `use_arg` only declares what goes into the **key**.  That would
+make the matrix ineffective: every lane would execute the same body without knowing which lane
+it is.  Noticed while implementing §10.
 
-- **F62-105** Der Rumpf liest seine Lane über den Namensraum `step`:
+- **F62-105** The body reads its lane via the namespace `step`:
 
-  | Aufruf | Ergebnis |
+  | Call | Result |
   |---|---|
-  | `step.arg("arch")` | der Wert dieser Achse in dieser Lane |
-  | `step.workspace()` | absoluter Pfad des Arbeitsbereichs dieser (Lane, Stufe) (§4.3) |
-  | `step.host("PKG")` | der Wirtswert dieses Namens, sonst leer |
+  | `step.arg("arch")` | the value of this axis in this lane |
+  | `step.workspace()` | absolute path of the workspace of this (lane, stage) (§4.3) |
+  | `step.host("PKG")` | the host value of this name, otherwise empty |
 
-  Gelesen wird aus einem thread-lokalen Platz, den die Laufzeit vor dem Rumpf setzt — dieselbe
-  Bauweise wie `step.set_status` (F62-90) und aus demselben Grund: ein Bundle traegt keinen
-  Zustand des Aufrufers (F62-89).
-- **F62-106** `step.arg(name)` ist ein **Fehler**, wenn die Achse nicht mit `use_arg` deklariert
-  wurde — nicht ein leerer Wert.  Begruendung: eine Achse, die der Rumpf liest, aber nicht
-  deklariert, waere ein **blinder Schluessel**: der Wert wirkt auf das Ergebnis, steht aber nicht
-  im Schluessel, und zwei verschiedene Lanes teilten einen Eintrag.  Das ist genau das Loch, das
-  §1.1 beschreibt; ein leerer Wert wuerde es verstecken.  Das Gegenstueck zu F62-7, nur zur
-  Laufzeit statt im Quelltext, weil in dieser Form erst die Laufzeit die Deklaration kennt.
-- **F62-107** *(F62-64-Pflicht: Schluesselmaterial?)*  Der Arbeitsbereichs-Pfad ist **kein**
-  Schluesselmaterial, obwohl der Rumpf ihn liest.  Er enthaelt Lane und Stufe, die schon ueber die
-  Bindungen im Schluessel stehen (§8), und zusaetzlich das Wurzelverzeichnis — naehme man es
-  hinein, ergaebe dasselbe Projekt an einem anderen Ort andere Schluessel, und kein Treffer
-  ueberlebte einen Umzug.  Dass der Pfad im Ergebnis auftauchen KANN (etwa in einer Logzeile), ist
-  ein Grund fuer `opaque`, nicht fuer ein neues Schluesselfeld.
+  It is read from a thread-local slot that the runtime sets before the body — the same
+  construction as `step.set_status` (F62-90) and for the same reason: a bundle carries no
+  state of the caller (F62-89).
+- **F62-106** `step.arg(name)` is an **error** if the axis was not declared with `use_arg`
+  — not an empty value.  Reason: an axis that the body reads but does not
+  declare would be a **blind key**: the value affects the result but is not
+  in the key, and two different lanes would share an entry.  That is exactly the hole that
+  §1.1 describes; an empty value would hide it.  The counterpart of F62-7, only at
+  runtime instead of in the source text, because in this form only the runtime knows the declaration.
+- **F62-107** *(F62-64 obligation: key material?)*  The workspace path is **not**
+  key material, although the body reads it.  It contains lane and stage, which are already in the key via the
+  bindings (§8), plus the root directory — including that
+  would give the same project different keys at another location, and no hit
+  would survive a move.  That the path CAN appear in the result (for instance in a log line) is
+  a reason for `opaque`, not for a new key field.
 
-#### 13.5d Wie §10 die zusammengesetzte Form erreicht
+#### 13.5d How §10 reaches the composed form
 
-§10 prueft **statisch**, und `set_cache(CacheClass.pure)` steht in der zusammengesetzten Form erst
-zur **Laufzeit** fest.  Damit waere die Reinheitspruefung (§10.2) auf die deklarierte Form
-beschraenkt — also ausgerechnet dort weg, wo Pipelines aus einer Datenbank oder einem Generator
-entstehen.
+§10 checks **statically**, and in the composed form `set_cache(CacheClass.pure)` is only fixed
+at **runtime**.  That would restrict the purity check (§10.2) to the declared form
+— i.e. remove it precisely where pipelines come out of a database or a generator.
 
-- **F62-102** Die Reinheit wird beim **Buendeln** erklaert, nicht beim Setzen der Klasse:
-  `sys.bundle("do_build", { context: true, pure: true })`.  Das ist die Stelle, an der der
-  Compiler den Rumpf in der Hand hat, und es ist dieselbe Stelle, an der schon die
-  Vollstaendigkeit geprueft wird (`spec/29_2` §18).  `pure: true` loest genau die Pruefungen aus
-  §10.2 aus; ohne die Angabe prueft niemand etwas, und `set_cache(pure)` ist dann eine Behauptung
-  ohne Deckung.
-- **F62-103** Ein Schritt mit `cache: pure`, dessen Rumpf **nicht** mit `pure: true` gebuendelt
-  wurde, ist ein **Warnfall** zur Laufzeit, kein Fehler.  Begruendung: die Laufzeit kann die
-  Behauptung nicht nachpruefen (der Rumpf ist ein Bundle), und einen Lauf abzubrechen, weil eine
-  *Pruefung* fehlt, wuerde die Pipeline zum Geisel einer Angabe machen, die der Autor vielleicht
-  bewusst nicht gemacht hat.  Die Warnung sagt genau das: hier gilt `pure` unbewiesen.
-- **F62-104** `assert_pure` (F62-22) gehoert aus demselben Grund an dieselbe Stelle:
-  `sys.bundle("do_build", { context: true, pure: true, assert_pure: true })`.  Ohne
-  `assert_pure` ist ein `sys.exe` im Rumpf eines `pure: true`-Bundles ein **Fehler** — nicht,
-  weil `sys.exe` schlecht waere, sondern weil die Unterschrift fehlt, die ein Mensch leisten muss
-  (der Compiler kann nicht in ein Programm sehen).
+- **F62-102** Purity is declared at **bundling** time, not when the class is set:
+  `sys.bundle("do_build", { context: true, pure: true })`.  That is the place where the
+  compiler has the body in hand, and it is the same place where
+  completeness is already checked (`spec/29_2` §18).  `pure: true` triggers exactly the checks from
+  §10.2; without the flag nobody checks anything, and `set_cache(pure)` is then a claim
+  without backing.
+- **F62-103** A step with `cache: pure` whose body was **not** bundled with `pure: true`
+  is a **warning case** at runtime, not an error.  Reason: the runtime cannot verify the
+  claim (the body is a bundle), and aborting a run because a
+  *check* is missing would make the pipeline hostage to a flag that the author may have
+  deliberately left out.  The warning says exactly that: here `pure` holds unproven.
+- **F62-104** `assert_pure` (F62-22) belongs in the same place for the same reason:
+  `sys.bundle("do_build", { context: true, pure: true, assert_pure: true })`.  Without
+  `assert_pure`, a `sys.exe` in the body of a `pure: true` bundle is an **error** — not
+  because `sys.exe` would be bad, but because the signature is missing that a human has to provide
+  (the compiler cannot look into a program).
 
-#### 13.5c `parallel` in der zusammengesetzten Form
+#### 13.5c `parallel` in the composed form
 
 ```yaml
-- call: [pipe.set_parallel, 8]      # hoechstens 8 Lanes gleichzeitig; 0 = auto (ein Kern je Lane)
+- call: [pipe.set_parallel, 8]      # at most 8 lanes at once; 0 = auto (one core per lane)
 ```
 
-- **F62-98** `parallel` begrenzt gleichzeitige **Lanes** (F62-10) und ist **kein**
-  Schluesselmaterial (F62-64-Pflicht): es entscheidet, wie viele Lanes gleichzeitig laufen, nicht
-  was eine Lane erzeugt.  Zwei Laeufe derselben Pipeline mit `parallel: 1` und `parallel: 8`
-  muessen dieselben Schluessel ergeben — waere es anders, waere die Nebenlaeufigkeit selbst eine
-  Eingabe, und ein Treffer haenge davon ab, wie schnell die Maschine war.
-- **F62-99** Der Schritt-Rumpf ist in dieser Form ein Bundle, das zur Laufzeit **uebersetzt** wird
-  (§13).  Die Laufzeit serialisiert genau diesen Abschnitt — die Lanes laufen parallel, das
-  Uebersetzen eines Rumpfs nicht.  Das ist die Rueckfallvariante aus F62-14, angewandt auf den
-  Uebersetzer statt auf den Prozessstart.
+- **F62-98** `parallel` limits concurrent **lanes** (F62-10) and is **not**
+  key material (F62-64 obligation): it decides how many lanes run at the same time, not
+  what a lane produces.  Two runs of the same pipeline with `parallel: 1` and `parallel: 8`
+  must produce the same keys — otherwise concurrency itself would be an
+  input, and a hit would depend on how fast the machine was.
+- **F62-99** In this form the step body is a bundle that is **compiled** at runtime
+  (§13).  The runtime serialises exactly this section — the lanes run in parallel, the
+  compilation of a body does not.  That is the fallback variant from F62-14, applied to the
+  compiler instead of to process start.
 
-  **Gemessen (2026-10-12, `tests/test_concurrent_isolated_exec.aiml`):** 24 isolierte
-  Uebersetzungen, einmal aus **8 Threads** und einmal **einthreadig**, dieselbe Arbeit:
+  **Measured (2026-10-12, `tests/test_concurrent_isolated_exec.aiml`):** 24 isolated
+  compilations, once from **8 threads** and once **single-threaded**, the same work:
 
-  | Form | Dauer (3 Laeufe) |
+  | Form | Duration (3 runs) |
   |---|---|
-  | 8 Threads | 1040 / 1026 / 1032 ms |
-  | einthreadig | 958 / 967 / 964 ms |
+  | 8 threads | 1040 / 1026 / 1032 ms |
+  | single-threaded | 958 / 967 / 964 ms |
 
-  Gleichzeitigkeit bringt **nichts** — sie ist sogar leicht langsamer, und 240 Uebersetzungen ueber
-  10 Laeufe liefen fehlerfrei durch.  Der Durchsatz ist von der Threadzahl **unabhaengig**
-  (~40 ms je Uebersetzung), obwohl im isolierten Pfad kein eigenes Schloss liegt: irgendwo in
-  LLVM wird ohnehin serialisiert.
-  **Folge:** das Schloss bleibt.  Es kostet messbar nichts und nimmt eine ganze Fehlerklasse aus
-  dem Spiel — das ist ein besserer Handel als eine Nebenlaeufigkeit, die keinen Gewinn bringt.
-  Die Frage ist damit **beantwortet**, nicht offen: wer sie neu stellt, muss zuerst zeigen, dass
-  der Durchsatz ueberhaupt an der Threadzahl haengt.
+  Concurrency brings **nothing** — it is even slightly slower, and 240 compilations over
+  10 runs went through without errors.  Throughput is **independent** of the thread count
+  (~40 ms per compilation), although there is no lock of its own in the isolated path: somewhere in
+  LLVM there is serialisation anyway.
+  **Consequence:** the lock stays.  It costs measurably nothing and takes an entire class of errors
+  out of play — that is a better deal than a concurrency that brings no gain.
+  The question is therefore **answered**, not open: whoever raises it again must first show that
+  throughput depends on the thread count at all.
 
-  **⚠️ Nachtrag 17.10.2026 — die Messung oben ist nicht mehr vollstaendig.** Derselbe Test
-  (`tests/test_concurrent_isolated_exec.aiml`) ist im vollen Korpuslauf vom 16.10.2026
-  **mit SIGSEGV abgestuerzt** (`--clean`-Vollbau, einziger Fehlschlag ausserhalb der zwei
-  spec-vor-Code-Labore).  Danach lief er im naechsten vollen Lauf und in **sechs** aufeinander
-  folgenden Einzellaeufen fehlerfrei.  Der Fehler ist also **sporadisch und lastabhaengig** — die
-  10 Laeufe von 2026-10-12 haben ihn nicht getroffen, was bei dieser Trefferrate erwartbar ist.
+  **⚠️ Addendum 2026-10-17 — the measurement above is no longer complete.** The same test
+  (`tests/test_concurrent_isolated_exec.aiml`) **crashed with SIGSEGV** in the full corpus run of 2026-10-16
+  (`--clean` full build, the only failure outside the two
+  spec-before-code labs).  After that it ran without errors in the next full run and in **six**
+  consecutive individual runs.  The bug is therefore **sporadic and load-dependent** — the
+  10 runs of 2026-10-12 did not hit it, which is to be expected at this hit rate.
 
-  Das aendert die **Folge** nicht, es verstaerkt sie: das Schloss bleibt, und zwar jetzt nicht nur
-  weil Nebenlaeufigkeit nichts bringt, sondern weil der isolierte Pfad unter Last nachweislich
-  nicht sicher ist.  Was sich aendert, ist der Satz „liefen fehlerfrei durch" — er gilt fuer jene
-  10 Laeufe, nicht als Aussage ueber den Pfad.  Wer die Frage neu stellt, muss ausserdem diesen
-  Absturz erklaeren.  Querverweis: `spec/65` F65-25 (ein Prozess je Nutzer) stuetzt sich darauf.
-- **F62-100** Der Beobachter (§13.2) wird **serialisiert** gerufen, auch wenn Lanes parallel
-  laufen.  Er ist benutzergeschriebener aiml-Code im Kontext des Aufrufers (F62-89); ihn aus acht
-  Threads gleichzeitig zu rufen hiesse, jeden Beobachter ohne Vorwarnung thread-sicher zu machen.
-  Die Reihenfolge der Aufrufe ist dann nicht die Quelltextreihenfolge — das ist bei parallelen
-  Lanes unvermeidlich und steht hier, damit niemand sich darauf verlaesst.
+  That does not change the **consequence**, it reinforces it: the lock stays, and now not only
+  because concurrency brings nothing, but because the isolated path is demonstrably
+  not safe under load.  What changes is the sentence "went through without errors" — it holds for those
+  10 runs, not as a statement about the path.  Whoever raises the question again must also explain this
+  crash.  Cross-reference: `spec/65` F65-25 (one process per user) relies on this.
+- **F62-100** The observer (§13.2) is called **serialised**, even when lanes run in
+  parallel.  It is user-written aiml code in the caller's context (F62-89); calling it from eight
+  threads at once would mean making every observer thread-safe without warning.
+  The order of the calls is then not the source order — that is unavoidable with parallel
+  lanes and is stated here so that nobody relies on it.
 
-#### 13.5b Anhalten und Fortsetzen in der zusammengesetzten Form
+#### 13.5b Pausing and resuming in the composed form
 
 ```yaml
-- call: [dep.set_pause_before, 1]            # §5.9, deklariertes Tor (F62-54)
-- call: [pipe.request_pause]                 # von aussen, wirkt NACH dem Schritt (F62-55)
-- call: [pipe.release, "deploy"]             # ein deklariertes Tor freigeben
-- call: [pipe.resume]                        # weiter; der Rest kommt aus dem Cache (F62-56)
+- call: [dep.set_pause_before, 1]            # §5.9, declared gate (F62-54)
+- call: [pipe.request_pause]                 # from outside, takes effect AFTER the step (F62-55)
+- call: [pipe.release, "deploy"]             # release a declared gate
+- call: [pipe.resume]                        # continue; the rest comes from the cache (F62-56)
 - decl: [lc, i32, { call: [pipe.lifecycle] }]  # Lifecycle.pending|running|paused|done
 ```
 
-- **F62-95** `pipeline.run()` liefert `-6`, wenn der Lauf **angehalten** wurde.  Nicht `0`: ein
-  angehaltener Lauf ist nicht fertig, und `0` hiesse "durch".  Nicht die Farbe eines Schritts:
-  `paused` ist Lebenszyklus, kein Ausgang (F62-44 ergaenzt).  Nach einem `resume` ist ein weiterer
-  `run()` buchstaeblich dasselbe wie ein zweiter Lauf derselben Pipeline — die bereits
-  aufgezeichneten Schritte treffen, der angehaltene laeuft.  Damit ist F62-56 nicht
-  implementiert, sondern **nicht noetig**: Fortsetzen braucht keinen eigenen Zustand.
-- **F62-96** *(F62-64-Pflicht: Schluesselmaterial?)*  `pause_before` ist **kein**
-  Schluesselmaterial.  Es entscheidet, **wann** ein Schritt laeuft, nicht **was** er erzeugt —
-  derselbe Schritt mit und ohne Tor liefert dasselbe Ergebnis, und ein Tor in den Schluessel zu
-  nehmen hiesse, jede Freigabe als neues Ergebnis zu zaehlen.  Gegenprobe: wuerde ein Tor den
-  Inhalt beeinflussen (etwa weil jemand im Wartezustand den Arbeitsbereich veraendert), waere
-  nicht das Tor das Schluesselmaterial, sondern die Veraenderung — und die faellt unter §7
-  (`opaque`), nicht unter dieses Feld.
-- **F62-97** Von aussen angehalten wird in dieser Form aus dem **Beobachter** (§13.2): er laeuft
-  je (Schritt, Lane) im Kontext des Aufrufers (F62-89), also genau dort, wo eine Bedienoberflaeche
-  oder ein Dienst sitzt.  `request_pause` aus einem Schritt-Rumpf wirkt ebenfalls, denn der Platz
-  liegt an der Pipeline und nicht im isolierten Kontext.
+- **F62-95** `pipeline.run()` returns `-6` if the run was **paused**.  Not `0`: a
+  paused run is not finished, and `0` would mean "through".  Not the colour of a step:
+  `paused` is lifecycle, not an outcome (F62-44 extended).  After a `resume`, a further
+  `run()` is literally the same as a second run of the same pipeline — the already
+  recorded steps hit, the paused one runs.  F62-56 is therefore not
+  implemented but **not needed**: resuming needs no state of its own.
+- **F62-96** *(F62-64 obligation: key material?)*  `pause_before` is **not**
+  key material.  It decides **when** a step runs, not **what** it produces —
+  the same step with and without a gate delivers the same result, and putting a gate into the key
+  would mean counting every release as a new result.  Cross-check: if a gate influenced the
+  content (for instance because someone changes the workspace while waiting),
+  it would not be the gate that is key material but the change — and that falls under §7
+  (`opaque`), not under this field.
+- **F62-97** In this form, pausing from outside happens from the **observer** (§13.2): it runs
+  per (step, lane) in the caller's context (F62-89), i.e. exactly where a user interface
+  or a service sits.  `request_pause` from a step body works as well, because the slot
+  is on the pipeline and not in the isolated context.
 
-- **F62-93** Die Praezedenzordnung aus F62-43 steht in der Implementierung an **einer** Stelle als
-  Tabelle (`kStatusPrecedence`, `pipeline_runtime.cpp`) und ist ausdruecklich **vorlaeufig**, bis
-  §16 Punkt 6 entschieden ist.  Tests pruefen deshalb nur, was schon entschieden ist: dass die
-  Ordnung **total** ist, dass aggregiert statt gemischt wird (F62-43), und dass die Farbe eines
-  Schritts die Lane erreicht — keine einzelne Farbbedeutung.
+- **F62-93** The precedence order from F62-43 is in **one** place in the implementation, as a
+  table (`kStatusPrecedence`, `pipeline_runtime.cpp`), and is explicitly **provisional** until
+  §16 item 6 is decided.  Tests therefore only check what is already decided: that the
+  order is **total**, that it aggregates instead of mixing (F62-43), and that the colour of a
+  step reaches the lane — no individual colour meaning.
 
-Methoden statt Feldzuweisung, und das ist keine Geschmacksfrage: eingebaute Typen sind in aiml
-**opake Handles** (`Code`, `process`, `path`).  `set: [bld.name, …]` setzte einen Struct-Member
-voraus — und ein Struct kann die variable Struktur (Schrittliste, Achsenliste) nicht tragen.  Der
-Wert ist ein Griff auf etwas, das wächst.
+Methods instead of field assignment, and that is not a matter of taste: built-in types in aiml are
+**opaque handles** (`Code`, `process`, `path`).  `set: [bld.name, …]` would presuppose a struct member
+— and a struct cannot carry the variable structure (step list, axis list).  The
+value is a handle on something that grows.
 
-- **F62-85** `step.body` ist ein **`Code`**, kein String und kein Funktionszeiger.  Ein String
-  wäre ungeprüfter Text; ein Funktionszeiger hätte keine Inhaltsadresse.  `Code` ist beides:
-  übersetzt und gehasht.
-- **F62-86** `use_arg(name)` entspricht `args:` der deklarierten Form (§5.2) — es sagt, welche
-  Achsen dieser Schritt benutzt, und **nur diese** gehen in seinen Schlüssel.  Ohne Angabe erbt er
-  die Achsen seiner Stufe; das ist die bequeme und die teurere Variante, genau wie dort.
-- **F62-87** `add_step` und `add_stage` **kopieren** den übergebenen Wert hinein.  Ein danach
-  geänderter `step` wirkt nicht mehr auf die Stufe, in der er schon steckt — sonst könnte eine
-  Pipeline ihre Form ändern, nachdem ihre Schlüssel gebildet wurden.  Wer zwei ähnliche Schritte
-  will, baut zwei und fügt beide ein.
-- **F62-88** `pipeline.run()` ist in beiden Formen dasselbe: dieselbe Lane-Expansion, dieselbe
-  Schlüsselbildung, dieselben Beobachter.  Der deklarierte Weg baut dieselbe Struktur zur
-  Übersetzungszeit auf, statt sie zur Laufzeit entgegenzunehmen.
+- **F62-85** `step.body` is a **`Code`**, not a string and not a function pointer.  A string
+  would be unchecked text; a function pointer would have no content address.  `Code` is both:
+  compiled and hashed.
+- **F62-86** `use_arg(name)` corresponds to `args:` of the declared form (§5.2) — it says which
+  axes this step uses, and **only these** go into its key.  Without it, the step inherits
+  the axes of its stage; that is the convenient and the more expensive variant, just as there.
+- **F62-87** `add_step` and `add_stage` **copy** the passed value in.  A `step` changed
+  afterwards no longer affects the stage it is already in — otherwise a
+  pipeline could change its shape after its keys were formed.  Whoever wants two similar steps
+  builds two and adds both.
+- **F62-88** `pipeline.run()` is the same in both forms: the same lane expansion, the same
+  key formation, the same observers.  The declared way builds the same structure at
+  compile time instead of receiving it at runtime.
 
-### 13.5f Die deklarierte Form ist Zucker auf der zusammengesetzten
+### 13.5f The declared form is sugar on top of the composed one
 
-Die deklarierte Form (§5) wird **vor** dem Uebersetzen in die zusammengesetzte Form umgeschrieben.
-Sie ist damit keine zweite Implementierung, sondern eine Schreibweise — und genau das verlangt
-F62-23 (der Compiler erzeugt den Ausfuehrer) ohne zwei Ausfuehrer zu bekommen, die auseinander
-driften (§16 Punkt 4).
+The declared form (§5) is rewritten into the composed form **before** compilation.
+It is therefore not a second implementation but a notation — and that is exactly what
+F62-23 demands (the compiler generates the executor) without getting two executors that drift
+apart (§16 item 4).
 
 ```yaml
 - pipeline:
@@ -1556,40 +1555,39 @@ driften (§16 Punkt 4).
             - step: { name: build, cache: pure, args: [arch], return: i32, body: [...] }
 ```
 
-wird zu drei gewoehnlichen Deklarationen: einer Funktion fuer den Rumpf, optional einer fuer die
-Sonde, und einer Funktion `demo()`, die `pipeline`/`stage`/`step` zusammensetzt und die Pipeline
-zurueckgibt.
+becomes three ordinary declarations: a function for the body, optionally one for the
+probe, and a function `demo()` that composes `pipeline`/`stage`/`step` and returns the pipeline.
 
-- **F62-108** Eine deklarierte Pipeline `name: demo` erzeugt eine Funktion `demo()` mit
-  Rueckgabetyp `pipeline`.  Der Name muss ein gueltiger aiml-Bezeichner sein.  Gebaut wird sie
-  also erst, wenn jemand sie ruft — die Deklaration selbst fuehrt nichts aus, und `demo().run()`
-  ist dasselbe wie eine handgeschriebene zusammengesetzte Pipeline.
-- **F62-109** Die deklarierten Achsen erscheinen im Rumpf als **lokale Variablen** gleichen
-  Namens, erzeugt aus `step.arg(...)` (§13.5e); dazu `workspace` und je ein Name aus `host:`.
-  Deshalb schreibt man `${arch}` im Rumpf und meint die Achse.
-- **F62-110** **F62-7 braucht damit keinen eigenen Pruefdurchlauf**: ein `${NAME}`, das keine
-  deklarierte Achse und kein `host:`-Name ist, ist im erzeugten Rumpf ein unbekannter Name und
-  damit ein **Uebersetzungsfehler** — der Fehler, den F62-7 verlangt, faellt aus der Umschreibung
-  heraus.  Das ist besser als eine zweite Pruefung, die mit der ersten uneins werden kann: wer
-  eine Achse vergisst, bekommt sie an der Stelle gemeldet, an der sie benutzt wird.
-  **Gemessen** (`tests/pipeline_declared_neg/undeclared_axis.aiml`): der Fehler kommt, die
-  *Meldung* ist aber unscharf — `Unknown Type: 'mode'` statt "unbekannter Name", weil die
-  Namensauflösung in dieser Lage in die Typauflösung fällt.  Das ist ein eigener Mangel
-  (verwechselt Name und Typ) und keine Eigenschaft von F62-7; er gehoert behoben, ohne dass die
-  Aussage hier davon abhaengt.
-- **F62-111** Was die Umschreibung **noch nicht** abdeckt und darum auch nicht vorgibt zu koennen:
-  `outputs:` (§16 Punkt 5), `runs_on` (§5.8) und `per`/`needs` **auf einer Stufe** (sie gelten nur
-  am Schritt).  Diese Felder werden beim Umschreiben **abgelehnt**, nicht ignoriert — ein
-  stillschweigend verworfenes `needs:` waere eine Pipeline, die in falscher Reihenfolge laeuft und
-  dabei gruen meldet.  `per:` und `needs:` am **Schritt** werden getragen (§13.5g), der
-  **Datenfluss** der `needs`-Werte (F62-33) dagegen nicht — siehe F62-113.
+- **F62-108** A declared pipeline `name: demo` produces a function `demo()` with
+  return type `pipeline`.  The name must be a valid aiml identifier.  It is therefore only
+  built when someone calls it — the declaration itself executes nothing, and `demo().run()`
+  is the same as a hand-written composed pipeline.
+- **F62-109** The declared axes appear in the body as **local variables** of the same
+  name, generated from `step.arg(...)` (§13.5e); plus `workspace` and one name each from `host:`.
+  That is why one writes `${arch}` in the body and means the axis.
+- **F62-110** **F62-7 therefore needs no check pass of its own**: a `${NAME}` that is neither a
+  declared axis nor a `host:` name is an unknown name in the generated body and
+  therefore a **compile error** — the error that F62-7 demands falls out of the rewrite.
+  That is better than a second check that can disagree with the first: whoever
+  forgets an axis gets it reported at the place where it is used.
+  **Measured** (`tests/pipeline_declared_neg/undeclared_axis.aiml`): the error comes, but the
+  *message* is imprecise — `Unknown Type: 'mode'` instead of "unknown name", because
+  name resolution falls into type resolution in this situation.  That is a separate defect
+  (it confuses name and type) and not a property of F62-7; it should be fixed without the
+  statement here depending on it.
+- **F62-111** What the rewrite does **not yet** cover and therefore does not pretend to handle:
+  `outputs:` (§16 item 5), `runs_on` (§5.8) and `per`/`needs` **on a stage** (they apply only
+  on the step).  These fields are **rejected** during rewriting, not ignored — a
+  silently discarded `needs:` would be a pipeline that runs in the wrong order and
+  reports green while doing so.  `per:` and `needs:` on the **step** are carried (§13.5g); the
+  **data flow** of the `needs` values (F62-33), on the other hand, is not — see F62-113.
 
-### 13.6 Pipelines als Quelltext erzeugen — der dritte Weg
+### 13.6 Generating pipelines as source text — the third way
 
-Neben der deklarierten (§13.3) und der zusammengesetzten Form (§13.5) gibt es einen dritten Weg:
-**Quelltext erzeugen** und regulär übersetzen.  Er lohnt sich, wo die Struktur aus Daten entsteht
-und man die Prüfungen trotzdem zur **Bauzeit** haben will — der zusammengesetzte Weg verschiebt sie
-auf den Laufbeginn (§13.3), dieser hier nicht.
+Besides the declared (§13.3) and the composed form (§13.5) there is a third way:
+**generate source text** and compile it normally.  It pays off where the structure comes from data
+and one still wants the checks at **build time** — the composed way moves them
+to the start of the run (§13.3), this one does not.
 
 ```yaml
 - def:
@@ -1617,26 +1615,26 @@ auf den Laufbeginn (§13.3), dieser hier nicht.
       - return: { call: [sys.exec, job] }
 ```
 
-Warum dieser Umweg besser ist als ein zusammensetzbarer Typ:
+Why this detour is better than a composable type:
 
-- **Die Prüfungen laufen.**  Der erzeugte Text geht durch denselben Compiler wie ein geschriebener:
-  `resolved` ohne `resolve:` ist ein Fehler, ein unbekanntes Attribut ist ein Fehler (F62-65), ein
-  Tippfehler in einem Parameternamen ist ein Fehler.  Ein Generator, der Unsinn erzeugt, erfährt
-  es — und zwar bevor etwas läuft.
-- **Der Schlüssel stimmt.**  Gehasht wird der **erzeugte** Text (§8).  Zwei Läufe, deren Generator
-  dasselbe erzeugt, treffen denselben Cache-Eintrag; ändert sich eine Zeile, trifft nur der
-  betroffene Schritt nicht mehr.  Ein zur Laufzeit zusammengesetztes Objekt hätte keinen
-  Quelltext und damit keinen stabilen Schlüssel.
-- **Die Matrix funktioniert.**  Der Generator darf `params:` schreiben; aufgeklappt wird sie beim
-  Übersetzen des erzeugten Textes, nicht vom Generator.  Wer die Lanes selbst ausschreiben müsste,
-  hätte den Vorteil verloren.
+- **The checks run.**  The generated text goes through the same compiler as a written one:
+  `resolved` without `resolve:` is an error, an unknown attribute is an error (F62-65), a
+  typo in a parameter name is an error.  A generator that produces nonsense finds out
+  — and before anything runs.
+- **The key is right.**  What is hashed is the **generated** text (§8).  Two runs whose generator
+  produces the same hit the same cache entry; if one line changes, only the
+  affected step no longer hits.  An object composed at runtime would have no
+  source text and therefore no stable key.
+- **The matrix works.**  The generator may write `params:`; it is expanded when the
+  generated text is compiled, not by the generator.  Whoever had to write out the lanes themselves
+  would have lost the advantage.
 
-- **F62-82** Erzeugter Pipeline-Quelltext ist gewöhnlicher Quelltext.  Es gibt keinen zweiten,
-  laxeren Pfad für ihn — dieselben Prüfungen, dieselbe Schlüsselbildung, dieselben Fehler.
-- **F62-83** Der Generator soll den erzeugten Text **ablegen können**, bevor er ihn ausführt
-  (`io.write`), denn ein Fehler in erzeugtem Text ist ohne den Text nicht zu lesen.  Eine
-  Fehlermeldung mit `zeile:spalte` (spec/49 `--check`) zeigt auf eine Zeile, die sonst nirgends
-  steht.
+- **F62-82** Generated pipeline source text is ordinary source text.  There is no second,
+  laxer path for it — the same checks, the same key formation, the same errors.
+- **F62-83** The generator should be **able to store** the generated text before executing it
+  (`io.write`), because an error in generated text cannot be read without the text.  An
+  error message with `line:column` (spec/49 `--check`) points to a line that is not
+  written anywhere else.
 
 ## 14. Relation to the Host System
 
@@ -1695,46 +1693,46 @@ The language defines the form, the parameter space, the classification, the key 
    total precedence order, no additive mixing for aggregates (F62-43), and outcome kept separate
    from lifecycle (F62-44).
 
-## 17. `runtime:` — geteilter oder eigener Ausführungskontext
+## 17. `runtime:` — shared or separate execution context
 
-Eine Pipeline sagt, **worin** ihre Schritte laufen:
+A pipeline states **in what** its steps run:
 
 ```yaml
 - pipeline:
     name: build_matrix
-    runtime: shared | own          # Vorgabe: shared
+    runtime: shared | own          # default: shared
 ```
 
-| Wert | Bedeutung |
+| Value | Meaning |
 |---|---|
-| `shared` | der Kontext des Wirts.  Bibliotheken, die der Wirt geladen hat, sind sichtbar; nichts wird dafür erneut übersetzt |
-| `own` | ein eigener Kontext mit **eigenem Symbolraum**.  Die Pipeline bringt mit, was sie braucht, und sieht nichts vom Wirt |
+| `shared` | the host's context.  Libraries the host has loaded are visible; nothing is compiled again for this |
+| `own` | a separate context with its **own symbol space**.  The pipeline brings along what it needs and sees nothing of the host |
 
-- **F62-72** `runtime: own` ist nötig, sobald zwei Pipelines **verschiedene Versionen derselben
-  Bibliothek** brauchen.  Mit einem geteilten Symbolraum gibt es pro Name genau einen Eintrag —
-  eine Version gewinnt, die andere verschwindet, **ohne Fehlermeldung**.  Das ist dieselbe
-  Fehlerklasse wie ein zu grober Cache-Schlüssel (F62-64): es läuft, und es läuft falsch.
-- **F62-73** `runtime` ist **Schlüsselmaterial** (F62-64, Fall 2).  Derselbe Schritt in einem
-  anderen Kontext kann gegen andere Bibliotheksversionen laufen und etwas anderes erzeugen; ein
-  gemeinsamer Cache-Eintrag wäre ein falscher Treffer.
-- **F62-74** Welche Bibliotheken eine Pipeline braucht, steht bei ihr, nicht beim Wirt:
+- **F62-72** `runtime: own` is needed as soon as two pipelines need **different versions of the same
+  library**.  With a shared symbol space there is exactly one entry per name —
+  one version wins, the other disappears, **without an error message**.  That is the same
+  class of error as a too coarse cache key (F62-64): it runs, and it runs wrongly.
+- **F62-73** `runtime` is **key material** (F62-64, case 2).  The same step in a
+  different context can run against different library versions and produce something different; a
+  shared cache entry would be a false hit.
+- **F62-74** Which libraries a pipeline needs is stated on the pipeline, not on the host:
 
   ```yaml
     libraries:
       - { name: acme_build, version: "2.1" }
   ```
 
-  Bei `runtime: own` werden genau diese geladen.  Bei `runtime: shared` wird geprüft, ob der Wirt
-  sie in **dieser** Version hat — fehlt sie oder weicht die Version ab, ist das ein Fehler vor dem
-  ersten Schritt, kein stiller Fehltreffer mitten im Lauf.
-- **F62-75** Die Version gehört in den Schlüssel, nicht nur in die Anforderung.  Sonst trifft ein
-  Schritt, der gegen `2.0` gebaut wurde, für einen Lauf mit `2.1`.
+  With `runtime: own` exactly these are loaded.  With `runtime: shared` it is checked whether the host
+  has them in **this** version — if one is missing or the version differs, that is an error before the
+  first step, not a silent false hit in the middle of the run.
+- **F62-75** The version belongs in the key, not only in the requirement.  Otherwise a
+  step built against `2.0` hits for a run with `2.1`.
 
-**Was das von der Laufzeit verlangt** (aiml `spec/29_2` §16/§17): einen Symbolraum **je Kontext**.
-Der heutige Weg über `DynamicLibrary::AddSymbol` ist flach, prozessweit und laut LLVM-Header
-"permanent" — damit ist weder eine zweite Version noch ein Entladen möglich.  Nötig ist entweder
-ein eigener Symbol-Resolver je Engine (bleibt bei MCJIT) oder ORCs **JITDylibs**, die genau dafür
-gemacht sind.  Die Versionsfrage entscheidet diesen Punkt, nicht die Geschwindigkeit.
+**What this demands of the runtime** (aiml `spec/29_2` §16/§17): a symbol space **per context**.
+Today's way via `DynamicLibrary::AddSymbol` is flat, process-wide and, according to the LLVM header,
+"permanent" — that makes neither a second version nor unloading possible.  What is needed is either
+a separate symbol resolver per engine (staying with MCJIT) or ORC's **JITDylibs**, which are made
+for exactly this.  The version question decides this point, not speed.
 
 ## 18. Target picture — `image:` and `push:`
 
@@ -1783,164 +1781,164 @@ node's own filesystem exactly as it does today.
   one tag per lane.
 
 - **F62-122** `to:` names a target, and the target may carry a **scheme**.  Without one it is a
-  registry reference as above.  `oci:<pfad>` is an **OCI Image Layout on disk** — the same
+  registry reference as above.  `oci:<path>` is an **OCI Image Layout on disk** — the same
   directory shape a registry serves, only local: `oci-layout`, `index.json`, `blobs/sha256/…`.
-  Das ist kein zweites Format und kein Sonderweg, sondern derselbe Vertrag ohne Netz; cosmos
-  schreibt ihn heute schon (`cosmos/doc/spec/110` §110.25).  Es ist die Form, die eine
-  Bau-Pipeline braucht, bevor es ein Registry gibt — und die, mit der ein Lauf sein Ergebnis
-  dem **nächsten** Lauf als Basis hinlegt (`image:` liest dieselbe Adresse).
-- **F62-123** Serialisiert wird dort, wo der Baum liegt (cosmos F96-27), und das gilt auch lokal:
-  der Knoten schreibt das Layout, der Controller merkt sich nur die Adresse.  Liegt das Ziel auf
-  einem anderen Rechner als der Baum, reisen die Blobs über den inhaltsadressierten Weg aus
-  cosmos §96.2 — nicht über den Controller.
+  This is not a second format and not a special path, but the same contract without a network; cosmos
+  already writes it today (`cosmos/doc/spec/110` §110.25).  It is the form a
+  build pipeline needs before there is a registry — and the one with which a run lays down its result
+  for the **next** run as a base (`image:` reads the same address).
+- **F62-123** Serialisation happens where the tree is (cosmos F96-27), and that also holds locally:
+  the node writes the layout, the controller only remembers the address.  If the target is on
+  a different machine from the tree, the blobs travel via the content-addressed path from
+  cosmos §96.2 — not via the controller.
 
 What this needs beyond the form: a root filesystem to start from, a deterministic layer
 serialization, whiteouts for deletions and full file metadata.  All four are collected in cosmos
 `doc/spec/96` §96.12 with their findings; none of them touches the stage/step form.
 
-### 18.1 `image:` ohne Laufzeit — und der lokale Lauf
+### 18.1 `image:` without a runtime — and the local run
 
-Eine Pipeline mit `image:` verlangt ein **Wurzel-Dateisystem**.  Der lokale JIT-Lauf (§12) hat
-keines: er läuft auf dem Rechner, auf dem jemand `run_<name>` aufgerufen hat.  Das ist kein
-Mangel — es ist der schnelle Weg, und er soll bleiben.  Aber es ist auch nicht dasselbe.
+A pipeline with `image:` requires a **root filesystem**.  The local JIT run (§12) has
+none: it runs on the machine on which someone called `run_<name>`.  That is not a
+defect — it is the fast path, and it should stay.  But it is not the same either.
 
-- **F62-124** `image:` ohne Bereitsteller ist ein **Fehler**, kein Hinweis und kein stiller
-  Rückfall auf das Dateisystem des Entwicklers.  Begründung ist F62-65 in seiner schärfsten
-  Form: ein Lauf, der gegen `/usr` des Laptops baut und trotzdem „gegen ubuntu:24.04" heißt,
-  ist schlimmer als ein Lauf, der gar nicht startet.  Die Meldung nennt **drei** Dinge — das
-  verlangte Abbild, dass hier keine Laufzeit da ist, und den Weg dorthin (ein Lauf über einen
-  Wirt, der Container kann).
-- **F62-124a (Nachtrag 25.10.2026): abgelehnt wird beim LAUF, nicht beim Übersetzen.**  Die
-  Begründung von F62-124 ist ein **Lauf**, der behauptet, woanders gelaufen zu sein — nicht eine
-  Datei, die ein Abbild nennt.  Bis hierher lehnte die Umschreibung schon das Übersetzen ab; damit
-  konnte eine Pipeline, die für einen Cluster gedacht ist, `--check` **nie** bestehen, und ein
-  Kontroller musste sie selbst lesen (§20.1 — genau die Doppelung, die weg soll).  Also: `image:`,
-  `push:`, `agent:`, `steplayer:`, `base:` übersetzen und stehen als Daten in `pipeline`/`stage`
-  (§20.4); **`pipe.run` lokal** gibt **-4** und lehnt mit derselben Meldung ab, die F62-124 verlangt — drei Dinge,
-  samt Weg.  Die Zusage bleibt wörtlich erhalten, sie fällt nur an der Stelle, an der sie gilt.
-- **F62-125** Ohne `image:` läuft eine Pipeline **gegen den Rechner**, und das ist die Vorgabe.
-  Der lokale Lauf braucht dafür kein Container-Konzept (§12) und soll keines bekommen.
-- **F62-132** Geprüft wird auf **beiden Ebenen** — am Kopf der Pipeline und an jeder Stufe.
-  Ein `image:` am Kopf ist der häufigere Fall (es gilt für alle Stufen), und genau dort wäre
-  ein stilles Weglassen am teuersten: der Autor liest „ubuntu-base", der Lauf nimmt den Wirt,
-  und niemand sieht den Unterschied am Ergebnis.  Negativproben:
-  `tests/pipeline_declared_neg/image_rejected.aiml` (Kopf) und `push_rejected.aiml`.
+- **F62-124** `image:` without a provider is an **error**, not a hint and not a silent
+  fallback to the developer's filesystem.  The reason is F62-65 in its sharpest
+  form: a run that builds against the laptop's `/usr` and is still called "against ubuntu:24.04"
+  is worse than a run that does not start at all.  The message names **three** things — the
+  requested image, that there is no runtime here, and the way to get there (a run through a
+  host that can do containers).
+- **F62-124a (addendum 2026-10-25): rejection happens at RUN time, not at compile time.**  The
+  reasoning of F62-124 is about a **run** that claims to have run elsewhere — not about a
+  file that names an image.  Until now the rewrite already rejected compilation; that meant
+  a pipeline intended for a cluster could **never** pass `--check`, and a
+  controller had to read it itself (§20.1 — exactly the duplication that is supposed to go away).  So: `image:`,
+  `push:`, `agent:`, `steplayer:`, `base:` compile and are available as data in `pipeline`/`stage`
+  (§20.4); **`pipe.run` locally** returns **-4** and refuses with the same message F62-124 demands — three things,
+  including the way.  The promise is kept literally, it just applies at the place where it holds.
+- **F62-125** Without `image:` a pipeline runs **against the machine**, and that is the default.
+  The local run needs no container concept for this (§12) and should not get one.
+- **F62-132** The check happens on **both levels** — at the head of the pipeline and at every stage.
+  An `image:` at the head is the more common case (it applies to all stages), and exactly there
+  silently dropping it would be most expensive: the author reads "ubuntu-base", the run takes the host,
+  and nobody sees the difference in the result.  Negative probes:
+  `tests/pipeline_declared_neg/image_rejected.aiml` (head) and `push_rejected.aiml`.
 
-### 18.1a `resources:` — was die Stufe an Maschine braucht
+### 18.1a `resources:` — what machine the stage needs
 
 ```yaml
 - pipeline:
     name: aiml_bauen
     image: ubuntu-base
-    resources: { cpu: 4, mem: "8G", pids: 2048 }    # gilt fuer alle Stufen
+    resources: { cpu: 4, mem: "8G", pids: 2048 }    # applies to all stages
     steps:
       - stage:
           name: bauen
-          resources: { cpu: 8, mem: "12G" }          # ueberschreibt sie
+          resources: { cpu: 8, mem: "12G" }          # overrides it
 ```
 
-- **F62-133** `resources:` nennt **Grenzen**, keine Wünsche: `cpu` in ganzen Kernen, `mem` mit
-  Einheit (`512M`, `8G`), `pids` als Zahl.  Der Wirt setzt sie als cgroup-Grenzen des
-  Containers (cosmos `doc/spec/110` §110.34).  Ohne Angabe gilt, was der Wirt vorgibt — eine
-  Pipeline, die nichts sagt, bekommt die Vorgabe und nicht „unbegrenzt".
-- **F62-134** `resources:` ist **kein Schlüsselmaterial** (F62-64, Fall 3), und das ist eine
-  Aussage über *Ergebnisse*, nicht über Bequemlichkeit: mehr Kerne machen denselben Bau
-  schneller, nicht anders.  Eine zu knappe **Speichergrenze** kann einen Schritt allerdings
-  töten — aber dann **scheitert** er, und ein Fehlschlag wird nicht aufgezeichnet (F62-92).  Eine
-  Grenze kann also einen Erfolg in einen Fehlschlag verwandeln, nie in einen *anderen Erfolg*;
-  darum bleibt der Schlüssel sauber, und ein Cache-Treffer bleibt richtig.
-- **F62-135** Die Grenze gehört in die **Pipeline**, nicht in den Wirt, sobald eine Stufe etwas
-  Besonderes braucht.  `COSMOS_RT_LIMIT_MB` galt für jeden Container gleich — das heißt entweder
-  jede Stufe bekommt, was die teuerste braucht (und ein Knoten trägt nur eine), oder die teuerste
-  stirbt.  Beides ist falsch, und keines davon steht in der Pipeline, wo es jemand nachlesen
-  könnte.
+- **F62-133** `resources:` names **limits**, not wishes: `cpu` in whole cores, `mem` with a
+  unit (`512M`, `8G`), `pids` as a number.  The host sets them as cgroup limits of the
+  container (cosmos `doc/spec/110` §110.34).  Without them, whatever the host prescribes applies — a
+  pipeline that says nothing gets the default and not "unlimited".
+- **F62-134** `resources:` is **not key material** (F62-64, case 3), and that is a
+  statement about *results*, not about convenience: more cores make the same build
+  faster, not different.  A too tight **memory limit** can, however, kill a step
+  — but then it **fails**, and a failure is not recorded (F62-92).  A
+  limit can therefore turn a success into a failure, never into a *different success*;
+  that is why the key stays clean and a cache hit stays correct.
+- **F62-135** The limit belongs in the **pipeline**, not in the host, as soon as a stage needs something
+  special.  `COSMOS_RT_LIMIT_MB` applied equally to every container — that means either
+  every stage gets what the most expensive one needs (and a node carries only one), or the most expensive one
+  dies.  Both are wrong, and neither is written in the pipeline, where someone could
+  look it up.
 
-### 18.1b `shares:` — ein Netzlaufwerk im Container
+### 18.1b `shares:` — a network drive in the container
 
-Kerne und Speicher sind das eine; manche Stufe braucht aber **Platz, der den Lauf überlebt**:
-ein Netzlaufwerk mit Quellen, ein Ablage-Verzeichnis für Artefakte, ein Paket-Cache, der nicht
-bei jedem Lauf neu aus dem Netz gezogen wird.
+Cores and memory are one thing; but some stages need **space that outlives the run**:
+a network drive with sources, a storage directory for artefacts, a package cache that is not
+pulled from the network anew on every run.
 
 ```yaml
 - pipeline:
     name: aiml_bauen
     image: ubuntu-base
     shares:
-      - { name: quellen, to: /mnt/quellen }              # lesen (Vorgabe)
-      - { name: artefakte, to: /mnt/out, mode: rw }      # schreiben
+      - { name: quellen, to: /mnt/quellen }              # read (default)
+      - { name: artefakte, to: /mnt/out, mode: rw }      # write
     steps:
       - stage:
           name: bauen
           shares:
-            - { name: ccache, to: /root/.ccache, mode: rw }   # zusaetzlich, nur hier
+            - { name: ccache, to: /root/.ccache, mode: rw }   # additionally, only here
           run: "ls /mnt/quellen && make -j8"
 ```
 
-- **F62-136** `shares:` nennt einen **NAMEN**, nie einen Pfad.  Wo die Ablage liegt — eine
-  NFS-Einhängung, eine SMB-Freigabe, ein Verzeichnis auf der Platte — weiß der **Wirt**, genau
-  wie bei `image:` (F62-66/67; cosmos `doc/spec/110` §110.35).  Der Grund ist nicht Geschmack:
-  eine Pipeline ist Nutzereingabe.  Dürfte sie `/srv/...` oder `/` hinschreiben, könnte jede
-  eingereichte Pipeline jedes Verzeichnis des Wirts in ihren Container holen — und bei `mode: rw`
-  auch beschreiben.  Ein Name, den der Betreiber vorher zugeordnet hat, kann das nicht.
-- **F62-137** Die Vorgabe ist **`ro`**.  Schreiben muss dastehen.  Eine Freigabe, die ein Lauf
-  versehentlich beschreibt, beschädigt die Läufe aller anderen; das ist der teuerste Fehler in
-  dieser Ecke und darum der, der Absicht verlangt.
-- **F62-138** `shares:` der Pipeline und der Stufe **addieren** sich; gleicher `to:` an beiden
-  Stellen heißt, die Stufe gewinnt.  Dieselbe Regel wie bei `resources:` — eine Stufe darf etwas
-  Besonderes brauchen, ohne dass die Pipeline für alle umgeschrieben wird.
-- **F62-139** `shares:` **ist** Schlüsselmaterial (F62-64, Fall 1), aber nur mit `name` und `to`
-  — nicht mit dem Inhalt.  Was ein Schritt an `/mnt/quellen` sieht, kann sich zwischen zwei
-  Läufen ändern, ohne dass irgendjemand es merkt; der Schlüssel kann das nicht abbilden, und
-  eine Aufzeichnung, die so tut, wäre eine Lüge über die Reproduzierbarkeit.  Die ehrliche Folge
-  steht schon in §7: die Vorgabe ist `cache: opaque`.  Wer eine Stufe mit `shares:` trotzdem als
-  `pure` erklärt, behauptet, dass der Inhalt der Freigabe zum Schlüssel gehört — und muss dafür
-  selbst sorgen (etwa, indem die Freigabe unveränderlich ist).
+- **F62-136** `shares:` names a **NAME**, never a path.  Where the storage lives — an
+  NFS mount, an SMB share, a directory on disk — is known to the **host**, just
+  as with `image:` (F62-66/67; cosmos `doc/spec/110` §110.35).  The reason is not taste:
+  a pipeline is user input.  If it could write `/srv/...` or `/`, every
+  submitted pipeline could pull any directory of the host into its container — and with `mode: rw`
+  also write to it.  A name that the operator mapped beforehand cannot do that.
+- **F62-137** The default is **`ro`**.  Writing has to be stated.  A share that a run
+  accidentally writes to damages everyone else's runs; that is the most expensive error in
+  this corner and therefore the one that demands intent.
+- **F62-138** `shares:` of the pipeline and of the stage **add up**; the same `to:` in both
+  places means the stage wins.  The same rule as for `resources:` — a stage may need something
+  special without the pipeline being rewritten for everyone.
+- **F62-139** `shares:` **is** key material (F62-64, case 1), but only with `name` and `to`
+  — not with the content.  What a step sees at `/mnt/quellen` can change between two
+  runs without anyone noticing; the key cannot represent that, and
+  a record that pretends otherwise would be a lie about reproducibility.  The honest consequence
+  is already in §7: the default is `cache: opaque`.  Whoever still declares a stage with `shares:` as
+  `pure` claims that the content of the share belongs to the key — and must take care of that
+  themselves (for instance by making the share immutable).
 
-### 18.4 `base:` — auf den Schichten eines anderen Laufs aufsetzen
+### 18.4 `base:` — building on the layers of another run
 
-`image:` sagt, **worin** ein Lauf arbeitet.  `base:` sagt, **worauf** er aufsetzt:
+`image:` says **in what** a run works.  `base:` says **on what** it builds:
 
 ```yaml
 - pipeline:
     name: 9rooms_bauen
-    base: "job:aiml_bauen"               # der juengste ERFOLGREICHE Lauf dieses Jobs
-    # base: "run:aiml-vom-Base-Image-5"  # oder: genau dieser Lauf
+    base: "job:aiml_bauen"               # the most recent SUCCESSFUL run of this job
+    # base: "run:aiml-vom-Base-Image-5"  # or: exactly this run
     steps:
       - stage: { name: bauen, run: "exodus build -c exodus-game.json" }
 ```
 
-- **F62-140** `base:` nimmt den **Schichtstapel** eines früheren Laufs als Unterbau.  Gelesen
-  wird aus ihm, **geschrieben immer in die eigene Schicht** — der andere Lauf bleibt unberührt,
-  und zwei Läufe können denselben Unterbau gleichzeitig benutzen.  Die Form ist heute
-  `run:<lauf>`; ein Name, den der Betreiber zuordnet, kann folgen, ändert aber nichts an der
-  Bedeutung.
-- **F62-141** `base:` gilt für den **ganzen Lauf**, nicht für eine Stufe.  Ein Stapel ist der
-  Boden, auf dem alle stehen; eine Stufe, die auf einem anderen Boden stünde als ihre Vorgängerin,
-  wäre kein Lauf mehr, sondern zwei.
-- **F62-142** `base:` ist **kein Ersatz für `image:`**, sondern die andere Richtung.  Ein Abbild
-  ist der Weg nach **draußen**: es trägt alles in sich, lässt sich wegkopieren und anderswo
-  auslegen.  Ein Stapel ist der Weg **nebenan**: er kostet nichts, setzt aber voraus, dass beide
-  Läufe auf demselben Wirt und demselben Grundabbild stehen (cosmos `doc/spec/110` F110-114).
-  Wer das eine für das andere hält, baut ein Abbild, das nur zu Hause funktioniert.
-- **F62-144** `base:` kennt zwei Formen.  `run:<lauf>` nennt **genau diesen** Lauf;
-  `job:<kennung>` nimmt den **jüngsten erfolgreichen** Lauf dieses Jobs.  „Letzter Lauf"
-  ohne „erfolgreich" gibt es bewusst **nicht**: ein fehlgeschlagener Lauf hat eine halbe
-  Schicht hinterlassen, und darauf zu bauen hieße, auf einem Zustand zu bauen, den nie jemand
-  gesehen hat.  Wer genau das will (eine kaputte Stufe untersuchen), nennt den Lauf beim Namen
-  — dann steht die Absicht in der Pipeline und ist nicht die stille Vorgabe.
-- **F62-145** `job:…` wird **bei der Anlage des Laufs** aufgelöst, nicht bei jeder Zuteilung.
-  Danach steht `run:<lauf>` im Datensatz, und das Protokoll nennt beides
-  (`'job:aiml-vom-Base-Image' → run:aiml-vom-Base-Image-5`).  Ein Unterbau, der sich mitten im
-  Lauf ändert, wäre ein Lauf auf zwei verschiedenen Böden; und ein Lauf, dessen Grundlage man
-  hinterher nicht mehr benennen kann, ist nicht nachvollziehbar.
-- **F62-143** Was weitergegeben werden soll, gehört in die **Wurzel**, nicht in den
-  Arbeitsplatz.  `/ws` ist der Arbeitsplatz des Laufs und wandert nicht mit; ein editierbarer
-  Einbau dorthin (`pip install -e`) hinterlässt im Stapel einen Verweis ins Leere
-  (`doc/spec/110` F110-115).  Fest einbauen, dann liegt es in der Schicht.
+- **F62-140** `base:` takes the **layer stack** of an earlier run as the foundation.  It is
+  read from, **writes always go into the own layer** — the other run remains untouched,
+  and two runs can use the same foundation at the same time.  The form today is
+  `run:<run>`; a name that the operator maps can follow, but changes nothing about the
+  meaning.
+- **F62-141** `base:` applies to the **whole run**, not to a stage.  A stack is the
+  ground everyone stands on; a stage that stood on different ground from its predecessor
+  would no longer be one run but two.
+- **F62-142** `base:` is **not a replacement for `image:`** but the other direction.  An image
+  is the way **out**: it carries everything within itself, can be copied away and deployed
+  elsewhere.  A stack is the way **next door**: it costs nothing, but presupposes that both
+  runs stand on the same host and the same base image (cosmos `doc/spec/110` F110-114).
+  Whoever mistakes one for the other builds an image that only works at home.
+- **F62-144** `base:` has two forms.  `run:<run>` names **exactly this** run;
+  `job:<id>` takes the **most recent successful** run of this job.  "Last run"
+  without "successful" deliberately does **not** exist: a failed run has left behind half a
+  layer, and building on it would mean building on a state that nobody has ever
+  seen.  Whoever wants exactly that (to investigate a broken stage) names the run explicitly
+  — then the intent is written in the pipeline and is not the silent default.
+- **F62-145** `job:…` is resolved **when the run is created**, not on every dispatch.
+  After that `run:<run>` is in the record, and the log names both
+  (`'job:aiml-vom-Base-Image' → run:aiml-vom-Base-Image-5`).  A foundation that changes in the middle of the
+  run would be a run on two different grounds; and a run whose basis can no longer
+  be named afterwards is not traceable.
+- **F62-143** What is to be passed on belongs in the **root**, not in the
+  workspace.  `/ws` is the run's workspace and does not travel along; an editable
+  install there (`pip install -e`) leaves a dangling reference in the stack
+  (`doc/spec/110` F110-115).  Install it properly, then it is in the layer.
 
-### 18.5 `agent:` und `steplayer:` — wer nimmt den Schritt, und entsteht dabei eine Schicht?
+### 18.5 `agent:` and `steplayer:` — who takes the step, and does a layer come into being?
 
-Zwei Fragen, die vorher in einem Wort steckten (`runs_on:`) oder gar nicht gestellt wurden:
+Two questions that previously were packed into one word (`runs_on:`) or not asked at all:
 
 ```yaml
 - pipeline:
@@ -1950,34 +1948,34 @@ Zwei Fragen, die vorher in einem Wort steckten (`runs_on:`) oder gar nicht geste
       - stage: { name: sauber, steplayer: own, image: ubuntu-base, run: "./von_vorn.sh" }
 ```
 
-- **F62-146** `agent:` sagt, **WER** den Schritt nimmt — ein **Etikett** (jeder Agent mit dieser
-  Marke) oder eine **Agenten-Kennung** (genau dieser).  Der Name ist bewusst nicht `node:`: ein
-  Container-Agent ist kein Knoten, er wohnt auf einem.  Was ausführt, ist in beiden Fällen ein
-  Agent.  (Hieß bis 25.10.2026 `runs_on:`, davor `label:`; beide alten Namen werden abgewiesen
-  und nennen den neuen.)
-- **F62-147** `steplayer:` sagt, **OB** jede Stufe in ihre **eigene Schicht** schreibt: `own`
-  (eigene Wurzel aus einem Abbild, Schicht je Stufe, eigener Arbeitsbereich — cosmos
-  `doc/spec/110` F110-93) oder `none` (kein Schichtenbau; der Schritt arbeitet auf dem
-  Dateisystem des Agenten, eingesperrt mit bwrap).  Ohne Angabe entscheidet `image:`: steht eines
-  da, ist `own` gemeint, sonst `none`.  Die Angabe ist nie nötig und immer erlaubt — und
-  `steplayer: none` **zusammen mit** `image:` ist ein Widerspruch, den die Einreichung abweist,
-  statt eines von beiden gewinnen zu lassen.
-- **F62-148** `steplayer:` ist **Schlüsselmaterial** (F62-64, Fall 1).  Derselbe Befehl
-  auf dem Dateisystem eines Agenten und in einer frischen Wurzel sieht Verschiedenes — ein
-  gemeinsamer Cache-Eintrag wäre ein falscher Treffer.  Sie gehört damit in den Schritt-Schlüssel
-  wie `image:` selbst.
-- **F62-149** Der Zuteiler **wählt nicht**.  Er weicht nicht auf einen Knoten aus, weil kein
-  Container frei ist, und startet keinen Container, weil die Knoten beschäftigt sind.  Wer
-  Ausweichen will, schreibt zwei Stufen und sagt, welche wann gilt — dann steht die Absicht in
-  der Pipeline und nicht in der Laune des Servers (cosmos `doc/spec/110` F110-124).
+- **F62-146** `agent:` says **WHO** takes the step — a **label** (any agent with this
+  tag) or an **agent id** (exactly this one).  The name is deliberately not `node:`: a
+  container agent is not a node, it lives on one.  What executes is an
+  agent in both cases.  (Called `runs_on:` until 2026-10-25, before that `label:`; both old names are rejected
+  and name the new one.)
+- **F62-147** `steplayer:` says **WHETHER** every stage writes into its **own layer**: `own`
+  (own root from an image, a layer per stage, own workspace — cosmos
+  `doc/spec/110` F110-93) or `none` (no layer building; the step works on the
+  agent's filesystem, confined with bwrap).  Without it, `image:` decides: if there is one,
+  `own` is meant, otherwise `none`.  The setting is never necessary and always allowed — and
+  `steplayer: none` **together with** `image:` is a contradiction that the submission rejects,
+  instead of letting one of the two win.
+- **F62-148** `steplayer:` is **key material** (F62-64, case 1).  The same command
+  on an agent's filesystem and in a fresh root sees different things — a
+  shared cache entry would be a false hit.  It therefore belongs in the step key
+  like `image:` itself.
+- **F62-149** The dispatcher **does not choose**.  It does not fall back to a node because no
+  container is free, and it does not start a container because the nodes are busy.  Whoever
+  wants fallback writes two stages and says which applies when — then the intent is in
+  the pipeline and not in the server's mood (cosmos `doc/spec/110` F110-124).
 
-### 18.2 `requires:` — was die Umgebung mitbringen muss
+### 18.2 `requires:` — what the environment must bring along
 
-Dieselbe Pipeline läuft lokal und im Container.  Lokal entscheidet der Rechner, ob `git`, `gcc`
-oder `llvm-config-18` da sind; im Container entscheidet das Abbild.  In beiden Fällen gilt:
-**fehlt etwas, soll es in der ersten Sekunde auffallen und nicht in der fünften Minute** —
-mitten im Übersetzen, mit einer Meldung über eine fehlende Header-Datei, die niemanden auf das
-fehlende Paket bringt.
+The same pipeline runs locally and in a container.  Locally the machine decides whether `git`, `gcc`
+or `llvm-config-18` are present; in a container the image decides.  In both cases:
+**if something is missing, it should be noticed in the first second and not in the fifth minute**
+— in the middle of compiling, with a message about a missing header file that leads nobody to the
+missing package.
 
 ```yaml
 - pipeline:
@@ -1986,25 +1984,25 @@ fehlende Paket bringt.
     requires: [git, "gcc>=13", llvm-config-18, "lib:yaml-cpp"]
 ```
 
-- **F62-126** `requires:` ist eine Liste von **Namen**: ein ausführbares Programm (`git`), mit
-  optionaler Mindestversion (`gcc>=13`), oder eine Bibliothek über `lib:<pkg-config-Name>`.
-  Geprüft wird **vor dem ersten Schritt** der Stufe, **einmal**, und die Meldung nennt **alles**
-  Fehlende auf einmal — nicht das erste, über das man stolpert.  Eine Prüfung, die nach dem
-  ersten Fehler aufhört, erzeugt drei Läufe statt einem.
-- **F62-127** `requires:` ist **kein Schlüsselmaterial** (F62-64, Fall 3).  Dass ein Werkzeug
-  *da ist*, ändert kein Ergebnis — dass es eine *bestimmte Version* ist, sehr wohl, und genau
-  dafür gibt es `host:` (§10).  Die Trennung ist die Regel aus F62-49, nur eine Ebene tiefer:
-  Vorbedingung prüfen ≠ Eigenschaft in den Schlüssel nehmen.
-- **F62-128** `requires:` ersetzt `image:` **nicht** und erklärt es auch nicht weg.  Es ist die
-  Zusage, die eine Pipeline über ihre Umgebung macht; `image:` ist die Umgebung.  Eine Pipeline
-  darf beides nennen — dann prüft der Container gegen die eigene Zusage, und ein Abbild, das
-  seine eigene Pipeline nicht tragen kann, fällt beim Bauen des Abbilds auf, nicht beim Bauen
-  des Produkts.
+- **F62-126** `requires:` is a list of **names**: an executable program (`git`), with
+  an optional minimum version (`gcc>=13`), or a library via `lib:<pkg-config name>`.
+  It is checked **before the first step** of the stage, **once**, and the message names **everything**
+  that is missing at once — not the first thing one stumbles over.  A check that stops after the
+  first error produces three runs instead of one.
+- **F62-127** `requires:` is **not key material** (F62-64, case 3).  That a tool
+  *is present* changes no result — that it is a *specific version* very much does, and that is
+  exactly what `host:` is for (§10).  The separation is the rule from F62-49, only one level deeper:
+  checking a precondition ≠ putting a property into the key.
+- **F62-128** `requires:` does **not** replace `image:` and does not explain it away either.  It is the
+  promise a pipeline makes about its environment; `image:` is the environment.  A pipeline
+  may name both — then the container checks against its own promise, and an image that
+  cannot carry its own pipeline is noticed when the image is built, not when the
+  product is built.
 
-### 18.3 Kausalität: ein Abbild, das eine Stufe erst herstellt
+### 18.3 Causality: an image that a stage first produces
 
-`push:` schreibt ein Abbild, `image:` liest eines — und beides darf in **derselben** Pipeline
-stehen.  Genau dann entsteht eine Reihenfolge, die niemand hingeschrieben hat:
+`push:` writes an image, `image:` reads one — and both may appear in the **same** pipeline.
+Exactly then an order arises that nobody wrote down:
 
 ```yaml
     steps:
@@ -2012,97 +2010,97 @@ stehen.  Genau dann entsteht eine Reihenfolge, die niemand hingeschrieben hat:
       - stage: { name: bauen,  image: "oci:deploy/oci/builder", ... }
 ```
 
-- **F62-129** Nennt eine Stufe als `image:` ein Ziel, das eine **andere Stufe derselben
-  Pipeline** schreibt, ist das eine **Kante im Graphen** — dieselbe Wirkung wie ein `needs:`,
-  nur hergeleitet statt hingeschrieben.  Ohne diese Herleitung liefe die zweite Stufe gegen das
-  Abbild des **vorigen Laufs**: grün, falsch, und beim nächsten Mal wieder anders.  Der Wirt
-  leitet die Kante aus dem Vergleich der Adressen ab und meldet einen Zyklus als Fehler.
-- **F62-130** In den Schlüssel geht die **Digest des geschriebenen Layouts**, nicht sein Pfad
-  (F62-68 für Tags, hier für lokale Ziele).  Ein Pfad ist ein Name und bewegt sich; die Digest
-  ist der Inhalt.  Erst damit ist ein Lauf, der ein Abbild baut und darin weiterbaut,
-  reproduzierbar — und erst damit darf die zweite Stufe aus dem Cache kommen.
-- **F62-131** Ein `image:`, das auf ein Ziel zeigt, das **niemand** in dieser Pipeline schreibt
-  und das es auch nicht gibt, ist ein Fehler **vor** dem Start — nicht beim Zuteilen der Stufe.
-  Der Lauf, der zehn Minuten arbeitet und dann an der letzten Stufe scheitert, weil ihr Abbild
-  nie existierte, ist die teuerste Art, es zu merken.
+- **F62-129** If a stage names as `image:` a target that **another stage of the same
+  pipeline** writes, that is an **edge in the graph** — the same effect as a `needs:`,
+  only derived instead of written down.  Without this derivation the second stage would run against the
+  image of the **previous run**: green, wrong, and different again next time.  The host
+  derives the edge by comparing the addresses and reports a cycle as an error.
+- **F62-130** What goes into the key is the **digest of the written layout**, not its path
+  (F62-68 for tags, here for local targets).  A path is a name and moves; the digest
+  is the content.  Only with this is a run that builds an image and continues building in it
+  reproducible — and only with this may the second stage come from the cache.
+- **F62-131** An `image:` that points to a target that **nobody** in this pipeline writes
+  and that does not exist either is an error **before** the start — not when the stage is dispatched.
+  The run that works for ten minutes and then fails at the last stage because its image
+  never existed is the most expensive way to find out.
 
-## 19. Umsetzungsstand (2026-10-11)
+## 19. Implementation status (2026-10-11)
 
-Diese Spec beschreibt mehr, als heute laeuft.  Damit sie keine Zusagen macht, die der Code nicht
-haelt, steht hier, was **gemessen** funktioniert und was offen ist.  Jede Zeile nennt den Test,
-der sie haelt — eine Zeile ohne Test gilt als nicht umgesetzt, egal wie ueberzeugend der Code
-aussieht.
+This spec describes more than runs today.  So that it makes no promises the code does not
+keep, this section states what **measurably** works and what is open.  Every line names the test
+that holds it — a line without a test counts as not implemented, no matter how convincing the code
+looks.
 
-### Umgesetzt und getestet
+### Implemented and tested
 
-| Thema | Wo | Test |
+| Topic | Where | Test |
 |---|---|---|
-| Matrix, Lanes, `exclude` als Teilbindung (§4) | `pipeline_runtime.cpp` | `tests/test_pipeline_matrix.aiml` |
-| `pipeline`/`stage`/`step` als Werte (§13.5) | `builtin_registry.cpp` | `tests/test_pipeline_types.aiml` |
-| Beobachter je (Schritt, Lane) (§13.2) | `AimlStepObserver` | `tests/test_pipeline_observer.aiml` |
-| `args`-Teilmenge = gröberer Schluessel (§5.2) | `step_key` | `tests/test_pipeline_args_subset.aiml` |
-| Wiederverwendungsklassen + Sonde (§7, §9) | `step_key`, `set_resolve` | `tests/test_pipeline_resolve.aiml` |
-| `on_fail`, `timeout`, `retry`, Status (§5.6, §5.7) | `run_lane` | `tests/test_pipeline_failure.aiml` |
-| Anhalten/Fortsetzen (§5.9) | `request_pause`, `release` | `tests/test_pipeline_pause.aiml` |
-| Parallele Lanes (§6) | `run_lane` + Threads | `tests/test_pipeline_parallel.aiml` |
-| Gleichzeitiger Prozessstart (F62-14) | — (Messung) | `tests/test_concurrent_spawn_hazard.aiml` |
-| Lane-Sicht im Rumpf, Arbeitsbereich (§4.3, §13.5e) | `step.arg`/`step.workspace` | `tests/test_pipeline_lane_access.aiml` |
-| Reinheitspruefung (§10.2) | `purity.h` | `tests/pipeline_purity/run.sh` |
-| Deklarierte Form (§5) | `pipeline_expand.cpp` | `tests/test_pipeline_declared.aiml`, `tests/pipeline_declared_neg/run.sh` |
-| Rumpf ueber die Leitung (§5.8, Teil) | `sys.bundle`/`sys.exec` | `tests/bundle_socket/run.sh` |
-| `requires:` lokal geprüft (§18.2) | `pipeline_expand` + `sys.require_tools` | `tests/test_pipeline_requires.aiml` |
+| Matrix, lanes, `exclude` as partial binding (§4) | `pipeline_runtime.cpp` | `tests/test_pipeline_matrix.aiml` |
+| `pipeline`/`stage`/`step` as values (§13.5) | `builtin_registry.cpp` | `tests/test_pipeline_types.aiml` |
+| Observer per (step, lane) (§13.2) | `AimlStepObserver` | `tests/test_pipeline_observer.aiml` |
+| `args` subset = coarser key (§5.2) | `step_key` | `tests/test_pipeline_args_subset.aiml` |
+| Reuse classes + probe (§7, §9) | `step_key`, `set_resolve` | `tests/test_pipeline_resolve.aiml` |
+| `on_fail`, `timeout`, `retry`, status (§5.6, §5.7) | `run_lane` | `tests/test_pipeline_failure.aiml` |
+| Pause/resume (§5.9) | `request_pause`, `release` | `tests/test_pipeline_pause.aiml` |
+| Parallel lanes (§6) | `run_lane` + threads | `tests/test_pipeline_parallel.aiml` |
+| Concurrent process start (F62-14) | — (measurement) | `tests/test_concurrent_spawn_hazard.aiml` |
+| Lane view in the body, workspace (§4.3, §13.5e) | `step.arg`/`step.workspace` | `tests/test_pipeline_lane_access.aiml` |
+| Purity check (§10.2) | `purity.h` | `tests/pipeline_purity/run.sh` |
+| Declared form (§5) | `pipeline_expand.cpp` | `tests/test_pipeline_declared.aiml`, `tests/pipeline_declared_neg/run.sh` |
+| Body over the wire (§5.8, part) | `sys.bundle`/`sys.exec` | `tests/bundle_socket/run.sh` |
+| `requires:` checked locally (§18.2) | `pipeline_expand` + `sys.require_tools` | `tests/test_pipeline_requires.aiml` |
 | `sys.require_tools` (spec/23 §5.6) | `process_runtime.cpp` | `tests/test_sys_require_tools.aiml` |
-| `image:`/`push:` lokal abgelehnt, mit Weg (§18.1 F62-124/132) | **beim LAUF** (F62-124a), nicht beim Übersetzen | `tests/test_pipeline_local_refuses.aiml` |
-| `image:` als Zuteilungskriterium (§18, F62-66/67) | cosmos `step_scheduler`, `rt_launcher` | cosmos `test/test_step_dispatch.aiml` |
-| `push: oci:<pfad>` + hergeleitete Reihenfolge (F62-122/129) | cosmos `push_worker`, `cluster_bootstrap` | cosmos `test/test_step_dispatch.aiml` + `doc/spec/110` §110.30 (Messung) |
+| `image:`/`push:` rejected locally, with the way (§18.1 F62-124/132) | **at RUN time** (F62-124a), not at compile time | `tests/test_pipeline_local_refuses.aiml` |
+| `image:` as a dispatch criterion (§18, F62-66/67) | cosmos `step_scheduler`, `rt_launcher` | cosmos `test/test_step_dispatch.aiml` |
+| `push: oci:<path>` + derived order (F62-122/129) | cosmos `push_worker`, `cluster_bootstrap` | cosmos `test/test_step_dispatch.aiml` + `doc/spec/110` §110.30 (measurement) |
 
-### Offen, mit Grund
+### Open, with reasons
 
-- **Datenfluss fuer eigene TYPEN (Rest von F62-33/F62-34).**  Zeichenketten und Zahlen fliessen
-  (§13.5h, F62-121): der Ergebniskanal laeuft ueber die Laufzeit statt ueber den Rueckgabewert der
-  JIT-Funktion, weil letzterer nicht abholbar ist (gemessen,
-  `tests/test_bundle_exec_semantics.aiml`).  Ein **Modell** muss der Autor heute selbst mit
-  `sys.serialize`/`sys.deserialize` durch denselben Kanal schicken; dass der Compiler das nicht
-  uebernimmt, ist der verbleibende Teil.  `list<T>` ueber die Lanes (F62-8, fan-in) fehlt damit
-  ebenfalls noch.
-- **`runs_on` und echter Transport auf einen Knoten (§5.8).**  Das Bundle reist nachgewiesen
-  ueber eine Verbindung (`tests/bundle_socket`), aber die Pipeline selbst waehlt keinen Knoten
-  aus; `runs_on` wird abgelehnt.
-- **`outputs:` und der Ausgabebaum (§16 Punkt 5).**  Der Arbeitsbereich existiert, wird aber
-  nicht gehasht und nicht uebertragen — der Cache haelt heute nur den Exit-Code, nicht den Baum.
-  Das ist die groesste Luecke zwischen dieser Spec und cosmos `doc/spec/96`.
-- **Zeitgrenze erzwingen (F62-40).**  `timeout` wird **festgestellt**, nicht erzwungen: der Rumpf
-  laeuft aus, danach gilt der Schritt als gescheitert, und das Log sagt es ausdruecklich.  Kinder
-  zu toeten braucht den Griff auf die Kindprozesse des Rumpfs, den der isolierte Kontext heute
-  nicht herausgibt.
-- ~~Gleichzeitiges Uebersetzen (F62-99)~~ — **gemessen und entschieden** (F62-99): Threads
-  bringen beim isolierten Uebersetzen nichts (8 Threads ~1030 ms gegen einthreadig ~960 ms fuer
-  dieselben 24 Uebersetzungen), das Schloss bleibt.
-- **Container-URL und Push (§17), 3D-Darstellung.**  Zielbild, nichts davon umgesetzt.
-- **Die Bedeutung der sechs Farben (§16 Punkt 6).**  Bewusst offen; die Praezedenzordnung steht
-  als vorlaeufige Tabelle an einer Stelle (F62-93).
+- **Data flow for user-defined TYPES (rest of F62-33/F62-34).**  Strings and numbers flow
+  (§13.5h, F62-121): the result channel goes through the runtime instead of through the return value of the
+  JIT function, because the latter cannot be retrieved (measured,
+  `tests/test_bundle_exec_semantics.aiml`).  Today the author has to send a **model** through the same
+  channel themselves with `sys.serialize`/`sys.deserialize`; that the compiler does not take this
+  over is the remaining part.  `list<T>` across the lanes (F62-8, fan-in) is therefore also still
+  missing.
+- **`runs_on` and real transport to a node (§5.8).**  The bundle demonstrably travels
+  over a connection (`tests/bundle_socket`), but the pipeline itself selects no node;
+  `runs_on` is rejected.
+- **`outputs:` and the output tree (§16 item 5).**  The workspace exists but is
+  neither hashed nor transferred — today the cache holds only the exit code, not the tree.
+  That is the biggest gap between this spec and cosmos `doc/spec/96`.
+- **Enforcing the time limit (F62-40).**  `timeout` is **detected**, not enforced: the body
+  runs to completion, after which the step counts as failed, and the log says so explicitly.  Killing
+  children needs the handle on the body's child processes, which the isolated context does not
+  hand out today.
+- ~~Concurrent compilation (F62-99)~~ — **measured and decided** (F62-99): threads
+  bring nothing for isolated compilation (8 threads ~1030 ms versus single-threaded ~960 ms for
+  the same 24 compilations); the lock stays.
+- **Container URL and push (§17), 3D display.**  Target picture, none of it implemented.
+- **The meaning of the six colours (§16 item 6).**  Deliberately open; the precedence order exists
+  as a provisional table in one place (F62-93).
 
-## 20. Die übersetzte Pipeline LESEN — ein Kontroller ist ein Leser, kein Parser
+## 20. READING the compiled pipeline — a controller is a reader, not a parser
 
-**Vorgabe des Nutzers (25.10.2026):** *„Die Idee war, dass der Pipeline-Code durch den Compiler
-geschoben wird.  Cosmos selber löst also keine aiml-Knoten auf."*
+**User requirement (2026-10-25):** *"The idea was that the pipeline code is pushed through the compiler.
+So cosmos itself does not resolve any aiml nodes."*
 
-### 20.1 Warum
+### 20.1 Why
 
-Heute lesen **zwei** Programme dieselbe Sprache: der Übersetzer (`pipeline_expand.cpp`, §5) und
-der Kontroller (cosmos `sources/server/pipeline_submit.aiml`, 180 `yaml.*`-Aufrufe).  Beide
-kennen `params`, `exclude`, `stages`, `steps`, beide bilden Lanes, beide prüfen Formen — und sie
-kennen **verschiedene Teile**: der Übersetzer die Reinheit und den Schlüssel, der Kontroller
-`agent:`, `steplayer:`, `image:`, `base:`, `shares:`, die Grenzen.  Zwei Leser derselben Sprache
-laufen auseinander, und zwar leise: ein Schlüssel, den der eine kennt und der andere nicht, ist
-entweder eine stille Wirkungslosigkeit oder eine Ablehnung ohne Grund.
+Today **two** programs read the same language: the compiler (`pipeline_expand.cpp`, §5) and
+the controller (cosmos `sources/server/pipeline_submit.aiml`, 180 `yaml.*` calls).  Both
+know `params`, `exclude`, `stages`, `steps`, both form lanes, both check forms — and they
+know **different parts**: the compiler purity and the key, the controller
+`agent:`, `steplayer:`, `image:`, `base:`, `shares:`, the limits.  Two readers of the same language
+drift apart, and they do so quietly: a key that one knows and the other does not is
+either a silent no-op or a rejection without reason.
 
-Die Richtung ist deshalb nicht „der Kontroller lernt die restlichen Schlüssel", sondern **der
-Kontroller liest überhaupt nicht mehr**: er gibt den Quelltext in einen Kontext (spec/29_2 §14a/§14b),
-lässt ihn übersetzen und **liest die entstandene Pipeline als Wert**.
+The direction is therefore not "the controller learns the remaining keys", but **the
+controller does not read at all any more**: it hands the source text to a context (spec/29_2 §14a/§14b),
+has it compiled and **reads the resulting pipeline as a value**.
 
 ```yaml
-# Der ganze Weg, ohne eine Zeile YAML im Kontroller:
+# The whole way, without a single line of YAML in the controller:
 - decl: [kontext, ctx_handle, { call: [ctx.new] }]
 - decl: [rcx, i32, { call: [kontext.exec, { call: [sys.code_from, eingereicht] }] }]
 - if: { condition: { lt: [rcx, 0] }, then: [ ... kontext.errors an den Einreicher ... ] }
@@ -2112,132 +2110,132 @@ lässt ihn übersetzen und **liest die entstandene Pipeline als Wert**.
 - decl: [stufen, i32, { call: [pipe.stage_count] }]
 ```
 
-### 20.2 Wer prüft was
+### 20.2 Who checks what
 
-| | prüft | Beispiel |
+| | checks | Example |
 |---|---|---|
-| **Übersetzer** | die **Form**: Schlüssel, Typen, Achsen, Verweise, Reinheit, Widersprüche | `steplayer: own` ohne `image:`; `needs: [gibtesnicht]`; unbekannter Schlüssel; `exclude` auf eine Achse, die es nicht gibt |
-| **Kontroller** | die **Lage**: was es hier gibt und wer darf | kennt dieser Cluster das Abbild `aiml-build`?  ist das Etikett `x86_64` an einem Agenten?  darf dieser Nutzer so viele Lanes? |
+| **Compiler** | the **form**: keys, types, axes, references, purity, contradictions | `steplayer: own` without `image:`; `needs: [gibtesnicht]`; unknown key; `exclude` on an axis that does not exist |
+| **Controller** | the **situation**: what exists here and who is allowed | does this cluster know the image `aiml-build`?  is the label `x86_64` on an agent?  may this user have this many lanes? |
 
-- **F62-150 Formfehler gehören dem Übersetzer, Lagefehler dem Kontroller.**  Die Trennlinie ist,
-  ob die Antwort im Quelltext steht: „`steplayer: own` ohne `image:`" ist im Quelltext
-  entscheidbar und daher ein **Übersetzungsfehler** — überall gleich, auch beim lokalen Lauf, und
-  nur **einmal** geschrieben.  „Dieses Abbild gibt es hier nicht" ist von der Maschine abhängig
-  und daher Sache des Kontrollers; ein Übersetzer, der sie behauptet, lügt auf jedem zweiten
-  Cluster.  Die alten Namen (`runs_on:`, `label:`, `runs_in:`) sind damit ebenfalls Formfehler:
-  **der Übersetzer** nennt den neuen Namen, nicht jeder Wirt für sich.
+- **F62-150 Form errors belong to the compiler, situation errors to the controller.**  The dividing line is
+  whether the answer is in the source text: "`steplayer: own` without `image:`" can be decided in the source
+  text and is therefore a **compile error** — the same everywhere, also in a local run, and
+  written only **once**.  "This image does not exist here" depends on the machine
+  and is therefore the controller's business; a compiler that claims it lies on every second
+  cluster.  The old names (`runs_on:`, `label:`, `runs_in:`) are therefore form errors as well:
+  **the compiler** names the new name, not every host on its own.
 
-### 20.3 Was der Übersetzer vor dem Lesen schon getan hat
+### 20.3 What the compiler has already done before reading
 
-- **Lanes gebildet**, `exclude` abgezogen (§4) — der Leser bekommt die Zahl und je Lane ihren
-  **Bindungstext** in der kanonischen Form `achse=wert,achse=wert` (sortiert, §8).  Genau die
-  Form, die auch der Beobachter (§13.1) und der Arbeitsbereichspfad (§4.3) tragen.
-- **Vorrang aufgelöst** (§18, F62-133/F62-138): `image:`, `timeout:`, `requires:`, `agent:`,
-  `steplayer:` und die Grenzen stehen an der Stufe mit dem Wert, der **gilt** — Stufe schlägt
-  Pipeline; `shares:` addieren sich.
-- **Vorgaben hergeleitet** (F110-125): `steplayer` ist `own`, wenn ein `image:` gilt, sonst `none`.
+- **Lanes formed**, `exclude` subtracted (§4) — the reader gets the number and, per lane, its
+  **binding text** in the canonical form `axis=value,axis=value` (sorted, §8).  Exactly the
+  form that the observer (§13.1) and the workspace path (§4.3) carry too.
+- **Precedence resolved** (§18, F62-133/F62-138): `image:`, `timeout:`, `requires:`, `agent:`,
+  `steplayer:` and the limits are on the stage with the value that **applies** — stage beats
+  pipeline; `shares:` add up.
+- **Defaults derived** (F110-125): `steplayer` is `own` if an `image:` applies, otherwise `none`.
 
-- **F62-151 Vorrang wird EINMAL aufgelöst, im Übersetzer.**  Sonst rechnet jeder Wirt die
-  Regeln nach, und zwei Wirte sind irgendwann uneins darüber, was `timeout:` an der Pipeline für
-  eine Stufe mit eigenem `timeout:` bedeutet.  Ein Leser, der nachrechnen muss, ist ein zweiter
-  Parser mit anderem Namen.
-- **F62-152 Der Bindungstext ist EIN Format.**  Lane-Text, Beobachter-`bindings`,
-  Arbeitsbereichsname und der Datensatz des Kontrollers (cosmos F96-34) tragen dieselbe
-  Zeichenkette.  Zwei Formate für denselben Begriff heissen: irgendwo wird Anzeigetext geparst.
+- **F62-151 Precedence is resolved ONCE, in the compiler.**  Otherwise every host recomputes the
+  rules, and two hosts at some point disagree about what `timeout:` on the pipeline means for
+  a stage with its own `timeout:`.  A reader that has to recompute is a second
+  parser with a different name.
+- **F62-152 The binding text is ONE format.**  Lane text, observer `bindings`,
+  workspace name and the controller's record (cosmos F96-34) carry the same
+  string.  Two formats for the same concept mean: somewhere display text is being parsed.
 
-### 20.4 Die Leser
+### 20.4 The readers
 
-Alles **nur lesend**; ein gelesener Wert ändert die Pipeline nicht.
+All **read-only**; a value that has been read does not change the pipeline.
 
-| Pipeline | gibt | Bedeutung |
+| Pipeline | returns | Meaning |
 |---|---|---|
-| `pipe.name` | string | Name aus der Deklaration |
-| `pipe.lane_count` | i32 | Lanes nach `exclude` (§4.3) |
+| `pipe.name` | string | name from the declaration |
+| `pipe.lane_count` | i32 | lanes after `exclude` (§4.3) |
 | `pipe.lane_bindings(i)` | string | `arch=x86_64,mode=debug` (F62-152) |
-| `pipe.stage_count` | i32 | Stufen je Lane |
-| `pipe.stage_at(i)` | stage | die i-te Stufe |
-| `pipe.axis_count` / `pipe.axis_name(i)` | i32 / string | die Achsen in Deklarationsreihenfolge |
-| `pipe.axis_value_count(i)` / `pipe.axis_value(i, j)` | i32 / string | ihre Domäne (§4.1) — Anzahl und Wert, **keine Liste**: ein `list<string>` aus der Laufzeit zurückzugeben kostet eine Füll-Schnittstelle je Leser, und zwei Zahlenleser sagen dasselbe |
+| `pipe.stage_count` | i32 | stages per lane |
+| `pipe.stage_at(i)` | stage | the i-th stage |
+| `pipe.axis_count` / `pipe.axis_name(i)` | i32 / string | the axes in declaration order |
+| `pipe.axis_value_count(i)` / `pipe.axis_value(i, j)` | i32 / string | their domain (§4.1) — count and value, **no list**: returning a `list<string>` from the runtime costs a filling interface per reader, and two number readers say the same thing |
 | `pipe.push_count` / `pipe.push_from(i)` / `pipe.push_to(i)` / `pipe.push_tag(i)` | i32 / string | `push:` (§18, F62-69/71) |
 
-| Stufe | gibt | Bedeutung |
+| Stage | returns | Meaning |
 |---|---|---|
 | `stg.name` | string | |
-| `stg.agent` | string | **WER** — Etikett oder Agenten-Kennung (F110-127) |
-| `stg.steplayer` | string | **OB** — `own` \| `none` (§18.5, F110-124) |
-| `stg.image` | string | **WORIN** — Abbild oder `oci:<pfad>` (F62-66) |
-| `stg.base` | string | **WORAUF** — `run:<lauf>` \| `job:<kennung>` |
+| `stg.agent` | string | **WHO** — label or agent id (F110-127) |
+| `stg.steplayer` | string | **WHETHER** — `own` \| `none` (§18.5, F110-124) |
+| `stg.image` | string | **IN WHAT** — image or `oci:<path>` (F62-66) |
+| `stg.base` | string | **ON WHAT** — `run:<run>` \| `job:<id>` |
 | `stg.requires` | string | `git,gcc>=13,lib:yaml-cpp` (§18.2, F62-126) |
-| `stg.shares` | string | `name:/ziel:modus,…` (§18.1b, F62-136) |
-| `stg.cpu_cores` / `stg.mem_mb` / `stg.pids_max` | i32 | Grenzen, 0 = Vorgabe des Wirts (§18.1a) |
-| `stg.timeout_ms` | i32 | 0 = Vorgabe des Ausführenden (F62-40) |
-| `stg.command` | string | `run:` — der Befehl der Scheibe 1 (cosmos F103-1) |
-| `stg.step_count` / `stg.step_at(i)` | i32 / step | die Schritte der Stufe (§5) |
+| `stg.shares` | string | `name:/target:mode,…` (§18.1b, F62-136) |
+| `stg.cpu_cores` / `stg.mem_mb` / `stg.pids_max` | i32 | limits, 0 = host default (§18.1a) |
+| `stg.timeout_ms` | i32 | 0 = executor default (F62-40) |
+| `stg.command` | string | `run:` — the command of slice 1 (cosmos F103-1) |
+| `stg.step_count` / `stg.step_at(i)` | i32 / step | the steps of the stage (§5) |
 
-| Schritt | gibt | Bedeutung |
+| Step | returns | Meaning |
 |---|---|---|
 | `stp.name` | string | |
 | `stp.needs_count` / `stp.need_at(i)` | i32 / string | `needs:` (§5.1) |
-| `stp.cache` | string | Wiederverwendungsklasse (§7) |
+| `stp.cache` | string | reuse class (§7) |
 | `stp.per` | string | `lane` \| `once` (§5.5) |
-| `stp.command` | string | `run:` am Schritt, sonst leer |
+| `stp.command` | string | `run:` on the step, otherwise empty |
 
-- **F62-153 Ein Leser gibt Werte, keine Zeiger in den Übersetzer.**  `stage` und `step` sind die
-  Werte aus §13.5 — dieselben, die man zusammensetzen kann.  Es gibt keinen Weg vom gelesenen
-  Wert zum AST, zum LLVM-Typ oder zur Symboltabelle (spec/29_2 F29_2-…m): sonst hängt der
-  Kontroller am Innenbau des Übersetzers.
-- **F62-154 Fehlt etwas, ist es leer bzw. 0 — nicht „unbekannt".**  Ein Leser wirft nicht, weil
-  ein Schlüssel nicht geschrieben wurde; `0` heisst bei den Grenzen ausdrücklich „die Vorgabe des
-  Wirts" und nicht „unbegrenzt" (§18.1a).  Ein Index ausserhalb des Bereichs ist dagegen ein
-  Programmfehler des Lesers und **wirft** (spec/22).
-- **F62-155 Die Stufen sind lane-UNabhängig, die Bindungen lane-abhängig.**  Darum `stage_at(i)`
-  ohne Lane und `lane_bindings(i)` ohne Stufe: das Kreuzprodukt baut der Leser, weil nur er weiss,
-  ob er eine Zeile je (Lane, Stufe) braucht (cosmos) oder je Stufe (eine Übersicht).  Eine
-  Leserfunktion, die beides mischt, müsste `(lane, stufe)` nehmen und für jede Abfrage dieselbe
-  Stufe neu beschreiben.
+- **F62-153 A reader returns values, not pointers into the compiler.**  `stage` and `step` are the
+  values from §13.5 — the same ones that can be composed.  There is no way from the value read
+  to the AST, the LLVM type or the symbol table (spec/29_2 F29_2-…m): otherwise the
+  controller depends on the compiler's internals.
+- **F62-154 If something is missing, it is empty or 0 — not "unknown".**  A reader does not throw because
+  a key was not written; for the limits `0` explicitly means "the host's
+  default" and not "unlimited" (§18.1a).  An index out of range, on the other hand, is a
+  programming error of the reader and **throws** (spec/22).
+- **F62-155 The stages are lane-INdependent, the bindings lane-dependent.**  Hence `stage_at(i)`
+  without a lane and `lane_bindings(i)` without a stage: the reader builds the cross product, because only it knows
+  whether it needs one row per (lane, stage) (cosmos) or per stage (an overview).  A
+  reader function that mixes both would have to take `(lane, stage)` and describe the same
+  stage anew for every query.
 
-### 20.4a Was beim Umbau noch aufgefallen ist (25.10.2026)
+### 20.4a What else was noticed during the rework (2026-10-25)
 
-Drei Stellen, an denen Spec und Umsetzung auseinander waren — gefunden, weil der Kontroller
-seitdem **denselben** Leser benutzt wie der Übersetzer.  Jede ist hier festgehalten, damit sie
-nicht ein zweites Mal auseinanderlaufen:
+Three places where spec and implementation had diverged — found because the controller
+has since been using the **same** reader as the compiler.  Each is recorded here so that they
+do not drift apart a second time:
 
-- **F62-156 `steps:` auf beiden Ebenen, wie F62-57 es sagt.**  Die Umschreibung las `stages:`,
-  die Spec schrieb `steps:` — und cosmos' 15 Pipelines waren die ganze Zeit spec-konform, der
-  Übersetzer der Ausreißer.  Jetzt gilt `steps:`; `stages:` wird abgewiesen und nennt den
-  richtigen Schlüssel.  Dasselbe für `params:`: die Umschreibung nahm die Abbildung
-  `arch: [...]`, §4.1 verlangt die **typisierte Liste** `[name, typ, [werte]]`, und cosmos'
-  Tests benutzten die Liste.  Der Typ wirkt jetzt: im Rumpf ist eine `i32`-Achse ein `i32`
-  (F62-1), gewandelt an **einer** Stelle im erzeugten Vorspann.
-- **F62-157 Der Name ist Text, die Funktion braucht einen Bezeichner.**  `name: 9rooms_vom_stapel`
-  fängt mit einer Ziffer an und war damit gar nicht übersetzbar — obwohl der Name völlig in
-  Ordnung ist.  Ist der Name ein Bezeichner, heißt die Funktion genau so (F62-108 bleibt, man
-  ruft sie lokal); sonst entsteht ein abgeleiteter Funktionsname, und der **Wert** trägt weiter
-  den echten Namen (`pipe.name`).  Ein Wirt findet die Funktion über `cx.names`
-  (spec/29_2 F29_2-…i) und braucht den Namen nicht zu raten.
-- **F62-158 Ein Übersetzer MELDET, er fällt nicht um.**  `cache: haeufig` ließ den erzeugten
-  Aufruf `set_cache(CacheClass.haeufig)` entstehen; die Enum-Auflösung gab `nullptr`, und die
-  Builtin-Methode rechnete damit weiter — Absturz im Übersetzer, bei genau der Eingabe, die er
-  gerade bemängelte.  Zwei Lehren, beide umgesetzt: `cache:` wird in der Umschreibung geprüft
-  (§7), und ein Argument, das sich nicht übersetzen ließ, hält die Builtin-Methode an.  Bei
-  einer **eingereichten** Pipeline ist das kein Schönheitsfehler: ein Absturz des Kontrollers
-  ist eine Einreichung, die den Dienst beendet.
+- **F62-156 `steps:` on both levels, as F62-57 says.**  The rewrite read `stages:`,
+  the spec wrote `steps:` — and cosmos' 15 pipelines were spec-compliant all along, the
+  compiler was the outlier.  Now `steps:` applies; `stages:` is rejected and names the
+  correct key.  The same for `params:`: the rewrite took the mapping
+  `arch: [...]`, §4.1 requires the **typed list** `[name, type, [values]]`, and cosmos'
+  tests used the list.  The type now takes effect: in the body an `i32` axis is an `i32`
+  (F62-1), converted in **one** place in the generated preamble.
+- **F62-157 The name is text, the function needs an identifier.**  `name: 9rooms_vom_stapel`
+  starts with a digit and therefore could not be compiled at all — although the name is perfectly
+  fine.  If the name is an identifier, the function is called exactly that (F62-108 stays; one
+  calls it locally); otherwise a derived function name is created, and the **value** keeps carrying
+  the real name (`pipe.name`).  A host finds the function via `cx.names`
+  (spec/29_2 F29_2-…i) and does not need to guess the name.
+- **F62-158 A compiler REPORTS, it does not fall over.**  `cache: haeufig` produced the generated
+  call `set_cache(CacheClass.haeufig)`; enum resolution returned `nullptr`, and the
+  builtin method kept calculating with it — a crash in the compiler, on exactly the input it was
+  complaining about.  Two lessons, both implemented: `cache:` is checked in the rewrite
+  (§7), and an argument that could not be compiled stops the builtin method.  With
+  a **submitted** pipeline this is not a cosmetic flaw: a crash of the controller
+  is a submission that terminates the service.
 
-### 20.5 Was damit NICHT gemeint ist
+### 20.5 What this does NOT mean
 
-- **Kein Lauf.**  Lesen führt nichts aus; `pipe.run` bleibt der lokale Lauf (§12).  Ein
-  Kontroller liest und teilt **selbst** zu — die verteilte Ausführung ist seine Aufgabe, nicht die
-  der Sprache (§14, F62-49).
-- **Keine Freigabe.**  Der Kontext ist keine Sicherheitsgrenze (spec/29_2 F29_2-…e).  Wer fremden
-  Quelltext übersetzt, übersetzt ihn **im eigenen Prozess**; die Grenze für fremden Code bleibt
-  ein eigener Prozess (spec/65 F65-15).  Für cosmos heisst das: die Einreichung wird geprüft, der
-  **Rumpf** läuft beim Agenten, nicht im Controller.
-- **Kein Schutz vor feindlichem Quelltext.**  Werte, die als Literal in erzeugten Quelltext
-  gehen, werden **maskiert** (`"` → `\"`, Zeilenumbruch → `\n`) — ohne das endete das Literal
-  mitten im Wert und der Rest wäre aiml, also eingeschleuster Code.  Maskiert und nicht
-  abgewiesen, weil ein `run:` legitim Anführungszeichen trägt.  Das macht die Umschreibung
-  **robust**, nicht sicher: für feindliche Einreichungen bleibt die Grenze ein eigener Prozess
-  (spec/65 F65-15), und ein Kontroller lässt eingereichten Quelltext nicht laufen
+- **No run.**  Reading executes nothing; `pipe.run` remains the local run (§12).  A
+  controller reads and dispatches **itself** — distributed execution is its job, not that
+  of the language (§14, F62-49).
+- **No clearance.**  The context is not a security boundary (spec/29_2 F29_2-…e).  Whoever compiles foreign
+  source text compiles it **in their own process**; the boundary for foreign code remains
+  a separate process (spec/65 F65-15).  For cosmos this means: the submission is checked, the
+  **body** runs at the agent, not in the controller.
+- **No protection against hostile source text.**  Values that go as a literal into generated source
+  text are **escaped** (`"` → `\"`, line break → `\n`) — without that the literal would end
+  in the middle of the value and the rest would be aiml, i.e. injected code.  Escaped and not
+  rejected, because a `run:` legitimately carries quotation marks.  That makes the rewrite
+  **robust**, not secure: for hostile submissions the boundary remains a separate process
+  (spec/65 F65-15), and a controller does not run submitted source text
   (`cx.load`, spec/29_2 F29_2-…n).
-- **Kein zweites Format.**  Es gibt keinen „Controller-Dialekt" der Pipeline-Sprache.  Was der
-  Übersetzer nicht kennt, ist ein Fehler — auch wenn ein Wirt damit umgehen könnte.
+- **No second format.**  There is no "controller dialect" of the pipeline language.  What the
+  compiler does not know is an error — even if a host could deal with it.
