@@ -190,13 +190,13 @@ Assign the shared fields one by one, or build the value with
 `decl: [x, Erweitert, basis]` and assign **that**.
 Test: `tests/test_model_set_base_into_field_error.aiml`.
 
-> **Warum das hier steht (21.11.2026).** Bis dahin war die Form nicht
-> beschrieben — der Compiler nahm sie an und kopierte `sizeof(ZIEL)` Bytes aus
-> der **kleineren** Quelle. Das liest über deren Ende hinaus, und der Müll
-> landet in den eigenen Feldern der abgeleiteten Form: ein `i32` las 0, eine
-> Zeichenkette leer, ein Listen-Handle **stürzte mit SIGSEGV ab**. Gefunden in
-> datacreatures (`SkillProfile inherits CombatSkill`), wo der Build grün war
-> und erst der Lauf fiel. Regression: `tests/test_model_init_from_base.aiml`.
+> **Why this is written here (2026-11-21).** Until then the form was not
+> described — the compiler accepted it and copied `sizeof(TARGET)` bytes from
+> the **smaller** source. That reads past its end, and the garbage
+> lands in the own fields of the derived form: an `i32` read 0, a
+> string empty, a list handle **crashed with SIGSEGV**. Found in
+> datacreatures (`SkillProfile inherits CombatSkill`), where the build was green
+> and only the run failed. Regression: `tests/test_model_init_from_base.aiml`.
 
 Constraints:
 - A model can only inherit from another model, not from a class.

@@ -369,9 +369,9 @@ reads `math.exp`/`math.log` in f32 carries only ~7 digits, however wide the vari
 | `{ "*": [m, v] }` | `mat4` + `vec4` | `vec4` |
 | `{ eq: [a, b] }` | `vec2/3/4` + same | `i8` |
 
-Vektorgleichheit heißt `eq` (die Symbolform `==` lehnt der Compiler ab, siehe spec/04_1).
-`neq` ist die Negation von `eq` und seit 01.11.2026 umgesetzt (dieselbe Laufzeitfunktion,
-nur andere Vergleichsrichtung) — `{ not: [{ eq: [a, b] }] }` bleibt gleichwertig.
+Vector equality is called `eq` (the compiler rejects the symbolic form `==`, see spec/04_1).
+`neq` is the negation of `eq` and has been implemented since 2026-11-01 (the same runtime function,
+just the opposite comparison direction) — `{ not: [{ eq: [a, b] }] }` remains equivalent.
 
 Operands may be any expression of the type: variables, parameters, fields, builtin calls and
 calls of user methods/functions returning the math type.

@@ -154,10 +154,10 @@ and the output it pumps along the way stays retrievable through `read_out`/`read
 - decl: [eof2, i32, { call: [ch.send_eof] }]
 ```
 
-Blockweise über `io.file_size` als Schranke, nicht in einem Stück: eine Datei in
-Agentengrösse im Arbeitsspeicher zu halten wäre dieselbe Sorte Fehler, die cosmos
-`doc/spec/90` §AP1.5a bei der Ausgabe vermeidet. (`io.read_bytes` liefert am Dateiende
-weniger als angefordert, hat aber keine eigene EOF-Abfrage — darum die gezählte Schranke.)
+Block by block with `io.file_size` as the bound, not in one piece: holding a file of
+agent size in memory would be the same kind of error that cosmos
+`doc/spec/90` §AP1.5a avoids for output. (`io.read_bytes` returns less than requested at the end of the file,
+but has no EOF query of its own — hence the counted bound.)
 
 libssh does bring SFTP (`sftp.h`), and it is the better fit for many files or for reading
 remote directories. It is left out of this slice on purpose: `write_buffer` already covers

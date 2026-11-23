@@ -217,9 +217,9 @@ and user management itself (§6).
 
 ## 10. Staged plan
 
-**Stand 18.10.2026:** M1–M4 sind umgesetzt und durch `tests/services/` abgedeckt (16 Tests,
-davon 8 negativ, mit echten HTTP-Round-Trips).  Offen: §4.4 (REST im wasm-Ziel ablehnen —
-erst mit einem wasm-Build pruefbar, deshalb noch nicht gebaut) und M5.
+**Status 2026-10-18:** M1–M4 are implemented and covered by `tests/services/` (16 tests,
+8 of them negative, with real HTTP round trips).  Open: §4.4 (reject REST in the wasm target —
+only checkable with a wasm build, therefore not built yet) and M5.
 
 - **M1 — tests first.** Corpus tests that declare a service and assert the synthesized
   names exist, that a request round-trips over RPC, and one negative test per check of §5.

@@ -68,7 +68,7 @@ dropdown_enum get_slider_value selection container_row_count
 ```
 
 This list is **every** `prefab_instance` method whose first argument the runtime
-resolves through `find_child` (abgeglichen gegen `src/sys/prefab_runtime.cpp`,
+resolves through `find_child` (checked against `src/sys/prefab_runtime.cpp`,
 2026-10-15).  Until then it named 6 of them, which left 24 methods carrying the
 identical failure class with no check at all — found while giving a job row a
 status dot, where `set_bg_color("stat_dot")` on a mistyped name would have thrown

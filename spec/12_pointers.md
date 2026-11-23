@@ -71,7 +71,7 @@ For primitive types (`ptr<i32>` etc.) `{ "?": [p] }` is still required for readi
 | `**pp = 5`   | `store: [pp, 5, 2]`        | (deref-write, depth=2)
 | `int v = *p` | `set: [v, { '?': [p] }]`   | (read via deref)
 
-`store:` ist das natürliche out-param-Pattern:
+`store:` is the natural out-param pattern:
 
 ```yaml
 - def:

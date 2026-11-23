@@ -418,10 +418,10 @@ rest_client_handle    ← + base URL + auto JSON headers + relative paths
       - set: [resp.body, body]
       - call: [resp.send]
 
-`req.method`, `req.path` und `req.body` sind immer `string`.  Fehlt der Teil in der
-Anfrage — und eine Anfrage ohne `Content-Length`, also jedes GET, hat keinen Rumpf —, ist
-das Ergebnis der **leere** String, nie ein Nullzeiger.  Bis 18.10.2026 gab `req.body` dort
-null zurueck, und ein korrektes `- set: [body, req.body]` im GET-Handler starb mit SIGSEGV.
+`req.method`, `req.path` and `req.body` are always `string`.  If that part is missing from the
+request — and a request without `Content-Length`, i.e. every GET, has no body — the
+result is the **empty** string, never a null pointer.  Until 2026-10-18 `req.body` returned
+null there, and a correct `- set: [body, req.body]` in the GET handler died with SIGSEGV.
 
 - decl: [srv, http_server_handle]
 - set: [srv, { call: [http.server, "0.0.0.0", 8080] }]

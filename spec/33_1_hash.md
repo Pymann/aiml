@@ -45,7 +45,7 @@ and unambiguous, since an *empty file* hashes to `e3b0c442…`.
 
 ```yaml
 - decl: [blob_id, string, { call: [hash.sha256_file, "cas/tmp/incoming" }]
-- if: { condition: { eq: [blob_id.len, 0] }, then: [{ call: [log.error, "nicht lesbar"] }] }
+- if: { condition: { eq: [blob_id.len, 0] }, then: [{ call: [log.error, "not readable"] }] }
 ```
 
 `sha256`, `sha512`, `sha3_256`, `blake2b`, `blake2s`, `md5` a `buffer<u8>` argument is hashed

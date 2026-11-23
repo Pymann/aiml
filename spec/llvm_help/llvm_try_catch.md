@@ -102,17 +102,17 @@ Perfect! Then I'll show you how to write try-catch logic in C++ and how to map i
 
 void may_throw(bool do_throw) {
     if (do_throw) {
-        throw std::runtime_error("Fehler passiert!");
+        throw std::runtime_error("Something went wrong!");
     }
-    std::cout << "Alles gut.\n";
+    std::cout << "All good.\n";
 }
 
 int main() {
     try {
         may_throw(true);  // Test: trigger exception
-        std::cout << "Dieser Code wird nicht ausgeführt, wenn Exception geworfen wird.\n";
+        std::cout << "This code is not executed when an exception is thrown.\n";
     } catch (const std::runtime_error& e) {
-        std::cout << "Gefangen: " << e.what() << "\n";
+        std::cout << "Caught: " << e.what() << "\n";
     }
     return 0;
 }
@@ -120,7 +120,7 @@ int main() {
 
 Result:
 
-Gefangen: Fehler passiert!
+Caught: Something went wrong!
 
 2. How LLVM sees it internally
 

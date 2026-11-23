@@ -253,17 +253,17 @@ The third row is the trap.  An index or constant tensor built **once before** th
 from the second iteration on it is older than one epoch and gets collected.  The loop then reads
 freed memory, and `embedding_lookup` crashes on a nonsense shape.
 
-Adam state (`m`, `v`) teilt sich die Pflicht:
+Adam state (`m`, `v`) shares the responsibility:
 
-- **Nach dem ersten Schritt** gehoert der Zustand der Laufzeit: `adam_step` kennzeichnet die
-  `m`/`v`-Tensoren, die es anfasst, als `keep`.  Damit uebersteht er auch eine lange Strecke
-  ohne Schritt -- eine MESSSCHLEIFE etwa, die nur vorwaerts rechnet.  Vorher hielt `adam_step`
-  nur die Epoche frisch; das traegt genau zwei Durchgaenge, danach gab `begin_graph` den
-  Zustand frei und der naechste Schritt las freigegebenen Speicher (SIGSEGV in `adam_step`,
-  21.11.2026: 6856 Messzeilen zwischen zwei Epochen).
-- **Vor dem ersten Schritt** sind `m` und `v` gewoehnliche eigene Tensoren und fallen unter
-  die dritte Zeile oben.  Wer sie vor der Schleife anlegt und erst nach einem STAPEL den
-  ersten Schritt macht, kennzeichnet sie selbst:
+- **After the first step** the state belongs to the runtime: `adam_step` marks the
+  `m`/`v` tensors it touches as `keep`.  That way it also survives a long stretch
+  without a step -- a MEASUREMENT LOOP, for instance, that only computes forward.  Before, `adam_step`
+  only kept the epoch fresh; that carries exactly two passes, after which `begin_graph` freed the
+  state and the next step read freed memory (SIGSEGV in `adam_step`,
+  2026-11-21: 6856 measurement lines between two epochs).
+- **Before the first step** `m` and `v` are ordinary own tensors and fall under
+  the third line above.  Whoever creates them before the loop and only takes the first step after a BATCH
+  marks them themselves:
 
 ```yaml
 - decl: [mom, tensor, { call: [tensor.zeros, 4, 3] }]
@@ -272,7 +272,7 @@ Adam state (`m`, `v`) teilt sich die Pflicht:
 - call: [vel.keep]
 ```
 
-Test fuer beide Faelle: `tests/test_tensor_adam_batched.aiml`.
+Test for both cases: `tests/test_tensor_adam_batched.aiml`.
 
 Mark anything else you intend to keep:
 

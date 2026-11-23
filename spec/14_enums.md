@@ -13,13 +13,13 @@ Enums are defined using the `enum` command. They map named constants to integer 
       - Yellow     # Auto-assigned: 11 (previous + 1)
 ```
 
-## `wire: true` — Vokabular einer Schnittstelle
+## `wire: true` — the vocabulary of an interface
 
-Ein Enum, dessen Mitglieder über ein Protokoll, eine Datei oder eine Datenbank
-gehen, trägt `wire: true`.  Die Angabe schaltet die Unused-Enumerator-Warnung
-für dieses Enum ab (spec/49 §18.2a) — denn ein Mitglied, das nur der andere
-Build benennt, ist kein totes Mitglied, sondern der Vertrag.  Sie ändert nichts
-an Kodierung oder Werten.
+An enum whose members go over a protocol, a file or a database
+carries `wire: true`.  The setting switches off the unused-enumerator warning
+for this enum (spec/49 §18.2a) — because a member that only the other
+build names is not a dead member but the contract.  It changes nothing
+about encoding or values.
 
 ```aiml
 - enum:
