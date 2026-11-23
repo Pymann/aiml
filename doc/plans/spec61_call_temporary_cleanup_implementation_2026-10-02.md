@@ -1,204 +1,204 @@
-# Implementierungsplan: Spec-61-Ownership bei Call-Temporaries
+# Implementation plan: spec 61 ownership for call temporaries
 
-Stand: 02.10.2026, nach Review implementiert auf Basis `572603f`. Die historischen Zeilennummern unten beziehen sich auf den Planungsstand; Funktionsnamen bleiben die stabilen Anker. Der Nutzer hat Tests und 9rooms-Läufe ausdrücklich ausgeschlossen und als Prüfung ausschließlich `exodus build --all` im AIML-Verzeichnis vorgegeben.
+As of: 02.10.2026, implemented after review on the basis of `572603f`. The historical line numbers below refer to the planning state; function names remain the stable anchors. The user explicitly excluded tests and 9rooms runs and specified `exodus build --all` in the AIML directory as the only check.
 
-## Umsetzungsstand
+## Implementation state
 
-- `ast_compiler.cpp`: Forward-Signaturen werden auch bei vorhandenen LLVM-Deklarationen vervollständigt; vorhandene Zusatzmetadaten bleiben erhalten. `this=ref<Class>` war im Basis-Commit bereits korrigiert. RC-Parameter mit `consumed` halten eine eigene Callee-Referenz; die Caller-Referenz bleibt bestehen.
-- `ast_compiler_call.cpp` / `.h`: gemeinsame `ResolvedCallSignature` für freie Funktionen, Methoden einschließlich Feldketten und Vererbung, Interface-Methoden und `fn<...>`-Variablen. Die Typabfrage erzeugt kein Receiver-IR. Alle vier Aufrufwege verwenden den gemeinsamen Argument-Abschluss, einschließlich Interface-void/sret und indirekten Aufrufen.
-- `context.h` / `ast_compiler_stmt.cpp`: typisierte Temp-Frames mit Entry-Alloca pro Temp-Stelle. Nullinitialisierung wird am Statement-Anfang und bei jeder While-Bedingung eingefügt. Ownership-Transfers und Releases setzen den Slot zurück. Unwind-Pads berücksichtigen die bereits erzeugten Temp-Slots zusätzlich zum Local-Snapshot; Cache-Schlüssel enthalten deren Adressen und Drop-Arten. Später im selben Statement erzeugte Slots gehören erst zu späteren Pads, da sie bei früheren Throws noch keinen Owner enthalten können.
-- String-Erzeuger in `ast_compiler_expr.cpp`, `ast_compiler_call.cpp`, `builtin_registry.cpp` und `serialize_impl.cpp` sind an dieselben Temp-Slots angeschlossen. Container-, Modell- und eindeutige Box-Argumente werden unmittelbar nach ihrer Auswertung registriert, bevor das nächste Argument ausgewertet wird. Eindeutige Boxen werden beim Aufruf an den Callee übertragen.
+- `ast_compiler.cpp`: forward signatures are completed even for existing LLVM declarations; existing additional metadata is kept. `this=ref<Class>` was already corrected in the base commit. RC parameters with `consumed` hold a callee reference of their own; the caller reference remains.
+- `ast_compiler_call.cpp` / `.h`: a shared `ResolvedCallSignature` for free functions, methods including field chains and inheritance, interface methods and `fn<...>` variables. The type query generates no receiver IR. All four call routes use the shared argument completion, including interface void/sret and indirect calls.
+- `context.h` / `ast_compiler_stmt.cpp`: typed temp frames with an entry alloca per temp site. Null initialisation is inserted at the start of the statement and at every while condition. Ownership transfers and releases reset the slot. Unwind pads take into account the temp slots already created in addition to the local snapshot; cache keys contain their addresses and drop kinds. Slots created later in the same statement only belong to later pads, since they cannot yet hold an owner at earlier throws.
+- String producers in `ast_compiler_expr.cpp`, `ast_compiler_call.cpp`, `builtin_registry.cpp` and `serialize_impl.cpp` are connected to the same temp slots. Container, model and unique box arguments are registered right after their evaluation, before the next argument is evaluated. Unique boxes are transferred to the callee at the call.
 
-Validierung: `exodus build --all` im AIML-Verzeichnis ist für den endgültigen Stand erfolgreich abgeschlossen (Exitcode 0; Build-Log: `/tmp/aiml-spec61-build-final.log`). 44 Regressionstestprogramme samt Import-Fixture sind unter `tests/lifetime/call_temporaries/` ergänzt und über ein gemeinsames Manifest in die funktionale Lifetime-Suite, das AOT-Leak-Gate und die Memory-Safety-Suite eingebunden. Abdeckung und Status stehen in `tests/lifetime/call_temporaries/README.md`. Die neuen Testprogramme wurden weder kompiliert noch ausgeführt. Keine Tests, Leak-Gates, Sanitizer-Läufe oder 9rooms-Builds/Messungen ausgeführt. Die unten beschriebenen Abnahmekriterien sind deshalb offen; kein Leak-Muster wird allein aufgrund der Bauprüfung als GREEN markiert.
+Validation: `exodus build --all` in the AIML directory completed successfully for the final state (exit code 0; build log: `/tmp/aiml-spec61-build-final.log`). 44 regression test programs including an import fixture were added under `tests/lifetime/call_temporaries/` and integrated via a shared manifest into the functional lifetime suite, the AOT leak gate and the memory safety suite. Coverage and status are in `tests/lifetime/call_temporaries/README.md`. The new test programs were neither compiled nor run. No tests, leak gates, sanitizer runs or 9rooms builds/measurements were run. The acceptance criteria described below are therefore open; no leak pattern is marked GREEN based on the build check alone.
 
 
-### Abnahme (2026-10-02, Nachtrag)
+### Acceptance (2026-10-02, addendum)
 
-Alle 44 Regressionen kompiliert und unter Valgrind ausgeführt: Exit 0, 0 definitiv/indirekt verlorene
-Bytes, keine Speicherfehler. Dafür nötig waren Testkorrekturen (gültiges AIML, siehe README) und drei
-Compiler-Fixes: `fn<…>`-Aufrufe übergeben bei `ref<T>`/`ptr<T>`-Parametern die Adresse; der `ptr<T>`-Move
-wird erst beim Betreten des Callees wirksam (der Slot des Locals wird nach der Argumentauswertung
-genullt, statt den Drop beim Übersetzen zu entfernen) — ein vorher werfendes Argument lässt die Box beim
-Aufrufer; `spawn` verschiebt erst nach der Argumentauswertung. Zusätzlich erkennt der Borrow-Checker
-schleifenübergreifendes use-after-move und Moves an Methoden-/Interface-Parameter (neg n20/n21).
+All 44 regressions compiled and run under Valgrind: exit 0, 0 definitely/indirectly lost
+bytes, no memory errors. This required test corrections (valid AIML, see README) and three
+compiler fixes: `fn<…>` calls pass the address for `ref<T>`/`ptr<T>` parameters; the `ptr<T>` move
+only takes effect on entering the callee (the local's slot is nulled after argument evaluation,
+instead of removing the drop at compile time) — an argument throwing before that leaves the box with the
+caller; `spawn` only moves after argument evaluation. In addition the borrow checker recognises
+cross-loop use-after-move and moves to method/interface parameters (neg n20/n21).
 
-## Ziel und Abgrenzung
+## Goal and delimitation
 
-Alle sechs bestätigten Fehlerbilder beheben: Methoden-Vorwärtsreferenz, Producer über verschachtelten Receiver, Producer über Funktionszeiger, Interface-Consumer, Funktionszeiger-Consumer und temporärer Caller-Owner bei Exception im Consumer. Vorrang hat spec/61_memory_management.md, besonders §§5, 8, 9.2 und 9.3. Der gültige Originalausdruck in 9rooms muss ohne zusätzliche lokale Variable leakfrei werden.
+Fix all six confirmed failure patterns: method forward reference, producer via a nested receiver, producer via a function pointer, interface consumer, function pointer consumer and a temporary caller owner on an exception in the consumer. spec/61_memory_management.md takes precedence, especially §§5, 8, 9.2 and 9.3. The valid original expression in 9rooms must become leak-free without an additional local variable.
 
-Keine Änderung des Sprachvertrags und keine zusätzlichen Pflicht-Annotationen in 9rooms. Containerargumente behalten ihre RC-Semantik. `ref<list<T>>` ist keine Lösung. `consumed` auf RC-Typen bedeutet nicht pauschal, dass die Caller-Referenz verschwindet: der Consumer hält seine eigene Referenz gemäß Vertrag. `ptr<T>`-Übergaben sind davon getrennt echte Moves.
+No change of the language contract and no additional mandatory annotations in 9rooms. Container arguments keep their RC semantics. `ref<list<T>>` is not a solution. `consumed` on RC types does not mean across the board that the caller reference disappears: the consumer holds its own reference per the contract. `ptr<T>` passing is separate from that and a real move.
 
-## Voraussetzung — Arbeitsstand des Nutzers zuerst validieren und committen
+## Precondition — validate and commit the user's working state first
 
-Vor Beginn der Compileränderungen dieses Plans wird der laufende Umbau des Nutzers abgeschlossen, validiert und von ihm committet: ptr<T>-Move, yaml_doc-Freigabe, Signatur-Vorlauf sowie Interface-Listen und -Maps. Basis-Commit, Compiler-/Runtime-Hashes und Gate-Ergebnisse festhalten; danach Quellanker/Zeilen und rote Reproduktionen gegen genau diesen Stand aktualisieren. Keine konkurrierenden Änderungen an diesem noch offenen Umbau beginnen.
+Before starting the compiler changes of this plan, the user's ongoing rework is completed, validated and committed by them: ptr<T> move, yaml_doc release, signature pre-pass as well as interface lists and maps. Record the base commit, compiler/runtime hashes and gate results; after that update source anchors/lines and red reproductions against exactly this state. Do not start competing changes to this still open rework.
 
-Zum Basis-Umbau gehört auch die im Review genannte fn-Lücke: fehlendes movePtrArg und fehlende consumed-Behandlung im indirekten fn-Pfad. Mit dem neuen Callee-Drop kann ein benannter ptr<T>-Owner sonst doppelt freigegeben werden. Diese Korrektur übernimmt der Nutzer vor seinem Commit; sie ist keine zusätzliche Implementierungsaufgabe dieses Plans. Ihre Regressionen bleiben bei der späteren Abnahme verpflichtend. Der separate RC-consumed-Vertrag wird unten ausdrücklich behandelt.
+The base rework also includes the fn gap named in the review: missing movePtrArg and missing consumed handling in the indirect fn path. With the new callee drop a named ptr<T> owner could otherwise be freed twice. The user takes over this correction before their commit; it is not an additional implementation task of this plan. Its regressions stay mandatory at the later acceptance. The separate RC consumed contract is dealt with explicitly below.
 
-Vor dem ersten Compilerfix außerdem Compile-Zeit und Binärgröße eines 9rooms-Builds als Vergleichsbasis erfassen (Messprotokoll in Schritt 6).
+Before the first compiler fix, also record the compile time and binary size of a 9rooms build as a basis for comparison (measurement protocol in step 6).
 
-## Aktueller Stand: bereits vorhandenen Fix berücksichtigen
+## Current state: take the already existing fix into account
 
-`ast_compiler.cpp:3867` enthält inzwischen `registerForwardInfo`; Aufrufe stehen bei Methodenvorwärtsdeklarationen um 4164 und freien Funktionen um 4603. Den ursprünglichen Fix daher nicht nochmals unabhängig implementieren.
+`ast_compiler.cpp:3867` now contains `registerForwardInfo`; calls are at method forward declarations around 4164 and free functions around 4603. So do not implement the original fix again independently.
 
-Zwei konkrete Konsistenzpunkte bleiben zu prüfen/korrigieren:
+Two concrete consistency points remain to be checked/corrected:
 
-- Die Methodenvorregistrierung übergibt derzeit `ptr<Class>` als implizites this; `visitTopLevel` um 4721 fügt dagegen `ref<Class>` ein. this muss in beiden Phasen derselbe nicht-ownende Receiver sein.
-- `registerForwardInfo` überspringt vorhandene FunctionInfo-Einträge, und die Vorwärtsdeklarationsschleifen überspringen vorhandene LLVM-Funktionen. Eine bereits existierende LLVM-Deklaration oder unvollständige FunctionInfo darf das Nachtragen von Signatur-/Ownership-Daten nicht verhindern. Das ist eine defensive Konsistenzprüfung, kein weiterer gemessener Hauptbefund: visitFunction überschreibt die Daten später vollständig; relevant ist das Zeitfenster vor dessen Body-Emission.
+- The method pre-registration currently passes `ptr<Class>` as the implicit this; `visitTopLevel` around 4721, by contrast, inserts `ref<Class>`. this must be the same non-owning receiver in both phases.
+- `registerForwardInfo` skips existing FunctionInfo entries, and the forward declaration loops skip existing LLVM functions. An already existing LLVM declaration or an incomplete FunctionInfo must not prevent signature/ownership data from being added. That is a defensive consistency check, not a further measured main finding: visitFunction later overwrites the data completely; relevant is the time window before its body emission.
 
-Die fünf späteren Minimalproben bleiben eigenständige Abnahmekriterien; vollständige Forward-Metadaten allein beheben sie nicht.
+The five later minimal probes remain separate acceptance criteria; complete forward metadata alone does not fix them.
 
-## Schritt 0 — Reproduktionen und Status nach dem Basis-Commit festhalten
+## Step 0 — record reproductions and status after the base commit
 
-Dateien: neue beschreibend benannte Dateien unter `tests/lifetime/`, Einbindung in `tests/run_lifetime_leak_gates.sh` (GREEN nach erfolgreichem Fix). Keine heute noch freien numerischen Test-IDs fest voraussetzen, da am Arbeitsbaum parallel gearbeitet wird.
+Files: new descriptively named files under `tests/lifetime/`, integration into `tests/run_lifetime_leak_gates.sh` (GREEN after a successful fix). Do not presuppose numeric test IDs that are free today, since work on the working tree happens in parallel.
 
-Ausgangsartefakte:
+Starting artifacts:
 
-- `../9rooms_v2/leak_probes/review_20261002/isolated/forward_method_1000/probe.aiml` und die grüne Gegenreihenfolge `self_chained_1000`.
-- `../9rooms_v2/leak_probes/review_20261002_more/{chain,fnptr,throw,iface_consumer,fnptr_consumer}_1000/probe.aiml`, jeweils passende `_local`-Kontrolle.
+- `../9rooms_v2/leak_probes/review_20261002/isolated/forward_method_1000/probe.aiml` and the green counter-order `self_chained_1000`.
+- `../9rooms_v2/leak_probes/review_20261002_more/{chain,fnptr,throw,iface_consumer,fnptr_consumer}_1000/probe.aiml`, each with a matching `_local` control.
 
-Alle sechs Muster samt Kontrollen in einem gemeinsamen Testlauf ausführen und einzeln ausweisen. Die Forward-Probe als reine Compilerprobe ohne Spielimporte reduzieren, dabei rote/grüne Reihenfolge unter identischen Typen erhalten; falls noch keine _local-Kontrolle existiert, diese ergänzen. Die Gegenreihenfolge ersetzt den eigenen Local-Kontrollfall nicht. Aktuelle Baseline gegen einen festen Compiler-/Runtime-Stand aufnehmen. Produktionsdatenbanken werden nicht benötigt. Fehlerhafte Proben nicht als grüne Gates eintragen, bevor der zugehörige Fix tatsächlich besteht.
+Run all six patterns including controls in a shared test run and report them individually. Reduce the forward probe to a pure compiler probe without game imports, keeping the red/green order under identical types; if no _local control exists yet, add it. The counter-order does not replace its own local control case. Record the current baseline against a fixed compiler/runtime state. Production databases are not needed. Do not enter failing probes as green gates before the associated fix actually passes.
 
-## Schritt 1 — Vollständige Signaturregistrierung vor Body-Codegen
+## Step 1 — complete signature registration before body codegen
 
-Konkrete Stellen:
+Concrete places:
 
 - `src/core/ast_compiler.cpp:3867`: `registerForwardInfo`.
-- `src/core/ast_compiler.cpp:4120`: Methoden-Vorwärtsdeklarationen in `registerTypeDecl`.
-- `src/core/ast_compiler.cpp:4562`: freie FunctionDecl-Vorregistrierung.
-- `src/core/ast_compiler.cpp:4721`: implizites this bei `visitTopLevel`.
-- `src/core/ast_compiler.cpp:5449`: FunctionInfo-Aufbau in `visitFunction`.
+- `src/core/ast_compiler.cpp:4120`: method forward declarations in `registerTypeDecl`.
+- `src/core/ast_compiler.cpp:4562`: free FunctionDecl pre-registration.
+- `src/core/ast_compiler.cpp:4721`: implicit this in `visitTopLevel`.
+- `src/core/ast_compiler.cpp:5449`: FunctionInfo construction in `visitFunction`.
 - `src/core/context.h:91`: `FunctionInfo`.
 
-Änderung: Signaturaufbau in einen gemeinsam verwendeten Helfer ziehen. Rückgabetyp, Return-Ownership, Argumentnamen/-typen/-lifetimes sowie this=ref<Class> vollständig setzen. LLVM-Funktion bei Bedarf wiederverwenden. Bereits zugewiesene fptable_index-, Versions-, Source-/Importdaten erhalten; Signatur-Vervollständigung nicht mit Body-Definition oder Vergabe eines zweiten Funktionsslots verwechseln. Kein Body-Codegen während dieses Vorlaufs.
+Change: pull the signature construction into a shared helper. Set the return type, return ownership, argument names/types/lifetimes as well as this=ref<Class> completely. Reuse the LLVM function where needed. Keep already assigned fptable_index, version, source/import data; do not confuse signature completion with the body definition or the assignment of a second function slot. No body codegen during this pre-pass.
 
-Abnahme: identisches Verhalten bei beiden Methodenreihenfolgen, bei freien Vorwärtsaufrufen, importierten/geerbten und generierten Classgroup-Methoden. Keine Abhängigkeit von kurzen Methodennamen in globalen Producer-Sets.
+Acceptance: identical behaviour for both method orders, for free forward calls, imported/inherited and generated classgroup methods. No dependence on short method names in global producer sets.
 
-## Schritt 2 — Eine typisierte Call-Signaturauflösung
+## Step 2 — one typed call signature resolution
 
-Konkrete Stellen:
+Concrete places:
 
 - `src/core/ast_compiler_stmt.cpp:374`: `ownedContainerCallType`.
 - `src/core/ast_compiler_stmt.cpp:384`: `resolveCallTarget`.
 - `src/core/ast_compiler_stmt.cpp:413`: `ownedModelCallType`.
 - `src/core/ast_compiler_call.cpp:75`: `parseFnType`.
-- `src/core/ast_compiler_call.cpp:146–187`: Auflösung tiefer Receiver für die eigentliche Codegenerierung.
-- `src/core/context.h:568`: `InterfaceMethod`, daneben `InterfaceInfo`.
-- `src/core/ast_compiler.h:89–95`: bisherige Ownership-/Call-Helfer; neue Deklarationen hier ergänzen.
+- `src/core/ast_compiler_call.cpp:146–187`: resolution of deep receivers for the actual code generation.
+- `src/core/context.h:568`: `InterfaceMethod`, next to it `InterfaceInfo`.
+- `src/core/ast_compiler.h:89–95`: previous ownership/call helpers; add new declarations here.
 
-Vorschlag: `ResolvedCallSignature` als semantisches Ergebnis einführen: Dispatch-Art, Rückgabetyp, Return-Ownership, Parametertypen/-verträge und gegebenenfalls konkretes FunctionInfo-Ziel. Ein fn- oder Interface-Aufruf braucht keine erfundene konkrete FunctionInfo; sein statischer Signaturtyp genügt.
+Proposal: introduce `ResolvedCallSignature` as the semantic result: dispatch kind, return type, return ownership, parameter types/contracts and, if applicable, the concrete FunctionInfo target. An fn or interface call needs no invented concrete FunctionInfo; its static signature type is enough.
 
-Auflösung muss freie Funktionen, einfache und verschachtelte Receiver, this/<., Vererbung, Interface-Signaturen sowie fn<...>-Variablen abdecken. Den vorhandenen fn-Typparser gemeinsam nutzbar machen; keine zweite abweichende Parserimplementierung.
+The resolution must cover free functions, simple and nested receivers, this/<., inheritance, interface signatures as well as fn<...> variables. Make the existing fn type parser shareable; no second divergent parser implementation.
 
-Wichtig: Signaturanalyse darf Receiver/Argumente nicht erneut auswerten. `resolvePropertyWritePtr` erzeugt Adress-/IR-Code und darf deshalb nicht blind als zweiter Analyseaufruf verwendet werden. Typauflösung von Werteauswertung trennen oder das bereits ermittelte Call-Ziel wiederverwenden.
+Important: signature analysis must not evaluate receivers/arguments again. `resolvePropertyWritePtr` generates address/IR code and must therefore not be used blindly as a second analysis call. Separate type resolution from value evaluation or reuse the call target already determined.
 
-`ownedContainerCallType`/`ownedModelCallType` nutzen danach diese Signaturdaten. Builtin-Accessor-Semantik gesondert typisiert halten: keine pauschale Annahme, dass jede Methode namens get/at borrowed ist oder jeder undurchsichtige Pointer ein Container. Spec 61 §5.4/§5.7 unterscheidet Elementarten; bestehende Accessor-Tests müssen erhalten bleiben.
+`ownedContainerCallType`/`ownedModelCallType` then use this signature data. Keep builtin accessor semantics typed separately: no blanket assumption that every method called get/at is borrowed or every opaque pointer is a container. Spec 61 §5.4/§5.7 distinguishes element kinds; existing accessor tests must be kept.
 
-Abnahme: `chain_1000` und `fnptr_1000` sind grün; gleichnamige Methoden verschiedener Klassen dürfen einander nicht beeinflussen. Zählerprobe bestätigt genau eine Auswertung je Receiver/Argument.
+Acceptance: `chain_1000` and `fnptr_1000` are green; methods of the same name in different classes must not influence each other. A counter probe confirms exactly one evaluation per receiver/argument.
 
-## Schritt 3 — Die vier Normalpfad-Leaks zuerst beheben
+## Step 3 — fix the four normal-path leaks first
 
-Nach der typisierten Auflösung aus Schritt 2 die normalen Call-Abschlüsse vereinheitlichen. Dieser überschaubare Zwischenstand darf mit ausdrücklich dokumentierter roter Throw-Probe separat abgenommen und committet werden. Er ist noch keine vollständige §9.3-Abnahme.
+After the typed resolution from step 2, unify the normal call completions. This manageable intermediate state may be accepted and committed separately with an explicitly documented red throw probe. It is not yet a complete §9.3 acceptance.
 
-Konkrete Stellen in `src/core/ast_compiler_call.cpp`:
+Concrete places in `src/core/ast_compiler_call.cpp`:
 
-| Pfad | Bestehende Stelle | Änderung im Normalpfad |
+| Path | Existing place | Change in the normal path |
 |---|---|---|
-| Direkte freie Funktion | `ctrArgTemps/modelArgTemps` um 555; Releases um 786 | vorhandenen Abschluss als gemeinsame Funktion nutzbar machen |
-| Direkte Methode | `ctrArgTemps/modelArgTemps` um 3442; Releases um 3578 | denselben Abschluss verwenden; Parameterversatz für this berücksichtigen |
-| fn-Verbraucher | Block um 734, unmittelbarer Return um 778 | nach erfolgreichem Call durch den gemeinsamen Abschluss führen; die ptr-/Argumentkorrektur des Basis-Commits erhalten |
-| Interface-Verbraucher | Vtable-Pfad um 850–1000, sret-Return um 987 und normaler Return um 999 | temporäre Argument-Owner sammeln und für alle Rückgabeformen einschließlich void/sret freigeben |
+| Direct free function | `ctrArgTemps/modelArgTemps` around 555; releases around 786 | make the existing completion usable as a shared function |
+| Direct method | `ctrArgTemps/modelArgTemps` around 3442; releases around 3578 | use the same completion; take the parameter offset for this into account |
+| fn consumer | block around 734, immediate return around 778 | route through the shared completion after a successful call; keep the ptr/argument correction of the base commit |
+| Interface consumer | vtable path around 850–1000, sret return around 987 and normal return around 999 | collect temporary argument owners and free them for all return forms including void/sret |
 
-Zusammen mit Schritt 2 werden damit `chain`, `fnptr`, `iface_consumer` und `fnptr_consumer` grün. Nicht bloß das return im fn-Pfad entfernen, ohne die Ergebnis-/void-Behandlung zu erhalten.
+Together with step 2, `chain`, `fnptr`, `iface_consumer` and `fnptr_consumer` thereby become green. Do not merely remove the return in the fn path without keeping the result/void handling.
 
-Vor Cleanup das Call-Resultat sichern und korrekt weiterreichen. Aliasing erlaubter Containerreturns muss gültig bleiben: eine eigene Rückgabereferenz muss vor dem Release der Argumentreferenz bestehen. Bestehende String-, Model- und Move-Helfer erhalten; derselbe Owner darf nur einen Cleanup-Verantwortlichen haben.
+Secure the call result before cleanup and pass it on correctly. Aliasing of allowed container returns must stay valid: a return reference of its own must exist before the argument reference is released. Keep the existing string, model and move helpers; the same owner may have only one party responsible for cleanup.
 
-Abnahme: vier rote Muster und alle zugehörigen _local-Kontrollen jeweils mit 10/1000 Aufrufen grün, benannte Caller-Container danach weiterbenutzbar, Ergebnisse unverändert. Throw-Tests weiterhin ausführen und als RED mit gemessenen Zahlen führen. Erfolg dieser Stufe nicht als vollständige Spec-61-Leakfreiheit ausgeben.
+Acceptance: four red patterns and all associated _local controls green at 10/1000 calls each, named caller containers still usable afterwards, results unchanged. Keep running the throw tests and carry them as RED with measured numbers. Do not present success at this stage as complete spec 61 leak freedom.
 
-## Schritt 4 — RC-consumed als eigenen Vertrag korrigieren
+## Step 4 — correct RC consumed as a contract of its own
 
-Diese Lücke gehört ausdrücklich zum Umfang. Sie ist vom ptr<T>-Move-Fix des Nutzers zu unterscheiden.
+This gap is explicitly part of the scope. It is to be distinguished from the user's ptr<T> move fix.
 
-Konkrete Stellen:
+Concrete places:
 
-- `src/core/ast_compiler_call.cpp`: consumed-Auswertung um den direkten Funktionspfad (ab 555), direkte Methoden (ab 3442), Interfaces (ab 916) und den durch den Basis-Commit korrigierten fn-Pfad (ab 734).
-- `src/core/ast_compiler_stmt.cpp`: `consumeLocalDrop`, `consumeStringTemp`; Aufrufer nach Typklasse unterscheiden.
-- `src/core/ast_compiler.cpp`: `visitFunction` und Parameter-Incref/`pendingParamDrops`; §8-Call-Referenz und dauerhafte Speicherung konsistent behandeln.
-- `src/core/ownership_analyzer.cpp` / `ownership_flow.h`: Argument-Move-Entscheidungen dürfen ein benanntes RC-Local nicht allein wegen consumed als Moved markieren. Diese Stellen nach dem Basis-Commit erneut lokalisieren.
+- `src/core/ast_compiler_call.cpp`: consumed evaluation around the direct function path (from 555), direct methods (from 3442), interfaces (from 916) and the fn path corrected by the base commit (from 734).
+- `src/core/ast_compiler_stmt.cpp`: `consumeLocalDrop`, `consumeStringTemp`; distinguish callers by type class.
+- `src/core/ast_compiler.cpp`: `visitFunction` and parameter incref/`pendingParamDrops`; treat the §8 call reference and permanent storage consistently.
+- `src/core/ownership_analyzer.cpp` / `ownership_flow.h`: argument move decisions must not mark a named RC local as Moved merely because of consumed. Re-locate these places after the base commit.
 
-Aktueller im Review beschriebener Zustand: Caller-Local verliert per consumeLocalDrop seine Referenz, Callee bekommt sie ohne incref. Das kann rechnerisch balanciert sein, verletzt aber §9.2 bei weiterer Nutzung des Caller-Locals: nach Freigabe durch den Callee hängt dessen Alias.
+Current state described in the review: the caller local loses its reference via consumeLocalDrop, the callee gets it without an incref. That can balance arithmetically, but violates §9.2 when the caller local is used further: after release by the callee its alias dangles.
 
-Ziel gemäß §9.2: benannte RC-Werte (string, list/map/buffer/cascade, shared) bleiben beim Caller gültig. Der Callee übernimmt eine zusätzliche eigene Referenz, nicht diejenige des benannten Callers. Speichert er sie dauerhaft, wird diese eigene Referenz in den Speicherort übertragen oder dort korrekt geteilt; sein Parameterdrop muss dazu passen. Nicht blind zusätzlich incref einbauen, wenn der Parameterpfad schon eine Call-Referenz hält: insgesamt genau eine zusätzliche Callee-Referenz herstellen und jede Speicherung gegen ihre vorhandene Retain-/Move-Semantik prüfen.
+Goal per §9.2: named RC values (string, list/map/buffer/cascade, shared) stay valid at the caller. The callee takes an additional reference of its own, not the one of the named caller. If it stores it permanently, this own reference is transferred into the storage location or shared correctly there; its parameter drop must match. Do not blindly add an extra incref when the parameter path already holds a call reference: establish exactly one additional callee reference in total and check every store against its existing retain/move semantics.
 
-ptr<T> bleibt ein echter Move; ref<T> bleibt nicht-ownend. Für RC-Temporaries ist Referenztransfer als Optimierung nur zulässig, wenn wirklich kein überlebender Caller-Owner benötigt wird. Sichere Grundimplementierung: Callee-Referenz sichern und Caller-Temporary regulär droppen. Ein RC-consumed-Argument darf deshalb nicht pauschal aus der Caller-Temp-Cleanup-Liste ausgeschlossen werden.
+ptr<T> stays a real move; ref<T> stays non-owning. For RC temporaries a reference transfer is only allowed as an optimisation when really no surviving caller owner is needed. Safe base implementation: secure the callee reference and drop the caller temporary regularly. An RC consumed argument must therefore not be excluded across the board from the caller temp cleanup list.
 
-Abnahme je betroffener RC-Klasse: Callee hält Wert nach Return; Caller liest/mutiert seinen benannten Wert weiter; Callee löscht/ersetzt später seine Referenz; Caller bleibt gültig und wird am Ende genau einmal freigegeben. Beide Freigabereihenfolgen testen, ebenso temporäre Argumente und Throw nach Übernahme. Für fn-Typen nur Verträge verwenden, die dessen statische Signatur tatsächlich trägt; nicht vom zufälligen aktuellen Funktionsziel ableiten oder neue Syntax als Teil dieses Fixes einführen.
+Acceptance per affected RC class: the callee holds the value after return; the caller keeps reading/mutating its named value; the callee later deletes/replaces its reference; the caller stays valid and is freed exactly once at the end. Test both release orders, as well as temporary arguments and a throw after the takeover. For fn types use only contracts that its static signature actually carries; do not derive them from the incidental current function target or introduce new syntax as part of this fix.
 
-## Schritt 5 — Ein typisierter Temp-Frame einschließlich Strings, Modelle und Unwind
+## Step 5 — one typed temp frame including strings, models and unwind
 
-Konkrete Stellen:
+Concrete places:
 
-- `src/core/context.h:316–380`: `ScopeDrop`, `cleanupStack`, `stmtDropSnapshot`, `unwindPadCache`, bisherige string-only `stmtTempStack`.
-- `src/core/ast_compiler_stmt.cpp:224`: `visitStatement` und Statement-Snapshot.
+- `src/core/context.h:316–380`: `ScopeDrop`, `cleanupStack`, `stmtDropSnapshot`, `unwindPadCache`, the previous string-only `stmtTempStack`.
+- `src/core/ast_compiler_stmt.cpp:224`: `visitStatement` and the statement snapshot.
 - `src/core/ast_compiler_stmt.cpp:471`: `releaseContainerHandle` / `releaseContainerCopyTemp`; `:793`: `makeHandleDrop`.
 - `src/core/ast_compiler_stmt.cpp:4605`: `emitScopeDrop`; `:4796`: `aimlUnwindDest`.
-- Weitere Integrationsstellen in derselben Datei: `consumeStringTemp`, Statement-Ende, `visitRetStmt`, `visitIfStmt`, `visitWhileStmt` und `visitThrow` mit den bisherigen stmtTempStack-Schleifen.
-- `src/core/ast_compiler_call.cpp:20`: `callOrInvoke`; gemeinsame Abschlüsse aus Schritt 3 sowie Erzeugung/Adoption von String- und Model-Resultaten.
-- `src/core/ast_compiler.h`: Deklarationen der typisierten Temp-Frame-Helfer.
+- Further integration points in the same file: `consumeStringTemp`, statement end, `visitRetStmt`, `visitIfStmt`, `visitWhileStmt` and `visitThrow` with the previous stmtTempStack loops.
+- `src/core/ast_compiler_call.cpp:20`: `callOrInvoke`; shared completions from step 3 as well as creation/adoption of string and model results.
+- `src/core/ast_compiler.h`: declarations of the typed temp frame helpers.
 
-### Feste Slots statt flusssensitiver Aktivierungsverwaltung
+### Fixed slots instead of flow-sensitive activation management
 
-Pro statischer Temp-Stelle einen festen Slot im Funktions-Entry-Block anlegen. Temp-Typ und Drop-Deskriptor stehen vor der betreffenden Statement-Emission fest (typisierter Vorlauf über die Ausdrucksstellen, ohne IR-Auswertung). Der Frame enthält die vollständige Menge seiner Slots, nicht nur diejenigen, deren Ausdruck schon übersetzt wurde.
+Create a fixed slot in the function entry block per static temp site. Temp type and drop descriptor are fixed before the emission of the statement concerned (a typed pre-pass over the expression sites, without IR evaluation). The frame contains the complete set of its slots, not just those whose expression has already been compiled.
 
-**Bei jedem dynamischen Statement-Beginn** alle Slots dieses Frames auf null/zero setzen, bevor eine Teilauswertung werfen kann. Einmalige Initialisierung beim Funktionseintritt reicht nicht. Für wiederholt ausgewertete while-Bedingungen erfolgt der Reset am Beginn jeder Bedingungsauswertung; Kurzschluss-/Verzweigungspfade dürfen keinen alten Temp-Wert wiederverwenden. Bei verschachtelten Statements nur deren eigenen Frame zurücksetzen, niemals noch benötigte äußere Owner. Vor erneutem Reset müssen Werte des vorherigen Durchlaufs freigegeben oder übertragen sein.
+**At every dynamic statement start** set all slots of this frame to null/zero, before a partial evaluation can throw. A one-time initialisation at function entry is not enough. For repeatedly evaluated while conditions the reset happens at the start of every condition evaluation; short-circuit/branch paths must not reuse an old temp value. For nested statements reset only their own frame, never still needed outer owners. Before a renewed reset, values of the previous pass must be freed or transferred.
 
-Container-/String-/Box-Handles verwenden Nullslots; Model-Resultate benötigen passend ausgerichtete, für ihren Drop sicher zero-initialisierte Slots. Die jeweilige Drop-Art muss den leeren Zustand tatsächlich sicher behandeln; nicht pauschal jeden Ressourcentyp wie einen nullbaren Pointer behandeln. Bestehende Typklassifikatoren und Drop-Deskriptoren wiederverwenden.
+Container/string/box handles use null slots; model results need suitably aligned slots that are safely zero-initialised for their drop. The respective drop kind must actually handle the empty state safely; do not treat every resource type across the board like a nullable pointer. Reuse existing type classifiers and drop descriptors.
 
-Nach erfolgreichem Producer-/Interpolationsergebnis den Owner sofort in seinen Slot schreiben. Wirft die Erzeugung selbst, bleibt der Slot leer. Auf Normalpfad nach Ende der Nutzung freigeben und leeren; bei echter Ownership-Übernahme durch Local/Return/Store nur den ursprünglichen Besitzslot leeren. RC-consumed nach Schritt 4 behandeln. Bei einem Move-Parameter Übergabe erst committen, wenn die notwendige Argumentauswertung abgeschlossen ist; ein vorheriger Throw muss die noch beim Caller liegenden Owner abbauen.
+After a successful producer/interpolation result, write the owner into its slot immediately. If the creation itself throws, the slot stays empty. On the normal path free and empty it after the end of use; on a real ownership takeover by a local/return/store only empty the original owning slot. Treat RC consumed per step 4. For a move parameter only commit the hand-over once the necessary argument evaluation is complete; a throw before that must dismantle the owners still lying with the caller.
 
-### Unwind-Pads und Cache
+### Unwind pads and cache
 
-Ein Pad darf sämtliche Slots des gültigen Temp-Frames unbedingt, aber null-/zero-sicher droppen: nicht ausgeführte und bereits übertragene Temporaries haben leere Slots. Keine flusssensitive Aktivierungsmenge und keine pfadabhängigen SSA-Ergebnisse im Pad. Bei verschachtelten Frames die tatsächlich verlassene Frame-Kette in umgekehrter Erzeugungsreihenfolge behandeln; erhalten bleibende äußere Scopes nicht mitfreigeben.
+A pad may drop all slots of the valid temp frame unconditionally, but null/zero-safely: temporaries not executed and already transferred have empty slots. No flow-sensitive activation set and no path-dependent SSA results in the pad. For nested frames handle the frame chain actually left in reverse creation order; do not free outer scopes that remain.
 
-`aimlUnwindDest` behält den Statement-Snapshotfilter für benannte Locals bei. Temp-Frames werden zusätzlich aufgenommen und nicht durch `if (snap && !snap->count(it->addr)) continue` ausgefiltert. So bleibt eine noch fehlgeschlagene Local-Initialisierung geschützt, während bereits erzeugte temporäre Argumente desselben Statements korrekt verschwinden.
+`aimlUnwindDest` keeps the statement snapshot filter for named locals. Temp frames are added in addition and are not filtered out by `if (snap && !snap->count(it->addr)) continue`. That way a still failed local initialisation stays protected, while already created temporary arguments of the same statement disappear correctly.
 
-Pad-Cache-Schlüssel: Funktion, Unwind-/Catch-Ziel, vorhandene normale Scope-Drops, statische Statement-/Auswertungsidentität und vollständige Temp-Slot-Menge einschließlich Drop-Arten/Frame-Kette. Innerhalb desselben Frames braucht er keinen Aktivierungszustand, weil die Nullslots diesen zur Laufzeit repräsentieren. Typischerweise ein wiederverwendbarer Pad je Cleanup-Konfiguration, nicht ein eigener Pad pro Temp-Stelle.
+Pad cache key: function, unwind/catch target, existing normal scope drops, static statement/evaluation identity and the complete temp slot set including drop kinds/frame chain. Within the same frame it needs no activation state, because the null slots represent it at runtime. Typically one reusable pad per cleanup configuration, not a separate pad per temp site.
 
-### Strings und Modelle sind Teil dieser Stufe
+### Strings and models are part of this stage
 
-Die bisherige Verschiebung der String-Migration entfällt. `consume_throw("x-${i}")` und ein werfender Consumer eines heap-ownenden Model-Temporaries bekommen eigene rote Reproduktionen, bevor diese Stufe beginnt; sie sind beim Abschluss zwingend grün. String-Temps aus Interpolation, String-Rückgaben und Model-Temps laufen in denselben typisierten Frame. Nach Migration ihre bisherigen stmtTempStack-/modelArgTemps-Releases entfernen oder auf den Frame umleiten, damit kein doppelter Drop entsteht.
+The previous postponement of the string migration is dropped. `consume_throw("x-${i}")` and a throwing consumer of a heap-owning model temporary get their own red reproductions before this stage starts; they are mandatorily green at completion. String temps from interpolation, string returns and model temps run into the same typed frame. After migration remove their previous stmtTempStack/modelArgTemps releases or redirect them to the frame, so that no double drop arises.
 
-Gemeinsame Abschlusshelfer aus Schritt 3 auf den Frame umstellen, ohne bereits behobene Normalpfade wieder zu verschlechtern. C++-RAII stellt Codegeneratorzustand wieder her, ersetzt aber keine LLVM-Ausgabe von Laufzeit-Cleanup.
+Switch the shared completion helpers from step 3 over to the frame without worsening already fixed normal paths again. C++ RAII restores code generator state, but does not replace the LLVM output of runtime cleanup.
 
-Abnahme: Container, String und heap-ownendes Model jeweils bei normalem Return, Consumer-Throw, Producer-Throw, später werfendem Argument, Schleifen und verschachtelten try/catch. `throw_1000` samt _local und allen neuen String-/Model-Kontrollen grün; kein UAF/Double-Free.
+Acceptance: container, string and heap-owning model each on normal return, consumer throw, producer throw, a later throwing argument, loops and nested try/catch. `throw_1000` including _local and all new string/model controls green; no UAF/double free.
 
-## Schritt 6 — Abnahme und Integration
+## Step 6 — acceptance and integration
 
-Gezielte Regressionen zuerst, dann bestehende Gates:
+Targeted regressions first, then the existing gates:
 
-- Einen gemeinsamen Gate-Lauf mit allen sechs Ausgangsmustern und sämtlichen _local-Kontrollen durchführen; die Forward-Reihenfolgekontrolle zusätzlich behalten. 0 definitely lost, 0 indirectly lost, keine Valgrind-Fehler, korrekte Resultate. Skalierung 10/1000 beibehalten. An der Endabnahme darf keiner dieser Fälle nur als erwartetes RED stehen.
-- Dispatch × normal/throw × temporär/benannt abdecken; Zusatzfälle später werfendes Argument, verschachtelter Receiver, importierte/geerbte Methode, gleichnamige Methoden, void/sret, Rückgabe teilt einen Container mit dem Argument.
-- ptr<T>-Argumente in allen vier Aufrufwegen (frei, Methode, Interface, fn) testen: benannter Owner und Temporary, normale Rückkehr und Throw; Caller-Move-Zustand korrekt, keine zweite Freigabe. Implizites this bleibt Borrow. Die vom Nutzer vorab behobene fn-Lücke muss dauerhaft abgesichert bleiben.
-- RC-consumed-Tests aus Schritt 4 und String-/Model-Unwind-Tests aus Schritt 5 laufen im selben Abnahmepaket.
-- List/map/buffer durch repräsentative Fälle prüfen; keine ausschließlich auf list<i32> zugeschnittene Typentscheidung.
-- `bash tests/run_lifetime_leak_gates.sh` und `bash tests/run_memory_sanitizers.sh` gemäß vorhandenen Repo-Voraussetzungen ausführen. Einen Buildfehler oder nicht ausgeführten Sanitizer nicht als bestanden werten.
-- Originalprobe `poison_tick_zone` mit unveränderter 9rooms-Ausdruckszeile neu bauen. Der zusätzliche lineare Verlust muss verschwinden. Die bekannte konstante 64-B-Allokation der alten Testvorlage separat ausweisen oder den Testaufbau bereinigen; nicht als tolerierten allgemeinen Leak ins Compiler-Gate übernehmen.
-- Danach 9rooms neu bauen und einen normalen Match-/Phasenwechsel sowie Match-Ende prüfen. Native Minimalproben ersetzen keinen WASM-/Browserlauf.
+- Run one shared gate run with all six starting patterns and all _local controls; keep the forward order control in addition. 0 definitely lost, 0 indirectly lost, no Valgrind errors, correct results. Keep the 10/1000 scaling. At final acceptance none of these cases may stand merely as an expected RED.
+- Cover dispatch × normal/throw × temporary/named; additional cases: a later throwing argument, a nested receiver, an imported/inherited method, methods of the same name, void/sret, a return that shares a container with the argument.
+- Test ptr<T> arguments on all four call routes (free, method, interface, fn): named owner and temporary, normal return and throw; caller move state correct, no second release. Implicit this stays a borrow. The fn gap fixed beforehand by the user must stay permanently secured.
+- The RC consumed tests from step 4 and the string/model unwind tests from step 5 run in the same acceptance package.
+- Check list/map/buffer through representative cases; no type decision tailored exclusively to list<i32>.
+- Run `bash tests/run_lifetime_leak_gates.sh` and `bash tests/run_memory_sanitizers.sh` according to the existing repo preconditions. Do not count a build error or a sanitizer that was not run as passed.
+- Rebuild the original probe `poison_tick_zone` with the unchanged 9rooms expression line. The additional linear loss must disappear. Report the known constant 64-B allocation of the old test template separately or clean up the test setup; do not take it into the compiler gate as a tolerated general leak.
+- After that rebuild 9rooms and check a normal match/phase change as well as the match end. Native minimal probes do not replace a WASM/browser run.
 
-### Compile-Zeit und Binärgröße messen
+### Measure compile time and binary size
 
-Vor dem ersten Fix auf dem validierten Basis-Commit und nach der Normalpfad-Stufe sowie nach dem Temp-/Unwind-Umbau denselben 9rooms-Build messen. Native Server- und WASM-Client-Ziele, Buildbefehl, Flags, Toolchain-Hashes, Quellstand und Zielartefakte im Protokoll festhalten. Ausschließlich passende Messpaare vergleichen; parallele Builds während der Messung vermeiden.
+Measure the same 9rooms build before the first fix on the validated base commit, after the normal-path stage and after the temp/unwind rework. Record native server and WASM client targets, build command, flags, toolchain hashes, source state and target artifacts in the protocol. Compare only matching measurement pairs; avoid parallel builds during the measurement.
 
-Jeweils sauberen Build und Build mit warmem Importcache getrennt messen, möglichst drei Läufe und Median für Wall-/CPU-Zeit; zusätzlichen Peak-RSS mit erfassen. Eigene Build-/Cache-Verzeichnisse verwenden, statt aktive fremde Caches zu löschen. Binärgröße der gleichen ungestrippten/gestrippten Artefakte sowie .text- und Exception-/Unwind-Sektionen (nativ) bzw. WASM-Dateigröße (Client) ausweisen. Ergänzend Zahl erzeugter Unwind-Pads/Temp-Slots aus IR oder Diagnostik zählen.
+Measure a clean build and a build with a warm import cache separately, preferably three runs and the median for wall/CPU time; also record peak RSS. Use separate build/cache directories instead of deleting active foreign caches. Report the binary size of the same unstripped/stripped artifacts as well as the .text and exception/unwind sections (native) or the WASM file size (client). Additionally count the number of generated unwind pads/temp slots from IR or diagnostics.
 
-Absolute Werte und prozentuale Änderung dokumentieren. Eine deutliche Mehrung auf Pad-Duplizierung, übergroße Slot-Frames oder doppelte Signaturanalyse untersuchen; nicht mit einem unbegründeten neuen Grenzwert automatisch akzeptieren. Vorhandene Performance-Grenzen gelten, ansonsten Ergebnis transparent zur Bewertung vorlegen. Ohne diese Messung keine abgeschlossene Performance-Abnahme behaupten.
+Document absolute values and the percentage change. Investigate a significant increase for pad duplication, oversized slot frames or double signature analysis; do not accept it automatically with an unjustified new limit. Existing performance limits apply, otherwise present the result transparently for assessment. Without this measurement claim no completed performance acceptance.
 
-## Empfohlene Umsetzungseinheiten
+## Recommended implementation units
 
-0. Nutzer validiert und committet seinen bestehenden Umbau inklusive fn-ptr-Move-Fix. Danach Basis/Zeilen aktualisieren und Messbaseline aufnehmen.
-1. Reproduktionen samt RED/GREEN-Status und verbleibende Signaturkonsistenz (Schritte 0–1).
-2. Typisierte Auflösung und gemeinsamer normaler Call-Abschluss (Schritte 2–3): vier zusätzliche Normalpfad-Muster grün, Throw ausdrücklich weiterhin RED. Separat abnehmbar, kein Anspruch vollständiger §9.3-Erfüllung.
-3. RC-consumed-Co-Ownership (Schritt 4) als eigener prüfbarer Vertragsschritt.
-4. Feste typisierte Temp-Slots für Container, Strings und Modelle einschließlich Unwind (Schritt 5); Throw- und neue Unwind-Regressionen auf GREEN umstellen.
-5. Gemeinsamer vollständiger Gate-Lauf, 9rooms-Abnahme und Buildkostenvergleich (Schritt 6).
+0. The user validates and commits their existing rework including the fn ptr move fix. After that update the base/lines and record the measurement baseline.
+1. Reproductions including RED/GREEN status and remaining signature consistency (steps 0–1).
+2. Typed resolution and the shared normal call completion (steps 2–3): four additional normal-path patterns green, throw explicitly still RED. Separately acceptable, no claim of complete §9.3 fulfilment.
+3. RC consumed co-ownership (step 4) as a checkable contract step of its own.
+4. Fixed typed temp slots for containers, strings and models including unwind (step 5); switch throw and the new unwind regressions to GREEN.
+5. A shared complete gate run, 9rooms acceptance and build cost comparison (step 6).
 
-Definition of done: alle sechs Muster und Kontrollen sowie RC-consumed-, ptr-Dispatch- und String-/Model-Unwind-Regressionen grün; identische Resultate unabhängig von Methodenreihenfolge/Dispatch; sichere normale und Exception-Ausgänge; gemessene Compile-Zeit/Binärgröße; keine erforderliche 9rooms-Umschreibung und keine Abweichung von Spec 61.
+Definition of done: all six patterns and controls as well as the RC consumed, ptr dispatch and string/model unwind regressions green; identical results regardless of method order/dispatch; safe normal and exception exits; measured compile time/binary size; no required 9rooms rewrite and no deviation from spec 61.
