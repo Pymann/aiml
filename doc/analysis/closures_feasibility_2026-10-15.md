@@ -1,106 +1,106 @@
-# Machbarkeit von Closures in AIML
+# Feasibility of closures in AIML
 
-Stand: 15.10.2026. Quellcodebasierte Architekturprüfung; keine Implementierung, kein Closure-Prototyp und kein neuer Compiler-Testlauf. Aufwand ist eine grobe technische Schätzung, keine gemessene Umsetzungsgeschwindigkeit. Annahme: eine mit AIML vertraute Person, konzentrierte Arbeit, keine größeren zusätzlichen Compilerfehler.
+As of: 15.10.2026. Source-based architecture review; no implementation, no closure prototype and no new compiler test run. The effort is a rough technical estimate, not a measured implementation speed. Assumption: a person familiar with AIML, focused work, no major additional compiler bugs.
 
-> **Nachtrag 15.10.2026:** Als Spec und Abnahmetests ausformuliert: `spec/64_closures.md`
-> (PROPOSAL) und `tests/closures/` (5 positive + 16 neg-Proben; geschrieben, noch nicht
-> kompiliert). Drei Entscheidungen weichen vom Text unten ab:
-> **(1)** Signaturen werden **benannt** deklariert (`- callable: { name: Each, args: … }` →
-> `block<Each>` / `closure<Each>`) statt inline `<param:return>`; **(2)** es gibt **zwei**
-> Arten — `block<Sig>` (nicht-entkommend, implizite Captures per Referenz, nicht-besitzend,
-> null Allokation) und `closure<Sig>` (entkommend, explizite Captures, besitzend move-only);
-> **(3)** `fn<…>` bleibt vollständig unverändert. Punkt (2) macht den `engine.run`-Fall zum
-> leichtesten statt zum schwersten: ein `block` erreicht den App-Zustand im aufrufenden Frame,
-> ohne Global, ohne Heap-Environment, ohne Ownership-Transfer. Implementierung steht aus.
+> **Addendum 15.10.2026:** Written up as a spec and acceptance tests: `spec/64_closures.md`
+> (PROPOSAL) and `tests/closures/` (5 positive + 16 neg probes; written, not yet
+> compiled). Three decisions deviate from the text below:
+> **(1)** signatures are declared **by name** (`- callable: { name: Each, args: … }` →
+> `block<Each>` / `closure<Each>`) instead of inline `<param:return>`; **(2)** there are **two**
+> kinds — `block<Sig>` (non-escaping, implicit captures by reference, non-owning,
+> zero allocation) and `closure<Sig>` (escaping, explicit captures, owning move-only);
+> **(3)** `fn<…>` stays completely unchanged. Point (2) makes the `engine.run` case the
+> easiest instead of the hardest: a `block` reaches the app state in the calling frame,
+> without a global, without a heap environment, without an ownership transfer. Implementation is pending.
 
-## Ergebnis
+## Result
 
-Closures sind machbar. Ein eingeschränkter Prototyp ist mittelschwer; eine sichere, allgemeine Sprachfunktion ist anspruchsvoll. Die größte Arbeit liegt in Ownership, Lebensdauer und Callback-Integration, nicht im YAML-Parser oder im indirekten LLVM-Aufruf.
+Closures are feasible. A restricted prototype is of medium difficulty; a safe, general language feature is demanding. The biggest work lies in ownership, lifetime and callback integration, not in the YAML parser or the indirect LLVM call.
 
-AIML hat bereits nackte Funktionszeiger und Interface-Aufrufe mit Objektkontext. Das liefert einen erheblichen Teil der technischen Grundlage. Es fehlt die Verknüpfung von lexikalisch eingefangenen Werten mit einem aufrufbaren, korrekt verwalteten Objekt.
+AIML already has bare function pointers and interface calls with object context. That provides a considerable part of the technical basis. What is missing is linking lexically captured values to a callable, correctly managed object.
 
-## Was heute existiert
+## What exists today
 
-| Bereich | Befund | Relevante Stelle |
+| Area | Finding | Relevant location |
 |---|---|---|
-| Funktionswerte | `fn<...>` ist ein einzelner opaker Codezeiger, kein Paar aus Code und Umgebung | `src/core/context.h:1277`, `spec/12_1_function_pointers.md` |
-| Funktionsreferenz | Funktionsname wird in einen Zeiger umgewandelt | `src/core/ast_compiler_expr.cpp:423` |
-| Indirekter Aufruf | Signatur wird aus fn-Typ rekonstruiert; Aufruf über `callOrInvoke`, inklusive bestehender Argument-Aufräumlogik | `src/core/ast_compiler_call.cpp:1035` |
-| Objektkontext | Interface-Dispatch verwendet `{obj, vtable}` und einen versteckten this-Parameter | `src/core/ast_compiler_call.cpp:1158` |
-| Syntax/AST | Geprüfte AST- und Expression-/Block-Builder haben keinen dedizierten Closure-Ausdruck beziehungsweise Capture-Knoten | `src/core/ast_nodes.h`, `src/core/ast/expression_builder.h`, `src/core/ast/block_builder.cpp` |
-| Speicherregeln | fn ist laut Spec ein trivial kopierbarer Wert ohne Teardown; ptr/shared/ref und Cleanup-Pfade existieren für andere Typen | `spec/61_memory_management.md:156`, `src/core/borrow_check.cpp` |
-| Engine-Callbacks | Feste native Signaturen `void(float)` und `void()`; Builtin übergibt drei Zeiger | `src/sys/engine_runtime.cpp:491`, `src/core/builtin_registry.cpp:8311` |
-| Browserpfad | Der aktive engine.run-Pfad verwendet eine manuelle Asyncify-Schleife | `src/sys/engine_runtime.cpp:503` |
+| Function values | `fn<...>` is a single opaque code pointer, not a pair of code and environment | `src/core/context.h:1277`, `spec/12_1_function_pointers.md` |
+| Function reference | A function name is converted into a pointer | `src/core/ast_compiler_expr.cpp:423` |
+| Indirect call | The signature is reconstructed from the fn type; the call goes via `callOrInvoke`, including the existing argument cleanup logic | `src/core/ast_compiler_call.cpp:1035` |
+| Object context | Interface dispatch uses `{obj, vtable}` and a hidden this parameter | `src/core/ast_compiler_call.cpp:1158` |
+| Syntax/AST | The AST and expression/block builders reviewed have no dedicated closure expression or capture node | `src/core/ast_nodes.h`, `src/core/ast/expression_builder.h`, `src/core/ast/block_builder.cpp` |
+| Memory rules | According to the spec, fn is a trivially copyable value without teardown; ptr/shared/ref and cleanup paths exist for other types | `spec/61_memory_management.md:156`, `src/core/borrow_check.cpp` |
+| Engine callbacks | Fixed native signatures `void(float)` and `void()`; the builtin passes three pointers | `src/sys/engine_runtime.cpp:491`, `src/core/builtin_registry.cpp:8311` |
+| Browser path | The active engine.run path uses a manual Asyncify loop | `src/sys/engine_runtime.cpp:503` |
 
-Achtung: Die Engine-Spec erwähnt als Vorschlag set_main_loop_arg; die aktive Implementierung nutzt bereits die manuelle Asyncify-Schleife. Eine Änderung muss dem Code folgen und diese Rückruf-/Suspendierungssemantik erhalten.
+Caution: the engine spec mentions set_main_loop_arg as a proposal; the active implementation already uses the manual Asyncify loop. A change must follow the code and preserve this callback/suspension semantics.
 
-## Warum fn nicht einfach eine Umgebung bekommen sollte
+## Why fn should not simply get an environment
 
-Ein bisheriger fn-Wert ist nur ein Codezeiger und laut Speichermodell ohne Teardown kopierbar. Eine Closure benötigt dagegen Code, Umgebung und Regeln zum Freigeben der Umgebung. Eine stille Umstellung von fn auf zwei Zeiger würde Layout, native Callback-ABIs, Container, Parameter, Rückgaben und Ownership verändern.
+An existing fn value is only a code pointer and, per the memory model, copyable without teardown. A closure, by contrast, needs code, an environment and rules for freeing the environment. A silent switch of fn to two pointers would change layout, native callback ABIs, containers, parameters, returns and ownership.
 
-Empfehlung: fn kompatibel lassen; separaten aufrufbaren Closure-Typ einführen. `closure<...>` ist hier nur ein Arbeitsname, keine existierende Syntax. Repräsentation entweder als verwaltetes Objekt mit Aufruf-/Destruktorfunktionen oder als Fat Pointer mit explizitem Besitzer der Umgebung. An der Grenze zu C braucht es immer einen passenden Adapter und einen Kontextparameter. Ein Cast auf einen nackten Funktionszeiger löst das nicht, insbesondere nicht für WASM.
+Recommendation: keep fn compatible; introduce a separate callable closure type. `closure<...>` is only a working name here, not existing syntax. Represent it either as a managed object with call/destructor functions or as a fat pointer with an explicit owner of the environment. At the boundary to C an adapter and a context parameter are always needed. A cast to a bare function pointer does not solve that, in particular not for WASM.
 
-## Empfohlener erster Umfang
+## Recommended first scope
 
-- Explizite Capture-Liste; kein implizites Einfangen aller sichtbaren Variablen.
-- Werte werden nach den bestehenden Typregeln kopiert oder explizit verschoben. Eine Wert-Capture ist nicht automatisch eine tiefe Kopie aller enthaltenen Handles.
-- Zunächst eine besitzende, verschiebbare Closure mit eindeutigem Besitzer. Aufrufe borgen die Closure nur aus. Gemeinsamer Besitz erst nach klarer Semantik.
-- ptr-Capture nur per Move; keine zweite Besitzinstanz auf denselben ptr erzeugen.
-- Keine entkommenden ref-Captures im ersten Umfang: Rückgabe und Speicherung dürfen keine Referenz auf einen bereits verlassenen Stackframe erzeugen.
-- Keine implizite Übertragung über Threads, Mirror, KV oder sys.bundle. Diese Verwendungen vorerst mit Diagnose ablehnen.
-- Nicht unterstützte Kombinationen ausdrücklich zurückweisen, statt sie als opake Zeiger durchzulassen.
+- An explicit capture list; no implicit capturing of all visible variables.
+- Values are copied or explicitly moved according to the existing type rules. A value capture is not automatically a deep copy of all contained handles.
+- First an owning, movable closure with a unique owner. Calls only borrow the closure. Shared ownership only after clear semantics.
+- ptr capture only by move; do not create a second owning instance of the same ptr.
+- No escaping ref captures in the first scope: return and storage must not create a reference to a stack frame that has already been left.
+- No implicit transfer across threads, mirror, KV or sys.bundle. Reject these uses with a diagnostic for now.
+- Explicitly reject unsupported combinations instead of letting them through as opaque pointers.
 
-Ein Generator kann pro Closure eine interne Umgebungsklasse und eine aufrufbare Funktion erzeugen. Die Funktion bekommt die Umgebung als versteckten Parameter; Capture-Zugriffe werden auf ihre Felder umgeschrieben. Vorhandener Interface-Dispatch ist dafür eine Vorlage, aber keine fertige Closure-Implementierung.
+A generator can create an internal environment class and a callable function per closure. The function gets the environment as a hidden parameter; capture accesses are rewritten to its fields. The existing interface dispatch is a template for this, but not a finished closure implementation.
 
-## Notwendige Arbeitspakete
+## Necessary work packages
 
-1. Semantik festlegen: Capture-Modi, Mutation, Kopie/Move, verschachtelte Closures, Lebensdauer, Null-Aufruf, Ausnahmen und unterstützte Speicherorte.
-2. AST/Parser ergänzen: Closure-Ausdruck mit typisierten Argumenten, Rückgabetyp, Capture-Liste und Body. Quellpositionen erhalten.
-3. Namensauflösung ergänzen: Parameter, lokale Namen und Captures trennen; Shadowing und verschachtelte Scopes korrekt behandeln. Bei expliziten Captures müssen nicht deklarierte freie Variablen diagnostiziert werden.
-4. Closure-Konvertierung: interne Umgebung und aufrufbare Funktion erzeugen; Capture-Initialisierung genau einmal auswerten; Typen und Symbolnamen deterministisch erzeugen.
-5. Codegen/ABI: Umgebung bei indirekten Aufrufen übergeben; bestehende Parameter-/Rückgabe-ABI und Ausnahmenbehandlung wiederverwenden. Native und WASM-Signaturen müssen exakt passen.
-6. Ownership/Cleanup: Move, Scope-Ende, Überschreiben, Rückgabe, Containerablage und Ausnahme-Unwinding für Umgebung und Captures implementieren. Teilweise initialisierte Umgebungen auf Fehlerpfaden freigeben.
-7. Laufzeit-APIs: zunächst engine.run closurefähig machen, inklusive Ownership während der gesamten nativen/Asyncify-Schleife und Freigabe beim Ende. Weitere Callback-APIs einzeln inventarisieren; sie werden nicht automatisch closurefähig.
-8. Integration: AST-Walker, statische Analyse, Typinferenz, Import-/Cache-Schlüssel und Debug-/Quellinformationen aktualisieren. Indirekte Aufrufe sind bereits eine Grenze mancher statischer Effektprüfungen; das darf nicht als vollständige Sicherheitsprüfung dargestellt werden.
+1. Define the semantics: capture modes, mutation, copy/move, nested closures, lifetime, null call, exceptions and supported storage locations.
+2. Extend AST/parser: a closure expression with typed arguments, return type, capture list and body. Preserve source positions.
+3. Extend name resolution: separate parameters, local names and captures; handle shadowing and nested scopes correctly. With explicit captures, undeclared free variables must be diagnosed.
+4. Closure conversion: create the internal environment and the callable function; evaluate capture initialisation exactly once; generate types and symbol names deterministically.
+5. Codegen/ABI: pass the environment on indirect calls; reuse the existing parameter/return ABI and exception handling. Native and WASM signatures must match exactly.
+6. Ownership/cleanup: implement move, scope end, overwrite, return, container storage and exception unwinding for the environment and captures. Free partially initialised environments on error paths.
+7. Runtime APIs: first make engine.run closure-capable, including ownership during the whole native/Asyncify loop and release at the end. Inventory further callback APIs individually; they do not become closure-capable automatically.
+8. Integration: update AST walkers, static analysis, type inference, import/cache keys and debug/source information. Indirect calls are already a limit of some static effect checks; that must not be presented as a complete safety check.
 
-## Schwierige Randfälle
+## Difficult edge cases
 
-- Eine Closure überlebt die Funktion, in der sie entstand: Captures dürfen nicht nur auf deren Stackslots zeigen.
-- Mehrere Closures sollen dieselbe veränderliche Variable sehen: dafür braucht es eine gemeinsam besessene Box statt unabhängiger Kopien. Nicht automatisch in den ersten Umfang aufnehmen.
-- Captures enthalten Strings, Container, Modelle oder besitzende Pointer: Freigabe und Move müssen auch bei throw korrekt sein.
-- Eine Closure hält das Objekt, das sie selbst speichert: gemeinsamer Besitz kann Zyklen erzeugen. Referenzzählung allein löst diese nicht.
-- Threadwechsel verlangt zusätzliche Synchronisations-/Send-Regeln; vorhandene shared-Regeln nicht umgehen.
-- C-Callbacks ohne user-data-Parameter können beliebigen Closure-Zustand nicht ohne zusätzliche Registrierung/Adapter tragen. Generierte native Trampoline wären kein tragfähiger allgemeiner WASM-Weg.
-- Persistente beziehungsweise remote ausgeführte Closures brauchen Codeidentität und serialisierbare Umgebung, keine rohen Prozesszeiger. Das wäre ein eigenes Vorhaben mit sys.bundle.
-- Hot Reload muss die Lebensdauer von Code und Umgebung gemeinsam berücksichtigen; kein ungültiger Codezeiger nach Modulwechsel.
+- A closure outlives the function in which it was created: captures must not just point to its stack slots.
+- Several closures are meant to see the same mutable variable: that needs a jointly owned box instead of independent copies. Do not include automatically in the first scope.
+- Captures contain strings, containers, models or owning pointers: release and move must be correct even on throw.
+- A closure holds the object that stores it: shared ownership can create cycles. Reference counting alone does not solve them.
+- Switching threads requires additional synchronisation/send rules; do not bypass the existing shared rules.
+- C callbacks without a user-data parameter cannot carry arbitrary closure state without additional registration/adapters. Generated native trampolines would not be a viable general WASM route.
+- Persistent or remotely executed closures need code identity and a serialisable environment, not raw process pointers. That would be a project of its own with sys.bundle.
+- Hot reload must take the lifetime of code and environment into account together; no invalid code pointer after a module switch.
 
-## Grobe Aufwandsspannen
+## Rough effort ranges
 
-| Ziel | Schwierigkeit | Größenordnung |
+| Goal | Difficulty | Order of magnitude |
 |---|---|---|
-| Nur expliziter Kontext für engine.run, keine neue Sprachfunktion | klein bis mittel | etwa 2–4 Arbeitstage inklusive nativer/WASM-Prüfung |
-| Eingeschränkter Closure-Prototyp: explizite primitive Captures, lokale/überschaubare Aufrufe | mittel | etwa 1–2 Wochen |
-| Belastbare erste Version mit besitzenden Captures, sauberem Cleanup, Rückgabe/Speicherung und Engine-Anbindung | hoch | etwa 4–8 Wochen |
-| Zusätzlich allgemeine Referenz-Captures, geteilter veränderlicher Zustand, Threadwechsel, Hot Reload und Remote-Serialisierung | sehr hoch | separates mehrwöchiges bis mehrmonatiges Vorhaben; ohne genaue Semantik nicht seriös enger schätzbar |
+| Only an explicit context for engine.run, no new language feature | small to medium | about 2–4 working days including native/WASM checks |
+| Restricted closure prototype: explicit primitive captures, local/manageable calls | medium | about 1–2 weeks |
+| Robust first version with owning captures, clean cleanup, return/storage and engine hookup | high | about 4–8 weeks |
+| Additionally general reference captures, shared mutable state, thread switching, hot reload and remote serialisation | very high | a separate multi-week to multi-month project; cannot be estimated more narrowly in a serious way without precise semantics |
 
-Die Spannen sind nicht additiv und hängen stark vom gewählten Umfang und vom Zustand der Ownership-/WASM-Pfade ab. Ein früher vertikaler Prototyp sollte die Schätzung verifizieren.
+The ranges are not additive and depend strongly on the chosen scope and on the state of the ownership/WASM paths. An early vertical prototype should verify the estimate.
 
-## Tests als Abnahmekriterien
+## Tests as acceptance criteria
 
-- Zwei Instanzen derselben Closure mit unterschiedlichen Captures bleiben unabhängig.
-- Rückgabe aus einer Factory: Capture nach Ende der Factory weiterhin gültig.
-- Strings, Container und Modelle werden beim Scope-Ende, Überschreiben und throw exakt einmal freigegeben.
-- ptr-Move in Capture: anschließende Nutzung des ursprünglichen Besitzers wird abgewiesen.
-- Entkommende Stackreferenz wird abgewiesen.
-- Signaturfehler und Null-Aufruf liefern definierte Diagnosen statt eines Absturzes.
-- Verschachtelte Scopes und Shadowing greifen auf den richtigen Wert zu.
-- Parameter und Rückgaben für Container/Modelle folgen exakt der bestehenden ABI.
-- Native und WASM-Ausführung desselben Beispiels liefern gleiche Ergebnisse.
-- Engine-Callback kann seinen App-Zustand ohne App-Global benutzen; Browser-Suspendierung und Beenden geben ihn nicht vorzeitig frei.
-- Bestehende fn- und Lifetime-Tests bleiben erfolgreich.
+- Two instances of the same closure with different captures stay independent.
+- Return from a factory: the capture stays valid after the factory ends.
+- Strings, containers and models are freed exactly once at scope end, overwrite and throw.
+- ptr move into a capture: subsequent use of the original owner is rejected.
+- An escaping stack reference is rejected.
+- Signature errors and a null call yield defined diagnostics instead of a crash.
+- Nested scopes and shadowing access the right value.
+- Parameters and returns for containers/models follow the existing ABI exactly.
+- Native and WASM execution of the same example give the same results.
+- The engine callback can use its app state without an app global; browser suspension and termination do not free it prematurely.
+- Existing fn and lifetime tests stay successful.
 
-## Empfehlung für Cosmos
+## Recommendation for cosmos
 
-Wenn das Ziel nur das letzte g_cosmos_app ist, ist der explizite Engine-Kontext der kleinste Eingriff. Die entsprechende Spec hält eine frühere Entscheidung „jetzt nicht umsetzen“ fest; diese Prüfung implementiert deshalb nichts.
+If the goal is only the last g_cosmos_app, the explicit engine context is the smallest intervention. The corresponding spec records an earlier decision "do not implement now"; this review therefore implements nothing.
 
-Wenn Closures als Sprachfunktion gewünscht sind, lohnt sich ein eigener, begrenzter Entwurf: fn behalten, explizite Captures, besitzende Umgebung, keine entkommenden Referenzen. Zuerst einen vertikalen Prototyp über Parser → Capture → Aufruf → Freigabe → WASM bauen; danach Engine-Integration und allgemeinere Capture-Typen. So wird der schwierigste Teil früh geprüft, bevor die Syntax auf alle Laufzeit-APIs ausgedehnt wird.
+If closures are wanted as a language feature, a separate, limited design is worthwhile: keep fn, explicit captures, an owning environment, no escaping references. First build a vertical prototype through parser → capture → call → release → WASM; after that the engine integration and more general capture types. That way the hardest part is checked early, before the syntax is extended to all runtime APIs.

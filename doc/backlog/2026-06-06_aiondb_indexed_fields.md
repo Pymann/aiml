@@ -1,10 +1,10 @@
-# AionDB Indexed Fields (`db_indexed` Modifier)
+# AionDB indexed fields (`db_indexed` modifier)
 
-**Status**: Backlog (2026-06-06)
-**Motivation**: Lookups wie "alle Items mit `name='Hammer'`" sind aktuell
-ein linearer Scan in jedem Caller (DataCreatures Tool-Check, Tag-Pool-Match,
-Recipe-Search etc.). DB-Engines lösen das per Sekundärindex (B-Tree/Hash) —
-AionDB hat den Pattern nicht. Wir bauen ihn als Compiler+Runtime-Feature ein.
+**Status**: backlog (2026-06-06)
+**Motivation**: lookups like "all items with `name='Hammer'`" are currently
+a linear scan in every caller (DataCreatures tool check, tag pool match,
+recipe search etc.). DB engines solve this with a secondary index (B-tree/hash) —
+AionDB does not have the pattern. We build it in as a compiler+runtime feature.
 
 ## Vision
 
@@ -14,94 +14,94 @@ AionDB hat den Pattern nicht. Wir bauen ihn als Compiler+Runtime-Feature ein.
     fields:
       - [item_id,   string]
       - [name,      string, "", { db_indexed: true }]      # 1:N exact match
-      - [item_type, i32,    0,  { db_indexed: true }]      # auch i32
-      - [tags,      list<string>, [], { db_indexed: true }] # list = jedes Tag indexen
+      - [item_type, i32,    0,  { db_indexed: true }]      # i32 too
+      - [tags,      list<string>, [], { db_indexed: true }] # list = index every tag
 ```
 
-Builtin-Methoden auf `Kv<string:Item>` (uniform, mit Field-Name als 1. Arg):
+Builtin methods on `Kv<string:Item>` (uniform, with the field name as the 1st arg):
 
 ```aiml
 - decl: [ids,   list<string>, { call: [items.findings_by, "name", "Hammer"] }]
 - decl: [tools, list<string>, { call: [items.findings_by, "item_type", 3] }]
-- decl: [rare,  list<string>, { call: [items.findings_by, "tag", "rare"] }]    # list-field
+- decl: [rare,  list<string>, { call: [items.findings_by, "tag", "rare"] }]    # list field
 
-# unique → finding_by (Singular) returnt string statt list:
+# unique → finding_by (singular) returns string instead of list:
 - decl: [user_id, string,    { call: [users.finding_by,  "email", "alice@example.com"] }]
 ```
 
-**Compile-Checks** (Field-Name muss String-Literal in V1):
-- Field existiert im Value-Model
-- Field hat `db_indexed: true`
-- `finding_by` (Singular) verlangt `unique: true`
-- `findings_by` (Plural) erlaubt auch unique-Felder, returnt dann list mit max 1 Element
+**Compile checks** (the field name must be a string literal in V1):
+- the field exists in the value model
+- the field has `db_indexed: true`
+- `finding_by` (singular) requires `unique: true`
+- `findings_by` (plural) also allows unique fields, then returns a list with at most 1 element
 
-Optional Modifier:
-- `{ db_indexed: "lower" }` — case-insensitive (Index speichert lowercase key)
+Optional modifiers:
+- `{ db_indexed: "lower" }` — case-insensitive (the index stores a lower-case key)
 - `{ db_indexed: true, unique: true }` — 1:1, `finding_by` legal
 
-## Implementierung
+## Implementation
 
 ### Compiler
 
-1. **Field-Modifier-Parser** (class_builder.cpp / model parser): `db_indexed`-Key erkennen + im ClassInfo/ModelInfo speichern (`bool is_db_indexed`, `string db_indexed_mode`).
-2. **db.open_kv-Site**: pro indexed field eine zusätzliche `db.open_kv("<table>__<field>", ...)` emittieren. Sidecar-Kvs sind `Kv<string:list<string>>` (1:N) oder `Kv<string:string>` (unique).
-3. **<kv>.set-Hook**: vor dem eigentlichen Daten-Set die alte Version laden (falls existent), dann pro indexed field den Diff aufs Index-Kv anwenden:
-   - Wenn `alt.f != neu.f` (oder list-Diff): `index[alt.f]` ohne id, `index[neu.f]` mit id.
-4. **<kv>.remove-Hook**: aktuelle Version laden, IDs aus allen Index-Kvs rausnehmen.
-5. **Builtin-Methoden** `findings_by(field_lit, value)` und `finding_by(field_lit, value)`: dispatch im Kv-Methoden-Handler in `ast_compiler_call.cpp`. Compiler validiert das Field-Literal (existiert, ist `db_indexed`, bei `finding_by` zusätzlich `unique:true`), löst den Sidecar-Handle auf und emittiert einen einzelnen Index-Kv-Lookup. Bei dynamischem 1. Arg (V1) → Hard-Error.
+1. **Field modifier parser** (class_builder.cpp / model parser): recognise the `db_indexed` key + store it in ClassInfo/ModelInfo (`bool is_db_indexed`, `string db_indexed_mode`).
+2. **db.open_kv site**: per indexed field emit an additional `db.open_kv("<table>__<field>", ...)`. Sidecar Kvs are `Kv<string:list<string>>` (1:N) or `Kv<string:string>` (unique).
+3. **<kv>.set hook**: before the actual data set, load the old version (if it exists), then apply the diff to the index Kv per indexed field:
+   - If `old.f != new.f` (or a list diff): `index[old.f]` without the id, `index[new.f]` with the id.
+4. **<kv>.remove hook**: load the current version, take the IDs out of all index Kvs.
+5. **Builtin methods** `findings_by(field_lit, value)` and `finding_by(field_lit, value)`: dispatch in the Kv method handler in `ast_compiler_call.cpp`. The compiler validates the field literal (exists, is `db_indexed`, for `finding_by` additionally `unique:true`), resolves the sidecar handle and emits a single index Kv lookup. With a dynamic 1st arg (V1) → hard error.
 
 ### Runtime
 
-Aktuelle `db.open_kv`-Implementierung muss nicht geändert werden — die Sidecar-Kvs sind ganz normale Kvs. Nur der Compiler emittiert die Hooks drumherum.
+The current `db.open_kv` implementation does not need to change — the sidecar Kvs are completely normal Kvs. Only the compiler emits the hooks around them.
 
-### Backfill / Konsistenz
+### Backfill / consistency
 
-- **V1: Indexe sind reine In-Memory-State** (kein WAL pro Index).  Beim
-  `db.open_kv` Aufruf ist der `AimlIndex` immer leer; Backfill-Logik
-  iteriert über das Main-Kv und füllt die Maps neu.  Kein
-  In-Band-Marker, daher kein Kollisionsrisiko mit User-Daten.
-- **Crash zwischen Main-set und Index-set**: irrelevant in V1 weil der
-  Index sowieso jedes Mal frisch backfilled wird.
+- **V1: indexes are pure in-memory state** (no WAL per index).  At the
+  `db.open_kv` call the `AimlIndex` is always empty; backfill logic
+  iterates over the main Kv and fills the maps anew.  No
+  in-band marker, hence no risk of collision with user data.
+- **Crash between the main set and the index set**: irrelevant in V1, because the
+  index is freshly backfilled every time anyway.
 
-### Persistierung des Index (V2 / out-of-scope V1)
+### Persisting the index (V2 / out of scope for V1)
 
-Wenn Backfill teuer wird (große Main-Kvs, häufige Restarts), persistieren
-wir den Index selbst.  **Reserved-Key-Encoding scheidet aus** weil
-User-Werte beliebige Strings inkl. Sentinel-aussehender Strings enthalten
-dürfen.  **Gewählter Mechanismus**: separater Meta-Sidecar
-`<main>__<field>__meta` mit `last_main_lsn`, `version` etc.  So bleibt
-der Daten-Sidecar `<main>__<field>` rein für User-Index-Einträge.
+If backfill becomes expensive (large main Kvs, frequent restarts), we persist
+the index itself.  **Reserved-key encoding is ruled out**, because
+user values may contain arbitrary strings, including strings that look like sentinels.
+**Chosen mechanism**: a separate meta sidecar
+`<main>__<field>__meta` with `last_main_lsn`, `version` etc.  That way
+the data sidecar `<main>__<field>` stays purely for user index entries.
 
-### Edge Cases
+### Edge cases
 
-- **Empty value indexing**: `{ db_indexed: true, skip_empty: true }` — default skip_empty=false, sonst sammelt sich alles unter `""`.
-- **List<T>-Felder — SET-Semantik**: Duplikate im Quellfeld werden vom
-  Index kollabiert (Membership-Frage hat keine Multiplicität).  Diff
-  beim Update arbeitet auf Mengen: `to_remove = old_set − new_set`,
-  `to_add = new_set − old_set`.  Das Quellfeld bleibt vom User
-  unverändert (kann weiterhin Duplikate enthalten), nur der Sidecar
-  enthält jeden Wert exakt einmal pro Record.  `index_add` ist dabei
-  idempotent (no-op wenn der Record schon registriert ist).
-- **Range-Queries**: aktuell out-of-scope. Würde B-Tree-Sidecar brauchen statt Hash-Kv.
-- **Composite Indexes** (`(name, item_type)`): out-of-scope für V1. Workaround: zusätzliches Feld `composite_key` mit `db_indexed: true` selbst pflegen.
+- **Empty value indexing**: `{ db_indexed: true, skip_empty: true }` — default skip_empty=false, otherwise everything accumulates under `""`.
+- **List<T> fields — SET semantics**: duplicates in the source field are
+  collapsed by the index (the membership question has no multiplicity).  The diff
+  on update works on sets: `to_remove = old_set − new_set`,
+  `to_add = new_set − old_set`.  The source field stays unchanged by the user
+  (it can still contain duplicates), only the sidecar
+  contains each value exactly once per record.  `index_add` is
+  idempotent (a no-op if the record is already registered).
+- **Range queries**: currently out of scope. Would need a B-tree sidecar instead of a hash Kv.
+- **Composite indexes** (`(name, item_type)`): out of scope for V1. Workaround: maintain an additional field `composite_key` with `db_indexed: true` yourself.
 
-## Aufwand-Schätzung
+## Effort estimate
 
-| Teil | Größenordnung |
+| Part | Order of magnitude |
 |---|---|
-| Schema-Parser-Erweiterung | 1-2h |
-| `db.open_kv` Sidecar-Kvs anlegen | 3-4h |
-| Set/Remove-Hooks (alt vs neu Diff) | 4-6h |
-| `find_by_<field>`-Methoden auto-emittieren | 3-4h |
-| Backfill-Logik | 2-3h |
-| Tests (single-field, list-field, unique, mit Migration) | 3-4h |
+| Schema parser extension | 1-2h |
+| Creating the sidecar Kvs in `db.open_kv` | 3-4h |
+| Set/remove hooks (old vs new diff) | 4-6h |
+| Auto-emitting the `find_by_<field>` methods | 3-4h |
+| Backfill logic | 2-3h |
+| Tests (single field, list field, unique, with migration) | 3-4h |
 
-→ **2-3 Sessions** für saubere Erstversion mit Tests.
+→ **2-3 sessions** for a clean first version with tests.
 
-## Beneficiaries im DataCreatures-Codebase
+## Beneficiaries in the DataCreatures codebase
 
-- `harvest.aiml` tool-check (aktueller Auslöser)
+- `harvest.aiml` tool check (the current trigger)
 - `discovery.aiml` `ensure_recipe_item` / `ensure_material_item` (idempotent check)
-- `tag_pools.aiml` (statische Listen, weniger nötig)
-- Skill-Lookups in `discovery.aiml` (`ensure_active_skill` dedup)
-- Künftige `find_by_type` in Crafting-Engine
+- `tag_pools.aiml` (static lists, less necessary)
+- Skill lookups in `discovery.aiml` (`ensure_active_skill` dedup)
+- A future `find_by_type` in the crafting engine
