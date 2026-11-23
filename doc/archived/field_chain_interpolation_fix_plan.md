@@ -1,236 +1,230 @@
-# AIML: Fixplan fuer Field-Chains in Interpolation und Call-Argumenten
+# AIML: fix plan for field chains in interpolation and call arguments
 
 ## Problem
 
-Der neue Chain-Support funktioniert inzwischen fuer:
+The new chain support now works for:
 
-- tiefe Field-Reads/Writes
-- List-Index-Ketten wie `a.items-0.hp`
-- Method-Chains wie `a.items-0.cost.get("1")`
+- deep field reads/writes
+- list index chains like `a.items-0.hp`
+- method chains like `a.items-0.cost.get("1")`
 
-Aber ein wichtiger Restbruch bleibt:
+But one important remaining break is left:
 
-- Field-Chains in String-Interpolation wie `${hc.iid}`
-- dieselben Chain-Ausdruecke in bestimmten Call-Argument-Kontexten
+- field chains in string interpolation like `${hc.iid}`
+- the same chain expressions in certain call argument contexts
 
-Im aktuellen Stand fuehrt das dazu, dass eigentlich string- oder ptr-basierte
-Ausdruecke intern als falscher Typ (`i32`) behandelt werden koennen.
+In the current state this means that expressions that are actually string or ptr based
+can internally be treated as the wrong type (`i32`).
 
-Praktischer Effekt in `9rooms`:
+Practical effect in `9rooms`:
 
 - `${hc.iid}`
 - `${g_client_info.player_name}`
 - `${g_client_info.deckset_id}`
 
-haben Frontend-Buildfehler ausgeloest, obwohl dieselben Zugriffe als normale
-Expressions ausserhalb der Interpolation funktionieren.
+triggered frontend build errors, although the same accesses work as normal
+expressions outside interpolation.
 
-## Kernbefund
+## Core finding
 
-Das ist kein allgemeiner Field-Chain-Bug mehr, sondern ein Integrationsloch
-zwischen:
+This is no longer a general field chain bug, but an integration hole
+between:
 
-- AST/Expression-Builder fuer Interpolation
+- the AST/expression builder for interpolation
 - `visitStringInterpolation(...)`
-- und den Typ-/Value-Konventionen von `visitVariable(...)`
+- and the type/value conventions of `visitVariable(...)`
 
-Mit anderen Worten:
+In other words:
 
-- `hc.iid` als normale Expression: ok
-- `${hc.iid}` als Interpolationsteil: noch nicht robust
+- `hc.iid` as a normal expression: ok
+- `${hc.iid}` as an interpolation part: not yet robust
 
-## Wahrscheinlichste Ursache
+## Most probable cause
 
-Die String-Interpolation arbeitet heute typsensitiv ueber `visitExpression(...)`
-und entscheidet dann anhand des LLVM-Typs, wie ein Teil in Stringform gebracht
-wird.
+String interpolation today works type-sensitively via `visitExpression(...)`
+and then decides based on the LLVM type how a part is brought into string form.
 
-Der Bruch sitzt wahrscheinlich in einem dieser Punkte:
+The break probably sits in one of these points:
 
-1. ein Interpolationsteil wird nicht als normaler `VariableExpr("hc.iid")`
-   gebaut
-2. oder `visitVariable(...)` liefert in diesem Pfad nicht den finalen Feldwert,
-   sondern einen Zwischenwert mit falscher Typinformation
-3. oder `visitStringInterpolation(...)` behandelt den Rueckgabewert eines
-   geketteten Feldzugriffs nicht gleich wie den eines einfachen Variablenreads
+1. an interpolation part is not built as a normal `VariableExpr("hc.iid")`
+2. or `visitVariable(...)` does not return the final field value in this path,
+   but an intermediate value with wrong type information
+3. or `visitStringInterpolation(...)` does not treat the return value of a
+   chained field access the same way as that of a simple variable read
 
-## Relevante C++-Stellen
+## Relevant C++ places
 
-Die heissesten Stellen fuer den Fix sind:
+The hottest places for the fix are:
 
 - [ast_compiler_expr.cpp](../../src/core/ast_compiler_expr.cpp)
   - `visitStringInterpolation(...)`
   - `visitVariable(...)`
   - `visitExpression(...)`
 - [ast/expression_builder.cpp](../../src/core/ast/expression_builder.cpp)
-  - falls `${...}`-Inhalte dort nicht als normale Expressions gebaut werden
+  - in case `${...}` contents are not built as normal expressions there
 - [string_utils.h](../../src/core/string_utils.h)
 - [expression.cpp](../../src/core/expression.cpp)
-  - falls dort Sonderbehandlung fuer Variablen-/Pfadauflosung steckt
-- optional zur Diagnose:
+  - in case there is special handling for variable/path resolution there
+- optionally for diagnosis:
   - [compiler.cpp](../../compiler.cpp)
   - [context.h](../../src/core/context.h)
 
-## Zielverhalten
+## Target behaviour
 
-Diese Faelle muessen gleichwertig funktionieren:
+These cases must work equally:
 
 ```aiml
 - decl: [iid, string, hc.iid]
 - print: ["iid=${iid}"]
 ```
 
-und
+and
 
 ```aiml
 - print: ["iid=${hc.iid}"]
 ```
 
-ebenso:
+likewise:
 
 ```aiml
 - call: [log.info, "player=${g_client_info.player_name} deckset=${g_client_info.deckset_id}"]
 ```
 
-und analog fuer:
+and analogously for:
 
 - `ptr<T>.field`
 - `list<T>-idx.field`
 - `obj.deep.field`
-- `obj.deep.map.get("x")` innerhalb von `${...}` sobald dort ein String oder
-  numerischer Wert entsteht
+- `obj.deep.map.get("x")` inside `${...}` as soon as a string or
+  numeric value results there
 
-## Konkreter Implementierungsplan
+## Concrete implementation plan
 
-### sprint_task_1: Repro-Tests fuer Interpolation und direkte String-Kontexte
+### sprint_task_1: repro tests for interpolation and direct string contexts
 
-Neue Tests zuerst anlegen.
+Create new tests first.
 
-Pfad:
+Path:
 
 - `tests/test_field_chain_interpolation.aiml`
-- optional `tests/test_field_chain_call_args.aiml`
+- optionally `tests/test_field_chain_call_args.aiml`
 
-Mindestens diese Faelle:
+At least these cases:
 
 - `${obj.field}`
 - `${obj.deep.field}`
 - `${obj.items-0.name}`
 - `${ptrObj.name}`
 - `log.info("x=${obj.field}")`
-- Zuweisung in `string`-Variable via Interpolation
+- assignment into a `string` variable via interpolation
 
-Akzeptanz:
+Acceptance:
 
-- alle laufen gruen
-- keine LLVM-Verifier-Fehler
-- keine Typdegradierung auf `i32`
+- all run green
+- no LLVM verifier errors
+- no type degradation to `i32`
 
-Betroffene Stellen:
+Affected places:
 
 - [ast_compiler_expr.cpp](../../src/core/ast_compiler_expr.cpp)
 - `tests/`
 
-### sprint_task_2: AST-Baum fuer `${...}` normieren
+### sprint_task_2: normalise the AST tree for `${...}`
 
-Pruefen, wie `${hc.iid}` intern gebaut wird.
+Check how `${hc.iid}` is built internally.
 
-Wenn der Inhalt nicht als normale Expression landet, muss das vereinheitlicht
-werden:
+If the content does not end up as a normal expression, this must be unified:
 
-- `${...}` soll denselben AST-Expression-Typ bekommen wie ausserhalb der
-  Interpolation
-- kein eigener vereinfachter „nur Variablenname“-Pfad fuer Chain-Strings
+- `${...}` should get the same AST expression type as outside
+  interpolation
+- no separate simplified "variable name only" path for chain strings
 
-Betroffene Stellen:
+Affected places:
 
 - [ast/expression_builder.cpp](../../src/core/ast/expression_builder.cpp)
-- ggf. [ast_builder.cpp](../../src/core/ast_builder.cpp)
+- possibly [ast_builder.cpp](../../src/core/ast_builder.cpp)
 
-### sprint_task_3: `visitStringInterpolation(...)` gegen Chain-Ergebnisse haerten
+### sprint_task_3: harden `visitStringInterpolation(...)` against chain results
 
-`visitStringInterpolation(...)` darf nicht implizit davon ausgehen, dass ein
-Teil nur:
+`visitStringInterpolation(...)` must not implicitly assume that a
+part is only:
 
-- simpler int
-- simpler string ptr
-- float
+- a simple int
+- a simple string ptr
+- a float
 
-ist.
+Instead:
 
-Stattdessen:
+- take the result of `visitExpression(part)` as the authoritative source
+- treat chained field reads exactly like normal VariableExprs
+- if necessary: distinguish pointer-to-string / loaded string cleanly
 
-- Ergebnis von `visitExpression(part)` als autoritative Quelle nehmen
-- gekettete Feldreads genau wie normale VariableExprs behandeln
-- falls noetig: pointer-to-string / loaded string sauber unterscheiden
-
-Betroffene Stellen:
+Affected places:
 
 - [ast_compiler_expr.cpp](../../src/core/ast_compiler_expr.cpp)
 
-### sprint_task_4: gemeinsame „value-to-string“-Konvertierung extrahieren
+### sprint_task_4: extract a shared "value-to-string" conversion
 
-Aktuell steckt die Typbehandlung fuer Interpolation lokal in
+Currently the type handling for interpolation sits locally in
 `visitStringInterpolation(...)`.
 
-Besser:
+Better:
 
-- zentralen Helfer einfuehren, z. B. `stringifyValue(IRValue*)`
-- denselben Helfer auch fuer `print`, `log.*` oder spaetere Template-Pfade
-  nutzbar machen
+- introduce a central helper, e.g. `stringifyValue(IRValue*)`
+- make the same helper usable for `print`, `log.*` or later template paths
 
-Das verhindert, dass Chain-Expressions an einer Stelle funktionieren und an
-einer anderen nicht.
+That prevents chain expressions from working in one place and not
+in another.
 
-Betroffene Stellen:
+Affected places:
 
 - [ast_compiler_expr.cpp](../../src/core/ast_compiler_expr.cpp)
 - [string_utils.h](../../src/core/string_utils.h)
-- ggf. neue Implementierungsdatei in `src/core/`
+- possibly a new implementation file in `src/core/`
 
-### sprint_task_5: Regressionen fuer reale 9rooms-Muster
+### sprint_task_5: regressions for real 9rooms patterns
 
-Nach dem generischen Fix genau die bisher problematischen Muster als Tests
-abdecken, aber hermetisch:
+After the generic fix, cover exactly the previously problematic patterns as tests,
+but hermetically:
 
 - `${hc.iid}`
 - `${client_info.player_name}`
 - `${obj.items-0.name}`
-- Interpolation innerhalb von `log.info(...)`
-- zusammengesetzte Strings mit mehreren Chain-Teilen
+- interpolation inside `log.info(...)`
+- composite strings with several chain parts
 
-Akzeptanz:
+Acceptance:
 
-- 9rooms-nahe Muster kompilieren
-- kein Rueckfall auf temporaere Alias-Variablen mehr noetig
+- 9rooms-like patterns compile
+- no more fallback to temporary alias variables needed
 
-## Architektonische Leitlinie
+## Architectural guideline
 
-Der Fix sollte **nicht** als Sonderfall „wenn StringInterpolation und Name
-enthaelt Punkt“ gebaut werden.
+The fix should **not** be built as a special case "if StringInterpolation and the name
+contains a dot".
 
-Die richtige Richtung ist:
+The right direction is:
 
-- Interpolation benutzt dieselbe Expression-Logik wie alle anderen Kontexte
-- Stringisierung ist ein nachgelagerter Schritt
-- kein separater Mini-Resolver nur fuer `${...}`
+- interpolation uses the same expression logic as all other contexts
+- stringification is a downstream step
+- no separate mini-resolver just for `${...}`
 
-Sonst bekommt AIML erneut parallele Semantik:
+Otherwise AIML gets parallel semantics again:
 
-- normaler Field-Read
-- Interpolation-Field-Read
-- Call-Arg-Field-Read
+- normal field read
+- interpolation field read
+- call arg field read
 
-Genau das sollte vermieden werden.
+That is exactly what should be avoided.
 
-## Empfehlung
+## Recommendation
 
-Wenn man das pragmatisch schneidet:
+If you cut it pragmatically:
 
-1. zuerst Testpaket
-2. dann AST-Pruefung fuer `${...}`
-3. dann `visitStringInterpolation(...)` zentral haerten
-4. danach 9rooms-nahe Regressionen
+1. test package first
+2. then the AST check for `${...}`
+3. then harden `visitStringInterpolation(...)` centrally
+4. after that 9rooms-like regressions
 
-Das ist klein genug fuer einen fokussierten Umbau und gross genug, um den
-jetzigen Rueckfall in Zwischenvariablen wieder abzubauen.
+That is small enough for a focused rework and big enough to remove the
+current fallback to intermediate variables again.
