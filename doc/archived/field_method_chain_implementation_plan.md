@@ -1,9 +1,9 @@
-# Implementierungsplan: Verkettete Field-/Method-Syntax in AIML
+# Implementation plan: chained field/method syntax in AIML
 
-## Ziel
+## Goal
 
-Der AIML-Compiler soll echte verkettete Zugriffe und Methoden konsistent
-unterstuetzen, z. B.:
+The AIML compiler should support real chained accesses and methods consistently,
+e.g.:
 
 - `a.b.c`
 - `a.b.c = 7`
@@ -12,79 +12,79 @@ unterstuetzen, z. B.:
 - `a.b.map.get("x")`
 - `this.player.hand-2.mana_cost.get("1")`
 
-Aktuell funktionieren nur Teilformen oder Sonderfaelle. Das fuehrt zu
-Hilfsvariablen, Workarounds und inkonsistentem Verhalten zwischen Read, Write
-und Method-Call.
+Currently only partial forms or special cases work. That leads to
+helper variables, workarounds and inconsistent behaviour between read, write
+and method call.
 
-## Kernproblem
+## Core problem
 
-Der Compiler behandelt Zugriffs-Strings heute nicht als echte Segmentkette,
-sondern meist als:
+Today the compiler does not treat access strings as a real segment chain,
+but mostly as:
 
 - `baseName`
-- plus ein Reststring ab dem ersten Punkt
+- plus a remainder string from the first dot onwards
 
-Dadurch brechen echte Ketten frueh weg.
+As a result, real chains break off early.
 
-## Aktueller Befund im C++-Code
+## Current findings in the C++ code
 
-### 1. Read-Pfad zerlegt nur einmal
+### 1. The read path splits only once
 
-In [ast_compiler_expr.cpp](../../src/core/ast_compiler_expr.cpp#L184) wird in `visitVariable(...)` nur der erste Trenner (`.` oder `-`) verarbeitet.
+In [ast_compiler_expr.cpp](../../src/core/ast_compiler_expr.cpp#L184), `visitVariable(...)` only processes the first separator (`.` or `-`).
 
-Folge:
+Consequence:
 
-- `a.b.c` wird zu:
+- `a.b.c` becomes:
   - `baseName = "a"`
   - `propName = "b.c"`
 
-Das ist keine echte rekursive Pfadauflösung.
+That is no real recursive path resolution.
 
-### 2. Write-Pfad zerlegt ebenfalls nur einmal
+### 2. The write path likewise splits only once
 
-In [ast_compiler_stmt.cpp](../../src/core/ast_compiler_stmt.cpp) wird `set` strukturell genauso behandelt.
+In [ast_compiler_stmt.cpp](../../src/core/ast_compiler_stmt.cpp), `set` is treated structurally in the same way.
 
-Folge:
+Consequence:
 
-- tiefe Ziele wie `root.match.round` oder `card.data.cost` sind nicht robust
+- deep targets such as `root.match.round` or `card.data.cost` are not robust
 
-### 3. Method-Call-Pfad splittet nur am ersten Punkt
+### 3. The method call path splits only at the first dot
 
-In [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp#L62) wird `call->functionName` mit `find('.')` nur einmal zerlegt.
+In [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp#L62), `call->functionName` is split only once with `find('.')`.
 
-Beispiel:
+Example:
 
 - `a.b.map.get`
   - `baseName = "a"`
   - `methodName = "b.map.get"`
 
-Dann versucht `visitObjectMethodCall(...)` auf `a` zu arbeiten, obwohl die
-eigentliche Receiver-Instanz erst nach mehreren Segmenten erreicht wird.
+Then `visitObjectMethodCall(...)` tries to work on `a`, although the
+actual receiver instance is only reached after several segments.
 
-### 4. Es gibt bereits Teil-Sonderfaelle, aber keinen allgemeinen Kettenpfad
+### 4. There are already partial special cases, but no general chain path
 
-In [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp#L459) und [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp#L1215) existiert bereits "chained method dispatch", aber nur als lokaler Sonderfall:
+In [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp#L459) and [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp#L1215) "chained method dispatch" already exists, but only as a local special case:
 
-- Feldname isolieren
-- dann Unter-Methode ausfuehren
+- isolate the field name
+- then execute the sub-method
 
-Das ist nuetzlich fuer einfache Builtin-Sonderfaelle wie:
+That is useful for simple builtin special cases such as:
 
 - `resp.headers.put(...)`
 - `c.mana_cost.put(...)`
 
-aber kein allgemeines Modell fuer beliebig tiefe Ketten.
+but no general model for arbitrarily deep chains.
 
-## Zielbild
+## Target picture
 
-Der Compiler soll jeden Zugriff intern in **Segmente** zerlegen und dann
-einheitlich aufloesen.
+The compiler should split every access internally into **segments** and then
+resolve them uniformly.
 
-Beispiel:
+Example:
 
 `this.player.hand-2.mana_cost.get("1")`
 
-soll intern werden zu:
+should internally become:
 
 1. `base(this)`
 2. `member(player)`
@@ -93,39 +93,39 @@ soll intern werden zu:
 5. `member(mana_cost)`
 6. `method(get)`
 
-Erst mit so einem Modell lassen sich:
+Only with such a model can
 
-- tiefe Reads
-- tiefe Writes
-- tiefe Method-Calls
-- gemischte Ketten aus Membern, Indizes und Methoden
+- deep reads
+- deep writes
+- deep method calls
+- mixed chains of members, indices and methods
 
-sauber vereinheitlichen.
+be cleanly unified.
 
-## Empfohlene Architektur
+## Recommended architecture
 
-### Architektonische Leitplanken
+### Architectural guard rails
 
-Wenn dieser Umbau nur punktuell in `visitVariable(...)` und `visitCall(...)`
-geflickt wird, entsteht sehr wahrscheinlich der naechste Parallelpfad.
+If this rebuild is only patched selectively in `visitVariable(...)` and `visitCall(...)`,
+the next parallel path will very probably arise.
 
-Darum sollten diese Regeln gelten:
+Therefore these rules should apply:
 
-1. Es gibt genau **einen** Parser fuer Access-Chains.
-2. Es gibt genau **einen** Resolver fuer Read/Write/Call-Receiver.
-3. `visitVariable(...)`, `visitSetStmt(...)` und `visitCall(...)` duplizieren
-   keine Pfadlogik mehr.
-4. Builtin-Methoden bekommen einen bereits korrekt aufgeloesten Receiver und
-   sollen nicht selbst wieder String-Ketten zerlegen.
-5. Property-Sonderfaelle wie `len` werden in denselben Kettenpfad integriert
-   und nicht als zweites System weitergefuehrt.
+1. There is exactly **one** parser for access chains.
+2. There is exactly **one** resolver for read/write/call receivers.
+3. `visitVariable(...)`, `visitSetStmt(...)` and `visitCall(...)` no longer duplicate
+   any path logic.
+4. Builtin methods get an already correctly resolved receiver and
+   should not split string chains again themselves.
+5. Property special cases such as `len` are integrated into the same chain path
+   and not continued as a second system.
 
-Wenn man diese 5 Punkte einhaelt, richtet der Umbau nicht nur die Syntax
-gerade, sondern reduziert gleichzeitig Architektur-Schulden im Compiler.
+If these 5 points are kept, the rebuild not only straightens the syntax,
+but at the same time reduces architectural debt in the compiler.
 
-### Stufe 1: Access-Chain-Datenmodell
+### Stage 1: access chain data model
 
-Neue zentrale Typen, z. B. in `utils.h/.cpp`:
+New central types, e.g. in `utils.h/.cpp`:
 
 - `enum class AccessSegmentKind`
   - `Base`
@@ -135,153 +135,153 @@ Neue zentrale Typen, z. B. in `utils.h/.cpp`:
 - `struct AccessSegment`
 - `struct AccessChain`
 
-Der Parser soll aus einem AIML-Pfad eine normierte Kette erzeugen.
+The parser should produce a normalised chain from an AIML path.
 
-Beispiele:
+Examples:
 
 - `a.b.c`
 - `a.items-0.hp`
 - `a.b.map.get`
 - `this.player.cards-1.len`
 
-### Stufe 2: Einheitlicher Chain-Parser
+### Stage 2: uniform chain parser
 
-Neue Funktion:
+New function:
 
 - `parseAccessChain(const std::string&)`
 
-Anforderungen:
+Requirements:
 
-- `.` und `-` gemeinsam verstehen
-- `this.` und `<.` vorher normalisieren
-- nicht nur String-Splitting, sondern echte Segmenttypen erzeugen
-- Methodenname am Ende sauber von Field-Segmenten trennen
+- understand `.` and `-` together
+- normalise `this.` and `<.` beforehand
+- not just string splitting, but produce real segment types
+- cleanly separate the method name at the end from field segments
 
-Diese Logik darf nicht mehr verteilt sein ueber:
+This logic must no longer be distributed over:
 
 - `visitVariable(...)`
 - `visitSetStmt(...)`
 - `visitCall(...)`
 
-## Zentrale Auflösung
+## Central resolution
 
-### Stufe 3: Gemeinsamer Resolver
+### Stage 3: shared resolver
 
-Neue Kernfunktion:
+New core function:
 
 - `resolveAccessChain(ctx, chain, mode)`
 
-`mode` etwa:
+`mode` for example:
 
 - `Read`
 - `Write`
 - `CallReceiver`
 
-Der Resolver laeuft Segment fuer Segment:
+The resolver walks segment by segment:
 
-- Startsymbol laden
-- Struct-Member absteigen
-- Pointer/Referenz beachten
-- List/Array-Index aufloesen
-- Container-Properties behandeln
-- finalen Receiver fuer Method-Call liefern
+- load the start symbol
+- descend into struct members
+- respect pointers/references
+- resolve list/array indices
+- handle container properties
+- deliver the final receiver for a method call
 
-### Stufe 4: Read/Write/Call auf denselben Resolver umstellen
+### Stage 4: switch read/write/call to the same resolver
 
 #### `visitVariable(...)`
 
 In [ast_compiler_expr.cpp](../../src/core/ast_compiler_expr.cpp#L179)
 
-soll:
+should:
 
-- Namespace-/Enum-Sonderfall frueh bleiben
-- normaler Variablen-/Field-Read aber komplett an `resolveAccessChain(..., Read)` gehen
+- keep the namespace/enum special case early
+- but send normal variable/field reads completely to `resolveAccessChain(..., Read)`
 
 #### `visitSetStmt(...)`
 
 In [ast_compiler_stmt.cpp](../../src/core/ast_compiler_stmt.cpp)
 
-soll:
+should:
 
-- das Ziel als Chain geparst werden
-- finaler LValue ueber `resolveAccessChain(..., Write)` geliefert werden
+- parse the target as a chain
+- deliver the final lvalue via `resolveAccessChain(..., Write)`
 
 #### `visitCall(...)`
 
 In [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp#L62)
 
-soll:
+should:
 
-- `call->functionName` nicht mehr nur in `baseName` + `methodName` gesplittet werden
-- stattdessen:
-  - Chain parsen
-  - finalen Receiver aufloesen
-  - letztes Segment als Method-Name behandeln
+- no longer split `call->functionName` only into `baseName` + `methodName`
+- instead:
+  - parse the chain
+  - resolve the final receiver
+  - treat the last segment as the method name
 
-## Konkreter Method-Call-Umbau
+## Concrete method call rebuild
 
-### Stufe 5: Receiver-Resolution fuer Ketten
+### Stage 5: receiver resolution for chains
 
-Heute:
+Today:
 
-- `a.b.map.get(...)` wird als Methode auf `a` gestartet
+- `a.b.map.get(...)` is started as a method on `a`
 
-Ziel:
+Goal:
 
-- Receiver ist `a.b.map`
-- Methode ist `get`
+- the receiver is `a.b.map`
+- the method is `get`
 
-Neue Hilfsfunktion:
+New helper function:
 
 - `splitChainForMethodCall(chain) -> receiverChain + methodSegment`
 
-Dann:
+Then:
 
-1. ReceiverChain aufloesen
-2. finalen Receiver-Typ bestimmen
-3. Method-Dispatch fuer genau diesen Typ ausfuehren
+1. resolve the receiver chain
+2. determine the final receiver type
+3. execute the method dispatch for exactly this type
 
-### Stufe 6: Builtin-Methoden nicht als Sonderlogikstring behandeln
+### Stage 6: do not treat builtin methods as special-logic strings
 
-Der bisherige "fieldName + subMethod"-Sonderfall kann danach stark vereinfacht werden.
+The previous "fieldName + subMethod" special case can then be simplified considerably.
 
-Ziel:
+Goal:
 
-- Builtin-Method-Dispatch bekommt bereits den korrekten Receiver
-- keine improvisierte Teilauflösung ueber String-Reste
+- the builtin method dispatch already gets the correct receiver
+- no improvised partial resolution via string remainders
 
-Das betrifft besonders:
+This particularly concerns:
 
 - `list<T>`
 - `map<K:V>`
 - `Kv<K:V>`
 - `Store<T>`
 - `TimeSeries<T>`
-- Builtin-Klassen mit Property-Handles
+- builtin classes with property handles
 
-## Properties vs. Methoden
+## Properties vs. methods
 
-### Stufe 7: Container-Properties sauber unterscheiden
+### Stage 7: distinguish container properties cleanly
 
-Es braucht eine saubere Regel fuer:
+A clean rule is needed for:
 
 - `a.cards.len`
 - `a.cards.len()`
 
-Empfehlung:
+Recommendation:
 
-- intern beide Formen auf dieselbe Property-/Builtin-Logik abbilden
-- aber ueber denselben Chain-Resolver
+- internally map both forms to the same property/builtin logic
+- but via the same chain resolver
 
-Wichtig:
+Important:
 
-- Property-Sonderfaelle duerfen nicht wieder ein zweiter Parallelpfad werden
+- property special cases must not become a second parallel path again
 
-## Dateiaufteilung
+## File layout
 
 ### `utils.h` / `utils.cpp`
 
-Neu hinein:
+New in here:
 
 - `AccessSegmentKind`
 - `AccessSegment`
@@ -292,47 +292,47 @@ Neu hinein:
 
 ### `ast_compiler_expr.cpp`
 
-Umbau:
+Rebuild:
 
-- `visitVariable(...)` auf Chain-Parser + Resolver
+- `visitVariable(...)` onto the chain parser + resolver
 
 ### `ast_compiler_stmt.cpp`
 
-Umbau:
+Rebuild:
 
-- `visitSetStmt(...)` auf Chain-Parser + Resolver
+- `visitSetStmt(...)` onto the chain parser + resolver
 
 ### `ast_compiler_call.cpp`
 
-Umbau:
+Rebuild:
 
-- `visitCall(...)` auf Receiver-Chain-Modell
-- `visitObjectMethodCall(...)` soll nicht mehr mit halb-rohen Method-Namen arbeiten
+- `visitCall(...)` onto the receiver chain model
+- `visitObjectMethodCall(...)` should no longer work with half-raw method names
 
-## Reihenfolge der Umsetzung
+## Implementation order
 
 ### sprint_task_1
 
-Titel: Access-Chain-Strukturen und Parser einführen
+Title: introduce access chain structures and the parser
 
-Ergebnis:
+Result:
 
-- Parser fuer `a.b`, `a.b.c`, `a.x-0.y`, `a.b.get`
+- a parser for `a.b`, `a.b.c`, `a.x-0.y`, `a.b.get`
 
-Betroffene Stellen:
+Affected places:
 
 - [utils.h](../../src/core/utils.h)
 - [utils.cpp](../../src/core/utils.cpp)
 
 ### sprint_task_2
 
-Titel: Gemeinsamen Resolver fuer Reads bauen
+Title: build the shared resolver for reads
 
-Ergebnis:
+Result:
 
-- `visitVariable(...)` liest tiefe Ketten sauber
+- `visitVariable(...)` reads deep chains cleanly
 
-Betroffene Stellen:
+Affected places:
 
 - [utils.h](../../src/core/utils.h)
 - [utils.cpp](../../src/core/utils.cpp)
@@ -340,13 +340,13 @@ Betroffene Stellen:
 
 ### sprint_task_3
 
-Titel: Gemeinsamen Resolver fuer Writes bauen
+Title: build the shared resolver for writes
 
-Ergebnis:
+Result:
 
-- `set: [a.b.c, ...]` funktioniert ueber denselben Pfad
+- `set: [a.b.c, ...]` works via the same path
 
-Betroffene Stellen:
+Affected places:
 
 - [utils.h](../../src/core/utils.h)
 - [utils.cpp](../../src/core/utils.cpp)
@@ -354,17 +354,17 @@ Betroffene Stellen:
 
 ### sprint_task_4
 
-Titel: Method-Call-Receiver auf Chain-Modell umstellen
+Title: switch method call receivers to the chain model
 
-Ergebnis:
+Result:
 
 - `a.b.map.get(...)`
 - `this.player.hand-1.mana_cost.get(...)`
 - `obj.nested.list.len()`
 
-laufen ueber echte Receiver-Aufloesung
+run via real receiver resolution
 
-Betroffene Stellen:
+Affected places:
 
 - [utils.h](../../src/core/utils.h)
 - [utils.cpp](../../src/core/utils.cpp)
@@ -372,14 +372,14 @@ Betroffene Stellen:
 
 ### sprint_task_5
 
-Titel: Builtin-Dispatch und Property-Zugriffe bereinigen
+Title: clean up builtin dispatch and property accesses
 
-Ergebnis:
+Result:
 
-- kein Sonderpfad-Wildwuchs mehr
-- Container-Properties und Methoden laufen konsistent
+- no more special-path sprawl
+- container properties and methods run consistently
 
-Betroffene Stellen:
+Affected places:
 
 - [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp)
 - [builtin_registry.cpp](../../src/core/builtin_registry.cpp)
@@ -387,18 +387,18 @@ Betroffene Stellen:
 
 ### sprint_task_6
 
-Titel: Negative Diagnostics für tiefe Chains verbessern
+Title: improve negative diagnostics for deep chains
 
-Ergebnis:
+Result:
 
-- Fehler wie:
-  - unbekanntes Zwischenmember
-  - Methode auf falschem Endtyp
-  - Index auf Nicht-Container
+- errors such as:
+  - unknown intermediate member
+  - method on the wrong end type
+  - index on a non-container
 
-mit klarer Meldung statt spaetem IR- oder Runtime-Fehler
+with a clear message instead of a late IR or runtime error
 
-Betroffene Stellen:
+Affected places:
 
 - [context.h](../../src/core/context.h)
 - [utils.cpp](../../src/core/utils.cpp)
@@ -406,11 +406,11 @@ Betroffene Stellen:
 - [ast_compiler_stmt.cpp](../../src/core/ast_compiler_stmt.cpp)
 - [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp)
 
-## Testplan
+## Test plan
 
-Pflichttests:
+Mandatory tests:
 
-1. `a.b.c` lesen
+1. read `a.b.c`
 2. `set: [a.b.c, 7]`
 3. `a.items-0.hp`
 4. `a.map.get("x")`
@@ -420,20 +420,18 @@ Pflichttests:
 8. `a.cards.len`
 9. `a.cards.len()`
 
-Negativtests:
+Negative tests:
 
-1. unbekanntes Zwischenmember
-2. Methode auf Skalar
-3. Index auf Nicht-Liste
-4. Write auf nicht schreibbares Ziel
+1. unknown intermediate member
+2. method on a scalar
+3. index on a non-list
+4. write to a non-writable target
 
-## Akzeptanzkriterium
+## Acceptance criterion
 
-Die Änderung ist erst dann erfolgreich, wenn Nutzer nicht mehr gezwungen sind,
-fuer einfache tiefe Ketten wie:
+The change is only successful when users are no longer forced
+to create helper variables or special workarounds for simple deep chains such as:
 
 - `a.b.c`
 - `this.player.hand-1.name`
 - `card.data.cost.get("1")`
-
-Hilfsvariablen oder Sonderworkarounds anzulegen.
