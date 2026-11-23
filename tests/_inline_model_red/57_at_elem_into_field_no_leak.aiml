@@ -7,7 +7,7 @@
 # "no temp". `{ at: [names, i] }` on a list<string> is BOTH: borrow read AND
 # owned temp (visitAtExpr increfs the element and registers it) → a second reference that
 # nobody frees: 1 string per assignment (~36 B here, 16 strings per 9rooms registration).
-# FIX: `rhsWasOwnedStringTemp` fragen (direkt nach der Auswertung festgehalten) statt der
+# FIX: ask `rhsWasOwnedStringTemp` (captured right after the evaluation) instead of the
 # emptied list. map.get/kv.get register no temp → their incref stays (322e0a0 intact).
 #
 # Covers the four sinks that 54_at_field_string_no_leak does NOT have: field store, field rebind,

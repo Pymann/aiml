@@ -1,7 +1,7 @@
 # SPEC?: 62_pipelines   # derived from the file name, to be confirmed
-# Berechneter Pfad: WARNUNG, kein Fehler — statisch nicht entscheidbar, und
+# Computed path: a WARNING, not an error — not statically decidable, and
 # Requires: driver
-# etwas anderes zu behaupten waere unehrlich (F62-20).
+# claiming anything else would be dishonest (F62-20).
 - def:
     name: body_read_rel
     args: [[stem, string]]

@@ -1,22 +1,22 @@
 # SPEC: 61_memory_management
 # static-check: off
-# spec/61 §5.4 + §7: ein Container-/Store-LESEN (`get`/`at`/`first`/`last`) liefert einen
-# BORROW — der Container behaelt das Eigentum.  Wird so ein Borrow in eine Senke gelegt, die
-# ihn spaeter selbst freigibt (Modellfeld, Listenelement, Map-Wert), muss die Senke eine
-# EIGENE Referenz nehmen (incref).  Sonst haelt sie freigegebenen Speicher, sobald der
-# Quell-Container stirbt — ein use-after-free, der meist unsichtbar bleibt, weil der Inhalt
-# noch dasteht.  Darum liegt zwischen Quelltod und Pruefung Heap-Churn.
+# spec/61 §5.4 + §7: a container/store READ (`get`/`at`/`first`/`last`) returns a
+# BORROW — the container keeps ownership.  If such a borrow is put into a sink that
+# frees it itself later (model field, list element, map value), the sink must take an
+# OWN reference (incref).  Otherwise it holds freed memory as soon as the
+# source container dies — a use-after-free that mostly stays invisible because the content
+# is still there.  That is why there is heap churn between the source's death and the check.
 #
-# Gegenprobe im selben Lauf: eine OWNED Quelle (Interpolation, Literal) darf NICHT zusaetzlich
-# increft werden — sie uebertraegt ihre einzige Referenz.  Das prueft hier der Inhalt; ein
-# falsches incref wuerde als Leck auffallen (Leak-Gate), nicht als falscher Text.
+# Counter-probe in the same run: an OWNED source (interpolation, literal) must NOT be
+# additionally increfed — it transfers its only reference.  The content checks that here; a
+# wrong incref would show up as a leak (leak gate), not as wrong text.
 
 - model:
     name: Rec
     fields:
       - [name, string, ""]
 
-# Allokiert kraeftig, damit ein freigegebener Block wiederverwendet wuerde.
+# allocates heavily, so that a freed block would be reused.
 - def:
     name: churn
     return: i32
@@ -125,7 +125,7 @@
       - call: [map_into_idx, slots]
       - decl: [copies, map<string:string>]
       - call: [map_into_map, copies]
-      # Die Quell-Container sind tot; jetzt den Heap umwaelzen.
+      # The source containers are dead; now churn the heap.
       - decl: [burned, i32, { call: [churn] }]
       - decl: [fails, i32, 0]
       - decl: [rec0, Rec, { at: [recs, 0] }]

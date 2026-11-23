@@ -3,13 +3,13 @@
 # Requires: driver
 # NEEDS: host
 # TIER: T1
-# CONSTRUCT: spec/65 F65-4 — die Ordnung, am echten Wirt.  Der Wirt bietet `read_status` auf
-#            Level 7 und `say_hello` auf Level 255 an; das Skript laeuft in einer Sitzung mit
-#            Freigabe 7 und erreicht beide.  Die Freigabe kommt am `sys.exec` (F65-36), die
-#            Level aus der Export-Tabelle (F65-23) — nicht aus der Skriptquelle, das waere
-#            Selbstbeglaubigung (F65-27).
-# COVERS: `session_clearance <= symbol_level`; Gleichheit ist Zugriff; das offene Ende (255).
-#         Die Gegenprobe zur unteren Schranke ist neg/n19 (Level 2 bei Freigabe 7).
+# CONSTRUCT: spec/65 F65-4 — the ordering, on a real host.  The host offers `read_status` at
+#            level 7 and `say_hello` at level 255; the script runs in a session with
+#            clearance 7 and reaches both.  The clearance comes with `sys.exec` (F65-36), the
+#            levels from the export table (F65-23) — not from the script source, that would be
+#            self-certification (F65-27).
+# COVERS: `session_clearance <= symbol_level`; equality is access; the open end (255).
+#         The counter-probe for the lower bound is neg/n19 (level 2 with clearance 7).
 # EXPECT: exit 0.
 
 - def:
@@ -26,7 +26,7 @@
     body:
       - return: [4]
 
-# Laeuft im BUENDEL, also in der eingeschraenkten Sitzung mit Freigabe 7.
+# Runs in the BUNDLE, i.e. in the restricted session with clearance 7.
 - def:
     name: user_script
     return: i32
@@ -57,7 +57,7 @@
       - if:
           condition: { neq: [rcx, 0] }
           then:
-            - call: [log.error, "Buendel lieferte ${rcx}, erwartet 0"]
+            - call: [log.error, "bundle returned ${rcx}, expected 0"]
             - return: [1]
-      - call: [log.info, "PASS 02 Freigabe 7 erreicht Level 7 und 255"]
+      - call: [log.info, "PASS 02 clearance 7 reaches level 7 and 255"]
       - return: [0]

@@ -3,24 +3,24 @@
 # static-check: off
 # NEEDS: write
 # REPLACE-LEVEL: 3
-# NEGATIVE (spec/65 F65-32): die Umgebung ist die Vorgabe des PROZESSES und darf nur
-# VERSCHAERFEN.  Der Wirt setzt `AIML_REPLACE_LEVEL=3`; der Aufruf verlangt 7 — und bekommt 3.
+# NEGATIVE (spec/65 F65-32): the environment is the PROCESS default and may only
+# TIGHTEN.  The host sets `AIML_REPLACE_LEVEL=3`; the call demands 7 — and gets 3.
 #
-# Hier laeuft „strenger" in die ANDERE Richtung als bei der Freigabe, weil der Vergleich
-# gegenlaeufig ist (`clearance <= replace_level`): strenger ist die KLEINERE Zahl.  Genau
-# deshalb ist „nicht gesetzt" nicht 0, sondern „keine Vorgabe" — waere es 0, koennte die
-# Umgebung das Recht nur abschalten und nie erteilen.
+# Here "stricter" runs in the OTHER direction than for the clearance, because the comparison
+# is reversed (`clearance <= replace_level`): stricter is the SMALLER number.  Exactly
+# that is why "not set" is not 0 but "no default" — if it were 0, the
+# environment could only switch the right off and never grant it.
 #
-# Unterschied zu n22: dort IST das Recht erteilt und die Version traegt die Aussage
-# (`clearance-collision`).  Hier wird das Recht von der Umgebung gekappt, also kommt es nie
-# bis zur Version — die Pruefungsreihenfolge aus F65-29 wird hier noch einmal sichtbar.
+# Difference from n22: there the right IS granted and the version carries the statement
+# (`clearance-collision`).  Here the right is capped by the environment, so it never gets
+# as far as the version — the check order from F65-29 becomes visible here once more.
 #
-# Die Regel hat ZWEI Richtungen, und diese Probe deckt nur eine.  Die andere ist am 17.10.2026
-# gemessen, weil eine Probe allein nicht zwischen „gekappt" und „Aufruf ignoriert"
-# unterscheidet:
-#   AIML_REPLACE_LEVEL=7 + Aufruf 0 → effektiv 0, clearance-replace  (der Aufruf verschaerft)
-#   AIML_REPLACE_LEVEL=7 + Aufruf 7 → erteilt, dann clearance-collision (n22-Datei)
-# Es gewinnt also immer das Strengere, aus welcher Quelle es auch kommt.
+# The rule has TWO directions, and this probe covers only one.  The other was measured on 2026-10-17,
+# because one probe alone cannot tell "capped" from "call ignored"
+# apart:
+#   AIML_REPLACE_LEVEL=7 + call 0 → effectively 0, clearance-replace  (the call tightens)
+#   AIML_REPLACE_LEVEL=7 + call 7 → granted, then clearance-collision (n22 file)
+# So the stricter one always wins, from whichever source it comes.
 # EXPECT-ERROR: clearance-replace
 - def:
     name: wipe_queue

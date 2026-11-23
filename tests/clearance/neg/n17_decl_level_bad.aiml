@@ -3,8 +3,8 @@
 # Requires: driver
 # NEEDS: step2
 # CLEARANCE: none
-# NEGATIVE (spec/65 F65-17, F65-21): `invalid-level` feuert in JEDEM Build, auch im
-# vertrauenswuerdigen — hier an der 4. Position eines `decl`.
+# NEGATIVE (spec/65 F65-17, F65-21): `invalid-level` fires in EVERY build, including the
+# trusted one — here at the 4th position of a `decl`.
 # EXPECT-ERROR: invalid-level
 - def:
     name: main

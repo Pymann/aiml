@@ -1,8 +1,8 @@
 # SPEC: 62_pipelines §18.5
-# F110-125: die Vorgabe ERGIBT sich aus `image:` und wird nicht geraten;
+# F110-125: the default FOLLOWS from `image:` and is not guessed;
 # Requires: driver
-# widersprueechliche Angaben werden abgewiesen, statt eine davon gewinnen zu
-# lassen.
+# contradictory settings are rejected instead of letting one of them
+# win.
 - pipeline:
     name: widerspruch
     image: ubuntu-base

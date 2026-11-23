@@ -1,22 +1,22 @@
 # SPEC: 61_memory_management,31_db_integration,15_models
 # static-check: off
-# Vier Formen aus der Jagd auf den cai-Absturz vom 2026-11-04 (SIGSEGV in __strlen_avx2 <-
-# enc <- aiml_ser_deep_copy <- cai.wissen.Aufloesung_eintraege), in EINER Datei, damit das
-# nur einmal uebersetzt werden muss:
+# Four forms from the hunt for the cai crash of 2026-11-04 (SIGSEGV in __strlen_avx2 <-
+# enc <- aiml_ser_deep_copy <- cai.wissen.Aufloesung_eintraege), in ONE file, so that it
+# only has to be compiled once:
 #
-#   A  eine Methode gibt eine FRISCH gebaute list<Model> zurueck, der Aufrufer weist sie
-#      einer schon belegten Lokalen zu und liest Elemente heraus   (cai: Aufloesung.loese)
-#   B  ein Borrow aus dem KV-Cache (`ref<T>` aus kv.get), dessen String-Feld in eine Liste
-#      geschoben wird                                   (cai: Wissensgraph.dinge_von)
-#   C  ein Borrow, dessen String-Feld ZURUECKGEGEBEN wird (cai: Wissensgraph.anzeige) —
-#      gaebe der Compiler es als owned zurueck, sinkt der Refcount des Cache-Strings
-#   D  Lesen und Schreiben verschraenkt ueber mehr Schluessel als das Cache-Fenster
-#      (MAX_DECODED_LRU = 1024) — das Regime des ZIM-Laufs
+#   A  a method returns a FRESHLY built list<Model>, the caller assigns it
+#      to an already bound local and reads elements from it   (cai: Aufloesung.loese)
+#   B  a borrow from the KV cache (`ref<T>` from kv.get) whose string field is pushed
+#      into a list                                     (cai: Wissensgraph.dinge_von)
+#   C  a borrow whose string field is RETURNED (cai: Wissensgraph.anzeige) —
+#      if the compiler returned it as owned, the cache string's refcount would drop
+#   D  reading and writing interleaved over more keys than the cache window
+#      (MAX_DECODED_LRU = 1024) — the regime of the ZIM run
 #
-# Die eigentliche Ursache lag woanders (spec/31 §6.7.3, Netz: tests/kv_decoded_cache/);
-# diese vier Formen bleiben als Netz fuer den Weg dorthin.  Jede Runde prueft den INHALT,
-# damit ein freigegebener oder geteilter Slot auch dann auffaellt, wenn der Speicher noch
-# lesbar ist.
+# The actual cause lay elsewhere (spec/31 §6.7.3, net: tests/kv_decoded_cache/);
+# these four forms stay as a net for the way there.  Every round checks the CONTENT,
+# so that a freed or shared slot is noticed even when the memory is still
+# readable.
 - model:
     name: NameRow
     fields:
@@ -62,7 +62,7 @@
             - set: [eintrag.quelle, "quelle-${nummer}"]
             - call: [<.namen.set, "k-${nummer}", eintrag]
 
-      # ── A/D: frische list<Model> aus get_copy-Elementen, als Rueckgabe
+      # ── A/D: fresh list<Model> from get_copy elements, as a return value
       - def:
           name: eintraege
           args: [[suchtext, string]]
@@ -78,7 +78,7 @@
                 - set: [row, { +: [row, 1] }]
             - return: out
 
-      # ── B: Borrow aus dem Cache, String-Feld in eine Liste
+      # ── B: borrow from the cache, string field into a list
       - def:
           name: dinge_von
           args: [[suchtext, string]]
@@ -96,7 +96,7 @@
                 - set: [row, { +: [row, 1] }]
             - return: out
 
-      # ── C: Borrow, dessen String-Feld zurueckgegeben wird
+      # ── C: borrow whose string field is returned
       - def:
           name: anzeige
           args: [[nummer, i32]]
@@ -110,7 +110,7 @@
                     - return: eintrag.ding
             - return: "unbekannt"
 
-      # ── A: belegte Lokale neu zuweisen, zweite Liste aus Elementen der ersten aufbauen
+      # ── A: reassign a bound local, build a second list from elements of the first
       - def:
           name: loese
           args: [[suchtext, string], [zweit, string]]
@@ -151,7 +151,7 @@
           return: i32
           body:
             - decl: [erwartet, string, { call: [<.wert_von, nummer] }]
-            # C: zweimal lesen — ein unbalancierter decref schlaegt beim ersten zu
+            # C: read twice — an unbalanced decref strikes on the first
             - decl: [eins, string, { call: [<.anzeige, nummer] }]
             - if: [{ neq: [eins, erwartet] }, true]
               then:
@@ -162,7 +162,7 @@
               then:
                 - print: ["FAIL C2 k-${nummer}"]
                 - return: 2
-            # B: Borrow-Feld in eine Liste, Liste faellt danach weg
+            # B: borrow field into a list, the list goes away afterwards
             - decl: [dinge, list<string>, { call: [<.dinge_von, "wort-${nummer}"] }]
             - if: [{ neq: [dinge.len, 1] }, true]
               then:
@@ -172,7 +172,7 @@
               then:
                 - print: ["FAIL B Inhalt k-${nummer}"]
                 - return: 4
-            # A: Rueckgabe einer frischen list<Model>, Zuweisung an eine belegte Lokale
+            # A: return of a fresh list<Model>, assignment to a bound local
             - decl: [tref, Treffer, { call: [<.loese, "wort-${nummer}", "wort-${nummer}"] }]
             - if: [{ neq: [tref.weg, "name"] }, true]
               then:
@@ -190,7 +190,7 @@
               then:
                 - print: ["FAIL A sorte='${tref.sorte}' k-${nummer}"]
                 - return: 8
-            # A, zweiter Zweig: erster Suchtext leer, zweiter trifft -> ueber teil/aus_formen
+            # A, second branch: first search text empty, second hits -> via teil/aus_formen
             - decl: [tref2, Treffer, { call: [<.loese, "fehlt-${nummer}", "wort-${nummer}"] }]
             - if: [{ neq: [tref2.weg, "beugung"] }, true]
               then:
@@ -200,7 +200,7 @@
               then:
                 - print: ["FAIL A2 Inhalt k-${nummer}"]
                 - return: 10
-            # C erneut, nach allen deep_copy-Durchgaengen
+            # C again, after all deep_copy passes
             - decl: [drei, string, { call: [<.anzeige, nummer] }]
             - if: [{ neq: [drei, erwartet] }, true]
               then:
@@ -208,7 +208,7 @@
                 - return: 11
             - return: 0
 
-      # ── D: mehr Schluessel als Cache-Plaetze, Schreiben und Lesen verschraenkt
+      # ── D: more keys than cache slots, writing and reading interleaved
       - def:
           name: lauf
           args: [[runden, i32]]
@@ -218,7 +218,7 @@
             - while: [{ lt: [row, runden] }]
               body:
                 - call: [<.lege_an, row]
-                # ein alter Schluessel, weit hinter dem Cache-Fenster (1024 Plaetze)
+                # an old key, far behind the cache window (1024 slots)
                 - decl: [alt, i32, { -: [row, 1500] }]
                 - if: [{ ge: [alt, 0] }, true]
                   then:
@@ -228,7 +228,7 @@
                         - print: ["FAIL D runde ${row}"]
                         - return: ergebnis
                 - set: [row, { +: [row, 1] }]
-            # und noch zwei frische Schluessel ohne Cache-Druck
+            # and two more fresh keys without cache pressure
             - decl: [ergebnis_a, i32, { call: [<.pruefe_eine, 3] }]
             - if: [{ neq: [ergebnis_a, 0] }, true]
               then:
@@ -245,7 +245,7 @@
       - decl: [ergebnis_mem, i32, { call: [graf_mem.lauf, 2000] }]
       - if: [{ neq: [ergebnis_mem, 0] }, true]
         then:
-          - print: ["FAIL nicht-persistent ergebnis=${ergebnis_mem}"]
+          - print: ["FAIL non-persistent ergebnis=${ergebnis_mem}"]
           - return: 1
       - decl: [wal_store, Kv<string:NameRow>, { call: [db.open_kv, "lt175_wal", { persist: true, path: "/tmp/aiml_test_lt175/" }] }]
       - decl: [graf_wal, shared<Graf>, { new: Graf }]

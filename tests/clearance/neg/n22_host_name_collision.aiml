@@ -2,13 +2,13 @@
 # Requires: driver
 # static-check: off
 # NEEDS: write
-# NEGATIVE (spec/65 F65-30): der stille Fallstrick aus spec/29_2 §4.2.  Hier ist `replace_level`
-# ERTEILT (Richtlinie 7, 7, 7), die Berechtigung ist also nicht das Thema — die Version ist es:
-# bei gleicher oder niedrigerer Version wuerde die heutige Logik die ankommende Definition
-# stillschweigend UEBERSPRINGEN.  Das Skript bekaeme dann das `wipe_queue` DES WIRTS, ohne es
-# zu merken: eine Ueberraschung in der Korrektheit, bevor sie eine in der Sicherheit ist.
+# NEGATIVE (spec/65 F65-30): the silent pitfall from spec/29_2 §4.2.  Here `replace_level` is
+# GRANTED (policy 7, 7, 7), so the permission is not the issue — the version is:
+# with an equal or lower version today's logic would silently SKIP the incoming
+# definition.  The script would then get the HOST's `wipe_queue` without
+# noticing: a surprise in correctness before it is one in security.
 #
-# An einer Vertrauensgrenze ist Verschatten nichts, was still passieren darf — also ein Fehler.
+# At a trust boundary shadowing is nothing that may happen silently — so it is an error.
 # EXPECT-ERROR: clearance-collision
 - def:
     name: wipe_queue

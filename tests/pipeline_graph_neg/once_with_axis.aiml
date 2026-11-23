@@ -1,7 +1,7 @@
 # SPEC?: 62_pipelines   # derived from the file name, to be confirmed
 # Requires: driver
-# F62-115: `per: once` mit deklarierter Achse ist ein Fehler — es gibt EIN
-# Ergebnis fuer die ganze Matrix, also kann es nicht von einer Achse haengen.
+# F62-115: `per: once` with a declared axis is an error — there is ONE
+# result for the whole matrix, so it cannot depend on an axis.
 - pipeline:
     name: once_axis
     params:

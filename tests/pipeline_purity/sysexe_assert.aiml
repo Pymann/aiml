@@ -1,5 +1,5 @@
 # SPEC?: 62_pipelines   # derived from the file name, to be confirmed
-# Dasselbe MIT assert_pure: erlaubt — die Unterschrift ist da (F62-22).
+# The same WITH assert_pure: allowed — the signature is there (F62-22).
 # Requires: driver
 - def:
     name: body_exe

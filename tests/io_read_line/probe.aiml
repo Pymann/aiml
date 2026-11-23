@@ -1,6 +1,6 @@
-# Requires: driver — tests/io_read_line/run.sh speist stdin.  Einzeln gestartet
-# haengt die Probe an einer offenen Pipe, bis die Zeitgrenze zuschlaegt (600 s).
-# Liest zwei Zeilen zeilenweise und meldet Laenge und Inhalt.
+# Requires: driver — tests/io_read_line/run.sh feeds stdin.  Started on its own,
+# hangs the probe on an open pipe until the time limit strikes (600 s).
+# Reads two lines line by line and reports length and content.
 - def:
     name: main
     return: i32

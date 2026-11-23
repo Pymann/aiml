@@ -1,7 +1,7 @@
 # SPEC?: 62_pipelines   # derived from the file name, to be confirmed
-# F62-17: `host:` traegt NAMEN, nie name=value — ein Wert im Quelltext waere
+# F62-17: `host:` carries NAMES, never name=value — a value in the source text would be
 # Requires: driver
-# ein Geheimnis im Quelltext.
+# a secret in the source text.
 - pipeline:
     name: with_host_value
     params:

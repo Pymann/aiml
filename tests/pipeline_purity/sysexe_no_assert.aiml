@@ -1,5 +1,5 @@
 # SPEC?: 62_pipelines   # derived from the file name, to be confirmed
-# sys.exe im reinen Rumpf OHNE assert_pure: Fehler (F62-22/F62-104).
+# sys.exe in a pure body WITHOUT assert_pure: error (F62-22/F62-104).
 # Requires: driver
 - def:
     name: body_exe

@@ -1,7 +1,7 @@
 # Requires: driver
-# Der ERLAUBTE Fall: `[]` als Default eines list-Feldes.  Muss uebersetzen, und
-# die Felder DANACH muessen noch da sein (spec/15: vor 2026-10-29 beendete ein
-# `[]`-Default still die Feldliste).
+# The ALLOWED case: `[]` as the default of a list field.  Must compile, and
+# the fields AFTER it must still be there (spec/15: before 2026-10-29 an
+# `[]` default silently ended the field list).
 - class:
     name: Probe
     members:
@@ -20,7 +20,7 @@
                 then:
                   - print: ["FAIL liste.len=${<.liste.len}"]
                   - set: [fehler, { +: [fehler, 1] }]
-            # Das Feld nach dem []-Default muss existieren und seinen Default tragen.
+            # The field after the [] default must exist and carry its default.
             - if:
                 condition: { neq: [<.zahl, 7] }
                 then:
@@ -31,7 +31,7 @@
                 then:
                   - print: ["FAIL wort=${<.wort}"]
                   - set: [fehler, { +: [fehler, 1] }]
-            # `.push` muss sofort gehen.
+            # `.push` must work immediately.
             - call: [<.liste.push, "spaeter"]
             - if:
                 condition: { neq: [<.liste.len, 1] }

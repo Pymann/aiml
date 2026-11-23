@@ -1,14 +1,14 @@
 # SPEC: 29_2_sys_exec,29_serialize
-# Live-Test (spec/29_2 §12/§13), Senderseite — AOT, kein JIT.
-# Requires: peer — wird von tests/bundle_socket/run.sh paarweise gestartet
+# Live test (spec/29_2 §12/§13), sender side — AOT, no JIT.
+# Requires: peer — started in pairs by tests/bundle_socket/run.sh
 # Expected exit code: 0
 
-# ── Durchgang 1: eine eigenstaendige Funktion ───────────────────────────
+# ── Pass 1: a self-contained function ───────────────────────────────────
 - def:
     name: remote_task
     return: i32
     body:
-      - print: ["   remote_task laeuft beim Empfaenger"]
+      - print: ["   remote_task runs at the receiver"]
       - return: 0
 
 # ── Durchgang 2: "Bibliothek" + Pipeline, die sie benutzt ───────────────
@@ -16,7 +16,7 @@
     name: lib_greet
     return: i32
     body:
-      - print: ["   lib_greet aus der Bibliothek"]
+      - print: ["   lib_greet from the library"]
       - return: 7
 
 - def:
@@ -46,7 +46,7 @@
       - print: ["1) Antwort: ${ans_one}"]
       - if: { condition: { neq: [ans_one, "ok"] }, then: [{ set: [fails, { +: [fails, 1] }] }] }
 
-      # Bibliothek und Pipeline getrennt buendeln und nacheinander schicken.
+      # Bundle library and pipeline separately and send them one after the other.
       - decl: [lib_pkg, Code, { call: [sys.bundle, "lib_greet"] }]
       - decl: [pipe_pkg, Code, { call: [sys.bundle, "run_pipeline"] }]
       - decl: [wire_lib, string, { call: [lib_pkg.toString] }]

@@ -45,12 +45,12 @@
       - if:
           condition: { neq: [via, 7] }
           then:
-            - call: [log.error, "open_to_all lieferte ${via}, erwartet 7"]
+            - call: [log.error, "open_to_all returned ${via}, expected 7"]
             - return: [1]
       - if:
           condition: { neq: [gate, 7] }
           then:
-            - call: [log.error, "with_gateway lieferte ${gate}, erwartet 7"]
+            - call: [log.error, "with_gateway returned ${gate}, expected 7"]
             - return: [1]
       - call: [log.info, "PASS 01 trusted default: Annotationen inert"]
       - return: [0]

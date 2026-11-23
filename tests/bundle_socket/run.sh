@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Live-Test: sys.bundle ueber Socket an einen AOT-Listener, dort ausgefuehrt.
-# Beweist spec/29_2 §11/§13 — isolierter Kontext laeuft OHNE JIT.
+# Live test: sys.bundle over a socket to an AOT listener, executed there.
+# Proves spec/29_2 §11/§13 — an isolated context runs WITHOUT a JIT.
 set -uo pipefail
 cd "$(dirname "$0")/../.."
 source ../../exvenv/bin/activate

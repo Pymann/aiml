@@ -6,14 +6,14 @@
 # CLEARANCE: 7
 # CREATE-LEVEL: 7
 # REPLACE-LEVEL: 3
-# CONSTRUCT: spec/65 F65-32 — die Richtlinie ist LESBAR, nie schreibbar.  Lesen ist harmlos und
-#            nuetzlich: nur so kann ein Skript eine brauchbare Fehlermeldung geben, statt an
-#            einer Diagnose des Compilers zu scheitern.  Level sind ohnehin nicht geheim
+# CONSTRUCT: spec/65 F65-32 — the policy is READABLE, never writable.  Reading is harmless and
+#            useful: only that way can a script give a usable error message instead of
+#            failing on a compiler diagnostic.  Levels are not secret anyway
 #            (F65-16).
-# COVERS: `clearance.level`, `clearance.create_level`, `clearance.replace_level` in einer
-#         eingeschraenkten Sitzung.  Hier kommt die Richtlinie aus der Umgebung (F65-20) —
-#         das ist der Fall, in dem der WIRT sie prozessweit vorgibt.
-#         Das Gegenstueck ist neg/n24: ein SETZER existiert nicht und wird abgewiesen.
+# COVERS: `clearance.level`, `clearance.create_level`, `clearance.replace_level` in a
+#         restricted session.  Here the policy comes from the environment (F65-20) —
+#         that is the case in which the HOST sets it for the whole process.
+#         The counterpart is neg/n24: a SETTER does not exist and is rejected.
 # EXPECT: exit 0.
 
 - def:
@@ -26,17 +26,17 @@
       - if:
           condition: { neq: [clr, 7] }
           then:
-            - call: [log.error, "clearance.level = ${clr}, erwartet 7"]
+            - call: [log.error, "clearance.level = ${clr}, expected 7"]
             - return: [1]
       - if:
           condition: { neq: [crt, 7] }
           then:
-            - call: [log.error, "clearance.create_level = ${crt}, erwartet 7"]
+            - call: [log.error, "clearance.create_level = ${crt}, expected 7"]
             - return: [1]
       - if:
           condition: { neq: [rpl, 3] }
           then:
-            - call: [log.error, "clearance.replace_level = ${rpl}, erwartet 3"]
+            - call: [log.error, "clearance.replace_level = ${rpl}, expected 3"]
             - return: [1]
       - call: [log.info, "PASS 12 Richtlinie lesbar"]
       - return: [0]

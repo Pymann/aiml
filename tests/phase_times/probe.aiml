@@ -1,6 +1,6 @@
 # SPEC: 70_performance
 # Requires: driver
-# Kleine, gueltige Probe fuer die Messschalter (spec/70 §11.3).
+# Small, valid probe for the measurement switches (spec/70 §11.3).
 # Expected exit code: 0
 - def:
     name: main

@@ -1,18 +1,18 @@
-# host_exports.txt — was der WIRT anbietet (spec/65 §5a, F65-23).
+# host_exports.txt — what the HOST offers (spec/65 §5a, F65-23).
 #
-# Format: Name|Level.  EINE Tabelle, nicht zwei: Level und Angebot stehen in
-# derselben Zeile, damit sie nicht auseinanderlaufen koennen.
+# Format: name|level.  ONE table, not two: level and offer are in
+# the same row, so that they cannot drift apart.
 #
-# Signatur und Adresse (F65-24) fehlen hier bewusst — sie braucht erst das
-# AUFRUFEN, und dafuer muss ein echter Wirt sie anmelden.  Diese Datei reicht
-# fuer die beiden Pruefungen zur UEBERSETZUNGSZEIT: Zugriff (F65-4/F65-5) und
-# `extern`-Zulassung (F65-13).
+# Signature and address (F65-24) are deliberately missing here — only
+# CALLING needs them, and for that a real host must register them.  This file is enough
+# for the two checks at COMPILE TIME: access (F65-4/F65-5) and
+# `extern` admission (F65-13).
 wipe_queue|2
 read_status|7
 say_hello|255
 never_exposed|0
 aiml_str_dup|7
-# Wirt als Shared Library (fixtures/libclearance_host.so, F65-24 zweiter Weg):
-# Name und Level hier, Adresse aus der vorgeladenen Bibliothek.
+# Host as a shared library (fixtures/libclearance_host.so, F65-24 second route):
+# name and level here, address from the preloaded library.
 clearance_host_answer|7
 clearance_host_secret|2

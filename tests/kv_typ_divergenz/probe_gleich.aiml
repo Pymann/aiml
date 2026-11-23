@@ -1,8 +1,8 @@
-# spec/31 §6.10 (positiv): derselbe Store, zweimal mit DEMSELBEN Werttyp
-# Requires: driver — tests/kv_typ_divergenz/run.sh fuehrt beide Faelle;
-# einzeln gestartet ist der ABBRUCH des Kreuz-Falls das erwartete Verhalten.
-# geoeffnet -- einmal als Global, einmal als Klassenmitglied.  Das ist der
-# Zustand einer schrittweisen Migration nach spec/58 und muss tragen.
+# spec/31 §6.10 (positive): the same store, opened twice with THE SAME value type
+# Requires: driver — tests/kv_typ_divergenz/run.sh runs both cases;
+# started on its own, the ABORT of the cross case is the expected behaviour.
+# -- once as a global, once as a class member.  That is the
+# state of a step-by-step migration per spec/58 and must hold.
 
 - model:
     name: Fund
@@ -53,8 +53,8 @@
             - if:
                 condition: { eq: [zahl, 2] }
                 then:
-                  - call: [log.info, "PASS gleicher Typ: name='${zur.name}' marken=${zahl} stufe=${zur.stufe}"]
+                  - call: [log.info, "PASS same type: name='${zur.name}' marken=${zahl} stufe=${zur.stufe}"]
                 else:
-                  - call: [log.error, "FAIL marken=${zahl}, soll 2"]
+                  - call: [log.error, "FAIL marken=${zahl}, should be 2"]
           else:
-            - call: [log.error, "FAIL name='${zur.name}', soll 'Gate Wraith'"]
+            - call: [log.error, "FAIL name='${zur.name}', should be 'Gate Wraith'"]

@@ -3,8 +3,8 @@
 # Requires: driver
 # NEEDS: step2
 # CLEARANCE: none
-# NEGATIVE (spec/65 F65-17, F65-21): dieselbe Pruefung am Klassenmitglied — der Modifier-Block
-# an 4. Position ist dieselbe Stelle wie beim `decl` (spec/03).
+# NEGATIVE (spec/65 F65-17, F65-21): the same check on a class member — the modifier block
+# at the 4th position is the same place as for `decl` (spec/03).
 # EXPECT-ERROR: invalid-level
 - class:
     name: Holder

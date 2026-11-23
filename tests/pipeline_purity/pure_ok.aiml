@@ -1,7 +1,7 @@
 # SPEC?: 62_pipelines   # derived from the file name, to be confirmed
-# Reiner Rumpf: nur Rechnen und log (log ist immer erlaubt, §10.2).
+# Pure body: only computing and log (log is always allowed, §10.2).
 # Requires: driver
-# Keine Reinheits-Diagnose erwartet.
+# No purity diagnostic expected.
 - def:
     name: body_ok
     return: i32

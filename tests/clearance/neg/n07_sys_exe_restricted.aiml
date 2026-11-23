@@ -3,9 +3,9 @@
 # Requires: driver
 # NEEDS: guard
 # CLEARANCE: 7
-# NEGATIVE (spec/65 F65-12 pt.2, F65-35): Builtins sind von Grund auf zu.  Eine Shell ist eine
-# vollstaendige Umgehung in einer Zeile, also ausser Reichweite, solange der Wirt sie nicht
-# ausdruecklich oeffnet.
+# NEGATIVE (spec/65 F65-12 pt.2, F65-35): builtins are closed from the ground up.  A shell is a
+# complete bypass in one line, so it is out of reach as long as the host does not
+# open it explicitly.
 # EXPECT-ERROR: clearance-builtin
 - def:
     name: main

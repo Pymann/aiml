@@ -24,11 +24,11 @@ out=$(AIML_CACHE="$CACHE" AIML_MEM_V3=1 AIML_LINT_GLOBALS=0 \
       "$AIML" tests/kv_typ_divergenz/probe_gleich.aiml -r 2>&1); rc=$?
 if [ $rc -ge 128 ]; then
     printf "  FAIL [gleicher Typ] stuerzte mit rc=%d ab (Signal %d)\n" "$rc" "$((rc-128))"; fail=1
-elif [ $rc -ne 0 ] || ! echo "$out" | grep -q "PASS gleicher Typ"; then
+elif [ $rc -ne 0 ] || ! echo "$out" | grep -q "PASS same type"; then
     printf "  FAIL [gleicher Typ] rc=%d\n" "$rc"
     echo "$out" | grep -E "FAIL|FATAL|error" | head -4 | sed 's/^/        /'; fail=1
 else
-    printf "  ok   [gleicher Typ] %s\n" "$(echo "$out" | grep -o "PASS gleicher Typ.*" | head -1)"
+    printf "  ok   [gleicher Typ] %s\n" "$(echo "$out" | grep -o "PASS same type.*" | head -1)"
 fi
 
 # ── Fall 2: verschiedener Typ → laut + Abbruch ─────────────────────────────
@@ -37,7 +37,7 @@ out=$(AIML_CACHE="$CACHE" AIML_MEM_V3=1 AIML_LINT_GLOBALS=0 \
 if [ $rc -ge 128 ]; then
     printf "  FAIL [fremder Typ] stuerzte mit rc=%d ab (Signal %d) statt zu melden\n" "$rc" "$((rc-128))"
     echo "$out" | grep -iE "crash|signal" | head -2 | sed 's/^/        /'; fail=1
-elif echo "$out" | grep -q "FAIL: zweite Oeffnung wurde still bedient"; then
+elif echo "$out" | grep -q "FAIL: second open was served silently"; then
     printf "  FAIL [fremder Typ] wurde STILL bedient — die Wache fehlt\n"; fail=1
 elif [ $rc -eq 0 ]; then
     printf "  FAIL [fremder Typ] rc=0 — erwartet war ein Abbruch\n"; fail=1

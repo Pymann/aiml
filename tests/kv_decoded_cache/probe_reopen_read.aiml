@@ -1,24 +1,24 @@
 # SPEC: 31_db_integration,61_memory_management
 # static-check: off
 # Requires: driver
-# (einzeln gestartet legt diese Probe nur den Speicher an — der Fall braucht ZWEI
-#  Prozesse ueber dieselbe WAL, siehe run.sh in diesem Verzeichnis)
-# spec/31 §6.7.3: der decoded_cache eines typisierten Kv ist auf MAX_DECODED_LRU (1024)
-# begrenzt, und ein `kv.get` liefert den Slot, den es gerade angelegt hat — nie einen,
-# den dieselbe Verdraengung schon freigegeben hat.
+# (started on its own this probe only creates the store — the case needs TWO
+#  processes over the same WAL, see run.sh in this directory)
+# spec/31 §6.7.3: the decoded_cache of a typed Kv is limited to MAX_DECODED_LRU (1024),
+# and a `kv.get` returns the slot it has just created — never one
+# that the same eviction has already freed.
 #
-# Diese Probe laeuft ZWEIMAL ueber dieselbe WAL (run.sh):
-#   1. Lauf  (Speicher leer) → 1200 Zeilen anlegen, das ist mehr als das Cache-Fenster.
-#   2. Lauf  (Speicher voll) → `db.open_kv` fuellt beim Backfill der db_indexed-Felder den
-#      decoded_cache mit ALLEN 1200 Zeilen.  Danach ein `set` (verdraengt den Schluessel)
-#      und ein Lesen desselben Schluessels: das ist der Cache-Miss, bei dem die Verdraengung
-#      zuschlaegt.  Gelesen wird der INHALT, damit ein freigegebener Slot auch dann auffaellt,
-#      wenn der Speicher noch lesbar ist.
+# This probe runs TWICE over the same WAL (run.sh):
+#   1st run  (store empty) → create 1200 rows, that is more than the cache window.
+#   2nd run  (store full) → `db.open_kv` fills the decoded_cache with ALL 1200 rows
+#      during the backfill of the db_indexed fields.  Then a `set` (evicts the key)
+#      and a read of the same key: that is the cache miss where the eviction
+#      strikes.  The CONTENT is read, so that a freed slot is noticed even
+#      when the memory is still readable.
 #
-# Das ist die Form des cai-Absturzes vom 2026-11-04 (SIGSEGV in __strlen_avx2 <- enc <-
-# aiml_ser_deep_copy <- cai.wissen.Aufloesung_eintraege): cai oeffnet einen Namens-Kv mit
-# zwei indizierten Feldern und zehntausenden Zeilen, schreibt im Lauf neue Namen und liest
-# sie spaeter wieder.
+# That is the shape of the cai crash of 2026-11-04 (SIGSEGV in __strlen_avx2 <- enc <-
+# aiml_ser_deep_copy <- cai.wissen.Aufloesung_eintraege): cai opens a names Kv with
+# two indexed fields and tens of thousands of rows, writes new names during the run and reads
+# them again later.
 - model:
     name: NameRow
     fields:
@@ -69,8 +69,8 @@
             - print: ["SEED ${anzahl}"]
             - return: 0
 
-      # der Lesepfad aus cai.wissen.Aufloesung.eintraege: Schluessel ueber den Index, dann
-      # get_copy je Treffer (der Compiler macht daraus kv_get + aiml_ser_deep_copy)
+      # the read path from cai.wissen.Aufloesung.eintraege: keys via the index, then
+      # get_copy per hit (the compiler turns that into kv_get + aiml_ser_deep_copy)
       - def:
           name: eintraege
           args: [[suchtext, string]]
@@ -92,17 +92,17 @@
           return: i32
           body:
             - decl: [erwartet, string, { call: [<.wert_von, nummer] }]
-            # 1. Borrow-Sicht auf den Slot
+            # 1. borrow view on the slot
             - decl: [sicht, ref<NameRow>, { call: [<.namen.get, "k-${nummer}"] }]
             - if: [{ neq: [sicht.ding, erwartet] }, true]
               then:
-                - print: ["FAIL k-${nummer}: get.ding stimmt nicht"]
+                - print: ["FAIL k-${nummer}: get.ding does not match"]
                 - return: 1
             - if: [{ neq: [sicht.sorte, marke] }, true]
               then:
-                - print: ["FAIL k-${nummer}: get.sorte='${sicht.sorte}' erwartet '${marke}'"]
+                - print: ["FAIL k-${nummer}: get.sorte='${sicht.sorte}' expected '${marke}'"]
                 - return: 2
-            # 2. derselbe Slot ueber den Index + get_copy — hier knallte cai
+            # 2. the same slot via the index + get_copy — this is where cai blew up
             - decl: [zeilen, list<NameRow>, { call: [<.eintraege, "wort-${nummer}"] }]
             - if: [{ neq: [zeilen.len, 1] }, true]
               then:
@@ -111,11 +111,11 @@
             - decl: [erste, NameRow, { call: [zeilen.get, 0] }]
             - if: [{ neq: [erste.ding, erwartet] }, true]
               then:
-                - print: ["FAIL k-${nummer}: get_copy.ding stimmt nicht"]
+                - print: ["FAIL k-${nummer}: get_copy.ding does not match"]
                 - return: 4
             - if: [{ neq: [erste.sorte, marke] }, true]
               then:
-                - print: ["FAIL k-${nummer}: get_copy.sorte='${erste.sorte}' erwartet '${marke}'"]
+                - print: ["FAIL k-${nummer}: get_copy.sorte='${erste.sorte}' expected '${marke}'"]
                 - return: 5
             - return: 0
 
@@ -123,13 +123,13 @@
           name: pruefe
           return: i32
           body:
-            # Lesen OHNE vorheriges Schreiben trifft den Cache (der Backfill hat alles abgelegt)
+            # reading WITHOUT prior writing hits the cache (the backfill stored everything)
             - decl: [kalt, i32, { call: [<.lies_und_pruefe, 7, "titel"] }]
             - if: [{ neq: [kalt, 0] }, true]
               then:
                 - return: kalt
-            # Schreiben verdraengt den Schluessel aus dem Cache; das naechste Lesen ist der
-            # Miss, bei dem die Verdraengung den gerade angelegten Slot erwischt.
+            # writing evicts the key from the cache; the next read is the
+            # miss where the eviction catches the slot that was just created.
             - decl: [row, i32, 0]
             - while: [{ lt: [row, 12] }]
               body:
@@ -138,7 +138,7 @@
                 - decl: [warm, i32, { call: [<.lies_und_pruefe, nummer, "neu"] }]
                 - if: [{ neq: [warm, 0] }, true]
                   then:
-                    - print: ["FAIL nach set/get auf k-${nummer}"]
+                    - print: ["FAIL after set/get on k-${nummer}"]
                     - return: warm
                 - set: [row, { +: [row, 1] }]
             - print: ["PASS kv decoded cache bounded, read slot stays valid"]

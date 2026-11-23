@@ -1,7 +1,7 @@
 # SPEC?: 62_pipelines   # derived from the file name, to be confirmed
-# sys.env bleibt verboten, auch MIT assert_pure: es gibt eine aiml-Alternative
+# sys.env stays forbidden, even WITH assert_pure: there is an aiml alternative
 # Requires: driver
-# (host:), also keinen Grund fuer eine Ausnahme (F62-22).
+# (host:), so no reason for an exception (F62-22).
 - def:
     name: body_env
     return: i32

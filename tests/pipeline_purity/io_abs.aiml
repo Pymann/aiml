@@ -1,5 +1,5 @@
 # SPEC?: 62_pipelines   # derived from the file name, to be confirmed
-# Konstanter absoluter Pfad ausserhalb des Arbeitsbereichs: Fehler (F62-19).
+# Constant absolute path outside the workspace: error (F62-19).
 # Requires: driver
 - def:
     name: body_read

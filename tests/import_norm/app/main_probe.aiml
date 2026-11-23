@@ -1,6 +1,6 @@
 # Requires: driver
-# Dieselbe Datei auf zwei Wegen: direkt als ../lib/shared.aiml und über ../lib/sub/user.aiml.
-# Vor der Normalisierung: JIT-Absturz (Aufruf über null), AOT: undefiniertes __aiml_lib_init_….
+# The same file by two routes: directly as ../lib/shared.aiml and via ../lib/sub/user.aiml.
+# Before normalisation: JIT crash (call through null), AOT: undefined __aiml_lib_init_….
 - import: "../lib/sub/user.aiml"
 - import: "../lib/shared.aiml"
 

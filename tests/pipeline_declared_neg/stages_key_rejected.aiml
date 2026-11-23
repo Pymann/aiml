@@ -1,8 +1,8 @@
 # SPEC: 62_pipelines §5.0
-# F62-57: eine Pipeline listet unter `steps:` ihre Stufen, eine Stufe darunter
+# F62-57: a pipeline lists its stages under `steps:`, a stage lists its
 # Requires: driver
-# ihre Schritte.  `stages:` las die Umschreibung bis zum 25.10.2026 — die Spec
-# sagt `steps:`, also sagt es die Umschreibung.
+# steps under it.  The rewrite read `stages:` until 2026-10-25 — the spec
+# says `steps:`, so the rewrite says it too.
 - pipeline:
     name: falscher_listenname
     stages:

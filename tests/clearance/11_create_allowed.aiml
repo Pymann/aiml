@@ -2,33 +2,33 @@
 # static-check: off
 # Requires: driver
 # NEEDS: dynload
-# NICHT MESSBAR, solange spec/29_2 §4.3 fehlt — und das liegt nicht an dieser Probe:
-#   `sys.bundle` nimmt den NAMEN einer Funktion, die der Wirt selbst uebersetzt hat.  Damit
-#   traegt jedes Buendel aus einer Datei einen Namen, den der Wirt SCHON HAT, und landet im
-#   ERSETZEN-Zweig (`clearance-replace`) statt im ANLEGEN-Zweig.  Gemessen 17.10.2026:
-#   `fresh_helper` wurde genau so abgelehnt.
-#   Der Waechter `clearance-create` ist gebaut und steht fail-closed richtig; erreichbar wird
-#   er erst, wenn ein Wirt fremden Code mit einem FREMDEN Namen annehmen kann.  Wer §4.3 baut,
-#   loest diese Probe ein — und F65-27 gleich mit, das am selben Punkt haengt.
+# NOT MEASURABLE as long as spec/29_2 §4.3 is missing — and that is not down to this probe:
+#   `sys.bundle` takes the NAME of a function the host compiled itself.  So
+#   every bundle from a file carries a name the host ALREADY HAS, and lands in the
+#   REPLACE branch (`clearance-replace`) instead of the CREATE branch.  Measured 2026-10-17:
+#   `fresh_helper` was rejected exactly that way.
+#   The guard `clearance-create` is built and stands correctly fail-closed; it only becomes
+#   reachable once a host can accept foreign code with a FOREIGN name.  Whoever builds §4.3
+#   redeems this probe — and F65-27 along with it, which hinges on the same point.
 # TIER: T1
-# CONSTRUCT: spec/65 F65-26 — `create_level` regelt, was in die Tabelle des WIRTS gelangt, und
-#            das kann nur im GETEILTEN Kontext passieren (F65-31).  Hier erteilt der Wirt das
-#            Recht: Richtlinie (7, 7, 0) heisst Freigabe 7, darf anlegen, darf NICHT ersetzen.
-# COVERS: die Richtlinie reist als Dreier am `sys.exec` (F65-36), in der Reihenfolge der
-#         F65-26-Tabelle; mit erteiltem `create_level` ist ein NEUER Name zugelassen.
-#         Das Gegenstueck ist neg/n20 — ohne das Recht dieselbe Lage, aber `clearance-create`.
-#         GRENZE: dass der neue Name danach auch AUFRUFBAR wird, ist spec/29_2 §4.3
-#         („dynamic loading not yet supported") und nicht Sache dieses Kapitels.  Geprueft ist
-#         hier die BERECHTIGUNG, nicht das Nachladen — sonst behauptete die Probe mehr als sie
-#         messen kann.
+# CONSTRUCT: spec/65 F65-26 — `create_level` governs what gets into the HOST's table, and
+#            that can only happen in the SHARED context (F65-31).  Here the host grants the
+#            right: policy (7, 7, 0) means clearance 7, may create, may NOT replace.
+# COVERS: the policy travels as a triple with `sys.exec` (F65-36), in the order of the
+#         F65-26 table; with `create_level` granted a NEW name is admitted.
+#         The counterpart is neg/n20 — the same situation without the right, but `clearance-create`.
+#         LIMIT: that the new name then also becomes CALLABLE is spec/29_2 §4.3
+#         ("dynamic loading not yet supported") and not this chapter's business.  What is checked
+#         here is the PERMISSION, not the loading — otherwise the probe would claim more than it
+#         can measure.
 # EXPECT: exit 0.
 
 - def:
     name: fresh_helper
     return: i32
     body:
-      # 0, damit ein nichtnulliges Ergebnis NUR von der Verweigerung kommen kann:
-      # `sys.exec` liefert den Rueckgabewert des `start_call`.
+      # 0, so that a non-zero result can come ONLY from the denial:
+      # `sys.exec` returns the return value of the `start_call`.
       - return: [0]
 
 - def:
@@ -40,7 +40,7 @@
       - if:
           condition: { neq: [rcx, 0] }
           then:
-            - call: [log.error, "Anlegen mit create_level 7 lieferte ${rcx}, erwartet 0"]
+            - call: [log.error, "creating with create_level 7 returned ${rcx}, expected 0"]
             - return: [1]
       - call: [log.info, "PASS 11 create_level erteilt"]
       - return: [0]

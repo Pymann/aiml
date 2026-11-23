@@ -4,13 +4,13 @@
 # NEEDS: writedown
 # TIER: T1
 # STATIC-CLEARANCE: on
-# CONSTRUCT: spec/65 F65-34 — die erlaubte Richtung.  Ein Wert von Level 2 darf in eine Lokale
-#            auf Level 2 (gleich) und in eine auf Level 0 (strenger) laufen.  Verboten ist nur
-#            das Speichern in eine WENIGER eingeschraenkte Lokale.
-# COVERS: Gleichheit ist erlaubt; nach unten (strenger) ist erlaubt; eine Lokale ohne
-#         Annotation und ohne eingeschraenkte Herkunft traegt KEIN Level, also ist ein Literal
-#         in eine annotierte Lokale kein Verstoss — eine Regel, die jedes Programm bricht,
-#         schuetzt nichts.
+# CONSTRUCT: spec/65 F65-34 — the permitted direction.  A value of level 2 may flow into a local
+#            at level 2 (equal) and into one at level 0 (stricter).  Only storing
+#            into a LESS restricted local is forbidden.
+# COVERS: equality is allowed; downwards (stricter) is allowed; a local without
+#         annotation and without restricted origin carries NO level, so a literal
+#         into an annotated local is no violation — a rule that breaks every program
+#         protects nothing.
 # EXPECT: exit 0.
 
 - def:
@@ -30,7 +30,7 @@
       # strenger: erlaubt
       - decl: [tighter, i32, 0, { level: 0 }]
       - set: [tighter, { call: [read_secret] }]
-      # Literal in eine annotierte Lokale: keine eingeschraenkte Herkunft, kein Verstoss
+      # literal into an annotated local: no restricted origin, no violation
       - decl: [open_num, i32, 7, { level: 255 }]
       - if:
           condition: { neq: [{ +: [same, tighter] }, 84] }

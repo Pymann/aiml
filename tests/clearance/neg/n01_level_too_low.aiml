@@ -4,10 +4,10 @@
 # NEEDS: exports
 # CLEARANCE: 7
 # EXPORTS: tests/clearance/host_exports.txt
-# NEGATIVE (spec/65 F65-4): der Wirt bietet `wipe_queue` auf Level 2 an; diese Sitzung
-# hat Freigabe 7.  Erreichbar ist nur, was `Freigabe <= Level` erfuellt.
-# Die Probe DEFINIERT nichts — sie darf es nicht: ein `level:` in eigener Quelle waere
-# Selbstbeglaubigung (F65-27), und genau darum muss das Level vom Wirt kommen.
+# NEGATIVE (spec/65 F65-4): the host offers `wipe_queue` at level 2; this session
+# has clearance 7.  Only what satisfies `clearance <= level` is reachable.
+# The probe DEFINES nothing — it must not: a `level:` in its own source would be
+# self-certification (F65-27), and that is exactly why the level must come from the host.
 # EXPECT-ERROR: clearance-denied
 - def:
     name: main

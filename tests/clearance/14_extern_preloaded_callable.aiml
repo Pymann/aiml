@@ -6,17 +6,17 @@
 # CLEARANCE: 7
 # EXPORTS: tests/clearance/host_exports.txt
 # PRELOAD: tests/clearance/fixtures/libclearance_host.so
-# CONSTRUCT: spec/65 F65-24, der ZWEITE Weg zur Adresse — und der einzige, der fuer eine
-#            Konsole taugt.  Probe 09 laesst den Wirt seine eigenen `def`s per
-#            `sys.export_symbol` anmelden; das setzt voraus, dass der Wirt den Code beim
-#            UEBERSETZEN schon hatte.  Ein Wirt, der fremden Quelltext uebersetzen laesst,
-#            IST der Uebersetzer und kennt das Skript erst zur Laufzeit.  Dort kommt die
-#            Adresse aus einer vorgeladenen Bibliothek und das Level aus der Tabelle.
-# COVERS: ein zugelassenes `extern` ist auch AUFRUFBAR — Probe 08 deklariert nur und ruft
-#         nie, belegt also die halbe Anforderung.  Hier wird der Wert geprueft (42).
-#         Das Gegenstueck ist neg/n28: dieselbe Bibliothek, dasselbe vorhandene Symbol,
-#         aber auf Level 2 angeboten → abgelehnt.  Zusammen zeigen die zwei, dass die
-#         Zulassung an der TABELLE haengt und nicht daran, ob das Symbol auffindbar ist.
+# CONSTRUCT: spec/65 F65-24, the SECOND route to the address — and the only one that works for a
+#            console.  Probe 09 has the host register its own `def`s via
+#            `sys.export_symbol`; that presupposes that the host already had the code when
+#            COMPILING.  A host that has foreign source text compiled
+#            IS the compiler and only knows the script at runtime.  There the
+#            address comes from a preloaded library and the level from the table.
+# COVERS: an admitted `extern` is also CALLABLE — probe 08 only declares and never
+#         calls, so it covers half the requirement.  Here the value is checked (42).
+#         The counterpart is neg/n28: the same library, the same existing symbol,
+#         but offered at level 2 → rejected.  Together the two show that
+#         admission depends on the TABLE and not on whether the symbol can be found.
 # EXPECT: exit 0.
 - extern: "C"
   defs:
@@ -33,7 +33,7 @@
       - if:
           condition: { neq: [ans, 42] }
           then:
-            - call: [log.error, "Wirtsfunktion lieferte ${ans}, erwartet 42"]
+            - call: [log.error, "host function returned ${ans}, expected 42"]
             - return: [1]
       - call: [log.info, "PASS 14 vorgeladenes Wirts-Symbol aufrufbar"]
       - return: [0]

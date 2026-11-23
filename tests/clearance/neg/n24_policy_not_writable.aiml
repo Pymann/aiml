@@ -3,11 +3,11 @@
 # static-check: off
 # NEEDS: write
 # CLEARANCE: 7
-# NEGATIVE (spec/65 F65-32): die Richtlinie ist lesbar, nie schreibbar.  Ein Builtin, das
-# `create_level` SETZT, waere Selbstbeglaubigung (F65-6) — das Skript erteilte sich selbst ein
-# Recht.  Es gibt daher keinen Setzer, und damit das kein stilles „unbekannte Funktion" wird,
-# ist der Namensraum `clearance` von Grund auf zu (F65-35) und nur die drei Leser sind offen:
-# ein Griff nach einem Setzer nennt den Grund, statt wie ein Tippfehler auszusehen.
+# NEGATIVE (spec/65 F65-32): the policy is readable, never writable.  A builtin that
+# SETS `create_level` would be self-certification (F65-6) — the script would grant itself a
+# right.  So there is no setter, and so that this does not become a silent "unknown function",
+# the namespace `clearance` is closed from the ground up (F65-35) and only the three readers are open:
+# reaching for a setter names the reason instead of looking like a typo.
 # EXPECT-ERROR: clearance-builtin
 - def:
     name: main

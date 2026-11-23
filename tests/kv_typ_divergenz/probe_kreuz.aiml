@@ -1,9 +1,9 @@
-# spec/31 §6.10 (negativ): derselbe Store, zweimal mit VERSCHIEDENEM Werttyp.
-# Requires: driver — tests/kv_typ_divergenz/run.sh fuehrt beide Faelle;
-# einzeln gestartet ist der ABBRUCH des Kreuz-Falls das erwartete Verhalten.
-# Die Laufzeit muss das beim zweiten Oeffnen laut melden und abbrechen -- vorher
-# bediente sie den abweichenden Leser still und der Satz wurde fremd gelesen
-# (datacreatures, 11.11.2026).
+# spec/31 §6.10 (negative): the same store, opened twice with a DIFFERENT value type.
+# Requires: driver — tests/kv_typ_divergenz/run.sh runs both cases;
+# started on its own, the ABORT of the cross case is the expected behaviour.
+# The runtime must report that loudly on the second open and abort -- before,
+# it served the deviating reader silently and the record was read as something foreign
+# (datacreatures, 2026-11-11).
 
 - model:
     name: Zaehler
@@ -19,7 +19,7 @@
       - [marken, list<string>]
       - [stufe,  i32, 0]
 
-# Erste Oeffnung: typisiert auf Zaehler.
+# First open: typed as Zaehler.
 - decl: [erst_kv, Kv<string:Zaehler>, { call: [db.open_kv, "tdiv_kreuz", {persist: true, path: "/tmp/aiml_test_kvtypdiv/"}] }]
 
 - def:
@@ -30,8 +30,8 @@
       - set: [ein.wert, 7]
       - call: [erst_kv.set, "schluessel", ein]
 
-      # Zweite Oeffnung desselben Stores, aber typisiert auf Fund -- hier muss
-      # die Wache zuschlagen.  Was danach kaeme, ist der Absturz aus dem Bericht.
+      # Second open of the same store, but typed as Fund -- here
+      # the guard must strike.  What would come after is the crash from the report.
       - decl: [zweit_kv, Kv<string:Fund>, { call: [db.open_kv, "tdiv_kreuz", {persist: true, path: "/tmp/aiml_test_kvtypdiv/"}] }]
       - decl: [zur, Fund, { call: [zweit_kv.get_copy, "schluessel"] }]
-      - call: [log.error, "FAIL: zweite Oeffnung wurde still bedient — name='${zur.name}'"]
+      - call: [log.error, "FAIL: second open was served silently — name='${zur.name}'"]

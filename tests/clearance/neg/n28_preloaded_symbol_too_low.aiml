@@ -5,14 +5,14 @@
 # CLEARANCE: 7
 # EXPORTS: tests/clearance/host_exports.txt
 # PRELOAD: tests/clearance/fixtures/libclearance_host.so
-# NEGATIVE (spec/65 F65-13/F65-4): das Symbol `clearance_host_secret` ist im Prozess
-# VORHANDEN — dieselbe vorgeladene Bibliothek, dieselbe Adresse, auffindbar.  Angeboten ist
-# es aber auf Level 2, und die Sitzung hat Freigabe 7.
+# NEGATIVE (spec/65 F65-13/F65-4): the symbol `clearance_host_secret` is PRESENT in the
+# process — the same preloaded library, the same address, findable.  But it is offered
+# at level 2, and the session has clearance 7.
 #
-# Darum ist diese Probe wichtiger als sie aussieht: sie zeigt, dass die Zulassung an der
-# TABELLE haengt und nicht an der Auffindbarkeit.  Haette ein Wirt sein Angebot nur durch
-# „was liegt im Prozess" bestimmt, waere jede Bibliothek, die er fuer sich selbst braucht,
-# automatisch das Angebot an jeden Nutzer.
+# That is why this probe is more important than it looks: it shows that admission depends on the
+# TABLE and not on findability.  Had a host determined its offer only by
+# "what is in the process", every library it needs for itself would
+# automatically be the offer to every user.
 # EXPECT-ERROR: clearance-denied
 - extern: "C"
   defs:

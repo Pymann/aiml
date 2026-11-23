@@ -4,9 +4,9 @@
 # NEEDS: exports
 # CLEARANCE: 7
 # EXPORTS: tests/clearance/host_exports.txt
-# NEGATIVE (spec/65 F65-5): nichts wird durch Auslassen erreichbar.  `new_helper` steht
-# nicht in der Export-Tabelle — also ist es nicht erreichbar, und ein neuer `def` beim
-# Wirt weitet nicht stillschweigend aus, was eine Konsole erreicht.
+# NEGATIVE (spec/65 F65-5): nothing becomes reachable by omission.  `new_helper` is
+# not in the export table — so it is not reachable, and a new `def` at the
+# host does not silently widen what a console reaches.
 # EXPECT-ERROR: clearance-denied
 - def:
     name: main

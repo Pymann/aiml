@@ -1,7 +1,7 @@
 # SPEC?: 62_pipelines   # derived from the file name, to be confirmed
 # Requires: driver
-# F62-9: `needs` darf nur FRUEHERE Schritte nennen; ein unbekannter Name ist
-# ein Fehler und nicht eine Kante, die stillschweigend entfaellt.
+# F62-9: `needs` may only name EARLIER steps; an unknown name is
+# an error and not an edge that silently drops out.
 - pipeline:
     name: bad_need
     params:

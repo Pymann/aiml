@@ -1,15 +1,15 @@
 # SPEC: 21_namespaces
-# Probe fuer den Globals-Lint (spec/21 §6.2 Regel 5).
-# Enthaelt absichtlich alle drei Faelle.
+# Probe for the globals lint (spec/21 §6.2 rule 5).
+# Deliberately contains all three cases.
 
-# 1. const Primitiv — DARF NICHT warnen (eine benannte Konstante ist kein Zustand).
+# 1. const primitive — must NOT warn (a named constant is not state).
 - decl: [MAX_TRIES, i32, 5, { const: true }]
 - decl: [GREETING, string, "hallo", { const: true }]
 
 # 2. schreibbares Primitiv — warnt (geteilter veraenderlicher Zustand).
 - decl: [g_counter, i32, 0]
 
-# 3. besitzendes Global — warnt mit Begruendung (Weitergabe verschiebt den Besitz).
+# 3. owning global — warns with a reason (passing it on moves the ownership).
 - model:
     name: LintBox
     fields:

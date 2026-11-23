@@ -3,11 +3,11 @@
 # static-check: off
 # NEEDS: guard
 # CLEARANCE: 7
-# NEGATIVE (spec/65 F65-13): `extern` umgeht JEDE Symboltabelle des Uebersetzers von
-# Bauart — das Skript nennt die Signatur selbst, und der JIT loest den Namen gegen den
-# Prozess auf (`LoadLibraryPermanently(nullptr)`).  Eine eingeschraenkte Sitzung darf
-# darum nur Namen deklarieren, die der Wirt ausdruecklich angeboten hat.
-# Die Export-Tabelle (§5a) existiert noch nicht, also ist die zulaessige Menge LEER.
+# NEGATIVE (spec/65 F65-13): `extern` bypasses EVERY symbol table of the compiler by
+# design — the script names the signature itself, and the JIT resolves the name against the
+# process (`LoadLibraryPermanently(nullptr)`).  A restricted session may
+# therefore only declare names that the host has explicitly offered.
+# The export table (§5a) does not exist yet, so the permissible set is EMPTY.
 # EXPECT-ERROR: clearance-extern
 - extern: "C"
   defs:

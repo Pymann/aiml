@@ -4,15 +4,15 @@
 # NEEDS: session
 # TIER: T1
 # CLEARANCE: 7
-# CONSTRUCT: spec/65 F65-26 (korrigiert 17.10.2026) — eine ISOLIERTE Sitzung definiert ihre
-#            eigenen Symbole frei.  Sie sind lokal zu ihrem frischen Kontext und erreichen die
-#            Tabelle des Wirts nie; `create_level` regelt nur das Hinzufuegen BEIM WIRT.
-# COVERS: eigener `def` in einer eingeschraenkten Sitzung ohne `create_level`; Aufruf der
-#         eigenen Schoepfung (moeglich, weil ihr Level die clearance IST, F65-27);
-#         kein `level:` in der Quelle (das waere Selbstbeglaubigung, neg/n16).
-# WARUM DIESE PROBE EXISTIERT: der frueher hier stehende Entwurf verlangte `create_level` fuer
-#         JEDE Definition — und weil jedes aiml-Programm ein `- def: main` braucht (spec/08),
-#         haette die Vorgabe 0 jedes Skript verboten.  Diese Probe haelt die Korrektur fest.
+# CONSTRUCT: spec/65 F65-26 (corrected 2026-10-17) — an ISOLATED session defines its
+#            own symbols freely.  They are local to its fresh context and never reach the
+#            host's table; `create_level` only governs adding AT THE HOST.
+# COVERS: an own `def` in a restricted session without `create_level`; calling its
+#         own creation (possible, because its level IS the clearance, F65-27);
+#         no `level:` in the source (that would be self-certification, neg/n16).
+# WHY THIS PROBE EXISTS: the draft that used to stand here demanded `create_level` for
+#         EVERY definition — and since every aiml program needs a `- def: main` (spec/08),
+#         the default 0 would have forbidden every script.  This probe records the correction.
 # EXPECT: exit 0.
 
 - def:
@@ -29,7 +29,7 @@
       - if:
           condition: { neq: [got, 4] }
           then:
-            - call: [log.error, "my_helper lieferte ${got}, erwartet 4"]
+            - call: [log.error, "my_helper returned ${got}, expected 4"]
             - return: [1]
-      - call: [log.info, "PASS 06 isolierte Sitzung definiert frei"]
+      - call: [log.info, "PASS 06 isolated session defines freely"]
       - return: [0]

@@ -2,8 +2,8 @@
 # Requires: driver
 # EXPECT: shorter than 3 characters
 # RULE: spec/49
-# Dieser Check geht bereits ueber fmtLoc -- er ist die Vergleichsprobe dafuer,
-# wie eine vollstaendige Diagnose aussieht (Datei, Zeile, Spalte, Name).
+# This check already goes through fmtLoc -- it is the comparison probe for
+# what a complete diagnostic looks like (file, line, column, name).
 - def:
     name: main
     return: i32

@@ -4,12 +4,12 @@
 # NEEDS: step2
 # TIER: T1
 # CLEARANCE: none
-# CONSTRUCT: spec/65 F65-37 — `sys.export_symbol(name, fn, level)`.  Prueft den Aufruf selbst,
-#            ohne eingeschraenkte Sitzung: gueltig -> 0, ungueltiges Level -> -1.
-# COVERS: Adresse aus einem Funktionszeiger auf den eigenen `def` (spec/12_1); Rueckgabewert
-#         als beobachtbare Wirkung (eine Lese-Abfrage auf die Tabelle gibt es noch nicht,
-#         F65-32 erlaubt sie, gebaut ist sie nicht);
-#         Level ausserhalb 0..255 wird abgelehnt statt stillschweigend geklemmt.
+# CONSTRUCT: spec/65 F65-37 — `sys.export_symbol(name, fn, level)`.  Checks the call itself,
+#            without a restricted session: valid -> 0, invalid level -> -1.
+# COVERS: address from a function pointer to the host's own `def` (spec/12_1); return value
+#         as the observable effect (a read query on the table does not exist yet,
+#         F65-32 allows it, it is not built);
+#         a level outside 0..255 is rejected instead of silently clamped.
 # EXPECT: exit 0.
 
 - def:
@@ -30,14 +30,14 @@
       - if:
           condition: { neq: [ok_rc, 0] }
           then:
-            - call: [log.error, "gueltiger Export lieferte ${ok_rc}, erwartet 0"]
+            - call: [log.error, "valid export returned ${ok_rc}, expected 0"]
             - return: [1]
 
       - decl: [bad_rc, i32, { call: [sys.export_symbol, "zu_hoch", fp_status, 300] }]
       - if:
           condition: { neq: [bad_rc, -1] }
           then:
-            - call: [log.error, "Level 300 lieferte ${bad_rc}, erwartet -1"]
+            - call: [log.error, "level 300 returned ${bad_rc}, expected -1"]
             - return: [1]
 
       - call: [log.info, "PASS 10 sys.export_symbol"]

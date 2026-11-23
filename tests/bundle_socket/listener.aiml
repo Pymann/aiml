@@ -2,12 +2,12 @@
 # Live test (spec/29_2 §12/§13), receiver side — AOT, no JIT.
 # Requires: peer — started in pairs by tests/bundle_socket/run.sh
 #
-# Zwei Durchgaenge:
+# Two passes:
 #   1. A bundle: source text -> code -> sys.exec in the isolated context.
-#   2. Bibliothek + Pipeline GETRENNT empfangen, hier mit Code.merge
-#      zusammengefuehrt und in EINEM Lauf ausgefuehrt — das ist der einzige
-#      Weg, eine Bibliothek verfuegbar zu machen, weil ein isolierter Kontext
-#      zwischen zwei sys.exec-Aufrufen nichts behaelt.
+#   2. Library + pipeline received SEPARATELY, merged here with Code.merge
+#      and executed in ONE run — that is the only
+#      way to make a library available, because an isolated context
+#      keeps nothing between two sys.exec calls.
 # Expected exit code: 0
 
 - def:
@@ -37,7 +37,7 @@
       - print: ["listener bereit"]
       - decl: [fails, i32, 0]
 
-      # ── Durchgang 1: ein einzelnes Bundle ───────────────────────────────
+      # ── Pass 1: a single bundle ─────────────────────────────────────────
       - decl: [conn_one, socket_handle, { call: [net.accept, server] }]
       - decl: [wire1, string, { call: [recv_text, conn_one] }]
       - print: ["1) empfangen: ${wire1.len} Bytes"]
@@ -48,7 +48,7 @@
       - call: [reply, conn_one, rc_one]
       - call: [net.close, conn_one]
 
-      # ── Durchgang 2: Bibliothek + Pipeline getrennt, hier gemerged ──────
+      # ── Pass 2: library + pipeline separately, merged here ──────────────
       - decl: [conn_two, socket_handle, { call: [net.accept, server] }]
       - decl: [lib_wire, string, { call: [recv_text, conn_two] }]
       - print: ["2) Bibliothek: ${lib_wire.len} Bytes"]

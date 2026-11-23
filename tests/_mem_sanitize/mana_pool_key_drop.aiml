@@ -1,7 +1,7 @@
 # SPEC?: 61_memory_management   # derived from the file name, to be confirmed
 # Mirrors 9rooms ManaPool (sources/models/mana_pool.aiml): a MODEL-backed map<string:i32>
 # whose keys are managed string locals built from "${i}" interpolation, used as map keys via
-# contains/get/put across many calls, accumulating. The live regression was "kein Mana mehr" (no mana left):
+# contains/get/put across many calls, accumulating. The live regression was "no mana left":
 # if the managed-string model frees/mangles a key that the map stored (move instead of borrow,
 # or scope-drop of a key the map now owns), then contains()/get() MISS and accumulated mana
 # reads back as 0. This probe asserts BOTH correctness (values persist + accumulate) and

@@ -8,32 +8,32 @@
 
 # ══════════════════════════════════════════════════════════════════════════════
 # HandCardView — one card in the player's hand
-# Erbt alle Kartenfelder von Card (inkl. mana_cost, attack, defense, ...).
-# iid = Instanz-ID (eindeutig pro Karte in der Hand; cid = Karten-Definition-ID).
+# Inherits all card fields from Card (incl. mana_cost, attack, defense, ...).
+# iid = instance ID (unique per card in the hand; cid = card definition ID).
 # ══════════════════════════════════════════════════════════════════════════════
 
 - model:
     name: HandCardView
     inherits: Card
     fields:
-      - [iid,          string]   # Instanz-ID — eindeutiger Bezeichner pro Handkarte
-      - [ability_text, string]   # Vorberechneter Text: passive + aktive Fähigkeiten
+      - [iid,          string]   # instance ID — unique identifier per hand card
+      - [ability_text, string]   # precomputed text: passive + active abilities
 
 # ══════════════════════════════════════════════════════════════════════════════
-# RuntimeEffectView — ein aktiver Effekt-Slot einer Kreatur
+# RuntimeEffectView — an active effect slot of a creature
 # ══════════════════════════════════════════════════════════════════════════════
 
 - model:
     name: RuntimeEffectView
     fields:
-      - [code,      i32,    0]   # Effect-Code (200=frozen, 201=shield, 40=regen, ...)
-      - [key,       string, ""]  # Lesbarer Name ("frozen", "shield", "regen", ...)
+      - [code,      i32,    0]   # effect code (200=frozen, 201=shield, 40=regen, ...)
+      - [key,       string, ""]  # readable name ("frozen", "shield", "regen", ...)
       - [dur_type,  i32,    1]   # 1=PERMANENT, 2=TURNS, 3=NEXT_TURN_PHASE, 4=END_OF_PHASE
-      - [dur_val,   i32,    0]   # Restdauer (Runden, Phase-ID, ...)
-      - [src_iid,   string, ""]  # IID der Quelle ("" wenn keine)
+      - [dur_val,   i32,    0]   # remaining duration (rounds, phase ID, ...)
+      - [src_iid,   string, ""]  # IID of the source ("" if none)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# CreatureView — Wesen/Urwesen auf dem Kampffeld (effektive Stats, Live-HP)
+# CreatureView — being/primal being on the battlefield (effective stats, live HP)
 # ══════════════════════════════════════════════════════════════════════════════
 
 - model:
@@ -42,28 +42,28 @@
       - [iid,    string]   # Instanz-ID (eindeutig, z.B. "ABC-123")
       - [cid,    string]   # Card-Definition-ID (z.B. "fire-dragon")
       - [name,   string]
-      - [room,   i32]     # Raum 1..5
-      - [var_hp,     i32]     # aktuelle HP
-      - [lp_max, i32]     # maximale LP (Base)
-      - [atk,    i32]     # effektiver Angriff
-      - [def,    i32]     # effektive Verteidigung
-      - [ini,    i32]     # effektive Initiative
-      - [mor,    i32]     # aktuelle Moral
-      - [mor_max, i32]    # maximale Moral (Basis)
-      - [mov,    i32]     # aktuelle Bewegungspunkte
-      - [mov_max, i32]    # maximale Bewegungspunkte (Basis)
-      - [tapped,         i32]     # 1 = getappt (Sprint 3)
+      - [room,   i32]     # room 1..5
+      - [var_hp,     i32]     # current HP
+      - [lp_max, i32]     # maximum HP (base)
+      - [atk,    i32]     # effective attack
+      - [def,    i32]     # effective defense
+      - [ini,    i32]     # effective initiative
+      - [mor,    i32]     # current morale
+      - [mor_max, i32]    # maximum morale (base)
+      - [mov,    i32]     # current movement points
+      - [mov_max, i32]    # maximum movement points (base)
+      - [tapped,         i32]     # 1 = tapped (sprint 3)
       - [equip_cid_0,    string]  # item CID equipped to slot 0
       - [equip_cid_1,    string]  # item CID equipped to slot 1
       - [equip_cid_2,    string]  # item CID equipped to slot 2
-      - [ability_text,   string]  # Vorberechneter Text: passive + aktive Fähigkeiten
-      - [mana_cost,      map<string:i32>]  # Original-Karten-Kosten (Hover-Preview)
-      - [provides,       map<string:i32>]  # meist leer (Preview-Uniformität)
-      - [card_type,      i32]     # CardType Enum (1=Kreatur, 6=Urwesen) — am Ende angehängt
-      - [spell_type,     i32]     # SpellType (0 für nicht-Zauber)
+      - [ability_text,   string]  # precomputed text: passive + active abilities
+      - [mana_cost,      map<string:i32>]  # original card cost (hover preview)
+      - [provides,       map<string:i32>]  # mostly empty (preview uniformity)
+      - [card_type,      i32]     # CardType enum (1=creature, 6=primal being) — appended at the end
+      - [spell_type,     i32]     # SpellType (0 for non-spells)
       - [passives,       map<string:i32>]  # active status effects: "frozen"=1, "shield"=1, "swimming"=1, etc.
-      - [effect_count,   i32,    0]       # Anzahl aktiver fx-Slots (Dirty-Detection)
-      - [effects,        list<RuntimeEffectView>]  # Runtime-Effekte (für UI)
+      - [effect_count,   i32,    0]       # number of active fx slots (dirty detection)
+      - [effects,        list<RuntimeEffectView>]  # runtime effects (for the UI)
 
 # Bewegungszustand-Lookup: state-int as string ("1"-"4") → passives-map-key
 - decl: [g_mov_state_names, map<string:string>]
@@ -76,26 +76,26 @@
       - call: [g_mov_state_names.put, "4", "subterranean"]
 
 # ══════════════════════════════════════════════════════════════════════════════
-# ZoneCardView — Karte in Nicht-Kampf-Zone (Mana, Falle, Zauber) oder Item in Kampfzone
-# face_down=1: Gegner sieht nur Kartenrücken (Fallen)
+# ZoneCardView — card in a non-combat zone (mana, trap, spell) or item in a combat zone
+# face_down=1: the opponent only sees the card back (traps)
 # ══════════════════════════════════════════════════════════════════════════════
 
 - model:
     name: ZoneCardView
     fields:
       - [cid,       string]
-      - [name,      string]   # "" wenn face_down=1 und Gegner
-      - [card_type, i32]      # 3=Mana, 7=Falle, 2=Zauber, 4=Item, 5=Schicksal
+      - [name,      string]   # "" if face_down=1 and opponent
+      - [card_type, i32]      # 3=mana, 7=trap, 2=spell, 4=item, 5=fate
       - [zone,      string]   # "mana_zone"|"trap_zone"|"spell_zone"|"room_1".."room_5"
-      - [face_down, i32]      # 1 = verdeckt
-      - [ability_text, string] # Preview-Text (nur wenn nicht face_down)
-      - [mana_cost,   map<string:i32>]  # Hover-Preview
-      - [provides,    map<string:i32>]  # Mana-Karten: produziertes Mana
-      - [spell_type,  i32]      # SpellType (0 für nicht-Zauber) — am Ende angehängt
-      - [initiative,  i32]      # Initiative (Items mit equip_cost==0)
-      - [equip_cost,  i32]      # Equip-Kosten (Items)
-      - [mkp,         i32]      # Manaklassenpunkte
-      - [equipped_to_iid, string]  # IID der Kreatur die dieses Item trägt ("" = nicht equipped)
+      - [face_down, i32]      # 1 = face down
+      - [ability_text, string] # preview text (only if not face_down)
+      - [mana_cost,   map<string:i32>]  # hover preview
+      - [provides,    map<string:i32>]  # mana cards: produced mana
+      - [spell_type,  i32]      # SpellType (0 for non-spells) — appended at the end
+      - [initiative,  i32]      # initiative (items with equip_cost==0)
+      - [equip_cost,  i32]      # equip cost (items)
+      - [mkp,         i32]      # mana class points
+      - [equipped_to_iid, string]  # IID of the creature that carries this item ("" = not equipped)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # ManaPool — 10 Manafarben pro Spieler
@@ -118,7 +118,7 @@
       - [amorph,   i32]
 
 # ══════════════════════════════════════════════════════════════════════════════
-# DeckCountsView — eigene Deck-Restkarten
+# DeckCountsView — own remaining deck cards
 # ══════════════════════════════════════════════════════════════════════════════
 
 - model:
@@ -132,7 +132,7 @@
       - [urwesen,  i32, 0]
 
 # ══════════════════════════════════════════════════════════════════════════════
-# PlayerView — gebündelte sichtbare Spielerdaten
+# PlayerView — bundled visible player data
 # ══════════════════════════════════════════════════════════════════════════════
 
 - model:
@@ -153,7 +153,7 @@
       - [field_items,      list<ZoneCardView>]
 
 # ══════════════════════════════════════════════════════════════════════════════
-# GameView model — alle client-sichtbaren Zustände
+# GameView model — all client-visible states
 # ══════════════════════════════════════════════════════════════════════════════
 
 - model:
@@ -176,22 +176,22 @@
       - [event_seq,   i32, 0]
       - [event_count, i32, 0]
       - [events,      list<GameEventView>]
-      # Aktive Trigger — Triggerinstanzen mit vollem Kontext (sprint_task_2)
+      # active triggers — trigger instances with full context (sprint_task_2)
       - [trigger_seq_counter,    i32, 0]
       - [active_trigger_count,   i32, 0]
       - [active_triggers,        list<TriggerEventView>]
       # Reaktionsfenster — aktuell offenes Counter-Fenster (sprint_task_3)
       - [reaction_state,         ReactionStateView]
-      - [reactable_triggers,     list<TriggerEventView>]   # letzte 3 conterable Trigger
-      # Interaction state — offen wenn eine Targeting-Aktion aktiv ist
+      - [reactable_triggers,     list<TriggerEventView>]   # last 3 counterable triggers
+      # Interaction state — open while a targeting action is active
       # mode: ""|"attack_target"|"spell_target"|"trap_target"|"equip_target"|"move_target"
       - [interaction_mode,        string, ""]
-      - [interaction_source_iid,  string, ""]   # IID/CID der Quell-Karte
-      - [interaction_source_zone, string, ""]   # Zone der Quelle
-      - [interaction_owner,       i32,    -1]   # 0=Spieler 1, 1=Spieler 2, -1=keiner
-      - [interaction_prompt,      string, ""]   # Anzeigetext für Client
-      - [interaction_target_mask, string, ""]   # erlaubte Ziele (kodierter String)
-      - [interaction_cancelable,  i32,    1]    # 1 = Abbruch erlaubt
+      - [interaction_source_iid,  string, ""]   # IID/CID of the source card
+      - [interaction_source_zone, string, ""]   # zone of the source
+      - [interaction_owner,       i32,    -1]   # 0=player 1, 1=player 2, -1=none
+      - [interaction_prompt,      string, ""]   # display text for the client
+      - [interaction_target_mask, string, ""]   # allowed targets (encoded string)
+      - [interaction_cancelable,  i32,    1]    # 1 = cancelling allowed
     sync: [round, phase, active, over, winner, my_turn, combat_attacker,
            var_me, opp,
            trap_window, trap_window_ms,
@@ -203,7 +203,7 @@
            interaction_cancelable]
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Hand accessor — 1-basierter Slot-Index, gibt ptr<HandCardView> oder null
+# Hand accessor — 1-based slot index, returns ptr<HandCardView> or null
 # ══════════════════════════════════════════════════════════════════════════════
 
 - def:
@@ -218,8 +218,8 @@
       - return: [{ call: [var_v.var_me.hand_cards.get, { -: [var_n, 1] }] }]
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Creature accessor — 0-basierter Index, side=0→p1, side=1→p2
-# Gibt ptr<CreatureView> oder null
+# Creature accessor — 0-based index, side=0→p1, side=1→p2
+# Returns ptr<CreatureView> or null
 # ══════════════════════════════════════════════════════════════════════════════
 
 - def:
@@ -257,7 +257,7 @@
 # Interaction helpers — Host-Seite
 # ══════════════════════════════════════════════════════════════════════════════
 
-# Setzt alle Interaction-Felder zurück (Targeting-Fenster geschlossen).
+# Resets all interaction fields (targeting window closed).
 - def:
     name: view_reset_interaction
     args: [[var_v, ptr<GameView>]]
@@ -270,7 +270,7 @@
       - set: [var_v.interaction_target_mask, ""]
       - set: [var_v.interaction_cancelable, 1]
 
-# Öffnet ein Targeting-Fenster mit vollständigen Parametern.
+# Opens a targeting window with complete parameters.
 - def:
     name: view_set_interaction
     static_off: ["args"]

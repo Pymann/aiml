@@ -1,7 +1,7 @@
 # Requires: driver
 # EXPECT-ERROR: non-empty list default
-# Gegenstueck fuer `- model:`/`fields:` — dieser Pfad war schon richtig, der
-# Test haelt ihn fest.
+# Counterpart for `- model:`/`fields:` — this path was already right, the
+# test records it.
 - model:
     name: Probe
     fields:

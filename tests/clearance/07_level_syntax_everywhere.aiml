@@ -4,12 +4,12 @@
 # NEEDS: step2
 # TIER: T1
 # CLEARANCE: none
-# CONSTRUCT: spec/65 §8 (F65-19) — `level` ist ein MODIFIER an den Stellen, an denen aiml
-#            Qualifier ohnehin fuehrt.  Diese Probe prueft die ANNAHME der Syntax in allen
-#            Formen bei abgeschalteter Durchsetzung (F65-1): nichts wird eingeschraenkt,
-#            aber jede Form muss den Schluessel kennen.
-# COVERS: decl 4. Position (mit und ohne lifetime); def-Schluessel; class-Ebene + Mitglied;
-#         model-Ebene + Feld; enum; interface; classgroup.
+# CONSTRUCT: spec/65 §8 (F65-19) — `level` is a MODIFIER at the places where aiml
+#            carries qualifiers anyway.  This probe checks the ACCEPTANCE of the syntax in all
+#            forms with enforcement switched off (F65-1): nothing is restricted,
+#            but every form must know the key.
+# COVERS: decl 4th position (with and without lifetime); def key; class level + member;
+#         model level + field; enum; interface; classgroup.
 # EXPECT: exit 0.
 
 - enum:

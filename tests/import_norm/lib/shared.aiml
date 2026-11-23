@@ -1,5 +1,5 @@
 # Requires: driver
-# Gemeinsame Bibliothek, wird unter zwei Schreibweisen importiert (siehe ../run.sh).
+# Shared library, imported under two spellings (see ../run.sh).
 - namespace: nrm.shared
 
 - class:

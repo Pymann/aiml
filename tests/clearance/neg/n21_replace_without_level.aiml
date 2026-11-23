@@ -2,14 +2,14 @@
 # Requires: driver
 # static-check: off
 # NEEDS: write
-# NEGATIVE (spec/65 F65-28): die kuerzeste Eskalation des Kapitels.  Das Buendel liefert einen
-# Rumpf fuer `wipe_queue` — einen Namen, den der Wirt SCHON HAT — in den GETEILTEN Kontext.
-# Die Richtlinie erteilt `create_level` 7, aber `replace_level` bleibt 0: ERSETZEN ist etwas
-# anderes als ANLEGEN, und zwar das gefaehrlichere, weil jeder spaetere Aufrufer im Wirt den
-# neuen Rumpf mit den Rechten des WIRTS ausfuehrt.
+# NEGATIVE (spec/65 F65-28): the chapter's shortest escalation.  The bundle delivers a
+# body for `wipe_queue` — a name the host ALREADY HAS — into the SHARED context.
+# The policy grants `create_level` 7, but `replace_level` stays 0: REPLACING is something
+# other than CREATING, and the more dangerous one, because every later caller in the host
+# runs the new body with the HOST's rights.
 #
-# Dass hier `create_level` erteilt ist, ist der Punkt: die beiden Rechte sind getrennt, und
-# das eine erteilt nicht das andere.  Waere nur eines da, waere diese Probe nicht zu bauen.
+# That `create_level` is granted here is the point: the two rights are separate, and
+# one does not grant the other.  If only one existed, this probe could not be built.
 # EXPECT-ERROR: clearance-replace
 - def:
     name: wipe_queue

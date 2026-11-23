@@ -4,7 +4,7 @@
     fields:
       - [purl, string, ""]
       - [release_id, string, ""]
-      - [token, string, ""]        # spec/66 §6: Tokenquelle fuer RPC
+      - [token, string, ""]        # spec/66 §6: token source for RPC
 
 - model:
     name: ResolveResp

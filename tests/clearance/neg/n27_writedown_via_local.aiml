@@ -3,12 +3,12 @@
 # static-check: off
 # NEEDS: writedown
 # STATIC-CLEARANCE: on
-# NEGATIVE (spec/65 F65-34): die naheliegendste Umgehung, und darum die wichtigere Probe.
-# `tmp` traegt keine Annotation — wenn eine Lokale ohne `level:` die Herkunft vergisst, ist die
-# Regel mit einem Zwischenschritt umgangen: `tmp = read_secret()` und dann `open_log = tmp`.
+# NEGATIVE (spec/65 F65-34): the most obvious bypass, and therefore the more important probe.
+# `tmp` carries no annotation — if a local without `level:` forgets the origin, the
+# rule is bypassed with one intermediate step: `tmp = read_secret()` and then `open_log = tmp`.
 #
-# Deshalb hat eine Lokale ZWEI Bedeutungen: `level:` ist die Schranke fuer das Speichern, und
-# was sie TRAEGT, ist das Strengste, was je hineinlief — und das reist weiter.
+# That is why a local has TWO meanings: `level:` is the barrier for storing, and
+# what it CARRIES is the strictest thing that ever flowed in — and that travels on.
 # EXPECT-ERROR: clearance-writedown
 - def:
     name: read_secret

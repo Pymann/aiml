@@ -2,12 +2,12 @@
 # Requires: driver
 # static-check: off
 # NEEDS: host
-# NEGATIVE (spec/65 F65-4 am echten Wirt): dieselbe Vorrichtung wie 09, aber das Skript ruft
-# `wipe_queue`, das der Wirt auf Level 2 anbietet.  Die Sitzung hat Freigabe 7 — also verweigert.
+# NEGATIVE (spec/65 F65-4 on a real host): the same fixture as 09, but the script calls
+# `wipe_queue`, which the host offers at level 2.  The session has clearance 7 — so denied.
 #
-# Diese Probe ist der Grund, warum 6b vor der Zugriffspruefung noetig war: ein Symbol „auf
-# Level 2, das ich nicht erreichen darf" MUSS vom Wirt kommen.  Schreibt es das Skript selbst,
-# ist es Selbstbeglaubigung (F65-27) und die Pruefung richtet sich gegen nichts.
+# This probe is the reason why 6b was needed before the access check: a symbol "at
+# level 2 that I may not reach" MUST come from the host.  If the script writes it itself,
+# it is self-certification (F65-27) and the check is aimed at nothing.
 # EXPECT-ERROR: clearance-denied
 - def:
     name: wipe_queue
@@ -31,6 +31,6 @@
       - call: [sys.export_symbol, "wipe_queue", fp_wipe, 2]
       - decl: [pkg, Code, { call: [sys.bundle, "user_script", { context: true }] }]
       - decl: [rcx, i32, { call: [sys.exec, pkg, 7] }]
-      # Der Fehlschlag des Buendels ist das ERGEBNIS dieser Probe — weitergeben,
-      # sonst meldet der Wirt Erfolg, obwohl die Sitzung abgelehnt wurde.
+      # The bundle's failure is the RESULT of this probe — pass it on,
+      # otherwise the host reports success although the session was rejected.
       - return: [rcx]

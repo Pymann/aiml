@@ -3,10 +3,10 @@
 # static-check: off
 # NEEDS: writedown
 # STATIC-CLEARANCE: on
-# NEGATIVE (spec/65 F65-34): das Beispiel des Kapitels.  `read_secret` liegt auf Level 2,
-# `open_log` ist auf Level 255 deklariert — also fuer jeden lesbar.  Ohne diese Regel ist ein
-# eingeschraenkter Wert in EINER Zuweisung gewaschen: dort lesen, wo man darf, dort ablegen,
-# wo jeder darf.
+# NEGATIVE (spec/65 F65-34): the chapter's example.  `read_secret` is at level 2,
+# `open_log` is declared at level 255 — so readable for everyone.  Without this rule a
+# restricted value is laundered in ONE assignment: read it where one may, store it
+# where anyone may.
 # EXPECT-ERROR: clearance-writedown
 - def:
     name: read_secret

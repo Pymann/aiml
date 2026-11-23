@@ -1,5 +1,5 @@
 # SPEC?: 62_pipelines,24_time   # derived from the file name, to be confirmed
-# time ist die Uhr — in einem reinen Rumpf ein Fehler (F62-18).
+# time is the clock — an error in a pure body (F62-18).
 # Requires: driver
 - def:
     name: body_clock

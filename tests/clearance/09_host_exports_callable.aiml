@@ -3,15 +3,15 @@
 # static-check: off
 # NEEDS: host
 # TIER: T1
-# CONSTRUCT: spec/65 §5c (F65-36/37/38) — ein WIRT in einer Datei.  Er definiert eigene `def`s
-#            mit Level, meldet sie mit Adresse an und laesst ein Buendel in einer
-#            eingeschraenkten Sitzung dagegen laufen.  Das ist die Vorrichtung, die den drei
-#            alten `host`-Proben (02/03/05) gefehlt hat — und die eine cosmos-Konsole braucht.
-# COVERS: `sys.export_symbol` (Adresse + Name + Level in EINEM Aufruf, F65-37);
-#         Freigabe am Buendel statt in der Umgebung (F65-36);
-#         ein exportiertes Symbol wird DEKLARIERT gebuendelt, nicht als Rumpf kopiert (F65-38)
-#         — sonst liefe die Zugriffspruefung ins Leere;
-#         erreichbar ist `read_status` (Level 7) bei Freigabe 7, `wipe_queue` (Level 2) nicht.
+# CONSTRUCT: spec/65 §5c (F65-36/37/38) — a HOST in one file.  It defines its own `def`s
+#            with a level, registers them with an address and runs a bundle in a
+#            restricted session against them.  That is the fixture the three
+#            old `host` probes (02/03/05) were missing — and that a cosmos console needs.
+# COVERS: `sys.export_symbol` (address + name + level in ONE call, F65-37);
+#         clearance on the bundle instead of in the environment (F65-36);
+#         an exported symbol is bundled DECLARED, not copied as a body (F65-38)
+#         — otherwise the access check would have nothing to act on;
+#         `read_status` (level 7) is reachable with clearance 7, `wipe_queue` (level 2) is not.
 # EXPECT: exit 0.
 
 - def:
@@ -28,7 +28,7 @@
     body:
       - return: [9]
 
-# Laeuft im BUENDEL, also in der eingeschraenkten Sitzung mit Freigabe 7.
+# Runs in the BUNDLE, i.e. in the restricted session with clearance 7.
 - def:
     name: user_script
     return: i32
@@ -44,13 +44,13 @@
     name: main
     return: i32
     body:
-      # Beide Haelften der Uebergabe in einem Aufruf: Adresse aus dem Funktionszeiger
-      # auf den eigenen `def` (spec/12_1), Name und Level in die Export-Tabelle.
+      # Both halves of the handover in one call: address from the function pointer
+      # to the host's own `def` (spec/12_1), name and level into the export table.
       - decl: [fp_status, fn<:i32>]
       - set: [fp_status, read_status]
       - call: [sys.export_symbol, "read_status", fp_status, 7]
 
-      # `wipe_queue` wird ABSICHTLICH auf Level 2 angeboten: erreichbar nur fuer Freigabe <= 2.
+      # `wipe_queue` is DELIBERATELY offered at level 2: reachable only for clearance <= 2.
       - decl: [fp_wipe, fn<:i32>]
       - set: [fp_wipe, wipe_queue]
       - call: [sys.export_symbol, "wipe_queue", fp_wipe, 2]
@@ -60,7 +60,7 @@
       - if:
           condition: { neq: [rcx, 0] }
           then:
-            - call: [log.error, "Buendel lieferte ${rcx}, erwartet 0"]
+            - call: [log.error, "bundle returned ${rcx}, expected 0"]
             - return: [1]
-      - call: [log.info, "PASS 09 Wirt bietet aufrufbare Symbole an"]
+      - call: [log.info, "PASS 09 host offers callable symbols"]
       - return: [0]

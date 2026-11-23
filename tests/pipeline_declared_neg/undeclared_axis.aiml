@@ -1,8 +1,8 @@
 # SPEC?: 62_pipelines   # derived from the file name, to be confirmed
-# F62-110: ${mode} ist nicht deklariert (args nennt nur arch) -> im erzeugten
+# F62-110: ${mode} is not declared (args only names arch) -> in the generated
 # Requires: driver
-# Rumpf eine undefinierte Variable.  Der Fehler, den F62-7 verlangt, faellt
-# aus der Umschreibung heraus.
+# body an undefined variable.  The error that F62-7 demands falls
+# out of the rewrite.
 - pipeline:
     name: blind_key
     params:

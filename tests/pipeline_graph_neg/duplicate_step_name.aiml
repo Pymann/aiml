@@ -1,7 +1,7 @@
 # SPEC?: 62_pipelines   # derived from the file name, to be confirmed
 # Requires: driver
-# F62-9: Schrittnamen sind in der Pipeline EINDEUTIG — sonst ist nicht
-# entscheidbar, welchen Schritt ein `needs` meint.
+# F62-9: step names are UNIQUE in the pipeline — otherwise it cannot be
+# decided which step a `needs` means.
 - pipeline:
     name: dup_names
     params:

@@ -5,10 +5,10 @@
 # TIER: T1
 # CLEARANCE: 7
 # EXPORTS: tests/clearance/host_exports.txt
-# CONSTRUCT: spec/65 F65-13 — die Kehrseite von neg/n05.  Der Wirt bietet `aiml_str_dup`
-#            auf Level 7 an, die Sitzung hat Freigabe 7: die `extern`-Deklaration ist
-#            damit ZUGELASSEN.  Ohne die Tabelle war jede abgelehnt; mit ihr entscheidet
-#            das Level, und das ist der Unterschied zwischen „fail closed" und „zu".
+# CONSTRUCT: spec/65 F65-13 — the flip side of neg/n05.  The host offers `aiml_str_dup`
+#            at level 7, the session has clearance 7: the `extern` declaration is
+#            therefore ADMITTED.  Without the table every one was rejected; with it the
+#            level decides, and that is the difference between "fail closed" and "closed".
 # EXPECT: exit 0.
 - extern: "C"
   defs:
@@ -20,5 +20,5 @@
     name: main
     return: i32
     body:
-      - call: [log.info, "PASS 08 extern aus der Export-Tabelle zugelassen"]
+      - call: [log.info, "PASS 08 extern admitted from the export table"]
       - return: [0]

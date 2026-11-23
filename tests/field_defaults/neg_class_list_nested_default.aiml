@@ -1,6 +1,6 @@
 # Requires: driver
 # EXPECT-ERROR: non-empty list default
-# Auch eine VERSCHACHTELTE Liste als Default ist gefuellt und damit ein Fehler.
+# A NESTED list as a default is filled as well and therefore an error.
 - class:
     name: Probe
     members:

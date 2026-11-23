@@ -1,25 +1,25 @@
-# Repro-Test fuer Linker-Bug `undefined reference to __unnamed_<N>`.
+# Repro test for the linker bug `undefined reference to __unnamed_<N>`.
 #
-# Beobachtet beim Build von tul_train nach Einfuehrung von BaseCfg-
-# Vererbung + sys.serialize/deserialize aus main.aiml. main.o
-# referenziert `__unnamed_210` (oder aehnlichen Index), niemand
-# definiert das Symbol.
+# Observed while building tul_train after introducing BaseCfg
+# inheritance + sys.serialize/deserialize from main.aiml. main.o
+# references `__unnamed_210` (or a similar index), nobody
+# defines the symbol.
 #
-# Verdacht: Schema-Registry / fptable / serialize-Glue erzeugt einen
-# externen Symbol-Reference, der nicht emittiert wird, wenn:
-#   - ein Cfg-Modell von einer in einer ANDEREN Datei deklarierten
-#     Basis erbt (BaseCfg in cfg_base.aiml, TulTrainCfg in tul_config.aiml)
-#   - sys.serialize / sys.deserialize aufgerufen wird
+# Suspicion: schema registry / fptable / serialize glue produces an
+# external symbol reference that is not emitted if:
+#   - a Cfg model inherits from a base declared in ANOTHER file
+#     (BaseCfg in cfg_base.aiml, TulTrainCfg in tul_config.aiml)
+#   - sys.serialize / sys.deserialize is called
 #
-# Test-Strategie: minimaler Multi-File-Build der dieselbe Struktur
-# verwendet. Wenn Linker-Fehler auftritt → Repro bestaetigt.
-# Wenn nicht → Bug ist spezieller, weiteres Eingrenzen noetig.
+# Test strategy: a minimal multi-file build that uses the same structure.
+# If a linker error occurs → repro confirmed.
+# If not → the bug is more specific, further narrowing down needed.
 
 - import: "tests/repro_link_unnamed_base.aiml"
 
-# ReproToolCfg ist im base-File definiert (mit voller TulTrainCfg-Struktur).
-# Hier nur Helper im selben File wie main, die analog zu main.aiml'var_s
-# expand_glob/build_default_bpe_tag-Helpern viele kleine Funktionen hinzufuegen.
+# ReproToolCfg is defined in the base file (with the full TulTrainCfg structure).
+# Here only helpers in the same file as main, which add many small functions analogous to
+# main.aiml's expand_glob/build_default_bpe_tag helpers.
 
 - def:
     name: local_helper_a
@@ -55,8 +55,8 @@
       - call: [sys.arg_dump, cfg]
       - set: [cfg.config, "/tmp/x.json"]
       - print: ["cfg loaded"]
-      # Cross-Module-Function-Calls: zwingt main.o die fptable-Slots fuer
-      # diese Funktionen zu emittieren (mit Pointern in andere Compilation-Units).
+      # Cross-module function calls: forces main.o to emit the fptable slots for
+      # these functions (with pointers into other compilation units).
       - decl: [var_a, i32, { call: [helper_a, 1] }]
       - decl: [var_b, i32, { call: [helper_b, 2] }]
       - decl: [var_c, i32, { call: [helper_c, 3] }]
@@ -69,7 +69,7 @@
       - decl: [var_j, i32, { call: [helper_j, 10] }]
       - print: ["var_a=${var_a} var_b=${var_b} var_c=${var_c} var_d=${var_d} var_e=${var_e}"]
       - print: ["var_f=${var_f} var_g=${var_g} var_h=${var_h} var_i=${var_i} var_j=${var_j}"]
-      # Lokale Helper auch aufrufen
+      # call the local helpers too
       - decl: [var_s, string, { call: [local_helper_a, "test"] }]
       - decl: [var_n, i32, { call: [local_helper_b, "test"] }]
       - decl: [var_m, i32, { call: [local_helper_c, 1, 2] }]
@@ -77,7 +77,7 @@
       # sys.serialize: erzeugt anonymen String-Konstanten + Schema-Lookup
       - decl: [json_str, string, { call: [sys.serialize, cfg] }]
       - print: ["${json_str}"]
-      # sys.deserialize: gleicher Schema-Lookup-Pfad rueckwaerts
+      # sys.deserialize: the same schema lookup path backwards
       - decl: [restored, ReproToolCfg, { call: [sys.deserialize, json_str, "ReproToolCfg"] }]
       - print: ["restored loaded"]
       - return: 0

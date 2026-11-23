@@ -1,5 +1,5 @@
 # Requires: driver
-# Importiert die Bibliothek über "../" — aus app/ aufgelöst wird das zu ../lib/sub/../shared.aiml.
+# Imports the library via "../" — resolved from app/ this becomes ../lib/sub/../shared.aiml.
 - namespace: nrm.user
 - import: "../shared.aiml"
 

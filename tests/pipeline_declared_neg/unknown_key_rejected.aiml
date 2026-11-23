@@ -1,8 +1,8 @@
 # SPEC: 62_pipelines §20.5
-# Was der Uebersetzer nicht kennt, ist ein Fehler — keine stille
+# What the compiler does not know is an error — not a silent
 # Requires: driver
-# Wirkungslosigkeit.  Genau das macht eine zweite Pruefung im Kontroller
-# entbehrlich.
+# no-op.  Exactly that makes a second check in the controller
+# unnecessary.
 - pipeline:
     name: fremder_schluessel
     bildnis: ubuntu-base

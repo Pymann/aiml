@@ -1,18 +1,18 @@
 # Requires: driver
-# Grenzfall des Listen-Default-Checks: eine INTERFACE-Signatur hat genau
-# dieselbe Form wie ein Member mit Default — `- [name, typ, drittes]`, wobei
-# das dritte Element eine nicht-leere Liste ist und der zweite Eintrag ein
-# Container-Typ sein kann:
+# Edge case of the list default check: an INTERFACE signature has exactly
+# the same form as a member with a default — `- [name, type, third]`, where
+# the third element is a non-empty list and the second entry can be a
+# container type:
 #
 #     - [spur_fuer, list<i32>, [[programm, string], [wert, i64]]]
 #
-# Hier ist das dritte Element aber die ARGUMENTLISTE, nicht ein Default.  Ein
-# Check, der nur auf die Form sieht statt auf `members:`/`fields:`, schlaegt
-# hier falsch an und bricht jedes Interface mit Container-Rueckgabetyp.
+# But here the third element is the ARGUMENT LIST, not a default.  A
+# check that only looks at the form instead of at `members:`/`fields:` fires
+# wrongly here and breaks every interface with a container return type.
 #
-# Echte Fundstelle: cai src/kern/graph/graph_dienst.aiml:20 (Partner-Session
-# exodus-b9).  Dort gruen — dieser Test haelt es fest, damit ein spaeterer
-# Umbau des Checks es nicht lautlos kaputt macht.
+# Real location: cai src/kern/graph/graph_dienst.aiml:20 (partner session
+# exodus-b9).  Green there — this test records it, so that a later
+# rework of the check does not break it silently.
 - interface:
     name: Spurgeber
     methods:
@@ -52,7 +52,7 @@
       - if:
           condition: { neq: [auf, 4] }
           then:
-            - print: ["FAIL oeffne ergab ${auf}"]
+            - print: ["FAIL oeffne returned ${auf}"]
             - set: [fehler, { +: [fehler, 1] }]
 
       - call: [werk.spur_fuer, "xyz", 7]

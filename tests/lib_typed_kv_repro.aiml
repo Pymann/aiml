@@ -1,7 +1,7 @@
 # SPEC?: 31_db_integration   # derived from the file name, to be confirmed
-# Repro-Lib: dasselbe typed-Kv wie in main + Setter über lib-eigene
-# Compilation-Unit. Schema ist absichtlich tief (mehrere nested Klassen
-# mit list<>-Feldern), um das echte DataCreature-Layout besser zu spiegeln.
+# Repro lib: the same typed Kv as in main + setters via the lib's own
+# compilation unit. The schema is deliberately deep (several nested classes
+# with list<> fields), to mirror the real DataCreature layout better.
 
 - model:
     name: ReproInner

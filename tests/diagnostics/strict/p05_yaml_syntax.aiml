@@ -1,12 +1,12 @@
 # SPEC: 49_static_analysis
 # Requires: driver
 # EXPECT: YAML parse error
-# NO-RULE: ein Syntaxfehler setzt keine Regel durch, er stellt fest, dass die Form gebrochen ist.
-# NO-NAME: er nennt auch kein Symbol -- es gibt an dieser Stelle keines.
+# NO-RULE: a syntax error enforces no rule, it establishes that the form is broken.
+# NO-NAME: it names no symbol either -- there is none at this point.
 #
-# Falsche Einrueckung: der haeufigste echte YAML-Fehler, und seine Marke trifft
-# die verursachende Zeile (anders als eine unbeendete Zeichenkette, die erst am
-# Dateiende auffaellt -- dort waere die gemeldete Zeile die ERKENNUNGSstelle).
+# Wrong indentation: the most common real YAML error, and its mark hits
+# the causing line (unlike an unterminated string, which only shows up at the
+# end of the file -- there the reported line would be the DETECTION point).
 - def:
     name: main
     return: i32

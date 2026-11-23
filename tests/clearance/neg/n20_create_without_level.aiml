@@ -2,21 +2,21 @@
 # Requires: driver
 # static-check: off
 # NEEDS: dynload
-# NICHT MESSBAR, solange spec/29_2 §4.3 fehlt — und das liegt nicht an dieser Probe:
-#   `sys.bundle` nimmt den NAMEN einer Funktion, die der Wirt selbst uebersetzt hat.  Damit
-#   traegt jedes Buendel aus einer Datei einen Namen, den der Wirt SCHON HAT, und landet im
-#   ERSETZEN-Zweig (`clearance-replace`) statt im ANLEGEN-Zweig.  Gemessen 17.10.2026:
-#   `fresh_helper` wurde genau so abgelehnt.
-#   Der Waechter `clearance-create` ist gebaut und steht fail-closed richtig; erreichbar wird
-#   er erst, wenn ein Wirt fremden Code mit einem FREMDEN Namen annehmen kann.  Wer §4.3 baut,
-#   loest diese Probe ein — und F65-27 gleich mit, das am selben Punkt haengt.
-# NEGATIVE (spec/65 F65-26): dieselbe Lage wie 11, nur ohne das Recht.  Die Richtlinie ist
-# (7) — Freigabe 7, `create_level` fehlt und ist damit 0, was nach F65-22 NIEMAND heisst.
-# Ein neuer Name im GETEILTEN Kontext gelangt in die Tabelle des Wirts und wird verweigert.
+# NOT MEASURABLE as long as spec/29_2 §4.3 is missing — and that is not down to this probe:
+#   `sys.bundle` takes the NAME of a function the host compiled itself.  So
+#   every bundle from a file carries a name the host ALREADY HAS, and lands in the
+#   REPLACE branch (`clearance-replace`) instead of the CREATE branch.  Measured 2026-10-17:
+#   `fresh_helper` was rejected exactly that way.
+#   The guard `clearance-create` is built and stands correctly fail-closed; it only becomes
+#   reachable once a host can accept foreign code with a FOREIGN name.  Whoever builds §4.3
+#   redeems this probe — and F65-27 along with it, which hinges on the same point.
+# NEGATIVE (spec/65 F65-26): the same situation as 11, only without the right.  The policy is
+# (7) — clearance 7, `create_level` is missing and therefore 0, which by F65-22 means NOBODY.
+# A new name in the SHARED context gets into the host's table and is denied.
 #
-# Warum „fail closed" hier das Richtige ist: wer die Richtlinie nicht ausspricht, hat sich
-# ueber das Schreibrecht keine Gedanken gemacht — und dann ist Nein die einzige Antwort, die
-# nicht von einem Versehen abhaengt.
+# Why "fail closed" is right here: whoever does not state the policy has not
+# thought about the write right — and then no is the only answer that
+# does not depend on an oversight.
 # EXPECT-ERROR: clearance-create
 - def:
     name: fresh_helper

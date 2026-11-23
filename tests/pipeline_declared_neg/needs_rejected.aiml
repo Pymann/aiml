@@ -1,8 +1,8 @@
 # SPEC?: 62_pipelines   # derived from the file name, to be confirmed
-# F62-111: `needs:` ist noch nicht abgedeckt und wird ABGELEHNT, nicht
+# F62-111: `needs:` is not covered yet and is REJECTED, not
 # Requires: driver
-# ignoriert — ein verworfenes needs waere eine Pipeline, die in falscher
-# Reihenfolge laeuft und dabei gruen meldet.
+# ignored — a discarded needs would be a pipeline that runs in the wrong
+# order and reports green while doing so.
 - pipeline:
     name: with_needs
     params:

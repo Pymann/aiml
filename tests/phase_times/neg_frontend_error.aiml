@@ -1,8 +1,8 @@
 # SPEC: 70_performance
 # Requires: driver
 # EXPECT-ERROR: unknown statement 'for'
-# Der Fehler entsteht im Parse/AST-Durchlauf, also MUSS --parse-only ihn melden
-# (spec/70 F70-91) -- sonst waere der Schalter eine stille Abkuerzung.
+# The error arises in the parse/AST pass, so --parse-only MUST report it
+# (spec/70 F70-91) -- otherwise the switch would be a silent shortcut.
 - def:
     name: main
     return: i32

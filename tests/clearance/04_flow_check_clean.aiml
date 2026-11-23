@@ -57,7 +57,7 @@
       - if:
           condition: { neq: [val, 1] }
           then:
-            - call: [log.error, "Kette lieferte ${val}, erwartet 1"]
+            - call: [log.error, "chain returned ${val}, expected 1"]
             - return: [1]
-      - call: [log.info, "PASS 04 Flussprüfung sauber"]
+      - call: [log.info, "PASS 04 flow check clean"]
       - return: [0]

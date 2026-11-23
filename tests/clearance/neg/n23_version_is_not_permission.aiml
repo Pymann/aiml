@@ -2,12 +2,12 @@
 # Requires: driver
 # static-check: off
 # NEEDS: write
-# NEGATIVE (spec/65 F65-29): ein `version:` im ankommenden Code ist EINGABE, nicht Berechtigung.
-# Die Zahl schreibt derjenige, der das Buendel geschrieben hat — an einer Vertrauensgrenze darf
-# sie darum nichts erlauben.  `version: 99` sieht nach spec/29_2 §4.2 wie ein Hot-Reload aus;
-# ohne `replace_level` ist es trotzdem keiner, und die Reihenfolge der Pruefungen ist der ganze
-# Inhalt dieser Anforderung: ZUERST die Berechtigung, DANN entscheidet die Version, ob sich
-# ueberhaupt etwas aendert.
+# NEGATIVE (spec/65 F65-29): a `version:` in incoming code is INPUT, not permission.
+# The number is written by whoever wrote the bundle — at a trust boundary it
+# may therefore permit nothing.  `version: 99` looks like a hot reload per spec/29_2 §4.2;
+# without `replace_level` it is still none, and the order of the checks is the whole
+# content of this requirement: FIRST the permission, THEN the version decides whether
+# anything changes at all.
 # EXPECT-ERROR: clearance-replace
 - def:
     name: wipe_queue

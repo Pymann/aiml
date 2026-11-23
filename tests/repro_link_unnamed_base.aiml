@@ -9,7 +9,7 @@
       - [save_config, string, ""]
       - [init_config, i32, 0]
 
-# Mid-Tier wie TulConfig (BaseCfg + Architektur-Felder)
+# mid tier like TulConfig (BaseCfg + architecture fields)
 - model:
     name: ReproMidCfg
     inherits: ReproBaseCfg
@@ -25,7 +25,7 @@
       - [bpe_tag, string, ""]
       - [trajectory_epoch_stride, i32, 0]
 
-# Top-Tier wie TulTrainCfg (alle Training-spezifischen Felder)
+# top tier like TulTrainCfg (all training-specific fields)
 - model:
     name: ReproToolCfg
     inherits: ReproMidCfg

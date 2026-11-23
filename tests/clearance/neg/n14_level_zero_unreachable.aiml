@@ -4,9 +4,9 @@
 # NEEDS: exports
 # CLEARANCE: 1
 # EXPORTS: tests/clearance/host_exports.txt
-# NEGATIVE (spec/65 F65-5, F65-22): Level 0 ist das geschlossene Ende — erreichbar fuer
-# NIEMANDEN, auch nicht fuer die Freigabe 1, denn `1 <= 0` ist falsch.  Das ist die
-# Symbolseite der Asymmetrie: am Symbol heisst 0 „niemand", als Freigabe ist 0 ungueltig.
+# NEGATIVE (spec/65 F65-5, F65-22): level 0 is the closed end — reachable for
+# NOBODY, not even for clearance 1, because `1 <= 0` is false.  That is the
+# symbol side of the asymmetry: on a symbol 0 means "nobody", as a clearance 0 is invalid.
 # EXPECT-ERROR: clearance-denied
 - def:
     name: main
