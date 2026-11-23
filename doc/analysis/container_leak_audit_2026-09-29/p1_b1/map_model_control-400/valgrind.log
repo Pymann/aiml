@@ -1,7 +1,7 @@
 ==100188== Memcheck, a memory error detector
 ==100188== Copyright (C) 2002-2022, and GNU GPL'd, by Julian Seward et al.
 ==100188== Using Valgrind-3.22.0 and LibVEX; rerun with -h for copyright info
-==100188== Command: /media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/doc/analysis/container_leak_audit_2026-09-29/p1_b1/map_model_control-400/bin
+==100188== Command: <repo>/doc/analysis/container_leak_audit_2026-09-29/p1_b1/map_model_control-400/bin
 ==100188== Parent PID: 99837
 ==100188== 
 ==100188== 

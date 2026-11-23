@@ -1,12 +1,12 @@
 
 === AIML CRASH (signal 11 at addr=0x3fffffff9 tid=76619) ===
 backtrace: 11 frames
-/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/out/libaiml/libaiml.so(+0x9c1a3f)[0x76c02c7c1a3f]
+<repo>/out/libaiml/libaiml.so(+0x9c1a3f)[0x76c02c7c1a3f]
 /lib/x86_64-linux-gnu/libc.so.6(+0x45330)[0x76c02ba45330]
-/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/out/libaiml/libaiml.so(+0x9d76b7)[0x76c02c7d76b7]
-/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/out/libaiml/libaiml.so(aiml_ser_free_decoded+0xcc)[0x76c02c7d9f0e]
-/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/out/libaiml/libaiml.so(aiml_map_free+0x129)[0x76c02c7d3fc2]
-/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/out/libaiml/libaiml.so(aiml_map_handle_release+0xb8)[0x76c02c7d4248]
+<repo>/out/libaiml/libaiml.so(+0x9d76b7)[0x76c02c7d76b7]
+<repo>/out/libaiml/libaiml.so(aiml_ser_free_decoded+0xcc)[0x76c02c7d9f0e]
+<repo>/out/libaiml/libaiml.so(aiml_map_free+0x129)[0x76c02c7d3fc2]
+<repo>/out/libaiml/libaiml.so(aiml_map_handle_release+0xb8)[0x76c02c7d4248]
 /tmp/aiml-container-review-results/map_nested_self_put-400/bin(+0x15ff)[0x55ca2f0b15ff]
 /tmp/aiml-container-review-results/map_nested_self_put-400/bin(+0x16ab)[0x55ca2f0b16ab]
 /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca)[0x76c02ba2a1ca]

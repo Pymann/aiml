@@ -1,13 +1,13 @@
 ==100387== Memcheck, a memory error detector
 ==100387== Copyright (C) 2002-2022, and GNU GPL'd, by Julian Seward et al.
 ==100387== Using Valgrind-3.22.0 and LibVEX; rerun with -h for copyright info
-==100387== Command: /media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/doc/analysis/container_leak_audit_2026-09-29/p1_b1/map_model_get_borrow-400/bin
+==100387== Command: <repo>/doc/analysis/container_leak_audit_2026-09-29/p1_b1/map_model_get_borrow-400/bin
 ==100387== Parent PID: 99837
 ==100387== 
 ==100387== Invalid read of size 1
 ==100387==    at 0x4850364: strcmp (in /usr/libexec/valgrind/vgpreload_memcheck-amd64-linux.so)
-==100387==    by 0x1094C9: __aiml_user_main (in /media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/doc/analysis/container_leak_audit_2026-09-29/p1_b1/map_model_get_borrow-400/bin)
-==100387==    by 0x10967A: main (in /media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/doc/analysis/container_leak_audit_2026-09-29/p1_b1/map_model_get_borrow-400/bin)
+==100387==    by 0x1094C9: __aiml_user_main (in <repo>/doc/analysis/container_leak_audit_2026-09-29/p1_b1/map_model_get_borrow-400/bin)
+==100387==    by 0x10967A: main (in <repo>/doc/analysis/container_leak_audit_2026-09-29/p1_b1/map_model_get_borrow-400/bin)
 ==100387==  Address 0x3d64616f6c796170 is not stack'd, malloc'd or (recently) free'd
 ==100387== 
 ==100387== 
@@ -19,8 +19,8 @@
 ==100387==    by 0x515DB1C: aiml_crash_handler(int, siginfo_t*, void*) (mirror_runtime.cpp:124)
 ==100387==    by 0x584132F: ??? (in /usr/lib/x86_64-linux-gnu/libc.so.6)
 ==100387==    by 0x4850363: strcmp (in /usr/libexec/valgrind/vgpreload_memcheck-amd64-linux.so)
-==100387==    by 0x1094C9: __aiml_user_main (in /media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/doc/analysis/container_leak_audit_2026-09-29/p1_b1/map_model_get_borrow-400/bin)
-==100387==    by 0x10967A: main (in /media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/doc/analysis/container_leak_audit_2026-09-29/p1_b1/map_model_get_borrow-400/bin)
+==100387==    by 0x1094C9: __aiml_user_main (in <repo>/doc/analysis/container_leak_audit_2026-09-29/p1_b1/map_model_get_borrow-400/bin)
+==100387==    by 0x10967A: main (in <repo>/doc/analysis/container_leak_audit_2026-09-29/p1_b1/map_model_get_borrow-400/bin)
 ==100387== 
 ==100387== HEAP SUMMARY:
 ==100387==     in use at exit: 373,020 bytes in 2,953 blocks

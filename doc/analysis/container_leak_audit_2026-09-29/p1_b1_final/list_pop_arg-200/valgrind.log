@@ -1,7 +1,7 @@
 ==105887== Memcheck, a memory error detector
 ==105887== Copyright (C) 2002-2022, and GNU GPL'd, by Julian Seward et al.
 ==105887== Using Valgrind-3.22.0 and LibVEX; rerun with -h for copyright info
-==105887== Command: /media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/doc/analysis/container_leak_audit_2026-09-29/p1_b1_final/list_pop_arg-200/bin
+==105887== Command: <repo>/doc/analysis/container_leak_audit_2026-09-29/p1_b1_final/list_pop_arg-200/bin
 ==105887== Parent PID: 105614
 ==105887== 
 ==105887== 
@@ -13,8 +13,8 @@
 ==105887==    at 0x4846828: malloc (in /usr/libexec/valgrind/vgpreload_memcheck-amd64-linux.so)
 ==105887==    by 0x5127A47: aiml_str_alloc (string_runtime.cpp:54)
 ==105887==    by 0x5127B26: aiml_str_dup (string_runtime.cpp:88)
-==105887==    by 0x109363: __aiml_user_main (in /media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/doc/analysis/container_leak_audit_2026-09-29/p1_b1_final/list_pop_arg-200/bin)
-==105887==    by 0x10952A: main (in /media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/doc/analysis/container_leak_audit_2026-09-29/p1_b1_final/list_pop_arg-200/bin)
+==105887==    by 0x109363: __aiml_user_main (in <repo>/doc/analysis/container_leak_audit_2026-09-29/p1_b1_final/list_pop_arg-200/bin)
+==105887==    by 0x10952A: main (in <repo>/doc/analysis/container_leak_audit_2026-09-29/p1_b1_final/list_pop_arg-200/bin)
 ==105887== 
 ==105887== LEAK SUMMARY:
 ==105887==    definitely lost: 3,400 bytes in 200 blocks

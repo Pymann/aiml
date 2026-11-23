@@ -1,7 +1,7 @@
 ==106126== Memcheck, a memory error detector
 ==106126== Copyright (C) 2002-2022, and GNU GPL'd, by Julian Seward et al.
 ==106126== Using Valgrind-3.22.0 and LibVEX; rerun with -h for copyright info
-==106126== Command: /media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/doc/analysis/container_leak_audit_2026-09-29/p1_b1_final/list_pop_discard-400/bin
+==106126== Command: <repo>/doc/analysis/container_leak_audit_2026-09-29/p1_b1_final/list_pop_discard-400/bin
 ==106126== Parent PID: 105614
 ==106126== 
 ==106126== 

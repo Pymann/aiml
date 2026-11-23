@@ -1,7 +1,7 @@
 ==122784== Memcheck, a memory error detector
 ==122784== Copyright (C) 2002-2022, and GNU GPL'd, by Julian Seward et al.
 ==122784== Using Valgrind-3.22.0 and LibVEX; rerun with -h for copyright info
-==122784== Command: /media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/doc/analysis/container_leak_audit_2026-09-29/p2p5/list_pop_arg-200/bin
+==122784== Command: <repo>/doc/analysis/container_leak_audit_2026-09-29/p2p5/list_pop_arg-200/bin
 ==122784== Parent PID: 122508
 ==122784== 
 ==122784== 

@@ -1,7 +1,7 @@
 ==105839== Memcheck, a memory error detector
 ==105839== Copyright (C) 2002-2022, and GNU GPL'd, by Julian Seward et al.
 ==105839== Using Valgrind-3.22.0 and LibVEX; rerun with -h for copyright info
-==105839== Command: /media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/doc/analysis/container_leak_audit_2026-09-29/p1_b1_final/map_model_replace-400/bin
+==105839== Command: <repo>/doc/analysis/container_leak_audit_2026-09-29/p1_b1_final/map_model_replace-400/bin
 ==105839== Parent PID: 105614
 ==105839== 
 ==105839== 
@@ -12,9 +12,9 @@
 ==105839== 6,800 bytes in 400 blocks are definitely lost in loss record 2,334 of 2,335
 ==105839==    at 0x4846828: malloc (in /usr/libexec/valgrind/vgpreload_memcheck-amd64-linux.so)
 ==105839==    by 0x5127A47: aiml_str_alloc (string_runtime.cpp:54)
-==105839==    by 0x10965D: __aiml_str_concat (in /media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/doc/analysis/container_leak_audit_2026-09-29/p1_b1_final/map_model_replace-400/bin)
-==105839==    by 0x109321: __aiml_user_main (in /media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/doc/analysis/container_leak_audit_2026-09-29/p1_b1_final/map_model_replace-400/bin)
-==105839==    by 0x1096BA: main (in /media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/doc/analysis/container_leak_audit_2026-09-29/p1_b1_final/map_model_replace-400/bin)
+==105839==    by 0x10965D: __aiml_str_concat (in <repo>/doc/analysis/container_leak_audit_2026-09-29/p1_b1_final/map_model_replace-400/bin)
+==105839==    by 0x109321: __aiml_user_main (in <repo>/doc/analysis/container_leak_audit_2026-09-29/p1_b1_final/map_model_replace-400/bin)
+==105839==    by 0x1096BA: main (in <repo>/doc/analysis/container_leak_audit_2026-09-29/p1_b1_final/map_model_replace-400/bin)
 ==105839== 
 ==105839== LEAK SUMMARY:
 ==105839==    definitely lost: 6,800 bytes in 400 blocks

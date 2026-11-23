@@ -1,2 +1,2 @@
-[WARNING]  [/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler.cpp:256] tests/test_list_model_push_value_and_pointer.aiml:16: variable 'value.title' is compared against a string literal in 'main' — consider a regular expression for string matching.
+[WARNING]  [<repo>/src/core/ast_compiler.cpp:256] tests/test_list_model_push_value_and_pointer.aiml:16: variable 'value.title' is compared against a string literal in 'main' — consider a regular expression for string matching.
 PASS model value/call/member copies, explicit dereference, pointer lists, growth and sharing
