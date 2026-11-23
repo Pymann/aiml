@@ -1,8 +1,8 @@
 # SPEC: 58_classgroups
-# spec/58 §4: Konstruktor-Argumente kommen aus den Gruppen-`params` UND aus
-# Literalen.  String-Literale wurden bisher WÖRTLICH in die erzeugte Aufrufzeile
-# geschrieben — nach dem YAML-Parsen ohne Anführungszeichen, also las der
-# Compiler sie als Typnamen ("Unknown Type: 'cas'").  Zahlen gingen zufällig.
+# spec/58 §4: constructor arguments come from the group `params` AND from
+# literals.  String literals used to be written LITERALLY into the generated call line
+# — after YAML parsing without quotation marks, so the
+# compiler read them as type names ("Unknown Type: 'cas'").  Numbers worked by chance.
 # Expected exit code: 0
 
 - class:
@@ -30,11 +30,11 @@
     name: LiteralRuntime
     params: [[from_param, string]]
     instances:
-      # Gemischt: ein Gruppen-Parameter und drei Literale (String, Zahl, Boolean).
+      # Mixed: one group parameter and three literals (string, number, boolean).
       - class: Sink
         instance: mixed
         constructor: [setup, from_param, 7, true]
-      # Nur Literale — der Fall, der vorher scheiterte.
+      # Only literals — the case that failed before.
       - class: Sink
         instance: literal_only
         constructor: [setup, "run_logs", 42, false]

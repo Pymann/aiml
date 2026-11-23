@@ -30,10 +30,10 @@
       - decl: [pos_y, f32, { call: [input.mouse_pos_y] }]
       - if:
           condition: { neq: [pos_x, 123.0] }
-          then: [{ print: ["FAIL mouse_pos_x=${pos_x}, erwartet 123"] }, { return: 1 }]
+          then: [{ print: ["FAIL mouse_pos_x=${pos_x}, expected 123"] }, { return: 1 }]
       - if:
           condition: { neq: [pos_y, 45.0] }
-          then: [{ print: ["FAIL mouse_pos_y=${pos_y}, erwartet 45"] }, { return: 1 }]
+          then: [{ print: ["FAIL mouse_pos_y=${pos_y}, expected 45"] }, { return: 1 }]
 
       # ── Druck ist SOFORT sichtbar (ohne update dazwischen) ───────────────
       - call: [input.post_mouse_down, 0]
@@ -102,14 +102,14 @@
                 then: [{ set: [ev_num, { +: [ev_num, 1] }] }]
       - if:
           condition: { neq: [ev_num, 2] }
-          then: [{ print: ["FAIL post_text('aö') ergab ${ev_num} text-Ereignisse, erwartet 2"] }, { return: 1 }]
+          then: [{ print: ["FAIL post_text('aö') ergab ${ev_num} text-Ereignisse, expected 2"] }, { return: 1 }]
 
       # ── Scrollen ─────────────────────────────────────────────────────────
       - call: [input.post_scroll, 0.0, -3.0]
       - decl: [scr, f32, { call: [input.mouse_scroll_y] }]
       - if:
           condition: { neq: [scr, -3.0] }
-          then: [{ print: ["FAIL mouse_scroll_y=${scr}, erwartet -3"] }, { return: 1 }]
+          then: [{ print: ["FAIL mouse_scroll_y=${scr}, expected -3"] }, { return: 1 }]
 
       # ── Drag-Flanken: Ein-Frame-Kanten, Zustand bleibt (§2.4) ────────────
       # Wichtig fuer engine.update_drag_gesture (spec/44_6): es haengt an

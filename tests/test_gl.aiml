@@ -1,6 +1,6 @@
-# Tests für gl namespace: type/constant resolution (kein GL-Context nötig)
-# Echte Render-Tests benötigen einen Display und GL-Context — dieser Test
-# prüft nur Compile-Zeit-Aspekte (Konstanten, Typ-Erkennung).
+# Tests for the gl namespace: type/constant resolution (no GL context needed)
+# Real render tests need a display and a GL context — this test
+# only checks compile-time aspects (constants, type detection).
 # Expected exit code: 0
 
 # ── Phase A: GL-Konstanten (Compile-Zeit i32) ─────────────────────────────

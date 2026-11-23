@@ -47,7 +47,7 @@
       - if:
           condition: { neq: [vor.len, 2] }
           then:
-            - print: ["FAIL Phase 5: findings_by im Schreiblauf = ${vor.len}, erwartet 2"]
+            - print: ["FAIL Phase 5: findings_by im Schreiblauf = ${vor.len}, expected 2"]
             - return: 1
       - print: ["Phase 5 ok"]
       - return: 0

@@ -1,15 +1,15 @@
 # SPEC: 62_pipelines
-# spec/62 F62-99: duerfen mehrere ISOLIERTE Uebersetzungen gleichzeitig laufen?
+# spec/62 F62-99: may several ISOLATED compilations run at the same time?
 #
-# F62-14 hat den gleichzeitigen PROZESSSTART gemessen und freigegeben.  Ueber
-# gleichzeitiges Uebersetzen sagt das nichts: das ist LLVM-Zustand, nicht
-# Prozess-Zustand.  Solange es ungemessen ist, serialisiert die Pipeline genau
-# diesen Abschnitt — Lanes parallel, Uebersetzen nicht.
+# F62-14 measured and cleared simultaneous PROCESS START.  About
+# simultaneous compiling that says nothing: that is LLVM state, not
+# process state.  As long as it is unmeasured, the pipeline serialises exactly
+# this section — lanes in parallel, compiling not.
 #
-# Dieser Test ist die Messung.  Vier Threads uebersetzen und fuehren je drei
-# VERSCHIEDENE Bundles aus (verschiedene Quelltexte, damit kein Cache den
-# Vorgang verdeckt).  Gepruefte Aussage: jeder Lauf gelingt, jeder liefert
-# SEIN eigenes Ergebnis zurueck, und nichts stuerzt ab.
+# This test is the measurement.  Four threads compile and execute three
+# DIFFERENT bundles each (different source texts, so that no cache hides the
+# process).  Checked statement: every run succeeds, every one returns
+# ITS own result, and nothing crashes.
 # Expected exit code: 0
 
 - decl: [g_ok,    i32, 0]
@@ -108,10 +108,10 @@
       - call: [thr_g.join]
       - call: [thr_h.join]
       - decl: [elapsed_ms, i64, { -: [{ call: [time.now] }, start_ms] }]
-      - print: ["  24 isolierte Uebersetzungen aus 8 Threads in ${elapsed_ms} ms, ok=${g_ok} fehlgeschlagen=${g_bad}"]
-      # Basislinie: DIESELBE Arbeit einthreadig.  Ohne sie sagt die Zahl oben
-      # nur "stuerzt nicht ab" — erst der Vergleich sagt, ob Nebenlaeufigkeit
-      # ueberhaupt etwas bringt (F62-99 haengt genau daran).
+      - print: ["  24 isolated compilations from 8 threads in ${elapsed_ms} ms, ok=${g_ok} failed=${g_bad}"]
+      # Baseline: THE SAME work single-threaded.  Without it the number above only says
+      # "does not crash" — only the comparison says whether concurrency
+      # brings anything at all (F62-99 hinges on exactly that).
       - set: [g_ok, 0]
       - set: [g_bad, 0]
       - decl: [seq_start, i64, { call: [time.now] }]

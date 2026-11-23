@@ -49,13 +49,13 @@
       - decl: [want_three, f64, 3.0]
       - if:
           condition: { neq: [sum_val, want_three] }
-          then: [{ print: ["FAIL f64 + Literal = ${sum_val}, erwartet 3"] }, { set: [fails, { +: [fails, 1] }] }]
+          then: [{ print: ["FAIL f64 + Literal = ${sum_val}, expected 3"] }, { set: [fails, { +: [fails, 1] }] }]
 
       - decl: [prod, f64, { '*': [ratio, 2] }]
       - decl: [want_55, f64, 5.5]
       - if:
           condition: { neq: [prod, want_55] }
-          then: [{ print: ["FAIL f64 * Ganzzahl-Literal = ${prod}, erwartet 5.5"] }, { set: [fails, { +: [fails, 1] }] }]
+          then: [{ print: ["FAIL f64 * Ganzzahl-Literal = ${prod}, expected 5.5"] }, { set: [fails, { +: [fails, 1] }] }]
 
       # ── Gegenprobe: mit cast bleibt alles wie bisher moeglich ────────────
       - if:

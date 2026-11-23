@@ -20,22 +20,22 @@
     name: main
     return: i32
     body:
-      # enums.name: Wert → Member-Name.
+      # enums.name: value → member name.
       - decl: [nm1, string, { call: [enums.name, "Color", Color.red] }]
       - if: { condition: { eq: [{ call: [streq, nm1, "red"] }, 0] }, then: [{ print: ["FAIL name(red)=${nm1}"] }, { call: [sys.exit, 1] }] }
       - decl: [nm2, string, { call: [enums.name, "Color", 10] }]
       - if: { condition: { eq: [{ call: [streq, nm2, "blue"] }, 0] }, then: [{ print: ["FAIL name(10)=${nm2}"] }, { call: [sys.exit, 1] }] }
-      # Laufzeit-Wert (nicht-Literal) funktioniert auch.
+      # a runtime value (non-literal) works too.
       - decl: [cvl, i32, 2]
       - decl: [nm3, string, { call: [enums.name, "Color", cvl] }]
       - if: { condition: { eq: [{ call: [streq, nm3, "green"] }, 0] }, then: [{ print: ["FAIL name(cvl=2)=${nm3}"] }, { call: [sys.exit, 1] }] }
-      # Kein Member mit diesem Wert → "".
+      # no member with this value → "".
       - decl: [nm4, string, { call: [enums.name, "Color", 99] }]
-      - if: { condition: { eq: [{ call: [streq, nm4, ""] }, 0] }, then: [{ print: ["FAIL name(99) sollte leer sein, war ${nm4}"] }, { call: [sys.exit, 1] }] }
+      - if: { condition: { eq: [{ call: [streq, nm4, ""] }, 0] }, then: [{ print: ["FAIL name(99) should be empty, war ${nm4}"] }, { call: [sys.exit, 1] }] }
 
-      # enums.value: Member-Name → Wert (== Color.member).
+      # enums.value: member name → value (== Color.member).
       - decl: [val1, i32, { call: [enums.value, "Color", "blue"] }]
-      - if: { condition: { neq: [val1, 10] }, then: [{ print: ["FAIL value(blue)=${val1} (erwartet 10)"] }, { call: [sys.exit, 1] }] }
+      - if: { condition: { neq: [val1, 10] }, then: [{ print: ["FAIL value(blue)=${val1} (expected 10)"] }, { call: [sys.exit, 1] }] }
       - if: { condition: { neq: [val1, Color.blue] }, then: [{ print: ["FAIL value(blue) != Color.blue"] }, { call: [sys.exit, 1] }] }
 
       - print: ["OK enum_reflection: name(1→red, 10→blue, cvl=2→green, 99→''), value(blue→10)"]

@@ -1,10 +1,10 @@
 # SPEC: 29_2_sys_exec
-# spec/29_2 §14a + spec/22: faengt NIEMAND den Signatur-Fehler, endet das
-# Programm mit 2 — und nennt dabei die BEGRUENDUNG.
+# spec/29_2 §14a + spec/22: if NOBODY catches the signature error, the
+# program ends with 2 — and names the REASON while doing so.
 #
-# Das zweite ist der Punkt dieses Tests: die vom Uebersetzer gelegten Wuerfe
-# (`emitThrowMsg`) notieren ihre Meldung wie ein `throw` in aiml, sonst steht
-# auf der obersten Ebene nur „(no message)" (gemessen 25.10.2026).
+# The second is the point of this test: the throws placed by the compiler
+# (`emitThrowMsg`) note their message like a `throw` in aiml, otherwise
+# the top level only shows "(no message)" (measured 2026-10-25).
 # Expected exit code: 2
 
 - def:
@@ -22,5 +22,5 @@
       - decl: [rcl, i32, { call: [kontext.exec, lib] }]
       # Eine Funktion, aber mit falschem Rueckgabetyp genannt: wirft.
       - decl: [adr, i64, { call: [kontext.symbol, "lib_acht", "fn() -> string"] }]
-      - print: ["  FAIL nicht geworfen (${adr})"]
+      - print: ["  FAIL not thrown (${adr})"]
       - return: 0

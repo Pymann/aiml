@@ -64,7 +64,7 @@
       - if:
           condition: { '&&': [{ gte: [budget, 3] }, { neq: [workers, 3] }] }
           then:
-            - print: ["FAIL ceil(9/4) erwartet 3 Worker, ist ${workers}"]
+            - print: ["FAIL ceil(9/4) expected 3 Worker, ist ${workers}"]
             - set: [fails, { +: [fails, 1] }]
 
       - if:

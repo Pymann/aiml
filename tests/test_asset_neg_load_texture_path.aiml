@@ -1,7 +1,7 @@
 # SPEC?: 42_path_type   # derived from the file name, to be confirmed
-# Negative: gl.load_texture mit string-literalem Pfad der im Asset-Bundle
-# liegt → Compile-Hard-Error.  Escape-Hatch bleibt nur für runtime-Variablen
-# (z.B. User-Uploads), nicht für statische Source-Strings.
+# Negative: gl.load_texture with a string literal path that lies in the asset bundle
+# → compile hard error.  The escape hatch stays only for runtime variables
+# (e.g. user uploads), not for static source strings.
 #
 # AssetRoots: tests/_asset_fixtures/basic/resources/textures
 # Expected exit code: 1

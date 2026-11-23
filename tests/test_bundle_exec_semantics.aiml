@@ -1,10 +1,10 @@
 # SPEC: 29_2_sys_exec,29_serialize,62_pipelines
-# spec/29_2 + spec/62 §5.6: was der Rueckgabewert von sys.exec eigentlich sagt.
+# spec/29_2 + spec/62 §5.6: what the return value of sys.exec actually says.
 #
-# Dieser Test haelt die ANTWORT fest, nicht eine Wunschvorstellung: ein Schritt
-# gilt nach spec/62 als gescheitert, wenn sein Rumpf WIRFT (F62-41) — nicht,
-# wenn er eine Zahl != 0 zurueckgibt, denn der Rueckgabewert ist nach §5.3 ein
-# Ergebnis und wird gecacht.  Beides wird hier unterschieden.
+# This test records the ANSWER, not wishful thinking: by spec/62 a step
+# counts as failed if its body THROWS (F62-41) — not
+# if it returns a number != 0, because by §5.3 the return value is a
+# result and is cached.  Both are distinguished here.
 # Expected exit code: 0
 
 - class:
@@ -23,8 +23,8 @@
       - throw: { new: StepFailed, message: "geplatzt" }
       - return: 0
 
-# Container-Methoden mit String-Literal IM Bundle — das ist der Fall, der im
-# Pipeline-Test 'Unknown Type: sleep' meldete.
+# container methods with a string literal IN the bundle — that is the case that
+# reported 'Unknown Type: sleep' in the pipeline test.
 - def:
     name: uses_list
     return: i32
@@ -57,8 +57,8 @@
       - print: ["  (Rueckgabe 7 im Bundle -> rc=${rc_seven})"]
 
       - decl: [rc_throw, i32, { call: [sys.exec, { call: [sys.bundle, "throws", { context: true }] }] }]
-      - print: ["  (werfender Rumpf -> rc=${rc_throw})"]
-      - set: [fails, { +: [fails, { call: [expect, "ein werfender Rumpf meldet einen Fehler", { neq: [rc_throw, 0] }] }] }]
+      - print: ["  (throwing body -> rc=${rc_throw})"]
+      - set: [fails, { +: [fails, { call: [expect, "a throwing body reports an error", { neq: [rc_throw, 0] }] }] }]
 
       - decl: [rc_list, i32, { call: [sys.exec, { call: [sys.bundle, "uses_list", { context: true }] }] }]
       - print: ["  (list<string> + push im Bundle -> rc=${rc_list})"]

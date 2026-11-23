@@ -85,10 +85,10 @@
       - decl: [got_y, f32, { cast: [got_yi, f32] }]
       - if:
           condition: { neq: [got_x, scr_x] }
-          then: [{ print: ["FAIL Zeiger steht bei x=${got_x}, erwartet ${scr_x}"] }, { return: 1 }]
+          then: [{ print: ["FAIL Zeiger steht bei x=${got_x}, expected ${scr_x}"] }, { return: 1 }]
       - if:
           condition: { neq: [got_y, scr_y] }
-          then: [{ print: ["FAIL Zeiger steht bei y=${got_y}, erwartet ${scr_y}"] }, { return: 1 }]
+          then: [{ print: ["FAIL Zeiger steht bei y=${got_y}, expected ${scr_y}"] }, { return: 1 }]
 
       # Klick über den X-Server.  Die Anwendung bekommt die Ereignisse über
       # glfwPollEvents in engine.swap; update_hover fragt die eigene

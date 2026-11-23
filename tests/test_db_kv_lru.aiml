@@ -1,5 +1,5 @@
 # SPEC?: 31_db_integration   # derived from the file name, to be confirmed
-# Tests for bounded LRU on decoded_cache (Schritt 7).
+# Tests for bounded LRU on decoded_cache (step 7).
 # Writes more typed entries than MAX_DECODED_LRU (1024), reads them back —
 # correctness must hold despite cache eviction. Re-reads of evicted keys
 # trigger fresh decode from mmap.

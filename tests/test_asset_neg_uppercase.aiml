@@ -1,7 +1,7 @@
 # SPEC?: 44_7_asset_registry   # derived from the file name, to be confirmed
-# Negative: Datei mit Großbuchstaben (Sword.png) wird vom Scanner gewarnt+skipped.
-# Lookup auf den (skipped) Stem → Compile-Hard-Error wie bei unknown_stem.
-# "hammer.png" (lowercase) ist im selben Root und wird normal registriert.
+# Negative: a file with upper-case letters (Sword.png) is warned about + skipped by the scanner.
+# A lookup on the (skipped) stem → compile hard error as with unknown_stem.
+# "hammer.png" (lowercase) is in the same root and is registered normally.
 #
 # AssetRoots: tests/_asset_fixtures/uppercase/resources/textures
 # Expected exit code: 1
@@ -11,8 +11,8 @@
     name: main
     return: i32
     body:
-      # "hammer" als Sanity (sollte gehen wenn Scanner sonst-OK funktioniert).
+      # "hammer" as a sanity check (should work if the scanner otherwise works OK).
       - decl: [hammer, gl_texture, { call: [gl.tex, "hammer"] }]
-      # "Sword" wurde wegen Großbuchstabe nicht registriert → hard error here.
+      # "Sword" was not registered because of the capital letter → hard error here.
       - decl: [sword, gl_texture, { call: [gl.tex, "Sword"] }]
       - return: 0

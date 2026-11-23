@@ -1,5 +1,5 @@
 # SPEC?: 43_1_gltf   # derived from the file name, to be confirmed
-# Tests für gltf namespace: load, scene, node, mesh, primitive, material
+# Tests for the gltf namespace: load, scene, node, mesh, primitive, material
 # Expected exit code: 0
 
 # ── Phase A: Fehlerbehandlung ──────────────────────────────────────────────
@@ -18,7 +18,7 @@
 
 - print: ["Phase A OK"]
 
-# ── Phase B: Laden einer minimalen .glb-Datei ─────────────────────────────
+# ── Phase B: loading a minimal .glb file ──────────────────────────────────
 
 - decl: [var_p, path, "tests/test.glb"]
 - decl: [scene, gltf_scene, { call: [gltf.load, var_p] }]
@@ -130,7 +130,7 @@
     - print: ["FAIL: expected indices bytes > 0"]
     - call: [sys.exit, 1]
 
-# Ersten Positions-Wert lesen (x der ersten Position)
+# read the first position value (x of the first position)
 - decl: [var_x0, f32, { call: [positions.get, 0] }]
 - print: ["Phase F: positions[0]=${var_x0}"]
 

@@ -1,4 +1,4 @@
-# tests/test_arg_dump.aiml — Tests fuer sys.arg_dump
+# tests/test_arg_dump.aiml — tests for sys.arg_dump
 # Run: ./out/aiml/aiml tests/test_arg_dump.aiml -- --steps 5 --output foo.txt --scale 2.5 --verbose 1 --count 42 --db-tag myrun --output-prefix ft --limit-words 100
 
 - model:
@@ -18,7 +18,7 @@
     args: []
     return: void
     body:
-      # T1: sys.arg_dump befuellt Felder aus argv
+      # T1: sys.arg_dump fills fields from argv
       - decl: [cfg, CliArgs]
       - call: [sys.arg_dump, cfg]
 

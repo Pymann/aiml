@@ -28,7 +28,7 @@
       - if:
           condition: { neq: [anz, 3] }
           then:
-            - print: ["FAIL: len=${anz}, erwartet 3"]
+            - print: ["FAIL: len=${anz}, expected 3"]
             - return: 1
 
       # Der eigentliche Punkt: der Nebenindex muss aus dem Dump aufgefuellt sein.
@@ -36,14 +36,14 @@
       - if:
           condition: { neq: [haemmer.len, 2] }
           then:
-            - print: ["FAIL: findings_by Hammer = ${haemmer.len}, erwartet 2 (Nebenindex aus dem Dump)"]
+            - print: ["FAIL: findings_by Hammer = ${haemmer.len}, expected 2 (Nebenindex aus dem Dump)"]
             - return: 1
 
       - decl: [saegen, list<string>, { call: [dinge.findings_by, "name", "Saege"] }]
       - if:
           condition: { neq: [saegen.len, 1] }
           then:
-            - print: ["FAIL: findings_by Saege = ${saegen.len}, erwartet 1"]
+            - print: ["FAIL: findings_by Saege = ${saegen.len}, expected 1"]
             - return: 1
 
       # Und die Zeile selbst, aus dem Dump gelesen.
@@ -51,7 +51,7 @@
       - if:
           condition: { eq: [{ eq: [var_c.name, "Saege"] }, 0] }
           then:
-            - print: ["FAIL: Zeile wc.name='${var_c.name}', erwartet 'Saege'"]
+            - print: ["FAIL: Zeile wc.name='${var_c.name}', expected 'Saege'"]
             - return: 1
 
       - print: ["Phase 6 ok: Nebenindex und Zeilen kommen aus dem Dump"]

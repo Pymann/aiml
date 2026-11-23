@@ -1,15 +1,15 @@
 # SPEC: 14_enums
-# Negative test: ein String-Literal wird an ein enum-typisiertes Methoden-
-# Argument übergeben.  Das ist ein HARTER Compiler-Fehler an der Call-Site —
-# mit Quell-Location und Hinweis, das Enum-Symbol (EnumType.<value>) zu nutzen.
+# Negative test: a string literal is passed to an enum-typed method
+# argument.  That is a HARD compiler error at the call site —
+# with source location and a hint to use the enum symbol (EnumType.<value>).
 #
-# Ohne diesen Check rutscht der Mismatch (i8* → i32) am Frontend vorbei und
-# taucht erst als kryptischer LLVM-IR-Verifier-Fehler ohne Zeilennummer auf.
-# Siehe spec/14_enums.md §"Argument Type Checking".
+# Without this check the mismatch (i8* → i32) slips past the frontend and
+# only shows up as a cryptic LLVM IR verifier error without a line number.
+# See spec/14_enums.md §"Argument Type Checking".
 #
 # Expected exit code: 1
 #
-# Diagnostic-Form:
+# Diagnostic form:
 #   ...: Call to 'Painter_paint': argument 1 ('col') type mismatch —
 #   passing a string/pointer where an integer- or enum-typed argument is
 #   expected; use EnumType.<value> or an int literal
@@ -35,6 +35,6 @@
     return: i32
     body:
       - decl: [pnt, ptr<Painter>, { new: Painter }]
-      # BUG: "green" ist ein String — col erwartet das Enum Color.
+      # BUG: "green" is a string — col expects the enum Color.
       - decl: [res, i32, { call: [pnt.paint, "green", 5] }]
       - return: res

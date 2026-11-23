@@ -28,7 +28,7 @@
     return: i32
     body:
       - if: { condition: { eq: [ist, soll] }, then: [{ call: [log.info, "  ok   ${was}: ${ist}"] }, { return: 0 }] }
-      - call: [log.info, "  FAIL ${was}: ${ist} (erwartet ${soll})"]
+      - call: [log.info, "  FAIL ${was}: ${ist} (expected ${soll})"]
       - return: 1
 
 - def:

@@ -1,7 +1,7 @@
 # SPEC?: 44_7_asset_registry   # derived from the file name, to be confirmed
-# Asset Registry: ein einzelnes File als Root (kein Directory).
-# Spiegelt das DataCreatures-Setup (exodus-client.json enthält
-# resources/skills/skill_default.png direkt als asset_directory-Eintrag).
+# Asset registry: a single file as a root (no directory).
+# Mirrors the DataCreatures setup (exodus-client.json contains
+# resources/skills/skill_default.png directly as an asset_directory entry).
 #
 # AssetRoots: tests/_asset_fixtures/file_root/skill_default.png
 # Expected exit code: 0

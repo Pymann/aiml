@@ -67,14 +67,14 @@
       - call: [engine.swap, win]
       - call: [input.post_mouse_move, a_mid_x, a_mid_y]
       - decl: [g_idle, i32, { call: [engine.update_drag_gesture, a_mid_x, a_mid_y] }]
-      - if: { condition: { neq: [g_idle, 0] }, then: [{ call: [log.error, "FAIL ohne Druck Zustand ${g_idle}, erwartet 0"] }, { return: 1 }] }
+      - if: { condition: { neq: [g_idle, 0] }, then: [{ call: [log.error, "FAIL ohne Druck Zustand ${g_idle}, expected 0"] }, { return: 1 }] }
 
       - call: [engine.swap, win]
       - call: [input.post_mouse_down, 0]
       - decl: [g_press, i32, { call: [engine.update_drag_gesture, a_mid_x, a_mid_y] }]
       - if:
           condition: { neq: [g_press, 1] }
-          then: [{ call: [log.error, "FAIL Druck ohne Bewegung gab Zustand ${g_press}, erwartet 1 (Kandidat) — ein Tipp darf kein Drag sein"] }, { return: 1 }]
+          then: [{ call: [log.error, "FAIL Druck ohne Bewegung gab Zustand ${g_press}, expected 1 (Kandidat) — ein Tipp darf kein Drag sein"] }, { return: 1 }]
       - if:
           condition: { pneq: [{ call: [engine.get_dragged] }, null] }
           then: [{ call: [log.error, "FAIL Tipp hat bereits einen Drag gestartet"] }, { return: 1 }]
@@ -87,7 +87,7 @@
       - decl: [g_drag, i32, { call: [engine.update_drag_gesture, b_mid_x, b_mid_y] }]
       - if:
           condition: { neq: [g_drag, 2] }
-          then: [{ call: [log.error, "FAIL nach Bewegung Zustand ${g_drag}, erwartet 2 (zieht)"] }, { return: 1 }]
+          then: [{ call: [log.error, "FAIL nach Bewegung Zustand ${g_drag}, expected 2 (zieht)"] }, { return: 1 }]
       - decl: [picked, prefab_instance, { call: [engine.get_dragged] }]
       - if:
           condition: { peq: [picked, null] }
@@ -102,7 +102,7 @@
       - decl: [g_drop, i32, { call: [engine.update_drag_gesture, b_mid_x, b_mid_y] }]
       - if:
           condition: { neq: [g_drop, 3] }
-          then: [{ call: [log.error, "FAIL Loslassen gab Zustand ${g_drop}, erwartet 3"] }, { return: 1 }]
+          then: [{ call: [log.error, "FAIL Loslassen gab Zustand ${g_drop}, expected 3"] }, { return: 1 }]
       - decl: [src, prefab_instance, { call: [engine.get_drag_source] }]
       - if:
           condition: { pneq: [src, card_a] }
@@ -131,7 +131,7 @@
       - decl: [g_cancel, i32, { call: [engine.update_drag_gesture, b_mid_x, b_mid_y] }]
       - if:
           condition: { neq: [g_cancel, 4] }
-          then: [{ call: [log.error, "FAIL Abbruch gab Zustand ${g_cancel}, erwartet 4"] }, { return: 1 }]
+          then: [{ call: [log.error, "FAIL Abbruch gab Zustand ${g_cancel}, expected 4"] }, { return: 1 }]
       - if:
           condition: { pneq: [{ call: [engine.get_dragged] }, null] }
           then: [{ call: [log.error, "FAIL Drag laeuft nach dem Abbruch weiter"] }, { return: 1 }]

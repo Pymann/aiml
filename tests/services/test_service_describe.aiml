@@ -34,7 +34,7 @@
       - decl: [direct, ResolveResp, { call: [LioApi_resolve_component, req] }]
       - if: { condition: { neq: [direct.spdx, "Apache-2.0"] }, then: [{ print: ["FAIL body not callable"] }, { return: 1 }] }
 
-      # spec/49: der Einstieg komponiert eine Klasse aus einer anderen Datei
+      # spec/49: the entry point composes a class from another file
       - decl: [gate, ptr<TokenAuth>, { new: TokenAuth }]
       - free: gate
 

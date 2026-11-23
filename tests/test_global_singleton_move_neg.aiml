@@ -1,10 +1,10 @@
 # SPEC: 21_namespaces §6.2 F21-S2
-# Negativ: ein `singleton`-Global darf NICHT an einen `ptr<T>`-Parameter gehen.
+# Negative: a `singleton` global must NOT go to a `ptr<T>` parameter.
 #
-# Genau dieser Zug liess in cosmos den WASM-Client zweimal abstuerzen: der
-# Parameter besitzt, sein Drop gibt frei, und der Global zeigt ins Leere.  Wer
-# die Warnung durch `singleton: true` abstellt, nimmt dafuer diese Pruefung in
-# Kauf — sonst waere die Markierung nur eine Stummschaltung.
+# Exactly this move made the cosmos WASM client crash twice: the
+# parameter owns, its drop frees, and the global points into nothing.  Whoever
+# switches the warning off with `singleton: true` accepts this check in
+# exchange — otherwise the marker would only be a mute button.
 #
 # Expected exit code: 1
 # ExpectedStderr: singleton

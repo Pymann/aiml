@@ -1,10 +1,10 @@
 # SPEC?: 15_models,19_inheritance   # derived from the file name, to be confirmed
 # static-check: off
-# Der Assignment-Guard darf VERWANDTE Modelle (Inheritance) NICHT blocken:
-# ein abgeleitetes Model in ein Basis-Feld zu schreiben kopiert den geteilten
-# Prefix und ist legitim.  (Gegenstück zum negativen wrongmodel-Fall.)
+# The assignment guard must NOT block RELATED models (inheritance):
+# writing a derived model into a base field copies the shared
+# prefix and is legitimate.  (Counterpart to the negative wrongmodel case.)
 #
-# Erwartung: kompiliert + läuft, base-Prefix-Felder korrekt kopiert.
+# Expectation: compiles + runs, base prefix fields copied correctly.
 
 - model: { name: Base, fields: [[uid, string], [num, i32]] }
 - model: { name: Derived, inherits: Base, fields: [[extra, i32]] }
@@ -19,7 +19,7 @@
       - set: [der.num, 7]
       - set: [der.extra, 99]
       - decl: [hold, Holder]
-      - set: [hold.slot, der]          # derived → base field: muss erlaubt sein
+      - set: [hold.slot, der]          # derived → base field: must be allowed
       - decl: [fails, i32, 0]
       - if: { condition: { neq: [hold.slot.uid, "abc"] }, then: [{ print: ["FAIL uid='${hold.slot.uid}'"] }, { set: [fails, { +: [fails, 1] }] }] }
       - if: { condition: { neq: [hold.slot.num, 7] }, then: [{ print: ["FAIL num=${hold.slot.num}"] }, { set: [fails, { +: [fails, 1] }] }] }

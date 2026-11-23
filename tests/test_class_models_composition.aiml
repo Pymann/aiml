@@ -1,6 +1,6 @@
 # SPEC?: 15_models,16_classes   # derived from the file name, to be confirmed
-# Probe: model + class via `models:` composition.  Class hat anderen Namen
-# als Modell, referenziert das Modell explizit und fügt Methoden hinzu.
+# Probe: model + class via `models:` composition.  The class has a different name
+# than the model, references the model explicitly and adds methods.
 
 - model:
     name: Bar

@@ -29,7 +29,7 @@
       - if:
           condition: { neq: [anz, 6] }
           then:
-            - print: ["FAIL: len=${anz} nach Neustart, erwartet 6"]
+            - print: ["FAIL: len=${anz} nach Neustart, expected 6"]
             - return: 1
 
       - decl: [bad, i32, 0]

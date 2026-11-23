@@ -1,8 +1,8 @@
 # SPEC?: 11_buffer   # derived from the file name, to be confirmed
-# test_buffer_f32.aiml — Buffer als f32-Array fuer Embedding-Tables
-# Testet alle Funktionalitaeten die fuer EmbeddingTable noetig sind:
-# alloc, sequentielles write, seek+read (random access), seek+write (random update), len
-# Nutzt den neuen tolerance(a, b, eps) Operator fuer f32-Vergleiche
+# test_buffer_f32.aiml — buffer as an f32 array for embedding tables
+# Tests all functionality needed for EmbeddingTable:
+# alloc, sequential write, seek+read (random access), seek+write (random update), len
+# Uses the new tolerance(a, b, eps) operator for f32 comparisons
 
 - decl: [pass, i32, 0]
 - decl: [fail, i32, 0]
@@ -96,7 +96,7 @@
       - print: ["FAIL: C1 in-place update idx=1 -> ${var_u1} expected 9.99"]
       - set: [fail, { +: [fail, 1] }]
 
-# Andere Werte unberuehrt?
+# other values untouched?
 - call: [buf.seek, 0]
 - decl: [var_c0, f32, { call: [buf.read, f32] }]
 - if:
@@ -119,8 +119,8 @@
       - print: ["FAIL: C3 idx=2 -> ${var_c2} expected 0.3"]
       - set: [fail, { +: [fail, 1] }]
 
-# ── Phase D: Realistische EmbeddingTable-Belastung ────────────────────────
-# 4096 tokens * 32 dim = 131072 floats = 524288 bytes (exakt wie tul_ask)
+# ── Phase D: realistic EmbeddingTable load ────────────────────────────────
+# 4096 tokens * 32 dim = 131072 floats = 524288 bytes (exactly as in tul_ask)
 - decl: [emb, buffer]
 - call: [emb.alloc, 524288]
 
@@ -238,7 +238,7 @@
       - print: ["PASS: H2 tolerance(1.0, 1.0005, 0.0001) = false"]
       - set: [pass, { +: [pass, 1] }]
 
-# Negative Werte
+# negative values
 - decl: [var_tc, f32, -3.5]
 - decl: [var_td, f32, -3.501]
 - if:

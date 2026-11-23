@@ -1,19 +1,19 @@
 # SPEC: 29_2_sys_exec
-# spec/29_2 §14a: `ctx` — der Kontext als eigener Namensraum.
+# spec/29_2 §14a: `ctx` — the context as a namespace of its own.
 #
-# Geprueft wird, was die Spec zusagt:
-#   1. `ctx.new` gibt einen Kontext, der laenger lebt als ein Aufruf.
-#   2. Ein zweites Bundle SIEHT, was das erste im selben Kontext definiert hat
-#      (F29_2-…f: sichtbar ist die Reihenfolge der Aufrufe).
-#   3. `kontext.symbol(name, typ)` gibt das Symbol, wenn der Typ stimmt.
-#   4. Stimmt er NICHT, wird geworfen (F29_2-…d) — und nur dann.
-#   5. Ein unbekannter Name wirft ebenfalls, aber eine ANDERE Ausnahme (…d2).
-#   6. Funktionen brauchen die VOLLE Signatur (…d3): `fn(i32,i32) -> i32`.
-#      Ein blankes `"fn"` ist zu wenig, eine falsche Stelligkeit auch.
+# What the spec promises is checked:
+#   1. `ctx.new` gives a context that lives longer than a call.
+#   2. A second bundle SEES what the first defined in the same context
+#      (F29_2-…f: what is visible is the order of the calls).
+#   3. `kontext.symbol(name, type)` returns the symbol if the type matches.
+#   4. If it does NOT, it throws (F29_2-…d) — and only then.
+#   5. An unknown name throws as well, but a DIFFERENT exception (…d2).
+#   6. Functions need the FULL signature (…d3): `fn(i32,i32) -> i32`.
+#      A bare `"fn"` is too little, and so is a wrong arity.
 #
-# Der Gewinn, um den es geht, ist die Grundlast: ein frischer Kontext kostet
-# ~96 ms (§15), ein wiederverwendeter nicht.  Darum werden hier ZWEI Bundles
-# in EINEM Kontext gefahren.
+# The gain at stake is the base cost: a fresh context costs
+# ~96 ms (§15), a reused one does not.  That is why TWO bundles are run here
+# in ONE context.
 # Expected exit code: 0
 
 - def:
@@ -33,7 +33,7 @@
     name: nutzt_lib
     return: i32
     body:
-      # Sieht die Funktion aus dem ERSTEN Bundle desselben Kontexts.
+      # Sees the function from the FIRST bundle of the same context.
       - decl: [got, i32, { call: [lib_sieben] }]
       - print: ["nutzt_lib sah ${got}"]
       - return: { -: [got, 7] }
@@ -49,24 +49,24 @@
       - decl: [rc_lib, i32, { call: [kontext.exec, lib] }]
       - if:
           condition: { neq: [rc_lib, 0] }
-          then: [{ print: ["  FAIL Bibliothek lief nicht (rc=${rc_lib})"] }, { set: [fails, { +: [fails, 1] }] }]
-          else: [{ print: ["  ok   Bibliothek im Kontext"] }]
+          then: [{ print: ["  FAIL library did not run (rc=${rc_lib})"] }, { set: [fails, { +: [fails, 1] }] }]
+          else: [{ print: ["  ok   library in the context"] }]
 
-      # Zweite Funktion, eigenes Bundle — sie hat ARGUMENTE, damit die
-      # Signatur etwas zu sagen hat.
+      # Second function, its own bundle — it has ARGUMENTS, so that the
+      # signature has something to say.
       - decl: [sum, Code, { call: [sys.bundle, "lib_summe"] }]
       - decl: [rc_sum, i32, { call: [kontext.exec, sum] }]
       - if:
           condition: { neq: [rc_sum, 0] }
-          then: [{ print: ["  FAIL lib_summe lief nicht (rc=${rc_sum})"] }, { set: [fails, { +: [fails, 1] }] }]
+          then: [{ print: ["  FAIL lib_summe did not run (rc=${rc_sum})"] }, { set: [fails, { +: [fails, 1] }] }]
 
-      # Drittes Bundle, SELBER Kontext: es ruft, was das erste definiert hat.
+      # Third bundle, SAME context: it calls what the first defined.
       - decl: [use, Code, { call: [sys.bundle, "nutzt_lib"] }]
       - decl: [rc_use, i32, { call: [kontext.exec, use] }]
       - if:
           condition: { neq: [rc_use, 0] }
-          then: [{ print: ["  FAIL zweites Bundle sah die Bibliothek nicht (rc=${rc_use})"] }, { set: [fails, { +: [fails, 1] }] }]
-          else: [{ print: ["  ok   zweites Bundle sieht das erste"] }]
+          then: [{ print: ["  FAIL second bundle did not see the library (rc=${rc_use})"] }, { set: [fails, { +: [fails, 1] }] }]
+          else: [{ print: ["  ok   second bundle sees the first"] }]
 
       # Symbol mit RICHTIGER Signatur: kommt wortlos zurueck.
       - decl: [adr, i64, { call: [kontext.symbol, "lib_sieben", "fn() -> i32"] }]
@@ -75,29 +75,29 @@
           then: [{ print: ["  FAIL Adresse von lib_sieben fehlt"] }, { set: [fails, { +: [fails, 1] }] }]
           else: [{ print: ["  ok   Symbol mit passender Signatur"] }]
 
-      # Leerzeichen zaehlen nicht: dieselbe Signatur, anders geschrieben.
+      # Whitespace does not count: the same signature, written differently.
       - decl: [adr2, i64, { call: [kontext.symbol, "lib_summe", "fn(i32,i32)->i32"] }]
       - if:
           condition: { le: [adr2, 0] }
           then: [{ print: ["  FAIL Adresse von lib_summe fehlt"] }, { set: [fails, { +: [fails, 1] }] }]
-          else: [{ print: ["  ok   Argumenttypen in der Signatur"] }]
+          else: [{ print: ["  ok   argument types in the signature"] }]
 
-      # Ein blankes "fn" ist zu wenig (…d3).
+      # A bare "fn" is too little (…d3).
       - try:
           body:
             - decl: [blank, i64, { call: [kontext.symbol, "lib_summe", "fn"] }]
-            - print: ["  FAIL blankes 'fn' wurde angenommen"]
+            - print: ["  FAIL bare 'fn' was accepted"]
             - set: [fails, { +: [fails, 1] }]
           catch:
             - type: Exception
               var: ex0
               body: [{ print: ["  ok   blankes 'fn' wirft: ${ex0.message}"] }]
 
-      # Falsche Stelligkeit: wirft, obwohl der Name eine Funktion ist.
+      # Wrong arity: throws although the name is a function.
       - try:
           body:
             - decl: [eng, i64, { call: [kontext.symbol, "lib_summe", "fn(i32) -> i32"] }]
-            - print: ["  FAIL falsche Stelligkeit wurde angenommen"]
+            - print: ["  FAIL wrong arity was accepted"]
             - set: [fails, { +: [fails, 1] }]
           catch:
             - type: Exception
@@ -108,7 +108,7 @@
       - try:
           body:
             - decl: [falsch, i64, { call: [kontext.symbol, "lib_sieben", "i32"] }]
-            - print: ["  FAIL falscher Typ wurde NICHT geworfen"]
+            - print: ["  FAIL wrong type was NOT thrown"]
             - set: [fails, { +: [fails, 1] }]
           catch:
             - type: Exception
@@ -119,7 +119,7 @@
       - try:
           body:
             - decl: [nix, i64, { call: [kontext.symbol, "gibtesnicht", "fn() -> i32"] }]
-            - print: ["  FAIL unbekanntes Symbol wurde NICHT geworfen"]
+            - print: ["  FAIL unknown symbol was NOT thrown"]
             - set: [fails, { +: [fails, 1] }]
           catch:
             - type: Exception

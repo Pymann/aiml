@@ -1,6 +1,6 @@
-# SPEC: 66_services §4.2 — REST: `serve_rest` haengt die Routen an den Server des
-# Projekts; der Request wird aus JSON-Body und Pfadparametern gefuellt, die Antwort
-# geht als JSON mit 200 zurueck.
+# SPEC: 66_services §4.2 — REST: `serve_rest` attaches the routes to the project's
+# server; the request is filled from the JSON body and path parameters, the response
+# goes back as JSON with 200.
 # Expected exit code: 0
 - import: "tests/services/_models.aiml"
 

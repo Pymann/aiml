@@ -1,7 +1,7 @@
 # SPEC?: 44_6_prefabs   # derived from the file name, to be confirmed
-# Negative: Prefab-Spec mit Stem der nicht im texture-Store existiert →
-# Compile-Hard-Error (Typo wird zur Build-Zeit gefangen statt als
-# Black-Square zur Runtime).
+# Negative: prefab spec with a stem that does not exist in the texture store →
+# compile hard error (the typo is caught at build time instead of as a
+# black square at runtime).
 #
 # AssetRoots: tests/_asset_fixtures/basic/resources/textures
 # Expected exit code: 1

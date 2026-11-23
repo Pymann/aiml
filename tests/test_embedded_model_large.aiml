@@ -1,13 +1,13 @@
 # SPEC?: 15_models   # derived from the file name, to be confirmed
-# tests/test_embedded_model_large.aiml — Repro: Grosse embedded struct + multi-level ptr-chain
+# tests/test_embedded_model_large.aiml — repro: large embedded struct + multi-level ptr chain
 #
-# Mimt die PfJobQueue / TulTrainCfg Situation:
-#   - Large inner struct mit ~20 Feldern (i32, f32, string)
-#   - Heap-allokierter outer struct (ptr<PfJobQueue>)
-#   - worker struct mit ptr auf outer (ptr<PfWorkerHandle>)
-#   - set: [outer.inner, inner_val]       (struct-zu-embedded-struct)
-#   - var_wh.queue.inner.field  (3-level chain durch eingebettete struct)
-#   - Spawn + Channel + embedded struct Zugriff im Thread
+# Mimics the PfJobQueue / TulTrainCfg situation:
+#   - large inner struct with ~20 fields (i32, f32, string)
+#   - heap-allocated outer struct (ptr<PfJobQueue>)
+#   - worker struct with a ptr to outer (ptr<PfWorkerHandle>)
+#   - set: [outer.inner, inner_val]       (struct-to-embedded-struct)
+#   - var_wh.queue.inner.field  (3-level chain through an embedded struct)
+#   - spawn + channel + embedded struct access in the thread
 
 # ─── Modelle ──────────────────────────────────────────────────────────────────
 - model:
@@ -46,7 +46,7 @@
       - [queue,  "ptr<BigQueue>", 0]
       - [thread, thread_handle,   0]
 
-# ─── Hilfsfunktion die BigCfg by-value empfängt ───────────────────────────────
+# ─── helper function that receives BigCfg by value ──────────────────────────────
 - def:
     name: process_cfg
     args:
@@ -65,7 +65,7 @@
       - [var_wh, "ref<BigWorker>"]
     return: void
     body:
-      # Lese n_workers aus embedded struct via 3-level chain
+      # read n_workers from the embedded struct via a 3-level chain
       - decl: [var_n, i32, var_wh.queue.cfg.var_b6]
       - print: ["  [worker] var_b6=${var_n}"]
       # Empfange Job-Index, bis Sentinel
@@ -73,7 +73,7 @@
       - while:
           condition: { ">=": [var_fi, 0] }
           body:
-            # KERN: embedded BigCfg by-value an Funktion übergeben
+            # CORE: pass the embedded BigCfg by value to a function
             - decl: [var_r, i32, { call: [process_cfg, var_fi, var_wh.queue.cfg] }]
             - print: ["  [worker] job ${var_fi} done, result=${var_r}"]
             - set: [var_fi, { call: [var_wh.queue.var_ch.recv] }]
@@ -86,7 +86,7 @@
     args: []
     return: i32
     body:
-      # T1: BigCfg fields nach new
+      # T1: BigCfg fields after new
       - decl: [var_q, "ptr<BigQueue>", { new: BigQueue }]
       - if:
           condition: { neq: [var_q.cfg.var_a0, 0] }

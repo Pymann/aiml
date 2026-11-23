@@ -33,7 +33,7 @@
       - if:
           condition: { neq: [tr_vor.len, 2] }
           then:
-            - print: ["FAIL clear_plain: vor clear ${tr_vor.len} Treffer, erwartet 2"]
+            - print: ["FAIL clear_plain: vor clear ${tr_vor.len} Treffer, expected 2"]
             - return: 1
 
       - call: [dinge.clear]
@@ -42,13 +42,13 @@
       - if:
           condition: { neq: [anzahl, 0] }
           then:
-            - print: ["FAIL clear_plain: len=${anzahl} nach clear, erwartet 0"]
+            - print: ["FAIL clear_plain: len=${anzahl} nach clear, expected 0"]
             - return: 1
       - decl: [tr_nach, list<string>, { call: [dinge.findings_by, "name", "Hammer"] }]
       - if:
           condition: { neq: [tr_nach.len, 0] }
           then:
-            - print: ["FAIL clear_plain: ${tr_nach.len} Treffer nach clear, erwartet 0 -- der Nebenindex hat clear ueberlebt"]
+            - print: ["FAIL clear_plain: ${tr_nach.len} Treffer nach clear, expected 0 -- der Nebenindex hat clear ueberlebt"]
             - return: 1
 
       - print: ["sidx clear_plain PASS"]

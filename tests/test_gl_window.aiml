@@ -1,6 +1,6 @@
-# OpenGL window test: weißer Würfel, 3 Sekunden sichtbar, dann Exit.
-# Erfordert einen aktiven Display (X11 oder Wayland).
-# Ausführen: ./out/aiml -r tests/test_gl_window.aiml
+# OpenGL window test: white cube, visible for 3 seconds, then exit.
+# Requires an active display (X11 or Wayland).
+# Run: ./out/aiml -r tests/test_gl_window.aiml
 # Expected exit code: 0
 # Requires: display
 
@@ -16,7 +16,7 @@
     - def: { name: glfwWindowShouldClose, args: [[win, ptr]],                                                         return: i32 }
     - def: { name: glfwTerminate,         args: [],                                                                    return: void }
 
-# ── Phase A: GLFW initialisieren und Fenster öffnen ───────────────────────────
+# ── Phase A: initialise GLFW and open a window ───────────────────────────────
 
 - decl: [var_ok, i32, { call: [glfwInit] }]
 - if: [{ eq: [var_ok, 0] }, true]
@@ -45,11 +45,11 @@
 - call: [gl.enable_depth_test]
 - call: [gl.viewport, 0, 0, 800, 600]
 
-- print: ["Phase A+B OK: Fenster und GL-Kontext erstellt"]
+- print: ["Phase A+B OK: window and GL context created"]
 
-# ── Phase C: Würfel-Geometrie ─────────────────────────────────────────────────
+# ── Phase C: cube geometry ────────────────────────────────────────────────────
 #
-# 8 Ecken eines Einheitswürfels (−0.5 … +0.5 in X/Y/Z), Vertex-Layout: x y z
+# 8 corners of a unit cube (−0.5 … +0.5 in X/Y/Z), vertex layout: x y z
 #
 #   7──────6
 #  /|     /|
@@ -68,7 +68,7 @@
      0.5,  0.5, -0.5,
     -0.5,  0.5, -0.5]]
 
-# 2 Dreiecke pro Fläche, 6 Flächen = 36 Indizes
+# 2 triangles per face, 6 faces = 36 indices
 - decl: [idxs, buffer<u32>, [
     0, 1, 2,  0, 2, 3,
     5, 4, 7,  5, 7, 6,
@@ -84,7 +84,7 @@
 - call: [vao.bind_ibo, ibo]
 - call: [vao.attrib, 0, 3, 12, 0]   # attrib 0: 3 floats, stride 12, offset 0
 
-# Kanten-IBO: 12 echte Würfelkanten (keine Diagonalen), 24 Indizes für GL_LINES
+# edge IBO: 12 real cube edges (no diagonals), 24 indices for GL_LINES
 - decl: [edge_idxs, buffer<u32>, [
     0, 1,  1, 2,  2, 3,  3, 0,
     4, 5,  5, 6,  6, 7,  7, 4,
@@ -96,7 +96,7 @@
 - call: [edge_vao.bind_ibo, edge_ibo]
 - call: [edge_vao.attrib, 0, 3, 12, 0]
 
-- print: ["Phase C OK: Würfel-Geometrie hochgeladen"]
+- print: ["Phase C OK: cube geometry uploaded"]
 
 # ── Phase D: Shader kompilieren ───────────────────────────────────────────────
 
@@ -130,8 +130,8 @@
 
 - print: ["Phase D OK: Shader kompiliert"]
 
-# ── Phase E: Rotations-Render-Schleife (~10 s, 300 Frames à 33 ms) ────────────
-# Two-Pass: 1) weiße Flächen (Fill + Polygon-Offset), 2) rote Kanten (GL_LINES)
+# ── Phase E: rotation render loop (~10 s, 300 frames at 33 ms) ───────────────
+# Two-pass: 1) white faces (fill + polygon offset), 2) red edges (GL_LINES)
 
 - decl: [proj,   mat4, { call: [math.mat4_perspective, 0.785, 1.333, 0.1, 100.0] }]
 - decl: [eye,    vec3, { call: [math.vec3, 2.0, 1.5, 3.0] }]
@@ -150,14 +150,14 @@
       - set: [mvp, { "*": [proj, view] }]
       - set: [mvp, { "*": [mvp, model] }]
       - call: [gl.clear_all, 0.05, 0.05, 0.1, 1.0]
-      # Pass 1: weiße Flächen, leicht zurückgeschoben
+      # pass 1: white faces, pushed back slightly
       - call: [gl.polygon_offset, 1.0, 1.0]
       - call: [gl.enable_polygon_offset_fill]
       - call: [sh_white.use]
       - call: [sh_white.uniform_mat4, "mvp", mvp]
       - call: [gl.draw_elements, vao, 36]
       - call: [gl.disable_polygon_offset_fill]
-      # Pass 2: rote Kanten via GL_LINES (keine Diagonalen)
+      # pass 2: red edges via GL_LINES (no diagonals)
       - call: [sh_red.use]
       - call: [sh_red.uniform_mat4, "mvp", mvp]
       - call: [gl.draw_lines, edge_vao, 24]
@@ -169,7 +169,7 @@
 
 - print: ["Phase E OK: Rotation gerendert"]
 
-# ── Aufräumen ─────────────────────────────────────────────────────────────────
+# ── Clean-up ──────────────────────────────────────────────────────────────────
 
 - call: [edge_vao.delete]
 - call: [edge_ibo.delete]

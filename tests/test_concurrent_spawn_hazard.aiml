@@ -1,16 +1,16 @@
 # SPEC: 62_pipelines
-# spec/62 §6.1 / F62-14: die Gefahr BEWEISEN, nicht annehmen.
+# spec/62 §6.1 / F62-14: PROVE the hazard, do not assume it.
 #
-# fork/exec aus einem Prozess mit mehreren Threads ist eine bekannte Gefahr —
-# das Kind erbt Sperren und Dateideskriptoren eines Prozesses, der an anderer
-# Stelle mitten in einer Operation steckt.  spec/62 erlaubt `parallel > 1`
-# ausdruecklich erst, wenn gleichzeitiger Prozessstart UNTER LAST gemessen ist.
+# fork/exec from a process with several threads is a known hazard —
+# the child inherits locks and file descriptors of a process that elsewhere
+# is in the middle of an operation.  spec/62 allows `parallel > 1`
+# explicitly only once simultaneous process start has been measured UNDER LOAD.
 #
-# Dieser Test ist diese Messung: acht Threads starten je zwoelf Prozesse,
-# also 96 Starts, die sich maximal ueberlappen.  Gepruefte Aussage ist nicht
-# "es ist schnell", sondern: JEDER Start gelingt, JEDER Exit-Code kommt
-# richtig an, und es haengt nichts.  Ein einzelner verlorener Start macht
-# `parallel > 1` unbrauchbar, denn er sieht im Lauf wie ein Schritt-Fehler aus.
+# This test is that measurement: eight threads start twelve processes each,
+# i.e. 96 starts that overlap as much as possible.  The checked statement is not
+# "it is fast", but: EVERY start succeeds, EVERY exit code arrives
+# correctly, and nothing hangs.  A single lost start makes
+# `parallel > 1` unusable, because in the run it looks like a step failure.
 # Expected exit code: 0
 
 - decl: [g_fails,   i32, 0]
@@ -34,19 +34,19 @@
             - call: [argv.push, "/bin/sh"]
             - call: [argv.push, "-c"]
             - call: [argv.push, "echo tag${tag}"]
-            # capture: true -> jedes Kind bekommt EIGENE Pipes.  Ohne das
-            # erbt es stdout des Elternprozesses, und der Test prueft nichts.
+            # capture: true -> every child gets ITS OWN pipes.  Without that
+            # it inherits the parent process's stdout, and the test checks nothing.
             - decl: [proc, process, { call: [sys.exe, argv, { capture: true }] }]
             - decl: [wait_rc, i32, { call: [proc.wait] }]
             - if:
                 condition: { eq: [wait_rc, 0] }
                 then: [{ set: [local_ok, { +: [local_ok, 1] }] }]
                 else: [{ set: [local_bad, { +: [local_bad, 1] }] }]
-            # Die zweite Haelfte der Gefahr: Deskriptoren.  Erbt ein Kind die
-            # Pipe eines ANDEREN Threads, landet dessen Ausgabe hier — genau
-            # der Fehler, den cosmos beim geerbten Listener hatte.  Jeder
-            # Thread schickt darum seine eigene Kennung durch und erwartet
-            # NUR sie zurueck.
+            # The second half of the hazard: descriptors.  If a child inherits the
+            # pipe of ANOTHER thread, its output lands here — exactly
+            # the bug cosmos had with the inherited listener.  Every
+            # thread therefore sends its own identifier through and expects
+            # ONLY that back.
             - decl: [out_txt, string, proc.stdout_buffer]
             - if:
                 condition: { neq: [out_txt, expected] }
@@ -102,10 +102,10 @@
       - call: [thr_g.join]
       - call: [thr_h.join]
       - decl: [elapsed_ms, i64, { -: [{ call: [time.now] }, start_ms] }]
-      - print: ["  96 Starts aus 8 Threads in ${elapsed_ms} ms, ok=${g_ok} fehlgeschlagen=${g_fails} vertauscht=${g_crossed}"]
+      - print: ["  96 starts from 8 threads in ${elapsed_ms} ms, ok=${g_ok} failed=${g_fails} swapped=${g_crossed}"]
       - set: [fails, { +: [fails, { call: [expect, "jeder Prozessstart gelingt", { eq: [g_fails, 0] }] }] }]
       - set: [fails, { +: [fails, { call: [expect, "jeder Exit-Code kommt an", { eq: [g_ok, 96] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "keine Ausgabe wandert in einen fremden Thread", { eq: [g_crossed, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "no output wanders into a foreign thread", { eq: [g_crossed, 0] }] }] }]
 
       - if:
           condition: { neq: [fails, 0] }

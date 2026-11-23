@@ -1,11 +1,11 @@
 # SPEC: 44_7_asset_registry,44_7_cascade_validate,49_static_analysis,49_static_off
-# `expect` ist eine FUNKTION, also `call: [expect, ...]`.  Bis 2026-10-15 stand
-# hier `- expect: [...]` — ein unbekannter Statement-Schluessel, den der Compiler
-# still verwarf (spec/49 §2a).  Der Test pruefte also NICHTS und druckte PASS.
-# cascade.describe / cascade.type_range — Schema-Introspektion (spec/44_7).
-#   type_range(type) → list<i32>  : mögliche Werte (enum-Member / cascade-Node-IDs)
-#   describe(cascade, opcodes?) → list<string> : Element0 = Opcode-Enum-Name,
-#     danach je Opcode "[id]node [range]Type …" (opcodes leer → alle).
+# `expect` is a FUNCTION, so `call: [expect, ...]`.  Until 2026-10-15 this said
+# `- expect: [...]` — an unknown statement key that the compiler
+# silently discarded (spec/49 §2a).  So the test checked NOTHING and printed PASS.
+# cascade.describe / cascade.type_range — schema introspection (spec/44_7).
+#   type_range(type) → list<i32>  : possible values (enum members / cascade node IDs)
+#   describe(cascade, opcodes?) → list<string> : element 0 = opcode enum name,
+#     after that per opcode "[id]node [range]Type …" (opcodes empty → all).
 
 - enum: { name: ECode,  values: [ {aa: 1}, {bb: 2} ] }
 - enum: { name: Colr, values: [ {xx: 1}, {yy: 2}, {zz: 3} ] }
@@ -52,7 +52,7 @@
       # describe alle Opcodes
       - decl: [dall, list<string>, { call: [cascade.describe, "Casc"] }]
       - call: [expect, { call: [joinlist, dall] }, "ECode | [1]aa [1,2,3]Colr | [2]bb"]
-      # describe gefiltert auf Opcode 2
+      # describe filtered to opcode 2
       - decl: [ops, list<i32>]
       - call: [ops.push, 2]
       - decl: [dflt, list<string>, { call: [cascade.describe, "Casc", ops] }]

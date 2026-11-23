@@ -1,14 +1,14 @@
 # SPEC: 21_namespaces §6.2, 44_1_engine §4.1
-# `singleton: true`: der erklaerte Anker eines Rueckrufs.
+# `singleton: true`: the declared anchor of a callback.
 #
-# `engine.run` nimmt FREIE Funktionen — ein Rueckruf traegt keinen Zustand, also
-# braucht jedes Fenster-Programm einen Anker auf Modulebene.  Die Markierung
-# nimmt ihm die Globals-Warnung und handelt sich dafuer eine PRUEFUNG ein
-# (F21-S2, Negativprobe: tests/test_global_singleton_move_neg.aiml).
+# `engine.run` takes FREE functions — a callback carries no state, so
+# every window program needs an anchor at module level.  The marker
+# takes the globals warning away from it and buys a CHECK in exchange
+# (F21-S2, negative probe: tests/test_global_singleton_move_neg.aiml).
 #
-# Hier wird geprueft, dass der Anker normal benutzbar bleibt: setzen, lesen,
-# Methoden rufen.  Eine Markierung, die still etwas anderes bedeutet als
-# „keine Warnung", waere schlimmer als die Warnung.
+# Here it is checked that the anchor stays normally usable: set, read,
+# call methods.  A marker that silently means something other than
+# "no warning" would be worse than the warning.
 #
 # Expected exit code: 0
 
@@ -45,7 +45,7 @@
       - decl: [seen, i32, { call: [g_anchor.count] }]
       - if:
           condition: { neq: [seen, 2] }
-          then: [{ print: ["FAIL singleton zaehlt ${seen} statt 2"] }, { return: 1 }]
+          then: [{ print: ["FAIL singleton counts ${seen} instead of 2"] }, { return: 1 }]
       - free: [g_anchor]
       - print: ["global singleton PASS"]
       - return: 0

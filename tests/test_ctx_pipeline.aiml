@@ -1,14 +1,14 @@
 # SPEC: 29_2_sys_exec, 62_pipelines
-# spec/62 §20.1 + spec/29_2 §14b: der WEG eines Kontrollers.  Quelltext
-# hinein, Pipeline heraus — ohne eine Zeile YAML im Kontroller.
+# spec/62 §20.1 + spec/29_2 §14b: the PATH of a controller.  Source text
+# in, pipeline out — without a single line of YAML in the controller.
 #
-#   1. `ctx.new` + `cx.exec(sys.code_from(text))` uebersetzt die Einreichung.
-#   2. `cx.names("fn() -> pipeline")` sagt, wie sie heisst (F29_2-…i) — der
-#      Kontroller muss den Namen NICHT aus der Quelle lesen.
-#   3. `cx.call(name, "fn() -> pipeline")` baut sie (F29_2-…j).
-#   4. gelesen wird der WERT (spec/62 §20.4).
-#   5. ist die Einreichung kaputt, nennt `cx.errors` den Grund (F29_2-…l) —
-#      sonst hat der Kontroller nur „ging nicht" fuer den Einreicher.
+#   1. `ctx.new` + `cx.exec(sys.code_from(text))` compiles the submission.
+#   2. `cx.names("fn() -> pipeline")` says what it is called (F29_2-…i) — the
+#      controller does NOT have to read the name from the source.
+#   3. `cx.call(name, "fn() -> pipeline")` builds it (F29_2-…j).
+#   4. what is read is the VALUE (spec/62 §20.4).
+#   5. if the submission is broken, `cx.errors` names the reason (F29_2-…l) —
+#      otherwise the controller only has "did not work" for the submitter.
 # Expected exit code: 0
 
 - def:
@@ -33,18 +33,18 @@
       - decl: [rcx, i32, { call: [kontext.exec, code] }]
       - set: [bad, { +: [bad, { call: [expect, "die Einreichung uebersetzt", { eq: [rcx, 0] }] }] }]
       - decl: [namen, list<string>, { call: [kontext.names, "fn() -> pipeline"] }]
-      - set: [bad, { +: [bad, { call: [expect, "der Kontext kennt genau eine Pipeline", { eq: [namen.len, 1] }] }] }]
+      - set: [bad, { +: [bad, { call: [expect, "the context knows exactly one pipeline", { eq: [namen.len, 1] }] }] }]
       - if: { condition: { eq: [namen.len, 0] }, then: [{ return: { +: [bad, 1] } }] }
       - decl: [pname, string, { at: [namen, 0] }]
-      - set: [bad, { +: [bad, { call: [expect, "und ihren Namen", { eq: [pname, "ctx_demo"] }] }] }]
+      - set: [bad, { +: [bad, { call: [expect, "and its name", { eq: [pname, "ctx_demo"] }] }] }]
       - decl: [pipe, pipeline, { call: [kontext.call, pname, "fn() -> pipeline"] }]
-      - set: [bad, { +: [bad, { call: [expect, "zwei Lanes", { eq: [{ call: [pipe.lane_count] }, 2] }] }] }]
-      - set: [bad, { +: [bad, { call: [expect, "zwei Stufen", { eq: [{ call: [pipe.stage_count] }, 2] }] }] }]
+      - set: [bad, { +: [bad, { call: [expect, "two lanes", { eq: [{ call: [pipe.lane_count] }, 2] }] }] }]
+      - set: [bad, { +: [bad, { call: [expect, "two stages", { eq: [{ call: [pipe.stage_count] }, 2] }] }] }]
       - decl: [one, stage, { call: [pipe.stage_at, 0] }]
-      - set: [bad, { +: [bad, { call: [expect, "Stufe 1 hat ihren Befehl", { eq: [{ call: [one.command] }, "make -j4"] }] }] }]
-      - set: [bad, { +: [bad, { call: [expect, "Stufe 1 erbt den Agenten", { eq: [{ call: [one.agent] }, "x86_64"] }] }] }]
+      - set: [bad, { +: [bad, { call: [expect, "stage 1 has its command", { eq: [{ call: [one.command] }, "make -j4"] }] }] }]
+      - set: [bad, { +: [bad, { call: [expect, "stage 1 inherits the agent", { eq: [{ call: [one.agent] }, "x86_64"] }] }] }]
       - decl: [two, stage, { call: [pipe.stage_at, 1] }]
-      - set: [bad, { +: [bad, { call: [expect, "Stufe 2 hat ihren eigenen", { eq: [{ call: [two.agent] }, "arm64"] }] }] }]
+      - set: [bad, { +: [bad, { call: [expect, "stage 2 has its own", { eq: [{ call: [two.agent] }, "arm64"] }] }] }]
       - return: bad
 
 - def:
@@ -57,20 +57,20 @@
       - decl: [quelle, string, { call: [io.read_file, "tests/_pipe/ctx_demo.aiml"] }]
       - set: [fails, { +: [fails, { call: [lies_fremde_pipeline, kontext, quelle] }] }]
 
-      # Die kaputte Einreichung: EIGENER Kontext, damit die Meldungen nicht
-      # die der ersten sind (F29_2-…l).
+      # The broken submission: its OWN context, so that the messages are not
+      # those of the first (F29_2-…l).
       - decl: [zweit, ctx_handle, { call: [ctx.new] }]
       - decl: [schlecht, string, { call: [io.read_file, "tests/_pipe/ctx_kaputt.aiml"] }]
       - decl: [rcb, i32, { call: [zweit.exec, { call: [sys.code_from, schlecht] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "die kaputte Einreichung geht NICHT durch", { lt: [rcb, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "the broken submission does NOT go through", { lt: [rcb, 0] }] }] }]
       - decl: [why, list<string>, { call: [zweit.errors] }]
-      - set: [fails, { +: [fails, { call: [expect, "und der Kontext sagt, warum", { gt: [why.len, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "and the context says why", { gt: [why.len, 0] }] }] }]
       - if:
           condition: { gt: [why.len, 0] }
           then:
             - decl: [first, string, { at: [why, 0] }]
-            - print: ["  Grund: ${first}"]
-            - set: [fails, { +: [fails, { call: [expect, "die Meldung nennt den Schluessel", { ge: [{ call: [first.index_of, "steplayer"] }, 0] }] }] }]
+            - print: ["  reason: ${first}"]
+            - set: [fails, { +: [fails, { call: [expect, "the message names the key", { ge: [{ call: [first.index_of, "steplayer"] }, 0] }] }] }]
 
       - if:
           condition: { neq: [fails, 0] }

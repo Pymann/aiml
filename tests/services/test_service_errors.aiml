@@ -1,5 +1,5 @@
-# SPEC: 66_services §8 — was der Rumpf wirft, wird zum Status: ServiceNotFound 404,
-# ServiceInvalid 400, alles andere 500 (Meldung geloggt, nicht nach aussen gegeben).
+# SPEC: 66_services §8 — what the body throws becomes the status: ServiceNotFound 404,
+# ServiceInvalid 400, everything else 500 (message logged, not passed to the outside).
 # Expected exit code: 0
 - import: "tests/services/_models.aiml"
 
@@ -18,7 +18,7 @@
             - if:
                 condition: { gt: [req.release_id.len, 0] }
                 then:
-                  - throw: { new: ServiceNotFound, message: "kein Release ${req.release_id}" }
+                  - throw: { new: ServiceNotFound, message: "no release ${req.release_id}" }
             - decl: [out, ResolveResp]
             - return: out
       - def:
@@ -30,7 +30,7 @@
             - if:
                 condition: { gt: [req.release_id.len, 0] }
                 then:
-                  - throw: { new: ServiceInvalid, message: "so nicht" }
+                  - throw: { new: ServiceInvalid, message: "not like this" }
             - decl: [out, ResolveResp]
             - return: out
 
@@ -64,10 +64,10 @@
       - call: [time.sleep_ms, 200]
 
       - decl: [not_found, i32, { call: [status_for, "missing"] }]
-      - if: { condition: { neq: [not_found, 404] }, then: [{ print: ["FAIL ServiceNotFound -> ${not_found}, erwartet 404"] }, { set: [bad, 1] }] }
+      - if: { condition: { neq: [not_found, 404] }, then: [{ print: ["FAIL ServiceNotFound -> ${not_found}, expected 404"] }, { set: [bad, 1] }] }
 
       - decl: [invalid, i32, { call: [status_for, "broken"] }]
-      - if: { condition: { neq: [invalid, 400] }, then: [{ print: ["FAIL ServiceInvalid -> ${invalid}, erwartet 400"] }, { set: [bad, 1] }] }
+      - if: { condition: { neq: [invalid, 400] }, then: [{ print: ["FAIL ServiceInvalid -> ${invalid}, expected 400"] }, { set: [bad, 1] }] }
 
       - call: [srv.stop]
       - call: [srv_thread.join]

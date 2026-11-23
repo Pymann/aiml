@@ -1,4 +1,4 @@
-# test_ends_with.aiml — Tests fuer string.ends_with(suffix)
+# test_ends_with.aiml — tests for string.ends_with(suffix)
 
 - def:
     name: main
@@ -20,7 +20,7 @@
             - print: ["FAIL: 'hello.json' ends_with '.json' expected 1, got ${var_r1}"]
             - set: [fail, { +: [fail, 1] }]
 
-      # Test 2: kein Match
+      # Test 2: no match
       - decl: [var_r2, i32, { call: [var_s1.ends_with, ".md"] }]
       - if:
           condition: { eq: [var_r2, 0] }
@@ -66,7 +66,7 @@
             - print: ["FAIL: 'hello.json' ends_with '' expected 1, got ${var_r5}"]
             - set: [fail, { +: [fail, 1] }]
 
-      # Test 6: Pfad mit Punkt im Verzeichnis
+      # Test 6: path with a dot in the directory
       - decl: [var_s6, string, "docs/v1.2/readme.md"]
       - decl: [var_r6, i32, { call: [var_s6.ends_with, ".md"] }]
       - if:

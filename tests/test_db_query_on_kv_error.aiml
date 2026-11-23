@@ -1,19 +1,19 @@
 # SPEC: 31_db_integration
-# Negativ-Test: `db.query` auf einem Kv muss beim UEBERSETZEN scheitern.
+# Negative test: `db.query` on a Kv must fail when COMPILING.
 #
-# `db.query` arbeitet auf einem Store<T> (db.open).  Ein Kv (db.open_kv) hat
-# ein anderes Innenleben; der Aufruf uebersetzte trotzdem sauber und las dann
-# Unsinn.  Zwei Gesichter desselben Fehlers:
-#   - DataCreatures-Server, 12.11.2026: SIGSEGV beim Hochfahren in
-#     aiml_db_store_is_active, addr=0x3f800000 -- das Bitmuster von 1.0f,
-#     also ein Zahlenwert, der als Zeiger benutzt wurde.
-#   - Dieselbe Zeile in klein: stumm eine LEERE Liste, obwohl ein passender
-#     Eintrag im Kv liegt.
+# `db.query` works on a Store<T> (db.open).  A Kv (db.open_kv) has
+# different internals; the call still compiled cleanly and then read
+# nonsense.  Two faces of the same bug:
+#   - DataCreatures server, 2026-11-12: SIGSEGV at startup in
+#     aiml_db_store_is_active, addr=0x3f800000 -- the bit pattern of 1.0f,
+#     i.e. a numeric value that was used as a pointer.
+#   - The same line in small: silently an EMPTY list, although a matching
+#     entry lies in the Kv.
 #
-# Dazu kam, dass der Vorlauf den Typ eines KLASSENMITGLIEDS gar nicht
-# ermittelte (`<.laden` ist auch eine VariableExpr, aber resolveVariable kennt
-# sie nicht) -- damit fiel auch `order_by` auf einem Mitglied stillschweigend
-# aus.  Beides ist jetzt ein Uebersetzungsfehler bzw. aufgeloest.
+# On top of that, the preliminary pass did not determine the type of a CLASS MEMBER at all
+# (`<.laden` is a VariableExpr too, but resolveVariable does not know
+# it) -- so `order_by` on a member silently dropped out as well.
+# Both are now a compile error or resolved, respectively.
 # Expected exit code: 1
 
 - model:
@@ -59,7 +59,7 @@
       - set: [eins.name, "a"]
       - set: [eins.wert, 9]
       - call: [g_halter.laden.set, "a", eins]
-      - print: ["vor der Abfrage"]
+      - print: ["before the query"]
       - decl: [anzahl, i32, { call: [g_halter.frage] }]
       - print: ["Treffer: ${anzahl}"]
       - return: 0

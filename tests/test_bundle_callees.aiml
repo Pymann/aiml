@@ -1,10 +1,10 @@
 # SPEC: 29_2_sys_exec,29_serialize
-# spec/29_2 §16: sys.bundle sammelt auch GERUFENE Funktionen ein.
+# spec/29_2 §16: sys.bundle also collects CALLED functions.
 #
-# Vorher zog ein Bundle nur die referenzierten TYPEN mit; eine Funktion, die
-# eine andere aufrief, liess sie zurueck — der Fehler fiel erst beim Empfaenger
-# als "Unknown function" auf, nachdem das Bundle schon unterwegs war.
-# Geprueft wird zwei Ebenen tief, damit nicht nur die erste Kante zaehlt.
+# Before, a bundle only took the referenced TYPES along; a function that
+# called another left it behind — the error only showed up at the receiver
+# as "Unknown function", after the bundle was already on its way.
+# Checked two levels deep, so that not only the first edge counts.
 # Expected exit code: 0
 
 - def:
@@ -47,10 +47,10 @@
       - decl: [fails, i32, 0]
       - decl: [pkg, Code, { call: [sys.bundle, "bundle_root", { context: true }] }]
 
-      # contains() taugt NICHT als Vollstaendigkeitspruefung: es ist eine
-      # Textsuche, und bundle_root ERWAEHNT mid_level in seinem Aufruf (§17).
-      # Nur die zweite Ebene ist damit aussagekraeftig, und entscheidend ist
-      # ohnehin, ob es LAEUFT.
+      # contains() is NO good as a completeness check: it is a
+      # text search, and bundle_root MENTIONS mid_level in its call (§17).
+      # Only the second level is therefore meaningful, and what matters
+      # anyway is whether it RUNS.
       - set: [fails, { +: [fails, { call: [expect, "Bundle enthaelt die zweite Ebene", { call: [pkg.contains, "deep_leaf"] }] }] }]
 
       - decl: [rcx, i32, { call: [sys.exec, pkg] }]

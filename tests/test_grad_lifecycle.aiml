@@ -40,9 +40,9 @@
 - decl: [g_after_first, f32, { call: [gW1.get, 0] }]
 - call: [log.info, "after first backward, var_W.grad[0] = ${g_after_first}"]
 
-# Wichtig: KEIN adam_step + KEIN zero_grad.  Wir starten direkt eine zweite
-# Iteration — nur begin_graph dazwischen.  Wenn die Runtime grad zwischen
-# Iterationen NICHT auto-clear'd, sehen wir eine Akkumulation.
+# Important: NO adam_step + NO zero_grad.  We directly start a second
+# iteration — only begin_graph in between.  If the runtime does NOT auto-clear grad between
+# iterations, we see an accumulation.
 - call: [tensor.begin_graph]
 - decl: [var_x2, tensor, { call: [tensor.zeros, 1, 4] }]
 - call: [var_x2.set, 0, 1.0]
@@ -57,9 +57,9 @@
 - decl: [g_after_second, f32, { call: [gW2.get, 0] }]
 - call: [log.info, "after second backward (no zero_grad), var_W.grad[0] = ${g_after_second}"]
 
-# Erwartung beim aktuellen Runtime-Verhalten: g_after_second ≈ 2 × g_after_first
-# (= akkumuliert).  Wenn das stimmt, ist die Konvention "user muss zero_grad
-# rufen" am Leben.
+# Expectation with the current runtime behaviour: g_after_second ≈ 2 × g_after_first
+# (= accumulated).  If that holds, the convention "the user must call zero_grad"
+# is alive.
 - decl: [ratio, f32, { "/": [g_after_second, g_after_first] }]
 - call: [log.info, "ratio second/first = ${ratio}  (expect ~2.0 = accumulator)"]
 - if:
@@ -90,7 +90,7 @@
 - decl: [g_after_zero, f32, { call: [gW3.get, 0] }]
 - call: [log.info, "after zero_grad + new backward, var_W.grad[0] = ${g_after_zero}"]
 
-# g_after_zero sollte ≈ g_after_first (eine frische backward-pass-Magnitude).
+# g_after_zero should be ≈ g_after_first (a fresh backward pass magnitude).
 - decl: [delta, f32, { "-": [g_after_zero, g_after_first] }]
 - decl: [abs_delta, f32, { call: [math.abs, delta] }]
 - decl: [rel, f32, { "/": [abs_delta, { call: [math.abs, g_after_first] }] }]

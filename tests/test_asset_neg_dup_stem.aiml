@@ -1,8 +1,8 @@
 # SPEC?: 44_7_asset_registry   # derived from the file name, to be confirmed
-# Negative: zwei verschiedene abs_paths mit demselben Stem im selben Kind-Store
-# → Scanner Hard-Error bevor IR überhaupt emittiert wird.
-# Fixture hat resources/items/sword.png + resources/icons/sword.png unter
-# zwei separaten Roots → echter Konflikt (≠ overlap-Test wo's derselbe File ist).
+# Negative: two different abs_paths with the same stem in the same kind store
+# → scanner hard error before any IR is emitted.
+# The fixture has resources/items/sword.png + resources/icons/sword.png under
+# two separate roots → a real conflict (≠ the overlap test, where it is the same file).
 #
 # AssetRoots: tests/_asset_fixtures/dup_stem/resources/items,tests/_asset_fixtures/dup_stem/resources/icons
 # Expected exit code: 1
@@ -12,5 +12,5 @@
     name: main
     return: i32
     body:
-      # Body egal — Scanner bricht ab bevor diese Funktion compiled wird.
+      # Body does not matter — the scanner aborts before this function is compiled.
       - return: 0

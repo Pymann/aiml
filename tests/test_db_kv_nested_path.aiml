@@ -1,8 +1,8 @@
 # SPEC: 31_db_integration
-# spec/31: `path: "sub/dir/"` legt den Unterbau an — einschliesslich der
-# Zwischenebenen.  Bis 2026-10-15 war es ein einstufiges `mkdir`: beim ersten
-# Oeffnen scheiterte es mit ENOENT, der Store blieb still leer, und nur der
-# ZWEITE Lauf (mit dann vorhandenem Verzeichnis) funktionierte.
+# spec/31: `path: "sub/dir/"` creates the substructure — including the
+# intermediate levels.  Until 2026-10-15 it was a single-level `mkdir`: on the first
+# open it failed with ENOENT, the store silently stayed empty, and only the
+# SECOND run (with the directory then present) worked.
 #
 # Expected exit code: 0
 
@@ -36,10 +36,10 @@
       - call: [nest.open]
       - if:
           condition: { neq: [{ call: [nest.roundtrip] }, 1] }
-          then: [{ print: ["FAIL verschachtelter path: Store schreibt/liest nicht"] }, { call: [sys.exit, 1] }]
+          then: [{ print: ["FAIL nested path: store does not write/read"] }, { call: [sys.exit, 1] }]
       - decl: [made, path, "aiondb/a/b/c"]
       - if:
           condition: { eq: [{ call: [io.is_dir, made] }, false] }
-          then: [{ print: ["FAIL das Verzeichnis aiondb/a/b/c wurde nicht angelegt"] }, { call: [sys.exit, 1] }]
+          then: [{ print: ["FAIL the directory aiondb/a/b/c was not created"] }, { call: [sys.exit, 1] }]
       - print: ["PASS test_db_kv_nested_path"]
       - return: 0

@@ -1,5 +1,5 @@
 # SPEC?: 33_2_compress   # derived from the file name, to be confirmed
-# Tests für compress namespace: gzip, deflate, zlib, brotli, zstd, lz4, tar.var_gz, zip
+# Tests for the compress namespace: gzip, deflate, zlib, brotli, zstd, lz4, tar.var_gz, zip
 # Expected exit code: 0
 
 - decl: [orig, string, "Hello World! This is a test string for compression round-trip testing."]

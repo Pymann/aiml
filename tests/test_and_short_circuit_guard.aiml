@@ -1,11 +1,11 @@
 # SPEC: 04_1_precedence,04_math
-# spec/04_1 §4: `and`/`or` werten KURZ aus — "if first operand is false,
-# remaining operands are not evaluated".  Darauf ruht das haeufigste Muster
-# ueberhaupt: erst pruefen, ob ein Zeiger steht, dann ihn benutzen.
+# spec/04_1 §4: `and`/`or` evaluate SHORT-circuit — "if first operand is false,
+# remaining operands are not evaluated".  The most common pattern of all
+# rests on this: first check whether a pointer is set, then use it.
 #
-# Anlass: im cosmos-Client bestand `{'&&': [{pneq: [<.live, null]}, {gt: [{call: [<.live.has]}, 0]}]}`
-# die Pruefung und stuerzte trotzdem im zweiten Operanden ab (SIGSEGV addr=0x8) —
-# die Wache war wirkungslos, weil beide Seiten ausgewertet wurden.
+# Occasion: in the cosmos client `{'&&': [{pneq: [<.live, null]}, {gt: [{call: [<.live.has]}, 0]}]}`
+# passed the check and still crashed in the second operand (SIGSEGV addr=0x8) —
+# the guard was ineffective because both sides were evaluated.
 # Expected exit code: 0
 
 - class:
@@ -28,23 +28,23 @@
     return: i32
     body:
       - decl: [host, ptr<Outer>, { new: Outer }]
-      # Der zweite Operand DARF nicht laufen: host.link ist null.
+      # The second operand must NOT run: host.link is null.
       - decl: [hits, i32, 0]
       - if:
           condition: { '&&': [{ pneq: [host.link, null] }, { gt: [{ call: [host.link.get_value] }, 0] }] }
           then: [{ set: [hits, 1] }]
-      - if: { condition: { neq: [hits, 0] }, then: [{ print: ["FAIL: Zweig lief, obwohl der Zeiger null ist"] }, { return: 1 }] }
+      - if: { condition: { neq: [hits, 0] }, then: [{ print: ["FAIL: branch ran although the pointer is null"] }, { return: 1 }] }
       # Dieselbe Wache in Wortform.
       - decl: [hits_word, i32, 0]
       - if:
           condition: { and: [{ pneq: [host.link, null] }, { gt: [{ call: [host.link.get_value] }, 0] }] }
           then: [{ set: [hits_word, 1] }]
       - if: { condition: { neq: [hits_word, 0] }, then: [{ print: ["FAIL: and-Zweig lief trotz null"] }, { return: 1 }] }
-      # or: steht der erste Operand, bleibt der zweite ungelesen.
+      # or: if the first operand is set, the second stays unread.
       - decl: [hits_or, i32, 0]
       - if:
           condition: { '||': [{ peq: [host.link, null] }, { gt: [{ call: [host.link.get_value] }, 0] }] }
           then: [{ set: [hits_or, 1] }]
-      - if: { condition: { neq: [hits_or, 1] }, then: [{ print: ["FAIL: or hat den ersten Treffer nicht genommen"] }, { return: 1 }] }
+      - if: { condition: { neq: [hits_or, 1] }, then: [{ print: ["FAIL: or did not take the first hit"] }, { return: 1 }] }
       - print: ["PASS and_short_circuit_guard"]
       - return: 0

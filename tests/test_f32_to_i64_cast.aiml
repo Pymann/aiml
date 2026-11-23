@@ -10,23 +10,23 @@
       # (a) f32-VARIABLE → i64
       - decl: [fval, f32, 64.0]
       - decl: [ival, i64, fval]
-      - print: ["(a) f32-var 64.0 -> i64 = ${ival} (erwartet 64)"]
+      - print: ["(a) f32-var 64.0 -> i64 = ${ival} (expected 64)"]
       - if: { condition: { neq: [ival, 64] }, then: [{ set: [fails, { +: [fails, 1] }] }] }
 
       # (b) f32-VARIABLE → i32
       - decl: [ival32, i32, fval]
-      - print: ["(b) f32-var 64.0 -> i32 = ${ival32} (erwartet 64)"]
+      - print: ["(b) f32-var 64.0 -> i32 = ${ival32} (expected 64)"]
       - if: { condition: { neq: [ival32, 64] }, then: [{ set: [fails, { +: [fails, 1] }] }] }
 
       # (c) inline f32-Ausdruck → i64
       - decl: [jval, i64, { '*': [fval, 2.0] }]
-      - print: ["(c) f32-inline 128.0 -> i64 = ${jval} (erwartet 128)"]
+      - print: ["(c) f32-inline 128.0 -> i64 = ${jval} (expected 128)"]
       - if: { condition: { neq: [jval, 128] }, then: [{ set: [fails, { +: [fails, 1] }] }] }
 
-      # (d) größerer Wert (näher am MKP-Fall)
+      # (d) a larger value (closer to the MKP case)
       - decl: [big_f, f32, 118339.0]
       - decl: [big_i, i64, big_f]
-      - print: ["(d) f32-var 118339.0 -> i64 = ${big_i} (erwartet 118339)"]
+      - print: ["(d) f32-var 118339.0 -> i64 = ${big_i} (expected 118339)"]
       - if: { condition: { neq: [big_i, 118339] }, then: [{ set: [fails, { +: [fails, 1] }] }] }
 
       - if:

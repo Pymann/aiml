@@ -1,14 +1,14 @@
 # SPEC?: 39_overloading,09_strings
-# Regression: `eq`/`neq` auf dem Ergebnis ZWEIER string-Builtins
-# (`{ eq: [zeichen.lower(), zeichen.upper()] }`) fiel auf Pointer-Identity
-# zurueck.  Beide Operanden sind frische Allokationen, also war das lautlos
-# "immer ungleich" — obwohl der Rueckgabetyp statisch bekannt ist.  Ein
-# string-Builtin steht in keiner FunctionInfo, darum lieferte der Resolver
-# in visitBinary einen leeren Typnamen.
+# Regression: `eq`/`neq` on the result of TWO string builtins
+# (`{ eq: [zeichen.lower(), zeichen.upper()] }`) fell back to pointer identity.
+# Both operands are fresh allocations, so this was silently
+# "always unequal" — although the return type is statically known.  A
+# string builtin is in no FunctionInfo, which is why the resolver
+# in visitBinary returned an empty type name.
 #
-# Aus derselben cai-Nacht wie test_eq_member_strings: in eigenschaft_leser.aiml
-# `fortsetzung` warnte der Compiler ueber zwei Aufruf-Temporaries.  Dort mit
-# typisierten Lokalen umschifft; hier festgehalten, dass es auch direkt geht.
+# From the same cai night as test_eq_member_strings: in eigenschaft_leser.aiml
+# `fortsetzung` the compiler warned about two call temporaries.  Worked around there with
+# typed locals; recorded here that it also works directly.
 #
 # Expected exit code: 0
 
@@ -20,7 +20,7 @@
       - decl: [zeichen, string, "Abc"]
       - decl: [gleich,  string, "abc"]
 
-      # Zwei Builtins, UNTERSCHIEDLICHER Inhalt → muss ungleich sein.
+      # two builtins, DIFFERENT content → must be unequal.
       - if:
           condition: { eq: [{ call: [zeichen.lower] }, { call: [zeichen.upper] }] }
           then:
@@ -30,25 +30,25 @@
           condition: { neq: [{ call: [zeichen.lower] }, { call: [zeichen.upper] }] }
           then: []
           else:
-            - print: ["FAIL neq auf lower/upper ergab gleich"]
+            - print: ["FAIL neq on lower/upper gave equal"]
             - set: [fails, { +: [fails, 1] }]
 
-      # Zwei Builtins mit GLEICHEM Inhalt, getrennt alloziert → muss gleich
-      # sein.  Genau das ergab vorher false (zwei verschiedene Zeiger).
+      # two builtins with the SAME content, allocated separately → must be equal.
+      # Exactly that gave false before (two different pointers).
       - if:
           condition: { eq: [{ call: [zeichen.lower] }, { call: [gleich.lower] }] }
           then: []
           else:
-            - print: ["FAIL zwei lower() mit gleichem Inhalt ergaben ungleich"]
+            - print: ["FAIL two lower() with the same content gave unequal"]
             - set: [fails, { +: [fails, 1] }]
 
-      # Gemischt: Builtin gegen typisierte Lokale (ging schon vorher).
+      # mixed: builtin against a typed local (already worked before).
       - decl: [klein, string, { call: [zeichen.lower] }]
       - if:
           condition: { eq: [{ call: [gleich.lower] }, klein] }
           then: []
           else:
-            - print: ["FAIL Builtin gegen Lokale ergab ungleich"]
+            - print: ["FAIL builtin against local gave unequal"]
             - set: [fails, { +: [fails, 1] }]
 
       # trim/substr als zweite Builtin-Paarung.

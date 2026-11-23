@@ -35,7 +35,7 @@
       - if:
           condition: { "||": [{ gt: [{ call: [math.abs, { "-": [pos_x, 120.0] }] }, 0.5] },
                               { gt: [{ call: [math.abs, { "-": [pos_y, 80.0] }] }, 0.5] }] }
-          then: [{ print: ["FAIL move_pending: Cursor bei (${pos_x},${pos_y}), erwartet (120,80)"] }, { return: 1 }]
+          then: [{ print: ["FAIL move_pending: Cursor bei (${pos_x},${pos_y}), expected (120,80)"] }, { return: 1 }]
 
       - if:
           condition: { neq: [{ call: [input.mouse_pressed, 0] }, 1] }

@@ -23,10 +23,10 @@
     methods:
       # A BASE method that uses the collaborator through the base member <.dep.
       - def: { name: read_dep, return: i32, body: [{ return: { call: [<.dep.get_v] } }] }
-      # Eine sees-Instanz ist VOLLWERTIG: ihre Attribute sind direkt lesbar UND
-      # schreibbar, nicht nur ihre Methoden (spec/58 §5.1).  Ohne das muesste
-      # jede Nachbar-Zusammenarbeit durch Getter/Setter oder durch zusaetzliche
-      # Parameter laufen.
+      # A sees instance is FULL-FLEDGED: its attributes are directly readable AND
+      # writable, not only its methods (spec/58 §5.1).  Without that
+      # every neighbour collaboration would have to go through getters/setters or through additional
+      # parameters.
       - def: { name: peek_attr,  return: i32, body: [{ return: <.dep.val }] }
       - def: { name: poke_attr,  args: [[nval, i32]], body: [{ set: [<.dep.val, nval] }] }
 
@@ -48,15 +48,15 @@
       # base method read_dep uses <.dep, which the classgroup wired to the dep instance
       - decl: [got, i32, { call: [rtg.usr.read_dep] }]
       - if: { condition: { neq: [got, 42] }, then: [{ print: ["FAIL read_dep=${got} exp 42 — base member not wired via sees"] }, { call: [sys.exit, 1] }] }
-      # Attribut der Nachbar-Instanz DIREKT lesen …
+      # read the neighbour instance's attribute DIRECTLY …
       - decl: [seen, i32, { call: [rtg.usr.peek_attr] }]
       - if: { condition: { neq: [seen, 42] }, then: [{ print: ["FAIL peek_attr=${seen} exp 42 — sibling attribute not readable"] }, { call: [sys.exit, 1] }] }
-      # … und schreiben; die Aenderung ist an der Instanz selbst sichtbar.
+      # … and write it; the change is visible on the instance itself.
       - call: [rtg.usr.poke_attr, 7]
       - decl: [after, i32, { call: [rtg.dep.get_v] }]
       - if: { condition: { neq: [after, 7] }, then: [{ print: ["FAIL poke_attr → dep.val=${after} exp 7 — sibling attribute not writable"] }, { call: [sys.exit, 1] }] }
-      # Die Gruppe FREIGEBEN: das verdrahtete Basismember ist ein Borrow, kein zweiter
-      # Eigentuemer — ohne dieses free lief der Test am Double-Free vorbei (spec/58 §5.1).
+      # FREE the group: the wired base member is a borrow, not a second
+      # owner — without this free the test ran past the double free (spec/58 §5.1).
       - free: rtg
       - print: ["PASS classgroup_sees_base_member: sees wires an existing base member; base method uses the collaborator; sibling ATTRIBUTES read+write; group free is clean"]
       - return: 0

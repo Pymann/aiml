@@ -1,8 +1,8 @@
 # SPEC?: 29_serialize,16_classes   # derived from the file name, to be confirmed
 # static-check: off
-# PROBE: serialisiert ein Model, das eine list<Klasse-mit-models> enthält,
-# über KV-Roundtrip?  (= die Frage ob ZoneEntry eine class sein darf, da es
-# in MatchSession.combat_zone: list<ZoneEntry> steckt + über KV/Wire geht.)
+# PROBE: does a model that contains a list<class with models> serialise
+# over a KV roundtrip?  (= the question whether ZoneEntry may be a class, since it
+# sits in MatchSession.combat_zone: list<ZoneEntry> + goes over KV/wire.)
 
 - model: { name: FooData, fields: [[val, i32]] }
 - class:

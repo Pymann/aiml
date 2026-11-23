@@ -1,15 +1,15 @@
 # SPEC?: 39_operators,15_models
-# Regression: `eq`/`neq` auf ZWEI Member-Strings desselben Objekts fiel auf
-# Pointer-Identity zurueck, obwohl beide Typen statisch bekannt sind (beide
-# `string`-Felder derselben Klasse).  Der Resolver in visitBinary kannte nur
-# die Schreibweise `obj.feld`; die Quellschreibweise fuer das aktuelle Objekt
-# ist aber `<.feld` — resolveVariable("<") schlug fehl, der Typname blieb leer,
-# und der Vergleich uebersetzte lautlos zu "immer ungleich".
+# Regression: `eq`/`neq` on TWO member strings of the same object fell back to
+# pointer identity, although both types are statically known (both
+# `string` fields of the same class).  The resolver in visitBinary only knew
+# the notation `obj.field`; but the source notation for the current object
+# is `<.field` — resolveVariable("<") failed, the type name stayed empty,
+# and the comparison silently compiled to "always unequal".
 #
-# Gefunden im cai-Wikipedia-Leser: `{ eq: [<.tag_name, <.skip_tag] }` traf nie,
-# darum wurde 10.000 Artikel lang alles nach dem ersten uebersprungenen
-# Element verworfen.  Eine Warnung gab es, aber sie war irrefuehrend —
-# "without resolvable type" stimmte nicht, der Typ WAR da.
+# Found in the cai Wikipedia reader: `{ eq: [<.tag_name, <.skip_tag] }` never matched,
+# so for 10,000 articles everything after the first skipped
+# element was discarded.  There was a warning, but it was misleading —
+# "without resolvable type" was not true, the type WAS there.
 #
 # Expected exit code: 0
 
@@ -20,8 +20,8 @@
       - [skip_tag,   string, "", { access: public }]
       - [other_tag,  string, "", { access: public }]
     methods:
-      # `<.a` gegen `<.b` mit GLEICHEM Inhalt, aber getrennt gebauten Strings:
-      # bei Pointer-Identity ist das false, inhaltlich true.
+      # `<.a` against `<.b` with the SAME content, but separately built strings:
+      # with pointer identity that is false, by content true.
       - def:
           name: eq_same_content
           args: []
@@ -36,7 +36,7 @@
           body:
             - if: { condition: { neq: [<.tag_name, <.skip_tag] }, then: [{ return: 1 }] }
             - return: 0
-      # Gegenprobe: wirklich unterschiedlicher Inhalt muss ungleich sein.
+      # counter-probe: really different content must be unequal.
       - def:
           name: eq_diff_content
           args: []
@@ -44,7 +44,7 @@
           body:
             - if: { condition: { eq: [<.tag_name, <.other_tag] }, then: [{ return: 1 }] }
             - return: 0
-      # Die zweite Schreibweise fuer dasselbe Objekt.
+      # the second notation for the same object.
       - def:
           name: eq_this_spelling
           args: []
@@ -52,7 +52,7 @@
           body:
             - if: { condition: { eq: [this.tag_name, this.skip_tag] }, then: [{ return: 1 }] }
             - return: 0
-      # Kontrolle: Member gegen Literal ging schon vorher (Literal liefert den Typ).
+      # control: member against literal already worked before (the literal provides the type).
       - def:
           name: eq_member_literal
           args: []
@@ -68,8 +68,8 @@
       - decl: [fails, i32, 0]
       - decl: [tgr, Tagger]
 
-      # Beide Felder auf denselben INHALT setzen, aber aus getrennten Quellen,
-      # damit kein Zufall zweimal denselben Zeiger liefert.
+      # set both fields to the same CONTENT, but from separate sources,
+      # so that no coincidence yields the same pointer twice.
       - decl: [part_a, string, "sp"]
       - decl: [part_b, string, "an"]
       - set: [tgr.tag_name, "span"]
@@ -80,21 +80,21 @@
       - if:
           condition: { neq: [res_eq, 1] }
           then:
-            - print: ["FAIL eq auf zwei gleiche Member-Strings ergab false (res=${res_eq})"]
+            - print: ["FAIL eq on two equal member strings gave false (res=${res_eq})"]
             - set: [fails, { +: [fails, 1] }]
 
       - decl: [res_neq, i32, { call: [tgr.neq_same_content] }]
       - if:
           condition: { neq: [res_neq, 0] }
           then:
-            - print: ["FAIL neq auf zwei gleiche Member-Strings ergab true (res=${res_neq})"]
+            - print: ["FAIL neq on two equal member strings gave true (res=${res_neq})"]
             - set: [fails, { +: [fails, 1] }]
 
       - decl: [res_diff, i32, { call: [tgr.eq_diff_content] }]
       - if:
           condition: { neq: [res_diff, 0] }
           then:
-            - print: ["FAIL eq auf unterschiedliche Member-Strings ergab true (res=${res_diff})"]
+            - print: ["FAIL eq on different member strings gave true (res=${res_diff})"]
             - set: [fails, { +: [fails, 1] }]
 
       - decl: [res_this, i32, { call: [tgr.eq_this_spelling] }]
@@ -108,10 +108,10 @@
       - if:
           condition: { neq: [res_lit, 1] }
           then:
-            - print: ["FAIL eq Member gegen Literal ergab false (res=${res_lit})"]
+            - print: ["FAIL eq member against literal gave false (res=${res_lit})"]
             - set: [fails, { +: [fails, 1] }]
 
-      # Kontrolle von AUSSEN: `obj.feld` gegen `obj.feld` ging schon vorher.
+      # control from OUTSIDE: `obj.field` against `obj.field` already worked before.
       - if:
           condition: { neq: [tgr.tag_name, tgr.skip_tag] }
           then:

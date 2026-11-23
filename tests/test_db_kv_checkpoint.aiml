@@ -1,5 +1,5 @@
 # SPEC?: 31_db_integration   # derived from the file name, to be confirmed
-# Tests for db.kv_checkpoint — compaction via temp+rename (Schritt 6).
+# Tests for db.kv_checkpoint — compaction via temp+rename (step 6).
 # After many delete operations, checkpoint should reduce real disk usage
 # and leave no orphan .compact file.
 # Expected exit code: 0

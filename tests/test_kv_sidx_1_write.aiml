@@ -42,19 +42,19 @@
       - if:
           condition: { neq: [ham.len, 2] }
           then:
-            - print: ["FAIL write: name=Hammer ergibt ${ham.len}, erwartet 2"]
+            - print: ["FAIL write: name=Hammer ergibt ${ham.len}, expected 2"]
             - return: 1
       - decl: [wer, list<string>, { call: [dinge.findings_by, "tag", "werkzeug"] }]
       - if:
           condition: { neq: [wer.len, 2] }
           then:
-            - print: ["FAIL write: tag=werkzeug ergibt ${wer.len}, erwartet 2"]
+            - print: ["FAIL write: tag=werkzeug ergibt ${wer.len}, expected 2"]
             - return: 1
       - decl: [sku_zwei, string, { call: [dinge.finding_by, "sku", "S2"] }]
       - if:
           condition: { neq: [sku_zwei, "bbb"] }
           then:
-            - print: ["FAIL write: sku=S2 ergibt '${sku_zwei}', erwartet 'bbb'"]
+            - print: ["FAIL write: sku=S2 ergibt '${sku_zwei}', expected 'bbb'"]
             - return: 1
 
       - decl: [ckpt_rc, i32, { call: [db.checkpoint] }]

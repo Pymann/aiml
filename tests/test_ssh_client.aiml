@@ -88,7 +88,7 @@
           then: [{ print: ["FAIL stderr landete in stdout ('${got_out}')"] }, { set: [fails, { +: [fails, 1] }] }]
       - if:
           condition: { neq: [got_rc, 7] }
-          then: [{ print: ["FAIL exit_code=${got_rc}, erwartet 7"] }, { set: [fails, { +: [fails, 1] }] }]
+          then: [{ print: ["FAIL exit_code=${got_rc}, expected 7"] }, { set: [fails, { +: [fails, 1] }] }]
       - call: [ch_ok.close]
 
       # ── 5. stdin ─────────────────────────────────────────────────────────

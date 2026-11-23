@@ -22,7 +22,7 @@
       - if:
           condition: { neq: [ist, erw] }
           then:
-            - print: ["FAIL ${was}: ${ist} Treffer, erwartet ${erw}"]
+            - print: ["FAIL ${was}: ${ist} Treffer, expected ${erw}"]
             - return: 1
       - return: 0
 
@@ -70,7 +70,7 @@
       - if:
           condition: { neq: [sku_drei, "ccc"] }
           then:
-            - print: ["FAIL read: sku=S3 ergibt '${sku_drei}', erwartet 'ccc'"]
+            - print: ["FAIL read: sku=S3 ergibt '${sku_drei}', expected 'ccc'"]
             - set: [bad, { +: [bad, 1] }]
       - decl: [sku_neun, string, { call: [dinge.finding_by, "sku", "S9"] }]
       - set: [bad, { +: [bad, { call: [pruef_zahl, sku_neun.len, 0, "sku=S9 leer"] }] }]

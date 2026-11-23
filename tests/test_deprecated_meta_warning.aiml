@@ -1,12 +1,12 @@
 # SPEC?: 56_meta   # derived from the file name, to be confirmed
 # static-check: off
-# FEATURE: `meta: [deprecated]` auf einer def/Methode → der Compiler gibt an
-# JEDER Nutzungsstelle eine WARNING mit Source-Location aus (kein Fehler; das
-# Programm kompiliert + läuft normal).  Erleichtert Refactorings: alte API als
-# deprecated markieren, dann zeigt der Compiler alle Call-Sites.
+# FEATURE: `meta: [deprecated]` on a def/method → the compiler emits at
+# EVERY use site a WARNING with source location (not an error; the
+# program compiles + runs normally).  Eases refactorings: mark the old API as
+# deprecated, then the compiler shows all call sites.
 #
-# Dieser Test kompiliert + läuft (exit 0).  Die eigentliche Prüfung ist die
-# Warning auf stderr — vom Test-Runner via grep verifiziert, nicht via exit.
+# This test compiles + runs (exit 0).  The actual check is the
+# warning on stderr — verified by the test runner via grep, not via the exit code.
 
 - def:
     name: old_helper
@@ -34,7 +34,7 @@
     name: main
     return: i32
     body:
-      # Nutzung der deprecated Funktion → hier muss die Warning entstehen.
+      # use of the deprecated function → the warning must arise here.
       - decl: [val_a, i32, { call: [old_helper] }]
       - decl: [val_b, i32, { call: [still_ok] }]
       - decl: [box, ptr<Box>, { new: Box }]

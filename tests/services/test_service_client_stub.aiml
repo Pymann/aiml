@@ -1,6 +1,6 @@
-# SPEC: 66_services §3 — der Client-Stub: eine Methode je Endpunkt ueber
-# send_and_await.  Ohne Gegenstelle laeuft der Aufruf in den Timeout (0) statt zu
-# haengen oder zu sterben; getestet wird die erzeugte Signatur und dieser Weg.
+# SPEC: 66_services §3 — the client stub: one method per endpoint via
+# send_and_await.  Without a peer the call runs into the timeout (0) instead of
+# hanging or dying; what is tested is the generated signature and this path.
 # Expected exit code: 0
 - import: "tests/services/_models.aiml"
 

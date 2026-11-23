@@ -1,21 +1,21 @@
 # SPEC: 61_memory_management
-# Ein lokal mit `new` angelegter Zeiger wird in ein GLOBAL gehaengt, dann
-# endet die Funktion.
+# A pointer created locally with `new` is hung into a GLOBAL, then
+# the function ends.
 #
-# spec/61: `new` erzeugt eine Heap-Allokation mit Eigentuemer.  Haengt die
-# Funktion sie in ein Global und endet, muss das Eigentum MITWANDERN — sonst
-# gibt das Verwerfen der Lokalen den Speicher frei und das Global zeigt auf
-# befreiten Heap.  Der naechste Lesezugriff ist dann ein Griff ins Leere.
+# spec/61: `new` creates a heap allocation with an owner.  If the
+# function hangs it into a global and ends, the ownership must MOVE ALONG — otherwise
+# discarding the local frees the memory and the global points to
+# freed heap.  The next read access is then a grab into nothing.
 #
-# Anlass: der WASM-Client von cosmos stuerzte mit "memory access out of
-# bounds" ab, sobald ein Live-Push angekommen war.  Der Push-Handler hat
-# genau diese Form (`decl fresh = new ClusterView` ... `set g_live = fresh`).
-# Nativ faellt das still durch, weil befreiter Speicher meist noch abgebildet
-# ist; WASM prueft die Grenzen und bricht ab.
+# Occasion: the cosmos WASM client crashed with "memory access out of
+# bounds" as soon as a live push had arrived.  The push handler has
+# exactly this form (`decl fresh = new ClusterView` ... `set g_live = fresh`).
+# Natively this silently falls through, because freed memory is usually still mapped;
+# WASM checks the bounds and aborts.
 #
-# Geprueft wird der VERSCHACHTELTE Fall (Modell mit list<Model> und Strings),
-# weil nur der inneren Heap besitzt — ein flaches Modell wuerde den Fehler
-# nicht zeigen.
+# The NESTED case is checked (a model with list<Model> and strings),
+# because only that owns inner heap — a flat model would not show the
+# error.
 # Expected exit code: 0
 
 - model:
@@ -76,14 +76,14 @@
     body:
       - decl: [fails, i32, 0]
 
-      # Erster Push: genau der Fall, der im Client abgestuerzt ist.
+      # first push: exactly the case that crashed in the client.
       - call: [apply_push, 5]
       - set: [fails, { +: [fails, { call: [expect, "Global gesetzt", { pneq: [g_view, null] }] }] }]
       - set: [fails, { +: [fails, { call: [expect, "5 Eintraege ueberlebt", { eq: [g_view.items.len, 5] }] }] }]
       - set: [fails, { +: [fails, { call: [expect, "Zeichenkette ueberlebt", { eq: [g_view.tag, "schnappschuss-5"] }] }] }]
 
-      # Die verschachtelten Elemente lesen — hier greift ein baumelndes
-      # Global ins Leere.
+      # read the nested elements — this is where a dangling
+      # global grabs into nothing.
       - decl: [sum, i32, 0]
       - decl: [row_ix, i32, 0]
       - while:
@@ -95,8 +95,8 @@
             - set: [row_ix, { +: [row_ix, 1] }]
       - set: [fails, { +: [fails, { call: [expect, "Summe 0+1+2+3+4", { eq: [sum, 10] }] }] }]
 
-      # Mehrere Pushes hintereinander: jeder ersetzt das Global.  Der alte
-      # Schnappschuss muss freigegeben werden, der neue lesbar bleiben.
+      # several pushes in a row: each replaces the global.  The old
+      # snapshot must be freed, the new one must stay readable.
       - decl: [round, i32, 2]
       - while:
           condition: { lt: [round, 9] }

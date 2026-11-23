@@ -14,7 +14,7 @@
       - if:
           condition: { neq: [anz, 8] }
           then:
-            - print: ["FAIL: len=${anz} bei kaputtem Dump, erwartet 8"]
+            - print: ["FAIL: len=${anz} bei kaputtem Dump, expected 8"]
             - return: 1
 
       - decl: [bad, i32, 0]

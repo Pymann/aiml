@@ -7,9 +7,9 @@
 - enum: { name: OwnerType,     values: [player, opponent, ally, all_allies] }
 - enum: { name: AttributeType, values: [lp, atk, def, ini, mov, mor] }
 
-# Cascade with rekursiver Referenz auf sich selbst (ist erlaubt),
-# nested cascade auf ValueType und primitive i32 (VALUE/COUNT/SIDES kommen
-# als alias in Phase 4).
+# Cascade with a recursive reference to itself (this is allowed),
+# nested cascade on ValueType and primitive i32 (VALUE/COUNT/SIDES come
+# as aliases in phase 4).
 - cascade:
     name: ValueType
     nodes:

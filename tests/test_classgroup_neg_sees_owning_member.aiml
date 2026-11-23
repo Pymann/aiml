@@ -1,8 +1,8 @@
 # SPEC: 58_classgroups
-# Negativtest (spec/58 §5.1): ein sees-Ziel, das ein vorhandenes Basismember verdrahtet,
-# muss ein BORROW sein.  Hier ist `dep` als `ptr<Dep>` deklariert — ein Eigentuemer
-# (spec/61 §5.2).  Die Gruppe gibt ihre Instanzen selbst frei; ein zweiter Eigentuemer
-# fuehrt beim `free:` der Gruppe zum Double-Free.  Der Compiler muss das zurueckweisen.
+# Negative test (spec/58 §5.1): a sees target that wires an existing base member
+# must be a BORROW.  Here `dep` is declared as `ptr<Dep>` — an owner
+# (spec/61 §5.2).  The group frees its instances itself; a second owner
+# leads to a double free on the group's `free:`.  The compiler must reject that.
 #
 # Expected exit code: 1
 

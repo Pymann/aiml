@@ -1,5 +1,5 @@
 # SPEC: 69_hashmap
-# hashmap<K:V>: Hashtabelle (O(1) pro Zugriff) mit string/int-Schlüsseln und int/bool/float/string-Werten.
+# hashmap<K:V>: hash table (O(1) per access) with string/int keys and int/bool/float/string values.
 
 - def:
     name: main
@@ -17,17 +17,17 @@
       - decl: [got_a, i32, { call: [hm_a.get, "alpha"] }]
       - if: [{ neq: [got_a, 11] }, true]
         then:
-          - print: ["FAIL A1: get alpha = ${got_a}, erwartet 11"]
+          - print: ["FAIL A1: get alpha = ${got_a}, expected 11"]
           - set: [var_ok, 0]
       - decl: [miss_a, i32, { call: [hm_a.get, "gamma"] }]
       - if: [{ neq: [miss_a, 0] }, true]
         then:
-          - print: ["FAIL A2: fehlender Schlüssel = ${miss_a}, erwartet 0"]
+          - print: ["FAIL A2: missing key = ${miss_a}, expected 0"]
           - set: [var_ok, 0]
       - decl: [len_a, i32, { call: [hm_a.len] }]
       - if: [{ neq: [len_a, 2] }, true]
         then:
-          - print: ["FAIL A3: len = ${len_a}, erwartet 2"]
+          - print: ["FAIL A3: len = ${len_a}, expected 2"]
           - set: [var_ok, 0]
       - if: [{ call: [hm_a.contains, "beta"] }, true]
         then:
@@ -38,10 +38,10 @@
       - call: [hm_a.remove, "beta"]
       - if: [{ call: [hm_a.contains, "beta"] }, true]
         then:
-          - print: ["FAIL A5: beta nach remove noch da"]
+          - print: ["FAIL A5: beta still there after remove"]
           - set: [var_ok, 0]
 
-      # ── B: add (Zähler) ──────────────────────────────────────────────────────────
+      # ── B: add (counter) ─────────────────────────────────────────────────────────
       - decl: [hm_b, "hashmap<string:i64>"]
       - decl: [idx, i32, 0]
       - while: [{ lt: [idx, 1000] }]
@@ -70,17 +70,17 @@
       - call: [hm_c.put, -3, "neu"]
       - if: [{ eq: [got_c, "minus drei"] }, true]
         then:
-          - print: ["OK C2: gebundener Wert bleibt nach Überschreiben gültig"]
+          - print: ["OK C2: bound value stays valid after overwriting"]
         else:
-          - print: ["FAIL C2: gebundener Wert verändert: '${got_c}'"]
+          - print: ["FAIL C2: bound value changed: '${got_c}'"]
           - set: [var_ok, 0]
       - decl: [miss_c, string, { call: [hm_c.get, 99] }]
       - if: [{ neq: [miss_c, ""] }, true]
         then:
-          - print: ["FAIL C3: fehlender Schlüssel liefert '${miss_c}'"]
+          - print: ["FAIL C3: missing key returns '${miss_c}'"]
           - set: [var_ok, 0]
 
-      # ── D: f64 und bool ──────────────────────────────────────────────────────────
+      # ── D: f64 and bool ──────────────────────────────────────────────────────────
       - decl: [hm_d, "hashmap<string:f64>"]
       - call: [hm_d.put, "pi", 3.25]
       - decl: [got_d, f64, { call: [hm_d.get, "pi"] }]
@@ -98,7 +98,7 @@
           - set: [var_ok, 0]
       - if: [{ call: [hm_e.get, 6] }, true]
         then:
-          - print: ["FAIL D3: fehlender bool ist true"]
+          - print: ["FAIL D3: missing bool is true"]
           - set: [var_ok, 0]
 
       # ── E: keys sortiert, clear ──────────────────────────────────────────────────
@@ -119,7 +119,7 @@
       - decl: [len_f, i32, { call: [hm_f.len] }]
       - if: [{ neq: [len_f, 0] }, true]
         then:
-          - print: ["FAIL E2: len nach clear = ${len_f}"]
+          - print: ["FAIL E2: len after clear = ${len_f}"]
           - set: [var_ok, 0]
 
       # ── F: Literal ───────────────────────────────────────────────────────────────
@@ -128,10 +128,10 @@
       - decl: [len_g, i32, { call: [hm_g.len] }]
       - if: [{ or: [{ neq: [got_g, 2] }, { neq: [len_g, 3] }] }, true]
         then:
-          - print: ["FAIL F1: literal zwei = ${got_g}, len = ${len_g}"]
+          - print: ["FAIL F1: literal two = ${got_g}, len = ${len_g}"]
           - set: [var_ok, 0]
 
-      # ── G: Kopie teilt die Tabelle (Griff, wie chan) ─────────────────────────────
+      # ── G: a copy shares the table (handle, like chan) ───────────────────────────
       - decl: [hm_h, "hashmap<string:i32>", hm_a]
       - call: [hm_h.put, "delta", 4]
       - decl: [got_h, i32, { call: [hm_a.get, "delta"] }]

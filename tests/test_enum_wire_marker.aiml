@@ -1,15 +1,15 @@
 # SPEC: 49_static_analysis §18.2a, 14_enums
-# `wire: true`: ein Enum, dessen Vokabular ueber eine Grenze geht, meldet seine
-# unbenannten Mitglieder NICHT als tot.
+# `wire: true`: an enum whose vocabulary crosses a boundary does NOT report its
+# unnamed members as dead.
 #
-# Ohne die Angabe warnt der Build zu Recht (test_unused_enum_member.aiml haelt
-# das fest).  Hier steht der Gegenfall: dasselbe Muster MIT `wire: true` — ein
-# Mitglied benannt, drei nicht — und kein Wort darueber.
+# Without the setting the build rightly warns (test_unused_enum_member.aiml records
+# that).  Here is the opposite case: the same pattern WITH `wire: true` — one
+# member named, three not — and not a word about it.
 #
-# Geprueft wird die Warnung selbst vom Testlaeufer (ExpectedStderr-Abwesenheit
-# laesst sich nicht ausdruecken); dieser Test sichert, dass `wire: true`
-# UEBERSETZT und die Werte unveraendert laesst — eine Angabe, die still die
-# Zahlen verschoebe, waere schlimmer als die Warnung.
+# The warning itself is checked by the test runner (absence of ExpectedStderr
+# cannot be expressed); this test makes sure that `wire: true`
+# COMPILES and leaves the values unchanged — a setting that silently shifted the
+# numbers would be worse than the warning.
 #
 # Expected exit code: 0
 
@@ -30,10 +30,10 @@
       - decl: [only_one, JobWire, JobWire.running]
       - if:
           condition: { neq: [{ cast: [only_one, i32] }, 1] }
-          then: [{ print: ["FAIL wire-Enum verschiebt Werte: ${{ cast: [only_one, i32] }}"] }, { return: 1 }]
+          then: [{ print: ["FAIL wire enum shifts values: ${{ cast: [only_one, i32] }}"] }, { return: 1 }]
       - decl: [last_one, JobWire, JobWire.finished]
       - if:
           condition: { neq: [{ cast: [last_one, i32] }, 3] }
-          then: [{ print: ["FAIL letzter Wert ist nicht 3"] }, { return: 1 }]
+          then: [{ print: ["FAIL last value is not 3"] }, { return: 1 }]
       - print: ["enum wire PASS"]
       - return: 0

@@ -87,7 +87,7 @@
             - if:
                 condition: { gt: [{ call: [got_a.index_of, "Xeins"] }, -1] }
                 then: [{ print: ["FAIL Klick landete am DOKUMENTANFANG statt am Ende von Zeile 1"] }]
-                else: [{ print: ["FAIL A: '${got_a}' erwartet '${want_a}'"] }]
+                else: [{ print: ["FAIL A: '${got_a}' expected '${want_a}'"] }]
             - call: [engine.destroy_window, win]
             - return: 1
 
@@ -119,6 +119,6 @@
             - print: ["PASS multiline_click: Klick trifft Zeile UND Spalte (auch mit Gutter)"]
             - call: [engine.destroy_window, win]
             - return: 0
-      - print: ["FAIL B: '${got_b}' erwartet '${want_b}'"]
+      - print: ["FAIL B: '${got_b}' expected '${want_b}'"]
       - call: [engine.destroy_window, win]
       - return: 1

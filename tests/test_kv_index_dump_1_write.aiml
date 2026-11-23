@@ -31,7 +31,7 @@
 - if:
     condition: { neq: [anz, 6] }
     then:
-      - print: ["FAIL Phase 1: len=${anz}, erwartet 6"]
+      - print: ["FAIL Phase 1: len=${anz}, expected 6"]
       - call: [sys.exit, 1]
 
 - decl: [hat, i32, { call: [var_kv.has, "k1"] }]

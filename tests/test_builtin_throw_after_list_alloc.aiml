@@ -1,16 +1,16 @@
 # SPEC: 10_collections
-# spec/10 F10-23 + spec/22: ein Index ausserhalb der Grenzen wirft eine FANGBARE
-# IndexOutOfBoundsException mit der Begruendung "index 5 of 2".  Dieser Test ist
-# der wasm32-Waechter dafuer, denn dort ging beides schief:
-#   * das Exception-Objekt wurde mit fester i64-Breite allokiert, obwohl der
-#     uebrige Code `malloc` mit size_t (i32 auf wasm32) deklariert — das machte
-#     JEDE Funktion mit `at`/`get` unuebersetzbar (220 im 9rooms-Client),
-#   * der Ausnahme-Record {Objekt, Thunk, Typ-Tag} wurde mit festen Abstaenden
-#     8/16 bei 24 Byte geschrieben — bei 4-Byte-Zeigern landen Thunk und Tag im
-#     Leeren, und kein `catch` findet seinen Typ,
-#   * und der emcc-Link fuehrte libc++-noexcept, womit __cxa_throw trappte.
-# Der Index bleibt dynamisch (ueber .len), damit der Check nicht wegfaltet.
-# Kein Import: der wasm-Runner linkt nur diese Datei.
+# spec/10 F10-23 + spec/22: an index out of bounds throws a CATCHABLE
+# IndexOutOfBoundsException with the reason "index 5 of 2".  This test is
+# the wasm32 guard for that, because there both went wrong:
+#   * the exception object was allocated with a fixed i64 width, although the
+#     rest of the code declares `malloc` with size_t (i32 on wasm32) — that made
+#     EVERY function with `at`/`get` uncompilable (220 in the 9rooms client),
+#   * the exception record {object, thunk, type tag} was written with fixed offsets
+#     8/16 at 24 bytes — with 4-byte pointers thunk and tag land in
+#     nothing, and no `catch` finds its type,
+#   * and the emcc link used libc++-noexcept, which made __cxa_throw trap.
+# The index stays dynamic (via .len), so that the check does not fold away.
+# No import: the wasm runner links only this file.
 # Expected exit code: 0
 
 - def:
@@ -23,7 +23,7 @@
       - decl: [caught, i32, 0]
       - decl: [reason, string, ""]
 
-      # Gueltiger Zugriff: der Pruefcode darf nicht in den Weg laufen.
+      # valid access: the check code must not get in the way.
       - try:
           body:
             - decl: [got, i32, { at: [items, last] }]
@@ -37,15 +37,15 @@
       - if:
           condition: { neq: [sum, 20] }
           then:
-            - call: [log.info, "FAIL: sum=${sum} erwartet 20"]
+            - call: [log.info, "FAIL: sum=${sum} expected 20"]
             - return: 1
 
-      # Ausserhalb der Grenzen: muss werfen UND hier gefangen werden.
+      # out of bounds: must throw AND be caught here.
       - decl: [far, i32, { +: [items.len, 3] }]
       - try:
           body:
             - decl: [bad, i32, { at: [items, far] }]
-            - call: [log.info, "FAIL: kein Wurf, las ${bad}"]
+            - call: [log.info, "FAIL: no throw, read ${bad}"]
           catch:
             - type: IndexOutOfBoundsException
               var: err
@@ -55,12 +55,12 @@
       - if:
           condition: { neq: [caught, 1] }
           then:
-            - call: [log.info, "FAIL: IndexOutOfBoundsException nicht gefangen"]
+            - call: [log.info, "FAIL: IndexOutOfBoundsException not caught"]
             - return: 1
       - if:
           condition: { neq: [reason, "index 5 of 2"] }
           then:
-            - call: [log.info, "FAIL: Begruendung '${reason}' erwartet 'index 5 of 2'"]
+            - call: [log.info, "FAIL: Begruendung '${reason}' expected 'index 5 of 2'"]
             - return: 1
 
       - call: [log.info, "OK: gefangen mit '${reason}'"]

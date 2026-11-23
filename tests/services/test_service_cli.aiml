@@ -1,11 +1,11 @@
-# SPEC: 66_services §4.3 — CLI-Transport: run_cli fuellt das Request-Modell aus
-# --flag-Werten, ruft denselben Rumpf und schreibt die Antwort als JSON nach stdout.
-# Ein unbekanntes Unterkommando gibt 1 zurueck (dann ist es nicht unseres).
+# SPEC: 66_services §4.3 — CLI transport: run_cli fills the request model from
+# --flag values, calls the same body and writes the response as JSON to stdout.
+# An unknown subcommand returns 1 (then it is not ours).
 # Expected exit code: 0
 - import: "tests/services/_models.aiml"
 
-# Der Rumpf haelt fest, was im Modell ankam — sonst wuerde der Test nur die
-# Rueckgabewerte pruefen und ein NICHT gefuelltes Feld nicht bemerken.
+# The body records what arrived in the model — otherwise the test would only
+# check the return values and not notice a field that was NOT filled.
 - decl: [seen_purl, string, ""]
 
 - service:

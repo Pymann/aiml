@@ -1,17 +1,17 @@
 # SPEC: 29_2_sys_exec,29_serialize,62_pipelines
-# spec/29_2 §13 + spec/62 F62-89: WAS genau sieht ein Bundle vom Wirt?
+# spec/29_2 §13 + spec/62 F62-89: WHAT exactly does a bundle see of the host?
 #
-# Die Frage ist nicht akademisch: laeuft eine Pipeline im Controller, haengt
-# daran, ob ein Schritt-Rumpf an dessen Zustand kommt.  Gepruefte Aussagen:
+# The question is not academic: if a pipeline runs in the controller, it
+# depends on this whether a step body gets at its state.  Checked statements:
 #
-#   1. Eine gerufene Funktion des Wirts IST erreichbar — sie wird als QUELLE
-#      mitgebuendelt (spec/29_2 §16) und laeuft damit als KOPIE.
-#   2. Die Kopie hat ihre EIGENEN Globalen, frisch initialisiert.  Der Zaehler
-#      des Wirts bleibt unberuehrt, der im Bundle beginnt bei 0.
+#   1. A called function of the host IS reachable — it is bundled along as SOURCE
+#      (spec/29_2 §16) and so runs as a COPY.
+#   2. The copy has its OWN globals, freshly initialised.  The host's
+#      counter stays untouched, the one in the bundle starts at 0.
 #
-# Daraus folgt die eigentliche Lehre: die Trennung ist LEXIKALISCH (Namen und
-# Zustand), nicht eine Sandbox — Dateien, Netz und Datenbank liegen fuer beide
-# im selben Prozess.
+# The actual lesson follows from that: the separation is LEXICAL (names and
+# state), not a sandbox — files, network and database are in the same process
+# for both.
 # Expected exit code: 0
 
 - decl: [g_counter, i32, 0]
@@ -50,25 +50,25 @@
     body:
       - decl: [fails, i32, 0]
 
-      # Der Wirt zaehlt zweimal: sein g_counter steht danach auf 2.
+      # The host counts twice: its g_counter is at 2 afterwards.
       - decl: [first, i32, { call: [bump] }]
       - decl: [second, i32, { call: [bump] }]
-      - set: [fails, { +: [fails, { call: [expect, "der Wirt zaehlt auf 2", { eq: [second, 2] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "the host counts to 2", { eq: [second, 2] }] }] }]
 
       - decl: [rc_iso, i32, { call: [sys.exec, { call: [sys.bundle, "body_calls_host", { context: true }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "der Rumpf konnte die Wirts-Funktion rufen", { eq: [rc_iso, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "the body could call the host function", { eq: [rc_iso, 0] }] }] }]
 
       - decl: [seen_txt, string, { call: [io.read_file, "logs/bundle_boundary.txt"] }]
-      - print: ["  (im Bundle sah bump() den Wert: ${seen_txt})"]
-      # 1 = frische Kopie der Globalen; 3 = geteilter Zustand des Wirts.
-      - set: [fails, { +: [fails, { call: [expect, "im Bundle beginnt der Zaehler bei 0 (frische Kopie)", { eq: [seen_txt, "1"] }] }] }]
+      - print: ["  (in the bundle bump() saw the value: ${seen_txt})"]
+      # 1 = fresh copy of the globals; 3 = shared state of the host.
+      - set: [fails, { +: [fails, { call: [expect, "in the bundle the counter starts at 0 (fresh copy)", { eq: [seen_txt, "1"] }] }] }]
 
       - decl: [after, i32, { call: [bump] }]
-      - set: [fails, { +: [fails, { call: [expect, "der Zaehler des Wirts blieb unberuehrt", { eq: [after, 3] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "the host's counter stayed untouched", { eq: [after, 3] }] }] }]
 
-      # Und die Kehrseite: derselbe Prozess, dieselben Dateien.  Der Rumpf hat
-      # gerade in das Arbeitsverzeichnis des Wirts geschrieben.
-      - set: [fails, { +: [fails, { call: [expect, "aber Dateien teilen beide (keine Sandbox)", { call: [io.exists, "logs/bundle_boundary.txt"] }] }] }]
+      # And the flip side: the same process, the same files.  The body has
+      # just written into the host's working directory.
+      - set: [fails, { +: [fails, { call: [expect, "but both share files (no sandbox)", { call: [io.exists, "logs/bundle_boundary.txt"] }] }] }]
 
       - if:
           condition: { neq: [fails, 0] }

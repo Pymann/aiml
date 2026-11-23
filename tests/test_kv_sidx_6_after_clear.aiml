@@ -23,19 +23,19 @@
       - if:
           condition: { neq: [anz, 0] }
           then:
-            - print: ["FAIL after_clear: len=${anz}, erwartet 0"]
+            - print: ["FAIL after_clear: len=${anz}, expected 0"]
             - return: 1
       - decl: [ham, list<string>, { call: [dinge.findings_by, "name", "Hammer"] }]
       - if:
           condition: { neq: [ham.len, 0] }
           then:
-            - print: ["FAIL after_clear: Hammer=${ham.len}, erwartet 0 -- alter Dump wiederbelebt"]
+            - print: ["FAIL after_clear: Hammer=${ham.len}, expected 0 -- alter Dump wiederbelebt"]
             - return: 1
       - decl: [tag_wert, list<string>, { call: [dinge.findings_by, "tag", "werkzeug"] }]
       - if:
           condition: { neq: [tag_wert.len, 0] }
           then:
-            - print: ["FAIL after_clear: tag=werkzeug ergibt ${tag_wert.len}, erwartet 0"]
+            - print: ["FAIL after_clear: tag=werkzeug ergibt ${tag_wert.len}, expected 0"]
             - return: 1
 
       - print: ["sidx after-clear PASS"]

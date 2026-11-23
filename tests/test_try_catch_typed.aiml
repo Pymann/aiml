@@ -63,13 +63,13 @@
       - if: { condition: { neq: [kind_none, 0] }, then: [{ print: ["FAIL ohne throw -> ${kind_none}"] }, { set: [bad, 1] }] }
 
       - decl: [kind_miss, i32, { call: [catch_kind, 1] }]
-      - if: { condition: { neq: [kind_miss, 1] }, then: [{ print: ["FAIL NotHere -> Zweig ${kind_miss}, erwartet 1"] }, { set: [bad, 1] }] }
+      - if: { condition: { neq: [kind_miss, 1] }, then: [{ print: ["FAIL NotHere -> Zweig ${kind_miss}, expected 1"] }, { set: [bad, 1] }] }
 
       - decl: [kind_wrong, i32, { call: [catch_kind, 2] }]
-      - if: { condition: { neq: [kind_wrong, 2] }, then: [{ print: ["FAIL Wrong -> Zweig ${kind_wrong}, erwartet 2"] }, { set: [bad, 1] }] }
+      - if: { condition: { neq: [kind_wrong, 2] }, then: [{ print: ["FAIL Wrong -> Zweig ${kind_wrong}, expected 2"] }, { set: [bad, 1] }] }
 
       - decl: [kind_base, i32, { call: [catch_kind, 3] }]
-      - if: { condition: { neq: [kind_base, 3] }, then: [{ print: ["FAIL Exception -> Zweig ${kind_base}, erwartet 3"] }, { set: [bad, 1] }] }
+      - if: { condition: { neq: [kind_base, 3] }, then: [{ print: ["FAIL Exception -> Zweig ${kind_base}, expected 3"] }, { set: [bad, 1] }] }
 
       # kein Zweig passt -> laeuft zum umschliessenden try weiter
       - decl: [outer, i32, 0]
@@ -88,7 +88,7 @@
               var: caught_outside
               body:
                 - set: [outer, 2]
-      - if: { condition: { neq: [outer, 2] }, then: [{ print: ["FAIL Weiterreichen -> ${outer}, erwartet 2"] }, { set: [bad, 1] }] }
+      - if: { condition: { neq: [outer, 2] }, then: [{ print: ["FAIL Weiterreichen -> ${outer}, expected 2"] }, { set: [bad, 1] }] }
 
       - if: { condition: { eq: [bad, 0] }, then: [{ print: ["test_try_catch_typed PASS"] }] }
       - return: bad

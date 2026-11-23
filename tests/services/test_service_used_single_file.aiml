@@ -1,6 +1,6 @@
-# SPEC: 66_services §5.6 (Gegenprobe) — derselbe Build-Gate wie im Negativtest, aber
-# der Service WIRD benutzt: der Endpunkt-Rumpf und die Reflexionstabelle.  Hier darf
-# §5.6 nicht anschlagen.
+# SPEC: 66_services §5.6 (counter-probe) — the same build gate as in the negative test, but
+# the service IS used: the endpoint body and the reflection table.  Here
+# §5.6 must not fire.
 # Expected exit code: 0
 - model:
     name: PingReq

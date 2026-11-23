@@ -38,7 +38,7 @@
 - call: [free, buf]
 - print: ["free ok"]
 
-# ── Phase C: Mehrfache extern-Blöcke (darf kein Duplikat-Fehler geben) ────────
+# ── Phase C: multiple extern blocks (must not give a duplicate error) ──────────
 
 - extern: "C"
   defs:

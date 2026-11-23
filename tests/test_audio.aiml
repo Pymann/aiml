@@ -7,7 +7,7 @@
 # Headless-safe: all tests run without an audio device.
 # If no device is available, miniaudio uses a null backend (silent mode).
 #
-# Ausführen: ./out/aiml -r tests/test_audio.aiml
+# Run: ./out/aiml -r tests/test_audio.aiml
 # Expected exit code: 0
 
 # ── Phase A: Engine lifecycle ─────────────────────────────────────────────────

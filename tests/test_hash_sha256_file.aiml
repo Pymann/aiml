@@ -1,10 +1,10 @@
 # SPEC: 11_buffer,33_1_hash,33_security
-# spec/33_1: hash.sha256_file(path) — Inhaltsadresse einer Datei, blockweise
-# gelesen (1 MiB), Speicher unabhängig von der Dateigröße.
+# spec/33_1: hash.sha256_file(path) — content address of a file, read block by block
+# (1 MiB), memory independent of the file size.
 #
-# Geprüft wird vor allem die EINE Eigenschaft, auf die es ankommt: der
-# Streaming-Pfad muss bit-für-bit dasselbe liefern wie hash.sha256 über denselben
-# Inhalt in einem Rutsch — sonst wären Inhaltsadressen je nach Weg verschieden.
+# Above all the ONE property that matters is checked: the
+# streaming path must deliver bit for bit the same as hash.sha256 over the same
+# content in one go — otherwise content addresses would differ depending on the route.
 # Expected exit code: 0
 - def:
     name: main
@@ -15,15 +15,15 @@
       - call: [io.remove_all, dir]
       - call: [io.mkdir_all, dir]
 
-      # ── leere Datei: bekannter Vektor ────────────────────────────────────
+      # ── empty file: known vector ─────────────────────────────────────────
       - decl: [empty_path, string, "${dir}/leer.bin"]
       - decl: [fh_empty, file_handle, { call: [io.open, empty_path, "wb"] }]
       - call: [io.close, fh_empty]
       - decl: [got_empty, string, { call: [hash.sha256_file, empty_path] }]
       - decl: [want_empty, string, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"]
-      - if: { condition: { neq: [got_empty, want_empty] }, then: [{ print: ["FAIL leer: ${got_empty}"] }, { return: 1 }] }
+      - if: { condition: { neq: [got_empty, want_empty] }, then: [{ print: ["FAIL empty: ${got_empty}"] }, { return: 1 }] }
 
-      # ── kleiner Inhalt: muss hash.sha256 des gleichen Strings entsprechen ─
+      # ── small content: must equal hash.sha256 of the same string ─────────
       - decl: [small_path, string, "${dir}/klein.txt"]
       - decl: [body, string, "abc"]
       - decl: [fh_small, file_handle, { call: [io.open, small_path, "wb"] }]
@@ -35,8 +35,8 @@
       - decl: [vector_abc, string, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"]
       - if: { condition: { neq: [got_small, vector_abc] }, then: [{ print: ["FAIL Vektor abc"] }, { return: 1 }] }
 
-      # ── binärsicher: 0x00 im Inhalt darf nicht abschneiden ───────────────
-      # buffer.write_to schreibt längenbewusst (spec/11), io.write wuerde am NUL enden.
+      # ── binary-safe: 0x00 in the content must not truncate ──────────────
+      # buffer.write_to writes length-aware (spec/11), io.write would stop at the NUL.
       - decl: [bin_path, string, "${dir}/binaer.bin"]
       - decl: [bytes, buffer]
       - call: [bytes.alloc, 8]
@@ -51,8 +51,8 @@
       - decl: [want_bin, string, { call: [hash.sha256, bytes] }]
       - if: { condition: { neq: [got_bin, want_bin] }, then: [{ print: ["FAIL binaer: ${got_bin} != ${want_bin}"] }, { return: 1 }] }
 
-      # ── grösser als ein Block: 3 MiB, deckt die Blockgrenzen ab ──────────
-      # 1 MiB ist die interne Blockgrösse; drei Blöcke prüfen update() über Grenzen.
+      # ── larger than one block: 3 MiB, covers the block boundaries ───────
+      # 1 MiB is the internal block size; three blocks check update() across boundaries.
       - decl: [big_path, string, "${dir}/gross.bin"]
       - decl: [block, buffer]
       - call: [block.alloc, 65536]
@@ -79,7 +79,7 @@
       - call: [io.close, fh_copy]
       - if: { condition: { neq: [{ call: [hash.sha256_file, copy_path] }, got_small] }, then: [{ print: ["FAIL Dedup"] }, { return: 1 }] }
 
-      # ── fehlende Datei → "" (nie null, unterscheidbar von der leeren Datei) ─
+      # ── missing file → "" (never null, distinguishable from the empty file) ─
       - decl: [missing, string, { call: [hash.sha256_file, "${dir}/gibts_nicht"] }]
       - if: { condition: { neq: [missing.len, 0] }, then: [{ print: ["FAIL fehlend: '${missing}'"] }, { return: 1 }] }
 

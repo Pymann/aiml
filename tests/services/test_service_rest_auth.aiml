@@ -1,5 +1,5 @@
-# SPEC: 66_services §6 — REST-Gate: das Token kommt aus dem Authorization-Header
-# (Bearer), sonst aus dem Feld.  Ohne Token 401, mit falscher Rolle 403, sonst 200.
+# SPEC: 66_services §6 — REST gate: the token comes from the Authorization header
+# (Bearer), otherwise from the field.  Without a token 401, with the wrong role 403, otherwise 200.
 # Expected exit code: 0
 - import: "tests/services/_models.aiml"
 - import: "tests/services/_auth.aiml"
@@ -59,13 +59,13 @@
       - call: [time.sleep_ms, 200]
 
       - decl: [no_token, i32, { call: [status_of, ""] }]
-      - if: { condition: { neq: [no_token, 401] }, then: [{ print: ["FAIL kein Token -> ${no_token}, erwartet 401"] }, { set: [bad, 1] }] }
+      - if: { condition: { neq: [no_token, 401] }, then: [{ print: ["FAIL no token -> ${no_token}, expected 401"] }, { set: [bad, 1] }] }
 
       - decl: [wrong_token, i32, { call: [status_of, "nope"] }]
-      - if: { condition: { neq: [wrong_token, 403] }, then: [{ print: ["FAIL falsche Rolle -> ${wrong_token}, erwartet 403"] }, { set: [bad, 1] }] }
+      - if: { condition: { neq: [wrong_token, 403] }, then: [{ print: ["FAIL wrong role -> ${wrong_token}, expected 403"] }, { set: [bad, 1] }] }
 
       - decl: [good_token, i32, { call: [status_of, "good"] }]
-      - if: { condition: { neq: [good_token, 200] }, then: [{ print: ["FAIL gueltiges Token -> ${good_token}, erwartet 200"] }, { set: [bad, 1] }] }
+      - if: { condition: { neq: [good_token, 200] }, then: [{ print: ["FAIL valid token -> ${good_token}, expected 200"] }, { set: [bad, 1] }] }
 
       - call: [srv.stop]
       - call: [srv_thread.join]

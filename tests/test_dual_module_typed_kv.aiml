@@ -1,27 +1,27 @@
 # SPEC?: 31_db_integration   # derived from the file name, to be confirmed
-# Repro für DataCreatures-Crash: zwei Module öffnen dasselbe
-# `Kv<string:T>` mit T = tief verschachtelte Klasse (mehrere nested
-# Structs, viele list<>-Felder).
+# Repro for a DataCreatures crash: two modules open the same
+# `Kv<string:T>` with T = a deeply nested class (several nested
+# structs, many list<> fields).
 #
-# Beobachtet im Server: `aiml_ser_encode` crashes mit signal 11 bei
-# `aiml_mirror_session_send_rpc_model` (DataCreature serialisieren).
+# Observed in the server: `aiml_ser_encode` crashes with signal 11 in
+# `aiml_mirror_session_send_rpc_model` (serialising a DataCreature).
 #
-# Hypothese: pro Compilation-Unit gibt es ein PrivateLinkage-Global
-# `__aiml_sernodes_<Type>`. Wenn zwei Module dasselbe Kv mit identischem
-# Type öffnen, registriert sich der ser_nodes-Pointer aus dem ERSTEN
-# Open im Singleton-Cache. Zweite Module-Codepfade nutzen aber ihren
-# eigenen lokalen ser_nodes-Pointer — wenn die Arrays inhaltlich
-# divergieren (z.B. weil ein Modul weniger transitive Imports sieht),
-# führt encode/decode zu falschen Offsets → segfault.
+# Hypothesis: per compilation unit there is a PrivateLinkage global
+# `__aiml_sernodes_<Type>`. If two modules open the same Kv with an identical
+# type, the ser_nodes pointer from the FIRST open registers itself
+# in the singleton cache. But the second module's code paths use their
+# own local ser_nodes pointer — if the arrays diverge in content
+# (e.g. because one module sees fewer transitive imports),
+# encode/decode leads to wrong offsets → segfault.
 #
-# Schreibe via Lib-Modul, lies via Main → encode mit lib's nodes,
-# decode mit main's nodes (oder umgekehrt) → wenn die Arrays nicht
-# byte-identisch sind, crashed das.
+# Write via the lib module, read via main → encode with lib's nodes,
+# decode with main's nodes (or the other way round) → if the arrays are not
+# byte-identical, it crashes.
 
 - import: "tests/lib_typed_kv_repro.aiml"
 
-# Doppel-Deklaration im main-Modul: NEUE ser_nodes-Globale für ReproOuter
-# in dieser Compilation-Unit.
+# Double declaration in the main module: a NEW ser_nodes global for ReproOuter
+# in this compilation unit.
 - decl: [repro_kv, Kv<string:ReproOuter>, { call: [db.open_kv, "repro_things.kvwal", {persist: true}] }]
 
 - call: [lib_put_thing, "id-A"]

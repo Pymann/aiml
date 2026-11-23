@@ -1,5 +1,5 @@
 # SPEC?: 33_1_hash   # derived from the file name, to be confirmed
-# Tests für hash namespace: { at: [SHA, 256] }/512, { at: [SHA, 3] }, { at: [Keccak, 256] }, { at: [RIPEMD, 160] }, BLAKE2, MD5, CRC32, HMAC
+# Tests for the hash namespace: { at: [SHA, 256] }/512, { at: [SHA, 3] }, { at: [Keccak, 256] }, { at: [RIPEMD, 160] }, BLAKE2, MD5, CRC32, HMAC
 # Expected exit code: 0
 
 # ── Phase A: { at: [SHA, 256] } / { at: [SHA, 512] } ─────────────────────────────────────────────

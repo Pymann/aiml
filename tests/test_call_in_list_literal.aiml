@@ -1,10 +1,10 @@
 # SPEC: 15_models,23_system
 # static-check: off
-# Ein `{ call: ... }` als ELEMENT eines Listen-Literals muss seinen Rueckgabewert in die
-# Liste legen — gemeldet 2026-11-04 aus cai: `decl: [log, list<string>, ["P", {call: ...}]]`
-# ergab eine Liste, deren zweites Element LEER war, ohne Warnung und ohne Fehler.
-# Diese Probe faechert die Stellung des Aufrufs auf (Element 0/1/2), die Art der Funktion
-# (eigene Funktion, string-Builtin, sys.serialize) und den Elementtyp (string, i32).
+# A `{ call: ... }` as an ELEMENT of a list literal must put its return value into the
+# list — reported 2026-11-04 from cai: `decl: [log, list<string>, ["P", {call: ...}]]`
+# gave a list whose second element was EMPTY, without a warning and without an error.
+# This probe fans out the position of the call (element 0/1/2), the kind of function
+# (own function, string builtin, sys.serialize) and the element type (string, i32).
 - model:
     name: PropRow
     fields:
@@ -69,43 +69,43 @@
     body:
       - decl: [fehler, i32, 0]
 
-      # 1. eigene Funktion als zweites Element
+      # 1. own function as the second element
       - decl: [lst_eigen, list<string>, ["P", { call: [mach_text, "a"] }]]
       - if: [{ neq: [lst_eigen.len, 2] }, true]
         then:
-          - print: ["FAIL eigen.len=${lst_eigen.len} erwartet 2"]
+          - print: ["FAIL eigen.len=${lst_eigen.len} expected 2"]
           - set: [fehler, { +: [fehler, 1] }]
       - set: [fehler, { +: [fehler, { call: [zaehle_leere, "eigen", lst_eigen] }] }]
       - decl: [wert_eigen, string, { call: [wert_an, lst_eigen, 1] }]
       - if: [{ neq: [wert_eigen, "text-a"] }, true]
         then:
-          - print: ["FAIL eigen[1]='${wert_eigen}' erwartet 'text-a'"]
+          - print: ["FAIL eigen[1]='${wert_eigen}' expected 'text-a'"]
           - set: [fehler, { +: [fehler, 1] }]
 
-      # 2. eigene Funktion als ERSTES Element
+      # 2. own function as the FIRST element
       - decl: [lst_vorn, list<string>, [{ call: [mach_text, "b"] }, "P"]]
       - if: [{ neq: [lst_vorn.len, 2] }, true]
         then:
-          - print: ["FAIL vorn.len=${lst_vorn.len} erwartet 2"]
+          - print: ["FAIL vorn.len=${lst_vorn.len} expected 2"]
           - set: [fehler, { +: [fehler, 1] }]
       - set: [fehler, { +: [fehler, { call: [zaehle_leere, "vorn", lst_vorn] }] }]
       - decl: [wert_vorn, string, { call: [wert_an, lst_vorn, 0] }]
       - if: [{ neq: [wert_vorn, "text-b"] }, true]
         then:
-          - print: ["FAIL vorn[0]='${wert_vorn}' erwartet 'text-b'"]
+          - print: ["FAIL vorn[0]='${wert_vorn}' expected 'text-b'"]
           - set: [fehler, { +: [fehler, 1] }]
 
-      # 3. zwei Aufrufe hintereinander, Element 1 und 2
+      # 3. two calls in a row, elements 1 and 2
       - decl: [lst_zwei, list<string>, ["P", { call: [mach_text, "c1"] }, { call: [mach_text, "c2"] }]]
       - if: [{ neq: [lst_zwei.len, 3] }, true]
         then:
-          - print: ["FAIL zwei.len=${lst_zwei.len} erwartet 3"]
+          - print: ["FAIL zwei.len=${lst_zwei.len} expected 3"]
           - set: [fehler, { +: [fehler, 1] }]
       - set: [fehler, { +: [fehler, { call: [zaehle_leere, "zwei", lst_zwei] }] }]
       - decl: [wert_zwei, string, { call: [wert_an, lst_zwei, 2] }]
       - if: [{ neq: [wert_zwei, "text-c2"] }, true]
         then:
-          - print: ["FAIL zwei[2]='${wert_zwei}' erwartet 'text-c2'"]
+          - print: ["FAIL zwei[2]='${wert_zwei}' expected 'text-c2'"]
           - set: [fehler, { +: [fehler, 1] }]
 
       # 4. string-Builtin als Element
@@ -113,13 +113,13 @@
       - decl: [lst_builtin, list<string>, ["P", { call: [roh.lower] }]]
       - if: [{ neq: [lst_builtin.len, 2] }, true]
         then:
-          - print: ["FAIL builtin.len=${lst_builtin.len} erwartet 2"]
+          - print: ["FAIL builtin.len=${lst_builtin.len} expected 2"]
           - set: [fehler, { +: [fehler, 1] }]
       - set: [fehler, { +: [fehler, { call: [zaehle_leere, "builtin", lst_builtin] }] }]
       - decl: [wert_builtin, string, { call: [wert_an, lst_builtin, 1] }]
       - if: [{ neq: [wert_builtin, "gross"] }, true]
         then:
-          - print: ["FAIL builtin[1]='${wert_builtin}' erwartet 'gross'"]
+          - print: ["FAIL builtin[1]='${wert_builtin}' expected 'gross'"]
           - set: [fehler, { +: [fehler, 1] }]
 
       # 5. sys.serialize als Element — die gemeldete Stelle
@@ -130,16 +130,16 @@
       - decl: [lst_inline, list<string>, ["P", { call: [sys.serialize, zeile, "bare"] }]]
       - if: [{ neq: [lst_inline.len, 2] }, true]
         then:
-          - print: ["FAIL inline.len=${lst_inline.len} erwartet 2"]
+          - print: ["FAIL inline.len=${lst_inline.len} expected 2"]
           - set: [fehler, { +: [fehler, 1] }]
       - set: [fehler, { +: [fehler, { call: [zaehle_leere, "inline", lst_inline] }] }]
 
-      # 6. dieselbe Serialisierung herausgehoben — der Umweg, der in cai funktioniert
+      # 6. the same serialisation hoisted out — the detour that works in cai
       - decl: [text, string, { call: [sys.serialize, zeile, "bare"] }]
       - decl: [lst_hoch, list<string>, ["P", text]]
       - if: [{ neq: [lst_hoch.len, 2] }, true]
         then:
-          - print: ["FAIL hoch.len=${lst_hoch.len} erwartet 2"]
+          - print: ["FAIL hoch.len=${lst_hoch.len} expected 2"]
           - set: [fehler, { +: [fehler, 1] }]
       - set: [fehler, { +: [fehler, { call: [zaehle_leere, "hoch", lst_hoch] }] }]
       - decl: [wert_inline, string, { call: [wert_an, lst_inline, 1] }]
@@ -149,50 +149,50 @@
           - print: ["FAIL inline != herausgehoben: '${wert_inline}' vs '${wert_hoch}'"]
           - set: [fehler, { +: [fehler, 1] }]
 
-      # 7. Interpolation einer Variablen als Element (Kontrollfall, muss gehen)
+      # 7. interpolation of a variable as an element (control case, must work)
       - decl: [lst_interp, list<string>, ["P", "${text}"]]
       - if: [{ neq: [lst_interp.len, 2] }, true]
         then:
-          - print: ["FAIL interp.len=${lst_interp.len} erwartet 2"]
+          - print: ["FAIL interp.len=${lst_interp.len} expected 2"]
           - set: [fehler, { +: [fehler, 1] }]
       - set: [fehler, { +: [fehler, { call: [zaehle_leere, "interp", lst_interp] }] }]
 
-      # 8. list<i32> mit einem Aufruf als Element
+      # 8. list<i32> with a call as an element
       - decl: [lst_zahl, list<i32>, [1, { call: [mach_zahl, 10] }, 3]]
       - if: [{ neq: [lst_zahl.len, 3] }, true]
         then:
-          - print: ["FAIL zahl.len=${lst_zahl.len} erwartet 3"]
+          - print: ["FAIL zahl.len=${lst_zahl.len} expected 3"]
           - set: [fehler, { +: [fehler, 1] }]
       - decl: [wert_zahl, i32, { call: [zahl_an, lst_zahl, 1] }]
       - if: [{ neq: [wert_zahl, 17] }, true]
         then:
-          - print: ["FAIL zahl[1]=${wert_zahl} erwartet 17"]
+          - print: ["FAIL zahl[1]=${wert_zahl} expected 17"]
           - set: [fehler, { +: [fehler, 1] }]
 
-      # 9. derselbe Fall auf der rechten Seite von `set:` (spec/10, gleicher Parser-Pfad)
+      # 9. the same case on the right-hand side of `set:` (spec/10, the same parser path)
       - decl: [lst_set, list<string>, []]
       - set: [lst_set, ["Q", { call: [mach_text, "s"] }, "R"]]
       - if: [{ neq: [lst_set.len, 3] }, true]
         then:
-          - print: ["FAIL set.len=${lst_set.len} erwartet 3"]
+          - print: ["FAIL set.len=${lst_set.len} expected 3"]
           - set: [fehler, { +: [fehler, 1] }]
       - decl: [wert_set, string, { call: [wert_an, lst_set, 1] }]
       - if: [{ neq: [wert_set, "text-s"] }, true]
         then:
-          - print: ["FAIL set[1]='${wert_set}' erwartet 'text-s'"]
+          - print: ["FAIL set[1]='${wert_set}' expected 'text-s'"]
           - set: [fehler, { +: [fehler, 1] }]
 
-      # 10. Grenzfall: ein Modifier-Block NACH dem Literal bleibt ein Modifier-Block
-      #     (die Map steht hier auf der aeusseren Ebene, nicht im Literal)
+      # 10. edge case: a modifier block AFTER the literal stays a modifier block
+      #     (the map is on the outer level here, not in the literal)
       - decl: [lst_mod, list<string>, ["a", { call: [mach_text, "m"] }], { const: true }]
       - if: [{ neq: [lst_mod.len, 2] }, true]
         then:
-          - print: ["FAIL mod.len=${lst_mod.len} erwartet 2"]
+          - print: ["FAIL mod.len=${lst_mod.len} expected 2"]
           - set: [fehler, { +: [fehler, 1] }]
       - decl: [wert_mod, string, { call: [wert_an, lst_mod, 1] }]
       - if: [{ neq: [wert_mod, "text-m"] }, true]
         then:
-          - print: ["FAIL mod[1]='${wert_mod}' erwartet 'text-m'"]
+          - print: ["FAIL mod[1]='${wert_mod}' expected 'text-m'"]
           - set: [fehler, { +: [fehler, 1] }]
 
       - if: [{ neq: [fehler, 0] }, true]

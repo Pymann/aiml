@@ -1,12 +1,12 @@
 # SPEC?: 02_types   # derived from the file name, to be confirmed
 # static-check: off
-# BUG-Repro: eine BODYLESS Interface-Methode mit STRUCT-Return-Typ (hier
-# map<string:i32>) synthetisiert als Default `UndefValue` statt eines
-# zero-initialisierten Structs.  Eine undef-Map hat undef data/size/cap →
-# der Caller (contains/get) liest Garbage → SIGSEGV.
+# BUG repro: a BODYLESS interface method with a STRUCT return type (here
+# map<string:i32>) synthesises `UndefValue` as the default instead of a
+# zero-initialised struct.  An undef map has undef data/size/cap →
+# the caller (contains/get) reads garbage → SIGSEGV.
 #
-# Erwartung nach Fix: die bodyless Methode gibt eine LEERE Map zurück
-# (contains → 0), kein Crash.
+# Expectation after the fix: the bodyless method returns an EMPTY map
+# (contains → 0), no crash.
 
 - interface:
     name: Produce
@@ -20,7 +20,7 @@
     models: [EmptyData]
     implements: [Produce]
     methods:
-      # bodyless → Default-Return.  Muss eine leere Map sein, kein undef.
+      # bodyless → default return.  Must be an empty map, not undef.
       - def: { name: give, return: map<string:i32> }
 
 - def:
@@ -29,7 +29,7 @@
     body:
       - decl: [obj, ptr<Empty>, { new: Empty }]
       - decl: [got, map<string:i32>, { call: [obj.give] }]
-      # Mutieren: undef data/size/cap → put realloct über Garbage → SIGSEGV.
+      # mutate: undef data/size/cap → put reallocs over garbage → SIGSEGV.
       - call: [got.put, "9", 9]
       - decl: [has, i32, { call: [got.contains, "1"] }]
       - if:

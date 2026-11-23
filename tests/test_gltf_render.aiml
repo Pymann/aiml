@@ -1,21 +1,21 @@
 # SPEC?: 43_1_gltf   # derived from the file name, to be confirmed
-# GLTF render test: texturierten Würfel aus cube_textured.glb laden und anzeigen.
+# GLTF render test: load a textured cube from cube_textured.glb and display it.
 #
-# Testet die vollständige Pipeline von einer .glb-Datei bis zum fertigen Render:
-#   gltf.load → Mesh/Primitive → Geometrie-Buffer + Material/Textur/Pixel
-#   → GPU-Upload (VBO/IBO/VAO/Textur) → Shader-Kompilierung → Render-Loop
+# Tests the complete pipeline from a .glb file to the finished render:
+#   gltf.load → mesh/primitive → geometry buffers + material/texture/pixels
+#   → GPU upload (VBO/IBO/VAO/texture) → shader compilation → render loop
 #
-# Erfordert einen aktiven Display (X11 oder Wayland).
-# Ausführen: ./out/aiml -r tests/test_gltf_render.aiml
+# Requires an active display (X11 or Wayland).
+# Run: ./out/aiml -r tests/test_gltf_render.aiml
 # Expected exit code: 0
 # Requires: display
 
-# ── GLFW-Funktionen via FFI deklarieren ───────────────────────────────────────
+# ── declare GLFW functions via FFI ────────────────────────────────────────────
 #
-# GLFW wird über das C-FFI direkt eingebunden (kein AIML-Wrapper).
-# Die Funktionen werden hier mit ihren genauen C-Signaturen deklariert,
-# damit der JIT-Compiler die Calls korrekt typprüfen und emittieren kann.
-# 'ptr' entspricht void* / GLFWwindow* / GLFWmonitor*.
+# GLFW is bound directly via the C FFI (no AIML wrapper).
+# The functions are declared here with their exact C signatures,
+# so that the JIT compiler can type-check and emit the calls correctly.
+# 'ptr' corresponds to void* / GLFWwindow* / GLFWmonitor*.
 - extern: "C"
   defs:
     - def: { name: glfwInit,               args: [],                                                             return: i32 }
@@ -26,26 +26,26 @@
     - def: { name: glfwPollEvents,         args: [],                                                             return: void }
     - def: { name: glfwTerminate,          args: [],                                                             return: void }
 
-# ── Phase A: GLB laden und Geometrie + Textur extrahieren ─────────────────────
+# ── Phase A: load the GLB and extract geometry + texture ──────────────────────
 #
-# cgltf parst die .glb-Datei im Binary-Format (JSON-Chunk + BIN-Chunk).
-# Wir greifen auf das erste Mesh → erste Primitive zu und holen:
-#   positions : xyz-Koordinaten als buffer<f32> (Attribut 0, 3 Floats pro Vertex)
-#   uvs       : Texturkoordinaten als buffer<f32> (Attribut 1, 2 Floats pro Vertex, UV-Set 0)
-#   indices   : Dreiecks-Indizes als buffer<u32>
-# Parallel dazu extrahieren wir die PBR-Basistextur:
-#   material → base_color_texture → gltf_image → RGBA-Pixel-Buffer
+# cgltf parses the .glb file in binary format (JSON chunk + BIN chunk).
+# We access the first mesh → first primitive and fetch:
+#   positions : xyz coordinates as buffer<f32> (attribute 0, 3 floats per vertex)
+#   uvs       : texture coordinates as buffer<f32> (attribute 1, 2 floats per vertex, UV set 0)
+#   indices   : triangle indices as buffer<u32>
+# In parallel we extract the PBR base texture:
+#   material → base_color_texture → gltf_image → RGBA pixel buffer
 
 - decl: [var_p, path, "tests/cube_textured.glb"]
 - decl: [scene, gltf_scene, { call: [gltf.load, var_p] }]
-# scene.valid() gibt 0 zurück wenn cgltf_parse oder cgltf_load_buffers fehlschlug
+# scene.valid() returns 0 if cgltf_parse or cgltf_load_buffers failed
 - decl: [var_ok, i32, { call: [scene.valid] }]
 - if: [{ eq: [var_ok, 0] }, true]
   then:
     - print: ["FAIL: gltf.load failed"]
     - call: [sys.exit, 1]
 
-# scene.meshes() befüllt eine list<gltf_mesh> über das interne GLTF_LIST-Makro
+# scene.meshes() fills a list<gltf_mesh> via the internal GLTF_LIST macro
 - decl: [meshes, list<gltf_mesh>]
 - set:  [meshes, { call: [scene.meshes] }]
 - decl: [var_mc, i32, { call: [meshes.len] }]
@@ -54,14 +54,14 @@
     - print: ["FAIL: no meshes in scene"]
     - call: [sys.exit, 1]
 
-# Erstes Mesh → erste Primitive (cube_textured.glb hat genau ein Mesh mit einer Primitive)
+# first mesh → first primitive (cube_textured.glb has exactly one mesh with one primitive)
 - decl: [mesh, gltf_mesh, { call: [meshes.get, 0] }]
 - decl: [prim, gltf_primitive, { call: [mesh.primitive, 0] }]
 
-# Geometrie-Buffer aus der Primitive holen.
-# prim.uvs(0) = UV-Set 0 (TEXCOORD_0 im glTF-Schema).4
-# Alle Buffer nutzen das GLTF_BUFM-Makro: C gibt AimlGltfBuffer* zurück,
-# der Handler kopiert das Struct per memcpy auf den Stack (buffer<T>).
+# fetch the geometry buffers from the primitive.
+# prim.uvs(0) = UV set 0 (TEXCOORD_0 in the glTF schema).
+# All buffers use the GLTF_BUFM macro: C returns AimlGltfBuffer*,
+# the handler copies the struct to the stack via memcpy (buffer<T>).
 - decl: [positions, buffer<f32>, { call: [prim.positions] }]
 - decl: [uvs,       buffer<f32>, { call: [prim.uvs, 0] }]
 - decl: [indices,   buffer<u32>, { call: [prim.indices] }]
@@ -69,22 +69,22 @@
 
 - print: ["Phase A: index_count=", icnt]
 
-# PBR-Textur-Pipeline: material → base_color_texture → image → Pixel-Daten.
-# Jeder Schritt kann null zurückgeben (fehlende Textur ist valides glTF).
+# PBR texture pipeline: material → base_color_texture → image → pixel data.
+# Every step can return null (a missing texture is valid glTF).
 - decl: [mat, gltf_material, { call: [prim.material] }]
 - if: [{ eq: [mat, null] }, true]
   then:
     - print: ["FAIL: no material on primitive"]
     - call: [sys.exit, 1]
 
-# base_color_texture entspricht dem 'baseColorTexture' im PBR-MetallicRoughness-Block
+# base_color_texture corresponds to 'baseColorTexture' in the PBR metallic-roughness block
 - decl: [tex, gltf_texture, { call: [mat.base_color_texture] }]
 - if: [{ eq: [tex, null] }, true]
   then:
     - print: ["FAIL: no base_color_texture on material"]
     - call: [sys.exit, 1]
 
-# tex.image() gibt das erste gltf_image zurück, das dieser Textur zugeordnet ist
+# tex.image() returns the first gltf_image assigned to this texture
 - decl: [img, gltf_image, { call: [tex.image] }]
 - if: [{ eq: [img, null] }, true]
   then:
@@ -95,12 +95,12 @@
 - decl: [var_th, i32, { call: [img.height] }]
 - print: ["Phase A OK: texture ", var_tw, "x", var_th, ", indices=", icnt]
 
-# ── Phase B: GLFW-Fenster + GL-Kontext ───────────────────────────────────────
+# ── Phase B: GLFW window + GL context ────────────────────────────────────────
 #
-# glfwInit initialisiert die Event-Loop und den Display-Zugriff.
-# Ohne aktives Display (z.B. in einer headless CI-Umgebung) schlägt dieser
-# Schritt mit 0 fehl — der Test ist entsprechend mit '# Requires: display'
-# markiert und wird von run_all_tests.var_sh übersprungen.
+# glfwInit initialises the event loop and display access.
+# Without an active display (e.g. in a headless CI environment) this
+# step fails with 0 — the test is marked accordingly with '# Requires: display'
+# and skipped by run_all_tests.var_sh.
 
 - decl: [ok2, i32, { call: [glfwInit] }]
 - if: [{ eq: [ok2, 0] }, true]
@@ -108,8 +108,8 @@
     - print: ["FAIL: glfwInit failed"]
     - call: [sys.exit, 1]
 
-# OpenGL 3.3 Core Profile anfordern.
-# Die Integer-Konstanten sind definiert in <GLFW/glfw3.var_h>:
+# request the OpenGL 3.3 core profile.
+# The integer constants are defined in <GLFW/glfw3.var_h>:
 #   GLFW_CONTEXT_VERSION_MAJOR = 0x00022002 = 139266
 #   GLFW_CONTEXT_VERSION_MINOR = 0x00022003 = 139267
 #   GLFW_OPENGL_PROFILE        = 0x00022008 = 139272
@@ -118,7 +118,7 @@
 - call: [glfwWindowHint, 139267, 3]       # GLFW_CONTEXT_VERSION_MINOR = 3
 - call: [glfwWindowHint, 139272, 204801]  # GLFW_OPENGL_PROFILE = CORE
 
-# null, null = kein Fullscreen-Monitor, kein geteilter GL-Kontext
+# null, null = no fullscreen monitor, no shared GL context
 - decl: [win, ptr, { call: [glfwCreateWindow, 800, 600, "AIML — texturierter Würfel", null, null] }]
 - if: [{ eq: [win, null] }, true]
   then:
@@ -126,34 +126,34 @@
     - call: [glfwTerminate]
     - call: [sys.exit, 1]
 
-# GL-Kontext auf den aktuellen Thread binden, GLEW initialisieren und
-# Depth-Test aktivieren (Würfel-Flächen korrekt sortiert nach Z-Abstand).
+# bind the GL context to the current thread, initialise GLEW and
+# enable the depth test (cube faces sorted correctly by Z distance).
 - call: [glfwMakeContextCurrent, win]
 - call: [gl.init]
 - call: [gl.enable_depth_test]
 - call: [gl.viewport, 0, 0, 800, 600]
-- print: ["Phase B OK: Fenster und GL-Kontext erstellt"]
+- print: ["Phase B OK: window and GL context created"]
 
-# ── Phase C: GPU-Ressourcen hochladen ────────────────────────────────────────
+# ── Phase C: upload GPU resources ────────────────────────────────────────────
 #
-# Alle Geometrie- und Textur-Daten werden jetzt in GPU-Speicher übertragen.
-# Das Layout für diesen Würfel:
-#   Attribut 0: Position (xyz), 3 × f32, stride = 12 Bytes
-#   Attribut 1: UV        (uv), 2 × f32, stride =  8 Bytes
+# All geometry and texture data is now transferred to GPU memory.
+# The layout for this cube:
+#   attribute 0: position (xyz), 3 × f32, stride = 12 bytes
+#   attribute 1: UV        (uv), 2 × f32, stride =  8 bytes
 #
-# Wichtig: jedes vao.bind_vbo() vor dem zugehörigen vao.attrib() setzen,
-# da AimlVAO intern nur einen 'current vbo_id' Slot hat und attrib()
-# immer den zuletzt gebundenen VBO für dieses Attribut verwendet.
+# Important: put every vao.bind_vbo() before the matching vao.attrib(),
+# since AimlVAO internally has only one 'current vbo_id' slot and attrib()
+# always uses the most recently bound VBO for this attribute.
 
 # Positions-VBO (attrib 0: xyz, 3 floats, stride 12)
 - decl: [pos_vbo, gl_buffer, { call: [gl.create_buffer, positions] }]
 # UV-VBO (attrib 1: uv, 2 floats, stride 8)
 - decl: [uv_vbo, gl_buffer, { call: [gl.create_buffer, uvs] }]
-# Index-Buffer-Object: enthält u32-Indizes für gl_DrawElements
+# index buffer object: contains u32 indices for gl_DrawElements
 - decl: [ibo, gl_buffer, { call: [gl.create_index_buffer, indices] }]
 
-# VAO bündelt den gesamten Vertex-State: welche VBOs zu welchen Attribs gehören.
-# Reihenfolge: VBO binden → Attrib konfigurieren → ggf. nächsten VBO binden.
+# The VAO bundles the whole vertex state: which VBOs belong to which attribs.
+# Order: bind VBO → configure attrib → bind the next VBO if needed.
 - decl: [vao, gl_vao, { call: [gl.create_vao] }]
 - call: [vao.bind_vbo, pos_vbo]
 - call: [vao.attrib, 0, 3, 12, 0]   # index=0, size=3 (xyz), stride=12, offset=0
@@ -161,27 +161,27 @@
 - call: [vao.bind_vbo, uv_vbo]
 - call: [vao.attrib, 1, 2, 8, 0]    # index=1, size=2 (uv),  stride=8,  offset=0
 
-# img.to_gl_texture() dekodiert das eingebettete PNG/JPEG via stb_image und
-# lädt die Pixel direkt auf die GPU — kein buffer<u8> Zwischenschritt in AIML.
-# gen_mipmaps erzeugt den vollständigen Mipmap-Stack (glGenerateMipmap).
+# img.to_gl_texture() decodes the embedded PNG/JPEG via stb_image and
+# loads the pixels directly onto the GPU — no buffer<u8> intermediate step in AIML.
+# gen_mipmaps creates the complete mipmap stack (glGenerateMipmap).
 - decl: [gltex, gl_texture, { call: [img.to_gl_texture] }]
 - call: [gltex.gen_mipmaps]
-- print: ["Phase C OK: Geometrie und Textur hochgeladen"]
+- print: ["Phase C OK: geometry and texture uploaded"]
 
-# ── Phase D: Shader kompilieren ───────────────────────────────────────────────
+# ── Phase D: compile shaders ──────────────────────────────────────────────────
 #
-# 'text: name / value: |...|' deklariert eine String-Variable mit mehrzeiligem
-# Literal-Inhalt (YAML-Block-Skalar). Der Inhalt wird direkt als GLSL-Quelltext
-# an gl.compile_shader übergeben — kein Datei-I/O nötig.
+# 'text: name / value: |...|' declares a string variable with multi-line
+# literal content (YAML block scalar). The content is passed directly as GLSL source
+# to gl.compile_shader — no file I/O needed.
 #
-# Vertex-Shader:
-#   - liest Positions (location=0) und UV-Koordinaten (location=1)
-#   - transformiert mit der MVP-Matrix (model × view × projection)
-#   - leitet vUv an den Fragment-Shader weiter
+# Vertex shader:
+#   - reads positions (location=0) and UV coordinates (location=1)
+#   - transforms with the MVP matrix (model × view × projection)
+#   - passes vUv on to the fragment shader
 #
-# Fragment-Shader:
-#   - liest Texel aus dem Sampler2D 'tex' an der interpolierten UV-Koordinate
-#   - gibt die Texturfarbe direkt als Ausgabe aus (kein Lighting)
+# Fragment shader:
+#   - reads texels from the sampler2D 'tex' at the interpolated UV coordinate
+#   - outputs the texture colour directly (no lighting)
 
 - text: vert_src
   value: |
@@ -208,27 +208,27 @@
 - decl: [shader, gl_shader, { call: [gl.compile_shader, vert_src, frag_src] }]
 - print: ["Phase D OK: Shader kompiliert"]
 
-# ── Phase E: Rotations-Render-Schleife (300 Frames à 33 ms ≈ 10 s) ───────────
+# ── Phase E: rotation render loop (300 frames at 33 ms ≈ 10 s) ───────────────
 #
-# Kamera-Setup (konstant, einmalig berechnet):
-#   proj : Perspektiv-Matrix (FOV ≈ 45°, Aspect 4:3, Near=0.1, Far=100)
-#   view : LookAt von [0,0,3] auf [0,0,0] mit Up=[0,1,0]
+# Camera setup (constant, computed once):
+#   proj : perspective matrix (FOV ≈ 45°, aspect 4:3, near=0.1, far=100)
+#   view : LookAt from [0,0,3] to [0,0,0] with up=[0,1,0]
 #
-# Pro Frame:
-#   1. model-Matrix um Y-Achse rotieren (angle += 0.02 rad ≈ 1.15°/Frame)
-#   2. MVP = proj × view × model (zwei Mat4-Multiplikationen)
-#   3. Clear (Farbe + Depth), Shader aktivieren, Uniforms setzen
-#   4. Textur auf Slot 0 binden, Dreiecke zeichnen (gl.draw_elements)
-#   5. Swap Buffers + PollEvents (GLFW Event-Queue abarbeiten)
-#   6. 33 ms schlafen → ~30 fps
+# Per frame:
+#   1. rotate the model matrix around the Y axis (angle += 0.02 rad ≈ 1.15°/frame)
+#   2. MVP = proj × view × model (two mat4 multiplications)
+#   3. clear (colour + depth), activate the shader, set uniforms
+#   4. bind the texture to slot 0, draw triangles (gl.draw_elements)
+#   5. swap buffers + poll events (process the GLFW event queue)
+#   6. sleep 33 ms → ~30 fps
 
 - decl: [proj,   mat4, { call: [math.mat4_perspective, 0.785, 1.333, 0.1, 100.0] }]
 - decl: [eye,    vec3, { call: [math.vec3, 0.0, 0.0, 3.0] }]
 - decl: [center, vec3, { call: [math.vec3, 0.0, 0.0, 0.0] }]
 - decl: [var_up,     vec3, { call: [math.vec3, 0.0, 1.0, 0.0] }]
 - decl: [view,   mat4, { call: [math.mat4_lookat, eye, center, var_up] }]
-- decl: [model,  mat4]    # wird jeden Frame neu gesetzt
-- decl: [mvp,    mat4]    # kombinierte Transform-Matrix
+- decl: [model,  mat4]    # set anew every frame
+- decl: [mvp,    mat4]    # combined transform matrix
 - decl: [angle,  f32, 0.0]
 - decl: [frame,  i32, 0]
 
@@ -237,16 +237,16 @@
     body:
       # Rotation um Y-Achse: 0.02 rad/Frame ≈ 1.15°/Frame → ~313° in 300 Frames
       - set: [model, { call: [math.mat4_rotate_y, angle] }]
-      # MVP = proj × view × model (rechts-nach-links: erst model, dann view, dann proj)
+      # MVP = proj × view × model (right to left: first model, then view, then proj)
       - set: [mvp, { "*": [proj, view] }]
       - set: [mvp, { "*": [mvp, model] }]
-      # Hintergrundfarbe (dunkles Blaugrau) + Depth-Buffer löschen
+      # clear the background colour (dark blue-grey) + depth buffer
       - call: [gl.clear_all, 0.1, 0.1, 0.15, 1.0]
-      # Shader aktivieren und MVP-Matrix + Textur-Slot als Uniforms setzen
+      # activate the shader and set the MVP matrix + texture slot as uniforms
       - call: [shader.use]
       - call: [shader.uniform_mat4, "mvp", mvp]
-      - call: [shader.uniform_i32,  "tex", 0]   # Sampler2D 'tex' → Textur-Slot 0
-      # Textur auf Slot 0 binden, dann indexierten Draw-Call ausführen
+      - call: [shader.uniform_i32,  "tex", 0]   # sampler2D 'tex' → texture slot 0
+      # bind the texture to slot 0, then issue the indexed draw call
       - call: [gl.bind_texture, gltex, 0]
       - call: [gl.draw_elements, vao, icnt]      # GL_TRIANGLES, icnt Indizes
       - call: [glfwSwapBuffers, win]
@@ -255,13 +255,13 @@
       - set: [angle, { +: [angle, 0.02] }]
       - set: [frame, { +: [frame, 1] }]
 
-- print: ["Phase E OK: texturierter Würfel gerendert"]
+- print: ["Phase E OK: textured cube rendered"]
 
-# ── Aufräumen ─────────────────────────────────────────────────────────────────
+# ── Clean-up ──────────────────────────────────────────────────────────────────
 #
-# GPU-Ressourcen in umgekehrter Reihenfolge der Erstellung freigeben
-# (VAO vor VBOs, da VAO Referenzen auf die Buffers hält).
-# scene.free() gibt den cgltf-Parse-Baum + alle Bild-Daten frei.
+# free GPU resources in the reverse order of creation
+# (VAO before VBOs, since the VAO holds references to the buffers).
+# scene.free() frees the cgltf parse tree + all image data.
 
 - call: [gltex.delete]
 - call: [vao.delete]

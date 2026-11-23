@@ -1,13 +1,13 @@
 # SPEC?: 15_models   # derived from the file name, to be confirmed
-# tests/test_embedded_model.aiml — Repro-Test: Embedded Model Struct (by-value field in Model)
+# tests/test_embedded_model.aiml — repro test: embedded model struct (by-value field in a model)
 #
-# Testet:
-#   1. model mit eingebettetem model-by-value Feld (kein ptr<T>)
-#   2. { new: OuterModel } mit embedded inner struct
-#   3. set: [outer.inner_field, inner_val] (struct-zu-embedded-struct Copy)
-#   4. outer.inner_field.var_x Chain-Zugriff (read)
-#   5. Embedded field als by-value Funktionsargument
-#   6. Isolation zweier Heap-Instanzen
+# Tests:
+#   1. a model with an embedded model-by-value field (no ptr<T>)
+#   2. { new: OuterModel } with an embedded inner struct
+#   3. set: [outer.inner_field, inner_val] (struct-to-embedded-struct copy)
+#   4. outer.inner_field.var_x chain access (read)
+#   5. an embedded field as a by-value function argument
+#   6. isolation of two heap instances
 
 # ─── Test-Modelle ──────────────────────────────────────────────────────────────
 - model:
@@ -37,7 +37,7 @@
     args: []
     return: i32
     body:
-      # T1: embedded field nach { new: ERect } = 0 (default)
+      # T1: embedded field after { new: ERect } = 0 (default)
       - decl: [var_r, "ptr<ERect>", { new: ERect }]
       - if:
           condition: { neq: [var_r.origin.var_x, 0] }
@@ -68,7 +68,7 @@
             - call: [sys.exit, 1]
       - print: ["T2 PASS: set embedded field via local var"]
 
-      # T3: andere Felder unberührt
+      # T3: other fields untouched
       - set: [var_r.var_w, 200]
       - set: [var_r.var_h, 100]
       - if:
@@ -106,7 +106,7 @@
             - call: [sys.exit, 1]
       - print: ["T5 PASS: sub-field direct set"]
 
-      # T6: Isolation — zweite Instanz beeinflusst nicht die erste
+      # T6: isolation — the second instance does not affect the first
       - decl: [var_r2, "ptr<ERect>", { new: ERect }]
       - decl: [var_p2, EPoint]
       - set: [var_p2.var_x, 1]

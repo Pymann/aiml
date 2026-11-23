@@ -1,6 +1,6 @@
 # SPEC?: 44_6_prefabs,42_path_type   # derived from the file name, to be confirmed
-# Negative: Prefab-Spec mit Pfad-Literal in `texture:` → Compile-Hard-Error.
-# Stem-only ist strikt; Pfade in Prefab-Specs sind nicht erlaubt.
+# Negative: prefab spec with a path literal in `texture:` → compile hard error.
+# Stem-only is strict; paths in prefab specs are not allowed.
 #
 # AssetRoots: tests/_asset_fixtures/basic/resources/textures
 # Expected exit code: 1
@@ -11,7 +11,7 @@
     width: 80
     height: 80
     children:
-      # Strikter Stem-Modus → kein '/' und keine Extension erlaubt.
+      # Strict stem mode → no '/' and no extension allowed.
       - { name: icon_img, type: rect, x: 0, y: 0, width: 80, height: 80,
           texture: "resources/textures/hammer.png" }
 

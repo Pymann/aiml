@@ -2,11 +2,11 @@
 # Requires: display
 # Requires: manual
 #
-# WARTET AUF EINEN MENSCHEN: die Schleife unten laeuft, bis das Fenster
-# geschlossen wird (`engine.running`).  Ohne diese Zeile lief der Test in der
-# Suite 600 s in die Zeitgrenze und meldete einen Fehlschlag, den es nicht gab
-# -- dieselbe Klasse wie test_ui.aiml und test_mem_render_probe.aiml.
-# Mit `./run_all_tests.sh --manual` laeuft er.
+# WAITS FOR A HUMAN: the loop below runs until the window
+# is closed (`engine.running`).  Without this line the test ran into the time limit
+# in the suite after 600 s and reported a failure that did not exist
+# -- the same class as test_ui.aiml and test_mem_render_probe.aiml.
+# It runs with `./run_all_tests.sh --manual`.
 #
 # End-to-end demo: cascade type + nested cascade payload + list<cascade<X>>
 # + prefab container that spawns one row per effect + on-the-fly grow/shrink.

@@ -1,19 +1,19 @@
 # SPEC: 52_arrays,53_dyn_arrays
-# Repro: `at: [struct.field_list, i]` schlägt mit "at: unknown variable
-# 'struct.field_list'" fehl, obwohl die Indexierung einer list<T>-Member-
-# Property logisch korrekt ist.  Workaround: in lokale Variable kopieren.
+# Repro: `at: [struct.field_list, i]` fails with "at: unknown variable
+# 'struct.field_list'", although indexing a list<T> member
+# property is logically correct.  Workaround: copy into a local variable.
 #
 # Spec status (2026-06-01):
-#   - spec/52_arrays.md zeigt at: nur mit bare-variable-containern
-#   - spec/53_dyn_arrays.md ebenso
-#   - Compiler ast_compiler_expr.cpp:911 fordert hart ein VariableExpr
+#   - spec/52_arrays.md shows at: only with bare variable containers
+#   - spec/53_dyn_arrays.md likewise
+#   - compiler ast_compiler_expr.cpp:911 hard-requires a VariableExpr
 #
-# Ohne Spec-/Compiler-Erweiterung sollte zumindest die Fehlermeldung klar
-# sagen, dass at: einen einfachen Variablen-Container braucht (statt
-# "unknown variable", was nach Symbol-Lookup-Failure aussieht).
+# Without a spec/compiler extension at least the error message should say clearly
+# that at: needs a simple variable container (instead of
+# "unknown variable", which looks like a symbol lookup failure).
 #
-# Erwarteter Status: failing build → demonstriert die Einschränkung.
-# Wenn future-fix erlaubt: at: mit struct.field-Container → exit 0.
+# Expected status: failing build → demonstrates the limitation.
+# If a future fix allows it: at: with a struct.field container → exit 0.
 
 - model:
     name: Holder
@@ -34,8 +34,8 @@
       - print: ["FAIL bare-variable at: expected 10, got ${var_a0}"]
       - call: [sys.exit, 1]
 
-# Variante B: struct.field als at-container — Compile-Error in current state.
-# Wenn future-fix das erlaubt, sollte dies var_a1 = 10 setzen.
+# Variant B: struct.field as an at container — compile error in the current state.
+# If a future fix allows that, this should set var_a1 = 10.
 - decl: [var_a1, i32, { at: [var_h.var_xs, 0] }]
 - if:
     condition: { neq: [var_a1, 10] }

@@ -127,7 +127,7 @@
       - decl: [typed, string, { call: [scene.text_value, "name_input"] }]
       - if:
           condition: { neq: [typed, "hallo"] }
-          then: [{ print: ["FAIL post_text: Feld enthaelt '${typed}', erwartet 'hallo'"] }, { return: 1 }]
+          then: [{ print: ["FAIL post_text: Feld enthaelt '${typed}', expected 'hallo'"] }, { return: 1 }]
 
       # ── 5. Taste ─────────────────────────────────────────────────────────
       - call: [engine.swap, win]

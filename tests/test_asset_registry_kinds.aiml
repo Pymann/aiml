@@ -1,6 +1,6 @@
 # SPEC?: 44_7_asset_registry   # derived from the file name, to be confirmed
-# Asset Registry: derselbe Stem in unterschiedlichen Kind-Stores (Texture +
-# Audio) koexistiert ohne Kollision.
+# Asset registry: the same stem in different kind stores (texture +
+# audio) coexists without a collision.
 #
 # AssetRoots: tests/_asset_fixtures/multikind/resources/textures,tests/_asset_fixtures/multikind/resources/audio
 # Expected exit code: 0

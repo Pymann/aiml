@@ -25,7 +25,7 @@
       - if:
           condition: { neq: [vor.len, 3] }
           then:
-            - print: ["FAIL clear: Ausgangslage Hammer=${vor.len}, erwartet 3"]
+            - print: ["FAIL clear: Ausgangslage Hammer=${vor.len}, expected 3"]
             - return: 1
 
       - call: [dinge.clear]
@@ -34,13 +34,13 @@
       - if:
           condition: { neq: [anz, 0] }
           then:
-            - print: ["FAIL clear: len=${anz} nach clear, erwartet 0"]
+            - print: ["FAIL clear: len=${anz} nach clear, expected 0"]
             - return: 1
       - decl: [nach, list<string>, { call: [dinge.findings_by, "name", "Hammer"] }]
       - if:
           condition: { neq: [nach.len, 0] }
           then:
-            - print: ["FAIL clear: Hammer=${nach.len} nach clear, erwartet 0"]
+            - print: ["FAIL clear: Hammer=${nach.len} nach clear, expected 0"]
             - return: 1
       - decl: [sku_eins, string, { call: [dinge.finding_by, "sku", "S1"] }]
       - if:

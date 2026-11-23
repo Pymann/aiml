@@ -6,15 +6,15 @@
 #   input   — init, mapping, polling, event queue
 #   gl_mesh — manual geometry upload + prim.to_gl_mesh()
 #
-# Erfordert einen aktiven Display (X11 oder Wayland).
-# Ausführen: ./out/aiml -r tests/test_engine.aiml
+# Requires an active display (X11 or Wayland).
+# Run: ./out/aiml -r tests/test_engine.aiml
 # Expected exit code: 0
 # Requires: display
 
-# ── Phase A: Plattform-Informationen (kein GL-Kontext nötig) ──────────────────
+# ── Phase A: platform information (no GL context needed) ─────────────────────
 #
-# engine.platform() ist eine compile-time Konstante (keine GLFW-Abhängigkeit).
-# Auf Desktop muss sie "desktop" zurückgeben.
+# engine.platform() is a compile-time constant (no GLFW dependency).
+# On desktop it must return "desktop".
 
 - decl: [plat, string, { call: [engine.platform] }]
 - if: [{ neq: [plat, "desktop"] }, true]
@@ -36,10 +36,10 @@
 
 - print: ["Phase A OK: platform=", plat, " mobile=", mob, " web=", web]
 
-# ── Phase B: Fenster erstellen ────────────────────────────────────────────────
+# ── Phase B: create a window ──────────────────────────────────────────────────
 #
-# engine.create_window ersetzt glfwInit + glfwCreateWindow + glfwMakeContextCurrent
-# + glewInit vollständig. GL 3.3 Core Profile + Depth-Test sind danach aktiv.
+# engine.create_window completely replaces glfwInit + glfwCreateWindow + glfwMakeContextCurrent
+# + glewInit. GL 3.3 core profile + depth test are active afterwards.
 
 - decl: [win, window_handle, { call: [engine.create_window, 800, 600, "AIML Engine Test"] }]
 - if: [{ eq: [win, null] }, true]
@@ -55,21 +55,21 @@
 
 - print: ["Phase B OK: window created, running=", running]
 
-# ── Phase C: Input — Init, Mapping, Polling ───────────────────────────────────
+# ── Phase C: input — init, mapping, polling ───────────────────────────────────
 #
-# input.init registriert GLFW-Callbacks und verdrahtet aiml_input_update mit
-# dem Frame-Loop via aiml_engine_register_input_update.
+# input.init registers GLFW callbacks and wires aiml_input_update to
+# the frame loop via aiml_engine_register_input_update.
 
 - call: [input.init, win]
 
-# Achsen und Aktionen mappen
+# map axes and actions
 - call: [input.map_axis,   "forward", "W",  1.0]
 - call: [input.map_axis,   "forward", "S", -1.0]
 - call: [input.map_axis,   "strafe",  "D",  1.0]
 - call: [input.map_axis,   "strafe",  "A", -1.0]
 - call: [input.map_action, "fire",    "Space"]
 
-# Keine Taste gedrückt → alle Polling-Werte müssen 0/0.0 sein
+# no key pressed → all polling values must be 0/0.0
 
 - decl: [ax_fwd, f32, { call: [input.axis, "forward"] }]
 - if: [{ neq: [ax_fwd, 0] }, true]
@@ -102,14 +102,14 @@
     - call: [sys.exit, 1]
 
 - decl: [gp0, i32, { call: [input.gamepad_connected, 0] }]
-# gamepad_connected kann 0 oder 1 sein — kein Fehler, nur ausgeben
+# gamepad_connected can be 0 or 1 — not an error, only print it
 
 - print: ["Phase C OK: axis=", ax_fwd, " fire=", fire_down, " has_ev=", has_ev, " gamepad0=", gp0]
 
-# ── Phase D: gl_mesh — manuelle Geometrie ────────────────────────────────────
+# ── Phase D: gl_mesh — manual geometry ───────────────────────────────────────
 #
-# Ein einfaches Dreieck in der XY-Ebene: 3 Vertices (xyz), 3 Indizes.
-# UVs und Normals werden als null übergeben (optionale Attribute).
+# A simple triangle in the XY plane: 3 vertices (xyz), 3 indices.
+# UVs and normals are passed as null (optional attributes).
 
 - decl: [tri_pos, buffer<f32>, [-0.5, -0.5, 0.0,
                                   0.5, -0.5, 0.0,
@@ -131,11 +131,11 @@
 
 - print: ["Phase D OK: gl_mesh created, index_count=", icnt]
 
-# ── Phase E: prim.to_gl_mesh — GLTF-Pipeline ─────────────────────────────────
+# ── Phase E: prim.to_gl_mesh — GLTF pipeline ─────────────────────────────────
 #
-# test.glb ist ein minimales GLB mit genau einem Mesh und einer Primitive.
-# prim.to_gl_mesh() führt intern positions/uvs/normals/indices-Abruf und
-# aiml_gl_create_mesh durch und gibt das fertige gl_mesh zurück.
+# test.glb is a minimal GLB with exactly one mesh and one primitive.
+# prim.to_gl_mesh() internally fetches positions/uvs/normals/indices and
+# runs aiml_gl_create_mesh and returns the finished gl_mesh.
 
 - decl: [var_gp, path, "tests/test.glb"]
 - decl: [scene, gltf_scene, { call: [gltf.load, var_gp] }]
@@ -170,11 +170,11 @@
 
 - print: ["Phase E OK: prim.to_gl_mesh index_count=", gm_icnt]
 
-# ── Phase F: Frame-Loop — engine.swap + Frame-Zähler ─────────────────────────
+# ── Phase F: frame loop — engine.swap + frame counter ────────────────────────
 #
-# Manueller Loop-Stil: 30 Frames rendern und dann beenden.
-# Jeder engine.swap-Aufruf: SwapBuffers + PollEvents + frame_count++
-# Wir prüfen, dass engine.frame() nach N Frames >= N ist.
+# Manual loop style: render 30 frames and then quit.
+# Every engine.swap call: SwapBuffers + PollEvents + frame_count++
+# We check that engine.frame() is >= N after N frames.
 
 - decl: [var_fr, i32, 0]
 - while:
@@ -194,7 +194,7 @@
 - decl: [eng_fps, f32, { call: [engine.fps] }]
 - print: ["Phase F OK: frame=", eng_frame, " fps=", eng_fps]
 
-# ── Aufräumen ─────────────────────────────────────────────────────────────────
+# ── Clean-up ──────────────────────────────────────────────────────────────────
 
 - call: [gltf_mesh_obj.delete]
 - call: [tri_mesh.delete]
