@@ -1,12 +1,12 @@
-# Spec 61: Container-Leaks und Speicherfehler
+# Spec 61: container leaks and memory errors
 
-Gezielte Regressionen zum [Implementierungsplan](../../../doc/spec61_container_leak_fix_plan_2026-09-29.md).
-Sie ergänzen die bestehende Lifetime-Suite: deren Tests für List-Remove, Shared-Listen und
-verworfene Pops decken die hier gezeigten Map-/String-Pop-Fehler nicht ab.
+Targeted regressions for the [implementation plan](../../../doc/spec61_container_leak_fix_plan_2026-09-29.md).
+They complement the existing lifetime suite: its tests for list remove, shared lists and
+discarded pops do not cover the map/string pop errors shown here.
 
-## Ausführen
+## Running
 
-Vom AIML-Projektroot, mit zueinander passendem gebautem Compiler und `libaiml`:
+From the AIML project root, with a built compiler and `libaiml` that match each other:
 
 ```bash
 python3 tests/lifetime/container_leaks/run.py
@@ -14,59 +14,59 @@ python3 tests/lifetime/container_leaks/run.py --only map_shared_control map_shar
 python3 tests/lifetime/container_leaks/run.py --iterations 200 --output /tmp/new-container-audit
 ```
 
-`--output` muss ein neues Verzeichnis sein. Ohne Angabe wird ein neues Verzeichnis unter `/tmp`
-erstellt und ausgegeben. `--root` überschreibt den automatisch ermittelten AIML-Projektpfad.
-Voraussetzungen: Python 3.11+, g++, Valgrind und native AIML-Buildartefakte. Der Runner baut nicht
-den Compiler, sondern jeden Repro AOT und linkt gegen `out/libaiml/libaiml.so`.
+`--output` must be a new directory. Without it, a new directory is created under `/tmp`
+and printed. `--root` overrides the automatically determined AIML project path.
+Requirements: Python 3.11+, g++, Valgrind and native AIML build artifacts. The runner does not build
+the compiler; it builds every repro AOT and links against `out/libaiml/libaiml.so`.
 
-Der Runner setzt `AIML_MEM_V3=1`, `AIML_LIFETIME_DROPS=1`, `AIML_MODEL_REFCOUNT=0` und führt jede
-Probe nativ sowie unter Valgrind aus. Default: 200 und 400 Iterationen. Die Quellen enthalten
-genau einen markierten Schleifengrenzwert; nur diese Grenze wird für den Testlauf variiert.
-String-Payloads bleiben konstant, damit Skalierung nicht von ihrer Länge abhängt.
+The runner sets `AIML_MEM_V3=1`, `AIML_LIFETIME_DROPS=1`, `AIML_MODEL_REFCOUNT=0` and runs every
+probe natively as well as under Valgrind. Default: 200 and 400 iterations. The sources contain
+exactly one marked loop bound; only that bound is varied for the test run.
+String payloads stay constant, so that scaling does not depend on their length.
 
-**Ziel jedes Tests: richtige Inhalte, Exit 0, 0 definite/indirect lost und keine Speicherfehler.**
-Historische Fehler in `cases.json` sind Diagnosemetadaten, keine erwarteten erfolgreichen XFAILs.
-Solange ein Fehler besteht, liefert der Runner Exit 1. Fehlendes Werkzeug ist ebenfalls ein Fehler.
-Crash, Compilerfehler oder fehlendes vollständiges Valgrind-Log gelten nicht als Leakbeweis.
-Der Runner unterscheidet LEAK, SAFETY_FAIL, ASSERTION_OR_RUN_FAIL und Infrastrukturfehler.
-Binärdatei-Hashes vor/nach dem Lauf müssen identisch sein, sonst ist die Abnahme ungültig.
+**Goal of every test: correct contents, exit 0, 0 definite/indirect lost and no memory errors.**
+Historical failures in `cases.json` are diagnostic metadata, not expected successful XFAILs.
+As long as a failure exists, the runner returns exit 1. A missing tool is a failure too.
+A crash, a compiler error or a missing complete Valgrind log do not count as proof of a leak.
+The runner distinguishes LEAK, SAFETY_FAIL, ASSERTION_OR_RUN_FAIL and infrastructure errors.
+Binary hashes before/after the run must be identical, otherwise the acceptance is invalid.
 
-Artefakte werden erhalten: pro Variante source/build/link/native/Valgrind-Logs, erzeugtes Binary,
-`results.json` und `provenance.json`. Native Runs erzeugen keine Core-Dumps. Definite/indirect
-werden nur aus vollständigen Valgrind-Berichten gelesen; RSS ist hier kein Gate.
+Artifacts are kept: per variant the source/build/link/native/Valgrind logs, the generated binary,
+`results.json` and `provenance.json`. Native runs produce no core dumps. Definite/indirect
+are only read from complete Valgrind reports; RSS is not a gate here.
 
-## Fälle
+## Cases
 
-| Probe | Befund | Isolierter Unterschied / Prüfung |
+| Probe | Finding | Isolated difference / check |
 |---|---|---|
-| `map_nested_control` | B1 Safety | Map mit Listenwert, gewöhnlicher Scope-Abbau; trotz Name KEINE grüne Kontrolle |
-| `map_nested_self_put` | B1 Safety / P4 | Zusätzlich denselben Wert via `get` erneut speichern |
-| `list_string_insert` | B2 Safety | Lokalen String einfügen; Inhalt/Größe korrekt, Besitz beim Drop prüfen |
-| `map_shared_control` | B3 Leak | Numerische Keys und Shared-Modell; trotz Name ein fehlerhafter Fall |
-| `map_shared_string_key_control` | Kontrolle zu B3 | Derselbe Besitzpfad mit String-Key |
-| `map_nested_remove` | B4 Leak | Inneren Listenwert aus der Map entfernen; Map danach leer |
-| `map_model_remove` | B4 Leak | Inline-Modell mit String-Feld entfernen; Map danach leer |
-| `map_model_replace` | B5 Leak | Modell unter gleichem Key ersetzen; Map bleibt bei einem Eintrag |
-| `map_model_get_borrow` | B7 Safety (Review) | Separater Modell-Get als `ref<Item>` mit Feld-Leseassertion |
-| `map_model_control` | Kontrolle zu B4/B5 | Einmal speichern, Größe prüfen, normaler Scope-Abbau |
-| `map_string_control` | Kontrolle zu B4 | Direkten Stringwert entfernen; Map danach leer |
-| `list_pop_bound` | B6 Leak | Pop an lokalen String binden; Text und leere Liste prüfen |
-| `list_pop_arg` | B6 Leak | Pop an Funktion übergeben; Callee prüft Text, Caller leere Liste |
-| `list_pop_discard` | Kontrolle zu B6 | Pop direkt verwerfen; Liste leer |
-| `list_nested_control` | Layout-Kontrolle | Verschachtelte Liste anstelle verschachtelter Map |
+| `map_nested_control` | B1 safety | map with a list value, ordinary scope teardown; despite the name NOT a green control |
+| `map_nested_self_put` | B1 safety / P4 | additionally store the same value again via `get` |
+| `list_string_insert` | B2 safety | insert a local string; content/size correct, check ownership on drop |
+| `map_shared_control` | B3 leak | numeric keys and a shared model; despite the name a failing case |
+| `map_shared_string_key_control` | control for B3 | the same ownership path with a string key |
+| `map_nested_remove` | B4 leak | remove an inner list value from the map; map empty afterwards |
+| `map_model_remove` | B4 leak | remove an inline model with a string field; map empty afterwards |
+| `map_model_replace` | B5 leak | replace a model under the same key; map stays at one entry |
+| `map_model_get_borrow` | B7 safety (review) | separate model get as `ref<Item>` with a field read assertion |
+| `map_model_control` | control for B4/B5 | store once, check size, normal scope teardown |
+| `map_string_control` | control for B4 | remove a direct string value; map empty afterwards |
+| `list_pop_bound` | B6 leak | bind a pop to a local string; check text and empty list |
+| `list_pop_arg` | B6 leak | pass a pop to a function; callee checks text, caller the empty list |
+| `list_pop_discard` | control for B6 | discard a pop directly; list empty |
+| `list_nested_control` | layout control | nested list instead of a nested map |
 
-Die Namen behalten die Zuordnung zur ursprünglichen Untersuchung. Die Zuordnung `finding`
-in `cases.json`, nicht das Wort `control` im Dateinamen, kennzeichnet grüne Gegenproben.
+The names keep the mapping to the original investigation. The `finding` mapping
+in `cases.json`, not the word `control` in the file name, marks green counter-probes.
 
-Die Unterordnerlage verhindert, dass das normale `tests/lifetime/[0-9]*.aiml`-Glob offene Fälle
-als grüne Tests einsammelt. Das bestehende Leak-Gate registriert bestätigte Fehler als RED und
-saubere Gegenproben als GREEN. **Sein Exit 0 alleine genügt nicht:** es lässt RED absichtlich
-nicht fehlschlagen. Für diese Arbeit immer den strikten Runner oben verwenden. Nach Reparatur
-jeweilige Fälle im allgemeinen Gate nach GREEN verschieben; dieser Runner braucht dafür keine
-Lockerung seiner Erwartungen.
+The subdirectory location prevents the normal `tests/lifetime/[0-9]*.aiml` glob from collecting open cases
+as green tests. The existing leak gate registers confirmed failures as RED and
+clean counter-probes as GREEN. **Its exit 0 alone is not enough:** it deliberately does not let RED
+fail. For this work always use the strict runner above. After a repair, move the
+respective cases to GREEN in the general gate; this runner needs no
+loosening of its expectations for that.
 
-Die größere Alias-/Move-/WASM-Testmatrix im Implementierungsplan ist zusätzliche spätere
-Fix-Abnahme. Diese Minimaltests behaupten weder vollständige Spec-61-Abdeckung noch eine
-WASM-/Browser-Abnahme.
+The larger alias/move/WASM test matrix in the implementation plan is additional later
+fix acceptance. These minimal tests claim neither complete spec 61 coverage nor a
+WASM/browser acceptance.
 
-Die Modell-Get-Leseassertion zeigte einen zusätzlichen, unabhängig von Replace auftretenden Crash. Sie steht deshalb in `map_model_get_borrow`, statt den B5-Leak mit einem früheren Crash zu verdecken. B5 und seine Kontrolle prüfen isoliert Map-Größe und vollständigen Scope-Abbau; die gespeicherten Feldinhalte werden über B7 separat abgesichert.
+The model get read assertion showed an additional crash that occurs independently of replace. It therefore lives in `map_model_get_borrow`, instead of hiding the B5 leak behind an earlier crash. B5 and its control check map size and complete scope teardown in isolation; the stored field contents are covered separately by B7.

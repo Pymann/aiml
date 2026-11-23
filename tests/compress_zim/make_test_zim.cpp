@@ -46,7 +46,7 @@ int main(int argc, char** argv) {
             "<html><body><h1>Zinn</h1><p>Ein weiteres Element.</p></body></html>"));
         creator.addItem(zim::writer::StringItem::create(
             "Notiz", "text/plain", "Notiz", plain,
-            "nur eine Notiz, kein Artikel"));
+            "just a note, not an article"));
 
         creator.addRedirection("Copper", "Copper", "Kupfer", article);
         // The pair below points at each other — resolve must report a loop, not spin.

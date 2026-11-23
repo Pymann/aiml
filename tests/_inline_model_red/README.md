@@ -1,13 +1,12 @@
-# Rote Vertrags-Tests: inline `list<Model>`-Element-Release (Paket 1)
+# Red contract tests: inline `list<Model>` element release (package 1)
 
-Gehört zu `doc/spec61_inline_value_model_release_plan_2026-09-24.md`. Diese Tests kodieren den
-Ziel-Vertrag (Spec 61 §5.4) für inline Value-Model-Elemente. Sie liegen bewusst unter `_inline_model_red/`
-(Präfix `_` → vom Korpus `run_all_tests.sh` ausgeschlossen), weil sie **RED bis Paket 5** sind und den
-grünen Korpus nicht brechen sollen. Nach Abschluss von Paket 3+5 wandern die grünen Fälle nach
-`tests/lifetime/[0-9]*` (Content) bzw. werden mit hartem Leak-Gate in die mem-sanitizer-Abnahme
-aufgenommen.
+Belongs to `doc/spec61_inline_value_model_release_plan_2026-09-24.md`. These tests encode the
+target contract (spec 61 §5.4) for inline value-model elements. They deliberately live under `_inline_model_red/`
+(prefix `_` → excluded from the `run_all_tests.sh` corpus), because they are **RED until package 5** and should not
+break the green corpus. Once packages 3+5 are done, the green cases move to
+`tests/lifetime/[0-9]*` (content) or are taken into the mem-sanitizer acceptance with a hard leak gate.
 
-## Ausführen
+## Running
 ```sh
 # Content (JIT):
 AIML_MEM_V3=1 AIML_LIFETIME_DROPS=1 out/aiml/aiml -r tests/_inline_model_red/49_value_survives_remove.aiml
@@ -17,54 +16,54 @@ g++ /tmp/r/*.o -Lout/libaiml -laiml -lyaml-cpp -lpthread -lssl -lcrypto -ldl -Wl
 AIML_MEM_V3=1 AIML_LIFETIME_DROPS=1 valgrind --leak-check=full /tmp/r/bin
 ```
 
-## Befund bei Erstellung (2026-09-24, aiml @ pop/clear-Fix-Stand)
+## Findings at creation (2026-09-24, aiml @ pop/clear fix state)
 
-| Test | Content (JIT) | Leak (valgrind) | Bedeutung |
+| Test | Content (JIT) | Leak (valgrind) | Meaning |
 |---|---|---|---|
-| `49_value_survives_remove` | **PASS** | **RED: 47 def + 16 indirect lost** | Die Kopie überlebt `remove` inhaltlich — ABER das entfernte elemKind-2-Element wird nicht freigegeben (remove defert kind 2). |
-| `50_share_semantics` | **PASS** | **RED: 16 B def lost** (Codex-Nachmessung 2026-09-24) | Container-shared + Scalar-independent ist beobachtbar korrekt, ABER `copy.label = "changed"` leakt den alten String (`aiml_str_dup ← main`). → **ZWEITER Leak-Pfad: Scalar/String-Feld-Reassignment auf einer Value-Model-View**, nicht nur der Release-Leak. Test 50 ist NICHT grün. |
+| `49_value_survives_remove` | **PASS** | **RED: 47 def + 16 indirect lost** | The copy survives `remove` content-wise — BUT the removed elemKind-2 element is not released (remove defers kind 2). |
+| `50_share_semantics` | **PASS** | **RED: 16 B def lost** (Codex re-measurement 2026-09-24) | Container-shared + scalar-independent is observably correct, BUT `copy.label = "changed"` leaks the old string (`aiml_str_dup ← main`). → **SECOND leak path: scalar/string field reassignment on a value-model view**, not only the release leak. Test 50 is NOT green. |
 
-## Zentrale Erkenntnis (empirisch, für die Umsetzung wichtig)
+## Central insight (empirical, important for the implementation)
 
-Der Inhalt in Test 49 ist heute **nur deshalb** grün, weil `remove`/`clear` das Value-Model-Element
-NICHT freigeben (der Leak IST der Grund, warum die geteilte View gültig bleibt). Ein **naives**
-Aktivieren des Element-Release (ohne CopyRetain) würde die View danglen lassen → Content bräche
-(double-free/UAF). Das stützt die Plan-Sequenz: **erst CopyRetain-Materialisierung, dann Release.**
-Test 49 verlangt am Ende BEIDES zusammen: PASS + 0 lost.
+The content in test 49 is green today **only because** `remove`/`clear` do NOT release the value-model element
+(the leak IS the reason the shared view stays valid). A **naive**
+activation of element release (without CopyRetain) would leave the view dangling → content would break
+(double-free/UAF). That supports the plan sequence: **CopyRetain materialisation first, then release.**
+In the end test 49 requires BOTH together: PASS + 0 lost.
 
-⚠️ **Korrektur (Codex §11):** Es ist NICHT „die einzige Lücke ist der Release-Leak". Test 50 zeigt
-einen zweiten Leak (Feld-Reassignment auf einer unbalancierten Value-Kopie). Ein reiner Release-Patch
-reicht also nicht. Share-Semantik ist beobachtbar korrekt, aber die Value-Kopie materialisiert HEUTE
-keinen eigenen Member-Besitz (der decl-Pfad memcpy't nur Struct-Bytes, ohne Retain — ast_compiler_stmt.cpp
-~1990). Genaue Unterscheidung: (1) eigenständige Struct-Bytes mit ungesicherten Feldreferenzen vs.
-(2) echte `ref` auf den Slot. „copy-on-write-at-set" ist im jeweiligen Pfad NICHT belegt.
+⚠️ **Correction (Codex §11):** It is NOT "the only gap is the release leak". Test 50 shows
+a second leak (field reassignment on an unbalanced value copy). A pure release patch
+is therefore not enough. Share semantics are observably correct, but the value copy TODAY does not materialise
+its own member ownership (the decl path only memcpy's struct bytes, without retain — ast_compiler_stmt.cpp
+~1990). Precise distinction: (1) independent struct bytes with unsecured field references vs.
+(2) a real `ref` to the slot. "copy-on-write-at-set" is NOT established in the respective path.
 
-## Paket 2 — Retain/Release-Audit (2026-09-24)
+## Package 2 — retain/release audit (2026-09-24)
 
-| Test | Ergebnis | Bedeutung |
+| Test | Result | Meaning |
 |---|---|---|
-| `p2_retain_coverage` | **GRÜN** (PASS + 0 lost + 0 errors, 200 Iter) | `aiml_ser_retain` co-owned string + list<i32> + nested Value-Model + map korrekt über den bestehenden `store: [ref<Model>, at(list,i)]`-Pfad. Linchpin validiert für die gängigen Feldarten. |
-| `p2_array_field_leak_RED` | **RED** (6780 B / 400 Blöcke lost, kein double-free) | `array<string:N>` als Model-Feld → serFieldSubtree RAWBYTES → retain/release sehen die Elemente nicht → reiner Leak. §9.6-Lücke bestätigt + quantifiziert. |
+| `p2_retain_coverage` | **GREEN** (PASS + 0 lost + 0 errors, 200 iter) | `aiml_ser_retain` co-owns string + list<i32> + nested value model + map correctly via the existing `store: [ref<Model>, at(list,i)]` path. Linchpin validated for the common field kinds. |
+| `p2_array_field_leak_RED` | **RED** (6780 B / 400 blocks lost, no double-free) | `array<string:N>` as a model field → serFieldSubtree RAWBYTES → retain/release do not see the elements → pure leak. §9.6 gap confirmed + quantified. |
 
-**Offene Paket-2/3-CODE-Arbeit (mit Risiko):** (a) Array-Feld-Lifecycle-Descriptor (STRUCT-Komposition) — ⚠️ ändert serFieldSubtree → **Schema-fp/Wire-Risiko** (wie die matches-KV-FATALs); separaten Lifecycle-Descriptor erwägen. (b) `isCopyableValue`-Trait aus `modelIsMoveOnly` ableiten (§9.5). (c) CopyRetain-Materialisierung bei decl/set/return/push verdrahten (§9.2/§9.3, Paket 3) — der breite ABI-Eingriff, braucht das volle Verhaltens-Gate.
+**Open package 2/3 CODE work (with risk):** (a) array field lifecycle descriptor (STRUCT composition) — ⚠️ changes serFieldSubtree → **schema fp/wire risk** (like the matches KV FATALs); consider a separate lifecycle descriptor. (b) Derive the `isCopyableValue` trait from `modelIsMoveOnly` (§9.5). (c) Wire up CopyRetain materialisation at decl/set/return/push (§9.2/§9.3, package 3) — the broad ABI intervention, needs the full behaviour gate.
 
-## Paket 3 — CopyRetain-Mechanik isoliert BEWIESEN (2026-09-24)
+## Package 3 — CopyRetain mechanics PROVEN in isolation (2026-09-24)
 
-| Test | Ergebnis | Bedeutung |
+| Test | Result | Meaning |
 |---|---|---|
-| `p3_copyretain_survives_source_drop` | **GRÜN** (PASS + 0 lost + 0 errors, 200 Iter) | Eine retain-Kopie (memcpy + `aiml_ser_retain` via store-retain-Pfad) überlebt die kind-2-FREIGABE des Quell-Listen-Elements (aiml_list_free scope-drop = dieselbe `aiml_ser_free_decoded`, die remove/clear nutzen) mit intaktem Inhalt (string/list/map/nested-model) und balancierten rc — **kein double-free, kein Leak.** |
+| `p3_copyretain_survives_source_drop` | **GREEN** (PASS + 0 lost + 0 errors, 200 iter) | A retain copy (memcpy + `aiml_ser_retain` via the store-retain path) survives the kind-2 RELEASE of the source list element (aiml_list_free scope drop = the same `aiml_ser_free_decoded` that remove/clear use) with intact content (string/list/map/nested model) and balanced rc — **no double-free, no leak.** |
 
-**Fazit:** Die Runtime-Mechanik (retain-Kopie ⊕ Element-Release) ist risikofrei validiert. Der frühere remove-Deep-Free-Regress lag NICHT an der Freigabe, sondern an der fehlenden retain-Kopie (View). Verbleibende (riskante) Arbeit: CopyRetain in den IMPLIZITEN `decl copy = at(..)`-Pfad verdrahten (statt is_view_alias) + remove/clear/pop-Release aktivieren — betrifft die Kern-Strukturen (ZoneEntry/MockCard/ActiveAbility), braucht das volle Game+Client-Verhaltens-Gate.
+**Conclusion:** The runtime mechanics (retain copy ⊕ element release) are validated risk-free. The earlier remove deep-free regression was NOT due to the release, but to the missing retain copy (view). Remaining (risky) work: wire CopyRetain into the IMPLICIT `decl copy = at(..)` path (instead of is_view_alias) + activate remove/clear/pop release — affects the core structures (ZoneEntry/MockCard/ActiveAbility), needs the full game+client behaviour gate.
 
-## Paket 3 — Stage-A-Versuch (decl-only CopyRetain) VERWORFEN (2026-09-24)
+## Package 3 — stage A attempt (decl-only CopyRetain) DISCARDED (2026-09-24)
 
-Versuch: CopyRetain nur am `decl copy = at(..)`-Init emittieren (memcpy → `aiml_ser_retain` +
-owned-Drop + `is_view_alias=false`), Escape-Sinks (set/idx/return/push) UNVERÄNDERT.
-**Ergebnis: mem-sanitizer FAIL (1 Check).** → **Empirischer Beweis: decl allein reicht NICHT.**
-Die Escape-Pfade (ast_compiler_stmt.cpp 2313/2471/3655, 4662, ast_compiler_call.cpp:1545 push) haben
-eigene is_view_alias-/deep-copy-Logik; wenn decl die Kopie zu owned+retain macht, widersprechen die
-Escapes (doppeltes retain/copy oder falscher Move → double-free/Imbalance). Bestätigt Plan §3/§4:
-Value-Materialisierung muss über ALLE Sinks GLEICHZEITIG konsolidiert werden (decl + set + idx +
-return + push + store), mit einheitlichem Ownership-Fakt statt der is_view_alias-Heuristik. Stage A
-wurde reverted (grüner Stand wiederhergestellt). Die eigentliche Paket-3-Umsetzung ist damit ein
-koordinierter Multi-Sink-Umbau — kein isolierter decl-Patch.
+Attempt: emit CopyRetain only at the `decl copy = at(..)` init (memcpy → `aiml_ser_retain` +
+owned drop + `is_view_alias=false`), escape sinks (set/idx/return/push) UNCHANGED.
+**Result: mem-sanitizer FAIL (1 check).** → **Empirical proof: decl alone is NOT enough.**
+The escape paths (ast_compiler_stmt.cpp 2313/2471/3655, 4662, ast_compiler_call.cpp:1545 push) have
+their own is_view_alias/deep-copy logic; when decl makes the copy owned+retain, the
+escapes contradict it (double retain/copy or a wrong move → double-free/imbalance). Confirms plan §3/§4:
+value materialisation must be consolidated across ALL sinks AT THE SAME TIME (decl + set + idx +
+return + push + store), with a uniform ownership fact instead of the is_view_alias heuristic. Stage A
+was reverted (green state restored). The actual package 3 implementation is therefore a
+coordinated multi-sink rework — not an isolated decl patch.
