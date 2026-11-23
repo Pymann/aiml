@@ -5,29 +5,29 @@ Filter --only 'prefab': 30 Test(s)
 --------------------------------------------------------
 Running: tests/test_asset_neg_prefab_path.aiml
 --------------------------------------------------------
-[ERROR] [/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast/prefab_builder.cpp:15] prefab texture must be a stem, not a path: 'resources/textures/hammer.png'
-[WARNING]  [/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp:1252] prefab 'BadTile' is declared but never instantiated in this build — no engine.instantiate("BadTile") anywhere. Remove the dead `- prefab:` declaration or wire it up.
-[ERROR] [/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/main.cpp:188] Compilation failed with errors.
+[ERROR] [<repo>/src/core/ast/prefab_builder.cpp:15] prefab texture must be a stem, not a path: 'resources/textures/hammer.png'
+[WARNING]  [<repo>/compiler.cpp:1252] prefab 'BadTile' is declared but never instantiated in this build — no engine.instantiate("BadTile") anywhere. Remove the dead `- prefab:` declaration or wire it up.
+[ERROR] [<repo>/main.cpp:188] Compilation failed with errors.
 [  OK  ] tests/test_asset_neg_prefab_path.aiml (Exit Code: 1)
 
 --------------------------------------------------------
 Running: tests/test_asset_neg_prefab_unknown.aiml
 --------------------------------------------------------
-[ERROR] [/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast/prefab_builder.cpp:25] prefab texture: stem 'misspelled' not in texture store
-[ERROR] [/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler.cpp:6013] tests/test_asset_neg_prefab_unknown.aiml:10:3: prefab 'BadTile' child 'icon_img': texture stem 'misspelled' not in texture store
-[WARNING]  [/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp:1252] prefab 'BadTile' is declared but never instantiated in this build — no engine.instantiate("BadTile") anywhere. Remove the dead `- prefab:` declaration or wire it up.
-[ERROR] [/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/main.cpp:188] Compilation failed with errors.
+[ERROR] [<repo>/src/core/ast/prefab_builder.cpp:25] prefab texture: stem 'misspelled' not in texture store
+[ERROR] [<repo>/src/core/ast_compiler.cpp:6013] tests/test_asset_neg_prefab_unknown.aiml:10:3: prefab 'BadTile' child 'icon_img': texture stem 'misspelled' not in texture store
+[WARNING]  [<repo>/compiler.cpp:1252] prefab 'BadTile' is declared but never instantiated in this build — no engine.instantiate("BadTile") anywhere. Remove the dead `- prefab:` declaration or wire it up.
+[ERROR] [<repo>/main.cpp:188] Compilation failed with errors.
 [  OK  ] tests/test_asset_neg_prefab_unknown.aiml (Exit Code: 1)
 
 --------------------------------------------------------
 Running: tests/test_list_prefab_instance.aiml
 --------------------------------------------------------
-[WARNING]  [/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler.cpp:1608] tests/test_list_prefab_instance.aiml: module-level global 'tiles' (list<prefab_instance>) has no owner — state belongs in a class or a classgroup instance (spec/21 §6.2); set AIML_LINT_GLOBALS=0 to silence
-[WARNING]  [/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler.cpp:1608] tests/test_list_prefab_instance.aiml: module-level global 'var_a' (prefab_instance) has no owner — state belongs in a class or a classgroup instance (spec/21 §6.2); set AIML_LINT_GLOBALS=0 to silence
-[WARNING]  [/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler.cpp:1608] tests/test_list_prefab_instance.aiml: module-level global 'var_b' (prefab_instance) has no owner — state belongs in a class or a classgroup instance (spec/21 §6.2); set AIML_LINT_GLOBALS=0 to silence
-[WARNING]  [/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler.cpp:1608] tests/test_list_prefab_instance.aiml: module-level global 'var_t0' (prefab_instance) has no owner — state belongs in a class or a classgroup instance (spec/21 §6.2); set AIML_LINT_GLOBALS=0 to silence
-[WARNING]  [/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler.cpp:1608] tests/test_list_prefab_instance.aiml: module-level global 'var_t1' (prefab_instance) has no owner — state belongs in a class or a classgroup instance (spec/21 §6.2); set AIML_LINT_GLOBALS=0 to silence
-[WARNING]  [/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp:1252] prefab 'Dummy' is declared but never instantiated in this build — no engine.instantiate("Dummy") anywhere. Remove the dead `- prefab:` declaration or wire it up.
+[WARNING]  [<repo>/src/core/ast_compiler.cpp:1608] tests/test_list_prefab_instance.aiml: module-level global 'tiles' (list<prefab_instance>) has no owner — state belongs in a class or a classgroup instance (spec/21 §6.2); set AIML_LINT_GLOBALS=0 to silence
+[WARNING]  [<repo>/src/core/ast_compiler.cpp:1608] tests/test_list_prefab_instance.aiml: module-level global 'var_a' (prefab_instance) has no owner — state belongs in a class or a classgroup instance (spec/21 §6.2); set AIML_LINT_GLOBALS=0 to silence
+[WARNING]  [<repo>/src/core/ast_compiler.cpp:1608] tests/test_list_prefab_instance.aiml: module-level global 'var_b' (prefab_instance) has no owner — state belongs in a class or a classgroup instance (spec/21 §6.2); set AIML_LINT_GLOBALS=0 to silence
+[WARNING]  [<repo>/src/core/ast_compiler.cpp:1608] tests/test_list_prefab_instance.aiml: module-level global 'var_t0' (prefab_instance) has no owner — state belongs in a class or a classgroup instance (spec/21 §6.2); set AIML_LINT_GLOBALS=0 to silence
+[WARNING]  [<repo>/src/core/ast_compiler.cpp:1608] tests/test_list_prefab_instance.aiml: module-level global 'var_t1' (prefab_instance) has no owner — state belongs in a class or a classgroup instance (spec/21 §6.2); set AIML_LINT_GLOBALS=0 to silence
+[WARNING]  [<repo>/compiler.cpp:1252] prefab 'Dummy' is declared but never instantiated in this build — no engine.instantiate("Dummy") anywhere. Remove the dead `- prefab:` declaration or wire it up.
 [test] before list decl
 [test] list<prefab_instance> declared, len=0
 [test] two instances spawned var_a= var_b=
@@ -48,8 +48,8 @@ Running: tests/test_list_prefab_instance.aiml
 --------------------------------------------------------
 Running: tests/test_prefab_child_error.aiml
 --------------------------------------------------------
-[ERROR] [/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler.cpp:1029] tests/test_prefab_child_error.aiml:25: 'inst'.set_text("does_not_exist") addresses an unknown child of prefab 'Panel' — no child with that name is declared in its `children:` list. Fix the child name or add the child to the prefab declaration.
-[ERROR] [/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/main.cpp:188] Compilation failed with errors.
+[ERROR] [<repo>/src/core/ast_compiler.cpp:1029] tests/test_prefab_child_error.aiml:25: 'inst'.set_text("does_not_exist") addresses an unknown child of prefab 'Panel' — no child with that name is declared in its `children:` list. Fix the child name or add the child to the prefab declaration.
+[ERROR] [<repo>/main.cpp:188] Compilation failed with errors.
 [  OK  ] tests/test_prefab_child_error.aiml (Exit Code: 1)
 
 [ SKIP ] tests/test_prefab_connector.aiml (Requires: display — no interactive display available)
@@ -57,7 +57,7 @@ Running: tests/test_prefab_child_error.aiml
 --------------------------------------------------------
 Running: tests/test_prefab_dead.aiml
 --------------------------------------------------------
-[WARNING]  [/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp:1252] prefab 'DeadBox' is declared but never instantiated in this build — no engine.instantiate("DeadBox") anywhere. Remove the dead `- prefab:` declaration or wire it up.
+[WARNING]  [<repo>/compiler.cpp:1252] prefab 'DeadBox' is declared but never instantiated in this build — no engine.instantiate("DeadBox") anywhere. Remove the dead `- prefab:` declaration or wire it up.
 PASS prefab_dead: 'UsedBox' (instantiate) + 'ListRow' (spawn) genutzt → keine Warnung; nur 'DeadBox' → Warnung
 [  OK  ] tests/test_prefab_dead.aiml (Exit Code: 0)
 
@@ -67,8 +67,8 @@ PASS prefab_dead: 'UsedBox' (instantiate) + 'ListRow' (spawn) genutzt → keine 
 --------------------------------------------------------
 Running: tests/test_prefab_member_child_error.aiml
 --------------------------------------------------------
-[ERROR] [/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler.cpp:1245] tests/test_prefab_member_child_error.aiml:33: '<.scene'.set_text("does_not_exist") addresses an unknown child of prefab 'MenuPanel' — no child with that name is declared in its `children:` list. Fix the child name or add the child to the prefab declaration.
-[ERROR] [/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/main.cpp:188] Compilation failed with errors.
+[ERROR] [<repo>/src/core/ast_compiler.cpp:1245] tests/test_prefab_member_child_error.aiml:33: '<.scene'.set_text("does_not_exist") addresses an unknown child of prefab 'MenuPanel' — no child with that name is declared in its `children:` list. Fix the child name or add the child to the prefab declaration.
+[ERROR] [<repo>/main.cpp:188] Compilation failed with errors.
 [  OK  ] tests/test_prefab_member_child_error.aiml (Exit Code: 1)
 
 --------------------------------------------------------
@@ -80,8 +80,8 @@ Running: tests/test_prefab_member_child_ok.aiml
 --------------------------------------------------------
 Running: tests/test_prefab_member_clicked_error.aiml
 --------------------------------------------------------
-[ERROR] [/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler.cpp:1245] tests/test_prefab_member_clicked_error.aiml:35: '<.form'.child_clicked("send_bttn") addresses an unknown child of prefab 'FormPanel' — no child with that name is declared in its `children:` list. Fix the child name or add the child to the prefab declaration.
-[ERROR] [/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/main.cpp:188] Compilation failed with errors.
+[ERROR] [<repo>/src/core/ast_compiler.cpp:1245] tests/test_prefab_member_clicked_error.aiml:35: '<.form'.child_clicked("send_bttn") addresses an unknown child of prefab 'FormPanel' — no child with that name is declared in its `children:` list. Fix the child name or add the child to the prefab declaration.
+[ERROR] [<repo>/main.cpp:188] Compilation failed with errors.
 [  OK  ] tests/test_prefab_member_clicked_error.aiml (Exit Code: 1)
 
 [ SKIP ] tests/test_prefab_multiline_click.aiml (Requires: display — no interactive display available)
@@ -89,8 +89,8 @@ Running: tests/test_prefab_member_clicked_error.aiml
 --------------------------------------------------------
 Running: tests/test_prefab_obj_method_callback.aiml
 --------------------------------------------------------
-[WARNING]  [/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler.cpp:1608] tests/test_prefab_obj_method_callback.aiml: module-level global 'g_counter' (Counter) has no owner — state belongs in a class or a classgroup instance (spec/21 §6.2); set AIML_LINT_GLOBALS=0 to silence
-[WARNING]  [/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp:1252] prefab 'TestPanel' is declared but never instantiated in this build — no engine.instantiate("TestPanel") anywhere. Remove the dead `- prefab:` declaration or wire it up.
+[WARNING]  [<repo>/src/core/ast_compiler.cpp:1608] tests/test_prefab_obj_method_callback.aiml: module-level global 'g_counter' (Counter) has no owner — state belongs in a class or a classgroup instance (spec/21 §6.2); set AIML_LINT_GLOBALS=0 to silence
+[WARNING]  [<repo>/compiler.cpp:1252] prefab 'TestPanel' is declared but never instantiated in this build — no engine.instantiate("TestPanel") anywhere. Remove the dead `- prefab:` declaration or wire it up.
 prefab obj.method trampoline PASS
 [  OK  ] tests/test_prefab_obj_method_callback.aiml (Exit Code: 0)
 
@@ -98,9 +98,9 @@ prefab obj.method trampoline PASS
 --------------------------------------------------------
 Running: tests/test_prefab_short_name_error.aiml
 --------------------------------------------------------
-[ERROR] [/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/context.h:834] tests/test_prefab_short_name_error.aiml:13:3: prefab child name 'bg' is shorter than 5 characters — prefab and child names are referenced by name across files; pick a descriptive name (>=5 chars)
-[WARNING]  [/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp:1252] prefab 'PanelBox' is declared but never instantiated in this build — no engine.instantiate("PanelBox") anywhere. Remove the dead `- prefab:` declaration or wire it up.
-[ERROR] [/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/main.cpp:188] Compilation failed with errors.
+[ERROR] [<repo>/src/core/context.h:834] tests/test_prefab_short_name_error.aiml:13:3: prefab child name 'bg' is shorter than 5 characters — prefab and child names are referenced by name across files; pick a descriptive name (>=5 chars)
+[WARNING]  [<repo>/compiler.cpp:1252] prefab 'PanelBox' is declared but never instantiated in this build — no engine.instantiate("PanelBox") anywhere. Remove the dead `- prefab:` declaration or wire it up.
+[ERROR] [<repo>/main.cpp:188] Compilation failed with errors.
 [  OK  ] tests/test_prefab_short_name_error.aiml (Exit Code: 1)
 
 --------------------------------------------------------
@@ -112,8 +112,8 @@ PASS prefab_static: bekannter Prefab 'Panel' + Child 'title' akzeptiert
 --------------------------------------------------------
 Running: tests/test_prefab_static_error.aiml
 --------------------------------------------------------
-[ERROR] [/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler.cpp:872] tests/test_prefab_static_error.aiml:17: engine.instantiate("NoSuchPrefab") refers to an unknown prefab — no `- prefab:` with that name is declared or imported in this module. Declare it, fix the name, or add the missing import.
-[ERROR] [/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/main.cpp:188] Compilation failed with errors.
+[ERROR] [<repo>/src/core/ast_compiler.cpp:872] tests/test_prefab_static_error.aiml:17: engine.instantiate("NoSuchPrefab") refers to an unknown prefab — no `- prefab:` with that name is declared or imported in this module. Declare it, fix the name, or add the missing import.
+[ERROR] [<repo>/main.cpp:188] Compilation failed with errors.
 [  OK  ] tests/test_prefab_static_error.aiml (Exit Code: 1)
 
 [ SKIP ] tests/test_prefab_textbox_selection.aiml (Requires: display — no interactive display available)
@@ -121,8 +121,8 @@ Running: tests/test_prefab_static_error.aiml
 --------------------------------------------------------
 Running: tests/test_prefab_unknown_attr.aiml
 --------------------------------------------------------
-[ERROR] [/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast/prefab_builder.cpp:147] prefab child 'pw_field' (type 'text_input'): unknown attribute 'password' — see spec/44_6 §4 for the attribute list (text_input masking is 'secret')
-[ERROR] [/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/main.cpp:188] Compilation failed with errors.
+[ERROR] [<repo>/src/core/ast/prefab_builder.cpp:147] prefab child 'pw_field' (type 'text_input'): unknown attribute 'password' — see spec/44_6 §4 for the attribute list (text_input masking is 'secret')
+[ERROR] [<repo>/main.cpp:188] Compilation failed with errors.
 [  OK  ] tests/test_prefab_unknown_attr.aiml (Exit Code: 1)
 
 --------------------------------------------------------

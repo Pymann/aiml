@@ -1,5 +1,5 @@
-[WARNING]  [/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler.cpp:256] tests/test_model_inherits_hetero_list.aiml:79: variable 'bas0.nam' is compared against a string literal in 'run' — consider a regular expression for string matching.
-[WARNING]  [/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler.cpp:256] tests/test_model_inherits_hetero_list.aiml:79: variable 'bas1.nam' is compared against a string literal in 'run' — consider a regular expression for string matching.
+[WARNING]  [<repo>/src/core/ast_compiler.cpp:256] tests/test_model_inherits_hetero_list.aiml:79: variable 'bas0.nam' is compared against a string literal in 'run' — consider a regular expression for string matching.
+[WARNING]  [<repo>/src/core/ast_compiler.cpp:256] tests/test_model_inherits_hetero_list.aiml:79: variable 'bas1.nam' is compared against a string literal in 'run' — consider a regular expression for string matching.
 
 === AIML CRASH (signal 11 at addr=(nil) tid=84403) ===
 backtrace: 13 frames

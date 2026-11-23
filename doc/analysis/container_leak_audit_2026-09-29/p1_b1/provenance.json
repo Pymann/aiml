@@ -1,8 +1,8 @@
 {
-  "root": "/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml",
+  "root": "<repo>",
   "binaries_before": {
-    "/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/out/aiml/aiml": "c386f6d1be06351bb63073fa2c73d2c182828cea7d789be1ed4df0b045aa6db3",
-    "/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/out/libaiml/libaiml.so": "13ca914a73fe10150c3b764f7a433769c1bd952d59f7bdf5ea95b18733665529"
+    "<repo>/out/aiml/aiml": "c386f6d1be06351bb63073fa2c73d2c182828cea7d789be1ed4df0b045aa6db3",
+    "<repo>/out/libaiml/libaiml.so": "13ca914a73fe10150c3b764f7a433769c1bd952d59f7bdf5ea95b18733665529"
   },
   "flags": {
     "AIML_MEM_V3": "1",
@@ -27,8 +27,8 @@
     "map_model_get_borrow": "92c6ba89255c23649b65eca3757350978bb9cfca803ea162cfa85edeea3da0af"
   },
   "binaries_after": {
-    "/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/out/aiml/aiml": "c386f6d1be06351bb63073fa2c73d2c182828cea7d789be1ed4df0b045aa6db3",
-    "/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/out/libaiml/libaiml.so": "13ca914a73fe10150c3b764f7a433769c1bd952d59f7bdf5ea95b18733665529"
+    "<repo>/out/aiml/aiml": "c386f6d1be06351bb63073fa2c73d2c182828cea7d789be1ed4df0b045aa6db3",
+    "<repo>/out/libaiml/libaiml.so": "13ca914a73fe10150c3b764f7a433769c1bd952d59f7bdf5ea95b18733665529"
   },
   "stable_binaries": true
 }

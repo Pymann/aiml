@@ -1,7 +1,7 @@
 ==122976== Memcheck, a memory error detector
 ==122976== Copyright (C) 2002-2022, and GNU GPL'd, by Julian Seward et al.
 ==122976== Using Valgrind-3.22.0 and LibVEX; rerun with -h for copyright info
-==122976== Command: /media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/doc/analysis/container_leak_audit_2026-09-29/p2p5/list_nested_control-400/bin
+==122976== Command: <repo>/doc/analysis/container_leak_audit_2026-09-29/p2p5/list_nested_control-400/bin
 ==122976== Parent PID: 122508
 ==122976== 
 ==122976== 

@@ -1,7 +1,7 @@
 
 === AIML CRASH (signal 11 at addr=(nil) tid=76825) ===
 backtrace: 8 frames
-/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/out/libaiml/libaiml.so(+0x9c1a3f)[0x7e382a3c1a3f]
+<repo>/out/libaiml/libaiml.so(+0x9c1a3f)[0x7e382a3c1a3f]
 /lib/x86_64-linux-gnu/libc.so.6(+0x45330)[0x7e3829645330]
 /lib/x86_64-linux-gnu/libc.so.6(+0x18b32b)[0x7e382978b32b]
 /tmp/aiml-container-review-results/map_model_replace-400/bin(+0x15ea)[0x61744f70a5ea]

@@ -1,26 +1,26 @@
 ==99935== Memcheck, a memory error detector
 ==99935== Copyright (C) 2002-2022, and GNU GPL'd, by Julian Seward et al.
 ==99935== Using Valgrind-3.22.0 and LibVEX; rerun with -h for copyright info
-==99935== Command: /media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/doc/analysis/container_leak_audit_2026-09-29/p1_b1/list_string_insert-400/bin
+==99935== Command: <repo>/doc/analysis/container_leak_audit_2026-09-29/p1_b1/list_string_insert-400/bin
 ==99935== Parent PID: 99837
 ==99935== 
 ==99935== Invalid read of size 4
 ==99935==    at 0x512B2B2: aiml_str_decref (string_runtime.cpp:116)
 ==99935==    by 0x512B500: aiml_list_free (string_runtime.cpp:191)
 ==99935==    by 0x512BC6C: aiml_list_handle_release (string_runtime.cpp:327)
-==99935==    by 0x109407: __aiml_user_main (in /media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/doc/analysis/container_leak_audit_2026-09-29/p1_b1/list_string_insert-400/bin)
-==99935==    by 0x1095AA: main (in /media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/doc/analysis/container_leak_audit_2026-09-29/p1_b1/list_string_insert-400/bin)
+==99935==    by 0x109407: __aiml_user_main (in <repo>/doc/analysis/container_leak_audit_2026-09-29/p1_b1/list_string_insert-400/bin)
+==99935==    by 0x1095AA: main (in <repo>/doc/analysis/container_leak_audit_2026-09-29/p1_b1/list_string_insert-400/bin)
 ==99935==  Address 0x128b2380 is 0 bytes inside a block of size 17 free'd
 ==99935==    at 0x484988F: free (in /usr/libexec/valgrind/vgpreload_memcheck-amd64-linux.so)
 ==99935==    by 0x512B2F4: aiml_str_decref (string_runtime.cpp:121)
-==99935==    by 0x1093E6: __aiml_user_main (in /media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/doc/analysis/container_leak_audit_2026-09-29/p1_b1/list_string_insert-400/bin)
-==99935==    by 0x1095AA: main (in /media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/doc/analysis/container_leak_audit_2026-09-29/p1_b1/list_string_insert-400/bin)
+==99935==    by 0x1093E6: __aiml_user_main (in <repo>/doc/analysis/container_leak_audit_2026-09-29/p1_b1/list_string_insert-400/bin)
+==99935==    by 0x1095AA: main (in <repo>/doc/analysis/container_leak_audit_2026-09-29/p1_b1/list_string_insert-400/bin)
 ==99935==  Block was alloc'd at
 ==99935==    at 0x4846828: malloc (in /usr/libexec/valgrind/vgpreload_memcheck-amd64-linux.so)
 ==99935==    by 0x512B087: aiml_str_alloc (string_runtime.cpp:54)
-==99935==    by 0x10954D: __aiml_str_concat (in /media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/doc/analysis/container_leak_audit_2026-09-29/p1_b1/list_string_insert-400/bin)
-==99935==    by 0x1092F6: __aiml_user_main (in /media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/doc/analysis/container_leak_audit_2026-09-29/p1_b1/list_string_insert-400/bin)
-==99935==    by 0x1095AA: main (in /media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/doc/analysis/container_leak_audit_2026-09-29/p1_b1/list_string_insert-400/bin)
+==99935==    by 0x10954D: __aiml_str_concat (in <repo>/doc/analysis/container_leak_audit_2026-09-29/p1_b1/list_string_insert-400/bin)
+==99935==    by 0x1092F6: __aiml_user_main (in <repo>/doc/analysis/container_leak_audit_2026-09-29/p1_b1/list_string_insert-400/bin)
+==99935==    by 0x1095AA: main (in <repo>/doc/analysis/container_leak_audit_2026-09-29/p1_b1/list_string_insert-400/bin)
 ==99935== 
 ==99935== 
 ==99935== HEAP SUMMARY:

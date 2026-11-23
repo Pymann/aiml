@@ -1,11 +1,11 @@
 
 === AIML CRASH (signal 11 at addr=(nil) tid=106191) ===
 backtrace: 8 frames
-/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/out/libaiml/libaiml.so(+0x8cf957)[0x5129957]
+<repo>/out/libaiml/libaiml.so(+0x8cf957)[0x5129957]
 /lib/x86_64-linux-gnu/libc.so.6(+0x45330)[0x583c330]
 /usr/libexec/valgrind/vgpreload_memcheck-amd64-linux.so(_vgr20160ZU_libcZdsoZa_strcmp+0x4)[0x4850364]
-/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/doc/analysis/container_leak_audit_2026-09-29/p1_b1_final/map_model_get_borrow-400/bin(+0x14ca)[0x1094ca]
-/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/doc/analysis/container_leak_audit_2026-09-29/p1_b1_final/map_model_get_borrow-400/bin(+0x167b)[0x10967b]
+<repo>/doc/analysis/container_leak_audit_2026-09-29/p1_b1_final/map_model_get_borrow-400/bin(+0x14ca)[0x1094ca]
+<repo>/doc/analysis/container_leak_audit_2026-09-29/p1_b1_final/map_model_get_borrow-400/bin(+0x167b)[0x10967b]
 /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca)[0x58211ca]
 /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b)[0x582128b]
-/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/doc/analysis/container_leak_audit_2026-09-29/p1_b1_final/map_model_get_borrow-400/bin(+0x1185)[0x109185]
+<repo>/doc/analysis/container_leak_audit_2026-09-29/p1_b1_final/map_model_get_borrow-400/bin(+0x1185)[0x109185]
