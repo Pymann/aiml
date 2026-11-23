@@ -189,9 +189,9 @@ N|storage|23_2_storage
 N|leak|61_memory_management
 N|heap|61_memory_management
 
-# --- D: Konstrukt im Rumpf.  Nur spezifische Marker; die allgegenwaertigen
-#     (list<, map<, while:, io., log., - model:, - class:) stehen bewusst NICHT
-#     hier, sonst traefe jedes Kapitel jeden Test.
+# --- D: construct in the body.  Only specific markers; the ubiquitous ones
+#     (list<, map<, while:, io., log., - model:, - class:) are deliberately NOT
+#     here, otherwise every chapter would hit every test.
 D|free:|20_free_operator
 D|fn<|12_1_function_pointers
 D|{ new:|18_instantiation

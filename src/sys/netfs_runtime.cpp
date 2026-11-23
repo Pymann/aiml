@@ -168,7 +168,7 @@ int32_t aiml_netfs_connect(const char* url, int32_t cred) {
     }
     if (!load_smb()) return 0;
     if (!g_smb.initialised) {
-        if (g_smb.init(auth_cb, 0) != 0) { set_error("smbc_init fehlgeschlagen"); return 0; }
+        if (g_smb.init(auth_cb, 0) != 0) { set_error("smbc_init failed"); return 0; }
         g_smb.initialised = true;
     }
     g_active_cred = cred;
@@ -237,7 +237,7 @@ int32_t aiml_netfs_write_file(const char* rel, const char* data) {
     const size_t len = data ? strlen(data) : 0;
     const ssize_t n = len ? g_smb.write(fd, data, len) : 0;
     g_smb.close(fd);
-    if (n < 0 || (size_t)n != len) { set_error("write_file: unvollstaendig geschrieben"); return -1; }
+    if (n < 0 || (size_t)n != len) { set_error("write_file: incompletely written"); return -1; }
     return 0;
 }
 

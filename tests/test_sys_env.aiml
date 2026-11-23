@@ -12,7 +12,7 @@
     name: main
     return: i32
     body:
-      # 1) Property-Form (spec/23) — Nullpointer-Regression.
+      # 1) property form (spec/23) — null pointer regression.
       - decl: [prop_env, map<string:string>]
       - set: [prop_env, sys.env]
       - decl: [prop_count, i32, prop_env.len]

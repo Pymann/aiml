@@ -2,7 +2,7 @@
 # Tests for the math namespace: vec2/3/4, quat, mat4, ivec2/3, scalars, operators
 # Expected exit code: 0
 
-# ── Phase A: Konstanten ────────────────────────────────────────────────────────
+# ── Phase A: constants ────────────────────────────────────────────────────────
 
 - decl: [var_pi,  f32, math.PI]
 - decl: [tau, f32, math.TAU]

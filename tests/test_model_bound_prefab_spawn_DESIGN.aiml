@@ -67,7 +67,7 @@
     name: DurationType
     nodes:
       - permanent:               [1]
-      - turns:                   [2, ValueType]                # rekursiv!
+      - turns:                   [2, ValueType]                # recursive!
       - next_turn_phase:         [3, GamePhase]
       - end_of_phase:            [4, GamePhase]
       - as_long_as_equipped:     [5]
@@ -360,7 +360,7 @@
           name: fire
           args: [[ctx, ClickCtx]]
           body:
-            - decl: [item, T, { new: T }]       # Neues Element mit Defaults
+            - decl: [item, T, { new: T }]       # New element with defaults
             - call: [<.target.push, item]
 
 - class:

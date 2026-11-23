@@ -114,7 +114,7 @@
       - call: [svc.write_corrupt, "bad"]
       - decl: [okc, i32, { call: [svc.fetch_into, "bad"] }]
       - if: { condition: { neq: [okc, -1] }, then: [{ print: ["FAIL 9: corrupt blob returned ${okc} (exp -1)"] }, { set: [fails, { +: [fails, 1] }] }] }
-      - if: { condition: { neq: [svc.work.tags.len, 0] }, then: [{ print: ["FAIL 10: corrupt blob left non-empty buffer (tags.len=${svc.work.tags.len}, exp 0/gezeroed)"] }, { set: [fails, { +: [fails, 1] }] }] }
+      - if: { condition: { neq: [svc.work.tags.len, 0] }, then: [{ print: ["FAIL 10: corrupt blob left non-empty buffer (tags.len=${svc.work.tags.len}, exp 0/zeroed)"] }, { set: [fails, { +: [fails, 1] }] }] }
 
       # ── 4. memory regression: reuse does NOT grow ─────────────────────────
       - decl: [warm, i64, { call: [svc.probe_reuse, 2000] }]

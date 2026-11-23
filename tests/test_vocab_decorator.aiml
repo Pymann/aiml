@@ -11,7 +11,7 @@
 - decl: [voc,   string, '{"Draw":["Draw","Ziehen","Piocher"],"card":["card","Karte","carte"],"UNK":["UNK","","---"]}']
 - decl: [rc_load, i32, { call: [vocab.load, langs, voc] }]
 
-# ── A: Decorated string-return-Funktion ──────────────────────────────────
+# ── A: decorated string-returning function ──────────────────────────────────
 
 - def:
     name: draw_verb
@@ -50,7 +50,7 @@
     body:
       - return: "Draw"
 
-# ── D: Non-string-return mit vocab-Decorator = Pass-through (safe) ───────
+# ── D: non-string return with a vocab decorator = pass-through (safe) ───────
 
 - def:
     name: number_thing

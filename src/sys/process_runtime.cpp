@@ -669,7 +669,7 @@ extern "C" char* aiml_sys_require_tools(const char* spec) {
         if (one.rfind("lib:", 0) == 0) {
             std::string lib = one.substr(4);
             if (!havePkgConfig) {
-                missing += " " + one + "(pkg-config fehlt)";   /* F23-41 */
+                missing += " " + one + "(pkg-config missing)";   /* F23-41 */
                 continue;
             }
             std::string cmd = "pkg-config --exists " + lib + " 2>/dev/null";

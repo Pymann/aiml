@@ -39,7 +39,7 @@
 
 - call: [glfwMakeContextCurrent, win]
 
-# ── Phase B: OpenGL initialisieren ────────────────────────────────────────────
+# ── Phase B: initialise OpenGL ────────────────────────────────────────────
 
 - call: [gl.init]
 - call: [gl.enable_depth_test]
@@ -98,7 +98,7 @@
 
 - print: ["Phase C OK: cube geometry uploaded"]
 
-# ── Phase D: Shader kompilieren ───────────────────────────────────────────────
+# ── Phase D: compile shaders ───────────────────────────────────────────────
 
 - text: vert_src
   value: |
@@ -128,7 +128,7 @@
 - decl: [sh_white, gl_shader, { call: [gl.compile_shader, vert_src, frag_white] }]
 - decl: [sh_red,   gl_shader, { call: [gl.compile_shader, vert_src, frag_red] }]
 
-- print: ["Phase D OK: Shader kompiliert"]
+- print: ["Phase D OK: shaders compiled"]
 
 # ── Phase E: rotation render loop (~10 s, 300 frames at 33 ms) ───────────────
 # Two-pass: 1) white faces (fill + polygon offset), 2) red edges (GL_LINES)

@@ -35,5 +35,5 @@
           then:
             - call: [log.error, "host function returned ${ans}, expected 42"]
             - return: [1]
-      - call: [log.info, "PASS 14 vorgeladenes Wirts-Symbol aufrufbar"]
+      - call: [log.info, "PASS 14 preloaded host symbol callable"]
       - return: [0]

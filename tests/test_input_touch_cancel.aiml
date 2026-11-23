@@ -88,7 +88,7 @@
           condition: { lt: [moved_x, 100.0] }
           then: [{ call: [log.error, "FAIL card did not follow the cursor (x=${moved_x})"] }, { return: 1 }]
 
-      # ── 2. + 3. Abbruch ─────────────────────────────────────────────────
+      # ── 2. + 3. Cancel ─────────────────────────────────────────────────
       - call: [engine.swap, win]
       - call: [input.post_touch_cancel]
       - decl: [cancelled, i32, { call: [input.mouse_cancelled, 0] }]

@@ -82,5 +82,5 @@
       - if: { condition: { "||": [{ neq: [bild4, 0] }, { neq: [bild5, 0] }] }, then: [{ print: ["FAIL click NEXT TO the button reports a hit"] }, { return: 1 }] }
 
       - call: [engine.destroy_window, win]
-      - print: ["OK ui.button nimmt injizierte Klicks an"]
+      - print: ["OK ui.button accepts injected clicks"]
       - return: 0

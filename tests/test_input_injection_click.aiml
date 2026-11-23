@@ -48,7 +48,7 @@
       - decl: [scene, prefab_instance, { call: [engine.instantiate, "ClickScene"] }]
       - call: [scene.set_pos, 0.0, 0.0]
 
-      # ── 1. Geometrie ─────────────────────────────────────────────────────
+      # ── 1. Geometry ─────────────────────────────────────────────────────
       - decl: [btn_x, f32, { call: [scene.child_rect_x, "ok_btn"] }]
       - decl: [btn_y, f32, { call: [scene.child_rect_y, "ok_btn"] }]
       - decl: [btn_w, f32, { call: [scene.child_rect_w, "ok_btn"] }]

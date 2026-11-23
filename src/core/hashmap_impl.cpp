@@ -192,7 +192,7 @@ llvm::Value* method(CompilerContext& ctx, const std::string& typeName, llvm::Val
         return list;
     }
     known = false;
-    LOG_ERROR(ctx.fmtLoc() + "Unbekannte hashmap-Methode: " + methodName +
+    LOG_ERROR(ctx.fmtLoc() + "Unknown hashmap method: " + methodName +
               " (put, get, add, contains, remove, len, clear, keys)");
     return nullptr;
 }

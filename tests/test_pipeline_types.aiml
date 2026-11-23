@@ -77,7 +77,7 @@
       - call: [bad_pipe.add_param, "mode", modes]
       - call: [bad_pipe.add_stage, bad_stage]
       - decl: [rc_bad, i32, { call: [bad_pipe.run] }]
-      - print: ["fehlerhafte Pipeline rc=${rc_bad}"]
+      - print: ["faulty pipeline rc=${rc_bad}"]
       - set: [fails, { +: [fails, { call: [expect, "unknown axis is rejected", { neq: [rc_bad, 0] }] }] }]
       - set: [fails, { +: [fails, { call: [expect, "and no step ran in the process", { eq: [{ call: [bad_pipe.ran_count] }, 0] }] }] }]
 

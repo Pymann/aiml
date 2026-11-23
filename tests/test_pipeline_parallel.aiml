@@ -124,7 +124,7 @@
       - decl: [broke, pipeline, { call: [eight_lanes, 4, 1] }]
       - decl: [rc_b, i32, { call: [broke.run] }]
       - set: [fails, { +: [fails, { call: [expect, "parallel: the failure arrives", { neq: [rc_b, 0] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "parallel: on_fail=pipeline stoppt die Vergabe", { lt: [{ call: [broke.attempt_count] }, 8] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "parallel: on_fail=pipeline stops the dispatch", { lt: [{ call: [broke.attempt_count] }, 8] }] }] }]
 
       - if:
           condition: { neq: [fails, 0] }

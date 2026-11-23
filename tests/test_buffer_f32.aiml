@@ -8,11 +8,11 @@
 - decl: [fail, i32, 0]
 - decl: [eps, f32, 0.001]
 
-# ── Phase A: Alloc + sequentielles write/read ──────────────────────────────
+# ── Phase A: alloc + sequential write/read ──────────────────────────────
 - decl: [buf, buffer]
 - call: [buf.alloc, 4096]
 
-# 4 floats schreiben (dim=4, 1 Token)
+# write 4 floats (dim=4, 1 token)
 - call: [buf.write, 0.1, f32]
 - call: [buf.write, 0.2, f32]
 - call: [buf.write, 0.3, f32]
@@ -149,7 +149,7 @@
 - call: [emb.seek, 644]
 - call: [emb.write, 2.5, f32]
 
-# Lesen: Token 5, Dim 0
+# Read: token 5, dim 0
 - call: [emb.seek, 640]
 - decl: [e50, f32, { call: [emb.read, f32] }]
 - if:

@@ -7,7 +7,7 @@
 # Before the fix: aiml_db_kv_open ignored the name parameter and returned a
 # new empty KV every time → var_kv.get in function B did not find the key → null deref → SIGSEGV.
 
-# ─── Hilfsfunktionen ──────────────────────────────────────────────────────────
+# ─── Helper functions ──────────────────────────────────────────────────────────
 
 - def:
     name: kv_writer

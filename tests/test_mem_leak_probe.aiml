@@ -128,7 +128,7 @@
             - set: [hcnt, { +: [hcnt, 1] }]
       - return: { -: [{ call: [sys.mem_usage] }, before] }
 
-# Probe D: reine list<string> Aufbau+Drop pro Iteration (STRING-LITERALE).
+# Probe D: pure list<string> build+drop per iteration (STRING LITERALS).
 - def:
     name: probe_list
     static_off: ["same_arg"]

@@ -560,7 +560,7 @@ IRValue* Compiler::visitCall(CallExpr* call) {
             // otherwise the caller believes he has the gain.
             if (ctx.dbOpenIndexDump && !ctx.dbOpenPersist)
                 LOG_ERROR(ctx.fmtLoc(call->sourceNode) + "db." + methodName
-                    + ": index_dump: true braucht persist: true (spec/31 §6.2.1)");
+                    + ": index_dump: true needs persist: true (spec/31 §6.2.1)");
         }
 
         // spec/23 §5.1: sys.exe option bag — bools are compile-time literals, the rest expressions.
@@ -5032,7 +5032,7 @@ IRValue* Compiler::visitSysExecCall(CallExpr* call) {
     // expression, because a console forms the policy per user at runtime.
     if (call->args.size() >= 2) {
         if (call->args.size() > 4) {
-            LOG_ERROR(ctx.fmtLoc() + "sys.exec: hoechstens (pkg, clearance, create_level, replace_level) — "
+            LOG_ERROR(ctx.fmtLoc() + "sys.exec: at most (pkg, clearance, create_level, replace_level) — "
                       "spec/65 F65-26/F65-36");
             return ctx.ir_gen->getInt32(-1);
         }

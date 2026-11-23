@@ -2614,7 +2614,7 @@ struct AimlIterator {
     bool        dump_path = false;
     uint64_t    dump_pos  = 0;
     bool        have      = false;
-    std::string cur_key;   // naechster Schluessel
+    std::string cur_key;   // next key
     std::string ret_key;   // the last one returned, valid until the next call
 };
 
@@ -3115,7 +3115,7 @@ struct AimlIndexBucket {
     // it would not be recognisable by the empty key, "" is a legitimate
     // kv key.  Whoever clears a slot clears it BEFORE the pos.erase.
     std::vector<const std::string*>         slots;  // Einfuegereihenfolge
-    std::unordered_map<std::string, size_t> pos;    // Schluessel → Stelle in slots
+    std::unordered_map<std::string, size_t> pos;    // key → position in slots
     size_t graves = 0;
 
     void add(const char* kv_key) {
@@ -3513,7 +3513,7 @@ static void sidx_write_one(AimlKv* kv, AimlIndex* idx, const std::string& field)
                 koff += ke.key_len + 1;
             }
         }
-        // Stringblock: erst die Feldwerte, dann die Schluessel, jeder mit 0.
+        // String block: first the field values, then the keys, each with 0.
         for (auto& v : vals) { roh(v.val, v.val_len); buf.push_back('\0'); spuel(false); }
         for (auto& v : vals)
             for (uint32_t i = 0; i < v.cnt; i++) {

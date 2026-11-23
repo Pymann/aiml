@@ -69,7 +69,7 @@
 - while:
     condition: { call: [engine.running, win] }
     body:
-      # ── Update: progress bar animieren ──────────────────────────────────
+      # ── Update: animate the progress bar ──────────────────────────────────
       - set: [progress, { +: [progress, 0.004] }]
       - if: [{ gt: [progress, 1.0] }, true]
         then:

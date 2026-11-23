@@ -9,7 +9,7 @@
 #   - var_wh.queue.inner.field  (3-level chain through an embedded struct)
 #   - spawn + channel + embedded struct access in the thread
 
-# ─── Modelle ──────────────────────────────────────────────────────────────────
+# ─── Models ──────────────────────────────────────────────────────────────────
 - model:
     name: BigCfg
     fields:

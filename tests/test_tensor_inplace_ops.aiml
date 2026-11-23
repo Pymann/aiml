@@ -50,7 +50,7 @@
 - call: [acc.scale_inplace, 0.5]
 - decl: [acc0, f32, { call: [acc.get, 0] }]
 
-# Referenzpfad
+# reference path
 - decl: [ref_sum, tensor, { call: [tensor.add, var_g0, var_g1] }]
 - decl: [ref_mean, tensor, { call: [tensor.mul_scalar, ref_sum, 0.5] }]
 - decl: [ref0, f32, { call: [ref_mean.get, 0] }]

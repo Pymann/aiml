@@ -54,7 +54,7 @@
       - set: [flat.count, 7]
       - decl: [flat_wire, string, { call: [sys.serialize, flat] }]
       - decl: [flat_back, Stamped, { call: [sys.deserialize, flat_wire, "Stamped"] }]
-      - set: [fails, { +: [fails, { call: [expect, "i64 im obersten Modell", { eq: [flat_back.taken_ms, big] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "i64 in the top-level model", { eq: [flat_back.taken_ms, big] }] }] }]
       - set: [fails, { +: [fails, { call: [expect, "and the i32 next to it", { eq: [flat_back.count, 7] }] }] }]
 
       # 2) i64 in a NESTED model — this is where it went wrong.
@@ -65,9 +65,9 @@
       - set: [nested.inner.count, 9]
       - decl: [nested_wire, string, { call: [sys.serialize, nested] }]
       - decl: [nested_back, Wrapper, { call: [sys.deserialize, nested_wire, "Wrapper"] }]
-      - set: [fails, { +: [fails, { call: [expect, "Zeichenkette im verschachtelten Modell", { eq: [nested_back.inner.label, "innen"] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "i64 im verschachtelten Modell", { eq: [nested_back.inner.taken_ms, big] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "i32 im verschachtelten Modell", { eq: [nested_back.inner.count, 9] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "string in the nested model", { eq: [nested_back.inner.label, "innen"] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "i64 in the nested model", { eq: [nested_back.inner.taken_ms, big] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "i32 in the nested model", { eq: [nested_back.inner.count, 9] }] }] }]
       - print: ["  (nested: taken_ms=${nested_back.inner.taken_ms}, expected ${big})"]
 
       # 3) The same with a list after the nested model.
@@ -80,7 +80,7 @@
       - call: [mixed.notes.push, "zweite notiz"]
       - decl: [mixed_wire, string, { call: [sys.serialize, mixed] }]
       - decl: [mixed_back, WrapperWithList, { call: [sys.deserialize, mixed_wire, "WrapperWithList"] }]
-      - set: [fails, { +: [fails, { call: [expect, "i64 mit Liste dahinter", { eq: [mixed_back.inner.taken_ms, big] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "i64 with a list behind it", { eq: [mixed_back.inner.taken_ms, big] }] }] }]
       - set: [fails, { +: [fails, { call: [expect, "the list after it arrives", { eq: [mixed_back.notes.len, 2] }] }] }]
 
       # ── 4) The BINARY route: typed KV store (ser_encode/ser_decode),

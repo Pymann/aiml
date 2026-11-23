@@ -15,7 +15,7 @@ AIML="${AIML:-out/aiml/aiml}"
 export AIML_LINT_PREFAB_INPUT=1
 DIR=tests/prefab_input
 
-echo "── Eingabe-Erreichbarkeit (spec/44_8 Tier 4) ──"
+echo "── input reachability (spec/44_8 tier 4) ──"
 fail=0
 ok()  { printf "  ok   %s\n" "$1"; }
 bad() { printf "  FAIL %s\n" "$1"; fail=1; }

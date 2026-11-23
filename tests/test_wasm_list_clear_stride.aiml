@@ -79,7 +79,7 @@
             - set: [row.row_num, mix]
             - call: [rows.push, row]
             - set: [mix, { +: [mix, 1] }]
-      - set: [fails, { +: [fails, { call: [expect, "96 Modelle", { eq: [rows.len, 96] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "96 models", { eq: [rows.len, 96] }] }] }]
       # Read before the clear: the contents must be intact (stride in at).
       - decl: [bad, i32, 0]
       - decl: [vix, i32, 0]
@@ -89,7 +89,7 @@
             - decl: [got, StrideRow, { at: [rows, vix] }]
             - if: { condition: { neq: [got.row_num, vix] }, then: [{ set: [bad, { +: [bad, 1] }] }] }
             - set: [vix, { +: [vix, 1] }]
-      - set: [fails, { +: [fails, { call: [expect, "jedes Modell liegt an seinem Platz", { eq: [bad, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "every model is in its place", { eq: [bad, 0] }] }] }]
       - call: [rows.clear]
       - set: [fails, { +: [fails, { call: [expect, "clear on list<Model> survives", { eq: [rows.len, 0] }] }] }]
 

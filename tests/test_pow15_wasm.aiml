@@ -1,4 +1,4 @@
-# Reproduziert pow15_i (x^1.5 via f32-sqrt) + f32→i64 via `set` in WASM.
+# Reproduces pow15_i (x^1.5 via f32-sqrt) + f32→i64 via `set` in WASM.
 - def:
     name: pow15_i
     args: [[val, i64]]

@@ -354,7 +354,7 @@ public:
     // are ignored (forward-compatible).  Parsed from `meta: [...]`.
     std::vector<std::string> meta;
 
-    // spec/65 F65-19/F65-10: `level:`/`grants:` als def-Schluessel.  -1 = absent.
+    // spec/65 F65-19/F65-10: `level:`/`grants:` as def keys.  -1 = absent.
     int level = -1;
     int grants = -1;
 

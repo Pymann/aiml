@@ -54,7 +54,7 @@
       - decl: [fails, i32, 0]
 
       - decl: [rc_seven, i32, { call: [sys.exec, { call: [sys.bundle, "ret_seven", { context: true }] }] }]
-      - print: ["  (Rueckgabe 7 im Bundle -> rc=${rc_seven})"]
+      - print: ["  (return 7 in the bundle -> rc=${rc_seven})"]
 
       - decl: [rc_throw, i32, { call: [sys.exec, { call: [sys.bundle, "throws", { context: true }] }] }]
       - print: ["  (throwing body -> rc=${rc_throw})"]
@@ -62,7 +62,7 @@
 
       - decl: [rc_list, i32, { call: [sys.exec, { call: [sys.bundle, "uses_list", { context: true }] }] }]
       - print: ["  (list<string> + push im Bundle -> rc=${rc_list})"]
-      - set: [fails, { +: [fails, { call: [expect, "Container-Methoden wirken im Bundle", { eq: [rc_list, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "container methods work in the bundle", { eq: [rc_list, 0] }] }] }]
 
       - if:
           condition: { neq: [fails, 0] }

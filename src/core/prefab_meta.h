@@ -12,7 +12,7 @@ namespace aiml {
 namespace prefab {
 
 struct ChildMeta {
-    std::string loc;      // "datei:zeile:spalte: " des KINDES (spec/49 F49-100)
+    std::string loc;      // "file:line:column: " of the CHILD (spec/49 F49-100)
     std::string name;
     std::string type;
     float pos_x = 0, pos_y = 0, width = 0, height = 0;

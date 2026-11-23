@@ -206,7 +206,7 @@
     }
 
 - decl: [shader, gl_shader, { call: [gl.compile_shader, vert_src, frag_src] }]
-- print: ["Phase D OK: Shader kompiliert"]
+- print: ["Phase D OK: shaders compiled"]
 
 # ── Phase E: rotation render loop (300 frames at 33 ms ≈ 10 s) ───────────────
 #

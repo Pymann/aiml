@@ -58,7 +58,7 @@
           condition: { neq: [right_fp, 1] }
           then: [{ print: ["FAIL right fingerprint was rejected"] }, { return: 1 }]
 
-      # ── 3. Authentifizierung ─────────────────────────────────────────────
+      # ── 3. Authentication ─────────────────────────────────────────────
       - decl: [bad_pw, i32, { call: [sess_a.auth_password, "falsch"] }]
       - if:
           condition: { neq: [bad_pw, 0] }

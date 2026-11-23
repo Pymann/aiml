@@ -9,7 +9,7 @@ PROBE=tests/lint_globals/probe.aiml
 LOG=tests/lint_globals/out.log
 fails=0
 
-check() { # name, bedingung
+check() { # name, condition
     if [ "$2" = "1" ]; then echo "  ok   $1"; else echo "  FAIL $1"; fails=$((fails+1)); fi
 }
 

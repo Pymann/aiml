@@ -37,7 +37,7 @@
       - decl: [res, i32, { call: [pipe.run] }]
       - if:
           condition: { neq: [res, 0] }
-          then: [{ print: ["FAIL: Lauf endete mit ${res}"] }, { return: 1 }]
+          then: [{ print: ["FAIL: run ended with ${res}"] }, { return: 1 }]
       # And the check itself, directly: what is missing is named.
       - decl: [miss, string, { call: [sys.require_tools, "gibtesnicht_zzz,sh"] }]
       - if:

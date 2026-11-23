@@ -2813,7 +2813,7 @@ void registerBuiltins(CompilerContext& ctx) {
                     ctx.getFunction(cfn, i8p, {i8p}), {self}));
             };
         };
-        // Leser mit festem Schluessel: `stg.agent` ruft attr(self, "agent").
+        // Reader with a fixed key: `stg.agent` calls attr(self, "agent").
         auto mkAttrStr = [](const char* cfn, const char* key) {
             return [cfn, key](CompilerContext& ctx, llvm::Value* base,
                               AIML::AST::CallExpr*, auto) -> IRValue* {
@@ -2910,7 +2910,7 @@ void registerBuiltins(CompilerContext& ctx) {
                     got, llvm::ConstantPointerNull::get(llvm::PointerType::getUnqual(ctx.context)));
                 llvm::Value* flag = ctx.builder.CreateZExt(isNull, ctx.builder.getInt8Ty());
                 llvm::Value* msg = ctx.builder.CreateGlobalStringPtr(
-                    std::string(what) + ": Index liegt ausserhalb (spec/62 F62-154)", "idx_msg");
+                    std::string(what) + ": index out of range (spec/62 F62-154)", "idx_msg");
                 emitGuardMsg(ctx, flag, "idx_bad", "idx_ok", "IndexOutOfBoundsException", msg);
                 return ctx.ir_gen->wrap(got);
             };

@@ -118,7 +118,7 @@ extern "C" void aiml_os_mouse_up(int32_t btn) {
 extern "C" void aiml_os_key_down(const char* name) {
     if (!ensure_display()) return;
     KeySym ks = keysym_for(name);
-    if (ks == NoSymbol) { fprintf(stderr, "[os_input] unbekannte Taste '%s'\n", name ? name : "(null)"); return; }
+    if (ks == NoSymbol) { fprintf(stderr, "[os_input] unknown key '%s'\n", name ? name : "(null)"); return; }
     KeyCode kc = XKeysymToKeycode(g_dpy, ks);
     if (!kc) { fprintf(stderr, "[os_input] no keycode mapping for '%s'\n", name); return; }
     XTestFakeKeyEvent(g_dpy, kc, True, 0);

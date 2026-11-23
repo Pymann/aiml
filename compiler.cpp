@@ -1068,7 +1068,7 @@ std::shared_ptr<std::vector<std::string>> AIMLCompiler::installImportResolver(
     return deferredImports;
 }
 
-// spec/04 "Operator-Schluessel zitieren" (quoting operator keys): for a bare operator key
+// spec/04 "Quoting operator keys": for a bare operator key
 // yaml-cpp only reports `unknown token` at the column of the character -- the author then looks for
 // a YAML problem, although a quotation mark is missing.  The exception's mark points
 // exactly at the character; with it the line can be fetched and the cause named.
@@ -1087,7 +1087,7 @@ static std::string bareOpKeyHint(const std::string& filename, const YAML::Except
     return " — line " + std::to_string(e.mark.line + 1) + " writes the operator key '"
            + op + "' bare: `" + gezeigt + "`.  A bare '" + op + "' is a YAML indicator"
            " character, not a key.  Quote it: { \"" + op + "\": [...] }"
-           " (spec/04 \"Operator-Schluessel zitieren\").";
+           " (spec/04 \"Quoting operator keys\").";
 }
 
 // spec/70 §11.2 — one clock for all phase counters.  Milliseconds as double:
@@ -1221,7 +1221,7 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
             }
         }
     } catch (const std::exception& e) {
-        LOG_ERROR(filename + std::string(": pipeline-Umschreibung: ") + e.what());
+        LOG_ERROR(filename + std::string(": pipeline rewrite: ") + e.what());
         return;
     }
     const double phaseParseStart = phaseNowMs();
@@ -1861,8 +1861,8 @@ int AIMLCompiler::compileLibraryAndRegister(const std::string& yaml_source) {
     // Keep the engine: otherwise the code is freed and the addresses just
     // registered point into nothing.
     engine_ = eng;
-    LOG_WARNING("compileLibraryAndRegister: " + std::to_string(registered) + " von " +
-                std::to_string(c ? c->functions.size() : 0) + " Eintraegen registriert");
+    LOG_WARNING("compileLibraryAndRegister: " + std::to_string(registered) + " of " +
+                std::to_string(c ? c->functions.size() : 0) + " entries registered");
     return registered;
 }
 

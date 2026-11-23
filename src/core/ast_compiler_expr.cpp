@@ -58,8 +58,8 @@ IRValue* Compiler::visitListLiteralValue(BufferLiteralExpr* lit) {
         ? static_cast<llvm::Type*>(llvm::PointerType::get(ctx.context, 0))
         : static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(elemName)));
     if (!elemTy) {
-        LOG_ERROR(ctx.fmtLoc(lit->sourceNode) + "Listenliteral als Argument: unbekannter"
-                  " Elementtyp '" + elemName + "' (spec/10).");
+        LOG_ERROR(ctx.fmtLoc(lit->sourceNode) + "list literal as an argument: unknown"
+                  " element type '" + elemName + "' (spec/10).");
         return nullptr;
     }
     llvm::Value* handle = ctx.builder.CreateCall(

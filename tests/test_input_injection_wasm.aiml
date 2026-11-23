@@ -73,7 +73,7 @@
           condition: { neq: [rel2, 0] }
           then: [{ print: ["FAIL mouse_released(0)=${rel2} after update — edge fires twice"] }, { return: 1 }]
 
-      # ── Tasten ───────────────────────────────────────────────────────────
+      # ── Keys ───────────────────────────────────────────────────────────
       - call: [input.post_key_down, "lctrl"]
       - decl: [ctrl_down, i32, { call: [input.key_down, "lctrl"] }]
       - decl: [ctrl_edge, i32, { call: [input.key_pressed, "lctrl"] }]
@@ -104,7 +104,7 @@
           condition: { neq: [ev_num, 2] }
           then: [{ print: ["FAIL post_text('aö') gave ${ev_num} text events, expected 2"] }, { return: 1 }]
 
-      # ── Scrollen ─────────────────────────────────────────────────────────
+      # ── Scrolling ─────────────────────────────────────────────────────────
       - call: [input.post_scroll, 0.0, -3.0]
       - decl: [scr, f32, { call: [input.mouse_scroll_y] }]
       - if:

@@ -309,7 +309,7 @@ std::unique_ptr<Node> StatementBuilder::finish() {
     // store: [ptr_var, value, (optional)depth]
     if (type == "store" && args.size() >= 1) {
         if (args.size() < 2 && !exprArg) {
-            LOG_ERROR(builder->fmtLoc(capturedLine, capturedColumn) + "store: braucht mindestens [ptr_var, value]");
+            LOG_ERROR(builder->fmtLoc(capturedLine, capturedColumn) + "store: needs at least [ptr_var, value]");
             return nullptr;
         }
         std::unique_ptr<Expr> val;
@@ -339,7 +339,7 @@ std::unique_ptr<Node> StatementBuilder::finish() {
             }
         }
         if (depth < 1) {
-            LOG_ERROR(builder->fmtLoc(capturedLine, capturedColumn) + "store: depth >= 1 erforderlich, got " + std::to_string(depth));
+            LOG_ERROR(builder->fmtLoc(capturedLine, capturedColumn) + "store: depth >= 1 required, got " + std::to_string(depth));
             return nullptr;
         }
         auto st = std::make_unique<StoreStmt>(args[0].first, std::move(val), depth);

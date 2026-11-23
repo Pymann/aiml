@@ -1,6 +1,6 @@
 # SPEC: 44_8_prefab_static
 # Requires: driver
-# EXPECT-SILENT: als Dekoration deklariert
+# EXPECT-SILENT: declared as decoration
 - prefab:
     name: FrameDeco
     width: 300

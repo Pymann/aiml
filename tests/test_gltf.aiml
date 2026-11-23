@@ -2,7 +2,7 @@
 # Tests for the gltf namespace: load, scene, node, mesh, primitive, material
 # Expected exit code: 0
 
-# ── Phase A: Fehlerbehandlung ──────────────────────────────────────────────
+# ── Phase A: error handling ──────────────────────────────────────────────
 
 - decl: [bad, gltf_scene, { call: [gltf.load, "/nonexistent_file.glb"] }]
 - decl: [bad_ok, i32, { call: [bad.valid] }]
@@ -60,7 +60,7 @@
 
 - print: ["Phase C OK"]
 
-# ── Phase D: Node-Eigenschaften ────────────────────────────────────────────
+# ── Phase D: node properties ────────────────────────────────────────────
 
 - decl: [node, gltf_node]
 - set: [node, { call: [nodes.get, 0] }]
@@ -162,7 +162,7 @@
 
 - print: ["Phase G OK"]
 
-# ── Freigabe ───────────────────────────────────────────────────────────────
+# ── Release ───────────────────────────────────────────────────────────────
 
 - call: [scene.free]
 - print: ["All gltf tests passed"]

@@ -4,7 +4,7 @@
 #include <vector>
 #include <cstring>
 #include "compiler.h"
-#include "src/core/asset_scanner.h"   // AssetScanner::all_stores() → Asset-Deps in die .d schreiben
+#include "src/core/asset_scanner.h"   // AssetScanner::all_stores() → write asset deps into the .d
 #include "logger.h"
 #include "src/core/venv.h"
 #include <filesystem>

@@ -42,7 +42,7 @@
       - if:
           condition: { eq: [whole, 3] }
           then: []
-          else: [{ print: ["FAIL f64 == Ganzzahl-Literal"] }, { set: [fails, { +: [fails, 1] }] }]
+          else: [{ print: ["FAIL f64 == integer literal"] }, { set: [fails, { +: [fails, 1] }] }]
 
       # ── arithmetic, the same matching step ──────────────────────────────
       - decl: [sum_val, f64, { +: [ratio, 0.25] }]
@@ -55,7 +55,7 @@
       - decl: [want_55, f64, 5.5]
       - if:
           condition: { neq: [prod, want_55] }
-          then: [{ print: ["FAIL f64 * Ganzzahl-Literal = ${prod}, expected 5.5"] }, { set: [fails, { +: [fails, 1] }] }]
+          then: [{ print: ["FAIL f64 * integer literal = ${prod}, expected 5.5"] }, { set: [fails, { +: [fails, 1] }] }]
 
       # ── counter-probe: with cast everything stays possible as before ────
       - if:

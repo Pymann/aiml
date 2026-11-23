@@ -121,5 +121,5 @@
       - if:
           condition: { eq: [fails, 0] }
           then: [{ print: ["PASS test_eq_member_strings"] }]
-          else: [{ print: ["FAILED ${fails} Pruefungen"] }]
+          else: [{ print: ["FAILED ${fails} checks"] }]
       - return: fails

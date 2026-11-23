@@ -8,7 +8,7 @@ cd "$(dirname "$0")/.."
 LOG="${1:-/tmp/aiml_build.log}"
 exec 9>/tmp/.aiml_build.lock
 if ! flock -n 9; then
-    echo "BUILD LAEUFT BEREITS — abgebrochen" >&2
+    echo "BUILD ALREADY RUNNING — aborted" >&2
     exit 2
 fi
 source ../../exvenv/bin/activate

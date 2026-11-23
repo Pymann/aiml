@@ -126,5 +126,5 @@
             - return: 1
 
       - call: [engine.destroy_window, win]
-      - call: [log.info, "PASS prefab_spawn_in_callback (${g_spawn_clicks} Knopf, ${g_cards.len} Karten, ${g_card_clicks} Kartenklicks)"]
+      - call: [log.info, "PASS prefab_spawn_in_callback (${g_spawn_clicks} button, ${g_cards.len} cards, ${g_card_clicks} card clicks)"]
       - return: 0

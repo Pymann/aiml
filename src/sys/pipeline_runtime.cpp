@@ -105,7 +105,7 @@ struct PStage {
     std::string        image;        // WORIN (F62-66)
     std::string        base;         // WORAUF: run:<lauf> | job:<kennung> (F62-144)
     std::string        requires_on;  // "git,gcc>=13" (§18.2, F62-126)
-    std::string        shares;       // "name:/ziel:modus,…" (§18.1b, F62-136)
+    std::string        shares;       // "name:/target:mode,…" (§18.1b, F62-136)
     std::string        command;      // `run:` — the command of slice 1
     int32_t            cpu_cores = 0;   // 0 = host default, NOT unlimited
     int32_t            mem_mb    = 0;
@@ -782,14 +782,14 @@ int32_t aiml_pipeline_run_observed(void* p, void* observer_raw) {
                             reach = (g_cur.fail_reach == 1) ? 1 : 0;
                             if (rc == 0) rc = -5;
                             LOG_ERROR("pipeline '" + pp->name + "': step '" + st.name +
-                                      "' brach ab: " + g_cur.fail_msg);
+                                      "' aborted: " + g_cur.fail_msg);
                         }
                         g_cur = CurStep{};
                         if (rc == 0) break;
                         if (attempt < st.retry)
                             LOG_WARNING("pipeline '" + pp->name + "': step '" + st.name +
-                                        "' Versuch " + std::to_string(attempt) + " von " +
-                                        std::to_string(st.retry) + " endete mit " + std::to_string(rc));
+                                        "' attempt " + std::to_string(attempt) + " of " +
+                                        std::to_string(st.retry) + " ended with " + std::to_string(rc));
                     }
                     std::lock_guard<std::mutex> g(state.mu);
                     if (rc == 0) ++pp->ran;
@@ -1003,13 +1003,13 @@ static std::vector<Bindings> live_lanes(PPipeline* pp) {
 void aiml_stage_set_attr(void* g, const char* key, const char* val) {
     if (!g || !key || !val) return;
     if (std::string* slot = stage_text(static_cast<PStage*>(g), key)) *slot = val;
-    else LOG_ERROR(std::string("stage.set_attr: unbekannter Schluessel '") + key + "'");
+    else LOG_ERROR(std::string("stage.set_attr: unknown key '") + key + "'");
 }
 
 void aiml_stage_set_limit(void* g, const char* key, int32_t value) {
     if (!g || !key) return;
     if (int32_t* slot = stage_num(static_cast<PStage*>(g), key)) *slot = value;
-    else LOG_ERROR(std::string("stage.set_limit: unbekannter Schluessel '") + key + "'");
+    else LOG_ERROR(std::string("stage.set_limit: unknown key '") + key + "'");
 }
 
 char* aiml_stage_attr(void* g, const char* key) {
@@ -1054,7 +1054,7 @@ char* aiml_step_need_at(void* s, int32_t idx) {
     if (!s) return aiml_str_alloc(0);
     auto* st = static_cast<PStep*>(s);
     if (idx < 0 || idx >= (int32_t)st->needs.size()) {
-        LOG_ERROR("step.need_at: Index " + std::to_string(idx) + " liegt ausserhalb");
+        LOG_ERROR("step.need_at: index " + std::to_string(idx) + " out of range");
         return aiml_str_alloc(0);
     }
     return str_out(st->needs[(size_t)idx]);
@@ -1089,7 +1089,7 @@ char* aiml_pipeline_lane_bindings(void* p, int32_t idx) {
     if (!p) return aiml_str_alloc(0);
     std::vector<Bindings> lanes = live_lanes(static_cast<PPipeline*>(p));
     if (idx < 0 || idx >= (int32_t)lanes.size()) {
-        LOG_ERROR("pipeline.lane_bindings: Index " + std::to_string(idx) + " liegt ausserhalb");
+        LOG_ERROR("pipeline.lane_bindings: index " + std::to_string(idx) + " out of range");
         return aiml_str_alloc(0);
     }
     return str_out(bind_text(lanes[(size_t)idx]));
@@ -1103,7 +1103,7 @@ char* aiml_pipeline_axis_name(void* p, int32_t idx) {
     if (!p) return aiml_str_alloc(0);
     auto* pp = static_cast<PPipeline*>(p);
     if (idx < 0 || idx >= (int32_t)pp->params.size()) {
-        LOG_ERROR("pipeline.axis_name: Index " + std::to_string(idx) + " liegt ausserhalb");
+        LOG_ERROR("pipeline.axis_name: index " + std::to_string(idx) + " out of range");
         return aiml_str_alloc(0);
     }
     return str_out(pp->params[(size_t)idx].first);
@@ -1130,7 +1130,7 @@ char* aiml_pipeline_axis_value(void* p, int32_t axis, int32_t vix) {
     if (axis < 0 || axis >= (int32_t)pp->params.size()) return aiml_str_alloc(0);
     const auto& vals = pp->params[(size_t)axis].second;
     if (vix < 0 || vix >= (int32_t)vals.size()) {
-        LOG_ERROR("pipeline.axis_value: Index " + std::to_string(vix) + " liegt ausserhalb");
+        LOG_ERROR("pipeline.axis_value: index " + std::to_string(vix) + " out of range");
         return aiml_str_alloc(0);
     }
     return str_out(vals[(size_t)vix]);
@@ -1144,7 +1144,7 @@ char* aiml_pipeline_push_field(void* p, int32_t idx, const char* which) {
     if (!p || !which) return aiml_str_alloc(0);
     auto* pp = static_cast<PPipeline*>(p);
     if (idx < 0 || idx >= (int32_t)pp->pushes.size()) {
-        LOG_ERROR("pipeline.push_*: Index " + std::to_string(idx) + " liegt ausserhalb");
+        LOG_ERROR("pipeline.push_*: index " + std::to_string(idx) + " out of range");
         return aiml_str_alloc(0);
     }
     const PPush& push = pp->pushes[(size_t)idx];

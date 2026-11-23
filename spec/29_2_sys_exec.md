@@ -997,8 +997,8 @@ Implemented at the third: `dfsCollect` collects every called name for which **no
 is stored**, and `sys.bundle` reports them:
 
 ```
-sys.bundle('worker'): unvollstaendig — gerufene Funktion(en) ohne hinterlegte Quelle:
-helper.  Der Empfaenger meldet dafuer 'Unknown function'.
+sys.bundle('worker'): incomplete — called function(s) without stored source:
+helper.  The receiver reports 'Unknown function' for them.
 ```
 
 Two properties that are intended here:

@@ -443,7 +443,7 @@ missing entries are in it, separated by spaces.
   first error produces three runs instead of one — and a user who gives up after the
   third.  That is exactly what this call is for, rather than three `sys.exe`.
 - **F23-41** If `pkg-config` itself is missing, every `lib:` requirement counts as missing and is
-  named with `(pkg-config fehlt)`.  Silently saying "yes" would be the dangerous direction:
+  named with `(pkg-config missing)`.  Silently saying "yes" would be the dangerous direction:
   the build would start and break at the linker.
 - **F23-42** The version check compares the **first number** of the first output line.
   That is enough for `gcc 13.3.0` and `cmake 3.28` and is deliberately simple; whoever needs more

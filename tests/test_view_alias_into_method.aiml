@@ -93,7 +93,7 @@
             - decl: [text, string, { call: [reader.describe, picked] }]
             - if:
                 condition: { lt: [text.len, 10] }
-                then: [{ print: ["  FAIL zu kurze Beschreibung in Runde ${round}"] }, { set: [fails, { +: [fails, 1] }] }]
+                then: [{ print: ["  FAIL description too short in round ${round}"] }, { set: [fails, { +: [fails, 1] }] }]
             - set: [round, { +: [round, 1] }]
 
       # Afterwards the container must be undamaged.

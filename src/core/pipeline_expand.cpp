@@ -304,7 +304,7 @@ bool expandPipelineDeclarations(const std::string& text, const std::string& wher
     try {
         root = YAML::Load(text);
     } catch (const std::exception& e) {
-        LOG_ERROR(where + ": pipeline-Umschreibung: " + e.what());
+        LOG_ERROR(where + ": pipeline rewrite: " + e.what());
         return false;
     }
     if (!root.IsSequence()) return false;

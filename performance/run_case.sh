@@ -21,9 +21,9 @@ mkdir -p "$WORK"
 
 ms() { date +%s%3N; }
 
-echo "== Umgebung (F70-15) =="
+echo "== Environment (F70-15) =="
 echo "commit=$(cd "$ROOT" && git rev-parse --short HEAD) cpu=$(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2- | sed 's/^ //') cores=$(nproc)"
-echo "kernel=$(uname -r) gcc=$(gcc -dumpversion) governor=$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null || echo unbekannt) ir_opt=none"
+echo "kernel=$(uname -r) gcc=$(gcc -dumpversion) governor=$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null || echo unknown) ir_opt=none"
 echo "load=$(cut -d' ' -f1-3 /proc/loadavg)"
 
 echo; echo "== JIT: compile-only (--check), 3x =="

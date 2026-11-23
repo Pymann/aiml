@@ -41,7 +41,7 @@
 
       # ── 1. via serialisation ─────────────────────────────────────────────
       - decl: [roh, string, { call: [sys.serialize, quelle] }]
-      - call: [log.info, "serialisiert: ${roh}"]
+      - call: [log.info, "serialised: ${roh}"]
       - decl: [zurueck, WirkTraeger, { call: [sys.deserialize, roh, "WirkTraeger"] }]
       - if:
           condition: { neq: [zurueck.wirkungen.len, 3] }

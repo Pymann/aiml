@@ -53,7 +53,7 @@
       # `sh` is NO good for this: dash knows no `--version` and then rightly
       # counts as unsatisfied (F23-42) — the check does not guess.
       - decl: [ver_ok, string, { call: [sys.require_tools, "python3>=3"] }]
-      - set: [fails, { +: [fails, { call: [expect, "erfuellte Mindestversion schweigt", { eq: [ver_ok.len, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "a satisfied minimum version stays silent", { eq: [ver_ok.len, 0] }] }] }]
       - decl: [ver_bad, string, { call: [sys.require_tools, "python3>=9999"] }]
       - set: [fails, { +: [fails, { call: [expect, "missed minimum version is named", { call: [has_text, ver_bad, "python3>=9999"] }] }] }]
       # And the case without a number: named, not guessed (F23-42).

@@ -71,7 +71,7 @@
 
       # And the list itself is undamaged.
       - decl: [again, Row, { at: [rows, 2] }]
-      - set: [fails, { +: [fails, { call: [expect, "erneutes Lesen desselben Elements", { eq: [again.name, "zeile-2"] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "reading the same element again", { eq: [again.name, "zeile-2"] }] }] }]
       - decl: [last, Row, { at: [rows, 5] }]
       - set: [fails, { +: [fails, { call: [expect, "and the last element", { eq: [last.count, 5] }] }] }]
 

@@ -18,5 +18,5 @@
       # author, because f64→f32 loses precision.
       - if:
           condition: { gt: [wide_val, narrow_val] }
-          then: [{ print: ["unerreichbar"] }]
+          then: [{ print: ["unreachable"] }]
       - return: 0

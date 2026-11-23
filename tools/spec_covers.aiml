@@ -62,7 +62,7 @@
                   - set: [idx, { +: [idx, 1] }]
             - return: [{ call: [<.rules.len] }]
 
-      # Kapitel EINER Art, die in `text` vorkommen, als "a,b,c".
+      # chapters of ONE kind that occur in `text`, as "a,b,c".
       - def:
           name: hits_for
           args: [[text, string], [want_kind, i32]]
@@ -163,5 +163,5 @@
           then:
             - set: [scan_root, "tests"]
       - decl: [done, i32, { call: [tool.walk, scan_root] }]
-      - call: [io.write, io.stderr, "spec_covers: ${rule_count} Regeln, ${done} Dateien in ${scan_root}\n"]
+      - call: [io.write, io.stderr, "spec_covers: ${rule_count} rules, ${done} files in ${scan_root}\n"]
       - return: [0]

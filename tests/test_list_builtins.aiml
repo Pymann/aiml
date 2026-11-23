@@ -165,7 +165,7 @@
       - call: [check, "sortd_0", { at: [sint, 0] }, 3]
       - call: [check, "sortd_3", { at: [sint, 3] }, 1]
 
-      # ── sort (string, lexikographisch) ──
+      # ── sort (string, lexicographic) ──
       - decl: [sstr, list<string>]
       - call: [sstr.push, "banana"]
       - call: [sstr.push, "apple"]

@@ -88,7 +88,7 @@
               var: caught_outside
               body:
                 - set: [outer, 2]
-      - if: { condition: { neq: [outer, 2] }, then: [{ print: ["FAIL Weiterreichen -> ${outer}, expected 2"] }, { set: [bad, 1] }] }
+      - if: { condition: { neq: [outer, 2] }, then: [{ print: ["FAIL rethrow -> ${outer}, expected 2"] }, { set: [bad, 1] }] }
 
       - if: { condition: { eq: [bad, 0] }, then: [{ print: ["test_try_catch_typed PASS"] }] }
       - return: bad

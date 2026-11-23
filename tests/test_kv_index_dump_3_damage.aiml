@@ -23,4 +23,4 @@
 
 # Destroy the dump: wrong magic, too short, unusable.
 - call: [io.write_file, "/tmp/aiml_kvidx_kaputt_20261106/idxkaputt.kvidx", "MUELL"]
-- print: ["Phase 3 ok: .kvidx ueberschrieben"]
+- print: ["Phase 3 ok: .kvidx overwritten"]

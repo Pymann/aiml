@@ -51,7 +51,7 @@
       - if: { condition: { neq: [rc_dang, 0] }, then: [{ print: ["FAIL link to a missing target"] }, { return: 1 }] }
       - if: { condition: { eq: [{ call: [io.is_symlink, dangling] }, 0] }, then: [{ print: ["FAIL dangling not as a link"] }, { return: 1 }] }
       - decl: [dang_target, string, { call: [io.read_link, dangling] }]
-      - if: { condition: { neq: [dang_target, "entsteht_erst"] }, then: [{ print: ["FAIL dangling Ziel"] }, { return: 1 }] }
+      - if: { condition: { neq: [dang_target, "entsteht_erst"] }, then: [{ print: ["FAIL dangling target"] }, { return: 1 }] }
 
       # existing target → -1
       - decl: [rc_twice, i32, { call: [io.symlink, "skript.sh", link_path] }]

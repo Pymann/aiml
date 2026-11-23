@@ -69,7 +69,7 @@ Variation that does **not** crash (different write key):
 ```aiml
 - decl: [p, Player, { call: [kv.get, "k"] }]
 - call: [p.creature_ids.push, "creature-x"]
-- call: [kv.set, "k2", p]     # ← OK, eviction trifft nur "k2", not "k"
+- call: [kv.set, "k2", p]     # ← OK, eviction only hits "k2", not "k"
 ```
 
 Variation that does **not** crash (no mutation):

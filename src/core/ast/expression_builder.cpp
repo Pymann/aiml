@@ -97,7 +97,7 @@ static void meldeGeschlucktenOperator(Builder* builder) {
     LOG_ERROR(builder->fmtLoc() + "operator key swallowed by YAML" + zeilentext +
               " -- " + welcher + " stands bare in key position, so YAML read it as an"
               " anchor/tag/null and the operator never reached the compiler." + rat +
-              " (spec/04 \"Operator-Schluessel zitieren\").");
+              " (spec/04 \"Quoting operator keys\").");
 }
 
 bool ExpressionBuilder::OnMapStart() {
@@ -204,7 +204,7 @@ bool ExpressionBuilder::OnSequenceStart() {
 
 bool ExpressionBuilder::OnSequenceEnd() {
     if (pendingListLiteral) {
-        // Ende des Literals — die aeussere Argumentliste laeuft weiter.
+        // End of the literal — the outer argument list continues.
         args.push_back(std::move(pendingListLiteral));
         pendingListLiteral.reset();
         return true;

@@ -1022,9 +1022,9 @@
       - print: ["--- Bundle-Ende ---"]
       - decl: [has_c1, i32, { call: [lib.contains, "lib_calc_1"] }]
       - decl: [has_c30, i32, { call: [lib.contains, "lib_calc_30"] }]
-      - print: ["Bundle enthaelt lib_calc_1=${has_c1} lib_calc_30=${has_c30}"]
+      - print: ["Bundle contains lib_calc_1=${has_c1} lib_calc_30=${has_c30}"]
       - decl: [nsym, i32, { call: [sys.lib_load, lib] }]
-      - print: ["lib_load registrierte ${nsym} Symbole"]
+      - print: ["lib_load registered ${nsym} symbols"]
       - set: [fails, { +: [fails, { call: [expect, "lib_load registers more than one function", { gt: [nsym, 1] }] }] }]
 
       # Route A: pipeline WITHOUT the library in the bundle (uses the loaded one).

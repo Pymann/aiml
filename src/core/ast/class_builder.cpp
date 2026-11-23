@@ -140,7 +140,7 @@ bool ClassBuilder::OnScalar(const std::string& value, const std::string& tag) {
                         try { currentVersion = std::stoull(value); } catch(...) {}
                     } else if (currentKey == "level") {   // spec/65 F65-33
                         int parsed = aiml::clearance::kAbsent;
-                        if (aiml::clearance::parseLevel(value, "class-Mitglied " + currentField, parsed))
+                        if (aiml::clearance::parseLevel(value, "class member " + currentField, parsed))
                             currentLevel = parsed;
                     } else if (currentKey == "access") {
                         currentAccess = value;

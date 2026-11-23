@@ -83,7 +83,7 @@
       - decl: [pretty_style, JsonStyle]
       - set: [pretty_style.pretty, 1]
       - decl: [pretty_out, string, { call: [sys.serialize, val, pretty_style] }]
-      - set: [fails, { +: [fails, { call: [expect, "Kurzform: pretty wirkt (F29-17)", { call: [has_text, pretty_out, "\n"] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "short form: pretty takes effect (F29-17)", { call: [has_text, pretty_out, "\n"] }] }] }]
       - decl: [bare_out, string, { call: [sys.serialize, val, bare_style] }]
       - call: [log.info, "  bare:   ${bare_out}"]
       - set: [fails, { +: [fails, { call: [expect, "bare leaves out __type", { eq: [{ call: [has_text, bare_out, "__type"] }, 0] }] }] }]

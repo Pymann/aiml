@@ -36,13 +36,13 @@
 
       - decl: [mine, list<string>, ["resolve", "--purl", "pkg:conan/zlib"]]
       - decl: [ran, i32, { call: [api.run_cli, mine] }]
-      - if: { condition: { neq: [ran, 0] }, then: [{ print: ["FAIL eigenes Unterkommando -> ${ran}"] }, { set: [bad, 1] }] }
+      - if: { condition: { neq: [ran, 0] }, then: [{ print: ["FAIL own subcommand -> ${ran}"] }, { set: [bad, 1] }] }
 
       - if: { condition: { neq: [seen_purl, "pkg:conan/zlib"] }, then: [{ print: ["FAIL --purl arrived as '${seen_purl}'"] }, { set: [bad, 1] }] }
 
       - decl: [foreign, list<string>, ["nicht-meins"]]
       - decl: [skipped, i32, { call: [api.run_cli, foreign] }]
-      - if: { condition: { neq: [skipped, 1] }, then: [{ print: ["FAIL fremdes Unterkommando -> ${skipped}"] }, { set: [bad, 1] }] }
+      - if: { condition: { neq: [skipped, 1] }, then: [{ print: ["FAIL foreign subcommand -> ${skipped}"] }, { set: [bad, 1] }] }
 
       - free: api
       - if: { condition: { eq: [bad, 0] }, then: [{ print: ["test_service_cli PASS"] }] }

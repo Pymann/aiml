@@ -35,10 +35,10 @@
       - decl: [weit, Erweitert, basis]
       - if:
           condition: { neq: [weit.kennung, "abc"] }
-          then: [{ call: [log.error, "FEHL Vorspann kennung='${weit.kennung}'"] }, { set: [fehler, { "+": [fehler, 1] }] }]
+          then: [{ call: [log.error, "FAIL preamble kennung='${weit.kennung}'"] }, { set: [fehler, { "+": [fehler, 1] }] }]
       - if:
           condition: { neq: [weit.zahl, 7] }
-          then: [{ call: [log.error, "FEHL Vorspann zahl=${weit.zahl}"] }, { set: [fehler, { "+": [fehler, 1] }] }]
+          then: [{ call: [log.error, "FAIL preamble zahl=${weit.zahl}"] }, { set: [fehler, { "+": [fehler, 1] }] }]
       # The derived form's own field stays at its default.
       - if:
           condition: { neq: [weit.zusatz, 42] }
@@ -69,7 +69,7 @@
       - decl: [weit_z, Erweitert, basis_zgr]
       - if:
           condition: { neq: [weit_z.kennung, "zgr"] }
-          then: [{ call: [log.error, "FEHL Zeiger-Vorspann kennung='${weit_z.kennung}'"] }, { set: [fehler, { "+": [fehler, 1] }] }]
+          then: [{ call: [log.error, "FAIL pointer preamble kennung='${weit_z.kennung}'"] }, { set: [fehler, { "+": [fehler, 1] }] }]
       - if:
           condition: { neq: [weit_z.zusatz, 42] }
           then: [{ call: [log.error, "FAIL pointer own field zusatz=${weit_z.zusatz}"] }, { set: [fehler, { "+": [fehler, 1] }] }]
@@ -89,7 +89,7 @@
       - set: [ziel, basis]
       - if:
           condition: { neq: [ziel.kennung, "abc"] }
-          then: [{ call: [log.error, "FEHL set Vorspann kennung='${ziel.kennung}'"] }, { set: [fehler, { "+": [fehler, 1] }] }]
+          then: [{ call: [log.error, "FAIL set preamble kennung='${ziel.kennung}'"] }, { set: [fehler, { "+": [fehler, 1] }] }]
       # The own fields stay what they were -- `set` only writes the
       # prefix, it creates nothing anew.
       - if:

@@ -54,7 +54,7 @@ Examples:
 This restriction is intentional. Only associative arithmetic operators with clear fold
 semantics are variadic. Non-associative operators stay binary to avoid ambiguous code.
 
-## Quoting operator keys ("Operator-Schluessel zitieren", 2026-11-07)
+## Quoting operator keys (2026-11-07)
 
 `{ op: [args] }` is a YAML flow map, and `op` is a YAML **key**.  There the
 indicator characters of YAML apply, not the operator table of AIML.  Of the symbolic
@@ -107,14 +107,14 @@ messages:
 stmt_percent.aiml: YAML parse error: yaml-cpp: error at line 6, column 23: unknown token
  — line 6 writes the operator key '%' bare: `- set: [rest, { %: [10, 3] }]`.  A bare '%'
 is a YAML indicator character, not a key.  Quote it: { "%": [...] }
-(spec/04 "Operator-Schluessel zitieren").
+(spec/04 "Quoting operator keys").
 
 # swallowing class -- recognised by a sequence or a null scalar arriving
 # in key position
 stmt_anchor.aiml:6: operator key swallowed by YAML here: `- set: [bits, { &: [12, 10] }]`
  -- the operator key '&' stands bare in key position, so YAML read it as an anchor/tag/null
 and the operator never reached the compiler.  Quote it: { "&": [...] }
-(spec/04 "Operator-Schluessel zitieren").
+(spec/04 "Quoting operator keys").
 ```
 
 `==`, `!=` and `<>` are also deprecated; comparisons are written in word form.

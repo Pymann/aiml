@@ -2,7 +2,7 @@
 # Tests for extern "C" FFI
 # Expected exit code: 0
 
-# ── Phase A: Block-Syntax — POSIX-Funktionen ──────────────────────────────────
+# ── Phase A: block syntax — POSIX functions ──────────────────────────────────
 
 - extern: "C"
   defs:

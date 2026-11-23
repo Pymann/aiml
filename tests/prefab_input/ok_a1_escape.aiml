@@ -1,6 +1,6 @@
 # SPEC: 44_8_prefab_static
 # Requires: driver
-# EXPECT-SILENT: set_input_transparent macht den Prefab-Wert zur Vorgabe
+# EXPECT-SILENT: set_input_transparent makes the prefab value the default
 - prefab:
     name: GlowBanner
     width: 200

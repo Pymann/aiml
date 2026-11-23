@@ -39,7 +39,7 @@
       - decl: [two, string, "zwei"]
       - set: [pick, [one, two]]
       - call: [chk.expect_i, "variable elements: length", pick.len, 2]
-      - call: [chk.expect_s, "Variablen-Elemente: Element 1", { at: [pick, 1] }, "zwei"]
+      - call: [chk.expect_s, "variable elements: element 1", { at: [pick, 1] }, "zwei"]
 
       # 3) replace, not append: a shorter assignment shortens the list.
       - set: [pick, ["nur_eins"]]

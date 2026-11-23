@@ -32,7 +32,7 @@
             - type: IndexOutOfBoundsException
               var: err
               body:
-                - call: [log.info, "FAIL: gueltiger Index warf: ${err.message}"]
+                - call: [log.info, "FAIL: valid index threw: ${err.message}"]
                 - set: [sum, -1]
       - if:
           condition: { neq: [sum, 20] }
@@ -60,7 +60,7 @@
       - if:
           condition: { neq: [reason, "index 5 of 2"] }
           then:
-            - call: [log.info, "FAIL: Begruendung '${reason}' expected 'index 5 of 2'"]
+            - call: [log.info, "FAIL: reason '${reason}' expected 'index 5 of 2'"]
             - return: 1
 
       - call: [log.info, "OK: caught with '${reason}'"]

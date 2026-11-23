@@ -37,5 +37,5 @@
           then:
             - call: [log.error, "sum wrong: ${same}+${tighter}"]
             - return: [1]
-      - call: [log.info, "PASS 13 Write-down: erlaubte Richtungen ${open_num}"]
+      - call: [log.info, "PASS 13 write-down: allowed directions ${open_num}"]
       - return: [0]

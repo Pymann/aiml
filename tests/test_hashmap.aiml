@@ -101,7 +101,7 @@
           - print: ["FAIL D3: missing bool is true"]
           - set: [var_ok, 0]
 
-      # ── E: keys sortiert, clear ──────────────────────────────────────────────────
+      # ── E: keys sorted, clear ──────────────────────────────────────────────────
       - decl: [hm_f, "hashmap<string:i32>"]
       - call: [hm_f.put, "zeta", 1]
       - call: [hm_f.put, "alpha", 2]
@@ -111,7 +111,7 @@
       - decl: [last_key, string, { call: [key_list.get, 2] }]
       - if: [{ and: [{ eq: [first_key, "alpha"] }, { eq: [last_key, "zeta"] }] }, true]
         then:
-          - print: ["OK E1: keys sortiert"]
+          - print: ["OK E1: keys sorted"]
         else:
           - print: ["FAIL E1: keys = ${first_key} .. ${last_key}"]
           - set: [var_ok, 0]

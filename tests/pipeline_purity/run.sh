@@ -17,7 +17,7 @@ want() {
     out=$(printf '%s\n' "$out" | grep -v "shorter than 3 characters")
     if [ "$sev" = "none" ]; then
         if printf '%s\n' "$out" | grep -qE "^(error|warning)[[:space:]].*(reinheit|purity|pure)"; then
-            echo "  FAIL $file: unerwartete Reinheits-Diagnose"
+            echo "  FAIL $file: unexpected purity diagnostic"
             printf '%s\n' "$out" | sed 's/^/        /' | head -3
             fails=$((fails+1))
         else

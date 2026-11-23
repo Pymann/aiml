@@ -40,7 +40,7 @@
       # ── Pass 1: a single bundle ─────────────────────────────────────────
       - decl: [conn_one, socket_handle, { call: [net.accept, server] }]
       - decl: [wire1, string, { call: [recv_text, conn_one] }]
-      - print: ["1) empfangen: ${wire1.len} Bytes"]
+      - print: ["1) received: ${wire1.len} bytes"]
       - decl: [job_one, Code, { call: [sys.code_from, wire1, { start: "remote_task", context: true }] }]
       - decl: [rc_one, i32, { call: [sys.exec, job_one] }]
       - print: ["1) sys.exec rc=${rc_one}"]

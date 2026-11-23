@@ -10,7 +10,7 @@
 #include "string_runtime.h"   // aiml_str_alloc: refcounted result (rc-header, no Invalid-read/leak)
 #include <cstring>
 #include <cstdlib>
-#include <cstdio>   // aiml_sha256_file: blockweises Lesen
+#include <cstdio>   // aiml_sha256_file: block-wise reading
 
 namespace {
 

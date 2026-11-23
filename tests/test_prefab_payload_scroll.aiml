@@ -100,7 +100,7 @@
       - if:
           condition: { '||': [{ neq: [sel_h, 0] }, { neq: [sel_v, 0] }] }
           then:
-            - print: ["FAIL Auswahl verloren: h=${sel_h} v=${sel_v}"]
+            - print: ["FAIL selection lost: h=${sel_h} v=${sel_v}"]
             - return: 1
       - print: ["PASS payload_scroll: accepted declaratively, 12 frames without a crash"]
       - return: 0

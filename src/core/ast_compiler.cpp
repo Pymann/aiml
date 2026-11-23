@@ -1,6 +1,6 @@
 #define DEBUG_MODE
 #include "serialize_impl.h"
-#include <cctype>   // std::isdigit (classgroup-constructor-Literale)
+#include <cctype>   // std::isdigit (classgroup constructor literals)
 #include "ast_compiler.h"
 #include "yaml_dump.h"
 #include "ast_builder.h"
@@ -1044,7 +1044,7 @@ void Compiler::checkPrefabUsage(Program* prog) {
             if (dot != std::string::npos) {
                 std::string base = fn.substr(0, dot);
                 std::string method = fn.substr(dot + 1);
-                // Tier 4: erst mitschreiben, dann die engere Tier-2-Pruefung.
+                // Tier 4: record first, then the narrower tier 2 check.
                 if (method.find('.') == std::string::npos && bound.count(base))
                     noteInstMethod(bound[base], method, call);
                 // Only simple `var.method` (no chained receiver) on a tracked

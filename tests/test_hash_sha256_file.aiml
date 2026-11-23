@@ -81,7 +81,7 @@
 
       # ── missing file → "" (never null, distinguishable from the empty file) ─
       - decl: [missing, string, { call: [hash.sha256_file, "${dir}/gibts_nicht"] }]
-      - if: { condition: { neq: [missing.len, 0] }, then: [{ print: ["FAIL fehlend: '${missing}'"] }, { return: 1 }] }
+      - if: { condition: { neq: [missing.len, 0] }, then: [{ print: ["FAIL missing: '${missing}'"] }, { return: 1 }] }
 
       - call: [io.remove_all, dir]
       - print: ["PASS hash_sha256_file"]

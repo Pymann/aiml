@@ -80,7 +80,7 @@
       - call: [apply_push, 5]
       - set: [fails, { +: [fails, { call: [expect, "global set", { pneq: [g_view, null] }] }] }]
       - set: [fails, { +: [fails, { call: [expect, "5 entries survived", { eq: [g_view.items.len, 5] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "Zeichenkette ueberlebt", { eq: [g_view.tag, "schnappschuss-5"] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "string survives", { eq: [g_view.tag, "schnappschuss-5"] }] }] }]
 
       # read the nested elements — this is where a dangling
       # global grabs into nothing.
@@ -104,10 +104,10 @@
             - call: [apply_push, round]
             - set: [fails, { +: [fails, { call: [expect, "round ${round} readable", { eq: [g_view.items.len, round] }] }] }]
             - decl: [last, Inner, { at: [g_view.items, { -: [round, 1] }] }]
-            - set: [fails, { +: [fails, { call: [expect, "Runde ${round} letztes Element", { eq: [last.count, { -: [round, 1] }] }] }] }]
+            - set: [fails, { +: [fails, { call: [expect, "round ${round} last element", { eq: [last.count, { -: [round, 1] }] }] }] }]
             - set: [round, { +: [round, 1] }]
 
-      - set: [fails, { +: [fails, { call: [expect, "7 Updates gezaehlt", { eq: [g_seq, 8] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "7 updates counted", { eq: [g_seq, 8] }] }] }]
 
       - if:
           condition: { eq: [fails, 0] }

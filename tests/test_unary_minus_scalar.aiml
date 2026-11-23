@@ -32,7 +32,7 @@
 
       # negation of an already negative number.
       - decl: [back, i32, { -: [negi] }]
-      - call: [chk.expect_i, "doppelte Negation", back, 7]
+      - call: [chk.expect_i, "double negation", back, 7]
 
       # i64
       - decl: [big, i64, 4000000000]

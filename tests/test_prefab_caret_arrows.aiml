@@ -43,7 +43,7 @@
       - decl: [scene, prefab_instance, { call: [engine.instantiate, "ArrowScene"] }]
       - call: [scene.set_pos, 0.0, 0.0]
 
-      # ── einzeilig ────────────────────────────────────────────────────────
+      # ── single-line ────────────────────────────────────────────────────────
       - call: [scene.set_text, "one_input", "abcdef"]
       - call: [scene.focus, "one_input"]
       - call: [step_frame, win]
@@ -66,7 +66,7 @@
             - call: [engine.destroy_window, win]
             - return: 1
 
-      # ── mehrzeilig mit Gutter ────────────────────────────────────────────
+      # ── multi-line with a gutter ────────────────────────────────────────────
       - call: [scene.set_text, "many_input", "abcdef\nzweite"]
       - call: [scene.focus, "many_input"]
       - call: [step_frame, win]

@@ -1,6 +1,6 @@
 # SPEC: 44_8_prefab_static
 # Requires: driver
-# EXPECT-SILENT: das Widget wird gelesen
+# EXPECT-SILENT: the widget is read
 - prefab:
     name: QuietForm
     width: 200

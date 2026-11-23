@@ -34,7 +34,7 @@
       - call: [chk.expect_i, "or with one true one", res, 1]
       - set: [res, 0]
       - if: { condition: { and: [true, true, true, true] }, then: [{ set: [res, 1] }] }
-      - call: [chk.expect_i, "and mit vier Operanden", res, 1]
+      - call: [chk.expect_i, "and with four operands", res, 1]
 
       # short circuit: after the first false one tally must not run any more.
       - set: [g_calls, 0]

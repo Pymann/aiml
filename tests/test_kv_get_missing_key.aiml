@@ -14,7 +14,7 @@
       - decl: [store, Kv<string:i32>, { call: [db.open_kv, "probe_missing_kv", { persist: false }] }]
       - call: [chk.expect_i, "missing key returns 0", { call: [store.get, "fehlt"] }, 0]
       - call: [store.set, "da", 7]
-      - call: [chk.expect_i, "vorhandener Schluessel unveraendert", { call: [store.get, "da"] }, 7]
+      - call: [chk.expect_i, "existing key unchanged", { call: [store.get, "da"] }, 7]
       - call: [chk.expect_i, "after writing still 0 for others", { call: [store.get, "immer_noch_weg"] }, 0]
       - if: { condition: { gt: [chk.fails, 0] }, then: [{ print: ["FAIL kv_get_missing (${chk.fails})"] }, { return: 1 }] }
       - print: ["PASS kv_get_missing_key"]

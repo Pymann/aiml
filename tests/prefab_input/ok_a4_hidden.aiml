@@ -1,6 +1,6 @@
 # SPEC: 44_8_prefab_static
 # Requires: driver
-# EXPECT-SILENT: visible: false ist der dokumentierte Weg, Alternativen zu stapeln
+# EXPECT-SILENT: visible: false is the documented way to stack alternatives
 - prefab:
     name: DoubleBar
     width: 200

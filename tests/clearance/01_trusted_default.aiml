@@ -52,5 +52,5 @@
           then:
             - call: [log.error, "with_gateway returned ${gate}, expected 7"]
             - return: [1]
-      - call: [log.info, "PASS 01 trusted default: Annotationen inert"]
+      - call: [log.info, "PASS 01 trusted default: annotations inert"]
       - return: [0]

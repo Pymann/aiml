@@ -5569,7 +5569,7 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
             }
         } else {
              LOG_ERROR(ctx.fmtLoc() + "failed to evaluate the return expression of '" +
-                      (ctx.currentFunctionName.empty() ? std::string("<unbenannt>")
+                      (ctx.currentFunctionName.empty() ? std::string("<unnamed>")
                                                        : ctx.currentFunctionName) +
                       "' — the expression produced no value (spec/07)");
              ctx.ir_gen->createRet(ctx.ir_gen->wrap(llvm::Constant::getNullValue(retTy)));
@@ -6957,7 +6957,7 @@ void Compiler::visitIdxStmt(IdxStmt* idx) {
 }
 
 // store: [ptr_var, value, (optional)depth]  → deref-write through a pointer.
-// Loadet depth-mal vom ptr-Slot, schreibt dann value an die finale Adresse.
+// Loads depth times from the ptr slot, then writes value to the final address.
 //   depth=1:  v = load slot; store value -> v
 //   depth=2:  v1 = load slot; v2 = load v1; store value -> v2
 //   depth=N:  N loads then store.

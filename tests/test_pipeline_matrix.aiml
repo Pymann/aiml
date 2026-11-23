@@ -58,7 +58,7 @@
     body:
       - decl: [fails, i32, 0]
 
-      # ── Kreuzprodukt ────────────────────────────────────────────────────
+      # ── Cross product ────────────────────────────────────────────────────
       - decl: [full, pipeline, { call: [build_three] }]
       - set: [fails, { +: [fails, { call: [expect, "2x2x2 gives eight lanes", { eq: [{ call: [full.lane_count] }, 8] }] }] }]
 

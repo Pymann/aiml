@@ -18,7 +18,7 @@
       - if:
           condition: { eq: [{ call: [db_path.exists] }, 0] }
           then:
-            - print: ["SKIP Phase 6 (zuerst Phase 5 laufen lassen)"]
+            - print: ["SKIP phase 6 (run phase 5 first)"]
             - return: 0
 
       - decl: [dinge, Kv<string:Werkzeug>]

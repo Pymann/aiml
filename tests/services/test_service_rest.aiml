@@ -44,7 +44,7 @@
       - set: [srv_thread, { call: [srv.start_async] }]
       - call: [time.sleep_ms, 200]
 
-      # Body-Quelle
+      # body source
       - decl: [post_url, url]
       - set: [post_url, { call: [http.parse_url, "http://127.0.0.1:23191/api/v1/components/resolve"] }]
       - decl: [post_resp, http_response_handle]

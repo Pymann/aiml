@@ -19,7 +19,7 @@
     else:
       - print: ["OK A0: load returned 0"]
 
-# Source-Sprache (Index 0) → pass-through
+# source language (index 0) → pass-through
 - call: [vocab.set_language, 0]
 - decl: [got_en, string, { call: [vocab.lookup, "Save Card"] }]
 - if:
@@ -176,7 +176,7 @@
       - print: ["FAIL H1: lang=${after_lang} hello='${after_hello}' bye='${after_bye}' (before was '${before}')"]
       - set: [var_ok, 0]
 
-# ── I: Malformed JSON → Fehlercodes ──────────────────────────────────────
+# ── I: malformed JSON → error codes ──────────────────────────────────────
 
 # no closing "}" → -1
 - decl: [rc_bad_langs, i32, { call: [vocab.load, '{"0":"en"', "{}"] }]

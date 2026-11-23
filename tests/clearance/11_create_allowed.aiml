@@ -42,5 +42,5 @@
           then:
             - call: [log.error, "creating with create_level 7 returned ${rcx}, expected 0"]
             - return: [1]
-      - call: [log.info, "PASS 11 create_level erteilt"]
+      - call: [log.info, "PASS 11 create_level granted"]
       - return: [0]

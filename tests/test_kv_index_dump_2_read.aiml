@@ -54,5 +54,5 @@
           condition: { neq: [bad, 0] }
           then:
             - return: 1
-      - print: ["Phase 2 ok: Dump + Ueberlauf + Tombstone stimmen"]
+      - print: ["Phase 2 ok: dump + overflow + tombstone match"]
       - return: 0

@@ -31,7 +31,7 @@
       - decl: [fails, i32, 0]
 
       - decl: [have_smb, i32, { call: [netfs.available] }]
-      - print: ["  (libsmbclient verfuegbar: ${have_smb})"]
+      - print: ["  (libsmbclient available: ${have_smb})"]
 
       # ── an unknown scheme is an ERROR (F63-4) ───────────────────────────
       - decl: [rc_bad, i32, { call: [netfs.connect, "ftp://host/share", 0] }]

@@ -55,7 +55,7 @@
       - call: [scene.set_text, "name_input", "hallo welt"]
       - call: [scene.select_all, "name_input"]
       - decl: [in_sel, string, { call: [scene.selection, "name_input"] }]
-      - if: { condition: { neq: [in_sel, "hallo welt"] }, then: [{ print: ["FAIL input-Auswahl: '${in_sel}'"] }, { return: 1 }] }
+      - if: { condition: { neq: [in_sel, "hallo welt"] }, then: [{ print: ["FAIL input selection: '${in_sel}'"] }, { return: 1 }] }
 
       # the focus moves along: the textbox is no longer selected
       - decl: [box_after, string, { call: [scene.selection, "log_box"] }]

@@ -39,11 +39,11 @@
       - decl: [rc_ok, i32, { call: [io.link, dst, again] }]
       - if: { condition: { neq: [rc_ok, 0] }, then: [{ print: ["FAIL second link"] }, { return: 1 }] }
       - decl: [rc_exists, i32, { call: [io.link, dst, again] }]
-      - if: { condition: { eq: [rc_exists, 0] }, then: [{ print: ["FAIL vorhandenes Ziel haette -1 geben muessen"] }, { return: 1 }] }
+      - if: { condition: { eq: [rc_exists, 0] }, then: [{ print: ["FAIL an existing target should have returned -1"] }, { return: 1 }] }
 
       # missing source → -1, no crash
       - decl: [rc_missing, i32, { call: [io.link, "${dir}/gibts_nicht", "${dir}/egal"] }]
-      - if: { condition: { eq: [rc_missing, 0] }, then: [{ print: ["FAIL fehlende Quelle"] }, { return: 1 }] }
+      - if: { condition: { eq: [rc_missing, 0] }, then: [{ print: ["FAIL missing source"] }, { return: 1 }] }
 
       - call: [io.remove_all, dir]
       - print: ["PASS io_link"]

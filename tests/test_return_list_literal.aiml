@@ -75,10 +75,10 @@
       - decl: [letztes, string, { at: [woerter, 2] }]
       - if:
           condition: { neq: [erstes, "eins"] }
-          then: [{ call: [log.error, "FEHL erstes Wort: '${erstes}'"] }, { set: [fehler, { "+": [fehler, 1] }] }]
+          then: [{ call: [log.error, "FAIL first word: '${erstes}'"] }, { set: [fehler, { "+": [fehler, 1] }] }]
       - if:
           condition: { neq: [letztes, "drei"] }
-          then: [{ call: [log.error, "FEHL letztes Wort: '${letztes}'"] }, { set: [fehler, { "+": [fehler, 1] }] }]
+          then: [{ call: [log.error, "FAIL last word: '${letztes}'"] }, { set: [fehler, { "+": [fehler, 1] }] }]
 
       - decl: [leer, list<string>, { call: [leere_liste] }]
       - if:
@@ -111,7 +111,7 @@
       - decl: [sechs, i32, { call: [plus_eins, 5] }]
       - if:
           condition: { neq: [sechs, 6] }
-          then: [{ call: [log.error, "FEHL Durchlass i32: ${sechs}"] }, { set: [fehler, { "+": [fehler, 1] }] }]
+          then: [{ call: [log.error, "FAIL pass-through i32: ${sechs}"] }, { set: [fehler, { "+": [fehler, 1] }] }]
 
       - decl: [weiter, list<string>, { call: [liste_weiter] }]
       - if:

@@ -45,7 +45,7 @@ magic=$(head -c 8 "$NAM" 2>/dev/null)
 vals=$(od -An -tu4 -j48 -N4 "$NAM" 2>/dev/null | tr -d ' ')
 keys=$(od -An -tu4 -j52 -N4 "$NAM" 2>/dev/null | tr -d ' ')
 if [ "$magic" = "AIMLKVSX" ] && [ "$vals" = "2" ] && [ "$keys" = "3" ]; then
-  ok "Kopf: AIMLKVSX, 2 Feldwerte, 3 Paare"
+  ok "header: AIMLKVSX, 2 field values, 3 pairs"
 else
   bad "header: magic='$magic' val_count=$vals key_count=$keys (expected AIMLKVSX/2/3)"
 fi

@@ -31,7 +31,7 @@
       - decl: [bad, i32, 0]
       - decl: [code, Code, { call: [sys.code_from, quelle] }]
       - decl: [rcx, i32, { call: [kontext.exec, code] }]
-      - set: [bad, { +: [bad, { call: [expect, "die Einreichung uebersetzt", { eq: [rcx, 0] }] }] }]
+      - set: [bad, { +: [bad, { call: [expect, "the submission compiles", { eq: [rcx, 0] }] }] }]
       - decl: [namen, list<string>, { call: [kontext.names, "fn() -> pipeline"] }]
       - set: [bad, { +: [bad, { call: [expect, "the context knows exactly one pipeline", { eq: [namen.len, 1] }] }] }]
       - if: { condition: { eq: [namen.len, 0] }, then: [{ return: { +: [bad, 1] } }] }

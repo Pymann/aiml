@@ -22,7 +22,7 @@
 
 extern "C" int aiml_clearance_export(const char* name, void* fn, int level) {
     if (!name || !*name) {
-        LOG_ERROR("sys.export_symbol: leerer Name (spec/65 F65-37)");
+        LOG_ERROR("sys.export_symbol: empty name (spec/65 F65-37)");
         return -1;
     }
     if (!fn) {

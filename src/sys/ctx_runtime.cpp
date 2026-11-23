@@ -233,7 +233,7 @@ int32_t aiml_ctx_names_fill(void* handle, const char* want_type, void* list_ptr)
     return found;
 }
 
-// spec/29_2 §14b (F29_2-…l): die Meldungen des LETZTEN `exec`.
+// spec/29_2 §14b (F29_2-…l): the messages of the LAST `exec`.
 // spec/21 §3.1: the package table for this context's `@name/…` imports.
 int32_t aiml_ctx_use_packages(void* handle, const char* path) {
     CtxSlot* slot = slot_of(handle);

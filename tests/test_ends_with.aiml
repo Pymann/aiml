@@ -8,7 +8,7 @@
       - decl: [pass, i32, 0]
       - decl: [fail, i32, 0]
 
-      # Test 1: einfaches Suffix
+      # Test 1: a simple suffix
       - decl: [var_s1, string, "hello.json"]
       - decl: [var_r1, i32, { call: [var_s1.ends_with, ".json"] }]
       - if:
@@ -43,7 +43,7 @@
             - print: ["FAIL: 'ab' ends_with 'abcdef' expected 0, got ${var_r3}"]
             - set: [fail, { +: [fail, 1] }]
 
-      # Test 4: exakter Match (String == Suffix)
+      # Test 4: exact match (string == suffix)
       - decl: [var_s4, string, ".md"]
       - decl: [var_r4, i32, { call: [var_s4.ends_with, ".md"] }]
       - if:
@@ -78,7 +78,7 @@
             - print: ["FAIL: 'docs/v1.2/readme.md' ends_with '.md' expected 1, got ${var_r6}"]
             - set: [fail, { +: [fail, 1] }]
 
-      # Test 7: .txt Erkennung
+      # Test 7: .txt detection
       - decl: [var_s7, string, "notes.txt"]
       - decl: [var_r7, i32, { call: [var_s7.ends_with, ".txt"] }]
       - if:

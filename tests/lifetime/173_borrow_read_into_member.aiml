@@ -31,7 +31,7 @@
             - set: [idx, { +: [idx, 1] }]
       - return: sink.len
 
-# 1) map.get -> Modellfeld
+# 1) map.get -> model field
 - def:
     name: map_into_field
     static_off: ["same_arg"]
@@ -43,7 +43,7 @@
       - set: [rec.name, { call: [names.get, "key"] }]
       - call: [recs.push, rec]
 
-# 2) list.at -> Modellfeld
+# 2) list.at -> model field
 - def:
     name: list_into_field
     static_off: ["same_arg"]

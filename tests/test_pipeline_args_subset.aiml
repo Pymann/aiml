@@ -88,7 +88,7 @@
 
       # ── the core of §5.2 as ONE comparison: the same body, the same
       # matrix, only the declaration differs -> 1 against 4 runs.
-      - set: [fails, { +: [fails, { call: [expect, "unnoetige Achsen kosten Wiederverwendung", { gt: [{ call: [p_both.ran_count] }, { call: [p_none.ran_count] }] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "unnecessary axes cost reuse", { gt: [{ call: [p_both.ran_count] }, { call: [p_none.ran_count] }] }] }] }]
 
       # ── and a second run hits throughout (the key is stable) ─
       - decl: [rc_b2, i32, { call: [p_both.run] }]

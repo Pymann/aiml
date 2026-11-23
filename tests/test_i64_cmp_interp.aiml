@@ -20,7 +20,7 @@
       - print: ["(b) big=${big} gt_max=${cmp_b} (expected 3000000000, 1)"]
       - if: { condition: { neq: [cmp_b, 1] }, then: [{ set: [fails, { +: [fails, 1] }] }] }
 
-      # (c) i64-Produkt i64×i32 (Promotion) + Interpolation
+      # (c) i64 product i64×i32 (promotion) + interpolation
       - decl: [base64, i64, 15000]
       - decl: [val32, i32, 1]
       - decl: [prod, i64, { '*': [base64, val32] }]
