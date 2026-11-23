@@ -1,166 +1,166 @@
-# Implementierungsplan für tiefe Member-Zugriffe
+# Implementation plan for deep member access
 
 ## Problem
 
-Im aktuellen AIML-Compiler sind verschachtelte Member-Zugriffe wie `a.b.c` oder `root.match.round` nicht konsistent implementiert.
+In the current AIML compiler, nested member access like `a.b.c` or `root.match.round` is not implemented consistently.
 
-In der Praxis führt das zu zwei Symptomen:
+In practice this leads to two symptoms:
 
-- tiefe Reads funktionieren nur teilweise oder nur in bestimmten Formen
-- tiefe Writes auf `set`-Ziele brechen früh, sodass man Hilfsvariablen anlegen oder ganze Teilobjekte neu zuweisen muss
+- deep reads only work partly or only in certain forms
+- deep writes to `set` targets break early, so that you have to create helper variables or reassign whole sub-objects
 
-Das deckt sich mit dem beobachteten Nutzerverhalten in `9rooms` und mit den Mirror-Repros.
+That matches the observed user behaviour in `9rooms` and the mirror repros.
 
-## Hauptbefund im C++-Code
+## Main finding in the C++ code
 
-### 1. `visitVariable(...)` splittet nur am ersten Separator
+### 1. `visitVariable(...)` only splits at the first separator
 
-In [ast_compiler_expr.cpp](../../src/core/ast_compiler_expr.cpp#L184) bis [ast_compiler_expr.cpp](../../src/core/ast_compiler_expr.cpp#L190) wird ein Variablenname mit `find('.')` bzw. `find('-')` zerlegt.
+In [ast_compiler_expr.cpp](../../src/core/ast_compiler_expr.cpp#L184) to [ast_compiler_expr.cpp](../../src/core/ast_compiler_expr.cpp#L190) a variable name is split with `find('.')` or `find('-')`.
 
-Das heißt:
+That means:
 
-- `a.b.c` wird zuerst nur zu `baseName = "a"` und `propName = "b.c"`
-- die weitere Behandlung ist nicht als generischer Segment-Walk aufgebaut
+- `a.b.c` first only becomes `baseName = "a"` and `propName = "b.c"`
+- the further handling is not built as a generic segment walk
 
-Damit ist die Expression-Seite strukturell nicht auf echte beliebig tiefe Pfade ausgelegt.
+So the expression side is structurally not designed for really arbitrarily deep paths.
 
-### 2. `visitSetStmt(...)` splittet ebenfalls nur einmal
+### 2. `visitSetStmt(...)` also splits only once
 
-In [ast_compiler_stmt.cpp](../../src/core/ast_compiler_stmt.cpp#L219) bis [ast_compiler_stmt.cpp](../../src/core/ast_compiler_stmt.cpp#L230) wird das `set`-Ziel genauso nur in `baseName` und `propName` zerlegt.
+In [ast_compiler_stmt.cpp](../../src/core/ast_compiler_stmt.cpp#L219) to [ast_compiler_stmt.cpp](../../src/core/ast_compiler_stmt.cpp#L230) the `set` target is likewise only split into `baseName` and `propName`.
 
-Folge:
+Consequence:
 
-- `root.match.round` wird als `baseName = "root"` und `propName = "match.round"` behandelt
-- danach sucht der Code nur noch ein direktes Member mit genau diesem Namen
-- tieferes Descending findet nicht statt
+- `root.match.round` is treated as `baseName = "root"` and `propName = "match.round"`
+- after that the code only looks for a direct member with exactly this name
+- no deeper descending takes place
 
-Das ist die direkte Ursache dafür, dass tiefe `set`-Ziele heute praktisch nicht sauber funktionieren.
+That is the direct cause of deep `set` targets practically not working cleanly today.
 
-### 3. `Utils::resolveLValue(...)` ist näher an der richtigen Richtung, aber noch nicht tief genug
+### 3. `Utils::resolveLValue(...)` is closer to the right direction, but not deep enough yet
 
-In [utils.cpp](../../src/core/utils.cpp#L117) bis [utils.cpp](../../src/core/utils.cpp#L129) wird mit `rfind('.')` gearbeitet.
+In [utils.cpp](../../src/core/utils.cpp#L117) to [utils.cpp](../../src/core/utils.cpp#L129) `rfind('.')` is used.
 
-Das ist besser als `find('.')`, weil wenigstens der letzte Member isoliert wird. Aber:
+That is better than `find('.')`, because at least the last member is isolated. But:
 
-- `resolveLValueMemberAccess(...)` in [utils.cpp](../../src/core/utils.cpp#L8) erwartet, dass `objName` bereits direkt im `symbol_table` liegt
-- bei `a.b.c` wird daraus `objName = "a.b"`
-- `"a.b"` ist aber kein echtes Symbol im `symbol_table`
+- `resolveLValueMemberAccess(...)` in [utils.cpp](../../src/core/utils.cpp#L8) expects `objName` to be directly in the `symbol_table` already
+- for `a.b.c` this becomes `objName = "a.b"`
+- `"a.b"`, however, is not a real symbol in the `symbol_table`
 
-Damit ist auch dieser Pfad nicht wirklich rekursiv.
+So this path is not really recursive either.
 
-### 4. Reads und Writes folgen unterschiedlichen Auflösungspfaden
+### 4. Reads and writes follow different resolution paths
 
-Es gibt heute keine einzige zentrale Pfadauflösung für:
+Today there is no single central path resolution for:
 
-- einfacher Variablenzugriff
-- Member-Read
-- Member-Write
-- Array-/Listenzugriff
-- gemischte Ketten wie `a.items-0.hp`
+- simple variable access
+- member read
+- member write
+- array/list access
+- mixed chains like `a.items-0.hp`
 
-Stattdessen ist die Logik verteilt über:
+Instead the logic is spread over:
 
 - [ast_compiler_expr.cpp](../../src/core/ast_compiler_expr.cpp)
 - [ast_compiler_stmt.cpp](../../src/core/ast_compiler_stmt.cpp)
 - [utils.cpp](../../src/core/utils.cpp)
 
-Das ist der Hauptgrund, warum tiefe Dot-Logik inkonsistent ist.
+That is the main reason why deep dot logic is inconsistent.
 
-## Zielbild
+## Target picture
 
-Der Compiler sollte jeden Pfad wie eine Segmentkette behandeln, nicht wie einen String mit einem Sonderfall.
+The compiler should treat every path as a segment chain, not as a string with a special case.
 
-Beispiele:
+Examples:
 
 - `a.b.c`
 - `a.items-0.hp`
 - `this.player.hand-2.name`
 - `ptr_to_root.match.round`
 
-Alle diese Formen sollten intern zu einer einheitlichen Folge von Pfadsegmenten normalisiert werden.
+All these forms should be normalised internally into a uniform sequence of path segments.
 
-## Empfohlene Implementierung
+## Recommended implementation
 
-### Stufe 1: Pfadparser einführen
+### Stage 1: introduce a path parser
 
-Erste neue Komponente:
+First new component:
 
 - `parseAccessPath("a.items-0.hp") -> [var(a), member(items), index(0), member(hp)]`
 
-Diese Logik sollte nicht mehr ad hoc in `visitVariable` und `visitSetStmt` stecken.
+This logic should no longer sit ad hoc in `visitVariable` and `visitSetStmt`.
 
-Primäre C++-Stelle:
+Primary C++ location:
 
-- neu in [utils.cpp](../../src/core/utils.cpp)
+- new in [utils.cpp](../../src/core/utils.cpp)
 
-Hilfreiche API:
+Helpful API:
 
 - `struct AccessSegment`
 - `enum class AccessKind { BaseVar, Member, Index }`
 - `parseAccessPath(const std::string&)`
 
-Wichtig:
+Important:
 
-- `.` und `-` müssen gemeinsam unterstützt werden
-- `this.` und `<.` sollten vor dem Parsen normalisiert werden
+- `.` and `-` must be supported together
+- `this.` and `<.` should be normalised before parsing
 
-### Stufe 2: Zentrale rekursive/iterative Auflösung bauen
+### Stage 2: build a central recursive/iterative resolution
 
-Danach sollte es genau eine Kernfunktion geben, z. B.:
+After that there should be exactly one core function, e.g.:
 
 - `resolveAccessPath(ctx, path, forWrite)`
 
-Diese Funktion läuft Segment für Segment durch und liefert:
+This function walks through segment by segment and returns:
 
-- entweder den finalen Pointer/LValue
-- oder zusätzlich Metadaten über den finalen Typ
+- either the final pointer/lvalue
+- or additionally metadata about the final type
 
-Primäre C++-Stellen:
+Primary C++ locations:
 
 - [utils.cpp](../../src/core/utils.cpp)
-- optional Deklarationen in [utils.h](../../src/core/utils.h)
+- optionally declarations in [utils.h](../../src/core/utils.h)
 
-Diese Funktion muss folgende Fälle einheitlich beherrschen:
+This function must handle the following cases uniformly:
 
-- Struct-Member
-- Pointer-/Ref-Dereferenz auf Structs
-- Listenelemente
-- Arrayelemente
-- gemischte Ketten
+- struct members
+- pointer/ref dereference to structs
+- list elements
+- array elements
+- mixed chains
 
-### Stufe 3: `visitVariable(...)` auf die neue Pfadauflösung umstellen
+### Stage 3: switch `visitVariable(...)` to the new path resolution
 
-`visitVariable(...)` in [ast_compiler_expr.cpp](../../src/core/ast_compiler_expr.cpp#L179) sollte nicht mehr selbst mit `find('.')` arbeiten.
+`visitVariable(...)` in [ast_compiler_expr.cpp](../../src/core/ast_compiler_expr.cpp#L179) should no longer work with `find('.')` itself.
 
-Stattdessen:
+Instead:
 
-- Namespace-/Enum-Sonderfälle früh behandeln
-- danach den Rest an die neue Pfadauflösung delegieren
+- handle namespace/enum special cases early
+- after that delegate the rest to the new path resolution
 
-Ziel:
+Goal:
 
-- tiefe Reads wie `a.b.c`
-- gemischte Reads wie `a.items-0.hp`
-- tiefe `.len`-artige Zugriffe nur dort als Property-Sonderfall behandeln, wo sie wirklich Container-Properties sind
+- deep reads like `a.b.c`
+- mixed reads like `a.items-0.hp`
+- treat deep `.len`-like accesses as a property special case only where they really are container properties
 
-### Stufe 4: `visitSetStmt(...)` vollständig auf denselben Pfadkern umstellen
+### Stage 4: switch `visitSetStmt(...)` completely to the same path core
 
-Das ist der wichtigste Schritt für die wahrgenommene Nutzbarkeit.
+That is the most important step for the perceived usability.
 
-In [ast_compiler_stmt.cpp](../../src/core/ast_compiler_stmt.cpp#L213) sollte `set` nicht mehr `baseName/propName` manuell zerlegen.
+In [ast_compiler_stmt.cpp](../../src/core/ast_compiler_stmt.cpp#L213) `set` should no longer split `baseName/propName` manually.
 
-Stattdessen:
+Instead:
 
-- Zielpfad parsen
-- finalen LValue mit `forWrite = true` auflösen
-- Zugriffsschutz und `const` am finalen Segment prüfen
-- Wert dorthin schreiben
+- parse the target path
+- resolve the final lvalue with `forWrite = true`
+- check access protection and `const` at the final segment
+- write the value there
 
-Wenn dieser Schritt fehlt, bleibt das eigentliche Nutzerproblem bestehen.
+If this step is missing, the actual user problem remains.
 
-### Stufe 5: Property-Sonderfälle in die Pfadauflösung integrieren
+### Stage 5: integrate property special cases into the path resolution
 
-Aktuell gibt es Spezialfälle wie:
+Currently there are special cases like:
 
 - `list.len`
 - `list.empty`
@@ -168,87 +168,87 @@ Aktuell gibt es Spezialfälle wie:
 
 in [utils.cpp](../../src/core/utils.cpp#L134).
 
-Diese sollten nicht als völlig separater Seitentrieb leben, sondern sauber in das Segmentmodell integriert werden:
+These should not live as a completely separate side branch, but be integrated cleanly into the segment model:
 
-- normale Member
-- Container-Property
-- Indexzugriff
+- normal members
+- container properties
+- index access
 
-Sonst bleibt die Pfadlogik wieder zweigeteilt.
+Otherwise the path logic stays split in two again.
 
-### Stufe 6: Builtin-Handle-Typen bewusst abgrenzen
+### Stage 6: delimit builtin handle types deliberately
 
-Es gibt Builtins mit eigens verdrahteten Settern/Gettern, z. B. in [builtin_registry.cpp](../../src/core/builtin_registry.cpp#L2421).
+There are builtins with specially wired setters/getters, e.g. in [builtin_registry.cpp](../../src/core/builtin_registry.cpp#L2421).
 
-Wichtig:
+Important:
 
-- normale Struct-Ketten sollten über die neue generische Pfadauflösung laufen
-- Builtin-Handle-Typen dürfen weiter spezielle Property-Setzer haben
-- aber nur als explizite Sonderfälle am Segmentende
+- normal struct chains should run via the new generic path resolution
+- builtin handle types may keep special property setters
+- but only as explicit special cases at the end of the segment chain
 
-So vermeidet man, dass Builtin-API und normale Dot-Logik sich gegenseitig kaputtmachen.
+That avoids the builtin API and normal dot logic breaking each other.
 
-## Testplan
+## Test plan
 
-Ohne neue gezielte Tests würde ich das nicht umbauen.
+I would not rebuild this without new targeted tests.
 
-### Neue Pflicht-Tests
+### New mandatory tests
 
-1. Tiefer Read:
+1. Deep read:
    `a.b.c`
 
-2. Tiefer Write:
+2. Deep write:
    `set: [a.b.c, 7]`
 
-3. Gemischter Pfad:
+3. Mixed path:
    `a.items-0.hp`
 
-4. Pointer/Ref-Kette:
+4. Pointer/ref chain:
    `p.nested.value`
 
-5. Container-Property nach Kette:
+5. Container property after a chain:
    `a.cards.len`
 
-6. Negativtest:
-   Zugriff auf nicht existentes Zwischenmember
+6. Negative test:
+   access to a non-existent intermediate member
 
-7. Negativtest:
-   Schreibzugriff auf `const`-Zwischenpfad bzw. finales `const`-Member
+7. Negative test:
+   write access to a `const` intermediate path or a final `const` member
 
-### Gute Zusatztests
+### Good additional tests
 
-- `this.` und `<.` mit tiefem Memberpfad
-- `set` auf verschachtelte Mirror-Modelle
-- Kombination aus `list.get(...)` und Dot-Zugriff, damit klar bleibt, was bewusst Methode und was direkter Pfad ist
+- `this.` and `<.` with a deep member path
+- `set` on nested mirror models
+- a combination of `list.get(...)` and dot access, so that it stays clear what is deliberately a method and what a direct path
 
-## Empfohlene Reihenfolge
+## Recommended order
 
-1. Pfadparser in `utils.*`
-2. zentrale `resolveAccessPath(...)`-Funktion in `utils.cpp`
-3. Expression-Read auf neue API umstellen
-4. `set`-Write auf neue API umstellen
-5. Property-/Builtin-Sonderfälle sauber nachziehen
-6. neue Regressionstests einchecken
+1. Path parser in `utils.*`
+2. Central `resolveAccessPath(...)` function in `utils.cpp`
+3. Switch expression reads to the new API
+4. Switch `set` writes to the new API
+5. Follow up cleanly with property/builtin special cases
+6. Check in new regression tests
 
-## Praktische Bewertung
+## Practical assessment
 
-Das ist kein kleiner kosmetischer Fix. Es ist eine kleine Infrastrukturarbeit im Compiler.
+This is not a small cosmetic fix. It is a small piece of infrastructure work in the compiler.
 
-Aber:
+But:
 
-- der Nutzen ist hoch
-- die Sprache wird deutlich konsistenter
-- `9rooms` und ähnliche Projekte verlieren viel Hilfsvariablen-Boilerplate
-- es beseitigt eine reale Sprachgrenze, die heute beim Modellieren größerer Datenstrukturen stört
+- the benefit is high
+- the language becomes considerably more consistent
+- `9rooms` and similar projects lose a lot of helper variable boilerplate
+- it removes a real language limit that gets in the way today when modelling larger data structures
 
-## Empfehlung
+## Recommendation
 
-Ich würde das als gezielten Compiler-Refactor behandeln, nicht als punktuellen Bugfix.
+I would treat this as a targeted compiler refactor, not as a point bug fix.
 
-Der richtige Hebel ist:
+The right lever is:
 
-- eine einheitliche Pfadrepräsentation
-- eine zentrale Auflösung
-- danach erst Reads und Writes darauf umstellen
+- a uniform path representation
+- a central resolution
+- only after that switch reads and writes over to it
 
-Alles andere würde nur neue Sonderfälle neben die bestehenden Sonderfälle stellen.
+Everything else would only put new special cases next to the existing special cases.
