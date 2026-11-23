@@ -253,16 +253,16 @@ This code runs **unchanged** on desktop, browser, and Android:
 - `engine.target_fps` is ignored; the cadence is the `emscripten_sleep(16)` above
 - Filesystem: virtual FS (Emscripten), assets must be packed beforehand
 
-> **Offen: der rAF-Pfad.** Der Zielzustand sind browsergesteuerte Frames
-> (`emscripten_set_main_loop_arg` oder `requestAnimationFrame` direkt) — damit
-> fällt der additive 16-ms-Posten weg und die Darstellung hängt am Bildschirmtakt.
-> Vorbedingung ist, dass **kein** suspendierender Aufruf mehr im Frame liegt:
-> `session.send_and_await`, `ws.recv`/`ws.poll`/`ws.connect` und der synchrone
-> Artwork-Pfad müssen vorher aus der Frameloop heraus (asynchrone Requests,
-> inkrementeller WS-Empfang, Asset-Aufträge mit Platzhalter). Erst danach ist der
-> Schleifenwechsel prüfbar; ein isolierter Austausch reproduziert den oben
-> beschriebenen Schleifen-Tod. Zwischenschritt ohne Vertragsänderung: nur das
-> **restliche** Framebudget schlafen (monotone Zeit) statt fester 16 ms.
+> **Open: the rAF path.** The target state is browser-driven frames
+> (`emscripten_set_main_loop_arg` or `requestAnimationFrame` directly) — that
+> removes the additive 16 ms item and the display follows the screen's refresh.
+> The precondition is that there is **no** suspending call left in the frame:
+> `session.send_and_await`, `ws.recv`/`ws.poll`/`ws.connect` and the synchronous
+> artwork path must first be moved out of the frame loop (asynchronous requests,
+> incremental WS receive, asset jobs with a placeholder). Only after that can the
+> loop switch be tested; an isolated swap reproduces the loop death
+> described above. Intermediate step without a contract change: sleep only the
+> **remaining** frame budget (monotonic time) instead of a fixed 16 ms.
 
 ### 7.2 Android
 
@@ -369,65 +369,65 @@ without any changes to the AIML `while:` source code. The yields live in
 `engine.run`'s own loop (§7.1), in `engine.swap`, and in the blocking `ws`/
 `mirror` calls.
 
-> **Ist-Zustand, nicht Zielzustand:** real gebaut wird mit **globalem**
-> `-sASYNCIFY=1` **ohne** `ASYNCIFY_ONLY`/`ASYNCIFY_ADD`-Liste (siehe
-> `9rooms_v2/exodus-client.json`). Asyncify instrumentiert damit jede Funktion,
-> die es nicht als „erreicht nie einen Sleep" beweisen kann — bei `-O0` ist der
-> Aufrufgraph maximal unpräzise, also praktisch alles. Das kostet Codegröße und
-> Laufzeit auf *allen* instrumentierten Funktionen, nicht nur auf den
-> suspendierenden. Eine ermittelte `ASYNCIFY_ONLY`-Liste (die suspendierenden
-> Pfade plus ihre Aufrufer) ist der offene Optimierungspunkt; JSPI (`-sJSPI`)
-> wäre die Variante, die die Instrumentierung ganz ersetzt.
+> **Current state, not target state:** the real build uses **global**
+> `-sASYNCIFY=1` **without** an `ASYNCIFY_ONLY`/`ASYNCIFY_ADD` list (see
+> `9rooms_v2/exodus-client.json`). Asyncify thereby instruments every function
+> that it cannot prove "never reaches a sleep" — at `-O0` the
+> call graph is maximally imprecise, so practically everything. That costs code size and
+> runtime on *all* instrumented functions, not only on the
+> suspending ones. A determined `ASYNCIFY_ONLY` list (the suspending
+> paths plus their callers) is the open optimisation point; JSPI (`-sJSPI`)
+> would be the variant that replaces the instrumentation entirely.
 
-## Offen: `engine.run` trägt keinen Kontext — und erzwingt damit ein Global
+## Open: `engine.run` carries no context — and thereby forces a global
 
-`engine.run` nimmt die Rückrufe als **nackte Funktionszeiger** mit fester Signatur:
+`engine.run` takes the callbacks as **bare function pointers** with a fixed signature:
 
 ```cpp
-void aiml_engine_run(void* win_ptr, void* update_fn, void* render_fn);   // kein ctx
+void aiml_engine_run(void* win_ptr, void* update_fn, void* render_fn);   // no ctx
 ```
 
-Der Update-Rückruf bekommt nur `dt` und hat keinen Platz für seinen Empfänger. Jede App, die
-in `update` an ihren eigenen Zustand will, braucht deshalb **ein Global** als Brücke — auch
-wenn sie sonst keinen einzigen hat.
+The update callback only gets `dt` and has no room for its receiver. Every app that
+wants to reach its own state in `update` therefore needs **a global** as a bridge — even
+if it has no other one at all.
 
-**Gemessen 2026-10-14 an zwei unabhängig gewachsenen Clients:**
+**Measured on 2026-10-14 on two independently grown clients:**
 
-| Projekt | Globals im Client | davon erzwungen durch diesen Rückruf |
+| Project | Globals in the client | of which forced by this callback |
 |---|---|---|
 | 9rooms | 2 | 1 (`g_app`) |
-| cosmos | 27 → (Migration läuft) | 1 (`g_cosmos_app`) |
+| cosmos | 27 → (migration in progress) | 1 (`g_cosmos_app`) |
 
-Beide landen aus demselben Grund bei demselben einen Global. Das ist kein Projektfehler,
-sondern eine Lücke dieser Schnittstelle — und sie steht quer zu spec/21 §6.2 Regel 5, die
-modulweite Globals als Geruch meldet.
+Both end up with the same single global for the same reason. That is not a project error
+but a gap in this interface — and it runs against spec/21 §6.2 rule 5, which
+reports module-wide globals as a smell.
 
-**Vorgeschlagene Form** (additiv, die Drei-Argument-Fassung bleibt gültig):
+**Proposed form** (additive, the three-argument version stays valid):
 
 ```cpp
 void aiml_engine_run(void* win_ptr, void* update_fn, void* render_fn, void* ctx);
-//  update_fn wird (f32 dt, void* ctx)
+//  update_fn becomes (f32 dt, void* ctx)
 ```
 
 ```yaml
 - def:
     name: on_frame
-    args: [[dtf, f32], [app, ref<MyApp>]]     # Empfänger reist mit
+    args: [[dtf, f32], [app, ref<MyApp>]]     # the receiver travels along
     body: [{ call: [app.frame] }]
 
 - def:
     name: main
     body:
-      - decl: [app, ptr<MyApp>, { new: MyApp }]      # lokal in main, kein Global
+      - decl: [app, ptr<MyApp>, { new: MyApp }]      # local in main, no global
       - call: [engine.run, app.win, on_frame, on_render, app]
 ```
 
-Der WASM-Pfad hat das Gegenstück bereits: `emscripten_set_main_loop_arg` statt
-`emscripten_set_main_loop`. Zu ändern wären die Signatur, der native Schleifen-Pfad, der
-WASM-Pfad und die Builtin-Deklaration; heutige Aufrufer (je einer in cosmos und 9rooms)
-bleiben gültig.
+The WASM path already has the counterpart: `emscripten_set_main_loop_arg` instead of
+`emscripten_set_main_loop`. What would need changing is the signature, the native loop path, the
+WASM path and the builtin declaration; today's callers (one each in cosmos and 9rooms)
+stay valid.
 
-**Entscheid 2026-10-14 (User):** jetzt **nicht** umsetzen — der cosmos-Client wird zuerst nach
-dem 9rooms-Muster aufgebaut (Kompositionswurzel). Dieses TODO bleibt der Weg, das letzte
-Global danach ersatzlos zu streichen.
+**Decision 2026-10-14 (user):** do **not** implement now — the cosmos client is first built along
+the 9rooms pattern (composition root). This TODO remains the way to remove the last
+global afterwards without replacement.
 

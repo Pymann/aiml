@@ -256,23 +256,23 @@ one container, §5). A pass-by-value copy isolates the *scalar/inline* part and 
 rc-managed part. For an independent copy of the whole thing use `clone`; for full aliasing pass
 a handle (`ptr<T>`, §6).
 
-**`decl: [kopie, Model, original]` ist dieselbe Kopie — und das incref ist Pflicht.**  Eine
-Kopie aus einem anderen Lokal folgt derselben Regel wie ein Parameter: member-weise, Skalare
-unabhängig, String-/Container-/`shared`-Felder **incref'd geteilt**.  Fehlt das incref, teilen
-Kopie und Original einen Puffer mit `rc=1`, und der nächste `set: [kopie.feld, …]` gibt beim
-Freigeben des alten Werts den String des **Originals** frei — das Original liest danach Müll.
-Beide Seiten besitzen nach dem incref ihre **eigene** Referenz und geben am Blockende je einmal
-ab, also wird genau einmal freigegeben.
+**`decl: [kopie, Model, original]` is the same copy — and the incref is mandatory.**  A
+copy from another local follows the same rule as a parameter: member-wise, scalars
+independent, string/container/`shared` fields **shared with an incref**.  If the incref is missing,
+copy and original share a buffer with `rc=1`, and the next `set: [kopie.feld, …]`, when
+releasing the old value, frees the **original's** string — the original then reads garbage.
+After the incref both sides own their **own** reference and each give it up once at the end of the block,
+so it is freed exactly once.
 
-> **Befund (2026-10-21).**  Genau dieses incref fehlte für den *plainen* Namen: `obj.feld` und
-> `{at: …}` wurden als Sicht erkannt und retained, ein schlichtes `original` nicht.  Aufgefallen
-> ist es an einem Cache-Schlüssel in cosmos (`doc/spec/92` Befund 5), der für **dieselbe**
-> Instanz bei jedem Lesen anders ausfiel — ein Schlüssel, der sich bewegt, trifft nie, und das
-> sieht wie ein harmloses „kein Treffer" aus.  Umsetzung: `Symbol::is_copy_retain` (getrennt von
-> `is_view_alias`, das zusätzlich das Escape-Verhalten steuert), die beiden `aiml_ser_retain`-
-> Stellen in `ast_compiler_stmt.cpp`, der Scope-Drop und `freshOwned` im Ownership-Analyzer —
-> alle vier im Gleichschritt.  Probe: `tests/test_value_model_copy_share.aiml` (Original direkt
-> und by value, Kopie, Kopie+`set`, Original **danach**, zweimal gelesen).
+> **Finding (2026-10-21).**  Exactly this incref was missing for the *plain* name: `obj.feld` and
+> `{at: …}` were recognised as a view and retained, a plain `original` was not.  It was noticed
+> on a cache key in cosmos (`doc/spec/92` finding 5) that came out differently for the **same**
+> instance on every read — a key that moves never hits, and that
+> looks like a harmless "no hit".  Implementation: `Symbol::is_copy_retain` (separate from
+> `is_view_alias`, which additionally controls the escape behaviour), the two `aiml_ser_retain`
+> places in `ast_compiler_stmt.cpp`, the scope drop and `freshOwned` in the ownership analyzer —
+> all four in lockstep.  Probe: `tests/test_value_model_copy_share.aiml` (original directly
+> and by value, copy, copy+`set`, original **afterwards**, read twice).
 
 ```yaml
 - def:
@@ -744,22 +744,22 @@ so access and ownership-transfer are **distinct verbs**. The rule per verb, by e
 | **`set`(i, v)** — replace (§5.5 order: **secure new first, then release old**) | move `v` in (`v` moved-out), then **free** the old box | incref/move new, then decref old | incref new, then decref old | copy/move new, then drop old |
 | **`push`/`insert`(v)** | **move** `v` in (`v` moved-out) | incref | incref | copy/move in |
 
-> ⚠️ **Abweichung (gefunden 2026-10-11, cosmos): für `map<string:string>` wird die zugesagte
-> `incref` NICHT ausgeführt.** Die Tabelle sagt für einen `string`-Wert „shared handle,
-> incref"; in der Praxis liefert `map.get` einen rohen Zeiger in die Map. Stirbt die Map,
-> dangelt der Wert.
+> ⚠️ **Deviation (found 2026-10-11, cosmos): for `map<string:string>` the promised
+> `incref` is NOT performed.** The table says "shared handle,
+> incref" for a `string` value; in practice `map.get` returns a raw pointer into the map. If the map dies,
+> the value dangles.
 >
-> Reproduktion (cosmos `defaults_from_env`): ein `sys.env`-Map-Local wird gelesen, das
-> Ergebnis in ein Modellfeld gelegt, die Funktion kehrt zurück — danach stand im Feld der
-> **Name einer anderen Umgebungsvariablen** (`QT_IM_MODULE`) statt des gelesenen Werts, und
-> zwar nur bei manchen Schlüsseln (die übrigen Slots waren noch nicht überschrieben). Das
-> Symptom ist also sporadisch und sieht wie ein Konfigurationsfehler aus.
+> Reproduction (cosmos `defaults_from_env`): a `sys.env` map local is read, the
+> result is put into a model field, the function returns — afterwards the field contained the
+> **name of another environment variable** (`QT_IM_MODULE`) instead of the value read, and
+> only for some keys (the other slots had not been overwritten yet). So the
+> symptom is sporadic and looks like a configuration error.
 >
-> Umgehung bis zur Behebung: den Wert über Interpolation (`"${raw}"`) in eine frische
-> Zeichenkette kopieren, oder die Map so lange leben lassen wie den Wert. Zu prüfen ist, ob
-> `map.get` increfen soll (dann Compiler-Fix) oder ob die Tabelle für `map` auf „borrow,
-> gültig nur solange die Map lebt" korrigiert gehört (dann Spec-Fix) — die beiden Fassungen
-> widersprechen sich, und das entscheidet, ob `get_copy` für `map` nötig wird.
+> Workaround until it is fixed: copy the value via interpolation (`"${raw}"`) into a fresh
+> string, or let the map live as long as the value. It remains to be checked whether
+> `map.get` should incref (then a compiler fix) or whether the table for `map` should be corrected to "borrow,
+> valid only as long as the map lives" (then a spec fix) — the two versions
+> contradict each other, and that decides whether `get_copy` becomes necessary for `map`.
 
 So: **`at`/`get` = borrow** (ownership stays in the list), **`pop`/`take` = move out** (the only
 way to get an owning `ptr<T>` back), **`remove` = release**. There is no verb that both keeps
@@ -1022,19 +1022,19 @@ clone and free walkers — MUST be derived from the **target** ABI (the target `
 from a host `sizeof(...)` and never from a literal `8`. The host compiler is always 64-bit while
 the target may not be, so a host-derived stride is wrong precisely where it cannot be noticed.
 
-**Eine benannte Groesse, kein Literal.** Die Zeiger-Schrittweite steht EINMAL im Compiler
-(`CompilerContext::ptrStride()`, aus dem Ziel-`DataLayout`) und jede Stelle mit zeigergrossen
-Element-Slots nimmt sie: String-, Modell-Handle-, `ptr<T>`-Box- und verschachtelte
-Container-Elemente, die Element-Klassifikation (`classifyListElem`), die Scope-Drop-Deskriptoren
-und die `clear`/`pop`-Freigabe.  In der Laufzeit ist `sizeof(void*)` dieselbe Groesse, weil sie
-FUER das Ziel uebersetzt wird — ein Rueckfallwert `8` dort ist derselbe Fehler.
+**A named size, not a literal.** The pointer stride is defined ONCE in the compiler
+(`CompilerContext::ptrStride()`, from the target `DataLayout`) and every place with pointer-sized
+element slots takes it: string, model handle, `ptr<T>` box and nested
+container elements, the element classification (`classifyListElem`), the scope drop descriptors
+and the `clear`/`pop` release.  In the runtime `sizeof(void*)` is the same size, because it is
+compiled FOR the target — a fallback value of `8` there is the same bug.
 
-> Gemessen am 2026-10-15: `classifyListElem` setzte fuer `string`, Modell-Handles und `ptr<T>`
-> hart `elemSize = 8`.  Auf wasm32 lief `list<string>.clear()` damit mit doppelter Schrittweite
-> ueber das Pufferende, dereferenzierte Datenmuell als String-Zeiger und riss den ganzen
-> cosmos-Client mit (Firefox meldet den Speicherzugriff als `index out of bounds`).  Dieselbe
-> Annahme stand an drei weiteren Stellen — genau das, was ein Literal an vielen Fundstellen
-> anrichtet und eine benannte Groesse verhindert.
+> Measured on 2026-10-15: `classifyListElem` hard-coded `elemSize = 8` for `string`, model handles and `ptr<T>`.
+> On wasm32, `list<string>.clear()` therefore ran with double the stride
+> past the end of the buffer, dereferenced data garbage as a string pointer and took the whole
+> cosmos client down with it (Firefox reports the memory access as `index out of bounds`).  The same
+> assumption was in three further places — exactly what a literal does at many sites
+> and what a named size prevents.
 
 > A descriptor that claims 8 where the generated code indexes at 4 does not fail loudly: the
 > decoder writes element *i* at `base + 8i`, the reader loads it from `base + 4i`. Index 0 agrees
