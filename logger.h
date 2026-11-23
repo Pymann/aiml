@@ -43,10 +43,10 @@ public:
     void setSuppressed(bool s) { suppressed_ = s; }
     bool isSuppressed() const { return suppressed_; }
 
-    // --check (spec/49): Befunde strukturiert mitschneiden statt nur zu drucken.
-    // Gesammelt wird der fertige Meldungstext samt "file:line:col: "-Praefix plus
-    // die Stelle im Compiler, die ihn ausgeloest hat — letztere ist heute die
-    // einzige stabile Kennung eines Checks (siehe spec/49, offener Punkt Codes).
+    // --check (spec/49): record findings in structured form instead of only printing them.
+    // What is collected is the finished message text including the "file:line:col: " prefix plus
+    // the place in the compiler that triggered it — the latter is today the
+    // only stable identifier of a check (see spec/49, open point "codes").
     struct Diag { const char* sev; std::string text; std::string origin; };
     void setCollect(bool c) { collect_ = c; }
     bool isCollecting() const { return collect_; }

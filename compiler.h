@@ -63,38 +63,38 @@ public:
     // Used by aiml_isolated_exec to run Code objects in a fresh LLVM context.
     void compileFromString(const std::string& yaml_source);
 
-    // spec/29_2 §14a: EIN Compiler, VIELE Bundles — der wiederverwendbare
-    // Kontext.  Jeder Aufruf uebersetzt in ein FRISCHES Modul (das vorige ist
-    // an seine Engine uebergegangen) und laesst es laufen; die Engines bleiben
-    // am Leben, damit die Adressen gueltig bleiben.  Was frueher definiert
-    // wurde, wird im neuen Modul nur DEKLARIERT und ueber DynamicLibrary
-    // aufgeloest — derselbe Weg wie bei `sys.lib_load` (§15).
+    // spec/29_2 §14a: ONE compiler, MANY bundles — the reusable
+    // context.  Every call compiles into a FRESH module (the previous one has
+    // passed to its engine) and runs it; the engines stay
+    // alive so that the addresses stay valid.  What was defined earlier
+    // is only DECLARED in the new module and resolved via DynamicLibrary
+    // — the same route as for `sys.lib_load` (§15).
     //
-    // Der Grund ist die Grundlast: ein frischer Kontext kostet ~96 ms,
-    // unabhaengig davon, wie wenig er tut (§15).
+    // The reason is the base cost: a fresh context costs ~96 ms,
+    // regardless of how little it does (§15).
     int execInContext(const std::string& yaml_source);
-    // spec/29_2 §14b (F29_2-…n): uebersetzen und einhaengen, OHNE den
-    // Einstiegspunkt zu rufen — fuer einen Wirt, der fremden Quelltext
-    // pruefen und lesen will, ohne ihn laufen zu lassen (cosmos F96-28).
+    // spec/29_2 §14b (F29_2-…n): compile and link in, WITHOUT calling the
+    // entry point — for a host that wants to check and read foreign source text
+    // without running it (cosmos F96-28).
     int loadInContext(const std::string& yaml_source);
   private:
     int compileInContext(const std::string& yaml_source, bool run_entry);
   public:
-    // Adresse eines im Kontext definierten Symbols, 0 wenn unbekannt.
+    // Address of a symbol defined in the context, 0 if unknown.
     uint64_t symbolAddress(const std::string& name) const;
 
-    // spec/29_2 §14b (F29_2-…l): die Meldungen des LETZTEN `execInContext`.
-    // Sie gehoeren dem Kontext, nicht dem Prozess — zwei Kontexte duerfen ihre
-    // Fehler nicht vermischen, sonst erklaert die eine Einreichung den Fehler
-    // der anderen.
+    // spec/29_2 §14b (F29_2-…l): the messages of the LAST `execInContext`.
+    // They belong to the context, not to the process — two contexts must not mix
+    // their errors, otherwise one submission explains the error
+    // of the other.
     const std::vector<std::string>& ctxErrors() const { return ctx_errors_; }
     // spec/21 §3.1: the package table for `@name/…` imports of this compiler
     // ("" = AIML_PACKAGES, then aiml.packages.json); a host sets it per context.
     void setPackageTable(const std::string& path);
-    // Der Symboltabellen-Zustand dieses Kontexts.  `void*`, weil context.h
-    // hier nicht eingebunden werden kann (Zyklus) — der Leser castet auf
-    // CompilerContext*.  Nur lesen: wer ihn veraendert, veraendert den
-    // Kontext hinter dem Ruecken seines Besitzers.
+    // The symbol-table state of this context.  `void*`, because context.h
+    // cannot be included here (cycle) — the reader casts to
+    // CompilerContext*.  Read only: whoever changes it changes the
+    // context behind its owner's back.
     void* contextState() const { return compiler_ctx_; }
 
     // Convenience: compileFromString + generateEntryPoint + jitRun.
@@ -104,15 +104,15 @@ public:
     // For classes/models (no callable function), returns 1 as a success sentinel.
     // The internal JIT engine is kept alive as long as this AIMLCompiler exists.
     // Used by compileYamlChunk in exec_impl.cpp for hot-reload.
-    // spec/29_2 §15: eine Bibliothek EINMAL uebersetzen und ihre Funktionen
-    // prozessweit als Symbole bekannt machen.  Die Engine bleibt an diesem
-    // Compiler haengen, damit die Adressen gueltig bleiben.
-    // Rueckgabe: Zahl der registrierten Funktionen, -1 bei Fehler.
+    // spec/29_2 §15: compile a library ONCE and make its functions
+    // known process-wide as symbols.  The engine stays attached to this
+    // compiler so that the addresses stay valid.
+    // Returns: number of registered functions, -1 on error.
     int compileLibraryAndRegister(const std::string& yaml_source);
 
-    // Nur Deklarationen uebernehmen (headerOnlyMode): Signaturen werden bekannt,
-    // Rumpfe werden NICHT erzeugt — das ist der billige Teil, der je Lauf
-    // wiederholt wird, waehrend die Rumpfe nur einmal uebersetzt wurden.
+    // Take over declarations only (headerOnlyMode): signatures become known,
+    // bodies are NOT generated — that is the cheap part that is repeated per
+    // run, while the bodies were compiled only once.
     void compileDeclarationsOnly(const std::string& yaml_source);
 
     uint64_t compileChunkAndGetAddress(const std::string& yaml_source,
@@ -141,13 +141,13 @@ public:
     // resolveImport() exactly like importedSourceFiles.  At the top-level
     // (non-library) build, prefabs in allPrefabDecls \ allPrefabUses are warned
     // as declared-but-never-instantiated.
-    // Name -> Datei, in der das Prefab deklariert wurde.  Vorher nur die Namen:
-    // die Warnung ueber ein totes Prefab konnte darum keine Datei nennen, und
-    // bei einem Build ueber mehrere Dateien ist "irgendwo" keine Fundstelle
+    // Name -> file in which the prefab was declared.  Previously only the names:
+    // the warning about a dead prefab therefore could not name a file, and
+    // in a build across several files "somewhere" is not a location
     // (spec/49 F49-100).
     std::map<std::string, std::string> allPrefabDecls;
-    // Tier 4 (spec/44_8): Deklarationen und die auf ihren Instanzen gerufenen
-    // Methoden, ueber alle Module gemischt -- dieselbe Bauart wie allPrefabDecls.
+    // Tier 4 (spec/44_8): declarations and the methods called on their instances,
+    // merged across all modules -- the same construction as allPrefabDecls.
     std::map<std::string, aiml::prefab::Meta> allPrefabMeta;
     std::map<std::string, std::set<std::string>> allPrefabInstMethods;
     std::set<std::string> allPrefabDynamicChild;
@@ -187,16 +187,16 @@ public:
     bool libraryMode = false;
     // When true, skip the internal import cache (build tool handles caching).
     bool noCache = false;
-    // spec/70 §11.3 — Messschalter.  Sie aendern NICHTS am erzeugten Code
-    // (F70-93); eine Messung mit einem Schalter, der das Ergebnis verschiebt,
-    // waere wertlos.  parseOnly bricht nach dem Parse/AST-Durchlauf ab.
+    // spec/70 §11.3 — measurement switches.  They change NOTHING in the generated code
+    // (F70-93); a measurement with a switch that shifts the result
+    // would be worthless.  parseOnly stops after the parse/AST pass.
     bool parseOnly = false;
     bool phaseTimes = false;
-    double phaseParseMs = 0.0;    // Stream-Parse UND AST-Bau: ein Durchlauf (§11.2)
+    double phaseParseMs = 0.0;    // stream parse AND AST build: one pass (§11.2)
     double phaseReparseMs = 0.0;  // Config-Load + sourceNode-Baum: die zwei zusaetzlichen Parses
     double phaseIrMs = 0.0;       // registerTypes / synthesize* / astCompiler.compile
     double phaseEmitMs = 0.0;     // IR-Text schreiben bzw. Objekt-Codegen
-    double phaseTotalMs = 0.0;    // ganze compile()-Dauer, auch was keine Phase ist
+    double phaseTotalMs = 0.0;    // whole compile() duration, including what is not a phase
     void reportPhaseTimes() const;   // F70-90: Zaehler auf stderr
     // Output directory for import .o files (used when noCache=true).
     std::string outputDir;
@@ -231,18 +231,18 @@ private:
     // Null for normal compile/jitRun flows (engine is local there).
     llvm::ExecutionEngine* engine_ = nullptr;
 
-    // spec/29_2 §14a: je `execInContext` eine Engine (sie besitzt ihr Modul)
-    // und der Quelltext, um seine Deklarationen im naechsten Modul zu
-    // wiederholen.  Beide Listen wachsen mit der Zahl der Bundles; freigegeben
-    // wird alles mit dem Compiler.
+    // spec/29_2 §14a: one engine per `execInContext` (it owns its module)
+    // and the source text, to repeat its declarations in the next
+    // module.  Both lists grow with the number of bundles; everything is
+    // freed with the compiler.
     std::vector<llvm::ExecutionEngine*> ctx_engines_;
     std::vector<std::string>            ctx_sources_;
 
-    // Gilt fuer den NAECHSTEN compileFromString: nur Deklarationen, keine
-    // Rumpfe (spec/29_2 §15).  Als Member und nicht im Kontext, weil
-    // compileFromString den Kontext NEU anlegt — ein Flag, das man vorher im
-    // alten setzt, ist danach weg.  Genau daran lief `compileDeclarationsOnly`
-    // bis 25.10.2026 ins Leere.
+    // Applies to the NEXT compileFromString: declarations only, no
+    // bodies (spec/29_2 §15).  As a member and not in the context, because
+    // compileFromString creates the context ANEW — a flag that one sets beforehand in the
+    // old one is gone afterwards.  This is exactly why `compileDeclarationsOnly`
+    // ran into nothing until 2026-10-25.
     bool headerOnlyNext_ = false;
     std::vector<std::string> ctx_errors_;   // §14b F29_2-…l
 

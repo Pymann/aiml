@@ -230,26 +230,26 @@ static std::string parseStartCallFuncName(const char* sc) {
 //   3. Create a new AIMLCompiler, compile + JIT-run the source.
 //   4. Restore the caller's active context/engine.
 
-// ── Bibliotheks-Registry (spec/29_2 §15) ─────────────────────────────────────
-// Prozessweit, bewusst ohne Handle: ein Agent laedt beim Start seine Bibliothek
-// und faehrt danach Schritte.  Mehrere voneinander isolierte Kontexte waeren der
-// naechste Schritt (ein `exec_context` als eindeutige Ressource), brauchen aber
-// ein rebindbares ctx.module() — heute eine Referenz an 601 Stellen.
+// ── Library registry (spec/29_2 §15) ─────────────────────────────────────────
+// Process-wide, deliberately without a handle: an agent loads its library at start
+// and then runs steps.  Several contexts isolated from each other would be the
+// next step (an `exec_context` as a unique resource), but they need
+// a rebindable ctx.module() — today a reference at 601 places.
 //
-// Gehalten wird zweierlei: der Compiler (damit seine Engine und damit die
-// registrierten Adressen am Leben bleiben) und der Quelltext (um je Lauf nur
-// die DEKLARATIONEN zu wiederholen, nicht die Rumpfe).
+// Two things are kept: the compiler (so that its engine and thus the
+// registered addresses stay alive) and the source text (so that per run only
+// the DECLARATIONS are repeated, not the bodies).
 static std::vector<std::unique_ptr<AIMLCompiler>> g_lib_compilers;
 static std::vector<std::string>                   g_lib_sources;
 
-// Hilfsfunktion: YAML-Quelltext aus den code_chunks eines Bundles bauen.
+// Helper: build YAML source text from the code_chunks of a bundle.
 //
-// NICHT durch Verketten: ein Chunk ist ein eigenes YAML-Dokument, und
-// aneinandergehaengt ergeben mehrere Dokumente kein gueltiges Dokument mit
-// mehreren Eintraegen — der Compiler sah dann nur den ersten `- def:`.
-// (Genau dieser Fehler liess `sys.lib_load` nur EIN Symbol registrieren,
-// obwohl das Bundle vier Funktionen enthielt.)  Stattdessen wie
-// aiml_isolated_exec: jeden Chunk parsen und in EINE Sequenz legen.
+// NOT by concatenation: a chunk is a YAML document of its own, and
+// several documents glued together do not make a valid document with
+// several entries — the compiler then only saw the first `- def:`.
+// (Exactly this bug made `sys.lib_load` register only ONE symbol,
+// although the bundle contained four functions.)  Instead, like
+// aiml_isolated_exec: parse every chunk and put it into ONE sequence.
 static std::string exec_chunks_to_yaml(ExecCode* code) {
     ExecList* cc = code ? code->code_chunks : nullptr;
     if (!cc || cc->size == 0) return std::string();
@@ -294,7 +294,7 @@ extern "C" int aiml_isolated_exec(void* raw) {
     if (!raw) return -2;
     ExecCode* code = static_cast<ExecCode*>(raw);
 
-    // ── Quelltext aus den code_chunks (eine Stelle: exec_chunks_to_yaml)
+    // ── Source text from the code_chunks (one place: exec_chunks_to_yaml)
     std::string yaml_source = exec_chunks_to_yaml(code);
     if (yaml_source.empty()) {
         LOG_WARNING("aiml_isolated_exec: no code_chunks — nothing to compile");
@@ -315,9 +315,9 @@ extern "C" int aiml_isolated_exec(void* raw) {
         AIMLCompiler iso;
         if (g_active_context)
             iso.compilerPath = g_active_context->compilerPath;
-        // Geladene Bibliotheken nur DEKLARIEREN (spec/29_2 §15): Signaturen
-        // werden bekannt, die Rumpfe wurden beim Laden einmal uebersetzt und
-        // sind ueber DynamicLibrary::AddSymbol erreichbar.
+        // Only DECLARE loaded libraries (spec/29_2 §15): signatures
+        // become known, the bodies were compiled once when loading and
+        // are reachable via DynamicLibrary::AddSymbol.
         for (const auto& lib : g_lib_sources) iso.compileDeclarationsOnly(lib);
         rc = iso.compileAndRun(yaml_source);
     } // iso destructor frees its LLVMContext, Module, IRBuilder, CompilerContext
@@ -339,15 +339,15 @@ extern "C" int aiml_isolated_exec(void* raw) {
 
 // ── aiml_ctx_exec_code (spec/29_2 §14a) ─────────────────────────────────────
 //
-// Dasselbe Bundle, derselbe Weg zum Quelltext wie bei `aiml_isolated_exec` —
-// nur laeuft es in einem Kontext, der WEITERLEBT.  Deshalb steht es hier und
-// nicht in ctx_runtime.cpp: der Weg vom Code-Objekt zum YAML ist schon da,
-// und zwei Fassungen davon waeren zwei, die auseinanderlaufen.
+// The same bundle, the same route to the source text as with `aiml_isolated_exec` —
+// only it runs in a context that LIVES ON.  That is why it is here and
+// not in ctx_runtime.cpp: the route from the code object to the YAML already exists,
+// and two versions of it would be two that drift apart.
 static int32_t aiml_ctx_exec_or_load(void* handle, void* raw, int run_entry);
 
-// spec/29_2 §14b (F29_2-…n): dasselbe, aber der Einstiegspunkt wird NICHT
-// gerufen — ein Kontroller prueft und liest fremden Quelltext, er laesst ihn
-// nicht laufen (cosmos F96-28).
+// spec/29_2 §14b (F29_2-…n): the same, but the entry point is NOT
+// called — a controller checks and reads foreign source text, it does not
+// run it (cosmos F96-28).
 extern "C" int32_t aiml_ctx_load_code(void* handle, void* raw) {
     return aiml_ctx_exec_or_load(handle, raw, /*run_entry=*/0);
 }
@@ -369,7 +369,7 @@ static int32_t aiml_ctx_exec_or_load(void* handle, void* raw, int run_entry) {
     auto* saved_ee      = g_active_ee;
     auto* saved_fptable = g_fptable_current;
 
-    // Der Griff ist ein Tabelleneintrag; die Instanz holt die Tabelle.
+    // The handle is a table entry; the instance fetches the table.
     auto* comp = static_cast<AIMLCompiler*>(aiml_ctx_compiler(handle));
     if (!comp) {
         LOG_ERROR("aiml_ctx_exec_code: unbekannter Kontext-Griff");
@@ -377,8 +377,8 @@ static int32_t aiml_ctx_exec_or_load(void* handle, void* raw, int run_entry) {
     }
     int rc = run_entry ? comp->execInContext(yaml_source)
                        : comp->loadInContext(yaml_source);
-    // Was dieses Bundle definiert hat, merkt sich der Kontext (F29_2-…f):
-    // der CompilerContext selbst wird beim naechsten Bundle verworfen.
+    // The context remembers what this bundle defined (F29_2-…f):
+    // the CompilerContext itself is discarded with the next bundle.
     aiml_ctx_record_symbols(handle);
 
     g_active_context   = saved_ctx;
@@ -403,8 +403,8 @@ extern "C" int aiml_exec_code(void* raw) {
     cache_fptable_globals();
 
     // ── 1. Code chunks: version-guarded hot-reload ────────────────────────────
-    // spec/65 §5b: eine verweigerte Schreibberechtigung bricht den Lauf ab.  Nur zu loggen
-    // und weiterzulaufen waere die stille Variante, die F65-30 gerade abschafft.
+    // spec/65 §5b: a refused write permission aborts the run.  Only logging
+    // and running on would be the silent variant that F65-30 abolishes.
     bool policy_denied = false;
     ExecList* cc = code->code_chunks;
     if (cc && cc->size > 0 && g_active_context) {
@@ -435,33 +435,33 @@ extern "C" int aiml_exec_code(void* raw) {
                             ? (uint64_t)g_fptable_versions[fidx]
                             : table.at(nm).compiled_version;
 
-                        // spec/65 F65-28/F65-29: ZUERST die Berechtigung, DANN entscheidet die
-                        // Version.  Die Version schreibt der Urheber des Buendels — an einer
-                        // Vertrauensgrenze ist sie Eingabe, nie Erlaubnis.
+                        // spec/65 F65-28/F65-29: FIRST the permission, THEN the
+                        // version decides.  The version is written by the bundle's author — at a
+                        // trust boundary it is input, never permission.
                         if (!aiml::clearance::mayReplace()) {
-                            LOG_ERROR("clearance-replace: `" + nm + "` existiert im Wirt; ein "
-                                      "Rumpf dafuer ist ERSETZEN, und diese Sitzung (Freigabe " +
+                            LOG_ERROR("clearance-replace: `" + nm + "` exists in the host; a "
+                                      "body for it means REPLACING, and this session (clearance " +
                                       std::to_string(aiml::clearance::sessionClearance()) +
-                                      ") hat replace_level " +
+                                      ") has replace_level " +
                                       std::to_string(aiml::clearance::replaceLevel()) +
-                                      " — spec/65 F65-28.  Ein `version:` im Buendel erteilt "
-                                      "das Recht nicht (F65-29).");
+                                      " — spec/65 F65-28.  A `version:` in the bundle does not grant "
+                                      "the right (F65-29).");
                             policy_denied = true;
                             return;
                         }
 
                         if (bundle_ver <= cur_ver) {
-                            // F65-30: in einer eingeschraenkten Sitzung ist das ein FEHLER, kein
-                            // Ueberspringen — sonst bekaeme das Skript stillschweigend die
-                            // Funktion DES WIRTS.  Verschatten darf an einer Grenze nicht still
-                            // geschehen; es ist eine Ueberraschung in der Korrektheit, bevor es
-                            // eine in der Sicherheit ist.
+                            // F65-30: in a restricted session this is an ERROR, not a
+                            // skip — otherwise the script would silently get the host's
+                            // function.  Shadowing must not happen silently at a boundary;
+                            // it is a surprise in correctness before it is
+                            // one in security.
                             if (aiml::clearance::restricted()) {
-                                LOG_ERROR("clearance-collision: `" + nm + "` existiert im Wirt "
-                                          "schon (live v" + std::to_string(cur_ver) +
-                                          ", Buendel v" + std::to_string(bundle_ver) +
-                                          ").  Die Definition zu UEBERSPRINGEN wuerde dem Skript "
-                                          "stillschweigend das Symbol des Wirts geben — "
+                                LOG_ERROR("clearance-collision: `" + nm + "` already exists in the "
+                                          "host (live v" + std::to_string(cur_ver) +
+                                          ", bundle v" + std::to_string(bundle_ver) +
+                                          ").  SKIPPING the definition would silently give the script "
+                                          "the host's symbol — "
                                           "spec/65 F65-30.");
                                 policy_denied = true;
                                 return;
@@ -492,15 +492,15 @@ extern "C" int aiml_exec_code(void* raw) {
                                         " — stays at v" + std::to_string(cur_ver));
                         }
                     } else {
-                        // spec/65 F65-26: ein NEUER Name gelangt hier in die Tabelle des Wirts
-                        // (nur im geteilten Kontext ueberhaupt moeglich, F65-31).  Das ist der
-                        // Akt, den `create_level` regelt — eine eigene, isolierte Definition ist
-                        // dagegen frei, weil sie den Wirt nie erreicht.
+                        // spec/65 F65-26: a NEW name gets into the host's table here
+                        // (only possible at all in the shared context, F65-31).  That is the
+                        // act that `create_level` governs — an own, isolated definition, on the
+                        // other hand, is free, because it never reaches the host.
                         if (!aiml::clearance::mayCreate()) {
-                            LOG_ERROR("clearance-create: `" + nm + "` waere ein NEUES Symbol in "
-                                      "der Tabelle des Wirts; diese Sitzung (Freigabe " +
+                            LOG_ERROR("clearance-create: `" + nm + "` would be a NEW symbol in "
+                                      "the host's table; this session (clearance " +
                                       std::to_string(aiml::clearance::sessionClearance()) +
-                                      ") hat create_level " +
+                                      ") has create_level " +
                                       std::to_string(aiml::clearance::createLevel()) +
                                       " — spec/65 F65-26.");
                             policy_denied = true;
@@ -518,8 +518,8 @@ extern "C" int aiml_exec_code(void* raw) {
 
             } catch (...) {}
         }
-        // -3 wie bei der verweigerten Freigabe (F65-4): eine Verweigerung ist eine
-        // Verweigerung, egal auf welcher Seite der Grenze sie entsteht.
+        // -3 as for the refused clearance (F65-4): a refusal is a
+        // refusal, no matter on which side of the boundary it arises.
         if (policy_denied) return -3;
     }
 
@@ -589,17 +589,17 @@ extern "C" int aiml_exec_code(void* raw) {
     return ((I32Fn)(intptr_t)addr)();
 }
 
-// spec/65 F65-36: `sys.exec(pkg, freigabe)` — dieselbe Ausfuehrung, aber mit einer Freigabe,
-// die NUR fuer diesen Lauf gilt.  Ein Wirt fuehrt Skripte fuer verschiedene Nutzer aus; eine
-// prozessweit gemerkte Freigabe koennte das nicht ausdruecken.
+// spec/65 F65-36: `sys.exec(pkg, clearance)` — the same execution, but with a clearance
+// that applies ONLY to this run.  A host runs scripts for different users; a
+// clearance remembered process-wide could not express that.
 //
-// `pushSessionClearance` verschaerft nur (hoehere Zahl = weniger Rechte), damit ein Aufruf sich
-// nicht mehr nehmen kann als die Prozess-Vorgabe erlaubt.  Zurueckgestellt wird in jedem Fall,
-// auch wenn der Lauf scheitert — sonst bliebe die Einschraenkung am Wirt haengen.
-// spec/65 F65-26/F65-36: die Richtlinie EINER Sitzung — drei Werte, zusammen uebergeben, in
-// der Reihenfolge der F65-26-Tabelle.  Sie gilt fuer die Dauer dieses Laufs und wird danach
-// zurueckgestellt, auch bei Ausnahme: eine Richtlinie, die haengen bleibt, ist eine
-// Eigenschaft des Prozesses und keine der Sitzung.
+// `pushSessionClearance` only tightens (higher number = fewer rights), so that a call
+// cannot take more than the process default allows.  It is reset in every case,
+// even if the run fails — otherwise the restriction would stay attached to the host.
+// spec/65 F65-26/F65-36: the policy of ONE session — three values, passed together, in
+// the order of the F65-26 table.  It applies for the duration of this run and is
+// reset afterwards, even on an exception: a policy that sticks is a
+// property of the process and not of the session.
 extern "C" int aiml_exec_code_policy(void* raw, int clearance, int create_level,
                                      int replace_level) {
     const aiml::clearance::Policy before =

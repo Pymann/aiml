@@ -23,9 +23,9 @@ int main(int argc, char** argv) {
     // spec/70 §11.3 — Messschalter.  Sie aendern nichts am erzeugten Code.
     bool phaseTimes = false;   // F70-90: Phasenzaehler auf stderr
     bool parseOnly = false;    // F70-91: nach Parse/AST abbrechen
-    bool noCacheFlag = false;  // F70-92: __aiml_cache fuer diesen Lauf verbieten
+    bool noCacheFlag = false;  // F70-92: forbid __aiml_cache for this run
     bool reportPrefabs = false;
-    bool checkOnly = false;   // --check: nur prüfen, maschinenlesbar melden (spec/49)
+    bool checkOnly = false;   // --check: only check, report machine-readably (spec/49)
     std::string reportFilter;
     std::string targetTriple;
     std::string assetRoots;  // raw comma-separated string, parsed in compile()
@@ -138,23 +138,23 @@ int main(int argc, char** argv) {
     if (noCacheFlag) compiler.noCache = true;
 
     if (parseOnly) {
-        // --parse-only (spec/70 F70-91): nur der Frontend-Durchlauf.  compile()
-        // kehrt nach dem AST zurueck, also entsteht keine Datei -- das -o-Ziel
-        // wird absichtlich nicht angefasst.  Die Diagnosen des Durchlaufs
-        // entscheiden den Rueckgabewert, sonst waere der Schalter eine stille
-        // Abkuerzung um die Pruefungen herum.
+        // --parse-only (spec/70 F70-91): only the front-end pass.  compile()
+        // returns after the AST, so no file comes into being -- the -o target
+        // is deliberately not touched.  The diagnostics of the pass
+        // decide the return value, otherwise the switch would be a silent
+        // shortcut around the checks.
         compiler.compile(inputFile, "/dev/null");
         compiler.reportPhaseTimes();
         return Logger::instance().hasErrors() ? 1 : 0;
     }
 
     if (checkOnly) {
-        // --check (spec/49, cosmos spec/98 F98-8): nur analysieren, nichts
-        // erzeugen — dieselbe Bauart wie --prefab-report.  Ausgabe ist
-        // tab-getrennt, weil Meldungen Doppelpunkte und Leerzeichen enthalten
-        // und ein Aufrufer sonst wieder raten muesste.
-        // Menschliche Ausgabe stumm: --check liefert AUSSCHLIESSLICH die
-        // tab-getrennten Datensaetze, sonst muss ein Aufrufer wieder filtern.
+        // --check (spec/49, cosmos spec/98 F98-8): only analyse, generate
+        // nothing — the same construction as --prefab-report.  Output is
+        // tab-separated, because messages contain colons and spaces
+        // and a caller would otherwise have to guess again.
+        // Human output muted: --check delivers EXCLUSIVELY the
+        // tab-separated records, otherwise a caller has to filter again.
         Logger::instance().setCollect(true);
         Logger::instance().setSuppressed(true);
         compiler.noCache = true;
@@ -162,19 +162,19 @@ int main(int argc, char** argv) {
         int errs = 0;
         for (const auto& d : Logger::instance().diags()) {
             std::string file = "-", line = "0", col = "0", msg = d.text;
-            // spec/49 F49-100/F49-101: der Ort steht VORNE und in genau einer
-            // Form, "<datei>:<zeile>[:<spalte>]: ".  Darum wird er hier
-            // VERANKERT gelesen und nicht im Text gesucht.
+            // spec/49 F49-100/F49-101: the location comes FIRST and in exactly one
+            // form, "<file>:<line>[:<column>]: ".  That is why it is read here
+            // ANCHORED and not searched for in the text.
             //
-            // Vorher suchte dieser Leser ".aiml:" IRGENDWO in der Meldung und
-            // riet die Grenzen per rfind(' ').  Bei einer YAML-Syntaxmeldung,
-            // die den Dateinamen zweimal enthaelt, landete so der Pfad im Feld
-            // ZEILE — ein Datensatz, den kein Werkzeug lesen kann (gemessen
-            // 16.11.2026).  Was nicht exakt passt, bleibt jetzt Text mit
-            // Zeile 0: eine zugegebene Luecke statt einer falschen Angabe.
+            // Previously this reader searched for ".aiml:" ANYWHERE in the message and
+            // guessed the boundaries via rfind(' ').  For a YAML syntax message
+            // that contains the file name twice, the path thus ended up in the field
+            // LINE — a record that no tool can read (measured
+            // 2026-11-16).  What does not match exactly now stays text with
+            // line 0: an admitted gap instead of a wrong statement.
             {
                 size_t cut = msg.find(": ");
-                // "<datei>:<zahl>[:<zahl>]" vor dem ": " — alles andere faellt durch
+                // "<file>:<number>[:<number>]" before the ": " — everything else falls through
                 while (cut != std::string::npos) {
                     const std::string head = msg.substr(0, cut);
                     size_t lastColon = head.rfind(':');
@@ -199,11 +199,11 @@ int main(int argc, char** argv) {
                             break;
                         }
                     }
-                    // Kein "datei:zeile" -- aber fmtLoc kennt zwei weitere Formen,
-                    // wenn keine Zeile bekannt ist: "datei: " und
-                    // "datei (in funktion): ".  Beide nennen die DATEI, und die
-                    // gehoert ins Feld, auch wenn die Zeile 0 bleibt (F49-100:
-                    // zugegebene Luecke statt Rateversuch).
+                    // No "file:line" -- but fmtLoc knows two further forms
+                    // when no line is known: "file: " and
+                    // "file (in function): ".  Both name the FILE, and it
+                    // belongs in the field, even if the line stays 0 (F49-100:
+                    // admitted gap instead of a guess).
                     const std::string inMark = " (in ";
                     size_t im = head.find(inMark);
                     std::string cand = (im == std::string::npos) ? head : head.substr(0, im);
@@ -213,8 +213,8 @@ int main(int argc, char** argv) {
                         file = cand;
                         msg = msg.substr(cut + 2);
                         if (im != std::string::npos) {
-                            // Die Funktion bleibt im Text -- sie ist Teil der
-                            // Aussage, nicht des Ortes (F49-102).
+                            // The function stays in the text -- it is part of the
+                            // statement, not of the location (F49-102).
                             msg = head.substr(im + 1) + ": " + msg;
                         }
                     }
@@ -306,10 +306,10 @@ int main(int argc, char** argv) {
             for (const auto& src : compiler.importedSourceFiles) {
                 depOut << " \\\n  " << src;
             }
-            // Asset-Deps: die via --asset-roots gescannten Assets werden in die
-            // Registry gebacken → dieses Objekt hängt an ihren Pfaden.  So triggert
-            // Exodus' .d-mtime-Check einen Recompile, wenn ein Asset sich ändert
-            // (kein --clean mehr nötig nach png→webp o.ä.).
+            // Asset deps: the assets scanned via --asset-roots are baked into the
+            // registry → this object depends on their paths.  That way
+            // Exodus' .d mtime check triggers a recompile when an asset changes
+            // (no more --clean needed after png→webp or similar).
             for (const auto& kv : AIML::AssetScanner::instance().all_stores()) {
                 for (const auto& se : kv.second) {
                     depOut << " \\\n  " << se.second.abs_path;
@@ -391,8 +391,8 @@ int main(int argc, char** argv) {
                  for (const auto& src : compiler.importedSourceFiles) {
                      depOut << " \\\n  " << src;
                  }
-                 // Asset-Deps (siehe .ll-Zweig): gescannte Assets als Abhängigkeiten
-                 // → Recompile bei Asset-Änderung ohne --clean.
+                 // Asset deps (see the .ll branch): scanned assets as dependencies
+                 // → recompile on asset change without --clean.
                  for (const auto& kv : AIML::AssetScanner::instance().all_stores()) {
                      for (const auto& se : kv.second) {
                          depOut << " \\\n  " << se.second.abs_path;

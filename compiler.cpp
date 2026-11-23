@@ -88,10 +88,10 @@ constexpr int kAimlFunctionMaxArgs = 5;
 // splitting at the declaration-level instead of the file-line-level alone.
 constexpr int kAimlMaxModelsPerFile = 3;
 
-// Effektive Zeilen: ignoriert reine Kommentar-Zeilen (`# ...`) und
-// komplett leere Zeilen.  Doku ist gratis, der Limit zählt nur Code.
-// Eine Zeile mit Code + trailing comment (`set: [x, 1]  # note`) wird
-// gezählt — das ist Code.
+// Effective lines: ignores pure comment lines (`# ...`) and
+// completely empty lines.  Documentation is free, the limit only counts code.
+// A line with code + trailing comment (`set: [x, 1]  # note`) is
+// counted — that is code.
 int countFileLines(const std::string& path) {
     std::ifstream in(path);
     if (!in.is_open()) return -1;
@@ -386,9 +386,9 @@ int maxStmtSourceLine(const AIML::AST::Stmt* stmt) {
     return maxLine;
 }
 
-// Zähle Code-Zeilen (keine reinen Kommentare, keine leeren) im Bereich
-// [startLine, endLine] inklusive einer Datei.  Spiegelbild von
-// countFileLines aber für einen Subrange.  Falls Datei fehlt → roher span.
+// Count code lines (no pure comments, no empty ones) in the range
+// [startLine, endLine] of a file, inclusive.  Mirror image of
+// countFileLines, but for a subrange.  If the file is missing → raw span.
 int countCodeLinesInRange(const std::string& path, int startLine, int endLine) {
     std::ifstream in(path);
     if (!in.is_open()) return endLine - startLine + 1;
@@ -960,7 +960,7 @@ std::shared_ptr<std::vector<std::string>> AIMLCompiler::installImportResolver(
         ctx.currentSourceFile = path;
 
         AIML::AST::Builder subBuilder;
-        subBuilder.sourceFile = path;          // Fundstelle fuer Parser-Meldungen
+        subBuilder.sourceFile = path;          // location for parser messages
         std::ifstream fin(path);
         if (fin.is_open()) {
             try {
@@ -1068,12 +1068,12 @@ std::shared_ptr<std::vector<std::string>> AIMLCompiler::installImportResolver(
     return deferredImports;
 }
 
-// spec/04 "Operator-Schluessel zitieren": fuer einen blanken Operatorschluessel meldet
-// yaml-cpp nur `unknown token` an der Spalte des Zeichens -- der Autor sucht dann nach
-// einem YAML-Problem, obwohl ein Anfuehrungszeichen fehlt.  Die Marke der Ausnahme zeigt
-// genau auf das Zeichen; damit laesst sich die Zeile holen und die Ursache benennen.
-// Die Suche ist rein lexikalisch und trifft auch in Daten in Anfuehrungszeichen -- das ist
-// hier unschaedlich, weil sie nur einen SCHON feststehenden Fehlschlag erklaert.
+// spec/04 "Operator-Schluessel zitieren" (quoting operator keys): for a bare operator key
+// yaml-cpp only reports `unknown token` at the column of the character -- the author then looks for
+// a YAML problem, although a quotation mark is missing.  The exception's mark points
+// exactly at the character; with it the line can be fetched and the cause named.
+// The search is purely lexical and also hits data in quotation marks -- that is
+// harmless here, because it only explains a failure that is ALREADY certain.
 static std::string bareOpKeyHint(const std::string& filename, const YAML::Exception& e) {
     if (e.mark.line < 0) return "";
     std::ifstream in(filename);
@@ -1090,18 +1090,18 @@ static std::string bareOpKeyHint(const std::string& filename, const YAML::Except
            " (spec/04 \"Operator-Schluessel zitieren\").";
 }
 
-// spec/70 §11.2 — eine Uhr fuer alle Phasenzaehler.  Millisekunden als double:
-// gerundet wird erst bei der Ausgabe, sonst runden vier kurze Phasen einzeln auf
-// 0 ab und die Summe ist kleiner als das Ganze.
+// spec/70 §11.2 — one clock for all phase counters.  Milliseconds as double:
+// rounding only happens on output, otherwise four short phases round down individually to
+// 0 and the sum is smaller than the whole.
 static double phaseNowMs() {
     return std::chrono::duration<double, std::milli>(
                std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
-// F70-90 — tab-getrennt auf STDERR, weil stdout dem uebersetzten Programm
-// gehoert (und bei --check den Diagnosen).  Unter --parse-only gibt es die
-// Phasen ir/emit nicht, also werden sie auch nicht gemeldet: eine 0 waere eine
-// Behauptung ueber Arbeit, die nie lief.
+// F70-90 — tab-separated on STDERR, because stdout belongs to the compiled program
+// (and under --check to the diagnostics).  Under --parse-only the phases
+// ir/emit do not exist, so they are not reported either: a 0 would be a
+// claim about work that never ran.
 void AIMLCompiler::reportPhaseTimes() const {
     if (!phaseTimes) return;
     auto rec = [](const char* name, double ms) {
@@ -1120,9 +1120,9 @@ void AIMLCompiler::reportPhaseTimes() const {
 
 void AIMLCompiler::compile(const std::string& filename, const std::string& outputFilename) {
     LOG_DEBUG("Compiling " + filename);
-    // §11.2: total deckt die ganze compile()-Dauer ab, auch Arbeit, die keiner
-    // Phase gehoert (Clearance-Fluss, Diagnosen, Importe ueber Sub-Compiler).
-    // Als Guard, damit JEDER Rueckgabepfad zaehlt -- compile() hat viele.
+    // §11.2: total covers the whole compile() duration, including work that belongs to no
+    // phase (clearance flow, diagnostics, imports via sub-compilers).
+    // As a guard, so that EVERY return path counts -- compile() has many.
     struct TotalGuard {
         double started; double& acc;
         ~TotalGuard() { acc += phaseNowMs() - started; }
@@ -1136,9 +1136,9 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
     try {
         config = YAML::LoadFile(filename);
     } catch (const YAML::Exception& e) {
-        // spec/49 F49-100: die Marke der Ausnahme kennt Zeile UND Spalte -- sie
-        // standen bisher nur im Fliesstext von e.what(), zusammen mit einem
-        // zweiten Dateinamen, woran der --check-Leser zerbrach.
+        // spec/49 F49-100: the exception's mark knows line AND column -- until now they
+        // were only in the running text of e.what(), together with a
+        // second file name, which broke the --check reader.
         std::string where = filename;
         if (e.mark.line >= 0) {
             where += ":" + std::to_string(e.mark.line + 1);
@@ -1190,19 +1190,19 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
 
     // 4. Parse YAML to AST & Compile (Two-Pass)
     AIML::AST::Builder astBuilder;
-    astBuilder.sourceFile = filename;          // Fundstelle fuer Parser-Meldungen
-    // ... und fuer die freien Helfer ohne Builder (spec/49 F49-100).  Der alte
-    // Wert wird beim Verlassen wiederhergestellt: ein Import parst rekursiv.
+    astBuilder.sourceFile = filename;          // location for parser messages
+    // ... and for the free helpers without a builder (spec/49 F49-100).  The old
+    // value is restored on exit: an import parses recursively.
     const std::string prevParseFile = AIML::AST::currentParseFile();
     AIML::AST::setCurrentParseFile(filename);
     struct ParseFileGuard {
         std::string prev;
         ~ParseFileGuard() { AIML::AST::setCurrentParseFile(prev); }
     } parseFileGuard{prevParseFile};
-    // spec/62 §13.5f: eine deklarierte Pipeline wird VOR dem Uebersetzen in
-    // die zusammengesetzte Form umgeschrieben.  Nur Dateien, die eine
-    // enthalten, laufen durch die Umschreibung — jede andere nimmt
-    // unveraendert den gewohnten Weg.
+    // spec/62 §13.5f: a declared pipeline is rewritten into the composed form
+    // BEFORE compilation.  Only files that contain one
+    // go through the rewrite — every other one takes the usual route
+    // unchanged.
     std::string expandedSource;
     bool usedExpansion = false;
     try {
@@ -1215,7 +1215,7 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
                 if (aiml::expandPipelineDeclarations(rawText, filename, expandedSource)) {
                     usedExpansion = true;
                 } else {
-                    LOG_ERROR(filename + ": pipeline-Deklaration konnte nicht umgeschrieben werden");
+                    LOG_ERROR(filename + ": the pipeline declaration could not be rewritten");
                     return;
                 }
             }
@@ -1243,9 +1243,9 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
         auto programAST = astBuilder.takeProgram();
         phaseParseMs += phaseNowMs() - phaseParseStart;
 
-        // --parse-only (spec/70 F70-91): hier endet der Frontend-Durchlauf.
-        // Keine Typen, keine IR, keine Datei.  Die Diagnosen dieses Durchlaufs
-        // sind gestellt und entscheiden in main den Rueckgabewert.
+        // --parse-only (spec/70 F70-91): the front-end pass ends here.
+        // No types, no IR, no file.  The diagnostics of this pass
+        // are in place and decide the return value in main.
         if (parseOnly) return;
 
         if (programAST) {
@@ -1331,13 +1331,13 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
             // Pass 2: Full Code Generation
             astCompiler.compile(programAST.get());
             phaseIrMs += phaseNowMs() - phaseIrStart;
-            // spec/65 F65-9 (opt-in, F65-17): Privilegienfluss ueber die Aufrufkanten.
-            // Laeuft je uebersetzter Datei; datei-UEBERGREIFENDE Kanten deckt das noch
-            // nicht ab (dafuer braucht es die Propagation wie bei den Enum-Mengen).
+            // spec/65 F65-9 (opt-in, F65-17): privilege flow across the call edges.
+            // Runs per compiled file; edges ACROSS files are not yet
+            // covered (that needs propagation as for the enum sets).
             if (aiml::clearance::flowCheckEnabled()) {
                 std::map<std::string, aiml::clearance::FlowNode> flowGraph;
                 for (const auto& kv : ctx.functions) {
-                    // Nur eigene Ruempfe: eine Deklaration traegt hier kein Level.
+                    // Own bodies only: a declaration carries no level here.
                     if (!kv.second.func || kv.second.func->isDeclaration()) continue;   // spec/65
                     aiml::clearance::FlowNode n;
                     n.level  = kv.second.clearance_level;
@@ -1346,8 +1346,8 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
                     flowGraph.emplace(kv.first, std::move(n));
                 }
                 aiml::clearance::checkFlow(flowGraph);
-                // spec/65 F65-34: Write-down im Rumpf — derselbe Hebel, weil beides derselbe
-                // Wunsch ist („pruefe die Privilegien statisch"), nicht zwei Entscheidungen.
+                // spec/65 F65-34: write-down in the body — the same lever, because both are the same
+                // wish ("check the privileges statically"), not two decisions.
                 aiml::clearance::checkWritedown(programAST.get());
             }
 
@@ -1361,7 +1361,7 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
                     itLoc != ctx.prefabDeclLoc.end() && !itLoc->second.empty()
                         ? itLoc->second : (filename + ": "));
             }
-            // Tier 4 (spec/44_8): Deklarationen und Methodenaufrufe mitmischen.
+            // Tier 4 (spec/44_8): merge in declarations and method calls.
             for (const auto& kv : ctx.prefabMeta) allPrefabMeta.emplace(kv.first, kv.second);
             for (const auto& kv : ctx.prefabInstMethods)
                 allPrefabInstMethods[kv.first].insert(kv.second.begin(), kv.second.end());
@@ -1399,8 +1399,8 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
             // both give a complete picture.  A warm-cache multi-file JIT run can
             // skip imports, so we stay silent there to avoid false "dead" noise.
             if (!libraryMode && !reportPrefabsMode && (noCache || importedSourceFiles.empty())) {
-                // spec/66 §5.6 — ein Service, den nichts im Build anfasst, ist toter
-                // Code: die Endpunkte waeren nie erreichbar.  FEHLER, nicht Warnung.
+                // spec/66 §5.6 — a service that nothing in the build touches is dead
+                // code: the endpoints would never be reachable.  An ERROR, not a warning.
                 for (const auto& sv : allServiceDecls) {
                     if (!allServiceUses.count(sv.first))
                         LOG_ERROR(sv.second + "service '" + sv.first + "' is declared but "
@@ -1419,9 +1419,9 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
                     }
                 }
 
-                // ── Tier 4: Eingabe-Erreichbarkeit (spec/44_8 F44_8-1..6) ──
-                // Ganzprogrammweit wie Tier 3: ein Prefab wird in einer Datei
-                // deklariert und in einer anderen bedient.
+                // ── Tier 4: input reachability (spec/44_8 F44_8-1..6) ──
+                // Whole-program like tier 3: a prefab is declared in one file
+                // and operated in another.
                 {
                     static const std::set<std::string> kInteractive = {
                         "button", "checkbox", "radio", "slider", "dropdown",
@@ -1434,30 +1434,30 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
                         "set_draggable", "set_input_blocking", "get_input_blocking",
                         "set_input_transparent", "get_input_transparent"
                     };
-                    // Liest jemand den Zustand eines Widgets?
+                    // Does anyone read the state of a widget?
                     static const std::set<std::string> kWidgetRead = {
                         "child_clicked", "is_checked", "text_value", "child_focused",
                         "dropdown_value", "dropdown_index", "dropdown_enum",
                         "get_slider_value", "selection", "container_row_count"
                     };
-                    // Fuer welche Typen zaehlt die Box ueberhaupt?  Ein `label`
-                    // wird nach TEXTMETRIK gezeichnet (pos + font_size) und nimmt
-                    // keine Eingabe -- `width: 0` ist dort der Normalfall, wie der
-                    // Korpus zeigt (test_prefab.aiml: 'zone_label' 0x0).  Fuer
-                    // alles andere ist die Box die Zeichen- UND die Trefferflaeche
-                    // (child_screen_bbox nimmt ch.width/ch.height direkt).
+                    // For which types does the box count at all?  A `label`
+                    // is drawn by TEXT METRICS (pos + font_size) and takes
+                    // no input -- `width: 0` is the normal case there, as the
+                    // corpus shows (test_prefab.aiml: 'zone_label' 0x0).  For
+                    // everything else the box is the drawing AND the hit area
+                    // (child_screen_bbox takes ch.width/ch.height directly).
                     static const std::set<std::string> kBoxed = {
                         "rect", "sprite", "button", "checkbox", "radio", "slider",
                         "dropdown", "text_input", "textbox", "container", "bar"
                     };
-                    // `cascade` fehlt hier bewusst: die Laufzeit baut die
-                    // Kaskaden-UI (Wurzel-Dropdown + Payload-Zeilen) selbst, und
-                    // dass ihre Flaeche aus der deklarierten Box kommt, ist nicht
-                    // belegt -- die einzige Probe im Korpus deklariert sie ohne
-                    // Groesse und steht in einer Datei, die sich selbst als
-                    // DESIGN-DRAFT bezeichnet.  Interaktiv ist sie trotzdem
-                    // (F44_8-1/-4 gelten weiter); nur die Box-Regeln schweigen,
-                    // solange die Fundlage fehlt.
+                    // `cascade` is deliberately missing here: the runtime builds the
+                    // cascade UI (root dropdown + payload rows) itself, and
+                    // that its area comes from the declared box is not
+                    // established -- the only probe in the corpus declares it without
+                    // a size and is in a file that calls itself a
+                    // DESIGN DRAFT.  It is interactive nonetheless
+                    // (F44_8-1/-4 still apply); only the box rules stay silent
+                    // as long as the evidence is missing.
                     auto fmtSize = [](float value) {
                         std::string s = std::to_string(value);
                         while (s.size() > 1 && s.back() == '0') s.pop_back();
@@ -1469,8 +1469,8 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
                     for (const auto& kvMeta : allPrefabMeta) {
                         const std::string& pname = kvMeta.first;
                         const aiml::prefab::Meta& meta = kvMeta.second;
-                        // Nie instanziiert?  Das meldet Tier 3 schon -- hier
-                        // nichts draufsatteln.
+                        // Never instantiated?  Tier 3 already reports that -- do not
+                        // pile anything on here.
                         if (!allPrefabUses.count(pname)) continue;
                         auto methodsIt = allPrefabInstMethods.find(pname);
                         auto hasMethod = [&](const std::string& m) {
@@ -1496,8 +1496,8 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
                         }
 
                         for (const auto& ch : meta.children) {
-                            if (!kBoxed.count(ch.type)) continue;   // label/text: Box zaehlt nicht
-                            // F44_8-3 — Kind ohne Flaeche
+                            if (!kBoxed.count(ch.type)) continue;   // label/text: box does not count
+                            // F44_8-3 — child without an area
                             if (ch.width <= 0.0f || ch.height <= 0.0f) {
                                 LOG_ERROR(ch.loc + "prefab '" + pname + "': child '" + ch.name +
                                     "' has size " + fmtSize(ch.width) + "x" + fmtSize(ch.height) +
@@ -1505,7 +1505,7 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
                                     "(spec/44_8 F44_8-3).");
                                 continue;
                             }
-                            // F44_8-2 — Kind ausserhalb der Trefferflaeche der Instanz
+                            // F44_8-2 — child outside the instance's hit area
                             if (!meta.inputTransparent && meta.width > 0.0f && meta.height > 0.0f &&
                                 (ch.pos_x < 0.0f || ch.pos_y < 0.0f ||
                                  ch.pos_x + ch.width  > meta.width ||
@@ -1523,11 +1523,11 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
                             }
                         }
 
-                        // F44_8-4 — zwei interaktive Kinder ueberlappen.
-                        // Gestapelte Alternativen sind legitim und werden in
-                        // echtem Code mit set_child_visible gesteuert, nicht mit
-                        // `visible: false` -- ist die Sichtbarkeit eines der
-                        // beiden verwaltet, ist der Stapel Absicht.
+                        // F44_8-4 — two interactive children overlap.
+                        // Stacked alternatives are legitimate and are controlled in
+                        // real code with set_child_visible, not with
+                        // `visible: false` -- if the visibility of one of the
+                        // two is managed, the stack is intentional.
                         const std::set<std::string>* managed = nullptr;
                         {
                             auto mv = allPrefabVisibleManaged.find(pname);
@@ -1551,13 +1551,13 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
                                     chb.pos_y + chb.height <= cha.pos_y;
                                 if (apart) continue;
                                 if (visManaged(cha.name) || visManaged(chb.name)) continue;
-                                // WARNUNG, nicht Fehler: ob ein Stapel Absicht
-                                // ist, haengt an set_child_visible auf einer
-                                // Instanz -- und die Bindung var=instantiate
-                                // sieht Container-Zeilen nicht.  An 9rooms waren
-                                // nach dem Notausgang noch 3 von 6 Funden
-                                // gesteuerte Stapel (AckDot).  Ein Fehler mit
-                                // dieser Quote waere unbrauchbar.
+                                // A WARNING, not an error: whether a stack is intentional
+                                // depends on set_child_visible on an
+                                // instance -- and the binding var=instantiate
+                                // does not see container rows.  In 9rooms, after
+                                // the escape hatch, 3 of 6 findings were still
+                                // controlled stacks (AckDot).  An error with
+                                // this rate would be useless.
                                 LOG_WARNING(chb.loc + "prefab '" + pname + "': children '" +
                                     cha.name + "' (" + cha.type + ") and '" + chb.name + "' (" +
                                     chb.type + ") overlap — the widget pass does not stop at the "
@@ -1567,16 +1567,16 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
                             }
                         }
 
-                        // F44_8-5 und F44_8-6 stehen hinter AIML_LINT_PREFAB_INPUT=1.
-                        // Beide ruhen auf der Tier-2-Bindung (var = instantiate
-                        // "Literal"), und echter Code gibt Instanzen durch Helfer
-                        // und Container weiter: an 9rooms meldete F44_8-6 zwanzig
-                        // Prefabs, deren Widgets sehr wohl gelesen werden --
-                        // ueber Instanzen, die die Bindung nicht sieht.  Als
-                        // Hinweis taugt die Regel, als Dauerwarnung luegt sie.
+                        // F44_8-5 and F44_8-6 are behind AIML_LINT_PREFAB_INPUT=1.
+                        // Both rest on the tier-2 binding (var = instantiate
+                        // "literal"), and real code passes instances on through helpers
+                        // and containers: in 9rooms F44_8-6 reported twenty
+                        // prefabs whose widgets are very much read --
+                        // through instances the binding does not see.  As a
+                        // hint the rule is useful, as a permanent warning it lies.
                         if (!prefabInputHints) continue;
 
-                        // F44_8-5 — Dekoration, die nur Hover nehmen kann
+                        // F44_8-5 — decoration that can only take hover
                         if (!anyInteractive && !meta.inputTransparent && !meta.draggable) {
                             bool asked = false;
                             for (const auto& m : kPointerAsk)
@@ -1592,7 +1592,7 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
                             }
                         }
 
-                        // F44_8-6 — deklariertes Widget, das niemand liest
+                        // F44_8-6 — declared widget that nobody reads
                         if (anyInteractive && !allPrefabDynamicChild.count(pname)) {
                             bool read = false;
                             for (const auto& m : kWidgetRead)
@@ -1702,18 +1702,18 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
 void AIMLCompiler::compileFromString(const std::string& yaml_source_in) {
     LOG_DEBUG("compileFromString: " + std::to_string(yaml_source_in.size()) + " bytes");
 
-    // spec/62 §13.5f: eine deklarierte Pipeline wird VOR dem Uebersetzen in
-    // die zusammengesetzte Form umgeschrieben — aus einer Zeichenkette genauso
-    // wie aus einer Datei.  Ohne das kannte ein Bundle (`sys.code_from`, ein
-    // `ctx`-Lauf) den Schluessel `pipeline:` nicht, und eine eingereichte
-    // Pipeline war nur ueber eine Datei uebersetzbar (spec/62 §20.1).
+    // spec/62 §13.5f: a declared pipeline is rewritten into the composed form
+    // BEFORE compilation — from a string just as
+    // from a file.  Without this a bundle (`sys.code_from`, a
+    // `ctx` run) did not know the key `pipeline:`, and a submitted
+    // pipeline could only be compiled via a file (spec/62 §20.1).
     std::string yaml_expanded;
     const std::string* use_source = &yaml_source_in;
     if (aiml::sourceHasPipelineDecl(yaml_source_in)) {
         if (aiml::expandPipelineDeclarations(yaml_source_in, "<memory>", yaml_expanded))
             use_source = &yaml_expanded;
         else
-            return;   // die Umschreibung hat schon gesagt, was falsch war
+            return;   // the rewrite has already said what was wrong
     }
     const std::string& yaml_source = *use_source;
 
@@ -1731,7 +1731,7 @@ void AIMLCompiler::compileFromString(const std::string& yaml_source_in) {
     ctx.compilerPath = compilerPath;
     ctx.ir_gen = AIML::createLLVMGenerator(ctx);
     ctx.currentSourceFile = "<memory>";
-    // Der Wunsch des Aufrufers gilt fuer DIESEN frischen Kontext (§15).
+    // The caller's wish applies to THIS fresh context (§15).
     ctx.headerOnlyMode = headerOnlyNext_;
     // Builtins before the header scan of imports (same order as compile()):
     // an imported class that implements a builtin interface needs it known.
@@ -1746,7 +1746,7 @@ void AIMLCompiler::compileFromString(const std::string& yaml_source_in) {
         YAML::Node rawSeq = YAML::Load(yaml_source);
 
         AIML::AST::Builder astBuilder;
-        astBuilder.sourceFile = "<memory>";    // Fundstelle fuer Parser-Meldungen
+        astBuilder.sourceFile = "<memory>";    // location for parser messages
         // Feed each node to the AST builder via a synthesised YAML stream
         std::istringstream ss(yaml_source);
         YAML::Parser parser(ss);
@@ -1773,13 +1773,13 @@ void AIMLCompiler::compileFromString(const std::string& yaml_source_in) {
                     == ctx.objectFilesToLink.end())
                     ctx.objectFilesToLink.push_back(obj);
             astCompiler.compile(programAST.get());
-            // spec/65 F65-9 (opt-in, F65-17): Privilegienfluss ueber die Aufrufkanten.
-            // Laeuft je uebersetzter Datei; datei-UEBERGREIFENDE Kanten deckt das noch
-            // nicht ab (dafuer braucht es die Propagation wie bei den Enum-Mengen).
+            // spec/65 F65-9 (opt-in, F65-17): privilege flow across the call edges.
+            // Runs per compiled file; edges ACROSS files are not yet
+            // covered (that needs propagation as for the enum sets).
             if (aiml::clearance::flowCheckEnabled()) {
                 std::map<std::string, aiml::clearance::FlowNode> flowGraph;
                 for (const auto& kv : ctx.functions) {
-                    // Nur eigene Ruempfe: eine Deklaration traegt hier kein Level.
+                    // Own bodies only: a declaration carries no level here.
                     if (!kv.second.func || kv.second.func->isDeclaration()) continue;   // spec/65
                     aiml::clearance::FlowNode n;
                     n.level  = kv.second.clearance_level;
@@ -1788,8 +1788,8 @@ void AIMLCompiler::compileFromString(const std::string& yaml_source_in) {
                     flowGraph.emplace(kv.first, std::move(n));
                 }
                 aiml::clearance::checkFlow(flowGraph);
-                // spec/65 F65-34: Write-down im Rumpf — derselbe Hebel, weil beides derselbe
-                // Wunsch ist („pruefe die Privilegien statisch"), nicht zwei Entscheidungen.
+                // spec/65 F65-34: write-down in the body — the same lever, because both are the same
+                // wish ("check the privileges statically"), not two decisions.
                 aiml::clearance::checkWritedown(programAST.get());
             }
         } else {
@@ -1804,28 +1804,28 @@ void AIMLCompiler::compileFromString(const std::string& yaml_source_in) {
 }
 
 int AIMLCompiler::compileAndRun(const std::string& yaml_source) {
-    // Fehlerstand VOR dem Uebersetzen merken: der Aufrufer (z.B. ein Agent, der
-    // schon Bundles ausgefuehrt hat) kann bereits Fehler gezaehlt haben; uns
-    // interessieren nur die aus DIESEM Lauf.
+    // Remember the error count BEFORE compiling: the caller (e.g. an agent that
+    // has already executed bundles) may already have counted errors; we are
+    // only interested in the ones from THIS run.
     int errsBefore = Logger::instance().errorCount();
     compileFromString(yaml_source);
     generateEntryPoint();
-    // spec/29_2 §17: ohne diese Pruefung meldete ein Bundle mit
-    // Uebersetzungsfehlern (z.B. "Unknown function") trotzdem rc=0 — der
-    // Empfaenger haette einen Schritt als erfolgreich gemeldet, der nie lief.
+    // spec/29_2 §17: without this check a bundle with
+    // compile errors (e.g. "Unknown function") still reported rc=0 — the
+    // receiver would have reported a step as successful that never ran.
     if (Logger::instance().errorCount() > errsBefore) {
-        LOG_ERROR("compileAndRun: Bundle hat Uebersetzungsfehler — wird nicht ausgefuehrt");
+        LOG_ERROR("compileAndRun: bundle has compile errors — not executed");
         return -3;
     }
     return jitRun();
 }
 
 // ── compileLibraryAndRegister (spec/29_2 §15) ────────────────────────────────
-// Eine Bibliothek EINMAL uebersetzen und ihre Funktionen prozessweit bekannt
-// machen.  Spaetere Bundles brauchen dann nur noch die DEKLARATIONEN (siehe
-// compileDeclarationsOnly) — ihre Aufrufe werden zu externen Symbolen, die
-// MCJIT ueber DynamicLibrary aufloest.  Das ist der Unterschied zwischen
-// "Bibliothek je Schritt mituebersetzen" und "einmal uebersetzen, oft rufen".
+// Compile a library ONCE and make its functions known process-wide.
+// Later bundles then only need the DECLARATIONS (see
+// compileDeclarationsOnly) — their calls become external symbols that
+// MCJIT resolves via DynamicLibrary.  That is the difference between
+// "compile the library along with every step" and "compile once, call often".
 int AIMLCompiler::compileLibraryAndRegister(const std::string& yaml_source) {
     compileFromString(yaml_source);
 
@@ -1857,9 +1857,9 @@ int AIMLCompiler::compileLibraryAndRegister(const std::string& yaml_source) {
         }
     }
     if (!missed.empty())
-        LOG_WARNING("compileLibraryAndRegister: ohne Adresse:" + missed);
-    // Engine festhalten: sonst wird der Code freigegeben und die eben
-    // registrierten Adressen zeigen ins Leere.
+        LOG_WARNING("compileLibraryAndRegister: without address:" + missed);
+    // Keep the engine: otherwise the code is freed and the addresses just
+    // registered point into nothing.
     engine_ = eng;
     LOG_WARNING("compileLibraryAndRegister: " + std::to_string(registered) + " von " +
                 std::to_string(c ? c->functions.size() : 0) + " Eintraegen registriert");
@@ -1867,12 +1867,12 @@ int AIMLCompiler::compileLibraryAndRegister(const std::string& yaml_source) {
 }
 
 // ── compileDeclarationsOnly (spec/29_2 §15) ──────────────────────────────────
-// Signaturen uebernehmen, Rumpfe NICHT erzeugen.  Billig, weil die teure
-// Codeerzeugung entfaellt; die Aufrufe landen als externe Symbole im Modul.
+// Take over signatures, do NOT generate bodies.  Cheap, because the expensive
+// code generation is dropped; the calls end up as external symbols in the module.
 void AIMLCompiler::compileDeclarationsOnly(const std::string& yaml_source) {
-    // Das Flag gehoert an den Compiler, nicht an den Kontext: compileFromString
-    // legt den Kontext NEU an, und was man vorher im alten gesetzt hat, ist
-    // danach weg (gefunden 25.10.2026 beim Bau von `ctx`, spec/29_2 §14a).
+    // The flag belongs to the compiler, not to the context: compileFromString
+    // creates the context ANEW, and what one set beforehand in the old one is
+    // gone afterwards (found 2026-10-25 while building `ctx`, spec/29_2 §14a).
     bool prev = headerOnlyNext_;
     headerOnlyNext_ = true;
     compileFromString(yaml_source);
@@ -1881,19 +1881,19 @@ void AIMLCompiler::compileDeclarationsOnly(const std::string& yaml_source) {
 
 // ── execInContext (spec/29_2 §14a) ──────────────────────────────────────────
 //
-// Ein Compiler, viele Bundles.  Der Unterschied zu `compileAndRun` ist nur
-// einer, aber er ist der Punkt der ganzen Uebung: die Instanz bleibt stehen.
+// One compiler, many bundles.  The difference from `compileAndRun` is only
+// one, but it is the point of the whole exercise: the instance stays in place.
 //
-// Drei Dinge muessen dafuer je Aufruf passieren:
-//   1. Ein FRISCHES Modul — das vorige ist beim Bau seiner Engine per
-//      std::move uebergegangen und existiert hier nicht mehr.
-//   2. Die Deklarationen der frueheren Bundles im neuen Modul wiederholen.
-//      Ihre Rumpfe liegen in den alten Engines; `DynamicLibrary::AddSymbol`
-//      macht sie auffindbar, und MCJIT loest den Aufruf darueber auf.  Ein
-//      `llvm::Function*` aus einem anderen Modul direkt zu benutzen waere
-//      ungueltige IR — das ist der Grund fuer den Umweg, nicht Vorsicht.
-//   3. Die Engine behalten.  Gibt man sie frei, zeigen die eben registrierten
-//      Adressen ins Leere (dieselbe Lehre wie bei `sys.lib_load`, §15).
+// Three things must happen per call for this:
+//   1. A FRESH module — the previous one passed over via std::move when its
+//      engine was built and no longer exists here.
+//   2. Repeat the declarations of the earlier bundles in the new module.
+//      Their bodies are in the old engines; `DynamicLibrary::AddSymbol`
+//      makes them findable, and MCJIT resolves the call through it.  Using an
+//      `llvm::Function*` from another module directly would be
+//      invalid IR — that is the reason for the detour, not caution.
+//   3. Keep the engine.  If it is freed, the addresses just registered
+//      point into nothing (the same lesson as with `sys.lib_load`, §15).
 // ── addImportObjects ─────────────────────────────────────────────────────────
 // The .o of this bundle's imports into its engine — each once per compiler: a
 // later bundle of the same context reaches them through the symbols the first
@@ -1926,28 +1926,28 @@ int AIMLCompiler::execInContext(const std::string& yaml_source) {
     return compileInContext(yaml_source, /*run_entry=*/true);
 }
 
-// spec/29_2 §14b (F29_2-…n): uebersetzen UND einhaengen, ohne den
-// Einstiegspunkt zu rufen.  Ein Kontroller, der fremden Quelltext annimmt,
-// will ihn pruefen und lesen — nicht laufen lassen (cosmos F96-28).
+// spec/29_2 §14b (F29_2-…n): compile AND link in, without calling the
+// entry point.  A controller that accepts foreign source text
+// wants to check and read it — not run it (cosmos F96-28).
 int AIMLCompiler::loadInContext(const std::string& yaml_source) {
     return compileInContext(yaml_source, /*run_entry=*/false);
 }
 
 int AIMLCompiler::compileInContext(const std::string& yaml_source, bool run_entry) {
-    // Ein frisches Modul, wenn das vorige an seine Engine uebergegangen ist.
-    // Der KONTEXT wird von compileFromString ohnehin neu angelegt — deshalb
-    // werden die frueheren Bundles hier erneut DEKLARIERT: ihre Signaturen
-    // muessen im neuen Modul stehen, ihre Rumpfe liegen in den alten Engines.
+    // A fresh module, if the previous one has passed to its engine.
+    // The CONTEXT is created anew by compileFromString anyway — that is why
+    // the earlier bundles are DECLARED again here: their signatures
+    // must be in the new module, their bodies are in the old engines.
     if (!module_) {
         module_ = std::make_unique<llvm::Module>("aiml_ctx", *context_);
         module_->setTargetTriple(llvm::sys::getDefaultTargetTriple());
         for (const auto& earlier : ctx_sources_) compileDeclarationsOnly(earlier);
     }
 
-    // spec/29_2 §14b (F29_2-…l): die Meldungen DIESES Bundles mitschneiden.
-    // `-3` heisst „ging nicht" und ist fuer einen Wirt wertlos, der einem
-    // Menschen sagen muss, WAS falsch war.  Zurueckgesetzt wird bei jedem
-    // Lauf, sonst berichtet der dritte die Fehler des ersten.
+    // spec/29_2 §14b (F29_2-…l): record the messages of THIS bundle.
+    // `-3` means "did not work" and is worthless to a host that has to tell a
+    // human WHAT was wrong.  It is reset on every
+    // run, otherwise the third one reports the errors of the first.
     Logger& logger = Logger::instance();
     const bool wasCollecting = logger.isCollecting();
     const size_t diagsBefore = logger.diags().size();
@@ -1965,13 +1965,13 @@ int AIMLCompiler::compileInContext(const std::string& yaml_source, bool run_entr
     logger.setCollect(wasCollecting);
 
     if (logger.errorCount() > errsBefore) {
-        LOG_ERROR("execInContext: Bundle hat Uebersetzungsfehler — wird nicht ausgefuehrt");
+        LOG_ERROR("execInContext: bundle has compile errors — not executed");
         return -3;
     }
 
     llvm::Function* mainFunc = module_->getFunction("main");
     if (!mainFunc && run_entry) {
-        LOG_ERROR("execInContext: kein Einstiegspunkt im Bundle");
+        LOG_ERROR("execInContext: no entry point in the bundle");
         return -1;
     }
 
@@ -1984,15 +1984,15 @@ int AIMLCompiler::compileInContext(const std::string& yaml_source, bool run_entr
     eb.setEngineKind(llvm::EngineKind::JIT);
     llvm::ExecutionEngine* eng = eb.create();
     if (!eng) {
-        LOG_ERROR("execInContext: Engine nicht baubar: " + errStr);
+        LOG_ERROR("execInContext: cannot build engine: " + errStr);
         return -1;
     }
     addImportObjects(eng);
     eng->finalizeObject();
     ctx_engines_.push_back(eng);
 
-    // Was dieses Bundle definiert hat, bekannt machen — fuer das naechste.
-    // Der Kontext ist der, den compileFromString eben angelegt hat.
+    // Make known what this bundle defined — for the next one.
+    // The context is the one compileFromString has just created.
     CompilerContext* c = static_cast<CompilerContext*>(compiler_ctx_);
     if (!c) return -2;
     for (const auto& fn : c->functions) {
@@ -2004,8 +2004,8 @@ int AIMLCompiler::compileInContext(const std::string& yaml_source, bool run_entr
     ctx_sources_.push_back(yaml_source);
 
     if (!run_entry) {
-        // Der Kontext bleibt gesetzt, damit ein spaeteres `cx.call` in dieser
-        // Engine landet — gelaufen ist nichts.
+        // The context stays set, so that a later `cx.call` lands in this
+        // engine — nothing has run.
         return 0;
     }
 
@@ -2017,9 +2017,9 @@ int AIMLCompiler::compileInContext(const std::string& yaml_source, bool run_entr
     return (int)rv.IntVal.getSExtValue();
 }
 
-// symbolAddress: wo liegt das Symbol?  Gesucht wird in den Engines dieses
-// Kontexts, juengste zuerst — ein spaeteres Bundle darf ein frueheres
-// ueberschreiben, und wer fragt, meint den Stand von jetzt.
+// symbolAddress: where is the symbol?  The engines of this context are
+// searched, newest first — a later bundle may overwrite an earlier
+// one, and whoever asks means the state as of now.
 uint64_t AIMLCompiler::symbolAddress(const std::string& name) const {
     for (auto it = ctx_engines_.rbegin(); it != ctx_engines_.rend(); ++it) {
         uint64_t addr = (*it)->getFunctionAddress(name);
@@ -2092,8 +2092,8 @@ void AIMLCompiler::generateEntryPoint() {
     builder.SetInsertPoint(entry);
     
     // 3. Setup Globals: __argc, __argv
-    // ExternalLinkage damit andere Compilation-Units (z.B. core/cfg_loader.aiml,
-    // die sys.get_arg aufrufen) auf dasselbe Symbol referenzieren koennen.
+    // ExternalLinkage so that other compilation units (e.g. core/cfg_loader.aiml,
+    // which call sys.get_arg) can reference the same symbol.
     module_->getOrInsertGlobal("__argc", builder.getInt32Ty());
     llvm::GlobalVariable* argcGlobal = module_->getNamedGlobal("__argc");
     argcGlobal->setLinkage(llvm::GlobalValue::ExternalLinkage);
@@ -2304,19 +2304,19 @@ void AIMLCompiler::setAssetRoots(const std::string& commaList) {
 }
 
 void AIMLCompiler::saveModule(const std::string& outputFilename) {
-    // IR wird VOR dem Schreiben geprueft — genau wie im JIT-Pfad und in
-    // compileToObject.  Vorher ging dieser Pfad ungeprueft auf die Platte, und
-    // das ist der Pfad, den exodus fuer .ll-Ausgabe benutzt: ein Aufruf mit
-    // falscher Argumentzahl landete so im Build, ohne dass jemand etwas sagte.
+    // The IR is verified BEFORE writing — just as in the JIT path and in
+    // compileToObject.  Previously this path went to disk unverified, and
+    // that is the path exodus uses for .ll output: a call with the
+    // wrong argument count thus ended up in the build without anyone saying anything.
     //
-    // Gemessen 2026-10-14 (cosmos): eine Methode bekam einen Parameter, drei
-    // Aufrufstellen blieben unveraendert — der Build war GRUEN, und im
-    // erzeugten .ll standen beide Formen nebeneinander:
+    // Measured 2026-10-14 (cosmos): a method got a parameter, three
+    // call sites stayed unchanged — the build was GREEN, and in the
+    // generated .ll both forms stood side by side:
     //   call void @AgentsScreen_apply_output(ptr %this_ptr)
     //   call void @AgentsScreen_apply_output(ptr %this_ptr22, ptr %agents_val)
-    // Dieselbe Quelle als JIT-Lauf wurde korrekt abgelehnt.  Ein Pfad, der
-    // weniger prueft als der andere, ist schlimmer als keiner: er erzeugt
-    // Vertrauen in ein Binary, das niemand geprueft hat.
+    // The same source as a JIT run was correctly rejected.  A path that
+    // checks less than the other is worse than none: it creates
+    // trust in a binary that nobody has checked.
     {
         bool anyFail = false;
         for (auto& F : *module_) {
@@ -2334,9 +2334,9 @@ void AIMLCompiler::saveModule(const std::string& outputFilename) {
             anyFail = true;
         }
         if (anyFail) {
-            // NICHT schreiben: eine fehlerhafte .ll wuerde sonst weiterverarbeitet
-            // oder — schlimmer — eine alte, gueltige Datei stehen lassen und den
-            // Build gruen erscheinen lassen.
+            // Do NOT write: a faulty .ll would otherwise be processed further
+            // or — worse — an old, valid file would be left in place and the
+            // build would appear green.
             LOG_ERROR("saveModule: refusing to write invalid IR to " + outputFilename);
             return;
         }
@@ -2352,10 +2352,10 @@ void AIMLCompiler::saveModule(const std::string& outputFilename) {
 }
 
 void AIMLCompiler::compileToObject(const std::string& /*filename*/, const std::string& outputFilename) {
-    // §11.2: total laeuft vom ersten Parse bis zum letzten Write.  Die Objekt-
-    // Ausgabe passiert NACH compile(), also zaehlt sie hier weiter -- sonst
-    // meldet der Objektpfad ein total, das kleiner ist als seine emit-Phase
-    // (gemessen: total=33, emit=55).
+    // §11.2: total runs from the first parse to the last write.  The object
+    // output happens AFTER compile(), so it keeps counting here -- otherwise
+    // the object path reports a total that is smaller than its emit phase
+    // (measured: total=33, emit=55).
     struct TotalGuard {
         double started; double& acc;
         ~TotalGuard() { acc += phaseNowMs() - started; }
@@ -2447,8 +2447,8 @@ void AIMLCompiler::compileToObject(const std::string& /*filename*/, const std::s
 // the top-level try/catch in jitRun can report it when nothing catches the
 // exception (spec/22: unhandled → print message to stderr + sys.exit(2)).
 // Without this the exception would unwind out of runFunction() and std::terminate
-// the process (core dump, no diagnostic). Die Ablage liegt in der Runtime
-// (src/sys/log_runtime.cpp), damit AOT- und wasm32-Ziele sie mitlinken.
+// the process (core dump, no diagnostic). The storage lives in the runtime
+// (src/sys/log_runtime.cpp), so that AOT and wasm32 targets link it in.
 extern "C" void        aiml_note_thrown_message(const char* msg);
 extern "C" const char* aiml_last_thrown_message(void);
 
@@ -3813,7 +3813,7 @@ static std::string normalizePath(const std::string& p) {
     }
 }
 
-// Revision eines Artefakts als "<groesse>_<mtime>".  Leer, wenn nicht ermittelbar.
+// Revision of an artefact as "<size>_<mtime>".  Empty if it cannot be determined.
 static std::string artifactRev(const std::string& file) {
     if (file.empty() || !fs::exists(file)) return "";
     try {
@@ -3826,19 +3826,18 @@ static std::string artifactRev(const std::string& file) {
     }
 }
 
-// spec/29_2 §12 (Befund 17.10.2026): der Cache-Schluessel muss die Revision des
-// UEBERSETZERS benennen.  `compilerPath` gibt es nur im JIT-Lauf; in einem
-// AOT-Binary ist `g_active_context` null, der Pfad bleibt leer, und vorher fiel
-// der Schluessel auf "unknown" zurueck — ein gemeinsamer Eimer fuer ALLE
-// Compiler-Versionen, aus dem nach einem libaiml-Update veralteter Code kommen
-// konnte.
+// spec/29_2 §12 (finding 2026-10-17): the cache key must name the revision of the
+// COMPILER.  `compilerPath` only exists in a JIT run; in an
+// AOT binary `g_active_context` is null, the path stays empty, and previously
+// the key fell back to "unknown" — a shared bucket for ALL
+// compiler versions, out of which stale code could come after a libaiml update.
 //
-// Zweiter Weg statt Platzhalter: `dladdr` auf eine Funktion dieser
-// Uebersetzungseinheit liefert die Datei, die den Uebersetzer tatsaechlich
-// enthaelt — im JIT-Lauf das `aiml`-Binary, im AOT-Binary die `libaiml.so`.
-// Bleibt auch das erfolglos, ist die Rueckgabe LEER und der Aufrufer schaltet
-// den Cache ab (fail closed) — ein Cache ohne Versionsschluessel ist schlimmer
-// als keiner.
+// Second route instead of a placeholder: `dladdr` on a function of this
+// translation unit yields the file that actually contains the compiler
+// — in a JIT run the `aiml` binary, in an AOT binary `libaiml.so`.
+// If that is unsuccessful too, the return value is EMPTY and the caller switches
+// the cache off (fail closed) — a cache without a version key is worse
+// than none.
 static std::string compilerBinaryRev(const std::string& compilerPath) {
     static std::string cached;
     static bool haveCached = false;
@@ -3851,8 +3850,8 @@ static std::string compilerBinaryRev(const std::string& compilerPath) {
             rev = artifactRev(info.dli_fname);
     }
     if (rev.empty())
-        LOG_WARNING("Objekt-Cache abgeschaltet: Revision des Uebersetzers nicht "
-                    "ermittelbar (spec/29_2 §12)");
+        LOG_WARNING("Object cache switched off: revision of the compiler cannot "
+                    "be determined (spec/29_2 §12)");
     cached = rev;
     haveCached = true;
     return cached;
@@ -3884,8 +3883,8 @@ static std::string cacheRevDir(const std::string& compilerPath) {
     static std::string dir;
     if (!dir.empty()) return dir;
     fs::path base = cacheBaseDir();
-    // Ohne Schluessel wird nie etwas GELESEN (computeImportCacheKey gibt "" zurueck);
-    // das Verzeichnis dient dann nur als Ablage und wird von sweepCache geraeumt.
+    // Without a key nothing is ever READ (computeImportCacheKey returns "");
+    // the directory then only serves as storage and is cleaned up by sweepCache.
     const std::string rev_tag = compilerBinaryRev(compilerPath);
     fs::path own = base / ("rev_" + (rev_tag.empty() ? std::string("nokey") : rev_tag));
     std::error_code ec;
@@ -3948,8 +3947,8 @@ std::string AIMLCompiler::computeImportCacheKey(const std::string& sourcePath,
     }
 
     keyText << "library_mode=" << (libMode ? 1 : 0) << "\n";
-    // spec/29_2 §12: ohne Revision des Uebersetzers KEIN Schluessel — ein leerer
-    // Schluessel laesst checkCache() scheitern und schaltet den Cache damit ab.
+    // spec/29_2 §12: no key without the compiler's revision — an empty
+    // key makes checkCache() fail and thereby switches the cache off.
     const std::string comp_rev = compilerBinaryRev(compilerPath);
     if (comp_rev.empty()) return "";
     keyText << "compiler_rev=" << comp_rev << "\n";
@@ -4084,7 +4083,7 @@ void AIMLCompiler::resolveImport(const std::string& path) {
     }
 
     // Propagate transitive prefab decl/use sets for Tier-3 dead-prefab analysis.
-    allPrefabDecls.insert(subCompiler.allPrefabDecls.begin(), subCompiler.allPrefabDecls.end());  // Name -> Datei
+    allPrefabDecls.insert(subCompiler.allPrefabDecls.begin(), subCompiler.allPrefabDecls.end());  // name -> file
     allPrefabMeta.insert(subCompiler.allPrefabMeta.begin(), subCompiler.allPrefabMeta.end());
     for (const auto& kv : subCompiler.allPrefabInstMethods)
         allPrefabInstMethods[kv.first].insert(kv.second.begin(), kv.second.end());
