@@ -1,272 +1,270 @@
-# AIML-Fixplan: Heap-Lifetimes und Render-Speicher
+# AIML fix plan: heap lifetimes and render memory
 
-Stand: 2026-09-07. Status: Plan; noch keine Implementierung.
+As of: 2026-09-07. Status: plan; no implementation yet.
 
-Ausgangspunkt: [Memory-Messbefunde von 9rooms_v2](../../../9rooms_v2/doc/analysis/memory_checks/findings_2026-09-07.md).
+Starting point: [memory measurement findings from 9rooms_v2](../../../9rooms_v2/doc/analysis/memory_checks/findings_2026-09-07.md).
 
-## Ziel und Abgrenzung
+## Goal and scope
 
-Wiederholte Arbeit mit konstantem Nutzdatenbestand soll nach dem Warmup einen
-begrenzten lebenden Heap behalten. Rückgaben, Aliase, Container und Runtime-Aufrufe
-müssen dabei korrekt bleiben. Der Fix muss dem nativen Server und dem WASM-Client
-zugutekommen.
+Repeated work with a constant payload set should keep a bounded live heap after
+the warmup. Returns, aliases, containers and runtime calls must stay correct in the
+process. The fix must benefit the native server and the WASM client.
 
-Die bereits bearbeiteten Mirror-/Disconnect-Fixes bleiben erhalten. Änderungen an
-9rooms-Match-Lifecycles, Schema-Migrationen und Produktivdatenbereinigung sind
-separate Aufgaben. Dieser Plan umfasst keinen Daten-Wipe und kein Deployment.
+The mirror/disconnect fixes already worked on are kept. Changes to
+9rooms match lifecycles, schema migrations and production data clean-up are
+separate tasks. This plan includes no data wipe and no deployment.
 
-## 1. Evidenz und noch offene Ursachen
+## 1. Evidence and causes still open
 
-- Der Bericht dokumentiert starkes Wachstum bei konstanten Lifecycle-Zählern.
-  Das passt zu temporären Allokationen; die Zähler allein beweisen jedoch weder
-  vollständiges Cleanup noch einen bestimmten Allokationspfad.
-- `src/core/ast_compiler_stmt.cpp` erzeugt für Model-Value-Locals aus `kv.get_copy`
-  explizit `aiml_ser_deep_copy`. Diese zusätzlichen Allokationen sind unabhängig
-  vom KV-Decode-Cache. Cache-Eviction allein kann sie nicht zurückgewinnen.
-- Probe E zeigt, dass auch dynamische Strings untersucht werden müssen. Probe D
-  mit Literalen ist nur eine Kontrolle ohne dynamischen Stringinhalt.
-- RA und RB rufen beide `populate` mit Interpolation auf. Gleiches Wachstum
-  belegt deshalb kein separates Instantiate-/Destroy-Leck.
-- `aiml_prefab_set_text` in `src/sys/prefab_runtime.cpp` weist einem `std::string`
-  zu. Dieser verwaltet seinen bisherigen Inhalt selbst. Die Aussage im Bericht,
-  dass dort der alte Text nicht freigegeben werde, ist damit nicht belegt.
-  Der AIML-Eingabestring kann trotzdem als Temporary lecken.
-- RC enthält Populate und Draw, aber keinen vollständigen Frame-Abschluss mit
-  Buffer-Swap. Zusätzlicher RSS kann auch aus Treiberallokationen oder ausstehenden
-  GPU-Kommandos stammen. Ein C++-Renderer-Leck braucht einen isolierten Nachweis.
-- Die vorhandene Render-Probe steht beim Review auf 300 Iterationen, während
-  der Bericht 20000 nennt. Quellstand, Binary und Parameter müssen zusammenpassen.
+- The report documents strong growth with constant lifecycle counters.
+  That fits temporary allocations; the counters alone, however, prove neither
+  complete clean-up nor a particular allocation path.
+- `src/core/ast_compiler_stmt.cpp` explicitly emits `aiml_ser_deep_copy` for model value locals from `kv.get_copy`.
+  These additional allocations are independent
+  of the KV decode cache. Cache eviction alone cannot reclaim them.
+- Probe E shows that dynamic strings must be investigated as well. Probe D
+  with literals is only a control without dynamic string content.
+- RA and RB both call `populate` with interpolation. Equal growth
+  therefore does not prove a separate instantiate/destroy leak.
+- `aiml_prefab_set_text` in `src/sys/prefab_runtime.cpp` assigns to a `std::string`.
+  That manages its previous content itself. The statement in the report
+  that the old text is not freed there is therefore not proven.
+  The AIML input string can still leak as a temporary.
+- RC contains populate and draw, but no complete frame completion with a
+  buffer swap. Additional RSS can also come from driver allocations or pending
+  GPU commands. A C++ renderer leak needs isolated proof.
+- At review time the existing render probe is set to 300 iterations, while
+  the report names 20000. Source state, binary and parameters must match.
 
-## 2. Arbeitspaket A: Reproduzierbare Baselines
+## 2. Work package A: reproducible baselines
 
-Vor Compileränderungen die vorhandenen Proben korrigieren und isolieren:
+Before compiler changes, correct and isolate the existing probes:
 
-1. `tests/test_mem_leak_probe.aiml`: Probe C auf konstante Payload-Größe umstellen
-   (bestehenden Wert ersetzen statt pro Iteration anhängen). Proben einzeln in
-   eigenen Prozessen ausführen. Ergebnisse nutzen, damit Optimierung die Arbeit
-   nicht entfernt. Temporäres DB-Verzeichnis pro Lauf verwenden; keine festen
-   rekursiv gelöschten Pfade und keine Produktivdaten.
-2. A/B/D/E ergänzen um nackte Interpolation ohne Container, wiederverwendete
-   dynamische Strings, Models mit ausschließlich skalaren Feldern, verschachtelte
-   Models sowie getrenntes Decode und Copy.
-3. `tests/test_mem_render_probe.aiml`: Populate ohne Renderer, `set_text` mit
-   Literalen und wiederverwendetem Text, Instantiate/Destroy ohne Populate, Draw
-   einer unveränderten Szene und vollständige Frames mit Swap getrennt messen.
-   Textlänge und Zeichenmenge begrenzen; Font-/Glyph-Warmup vor der Messung.
-4. Native Debug-Binaries mit ASan/LSan und/oder Heap-Profiler untersuchen.
-   RSS ergänzen um lebende Allokationen mit Stacks, anonyme und dateibasierte
-   Speicherseiten sowie relevante Objektzähler. Im WASM-Client den benutzten
-   Allocator-Heap getrennt von der WebAssembly.Memory-Kapazität erfassen.
-5. Warmup und mehrere gleich große Batches messen. Compiler-/Runtime-Version,
-   Buildflags, Parameter und Ergebnisse gemeinsam speichern. Saubere und
-   inkompatible Test-KVs getrennt untersuchen.
+1. `tests/test_mem_leak_probe.aiml`: switch probe C to a constant payload size
+   (replace an existing value instead of appending per iteration). Run the probes individually in
+   their own processes. Use the results so that optimisation does not remove the work.
+   Use a temporary DB directory per run; no fixed
+   recursively deleted paths and no production data.
+2. Extend A/B/D/E with bare interpolation without a container, reused
+   dynamic strings, models with exclusively scalar fields, nested
+   models as well as separate decode and copy.
+3. `tests/test_mem_render_probe.aiml`: measure separately populate without the renderer, `set_text` with
+   literals and reused text, instantiate/destroy without populate, draw
+   of an unchanged scene and complete frames with swap.
+   Bound the text length and character set; font/glyph warmup before the measurement.
+4. Examine native debug binaries with ASan/LSan and/or a heap profiler.
+   Supplement RSS with live allocations with stacks, anonymous and file-backed
+   memory pages as well as relevant object counters. In the WASM client, record the used
+   allocator heap separately from the WebAssembly.Memory capacity.
+5. Measure the warmup and several equally sized batches. Store compiler/runtime version,
+   build flags, parameters and results together. Examine clean and
+   incompatible test KVs separately.
 
-Abnahme: Für jede als Leak eingestufte Quelle existiert ein Allokationsstack und
-ein erklärter fehlender Freigabepfad. RSS-Wachstum allein reicht nicht für eine
-Zuschreibung an KV, `set_text` oder Draw.
+Acceptance: for every source classified as a leak there is an allocation stack and
+an explained missing release path. RSS growth alone is not enough for an
+attribution to KV, `set_text` or draw.
 
-## 3. Arbeitspaket B: Ownership-Vertrag festlegen
+## 3. Work package B: define the ownership contract
 
-Vor automatischem Free die geltenden Regeln in `spec/10_collections.md`,
-`spec/15_models.md` und `spec/45_heap_serialization.md` mit der Implementierung
-abgleichen. Für Compiler und Runtime eine gemeinsame Tabelle erstellen:
+Before automatic freeing, reconcile the applicable rules in `spec/10_collections.md`,
+`spec/15_models.md` and `spec/45_heap_serialization.md` with the implementation.
+Create a shared table for compiler and runtime:
 
-| Herkunft / Operation | Zu klärender bzw. durchzusetzender Vertrag |
+| Origin / operation | Contract to clarify or enforce |
 |---|---|
-| Stringliteral | Statisch; niemals freigeben |
-| Interpolation / String-returnende Runtime | Besitzender Rückgabewert oder ausdrücklich geliehene Sicht |
-| Model-Deep-Copy | Ziel besitzt die kopierten Heap-Felder |
-| `kv.get`, `list.get`, Feldreferenz | Geliehene Sicht; Besitzer und Invalidierung dokumentieren |
-| `kv.get_copy` → Model-Local | Cache-Zwischenwert und zusätzliche unabhängige Local-Kopie unterscheiden |
-| Zuweisung, Parameter, `push`, `set` | Bestehenden Aliasvertrag erhalten; Copy, Retain oder Move eindeutig festlegen |
-| `set_text` | Runtime kopiert synchron; Lebensdauer der Eingabe nach dem Call separat behandeln |
-| Return / dauerhafte Speicherung | Wert überlebt den Erzeugerscope durch korrekten Besitztransfer oder geteilten Besitz |
-| Pointer, Callbacks, FFI | Borrowed, owned und escaping ausdrücklich unterscheiden |
+| String literal | Static; never free |
+| Interpolation / string-returning runtime | Owning return value or explicitly borrowed view |
+| Model deep copy | The target owns the copied heap fields |
+| `kv.get`, `list.get`, field reference | Borrowed view; document owner and invalidation |
+| `kv.get_copy` → model local | Distinguish the cache intermediate value and the additional independent local copy |
+| Assignment, parameter, `push`, `set` | Keep the existing alias contract; define copy, retain or move unambiguously |
+| `set_text` | The runtime copies synchronously; treat the lifetime of the input after the call separately |
+| Return / durable storage | The value outlives the producer scope through correct ownership transfer or shared ownership |
+| Pointers, callbacks, FFI | Explicitly distinguish borrowed, owned and escaping |
 
-Bevorzugter Ansatz: Ownership-Metadaten im Codegen plus typspezifische
-Copy-/Move-/Drop-Operationen. Ob gemeinsam genutzte Daten Retain/Release benötigen,
-hängt von den bestehenden Aliasregeln ab. Nicht stillschweigend alle Zuweisungen
-in Deep-Copies verwandeln. Erforderliche Semantik-/ABI-Änderungen vor Umsetzung
-gesondert beschreiben.
+Preferred approach: ownership metadata in codegen plus type-specific
+copy/move/drop operations. Whether shared data needs retain/release
+depends on the existing alias rules. Do not silently turn all assignments
+into deep copies. Describe required semantics/ABI changes separately before
+implementation.
 
-Entscheidungstor: Ein Scope-Destructor ist erst zulässig, wenn die Entweichpfade
-des Werts geklärt sind. Kein pauschales `aiml_ser_free_decoded` für beliebige
-Models: Literal-, Borrowed- und Owned-Felder sowie flache Kopien können sonst
-Double-Free oder Use-After-Free auslösen. Eine bloße Owned-Markierung am gesamten
-Model genügt bei gemischten oder später ersetzten Feldern nicht.
+Decision gate: a scope destructor is only permissible once the escape paths
+of the value are clarified. No blanket `aiml_ser_free_decoded` for arbitrary
+models: literal, borrowed and owned fields as well as shallow copies can otherwise
+trigger a double free or use-after-free. A mere owned marker on the whole
+model is not enough for mixed or later replaced fields.
 
-Abnahme: Locals, Temporaries, Parameter, Felder, Container, Rückgaben und
-Runtime-Grenzen sind abgedeckt. Ungeklärte Fälle werden nicht unsicher automatisch
-freigegeben; gegebenenfalls ist eine gezielte Compilerdiagnose erforderlich.
+Acceptance: locals, temporaries, parameters, fields, containers, returns and
+runtime boundaries are covered. Unclarified cases are not freed automatically in an unsafe way;
+a targeted compiler diagnostic may be required.
 
-## 4. Arbeitspaket C: Lifetime-Codegen schrittweise implementieren
+## 4. Work package C: implement lifetime codegen step by step
 
-Betroffene Einstiegspunkte: `src/core/context.h`, `ast_compiler_stmt.cpp`,
+Affected entry points: `src/core/context.h`, `ast_compiler_stmt.cpp`,
 `ast_compiler_expr.cpp`, `ast_compiler_call.cpp`,
 `src/core/ast/control_flow_builder.*`, `src/core/ast/function_builder.*`,
-`list_impl.*`, `builtin_registry.cpp` und String-/Serialisierungsruntime.
+`list_impl.*`, `builtin_registry.cpp` and the string/serialisation runtime.
 
-1. Besitz und Initialisierungszustand an Symbolen und Ausdrucksergebnissen
-   führen. AST-Form oder LLVM-Pointertyp allein unterscheiden Ownership nicht.
-2. Temporaries bis zum Ende ihres vollständigen Ausdrucks am Leben halten.
-   Nach synchron kopierenden Calls freigeben; bei Speicherung/Return übertragen
-   oder korrekt teilen. Verschachtelte Calls und mehrere Argumente abdecken.
-3. Typspezifisches Drop für owned Strings, Listen, Maps, Buffer und rekursive
-   Model-Felder erzeugen. Literale und geliehene Pointer ausnehmen. Ownership von
-   Decode-Ergebnissen mit den regulären Runtime-Containern abstimmen.
-4. Cleanup in umgekehrter Initialisierungsreihenfolge an allen Scope-Ausgängen:
-   normaler Blockausgang, jede Schleifeniteration, `break`, `continue`, sämtliche
-   Returns und unterstützte Exception-/Unwind-Pfade. Teilinitialisierte und
-   bereits bewegte Werte sicher behandeln.
-5. Rückgabewerte vor Cleanup sichern: direkte und mehrstufige Model-Rückgaben,
-   Rückgabe eines Felds sowie Container-Rückgaben. Der Callee darf übertragenen
-   Besitz nicht erneut zerstören.
-6. Überschreiben behandeln: RHS zuerst sicher auswerten, bisherigen Besitz
-   korrekt freigeben, neuen übernehmen. Selbstzuweisung und Referenzen auf alte
-   Felder berücksichtigen. `push/set/remove/clear` und Container-Wachstum müssen
-   denselben Ownership-Vertrag erfüllen wie Locals.
-7. Explizites `free` integrieren, damit keine zweite automatische Freigabe folgt.
-   Escapende Stackadressen erkennen. Pointer, Interfaces und Klasseninstanzen
-   nicht allein aufgrund ihrer Repräsentation als besitzende Models behandeln.
+1. Carry ownership and initialisation state on symbols and expression results.
+   AST shape or LLVM pointer type alone do not distinguish ownership.
+2. Keep temporaries alive until the end of their full expression.
+   Free them after synchronously copying calls; transfer them or share them correctly on store/return.
+   Cover nested calls and several arguments.
+3. Emit type-specific drops for owned strings, lists, maps, buffers and recursive
+   model fields. Exclude literals and borrowed pointers. Align the ownership of
+   decode results with the regular runtime containers.
+4. Clean-up in reverse initialisation order at all scope exits:
+   normal block exit, every loop iteration, `break`, `continue`, all
+   returns and supported exception/unwind paths. Handle partially initialised and
+   already moved values safely.
+5. Secure return values before clean-up: direct and multi-level model returns,
+   returning a field as well as container returns. The callee must not destroy
+   transferred ownership again.
+6. Handle overwriting: evaluate the RHS safely first, free the previous ownership
+   correctly, take over the new one. Consider self-assignment and references to old
+   fields. `push/set/remove/clear` and container growth must
+   fulfil the same ownership contract as locals.
+7. Integrate explicit `free` so that no second automatic free follows.
+   Detect escaping stack addresses. Do not treat pointers, interfaces and class instances
+   as owning models merely because of their representation.
 
-Abnahme (verbindlich): Die isolierten nativen Proben müssen unter ASan/LSan
-bestehen: keine UAF, Invalid-/Double-Free und keine verlorenen eigenen
-Allokationen. N/2N-Messungen des lebenden Heaps ergänzen diese Prüfung, ersetzen
-sie aber nicht. Sinkender oder flacher RSS allein gilt nicht als Abnahme.
-Zurückgegebene und gespeicherte Werte bleiben nach dem Erzeugerscope gültig;
-gleichwertige WASM-Proben bestehen. Nicht verfügbare Sanitizer bedeuten eine
-offene Abnahme, keinen stillschweigenden Ersatz durch reine RSS-Messung.
+Acceptance (binding): the isolated native probes must pass under ASan/LSan:
+no UAF, invalid/double free and no lost own
+allocations. N/2N measurements of the live heap supplement this check, but do not
+replace it. Falling or flat RSS alone does not count as acceptance.
+Returned and stored values stay valid after the producer scope;
+equivalent WASM probes pass. Unavailable sanitizers mean an
+open acceptance, not a silent substitution by pure RSS measurement.
 
-## 5. Arbeitspaket D: Bestätigte Renderer-Lecks separat reparieren
+## 5. Work package D: repair confirmed renderer leaks separately
 
-Dieses Paket kann nach A unabhängig vom größeren Compilerpaket umgesetzt werden,
-sofern die Proben ein Runtime-Leck belegen:
+This package can be implemented after A independently of the larger compiler package,
+provided the probes prove a runtime leak:
 
-- In `src/sys/prefab_runtime.cpp`, `ui_runtime.cpp` und aufgerufenen Font-/GL-Pfaden
-  den gemessenen Allokationsstacks folgen. Temporäre Layout-Daten über RAII
-  freigeben; bestehende String-/Vector-Destructoren nicht umgehen.
-- Dauerhafte Text-/Glyph-/Texture-Caches von verlorenen Allokationen trennen.
-  Falls wechselnde Inhalte unbeschränkt akkumulieren, Grenzen und Invalidierung
-  festlegen. GPU-Ressourcen gesondert erfassen.
-- Destroy muss Instanz, Kinder und Registrierungen bereinigen. Während Draw
-  verzögertes Destroy erst am sicheren Frame-Ende abschließen. Gemeinsam genutzte
-  Fonts und Texturen dürfen nicht pro Instanz gelöscht werden.
-- Kein `free(text)` in `set_text`: Die Eingabe kann ein Literal oder eine
-  geliehene Adresse sein. Ein dort sichtbares AIML-Temporary gehört zu Paket C.
+- In `src/sys/prefab_runtime.cpp`, `ui_runtime.cpp` and the called font/GL paths,
+  follow the measured allocation stacks. Free temporary layout data via RAII;
+  do not bypass existing string/vector destructors.
+- Separate durable text/glyph/texture caches from lost allocations.
+  If changing contents accumulate without bound, define limits and invalidation.
+  Record GPU resources separately.
+- Destroy must clean up the instance, children and registrations. A destroy
+  deferred during draw completes only at the safe end of the frame. Shared
+  fonts and textures must not be deleted per instance.
+- No `free(text)` in `set_text`: the input can be a literal or a
+  borrowed address. An AIML temporary visible there belongs to package C.
 
-Abnahme: Unveränderte Szene mit vollständigem Frame-Zyklus, Textwechsel und
-Instantiate/Destroy zeigen nach Warmup keinen linearen Anstieg lebender Ressourcen.
-Draw ohne Swap bleibt eine Diagnosekontrolle.
+Acceptance: an unchanged scene with a complete frame cycle, text changes and
+instantiate/destroy show no linear growth of live resources after warmup.
+Draw without swap remains a diagnostic control.
 
-## 6. Verifikation und Integration
+## 6. Verification and integration
 
-Gezielte Regressionen für:
+Targeted regressions for:
 
-- Literale und dynamische Strings; nested Models/Listen/Maps; leer/null;
-  Copy/Move/Self-Assignment; Überschreiben; `push` mit anschließender Nutzung des
-  Originals; `remove/clear`; borrowed `get`; Copy → Mutation → KV-Writeback.
-- Direkte und mehrstufige Rückgaben, mehrere Return-Zweige, `break/continue`,
-  Exceptions und Teilinitialisierung, explizites Free sowie Runtime-Calls mit
-  temporären und gespeicherten Argumenten.
-- Speicherproben A/B/C/D/E und isolierte Renderer-Proben mit konstantem Bestand.
-  Nach Warmup Batches mit N und 2N vergleichen: kein proportional zu N wachsender
-  eigener Live-Heap. Heap-/WASM-Kapazität und RSS müssen nach Free nicht sinken.
+- literals and dynamic strings; nested models/lists/maps; empty/null;
+  copy/move/self-assignment; overwriting; `push` with subsequent use of the
+  original; `remove/clear`; borrowed `get`; copy → mutation → KV write-back.
+- direct and multi-level returns, several return branches, `break/continue`,
+  exceptions and partial initialisation, explicit free as well as runtime calls with
+  temporary and stored arguments.
+- memory probes A/B/C/D/E and isolated renderer probes with a constant set.
+  After warmup compare batches with N and 2N: no own live heap growing proportionally to N.
+  Heap/WASM capacity and RSS do not have to fall after free.
 
-Nach bestandenen gezielten Checks relevante vorhandene Compiler-, Collections-,
-Serialisierungs-, Mirror- und Prefab-Tests durchführen. Vor Abschluss des
-Compilerpakets die vollständige Suite ausführen; bestehende Fehler getrennt
-dokumentieren. Nicht nach jedem kleinen Schritt die komplette Suite wiederholen.
+After the targeted checks pass, run the relevant existing compiler, collections,
+serialisation, mirror and prefab tests. Before completing the
+compiler package, run the full suite; document existing failures separately.
+Do not repeat the complete suite after every small step.
 
-Native Runtime und WASM-Runtime sowie beide 9rooms-Binaries passend neu bauen.
-Anschließend isolierte 9rooms-Messung mit frischer Test-DB: Menü, genau ein Match,
-Match-Ende und Tab-Schließen. Gleiche Aktivität wie in der Baseline verwenden;
-ein Vergleichslauf muss mindestens die zuvor beobachteten ungefähr 50 Minuten
-abdecken. Speicher pro Tick/Poll/Frame und Lifecycle-Zähler gemeinsam auswerten.
+Rebuild the native runtime and the WASM runtime as well as both 9rooms binaries accordingly.
+Then an isolated 9rooms measurement with a fresh test DB: menu, exactly one match,
+match end and tab close. Use the same activity as in the baseline;
+a comparison run must cover at least the roughly 50 minutes observed before.
+Evaluate memory per tick/poll/frame and the lifecycle counters together.
 
-## 7. Reihenfolge, Lieferung und mögliche Mitigation
+## 7. Order, delivery and possible mitigation
 
-Dringlichkeit und Entscheidungstore vor dem großen Compilerpaket:
+Urgency and decision gates before the big compiler package:
 
-1. **A und Decode-Gültigkeit zuerst:** Baselines isolieren und den Fehlervertrag
-   aus 8.6.2 durch Runtime und Scheduler führen. Ungültige Blobs dürfen nicht als
-   erfolgreich geladene Matches verarbeitet werden. Dies ist eine zwingende
-   Voraussetzung für den Server-Nachmessungslauf.
-2. **Server-Nachmessung als Gate vor C:** Die bereits im Scheduler verwendete
-   get_copy_at-Mitigation ist umgesetzt, ihre Wirkung gegen Server-OOM aber noch
-   unbestätigt. Nach erfülltem Decode-Gate mindestens die bisherigen ca. 50 Minuten
-   mit konstantem Match-Bestand messen: RSS, Live-Heap und Lifecycle-Zähler.
-   Saubere Testdaten und kontrollierte inkompatible Test-Blobs getrennt prüfen.
-3. **Nach Messergebnis priorisieren:** Bei flachem Verlauf ist das akute
-   OOM-Risiko für das gemessene Lastprofil entschärft; C wird sorgfältige
-   Qualitätsarbeit ohne OOM-Zeitdruck. Bei weiterem Wachstum zuerst verbleibende
-   Allokationsstacks isolieren. C nicht als unbestätigten Notfallumbau vorziehen.
-4. **B, dann C:** Ownership-Vertrag und Kompatibilitätsprüfung vor Aktivierung
-   automatischer Drops. C ist ein grundlegender Ausbau des Lifetime-Codegens,
-   kein kleiner lokaler Fix. Bestehende Sprachsemantik bleibt erhalten; nur wenn
-   eine Änderung nachweislich unvermeidbar ist, den konkreten Fall zuvor mit dem
-   Nutzer klären. Regressionstests und längere Speicherläufe sind autorisiert.
-5. **D und Integration:** Bestätigte Renderer-Fixes können nach A separat
-   vorgezogen werden. Danach native/WASM-Integration und Vorher-/Nachher-Messung.
+1. **A and decode validity first:** isolate the baselines and carry the error contract
+   from 8.6.2 through runtime and scheduler. Invalid blobs must not be processed as
+   successfully loaded matches. This is a mandatory
+   precondition for the server re-measurement run.
+2. **Server re-measurement as a gate before C:** the get_copy_at mitigation already used in the scheduler
+   is implemented, but its effect against the server OOM is still
+   unconfirmed. After the decode gate is met, measure at least the previous approx. 50 minutes
+   with a constant match set: RSS, live heap and lifecycle counters.
+   Check clean test data and controlled incompatible test blobs separately.
+3. **Prioritise by the measurement result:** with a flat curve the acute
+   OOM risk for the measured load profile is defused; C becomes careful
+   quality work without OOM time pressure. With further growth, first isolate the remaining
+   allocation stacks. Do not pull C forward as an unconfirmed emergency rebuild.
+4. **B, then C:** ownership contract and compatibility check before activating
+   automatic drops. C is a fundamental expansion of the lifetime codegen,
+   not a small local fix. Existing language semantics are preserved; only if
+   a change is demonstrably unavoidable, clarify the concrete case with the
+   user beforehand. Regression tests and longer memory runs are authorised.
+5. **D and integration:** confirmed renderer fixes can be pulled forward separately after A.
+   Then native/WASM integration and the before/after measurement.
 
-Jeder Teil erhält passende Nachweise und aktualisierte Spezifikation. Bestehende
-uncommittete Nutzeränderungen, insbesondere in `mem_runtime.cpp` und
-`mirror_runtime.cpp`, bleiben erhalten. Rücknahme einzelner Änderungen muss ohne
-Zurücksetzen fremder Arbeit möglich sein.
+Every part gets matching evidence and an updated specification. Existing
+uncommitted user changes, in particular in `mem_runtime.cpp` and
+`mirror_runtime.cpp`, are preserved. Reverting individual changes must be possible without
+resetting other people's work.
 
-`get_copy_at` ist bereits als Server-Mitigation im Scheduler eingesetzt:
-Der Zielpuffer muss seinen bisherigen Heap freigeben und entwichene Aliase
-ausschließen. Nur die Struct-Hülle wiederzuverwenden löst das Problem nicht.
-Ein pauschaler Wechsel des Schedulers auf `kv.get` ist wegen KV-Invalidierung
-ebenfalls kein sicherer Fix.
+`get_copy_at` is already in use as a server mitigation in the scheduler:
+the target buffer must free its previous heap and rule out escaped aliases.
+Merely reusing the struct shell does not solve the problem.
+A blanket switch of the scheduler to `kv.get` is likewise not a safe fix because of KV invalidation.
 
-Der Plan setzt weder voraus, dass alle beobachteten Renderer-Zuwächse echte Lecks
-sind, noch verspricht er, dass ein einzelner Model-Destructor sämtliche Client-
-und Serverlecks behebt. Diese Abgrenzung wird durch die Baselines geprüft.
+The plan neither assumes that all observed renderer growth is a real leak,
+nor does it promise that a single model destructor fixes all client
+and server leaks. This delimitation is checked by the baselines.
 
-## 8. Konkrete Änderungen mit Zeilenangaben
+## 8. Concrete changes with line numbers
 
-Zeilenstand: 2026-09-07 beim Ergänzen geprüft. Bei Änderungen die genannten
-Funktionsnamen als Suchanker nutzen. Helfernamen in den Vorschlägen sind Entwürfe,
-keine schon vorhandenen APIs. Alle Vorschläge betreffen eine spätere Umsetzung.
+Line state: checked on 2026-09-07 while adding this. On changes, use the named
+function names as search anchors. Helper names in the proposals are drafts,
+not existing APIs. All proposals concern a later implementation.
 
-### 8.1 Proben korrigieren — Paket A
+### 8.1 Correct the probes — package A
 
-| Datei / Zeile | Vorschlag |
+| File / line | Proposal |
 |---|---|
-| `tests/test_mem_leak_probe.aiml:56`, `probe_set` | Anhängen von `"more"` durch Ersetzen eines vorhandenen skalaren Elements ersetzen, etwa `idx: [mrec.nums, 0, ccnt]`. Payload bleibt konstant. |
-| `tests/test_mem_leak_probe.aiml:139` | Probenwahl und Iterationen parametrisieren; Proben separat starten, Resultate verwenden und N/2N nach Warmup vergleichen. |
-| `tests/test_mem_leak_probe.aiml:114` | Interpolation ohne Liste und Liste mit außerhalb der Schleife erzeugten dynamischen Strings als Kontrollen ergänzen. |
-| `tests/test_mem_render_probe.aiml:26`, `populate` | Varianten mit Literalen und wiederverwendetem Text ergänzen; Interpolation von Textspeicherung trennen. |
-| `tests/test_mem_render_probe.aiml:75`, `probe_frame` | Draw-only ohne Populate sowie vollständigen Frame mit vorhandenem Swap-/Frame-Ende-API separat messen. |
-| `tests/test_mem_render_probe.aiml:103`, `:115` | Iterationen parametrisieren; `held` vor Window-/GL-Abbau zerstören. Font-/Scene-Abbau gemäß bestehendem API-Vertrag. |
+| `tests/test_mem_leak_probe.aiml:56`, `probe_set` | Replace appending `"more"` with replacing an existing scalar element, e.g. `idx: [mrec.nums, 0, ccnt]`. The payload stays constant. |
+| `tests/test_mem_leak_probe.aiml:139` | Parameterise probe selection and iterations; start probes separately, use the results and compare N/2N after warmup. |
+| `tests/test_mem_leak_probe.aiml:114` | Add interpolation without a list and a list with dynamic strings created outside the loop as controls. |
+| `tests/test_mem_render_probe.aiml:26`, `populate` | Add variants with literals and reused text; separate interpolation from text storage. |
+| `tests/test_mem_render_probe.aiml:75`, `probe_frame` | Measure draw-only without populate as well as a complete frame with the existing swap/frame-end API separately. |
+| `tests/test_mem_render_probe.aiml:103`, `:115` | Parameterise iterations; destroy `held` before window/GL teardown. Font/scene teardown per the existing API contract. |
 
-### 8.2 String-Refcounting und Produzenten — B/C
+### 8.2 String refcounting and producers — B/C
 
 - `src/sys/string_runtime.cpp:37`, `:74`, `:81`: `aiml_str_alloc/incref/decref`
-  existieren bereits. Darauf aufbauen. Incref/Decref lesen derzeit einen
-  Magic-Header vor beliebigen übergebenen Adressen; der Adressgrößencheck beweist
-  keinen gültigen Speicher davor. Vor breiterem Einsatz sichere Managed-Herkunft
-  im Codegen und für gemischte Runtime-Grenzen einen sicheren Registry-/Handle-
-  Vertrag vorsehen. Registry bei nebenläufiger Nutzung absichern. Nicht beliebige
-  Literale probeweise vor ihrer Adresse lesen.
-- `src/sys/prefab_runtime.cpp:6021`, `aiml_prefab_text_value`: liefert `strdup`.
-  Nach Konsumentenaudit auf `aiml_str_dup` umstellen und Resultat als owned
-  Managed-String kennzeichnen. Dropdown-Stringrückgaben ab `:3839` mitprüfen.
-  Vorhandenes `free(char*)` wäre danach ungültig und muss mitumgestellt werden.
-- `src/core/ast_compiler_expr.cpp:43–68` und `src/core/string_utils.h:13`:
-  Concat erzeugt neue Akkumulatoren. Ersetzten owned Akkumulator nach erfolgreichem
-  Concat releasen, Endergebnis als owned Temporary weiterreichen. Zahl-zu-String-
-  Segmente erfassen; Borrowed Segmente und Literale nicht freigeben.
-- `src/core/ast_compiler_expr.cpp:1152–1164`: Lesen eines String-Listenelements
-  führt bereits Incref aus. Ausdruck als owned erfassen und später releasen;
-  kein zweites pauschales Retain bei `decl`. Bestehenden
-  `tests/test_mirror_close_string_uaf.aiml` als Kontrolle erhalten.
+  already exist. Build on them. Incref/decref currently read a
+  magic header in front of arbitrary passed addresses; the address size check proves
+  no valid memory in front of it. Before broader use, provide a safe managed origin
+  in codegen and, for mixed runtime boundaries, a safe registry/handle
+  contract. Secure the registry for concurrent use. Do not probe arbitrary
+  literals by reading in front of their address.
+- `src/sys/prefab_runtime.cpp:6021`, `aiml_prefab_text_value`: returns `strdup`.
+  After a consumer audit, switch to `aiml_str_dup` and mark the result as an owned
+  managed string. Check the dropdown string returns from `:3839` too.
+  An existing `free(char*)` would be invalid afterwards and must be switched as well.
+- `src/core/ast_compiler_expr.cpp:43–68` and `src/core/string_utils.h:13`:
+  concat creates new accumulators. Release the replaced owned accumulator after a successful
+  concat, pass the final result on as an owned temporary. Capture number-to-string
+  segments; do not free borrowed segments and literals.
+- `src/core/ast_compiler_expr.cpp:1152–1164`: reading a string list element
+  already performs an incref. Capture the expression as owned and release it later;
+  no second blanket retain on `decl`. Keep the existing
+  `tests/test_mirror_close_string_uaf.aiml` as a control.
 
-### 8.3 Ownership-Metadaten und Scope-Cleanup — B/C
+### 8.3 Ownership metadata and scope clean-up — B/C
 
-`src/core/context.h:27` (`Symbol`) um Ownership-/Initialisierungsinformationen
-ergänzen; `:186` (`Scope`) um geordnete Cleanup-Liste. Die Variablen-Map speichert
-keine Initialisierungsreihenfolge. Entwurf für gemeinsame Compiler-Helfer:
+Extend `src/core/context.h:27` (`Symbol`) with ownership/initialisation information;
+`:186` (`Scope`) with an ordered clean-up list. The variable map stores
+no initialisation order. Draft for shared compiler helpers:
 
 ```cpp
 enum class Ownership { Static, Borrowed, Owned, Shared };
@@ -276,116 +274,116 @@ emitCleanupsUntil(scopeBoundary);
 transferOrRetainResult(source, destination);
 ```
 
-Initialized/moved/maybe-initialized als Datenflusszustände auch an Ausdrücken
-führen. Bedingte Initialisierung und Move benötigen gegebenenfalls Laufzeitflags;
-ein einzelnes C++-bool beim Kompilieren reicht nicht. `is_byref_arg` berücksichtigen.
-Gemischter Feldbesitz braucht einen einheitlichen Feldvertrag oder Metadaten;
-eine Owned-Markierung nur am ganzen Model reicht nicht.
+Carry initialized/moved/maybe-initialized as data flow states on expressions too.
+Conditional initialisation and moves may need runtime flags;
+a single C++ bool at compile time is not enough. Take `is_byref_arg` into account.
+Mixed field ownership needs a uniform field contract or metadata;
+an owned marker only on the whole model is not enough.
 
-- `src/core/ast_compiler_stmt.cpp:1285`, `visitBlockStmt`: sichert/restauriert
-  derzeit Symboltabelle. Cleanup-Frames betreten/verlassen; normalen Cleanup nur
-  in noch nicht terminierten Basic Blocks emittieren.
-- `:1362–1367`: Body-Locals vor While-Rücksprung freigeben, nicht erst nach der
-  gesamten Schleife. Initialisierungs-/Move-Flags pro Iteration korrekt setzen.
-- `:1190–1236`: Return-Ergebnis sichern, verlassene Scopes aufräumen, dann
-  `ret`. Void-/implizite Returns mit erfassen; nichts hinter Terminatoren anfügen.
-- `:1374`, `visitTry`: Cleanup der tatsächlich verlassenen Scopes auch im
-  Exception-/Unwind-Pfad. Nur initialisierte Ressourcen freigeben. Unterstützte
-  Break-/Continue-Emitter an dieselben Scope-Grenzen anbinden.
-- Nicht allein Builder-Fassaden ändern: diese Statement-Visitor emittieren selbst
-  Kontrollfluss und müssen die neuen Helfer tatsächlich verwenden.
+- `src/core/ast_compiler_stmt.cpp:1285`, `visitBlockStmt`: currently saves/restores
+  the symbol table. Enter/leave clean-up frames; emit normal clean-up only
+  in basic blocks that are not yet terminated.
+- `:1362–1367`: free body locals before the while jump back, not only after the
+  whole loop. Set initialisation/move flags correctly per iteration.
+- `:1190–1236`: secure the return result, clean up the scopes being left, then
+  `ret`. Capture void/implicit returns too; append nothing after terminators.
+- `:1374`, `visitTry`: clean up the scopes actually left in the
+  exception/unwind path too. Free only initialised resources. Attach supported
+  break/continue emitters to the same scope boundaries.
+- Do not change only the builder facades: these statement visitors emit control flow
+  themselves and must actually use the new helpers.
 
-### 8.4 Deep-Copy, Replace und Return — C
+### 8.4 Deep copy, replace and return — C
 
-| Datei / Zeile | Eingriff nach geklärtem Ownership-Vertrag |
+| File / line | Intervention after the ownership contract is clarified |
 |---|---|
-| `src/core/ast_compiler_stmt.cpp:586–607` | Nach erfolgreicher Local-Deep-Copy Besitz/Initialisierung markieren und Cleanup registrieren; KV-Cache-Slot nicht mitfreigeben. |
-| `src/core/ast_compiler_stmt.cpp:862`, `:1104` | Weitere Deep-Copy-Zuweisungspfade auf belegte Ziele prüfen und gemeinsamen Replace-Helfer verwenden. |
-| `src/core/ast_compiler_stmt.cpp:1219–1236` | Bestehende Return-Deep-Copy erhalten, Resultat an Caller übertragen und vom Callee-Cleanup ausnehmen. |
-| `src/sys/ser_runtime.cpp:696`, `aiml_ser_deep_copy` | Vorbedingung „Ziel ist leer“ erhalten; checked Replace-Variante für belegte Ziele ergänzen. |
-| `src/sys/ser_runtime.cpp:471`, `fre` | Nur für kompatibel besessene Decode-Felder nutzen; nach Listen-Free auch size/capacity nullen. Allgemeines Model-Drop braucht Feldvertrag. |
+| `src/core/ast_compiler_stmt.cpp:586–607` | After a successful local deep copy, mark ownership/initialisation and register clean-up; do not free the KV cache slot along with it. |
+| `src/core/ast_compiler_stmt.cpp:862`, `:1104` | Check further deep copy assignment paths for occupied targets and use a shared replace helper. |
+| `src/core/ast_compiler_stmt.cpp:1219–1236` | Keep the existing return deep copy, transfer the result to the caller and exclude it from the callee clean-up. |
+| `src/sys/ser_runtime.cpp:696`, `aiml_ser_deep_copy` | Keep the precondition "target is empty"; add a checked replace variant for occupied targets. |
+| `src/sys/ser_runtime.cpp:471`, `fre` | Use only for compatibly owned decode fields; after a list free also zero size/capacity. A general model drop needs a field contract. |
 
-Entwurf für Replace, auch bei Selbstzuweisung und Quellaliasen:
+Draft for replace, also for self-assignment and source aliases:
 
 ```cpp
 tmp = zeroInitialized<T>();
 if (!tryDeepCopy(tmp, source)) {
     dropPartiallyInitialized(tmp);
-    propagateError();             // bisheriges Ziel bleibt erhalten
+    propagateError();             // the previous target is preserved
 }
 drop(destination);
-move(destination, tmp);           // tmp danach ohne eigenen Besitz
+move(destination, tmp);           // tmp afterwards without ownership of its own
 ```
 
-Aktuelle Deep-Copy liefert void: checked Variante oder entsprechender Fehlervertrag
-nötig. Nicht zuerst Ziel freigeben, weil die Quelle auf dessen Felder zeigen kann.
+The current deep copy returns void: a checked variant or a corresponding error contract
+is needed. Do not free the target first, because the source can point to its fields.
 
-### 8.5 Container-Elemente — C
+### 8.5 Container elements — C
 
 `src/core/list_impl.cpp:56` (`push`), `:200` (`clear`), `:287` (`remove`):
 
-- Push/Insert mit AIML-Elementtyp oder Lifetime-Descriptor versehen; Copy/Retain/
-  Move nach Vertrag. LLVM-Pointertyp allein unterscheidet Stringbesitz nicht.
-- Clear setzt aktuell nur size=0. Owned Elemente vorher droppen; Pufferkapazität
-  darf bleiben. Sonst sind Elemente für spätere Freigabe nicht mehr erreichbar.
-- Remove droppt genau das entfernte owned Element, verschiebt verbleibende Slots
-  als Besitztransfer und neutralisiert letzten ungenutzten Slot. Verschobene
-  Elemente nicht zusätzlich releasen.
-- Container-Drop erst Elemente, dann Buffer. Borrowed Parameter nicht zerstören.
-  Maps entsprechend prüfen. Flache Modelkopien aus at/get dürfen nicht zu zwei
-  Besitzern desselben Heaps werden.
+- Give push/insert the AIML element type or a lifetime descriptor; copy/retain/
+  move per contract. The LLVM pointer type alone does not distinguish string ownership.
+- Clear currently only sets size=0. Drop owned elements beforehand; the buffer capacity
+  may stay. Otherwise the elements are no longer reachable for a later free.
+- Remove drops exactly the removed owned element, shifts the remaining slots
+  as an ownership transfer and neutralises the last unused slot. Do not additionally release
+  shifted elements.
+- Container drop: elements first, then the buffer. Do not destroy borrowed parameters.
+  Check maps accordingly. Shallow model copies from at/get must not become two
+  owners of the same heap.
 
-### 8.6 Vorhandenes get_copy_at absichern
+### 8.6 Secure the existing get_copy_at
 
-Bereits vorhanden: `src/sys/db_runtime.cpp:1661` und
-`src/core/ast_compiler_call.cpp:1832`. Die Mitigation in Abschnitt 7 ist inzwischen
-ein Audit dieses vorhandenen Pfads, keine Aufforderung, ihn neu zu implementieren.
+Already present: `src/sys/db_runtime.cpp:1661` and
+`src/core/ast_compiler_call.cpp:1832`. The mitigation in section 7 is by now
+an audit of this existing path, not a request to reimplement it.
 
-1. Kommentar ab `db_runtime.cpp:1653` korrigieren: „zero per-call allocation“ ist
-   falsch; Decode allokiert Heap-Felder neu. Wiederverwendet wird die Struct-Hülle.
-2. **Verbindliches Decode-Gate vor dem Server-Live-Test:** Missing key = 0 ist
-   bereits vorhanden (db_runtime.cpp:1668/1672). Im gefundenen typed Pfad wird
-   hingegen der Decode-Status ignoriert und danach return 1 ausgeführt.
-   Präzisierung zum Review: aiml_ser_decode liefert im aktuellen Quellstand
-   bereits int, nicht void (ser_runtime.h:84, ser_runtime.cpp:713): 0 bei Erfolg,
-   -1 bei Fehler. Es fehlt die Weitergabe und Behandlung dieses Status.
-   Vorschlag für get_copy_at: 1 = erfolgreich kopiert, 0 = Key fehlt,
-   -1 = ungültiges Blob; den API-Vertrag in Spec und Codegen abgleichen.
-   Scheduler/Wrapper dürfen ausschließlich bei 1 weiterarbeiten. Bei Fehler
-   keinen teilweise dekodierten Zielwert lesen, ticken oder zurückschreiben;
-   Teilallokationen sicher bereinigen und Zielzustand ausdrücklich definieren.
-   Schema-Mismatch und strukturell korruptes Blob getrennt prüfen. Die drei
-   berichteten Alt-Match-Keys als Testfall nachbilden; ungültige Keys für den
-   aktuellen Datenstand markieren und vom regelmäßigen Tick ausschließen, mit
-   definierter erneuter Prüfung nach Datenänderung. Kein Produktivdaten-Wipe.
-3. Ziel als initialisierten eigenen Puffer verlangen, keinen KV-Cachealias.
-   Codegen-Prüfung bei `ast_compiler_call.cpp:1832` präzisieren; unbekannte Aliase
-   diagnostizieren oder über sicheren API-Vertrag ausschließen. Letzten Inhalt
-   am Scope-Ende ebenfalls droppen.
-4. Soll alter Zielinhalt bei Decode-Fehler erhalten bleiben, Replace aus 8.4
-   verwenden. Aktuell wird er vor Decode gelöscht; Verhalten spezifizieren.
+1. Correct the comment from `db_runtime.cpp:1653`: "zero per-call allocation" is
+   wrong; decode allocates heap fields anew. What is reused is the struct shell.
+2. **Binding decode gate before the server live test:** missing key = 0 is
+   already present (db_runtime.cpp:1668/1672). In the found typed path, however,
+   the decode status is ignored and return 1 is executed afterwards.
+   Clarification on the review: in the current source state aiml_ser_decode
+   already returns int, not void (ser_runtime.h:84, ser_runtime.cpp:713): 0 on success,
+   -1 on error. What is missing is passing on and handling this status.
+   Proposal for get_copy_at: 1 = copied successfully, 0 = key missing,
+   -1 = invalid blob; reconcile the API contract in the spec and codegen.
+   Scheduler/wrappers may only continue on 1. On an error,
+   do not read, tick or write back a partially decoded target value;
+   clean up partial allocations safely and define the target state explicitly.
+   Check schema mismatch and structurally corrupt blobs separately. Recreate the three
+   reported old match keys as a test case; mark invalid keys for the
+   current data state and exclude them from the regular tick, with a
+   defined recheck after a data change. No production data wipe.
+3. Require the target to be an initialised buffer of its own, not a KV cache alias.
+   Make the codegen check at `ast_compiler_call.cpp:1832` more precise; diagnose unknown aliases
+   or rule them out via a safe API contract. Also drop the last content
+   at the end of the scope.
+4. If the old target content should be preserved on a decode error, use the replace from 8.4.
+   Currently it is deleted before decode; specify the behaviour.
 
-### 8.7 Renderer — konkrete Prüfstellen, bedingte Änderungen
+### 8.7 Renderer — concrete check points, conditional changes
 
-- `src/sys/prefab_runtime.cpp:3662`, set_text: std::string-Zuweisung erhalten.
-  Call-Vertrag „borrowed input, synchronously copied“ erfassen, damit owned
-  Eingabe-Temporaries danach korrekt freigegeben werden. Kein free(text).
-- `:4807`, draw_scene: Stacks für Layout, Renderlisten und GL getrennt messen.
-  Lokale Vektoren haben RAII. Wiederverwendbare Scratch-Vektoren wären eine
-  Allokationsoptimierung, kein pauschaler Leak-Fix; Reentrancy beachten.
-- Pending-Delete-Sweep ab `:4875`: mit Instanz-/Kinderzählern vollständige
-  Deregistrierung prüfen. Nur bei belegtem Restbestand fehlende Freigaben
-  ergänzen; sicheren Frame-Ende-Zeitpunkt erhalten.
+- `src/sys/prefab_runtime.cpp:3662`, set_text: keep the std::string assignment.
+  Capture the call contract "borrowed input, synchronously copied" so that owned
+  input temporaries are freed correctly afterwards. No free(text).
+- `:4807`, draw_scene: measure stacks for layout, render lists and GL separately.
+  Local vectors have RAII. Reusable scratch vectors would be an
+  allocation optimisation, not a blanket leak fix; mind reentrancy.
+- Pending delete sweep from `:4875`: check complete deregistration with instance/child counters.
+  Only add missing frees if a remainder is proven;
+  keep the safe end-of-frame point in time.
 
-### 8.8 Abnahme und Aktivierungsreihenfolge
+### 8.8 Acceptance and activation order
 
-Strings: ausgeglichene Retain/Release und gültige Aliase nach Container-/Mirror-
-Close. Models: A/B plus Return-/Loop-/Exception-Kontrollen. Container: E plus
-Push/Clear/Remove mit erlaubten Aliasnutzungen. get_copy_at: fehlender Key,
-inkompatibles Blob, wiederholtes Refill und finaler Drop. Renderer: isolierte
-vollständige Frames. ASan/LSan sind für C verbindliche Abnahme; gleichwertige
-WASM-Proben und Live-Heap-Messungen kommen hinzu. RSS allein genügt nicht.
+Strings: balanced retain/release and valid aliases after container/mirror
+close. Models: A/B plus return/loop/exception controls. Containers: E plus
+push/clear/remove with permitted alias uses. get_copy_at: missing key,
+incompatible blob, repeated refill and the final drop. Renderer: isolated
+complete frames. ASan/LSan are the binding acceptance for C; equivalent
+WASM probes and live heap measurements are added. RSS alone is not enough.
 
-Mit 8.1 und dem Vertrag aus B beginnen. Model-Drops erst zusammen mit den nötigen
-Transfer-/Containerregeln aktivieren. Diese Zeilen sind keine unabhängigen
-Einzeilen-Fixes.
+Start with 8.1 and the contract from B. Activate model drops only together with the necessary
+transfer/container rules. These lines are not independent
+one-line fixes.
