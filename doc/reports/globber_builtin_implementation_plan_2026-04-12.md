@@ -1,32 +1,32 @@
 # Globber Builtin Implementation Plan
 
-Stand: 2026-04-12
+As of: 2026-04-12
 
 Basis:
 
 - [42_1_globber.md](../spec/42_1_globber.md)
 - [42_path_type.md](../spec/42_path_type.md)
 
-Ziel:
+Goal:
 
-- ein echter Builtin-`Globber`
-- Wildcards `*`, `?`, `**`
-- inkrementell, directory-by-directory
-- begrenzte Allokation pro Schritt
-- keine Vollmaterialisierung wie `glob.glob(...)`
+- a real builtin `Globber`
+- wildcards `*`, `?`, `**`
+- incremental, directory by directory
+- bounded allocation per step
+- no full materialisation like `glob.glob(...)`
 
 ---
 
-## 1. Ausgangslage im bestehenden AIML-Code
+## 1. Starting point in the existing AIML code
 
-### 1.1 Was schon vorhanden ist
+### 1.1 What already exists
 
-**Pfad-Runtime**
+**Path runtime**
 
 - [path_runtime.h](../src/core/path_runtime.h)
 - [path_runtime.cpp](../src/core/path_runtime.cpp)
 
-Bereits vorhanden:
+Already present:
 
 - `aiml_path_intern`
 - `aiml_path_join`
@@ -43,16 +43,16 @@ Bereits vorhanden:
 - `aiml_io_write_file`
 - `aiml_io_list_dir_fill`
 
-**Compiler/Builtins**
+**Compiler/builtins**
 
 - [builtin_registry.cpp](../src/core/builtin_registry.cpp)
 
-Bereits vorhanden:
+Already present:
 
-- `path` als Builtin-Klasse
-- `path`-Namespace (`from_string`, `cwd`, `home`, ...)
+- `path` as a builtin class
+- the `path` namespace (`from_string`, `cwd`, `home`, ...)
 - `io.list_dir(path) -> list<path>`
-- etablierte Builtin-Klassen mit opaque Runtime-Handles wie:
+- established builtin classes with opaque runtime handles such as:
   - `process`
   - `socket_handle`
 
@@ -61,59 +61,59 @@ Bereits vorhanden:
 - [test_path.aiml](../tests/test_path.aiml)
 - [test_io_write_listdir.aiml](../tests/test_io_write_listdir.aiml)
 
-**AIML-seitiger Vorläufer**
+**AIML-side predecessor**
 
 - `test/tul/train/main.aiml`
 
-Dort existiert bereits `expand_glob(...)` als Workaround auf Basis von:
+There, `expand_glob(...)` already exists as a workaround based on:
 
 - `io.list_dir`
 - `string.starts_with`
 - `string.ends_with`
 
-Das ist wichtig, weil die gewünschte Semantik im Projekt bereits praktisch gebraucht wird.
+This is important, because the desired semantics are already needed in practice in the project.
 
-### 1.2 Was noch fehlt
+### 1.2 What is still missing
 
-Es gibt aktuell **keinen**:
+There is currently **no**:
 
-- Runtime-Typ `Globber`
-- C-API für inkrementelles Glob-State
-- Compiler-Registrierung für `Globber`
-- `io.globber(...)`-Konstruktor
-- Tests für `*`, `?`, `**`
+- runtime type `Globber`
+- C API for an incremental glob state
+- compiler registration for `Globber`
+- `io.globber(...)` constructor
+- tests for `*`, `?`, `**`
 
 ---
 
-## 2. Architekturentscheidung
+## 2. Architecture decision
 
-Die bestehende Codebasis legt drei mögliche Richtungen nahe:
+The existing code base suggests three possible directions:
 
-1. Reines AIML-Glob auf `io.list_dir`
+1. a pure AIML glob on `io.list_dir`
 2. `io.glob(pattern) -> list<path>`
-3. echter zustandsbehafteter Builtin-Typ
+3. a real stateful builtin type
 
-Die Spezifikation hat Variante 3 festgezogen. Das ist auch technisch die richtige Wahl.
+The specification has settled on variant 3. That is also the technically right choice.
 
-### Warum nicht `io.glob(...) -> list<path>`
+### Why not `io.glob(...) -> list<path>`
 
-- große Bäume allokieren zu viel auf einmal
-- keine sichtbare Traversal-Position
-- kein natürliches Backpressure
-- `**` würde leicht unkontrolliert teuer
+- large trees allocate too much at once
+- no visible traversal position
+- no natural backpressure
+- `**` would easily become uncontrollably expensive
 
-### Warum `Globber`
+### Why `Globber`
 
-- passt zur vorhandenen Builtin-Handle-Strategie
-- passt zur `path`-Runtime
-- inkrementelle Semantik ist klar testbar
-- große Dateibäume bleiben beherrschbar
+- fits the existing builtin handle strategy
+- fits the `path` runtime
+- incremental semantics are clearly testable
+- large file trees stay manageable
 
 ---
 
-## 3. Ziel-API
+## 3. Target API
 
-### 3.1 Builtin-Klasse
+### 3.1 Builtin class
 
 ```yaml
 - class:
@@ -136,63 +136,63 @@ Die Spezifikation hat Variante 3 festgezogen. Das ist auch technisch die richtig
           return: i32
 ```
 
-### 3.2 Namespace-Konstruktor
+### 3.2 Namespace constructor
 
 ```yaml
 - decl: [g, Globber]
 - set: [g, { call: [io.globber, "docs/**/*.md", 256] }]
 ```
 
-`io.globber(...)` ist nur ein Convenience-Konstruktor und muss semantisch
-äquivalent zu `decl + init(...)` sein.
+`io.globber(...)` is only a convenience constructor and must be semantically
+equivalent to `decl + init(...)`.
 
 ---
 
-## 4. Technische Kernentscheidung: Runtime-Handle statt reinem Struct-State
+## 4. Core technical decision: runtime handle instead of pure struct state
 
-Die bestehende Builtin-Strategie in [builtin_registry.cpp](../src/core/builtin_registry.cpp) benutzt für zustandsbehaftete Builtins opaque Runtime-Pointer:
+The existing builtin strategy in [builtin_registry.cpp](../src/core/builtin_registry.cpp) uses opaque runtime pointers for stateful builtins:
 
 - `process`
 - `socket_handle`
 
-Für `Globber` sollte dasselbe Muster verwendet werden.
+The same pattern should be used for `Globber`.
 
-### Empfohlene interne Form
+### Recommended internal form
 
-**Öffentliche AIML-Sicht**
+**Public AIML view**
 
 - `pattern: path`
 - `location: path`
 - `findings: list<path>`
 - `done: i32`
 
-**Interner Runtime-State**
+**Internal runtime state**
 
 ```cpp
 struct AimlGlobber;
 ```
 
-mit intern z. B.:
+with, internally, e.g.:
 
 - `pattern_raw`
 - `max_findings_per_step`
-- `std::deque<GlobTask>` oder `std::vector<GlobTask>`
-- current overflow state für große Einzelordner
+- `std::deque<GlobTask>` or `std::vector<GlobTask>`
+- current overflow state for large individual folders
 - parsed pattern segments
 - `done`
 
-Wichtig:
+Important:
 
-- der Traversal-Queue/Stack gehört **nicht** in AIML-Felder
-- nur sichtbarer Snapshot-Zustand gehört in AIML-Felder
+- the traversal queue/stack does **not** belong in AIML fields
+- only the visible snapshot state belongs in AIML fields
 
 ---
 
-## 5. Runtime-Design
+## 5. Runtime design
 
-### 5.1 Neue C-API in `path_runtime.h`
+### 5.1 New C API in `path_runtime.h`
 
-Neue Funktionen:
+New functions:
 
 ```cpp
 void* aiml_globber_new(void);
@@ -209,9 +209,9 @@ Optional:
 int aiml_glob_match_segment(const char* pattern_seg, const char* name);
 ```
 
-### 5.2 Interner Traversal-State
+### 5.2 Internal traversal state
 
-Empfohlene Struktur:
+Recommended structure:
 
 ```cpp
 struct GlobTask {
@@ -236,241 +236,240 @@ struct AimlGlobber {
 };
 ```
 
-### 5.3 Matching-Semantik
+### 5.3 Matching semantics
 
-Pro Segment:
+Per segment:
 
-- `*` -> beliebig viele Zeichen
-- `?` -> genau ein Zeichen
-- `**` -> rekursive Directory-Wildcard
+- `*` -> any number of characters
+- `?` -> exactly one character
+- `**` -> recursive directory wildcard
 
-Wichtig:
+Important:
 
-- Matching geschieht **pro Segment**
-- nicht über den Gesamtpfadstring
+- matching happens **per segment**
+- not over the whole path string
 
-### 5.4 `next()`-Semantik in der Runtime
+### 5.4 `next()` semantics in the runtime
 
 `aiml_globber_next(...)`:
 
-1. leert die vom Compiler vorbereitete `list<path>`
-2. setzt `out_location`
-3. verarbeitet genau einen Directory-Step
-4. schreibt Treffer in die Ergebnisliste
-5. hält `findings.len <= max_findings_per_step`
-6. gibt `1` bei Fortschritt, `0` bei vollständigem Ende
+1. empties the `list<path>` prepared by the compiler
+2. sets `out_location`
+3. processes exactly one directory step
+4. writes hits into the result list
+5. keeps `findings.len <= max_findings_per_step`
+6. returns `1` on progress, `0` at the complete end
 
-Wenn ein einzelner Ordner mehr Treffer hat als `max_findings_per_step`:
+If a single folder has more hits than `max_findings_per_step`:
 
-- `location` bleibt auf diesem Ordner
-- die Runtime merkt sich einen Cursor
-- der nächste `next()`-Aufruf setzt dort fort
+- `location` stays on this folder
+- the runtime remembers a cursor
+- the next `next()` call continues there
 
-Das ist wichtig, sonst wäre der Per-Step-Limit bei großen Ordnern nur Schein.
+That is important, otherwise the per-step limit would be a mere pretence for large folders.
 
 ---
 
-## 6. Compiler- und Builtin-Integration
+## 6. Compiler and builtin integration
 
-### 6.1 Neue Builtin-Klasse in `builtin_registry.cpp`
+### 6.1 New builtin class in `builtin_registry.cpp`
 
-Analog zu `socket_handle` und `process`:
+Analogous to `socket_handle` and `process`:
 
 - `ctx.classes["Globber"]`
 - `isBuiltin = true`
 
-Methoden:
+Methods:
 
 - `init(pattern, max_findings)`
 - `next()`
 
-Feldzugriffe:
+Field accesses:
 
 - `pattern`
 - `location`
 - `findings`
 - `done`
 
-### 6.2 Schwieriger Punkt: Sichtbare Felder + hidden handle
+### 6.2 Difficult point: visible fields + hidden handle
 
-Für `Globber` reicht ein nackter `i8*` wie bei `socket_handle` nicht, weil
-die Spezifikation sichtbare Member fordert.
+For `Globber`, a bare `i8*` as with `socket_handle` is not enough, because
+the specification requires visible members.
 
-Darum braucht es entweder:
+Therefore it needs either:
 
-1. einen echten LLVM-Struct-Typ für `Globber` mit:
-   - hidden handle pointer
+1. a real LLVM struct type for `Globber` with:
+   - a hidden handle pointer
    - visible AIML fields
 
-oder
+or
 
-2. eine bestehende Mechanik für builtin-backed class layouts wiederverwenden, falls vorhanden
+2. reuse an existing mechanism for builtin-backed class layouts, if one exists
 
-Empfehlung:
+Recommendation:
 
-- `Globber` als normaler Klassenlayout-Typ mit erstem hidden Feld:
+- `Globber` as a normal class layout type with a hidden first field:
   - `__globber_handle: i8*` (private/internal)
-- sichtbare Felder regulär daneben
+- the visible fields regularly next to it
 
-Dann können Methoden:
+Then methods can:
 
-- den Handle nutzen
-- und danach `location`, `findings`, `done`, `pattern` synchronisieren
+- use the handle
+- and afterwards synchronise `location`, `findings`, `done`, `pattern`
 
 ### 6.3 `io.globber(...)`
 
-In `io`-Namespace ergänzen:
+Add to the `io` namespace:
 
 ```cpp
 io.builtinFuncs["globber"]
 ```
 
-Semantik:
+Semantics:
 
-- allokiert einen `Globber`
-- ruft `init(...)`
-- gibt das Objekt zurück
+- allocates a `Globber`
+- calls `init(...)`
+- returns the object
 
-Wenn Konstruktion von Klassenwerten im Builtin-Pfad zu teuer ist:
+If constructing class values in the builtin path is too expensive:
 
-- zuerst nur `decl + g.init(...)` unterstützen
-- `io.globber(...)` in zweiter Teilphase ergänzen
+- support only `decl + g.init(...)` at first
+- add `io.globber(...)` in a second sub-phase
 
 ---
 
-## 7. Testplan
+## 7. Test plan
 
-### 7.1 Neue Tests
+### 7.1 New tests
 
-Neue Testdatei:
+New test file:
 
 - `../tests/test_globber.aiml`
 
-Pflichtfälle:
+Mandatory cases:
 
 1. `*.txt`
-   - flaches Matching im aktuellen Ordner
+   - flat matching in the current folder
 2. `test_?.json`
-   - `?`-Wildcard
+   - `?` wildcard
 3. `docs/*.md`
-   - segmentiertes Matching mit Basisverzeichnis
+   - segmented matching with a base directory
 4. `docs/**/*.md`
-   - rekursive Traversal
+   - recursive traversal
 5. `max_findings_per_step = 1`
-   - Overflow-Cursor für großen Einzelordner
-6. kein Treffer
-   - `done` korrekt, `findings` leer
-7. ungültiges oder nicht lesbares Startverzeichnis
-   - sauberer Endzustand statt Crash
+   - overflow cursor for a large individual folder
+6. no hit
+   - `done` correct, `findings` empty
+7. invalid or unreadable start directory
+   - a clean end state instead of a crash
 
-### 7.2 Regressionen
+### 7.2 Regressions
 
-Bestehende Tests müssen weiter laufen:
+Existing tests must keep running:
 
 - [test_path.aiml](../tests/test_path.aiml)
 - [test_io_write_listdir.aiml](../tests/test_io_write_listdir.aiml)
 
-### 7.3 TUL-Smoke-Test
+### 7.3 TUL smoke test
 
-Bestehenden AIML-Workaround in `test/tul/train/main.aiml` später ersetzen oder parallel prüfen:
+Later replace the existing AIML workaround in `test/tul/train/main.aiml` or check it in parallel:
 
-- `"docs/*.md"` mit altem `expand_glob(...)`
-- `"docs/*.md"` mit neuem `Globber`
+- `"docs/*.md"` with the old `expand_glob(...)`
+- `"docs/*.md"` with the new `Globber`
 
-Das ist ein guter Praxistest.
-
----
-
-## 8. Thread-Safety
-
-Aus [47_thread_safety.md](../spec/47_thread_safety.md) folgt:
-
-- `path`-Interning ist bereits global geschützt
-- `io.list_dir` ist als reine Funktion einsortiert
-
-Für `Globber` gilt:
-
-- ein einzelner `Globber`-Handle sollte als **Kategorie 3 / per-handle**
-  behandelt werden
-- also **nicht implizit thread-safe**
-- parallele Nutzung desselben `Globber`-Objekts aus mehreren Threads ist kein Ziel
-
-Das vereinfacht die Runtime deutlich.
+That is a good practical test.
 
 ---
 
-## 9. Implementierungsreihenfolge
+## 8. Thread safety
 
-### Phase 1 — Runtime-Grundlage
+From [47_thread_safety.md](../spec/47_thread_safety.md) it follows that:
+
+- `path` interning is already globally protected
+- `io.list_dir` is classified as a pure function
+
+For `Globber`:
+
+- a single `Globber` handle should be treated as **category 3 / per-handle**
+- i.e. **not implicitly thread-safe**
+- parallel use of the same `Globber` object from several threads is not a goal
+
+That simplifies the runtime considerably.
+
+---
+
+## 9. Implementation order
+
+### Phase 1 — runtime foundation
 
 1. `path_runtime.h`
-   - C-API für `AimlGlobber`
+   - C API for `AimlGlobber`
 2. `path_runtime.cpp`
-   - `AimlGlobber`-State
-   - Segmentparser
-   - Segmentmatcher für `*` / `?`
-   - Traversal-Engine für `**`
+   - `AimlGlobber` state
+   - segment parser
+   - segment matcher for `*` / `?`
+   - traversal engine for `**`
    - bounded `next()`
 
-### Phase 2 — Compiler/Builtin
+### Phase 2 — compiler/builtin
 
 3. `builtin_registry.cpp`
-   - `Globber` Builtin-Klasse
-   - Methoden `init`, `next`
-   - sichtbare Felder + hidden handle
-4. optional `io.globber(...)`
+   - `Globber` builtin class
+   - methods `init`, `next`
+   - visible fields + hidden handle
+4. optionally `io.globber(...)`
 
-### Phase 3 — Tests
+### Phase 3 — tests
 
 5. `test_globber.aiml`
-6. ggf. `test_globber_recursive.aiml` wenn der erste Test zu groß wird
-7. TUL-Smoke-Test oder temporärer Beispieltest
+6. possibly `test_globber_recursive.aiml` if the first test becomes too big
+7. TUL smoke test or a temporary example test
 
-### Phase 4 — Doku
+### Phase 4 — docs
 
 8. `aiml_reference_guide.md`
-   - `Globber` ergänzen
-9. ggf. `00_reference_guide.md`
-   - Unterkapitel bereits gelistet, nur wenn nötig Kurzverweis ergänzen
+   - add `Globber`
+9. possibly `00_reference_guide.md`
+   - sub-chapter already listed, add a short reference only if needed
 
 ---
 
-## 10. Nicht-Ziele für V1
+## 10. Non-goals for V1
 
-Nicht Teil der ersten Implementierung:
+Not part of the first implementation:
 
 - character classes `[abc]`
 - brace expansion `{a,b}`
-- shell-expansion von `~`
-- symlink policy beyond default filesystem iteration
-- Sortiergarantie über Plattformen hinaus
-- parallele Traversal eines einzelnen `Globber`
+- shell expansion of `~`
+- a symlink policy beyond the default filesystem iteration
+- a sorting guarantee across platforms
+- parallel traversal of a single `Globber`
 
 ---
 
-## 11. Definition of Done
+## 11. Definition of done
 
-Das Feature ist fertig, wenn:
+The feature is done when:
 
-1. `Globber.init(pattern, max_findings_per_step)` funktioniert
-2. `Globber.next()` directory-by-directory iteriert
-3. `*`, `?`, `**` korrekt unterstützt werden
-4. `findings.len` pro Schritt begrenzt ist
-5. große Einzelordner ohne Vollmaterialisierung verarbeitet werden
-6. `location`, `done`, `pattern` korrekt synchronisiert werden
-7. neue Tests grün sind
-8. bestehende `path`- und `io.list_dir`-Tests grün bleiben
+1. `Globber.init(pattern, max_findings_per_step)` works
+2. `Globber.next()` iterates directory by directory
+3. `*`, `?`, `**` are supported correctly
+4. `findings.len` is bounded per step
+5. large individual folders are processed without full materialisation
+6. `location`, `done`, `pattern` are synchronised correctly
+7. the new tests are green
+8. the existing `path` and `io.list_dir` tests stay green
 
 ---
 
-## 12. Empfohlene erste Umsetzungsentscheidung
+## 12. Recommended first implementation decision
 
-Die riskanteste technische Stelle ist **nicht** das Wildcard-Matching, sondern
-die Frage, wie `Globber` im Compilerlayout repräsentiert wird.
+The riskiest technical spot is **not** the wildcard matching, but
+the question of how `Globber` is represented in the compiler layout.
 
-Darum sollte der erste konkrete Implementation Spike sein:
+Therefore the first concrete implementation spike should be:
 
-1. hidden handle + sichtbare Felder als Builtin-Klasse sauber modellieren
-2. danach Runtime-`next()` anschließen
+1. cleanly model hidden handle + visible fields as a builtin class
+2. then connect the runtime `next()`
 
-Wenn dieser Teil sauber sitzt, ist der Rest vergleichsweise geradlinig.
+Once this part sits cleanly, the rest is comparatively straightforward.
