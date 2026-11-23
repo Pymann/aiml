@@ -1,69 +1,69 @@
-# AionDB Kv mmap Refactor — Plan und API-Vertrag
+# AionDB Kv mmap Refactor — Plan and API Contract
 
-**Datum:** 2026-04-29 (Plan), 2026-04-30 (Done)
-**Status:** ✅ **DONE** — alle 7 Implementations-Schritte deployed, 161/0/19 Tests gruen
-**Betrifft:** alle `Kv<...>` Stores (typed, string, blob, fixed)
-**Kompatibilitaet:** alte `.kvwal`-Dateien werden invalidiert (Format-Version 1 → 2)
-**Final-Spec:** [`spec/31_db_integration.md`](../31_db_integration.md) §6.2-§6.7
+**Date:** 2026-04-29 (plan), 2026-04-30 (done)
+**Status:** ✅ **DONE** — all 7 implementation steps deployed, 161/0/19 tests green
+**Affects:** all `Kv<...>` stores (typed, string, blob, fixed)
+**Compatibility:** old `.kvwal` files are invalidated (format version 1 → 2)
+**Final spec:** [`spec/31_db_integration.md`](../31_db_integration.md) §6.2-§6.7
 
-## Implementations-Zusammenfassung
+## Implementation summary
 
-| Schritt | Was | Status |
+| Step | What | Status |
 |---|---|---|
-| 1 | Datei-Header (`AIMLKVWL` magic, version, flags) + format check | ✅ |
-| 2 | mmap-Setup mit sparse-extended Reserve (16 MB initial, mremap-grow) | ✅ |
-| 3 | Index-basierte Reads (kv->index statt kv->map fuer persistent) | ✅ |
-| 4 | Strings mit `\0` im WAL → zero-copy mmap-pointer (Version-Bump auf 2) | ✅ |
-| 5 | `kv.evict` via `madvise(MADV_DONTNEED)`, Index intakt | ✅ |
-| 6 | `kv.checkpoint` mit Temp-File + atomic rename (crash-safe) | ✅ |
-| 7 | Decoded-Cache als bounded LRU (MAX 1024) | ✅ |
+| 1 | File header (`AIMLKVWL` magic, version, flags) + format check | ✅ |
+| 2 | mmap setup with sparse-extended reserve (16 MB initial, mremap grow) | ✅ |
+| 3 | Index-based reads (kv->index instead of kv->map for persistent) | ✅ |
+| 4 | Strings with `\0` in the WAL → zero-copy mmap pointer (version bump to 2) | ✅ |
+| 5 | `kv.evict` via `madvise(MADV_DONTNEED)`, index intact | ✅ |
+| 6 | `kv.checkpoint` with temp file + atomic rename (crash-safe) | ✅ |
+| 7 | Decoded cache as a bounded LRU (MAX 1024) | ✅ |
 
-Tests: 161 passed (158 bestehend + `test_db_kv_evict.aiml` + neu hinzugefuegt
+Tests: 161 passed (158 existing + `test_db_kv_evict.aiml` + newly added
 `test_db_kv_checkpoint.aiml` + `test_db_kv_lru.aiml`), 0 failed, 19 skipped.
 
 ## Motivation
 
-Aktuell wird beim `db.open_kv()` der gesamte WAL gescannt und alle Werte
-in eine `std::unordered_map<string, vector<uint8_t>>` kopiert. Bei
-hundert MB / GB grossen Stores (z.B. Tensor-Trajectories im Per-File
-Training) fuehrt das zu RSS-Druck und in Verbindung mit mehreren
-gleichzeitig offenen Stores zu OOM.
+Currently `db.open_kv()` scans the whole WAL and copies all values
+into a `std::unordered_map<string, vector<uint8_t>>`. With stores of
+hundreds of MB / GB (e.g. tensor trajectories in per-file
+training) this leads to RSS pressure and, together with several
+stores open at the same time, to OOM.
 
-Ziel: Werte direkt aus einer `mmap`'d Datei lesen, RAM-Footprint = nur
-ein kleiner Index `key → (offset, length)`.
+Goal: read values directly from an `mmap`'d file, RAM footprint = only
+a small index `key → (offset, length)`.
 
-## Geltungsbereich
+## Scope
 
-Alle vier KV-Speichermodi werden gleichzeitig migriert:
+All four KV storage modes are migrated at the same time:
 
-| Modus | Trigger | Heute | Nach Refactor |
+| Mode | Trigger | Today | After the refactor |
 |---|---|---|---|
-| Typed | `ser_nodes != nullptr` | Blob in `map`, decoded in `decoded_cache` | Blob in mmap, decoded LRU-bounded |
-| String | `val_size==0`, `!blob_only` | `strdup`'d `char*` in `map` | mmap-Pointer (mit Null-Terminator in WAL) |
-| Blob | `val_size==0`, `blob_only` | rohe Bytes in `map` | mmap-Pointer (zero-copy) |
-| Fixed | `val_size>0` | rohe Bytes in `map` | mmap-Pointer |
+| Typed | `ser_nodes != nullptr` | blob in `map`, decoded in `decoded_cache` | blob in mmap, decoded LRU-bounded |
+| String | `val_size==0`, `!blob_only` | `strdup`'d `char*` in `map` | mmap pointer (with null terminator in the WAL) |
+| Blob | `val_size==0`, `blob_only` | raw bytes in `map` | mmap pointer (zero-copy) |
+| Fixed | `val_size>0` | raw bytes in `map` | mmap pointer |
 
-## Datei-Format (NEU)
+## File format (NEW)
 
-### Header (32 Bytes, Datei-Anfang)
+### Header (32 bytes, start of file)
 
 ```c
 struct AimlKvWalHeader {
     char     magic[8];       // "AIMLKVWL"
     uint32_t version;        // 1
     uint32_t flags;          // bit0: typed, bit1: string, bit2: blob, bit3: fixed
-    int64_t  val_size;       // fixed-mode element size (0 fuer string/typed/blob)
-    uint64_t wal_used;       // letzter geschriebener Byte-Offset (best-effort)
+    int64_t  val_size;       // fixed-mode element size (0 for string/typed/blob)
+    uint64_t wal_used;       // last written byte offset (best-effort)
 };
 static_assert(sizeof(AimlKvWalHeader) == 32);
 ```
 
-`wal_used` wird:
-- bei `kv_close` / `kv_checkpoint` aktualisiert (msync auf erste Page)
-- bei normalen `set` NICHT mitgeschrieben (Performance)
-- beim Open via Crash-Scan ab `header.wal_used` rekonstruiert
+`wal_used` is:
+- updated on `kv_close` / `kv_checkpoint` (msync on the first page)
+- NOT written along on normal `set`s (performance)
+- reconstructed on open via a crash scan from `header.wal_used`
 
-### Records (unmittelbar nach Header)
+### Records (immediately after the header)
 
 ```
 SET:        [op=1:u8][key_len:u32][key:bytes][val_bytes:u32][val:bytes]
@@ -71,31 +71,31 @@ DELETE:     [op=2:u8][key_len:u32][key:bytes]
 SET_BLOB:   [op=3:u8][key_len:u32][key:bytes][val_bytes:u32][val:bytes]
 ```
 
-**Aenderung gegenueber heute (string-mode):**
-- `kv_wal_write_set` schreibt im String-Modus jetzt `strlen(str)+1` Bytes
-  inklusive `\0`. Damit ist `mmap_base + offset` direkt ein gueltiger
-  null-terminierter `char*`.
-- Alle anderen Records bleiben formatgleich, nur durch den neuen Header
-  praefigiert.
+**Change compared with today (string mode):**
+- In string mode `kv_wal_write_set` now writes `strlen(str)+1` bytes
+  including `\0`. This makes `mmap_base + offset` directly a valid
+  null-terminated `char*`.
+- All other records keep their format, only prefixed by the new
+  header.
 
-### Magic + Versions-Check
+### Magic + version check
 
-Beim Open:
-1. Datei existiert nicht / leer → schreibe Header, `ftruncate` auf Reserve-Groesse
-2. Datei existiert, magic stimmt → aktuelle Version: nutzen
-3. Datei existiert, magic stimmt nicht → **fatal log + abort**
-   (alte Format-Version 0 ohne Header → User informieren, manuell loeschen)
-4. Datei existiert, magic stimmt, version unbekannt → fatal log
+On open:
+1. File does not exist / is empty → write header, `ftruncate` to the reserve size
+2. File exists, magic matches → current version: use it
+3. File exists, magic does not match → **fatal log + abort**
+   (old format version 0 without a header → inform the user, delete manually)
+4. File exists, magic matches, version unknown → fatal log
 
-→ alte `.kvwal` Dateien sind nicht migrierbar; User loescht `aiondb/`.
+→ old `.kvwal` files cannot be migrated; the user deletes `aiondb/`.
 
-## Speicher-Modell
+## Memory model
 
-### mmap-Reserve
+### mmap reserve
 
-Beim Open wird die Datei via `ftruncate` auf eine Reserve-Groesse gestreckt
-(default `KV_MMAP_RESERVE = 16 GB`, sparse — kein Disk-Verbrauch). Das
-gesamte Reserve-Fenster wird mit `MAP_SHARED|MAP_NORESERVE` gemappt:
+On open the file is stretched via `ftruncate` to a reserve size
+(default `KV_MMAP_RESERVE = 16 GB`, sparse — no disk usage). The
+whole reserve window is mapped with `MAP_SHARED|MAP_NORESERVE`:
 
 ```c
 ftruncate(fd, KV_MMAP_RESERVE);
@@ -105,14 +105,14 @@ void* base = mmap(nullptr, KV_MMAP_RESERVE,
                   fd, 0);
 ```
 
-- Pages werden lazy alloziert beim ersten Touch
-- RSS waechst nur mit tatsaechlich genutztem Daten-Volumen
-- Keine `mremap`-Fallunterscheidung im Hot Path (Reserve gross genug)
-- 16 GB virt pro Store ist vertretbar (auch 1000 Stores = 16 TB virt, kein Problem)
+- Pages are allocated lazily on first touch
+- RSS only grows with the data volume actually used
+- No `mremap` case distinction in the hot path (reserve large enough)
+- 16 GB virtual per store is acceptable (even 1000 stores = 16 TB virtual, no problem)
 
 ### Append = memcpy
 
-Schreiben nutzt **keine** `write()` Syscalls mehr:
+Writing no longer uses **any** `write()` syscalls:
 
 ```c
 char* dst = (char*)kv->mmap_base + kv->wal_used;
@@ -120,38 +120,38 @@ memcpy(dst, &record, record_size);
 kv->wal_used += record_size;
 ```
 
-Eintraege landen direkt in der Page-Cache-Region. Kernel synct lazy.
+Entries land directly in the page cache region. The kernel syncs lazily.
 
-Wenn `wal_used + record_size > KV_MMAP_RESERVE`, wird entweder:
-- die Reserve verdoppelt (`ftruncate` + `mremap`) — Phase 2
-- oder `log.fatal` (Phase 1)
+If `wal_used + record_size > KV_MMAP_RESERVE`, either:
+- the reserve is doubled (`ftruncate` + `mremap`) — phase 2
+- or `log.fatal` (phase 1)
 
 ### Index
 
 ```c
 struct ValueLoc {
-    uint64_t offset;     // Offset in mmap_base
-    uint32_t length;     // Bytes des Value-Records
+    uint64_t offset;     // offset in mmap_base
+    uint32_t length;     // bytes of the value record
 };
 std::unordered_map<std::string, ValueLoc> index;
 ```
 
-`ValueLoc::offset` zeigt auf den **Value-Block** (nicht den Record-Anfang).
-Damit ist `mmap_base + offset` direkt ein gueltiger Pointer auf die Daten.
+`ValueLoc::offset` points to the **value block** (not the start of the record).
+This makes `mmap_base + offset` directly a valid pointer to the data.
 
-### Open-Pfad
+### Open path
 
 1. `open(wal_path, O_RDWR|O_CREAT)`
-2. Falls leer: Header schreiben, `ftruncate(fd, RESERVE)`
-3. Falls vorhanden: Header lesen, magic/version pruefen
+2. If empty: write the header, `ftruncate(fd, RESERVE)`
+3. If present: read the header, check magic/version
 4. `mmap(RESERVE, PROT_READ|PROT_WRITE, MAP_SHARED|MAP_NORESERVE)`
-5. Index aufbauen: linearer Scan von `sizeof(header)` bis zum ersten
-   ungueltigen Op-Byte (Crash-Recovery) oder bis `header.wal_used`
-6. Fertig — keine Daten kopiert, nur Index gefuellt
+5. Build the index: linear scan from `sizeof(header)` up to the first
+   invalid op byte (crash recovery) or up to `header.wal_used`
+6. Done — no data copied, only the index filled
 
-## API-Vertrag
+## API contract
 
-### Was bleibt unveraendert (alle AIML-Aufrufe)
+### What stays unchanged (all AIML calls)
 
 ```yaml
 - decl: [kv,  Kv<string:string>, { call: [db.open_kv, "name", {persist: true}] }]
@@ -169,156 +169,156 @@ Damit ist `mmap_base + offset` direkt ein gueltiger Pointer auf die Daten.
 - call: [kv.reload]
 ```
 
-Alle obigen Aufrufe haben **identische Signatur und Semantik** wie zuvor.
+All the calls above have **identical signatures and semantics** to before.
 
-### Was sich aendert: Pointer-Lebensdauer
+### What changes: pointer lifetime
 
-| Operation | Gueltig bis (heute) | Gueltig bis (neu) |
+| Operation | Valid until (today) | Valid until (new) |
 |---|---|---|
-| `kv.get(k)` String-Modus | naechste `kv.set(k,...)` oder `kv.delete(k)` | `kv.checkpoint()` oder `kv.clear()` |
-| `kv.get_blob(k)` Blob-Modus | naechste `kv.set_blob(k,...)` | `kv.checkpoint()` oder `kv.clear()` |
-| `kv.get(k)` Typed-Modus | naechste `kv.set(k,...)` oder `kv.delete(k)` | unveraendert (Decoded-Cache) |
-| `kv.iter()` Keys | bis `kv.set/delete/clear` | bis `kv.set/delete/clear` (unveraendert) |
+| `kv.get(k)` string mode | next `kv.set(k,...)` or `kv.delete(k)` | `kv.checkpoint()` or `kv.clear()` |
+| `kv.get_blob(k)` blob mode | next `kv.set_blob(k,...)` | `kv.checkpoint()` or `kv.clear()` |
+| `kv.get(k)` typed mode | next `kv.set(k,...)` or `kv.delete(k)` | unchanged (decoded cache) |
+| `kv.iter()` keys | until `kv.set/delete/clear` | until `kv.set/delete/clear` (unchanged) |
 
-**Wichtige Lockerung:** Pointer aus `kv.get(k)` werden NICHT mehr durch
-`kv.set(k, anderer_wert)` invalidiert. Hintergrund: alte Records
-bleiben im WAL, der neue Wert wird angefuegt, der Index zeigt auf den
-neuen — der alte Pointer zeigt aber weiterhin in eine gueltige
-mmap-Region.
+**Important relaxation:** pointers from `kv.get(k)` are NO longer invalidated by
+`kv.set(k, other_value)`. Background: old records
+stay in the WAL, the new value is appended, the index points to the
+new one — but the old pointer still points into a valid
+mmap region.
 
-→ **Alle Code, der heute korrekt ist, bleibt korrekt.** Die neue
-Garantie ist staerker, nicht schwaecher.
+→ **All code that is correct today stays correct.** The new
+guarantee is stronger, not weaker.
 
-### Was sich aendert: Performance-Profil
+### What changes: performance profile
 
-| Operation | Heute | Neu |
+| Operation | Today | New |
 |---|---|---|
-| `db.open_kv()` (gross) | viel RAM, langsam | wenig RAM, ungefaehr gleich schnell |
-| `kv.get()` | hash + memcpy/strdup | hash + Pointer-Return (schneller) |
-| `kv.set_blob(grosser Wert)` | malloc + memcpy + write | memcpy in mmap (schneller) |
-| `kv.evict()` | clear() der Map (free) | `madvise(MADV_DONTNEED)` (instant, RSS faellt) |
-| `kv.reload()` | full WAL replay | Index-Rebuild (gleich schnell) |
-| `kv.checkpoint()` | rewrite + fsync | unmap + truncate + rewrite + remap (langsamer, aber selten) |
+| `db.open_kv()` (large) | a lot of RAM, slow | little RAM, about as fast |
+| `kv.get()` | hash + memcpy/strdup | hash + pointer return (faster) |
+| `kv.set_blob(large value)` | malloc + memcpy + write | memcpy into mmap (faster) |
+| `kv.evict()` | clear() of the map (free) | `madvise(MADV_DONTNEED)` (instant, RSS drops) |
+| `kv.reload()` | full WAL replay | index rebuild (equally fast) |
+| `kv.checkpoint()` | rewrite + fsync | unmap + truncate + rewrite + remap (slower, but rare) |
 
-### Was sich aendert: Crash-Verhalten
+### What changes: crash behaviour
 
-- Heute: Crash → letzter unvollstaendiger Record bleibt im WAL, beim
-  naechsten Open wird er beim Replay erkannt (read schlaegt fehl) und
-  abgebrochen. Datenverlust = der eine unvollstaendige Eintrag.
-- Neu: gleich. Open scannt bis zum ersten ungueltigen Op-Byte. Sparse
-  Pages nach dem letzten gueltigen Record sind 0 (durch ftruncate),
-  was natuerlicher Sentinel ist.
+- Today: crash → the last incomplete record stays in the WAL; on the
+  next open it is detected during replay (read fails) and
+  aborted. Data loss = that one incomplete entry.
+- New: the same. Open scans up to the first invalid op byte. Sparse
+  pages after the last valid record are 0 (through ftruncate),
+  which is a natural sentinel.
 
-## API fuer 9rooms-Projekt — Migration-Hinweise
+## API for the 9rooms project — migration notes
 
-### Was 9rooms bemerken wird
+### What 9rooms will notice
 
-1. **Alte `.kvwal` Dateien sind unbrauchbar** — beim Open wird per
-   Magic-Check abgebrochen. User muss `aiondb/`-Verzeichnis loeschen
-   bzw. die spezifischen `.kvwal`-Dateien.
+1. **Old `.kvwal` files are unusable** — on open, the magic check
+   aborts. The user must delete the `aiondb/` directory
+   or the specific `.kvwal` files.
 
-2. **Datenbank-Reinit haengt sich nicht mehr** — `kv.evict()` ist jetzt
-   instant statt teuer.
+2. **Database reinit no longer hangs** — `kv.evict()` is now
+   instant instead of expensive.
 
-3. **Hot-Reload aus anderem Prozess** — `kv.reload()` Verhalten
-   bleibt: Index wird neu aufgebaut. Der MAP_SHARED-Mode sieht aber
-   neue Bytes anderer Schreiber automatisch. `reload()` wird nur noch
-   benoetigt, wenn der Schreiber **andere Stores** angelegt hat oder
-   bestehende **gekuerzt** wurden (Compaction).
+3. **Hot reload from another process** — `kv.reload()` behaviour
+   stays: the index is rebuilt. But MAP_SHARED mode sees
+   new bytes from other writers automatically. `reload()` is only still
+   needed when the writer has created **other stores** or
+   existing ones have been **shortened** (compaction).
 
-4. **`get()` Pointer-Lebensdauer ist gelockert** — bestehender Code
-   bleibt korrekt. Neuer Code darf laenger Pointer halten.
+4. **`get()` pointer lifetime is relaxed** — existing code
+   stays correct. New code may hold pointers longer.
 
-### Was 9rooms nicht aendern muss
+### What 9rooms does not need to change
 
-- Keine AIML-Source-Aenderung
-- Keine Recompile noetig (libaiml ABI bleibt)
-- Keine Build-Konfig-Aenderung
+- No AIML source change
+- No recompile needed (libaiml ABI stays)
+- No build config change
 
-### Empfohlener Migrations-Schritt fuer 9rooms
+### Recommended migration step for 9rooms
 
 ```bash
-# Vor dem ersten Run mit neuer libaiml:
+# Before the first run with the new libaiml:
 rm -rf aiondb/*.kvwal
-# Optional: alle Stores neu populieren
+# Optional: repopulate all stores
 ```
 
-Bei Stores mit nicht-rekonstruierbaren Daten (User-State,
-Spielfortschritt) — vor dem Update **manuell exportieren** und nach
-dem Update neu schreiben.
+For stores with non-reconstructible data (user state,
+game progress) — **export manually** before the update and rewrite them after
+the update.
 
-## Implementierung — Teilschritte
+## Implementation — sub-steps
 
-### Schritt 1: Datei-Header und Format-Migration
-- `AimlKvWalHeader` Struct + Konstanten
-- `aiml_db_kv_open_persist`: Header schreiben/lesen, Magic-Check
-- Alte Dateien ohne Header abweisen
+### Step 1: file header and format migration
+- `AimlKvWalHeader` struct + constants
+- `aiml_db_kv_open_persist`: write/read the header, magic check
+- Reject old files without a header
 
-### Schritt 2: mmap-Setup
+### Step 2: mmap setup
 - Reserve via `ftruncate` + `mmap(MAP_SHARED|MAP_NORESERVE)`
-- `wal_used` Cursor in `AimlKv` Struct
-- Records via memcpy in mmap, kein `write()` mehr
+- `wal_used` cursor in the `AimlKv` struct
+- Records via memcpy into the mmap, no `write()` any more
 
-### Schritt 3: Index-basierte Reads
-- `ValueLoc` Struct + `index` Map ersetzt `kv->map`
-- `kv_wal_replay()` baut nur Index, kopiert keine Daten
-- `aiml_db_kv_get`: Lookup → `mmap_base + offset` zurueckgeben
+### Step 3: index-based reads
+- `ValueLoc` struct + `index` map replaces `kv->map`
+- `kv_wal_replay()` only builds the index, copies no data
+- `aiml_db_kv_get`: lookup → return `mmap_base + offset`
 
-### Schritt 4: String-Modus mit Null-Terminator
-- `kv_wal_write_set` (string-mode): `val_bytes = strlen(str) + 1`
-- WAL enthaelt `\0`-terminierte Strings → direkter `char*` Return
+### Step 4: string mode with null terminator
+- `kv_wal_write_set` (string mode): `val_bytes = strlen(str) + 1`
+- The WAL contains `\0`-terminated strings → direct `char*` return
 
-### Schritt 5: Blob-Modus zero-copy
-- `kv_set_blob`: memcpy direkt in mmap-Region
-- `kv_get_blob`: Pointer + length aus Index
+### Step 5: blob mode zero-copy
+- `kv_set_blob`: memcpy directly into the mmap region
+- `kv_get_blob`: pointer + length from the index
 
-### Schritt 6: Typed-Modus mit Decoded-Cache
-- Serialized-Blob via mmap
-- `decoded_cache` als bounded LRU (z.B. 100 Eintraege)
-- Auf Cache-Miss: decode aus mmap
+### Step 6: typed mode with decoded cache
+- Serialised blob via mmap
+- `decoded_cache` as a bounded LRU (e.g. 100 entries)
+- On a cache miss: decode from the mmap
 
-### Schritt 7: kv_evict mit madvise
-- Decoded-Cache leeren
+### Step 7: kv_evict with madvise
+- Clear the decoded cache
 - `madvise(mmap_base, mmap_size, MADV_DONTNEED)`
-- Index NICHT leeren (klein, faellt bei naechstem Touch eh wieder ein)
-- `evicted`-Flag und `lazy_reload` entfallen
+- Do NOT clear the index (small, faults back in on the next touch anyway)
+- The `evicted` flag and `lazy_reload` are dropped
 
-### Schritt 8: Compaction (kv_checkpoint)
-- Lock acquire
-- alte mmap unmap
-- alle aktiven Records in temp-Datei schreiben
+### Step 8: compaction (kv_checkpoint)
+- Acquire the lock
+- unmap the old mmap
+- write all active records into a temp file
 - temp → real (rename)
-- neue mmap aufsetzen
-- Index neu aufbauen (Offsets haben sich geaendert)
+- set up the new mmap
+- rebuild the index (offsets have changed)
 
-### Schritt 9: Tests + Dokumentation
-- Bestehende Tests laufen lassen (sollten alle gruen sein)
-- Neue Tests: grosser Store + evict → RSS-Drop verifizieren
-- spec/31_db_integration.md updaten
+### Step 9: tests + documentation
+- Run the existing tests (should all be green)
+- New tests: large store + evict → verify the RSS drop
+- update spec/31_db_integration.md
 
-## Risiken und Mitigation
+## Risks and mitigation
 
-| Risiko | Wahrscheinlichkeit | Mitigation |
+| Risk | Likelihood | Mitigation |
 |---|---|---|
-| 16 GB Reserve auf 32-bit-Systemen unmoeglich | irrelevant (nur 64-bit) | – |
-| Reserve-Ueberlauf (Datei waechst >16 GB) | niedrig | log.fatal in Phase 1, mremap in Phase 2 |
-| Crash mitten im Header-Update | sehr niedrig | Crash-Scan ab `sizeof(header)` ignoriert Header-Felder |
-| `kv.checkpoint()` waehrend andere Threads lesen | mittel | Per-KV mutex haelt; Compaction blockiert Reads |
-| Page-Cache-Druck durch viele Stores | niedrig | madvise(DONTNEED) bei evict freigibt Pages |
-| msync-Latenz bei sehr grossen Schreibvolumen | niedrig | Linux flush-Daemon syncs alle 30 s automatisch |
+| 16 GB reserve impossible on 32-bit systems | irrelevant (64-bit only) | – |
+| Reserve overflow (file grows >16 GB) | low | log.fatal in phase 1, mremap in phase 2 |
+| Crash in the middle of a header update | very low | crash scan from `sizeof(header)` ignores header fields |
+| `kv.checkpoint()` while other threads read | medium | per-KV mutex holds; compaction blocks reads |
+| Page cache pressure from many stores | low | madvise(DONTNEED) on evict frees pages |
+| msync latency with very large write volumes | low | the Linux flush daemon syncs automatically every 30 s |
 
-## Erfolgs-Kriterien
+## Success criteria
 
-1. **Per-File-Training laeuft durch ohne OOM** (10 Files × 4 Worker)
-2. **RSS faellt nach Worker-Join** (kv.evict + tensor.arena_free greifen)
-3. **Bestehende AIML-Tests laufen alle gruen** (159+ Tests)
-4. **Test-Run mit grossem Store**: Open eines 1 GB Stores ohne RSS-Spike
-5. **9rooms-Smoke-Test**: nach Verzeichnis-Reset funktioniert das Spiel
+1. **Per-file training runs through without OOM** (10 files × 4 workers)
+2. **RSS drops after worker join** (kv.evict + tensor.arena_free take effect)
+3. **Existing AIML tests all run green** (159+ tests)
+4. **Test run with a large store**: open of a 1 GB store without an RSS spike
+5. **9rooms smoke test**: after a directory reset the game works
 
-## Offene Fragen
+## Open questions
 
-- Soll Reserve-Groesse konfigurierbar sein? (env var `AIMLDB_KV_RESERVE_MB`?)
-- Brauchen wir bounded-LRU explizit, oder Heap-Druck als implizite Eviction?
-- Compaction automatisch triggern (z.B. bei DELETE-Anteil > 30 %)?
+- Should the reserve size be configurable? (env var `AIMLDB_KV_RESERVE_MB`?)
+- Do we need a bounded LRU explicitly, or heap pressure as implicit eviction?
+- Trigger compaction automatically (e.g. when the DELETE share is > 30 %)?
 
-Diese koennen in Phase 2 entschieden werden.
+These can be decided in phase 2.
