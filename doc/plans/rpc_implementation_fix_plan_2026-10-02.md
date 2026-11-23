@@ -1,520 +1,520 @@
-# AIML RPC: Implementierungsplan nach Review
+# AIML RPC: implementation plan after review
 
-Stand: 2026-10-02. Status: geplant, noch nicht implementiert.
+As of: 2026-10-02. Status: planned, not yet implemented.
 
-Die sechs Review-Befunde werden in sieben aufeinander aufbauenden Arbeitspaketen
-behoben. Zeilennummern beziehen sich auf den während der Planung gelesenen Stand;
-Funktionsnamen sind die dauerhaften Anker. Parallel vorhandene Änderungen an
-`take_rpc` und dem strukturellen RPC-Fingerprint sind berücksichtigt und dürfen
-nicht überschrieben werden.
+The six review findings are fixed in seven work packages that build on one another.
+Line numbers refer to the state read during planning;
+function names are the durable anchors. Changes to `take_rpc` and the structural RPC fingerprint
+that exist in parallel are taken into account and must
+not be overwritten.
 
-## 1. Verbindliche Zielsemantik
+## 1. Binding target semantics
 
-- Netzwerkdaten werden ausschließlich mit ihrer tatsächlich empfangenen Länge
-  decodiert. Ungültige Frames führen zu einem kontrollierten Fehler, nicht zu
-  Teilmutation, Out-of-bounds-Zugriffen oder unbegrenzten Allokationen.
-- Low-Level-Client-RPCs gehen ausschließlich zum Server. Ein Server-Handler
-  entscheidet ausdrücklich über Antworten und Broadcasts.
-- Low-Level-Host-Sends behalten `target == 0` als expliziten Broadcast und
-  `target > 0` als Peer-ID. Ein unbekannter positiver Peer wird niemals zum
-  Broadcast; negative Targets werden abgewiesen.
-- Request/Response verwendet eine explizite Request-ID und Nachrichtenart.
-  Methodenname und Schema sind zusätzliche Prüfungen, keine Korrelation.
-- Unbeteiligte Nachrichten behalten ihre Reihenfolge und ihren Inhalt.
-- Automatische Objekt-RPCs bilden einen eigenen, registrierten Dispatch-Pfad.
-  Objekt-ID, Peer-ID und Request-ID sind getrennte Begriffe und Felder.
-- Unterstützte automatische RPC-Methoden sind zunächst `void` und besitzen
-  ausschließlich serialisierbare Wertparameter. Unzulässige Signaturen erhalten
-  Compilerfehler. Rückgabewerte bleiben beim expliziten Request/Response-API.
+- Network data is decoded exclusively with its actually received length.
+  Invalid frames lead to a controlled error, not to
+  partial mutation, out-of-bounds accesses or unbounded allocations.
+- Low-level client RPCs go exclusively to the server. A server handler
+  decides explicitly about responses and broadcasts.
+- Low-level host sends keep `target == 0` as an explicit broadcast and
+  `target > 0` as a peer ID. An unknown positive peer never becomes a
+  broadcast; negative targets are rejected.
+- Request/response uses an explicit request ID and message kind.
+  Method name and schema are additional checks, not correlation.
+- Uninvolved messages keep their order and their content.
+- Automatic object RPCs form a separate, registered dispatch path.
+  Object ID, peer ID and request ID are separate concepts and fields.
+- Supported automatic RPC methods are initially `void` and have
+  exclusively serialisable value parameters. Inadmissible signatures get
+  compiler errors. Return values stay with the explicit request/response API.
 
-## 2. Arbeitspaket 0: Build und ABI konsolidieren
+## 2. Work package 0: consolidate build and ABI
 
-**C++-Stellen**
+**C++ places**
 
-- `src/sys/ser_runtime.h:67`: `aiml_ser_rpc_blob_matches` steht aktuell vor dem
-  anonymen `typedef ... AimlTypeNode` ab Zeile 73. Deklaration hinter die
-  Typdefinition verschieben. Keine unpassende Forward-Deklaration eines anonymen
-  Structs einführen.
-- `src/sys/mirror_runtime.h`: öffentliche Deklaration für das inzwischen
-  implementierte `aiml_mirror_session_take_rpc` ergänzen; Kommentare zu
-  Event-Lebensdauer, Routing und `send_and_await` aktualisieren.
-- `src/core/context.h:1243`: der Fallback für `rpc_event` erzeugt nur drei Felder;
-  `src/core/builtin_registry.cpp:9708` erzeugt sieben. Eine gemeinsame
-  LLVM-Typ-Erzeugungsfunktion verwenden, damit beide Pfade identisch sind.
-- `src/sys/mirror_runtime.cpp:185`, `AimlRpcEvent`: C++-Layout und LLVM-Felder
-  gemeinsam verwalten/testen; kommende Request-ID-Felder überall ergänzen.
+- `src/sys/ser_runtime.h:67`: `aiml_ser_rpc_blob_matches` currently stands before the
+  anonymous `typedef ... AimlTypeNode` from line 73. Move the declaration behind the
+  type definition. Do not introduce an unsuitable forward declaration of an anonymous
+  struct.
+- `src/sys/mirror_runtime.h`: add the public declaration for the meanwhile
+  implemented `aiml_mirror_session_take_rpc`; update the comments on
+  event lifetime, routing and `send_and_await`.
+- `src/core/context.h:1243`: the fallback for `rpc_event` creates only three fields;
+  `src/core/builtin_registry.cpp:9708` creates seven. Use a shared
+  LLVM type creation function so that both paths are identical.
+- `src/sys/mirror_runtime.cpp:185`, `AimlRpcEvent`: manage/test the C++ layout and LLVM fields
+  together; add the upcoming request ID fields everywhere.
 
-**Abnahme**
+**Acceptance**
 
-Sauberer nativer Build und Compile-Smoke für beide Reihenfolgen der
-`rpc_event`-Typinitialisierung. LLVM-DataLayout gegen C++-`sizeof`/`offsetof`
-prüfen; wasm32 separat prüfen, keine x86-64-Padding-Konstanten übernehmen.
+A clean native build and compile smoke test for both orders of the
+`rpc_event` type initialisation. Check the LLVM DataLayout against C++ `sizeof`/`offsetof`;
+check wasm32 separately, do not adopt x86-64 padding constants.
 
-## 3. Arbeitspaket 1: Paket- und Decodergrenzen absichern [P1]
+## 3. Work package 1: secure packet and decoder boundaries [P1]
 
-**C++-Stellen**
+**C++ places**
 
-- `src/sys/mirror_runtime.cpp:413`, `process_packet`, RPC-Zweig ab Zeile 524.
+- `src/sys/mirror_runtime.cpp:413`, `process_packet`, RPC branch from line 524.
 - `src/sys/mirror_runtime.cpp:1384`, `aiml_rpc_event_decode_into`.
 - `src/sys/mirror_runtime.cpp:1400`, `aiml_mirror_session_take_rpc`.
-- `src/sys/ser_runtime.cpp:1443`, `aiml_ser_rpc_blob_matches`, und
-  `aiml_ser_decode` unmittelbar danach.
-- `src/sys/ser_runtime.cpp:493`, rekursiver `dec`-Walker und seine Lesehelfer.
-- Deklarationen in `src/sys/ser_runtime.h`.
+- `src/sys/ser_runtime.cpp:1443`, `aiml_ser_rpc_blob_matches`, and
+  `aiml_ser_decode` directly after it.
+- `src/sys/ser_runtime.cpp:493`, the recursive `dec` walker and its read helpers.
+- Declarations in `src/sys/ser_runtime.h`.
 
-**Änderungen**
+**Changes**
 
-1. Gemeinsamen RPC-Parser mit Ergebnis `NeedMore`, `Complete`, `Invalid`
-   einführen. Er erhält `(const uint8_t*, size_t available)` und liefert eine
-   validierte Paketansicht sowie die tatsächlich verbrauchten Bytes.
-2. Längen mit Subtraktion prüfen: erst `offset <= available`, dann
-   `blob_len <= available - offset`. Den Cast `(int)blob_len` aus der bisherigen
-   Prüfung entfernen. In WebSocket-Nachrichten genau ein vollständiges Paket
-   verlangen; unerwartete Restbytes sind ein Fehler.
-3. Konfigurierbare Obergrenze für RPC-Frames einführen; initialer Vorschlag:
-   8 MiB pro Frame. Grenze vor Bufferwachstum/Allokation prüfen und in der Spec
-   dokumentieren. Methodennamen müssen 1–255 Bytes lang und frei von NUL sein;
-   `strlen(method) & 0xFF` im Sender durch explizite Prüfung ersetzen.
-4. `arg_kind` ausschließlich 0 oder 1; bei 0 muss die Blob-Länge 0 sein. Bei 1
-   mindestens den vier Byte langen Präfix verlangen, dessen Wert exakt der
-   verbleibenden Blob-Länge entsprechen muss. Für neue typisierte RPCs außerdem
-   Magic und Fingerprint verlangen. Legacy-Kompatibilität ausdrücklich begrenzen.
-5. Neue größenbewusste APIs hinzufügen, zum Beispiel
-   `aiml_ser_decode_sized(blob, blob_size, out, nodes, n_nodes)` und
-   `aiml_ser_rpc_blob_matches_sized(...)`. Alle RPC-Aufrufer einschließlich
-   `take_rpc` verwenden diese APIs. Bestehende persistente Datenformate nicht
-   nebenbei ändern; alte größenlose APIs dürfen nur intern vertrauenswürdige
-   Buffer verarbeiten.
-6. Decoder-Lesehelfer auf überlaufsichere Restlängenprüfungen umstellen.
-   Containeranzahlen, `count * element_size`, Verschachtelungstiefe und gesamte
-   Decode-Allokation begrenzen. Ein Frame-Limit allein verhindert keine riesige
-   Allokation aus einem kleinen, manipulierten Elementzähler.
-7. In ein temporäres, nullinitialisiertes Objekt decodieren. Bei Fehler dessen
-   bereits erzeugte Heapfelder freigeben; bestehendes Ziel unverändert lassen.
-   Erst nach vollständig erfolgreicher Prüfung alte Ziel-Felder freigeben und
-   das Ergebnis übertragen. Zielgröße als geprüfte Compiler-Metadaten übergeben,
-   nicht unbesehen aus einem beliebigen Root-Node ableiten.
-8. `builtin_registry.cpp`, Builtins `decode_rpc`, `take_rpc`, `send_and_await`:
-   vorgezogene `CreateMemSet`-Aufrufe entfernen und die transaktionale Runtime
-   nutzen. Gemeinsame Pointerextraktion für Value-Modelle, `ptr<>`, `ref<>` und
-   aktivierte Refcount-Modelle verwenden; keinen Pointer-Slot als Objekt löschen.
+1. Introduce a shared RPC parser with the results `NeedMore`, `Complete`, `Invalid`.
+   It receives `(const uint8_t*, size_t available)` and returns a
+   validated packet view as well as the bytes actually consumed.
+2. Check lengths with subtraction: first `offset <= available`, then
+   `blob_len <= available - offset`. Remove the cast `(int)blob_len` from the previous
+   check. In WebSocket messages, require exactly one complete packet;
+   unexpected remaining bytes are an error.
+3. Introduce a configurable upper limit for RPC frames; initial proposal:
+   8 MiB per frame. Check the limit before buffer growth/allocation and document it
+   in the spec. Method names must be 1–255 bytes long and free of NUL;
+   replace `strlen(method) & 0xFF` in the sender with an explicit check.
+4. `arg_kind` exclusively 0 or 1; for 0 the blob length must be 0. For 1,
+   require at least the four-byte prefix, whose value must exactly equal the
+   remaining blob length. For new typed RPCs, additionally require
+   magic and fingerprint. Limit legacy compatibility explicitly.
+5. Add new size-aware APIs, for example
+   `aiml_ser_decode_sized(blob, blob_size, out, nodes, n_nodes)` and
+   `aiml_ser_rpc_blob_matches_sized(...)`. All RPC callers including
+   `take_rpc` use these APIs. Do not change existing persistent data formats
+   along the way; old size-less APIs may only process internally trusted
+   buffers.
+6. Switch the decoder read helpers to overflow-safe remaining length checks.
+   Bound container counts, `count * element_size`, nesting depth and the total
+   decode allocation. A frame limit alone does not prevent a huge
+   allocation from a small, manipulated element counter.
+7. Decode into a temporary, zero-initialised object. On error, free its
+   already created heap fields; leave the existing target unchanged.
+   Only after a completely successful check free the old target fields and
+   transfer the result. Pass the target size as checked compiler metadata,
+   do not derive it unseen from an arbitrary root node.
+8. `builtin_registry.cpp`, builtins `decode_rpc`, `take_rpc`, `send_and_await`:
+   remove the preceding `CreateMemSet` calls and use the transactional runtime.
+   Use a shared pointer extraction for value models, `ptr<>`, `ref<>` and
+   enabled refcount models; do not clear a pointer slot as an object.
 
-**Regressionen**
+**Regressions**
 
-Blob-Längen 0/1/2/3, widersprüchlicher innerer Präfix, abgeschnittene Header,
-`UINT32_MAX`, unbekanntes `arg_kind`, ungültige Methodenlänge, falscher Fingerprint,
-überlaufende Containeranzahl und tiefe Verschachtelung. Zielobjekt mit bestehenden
-Strings/Listen muss bei Fehler erhalten bleiben. ASan/UBSan und Leak-Prüfung des
-teilweise aufgebauten temporären Objekts.
+Blob lengths 0/1/2/3, a contradictory inner prefix, truncated headers,
+`UINT32_MAX`, unknown `arg_kind`, invalid method length, wrong fingerprint,
+overflowing container count and deep nesting. A target object with existing
+strings/lists must be preserved on error. ASan/UBSan and a leak check of the
+partially built temporary object.
 
-## 4. Arbeitspaket 2: TCP-Framing auf dasselbe Format bringen [P1]
+## 4. Work package 2: bring TCP framing to the same format [P1]
 
-**C++-Stellen**
+**C++ places**
 
-- `src/sys/mirror_runtime.cpp:633`, `mirror_recv_from_peers`, besonders RPC-Zweig
-  ab Zeile 672: liest derzeit nur `method_len + method + i32`.
-- `AimlMirrorPeer` ab Zeile 149; `tcp_recv_all`/`tcp_send_all` ab Zeile 260.
-- `mirror_send` ab Zeile 299 und `mirror_send_rpc_v2` ab Zeile 1307.
+- `src/sys/mirror_runtime.cpp:633`, `mirror_recv_from_peers`, especially the RPC branch
+  from line 672: currently reads only `method_len + method + i32`.
+- `AimlMirrorPeer` from line 149; `tcp_recv_all`/`tcp_send_all` from line 260.
+- `mirror_send` from line 299 and `mirror_send_rpc_v2` from line 1307.
 
-**Änderungen**
+**Changes**
 
-1. Pro Peer Empfangsbuffer und Parse-Position ergänzen. Verfügbare Bytes
-   nichtblockierend einlesen; vollständige Pakete über den Parser aus Paket 1
-   konsumieren, unvollständige Pakete bis zum nächsten `update` behalten.
-2. Für v2 exakt `6 + 1 + method_len + 1 + 4 + 4 + blob_len` Bytes konsumieren.
-   Mehrere Pakete in einem TCP-Read und über beliebige Reads fragmentierte
-   Pakete unterstützen. Alle bisherigen Paketarten in die Bufferverwaltung
-   integrieren, damit DELTA/REGISTER/RPC-Mischverkehr nicht desynchronisiert.
-3. Auch Teil-Sends behandeln: pro Peer Sendebuffer und Offset, Weiterleitung
-   nach `EAGAIN` beim nächsten Update. Kein stiller Verlust nach kurzem `send`.
-4. Fehlerhafte/überlange Frames schließen ausschließlich den betroffenen Peer
-   und erzeugen einen diagnostizierbaren Disconnect. Buffer bei Close freigeben.
+1. Add a receive buffer and parse position per peer. Read available bytes
+   non-blockingly; consume complete packets via the parser from package 1,
+   keep incomplete packets until the next `update`.
+2. For v2, consume exactly `6 + 1 + method_len + 1 + 4 + 4 + blob_len` bytes.
+   Support several packets in one TCP read and packets fragmented across arbitrary reads.
+   Integrate all previous packet kinds into the buffer management, so that mixed
+   DELTA/REGISTER/RPC traffic does not desynchronise.
+3. Also handle partial sends: a send buffer and offset per peer, continuing
+   after `EAGAIN` on the next update. No silent loss after a short `send`.
+4. Faulty/overlong frames close only the affected peer
+   and produce a diagnosable disconnect. Free the buffers on close.
 
-**Regressionen**
+**Regressions**
 
-Legacy-i32 und typisierte RPCs über TCP; jedes Byte einzeln senden; mehrere RPCs
-in einem Write; RPC zwischen REGISTER und DELTA; Disconnect mitten im Frame;
-langsamer Peer darf den Host-Update für andere Peers nicht blockieren. Bestehende
-WebSocket-Tests müssen denselben Parserpfad abdecken.
+Legacy i32 and typed RPCs over TCP; send every byte individually; several RPCs
+in one write; an RPC between REGISTER and DELTA; disconnect in the middle of a frame;
+a slow peer must not block the host update for other peers. Existing
+WebSocket tests must cover the same parser path.
 
-## 5. Arbeitspaket 3: Ungefragtes Weiterleiten entfernen [P1]
+## 5. Work package 3: remove unrequested forwarding [P1]
 
-**C++-Stellen**
+**C++ places**
 
-- `src/sys/mirror_runtime.cpp:558–560`, RPC-Enqueue und anschließender Broadcast.
-- `mirror_send_rpc_v2` und `aiml_mirror_session_send_rpc[_model]`.
-- `spec/44_5_mirror.md`, Routing-/Targeted-Send-Vertrag.
+- `src/sys/mirror_runtime.cpp:558–560`, RPC enqueue and the subsequent broadcast.
+- `mirror_send_rpc_v2` and `aiml_mirror_session_send_rpc[_model]`.
+- `spec/44_5_mirror.md`, routing/targeted send contract.
 
-**Änderungen**
+**Changes**
 
-1. Den pauschalen `broadcast_pkt` nach eingehenden Low-Level-RPCs entfernen.
-   Ein Client-Request wird nur lokal beim Host eingereiht.
-2. Explizite Serverantworten weiterhin anhand der vom Socket bestimmten
-   `peer_id` adressieren. `net_id` niemals als Ersatz für die Absenderidentität
-   verwenden. Spec und Beispiele korrigieren, die unbekannte Targets noch als
-   Broadcast oder Antworten über `rpc.net_id` beschreiben.
-3. Automatisches Routing erst über den getrennten, registrierten Objektpfad in
-   Paket 6 zulassen. Für Low-Level-RPCs keine vom Client wählbare Relay-Option.
+1. Remove the blanket `broadcast_pkt` after incoming low-level RPCs.
+   A client request is only queued locally at the host.
+2. Keep addressing explicit server responses by the `peer_id` determined from the socket.
+   Never use `net_id` as a substitute for the sender identity.
+   Correct the spec and examples that still describe unknown targets as a
+   broadcast or responses via `rpc.net_id`.
+3. Only allow automatic routing via the separate, registered object path in
+   package 6. No client-selectable relay option for low-level RPCs.
 
-**Regressionen**
+**Regressions**
 
-Host mit zwei Clients: A sendet private Payload, B erhält nichts. Auch ein
-von A gesendetes `set_result` erreicht B nicht. Gezielte Hostantwort erreicht nur
-A; Host-Broadcast mit Target 0 erreicht beide. Unbekanntes/negatives Target
-versendet nichts. Nach Disconnect darf eine alte Peer-ID keinen neuen Peer
-adressieren; IDs innerhalb einer Session nicht wiederverwenden.
+Host with two clients: A sends a private payload, B receives nothing. Even a
+`set_result` sent by A does not reach B. A targeted host response reaches only
+A; a host broadcast with target 0 reaches both. An unknown/negative target
+sends nothing. After a disconnect, an old peer ID must not address a new peer;
+do not reuse IDs within a session.
 
-## 6. Arbeitspaket 4: Stabile Queue-Entnahme [P2]
+## 6. Work package 4: stable queue removal [P2]
 
-**C++-Stellen**
+**C++ places**
 
-- `AimlMirrorSession::rpc_queue` ab `mirror_runtime.cpp:205`.
-- `aiml_mirror_session_send_and_await`, Requeue-Schleife aktuell um Zeile 1523.
-- `aiml_mirror_session_take_rpc`, insbesondere `kMaxQueued = 64`.
-- `next_rpc`, `poll_rpc`, `has_rpc`, Session-Close.
+- `AimlMirrorSession::rpc_queue` from `mirror_runtime.cpp:205`.
+- `aiml_mirror_session_send_and_await`, requeue loop currently around line 1523.
+- `aiml_mirror_session_take_rpc`, in particular `kMaxQueued = 64`.
+- `next_rpc`, `poll_rpc`, `has_rpc`, session close.
 
-**Änderungen**
+**Changes**
 
-1. `std::queue<AimlRpcEvent*>` durch `std::deque` ersetzen und einen gemeinsamen
-   Helfer `take_matching_rpc(predicate)` einführen. Nur den Treffer entfernen;
-   sämtliche anderen Elemente bleiben an derselben Position.
-2. `send_and_await` und `take_rpc` über diesen Helfer implementieren. Kein
-   wiederholtes Pop/Push und kein Anhängen übersprungener Events hinter den Rest.
-3. Das neue pauschale Löschen aller Events über Position 64 in `take_rpc`
-   entfernen: Es löscht auch gültige Pushes anderer Consumer. Queue-Grenzen beim
-   Empfang pro Peer anhand Anzahl UND Bytes durchsetzen; Überlast kontrolliert
-   melden/Verbindung schließen, niemals stillschweigend fremde Events löschen.
-4. Eventbesitz vereinheitlichen: jeder Eintrag wird genau einmal freigegeben.
-   Borrow aus `next_rpc`/`poll_rpc` bleibt bis zur nächsten Entnahme desselben
-   Borrow-Pfads oder Close gültig; interne Suchentnahme darf ihn nicht freigeben.
+1. Replace `std::queue<AimlRpcEvent*>` with `std::deque` and introduce a shared
+   helper `take_matching_rpc(predicate)`. Remove only the hit;
+   all other elements stay at the same position.
+2. Implement `send_and_await` and `take_rpc` via this helper. No
+   repeated pop/push and no appending of skipped events behind the rest.
+3. Remove the new blanket deletion of all events beyond position 64 in `take_rpc`:
+   it also deletes valid pushes of other consumers. Enforce queue limits on
+   receipt per peer by count AND bytes; report overload in a controlled way/close the connection,
+   never silently delete foreign events.
+4. Unify event ownership: every entry is freed exactly once.
+   A borrow from `next_rpc`/`poll_rpc` stays valid until the next removal via the same
+   borrow path or close; internal search removal must not free it.
 
-**Regressionen**
+**Regressions**
 
-`A, Result, B` ergibt nach Entnahme `A, B`; Treffer vorn/hinten; kein Treffer;
-Timeout; falsches Schema; mehrere gleiche Methoden; mindestens 65 unbeteiligte
-Pushes. Unter ASan wiederholte Entnahme und Session-Close prüfen.
+`A, Result, B` yields `A, B` after removal; hit at the front/back; no hit;
+timeout; wrong schema; several identical methods; at least 65 uninvolved
+pushes. Check repeated removal and session close under ASan.
 
-## 7. Arbeitspaket 5: Echte Request/Response-Korrelation [P1]
+## 7. Work package 5: real request/response correlation [P1]
 
-**C++-Stellen**
+**C++ places**
 
 - `AimlMirrorSession`, `AimlRpcEvent`, `mirror_send_rpc_v2`, `process_packet`.
-- `aiml_mirror_session_send_and_await` und neue Reply-Funktion in
+- `aiml_mirror_session_send_and_await` and a new reply function in
   `src/sys/mirror_runtime.h/.cpp`.
-- `builtin_registry.cpp`: `rpc_event`, `send_and_await` ab Zeile 10184 und
-  neues Builtin `reply_rpc`.
-- `context.h`: gemeinsame `rpc_event`-Definition aus Paket 0.
+- `builtin_registry.cpp`: `rpc_event`, `send_and_await` from line 10184 and
+  a new builtin `reply_rpc`.
+- `context.h`: the shared `rpc_event` definition from package 0.
 
-**Protokollentscheidung**
+**Protocol decision**
 
-Neues, eindeutig unterscheidbares `PKT_RPC_V3` einführen; v2 nicht heuristisch
-umdeuten. V3 erhält einen festen Header mit Version, Gesamtlänge, Nachrichtenart
-(`push`, `request`, `response`, `object_call`), `request_id:u64`, separater
-Objekt-ID und Routingmetadaten für Objektaufrufe. Alle Integer explizit LE
-codieren; niemals C++-Structs als Wireformat kopieren. Methoden-/Payloadformat
-und Feldbreiten vor Implementierung in der Spec vollständig festschreiben.
+Introduce a new, unambiguously distinguishable `PKT_RPC_V3`; do not reinterpret v2
+heuristically. V3 gets a fixed header with version, total length, message kind
+(`push`, `request`, `response`, `object_call`), `request_id:u64`, a separate
+object ID and routing metadata for object calls. Encode all integers explicitly LE;
+never copy C++ structs as a wire format. Fully pin down the method/payload format
+and field widths in the spec before implementation.
 
-Capability-Austausch beim Verbindungsaufbau ergänzen. Während Capability-Status
-unbekannt ist, keine neuen Request/Response-Pakete senden. Mit alten Peers nur
-explizit unterstützte v2-One-Way-Kommunikation erlauben; `send_and_await` meldet
-fehlende Unterstützung, statt unsicher auf Methodenmatching zurückzufallen.
-Diese Protokolländerung benötigt koordinierte Aktualisierung von Client/Server.
+Add a capability exchange at connection setup. While the capability status
+is unknown, do not send new request/response packets. With old peers, only allow
+explicitly supported v2 one-way communication; `send_and_await` reports
+missing support instead of falling back unsafely to method matching.
+This protocol change needs a coordinated update of client/server.
 
-**Änderungen**
+**Changes**
 
-1. Pro Verbindung monotone Request-IDs vergeben, 0 für Push reservieren.
-   Verbindungsgeneration und erwarteten Antwort-Peer im lokalen Pending-Eintrag
-   speichern; bei Disconnect Pending-Requests beenden. Überlauf kontrolliert
-   behandeln, niemals eine noch relevante ID erneut vergeben.
-2. `session.reply_rpc(ev, method, arg[, model])` ergänzen. Antwortziel aus dem
-   vertrauenswürdigen `ev.peer_id`, Request-ID aus `ev.request_id` übernehmen;
-   Response-Nachrichtenart setzen. Server-Handler und Tests auf dieses API
-   migrieren. Ohne Echo der ID auf Serverseite ist die Korrektur unvollständig.
-3. `send_and_await` wartet auf `response + request_id + erwartete Verbindung`;
-   erst dann Methode/Schema/Payload prüfen. Eine korrelierte, aber kaputte Antwort
-   beendet den Request als Decode-/Protokollfehler und wird nicht endlos gescannt.
-4. Deadline mit monotoner Uhr bestimmen. Anzahl von 2-ms-Sleeps ist keine
-   Zeitmessung; Update-/Decode-Dauer muss zum Timeout zählen.
-5. Verspätete, doppelte und unbekannte Response-IDs werden gezielt als solche
-   verworfen/diagnostiziert, ohne Pushes zu entfernen. Bereits vor dem Send
-   wartende gleichartige Antworten dürfen nie den neuen Request erfüllen.
-6. Request-ID-API auch für asynchrone Consumer bereitstellen, z.B.
-   `send_request(...) -> u64` und `take_response(id, target)`. `take_rpc(method,
-   target)` bleibt ausdrücklich ein Push-/Legacy-Queue-Filter und beansprucht
-   keine sichere Request-Korrelation.
+1. Assign monotonic request IDs per connection, reserve 0 for push.
+   Store the connection generation and the expected response peer in the local pending entry;
+   end pending requests on disconnect. Handle overflow in a controlled way,
+   never reassign a still relevant ID.
+2. Add `session.reply_rpc(ev, method, arg[, model])`. Take the response target from the
+   trusted `ev.peer_id`, the request ID from `ev.request_id`;
+   set the response message kind. Migrate server handlers and tests to this API.
+   Without the server echoing the ID, the fix is incomplete.
+3. `send_and_await` waits for `response + request_id + expected connection`;
+   only then check method/schema/payload. A correlated but broken response
+   ends the request as a decode/protocol error and is not scanned endlessly.
+4. Determine the deadline with a monotonic clock. A count of 2 ms sleeps is not a
+   time measurement; update/decode duration must count towards the timeout.
+5. Late, duplicate and unknown response IDs are discarded/diagnosed specifically as such,
+   without removing pushes. Responses of the same kind already waiting before the send
+   must never fulfil the new request.
+6. Also provide the request ID API for asynchronous consumers, e.g.
+   `send_request(...) -> u64` and `take_response(id, target)`. `take_rpc(method,
+   target)` explicitly remains a push/legacy queue filter and does not claim
+   safe request correlation.
 
-**Regressionen**
+**Regressions**
 
-Request A läuft ab, Request B hat dasselbe Antwortschema, Antwort A trifft vor B
-ein: Nur B erfüllt B. Zwei ausstehende Requests mit vertauschter Antwortreihenfolge;
-Antwort vom falschen Peer; doppelte Antwort; neue Verbindung mit alten Events;
-Timeout 0; typgleiche Push-Nachricht `set_result`; v2/v3-Inkompatibilität mit
-klarem Fehler. Native↔WASM muss dieselben Wire-IDs und Headergrößen verwenden.
+Request A times out, request B has the same response schema, response A arrives before B:
+only B fulfils B. Two pending requests with swapped response order;
+a response from the wrong peer; a duplicate response; a new connection with old events;
+timeout 0; a type-identical push message `set_result`; v2/v3 incompatibility with a
+clear error. Native↔WASM must use the same wire IDs and header sizes.
 
-## 8. Arbeitspaket 6: Automatische Objekt-RPCs tatsächlich implementieren [P2]
+## 8. Work package 6: really implement automatic object RPCs [P2]
 
-**C++-Stellen**
+**C++ places**
 
-- `src/core/ast/model_builder.cpp`, Einlesen von `rpc`.
-- `src/core/ast_compiler.cpp:4355`, Übernahme von `rpcMethods` und Modellcodegen.
-- `src/core/context.h:206`, Klassenmetadaten für `rpcMethods`.
-- `src/core/ast_compiler_call.cpp:891`, `visitObjectMethodCall`, einschließlich
-  Interface-Dispatch ab Zeile 944 und direkter Methodenauflösung um Zeile 3458.
-- `builtin_registry.cpp`: `register`/`register_id` um Zeilen 9890/9925 sowie
-  `set_rpc_target` um Zeile 10371.
-- `mirror_runtime.cpp`: `AimlMirrorRegistered`, Register/Unregister ab Zeile
-  1002, `set_rpc_target` ab Zeile 1258 und Session-Update.
+- `src/core/ast/model_builder.cpp`, reading in `rpc`.
+- `src/core/ast_compiler.cpp:4355`, taking over `rpcMethods` and model codegen.
+- `src/core/context.h:206`, class metadata for `rpcMethods`.
+- `src/core/ast_compiler_call.cpp:891`, `visitObjectMethodCall`, including
+  interface dispatch from line 944 and direct method resolution around line 3458.
+- `builtin_registry.cpp`: `register`/`register_id` around lines 9890/9925 as well as
+  `set_rpc_target` around line 10371.
+- `mirror_runtime.cpp`: `AimlMirrorRegistered`, register/unregister from line
+  1002, `set_rpc_target` from line 1258 and session update.
 
-**Compileränderungen**
+**Compiler changes**
 
-1. `rpc:` gegen die tatsächlich aufgelösten Methoden validieren: Namen,
-   Vererbung, Signaturen, `void`, serialisierbare Parameter. Für Parameter einen
-   synthetischen Argument-Struct plus Serializerbeschreibung generieren; keine
-   native Pointeradresse auf das Netzwerk schreiben.
-2. Pro RPC einen öffentlichen Wrapper und einen lokalen Body/Dispatch-Thunk
-   erzeugen. Der Wrapper trifft einmal die Routingentscheidung; der Thunk
-   decodiert Argumente und ruft direkt den lokalen Body. Empfang darf nicht
-   erneut durch den Netzwerk-Wrapper laufen und Relay-Schleifen erzeugen.
-3. Direkte und Interface-/VTable-Aufrufe auf denselben Wrapper führen. Receiver
-   und Argumentausdrücke nur einmal auswerten. Nicht registrierte Objekte behalten
-   normale lokale Methodenaufrufe; registrierte Objekte benutzen RPC-Routing.
-4. Registrierung übergibt RPC-Deskriptortabelle mit Methodennamen,
-   Argument-Schema und Thunk. Unbekannte Methoden oder falsche Schemas dürfen
-   niemals in beliebige lokale Methoden dispatchen.
+1. Validate `rpc:` against the actually resolved methods: names,
+   inheritance, signatures, `void`, serialisable parameters. Generate a
+   synthetic argument struct plus a serializer description for the parameters; do not write a
+   native pointer address onto the network.
+2. Generate a public wrapper and a local body/dispatch thunk per RPC.
+   The wrapper makes the routing decision once; the thunk
+   decodes arguments and calls the local body directly. Receiving must not
+   run through the network wrapper again and create relay loops.
+3. Route direct and interface/vtable calls to the same wrapper. Evaluate the receiver
+   and argument expressions only once. Unregistered objects keep
+   normal local method calls; registered objects use RPC routing.
+4. Registration passes an RPC descriptor table with method names,
+   argument schema and thunk. Unknown methods or wrong schemas must
+   never dispatch into arbitrary local methods.
 
-**Runtimeänderungen und Ownership**
+**Runtime changes and ownership**
 
-1. Registrierte Objekte erhalten Session-Zuordnung, stabile Netz-ID und
-   `owner_peer_id`. Objektadressen sind nur lokale Lookup-Schlüssel. Mehrfache
-   Registrierung desselben Objekts in verschiedenen Sessions als mehrdeutig
-   ablehnen; Unregister/Close entfernt Zuordnung und Dispatch-Metadaten.
-2. Host vergibt/kontrolliert globale Objekt-IDs und bestätigt sie dem
-   registrierenden Client. Clientseitige Zähler dürfen nicht kollidierende globale
-   IDs erzeugen. Register-Nachrichten übertragen autorisierte Ownership;
-   Owner-Disconnect invalidiert/entfernt die betroffenen Registrierungen.
-3. `set_rpc_target` speichert pro Objekt/Methode einen validierten Enum.
-   Unbekannte Methoden/Ziele oder unregistrierte Objekte melden einen Fehler.
-4. Ziele exakt implementieren:
-   - `owner`: nur Owner; lokal, falls Aufrufer Owner ist.
-   - `server`: nur Host; auf dem Host lokal.
-   - `all`: jeder beteiligte Peer einschließlich Sender genau einmal.
-   - `others`: alle beteiligten Peers außer Sender, einschließlich Host, sofern
-     dieser nicht Sender ist.
-5. Clients vermitteln Remote-Ziele über den Host. Nur `object_call` mit gültiger
-   Objekt-/Methodenregistrierung darf geroutet werden. Host prüft freigegebene
-   Zielpolitik; bloße Clientangaben sind keine Relay-Erlaubnis. Sender-ID wird
-   ausschließlich aus der Verbindung gewonnen und nur vom Host weitergegeben.
-   Vom Server festgelegte Methoden-/Target-Freigaben können Clients nicht durch
-   ihr lokales `set_rpc_target` erweitern.
-6. Beim Empfang erlaubt nur der separate Objektpfad automatische Ausführung;
-   Low-Level-RPCs bleiben für manuelle Handler in der Queue. Ein Paket wird nie
-   automatisch ausgeführt UND anschließend manuell erneut zugestellt.
-7. Lokale Ausführung und Remote-Weiterleitung für `all`/`others` zusammen planen,
-   sodass der Host den Sender nicht nochmals beliefert. Definierten Schutz vor
-   erneuter Ausführung desselben weitergereichten Objektaufrufs vorsehen.
+1. Registered objects get a session assignment, a stable net ID and
+   `owner_peer_id`. Object addresses are only local lookup keys. Reject multiple
+   registration of the same object in different sessions as ambiguous;
+   unregister/close removes the assignment and dispatch metadata.
+2. The host assigns/controls global object IDs and confirms them to the
+   registering client. Client-side counters must not produce colliding global
+   IDs. Register messages transmit authorised ownership;
+   owner disconnect invalidates/removes the affected registrations.
+3. `set_rpc_target` stores a validated enum per object/method.
+   Unknown methods/targets or unregistered objects report an error.
+4. Implement the targets exactly:
+   - `owner`: only the owner; local if the caller is the owner.
+   - `server`: only the host; local on the host.
+   - `all`: every participating peer including the sender, exactly once.
+   - `others`: all participating peers except the sender, including the host, unless
+     it is the sender.
+5. Clients relay remote targets via the host. Only an `object_call` with a valid
+   object/method registration may be routed. The host checks the released
+   target policy; mere client statements are no relay permission. The sender ID is
+   obtained exclusively from the connection and only passed on by the host.
+   Clients cannot extend method/target releases set by the server through
+   their local `set_rpc_target`.
+6. On receipt, only the separate object path allows automatic execution;
+   low-level RPCs stay in the queue for manual handlers. A packet is never
+   executed automatically AND then delivered again manually.
+7. Plan local execution and remote forwarding for `all`/`others` together,
+   so that the host does not deliver to the sender again. Provide defined protection against
+   re-executing the same forwarded object call.
 
-**Regressionen**
+**Regressions**
 
-Host plus zwei Clients; alle vier Ziele jeweils von Host und Client aufrufen;
-pro Ziel exakte Ausführungsanzahl und Absender prüfen. Unregistriertes Objekt,
-unbekannte Methode, ungültiges Ziel, fehlende Freigabe, kollidierende Registrierung,
-Owner-Disconnect, Unregister, geerbte RPC-Methode, Interface-Aufruf und
-Seiteneffekt in einem Argument. Negative Compilerfälle für nicht serialisierbare
-Parameter und nicht unterstützte Rückgabewerte. Native↔WASM mit String-/Listen-
-Argumenten. Test beweist insbesondere: kein erneutes Senden beim Dispatch-Thunks.
+Host plus two clients; call all four targets from host and client respectively;
+check the exact execution count and sender per target. Unregistered object,
+unknown method, invalid target, missing release, colliding registration,
+owner disconnect, unregister, inherited RPC method, interface call and
+a side effect in an argument. Negative compiler cases for non-serialisable
+parameters and unsupported return values. Native↔WASM with string/list
+arguments. The test proves in particular: no re-sending in the dispatch thunk.
 
-## 9. Geplante Testdateien und Integrationsreihenfolge
+## 9. Planned test files and integration order
 
-Neue gezielte Runtime-Suite, z.B. `tests/runtime/test_mirror_rpc_protocol.cpp`,
-mit privatem testbarem Parser-/Queue-Modul; produktive `.cpp`-Dateien nicht als
-Dauerlösung in Tests inkludieren. Zusätzlich:
+A new targeted runtime suite, e.g. `tests/runtime/test_mirror_rpc_protocol.cpp`,
+with a private testable parser/queue module; do not include productive `.cpp` files
+in tests as a permanent solution. Additionally:
 
-| Testdatei (neu) | Prüft |
+| Test file (new) | Checks |
 | --- | --- |
-| `tests/test_mirror_rpc_tcp.aiml` | i32 und typisierte TCP-RPCs |
-| `tests/test_mirror_rpc_no_relay.aiml` | Isolation zweier Clients, explizite Targets |
-| `tests/test_mirror_rpc_queue_order.aiml` | stabile Entnahme, mehr als 64 Pushes |
-| `tests/test_mirror_rpc_request_id.aiml` | Timeout-Straggler, ID-/Peer-Korrelation |
-| `tests/test_mirror_rpc_auto_dispatch.aiml` | normale Methodenaufrufe und Zielmatrix |
-| `tests/test_mirror_rpc_decode_failure.aiml` | Ziel bleibt erhalten, Speicherfreigabe |
-| `tests/wasm/test_mirror_rpc_v3_client.aiml` | Wire-/ABI-Parität zum nativen Server |
+| `tests/test_mirror_rpc_tcp.aiml` | i32 and typed TCP RPCs |
+| `tests/test_mirror_rpc_no_relay.aiml` | isolation of two clients, explicit targets |
+| `tests/test_mirror_rpc_queue_order.aiml` | stable removal, more than 64 pushes |
+| `tests/test_mirror_rpc_request_id.aiml` | timeout stragglers, ID/peer correlation |
+| `tests/test_mirror_rpc_auto_dispatch.aiml` | normal method calls and the target matrix |
+| `tests/test_mirror_rpc_decode_failure.aiml` | target is preserved, memory is freed |
+| `tests/wasm/test_mirror_rpc_v3_client.aiml` | wire/ABI parity with the native server |
 
-Bestehende Tests weiterführen: `test_mirror_rpc_int_compat`,
+Keep running the existing tests: `test_mirror_rpc_int_compat`,
 `test_mirror_rpc_model_ws`, `test_mirror_rpc_model_map`, `test_mirror_rpc_peer_id`,
 `test_mirror_rpc_dispatcher`, `test_mirror_rpc_handler_builtin`,
-`test_rpc_typed_lists_inherited`, `test_iface_list_ptr_rpc_binary` und die
-bestehenden Single-/Multifile-WASM-RPC-Tests. TCP-/WS-Tests mit isolierten Ports
-oder dynamischer Portvergabe ausführen.
+`test_rpc_typed_lists_inherited`, `test_iface_list_ptr_rpc_binary` and the
+existing single/multi-file WASM RPC tests. Run TCP/WS tests with isolated ports
+or dynamic port assignment.
 
-Empfohlene Commit-Reihenfolge:
+Recommended commit order:
 
-1. Build/ABI und längenbewusster Parser/Decoder mit Sanitizer-Regressionen.
-2. TCP-Buffering und korrektes v2-Framing.
-3. Relay entfernen, gezielte Zustellung testen und Spec korrigieren.
-4. Queue-Entnahme vereinheitlichen und stilles Löschen in `take_rpc` entfernen.
-5. V3-Header/Capabilities, Request-IDs, Reply-API und Handler-Migration gemeinsam.
-6. RPC-Wrapper/Thunks, Registrierung/Ownership und Target-Routing gemeinsam.
-7. Native/WASM-Integration, Dokumentation und vollständige relevante Testsuite.
+1. Build/ABI and the length-aware parser/decoder with sanitizer regressions.
+2. TCP buffering and correct v2 framing.
+3. Remove the relay, test targeted delivery and correct the spec.
+4. Unify queue removal and remove the silent deletion in `take_rpc`.
+5. V3 header/capabilities, request IDs, reply API and handler migration together.
+6. RPC wrappers/thunks, registration/ownership and target routing together.
+7. Native/WASM integration, documentation and the complete relevant test suite.
 
-Jeder Commit muss kompilieren und seine gezielten Regressionen bestehen.
-Automatisches Routing darf nicht als bloße Implementierung des bisherigen
-`set_rpc_target`-Stubs abgenommen werden: Compiler-Wrapper, Objektidentität,
-Empfangs-Dispatch und Autorisierung gehören zusammen.
+Every commit must compile and pass its targeted regressions.
+Automatic routing must not be accepted as a mere implementation of the previous
+`set_rpc_target` stub: compiler wrappers, object identity,
+receive dispatch and authorisation belong together.
 
-## 10. Fertig-Kriterien
+## 10. Done criteria
 
-- Alle sechs Review-Befunde besitzen einen zuvor fehlschlagenden Regressionstest.
-- Malformed-Packet-Suite unter ASan/UBSan ohne Speicherfehler; Decode-Fehlerpfade
-  ohne Leaks und ohne Mutation des bestehenden Zielobjekts.
-- TCP und WebSocket liefern dieselbe RPC-Semantik; native/WASM-Interop getestet.
-- Keine private Client-Payload wird implizit weitergereicht.
-- Alte/fremde Antworten können keinen neuen Request erfüllen.
-- Push-Reihenfolge bleibt erhalten, Queue-Überlast ist sichtbar und begrenzt.
-- `rpc:` und alle dokumentierten Targets wirken bei normalen Methodenaufrufen.
-- `spec/44_5_mirror.md`, Runtime-Header und Compiler-Builtins stimmen überein;
-  v2/v3-Migration und Grenzen sind explizit dokumentiert.
+- All six review findings have a previously failing regression test.
+- The malformed packet suite under ASan/UBSan without memory errors; decode error paths
+  without leaks and without mutating the existing target object.
+- TCP and WebSocket deliver the same RPC semantics; native/WASM interop tested.
+- No private client payload is forwarded implicitly.
+- Old/foreign responses cannot fulfil a new request.
+- Push order is preserved, queue overload is visible and bounded.
+- `rpc:` and all documented targets take effect on normal method calls.
+- `spec/44_5_mirror.md`, runtime headers and compiler builtins agree;
+  v2/v3 migration and limits are documented explicitly.
 
-## 11. Entscheidung vom 2026-10-03: DELTA, Replika-Anfangszustand und WS9-Test
+## 11. Decision of 2026-10-03: DELTA, replica initial state and the WS9 test
 
-Status: verbindliche Präzisierung des Plans; die nachstehenden Runtime-/Test-
-Korrekturen sind damit noch nicht implementiert. Die Implementierung ist seit
-Erstellung dieses Plans weiterentwickelt worden; dieser Abschnitt bezieht sich
-auf den am 2026-10-03 geprüften Stand.
+Status: binding refinement of the plan; the runtime/test
+corrections below are not yet implemented by this. The implementation has
+evolved since this plan was written; this section refers
+to the state checked on 2026-10-03.
 
-### 11.1 Auch DELTA wird strikt und transaktional
+### 11.1 DELTA also becomes strict and transactional
 
-**Entscheidung: keine implizite Best-effort-Ausnahme für DELTA.** Empfangene
-Snapshots werden vollständig validiert und entweder vollständig übernommen oder
-vollständig verworfen. Bei einem Fehler bleiben der letzte gültige Zustand bzw.
-der gültige lokale Default-Zustand unverändert. Schemaabweichungen müssen sichtbar
-werden; ein Verbindungsabbruch ist bei einem Schemafehler nicht zwingend, ein
-Erfolgs-/Ready-Signal ist jedoch verboten.
+**Decision: no implicit best-effort exception for DELTA.** Received
+snapshots are validated completely and either taken over completely or
+discarded completely. On an error, the last valid state or
+the valid local default state stays unchanged. Schema deviations must become
+visible; a disconnect is not mandatory on a schema error, but a
+success/ready signal is forbidden.
 
-Begründung anhand der tatsächlichen Fixtures:
+Rationale based on the actual fixtures:
 
 - `tests/ws_context_card_a.aiml`: `SharedCard = {name:string, cost:i32}`.
-- `tests/ws_context_card_b.aiml`: zusätzlich `rarity:i32`.
-- `tests/ws_context_shared_view.aiml`: enthält `list<SharedCard>`.
-- `test_mirror_ws_shared_module_context_mismatch` prüft also wirklich verschiedene
-  verschachtelte Schemata, nicht lediglich verschiedene lokale Compiler-Typ-IDs.
-  Er verwendet nur ein Kartenelement und prüft die bereits gelesenen Präfixfelder.
+- `tests/ws_context_card_b.aiml`: additionally `rarity:i32`.
+- `tests/ws_context_shared_view.aiml`: contains `list<SharedCard>`.
+- `test_mirror_ws_shared_module_context_mismatch` therefore really tests different
+  nested schemas, not merely different local compiler type IDs.
+  It uses only one card element and checks the prefix fields already read.
 
-Das positionsbasierte Wireformat enthält keine Feld-IDs oder Längengrenze pro
-Struct-Element. Schon bei zwei Karten kann der Empfänger das fehlende `rarity`
-aus den Bytes des nächsten Elements lesen. Ein begrenzter Bufferzugriff macht
-solche Daten weder kompatibel noch semantisch richtig. Der bestehende grüne Test
-ist deshalb keine Grundlage für einen Versionskompatibilitätsvertrag.
+The position-based wire format contains no field IDs or length boundary per
+struct element. With just two cards, the receiver can read the missing `rarity`
+from the bytes of the next element. Bounded buffer access does not make
+such data compatible or semantically right. The existing green test
+is therefore no foundation for a version compatibility contract.
 
-**Konkrete Umsetzung:**
+**Concrete implementation:**
 
-1. `src/sys/mirror_runtime.cpp`, `process_packet`, DELTA-Zweig um Zeile 590:
-   `aiml_ser_decode_bounded` und vorheriges Free/Memset durch transaktionales
-   Decodieren ersetzen. `has_decoded`, Shadow und eventuelle Ready-Meldung nur
-   nach erfolgreichem Commit aktualisieren.
-2. `aiml_mirror_session_register_id_typed`, Pending-Blob-Zweig um Zeile 1287:
-   denselben zentralen Apply-Helper verwenden. Rückgabewert prüfen, Fehler nicht
-   als erfolgreichen Anfangssnapshot markieren. Pending-Blob in jedem Fall
-   geordnet freigeben, Fehler diagnostizieren.
-3. Auch die Schemaidentität prüfen: bloßes vollständiges Konsumieren der Bytes
-   erkennt z.B. gleich große, unterschiedlich interpretierte Felder nicht.
-   Für DELTA einen strukturellen Wire-Schema-Fingerprint übertragen/abgleichen,
-   der unabhängig von nativen Offsets, Pointerbreite und lokalen Registry-IDs
-   ist. Gleiche Wire-Schemata aus verschiedenen Importkontexten müssen passen.
-   DELTA-Formatänderung ausdrücklich versionieren bzw. aushandeln; vorhandene
-   ungetaggte Frames niemals fälschlich als schemaverifiziert bezeichnen.
-4. Den bisherigen Mismatch-Erfolgstest in einen negativen Test überführen:
-   unterschiedliches Schema wird abgelehnt, Default-/Vorherzustand bleibt
-   unverändert, und ein beobachtbares Decode-/Schemafehler-Ergebnis entsteht.
-   Beide Richtungen und mindestens zwei verschachtelte Listenelemente prüfen.
-5. Separaten positiven Importkontext-Test mit identischem Wire-Schema, aber
-   unterschiedlichen Importsets/Compiler-Kontexten erhalten.
+1. `src/sys/mirror_runtime.cpp`, `process_packet`, DELTA branch around line 590:
+   replace `aiml_ser_decode_bounded` and the preceding free/memset with transactional
+   decoding. Update `has_decoded`, the shadow and any ready notification only
+   after a successful commit.
+2. `aiml_mirror_session_register_id_typed`, pending blob branch around line 1287:
+   use the same central apply helper. Check the return value, do not mark errors
+   as a successful initial snapshot. Free the pending blob in an orderly way
+   in every case, diagnose errors.
+3. Also check the schema identity: merely consuming the bytes completely does not
+   detect e.g. equally sized, differently interpreted fields.
+   For DELTA, transmit/compare a structural wire schema fingerprint
+   that is independent of native offsets, pointer width and local registry IDs.
+   Identical wire schemas from different import contexts must match.
+   Version or negotiate the DELTA format change explicitly; never wrongly call existing
+   untagged frames schema-verified.
+4. Turn the previous mismatch success test into a negative test:
+   a different schema is rejected, the default/previous state stays
+   unchanged, and an observable decode/schema error result arises.
+   Check both directions and at least two nested list elements.
+5. Keep a separate positive import context test with an identical wire schema, but
+   different import sets/compiler contexts.
 
-Soll später Schema-Evolution unterstützt werden, braucht sie ein separates,
-versioniertes Format mit eindeutigen Feldgrenzen/IDs oder explizite Migrationen.
-Dabei bleibt das Decodieren strikt: erst Quellschema validieren, dann definiert
-migrieren. Ein stilles Best-effort-Fallback wird nicht eingeführt.
+If schema evolution is to be supported later, it needs a separate,
+versioned format with unambiguous field boundaries/IDs or explicit migrations.
+Decoding stays strict in the process: first validate the source schema, then
+migrate in a defined way. A silent best-effort fallback is not introduced.
 
-### 11.2 Ungültiger Replika-Anfangszustand bleibt ein eigener Fehler
+### 11.2 An invalid replica initial state remains an error of its own
 
-**Entscheidung: gültige lokale Initialisierung ist Voraussetzung der Replikation;
-`release_old = 0` und Fehler-Toleranz sind keine dauerhafte Reparatur.**
+**Decision: valid local initialisation is a precondition for replication;
+`release_old = 0` and error tolerance are not a permanent repair.**
 
-Gesicherte Befunde im aktuellen Runtime-Code:
+Confirmed findings in the current runtime code:
 
-- `process_packet` setzt `has_decoded = true`, auch wenn der Decoder scheitert.
-- `register_id_typed` ignoriert beim Pending-Blob den Decode-Rückgabewert.
-- Beim ersten Decode wird direkt in ein bereits vorhandenes Modell geschrieben;
-  der bisherige Default-/Heap-Inhalt hat keinen einheitlichen Ersetzungsvertrag.
-- `session.close` und `PKT_UNREGISTER` geben teilweise Modellfelder frei,
-  während Compiler-Scope-Cleanup ebenfalls Ownership besitzt. Diese Zuständigkeit
-  muss vor einer pauschalen Änderung zu `release_old = 1` geklärt werden.
+- `process_packet` sets `has_decoded = true` even when the decoder fails.
+- `register_id_typed` ignores the decode return value for the pending blob.
+- On the first decode, data is written directly into an already existing model;
+  the previous default/heap content has no uniform replacement contract.
+- `session.close` and `PKT_UNREGISTER` partly free model fields,
+  while the compiler scope clean-up also holds ownership. This responsibility
+  must be clarified before a blanket change to `release_old = 1`.
 
-Die konkrete Ursache des gemeldeten ungültigen Zustands vor dem ersten Decode
-ist durch diese Analyse noch nicht isoliert. Nicht als behoben deklarieren.
+The concrete cause of the reported invalid state before the first decode
+has not yet been isolated by this analysis. Do not declare it fixed.
 
-**Umsetzung und Abnahme:**
+**Implementation and acceptance:**
 
-1. Minimalreproduktion ohne Netzwerk: dasselbe Replika-Modell deklarieren,
-   String-/Listen-/Map-Defaults lesen, serialisieren und verlassen. Lokal,
-   importiert-global und bei aktivierter Refcount-Repräsentation testen.
-2. C++-Anker: `Compiler::initClassContainerMembers` in
-   `src/core/ast_compiler.cpp:131`, globale Initialisierung in derselben Datei;
-   `src/core/ast_compiler_stmt.cpp` um Zeile 1711 und ScopeDrop-Registrierung;
-   `builtin_registry.cpp`, `MIRROR_FIND_OBJ_PTR` und `register_id`.
-   Initialisierung, richtige Objektadresse und erzeugte Serializer-Deskriptoren
-   gegeneinander prüfen. Keine pauschale Nullinitialisierung lebender Container.
-3. Ziel-Ownership festlegen: Mirror registriert ein vom AIML-Aufrufer besessenes
-   Objekt als Borrow. Erfolgreiches Apply ersetzt dessen Felder korrekt; Close
-   und Unregister lösen die Registrierung und Runtime-Buffer, zerstören aber
-   nicht heimlich das weiterhin lebende AIML-Modell. Den Compiler-Scope-Drop
-   und den bestehenden Runtime-Free-Pfad darauf abstimmen.
-4. Bereitschaft getrennt von gültiger Initialisierung behandeln:
-   `WaitingForSnapshot` ist ein gültiges lokales Objekt; `Ready` bedeutet einen
-   erfolgreich übernommenen Snapshot. Ein fehlerhafter Snapshot darf weder
-   Bereitschaft noch erfolgreiche Decode-Historie erzeugen.
-5. Regressionen für DELTA vor/nach `register_id`, erstes DELTA ungültig, gültig →
-   ungültig → gültig, Close vor dem ersten DELTA und Modellzugriff nach Close.
-   ASan/UBSan plus Leak-/Double-Free-Prüfung; bestehende Defaults müssen bei
-   abgewiesenem Snapshot erhalten bleiben.
+1. A minimal reproduction without a network: declare the same replica model,
+   read string/list/map defaults, serialise and leave. Test locally,
+   imported-global and with the refcount representation enabled.
+2. C++ anchors: `Compiler::initClassContainerMembers` in
+   `src/core/ast_compiler.cpp:131`, global initialisation in the same file;
+   `src/core/ast_compiler_stmt.cpp` around line 1711 and the ScopeDrop registration;
+   `builtin_registry.cpp`, `MIRROR_FIND_OBJ_PTR` and `register_id`.
+   Check initialisation, the correct object address and the generated serializer descriptors
+   against each other. No blanket zero-initialisation of live containers.
+3. Define target ownership: mirror registers an object owned by the AIML caller
+   as a borrow. A successful apply replaces its fields correctly; close
+   and unregister release the registration and runtime buffers, but do
+   not secretly destroy the still living AIML model. Align the compiler scope drop
+   and the existing runtime free path with this.
+4. Treat readiness separately from valid initialisation:
+   `WaitingForSnapshot` is a valid local object; `Ready` means a
+   successfully taken-over snapshot. A faulty snapshot must produce neither
+   readiness nor a successful decode history.
+5. Regressions for DELTA before/after `register_id`, an invalid first DELTA, valid →
+   invalid → valid, close before the first DELTA and model access after close.
+   ASan/UBSan plus leak/double free checks; existing defaults must be preserved on a
+   rejected snapshot.
 
-### 11.3 Timing-Abhängigkeit im WS9-Test entfernen
+### 11.3 Remove the timing dependency in the WS9 test
 
-Prüfung am 2026-10-03: `test_mirror_ws_9rooms_imports.aiml` mit dem vorhandenen
-Binary 16-mal seriell ausgeführt, 16/16 erfolgreich. Logs liegen lokal unter
-`/tmp/aiml-ws9-review/run-*.log`. Das reproduziert weder die berichtete Fehlerrate
-noch widerlegt es die Race-Stelle.
+Check on 2026-10-03: `test_mirror_ws_9rooms_imports.aiml` run serially 16 times with the existing
+binary, 16/16 successful. Logs are located locally under
+`/tmp/aiml-ws9-review/run-*.log`. This neither reproduces the reported failure rate
+nor refutes the race location.
 
-**Konkrete Race-Stelle:** Im Host-Zweig des Tests werden nach
-`object_registered` lediglich 16 ms gewartet und zweimal `sess.update` aufgerufen.
-Danach setzt der Test `got_ci = 1` und kopiert `player_name` in den View.
-REGISTER bestätigt jedoch weder den Empfang noch das erfolgreiche Anwenden des
-folgenden DELTA. Kommt dieses später, wird der View mit dem alten Namen gefüllt
-und anschließend nicht mehr berichtigt.
+**Concrete race location:** in the host branch of the test, after
+`object_registered` it merely waits 16 ms and calls `sess.update` twice.
+Afterwards the test sets `got_ci = 1` and copies `player_name` into the view.
+REGISTER, however, confirms neither the receipt nor the successful application of the
+following DELTA. If that comes later, the view is filled with the old name
+and not corrected afterwards.
 
-**Entscheidung: Zustands-/Acknowledgement-Synchronisierung statt längerer Sleeps.**
+**Decision: state/acknowledgement synchronisation instead of longer sleeps.**
 
-1. Nach REGISTER nur die Replika binden. In der Update-Schleife bis zur Deadline
-   auf erfolgreich angewandtes ClientInfo warten; im konkreten Test zusätzlich
-   `player_name == "Nikolai"`, `deckset_id == "deckset-alpha"` und
-   `player_id == "token-123"` prüfen. Erst dann View füllen und `got_ci` setzen.
-2. Generisch ist ein Ready-/Snapshot-Zähler aus einem erfolgreichen Apply besser
-   als ein Feldwert als Signal. Ein leerer Name kann im echten Programm legitim
-   sein; die oben genannten Werte sind ausschließlich Test-Prädikate.
-3. Host bis zur Client-Bestätigung des vollständig geprüften View weiterpumpen.
-   Client bestätigt über explizites RPC; Host validiert seine eigenen
-   ClientInfo-Felder vor der Bestätigung. Die derzeitigen 40 festen
-   Abschluss-Updates ersetzen keine Empfangsbestätigung.
-4. Keine unsynchronisierten Reads von Host-Globals durch den Client-Thread.
-   Host prüft Serverfelder selbst; dessen Ergebnis nach Thread-Join auswerten
-   bzw. über einen synchronisierten Kanal übertragen. Objekt-Lifetime beim
-   Session-Close darf nicht mit den Assertions konkurrieren.
-5. Timeouts in jeder Phase müssen den tatsächlich wartenden Zustand benennen
-   und als Fehler enden. Sleep dient höchstens der Poll-Taktung, nicht dem
-   Nachweis der Bereitschaft.
-6. Zusätzlich zum Wiederholungslauf DELTA gezielt nach REGISTER verzögern,
-   z.B. über einen Test-Transport/Proxy. Der Test muss auch mit deutlich mehr
-   als 16 ms Verzögerung bestehen. Danach 50–100 serielle Läufe; ein zufällig
-   grüner Lauf allein ist keine Abnahme. Fester Port verlangt isolierte Ausführung.
+1. After REGISTER, only bind the replica. In the update loop, wait until the deadline
+   for successfully applied ClientInfo; in the concrete test additionally check
+   `player_name == "Nikolai"`, `deckset_id == "deckset-alpha"` and
+   `player_id == "token-123"`. Only then fill the view and set `got_ci`.
+2. Generically, a ready/snapshot counter from a successful apply is better
+   than a field value as a signal. An empty name can be legitimate in a real program;
+   the values above are exclusively test predicates.
+3. Keep pumping the host until the client confirms the completely checked view.
+   The client confirms via an explicit RPC; the host validates its own
+   ClientInfo fields before the confirmation. The current 40 fixed
+   closing updates do not replace a receipt confirmation.
+4. No unsynchronised reads of host globals by the client thread.
+   The host checks server fields itself; evaluate its result after the thread join
+   or transmit it via a synchronised channel. Object lifetime on
+   session close must not race with the assertions.
+5. Timeouts in every phase must name the state actually being waited for
+   and end as an error. Sleep serves at most as poll pacing, not as
+   proof of readiness.
+6. In addition to the repeated run, deliberately delay DELTA after REGISTER,
+   e.g. via a test transport/proxy. The test must also pass with considerably more
+   than 16 ms delay. Then 50–100 serial runs; a randomly
+   green run alone is no acceptance. A fixed port requires isolated execution.
 
-Konkrete C++-Änderungen, API-Signaturen und Code-Snippets zu Abschnitt 11:
-[DELTA-/Replika-/WS9-Implementierungsplan](delta_replica_ws9_implementation_plan_2026-10-03.md).
+Concrete C++ changes, API signatures and code snippets for section 11:
+[DELTA/replica/WS9 implementation plan](delta_replica_ws9_implementation_plan_2026-10-03.md).
