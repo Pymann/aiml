@@ -1,7 +1,7 @@
-# WASM Mirror-RPC Tests — Orchestration & Pair-Run
+# WASM mirror RPC tests — orchestration & pair run
 
-**Status**: Backlog (2026-06-07)
-**Scope**: Test-Infrastruktur (run_wasm_tests.sh, run_all_tests.sh, tools/)
+**Status**: backlog (2026-06-07)
+**Scope**: test infrastructure (run_wasm_tests.sh, run_all_tests.sh, tools/)
 **Failing tests**:
 - `tests/wasm/test_mirror_rpc_client.aiml`
 - `tests/wasm/test_mirror_rpc_client_multifile.aiml`
@@ -13,48 +13,48 @@
 FAIL: missing nids (item=-1 detail=-1)
 ```
 
-Beide Tests laufen als clean exit-1 wenn man sie via `run_all_tests.sh`
-ausführt (native AIML-Interpreter, kein Server-Companion).
+Both tests end as a clean exit 1 when run via `run_all_tests.sh`
+(native AIML interpreter, no server companion).
 
-## Root Cause
+## Root cause
 
-Die `tests/wasm/test_mirror_rpc_client*.aiml` sind **WASM-Clients**, die
-einen **nativen Server-Companion** auf `ws://localhost:18888` voraussetzen
-(`test_mirror_rpc_server.aiml` bzw. `..._server_multifile.aiml`). Der
-Server registriert ItemImpl + Detail-Objekte, der Client connected
-und verifiziert sync + send_rpc roundtrip mit nested `list<string>`.
+The `tests/wasm/test_mirror_rpc_client*.aiml` are **WASM clients** that
+require a **native server companion** on `ws://localhost:18888`
+(`test_mirror_rpc_server.aiml` or `..._server_multifile.aiml`). The
+server registers ItemImpl + detail objects, the client connects
+and verifies sync + a send_rpc round trip with a nested `list<string>`.
 
-Das ist eine **echte Cross-Runtime-Regression** (native-host wire-codec ↔
-wasm-client wire-codec) — genau der Pfad den DataCreatures' WS-RPC-Bridge
-benutzt.
+That is a **real cross-runtime regression** (native host wire codec ↔
+wasm client wire codec) — exactly the path DataCreatures' WS RPC bridge
+uses.
 
-**Problem**: Es gibt aktuell keinen Runner, der das Paar orchestriert:
+**Problem**: there is currently no runner that orchestrates the pair:
 
-1. `tests/wasm_tests.list` enthält nur pure-compute-Tests
-   ("no GL/network/filesystem"). Mirror-RPC ist explizit ausgeschlossen.
-2. `run_all_tests.sh` findet die Files via `find tests/` und führt sie
-   einzeln durch den nativen Interpreter aus. Client ohne Server → FAIL.
-3. Die Server-Counterparts (`*_server.aiml`) **passen** in `run_all_tests.sh`
-   weil sie nur stumm `time.sleep_ms` × 800 = 8s lauschen und dann mit
-   exit 0 zurückkehren — **false-positive PASS**, sagt nichts über das
-   Wire-Protokoll aus.
+1. `tests/wasm_tests.list` only contains pure-compute tests
+   ("no GL/network/filesystem"). Mirror RPC is explicitly excluded.
+2. `run_all_tests.sh` finds the files via `find tests/` and runs them
+   one by one through the native interpreter. Client without server → FAIL.
+3. The server counterparts (`*_server.aiml`) **pass** in `run_all_tests.sh`
+   because they only listen silently for `time.sleep_ms` × 800 = 8s and then
+   return with exit 0 — a **false-positive PASS** that says nothing about the
+   wire protocol.
 
-## Vorschlag
+## Proposal
 
-### Option A — Orchestrator-Runner (empfohlen)
+### Option A — orchestrator runner (recommended)
 
-Eigener Pair-Runner `tools/run_wasm_pair_test.sh`:
+A dedicated pair runner `tools/run_wasm_pair_test.sh`:
 
 ```bash
 # tools/run_wasm_pair_test.sh <server.aiml> <client.aiml>
-# 1. Compile <client.aiml> nach wasm via tools/run_wasm_test.sh (nicht run, nur build)
-# 2. Spawn <server.aiml> nativ im Hintergrund (port 18888)
-# 3. Wait-for-port loop (max 5s) bis Server listened
-# 4. Run wasm <client> via node, capture exit
-# 5. Kill server, return client exit
+# 1. Compile <client.aiml> to wasm via tools/run_wasm_test.sh (build only, no run)
+# 2. Spawn <server.aiml> natively in the background (port 18888)
+# 3. Wait-for-port loop (max 5s) until the server listens
+# 4. Run the wasm <client> via node, capture the exit
+# 5. Kill the server, return the client's exit
 ```
 
-In `tests/wasm_tests.list` eine neue Section:
+A new section in `tests/wasm_tests.list`:
 
 ```
 # Paired tests: server runs native, client runs wasm.
@@ -63,11 +63,11 @@ pair tests/wasm/test_mirror_rpc_server.aiml          tests/wasm/test_mirror_rpc_
 pair tests/wasm/test_mirror_rpc_server_multifile.aiml tests/wasm/test_mirror_rpc_client_multifile.aiml
 ```
 
-`run_wasm_tests.sh` parsed `pair`-Zeilen und ruft `run_wasm_pair_test.sh`.
+`run_wasm_tests.sh` parses `pair` lines and calls `run_wasm_pair_test.sh`.
 
-### run_all_tests.sh — Skip-Tag für Pair-Tests
+### run_all_tests.sh — skip tag for pair tests
 
-Sowohl Server als auch Client bekommen `# Requires: wasm-pair`. Skip-Logik
+Both server and client get `# Requires: wasm-pair`. Skip logic
 in `run_all_tests.sh`:
 
 ```bash
@@ -77,42 +77,42 @@ if grep -q "# Requires: wasm-pair" "$TEST"; then
 fi
 ```
 
-Damit:
-- `run_all_tests.sh` zeigt die Tests als saubere SKIPs (statt false-positive
-  PASS beim Server + echtes FAIL beim Client).
-- `run_wasm_tests.sh` orchestriert den Pair-Run und fängt echte Regressions.
+With that:
+- `run_all_tests.sh` shows the tests as clean SKIPs (instead of a false-positive
+  PASS for the server + a real FAIL for the client).
+- `run_wasm_tests.sh` orchestrates the pair run and catches real regressions.
 
-### Option B — Spawn-im-Prozess (Workaround, nicht empfohlen)
+### Option B — spawn in-process (workaround, not recommended)
 
-Server + Client in einer AIML-Datei mit `spawn` für den Server-Thread.
-Vorteile: kein neuer Runner, ein File. Nachteile: wir verlieren genau
-das was die Tests testen sollen — den nativen↔wasm Wire-Codec mismatch.
-Identische Codepfade auf beiden Seiten würden den Bug-Vektor maskieren.
+Server + client in one AIML file with `spawn` for the server thread.
+Advantages: no new runner, one file. Disadvantages: we lose exactly
+what the tests are meant to test — the native↔wasm wire codec mismatch.
+Identical code paths on both sides would mask the bug vector.
 
-## Aufwand-Schätzung
+## Effort estimate
 
-| Teil | Größenordnung |
+| Part | Order of magnitude |
 |---|---|
-| `run_wasm_pair_test.sh` skript | 1h |
-| `wasm_tests.list` Parser-Update | 30min |
-| `run_all_tests.sh` Skip-Tag-Handler | 15min |
-| Tag-Comments in 4 Test-Files | 5min |
-| Verify (server.exit_code; client.exit_code; cleanup-leak-check) | 30min |
+| `run_wasm_pair_test.sh` script | 1h |
+| `wasm_tests.list` parser update | 30min |
+| `run_all_tests.sh` skip tag handler | 15min |
+| Tag comments in 4 test files | 5min |
+| Verify (server.exit_code; client.exit_code; cleanup leak check) | 30min |
 
-→ **< 3h**, eigene Session.
+→ **< 3h**, a session of its own.
 
-## Verwandte Issues
+## Related issues
 
-- Pre-existing `test_aiondb_store_heap_reopen_2_read.aiml` "missing
-  write-pair" hatte ähnliche Struktur (read ohne write), gefixt 2026-06-07
-  durch Schreiben des fehlenden Counterparts.
-- `test_iface_list_return_after_mirror.aiml` Timing-Race (gefixt
-  2026-06-07) — gleicher Mirror-RPC-Pfad, aber in-process via `spawn`
-  statt cross-runtime.
+- The pre-existing `test_aiondb_store_heap_reopen_2_read.aiml` "missing
+  write pair" had a similar structure (read without write), fixed 2026-06-07
+  by writing the missing counterpart.
+- `test_iface_list_return_after_mirror.aiml` timing race (fixed
+  2026-06-07) — the same mirror RPC path, but in-process via `spawn`
+  instead of cross-runtime.
 
-## Out-of-Scope
+## Out of scope
 
-- Mirror-RPC selbst funktionsmäßig prüfen — der WIRE-CODEC-Bug aus
-  DataCreatures wurde 2026-06-05 gefixt (`wasm_vtable_struct_return`).
-  Diese Tests sind Regression-Repros, kein offener Bug.
-- run_all_tests.sh komplett umbauen — nur das eine Skip-Pattern ergänzen.
+- Checking mirror RPC itself functionally — the WIRE CODEC bug from
+  DataCreatures was fixed 2026-06-05 (`wasm_vtable_struct_return`).
+  These tests are regression repros, not an open bug.
+- Rebuilding run_all_tests.sh completely — only add the one skip pattern.

@@ -1,122 +1,122 @@
-# AIML Spec vs Implementierung
+# AIML spec vs implementation
 
-## Kurzfazit
+## Short conclusion
 
-Die AIML-Implementierung deckt einen brauchbaren Kern der Sprache ab, ist gegen die aktuelle Spec aber nicht vollstaendig. Der groesste Punkt ist nicht nur fehlende Implementierung, sondern auch, dass die Spec selbst laut [SPEC_REVIEW.md](../../spec/SPEC_REVIEW.md) noch 71 offene Inkonsistenzen, Luecken oder Widersprueche hat.
+The AIML implementation covers a usable core of the language, but is not complete against the current spec. The biggest point is not only missing implementation, but also that according to [SPEC_REVIEW.md](../../spec/SPEC_REVIEW.md) the spec itself still has 71 open inconsistencies, gaps or contradictions.
 
-Deshalb muss die Luecke in zwei Ebenen betrachtet werden:
+The gap therefore has to be looked at on two levels:
 
-- die Spec ist an mehreren Stellen noch nicht normiert
-- die Implementierung deckt einige spezifizierte Komfort- und Striktheitsregeln nur teilweise oder gar nicht ab
+- the spec is not yet standardised in several places
+- the implementation covers some specified convenience and strictness rules only partly or not at all
 
-## Was bereits als belastbarer Kern wirkt
+## What already looks like a reliable core
 
-- Grundsyntax fuer `def`, `call`, `decl`, `set`, Kontrollfluss und Basistypen
-- Modelle als Datenlayout und Serialisierungsbasis
-- Mirror-Grundpfad mit registrierten Objekten, Deltas und RPC-Queues
-- Persistenz- und Runtime-Builtins in einem produktiv nutzbaren, aber uneinheitlichen Zustand
+- Basic syntax for `def`, `call`, `decl`, `set`, control flow and basic types
+- Models as the data layout and the basis for serialisation
+- The basic mirror path with registered objects, deltas and RPC queues
+- Persistence and runtime builtins in a productively usable but inconsistent state
 
-## Groesste Luecken gegen die Spec
+## Biggest gaps against the spec
 
-### 1. Funktionsaufrufe und Aufrufsemantik
+### 1. Function calls and call semantics
 
-Die Spec in [07_functions.md](../../spec/07_functions.md) verspricht mehr als der aktuelle Compiler belastbar absichert:
+The spec in [07_functions.md](../../spec/07_functions.md) promises more than the current compiler reliably secures:
 
-- Default-Argumente und benannte Trailing-Overrides sind spezifiziert
-- `map<string:any>` als Eingabe fuer Funktionssignaturen mit Validierung und Auto-Unboxing ist spezifiziert
-- klare `TypeMismatchException`-Semantik ist spezifiziert
+- default arguments and named trailing overrides are specified
+- `map<string:any>` as input for function signatures with validation and auto-unboxing is specified
+- clear `TypeMismatchException` semantics are specified
 
-Der aktuelle Call-Pfad ist hier nach bisheriger Analyse nur teilweise strikt:
+According to the analysis so far, the current call path is only partly strict here:
 
-- falsche Parametertypen fuehren nicht allgemein zu einem sauberen Frontend-Fehler
-- Casts und Typanpassungen passieren teils implizit
-- der Unterschied zwischen User-Funktionen und Builtin-Sonderfaellen ist nicht sauber normiert
+- wrong parameter types do not generally lead to a clean frontend error
+- casts and type adjustments partly happen implicitly
+- the difference between user functions and builtin special cases is not cleanly standardised
 
-Betroffene Stellen:
+Affected places:
 
 - [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp)
 - [call_dispatcher.cpp](../../src/core/call_dispatcher.cpp)
 - [ir_generator.cpp](../../src/core/ir_generator.cpp)
 
-### 2. Modelle, strukturelle Typisierung und tiefe Member-Zugriffe
+### 2. Models, structural typing and deep member access
 
-Die Spec in [15_models.md](../../spec/15_models.md) ist deutlich reicher als der heute robuste Alltagsumfang:
+The spec in [15_models.md](../../spec/15_models.md) is considerably richer than today's robust everyday scope:
 
-- Zuweisung aus Maps mit Laufzeitvalidierung
-- strukturelle Typisierung fuer Modellparameter
-- `ptr<Model>` mit Auto-Dot-Dereferenzierung
-- tiefer Zugriff auf verschachtelte Felder
+- assignment from maps with runtime validation
+- structural typing for model parameters
+- `ptr<Model>` with auto-dot dereferencing
+- deep access to nested fields
 
-Die bekannte praktische Luecke ist vor allem der Zugriffspfad:
+The known practical gap is above all the access path:
 
-- tiefe Member-Ketten wie `a.b.c` sind nicht konsistent fuer Read/Write/LValue
-- dadurch entstehen viele Hilfsvariablen und Whole-Object-Reassigns
+- deep member chains like `a.b.c` are not consistent for read/write/lvalue
+- this produces many helper variables and whole-object reassigns
 
-Betroffene Stellen:
+Affected places:
 
 - [member_chain_plan.md](../../member_chain_plan.md)
 - [ast_compiler_expr.cpp](../../src/core/ast_compiler_expr.cpp)
 - [ast_compiler_stmt.cpp](../../src/core/ast_compiler_stmt.cpp)
 - [utils.cpp](../../src/core/utils.cpp)
 
-### 3. Mirror-Spec gegen Runtime-Verhalten
+### 3. Mirror spec vs runtime behaviour
 
-Die Mirror-Spec in [44_5_mirror.md](../../spec/44_5_mirror.md) beschreibt eine relativ glatte transportagnostische API.
+The mirror spec in [44_5_mirror.md](../../spec/44_5_mirror.md) describes a relatively smooth transport-agnostic API.
 
-Die Runtime ist funktional, aber nicht voll auf diesem Niveau:
+The runtime is functional, but not fully at that level:
 
-- `session.update()`-Semantik war im WS-Pfad nicht so robust wie die Spec suggeriert
-- Queue-/Poll-/Wait-Ergonomie fuehrt auf AIML-Seite zu viel Boilerplate
-- einige reale Mirror-Faelle mussten erst ueber Repros und Reporte abgesichert werden
+- `session.update()` semantics were not as robust in the WS path as the spec suggests
+- queue/poll/wait ergonomics lead to too much boilerplate on the AIML side
+- some real mirror cases first had to be secured through repros and reports
 
-Betroffene Stellen:
+Affected places:
 
 - [mirror_ws_crash_report.md](../../mirror_ws_crash_report.md)
 - [builtin_registry.cpp](../../src/core/builtin_registry.cpp)
 - [mirror_runtime.cpp](../../src/sys/mirror_runtime.cpp)
 
-### 4. JIT- und AOT-Verhalten ist nicht aequivalent
+### 4. JIT and AOT behaviour are not equivalent
 
-Sprachsichtlich sollte AIML-Quelltext moeglichst dieselbe Semantik haben, egal ob Datei-/AOT-Pfad oder String-/Chunk-/JIT-Pfad.
+From the language's point of view, AIML source should have the same semantics as far as possible, whether via the file/AOT path or the string/chunk/JIT path.
 
-Der aktuelle Compiler hat hier bekannte Unterschiede:
+The current compiler has known differences here:
 
-- anderer Compilerkontext
-- andere Importbehandlung
-- andere Objekt- und Linkpfade
-- andere Initialisierungs- und Symbolregistrierung
+- a different compiler context
+- different import handling
+- different object and link paths
+- different initialisation and symbol registration
 
-Betroffene Stellen:
+Affected places:
 
 - [jit_vs_aot.md](../../jit_vs_aot.md)
 - [compiler.cpp](../../compiler.cpp)
 - [ast_compiler.cpp](../../src/core/ast_compiler.cpp)
 
-### 5. Die Spec selbst ist noch kein harter Vertragsstand
+### 5. The spec itself is not yet a hard contract
 
-Die Vollstaendigkeitsfrage ist ohne Normierung der Spec nur begrenzt beantwortbar. Der bestehende Review zeigt offene Punkte bei:
+Without standardising the spec, the completeness question can only be answered to a limited extent. The existing review shows open points in:
 
-- Typnamen
-- YAML-Syntaxvarianten
-- Fehlersemantik
-- `any`-Verhalten
-- Collection-Zugriff
-- reservierten Namespaces
+- type names
+- YAML syntax variants
+- error semantics
+- `any` behaviour
+- collection access
+- reserved namespaces
 
-Betroffene Stelle:
+Affected place:
 
 - [SPEC_REVIEW.md](../../spec/SPEC_REVIEW.md)
 
-## Prioritaet
+## Priority
 
-Wenn das Ziel echte Spec-Naehe ist, ist diese Reihenfolge am sinnvollsten:
+If the goal is real closeness to the spec, this order makes the most sense:
 
-1. Spec normalisieren und priorisieren
-2. Funktionsaufrufe und Typpruefung haerten
-3. Model-/Member-Zugriffe vereinheitlichen
-4. Mirror-Verhalten und API-Ergonomie an die Spec angleichen
-5. JIT/AOT-Paritaet herstellen
+1. Normalise and prioritise the spec
+2. Harden function calls and type checking
+3. Unify model/member access
+4. Align mirror behaviour and API ergonomics with the spec
+5. Establish JIT/AOT parity
 
-## Ergebnis
+## Result
 
-AIML ist gegen die Spec heute am ehesten "teilweise implementiert, aber nicht durchgaengig normkonform". Der Kern funktioniert, die Sprache als spezifiziertes Ganzes ist aber noch nicht geschlossen genug, um von hoher Vollstaendigkeit zu sprechen.
+Measured against the spec, AIML today is best described as "partly implemented, but not consistently conformant". The core works, but the language as a specified whole is not yet closed enough to speak of a high degree of completeness.
