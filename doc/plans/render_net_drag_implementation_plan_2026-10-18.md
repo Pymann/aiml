@@ -1,404 +1,403 @@
-# Umsetzungsplan: Renderschleife, Netzwerk, Drag & Drop (2026-10-18)
+# Implementation plan: render loop, network, drag & drop (2026-10-18)
 
-Grundlage: [`9rooms_v2/doc/reports/client_performance_analysis_2026-10-18.md`](../../../9rooms_v2/doc/reports/client_performance_analysis_2026-10-18.md)
-(zusammengeführt mit [`doc/analysis/render_network_drag_review_2026-10-18.md`](../analysis/render_network_drag_review_2026-10-18.md)).
-Reihenfolge nach User-Vorgabe: **erst das Einfache und die Spec-Widersprüche,
-dann die Engine.** Bestehende Schnittstellen werden **nicht geändert, nur
-erweitert.**
+Basis: [`9rooms_v2/doc/reports/client_performance_analysis_2026-10-18.md`](../../../9rooms_v2/doc/reports/client_performance_analysis_2026-10-18.md)
+(merged with [`doc/analysis/render_network_drag_review_2026-10-18.md`](../analysis/render_network_drag_review_2026-10-18.md)).
+Order as specified by the user: **first the simple things and the spec contradictions,
+then the engine.** Existing interfaces are **not changed, only
+extended.**
 
 ---
 
-## Umsetzungsstand (2026-10-18, Nacht)
+## Implementation status (2026-10-18, night)
 
-| Punkt | Stand | Beleg |
+| Item | Status | Evidence |
 |---|---|---|
-| S0.1 rAF-Widerspruch in `spec/44_1` | **fertig** | 4 Stellen + Preis-Tabelle + „Offen: rAF-Pfad", Querverweis `doc/wasm_frame_loop.md` |
-| S0.2 Asyncify-Whitelist §9.4 | **fertig** | Ist-Zustand (globales `-sASYNCIFY=1`) dokumentiert, Whitelist/JSPI als offener Punkt |
-| S0.3 z-Ordnung | **fertig** | Code-Kommentar `hit_test` richtiggestellt + neuer `spec/44_6` „Treffer-Reihenfolge" |
-| S0.4 `session.update` „once per frame" | **fertig** | `spec/44_5` §5: blockierende Aufrufe unterlaufen die Regel |
-| S2.1 Cancel-Flanke | **fertig** | `spec/44_0` §2.2 normativ + §2.4 + §8.2, `spec/44_6` Abbruch-Muster; Runtime 3 Pfade; `tests/test_input_touch_cancel.aiml` grün, **Mutationsprobe rot** |
-| S2.2 `cancel_request` räumt die Queue | **fertig** | `spec/44_5` §7.2 + Warnblock; `tests/test_mirror_cancel_request_drains.aiml` grün, **Mutationsprobe rot** |
-| S1.2 `poll_cooldown` | **fertig** | `poll_forced` schlägt den Cooldown |
-| S1.3 `confirm_phase`-Antwort | **fertig** | `consume_phase_ack` + `BoardScreen.show_action_error` (Float-Pool) |
-| S1.4 `apply_drag` 1×/Frame | **fertig** | `last_drag_frame` gegen `engine.frame()` |
-| S1.5 z-Ebenen der Drop-Flächen | **fertig** | −8…−1 in Erzeugungsreihenfolge → unverändertes Aussehen, deterministische Treffer |
-| S1.6 Request-Lebenszyklus | **teilweise** | Board-Load: `cancel_request` bei Timeout + `-1`-Zweig; Lobby: `-1`-Zweig + `send_request==0`-Guard. Deck-Editor **absichtlich unverändert** (behandelt `-1` schon über das leere Modell, s. u.) |
-| **Client-Guard für den Cancel** | **fertig** | `board_drag_controller.apply_drag` + Deck-Editor-Drop in `main_menu_app`: ohne diesen Guard wäre die Engine-Korrektur in 9rooms wirkungslos |
-| S1.1 Prod-Build-Vergleich | **Config fertig, Messung blockiert** | `exodus-client-o2.json` (neu, nichts überschrieben) — s. Blocker unten |
-| S2.3 Press-Gestenmaschine | **fertig (Engine), 9rooms-Umstellung offen** | `spec/44_6` „Aufnehmen am Druckpunkt"; additiv `engine.update_drag_gesture` + `engine.get_drag_source`, `update_drag` unverändert; `tests/test_prefab_drag_gesture.aiml` grün, **Mutationsprobe rot** (Pick am Cursor → genau die Fehlermeldung). 9rooms benutzt es noch NICHT — das ist eine Verhaltensänderung der Kern-Interaktion und braucht einen Spieltest |
-| S2.4 z-Dirty-Flag | **offen** | |
-| S2.5 Snapshot/Bereinigung trennen | **offen** | |
-| Stufe 3 | **offen** | |
+| S0.1 rAF contradiction in `spec/44_1` | **done** | 4 places + price table + "Open: the rAF path", cross-reference `doc/wasm_frame_loop.md` |
+| S0.2 Asyncify whitelist §9.4 | **done** | actual state (global `-sASYNCIFY=1`) documented, whitelist/JSPI as an open item |
+| S0.3 z order | **done** | `hit_test` code comment corrected + new `spec/44_6` "Hit order" |
+| S0.4 `session.update` "once per frame" | **done** | `spec/44_5` §5: blocking calls undermine the rule |
+| S2.1 cancel edge | **done** | `spec/44_0` §2.2 normative + §2.4 + §8.2, `spec/44_6` abort pattern; runtime 3 paths; `tests/test_input_touch_cancel.aiml` green, **mutation probe red** |
+| S2.2 `cancel_request` clears the queue | **done** | `spec/44_5` §7.2 + warning block; `tests/test_mirror_cancel_request_drains.aiml` green, **mutation probe red** |
+| S1.2 `poll_cooldown` | **done** | `poll_forced` beats the cooldown |
+| S1.3 `confirm_phase` response | **done** | `consume_phase_ack` + `BoardScreen.show_action_error` (float pool) |
+| S1.4 `apply_drag` 1×/frame | **done** | `last_drag_frame` against `engine.frame()` |
+| S1.5 z levels of the drop areas | **done** | −8…−1 in creation order → unchanged look, deterministic hits |
+| S1.6 request lifecycle | **partial** | board load: `cancel_request` on timeout + `-1` branch; lobby: `-1` branch + `send_request==0` guard. Deck editor **deliberately unchanged** (already handles `-1` via the empty model, see below) |
+| **Client guard for the cancel** | **done** | `board_drag_controller.apply_drag` + deck editor drop in `main_menu_app`: without this guard the engine correction would have no effect in 9rooms |
+| S1.1 prod build comparison | **config done, measurement blocked** | `exodus-client-o2.json` (new, nothing overwritten) — see the blocker below |
+| S2.3 press gesture machine | **done (engine), 9rooms switch-over open** | `spec/44_6` "pick-up at the press point"; additive `engine.update_drag_gesture` + `engine.get_drag_source`, `update_drag` unchanged; `tests/test_prefab_drag_gesture.aiml` green, **mutation probe red** (pick at the cursor → exactly the error message). 9rooms does NOT use it yet — that is a behaviour change of the core interaction and needs a play test |
+| S2.4 z dirty flag | **open** | |
+| S2.5 separate snapshot/clean-up | **open** | |
+| Stage 3 | **open** | |
 
-Drei neue Regressionstests, alle mit bestandener Mutationsprobe (erst den Fehler
-wieder eingebaut, FAIL gesehen, zurückgenommen, PASS gesehen) — ohne diese Probe
-wäre nicht belegt, dass die Tests den jeweiligen Fehler überhaupt treffen:
+Three new regression tests, all with a passed mutation probe (first put the bug
+back in, saw FAIL, reverted, saw PASS) — without this probe it
+would not be proven that the tests hit the respective bug at all:
 `tests/test_input_touch_cancel.aiml`, `tests/test_mirror_cancel_request_drains.aiml`,
 `tests/test_prefab_drag_gesture.aiml`.
 
-Regression nach allen Änderungen (`--only input|prefab|mirror`, Xvfb :99):
-**10 / 32 / 42 OK, 0 eigene Fehlschläge.** Der einzige rote Eintrag in allen drei
-Läufen ist `tests/closures/run.sh` — ein **untracked** Verzeichnis (`??`) aus einer
-fremden, uncommitteten Session (die auch `compiler.cpp`/`compiler.h` und ~40 Specs
-geändert hat). Nicht meine Baustelle, deshalb auch **nichts committet**.
+Regression after all changes (`--only input|prefab|mirror`, Xvfb :99):
+**10 / 32 / 42 OK, 0 failures of my own.** The only red entry in all three
+runs is `tests/closures/run.sh` — an **untracked** directory (`??`) from someone
+else's uncommitted session (which also changed `compiler.cpp`/`compiler.h` and ~40 specs).
+Not my construction site, which is why **nothing was committed** either.
 
-**Korrektur am Plan (beim Umsetzen gefunden):** `spec/44_0` §2.4 spezifiziert
-**bereits** eine vollständige Gestenmaschine — `input.drag_active/started/ended`,
-`drag_origin_x/y`, `drag_delta_*` und eine konfigurierbare Schwelle
-(`drag_set_threshold`, Default 5 px), gespeist vom **Press-Ursprung**.
-`engine.update_drag` benutzt davon **nichts** und pickt stattdessen pegelgesteuert
-mit der aktuellen Position. S2.3 ist damit viel kleiner als geplant: nicht „eine
-Gestenmaschine bauen", sondern „die vorhandene an den Prefab-Drag anschließen"
-(additiv als zweiter Aufruf neben `update_drag`). Die Cancel-Flanke ist dort
-jetzt schon angeschlossen (`input.drag_cancelled`).
+**Correction to the plan (found while implementing):** `spec/44_0` §2.4 **already**
+specifies a complete gesture machine — `input.drag_active/started/ended`,
+`drag_origin_x/y`, `drag_delta_*` and a configurable threshold
+(`drag_set_threshold`, default 5 px), fed from the **press origin**.
+`engine.update_drag` uses **none** of it and instead picks level-triggered
+with the current position. S2.3 is therefore much smaller than planned: not "build a
+gesture machine", but "connect the existing one to the prefab drag"
+(additively as a second call next to `update_drag`). The cancel edge is already
+connected there (`input.drag_cancelled`).
 
-**Blocker bei S1.1 (ein Befehl, dann läuft die Messung):** `9rooms_v2/__exodus_cache`
-ist leer — die projektlokale emsdk-Installation fehlt. Für ein `output_type: wasm`
-besteht exodus auf **genau diesem** projektlokalen Pfad; ein absoluter Verweis auf
-die vorhandene emsdk unter `aiml/__exodus_cache/git/emsdk` wird beim Linken
-ignoriert (zweimal reproduziert, der Compile-Schritt lief jeweils durch). Es
-braucht also einmal das emsdk-Setup aus den `git_packages` — ein
-Toolchain-Download im GB-Bereich. Den habe ich nachts **nicht** unaufgefordert
-angestoßen; `exodus-client-o2.json` ist 1:1 von `exodus-client.json` abgeleitet
-(gleiches emsdk-Setup) und unterscheidet sich nur in
-`optimization: 2`, `-sASSERTIONS=0`, `-g1` und dem Fehlen aller
-`AIML_MEM_DIFF*`-Variablen. Sobald emsdk einmal installiert ist:
+**Blocker for S1.1 (one command, then the measurement runs):** `9rooms_v2/__exodus_cache`
+is empty — the project-local emsdk installation is missing. For an `output_type: wasm`,
+exodus insists on **exactly this** project-local path; an absolute reference to
+the existing emsdk under `aiml/__exodus_cache/git/emsdk` is ignored when linking
+(reproduced twice; the compile step went through each time). So it
+needs the emsdk setup from the `git_packages` once — a
+toolchain download in the GB range. I did **not** start it unasked
+at night; `exodus-client-o2.json` is derived 1:1 from `exodus-client.json`
+(same emsdk setup) and differs only in
+`optimization: 2`, `-sASSERTIONS=0`, `-g1` and the absence of all
+`AIML_MEM_DIFF*` variables. As soon as emsdk is installed once:
 
 ```bash
-exodus build -c exodus-client-o2.json     # schreibt nach out/client_o2/, fasst out/client/ nicht an
+exodus build -c exodus-client-o2.json     # writes to out/client_o2/, does not touch out/client/
 ```
 
-Dann fps-Log derselben Szene (Lobby + Board-Eintritt) gegen den heutigen Build
-vergleichen — das ist die Messung zu Rangfolge #1 und #2.
+Then compare the fps log of the same scene (lobby + board entry) against today's build
+— that is the measurement for ranks #1 and #2.
 
-**Zweite Korrektur:** S1.6 war für den Deck-Editor zu breit. Dessen drei
-`take_response`-Stellen prüfen bewusst nur `== 0`, weil ein `-1` das Zielmodell
-leer lässt → `success != 1` → Warnpfad; der Kommentar dort sagt das ausdrücklich.
-Richtig so, nicht angefasst.
-
----
-
-## Leitplanken
-
-Verbindlich für jeden Punkt unten:
-
-1. **Additiv.** Neue Aufrufe, neue Felder, neue Dateien. Keine geänderte
-   Signatur, kein entfernter Aufruf, kein geändertes Rückgabeformat. Wo eine
-   Verhaltensänderung unvermeidlich ist, steht sie unten **ausdrücklich** als
-   solche (Abschnitt „Verhaltensänderungen" — genau vier, alle Bugfixes).
-2. **Spec → Tests → Code** (Arbeitsprinzip 3). Kein Code vor Spec-Text und
-   Testfall, außer der User genehmigt es im Einzelfall.
-3. **Spec muss wahr sein** (Prinzip 2). Stufe 0 ist deshalb Pflicht und steht
-   vor allem anderen.
-4. **Bauen** nur mit `exodus` aus der `exvenv`; für aiml selbst **immer**
-   `exodus build --all`. Nie den Compiler-Binary direkt auf Einzeldateien.
-5. **Ein** `run_all_tests.sh` gleichzeitig. Nie Sanitizer und Suite parallel.
-   Logs persistent ins Session-Dir, nicht `/tmp`. `cleanup.sh` vor jedem Lauf.
-6. Keine Routine-Gesamtabnahmen von selbst, nur die betroffenen Tests.
-7. Keine interaktiven Demos in Testschleifen (blockieren die Suite).
-8. Knappe Kommentare; bei `.aiml`-Annotationen meist keine.
+**Second correction:** S1.6 was too broad for the deck editor. Its three
+`take_response` places deliberately check only `== 0`, because a `-1` leaves the target model
+empty → `success != 1` → warning path; the comment there says so explicitly.
+That is right; not touched.
 
 ---
 
-## Stufe 0 — Spec-Widersprüche (nur Spec, kein Code)
+## Guard rails
 
-Vier Stellen, an denen die Spec etwas anderes sagt als die Implementierung.
-Kein Testfall nötig: Abnahme ist „der Spec-Text ist am Code nachprüfbar wahr".
+Binding for every item below:
 
-### S0.1 — `spec/44_1`: Browser-Schleife ist nicht rAF
-
-**Befund:** vier Stellen behaupten `emscripten_set_main_loop_arg` +
-`requestAnimationFrame` (Zeilen 19, 95, 212/218, 314); die Implementierung
-fährt `while (!quit) { web_loop_tick(); emscripten_sleep(16); }`.
-
-**Die Richtung ist bereits entschieden** — nicht von mir: `doc/wasm_frame_loop.md`
-erklärt die Sleep-Schleife als **„load-bearing — do not simplify this back to
-`emscripten_set_main_loop`"** und belegt per Isolationstabelle, dass ein
-WS-Send, der zum rAF-Scheduler zurückkehrt, die Schleife still tötet. Also:
-**Spec an die Implementierung anpassen**, nicht umgekehrt.
-
-**Änderung:**
-- Platform-Mapping-Zeile und §4.1 auf die manuelle Asyncify-Schleife umstellen.
-- §7.1: „VSync via `requestAnimationFrame` (always active)" ersetzen durch die
-  wahre Aussage samt Preis: **Frameperiode = Arbeit + 16 ms**, also nie 60 fps,
-  keine Compositor-Synchronisation, `setTimeout`-Drosselung im Hintergrundtab.
-- §9.3 (Frame-Limiter Browser) entsprechend.
-- Querverweis auf `doc/wasm_frame_loop.md` als Begründung.
-- Neuer Unterpunkt „Offen: rAF-Pfad" mit den Vorbedingungen (alle
-  suspendierenden Aufrufe aus dem Frame heraus) — damit der Zielzustand
-  dokumentiert bleibt, statt als falsche Gegenwart dazustehen.
-
-### S0.2 — `spec/44_1` §9.4: Asyncify-Whitelist
-
-**Befund:** Spec nennt `-sASYNCIFY -sASYNCIFY_IMPORTS=[engine_swap_internal]`;
-reale Builds nutzen globales `-sASYNCIFY=1` ohne `ASYNCIFY_ONLY`.
-**Änderung:** Ist-Zustand dokumentieren, die Whitelist als offenen
-Optimierungspunkt kennzeichnen (sie ist Teil von S1.1/Rangfolge #2).
-
-### S0.3 — z-Ordnung wirkt erst nach dem Zeichnen
-
-**Befund:** `aiml_prefab_hit_test` behauptet im Kommentar „Iterate in reverse
-z_order (topmost first)", iteriert aber die Instanzliste; das stimmt nur, weil
-`prefab_draw_scene` die Liste als Seiteneffekt sortiert. `set_z` sortiert nicht.
-**Änderung:** (a) Kommentar im Code richtigstellen; (b) `spec/44_6` hält
-ausdrücklich fest, dass `set_z` für **Treffer- und Drag-Prüfung** erst nach dem
-nächsten `draw_scene` wirkt, und dass neu erzeugte Instanzen bis dahin am
-Listenende stehen. Das ist unangenehm, aber wahr — und S2.4 ändert es danach
-bewusst und sichtbar.
-
-### S0.4 — `session.update` „once per frame" ist nicht einhaltbar
-
-**Befund:** `spec/44_5` §5 sagt „called once per frame"; `send_and_await` pumpt
-intern pro 2-ms-Tick, also dutzende Male pro Frame, mitten im Render-Durchlauf.
-**Änderung:** §5 um einen Hinweis ergänzen, dass die blockierenden
-Komfort-Aufrufe (`send_and_await`, `connect`) die Session selbst pumpen und
-diese Regel damit unterlaufen; Empfehlung für Frame-Anwendungen auf
-`send_request`/`take_response` zeigen. Vorbereitung für K1 (§4.5 des Berichts).
+1. **Additive.** New calls, new fields, new files. No changed
+   signature, no removed call, no changed return format. Where a
+   behaviour change is unavoidable, it is listed below **explicitly** as
+   such (section "Behaviour changes" — exactly four, all bug fixes).
+2. **Spec → tests → code** (working principle 3). No code before spec text and
+   test case, unless the user approves it in the individual case.
+3. **The spec must be true** (principle 2). Stage 0 is therefore mandatory and comes
+   before everything else.
+4. **Build** only with `exodus` from the `exvenv`; for aiml itself **always**
+   `exodus build --all`. Never the compiler binary directly on individual files.
+5. **One** `run_all_tests.sh` at a time. Never sanitizer and suite in parallel.
+   Logs persistently into the session dir, not `/tmp`. `cleanup.sh` before every run.
+6. No routine full acceptance runs on my own, only the affected tests.
+7. No interactive demos in test loops (they block the suite).
+8. Terse comments; for `.aiml` annotations mostly none.
 
 ---
 
-## Stufe 1 — Einfach und lokal (9rooms + Build-Konfiguration)
+## Stage 0 — spec contradictions (spec only, no code)
 
-Kein Engine-Code. Jeder Punkt für sich abnehmbar.
+Four places where the spec says something different from the implementation.
+No test case needed: acceptance is "the spec text is verifiably true against the code".
 
-### S1.1 — Produktions-Build messbar machen *(additiv: neue Datei)*
+### S0.1 — `spec/44_1`: the browser loop is not rAF
 
-**Nicht** `exodus-client.json` umschreiben — das überschreibt die
-ausgelieferten Artefakte in `out/client/`. Stattdessen **neu**:
-`9rooms_v2/exodus-client-prod.json` mit `"name": "client_prod"` (eigenes
-Ausgabeverzeichnis `out/client_prod/`), darin:
+**Finding:** four places claim `emscripten_set_main_loop_arg` +
+`requestAnimationFrame` (lines 19, 95, 212/218, 314); the implementation
+runs `while (!quit) { web_loop_tick(); emscripten_sleep(16); }`.
+
+**The direction has already been decided** — not by me: `doc/wasm_frame_loop.md`
+declares the sleep loop **"load-bearing — do not simplify this back to
+`emscripten_set_main_loop`"** and proves via an isolation table that a
+WS send that returns to the rAF scheduler silently kills the loop. So:
+**adapt the spec to the implementation**, not the other way round.
+
+**Change:**
+- switch the platform mapping line and §4.1 to the manual Asyncify loop.
+- §7.1: replace "VSync via `requestAnimationFrame` (always active)" with the
+  true statement including its price: **frame period = work + 16 ms**, so never 60 fps,
+  no compositor synchronisation, `setTimeout` throttling in a background tab.
+- §9.3 (frame limiter browser) accordingly.
+- cross-reference to `doc/wasm_frame_loop.md` as the rationale.
+- a new sub-item "Open: the rAF path" with the preconditions (all
+  suspending calls out of the frame) — so that the target state stays
+  documented instead of standing there as a false present.
+
+### S0.2 — `spec/44_1` §9.4: Asyncify whitelist
+
+**Finding:** the spec names `-sASYNCIFY -sASYNCIFY_IMPORTS=[engine_swap_internal]`;
+real builds use a global `-sASYNCIFY=1` without `ASYNCIFY_ONLY`.
+**Change:** document the actual state, mark the whitelist as an open
+optimisation item (it is part of S1.1/rank #2).
+
+### S0.3 — z order only takes effect after drawing
+
+**Finding:** `aiml_prefab_hit_test` claims in its comment "Iterate in reverse
+z_order (topmost first)", but iterates the instance list; that is only true because
+`prefab_draw_scene` sorts the list as a side effect. `set_z` does not sort.
+**Change:** (a) correct the comment in the code; (b) `spec/44_6` states
+explicitly that `set_z` only takes effect for **hit and drag checks** after the
+next `draw_scene`, and that newly created instances stand at the end of the list until then.
+That is unpleasant, but true — and S2.4 changes it afterwards
+deliberately and visibly.
+
+### S0.4 — `session.update` "once per frame" cannot be kept
+
+**Finding:** `spec/44_5` §5 says "called once per frame"; `send_and_await` pumps
+internally per 2 ms tick, i.e. dozens of times per frame, in the middle of the render pass.
+**Change:** add a note to §5 that the blocking
+convenience calls (`send_and_await`, `connect`) pump the session themselves and
+thereby undermine this rule; point frame applications to
+`send_request`/`take_response`. Preparation for K1 (§4.5 of the report).
+
+---
+
+## Stage 1 — simple and local (9rooms + build configuration)
+
+No engine code. Each item can be accepted on its own.
+
+### S1.1 — make the production build measurable *(additive: new file)*
+
+Do **not** rewrite `exodus-client.json` — that overwrites the
+shipped artefacts in `out/client/`. Instead, **new**:
+`9rooms_v2/exodus-client-prod.json` with `"name": "client_prod"` (its own
+output directory `out/client_prod/`), containing:
 
 - `"optimization": "2"`, `ASSERTIONS=0`, `-g1`
-- **ohne** `AIML_MEM_DIFF*`
-- `ASYNCIFY_ONLY`-Liste, falls sie sich ermitteln lässt; sonst erst mal ohne
+- **without** `AIML_MEM_DIFF*`
+- an `ASYNCIFY_ONLY` list, if it can be determined; otherwise without it for now
 
-**Abnahme:** beide Builds nebeneinander, gleiche Szene (Lobby + Board-Eintritt),
-fps-Log und `client.wasm`-Größe vergleichen. Erst wenn die Zahl steht, ist die
-Entscheidung über die Prod-Config eine Entscheidung und keine Vermutung.
+**Acceptance:** both builds side by side, the same scene (lobby + board entry),
+compare the fps log and the `client.wasm` size. Only once the number stands is the
+decision about the prod config a decision and not a guess.
 
-**Risiko, das benannt werden muss:** `-O0 → -O2` kann latentes UB im generierten
-Code sichtbar machen. Deshalb separater Build, separates Verzeichnis, nichts
-überschrieben. Vorher nichts deployen.
+**Risk that must be named:** `-O0 → -O2` can make latent UB in the generated
+code visible. Hence a separate build, a separate directory, nothing
+overwritten. Do not deploy anything beforehand.
 
-### S1.2 — `poll_cooldown` nicht durch den auslösenden Klick setzen
+### S1.2 — do not set `poll_cooldown` through the triggering click
 
-`poll_board_state` setzt bei Press/Release `poll_cooldown = 30` — auch bei dem
-Klick, der selbst `board_poll = 60` angefordert hat (§2.4 des Berichts). Fix:
-ein Flag „Refresh wurde angefordert" schlägt den Cooldown. Zusätzlich
-Framezähler → monotone Zeitstempel.
-**Abnahme:** Stoppuhr am Check-Button; die ~1 s Totzeit verschwindet.
+`poll_board_state` sets `poll_cooldown = 30` on press/release — also for the
+click that itself requested `board_poll = 60` (§2.4 of the report). Fix:
+a "refresh was requested" flag beats the cooldown. Additionally
+frame counter → monotonic timestamps.
+**Acceptance:** stopwatch on the check button; the ~1 s dead time disappears.
 
-### S1.3 — `confirm_phase`-Antwort auswerten + lokales Pending
+### S1.3 — evaluate the `confirm_phase` response + local pending
 
-Heute wird die Antwort verworfen und nur `board_poll = 60` gesetzt. Fix:
-Ergebnis auswerten, Ablehnung am Board anzeigen, sofortiges lokales
-„wird gesendet" — klar getrennt vom bestätigten Phasenwechsel.
-**Abnahme:** Blindtest ohne Konsole: gesendet / wartet / abgelehnt / nicht
-geklickt sind unterscheidbar.
+Today the response is discarded and only `board_poll = 60` is set. Fix:
+evaluate the result, show a rejection on the board, an immediate local
+"being sent" — clearly separated from the confirmed phase change.
+**Acceptance:** blind test without a console: sent / waiting / rejected / not
+clicked are distinguishable.
 
-### S1.4 — `apply_drag` einmal pro Frame
+### S1.4 — `apply_drag` once per frame
 
-Nach einer Aktion ruft `main_menu_app.frame` `board.render` ein zweites Mal,
-also `apply_drag` zweimal mit denselben Flanken (§3.3). Fix: Frame-Latch wie
-schon bei `deck_click_latch`, nur für den Drag-Eintritt.
-**Abnahme:** Aktion auslösen, während die Maus gedrückt bleibt → kein
-Zweit-Greifen.
+After an action, `main_menu_app.frame` calls `board.render` a second time,
+i.e. `apply_drag` twice with the same edges (§3.3). Fix: a frame latch as
+already with `deck_click_latch`, only for the drag entry.
+**Acceptance:** trigger an action while the mouse stays pressed → no
+second grab.
 
-### S1.5 — Explizite z-Ebenen für die Drop-Flächen *(rein AIML)*
+### S1.5 — explicit z levels for the drop areas *(pure AIML)*
 
-`spell_stack`, `trap_band_ali`, `perm_spell_band`, `mana_band_ali`, die fünf
-`combat_zones`, `decks_ali`, `soul_self/others` haben alle z = 0 und werden
-nur durch die Erzeugungsreihenfolge getrennt (§3.5). Fix: eine dokumentierte
-Ebenenvergabe (z. B. Bänder 1, Zonen 2, Decks 3, Soulmages 4). Keine
-Engine-Änderung, wirkt sofort.
-**Abnahme:** Ablegen auf einer Überlappung trifft reproduzierbar dieselbe
-Fläche, unabhängig von `init`.
+`spell_stack`, `trap_band_ali`, `perm_spell_band`, `mana_band_ali`, the five
+`combat_zones`, `decks_ali`, `soul_self/others` all have z = 0 and are separated
+only by the creation order (§3.5). Fix: a documented
+level assignment (e.g. bands 1, zones 2, decks 3, soulmages 4). No
+engine change, takes effect immediately.
+**Acceptance:** dropping on an overlap reproducibly hits the same
+area, independent of `init`.
 
-### S1.6 — Request-Lebenszyklus an den Aufrufstellen schließen
+### S1.6 — close the request lifecycle at the call sites
 
-`send_request == 0` und `take_response == -1` werden teils nicht behandelt
-(`pump_board_load` Schritt 2 prüft nur `== 0`; `poll_consume` lässt `-1` am
-Gate vorbei und rotiert mit stillem Datenverlust weiter). Dazu fehlt
-`cancel_request` beim Board-Load-Timeout und bei Ansichtswechseln.
-**Abnahme:** Protokollfehler beendet den Pendingzustand sichtbar statt in den
-300-Frame-Timeout zu laufen.
-**Achtung:** vollständig wirkt das erst mit S2.2 — `cancel_request` räumt heute
-die bereits eingereihte Antwort nicht weg.
+`send_request == 0` and `take_response == -1` are partly not handled
+(`pump_board_load` step 2 only checks `== 0`; `poll_consume` lets `-1` past the
+gate and keeps rotating with silent data loss). In addition,
+`cancel_request` is missing on the board load timeout and on view changes.
+**Acceptance:** a protocol error ends the pending state visibly instead of running into the
+300-frame timeout.
+**Caution:** this only fully takes effect with S2.2 — `cancel_request` today does not clear
+the already queued response.
 
 ---
 
-## Stufe 2 — Engine, additiv
+## Stage 2 — engine, additive
 
-### S2.1 — Cancel-Flanke, die kein Release ist *(wichtigster Punkt)*
+### S2.1 — a cancel edge that is not a release *(most important item)*
 
-**Fehler:** `touchcancel` hängt am selben Handler wie `touchend` und erzeugt
-`pend_release[0] = 1`; `bin_touchstart` tut dasselbe bei zwei Fingern. Ein
-abgebrochener Touch läuft damit in `handle_drop` und **löst einen Spielzug aus**
-(§3.11). Betrifft jede AIML-App mit Touch-Drag.
+**Bug:** `touchcancel` hangs on the same handler as `touchend` and produces
+`pend_release[0] = 1`; `bin_touchstart` does the same with two fingers. An
+aborted touch therefore runs into `handle_drop` and **triggers a game move**
+(§3.11). Affects every AIML app with touch drag.
 
-**Spec zuerst** (`spec/44_0`):
-- §7 um die Cancel-Flanke erweitern: neue Abfrage `input.mouse_cancelled(btn)`
-  neben `mouse_pressed`/`mouse_released` — gleiche Frame-Semantik.
-- Vertrag festschreiben: **ein Cancel beendet die Geste und erzeugt niemals
-  Tap oder Drop.** `touchcancel` und der Zwei-Finger-Übergang liefern Cancel,
-  **nicht** Release.
-- §8.2 additiv: `input.post_touch_cancel()` als Injection-Aufruf, Frame-Vertrag
-  aus §8.3 unverändert.
-- `spec/44_6`: `engine.update_drag` bricht bei Cancel ab (Snap-back wie
-  `cancel_drag`), ohne Drop-Übergang.
+**Spec first** (`spec/44_0`):
+- extend §7 with the cancel edge: a new query `input.mouse_cancelled(btn)`
+  next to `mouse_pressed`/`mouse_released` — same frame semantics.
+- fix the contract: **a cancel ends the gesture and never produces a
+  tap or drop.** `touchcancel` and the two-finger transition deliver cancel,
+  **not** release.
+- §8.2 additively: `input.post_touch_cancel()` as an injection call, frame contract
+  from §8.3 unchanged.
+- `spec/44_6`: `engine.update_drag` aborts on cancel (snap-back like
+  `cancel_drag`), without a drop transition.
 
-**Test** (neu, `tests/test_input_touch_cancel.aiml`): Karte greifen, Cancel
-injizieren, prüfen: `get_dragged() == null`, Position = Ursprung, **kein**
-Drop-Übergang beobachtet. Desktop + WASM-Pfad (emsdk-node, siehe
+**Test** (new, `tests/test_input_touch_cancel.aiml`): grab a card, inject a
+cancel, check: `get_dragged() == null`, position = origin, **no**
+drop transition observed. Desktop + WASM path (emsdk node, see
 `wasm-headless-testing`).
 
-**Code:** eigener `bin_touchcancel`, eigenes `pend_cancel`-Latch,
-`aiml_prefab_update_drag` wertet es aus. Der Zwei-Finger-Pfad in
-`bin_touchstart` sendet Cancel statt Release.
+**Code:** its own `bin_touchcancel`, its own `pend_cancel` latch,
+`aiml_prefab_update_drag` evaluates it. The two-finger path in
+`bin_touchstart` sends cancel instead of release.
 
-**Zusatz:** Blur-/Visibility-Reset (`visibilitychange`, `blur`) geht über
-denselben Cancel-Pfad — sonst tauscht man eine hängende Karte gegen einen
-unbeabsichtigten Zug.
+**Addition:** the blur/visibility reset (`visibilitychange`, `blur`) goes through
+the same cancel path — otherwise one swaps a hanging card for an
+unintended move.
 
-### S2.2 — `cancel_request` räumt die Queue mit
+### S2.2 — `cancel_request` clears the queue too
 
-`cancel_request` löscht nur die ID aus `outstanding`; eine schon eingereihte
-Antwort bleibt liegen und ist über `take_response` nicht erreichbar (ID-Prüfung
-zuerst, dann `-1` ohne Entfernen). Der Client drainiert `poll_rpc` nirgends,
-nutzt `cancel_request` aber bereits. Verwaiste Events laufen gegen das
-Per-Peer-Limit aus `spec/44_5` §7.2 (4096 / 64 MiB → **Peer wird getrennt**).
+`cancel_request` only deletes the ID from `outstanding`; an already queued
+response stays there and is not reachable via `take_response` (ID check
+first, then `-1` without removal). The client drains `poll_rpc` nowhere,
+but already uses `cancel_request`. Orphaned events run against the
+per-peer limit from `spec/44_5` §7.2 (4096 / 64 MiB → **the peer is disconnected**).
 
-**Spec:** `spec/44_5` §7.2 bei `cancel_request` ergänzen: „entfernt die
-Anmeldung **und** eine bereits eingereihte Antwort dieser ID".
-**Test:** Request → Antwort eintreffen lassen (`update`) → `cancel_request` →
-`has_rpc()` ist wieder beim Ausgangswert.
-**Code:** `rpc_take_matching` + `aiml_free_rpc_event` im Cancel — beides
-vorhanden, es wird nur nicht gerufen. Signatur unverändert.
+**Spec:** add to `spec/44_5` §7.2 at `cancel_request`: "removes the
+registration **and** an already queued response of this ID".
+**Test:** request → let the response arrive (`update`) → `cancel_request` →
+`has_rpc()` is back at its initial value.
+**Code:** `rpc_take_matching` + `aiml_free_rpc_event` in the cancel — both
+exist, they are just not called. Signature unchanged.
 
-### S2.3 — Press-Gestenmaschine *(additiv neben `update_drag`)*
+### S2.3 — press gesture machine *(additive next to `update_drag`)*
 
-`update_drag` ist pegelgesteuert, pickt mit der *aktuellen* Position und hat
-keine Schwellenphase (§3.7, §3.10, §3.12). Statt es zu ändern:
+`update_drag` is level-triggered, picks with the *current* position and has
+no threshold phase (§3.7, §3.10, §3.12). Instead of changing it:
 
-**Neu** `engine.update_gesture(mx, my, btn, rel, cancel, threshold)` →
-Zustand (`none`/`candidate`/`dragging`/`dropped`/`cancelled`), das intern
-- das Press-Ziel an der **Druckposition** und der zuletzt gezeichneten Szene
-  auflöst und festhält,
-- erst nach `threshold` zum Drag wird,
-- genau ein Ende liefert: Tap **oder** Drop **oder** Cancel.
+**New** `engine.update_gesture(mx, my, btn, rel, cancel, threshold)` →
+state (`none`/`candidate`/`dragging`/`dropped`/`cancelled`), which internally
+- resolves and holds the press target at the **press position** and the last drawn
+  scene,
+- only becomes a drag after `threshold`,
+- delivers exactly one end: tap **or** drop **or** cancel.
 
-`engine.update_drag` bleibt unverändert gültig; 9rooms wechselt, andere Apps
-nicht. Die 12-px-Logik des Boards (heute nach dem Drag-Start, in
-Bildschirmkoordinaten) wird dadurch ersetzt, nicht repariert — die Schwelle
-gehört in Designkoordinaten und vor den Start.
+`engine.update_drag` stays valid unchanged; 9rooms switches, other apps
+do not. The board's 12 px logic (today after the drag start, in
+screen coordinates) is thereby replaced, not repaired — the threshold
+belongs in design coordinates and before the start.
 
-**Spec:** `spec/44_6` neuer Abschnitt; `spec/44_0` §8 um
-`post_touch_cancel`-Zusammenspiel ergänzen.
-**Test:** schneller Drag über eine simulierte Frame-Pause; gehaltene Taste
-fährt erst später über eine Karte; Klick bei bewegter Maus trifft die gedrückte
-Karte.
+**Spec:** `spec/44_6` new section; extend `spec/44_0` §8 with the
+`post_touch_cancel` interplay.
+**Test:** a fast drag across a simulated frame pause; a held button
+only later moves over a card; a click with a moving mouse hits the pressed
+card.
 
-### S2.4 — z-Sortierung per Dirty-Flag
+### S2.4 — z sorting via a dirty flag
 
-`set_z` markiert die Szene als unsortiert; Treffer- und Drag-Prüfung sortieren
-bei Bedarf, statt auf das nächste `draw_scene` zu warten. Behebt den
-Ein-Frame-Verzug und das „neue Instanzen sind oben" nach einem Reload (§3.4).
-Signaturen unverändert.
-**Test:** `set_z` + sofortiger `hit_test` im selben Frame trifft die neue
-Reihenfolge.
+`set_z` marks the scene as unsorted; hit and drag checks sort
+on demand instead of waiting for the next `draw_scene`. Fixes the
+one-frame lag and the "new instances are on top" after a reload (§3.4).
+Signatures unchanged.
+**Test:** `set_z` + an immediate `hit_test` in the same frame hits the new
+order.
 
-### S2.5 — Snapshot und Bereinigung trennen
+### S2.5 — separate snapshot and clean-up
 
-`web_loop_tick` zieht den Input-Snapshot **nach** `update` → Flanken hinken der
-live geschriebenen Mausposition einen Frame nach (§3.12). `input_update`
-vorzuziehen ist falsch: der native Pfad löscht dort als Erstes die Latches.
+`web_loop_tick` takes the input snapshot **after** `update` → edges lag one frame
+behind the live-written mouse position (§3.12). Moving `input_update`
+forward is wrong: the native path clears the latches there first thing.
 
-Also zwei interne Schritte (Snapshot übernehmen / Ereignisse bereinigen), vom
-Frame-Treiber an den richtigen Stellen gerufen. **Öffentliche Schnittstelle
-unverändert** — `input.update()` bleibt, was es ist.
+So two internal steps (take over the snapshot / clean up events), called by the
+frame driver at the right places. **Public interface
+unchanged** — `input.update()` stays what it is.
 
-**Gefahr:** `spec/44_0` §8.3 schreibt den Injection-Frame-Vertrag fest („eine
-injizierte Flanke feuert genau einmal, gleicher Vertrag auf jeder Plattform").
-Dieser Punkt kommt deshalb **zuletzt** in Stufe 2 und nur mit den drei
-bestehenden `test_input_injection_*` grün.
-
----
-
-## Stufe 3 — groß, nicht in einer Nacht
-
-Nur Reihenfolge, Details im Bericht (§4.5, §5):
-
-1. Board-RPCs asynchron, auf Basis eines typisierten Anfrage-Handles (K2) mit
-   Besitzerbereich und Generation.
-2. Nativer WS/WSS-Empfang inkrementell + Backpressure (Voraussetzung für jedes
-   Frame-Budget, K3).
-3. Artwork asynchron mit Platzhalter (K4).
-4. Board-Ansichten über `iid` erhalten statt Vollreload.
-5. Rein lesende Spielerprojektion aus `MatchService.get`, dann zweiten
-   Round-Trip streichen; `source_iid` + erwartete Revision in die Requests.
-6. Session-Pump-Vertrag + Framevertrag in `engine.run` (K1, zusammen mit dem
-   `ctx`-Parameter aus `spec/44_1` „Offen" — additive Vier-Argument-Fassung).
-7. rAF-Pfad, erst wenn 1–3 den Frame frei von suspendierenden Aufrufen haben.
+**Danger:** `spec/44_0` §8.3 fixes the injection frame contract ("an
+injected edge fires exactly once, same contract on every platform").
+This item therefore comes **last** in stage 2 and only with the three
+existing `test_input_injection_*` green.
 
 ---
 
-## Verhaltensänderungen (die vier Ausnahmen von „nur additiv")
+## Stage 3 — big, not in one night
 
-Die Schnittstelle bleibt überall gleich; bei diesen vier ändert sich das
-*Verhalten* bestehender Aufrufe. Alle vier sind Bugfixes, keiner war
-dokumentiert zugesichert:
+Only the order; details in the report (§4.5, §5):
 
-| Punkt | Was sich ändert | Wer könnte sich darauf verlassen |
+1. Board RPCs asynchronous, based on a typed request handle (K2) with
+   an owner scope and a generation.
+2. Native WS/WSS receive incremental + backpressure (precondition for any
+   frame budget, K3).
+3. Artwork asynchronous with a placeholder (K4).
+4. Keep board views via `iid` instead of a full reload.
+5. A purely reading player projection from `MatchService.get`, then drop the second
+   round trip; `source_iid` + expected revision into the requests.
+6. Session pump contract + frame contract in `engine.run` (K1, together with the
+   `ctx` parameter from `spec/44_1` "Open" — additive four-argument version).
+7. rAF path, only once 1–3 have the frame free of suspending calls.
+
+---
+
+## Behaviour changes (the four exceptions to "additive only")
+
+The interface stays the same everywhere; for these four the *behaviour* of
+existing calls changes. All four are bug fixes, none was
+documented as guaranteed:
+
+| Item | What changes | Who could rely on it |
 |---|---|---|
-| S2.1 | `touchcancel` / Zwei-Finger liefern Cancel statt Release | nur Code, der den Bug nutzt (keiner — der Zug ist unerwünscht) |
-| S2.2 | `cancel_request` entfernt zusätzlich die eingereihte Antwort | Code, der sie danach per `poll_rpc` abholt — im Client nicht vorhanden |
-| S2.4 | `set_z` wirkt sofort für Treffer/Drag statt ab dem nächsten Draw | Code, der den Verzug einplant — nirgends belegt |
-| S2.5 | Flanken und Mausposition stammen aus demselben Frame | der Injection-Vertrag `spec/44_0` §8.3 — **muss** erhalten bleiben, deshalb zuletzt |
+| S2.1 | `touchcancel` / two fingers deliver cancel instead of release | only code that uses the bug (none — the move is unwanted) |
+| S2.2 | `cancel_request` additionally removes the queued response | code that picks it up afterwards via `poll_rpc` — not present in the client |
+| S2.4 | `set_z` takes effect immediately for hit/drag instead of from the next draw | code that plans for the lag — nowhere evidenced |
+| S2.5 | edges and mouse position come from the same frame | the injection contract `spec/44_0` §8.3 — **must** be preserved, hence last |
 
-Entscheidung dazu steht beim User; mein Vorschlag ist, alle vier ungated zu
-machen, weil ein Gate hier nur zwei Verhalten gleichzeitig am Leben hält (wie
-bei den zwei memV3-Gates, die den `free:`-Operator still zum No-op gemacht
-haben).
+The decision on this rests with the user; my proposal is to make all four ungated,
+because a gate here only keeps two behaviours alive at the same time (as
+with the two memV3 gates that silently turned the `free:` operator into a no-op).
 
 ---
 
-## Was ich heute Nacht mache — in dieser Reihenfolge
+## What I do tonight — in this order
 
-Ohne Rückfrage, weil es unter Prinzip 3 (Spec+Tests zuerst) fällt und nichts
-überschreibt:
+Without asking back, because it falls under principle 3 (spec+tests first) and overwrites
+nothing:
 
-1. **Stufe 0 komplett** (S0.1–S0.4). Reine Spec- und Kommentararbeit, macht die
-   Spec wieder wahr. Danach `exodus build --all`, um sicher zu sein, dass die
-   Doku-Änderungen nichts angefasst haben.
-2. **S2.1 Spec + Test** — Cancel-Flanke in `spec/44_0`/`44_6` schreiben,
-   `tests/test_input_touch_cancel.aiml` anlegen. Der Test ist zunächst **rot**;
-   das ist der Beweis, dass er den Fehler trifft.
-3. **S2.2 Spec + Test** (klein, scharf abgrenzbar).
-4. **S2.1 + S2.2 Code**, dann die betroffenen Tests plus die drei
-   `test_input_injection_*` und die `test_mirror_*`. Keine Gesamtsuite.
-5. **S1.4, S1.5, S1.2** in 9rooms — lokal, je ein kleiner Eingriff.
-6. **S1.1**: `exodus-client-prod.json` anlegen und bauen (dauert), fps-Log
-   gegen den heutigen Build.
+1. **Stage 0 completely** (S0.1–S0.4). Pure spec and comment work, makes the
+   spec true again. Afterwards `exodus build --all`, to be sure that the
+   doc changes touched nothing.
+2. **S2.1 spec + test** — write the cancel edge into `spec/44_0`/`44_6`,
+   create `tests/test_input_touch_cancel.aiml`. The test is **red** at first;
+   that is the proof that it hits the bug.
+3. **S2.2 spec + test** (small, sharply delimitable).
+4. **S2.1 + S2.2 code**, then the affected tests plus the three
+   `test_input_injection_*` and the `test_mirror_*`. No full suite.
+5. **S1.4, S1.5, S1.2** in 9rooms — local, one small intervention each.
+6. **S1.1**: create and build `exodus-client-prod.json` (takes a while), fps log
+   against today's build.
 
-Das reicht für die Nacht; S2.3 und S2.5 kommen danach, weil sie beide die
-Gestenmaschine berühren und ich sie nicht halb offen lassen will.
+That is enough for the night; S2.3 and S2.5 come afterwards, because they both touch the
+gesture machine and I do not want to leave them half open.
 
-## Was ich *nicht* mache
+## What I do *not* do
 
-- Kein Deploy, kein Anfassen von `exodus-client.json` oder `out/client/`.
-- Keine Gesamt-Suite und keine Abnahmeläufe von selbst (Prinzip aus
-  `no-long-acceptance-runs`); nur die betroffenen Tests.
-- Keine Stufe-3-Punkte anfangen — die brauchen erst K2 bzw. eine
-  Server-Entscheidung.
-- Kein `rm -rf __aiml_cache` (exodus invalidiert selbst).
+- No deploy, no touching of `exodus-client.json` or `out/client/`.
+- No full suite and no acceptance runs on my own (principle from
+  `no-long-acceptance-runs`); only the affected tests.
+- Do not start any stage 3 items — they first need K2 or a
+  server decision.
+- No `rm -rf __aiml_cache` (exodus invalidates by itself).
 
-## Was eine Entscheidung braucht (Default, falls keine kommt)
+## What needs a decision (default if none comes)
 
-1. **Prod-Config umstellen?** Ich baue nur die Vergleichs-Config und messe.
-   Das Umstellen von `exodus-client.json` und das Deploy bleiben bei dir.
-2. **Die vier Verhaltensänderungen ungated?** Default: ja, ungated (Begründung
-   oben). Sag Stopp, dann baue ich S2.1 hinter ein Spec-Flag — würde ich aber
-   nicht empfehlen.
-3. **S2.3 `update_gesture` in der Engine oder erst im Board?** Default: Engine,
-   additiv — weil `cosmos` und jede künftige Touch-App denselben Fehler sonst
-   erbt. Board-lokal wäre schneller, aber die dritte Kopie derselben Logik.
+1. **Switch the prod config?** I only build the comparison config and measure.
+   Switching `exodus-client.json` and the deploy stay with you.
+2. **The four behaviour changes ungated?** Default: yes, ungated (rationale
+   above). Say stop, and I will build S2.1 behind a spec flag — but I would
+   not recommend it.
+3. **S2.3 `update_gesture` in the engine or first in the board?** Default: engine,
+   additive — because `cosmos` and every future touch app would otherwise inherit the same bug.
+   Board-local would be faster, but the third copy of the same logic.
