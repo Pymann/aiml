@@ -1,13 +1,13 @@
 #!/bin/bash
-# Ein Fall nach spec/70: JIT (compile-only + gesamt) und AOT (Objekt, Link, Lauf),
-# dazu die C-Grundlinie im SELBEN Lauf (F70-60).  Der alte run.sh kann AOT nicht
-# messen -- er uebergibt `-o <case>.bin` (das ist ein OBJEKTFILE) und versucht es
-# auszufuehren; mit `set -e` endet er dort.  Deshalb dieser Runner.
+# One case per spec/70: JIT (compile-only + total) and AOT (object, link, run),
+# plus the C baseline in the SAME run (F70-60).  The old run.sh cannot measure AOT
+# -- it passes `-o <case>.bin` (that is an OBJECT FILE) and tries to
+# execute it; with `set -e` it ends there.  Hence this runner.
 #
 #   performance/run_case.sh fib100
 set -uo pipefail
 
-CASE="${1:?Fall fehlt, z.B. fib100}"
+CASE="${1:?case missing, e.g. fib100}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 AIML="$ROOT/out/aiml/aiml"
 LIB="$ROOT/out/libaiml"
@@ -15,8 +15,8 @@ SRC="$ROOT/performance/cases/$CASE.aiml"
 WORK="$ROOT/performance/results/$CASE"
 BASE="$ROOT/performance/baselines/$CASE"
 
-[ -x "$AIML" ] || { echo "kein Compiler: $AIML"; exit 1; }
-[ -f "$SRC" ]  || { echo "kein Fall: $SRC"; exit 1; }
+[ -x "$AIML" ] || { echo "no compiler: $AIML"; exit 1; }
+[ -f "$SRC" ]  || { echo "no case: $SRC"; exit 1; }
 mkdir -p "$WORK"
 
 ms() { date +%s%3N; }
@@ -32,12 +32,12 @@ for i in 1 2 3; do
     echo "  compile_ms=$((t1-t0)) rc=$rc"
 done
 
-echo; echo "== JIT: compile + Lauf =="
+echo; echo "== JIT: compile + run =="
 t0=$(ms); "$AIML" "$SRC" > "$WORK/jit.stdout" 2> "$WORK/jit.stderr"; rc=$?; t1=$(ms)
 echo "  total_ms=$((t1-t0)) rc=$rc"
 sed 's/^/  /' "$WORK/jit.stdout"
 
-echo; echo "== AOT: Objekt, Link, Lauf (F70-4) =="
+echo; echo "== AOT: object, link, run (F70-4) =="
 t0=$(ms); "$AIML" "$SRC" -o "$WORK/$CASE.o" > "$WORK/aot.compile.log" 2>&1; rc=$?; t1=$(ms)
 echo "  obj_ms=$((t1-t0)) rc=$rc"
 DEPS=""; [ -f "$WORK/$CASE.o.deps" ] && DEPS="$(tr '\n' ' ' < "$WORK/$CASE.o.deps")"
@@ -54,7 +54,7 @@ if [ -x "$WORK/$CASE.bin" ]; then
 fi
 
 if [ -f "$BASE/$CASE.c" ]; then
-    echo; echo "== C-Grundlinie, gleicher Lauf (F70-60) =="
+    echo; echo "== C baseline, same run (F70-60) =="
     t0=$(ms); gcc -O2 -o "$WORK/$CASE.c.bin" "$BASE/$CASE.c" 2> "$WORK/c.build.log"; rc=$?; t1=$(ms)
     echo "  cc_ms=$((t1-t0)) rc=$rc flags='-O2' cc=gcc-$(gcc -dumpversion)   # F70-63"
     echo "  binary_bytes=$(stat -c %s "$WORK/$CASE.c.bin")"

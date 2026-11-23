@@ -2,13 +2,13 @@
 
 SKIP_BUILD=0
 RUN_MANUAL=0
-# Zeitgrenze je Test.  OHNE sie stoppt EIN haengender Test die ganze Suite —
-# genau das ist am 2026-10-15 passiert.  Eine Ueberschreitung ist ein
-# FEHLSCHLAG mit Begruendung, kein stilles Weiterlaufen.
+# Time limit per test.  WITHOUT it ONE hanging test stops the whole suite —
+# exactly that happened on 2026-10-15.  Exceeding it is a
+# FAILURE with a reason, not a silent carrying on.
 TEST_TIMEOUT="${TEST_TIMEOUT:-600}"
-# --only <muster>: nur passende Tests laufen lassen.  Die Suite kostet sonst
-# jedes Mal den ganzen Korpus, auch wenn eine Aenderung einen Test betrifft
-# (User-Direktive: nur betroffene Tests).
+# --only <pattern>: only run matching tests.  Otherwise the suite costs
+# the whole corpus every time, even when a change affects one test
+# (user directive: only affected tests).
 ONLY=""
 TAKE_ONLY=0
 for arg in "$@"; do
@@ -24,8 +24,8 @@ for arg in "$@"; do
     fi
 done
 
-# exodus kommt aus der Python-venv, wo es eine gibt (in einem Container liegt
-# es woanders und steht schon auf PATH).
+# exodus comes from the Python venv where there is one (in a container it lives
+# elsewhere and is already on PATH).
 [ -f ../../exvenv/bin/activate ] && source ../../exvenv/bin/activate
 if [ $SKIP_BUILD -eq 0 ]; then
     exodus build
@@ -104,9 +104,9 @@ echo "======================" | tee -a "$OUTPUT_FILE"
 # by tests/lifetime/run_lifetime.sh (which is MODE-aware). This generic runner
 # has no MODE/neg semantics and scored the compile-error ones as failures
 # (Expected 0), so they belong to the lifetime suite, not the corpus.
-# Verzeichnisse ausschliessen, nicht NAMEN: `grep -v "out"` traf jeden Test mit
-# "out" im Namen ("layout", "routes", "outparam") und verschluckte 5 Tests seit
-# immer (gemessen 17.10.2026).
+# Exclude directories, not NAMES: `grep -v "out"` hit every test with
+# "out" in its name ("layout", "routes", "outparam") and swallowed 5 tests since
+# forever (measured 17.10.2026).
 TEST_FILES=$(find tests/ -name "*.aiml" \
     -not -path "*/__aiml_cache/*" -not -path "*/build/*" -not -path "*/out/*" \
     -not -path "*/_*" -not -path "tests/lifetime/neg/*" | sort)
@@ -163,23 +163,23 @@ for TEST in $TEST_FILES; do
     fi
 
     # "# Requires: driver" means the file belongs to a run.sh in its own
-    # directory and is not a standalone test — ein Negativfall soll ja gerade
-    # NICHT uebersetzen, und einzeln gestartet sieht das wie ein Fehlschlag
-    # aus.  Die Treiber laufen am Ende dieses Skripts.
+    # directory and is not a standalone test — a negative case is meant
+    # NOT to compile, and started on its own that looks like a failure.
+    # The drivers run at the end of this script.
     if grep -q "# Requires: driver" "$TEST"; then
-        echo "[ SKIP ] $TEST (Requires: driver — laeuft ueber run.sh seines Verzeichnisses)" | tee -a "$OUTPUT_FILE"
+        echo "[ SKIP ] $TEST (Requires: driver — runs via the run.sh of its directory)" | tee -a "$OUTPUT_FILE"
         ((SKIPPED++))
         ((TOTAL++))
         continue
     fi
 
-    # "# Requires: manual" — der Test oeffnet ein Fenster und laeuft, bis ein
-    # MENSCH es schliesst.  In einer Testschleife ist das kein Test, sondern ein
-    # Halt: der Lauf stand am 2026-10-15 ueber 20 Minuten in
-    # test_mem_render_probe, weil niemand davor sass.  Mit --manual laufen sie.
+    # "# Requires: manual" — the test opens a window and runs until a
+    # HUMAN closes it.  In a test loop that is not a test but a
+    # halt: on 2026-10-15 the run stood for over 20 minutes in
+    # test_mem_render_probe, because nobody sat in front of it.  With --manual they run.
     if grep -q "# Requires: manual" "$TEST"; then
         if [ "${RUN_MANUAL:-0}" != "1" ]; then
-            echo "[ SKIP ] $TEST (Requires: manual — wartet auf einen Menschen; mit --manual starten)" | tee -a "$OUTPUT_FILE"
+            echo "[ SKIP ] $TEST (Requires: manual — waits for a human; start with --manual)" | tee -a "$OUTPUT_FILE"
             ((SKIPPED++))
             ((TOTAL++))
             continue
@@ -214,12 +214,12 @@ for TEST in $TEST_FILES; do
     
     # Determine expected exit code.
     #
-    # Zuerst der DATEIKOPF: fast jeder Test traegt dort "# Expected exit code: N".
-    # Bis 2026-10-11 las das niemand, und die Liste darunter war die einzige
-    # Wahrheit — ein Negativtest ohne Eintrag galt als Fehlschlag, obwohl er
-    # genau das tat, was sein Kopf ankuendigt (test_mixed_operand_error).
-    # Die Liste darunter bleibt und UEBERSCHREIBT den Kopf, damit kein
-    # bestehender Eintrag seine Bedeutung verliert.
+    # First the FILE HEADER: almost every test carries "# Expected exit code: N" there.
+    # Until 2026-10-11 nobody read it, and the list below was the only
+    # truth — a negative test without an entry counted as a failure, although it
+    # did exactly what its header announces (test_mixed_operand_error).
+    # The list below stays and OVERRIDES the header, so that no
+    # existing entry loses its meaning.
     EXPECTED_CODE=$(grep -m1 -oE '^# Expected exit code: *[0-9]+' "$TEST" | grep -oE '[0-9]+$')
     [ -n "$EXPECTED_CODE" ] || EXPECTED_CODE=0
     if [[ "$TEST" == *"test_collections.aiml" ]]; then
@@ -254,12 +254,12 @@ for TEST in $TEST_FILES; do
         # a class from another file — see spec/49 §7.
         EXPECTED_CODE=1
     elif [[ "$TEST" == *"test_model_set_base_into_field_error.aiml" ]]; then
-        # Negativtest: ein Basiswert in ein abgeleitetes FELD -- mehrdeutig, und
-        # der alte Weg stuerzte ab (spec/15).
+        # Negative test: a base value into a derived FIELD -- ambiguous, and
+        # the old route crashed (spec/15).
         EXPECTED_CODE=1
     elif [[ "$TEST" == *"test_return_list_no_list_error.aiml" ]]; then
-        # Negativtest: `return: [a, b, c]` in einer i32-Funktion -- vorher gewann
-        # still das letzte Element. Harter Fehler (spec/10).
+        # Negative test: `return: [a, b, c]` in an i32 function -- before, the last
+        # element silently won. Hard error (spec/10).
         EXPECTED_CODE=1
     elif [[ "$TEST" == *"test_static_string_switch_error.aiml" ]]; then
         # Negative test: same variable compared against 2+ string literals —
@@ -369,11 +369,11 @@ for TEST in $TEST_FILES; do
         fi
     fi
 
-    # `timeout` meldet 124 (bzw. 137 nach SIGKILL).  Das als gewoehnlichen
-    # Fehlschlag zu zaehlen waere irrefuehrend — ein Test, der HAENGT, ist etwas
-    # anderes als einer, der ein falsches Ergebnis liefert.
+    # `timeout` reports 124 (or 137 after SIGKILL).  Counting that as an ordinary
+    # failure would be misleading — a test that HANGS is something
+    # different from one that returns a wrong result.
     if [ $EXIT_CODE -eq 124 ] || [ $EXIT_CODE -eq 137 ]; then
-        echo "[ FAIL ] $TEST (ZEITGRENZE ${TEST_TIMEOUT}s ueberschritten — haengt der Test?)" | tee -a "$OUTPUT_FILE"
+        echo "[ FAIL ] $TEST (TIME LIMIT ${TEST_TIMEOUT}s exceeded — is the test hanging?)" | tee -a "$OUTPUT_FILE"
         ((FAILED++))
         ((TOTAL++))
         echo "" | tee -a "$OUTPUT_FILE"
@@ -392,11 +392,11 @@ for TEST in $TEST_FILES; do
     echo "" | tee -a "$OUTPUT_FILE"
 done
 
-# ── Treiber-Tests: ein run.sh je Verzeichnis ────────────────────────────────
-# Diese Tests brauchen mehr als "Datei starten, Exit-Code lesen": gepaarte
-# Prozesse (bundle_socket) oder erwartete DIAGNOSEN statt Laeufe
-# (pipeline_purity, pipeline_declared_neg).  Sie gehoeren trotzdem in die
-# Suite — sonst laufen sie nie mit und verrotten.
+# ── driver tests: one run.sh per directory ──────────────────────────────────
+# These tests need more than "start the file, read the exit code": paired
+# processes (bundle_socket) or expected DIAGNOSTICS instead of runs
+# (pipeline_purity, pipeline_declared_neg).  They still belong in the
+# suite — otherwise they never run along and rot.
 for DRIVER in tests/*/run.sh; do
     [ -x "$DRIVER" ] || continue
     echo "--------------------------------------------------------" | tee -a "$OUTPUT_FILE"

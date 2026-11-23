@@ -1,15 +1,15 @@
-# spec_covers.aiml — welcher Test beansprucht welches Spec-Kapitel?
+# spec_covers.aiml — which test claims which spec chapter?
 #
-# Drei Arten von Treffern, strikt getrennt (tools/spec_covers_rules.txt):
-#   A = AUSGEWIESEN  der Test nennt `spec/NN` selbst im Text   -> eine ZUSAGE
-#   N = NAME         der Dateiname nennt das Thema             -> starker Hinweis
-#   D = BENUTZT      der Rumpf benutzt ein Konstrukt           -> schwacher Hinweis
+# Three kinds of hits, strictly separated (tools/spec_covers_rules.txt):
+#   A = DECLARED     the test names `spec/NN` itself in its text -> a COMMITMENT
+#   N = NAME         the file name names the topic               -> strong hint
+#   D = USED         the body uses a construct                   -> weak hint
 #
-# Nur A ist eine Zusage.  Ein Kapitel mit ausschliesslich D-Treffern ist NICHT
-# abgedeckt, es wird nur beruehrt.  Diese Trennung ist der Zweck des Werkzeugs:
-# ohne sie taeuscht die Liste Abdeckung vor, und genau das soll sie aufdecken.
+# Only A is a commitment.  A chapter with only D hits is NOT
+# covered, it is only touched.  This separation is the purpose of the tool:
+# without it the list fakes coverage, and that is exactly what it is meant to uncover.
 #
-# Ausgabe je Datei:  <pfad>\tA=<kapitel,...>\tN=<kapitel,...>\tD=<kapitel,...>
+# Output per file:  <path>\tA=<chapter,...>\tN=<chapter,...>\tD=<chapter,...>
 
 - model:
     name: Rule
@@ -106,7 +106,7 @@
             - call: [io.write, io.stdout, "${fpath}\tA=${auth}\tN=${byname}\tD=${used}\n"]
             - return: [0]
 
-      # Arbeitsliste statt Rekursion: gefundene Unterverzeichnisse werden angehaengt.
+      # Work list instead of recursion: subdirectories found are appended.
       - def:
           name: walk
           args: [[root_dir, string]]
@@ -155,7 +155,7 @@
       - if:
           condition: { lt: [rule_count, 10] }
           then:
-            - call: [log.error, "spec_covers: Regeltabelle leer oder unlesbar (${rule_count})"]
+            - call: [log.error, "spec_covers: rule table empty or unreadable (${rule_count})"]
             - return: [1]
       - decl: [scan_root, string, { call: [sys.get_arg, 1] }]
       - if:

@@ -19,9 +19,9 @@ run_aot_test() {
 
     echo "--- AOT: $name ---"
 
-    # Jeder Fall bekommt sein EIGENES Verzeichnis: die Objekte werden unten als
-    # Gruppe eingesammelt, und in einem gemeinsamen Verzeichnis zieht Fall 2
-    # sonst das Hauptobjekt von Fall 1 mit -- zwei Einsprungpunkte in einem Link.
+    # Every case gets its OWN directory: the objects are collected below as a
+    # group, and in a shared directory case 2 would otherwise pull in
+    # the main object of case 1 -- two entry points in one link.
     local case_dir="$WORK_DIR/$name"
     mkdir -p "$case_dir"
 
@@ -33,13 +33,13 @@ run_aot_test() {
         return
     fi
 
-    # Objekte einsammeln: das Hauptobjekt UND die Import-Objekte, die der
-    # Compiler danebenlegt.  Bis hierher stand ein Leser fuer `${name}.o.deps`
-    # -- ein Sidecar, das main.cpp seit 0dd80d77 (2026-03-22) nicht mehr
-    # schreibt, sondern loescht; seitdem linkte dieser Test ohne die Importe und
-    # scheiterte an undefinierten Symbolen.  Die Abhaengigkeiten stehen heute in
-    # `${name}.d` (Make-Format), die Objekte liegen als <pfad_mit_unterstrichen>.o
-    # im selben Verzeichnis.
+    # Collect the objects: the main object AND the import objects that the
+    # compiler puts next to it.  Up to here there was a reader for `${name}.o.deps`
+    # -- a sidecar that main.cpp has no longer written since 0dd80d77 (2026-03-22)
+    # but deletes; since then this test linked without the imports and
+    # failed on undefined symbols.  The dependencies are now in
+    # `${name}.d` (make format), the objects lie as <path_with_underscores>.o
+    # in the same directory.
     local objs
     objs=$(ls "$case_dir"/*.o 2>/dev/null | tr '\n' ' ')
 
@@ -76,11 +76,11 @@ run_aot_test "hello" "tests/test_aot_hello.aiml" "AOT_HELLO_PASS"
 # Test 2: With import (lib_globals.aiml)
 run_aot_test "import" "tests/test_aot_import.aiml" "AOT_IMPORT_PASS"
 
-# Test 3: Text-IR mit -o <datei>.ll.  Frueher stand hier "default mode, no
-# flags" und die Erwartung, dass ein blosser Aufruf `tests/test_aot_hello.ll`
-# hinterlaesst.  Der blosse Aufruf UEBERSETZT UND FUEHRT HEUTE AUS (er druckte
-# AOT_HELLO_PASS), schreibt also gar keine Datei -- der Fall pruefte eine
-# Vorgabe, die es nicht mehr gibt.  Jetzt wird der .ll-Pfad gepruefet, den es gibt.
+# Test 3: text IR with -o <file>.ll.  This used to say "default mode, no
+# flags" with the expectation that a bare call leaves `tests/test_aot_hello.ll`
+# behind.  The bare call today COMPILES AND RUNS (it printed
+# AOT_HELLO_PASS), so it writes no file at all -- the case checked a
+# default that no longer exists.  Now the .ll path that does exist is checked.
 echo "--- AOT: ll_output ---"
 ((TOTAL++))
 LL_OUT="$WORK_DIR/hello_ir.ll"

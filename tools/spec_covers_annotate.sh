@@ -1,28 +1,28 @@
 #!/usr/bin/env bash
-# spec_covers_annotate.sh — schreibt die `# SPEC:`-Kopfzeile in die Tests.
+# spec_covers_annotate.sh — writes the `# SPEC:` header line into the tests.
 #
-# Teilung der Arbeit: die ZUORDNUNG macht tools/spec_covers.aiml (lesend, in aiml),
-# das EINFUEGEN macht dieses Skript. `sed -i '1i'` ist byte-treu, und jede Aenderung
-# ist genau eine zusaetzliche Zeile — das laesst sich mit `git diff --stat`
-# vollstaendig pruefen, was bei Stringbau in aiml nicht so einfach waere.
+# Division of labour: the MAPPING is done by tools/spec_covers.aiml (read-only, in aiml),
+# the INSERTING by this script. `sed -i '1i'` is byte-faithful, and every change
+# is exactly one additional line — that can be checked completely with `git diff --stat`,
+# which would not be as easy with string building in aiml.
 #
-# Herkunft steht IM Schluessel, damit Zusage und Vermutung greppbar getrennt sind:
-#   `# SPEC:`   der Test nennt die Kapitel selbst       -> uebernommen
-#   `# SPEC?:`  aus dem Dateinamen abgeleitet           -> zu bestaetigen
-# Der Schluessel heisst SPEC und nicht COVERS, weil `# COVERS:` in den Laboren
-# (tests/closures, tests/clearance) schon als PROSA-Feld belegt ist — zwei
-# Bedeutungen fuer einen Schluessel waere genau die Doppeldeutigkeit, die ein
-# spaeteres Werkzeug stillschweigend falsch liest.
-# Dateien ohne beides werden NICHT angefasst und aufgelistet: sie brauchen einen
-# Menschen, und eine geratene Annotation waere schlimmer als keine.
+# The origin is IN the key, so that commitment and guess are separable by grep:
+#   `# SPEC:`   the test names the chapters itself       -> taken over
+#   `# SPEC?:`  derived from the file name               -> to be confirmed
+# The key is called SPEC and not COVERS, because `# COVERS:` in the labs
+# (tests/closures, tests/clearance) is already taken as a PROSE field — two
+# meanings for one key would be exactly the ambiguity that a
+# later tool silently misreads.
+# Files with neither are NOT touched and are listed: they need a
+# human, and a guessed annotation would be worse than none.
 #
-#   bash tools/spec_covers_annotate.sh            # Trockenlauf (zaehlt nur)
-#   WRITE=1 bash tools/spec_covers_annotate.sh    # schreibt
+#   bash tools/spec_covers_annotate.sh            # dry run (only counts)
+#   WRITE=1 bash tools/spec_covers_annotate.sh    # writes
 set -uo pipefail
 cd "$(dirname "$0")/.."
 REPORT="${REPORT:-logs/covers_report.tsv}"
 WRITE="${WRITE:-0}"
-[ -f "$REPORT" ] || { echo "Report fehlt: $REPORT — erst tools/spec_covers.aiml laufen lassen"; exit 1; }
+[ -f "$REPORT" ] || { echo "report missing: $REPORT — run tools/spec_covers.aiml first"; exit 1; }
 
 n_auth=0; n_name=0; n_none=0; n_skip=0
 : > logs/covers_needs_human.txt
@@ -42,12 +42,12 @@ while IFS=$'\t' read -r fpath acol ncol dcol; do
     n_none=$((n_none+1)); continue
   fi
   if [ "$WRITE" = "1" ]; then
-    sed -i "1i $line" "$fpath" || { echo "FEHLER bei $fpath"; exit 1; }
+    sed -i "1i $line" "$fpath" || { echo "ERROR at $fpath"; exit 1; }
   fi
 done < "$REPORT"
 
-echo "COVERS:   $n_auth  (aus Spec-Zitaten im Test)"
-echo "COVERS?:  $n_name  (aus dem Dateinamen, zu bestaetigen)"
-echo "ohne:     $n_none  -> logs/covers_needs_human.txt"
-echo "schon da: $n_skip"
-[ "$WRITE" = "1" ] || echo "(Trockenlauf — WRITE=1 zum Schreiben)"
+echo "COVERS:   $n_auth  (from spec citations in the test)"
+echo "COVERS?:  $n_name  (from the file name, to be confirmed)"
+echo "without:  $n_none  -> logs/covers_needs_human.txt"
+echo "already there: $n_skip"
+[ "$WRITE" = "1" ] || echo "(dry run — WRITE=1 to write)"

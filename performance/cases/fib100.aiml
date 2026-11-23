@@ -1,18 +1,18 @@
 # SPEC: 70_performance
-# fib100 — wie schnell die ersten 100 Fibonacci-Zahlen entstehen (spec/70 §6.1).
+# fib100 — how fast the first 100 Fibonacci numbers come about (spec/70 §6.1).
 #
-# F70-10  Wiederholungen werden hochgezogen, bis eine Probe >= 500 ms dauert
-#         (time.mono_ms hat nur Millisekunden; eine einzelne Runde aus 100
-#          Additionen liegt weit unter der Auflösung).
-# F70-11  Die Kalibrierung ist der verworfene Warmlauf.
-# F70-12  Danach sieben Proben, Median aus der sortierten Liste.
-# F70-16  Das Ergebnis wird geprüft (fib(10)) und ausgegeben (fib(92)), damit die
-#         Schleife nicht wegoptimiert werden kann und falsche Arithmetik auffällt.
+# F70-10  Repetitions are raised until one sample takes >= 500 ms
+#         (time.mono_ms only has milliseconds; a single round of 100
+#          additions lies far below the resolution).
+# F70-11  The calibration is the discarded warm-up run.
+# F70-12  After that seven samples, median from the sorted list.
+# F70-16  The result is checked (fib(10)) and printed (fib(92)), so that the
+#         loop cannot be optimised away and wrong arithmetic gets noticed.
 #
-# Zahlenbreite: fib(92) = 7540113804746346429 ist die größte exakt in i64
-# darstellbare Fibonacci-Zahl. Ab fib(93) läuft die Summe über und die Runde
-# rechnet modulo 2^64 weiter. Als Arbeitslast ist das gewollt und hier
-# dokumentiert; als *Ergebnis* wären die Werte ab 93 falsch.
+# Number width: fib(92) = 7540113804746346429 is the largest Fibonacci number
+# exactly representable in i64. From fib(93) on the sum overflows and the round
+# keeps computing modulo 2^64. As a workload that is intended and documented
+# here; as a *result* the values from 93 on would be wrong.
 #
 # Expected exit code: 0
 
@@ -68,7 +68,7 @@
       - if:
           condition: { eq: [sink, 0] }
           then:
-            - call: [io.write, io.stdout, "sink=0 — die Runde wurde wegoptimiert\n"]
+            - call: [io.write, io.stdout, "sink=0 — the round was optimised away\n"]
             - call: [sys.exit, 1]
       - return: elapsed
 
@@ -80,7 +80,7 @@
       - if:
           condition: { neq: [f10, 55] }
           then:
-            - decl: [bad, string, "FAIL fib(10)=${f10} erwartet 55\n"]
+            - decl: [bad, string, "FAIL fib(10)=${f10} expected 55\n"]
             - call: [io.write, io.stdout, bad]
             - call: [sys.exit, 1]
 

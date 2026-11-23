@@ -1,73 +1,73 @@
-# AIML Test-Suiten — Status & Übersicht
+# AIML test suites — status & overview
 
-Stand: 2026-09-23 · Branch `mem-v3-compiler` · Build: `exodus build --all` (aus `exvenv`) · Gates: `AIML_MEM_V3=1 AIML_LIFETIME_DROPS=1` (memV3, Compiler-Default)
+As of: 2026-09-23 · branch `mem-v3-compiler` · build: `exodus build --all` (from `exvenv`) · gates: `AIML_MEM_V3=1 AIML_LIFETIME_DROPS=1` (memV3, compiler default)
 
-## TL;DR — sind alle Suiten grün?
+## TL;DR — are all suites green?
 
-**Fast — der memV3-/Lifetime-/Memory-Safety-Kern ist grün, mit vier Ausnahmen, von denen keine ein offener memV3-Bug ist:**
+**Almost — the memV3/lifetime/memory-safety core is green, with four exceptions, none of which is an open memV3 bug:**
 
-- ✅ **Lifetime (spec/61)**: 47/0, 13 neg, 2 warn — vollständig grün.
-- ✅ **Memory-Sanitizer (valgrind)**: 41/41 memory-safe (die vormalige leak-probe-A-Verletzung war der `sys.env`-Bug, jetzt behoben).
-- ✅ **JSON-Serialize**: alle Serialize-Tests grün + **deterministisch** — der langjährige nicht-deterministische #2-Bug ist an der Wurzel behoben.
-- 🟢 **Haupt-Korpus**: der einzige rote Test ist **1 offene Design-Frage** (`test_model_inherits_hetero_list`). Die `lifetime/neg`-Negativtests werden jetzt (korrekt) nur noch von `run_lifetime.sh` gefahren, nicht mehr vom Korpus. **Keine flaky Tests, kein Harness-Rauschen mehr.**
-- ⚠️ **AOT-Smoke**: 1/3 — 2 **pre-existing** Multi-File-Linking-Fehler (eigene Infra-Domäne, von der memV3-Arbeit unberührt).
-- ⏸️ **WASM**: diese Session **nicht** ausgeführt (braucht node/wasm-Toolchain).
+- ✅ **Lifetime (spec/61)**: 47/0, 13 neg, 2 warn — fully green.
+- ✅ **Memory sanitizer (valgrind)**: 41/41 memory-safe (the former leak-probe-A violation was the `sys.env` bug, now fixed).
+- ✅ **JSON serialize**: all serialize tests green + **deterministic** — the long-standing non-deterministic bug #2 is fixed at the root.
+- 🟢 **Main corpus**: the only red test is **1 open design question** (`test_model_inherits_hetero_list`). The `lifetime/neg` negative tests are now (correctly) run only by `run_lifetime.sh`, no longer by the corpus. **No flaky tests, no more harness noise.**
+- ⚠️ **AOT smoke**: 1/3 — 2 **pre-existing** multi-file linking failures (a separate infra domain, untouched by the memV3 work).
+- ⏸️ **WASM**: **not** run in this session (needs the node/wasm toolchain).
 
 ---
 
-## Die Suiten im Detail
+## The suites in detail
 
-| Suite | Runner | Zweck | Stand |
+| Suite | Runner | Purpose | Status |
 |---|---|---|---|
-| Haupt-Korpus | `run_all_tests.sh` | Alle `tests/**/*.aiml` via nativem JIT (`aiml <file> -r`); räumt DB-State + `__aiml_cache` | **421/466 OK** |
-| Lifetime (spec/61) | `tests/lifetime/run_lifetime.sh` | Ownership/Borrow/Move + Teardown-Leaks (pos + neg + warn), MODE=spec61 | **47/0, 13 neg, 2 warn** ✅ |
-| Memory-Sanitizer | `tests/run_memory_sanitizers.sh` | 41 Probes je 2× (nativ = Correctness + valgrind = keine UAF/Double-Free/Invalid-Access) | **40/41** |
-| AOT-Smoke | `run_aot_tests.sh` | `.aiml` → `.o` kompilieren, gegen `libaiml.so` linken, Binary ausführen | **1/3** ⚠️ |
-| WASM | `run_wasm_tests.sh` | `.aiml` → wasm32, Ausführung via node | **nicht ausgeführt** ⏸️ |
-| (Wrapper, keine Suite) | `run_safe.sh` | ulimit-Wrapper (RAM/Stack/CPU) zum Debuggen von Compiler-Crashes | — |
+| Main corpus | `run_all_tests.sh` | All `tests/**/*.aiml` via native JIT (`aiml <file> -r`); cleans up DB state + `__aiml_cache` | **421/466 OK** |
+| Lifetime (spec/61) | `tests/lifetime/run_lifetime.sh` | Ownership/borrow/move + teardown leaks (pos + neg + warn), MODE=spec61 | **47/0, 13 neg, 2 warn** ✅ |
+| Memory sanitizer | `tests/run_memory_sanitizers.sh` | 41 probes, 2× each (native = correctness + valgrind = no UAF/double free/invalid access) | **40/41** |
+| AOT smoke | `run_aot_tests.sh` | Compile `.aiml` → `.o`, link against `libaiml.so`, run the binary | **1/3** ⚠️ |
+| WASM | `run_wasm_tests.sh` | `.aiml` → wasm32, run via node | **not run** ⏸️ |
+| (wrapper, not a suite) | `run_safe.sh` | ulimit wrapper (RAM/stack/CPU) for debugging compiler crashes | — |
 
 ---
 
-## Nicht-grüne Punkte — Einordnung
+## Non-green items — classification
 
-### Haupt-Korpus (419/466) — die 47 „nicht-OK" zerfallen so:
-- **38 SKIP** — Bibliotheks-/Fixture-Dateien, die von anderen Tests importiert werden (kein eigenständiger Lauf).
-- **9× `tests/lifetime/neg/n01…n13`** — **Harness-Rauschen, kein Bug**: das sind Negativ-Tests (müssen einen Compile-Fehler werfen), aber `run_all_tests.sh` erwartet Exit 0 → zählt sie als Fail. Validiert werden sie von `run_lifetime.sh` (dort 13/13 grün).
-- **1 echte offene Frage: `test_model_inherits_hetero_list`** — `list<any>` mit Base-Slice-Semantik für heterogene Model-Listen. **Vom Test-Autor selbst als offene Typsystem-Design-Frage markiert** („Es bleibt zu entscheiden, wie der compiler hinsichtlich Typisierung gestaltet wird") — braucht eine Grundsatzentscheidung + Feature, keinen Bugfix.
-### JSON-Serialize (✅ gelöst)
-- `test_json_style_serialize` + `test_serialize_ext` waren der bekannte nicht-deterministische Serialize-Bug #2 (~75% SIGSEGV, layout-/ASLR-abhängig, valgrind-unsichtbar). **Root-Cause:** `sys.serialize` übergab für ein `list/map/buffer`-Arg unter memV3 die **alloca-Adresse** statt des **Handle-Pointers** → `emitSerializeList` las die Pointer-Bytes als `{size,cap,data}` → `size` = niederwertige Bits einer Heap-Adresse → Garbage-Iteration → Crash (mal klein/ok, meist riesig). **Fix:** Handle unter memV3 vor dem Serialisieren laden. Jetzt **30/30 deterministisch, valgrind 0 invalid-access**, alle Serialize-Tests 5/5.
+### Main corpus (419/466) — the 47 "not OK" break down as follows:
+- **38 SKIP** — library/fixture files imported by other tests (no standalone run).
+- **9× `tests/lifetime/neg/n01…n13`** — **harness noise, not a bug**: these are negative tests (they must raise a compile error), but `run_all_tests.sh` expects exit 0 → counts them as failures. They are validated by `run_lifetime.sh` (13/13 green there).
+- **1 real open question: `test_model_inherits_hetero_list`** — `list<any>` with base-slice semantics for heterogeneous model lists. **Marked by the test author as an open type-system design question** ("It remains to be decided how the compiler will be designed with regard to typing") — needs a fundamental decision + a feature, not a bug fix.
+### JSON serialize (✅ solved)
+- `test_json_style_serialize` + `test_serialize_ext` were the known non-deterministic serialize bug #2 (~75% SIGSEGV, layout/ASLR dependent, invisible to valgrind). **Root cause:** for a `list/map/buffer` argument under memV3, `sys.serialize` passed the **alloca address** instead of the **handle pointer** → `emitSerializeList` read the pointer bytes as `{size,cap,data}` → `size` = low bits of a heap address → garbage iteration → crash (sometimes small/ok, mostly huge). **Fix:** load the handle under memV3 before serialising. Now **30/30 deterministic, valgrind 0 invalid access**, all serialize tests 5/5.
 
-### Flaky-Cluster test_system + test_mem_leak_probe (✅ gelöst)
-- SIGABRT „corrupted size vs. prev_size" / Sanitizer-leak-probe-A. **Root-Cause:** `sys.env()` lieferte eine `AimlHttpMap*` OHNE memV3-`[rc][pad]`-Header (open-addressing, libc-strdup-Strings) — aber der `map<string:string>`-Local ist ein Handle, dessen Scope-Drop `aiml_map_handle_release` den rc-Header 8 B VOR dem Block liest+schreibt → Heap-Korruption. **Fix:** echtes memV3-Map-Handle (`aiml_map_handle_new`) + DENSE-Store aiml-managed Strings. Zusätzlich `io.read_all` → aiml-managed String (war bare-malloc, OOB-Read). Jetzt **test_system 20/20 + valgrind 0, test_mem_leak_probe 10/10, Sanitizer 41/41**.
+### Flaky cluster test_system + test_mem_leak_probe (✅ solved)
+- SIGABRT "corrupted size vs. prev_size" / sanitizer leak-probe A. **Root cause:** `sys.env()` returned an `AimlHttpMap*` WITHOUT the memV3 `[rc][pad]` header (open addressing, libc strdup strings) — but the `map<string:string>` local is a handle whose scope drop `aiml_map_handle_release` reads+writes the rc header 8 B BEFORE the block → heap corruption. **Fix:** a real memV3 map handle (`aiml_map_handle_new`) + DENSE store with aiml-managed strings. Additionally `io.read_all` → aiml-managed string (was a bare malloc, OOB read). Now **test_system 20/20 + valgrind 0, test_mem_leak_probe 10/10, sanitizer 41/41**.
 
-### AOT-Smoke (1/3)
-- 2 Fehler beim **Multi-File-AOT-Linken** (`undefined reference to testlib.inc_counter` u.a.) und ein `.ll`-Output-Test. Das ist die Objektdatei-/Linker-Infrastruktur — eine eigene Domäne, **unberührt** von den memV3-/Ownership-Änderungen.
+### AOT smoke (1/3)
+- 2 failures in **multi-file AOT linking** (`undefined reference to testlib.inc_counter` and others) and one `.ll` output test. That is the object file/linker infrastructure — a domain of its own, **untouched** by the memV3/ownership changes.
 
 ### WASM
-- Diese Session nicht ausgeführt (separates Target, braucht node + wasm-Toolchain). Kein Aussage über grün/rot.
+- Not run in this session (separate target, needs node + the wasm toolchain). No statement about green/red.
 
 ---
 
-## Diese Session gefixt (Branch `mem-v3-compiler`)
+## Fixed in this session (branch `mem-v3-compiler`)
 
-memV3/spec-61-Konsolidierung, jeder Fix valgrind-verifiziert, Lifetime durchgängig 47/0:
+memV3/spec 61 consolidation, every fix verified with valgrind, lifetime 47/0 throughout:
 
-- **§6.2/§10** — Push einer Pointer-Expression in `value list<Model>` = Compile-Fehler (3 Diagnostic-Tests).
-- **§5.1** — Zyklus-Guard im Free-Walker (rekursiver `ptr<>`-Back-ref, `test_recursive_ptr_ser`).
-- **§5.4/§7** — move-only Ressourcen (`tensor`, `ptr<>`) nicht value-kopierbar; Tests auf `ref<>`/`{clone}` migriert (`test_class_member_shared_tensor`, `test_list_model_push_value_and_pointer`) + Compiler-Enforcement.
-- **§5** — `srv.filesystem` lädt den `list<path>`-Handle (memV3); `get_copy_at` re-initialisiert leere Container-Handles; `db_indexed list<string>` (Default/Backfill/`aiml_str_dup`).
-- **§5.4 (Lösung c)** — `.get`/`.at`/`{at:}` liefern `ref<T>`-Borrow; `ptr<T>`-Binding = Compile-Fehler (nutze `ref<T>` oder `get_copy`); **`ref<Interface>` vereinheitlicht** (= Fat-Pointer wie `ptr<Interface>`, inkl. Dispatch + Cross-Interface-Upcast); ~14 Tests migriert + Negativ-Test `test_ptr_bind_get_borrow_error`.
-- **§5 (JSON-Serialize #2)** — `sys.serialize` lädt für `list/map/buffer`-Args den memV3-Handle statt der Slot-Adresse → behebt den nicht-deterministischen Serialize-Crash an der Wurzel (`test_json_style_serialize`, `test_serialize_ext`).
-- **§5 (sys.env / io.read_all)** — `sys.env()` liefert ein echtes memV3-Map-Handle (statt header-loser `AimlHttpMap*`), `io.read_all` einen aiml-managed String → behebt den Heap-Korruptions-Cluster (`test_system`, `test_mem_leak_probe`, Sanitizer leak-probe A).
+- **§6.2/§10** — pushing a pointer expression into a `value list<Model>` = compile error (3 diagnostic tests).
+- **§5.1** — cycle guard in the free walker (recursive `ptr<>` back-ref, `test_recursive_ptr_ser`).
+- **§5.4/§7** — move-only resources (`tensor`, `ptr<>`) are not value-copyable; tests migrated to `ref<>`/`{clone}` (`test_class_member_shared_tensor`, `test_list_model_push_value_and_pointer`) + compiler enforcement.
+- **§5** — `srv.filesystem` loads the `list<path>` handle (memV3); `get_copy_at` re-initialises empty container handles; `db_indexed list<string>` (default/backfill/`aiml_str_dup`).
+- **§5.4 (solution c)** — `.get`/`.at`/`{at:}` return a `ref<T>` borrow; a `ptr<T>` binding = compile error (use `ref<T>` or `get_copy`); **`ref<Interface>` unified** (= fat pointer like `ptr<Interface>`, incl. dispatch + cross-interface upcast); ~14 tests migrated + negative test `test_ptr_bind_get_borrow_error`.
+- **§5 (JSON serialize #2)** — for `list/map/buffer` arguments `sys.serialize` loads the memV3 handle instead of the slot address → fixes the non-deterministic serialize crash at the root (`test_json_style_serialize`, `test_serialize_ext`).
+- **§5 (sys.env / io.read_all)** — `sys.env()` returns a real memV3 map handle (instead of a header-less `AimlHttpMap*`), `io.read_all` an aiml-managed string → fixes the heap corruption cluster (`test_system`, `test_mem_leak_probe`, sanitizer leak-probe A).
 
-## Reproduzieren
+## Reproducing
 
 ```bash
 source /media/.../python/exvenv/bin/activate
 cd .../test/aiml
 exodus build --all
-bash run_all_tests.sh --no-build          # Haupt-Korpus (nur EIN Lauf gleichzeitig!)
-bash tests/lifetime/run_lifetime.sh        # Lifetime spec61
-bash tests/run_memory_sanitizers.sh        # valgrind-Gate (~20–30 min)
-bash run_aot_tests.sh                       # AOT-Smoke
+bash run_all_tests.sh --no-build          # main corpus (only ONE run at a time!)
+bash tests/lifetime/run_lifetime.sh        # lifetime spec61
+bash tests/run_memory_sanitizers.sh        # valgrind gate (~20–30 min)
+bash run_aot_tests.sh                       # AOT smoke
 ```

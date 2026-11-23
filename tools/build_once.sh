@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Ein Build zur Zeit.  Ueberlappende `exodus build --all` uebernehmen Objekte,
-# die der andere Lauf gerade mit altem Inhalt erzeugt hat — die Aenderung ist
-# dann NICHT in der Bibliothek, und man misst an Code, der nie gebaut wurde.
-# (Zweimal passiert; beide Male kostete es mehrere Runden.)
+# One build at a time.  Overlapping `exodus build --all` take over objects
+# that the other run has just produced with old content — the change is
+# then NOT in the library, and you measure code that was never built.
+# (Happened twice; both times it cost several rounds.)
 set -uo pipefail
 cd "$(dirname "$0")/.."
 LOG="${1:-/tmp/aiml_build.log}"
@@ -14,6 +14,6 @@ fi
 source ../../exvenv/bin/activate
 timeout 1800 exodus build --all > "$LOG" 2>&1
 RC=$?
-echo "exit=$RC  Fehler=$(grep -cE 'error:' "$LOG")"
+echo "exit=$RC  errors=$(grep -cE 'error:' "$LOG")"
 grep -E "error:" "$LOG" | sed 's|.*/aiml/||' | sort -u | head -5
 exit $RC

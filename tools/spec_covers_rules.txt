@@ -1,13 +1,13 @@
-# spec_covers_rules.txt — Tabelle fuer tools/spec_covers.aiml
-# Format: art|marker|kapitel
-#   A = AUSGEWIESEN  der Test nennt spec/NN selbst im Text  -> eine Zusage
-#   N = NAME         der DATEINAME nennt das Thema            -> starker Hinweis
-#   D = BENUTZT      der Rumpf benutzt ein Konstrukt           -> schwacher Hinweis
-# Nur A ist eine Zusage.  Ein Kapitel mit ausschliesslich D-Treffern ist NICHT
-# abgedeckt, es wird beruehrt.  Marker muessen das THEMA anzeigen, nicht jede
-# Beilaeufigkeit — zu kurze Marker (z.B. 'glob' in 'global') verrauschen alles.
+# spec_covers_rules.txt — table for tools/spec_covers.aiml
+# Format: kind|marker|chapter
+#   A = DECLARED     the test names spec/NN itself in its text -> a commitment
+#   N = NAME         the FILE NAME names the topic             -> strong hint
+#   D = USED         the body uses a construct                 -> weak hint
+# Only A is a commitment.  A chapter with only D hits is NOT
+# covered, it is touched.  Markers must indicate the TOPIC, not every
+# incidental mention — markers that are too short (e.g. 'glob' in 'global') add noise everywhere.
 
-# --- A: ein Eintrag je Spec-Datei ---
+# --- A: one entry per spec file ---
 A|spec/00|00_reference_guide
 A|spec/01|01_primitive_types
 A|spec/02|02_types
@@ -116,7 +116,7 @@ A|spec/63|63_network_filesystems
 A|spec/64|64_closures
 A|spec/65|65_symbol_clearance
 
-# --- N: Dateiname nennt das Thema (staerkster maschineller Hinweis) ---
+# --- N: the file name names the topic (strongest machine hint) ---
 N|enum|14_enums
 N|tensor|50_tensor_runtime
 N|cascade|57_function_cascades
@@ -235,9 +235,9 @@ D|trace.|48_trace
 D|storage.|23_2_storage
 D|sys.exe|23_system
 
-# --- N, zweite Runde: aus logs/covers_needs_human.txt nachgezogen (17.10.2026).
-#     Die erste Tabelle liess 145 Dateien ohne Zuordnung; die meisten waren
-#     Luecken HIER, nicht wirklich unzuordenbar.
+# --- N, second round: added from logs/covers_needs_human.txt (17.10.2026).
+#     The first table left 145 files without a mapping; most of them were
+#     gaps HERE, not really unassignable.
 N|list|10_collections
 N|map_|10_collections
 N|idx|10_collections

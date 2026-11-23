@@ -1481,7 +1481,7 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
                         for (const auto& ch : meta.children)
                             if (kInteractive.count(ch.type)) { anyInteractive = true; break; }
 
-                        // F44_8-1 — durchklickbares Prefab mit interaktivem Kind
+                        // F44_8-1 — click-through prefab with an interactive child
                         if (meta.inputTransparent && !hasMethod("set_input_transparent")) {
                             for (const auto& ch : meta.children) {
                                 if (!kInteractive.count(ch.type)) continue;

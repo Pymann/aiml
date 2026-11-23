@@ -44,13 +44,13 @@ WASM="$BUILD_DIR/$NAME.wasm"
 "$AIML_BIN" "$TEST" --target wasm32 --emit-main -o "$LL" 2>&1 >/dev/null | grep -v "^$" || true
 
 # 2. emcc links IR + libaiml_wasm.a → .wasm + .js loader
-# -fexceptions: spec/22 verlangt fangbare Ausnahmen, und spec/10 F10-23 wirft bei
-# jedem Index ausserhalb der Grenzen.  Ohne das Flag linkt emcc libc++-noexcept und
-# __cxa_throw trappt (RuntimeError: unreachable) statt zu werfen.
+# -fexceptions: spec/22 requires catchable exceptions, and spec/10 F10-23 throws on
+# every index out of bounds.  Without the flag emcc links libc++-noexcept and
+# __cxa_throw traps (RuntimeError: unreachable) instead of throwing.
 #
-# „signature mismatch" wird NICHT mehr ausgefiltert: genau das meldet wasm-ld, wenn
-# der Compiler eine libc-Funktion mit falscher Breite deklariert (malloc(i64) auf
-# wasm32).  Die Warnung war die einzige Spur dieser Fehlerklasse.
+# "signature mismatch" is NO LONGER filtered out: that is exactly what wasm-ld reports when
+# the compiler declares a libc function with the wrong width (malloc(i64) on
+# wasm32).  The warning was the only trace of this class of error.
 EMCC_LOG="$BUILD_DIR/emcc.log"
 "$EMCC" "$LL" -o "$JS" \
     -L"$AIML_WASM_DIR" -laiml_wasm \
@@ -60,7 +60,7 @@ EMCC_LOG="$BUILD_DIR/emcc.log"
     2>&1 | grep -viE "cache:INFO|system_libs:INFO" | tee "$EMCC_LOG" || true
 
 if grep -q "signature mismatch" "$EMCC_LOG"; then
-    echo "FEHLER: wasm-ld meldet Signatur-Abweichungen (falsche size_t-Breite im Codegen):" >&2
+    echo "ERROR: wasm-ld reports signature mismatches (wrong size_t width in codegen):" >&2
     grep "signature mismatch" "$EMCC_LOG" >&2
     exit 4
 fi
