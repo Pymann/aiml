@@ -17,23 +17,23 @@ Regression tests: `tests/test_kv_get_mutate_set_same_key.aiml` (5/5),
 ## TL;DR
 
 ```aiml
-- decl: [p, Player, { call: [players.get, email] }]   # 1. flache Kopie aus decoded_cache
-- call: [p.creature_ids.push, c.creature_id]          # 2. mutiert geteilten Heap-Buffer
+- decl: [p, Player, { call: [players.get, email] }]   # 1. shallow copy from decoded_cache
+- call: [p.creature_ids.push, c.creature_id]          # 2. mutates the shared heap buffer
 - call: [players.set, email, p]                       # 3. SIGSEGV in aiml_ser_encode
 ```
 
-`kv.get` returnt einen Pointer in den `decoded_cache`; `decl: [p, T, kv.get(...)]`
-macht nur einen flachen `memcpy` der Struct-Bytes. Alle inneren Heap-Pointer
-(Strings, Listen-Data-Buffer) bleiben **shared** zwischen `p` und Cache.
+`kv.get` returns a pointer into the `decoded_cache`; `decl: [p, T, kv.get(...)]`
+only does a shallow `memcpy` of the struct bytes. All inner heap pointers
+(strings, list data buffers) stay **shared** between `p` and the cache.
 
-Mutationen wie `push` reallocieren den geteilten Buffer. Beim folgenden
-`kv.set(same_key, p)` ruft das Runtime als **allerersten Schritt**
-`kv_decoded_evict(kv, same_key)` auf — bevor der Encoder läuft. Eviction freed
-alle Heap-Allokationen des Cache-Eintrags, einschließlich des Buffers, der
-jetzt auch in `p` referenziert ist.
+Mutations like `push` reallocate the shared buffer. On the following
+`kv.set(same_key, p)` the runtime calls, as its **very first step**,
+`kv_decoded_evict(kv, same_key)` — before the encoder runs. Eviction frees
+all heap allocations of the cache entry, including the buffer that
+is now also referenced in `p`.
 
-Der direkt darauf folgende `aiml_ser_encode(p, …)` dereferenziert dangling
-Pointer → SIGSEGV in `libc.strlen` über die `enc(STRING)`-Codepath.
+The `aiml_ser_encode(p, …)` that directly follows dereferences dangling
+pointers → SIGSEGV in `libc.strlen` via the `enc(STRING)` code path.
 
 ---
 

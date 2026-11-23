@@ -18,11 +18,11 @@ explicit.
 
 Examples:
 
-- "im card editor"
-- "die datei im ideas ordner"
-- "die tests fuer cascade"
-- "das file neben dem parser"
-- "das markdown unter doc"
+- "in the card editor"
+- "the file in the ideas folder"
+- "the tests for cascade"
+- "the file next to the parser"
+- "the markdown under doc"
 
 Humans resolve these phrases using:
 

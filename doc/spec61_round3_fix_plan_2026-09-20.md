@@ -1,94 +1,94 @@
-# Spec 61: Plan zur Behebung der drei Befunde aus Review-Runde 3
+# Spec 61: plan to fix the three findings from review round 3
 
-Stand: 2026-09-20. Status: geplant, noch nicht umgesetzt.
+As of: 2026-09-20. Status: planned, not yet implemented.
 
-## Ziel und Umfang
+## Goal and scope
 
-Die drei nachgewiesenen Fehler aus den Probes 30–32 beheben. Maßgeblich sind Spec 61 §5.1 (Deep-Clone und Erhalt der Graphstruktur) und §6.2 (Borrow statt Ownership-Transfer bei `ref<T>`).
+Fix the three demonstrated errors from probes 30–32. Authoritative are spec 61 §5.1 (deep clone and preserving the graph structure) and §6.2 (borrow instead of ownership transfer for `ref<T>`).
 
-Der letzte vollständige Testlauf ergab 42 erfolgreiche Prüfungen und drei Fehlschläge. Die älteren Regressionstests bestanden bereits. Da parallel Änderungen am Compiler stattfinden, muss dieser Ausgangsstand vor der Umsetzung erneut geprüft werden.
+The last complete test run gave 42 successful checks and three failures. The older regression tests already passed. Since changes to the compiler are happening in parallel, this baseline must be re-checked before implementation.
 
-| Befund | Ist-Verhalten | Erwartetes Verhalten | Regressionstest |
+| Finding | Actual behaviour | Expected behaviour | Regression test |
 |---|---|---|---|
-| F1: Listen-Clone ist flach | Mutation am Clone verändert das Original von 7 auf 99 | Alle besessenen veränderlichen Elemente werden unabhängig geklont | [30_round3_list_clone_deep.aiml](../tests/lifetime/30_round3_list_clone_deep.aiml) |
-| F2: Container-DAG geht verloren | Zwei ursprünglich identische Listen werden getrennt geklont; `right.len` bleibt 2 | Beide Kanten zeigen auf genau einen geklonten Container; `right.len` wird 3 | [31_round3_clone_container_dag.aiml](../tests/lifetime/31_round3_clone_container_dag.aiml) |
-| F3: Borrow-Zuweisung wird als Move gewertet | `set: [view, second]` führt anschließend zu `use-after-move` für `second` | `view: ref<T>` leiht aus; `second: ptr<T>` bleibt ein gültiger Owner | [32_round3_ref_rebind_borrow.aiml](../tests/lifetime/32_round3_ref_rebind_borrow.aiml) |
+| F1: list clone is shallow | Mutation of the clone changes the original from 7 to 99 | All owned mutable elements are cloned independently | [30_round3_list_clone_deep.aiml](../tests/lifetime/30_round3_list_clone_deep.aiml) |
+| F2: container DAG is lost | Two originally identical lists are cloned separately; `right.len` stays 2 | Both edges point to exactly one cloned container; `right.len` becomes 3 | [31_round3_clone_container_dag.aiml](../tests/lifetime/31_round3_clone_container_dag.aiml) |
+| F3: borrow assignment is treated as a move | `set: [view, second]` subsequently leads to `use-after-move` for `second` | `view: ref<T>` borrows; `second: ptr<T>` stays a valid owner | [32_round3_ref_rebind_borrow.aiml](../tests/lifetime/32_round3_ref_rebind_borrow.aiml) |
 
-Die Implementierung bleibt hinter dem bestehenden Spec-61-Schalter `AIML_MEM_V3`. Die Semantik von `copy` bleibt flach. Ältere Fehler und andere Ownership-Baustellen gehören nur dann in diesen Umfang, wenn sie die drei Korrekturen unmittelbar blockieren.
+The implementation stays behind the existing spec 61 switch `AIML_MEM_V3`. The semantics of `copy` stay shallow. Older errors and other ownership construction sites only belong in this scope if they directly block the three corrections.
 
-## 1. Ausgangsstand sichern
+## 1. Secure the baseline
 
-- Aktuellen Diff prüfen und parallele Änderungen erhalten; die unten genannten Funktionen erneut lesen.
-- Einen Compiler aus dem aktuellen C++-Stand bauen und verwendeten Commit beziehungsweise Arbeitsstand sowie Buildzeit dokumentieren.
-- `ONLY=round3 bash tests/lifetime/run_lifetime.sh` ausführen. Bereits behobene Fälle nicht erneut implementieren.
-- Bestehende Kontrollfälle zu Container-Aliasing, flachem Copy, Graph-Clone und Borrowing als Vergleich verwenden.
+- Review the current diff and keep parallel changes; re-read the functions named below.
+- Build a compiler from the current C++ state and document the commit or working state used as well as the build time.
+- Run `ONLY=round3 bash tests/lifetime/run_lifetime.sh`. Do not re-implement cases that are already fixed.
+- Use existing control cases for container aliasing, shallow copy, graph clone and borrowing as a comparison.
 
-## 2. F2: Container im Graph-Clone memoisierten
+## 2. F2: memoise containers in the graph clone
 
-**Betroffene Stellen:** [ser_runtime.cpp](../src/sys/ser_runtime.cpp), `clw`, insbesondere `AIML_TD_LIST_PTR`, `AIML_TD_MAP_PTR`, `AIML_TD_BUFFER_PTR`, sowie `aiml_clone_deep`.
+**Affected places:** [ser_runtime.cpp](../src/sys/ser_runtime.cpp), `clw`, in particular `AIML_TD_LIST_PTR`, `AIML_TD_MAP_PTR`, `AIML_TD_BUFFER_PTR`, as well as `aiml_clone_deep`.
 
-Die drei Container-Fälle erzeugen bisher bei jeder eingehenden Kante einen neuen Handle. Sie müssen dieselbe Zuordnung Originalobjekt → Clone verwenden wie der übrige Graph-Walker.
+So far the three container cases create a new handle for every incoming edge. They must use the same original object → clone mapping as the rest of the graph walker.
 
-1. Vor jeder Container-Allokation die quelladressbasierte Memo-Tabelle prüfen.
-2. Bei einem Treffer den bereits geklonten Handle übernehmen und dessen **Container-Refcount** für die zusätzliche besitzende Kante erhöhen. Hier nicht `aiml_model_incref` verwenden: Modell- und Container-Header sind unterschiedliche Laufzeitverträge.
-3. Bei einem neuen Objekt den passenden Listen-, Map- oder Buffer-Handle anlegen und **vor** dem rekursiven Kopieren seiner Inhalte in die Memo-Tabelle eintragen.
-4. Alle Unterobjekte innerhalb desselben Clone-Aufrufs mit derselben Memo-Tabelle bearbeiten. Null-Handles erhalten ihre bestehende Semantik.
-5. Sicherstellen, dass jede besitzende Kante genau einmal gezählt wird und temporäre Hilfshandles keine zusätzlichen Referenzen zurücklassen.
+1. Before every container allocation, check the source-address-based memo table.
+2. On a hit, take over the already cloned handle and increase its **container refcount** for the additional owning edge. Do not use `aiml_model_incref` here: model and container headers are different runtime contracts.
+3. For a new object, create the matching list, map or buffer handle and enter it into the memo table **before** recursively copying its contents.
+4. Process all sub-objects within the same clone call with the same memo table. Null handles keep their existing semantics.
+5. Make sure every owning edge is counted exactly once and temporary helper handles leave no additional references behind.
 
-**Abnahme:** Probe 31 besteht. Mutation über `duplicate.left` ist über `duplicate.right` sichtbar, während das Original unverändert bleibt. Zusätzlich entsprechende DAG-Fälle für Map und Buffer prüfen, da sie denselben geänderten Switch-Zweig verwenden. Bei Scope-Ende dürfen keine mehrfachen Freigaben auftreten.
+**Acceptance:** probe 31 passes. A mutation via `duplicate.left` is visible via `duplicate.right`, while the original stays unchanged. Additionally check corresponding DAG cases for map and buffer, since they use the same changed switch branch. No multiple releases may occur at scope end.
 
-## 3. F1: Listen-Clone an den Deep-Clone-Walker anbinden
+## 3. F1: hook the list clone up to the deep-clone walker
 
-**Betroffene Stellen:** [ast_compiler_stmt.cpp](../src/core/ast_compiler_stmt.cpp), `emitListHandleDecl`; [string_runtime.cpp](../src/sys/string_runtime.cpp), `aiml_list_handle_copy`; die Erzeugung der Clone-Typbeschreibungen in [ast_compiler.cpp](../src/core/ast_compiler.cpp).
+**Affected places:** [ast_compiler_stmt.cpp](../src/core/ast_compiler_stmt.cpp), `emitListHandleDecl`; [string_runtime.cpp](../src/sys/string_runtime.cpp), `aiml_list_handle_copy`; the generation of clone type descriptors in [ast_compiler.cpp](../src/core/ast_compiler.cpp).
 
-`emitListHandleDecl` führt `copy` und `clone` bisher gemeinsam über `aiml_list_handle_copy` aus. Diese Runtime-Funktion kopiert absichtlich nur den Container und erhöht die Refcounts seiner gemeinsam genutzten Elemente.
+So far `emitListHandleDecl` executes `copy` and `clone` together via `aiml_list_handle_copy`. This runtime function deliberately copies only the container and increases the refcounts of its shared elements.
 
-1. Die Behandlung von `isCopy` und `isClone` aufteilen. `copy` behält den flachen Runtime-Pfad und seine Move-only-Prüfung.
-2. `clone` über den memoisierten Deep-Clone-Walker aus Abschnitt 2 ausführen. Vorhandene Hilfsfunktionen für Clone-Ausdrücke und Typbeschreibungen wiederverwenden beziehungsweise gezielt gemeinsam nutzbar machen.
-3. Die tatsächliche Repräsentation beachten: Eine lokale Liste enthält unter memV3 einen **Handle-Pointer**, keinen inline gespeicherten Listenheader. Quelladresse, Zieladresse und Root-Typbeschreibung müssen übereinstimmen; ein `LIST_PTR`-Descriptor benötigt die Adresse des Handle-Slots.
-4. Quellausdruck genau einmal auswerten. Einen gültigen Clone-Ausdruck nicht stillschweigend durch einen Null-Handle ersetzen, wenn die Quelle kein einfacher Variablenname ist.
-5. Eine gemeinsame Memo-Tabelle für die gesamte Liste benutzen. Ein separater Clone-Aufruf pro Element würde Aliase zwischen Elementen erneut zerstören.
-6. Den Ergebnis-Handle als genau eine neue besitzende Referenz in den Zielslot übernehmen und mit dem vorhandenen Scope-Drop verbinden. Keine zusätzliche flache Element-Incref-Schleife nach dem Deep-Clone ausführen.
+1. Split the handling of `isCopy` and `isClone`. `copy` keeps the shallow runtime path and its move-only check.
+2. Execute `clone` via the memoised deep-clone walker from section 2. Reuse existing helper functions for clone expressions and type descriptors, or make them specifically shareable.
+3. Respect the actual representation: under memV3 a local list contains a **handle pointer**, not a list header stored inline. Source address, target address and root type descriptor must match; a `LIST_PTR` descriptor needs the address of the handle slot.
+4. Evaluate the source expression exactly once. Do not silently replace a valid clone expression with a null handle when the source is not a simple variable name.
+5. Use one shared memo table for the whole list. A separate clone call per element would destroy aliases between elements again.
+6. Take the result handle into the target slot as exactly one new owning reference and connect it to the existing scope drop. Do not run an additional shallow element incref loop after the deep clone.
 
-**Abnahme:** Probe 30 besteht. Ergänzend prüfen:
+**Acceptance:** probe 30 passes. Additionally check:
 
-- Zwei Listeneinträge mit demselben `shared<T>` ergeben genau ein neues gemeinsames Zielobjekt innerhalb des Clones.
-- `list<ptr<T>>` erhält neue besessene Objekte; keine Pointeradresse wird mit dem Original geteilt.
-- Ein flaches `copy` einer Liste mit `shared<T>` teilt weiterhin die Elemente, besitzt aber einen eigenen Container.
-- Die bestehenden skalaren Copy-/Clone-Probes und Probe 15 bleiben grün.
+- Two list entries with the same `shared<T>` result in exactly one new shared target object within the clone.
+- `list<ptr<T>>` gets new owned objects; no pointer address is shared with the original.
+- A shallow `copy` of a list with `shared<T>` still shares the elements, but owns its own container.
+- The existing scalar copy/clone probes and probe 15 stay green.
 
-## 4. F3: Move-Diagnostik am Zieltyp ausrichten
+## 4. F3: align the move diagnostic with the target type
 
-**Betroffene Stelle:** [borrow_check.cpp](../src/core/borrow_check.cpp), `BorrowChecker::stmt`, Zweig für `SetStmt`.
+**Affected place:** [borrow_check.cpp](../src/core/borrow_check.cpp), `BorrowChecker::stmt`, branch for `SetStmt`.
 
-Die bisherige Fallunterscheidung behandelt einen unbekannten beziehungsweise nicht als `ptr` erfassten Zielslot trotzdem als besitzenden Empfänger. So wird bei einem `ref<T>`-Ziel die Pointerquelle fälschlich auf `Moved` gesetzt.
+The existing case distinction still treats an unknown target slot, or one not recorded as `ptr`, as an owning receiver. So for a `ref<T>` target the pointer source is wrongly set to `Moved`.
 
-1. Den statischen Typ des Zielslots verlässlich ermitteln. Für lokale Variablen die Typinformationen aller Deklarationen und Parameter verwenden; ein fehlender Eintrag in `ptrLocals` beweist keinen besitzenden Zieltyp.
-2. Bei `ref<T>`-Zielen die Quelle auf gültige Benutzung prüfen, aber **nicht** als verschoben markieren. Die Borrow-Herkunft beziehungsweise bestehende Invalidierungsinformation aktualisieren, soweit der Checker diese erfasst.
-3. Dieselbe Entscheidung für auflösbare `ref<T>`-Felder verwenden. Ein Feldziel allein darf nicht automatisch einen Move auslösen.
-4. Bei echten besitzenden Zielslots die bestehende Move-Regel erhalten. Verbotene Cross-kind-Konversionen müssen weiterhin diagnostiziert werden; die Korrektur darf sie nicht durch eine pauschale Ausnahme freigeben.
-5. Beim Lowering gegenprüfen, dass eine Borrow-Zuweisung weder den Quellslot leert noch dessen Drop entfernt oder Eigentum an das `ref` überträgt. Probe 32 muss auch nach erfolgreicher Diagnosephase korrekt laufen.
+1. Determine the static type of the target slot reliably. For local variables use the type information of all declarations and parameters; a missing entry in `ptrLocals` does not prove an owning target type.
+2. For `ref<T>` targets check the source for valid use, but do **not** mark it as moved. Update the borrow origin or existing invalidation information, insofar as the checker records it.
+3. Use the same decision for resolvable `ref<T>` fields. A field target alone must not automatically trigger a move.
+4. For real owning target slots keep the existing move rule. Forbidden cross-kind conversions must still be diagnosed; the correction must not allow them through a blanket exemption.
+5. In lowering, cross-check that a borrow assignment neither empties the source slot nor removes its drop or transfers ownership to the `ref`. Probe 32 must also run correctly after a successful diagnostic phase.
 
-**Abnahme:** Probe 32 besteht. Ergänzend Borrow-Feldzuweisung prüfen. Die negativen Tests für echte Moves, illegale Konversionen und Weiterverwendung eines an einen besitzenden Parameter übergebenen Pointers bleiben wirksam.
+**Acceptance:** probe 32 passes. Additionally check borrow field assignment. The negative tests for real moves, illegal conversions and reuse of a pointer passed to an owning parameter stay effective.
 
-## 5. Reihenfolge und Abschlussprüfung
+## 5. Order and final check
 
-Empfohlene Reihenfolge: F2 → F1 → F3. F1 benötigt die korrekte Container-Memoisierung; F3 ist davon unabhängig. Pro Änderung einen kleinen, separat prüfbaren Diff erstellen.
+Recommended order: F2 → F1 → F3. F1 needs the correct container memoisation; F3 is independent of it. Create a small, separately checkable diff per change.
 
-Nach den Korrekturen aus dem AIML-Projektverzeichnis:
+After the corrections, from the AIML project directory:
 
 ```bash
 ONLY=round3 bash tests/lifetime/run_lifetime.sh
 bash tests/lifetime/run_lifetime.sh
 ```
 
-- Alle drei Ausgangsprobes und die gezielten Ergänzungen bestehen.
-- Die komplette Spec-61-Lifetime-Suite besteht einschließlich Negativ- und Warnprüfungen. Erwartungen nicht abschwächen, um fehlerhaftes Verhalten grün zu machen.
-- Die geänderten Clone-Pfade mit einem frisch gebauten ASan-Compiler auf ungültige Speicherzugriffe und doppelte Freigaben prüfen. Für Leak-Prüfungen azyklische Probes verwenden; absichtliche Ownership-Zyklen separat behandeln.
-- Relevante modellunabhängige Kontrolltests auch mit `MODE=off` ausführen, um die Begrenzung auf memV3 zu prüfen. Nicht die gesamte Spec-61-Suite im alten Modus als grün voraussetzen.
-- Bei neuen Fehlern nur die betroffenen Prüfungen erweitern; erfolgreiche unveränderte Prüfungen nicht ohne Anlass wiederholen.
-- Abschlussbericht mit geändertem C++-Pfad, Buildstand, Testbefehlen und Ergebnissen erstellen.
+- All three original probes and the targeted additions pass.
+- The complete spec 61 lifetime suite passes, including negative and warning checks. Do not weaken expectations to make faulty behaviour green.
+- Check the changed clone paths with a freshly built ASan compiler for invalid memory accesses and double frees. Use acyclic probes for leak checks; handle deliberate ownership cycles separately.
+- Also run relevant model-independent control tests with `MODE=off`, to check the restriction to memV3. Do not require the whole spec 61 suite to be green in the old mode.
+- On new failures only extend the affected checks; do not repeat successful unchanged checks without reason.
+- Write a final report with the changed C++ path, build state, test commands and results.
 
-## Erledigt, wenn
+## Done when
 
-Die neuen Tests 30–32 und alle bisherigen Lifetime-Prüfungen bestehen, Listen-Clones besessene Elemente unabhängig kopieren und interne Container-Aliase erhalten, und Borrow-Zuweisungen keine Ownership-Transfers auslösen. Der bestehende flache `copy`-Vertrag und echte Move-Diagnosen bleiben erhalten.
+The new tests 30–32 and all previous lifetime checks pass, list clones copy owned elements independently and keep internal container aliases, and borrow assignments trigger no ownership transfers. The existing shallow `copy` contract and real move diagnostics are preserved.

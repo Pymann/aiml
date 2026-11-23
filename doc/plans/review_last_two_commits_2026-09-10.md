@@ -1,88 +1,88 @@
-# Review: be8c023 und 69b0f34
+# Review: be8c023 and 69b0f34
 
-Datum: 2026-09-10. Beide Commits heißen `ownership dataflow`. Geprüfter Bereich: `HEAD~2..HEAD`, Endstand `69b0f34`. Alle 15 geänderten Pfade hinsichtlich Implementierung, Proben und dokumentierter Abnahme eingeordnet. Git ausschließlich lesend benutzt, wie für den Commit-Vergleich angefragt. Kein Compiler-/Runtime-Code geändert, keine neuen Tests gebaut oder ausgeführt.
+Date: 2026-09-10. Both commits are called `ownership dataflow`. Range reviewed: `HEAD~2..HEAD`, final state `69b0f34`. All 15 changed paths classified with respect to implementation, probes and documented acceptance. Git used read-only, as requested for the commit comparison. No compiler/runtime code changed, no new tests built or run.
 
-Die zwei untracked Proben im Arbeitsbaum sind kein Bestandteil dieser Commits. Deshalb sind lokale Erfolgsmeldungen nicht automatisch für einen sauberen Checkout reproduzierbar.
+The two untracked probes in the working tree are not part of these commits. Therefore local success reports are not automatically reproducible for a clean checkout.
 
-## R1 — P1: Return über eine View-Variable kann den tatsächlichen Owner freigeben
+## R1 — P1: a return via a view variable can free the actual owner
 
-Stelle: `src/core/ast_compiler_stmt.cpp:1400–1414,1465`.
+Location: `src/core/ast_compiler_stmt.cpp:1400–1414,1465`.
 
-Die Ausnahme vom Return-Cleanup nimmt nur die OwnershipId der zurückgegebenen Variable bzw. ihres textuellen Basenamens. Beispiel: lokales owned Modell `owner` mit einer Liste; lokales `view` erhält flach `owner.items`; `return view`. Der Analyzer markiert `view` als Borrowed/Unknown, hält aber keine Beziehung zu `owner`. Return schützt ausschließlich `view`; `owner` wird freigegeben. Die zurückgegebene Listenhülle enthält damit einen freigegebenen Buffer. Gleiches Problem bei einem geliehenen Modellpointer über einen anderen lokalen Namen.
+The exemption from return cleanup only takes the OwnershipId of the returned variable or its textual base name. Example: a local owned model `owner` with a list; a local `view` receives `owner.items` shallowly; `return view`. The analyzer marks `view` as Borrowed/Unknown, but keeps no relation to `owner`. Return protects only `view`; `owner` is freed. The returned list shell thus contains a freed buffer. The same problem exists with a borrowed model pointer under another local name.
 
-Die Prüfung `retVar` beweist keine Alias-Sicherheit. Benötigt: Ressourcenherkunft bis zum wirklichen Owner verfolgen, unabhängige Copy vor Cleanup oder bis dahin Cleanup bei ungeklärter Heap-Rückgabe unterdrücken. Der Fall wird erst durch die jetzt aktivierte Return-Freigabe laufzeitkritisch.
+The `retVar` check proves no alias safety. Needed: track the resource origin up to the real owner, an independent copy before cleanup, or until then suppress cleanup for an unresolved heap return. The case only becomes runtime-critical through the now activated return release.
 
-## R2 — P1: Member-Deep-Copy liest bei ptr<Model> den Pointer-Slot als Modell
+## R2 — P1: member deep copy reads the pointer slot as a model for ptr<Model>
 
-Stelle: `src/core/ast_compiler_stmt.cpp:1284–1296`; Helfer `src/core/ast_compiler.cpp:4994–5018`.
+Location: `src/core/ast_compiler_stmt.cpp:1284–1296`; helper `src/core/ast_compiler.cpp:4994–5018`.
 
-`emitLValueAddress` liefert für eine einfache ptr-Variable deren Alloca. Nur `is_byref_arg` wird dereferenziert; ein gewöhnlicher `ptr<Model>`-Parameter oder lokaler Pointer fällt nicht darunter. Der neue Fast-Path übergibt diese Adresse direkt an `aiml_ser_deep_copy` mit dem Descriptor des Zielmodells.
+For a simple ptr variable `emitLValueAddress` returns its alloca. Only `is_byref_arg` is dereferenced; an ordinary `ptr<Model>` parameter or local pointer does not fall under it. The new fast path passes this address directly to `aiml_ser_deep_copy` with the descriptor of the target model.
 
-Bei einer Zuweisung `set: [<.model, source_ptr]` wird dadurch der acht Byte große Pointer-Slot statt des Pointees serialisiert. Je nach Modellfeldern entstehen ungültige Pointer oder Reads außerhalb des Slots. Der bisherige untere Pointerpfad benutzte dagegen den ausgewerteten Pointerwert.
+For an assignment `set: [<.model, source_ptr]` the eight-byte pointer slot is therefore serialised instead of the pointee. Depending on the model fields this produces invalid pointers or reads outside the slot. The previous lower pointer path, by contrast, used the evaluated pointer value.
 
-Korrektur: `lvTy` und LLVM-Repräsentation auswerten; für `ptr<T>` den tatsächlichen Pointee übergeben, für Value-T das Struct-Lvalue. Null-/Typvertrag vor Zugriff prüfen.
+Correction: evaluate `lvTy` and the LLVM representation; for `ptr<T>` pass the actual pointee, for value T the struct lvalue. Check the null/type contract before access.
 
-## R3 — P1: Neuer Member-Fast-Path umgeht die Prüfung inkompatibler Modelle
+## R3 — P1: the new member fast path bypasses the check for incompatible models
 
-Stelle: `src/core/ast_compiler_stmt.cpp:1284–1314`.
+Location: `src/core/ast_compiler_stmt.cpp:1284–1314`.
 
-Die Deep-Copy kehrt bei :1296 zurück; die bisherige Diagnose für eine Quelle eines fremden Modelltyps beginnt erst bei :1299. Für einen borrowed Modellparameter mit anderem Layout greift der Fast-Path, obwohl `lvTy` nicht gegen `finalTypeName` geprüft wird. Der Ziel-Descriptor wird zum Lesen des falschen Quelllayouts verwendet. Das kann über einen zuvor diagnostizierten Programmfehler hinaus zur Speicherverletzung führen.
+The deep copy returns at :1296; the existing diagnostic for a source of a foreign model type only starts at :1299. For a borrowed model parameter with a different layout the fast path kicks in, although `lvTy` is not checked against `finalTypeName`. The target descriptor is used to read the wrong source layout. Beyond a previously diagnosed program error that can lead to a memory violation.
 
-Korrektur: sämtliche Kompatibilitätsprüfungen vor jedes Copy-/Move-Lowering setzen. Layoutverträglichkeit nicht durch das bloße Vorhandensein einer Adresse ersetzen.
+Correction: put all compatibility checks before any copy/move lowering. Do not replace layout compatibility by the mere presence of an address.
 
-## R4 — P1: Derselbe Owner kann mehrfach in verschiedene Member bewegt werden
+## R4 — P1: the same owner can be moved several times into different members
 
-Stelle: `src/core/ownership_analyzer.cpp:133–141`; `consumeLocalDrop` in `src/core/ast_compiler_stmt.cpp`.
+Location: `src/core/ownership_analyzer.cpp:133–141`; `consumeLocalDrop` in `src/core/ast_compiler_stmt.cpp`.
 
-Ein als Owned klassifizierter Local bleibt nach geplantem Member-Move unverändert Owned/Live. Die Quelle wird weder im Analyzer Moved noch mit den Zielressourcen verknüpft. Beispiel: frisches `x`, dann `set:[a.field,x]` und `set:[b.field,x]`. Beide Statements werden Move, beide speichern flach. `consumeLocalDrop` entfernt lediglich die direkte Freigabe von x. Die rekursiven Drops von a und b können trotzdem denselben inneren Heap doppelt freigeben; Return-Cleanup macht dies auch beim üblichen abschließenden Return sichtbar.
+A local classified as Owned stays Owned/Live unchanged after a planned member move. The source is neither marked Moved in the analyzer nor linked to the target resources. Example: a fresh `x`, then `set:[a.field,x]` and `set:[b.field,x]`. Both statements become a move, both store shallowly. `consumeLocalDrop` only removes the direct release of x. The recursive drops of a and b can still free the same inner heap twice; return cleanup makes this visible even with the usual final return.
 
-Korrektur: echten Konsum pfadbezogen erfassen; erneute Verwendung erkennen. Warning-first benötigt eine sichere Behandlung der gesamten beteiligten Besitzerkette, nicht nur das Löschen des Quell-Drops. Branch-/Schleifen-Merges können ohne solche Transferzustände keine Move-Sicherheit beweisen.
+Correction: record real consumption per path; detect reuse. Warning-first needs safe handling of the whole ownership chain involved, not just deleting the source drop. Without such transfer states, branch/loop merges cannot prove move safety.
 
-## R5 — P1: Calls können den freigegebenen Slot verändern, ohne den Plan zu aktualisieren
+## R5 — P1: calls can change the freed slot without updating the plan
 
-Stelle: `src/core/ownership_analyzer.cpp:168–194` (Bedingungen, Calls und übrige Statements).
+Location: `src/core/ownership_analyzer.cpp:168–194` (conditions, calls and remaining statements).
 
-Ein frisch deklarierter Listen-Local bleibt laut Analyzer owned, auch wenn eine Funktion ihn über einen by-ref-Parameter auf einen fremden Buffer umbindet. Weder Call-Argumente noch Bedingungen liefern Mutation-/Retain-Effekte. Das neue Return-Cleanup kann diesen fremden Buffer nun freigeben. Deep-Copy allein für Modell-Member-Set behebt diesen Fall nicht.
+According to the analyzer a freshly declared list local stays owned even when a function rebinds it to a foreign buffer via a by-ref parameter. Neither call arguments nor conditions provide mutation/retain effects. The new return cleanup can now free this foreign buffer. Deep copy for model member set alone does not fix this case.
 
-Korrektur: bekannte Call-Effekte auswerten, unbekannte Mutationen/Retention konservativ behandeln. Der im Bericht behauptete konservative Schutz der nicht modellierten Funktionsgrenzen ist damit nicht allgemein gegeben.
+Correction: evaluate known call effects, treat unknown mutations/retention conservatively. The conservative protection of the unmodelled function boundaries claimed in the report is therefore not given in general.
 
-## R6 — P1: Fehlende Analyse fällt weiterhin auf ungeprüfte normale Drops zurück
+## R6 — P1: missing analysis still falls back to unchecked normal drops
 
-Stelle: `src/core/ast_compiler_stmt.cpp:1642–1646`; `ownership_analyzer.cpp:58–72` und Statement-Dispatch.
+Location: `src/core/ast_compiler_stmt.cpp:1642–1646`; `ownership_analyzer.cpp:58–72` and statement dispatch.
 
-Das Gate läuft nur bei vorhandenem Plan, Block-Exit und OwnershipId. Fehlt eines, wird trotzdem `emitScopeDrop` ausgeführt. Try/Catch wird vom Analyzer nicht besucht; entsprechende Locals erhalten keine IDs/Exit-Fakten und umgehen das Gate. Die fehlende Abdeckung war schon beim Watch-Review W1 notiert und ist in diesen Commits nicht geschlossen.
+The gate only runs when a plan, a block exit and an OwnershipId are present. If one is missing, `emitScopeDrop` is executed anyway. Try/catch is not visited by the analyzer; the corresponding locals get no IDs/exit facts and bypass the gate. The missing coverage was already noted in watch review W1 and is not closed in these commits.
 
-Korrektur: bei fehlendem Beweis konservativ unterdrücken oder den jeweiligen Block/Parameter explizit modellieren. Das ist eine verbleibende Schutzlücke der neu eingeführten Analyse, nicht die Behauptung, jede davon betroffene Freigabe sei erst in diesen Commits hinzugekommen.
+Correction: suppress conservatively when the proof is missing, or model the respective block/parameter explicitly. This is a remaining protection gap of the newly introduced analysis, not a claim that every release affected by it was only added in these commits.
 
-## R7 — P2: Eingecheckte Harness referenziert nicht eingecheckte Testdateien
+## R7 — P2: the checked-in harness references test files that are not checked in
 
-Stelle: `tests/run_memory_sanitizers.sh:143–146`.
+Location: `tests/run_memory_sanitizers.sh:143–146`.
 
-Folgende referenzierte Dateien fehlen im Baum von `69b0f34` und erscheinen lokal nur als untracked:
+The following referenced files are missing from the tree of `69b0f34` and only appear locally as untracked:
 
 - `tests/_mem_sanitize/ownership_shared_member_void.aiml`
 - `tests/_mem_sanitize/return_cleanup.aiml`
 
-Ein sauberer Checkout kann die neue Harness nicht vollständig bestehen. Korrektur: die tatsächlich verwendeten Proben Bestandteil der Änderung machen; nicht auf den lokalen Arbeitsbaum als Testvoraussetzung vertrauen.
+A clean checkout cannot fully pass the new harness. Correction: make the probes actually used part of the change; do not rely on the local working tree as a test precondition.
 
-## R8 — P2: Lokaler Modell-Copy-Fast-Path umgeht const-Prüfung
+## R8 — P2: the local model copy fast path bypasses the const check
 
-Stelle: `src/core/ast_compiler_stmt.cpp:899–922` gegenüber const-Prüfung `:974`.
+Location: `src/core/ast_compiler_stmt.cpp:899–922` versus the const check at `:974`.
 
-Bei kompatiblen Heap-Modellen erfolgt Deep-Copy samt frühem Return vor `sym->is_const`. Eine lokale Zuweisung in ein const-Modell kann damit akzeptiert werden, die bisher verboten war. Auch der Selbstzuweisungs-Shortcut liegt davor.
+For compatible heap models the deep copy including the early return happens before `sym->is_const`. A local assignment into a const model that used to be forbidden can thereby be accepted. The self-assignment shortcut also lies before it.
 
-Korrektur: Schreibbarkeitsprüfung vor allen Fast-Paths. Kein Runtime-/Ownership-Optimierungspfad darf bestehende Sprachprüfungen überspringen.
+Correction: writability check before all fast paths. No runtime/ownership optimisation path may skip existing language checks.
 
-## Probe- und Dokumentationsbefunde
+## Probe and documentation findings
 
-- `assign_local_copy.aiml` kommentiert, dass das innere `yrec` gedroppt wird. Der Analyzer setzt es beim Set jedoch auf Unknown und das Gate unterdrückt gerade diesen Drop. Die Probe prüft Inhalt und späteren Quellzugriff, beweist aber nicht allein die behauptete Cleanup-Unabhängigkeit. Gezielt Freigabe/Mutation der Kopie nachweisen.
-- `map_string_drop.aiml` prüft lediglich Aufbau ohne Absturz; trotz Kommentar keine Inhaltsassertion. Map-Drop bleibt ausdrücklich zurückgestellt und wird dadurch nicht validiert.
-- Das Datenmodell/Join-/mayDrop-Modul ist als Baustein sinnvoll. Es liefert aber ohne Aliasressourcen, Moved-Transfers und Call-Effekte keinen vollständigen Ownership-Beweis.
-- Die dokumentierten lokalen Verbesserungen (direkter View-Rebind, bestimmter borrowed Modell-Member-Store, einfacher Return mit eigener Liste) sind enger als die Aussage, das gesamte Kern-Akzeptanzkriterium sei erfüllt.
-- Bewusst zurückgestellte Replace-Lecks und Map-/Box-Drops sind bekannte Restarbeit; sie werden hier nicht als neue unerwartete Regression doppelt gezählt.
+- `assign_local_copy.aiml` comments that the inner `yrec` is dropped. The analyzer, however, sets it to Unknown at the set and the gate suppresses exactly this drop. The probe checks content and later source access, but does not by itself prove the claimed cleanup independence. Demonstrate release/mutation of the copy specifically.
+- `map_string_drop.aiml` only checks construction without a crash; despite the comment there is no content assertion. Map drop stays explicitly deferred and is therefore not validated by it.
+- The data model/join/mayDrop module makes sense as a building block. But without alias resources, moved transfers and call effects it provides no complete ownership proof.
+- The documented local improvements (direct view rebind, certain borrowed model member stores, simple return with its own list) are narrower than the statement that the whole core acceptance criterion is met.
+- Deliberately deferred replace leaks and map/box drops are known remaining work; they are not counted twice here as a new unexpected regression.
 
-## Ergebnis
+## Result
 
-Beide Commits verbessern einzelne bekannte Fälle. Eine allgemeine Freigabe des aktiven Return-Cleanups ist durch die aktuelle Analyse nicht gedeckt. R1–R5 vor dieser Freigabe schließen; R6 als konservative Gate-Regel korrigieren. R7 macht außerdem den dokumentierten Harness-Erfolg aus dem Commit allein nicht reproduzierbar.
+Both commits improve individual known cases. A general release of the active return cleanup is not covered by the current analysis. Close R1–R5 before that release; correct R6 as a conservative gate rule. R7 additionally makes the documented harness success not reproducible from the commit alone.
 
-Alle Fehlerpfade oben sind aus dem Quelltext abgeleitet; konkrete neue Crash-Repros wurden in dieser Review nicht ausgeführt. Dokumentierte vorherige Suite-/Valgrind-Erfolge wurden nicht als eigene Verifikation ausgegeben.
+All failure paths above are derived from the source; no concrete new crash repros were run in this review. Documented earlier suite/valgrind successes were not presented as our own verification.
