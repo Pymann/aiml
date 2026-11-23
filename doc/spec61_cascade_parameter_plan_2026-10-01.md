@@ -1,169 +1,169 @@
-# Spec 61: Cascade-Parameter - Befunde und Implementierungsplan
+# Spec 61: cascade parameters - findings and implementation plan
 
-Stand: 2026-10-01. Untersuchter Modus: AIML_MEM_V3=1, AIML_LIFETIME_DROPS=1.
-Umfang: Analyse, neue Probes und Plan; keine Compilerkorrektur durch diese Untersuchung.
+As of: 2026-10-01. Mode examined: AIML_MEM_V3=1, AIML_LIFETIME_DROPS=1.
+Scope: analysis, new probes and plan; no compiler correction through this investigation.
 
-## Ergebnis
+## Result
 
-Die gemeldete Inkonsistenz ist real. Im waehrend der Untersuchung aktualisierten
-Arbeitsstand ist cascade bereits in CompilerContext::isByrefParamType enthalten.
-Das behebt freie Funktionen, reicht aber weder fuer alle Aufrufwege noch fuer
-Spec-61-konforme Ownership. Der Compiler wurde mit exodus build -j 2 neu gebaut;
-die unten genannten Ergebnisse stammen aus diesem Build.
+The reported inconsistency is real. In the working state updated during the
+investigation, cascade is already contained in CompilerContext::isByrefParamType.
+That fixes free functions, but is enough neither for all call routes nor for
+spec 61 conformant ownership. The compiler was rebuilt with exodus build -j 2;
+the results named below come from this build.
 
-1. **P1: Parameter-Rebinding zerstoert Caller-Eigentum.**
-   visitFunction registriert normale Containerparameter als Borrow ohne Retain/Drop
-   (src/core/ast_compiler.cpp:5480, :5543, :5624). Der Handle-set-Pfad
-   (src/core/ast_compiler_stmt.cpp:2848) released trotzdem den alten Handle.
-   rebind.aiml belegt UAF/Double-free und einen Leak des neuen Handles:
-   24 Bytes definite + 16 Bytes indirect, 12 Valgrind-Fehler, Exit 99.
-2. **P1: Der Parameter ueberlebt ein Rebinding seines urspruenglichen Owners nicht.**
-   owner_rebind.aiml uebergibt holder.row und ref<Holder>, ersetzt holder.row
-   im Callee und benutzt danach row. Der alte Handle wurde bereits durch
-   aiml_ser_free_decoded freigegeben. Valgrind meldet UAF; Exit 139.
-   Die Probe initialisiert das Feld explizit und beendet den Seed-Scope vor dem Call,
-   sodass keine zusaetzliche lokale Referenz den Fehler verdeckt.
-3. **P1: Klassenmethoden haben weiterhin eine abweichende Vordeklaration.**
-   registerTypeDecl prueft bei Methoden noch ausschliesslich list/map
-   (src/core/ast_compiler.cpp:4109); visitFunction verwendet dagegen den neuen
-   gemeinsamen Helper (:5366). Die vorhandene LLVM-Vordeklaration wird wiederverwendet.
-   Interface-Konformitaet erwartet einen Pointer (:4772) und lehnt die Methode ab.
-   Auch direkte Methoden sind deshalb zu pruefen. buffer fehlt an derselben Stelle.
-4. **P1: fn-Aufrufe benutzen eine weitere abweichende Signatur.**
-   src/core/ast_compiler_call.cpp:717 baut Parametertypen unmittelbar mit getLLVMType
-   und uebergibt rohe Expressionswerte. indirect.aiml scheitert an der LLVM-Verifikation:
-   GenericList als Argument gegen list_i32 in der Signatur; ausserdem muss das Ziel
-   nach der neuen ABI einen Handle-Pointer erhalten.
+1. **P1: parameter rebinding destroys caller ownership.**
+   visitFunction registers normal container parameters as a borrow without retain/drop
+   (src/core/ast_compiler.cpp:5480, :5543, :5624). The handle set path
+   (src/core/ast_compiler_stmt.cpp:2848) releases the old handle anyway.
+   rebind.aiml demonstrates UAF/double free and a leak of the new handle:
+   24 bytes definite + 16 bytes indirect, 12 Valgrind errors, exit 99.
+2. **P1: the parameter does not survive a rebinding of its original owner.**
+   owner_rebind.aiml passes holder.row and ref<Holder>, replaces holder.row
+   in the callee and uses row afterwards. The old handle was already freed by
+   aiml_ser_free_decoded. Valgrind reports a UAF; exit 139.
+   The probe initialises the field explicitly and ends the seed scope before the call,
+   so that no additional local reference hides the error.
+3. **P1: class methods still have a divergent forward declaration.**
+   For methods, registerTypeDecl still only checks list/map
+   (src/core/ast_compiler.cpp:4109); visitFunction, by contrast, uses the new
+   shared helper (:5366). The existing LLVM forward declaration is reused.
+   Interface conformance expects a pointer (:4772) and rejects the method.
+   Direct methods therefore have to be checked too. buffer is missing at the same place.
+4. **P1: fn calls use yet another divergent signature.**
+   src/core/ast_compiler_call.cpp:717 builds parameter types directly with getLLVMType
+   and passes raw expression values. indirect.aiml fails LLVM verification:
+   GenericList as the argument against list_i32 in the signature; in addition, under the new ABI
+   the target must receive a handle pointer.
 
-## Reproduktion
+## Reproduction
 
 bash tests/lifetime/cascade_params/run.sh
 
-Der Runner baut native AOT-Probes und linkt gegen out/libaiml. Er prueft auch
-ERROR-Meldungen im Buildlog, weil der Compiler bei LLVM-Verifikationsfehlern in
-dieser Untersuchung teils Exit 0 lieferte. Valgrind ist zwingend; Fehler, Leaks,
-Timeouts und nichtnull Programm-Exits lassen den Runner fehlschlagen.
+The runner builds native AOT probes and links against out/libaiml. It also checks
+ERROR messages in the build log, because in this investigation the compiler partly
+returned exit 0 on LLVM verification errors. Valgrind is mandatory; errors, leaks,
+timeouts and non-zero program exits make the runner fail.
 
-| Probe | Geprueft | Ergebnis |
+| Probe | Checked | Result |
 |---|---|---|
-| direct.aiml | freie Funktion, Weiterreichen, Wachstum auf 40 Elemente, Inhalt | Exit 0; 0 definite/indirect; 0 Valgrind-Fehler |
-| dispatch.aiml | direkte Methode und Interface-Methode mit gleicher Signatur | Buildfehler: arg row passt nicht zum Interface |
-| indirect.aiml | fn<cascade<ProbeCode>:i32> | LLVM-Verifikationsfehler |
-| rebind.aiml | lokale Neubelegung des Parameters, Caller bleibt unveraendert | Exit 99; UAF/Double-free; 24/16 Bytes verloren |
-| owner_rebind.aiml | alter Parameter bleibt trotz Owner-Neubelegung lebendig | Exit 139; UAF |
+| direct.aiml | free function, passing on, growth to 40 elements, content | exit 0; 0 definite/indirect; 0 Valgrind errors |
+| dispatch.aiml | direct method and interface method with the same signature | build error: arg row does not match the interface |
+| indirect.aiml | fn<cascade<ProbeCode>:i32> | LLVM verification error |
+| rebind.aiml | local rebinding of the parameter, the caller stays unchanged | exit 99; UAF/double free; 24/16 bytes lost |
+| owner_rebind.aiml | the old parameter stays alive despite the owner being rebound | exit 139; UAF |
 
-Logs des abschliessenden Laufs: /tmp/aiml-cascade-params-33EmlC/.
-Der vorherige Lauf ohne indirect liegt in /tmp/aiml-cascade-params-vFFbEM/.
-Die Probes sind absichtlich noch kein GREEN-Gate.
+Logs of the final run: /tmp/aiml-cascade-params-33EmlC/.
+The previous run without indirect is in /tmp/aiml-cascade-params-vFFbEM/.
+The probes are deliberately not yet a GREEN gate.
 
-## Sollvertrag
+## Target contract
 
-Spec 61, Tabelle 2.1: cascade<X> ist ein Class-3-Container mit list<i32>-Layout.
-Section 5 fordert Aliasing durch geteilte Handles; Section 8 und 11.2 fordern
-Incref bei der Parameteruebergabe. Gemeint ist ein kopierter Handle auf denselben
-Container, keine Kopie von size/capacity/data und keine Referenz auf den Caller-Slot.
+Spec 61, table 2.1: cascade<X> is a class 3 container with a list<i32> layout.
+Section 5 requires aliasing through shared handles; sections 8 and 11.2 require
+an incref on parameter passing. What is meant is a copied handle to the same
+container, no copy of size/capacity/data and no reference to the caller's slot.
 
-- Mutation und Reallokation des Containers sind fuer alle Aliase sichtbar.
-- set auf den Parameter ersetzt nur dessen lokalen Handle.
-- Jeder Parameter besitzt fuer seine Lebensdauer eine eigene Referenz.
-- Rebinding sichert zuerst den neuen Handle, released den alten und speichert neu.
-- Normaler Exit, fruehes return und Exception-Unwind released genau diese Referenz.
-- Rueckgabe oder Speicherung darf die Referenz korrekt teilen/uebertragen.
+- Mutation and reallocation of the container are visible to all aliases.
+- set on the parameter only replaces its local handle.
+- Every parameter owns a reference of its own for its lifetime.
+- Rebinding first secures the new handle, releases the old one and stores the new one.
+- Normal exit, early return and exception unwind release exactly this reference.
+- Returning or storing may share/transfer the reference correctly.
 
-**Spec-Widerspruch:** Section 9.2 beschreibt RC-Parameter noch als standardmaessig
-borrowed und consumed als Retain/Co-ownership; Section 8 verlangt bereits Incref.
-Zudem behandelt der Compiler consumed pauschal als Caller-Move.
-Empfehlung: Section 8 als Default beibehalten; 9.2 fuer RC-Typen darauf abstimmen
-und consumed als Co-ownership-Vertrag konkretisieren. ptr bleibt Move.
-Eine blosse Abschwaechung von Section 8 auf Borrow loest owner_rebind nicht.
+**Spec contradiction:** section 9.2 still describes RC parameters as borrowed by
+default and consumed as retain/co-ownership; section 8 already requires an incref.
+In addition the compiler treats consumed across the board as a caller move.
+Recommendation: keep section 8 as the default; align 9.2 with it for RC types
+and make consumed concrete as a co-ownership contract. ptr stays a move.
+Merely weakening section 8 to a borrow does not solve owner_rebind.
 
-## Implementierungsplan
+## Implementation plan
 
-### 1. Parameter-ABI vollstaendig vereinheitlichen
+### 1. Unify the parameter ABI completely
 
-Den vorhandenen Helper auch fuer Methoden-Vordeklarationen (:4109) einsetzen.
-Freie Vordeklaration, Definition, Interface-Konformitaet, Vtable-Aufruf und fn-Aufruf
-muessen dieselbe Parametertyp-Abbildung verwenden. Beim fn-Pfad auch Argumentwerte
-als Handle laden; eine reine Aenderung des LLVM FunctionType genuegt nicht.
-Container-Rueckgabetypen im fn-Pfad ebenfalls auf Handle-ABI abstimmen.
-Kein globales Umstellen von getLLVMType: Layout der Containeroperationen bleibt noetig.
-Vorhandene Alias-/Namespace-Aufloesung verwenden. Legacy memV3=0 separat beurteilen.
+Use the existing helper for method forward declarations as well (:4109).
+Free forward declaration, definition, interface conformance, vtable call and fn call
+must use the same parameter type mapping. In the fn path also load argument values
+as handles; merely changing the LLVM FunctionType is not enough.
+Also align container return types in the fn path with the handle ABI.
+No global switch of getLLVMType: the layout of the container operations stays necessary.
+Use the existing alias/namespace resolution. Assess legacy memV3=0 separately.
 
-Abnahme: direct, dispatch und indirect kompilieren; Mutationen, Inhalte und
-Weiterreichen sind korrekt. Vorwaertsreferenzen und buffer-Methoden ergaenzen.
+Acceptance: direct, dispatch and indirect compile; mutations, contents and
+passing on are correct. Add forward references and buffer methods.
 
-### 2. Normale Containerparameter als lokale RC-Owner fuehren
+### 2. Carry normal container parameters as local RC owners
 
-Im Funktionsprolog unter memV3 den eingehenden Handle retainen und einen passenden
-pendingParamDrop registrieren: cascade nutzt List-Release mit i32-Elementlayout.
-Denselben Vertrag fuer list/map/buffer anwenden; der fehlende Retain ist eine
-gemeinsame Containerluecke. Bestehende Drop-/Deskriptor-Helfer wiederverwenden.
+In the function prologue under memV3, retain the incoming handle and register a matching
+pendingParamDrop: cascade uses a list release with an i32 element layout.
+Apply the same contract to list/map/buffer; the missing retain is a
+shared container gap. Reuse existing drop/descriptor helpers.
 
-Parameterstatus und Ownership getrennt fuehren: is_param darf nicht pauschal
-"besitzt keine Referenz" bedeuten. Ownership-Analyse und Cleanup muessen lokale
-Parameter-Slots bei Rebind und allen Exits abbilden. Bereits vorhandene Caller-
-Temp-Releases duerfen nicht als zweite Freigabe derselben Referenz wirken.
+Carry parameter status and ownership separately: is_param must not mean
+"owns no reference" across the board. Ownership analysis and cleanup must represent local
+parameter slots on rebind and on all exits. Existing caller
+temp releases must not act as a second release of the same reference.
 
-Abnahme: rebind und owner_rebind ohne Speicherfehler und ohne definite/indirect Leaks.
-Kontrollvarianten fuer list/map/buffer, zwei gleiche Argumente, Self-assignment,
-fruehes return, Fallthrough und throw/catch pruefen.
+Acceptance: rebind and owner_rebind without memory errors and without definite/indirect leaks.
+Check control variants for list/map/buffer, two identical arguments, self-assignment,
+early return, fallthrough and throw/catch.
 
-### 3. Return, Escape, consumed und temporaere Argumente ausbalancieren
+### 3. Balance return, escape, consumed and temporary arguments
 
-visitRetStmt (:3764, :3996) behandelt Parameter aktuell als Borrow und increft
-Rueckgaben. Nach Schritt 2 entweder Parameter-Owner in das Resultat bewegen und
-den Drop ausnehmen, oder Resultat retainen und Parameter normal droppen. Nicht
-Incref plus Drop-Ausnahme kombinieren: das verliert eine Referenz.
+visitRetStmt (:3764, :3996) currently treats parameters as a borrow and increfs
+returns. After step 2 either move the parameter owner into the result and
+exempt the drop, or retain the result and drop the parameter normally. Do not
+combine an incref with a drop exemption: that loses a reference.
 
-set/push/Member-Store muessen bei RC-Quellen die benoetigte Referenz sichern;
-Weitergabe darf keine fremde Caller-Referenz konsumieren. consumed-Verhalten gemaess
-bereinigtem Vertrag an freien, direkten Methoden- und Interface-Aufrufen angleichen
+set/push/member store must secure the required reference for RC sources;
+passing on must not consume a foreign caller reference. Align consumed behaviour with the
+cleaned-up contract for free, direct method and interface calls
 (ast_compiler_call.cpp:526, :874, :3363).
-Owned Producer-Temps, verschachtelte Calls und Interface-/fn-Temps muessen nach
-Call/Statement beziehungsweise beim Unwind genau einmal freigegeben werden.
+Owned producer temps, nested calls and interface/fn temps must be released exactly once after the
+call/statement or on unwind.
 
-Abnahme: Parameter rueckgeben, Ergebnis ignorieren/binden/weiterreichen; Parameter
-in Feld/Container speichern und nach Caller-Scope verwenden; consumed mit Alias,
-frischem Temp, unbenutztem Parameter und Exception. Jeweils Inhalts- und Leaktests.
+Acceptance: return a parameter, ignore/bind/pass on the result; store a parameter
+in a field/container and use it after the caller's scope; consumed with an alias,
+a fresh temp, an unused parameter and an exception. Content and leak tests for each.
 
-### 4. Cascade-Typregeln und Spec konsistent dokumentieren
+### 4. Document cascade type rules and the spec consistently
 
-Section 8/9.2 sowie Kommentare zu is_param/is_byref_arg auf den neuen Vertrag bringen.
-isRefContainerType (context.h:424) erfasst bisher kein ref<cascade<...>>.
-Das Verbot entsprechend der Class-3-Einordnung explizit in der Spec auffuehren
-und fuer Parameter, Return, Feld und Local mit negativen Probes absichern.
+Bring sections 8/9.2 as well as comments on is_param/is_byref_arg up to the new contract.
+isRefContainerType (context.h:424) so far does not cover ref<cascade<...>>.
+List the ban explicitly in the spec in line with the class 3 classification
+and secure it with negative probes for parameter, return, field and local.
 
-Separater Nebenbefund: at auf cascade wird derzeit abgelehnt (ast_compiler_expr.cpp);
-die neuen Probes benutzen deshalb das unterstuetzte .get. Ob at/idx als Cascade-
-API gelten sollen, getrennt von der Parameter-ABI klaeren. Ebenso wurde ein nicht
-explizit initialisiertes Cascade-Modellfeld in der ersten Probe als null beobachtet;
-Initialisierung ist separat zu untersuchen, kein Nachweis fuer Parameter-Ownership.
+Separate side finding: at on cascade is currently rejected (ast_compiler_expr.cpp);
+the new probes therefore use the supported .get. Whether at/idx are to count as a cascade
+API is to be clarified separately from the parameter ABI. Likewise, a cascade model field
+not explicitly initialised was observed as null in the first probe;
+initialisation is to be investigated separately, it is no proof about parameter ownership.
 
-### 5. Abnahme und Gate
+### 5. Acceptance and gate
 
-Erst nach gruenen semantischen Assertions und null Valgrind-Fehlern die Probes in
-run_lifetime_leak_gates.sh uebernehmen. Grenzwert: 0 definite + 0 indirect Bytes.
-Bestehende 97_cascade_model_carrier_render, 132_interface_returns,
-141_buffer_handle_set_and_param und 142_cascade_param_handle mitlaufen lassen.
-Danach Lifetime-/Sanitizer-Suites und vorhandene Cascade-/Interface-Suites ausfuehren.
-JIT sowie WASM fuer die geaenderte direkte/indirekte ABI gesondert verifizieren.
+Only take the probes into run_lifetime_leak_gates.sh after green semantic assertions and zero
+Valgrind errors. Limit: 0 definite + 0 indirect bytes.
+Let the existing 97_cascade_model_carrier_render, 132_interface_returns,
+141_buffer_handle_set_and_param and 142_cascade_param_handle run along.
+After that run the lifetime/sanitizer suites and the existing cascade/interface suites.
+Verify JIT as well as WASM separately for the changed direct/indirect ABI.
 
-Die Untersuchung selbst hat native AOT + Valgrind ausgefuehrt. JIT, WASM und die
-gesamte Testsuite wurden nicht ausgefuehrt; dieser Plan ist keine Gesamtfreigabe
-der Implementierung von Spec 61.
+The investigation itself ran native AOT + Valgrind. JIT, WASM and the
+whole test suite were not run; this plan is not an overall release
+of the implementation of spec 61.
 
 
-## Umsetzungsstand (2026-10-01, Nacht)
+## Implementation state (2026-10-01, night)
 
-- **Schritt 1 erledigt:** `CompilerContext::isByrefParamType` (list/map/buffer/cascade) an allen
-  Signaturstellen (Definition, freie und Methoden-Vordeklaration, Interface-Pruefung, Vtable-Aufruf);
-  `fn<…>`-Aufruf nutzt dieselbe Abbildung und uebergibt Container-Locals als Handle.
-- **Schritt 2 erledigt:** Container-Parameter halten eine eigene Referenz (Prolog-Incref + Drop via
-  `makeHandleDrop`), `consumed` uebernimmt die Caller-Referenz ohne Incref. `set` auf/aus Parametern
-  teilt den Handle. spec/61 §8 praezisiert (kein echter Widerspruch zu §9.2: "borrowed for the call").
-- **Schritt 3 erledigt:** Rueckgabe eines Parameters bewegt dessen Referenz (kein Incref + Drop-Ausnahme).
-- **Schritt 4 erledigt:** `ref<cascade<…>>` ist Compile-Fehler (neg/n14). Nebenbefund behoben:
-  Cascade-Modellfelder zaehlten nicht als Heap (`serHasHeap`) → Modell-Drop gab sie nie frei (Test 145).
-- **Schritt 5:** alle Probes in `tests/run_lifetime_leak_gates.sh` (GREEN), dazu 142/144/145.
-- Unwind (spec/61 §9.3, neu) mitumgesetzt: Exception-Pfade releasen Locals/Parameter, catch besitzt das Objekt.
-- Offen (separat): `at` auf cascade (API-Frage), JIT/WASM-Sonderverifikation der indirekten ABI.
+- **Step 1 done:** `CompilerContext::isByrefParamType` (list/map/buffer/cascade) at all
+  signature sites (definition, free and method forward declaration, interface check, vtable call);
+  the `fn<…>` call uses the same mapping and passes container locals as handles.
+- **Step 2 done:** container parameters hold a reference of their own (prologue incref + drop via
+  `makeHandleDrop`), `consumed` takes over the caller's reference without an incref. `set` onto/from parameters
+  shares the handle. spec/61 §8 made more precise (no real contradiction to §9.2: "borrowed for the call").
+- **Step 3 done:** returning a parameter moves its reference (no incref + drop exemption).
+- **Step 4 done:** `ref<cascade<…>>` is a compile error (neg/n14). Side finding fixed:
+  cascade model fields did not count as heap (`serHasHeap`) → the model drop never freed them (test 145).
+- **Step 5:** all probes in `tests/run_lifetime_leak_gates.sh` (GREEN), plus 142/144/145.
+- Unwind (spec/61 §9.3, new) implemented along with it: exception paths release locals/parameters, catch owns the object.
+- Open (separately): `at` on cascade (API question), special JIT/WASM verification of the indirect ABI.
