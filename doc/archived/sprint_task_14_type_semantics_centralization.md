@@ -1,34 +1,34 @@
 # sprint_task_14
 
-## Titel
+## Title
 
-Typsemantik aus verteilten Sonderfaellen in eine zentrale API ziehen
+Pull type semantics out of scattered special cases into a central API
 
 ## Status
 
-Weiterhin offen und strategisch wichtig.
+Still open and strategically important.
 
-## Ziel
+## Goal
 
-Typregeln fuer Pointer, Container, Heap-Typen und Serialisierung sollen nicht weiter als verstreute String- und Sonderfalllogik ueber den Compiler verteilt sein.
+Type rules for pointers, containers, heap types and serialisation should no longer be spread across the compiler as scattered string and special-case logic.
 
-## Aktueller Stand
+## Current state
 
-- Eine explizite `TypeSemantics`-API existiert im aktuellen Code nicht.
-- Typentscheidungen sind weiterhin ueber [context.h](../../src/core/context.h), [ast_compiler_expr.cpp](../../src/core/ast_compiler_expr.cpp), [ast_compiler_stmt.cpp](../../src/core/ast_compiler_stmt.cpp), [serialize_impl.cpp](../../src/core/serialize_impl.cpp) und [builtin_registry.cpp](../../src/core/builtin_registry.cpp) verteilt.
+- An explicit `TypeSemantics` API does not exist in the current code.
+- Type decisions are still spread over [context.h](../../src/core/context.h), [ast_compiler_expr.cpp](../../src/core/ast_compiler_expr.cpp), [ast_compiler_stmt.cpp](../../src/core/ast_compiler_stmt.cpp), [serialize_impl.cpp](../../src/core/serialize_impl.cpp) and [builtin_registry.cpp](../../src/core/builtin_registry.cpp).
 
-## Was an der alten Fassung veraltet war
+## What was outdated in the old version
 
-- Inhaltlich wenig; die Task war schon nahe am eigentlichen Problem.
-- Zu ergaenzen ist heute nur die klarere Verbindung zu Serialisierung, Mirror und Containerlayout.
+- Little in substance; the task was already close to the actual problem.
+- Today only the clearer connection to serialisation, mirror and container layout needs adding.
 
-## Fokus
+## Focus
 
-1. kleine zentrale Typsemantik-API definieren.
-2. die wichtigsten Fragen dort kapseln.
-3. Call-, Decl-, Serialize- und Builtin-Pfade schrittweise darauf umstellen.
+1. Define a small central type semantics API.
+2. Encapsulate the most important questions there.
+3. Switch call, decl, serialize and builtin paths over to it step by step.
 
-## Betroffene Stellen
+## Affected places
 
 - [context.h](../../src/core/context.h)
 - [ast_compiler_stmt.cpp](../../src/core/ast_compiler_stmt.cpp)
@@ -36,8 +36,8 @@ Typregeln fuer Pointer, Container, Heap-Typen und Serialisierung sollen nicht we
 - [serialize_impl.cpp](../../src/core/serialize_impl.cpp)
 - [builtin_registry.cpp](../../src/core/builtin_registry.cpp)
 
-## Akzeptanzkriterien
+## Acceptance criteria
 
-- Neue Typregeln entstehen nicht mehr als verstreute String-Sonderfaelle.
-- Mehrere Compilerpfade greifen auf dieselbe Typentscheidung zu.
-- Container-, Pointer- und Heap-Edge-Cases werden konsistenter.
+- New type rules no longer arise as scattered string special cases.
+- Several compiler paths use the same type decision.
+- Container, pointer and heap edge cases become more consistent.

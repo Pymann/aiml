@@ -1,34 +1,34 @@
 # sprint_task_8
 
-## Titel
+## Title
 
-Top-Level-Storage-Semantik bereinigen und IR-Invarianten absichern
+Clean up top-level storage semantics and secure IR invariants
 
 ## Status
 
-Teilweise ueberholt, aber weiterhin relevant.
+Partly outdated, but still relevant.
 
-## Ziel
+## Goal
 
-Top-Level-`decl` soll semantisch konsistent bleiben, und invalide IR-Situationen sollen nicht mehr erst tief in spaeten LLVM-Pfaden auffallen.
+Top-level `decl` should stay semantically consistent, and invalid IR situations should no longer only surface deep in late LLVM paths.
 
-## Aktueller Stand
+## Current state
 
-- `compiler.cpp` verifiziert Module bereits vor JIT- bzw. Ausfuehrungspfaden.
-- Gleichzeitig existieren weiterhin `libraryMode`, `inTopLevelInit`, `__aiml_init` und globale Symbolpromotion im realen Compilerzustand.
+- `compiler.cpp` already verifies modules before the JIT and execution paths.
+- At the same time `libraryMode`, `inTopLevelInit`, `__aiml_init` and global symbol promotion still exist in the real compiler state.
 
-## Was an der alten Fassung veraltet war
+## What was outdated in the old version
 
-- „Modulverifikation vor jedem Pfad einfuehren“ ist nicht mehr der Hauptgewinn; Verifikation existiert bereits.
-- Der Kern ist heute eher die Speicher- und Initialisierungssemantik von top-level State als der blanke Verifier selbst.
+- "Introduce module verification before every path" is no longer the main gain; verification already exists.
+- Today the core is rather the storage and initialisation semantics of top-level state than the bare verifier itself.
 
-## Fokus
+## Focus
 
-1. Top-Level-Storage-Regel klarziehen: Global, Init-Code und Zugriffspfad.
-2. problematische Fremd-Frame-/Alloca-Nutzung weiter einschränken.
-3. Verifier-Fehler als klare AIML-Diagnosen nutzbar machen.
+1. Clarify the top-level storage rule: global, init code and access path.
+2. Further restrict problematic use of foreign frames/allocas.
+3. Make verifier errors usable as clear AIML diagnostics.
 
-## Betroffene Stellen
+## Affected places
 
 - [ast_compiler.cpp](../../src/core/ast_compiler.cpp)
 - [compiler.cpp](../../compiler.cpp)
@@ -36,8 +36,8 @@ Top-Level-`decl` soll semantisch konsistent bleiben, und invalide IR-Situationen
 - [ast_compiler_expr.cpp](../../src/core/ast_compiler_expr.cpp)
 - [context.h](../../src/core/context.h)
 
-## Akzeptanzkriterien
+## Acceptance criteria
 
-- Top-Level-State verhaelt sich ueber relevante Pfade konsistent.
-- Invalides IR fuehrt zu einem AIML-Fehler statt zu spaeten LLVM-Abstuerzen.
-- Verifier-Meldungen sind fuer Repros praktisch nutzbar.
+- Top-level state behaves consistently across the relevant paths.
+- Invalid IR leads to an AIML error instead of late LLVM crashes.
+- Verifier messages are practically usable for repros.

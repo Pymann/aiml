@@ -1,36 +1,36 @@
 # sprint_task_6
 
-## Titel
+## Title
 
-Mirror-Semantik gegen aktuelle Runtime und Repros absichern
+Secure mirror semantics against the current runtime and repros
 
 ## Status
 
-Weiterhin relevant, aber die Fragestellung ist heute konkreter als in der Erstfassung.
+Still relevant, but the question is more concrete today than in the first version.
 
-## Ziel
+## Goal
 
-Die Mirror-Implementierung soll fuer die realen Problemzonen stabilisiert werden: Typed Registration, Delta-Sync, Event-/RPC-Queues, WS/TCP-Verhalten und reale App-Repros wie `9rooms`.
+The mirror implementation should be stabilised for the real problem zones: typed registration, delta sync, event/RPC queues, WS/TCP behaviour and real app repros such as `9rooms`.
 
-## Aktueller Stand
+## Current state
 
-- Mirror ist produktiv nutzbar und im Compiler bereits breit exponiert.
-- `poll_event` und `poll_rpc` sind heute vorhanden; die alte Formulierung als reine API-Luecke ist deshalb zu schwach.
-- Reale Fehlerbilder leben bereits in [mirror_ws_crash_report.md](../../mirror_ws_crash_report.md) und WS-Tests.
+- Mirror is productively usable and already broadly exposed in the compiler.
+- `poll_event` and `poll_rpc` exist today; the old wording as a mere API gap is therefore too weak.
+- Real failure patterns already live in [mirror_ws_crash_report.md](../../mirror_ws_crash_report.md) and WS tests.
 
-## Was an der alten Fassung veraltet war
+## What was outdated in the old version
 
-- Poll-/Wait-Ergonomie als hypothetische Folgearbeit ist zu allgemein.
-- Der wichtigste Wert der Task liegt heute in Regressionen fuer reale Mirror-Semantik, nicht in einem abstrakten Spec-Abgleich allein.
+- Poll/wait ergonomics as hypothetical follow-up work is too general.
+- The main value of the task today lies in regressions for real mirror semantics, not in an abstract spec comparison alone.
 
-## Fokus
+## Focus
 
-1. Typed Register/Unregister und Delta-Sync.
-2. Event-/RPC-Queue-Semantik.
-3. WS- und TCP-Paritaet in den kritischen Faellen.
-4. App-nahe Repros, besonders `9rooms`.
+1. Typed register/unregister and delta sync.
+2. Event/RPC queue semantics.
+3. WS and TCP parity in the critical cases.
+4. App-level repros, especially `9rooms`.
 
-## Betroffene Stellen
+## Affected places
 
 - [spec/44_5_mirror.md](../../spec/44_5_mirror.md)
 - [mirror_ws_crash_report.md](../../mirror_ws_crash_report.md)
@@ -38,8 +38,8 @@ Die Mirror-Implementierung soll fuer die realen Problemzonen stabilisiert werden
 - [src/sys/mirror_runtime.cpp](../../src/sys/mirror_runtime.cpp)
 - [tests](../../tests)
 
-## Akzeptanzkriterien
+## Acceptance criteria
 
-- Die reale Mirror-Semantik ist fuer die wichtigsten Faelle testbar abgesichert.
-- WS- und TCP-Pfade divergieren nicht still in Kernfaellen.
-- Reale Repros bleiben als Regressionstests erhalten.
+- The real mirror semantics are secured testably for the most important cases.
+- WS and TCP paths do not silently diverge in core cases.
+- Real repros are kept as regression tests.

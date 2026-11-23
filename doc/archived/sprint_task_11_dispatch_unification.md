@@ -1,43 +1,43 @@
 # sprint_task_11
 
-## Titel
+## Title
 
-Dispatch-Verantwortung fuer Calls und Builtins bereinigen
+Clean up dispatch responsibility for calls and builtins
 
 ## Status
 
-Stark zu reframen; die alte Fassung enthielt mehrere veraltete Pfade.
+Needs heavy reframing; the old version contained several outdated paths.
 
-## Ziel
+## Goal
 
-Es soll klar sein, welche Stellen heute wirklich Aufrufsemantik entscheiden: AST-Call-Compiler, Builtin-Registry und Runtime-gebundene Registrierungslogik.
+It should be clear which places really decide call semantics today: the AST call compiler, the builtin registry and runtime-bound registration logic.
 
-## Aktueller Stand
+## Current state
 
-- `call_dispatcher.cpp` existiert im aktuellen Stand nicht.
-- `expression.cpp` als Legacy-Referenz ist ebenfalls kein realer aktiver Kernpfad.
-- Der relevante Ist-Zuschnitt liegt heute vor allem in [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp) und [builtin_registry.cpp](../../src/core/builtin_registry.cpp).
+- `call_dispatcher.cpp` does not exist in the current state.
+- `expression.cpp` as a legacy reference is not a real active core path either.
+- The relevant actual layout today lies mainly in [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp) and [builtin_registry.cpp](../../src/core/builtin_registry.cpp).
 
-## Was an der alten Fassung veraltet war
+## What was outdated in the old version
 
-- Mehrere genannte Dateien/Pfade sind als aktive Parallelwahrheiten ueberholt.
-- Die Task muss heute weniger „Dispatcher vereinheitlichen“ als „Besitzverhaeltnisse im aktuellen Call-Stack klaeren“.
+- Several of the files/paths named are outdated as active parallel truths.
+- Today the task must be less "unify the dispatcher" than "clarify ownership in the current call stack".
 
-## Fokus
+## Focus
 
-1. dokumentieren, welche Aufrufklasse wo entschieden wird.
-2. Builtin-Semantik nicht zwischen AST-Compiler und Registry diffundieren lassen.
-3. veraltete Verweise aus Doku und Codekommentaren entfernen.
+1. Document which call class is decided where.
+2. Do not let builtin semantics diffuse between the AST compiler and the registry.
+3. Remove outdated references from docs and code comments.
 
-## Betroffene Stellen
+## Affected places
 
 - [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp)
 - [builtin_registry.cpp](../../src/core/builtin_registry.cpp)
 - [builtin_registry.h](../../src/core/builtin_registry.h)
-- bei Legacy-Hinweisen: [context.h](../../src/core/context.h)
+- for legacy hints: [context.h](../../src/core/context.h)
 
-## Akzeptanzkriterien
+## Acceptance criteria
 
-- Es ist fuer jede Call-Klasse klar, welche Komponente zustaendig ist.
-- Veraltete Dispatcher-Annahmen leben nicht weiter in Sprintplan und Codekommentaren.
-- Neue Fixes muessen nicht in mehreren vermeintlichen Parallelpfaden nachgezogen werden.
+- For every call class it is clear which component is responsible.
+- Outdated dispatcher assumptions no longer live on in the sprint plan and code comments.
+- New fixes do not have to be followed up in several supposed parallel paths.

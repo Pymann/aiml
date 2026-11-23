@@ -1,33 +1,33 @@
 # sprint_task_13
 
-## Titel
+## Title
 
-IR-Abstraktion auf einen klaren Besitzpfad reduzieren
+Reduce the IR abstraction to one clear ownership path
 
 ## Status
 
-Weiterhin offen.
+Still open.
 
-## Ziel
+## Goal
 
-Die parallele Existenz von rohen LLVM-Pfaden und Wrapper-Abstraktion soll auf eine belastbare Zielarchitektur reduziert werden.
+The parallel existence of raw LLVM paths and a wrapper abstraction should be reduced to a reliable target architecture.
 
-## Aktueller Stand
+## Current state
 
-- [ir_generator.cpp](../../src/core/ir_generator.cpp) existiert weiterhin, ist aber klein.
-- Gleichzeitig lebt der Grossteil der echten Compilerarbeit weiterhin sehr nah an rohem LLVM in den `ast_compiler_*`-Dateien.
+- [ir_generator.cpp](../../src/core/ir_generator.cpp) still exists, but is small.
+- At the same time, most of the real compiler work still lives very close to raw LLVM in the `ast_compiler_*` files.
 
-## Was an der alten Fassung veraltet war
+## What was outdated in the old version
 
-- Die Task klang nach reinem `Symbol`-Cleanup; das Problem ist breiter und betrifft den offiziellen Besitzpfad fuer IR-Erzeugung insgesamt.
+- The task sounded like a pure `Symbol` cleanup; the problem is broader and concerns the official ownership path for IR generation as a whole.
 
-## Fokus
+## Focus
 
-1. Zielarchitektur explizit entscheiden.
-2. danach Mischpfade markieren.
-3. neue Compilerlogik nur noch ueber den Zielpfad zulassen.
+1. Decide the target architecture explicitly.
+2. Then mark mixed paths.
+3. Only allow new compiler logic through the target path.
 
-## Betroffene Stellen
+## Affected places
 
 - [ir_generator.cpp](../../src/core/ir_generator.cpp)
 - [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp)
@@ -35,8 +35,8 @@ Die parallele Existenz von rohen LLVM-Pfaden und Wrapper-Abstraktion soll auf ei
 - [ast_compiler_stmt.cpp](../../src/core/ast_compiler_stmt.cpp)
 - [context.h](../../src/core/context.h)
 
-## Akzeptanzkriterien
+## Acceptance criteria
 
-- Neue Compilerarbeit muss nicht mehr zwischen zwei gleichberechtigten IR-Welten springen.
-- Mischpfade sind sichtbar und werden schrittweise kleiner.
-- Die Zielarchitektur ist fuer Folgearbeit verbindlich genug.
+- New compiler work no longer has to jump between two equal IR worlds.
+- Mixed paths are visible and get smaller step by step.
+- The target architecture is binding enough for follow-up work.

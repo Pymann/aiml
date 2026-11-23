@@ -1,17 +1,17 @@
 # AIML Control-Flow Short Form Spec Mismatch Report
 
-Datum: 2026-04-09
-Status: **GESCHLOSSEN** — beide Befunde behoben
+Date: 2026-04-09
+Status: **CLOSED** — both findings fixed
 
-## Behobene Befunde
+## Fixed findings
 
-### Befund 1: ControlFlowBuilder Kurzform (`if: [cond, true]`)
+### Finding 1: ControlFlowBuilder short form (`if: [cond, true]`)
 
-**Fix**: `receiveChildNode` behandelt `currentKey.empty()` korrekt; `OnNull` leitet null-Literale weiter; `OnSequenceEnd` setzt `expectingKey` zurück.
+**Fix**: `receiveChildNode` handles `currentKey.empty()` correctly; `OnNull` forwards null literals; `OnSequenceEnd` resets `expectingKey`.
 
-Kurzform `if: [{ ... }, true]` und `while: [{ ... }]` sind damit stabil implementiert und spec-konform.
+The short forms `if: [{ ... }, true]` and `while: [{ ... }]` are thus implemented stably and conform to the spec.
 
-### Befund 2: `map.contains(...)` fehlender Pointer-bitcast
+### Finding 2: `map.contains(...)` missing pointer bitcast
 
 **Fix** in `src/core/ast_compiler_call.cpp`:
 
@@ -24,15 +24,15 @@ Kurzform `if: [{ ... }, true]` und `while: [{ ... }]` sind damit stabil implemen
     return ctx.ir_gen->wrap(MapImpl::contains(ctx, ..., keyVal, mapStructTy));
 ```
 
-`contains` ist damit konsistent zu `put/get/remove`.
+`contains` is thus consistent with `put/get/remove`.
 
-**Regressionstest**: `tests/test_map_contains.aiml` — deckt Szenarien A–G ab, inklusive der report-spezifischen Kurzformen:
+**Regression test**: `tests/test_map_contains.aiml` — covers scenarios A–G, including the report-specific short forms:
 
 ```aiml
 - if: [{ call: [m.contains, "k"] }, true]
 - if: [{ eq: [{ call: [m.contains, "k"] }, 1] }, true]
 ```
 
-## Offene Punkte
+## Open items
 
-Keine. Alle Befunde behoben, Spec aktualisiert.
+None. All findings fixed, spec updated.

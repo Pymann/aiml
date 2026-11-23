@@ -1,42 +1,42 @@
 # sprint_task_2
 
-## Titel
+## Title
 
-Negativtests fuer Call-Typfehler und Arity-Fehler stabilisieren
+Stabilise negative tests for call type errors and arity errors
 
 ## Status
 
-Weiterhin offen und direkt an `sprint_task_1` gekoppelt.
+Still open and directly coupled to `sprint_task_1`.
 
-## Ziel
+## Goal
 
-Ein kleines, belastbares Negativtestpaket soll sicherstellen, dass falsche Aufrufe reproduzierbar als Compilerfehler enden.
+A small, reliable package of negative tests should ensure that wrong calls reproducibly end as compiler errors.
 
-## Aktueller Stand
+## Current state
 
-- Der Call-Pfad ist heute staerker in [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp) konzentriert.
-- Die alte Fassung verwies noch auf einen Dispatcher-Zuschnitt, der im aktuellen Code so nicht mehr existiert.
+- Today the call path is more concentrated in [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp).
+- The old version still referred to a dispatcher layout that no longer exists like that in the current code.
 
-## Was an der alten Fassung veraltet war
+## What was outdated in the old version
 
-- `call_dispatcher.cpp` als zentrale Testreferenz ist ueberholt.
-- Der Task war als reine Sammlung beschrieben, ohne die Fehlerklassen zu priorisieren.
+- `call_dispatcher.cpp` as the central test reference is outdated.
+- The task was described as a mere collection, without prioritising the error classes.
 
-## Fokus
+## Focus
 
-1. Arity-Fehler.
-2. elementare Typmismatches bei User-Funktionen.
-3. Methoden- und `fn<...>`-Faelle.
-4. nur danach Pointer-/Struct-Randfaelle.
+1. Arity errors.
+2. Elementary type mismatches for user functions.
+3. Method and `fn<...>` cases.
+4. Only after that pointer/struct edge cases.
 
-## Betroffene Stellen
+## Affected places
 
 - [tests](../../tests)
 - [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp)
-- bei Builtin-Ausnahmen: [builtin_registry.cpp](../../src/core/builtin_registry.cpp)
+- for builtin exceptions: [builtin_registry.cpp](../../src/core/builtin_registry.cpp)
 
-## Akzeptanzkriterien
+## Acceptance criteria
 
-- Fuer jede priorisierte Fehlerklasse existiert mindestens ein Negativtest.
-- Die Tests scheitern am Compiler statt erst zur Laufzeit.
-- Fehlertexte enthalten mindestens Zielsymbol, Argumentposition und Typursache.
+- For every prioritised error class there is at least one negative test.
+- The tests fail in the compiler instead of only at runtime.
+- Error texts contain at least the target symbol, the argument position and the type cause.

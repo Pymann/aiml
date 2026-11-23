@@ -1,45 +1,45 @@
-# AIML: Zeiger in Modell-Wertlisten verhindern — 2026-09-05
+# AIML: prevent pointers in model value lists — 2026-09-05
 
-## Änderung
+## Change
 
-`src/core/ast_compiler_call.cpp` prüft bei `list<T>.push()` jetzt die tatsächliche LLVM-Repräsentation des Arguments. Ein Pointerargument für ein Struct-Wertelement führt unabhängig von der AST-Form zum Compile-Fehler. Das umfasst Variablen, Member und verschachtelte CallExpr wie `destination.push(source.get(index))`. Nach der Diagnose wird keine fehlerhafte Push-IR erzeugt.
+`src/core/ast_compiler_call.cpp` now checks the actual LLVM representation of the argument for `list<T>.push()`. A pointer argument for a struct value element leads to a compile error regardless of the AST form. That covers variables, members and nested CallExprs such as `destination.push(source.get(index))`. After the diagnostic no faulty push IR is generated.
 
-Die frühere Prüfung untersuchte nur VariableExpr und konnte dadurch den 9rooms-Reveal-Absturz verursachenden CallExpr übersehen. Der vorhandene Interface-Fat-Pointer-Upcast bleibt ausgenommen und unverändert. Listenlayout und get()-Semantik wurden nicht geändert. Der Fix ist auf den Pointer-/Aggregate-Konflikt bei push begrenzt, keine vollständige Prüfung aller möglichen Container-Typkonflikte.
+The earlier check only examined VariableExpr and could therefore miss the CallExpr causing the 9rooms reveal crash. The existing interface fat pointer upcast stays exempt and unchanged. List layout and get() semantics were not changed. The fix is limited to the pointer/aggregate conflict on push, not a complete check of all possible container type conflicts.
 
-`compiler_change.patch` zeigt ausschließlich diese Änderung gegenüber dem bereits bearbeiteten Nutzer-Arbeitsstand vor Beginn des Fixes. Andere vorhandene Quelländerungen wurden erhalten.
+`compiler_change.patch` shows only this change relative to the user's already edited working state before the fix began. Other existing source changes were kept.
 
-## Regressionstests
+## Regression tests
 
-- `tests/test_list_model_nested_get_push_repro.aiml`: verschachteltes get/push, jetzt Compile-Fehler.
-- `tests/test_ptr_push_into_value_list_error.aiml`: bestehender direkter Zeigerfall bleibt Compile-Fehler.
-- `tests/test_ptr_member_push_into_value_list_error.aiml`: Member-Ausdruck wird abgewiesen.
-- `tests/test_ptr_call_push_into_value_list_error.aiml`: Funktion mit ptr-Rückgabe wird abgewiesen.
-- `tests/test_list_model_push_value_and_pointer.aiml`: gültige Modellrückgaben, Member-Wertkopien, get über lokale Wertvariable, explizites Dereferenzieren, Pointerlisten, Listenwachstum und Copy-/Sharing-Semantik bestehen.
+- `tests/test_list_model_nested_get_push_repro.aiml`: nested get/push, now a compile error.
+- `tests/test_ptr_push_into_value_list_error.aiml`: the existing direct pointer case stays a compile error.
+- `tests/test_ptr_member_push_into_value_list_error.aiml`: a member expression is rejected.
+- `tests/test_ptr_call_push_into_value_list_error.aiml`: a function with a ptr return is rejected.
+- `tests/test_list_model_push_value_and_pointer.aiml`: valid model returns, member value copies, get via a local value variable, explicit dereferencing, pointer lists, list growth and copy/sharing semantics pass.
 
-`run_all_tests.sh` erkennt die vier Negativtests und verlangt neben Exit 1 den spezifischen Compile-Diagnosetext. Ein erneuter Runtime-Exit 1 des alten Repros kann dadurch nicht als bestandener Test gelten. Shell-Syntax wurde geprüft. Die vollständige globale Suite wurde nicht ausgeführt; die fokussierte Auswahl steht in results.json.
+`run_all_tests.sh` recognises the four negative tests and requires the specific compile diagnostic text in addition to exit 1. A renewed runtime exit 1 of the old repro therefore cannot count as a passed test. Shell syntax was checked. The full global suite was not run; the focused selection is in results.json.
 
-## Validierung
+## Validation
 
-- Compiler über `exodus build -c exodus.json` erfolgreich neu gebaut.
-- 30 native gezielte Prüfungen: **29 bestanden**, ein bestehender heterogener Modelllisten-Repro stürzt ab.
-- Isolierter Vorher-/Nachher-Vergleich für `test_model_inherits_hetero_list.aiml`: **beide SIGSEGV (-11), bytegleiche LLVM-IR**. SHA-256 und Exitcodes in baseline_comparison.json. Der isolierte Baseline-Compiler wurde mit der vorher gesicherten ast_compiler_call.cpp und ansonsten denselben Objektdateien separat unter /tmp gebaut; kein temporäres Zurücksetzen des Arbeitsstands.
-- 4 wasm32-Kompilierprüfungen: drei neue Pointer-Konflikte korrekt abgelehnt, positiver Modell-/Pointertest erfolgreich kompiliert. Kein WASM-Browserlauf.
-- Explizites Dereferenzieren im positiven Test abschließend zusätzlich nativ und für wasm32 geprüft.
-- `git diff --check` für die geänderten Bestandsdateien erfolgreich.
+- Compiler rebuilt successfully via `exodus build -c exodus.json`.
+- 30 targeted native checks: **29 passed**, one existing heterogeneous model list repro crashes.
+- Isolated before/after comparison for `test_model_inherits_hetero_list.aiml`: **both SIGSEGV (-11), byte-identical LLVM IR**. SHA-256 and exit codes in baseline_comparison.json. The isolated baseline compiler was built separately under /tmp with the previously saved ast_compiler_call.cpp and otherwise the same object files; no temporary reset of the working state.
+- 4 wasm32 compile checks: three new pointer conflicts correctly rejected, the positive model/pointer test compiled successfully. No WASM browser run.
+- Explicit dereferencing in the positive test finally also checked natively and for wasm32.
+- `git diff --check` for the changed existing files succeeded.
 
-Die Negative-Tests werden als PASS gezählt, wenn Kompilierung mit dem erwarteten Pointer-/Wertfehler abbricht, nicht wenn das Programm abstürzt. Die beigefügten Rohlogs dokumentieren den einzelnen verbleibenden Altfehler offen.
+The negative tests are counted as PASS when compilation aborts with the expected pointer/value error, not when the program crashes. The attached raw logs openly document the single remaining old failure.
 
-## Auswirkung auf 9rooms_v2
+## Effect on 9rooms_v2
 
-Der fehlerhafte Aufruf in `BoardScreen.cp_tick` wird beim nächsten Neubau nun frühzeitig abgewiesen. Für einen wieder baubaren Client ist dort die bereits dokumentierte explizite MockCard-Wertkopie erforderlich. Dieser Auftrag ändert AIML; der 9rooms-Workaround wurde hier nicht angewandt und der Webclient nicht neu ausgeliefert.
+The faulty call in `BoardScreen.cp_tick` is now rejected early at the next rebuild. For a buildable client again, the already documented explicit MockCard value copy is required there. This task changes AIML; the 9rooms workaround was not applied here and the web client was not redeployed.
 
-## Erneut prüfen
+## Re-check
 
-Vom AIML-Projektverzeichnis:
+From the AIML project directory:
 
 ```sh
 ./out/aiml/aiml tests/test_list_model_nested_get_push_repro.aiml -r
-# Erwartet: Exit 1 UND "pointer instead of a value" / "Compilation failed".
+# Expected: exit 1 AND "pointer instead of a value" / "Compilation failed".
 ./out/aiml/aiml tests/test_list_model_push_value_and_pointer.aiml -r
-# Erwartet: Exit 0, PASS.
+# Expected: exit 0, PASS.
 ```

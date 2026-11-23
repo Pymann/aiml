@@ -1,40 +1,40 @@
 # sprint_task_12
 
-## Titel
+## Title
 
-Compile-Pipeline fuer Datei, String, JIT und Chunk-Kompilation vereinheitlichen
+Unify the compile pipeline for file, string, JIT and chunk compilation
 
 ## Status
 
-Weiterhin offen und klar von Task 7 getrennt.
+Still open and clearly separate from task 7.
 
-## Ziel
+## Goal
 
-Die unterschiedlichen Compile-Entry-Points sollen auf einen kleinen gemeinsamen Kern reduziert werden.
+The different compile entry points should be reduced to a small shared core.
 
-## Aktueller Stand
+## Current state
 
-- [compiler.cpp](../../compiler.cpp) besitzt weiterhin getrennte Pfade fuer `compile()`, `compileFromString()`, `jitRun()` und `compileChunkAndGetAddress()`.
-- Genau das macht die Task weiterhin aktuell.
+- [compiler.cpp](../../compiler.cpp) still has separate paths for `compile()`, `compileFromString()`, `jitRun()` and `compileChunkAndGetAddress()`.
+- Exactly that keeps the task current.
 
-## Was an der alten Fassung veraltet war
+## What was outdated in the old version
 
-- Inhaltlich wenig; die Aufgabe ist weiterhin treffend.
-- Wichtig ist nur die klarere Abgrenzung zu Task 7: Task 12 ist Pipeline-Architektur, nicht Semantik-Paritaet.
+- Little in substance; the task is still accurate.
+- The only important thing is the clearer separation from task 7: task 12 is pipeline architecture, not semantic parity.
 
-## Fokus
+## Focus
 
-1. gemeinsamen Compile-Kern freilegen.
-2. Source-Frontend, JIT, Chunk und Object-Emit als Strategien darueberlegen.
-3. Symbol-/Library-Preload und Verifikation an wenigen klaren Stellen verankern.
+1. Expose the shared compile core.
+2. Layer source frontend, JIT, chunk and object emit on top as strategies.
+3. Anchor symbol/library preload and verification in a few clear places.
 
-## Betroffene Stellen
+## Affected places
 
 - [compiler.cpp](../../compiler.cpp)
 - [ast_compiler.cpp](../../src/core/ast_compiler.cpp)
 
-## Akzeptanzkriterien
+## Acceptance criteria
 
-- Neue Features muessen nicht doppelt in mehreren Compile-Entry-Points nachgeruestet werden.
-- Compile-Pfade unterscheiden sich nur noch dort, wo es technisch notwendig ist.
-- Verifikation, Import-Setup und Init-Hooks sind an wenigen festen Stellen verankert.
+- New features do not have to be retrofitted twice into several compile entry points.
+- Compile paths differ only where it is technically necessary.
+- Verification, import setup and init hooks are anchored in a few fixed places.

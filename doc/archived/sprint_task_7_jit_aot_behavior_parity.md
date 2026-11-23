@@ -1,35 +1,35 @@
 # sprint_task_7
 
-## Titel
+## Title
 
-Semantische JIT-/AOT-Paritaet herstellen
+Establish semantic JIT/AOT parity
 
 ## Status
 
-Weiterhin offen und klar von Task 12 zu unterscheiden.
+Still open and to be clearly distinguished from task 12.
 
-## Ziel
+## Goal
 
-Derselbe AIML-Inhalt soll in JIT und AOT dieselbe sichtbare Semantik haben.
+The same AIML content should have the same visible semantics in JIT and AOT.
 
-## Aktueller Stand
+## Current state
 
-- [compiler.cpp](../../compiler.cpp) zeigt weiterhin getrennte Entry-Points fuer `compile`, `compileFromString`, `jitRun` und `compileChunkAndGetAddress`.
-- Modulverifikation existiert bereits in beiden Hauptpfaden; das Problem ist heute also weniger „Verifier fehlt“ als „Semantik und Init-Verhalten driften“. 
+- [compiler.cpp](../../compiler.cpp) still shows separate entry points for `compile`, `compileFromString`, `jitRun` and `compileChunkAndGetAddress`.
+- Module verification already exists in both main paths; so today the problem is less "the verifier is missing" than "semantics and init behaviour drift apart".
 
-## Was an der alten Fassung veraltet war
+## What was outdated in the old version
 
-- Der Task vermischte semantische Paritaet mit Pipeline-Architektur.
-- Verifikation als Kernluecke ist heute nicht mehr der richtige Schwerpunkt.
+- The task mixed semantic parity with pipeline architecture.
+- Verification as the core gap is no longer the right focus today.
 
-## Fokus
+## Focus
 
-1. Import- und Symbolsichtbarkeit.
-2. Init-Verhalten inklusive `__aiml_init`.
-3. Kontext- und Seiteneffekte zwischen Datei- und Stringpfad.
-4. kleine Repros, die beide Pfade gegeneinander halten.
+1. Import and symbol visibility.
+2. Init behaviour including `__aiml_init`.
+3. Context and side effects between the file path and the string path.
+4. Small repros that hold both paths against each other.
 
-## Betroffene Stellen
+## Affected places
 
 - [jit_vs_aot.md](../../jit_vs_aot.md)
 - [compiler.cpp](../../compiler.cpp)
@@ -37,8 +37,8 @@ Derselbe AIML-Inhalt soll in JIT und AOT dieselbe sichtbare Semantik haben.
 - [exec_impl.cpp](../../exec_impl.cpp)
 - [fptable.cpp](../../src/core/fptable.cpp)
 
-## Akzeptanzkriterien
+## Acceptance criteria
 
-- Kernfaelle verhalten sich in JIT und AOT gleich.
-- Import- und Init-Regeln sind nicht mehr pfadabhaengig ueberraschend.
-- Verbleibende Unterschiede sind klein und bewusst dokumentiert.
+- Core cases behave the same in JIT and AOT.
+- Import and init rules are no longer surprisingly path-dependent.
+- Remaining differences are small and deliberately documented.

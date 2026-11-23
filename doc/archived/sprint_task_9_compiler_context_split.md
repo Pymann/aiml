@@ -1,42 +1,42 @@
 # sprint_task_9
 
-## Titel
+## Title
 
-`CompilerContext` entlang echter Verantwortungen aufspalten
+Split `CompilerContext` along real responsibilities
 
 ## Status
 
-Weiterhin offen und strukturell wichtig.
+Still open and structurally important.
 
-## Ziel
+## Goal
 
-Den grossen Ambient-State-Container [context.h](../../src/core/context.h) so zu entschlacken, dass neue Features nicht weiter an einen God-Context gekoppelt werden.
+Slim down the large ambient state container [context.h](../../src/core/context.h) so that new features are no longer coupled to a god context.
 
-## Aktueller Stand
+## Current state
 
-- `CompilerContext` ist weiterhin gross und traegt Semantik-, Codegen-, Import-, Init-, Serialisierungs- und Mirror-bezogene Zustandsfelder.
-- Der Task ist heute eher noch dringlicher als in der Erstfassung, weil viele neuere Themen daran anhaengen.
+- `CompilerContext` is still large and carries semantic, codegen, import, init, serialisation and mirror-related state fields.
+- Today the task is even more urgent than in the first version, because many newer topics hang off it.
 
-## Was an der alten Fassung veraltet war
+## What was outdated in the old version
 
-- Der vorgeschlagene Zielschnitt war als starres Klassenset formuliert.
-- Sinnvoller ist heute ein schrittweiser Schnitt nach Lese-/Schreibmustern statt sofortiger Grossaufteilung.
+- The proposed target cut was phrased as a rigid set of classes.
+- Today a step-by-step cut along read/write patterns makes more sense than an immediate big split.
 
-## Fokus
+## Focus
 
-1. Felder inventarisieren und in Cluster gruppieren.
-2. Kurzlebigen Call-/Compile-State zuerst herausziehen.
-3. dann Import-/Session-/Codegen-Zustand trennen.
-4. Adapterphase bewusst einplanen.
+1. Inventory the fields and group them into clusters.
+2. Pull out short-lived call/compile state first.
+3. Then separate import/session/codegen state.
+4. Deliberately plan for an adapter phase.
 
-## Betroffene Stellen
+## Affected places
 
 - [context.h](../../src/core/context.h)
 - [compiler.cpp](../../compiler.cpp)
 - [ast_compiler.cpp](../../src/core/ast_compiler.cpp)
 
-## Akzeptanzkriterien
+## Acceptance criteria
 
-- Neue Features haengen nicht mehr automatisch an einem globalen God-Context.
-- Kurzlebiger Compile-/Call-State ist von langlebigem Modul-/Semantik-State getrennt.
-- Migration kann schrittweise erfolgen, ohne den gesamten Compiler in einem Zug zu brechen.
+- New features no longer automatically hang off a global god context.
+- Short-lived compile/call state is separated from long-lived module/semantic state.
+- Migration can happen step by step, without breaking the whole compiler in one go.

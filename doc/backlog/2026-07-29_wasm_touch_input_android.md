@@ -1,39 +1,39 @@
-# WASM/Browser: Touch-Input für Mobil (Android/iOS)
+# WASM/browser: touch input for mobile (Android/iOS)
 
 Date: 2026-07-29
 Status: backlog
 
 ## Summary
 
-Der WASM/Browser-Build (emscripten + WebGL2, `src/sys/engine_runtime.cpp`)
-rendert und vernetzt bereits portabel — aber das **Input-Handling kennt nur
-Maus + Tastatur**. Es gibt keinen Touch-/Pointer-Event-Pfad. Auf einem
-Android-/iOS-Browser funktioniert damit **kein Drag & Drop** — und 9rooms_v2
-ist stark drag-lastig (Karten aus der Hand in Zonen ziehen, Angreifen per Drag,
-Ausrüsten, Bewegen). Desktop-Browser (Windows/macOS/Linux) sind ok, weil dort
-Maus-Events kommen.
+The WASM/browser build (emscripten + WebGL2, `src/sys/engine_runtime.cpp`)
+already renders and networks portably — but **input handling only knows
+mouse + keyboard**. There is no touch/pointer event path. In an
+Android/iOS browser **drag & drop therefore does not work** — and 9rooms_v2
+is heavily drag-based (dragging cards from the hand into zones, attacking by drag,
+equipping, moving). Desktop browsers (Windows/macOS/Linux) are fine, because there
+mouse events arrive.
 
-## Was fehlt
+## What is missing
 
-- Emscripten Touch-Events registrieren: `emscripten_set_touchstart_callback` /
-  `touchmove` / `touchend` (bzw. Pointer-Events `pointerdown/move/up`, die Maus
-  UND Touch vereinheitlichen — vermutlich der sauberere Weg).
-- Diese auf denselben internen Input-State mappen wie die Maus (Position +
-  „primary button down"), damit die bestehende Drag-Logik (pick → move → drop)
-  ohne Änderung greift.
-- Multi-Touch vorerst ignorieren (nur der erste Finger = Cursor).
-- Optional: Long-Press → Rechtsklick-Äquivalent (Ability-Picker etc.), da es
-  auf Touch keine zweite Maustaste gibt.
+- Register emscripten touch events: `emscripten_set_touchstart_callback` /
+  `touchmove` / `touchend` (or pointer events `pointerdown/move/up`, which unify mouse
+  AND touch — probably the cleaner way).
+- Map them onto the same internal input state as the mouse (position +
+  "primary button down"), so that the existing drag logic (pick → move → drop)
+  works without changes.
+- Ignore multi-touch for now (only the first finger = cursor).
+- Optional: long press → right-click equivalent (ability picker etc.), since
+  touch has no second mouse button.
 
-## Umfang / Ort
+## Scope / location
 
-- `src/sys/engine_runtime.cpp` (emscripten-Zweig, `#if defined(__EMSCRIPTEN__)`)
-  — dort werden schon Canvas-Größe/WebGL init gehandhabt; Touch-Callbacks dazu.
-- Kein AIML-seitiger Change nötig, wenn Touch auf den Maus-State gemappt wird.
+- `src/sys/engine_runtime.cpp` (emscripten branch, `#if defined(__EMSCRIPTEN__)`)
+  — canvas size/WebGL init are already handled there; add the touch callbacks.
+- No AIML-side change needed if touch is mapped onto the mouse state.
 
-## Kontext
+## Context
 
-Aufgekommen bei der Frage „läuft 9rooms_v2 als Browser-Game auf Windows/Android?"
-(2026-07-29): Windows-Browser ja, Android nur eingeschränkt — genau wegen des
-fehlenden Touch-Inputs. Netzwerk ist portabel (WS-Client hat `#ifdef
-__EMSCRIPTEN__`-Pfad in `ws_runtime.cpp`; nur `ws://`/`wss://`, kein rohes TCP).
+Came up with the question "does 9rooms_v2 run as a browser game on Windows/Android?"
+(2026-07-29): Windows browser yes, Android only to a limited extent — exactly because of the
+missing touch input. Networking is portable (the WS client has an `#ifdef
+__EMSCRIPTEN__` path in `ws_runtime.cpp`; only `ws://`/`wss://`, no raw TCP).

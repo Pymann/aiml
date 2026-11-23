@@ -1,40 +1,40 @@
 # sprint_task_10
 
-## Titel
+## Title
 
-`builtin_registry.cpp` funktional modularisieren
+Modularise `builtin_registry.cpp` by function
 
 ## Status
 
-Unveraendert relevant.
+Still relevant, unchanged.
 
-## Ziel
+## Goal
 
-Den weiterhin sehr grossen Builtin-Monolithen in fachliche Module schneiden, ohne die bestehende Builtin-Oberflaeche zu brechen.
+Cut the still very large builtin monolith into domain modules without breaking the existing builtin surface.
 
-## Aktueller Stand
+## Current state
 
-- [builtin_registry.cpp](../../src/core/builtin_registry.cpp) liegt weiterhin bei rund 7250 Zeilen.
-- Es gibt bereits [builtin_registry.h](../../src/core/builtin_registry.h), aber noch keine echte Domaenentrennung.
+- [builtin_registry.cpp](../../src/core/builtin_registry.cpp) is still at around 7250 lines.
+- [builtin_registry.h](../../src/core/builtin_registry.h) already exists, but there is no real domain separation yet.
 
-## Was an der alten Fassung veraltet war
+## What was outdated in the old version
 
-- Die Problemformulierung ist weiterhin richtig; praktisch zu ergaenzen ist heute nur der aktuelle Ist-Stand.
+- The problem statement is still right; in practice only the current state needs adding today.
 
-## Fokus
+## Focus
 
-1. Registrierungsschnitt klein halten.
-2. Domaenenmodule einfuehren.
-3. gemeinsam genutzte Hilfen separat auslagern.
-4. keine semantische Aenderung als Vorbedingung.
+1. Keep the registration interface small.
+2. Introduce domain modules.
+3. Move shared helpers out separately.
+4. No semantic change as a precondition.
 
-## Betroffene Stellen
+## Affected places
 
 - [builtin_registry.cpp](../../src/core/builtin_registry.cpp)
 - [builtin_registry.h](../../src/core/builtin_registry.h)
 
-## Akzeptanzkriterien
+## Acceptance criteria
 
-- Neue Builtins landen in Domaenenmodulen.
-- Die zentrale Registrierungsoberflaeche bleibt klein.
-- Die Aufspaltung fuehrt nicht zu stillen Sprachveraenderungen.
+- New builtins land in domain modules.
+- The central registration surface stays small.
+- The split does not lead to silent language changes.

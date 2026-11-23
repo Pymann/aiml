@@ -5,11 +5,11 @@
           if (methodName == "push" && argVals.size() > 0) {
               llvm::Value* pushVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
 -             // ── Static check: push(ptr<T>) into a VALUE list<T> ────────────
--             // Ein 8-byte Pointer würde in einen Value-Struct-Slot geschrieben
--             // (nur die ersten 8 bytes gesetzt, Rest garbage) → Heap-Korruption
--             // / SIGSEGV beim Serialisieren (aiml_ser_encode).  Compile-Fehler.
--             // Ausgenommen: list<ptr<T>> (element = ptr, ok) und Interface-
--             // FatPtr-Listen (eigenes Upcast-Handling direkt darunter).
+-             // An 8-byte pointer would be written into a value struct slot
+-             // (only the first 8 bytes set, the rest garbage) → heap corruption
+-             // / SIGSEGV when serialising (aiml_ser_encode).  Compile error.
+-             // Exempt: list<ptr<T>> (element = ptr, ok) and interface
+-             // FatPtr lists (their own upcast handling right below).
 -             {
 -                 bool elemIsPtr = (listElemName.rfind("ptr<", 0) == 0);
 -                 bool elemIsFatPtr = llvmListElemType && llvmListElemType->isStructTy() &&
@@ -46,5 +46,5 @@
 +                     " value before push(), or use list<ptr<" + listElemName + ">>.");
 +                 return nullptr;
               }
-              // Interface-Upcast für push(ptr<Concrete>) wenn list-elem = ptr<Interface>.
-              // Ohne diesen Schritt landet ein 8-byte class-ptr in einem 16-byte
+              // Interface upcast for push(ptr<Concrete>) when list-elem = ptr<Interface>.
+              // Without this step an 8-byte class ptr ends up in a 16-byte

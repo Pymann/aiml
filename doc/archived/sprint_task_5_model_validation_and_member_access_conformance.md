@@ -1,34 +1,34 @@
 # sprint_task_5
 
-## Titel
+## Title
 
-Member-Access und Modellvalidierung auf einen gemeinsamen Pfad ziehen
+Pull member access and model validation onto a shared path
 
 ## Status
 
-Weiterhin hoch relevant.
+Still highly relevant.
 
-## Ziel
+## Goal
 
-Tiefe Member-Zugriffe, LValue-Aufloesung und Modellvalidierung sollen konsistent werden, statt ueber mehrere halbgetrennte Compilerpfade zu laufen.
+Deep member access, lvalue resolution and model validation should become consistent instead of running through several half-separate compiler paths.
 
-## Aktueller Stand
+## Current state
 
-- Der Member-Zugriff ist heute noch ueber [ast_compiler_expr.cpp](../../src/core/ast_compiler_expr.cpp), [ast_compiler_stmt.cpp](../../src/core/ast_compiler_stmt.cpp) und [utils.cpp](../../src/core/utils.cpp) verteilt.
-- [member_chain_plan.md](../../member_chain_plan.md) ist weiterhin die naheliegende Vorarbeit.
+- Member access is still spread over [ast_compiler_expr.cpp](../../src/core/ast_compiler_expr.cpp), [ast_compiler_stmt.cpp](../../src/core/ast_compiler_stmt.cpp) and [utils.cpp](../../src/core/utils.cpp) today.
+- [member_chain_plan.md](../../member_chain_plan.md) is still the obvious groundwork.
 
-## Was an der alten Fassung veraltet war
+## What was outdated in the old version
 
-- Zu viel Fokus auf rein dokumentierte Spec-Versprechen, zu wenig auf den realen zentralen Access-Pfad.
-- Strukturelle Typisierung und tiefer Zugriff waren vermischt, obwohl sie unterschiedliche Risiken haben.
+- Too much focus on merely documented spec promises, too little on the real central access path.
+- Structural typing and deep access were mixed up, although they carry different risks.
 
-## Fokus
+## Focus
 
-1. Einheitlicher Resolver fuer Read/Write/LValue.
-2. danach tiefe Chains und Auto-Dot-Deref.
-3. erst danach Map-zu-Model-Validierung und strukturelle Kompatibilitaet.
+1. A unified resolver for read/write/lvalue.
+2. After that deep chains and auto-dot deref.
+3. Only after that map-to-model validation and structural compatibility.
 
-## Betroffene Stellen
+## Affected places
 
 - [spec/15_models.md](../../spec/15_models.md)
 - [member_chain_plan.md](../../member_chain_plan.md)
@@ -36,8 +36,8 @@ Tiefe Member-Zugriffe, LValue-Aufloesung und Modellvalidierung sollen konsistent
 - [ast_compiler_stmt.cpp](../../src/core/ast_compiler_stmt.cpp)
 - [utils.cpp](../../src/core/utils.cpp)
 
-## Akzeptanzkriterien
+## Acceptance criteria
 
-- Tiefe Member-Chains verhalten sich fuer Read und Write konsistent.
-- `ptr<Model>`-Zugriffe folgen einer klaren Regel.
-- Modellvalidierung ist nachvollziehbar und nicht mehr nur Seiteneffekt einzelner Codepfade.
+- Deep member chains behave consistently for read and write.
+- `ptr<Model>` access follows one clear rule.
+- Model validation is traceable and no longer just a side effect of individual code paths.

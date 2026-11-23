@@ -1,38 +1,38 @@
-# AOT-Build: Top-Level-Handler für uncaught Exceptions
+# AOT build: top-level handler for uncaught exceptions
 
 Date: 2026-07-30
 Status: backlog
 
-## Kontext
+## Context
 
-2026-07-30 wurde die **JIT**-Ausführung (`aiml … -r`) sauber gemacht: eine
-uncaught AIML-Exception wird jetzt am Top-Level in `AIMLCompiler::jitRun` von
-einem `try/catch(...)` gefangen → druckt `Unhandled AIML exception: <message>`
-nach stderr + `return 2` (statt `std::terminate`/Core-Dump). Die `message` wird
-in `visitThrow` vor `__cxa_throw` via `aiml_note_thrown_message` in einer
-thread-local abgelegt (siehe Memory `aiml_exception_propagation`).
+On 2026-07-30 **JIT** execution (`aiml … -r`) was cleaned up: an
+uncaught AIML exception is now caught at the top level in `AIMLCompiler::jitRun` by
+a `try/catch(...)` → prints `Unhandled AIML exception: <message>`
+to stderr + `return 2` (instead of `std::terminate`/core dump). The `message` is
+stored in a thread-local in `visitThrow` before `__cxa_throw` via `aiml_note_thrown_message`
+(see memory `aiml_exception_propagation`).
 
-**Offen:** Der **AOT**-Build (native Executable, z.B. der 9rooms-`game`-Server via
-`exodus build -c …`) hat KEINEN äquivalenten Wrapper. Die kompilierte AIML-`main`
-ist der Entry-Point; eine uncaught Exception unwindet aus `main` heraus →
-harter Abbruch (`std::terminate`) ohne Diagnose. Für einen langlebigen Server ist
-das gefährlich (ein einziger Bad-Data-Pfad killt den Prozess).
+**Open:** The **AOT** build (native executable, e.g. the 9rooms `game` server via
+`exodus build -c …`) has NO equivalent wrapper. The compiled AIML `main`
+is the entry point; an uncaught exception unwinds out of `main` →
+hard abort (`std::terminate`) without a diagnostic. For a long-lived server
+that is dangerous (a single bad-data path kills the process).
 
 ## Plan
 
-- Beim AOT-Codegen die AIML-`main` NICHT direkt als C-`main` exportieren, sondern
-  eine C++-`main`-Wrapper generieren/linken, die die AIML-`main` in
+- In AOT codegen do NOT export the AIML `main` directly as the C `main`, but
+  generate/link a C++ `main` wrapper that calls the AIML `main` in
   `try { … } catch (...) { fprintf(stderr, "Unhandled AIML exception: %s\n",
-  g_aiml_last_thrown_msg…); return 2; }` aufruft — analog zu `jitRun`.
-  `aiml_note_thrown_message` + `g_aiml_last_thrown_msg` existieren bereits
-  (`compiler.cpp`); für AOT müssen sie in die Runtime (`libaiml`) statt in den
-  Compiler, damit das gelinkte Binary sie findet.
-- Alternativ: `std::set_terminate`-Handler registrieren, der die zuletzt notierte
-  Message druckt.
+  g_aiml_last_thrown_msg…); return 2; }` — analogous to `jitRun`.
+  `aiml_note_thrown_message` + `g_aiml_last_thrown_msg` already exist
+  (`compiler.cpp`); for AOT they have to move into the runtime (`libaiml`) instead of the
+  compiler, so that the linked binary finds them.
+- Alternatively: register a `std::set_terminate` handler that prints the last noted
+  message.
 
-## Warum relevant
+## Why it matters
 
-Blockiert die saubere Server-seitige Fehler-Behandlung bei der geplanten
-Effect/Cost-Kaskaden-Validierung (9rooms, eigenes Backlog): dort MUSS der
-create_card-RPC-Handler die Exception selbst fangen, weil der AOT-Server sonst
-crasht. Ein AOT-Top-Level-Wrapper wäre das robustere Netz.
+Blocks clean server-side error handling for the planned
+effect/cost cascade validation (9rooms, separate backlog): there the
+create_card RPC handler MUST catch the exception itself, because otherwise the AOT server
+crashes. An AOT top-level wrapper would be the more robust net.

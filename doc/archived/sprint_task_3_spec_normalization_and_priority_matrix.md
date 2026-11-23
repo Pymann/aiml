@@ -1,41 +1,41 @@
 # sprint_task_3
 
-## Titel
+## Title
 
-Spec-Status normalisieren und als lebende Prioritaetsmatrix pflegen
+Normalise the spec status and maintain it as a living priority matrix
 
 ## Status
 
-Teilweise vorbereitet durch vorhandene Review-Dokumente, aber noch nicht als belastbare Arbeitsmatrix verdichtet.
+Partly prepared by existing review documents, but not yet condensed into a reliable working matrix.
 
-## Ziel
+## Goal
 
-Die AIML-Spec soll nicht nur gesammelt, sondern in einen aktuellen, umsetzbaren Status ueberfuehrt werden: verbindlich, offen, widerspruechlich oder bereits ueberholt.
+The AIML spec should not just be collected but turned into a current, actionable status: binding, open, contradictory or already superseded.
 
-## Aktueller Stand
+## Current state
 
-- [SPEC_REVIEW.md](../../spec/SPEC_REVIEW.md) und [spec_impl_completeness.md](../../spec_impl_completeness.md) existieren bereits.
-- Es gibt damit schon Vorarbeit; der Engpass ist heute eher Pflege, Priorisierung und Entschlackung als reine Erstaufnahme.
+- [SPEC_REVIEW.md](../../spec/SPEC_REVIEW.md) and [spec_impl_completeness.md](../../spec_impl_completeness.md) already exist.
+- So there is groundwork already; the bottleneck today is maintenance, prioritisation and slimming down rather than an initial survey.
 
-## Was an der alten Fassung veraltet war
+## What was outdated in the old version
 
-- Die Formulierung klang nach kompletter Erstinventur.
-- Die Zahl alter Issues ist als Steuerungsmodell zu grob.
+- The wording sounded like a complete initial inventory.
+- The number of old issues is too coarse as a steering model.
 
-## Fokus
+## Focus
 
-1. Bestehende Review-Arbeit auf „normativ / offen / ueberholt / ersetzt“ verdichten.
-2. Pro Sprachkapitel nur noch wenige konkrete Blocker benennen.
-3. Daraus eine Reihenfolge fuer Compiler-, Runtime- und Testarbeit machen.
+1. Condense the existing review work into "normative / open / superseded / replaced".
+2. Name only a few concrete blockers per language chapter.
+3. Derive an order for compiler, runtime and test work from that.
 
-## Betroffene Stellen
+## Affected places
 
 - [spec](../../spec)
 - [SPEC_REVIEW.md](../../spec/SPEC_REVIEW.md)
 - [spec_impl_completeness.md](../../spec_impl_completeness.md)
 
-## Akzeptanzkriterien
+## Acceptance criteria
 
-- Pro wichtigem Sprachkapitel ist sichtbar, ob es normativ, offen oder ueberholt ist.
-- Nachfolgende Sprint-Tasks muessen keine Spec-Inventur mehr mittransportieren.
-- Widersprueche und Altlasten sind klar von echter Folgearbeit getrennt.
+- For every important language chapter it is visible whether it is normative, open or superseded.
+- Subsequent sprint tasks no longer have to carry a spec inventory along.
+- Contradictions and legacy issues are clearly separated from real follow-up work.

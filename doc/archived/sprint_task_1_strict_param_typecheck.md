@@ -1,45 +1,45 @@
 # sprint_task_1
 
-## Titel
+## Title
 
-Strikte Parametertyppruefung im Call-Pfad konsolidieren
+Consolidate strict parameter type checking in the call path
 
 ## Status
 
-Teilweise vorbereitet, aber noch nicht als durchgaengig harte Sprachregel abgesichert.
+Partly prepared, but not yet secured as a consistently hard language rule.
 
-## Ziel
+## Goal
 
-Funktions- und Methodenaufrufe sollen bei falschen Argumenttypen frueh und eindeutig im Compiler scheitern, statt implizit weiterzucasten oder spaet in LLVM-/Runtime-Fehler zu laufen.
+Function and method calls with wrong argument types should fail early and unambiguously in the compiler, instead of implicitly casting on or running late into LLVM/runtime errors.
 
-## Aktueller Stand
+## Current state
 
-- Der relevante Hauptpfad liegt heute in [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp).
-- Die alte Annahme eines separaten `call_dispatcher.cpp` als Kernpfad ist veraltet; diese Datei existiert im aktuellen Stand nicht.
-- Builtin-Semantik lebt weiterhin stark in [builtin_registry.cpp](../../src/core/builtin_registry.cpp).
+- The relevant main path today lies in [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp).
+- The old assumption of a separate `call_dispatcher.cpp` as the core path is outdated; that file does not exist in the current state.
+- Builtin semantics still live largely in [builtin_registry.cpp](../../src/core/builtin_registry.cpp).
 
-## Was an der alten Fassung veraltet war
+## What was outdated in the old version
 
-- `call_dispatcher.cpp` als zentrale Abhaengigkeit stimmt nicht mehr.
-- Der Task war zu breit fuer „alle Call-Arten gleichzeitig“.
-- Die Trennung zwischen Sprachregel und Builtin-Sonderfall war nicht scharf genug.
+- `call_dispatcher.cpp` as the central dependency is no longer correct.
+- The task was too broad for "all call kinds at once".
+- The separation between language rule and builtin special case was not sharp enough.
 
-## Fokus
+## Focus
 
-1. Direkte User-Function-Calls haerten.
-2. Danach Methodenaufrufe und `fn<...>`-Calls auf dieselbe Validierungslogik ziehen.
-3. Builtin-Sonderfaelle explizit isolieren, statt sie still in den allgemeinen Call-Regeln mitzuschleppen.
+1. Harden direct user function calls.
+2. Then pull method calls and `fn<...>` calls onto the same validation logic.
+3. Isolate builtin special cases explicitly, instead of silently dragging them along in the general call rules.
 
-## Betroffene Stellen
+## Affected places
 
 - [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp)
 - [compiler.cpp](../../compiler.cpp)
 - [context.h](../../src/core/context.h)
-- bei Builtin-Sonderfaellen: [builtin_registry.cpp](../../src/core/builtin_registry.cpp)
+- for builtin special cases: [builtin_registry.cpp](../../src/core/builtin_registry.cpp)
 
-## Akzeptanzkriterien
+## Acceptance criteria
 
-- Falscher Parametertyp bei User-Funktionen erzeugt einen klaren Compilerfehler.
-- Zu viele und zu wenige Argumente werden konsistent behandelt.
-- Methoden und `fn<...>` folgen derselben Grundregel oder sind explizit als Folgearbeit markiert.
-- Builtin-Ausnahmen sind sichtbar und nicht mehr unbeabsichtigter Seiteneffekt des allgemeinen Call-Pfads.
+- A wrong parameter type for user functions produces a clear compiler error.
+- Too many and too few arguments are handled consistently.
+- Methods and `fn<...>` follow the same basic rule or are explicitly marked as follow-up work.
+- Builtin exceptions are visible and no longer an unintended side effect of the general call path.
