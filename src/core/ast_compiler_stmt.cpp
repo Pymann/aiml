@@ -16,8 +16,8 @@
 namespace AIML {
 namespace AST {
 
-// Weiter unten definiert; der decl-Pfad braucht sie fuer die Initialisierung
-// einer abgeleiteten Form aus einem Basiswert (spec/15).
+// Defined further below; the decl path needs it to initialise
+// a derived form from a base value (spec/15).
 static bool modelIsAncestor(CompilerContext& ctx, std::string derived, const std::string& base);
 
 namespace {
@@ -151,15 +151,15 @@ bool rejectVoidCallInit(CompilerContext& ctx, Expr* initExpr,
     // Method/namespace calls are routed through different visit handlers;
     // their typing is checked elsewhere.  Only catch the direct-call form.
     if (call->functionName.find('.') != std::string::npos) {
-        // Ein METHODEN- oder Namensraum-Aufruf.  Seine Typregeln liegen
-        // anderswo — hier ist nur wichtig, dass er nicht void liefert, wenn
-        // sein Wert gespeichert werden soll.  Ein in DIESER Einheit bekannter
-        // Methodenname wird deshalb geprueft; alles andere faellt wie bisher
-        // durch (ein Builtin hat keine llvm::Function unter diesem Namen).
+        // A METHOD or namespace call.  Its type rules live
+        // elsewhere — here it only matters that it does not return void when
+        // its value is to be stored.  A method name known in THIS unit
+        // is therefore checked; everything else falls through as before
+        // (a builtin has no llvm::Function under that name).
         //
-        // Grund: ohne diese Pruefung landet ein void-Wert in einer typisierten
-        // Stelle, und LLVM stuerzt spaeter in getPrefTypeAlignment ab statt
-        // etwas zu melden (gemessen 2026-10-12 am cosmos-RunsScreen).
+        // Reason: without this check a void value lands in a typed
+        // slot, and LLVM later crashes in getPrefTypeAlignment instead of
+        // reporting something (measured 2026-10-12 on the cosmos RunsScreen).
         const std::string base = call->functionName.substr(0, call->functionName.rfind('.'));
         const std::string meth = call->functionName.substr(call->functionName.rfind('.') + 1);
 
@@ -535,8 +535,8 @@ static int aimlTraceKind(CompilerContext& ctx, const std::string& tn) {
 // resolve it separately).
 void Compiler::classifyListElem(const std::string& elemName, int& elemKind, int64_t& elemSize,
                                 llvm::GlobalVariable*& serNodes, int32_t& serNodesCount) {
-    // spec/61 §5.7: zeigergrosse Slots striden mit ctx.ptrStride() (4 auf wasm32),
-    // nie mit einem literalen 8 — das kostete den WASM-Client (2026-10-15).
+    // spec/61 §5.7: pointer-sized slots stride with ctx.ptrStride() (4 on wasm32),
+    // never with a literal 8 — that cost the WASM client (2026-10-15).
     elemKind = 0; elemSize = ctx.ptrStride(); serNodes = nullptr; serNodesCount = 0;
     if (elemName == "string") {
         elemKind = 1; elemSize = ctx.ptrStride();
@@ -754,25 +754,25 @@ void Compiler::movePtrArg(Expr* arg, const std::string& paramType, const std::st
     if (ve->name == "null") return;
     if (ve->name.find('.') != std::string::npos || ve->name.find('<') != std::string::npos) { reject(); return; }
     Symbol* s = resolveVariable(ve->name);
-    // Ein Name, der sich hier NICHT aufloesen laesst, ist typischerweise ein
-    // Global aus einer importierten Datei (spec/21 §2.1: die Datei sieht nur
-    // ihren eigenen Import-Abschluss).  Frueher fiel er durch diese Pruefung
-    // und wurde stillschweigend VERSCHOBEN — das Global war danach frei.  Genau
-    // so sind zwei WASM-Abstuerze entstanden (2026-10-13/14: cosmos
-    // `<.apply, g_live_cluster` und `<.apply_agents, g_live_agents`, beide
-    // gruen uebersetzt).  Unbekannt heisst ab jetzt ABGELEHNT, nicht erlaubt:
-    // ein Besitzuebergang, den der Compiler nicht nachvollziehen kann, ist
-    // keiner, den er durchwinken darf.
+    // A name that can NOT be resolved here is typically a
+    // global from an imported file (spec/21 §2.1: the file only sees
+    // its own import closure).  It used to fall through this check
+    // and was silently MOVED — the global was freed afterwards.  That is exactly
+    // how two WASM crashes came about (2026-10-13/14: cosmos
+    // `<.apply, g_live_cluster` and `<.apply_agents, g_live_agents`, both
+    // compiled green).  From now on unknown means REJECTED, not allowed:
+    // an ownership transfer the compiler cannot follow is
+    // not one it may wave through.
     if (!s || s->is_global || s->typeName.rfind("ptr<", 0) != 0) { reject(); return; }
     // The move takes effect when the callee is entered: called after all arguments are evaluated,
     // it empties the local's slot (its drop stays and is null-safe). A throw while evaluating a
     // later argument therefore leaves the box with the caller (spec/61 §9.3).
     llvm::Value* slot = s->ir_alloca_inst ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(s->ir_alloca_inst))
                                           : static_cast<llvm::Value*>(s->alloca_inst);
-    // Die SPEICHERFORM entscheidet, nicht das is_global-Flag: ein echtes Local
-    // hat ein Alloca, ein Global (auch ein importiertes) hat keins.  Das Flag
-    // ist bei importierten Globalen nicht gesetzt — deshalb rutschte
-    // `<.apply_agents, g_live_agents` durch und gab das Global frei.
+    // The STORAGE FORM decides, not the is_global flag: a real local
+    // has an alloca, a global (including an imported one) has none.  The flag
+    // is not set on imported globals — that is why
+    // `<.apply_agents, g_live_agents` slipped through and freed the global.
     auto* ai = llvm::dyn_cast_or_null<llvm::AllocaInst>(slot);
     if (!ai) { reject(); return; }
     ctx.builder.CreateStore(llvm::Constant::getNullValue(ai->getAllocatedType()), ai);
@@ -795,8 +795,8 @@ void Compiler::releaseContainerCopyTemp(llvm::Value* tempSlot, bool tempOwned, c
                {i8p, i8p, ctx.builder.getInt32Ty()}), { tempSlot, d, ctx.builder.getInt32(nc) });
 }
 
-// Typ des Empfängers von `a.b.c.method` (Pfad vor dem letzten Punkt) über Symboltabelle und
-// Klassenmitglieder; "" wenn unbekannt (z. B. Namespace-Funktion).
+// Type of the receiver of `a.b.c.method` (path before the last dot) via the symbol table and
+// class members; "" if unknown (e.g. a namespace function).
 static std::string receiverTypeName(const CompilerContext& ctx, const std::string& functionName) {
     size_t last = functionName.rfind('.');
     if (last == std::string::npos) return "";
@@ -825,12 +825,12 @@ static bool isContainerTypeName(const std::string& tn) {
         || tn.rfind("cascade<", 0) == 0 || tn.rfind("array<", 0) == 0;
 }
 
-// `.get/.at/.first/.last` (Kurzname sn) ist ein geliehener Elementzugriff, wenn der Empfänger ein
-// Container ist — unabhängig davon, ob irgendeine Funktion mit demselben Kurznamen ein Producer ist.
-// Vorher entschied nur ownsReturnMatches(sn): gab es irgendwo eine Methode `get` mit string-Rückgabe
-// (z. B. KnowledgeStore.get), galt `return: { call: [<.liste.get, i] }` als frische eigene Referenz;
-// der Aufrufer gab den geliehenen String frei, die Liste las danach Müll
-// (tests/test_hashmap_string_return.aiml, gefunden von cai am 29.10.2026).
+// `.get/.at/.first/.last` (short name sn) is a borrowed element access if the receiver is a
+// container — regardless of whether some function with the same short name is a producer.
+// Before, only ownsReturnMatches(sn) decided: if there was a method `get` with a string return anywhere
+// (e.g. KnowledgeStore.get), `return: { call: [<.liste.get, i] }` counted as a fresh owned reference;
+// the caller freed the borrowed string, and the list then read garbage
+// (tests/test_hashmap_string_return.aiml, found by cai on 2026-10-29).
 static bool isBorrowingAccessor(const CompilerContext& ctx, const std::string& functionName,
                                 const std::string& sn, const std::string& type) {
     if (!(sn == "get" || sn == "at" || sn == "first" || sn == "last")) return false;
@@ -1970,11 +1970,11 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
                     if (ve->name.find('.') != std::string::npos || ve->name.find('<') != std::string::npos)
                         sym.is_view_alias = true;
                     else
-                        // spec/61 §7: Kopie aus einem anderen LOKAL — member-weise, mit incref
-                        // je geteiltem Feld.  Ohne das incref gibt der naechste Member-Store der
-                        // Kopie den String des Originals frei (Probe
-                        // tests/test_value_model_copy_share.aiml).  Gleichschritt: freshOwned in
-                        // ownership_analyzer.cpp und die beiden Retain-Stellen unten.
+                        // spec/61 §7: copy from another LOCAL — member-wise, with an incref
+                        // per shared field.  Without the incref the next member store of the
+                        // copy frees the original's string (probe
+                        // tests/test_value_model_copy_share.aiml).  Lockstep: freshOwned in
+                        // ownership_analyzer.cpp and the two retain sites below.
                         sym.is_copy_retain = true;
                 } else if (auto* ce = dynamic_cast<CallExpr*>(iv)) {
                     const std::string& fn = ce->functionName;
@@ -2158,15 +2158,15 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
             && decl->typeName.rfind("ptr<", 0) == 0 && decl->typeName.back() == '>'
             && !ctx.cleanupStack.empty()) {
             bool ownedInit = dynamic_cast<NewExpr*>(decl->initialValue.get()) != nullptr;
-            // spec/19 §Polymorphism + spec/61 §8: AUFWAERTSWANDLUNG eines eigenen Zeigers
-            //   decl: [sicht, ptr<Iface>, besitzer]      (besitzer: ptr<Klasse>)
-            // Bisher entstand dabei ein BESITZLOSER Zwilling: `sicht` bekam keinen Drop,
-            // `besitzer` behielt seinen.  Beim Weiterreichen an einen ptr<T>-Parameter
-            // (§8: Argument wird gemoved) gab dann der Aufgerufene frei UND der Besitzer
-            // noch einmal -- Doppelfreigabe, danach kaputte vtables (gemessen 2026-11-10 in
-            // datacreatures: Absturz beim Hovern, tests/test_iface_upcast_param.aiml).
-            // Richtig ist die UEBERGABE: `sicht` wird Eigentuemer, `besitzer` verliert
-            // seinen Drop -- ein Eigentuemer, eine Freigabe.
+            // spec/19 §Polymorphism + spec/61 §8: UPCAST of an owning pointer
+            //   decl: [view, ptr<Iface>, owner]      (owner: ptr<Class>)
+            // Until now this produced an OWNERLESS twin: `view` got no drop,
+            // `owner` kept its own.  When passed on to a ptr<T> parameter
+            // (§8: the argument is moved) the callee freed it AND the owner
+            // once more -- double free, broken vtables afterwards (measured 2026-11-10 in
+            // datacreatures: crash on hover, tests/test_iface_upcast_param.aiml).
+            // The right thing is the HANDOVER: `view` becomes the owner, `owner` loses
+            // its drop -- one owner, one free.
             bool transferFromLocal = false;
             if (!ownedInit && ctx.lifetimeDropsEnabled) {
                 std::string declInner = decl->typeName.substr(4, decl->typeName.size() - 5);
@@ -2258,8 +2258,8 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
                     sd.debugName = decl->varName; sd.debugType = decl->typeName;
                     ctx.cleanupStack.back().push_back(sd);
                 }
-                // Uebergabe abschliessen: die Quelle verliert ihren Drop, sonst
-                // gaeben beide frei (siehe transferFromLocal oben).
+                // Complete the handover: the source loses its drop, otherwise
+                // both would free (see transferFromLocal above).
                 if (transferFromLocal) consumeLocalDrop(decl->initialValue.get(), false);
             }
         }
@@ -2598,21 +2598,21 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
         ctx.floatResultTy = savedResTy;
         ctx.deserializeTargetType.clear();
 
-        // Eine ABGELEITETE Form aus einem BASISWERT anlegen (spec/15 "Model
-        // Inheritance": die Felder der Basis liegen als Vorspann im Speicher).
-        // Der allgemeine Weg kopiert `sizeof(ZIEL)` Bytes aus einer KLEINEREN
-        // Quelle -- er liest ueber deren Ende hinaus, und der Muell landet in
-        // den eigenen Feldern der abgeleiteten Form: ein i32 las 0, eine
-        // Zeichenkette leer, ein Listen-Handle stuerzte mit SIGSEGV ab
-        // (gemessen 21.11.2026 in datacreatures, `SkillProfile`).
-        // Also: nur den geteilten Vorspann kopieren und die EIGENEN Felder so
-        // einrichten, wie ein `decl` ohne Initialisierer es taete.
+        // Create a DERIVED form from a BASE value (spec/15 "Model
+        // Inheritance": the base's fields lie in memory as a prefix).
+        // The general path copies `sizeof(TARGET)` bytes from a SMALLER
+        // source -- it reads past its end, and the garbage lands in
+        // the derived form's own fields: an i32 read 0, a
+        // string empty, a list handle crashed with SIGSEGV
+        // (measured 2026-11-21 in datacreatures, `SkillProfile`).
+        // So: copy only the shared prefix and set up the OWN fields
+        // the way a `decl` without an initialiser would.
         // Regression: tests/test_model_init_from_base.aiml
         if (initVal && !isPrePromotedGlobal) {
             std::string srcTypeName = declaredTypeOfExpr(decl->initialValue.get());
-            // Eine Variable mit WERT-Typ meldet sich dort als `ptr<T>` (eine
-            // Klasseninstanz verhaelt sich am Argument wie ein Zeiger) -- die
-            // Huelle gehoert hier weg, sonst findet die Suche den Typ nie.
+            // A variable with a VALUE type reports itself there as `ptr<T>` (a
+            // class instance behaves like a pointer at the argument) -- the
+            // wrapper has to go here, otherwise the lookup never finds the type.
             if ((srcTypeName.rfind("ptr<", 0) == 0 || srcTypeName.rfind("ref<", 0) == 0)
                 && !srcTypeName.empty() && srcTypeName.back() == '>')
                 srcTypeName = srcTypeName.substr(4, srcTypeName.size() - 5);
@@ -2625,9 +2625,9 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
                 && srcIt->second.type && dstIt->second.type
                 && initRawB
                 && modelIsAncestor(ctx, decl->typeName, srcTypeName)) {
-                // Die Auswertung liefert je nach Ausdruck einen ZEIGER auf die
-                // Quelle oder den Strukturwert selbst -- ein Wert wird erst in
-                // einen Zwischenplatz gelegt, damit es etwas zu kopieren gibt.
+                // Depending on the expression, evaluation yields a POINTER to the
+                // source or the struct value itself -- a value is first put into
+                // a temporary slot so that there is something to copy.
                 llvm::Value* srcPtr = initRawB;
                 if (!initRawB->getType()->isPointerTy()) {
                     if (initRawB->getType() != srcIt->second.type) { /* fremde Form */ }
@@ -2645,23 +2645,23 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
                 ctx.builder.CreateCall(mcfB, {
                     unwrappedAlloca, srcPtr, ctx.getSizeConst(srcSize)
                 });
-                // Die Grenze ist der HOECHSTE Feldindex der Quelle plus eins --
-                // nicht die Zahl ihrer Mitglieder: `members` fuehrt bei einem
-                // geerbten Modell nur die EIGENEN Felder, die Indizes laufen
-                // aber ueber den geerbten Vorspann weiter.  Mit der Zahl als
-                // Grenze wurden Felder der Quelle neu eingerichtet und kamen
-                // leer an (icon_path, outcome_tags -- gemessen 21.11.2026 im
-                // datacreatures-Gate).
+                // The limit is the source's HIGHEST field index plus one --
+                // not the number of its members: for an inherited model `members`
+                // only lists the OWN fields, but the indices continue
+                // past the inherited prefix.  With the count as the
+                // limit, fields of the source were set up fresh and arrived
+                // empty (icon_path, outcome_tags -- measured 2026-11-21 in the
+                // datacreatures gate).
                 unsigned ownFrom = 0;
                 for (const auto& [sm_name, sm] : srcIt->second.members)
                     if (sm.index + 1 > ownFrom) ownFrom = (unsigned)(sm.index + 1);
-                // Die Kopie TEILT die Zeichenketten und Listen des Vorspanns mit
-                // der Quelle.  Ohne eigenen Ref-Zaehler gibt die Quelle sie am
-                // Blockende frei, und die Kopie steht leer da -- im
-                // datacreatures-Gate kamen `icon_path` und `outcome_tags` leer an,
-                // und der Lauf endete mit SIGABRT (21.11.2026).  Die
-                // Serialisierungsknoten der QUELLE beschreiben genau den
-                // Vorspann, also halten sie genau das Richtige fest.
+                // The copy SHARES the prefix's strings and lists with
+                // the source.  Without a ref count of its own the source frees them at
+                // the end of the block, and the copy is left empty -- in the
+                // datacreatures gate `icon_path` and `outcome_tags` arrived empty,
+                // and the run ended with SIGABRT (2026-11-21).  The
+                // SOURCE's serialisation nodes describe exactly the
+                // prefix, so they retain exactly the right thing.
                 if (srcIt->second.hasHeapFields && srcIt->second.serNodesVar) {
                     llvm::Type* ptrTyR = llvm::PointerType::get(ctx.context, 0);
                     llvm::Function* rf = ctx.getFunction("aiml_ser_retain", ctx.builder.getVoidTy(),
@@ -2670,10 +2670,10 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
                         ctx.builder.getInt32(srcIt->second.serNodesCount) });
                 }
                 initClassContainerMembers(unwrappedAlloca, decl->typeName, ownFrom);
-                // Und weil die Kopie jetzt eigene Rechte haelt (Vorspann per
-                // Festhalten, eigene Felder frisch), gehoert sie beim Verlassen
-                // des Blocks aufgeraeumt -- mit den Knoten des ZIELS, die beides
-                // abdecken.
+                // And because the copy now holds rights of its own (prefix by
+                // retaining, own fields fresh), it must be cleaned up when leaving
+                // the block -- with the TARGET's nodes, which cover
+                // both.
                 if (decl->lifetime != "persistent" && !ctx.cleanupStack.empty()
                     && dstIt->second.hasHeapFields && dstIt->second.serNodesVar) {
                     CompilerContext::ScopeDrop sd;
@@ -3183,10 +3183,10 @@ static bool setTargetSharesLocalHandle(SetStmt* setStmt) {
 }
 
 void Compiler::visitSetStmt(SetStmt* setStmt) {
-    // spec/10: `set: [ziel, [v1, v2, ...]]` ERSETZT den Inhalt — ein `clear`, dann ein `push`
-    // je Element.  Bewusst ueber die gewoehnliche Methoden-Dispatch (`ziel.clear`/`ziel.push`),
-    // damit Member, memV3-Handles, String-Besitz und Zahlumwandlung genauso behandelt werden
-    // wie beim handgeschriebenen `call: [ziel.push, v]` — kein zweiter Pfad, der driften kann.
+    // spec/10: `set: [target, [v1, v2, ...]]` REPLACES the contents — a `clear`, then a `push`
+    // per element.  Deliberately via the ordinary method dispatch (`target.clear`/`target.push`),
+    // so that members, memV3 handles, string ownership and number conversion are treated exactly
+    // as with a hand-written `call: [target.push, v]` — no second path that can drift.
     if (auto* listLit = dynamic_cast<BufferLiteralExpr*>(setStmt->value.get())) {
         CallExpr clearCall(setStmt->target + ".clear");
         clearCall.sourceNode = setStmt->sourceNode;
@@ -3197,15 +3197,15 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
             pushCall.sourceNode = setStmt->sourceNode;
             pushCall.args.push_back(std::move(elem));   // geliehen …
             visitExpression(&pushCall);
-            elem = std::move(pushCall.args[0]);         // … und zurueck in den AST
+            elem = std::move(pushCall.args[0]);         // … and back into the AST
         }
         return;
     }
-    // spec/02: ein Container-Ziel nimmt keinen Skalar.  Vorher landete der Skalar im
-    // Container-Slot und machte ihn unbrauchbar (Muell in `.len`, danach SIGSEGV).
-    // Abgelehnt werden nur EINDEUTIGE Faelle — ein Literal oder eine Variable mit
-    // bekanntem Skalartyp.  Aufrufe und Interpolationen bleiben unberuehrt, damit die
-    // Pruefung nichts Richtiges verbietet.
+    // spec/02: a container target takes no scalar.  Before, the scalar landed in the
+    // container slot and made it unusable (garbage in `.len`, then SIGSEGV).
+    // Only UNAMBIGUOUS cases are rejected — a literal or a variable with a
+    // known scalar type.  Calls and interpolations stay untouched, so that the
+    // check forbids nothing that is correct.
     if (setStmt->value) {
         auto isContainer = [](const std::string& t) {
             return t.rfind("list<", 0) == 0 || t.rfind("map<", 0) == 0
@@ -3224,19 +3224,19 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
             std::string vt, shown;
             if (auto* le = dynamic_cast<LiteralExpr*>(setStmt->value.get())) {
                 vt = le->type;
-                // Ein nacktes Zahlliteral traegt hier noch keinen Typ ("unknown") —
-                // dann ist der geschriebene Wert die hilfreichere Auskunft.
-                shown = (vt.empty() || vt == "unknown") ? ("das Literal " + le->value) : vt;
+                // A bare number literal carries no type here yet ("unknown") —
+                // then the written value is the more helpful information.
+                shown = (vt.empty() || vt == "unknown") ? ("the literal " + le->value) : vt;
             } else if (dynamic_cast<VariableExpr*>(setStmt->value.get())) {
                 vt = declaredTypeOfExpr(setStmt->value.get());
                 shown = vt;
             }
             if (!vt.empty() && !isContainer(vt)) {
-                LOG_ERROR(ctx.fmtLoc() + "set: '" + setStmt->target + "' ist " + tt
-                          + ", der Wert ist " + shown + " — ein Container nimmt keinen Skalar."
-                          + " Fuer EIN Element: call: [" + setStmt->target + ".push, <wert>];"
-                          + " fuer einen Index: idx: [" + setStmt->target + ", <index>, <wert>];"
-                          + " fuer den ganzen Inhalt: set: [" + setStmt->target
+                LOG_ERROR(ctx.fmtLoc() + "set: '" + setStmt->target + "' is " + tt
+                          + ", the value is " + shown + " — a container takes no scalar."
+                          + " For ONE element: call: [" + setStmt->target + ".push, <value>];"
+                          + " for an index: idx: [" + setStmt->target + ", <index>, <value>];"
+                          + " for the whole contents: set: [" + setStmt->target
                           + ", [v1, v2, ...]] (spec/02, spec/10).");
                 return;
             }
@@ -4446,16 +4446,16 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                         // this memcpy writes into a zeroed field; the moved-in source's own scope-drop
                         // was consumed by consumeLocalDrop → no double-free, no leak.
                         uint64_t sz = ctx.module().getDataLayout().getTypeAllocSize(fieldTy);
-                        // Verwandte Modelle duerfen einander zugewiesen werden
-                        // (modelsInheritanceRelated) -- dann teilen sie nur den
-                        // VORSPANN, und kopiert werden darf hoechstens so viel,
-                        // wie die QUELLE hat.  Ist die Quelle die Basis, las die
-                        // Kopie sonst ueber deren Ende hinaus: der Muell landete
-                        // in den eigenen Feldern des Ziels und stuerzte beim
-                        // naechsten Zugriff ab (SIGSEGV, gemessen 21.11.2026;
-                        // Regression tests/test_model_init_from_base.aiml, Fall
-                        // "Feld als Ziel").  Dasselbe Leiden wie im decl-Pfad,
-                        // nur eine Anweisung weiter.
+                        // Related models may be assigned to each other
+                        // (modelsInheritanceRelated) -- then they only share the
+                        // PREFIX, and at most as much may be copied
+                        // as the SOURCE has.  If the source is the base, the
+                        // copy otherwise read past its end: the garbage landed
+                        // in the target's own fields and crashed on the
+                        // next access (SIGSEGV, measured 2026-11-21;
+                        // regression tests/test_model_init_from_base.aiml, case
+                        // "Feld als Ziel").  The same ailment as in the decl path,
+                        // just one statement further on.
                         {
                             std::string srcTn = declaredTypeOfExpr(setStmt->value.get());
                             if ((srcTn.rfind("ptr<", 0) == 0 || srcTn.rfind("ref<", 0) == 0)
@@ -4512,21 +4512,21 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                         // so the member owns an INDEPENDENT heap. Skipped for a ptr<T>/ref<T> source
                         // (finding #2: emitLValueAddress would give the pointer SLOT, not the pointee
                         // model — those fall through to the pointer-aware logic below).
-                        // Eine Tiefkopie laeuft ueber die Serialisierungsknoten des
-                        // ZIELS.  Ist die Quelle nur die BASIS, beschreiben diese
-                        // Knoten Felder, die es in ihr gar nicht gibt -- der
-                        // Durchlauf liest hinter ihrem Ende weiter und stuerzt ab
-                        // (SIGSEGV, gemessen 21.11.2026).  Verwandte Modelle teilen
-                        // nur den Vorspann; dann gilt der flache Weg weiter unten,
-                        // der auf die Quellgroesse geklemmt ist.
-                        // Ein BASISWERT in ein abgeleitetes FELD ist mehrdeutig: was
-                        // soll mit den eigenen Feldern des Ziels geschehen?  Der
-                        // Weg dorthin gibt erst den ganzen Zielspeicher frei und
-                        // kopiert dann -- bei einer kleineren Quelle zeigen die
-                        // eigenen Felder danach auf Freigegebenes (SIGSEGV, gemessen
-                        // 21.11.2026).  Statt eine Bedeutung zu erfinden, wird die
-                        // Form abgelehnt; `decl: [x, Abgeleitet, basis]` und die
-                        // Zuweisung an eine VARIABLE sind beschrieben und getestet
+                        // A deep copy runs over the TARGET's serialisation
+                        // nodes.  If the source is only the BASE, these
+                        // nodes describe fields that do not exist in it at all -- the
+                        // walk keeps reading past its end and crashes
+                        // (SIGSEGV, measured 2026-11-21).  Related models share
+                        // only the prefix; then the flat path further below applies,
+                        // which is clamped to the source size.
+                        // A BASE value into a derived FIELD is ambiguous: what
+                        // should happen to the target's own fields?  The
+                        // path there first frees the whole target memory and
+                        // then copies -- with a smaller source the
+                        // own fields then point to freed memory (SIGSEGV, measured
+                        // 2026-11-21).  Instead of inventing a meaning, the
+                        // form is rejected; `decl: [x, Derived, base]` and the
+                        // assignment to a VARIABLE are described and tested
                         // (spec/15, tests/test_model_init_from_base.aiml).
                         {
                             std::string srcTn = declaredTypeOfExpr(setStmt->value.get());
@@ -4610,12 +4610,12 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                                 return;
                             }
                             uint64_t sz = ctx.module().getDataLayout().getTypeAllocSize(structTy);
-                            // Verwandte Modelle teilen nur den VORSPANN: ist die
-                            // Quelle die Basis, darf hoechstens ihre Groesse
-                            // kopiert werden.  Sonst liest die Kopie ueber das
-                            // Quellende hinaus, und der Muell landet in den
-                            // eigenen Feldern des Ziels -- SIGSEGV beim naechsten
-                            // Zugriff (gemessen 21.11.2026, Fall "Feld als Ziel"
+                            // Related models only share the PREFIX: if the
+                            // source is the base, at most its size may
+                            // be copied.  Otherwise the copy reads past the
+                            // end of the source, and the garbage lands in the
+                            // target's own fields -- SIGSEGV on the next
+                            // access (measured 2026-11-21, case "Feld als Ziel"
                             // in tests/test_model_init_from_base.aiml).
                             {
                                 std::string srcTn = declaredTypeOfExpr(setStmt->value.get());
@@ -4889,48 +4889,48 @@ void Compiler::visitExprStmt(ExprStmt* exprStmt) {
 }
 static void emitScopeDrop(CompilerContext& ctx, const CompilerContext::ScopeDrop& it);  // defined below
 void Compiler::visitRetStmt(RetStmt* retStmt) {
-    // spec/10: `return: [a, b]` ist ein LISTENLITERAL -- `return: [{ +: [x, 1] }]` dagegen
-    // der EINE Wert in Folgenschreibweise, und so steht es ueberall im Korpus.  Der Parser
-    // kann die beiden nicht trennen (er kennt den Rueckgabetyp nicht), also entscheidet es
-    // hier: ohne Container-Rueckgabetyp wird das einzelne Element durchgelassen, mehrere
-    // sind ein Fehler.  Ein einzelnes Element, das SELBST den Rueckgabetyp hat
-    // (`return: [meine_liste]`), ist ebenfalls Durchlass, keine Liste in der Liste.
+    // spec/10: `return: [a, b]` is a LIST LITERAL -- `return: [{ +: [x, 1] }]` on the other hand is
+    // the ONE value in sequence notation, and that is how it is written everywhere in the corpus.  The parser
+    // cannot tell the two apart (it does not know the return type), so it is decided
+    // here: without a container return type the single element is let through, several
+    // are an error.  A single element that ITSELF has the return type
+    // (`return: [my_list]`) is let through as well, not a list inside the list.
     if (auto* retLit = dynamic_cast<BufferLiteralExpr*>(retStmt->value.get())) {
         const std::string& rtDecl = ctx.currentFunctionReturnType;
         const bool willListe = rtDecl.rfind("list<", 0) == 0 || rtDecl.rfind("buffer", 0) == 0;
         bool durchlass = !willListe;
-        // EIN Element in einer Funktion, die einen Behaelter zurueckgibt: ist das
-        // ein Literal ("eins") -- dann ein Behaelter mit einem Element -- oder der
-        // fertige Behaelter selbst?
+        // ONE element in a function that returns a container: is that
+        // a literal ("eins") -- then a container with one element -- or the
+        // finished container itself?
         //
-        // Entschieden wird am Typ des Elements, und `""` (nicht bestimmbar, also
-        // ein AUFRUF) heisst Durchlass.  Genau daran scheiterten am 21.11.2026
-        // neun Tests: `return: [{ call: [bytes.concat, ...] }]` in einer
-        // `buffer<u8>`-Funktion wurde als Behaelterliteral gelesen, dessen
-        // Elementtyp niemand bestimmen kann (test_bytes, test_pipeline_*).  Vor
-        // der Regel liess der Compiler JEDEN Einzelfall durch -- fuer Aufrufe
-        // bleibt es dabei.
+        // It is decided by the element's type, and `""` (not determinable, so
+        // a CALL) means let through.  Exactly this made nine tests fail on 2026-11-21:
+        // `return: [{ call: [bytes.concat, ...] }]` in a
+        // `buffer<u8>` function was read as a container literal whose
+        // element type nobody can determine (test_bytes, test_pipeline_*).  Before
+        // the rule the compiler let EVERY single case through -- for calls
+        // it stays that way.
         if (willListe && retLit->elements.size() == 1) {
             Expr* eins = retLit->elements[0].get();
             const std::string et = declaredTypeOfExpr(eins);
             const bool istLiteral = dynamic_cast<LiteralExpr*>(eins) != nullptr;
-            if (et == rtDecl) durchlass = true;              // schon der Behaelter
-            else if (!istLiteral && et.empty()) durchlass = true;  // Aufruf: der ganze Behaelter
+            if (et == rtDecl) durchlass = true;              // already the container
+            else if (!istLiteral && et.empty()) durchlass = true;  // call: the whole container
         }
         if (durchlass) {
             if (retLit->elements.size() == 1) {
                 std::unique_ptr<Expr> innen = std::move(retLit->elements[0]);
                 retStmt->value = std::move(innen);
             } else if (retLit->elements.empty()) {
-                // `return: []` ohne Listen-Rueckgabetyp ist das blanke Verlassen der
-                // Funktion -- so steht es 118 Mal im Korpus (tests/venv/kontor_stub.aiml
-                // und ueberall in datacreatures).  Ein nicht-void Rumpf faellt danach in
-                // die bestehende Diagnose "Empty return statement in non-void function".
+                // `return: []` without a list return type is the bare exit from the
+                // function -- it is written that way 118 times in the corpus (tests/venv/kontor_stub.aiml
+                // and everywhere in datacreatures).  A non-void body then falls into
+                // the existing diagnostic "Empty return statement in non-void function".
                 retStmt->value.reset();
             } else {
-                LOG_ERROR(ctx.fmtLoc(retStmt->sourceNode) + "return: [...] mit "
-                          + std::to_string(retLit->elements.size()) + " Werten, aber der"
-                          " Rueckgabetyp '" + rtDecl + "' ist kein list<T> (spec/10).");
+                LOG_ERROR(ctx.fmtLoc(retStmt->sourceNode) + "return: [...] with "
+                          + std::to_string(retLit->elements.size()) + " values, but the"
+                          " return type '" + rtDecl + "' is not a list<T> (spec/10).");
             }
         }
     }
@@ -5036,10 +5036,10 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
     // gated, so a still-shared view is not freed); the returned concat temp is moved out, not dropped.
     if (dynamic_cast<StringInterpolationExpr*>(retStmt->value.get()))
         retFreshOwned = true;
-    // spec/61 §6.2: `return: ["a", "b"]` -- ein Listen-/Pufferliteral ist ein FRISCHER
-    // Behaelter.  Er kann keine Lokale dieser Funktion aliasieren (er kopiert deren
-    // Inhalt), also darf der Rueckgabepfad die Geschwister aufraeumen, und der
-    // Behaelter selbst wird hinausgegeben.
+    // spec/61 §6.2: `return: ["a", "b"]` -- a list/buffer literal is a FRESH
+    // container.  It cannot alias a local of this function (it copies its
+    // contents), so the return path may clean up the siblings, and the
+    // container itself is handed out.
     if (dynamic_cast<BufferLiteralExpr*>(retStmt->value.get()))
         retFreshOwned = true;
     // spec/61 §4/§8 diagnostic (finding-1 class): a function that returns a FRESH string (an
@@ -5270,9 +5270,9 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
         llvm::Type* savedRetLitTy = ctx.floatLitTy;
         llvm::Type* savedRetResTy = ctx.floatResultTy;
         if (retTy && retTy->isFloatingPointTy()) { ctx.floatLitTy = retTy; ctx.floatResultTy = retTy; }
-        // spec/10: `return: [a, b]` -- den Elementtyp gibt der ERKLAERTE Rueckgabetyp,
-        // nicht das erste Element.  Nur so traegt `return: []` (leere Liste) und nur so
-        // wird `list<f32>` nicht aus einer ganzen Zahl zu i32 geraten.
+        // spec/10: `return: [a, b]` -- the element type comes from the DECLARED return type,
+        // not from the first element.  Only that way does `return: []` (empty list) work, and only that way
+        // does `list<f32>` not turn into i32 from an integer.
         const std::string savedRetLitArg = ctx.listLiteralArgType;
         if (dynamic_cast<BufferLiteralExpr*>(retStmt->value.get())
             && (ctx.currentFunctionReturnType.rfind("list<", 0) == 0
@@ -6234,14 +6234,14 @@ void Compiler::visitTry(TryStmt* tryStmt) {
         sd.debugName = tryStmt->catches.empty() ? std::string() : tryStmt->catches.front().var;
         ctx.cleanupStack.back().push_back(sd);
     }
-    // spec/22: die Zweige werden in GESCHRIEBENER Reihenfolge geprueft; es gewinnt der
-    // erste, dessen Typ der geworfene erfuellt (gleicher Typ oder Abkoemmling).  Passt
-    // keiner, laeuft die Ausnahme weiter, als gaebe es dieses `try` nicht.
+    // spec/22: the branches are checked in WRITTEN order; the first one whose
+    // type the thrown one satisfies wins (same type or descendant).  If
+    // none matches, the exception propagates as if this `try` did not exist.
     llvm::Value* typeTag = ctx.builder.CreateLoad(
         ptrTy, ctx.excRecordField(rawExc, 2, "exc_tag_slot"), "exc_type_tag");
     llvm::Value* nullTag = llvm::ConstantPointerNull::get(ptrTy);
 
-    // "dieser Typ und alles, was von ihm erbt" — statisch aus der Klassentabelle.
+    // "this type and everything that inherits from it" — statically from the class table.
     auto matchingNames = [&](const std::string& base) {
         std::set<std::string> out;
         if (base.empty()) return out;
@@ -6263,9 +6263,9 @@ void Compiler::visitTry(TryStmt* tryStmt) {
         llvm::BasicBlock* handler  = llvm::BasicBlock::Create(ctx.context, "catch_run", func);
         llvm::BasicBlock* nextTest = llvm::BasicBlock::Create(ctx.context, "catch_test", func);
         if (clause.type.empty()) {
-            ctx.builder.CreateBr(handler);                  // Zweig ohne Typ faengt alles
+            ctx.builder.CreateBr(handler);                  // branch without a type catches everything
         } else {
-            // Ein Wurf ohne Tag (fremder Pfad) soll nicht verschwinden: er nimmt den Zweig.
+            // A throw without a tag (foreign path) must not vanish: it takes the branch.
             llvm::BasicBlock* cmpBB = llvm::BasicBlock::Create(ctx.context, "catch_cmp", func);
             ctx.builder.CreateCondBr(ctx.builder.CreateICmpEQ(typeTag, nullTag, "exc_tag_missing"),
                                      handler, cmpBB);
@@ -6308,7 +6308,7 @@ void Compiler::visitTry(TryStmt* tryStmt) {
         ctx.builder.SetInsertPoint(nextTest);
     }
 
-    // Kein Zweig passt: weiterreichen.  Das Objekt reist mit, also KEIN Drop hier.
+    // No branch matches: pass it on.  The object travels along, so NO drop here.
     {
         llvm::Function* rethrowFn = ctx.getFunction("__cxa_rethrow", ctx.builder.getVoidTy(), {});
         if (llvm::BasicBlock* ud = unwindDest(true)) {
@@ -6388,8 +6388,8 @@ void Compiler::visitThrow(ThrowStmt* throwStmt) {
     llvm::Value* rawObj = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(excVal));
     if (thrownLocal) consumeLocalDrop(thrownLocal);
 
-    // Record {Objekt, Free-Thunk, Typ-Tag}; Abstaende aus dem Datenlayout (context.h),
-    // damit wasm32 mit seinen 4-Byte-Zeigern nicht ins Leere schreibt.
+    // Record {object, free thunk, type tag}; offsets from the data layout (context.h),
+    // so that wasm32 with its 4-byte pointers does not write into nothing.
     llvm::Value* excAlloc = ctx.builder.CreateCall(
         ctx.getFunction("__cxa_allocate_exception", ptrTy, {ctx.getSizeType()}),
         {ctx.getSizeConst(ctx.getExcRecordSize())}, "exc_alloc");
@@ -6406,8 +6406,8 @@ void Compiler::visitThrow(ThrowStmt* throwStmt) {
     }
     ctx.builder.CreateStore(thunk, ctx.excRecordField(excAlloc, 1, "exc_thunk_slot"));
 
-    // spec/22: der Klassenname reist MIT — ohne ihn kann kein catch nach Typ waehlen
-    // (bis 18.10.2026 bekam __cxa_throw nullptr als Typinfo und jeder Handler fing alles).
+    // spec/22: the class name travels ALONG — without it no catch can select by type
+    // (until 2026-10-18 __cxa_throw got nullptr as type info and every handler caught everything).
     llvm::Value* typeTag;
     if (rethrowRec) {
         llvm::Value* rec = ctx.builder.CreateLoad(ptrTy, rethrowRec, "rethrow_rec2");
@@ -6428,9 +6428,9 @@ void Compiler::visitThrow(ThrowStmt* throwStmt) {
     decrefCurrentStmtTemps(ctx);
     llvm::Function* throwFunc = ctx.getFunction("__cxa_throw", ctx.builder.getVoidTy(), {ptrTy, ptrTy, ptrTy});
     llvm::Value* nullp = llvm::ConstantPointerNull::get(ptrTy);
-    // Typinfo (context.h): der Handler wird weiter ueber den Typ-Tag gewaehlt, aber ein
-    // null-type_info bringt Emscriptens __cxa_throw zum Absturz.  `rethrow` ohne eigene
-    // Klasse behaelt den Tag und meldet hier den Basistyp.
+    // Type info (context.h): the handler is still selected via the type tag, but a
+    // null type_info makes Emscripten's __cxa_throw crash.  `rethrow` without a class of its own
+    // keeps the tag and reports the base type here.
     llvm::Constant* tinfo = ctx.getExcTypeInfo(excClass.empty() ? "Exception" : excClass);
     llvm::Function* currentFunc = ctx.builder.GetInsertBlock()->getParent();
     if (llvm::BasicBlock* ud = unwindDest(true)) {
