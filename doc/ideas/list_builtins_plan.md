@@ -1,73 +1,72 @@
-# Plan: List-Builtins fuer AIML
+# Plan: list builtins for AIML
 
-Stand: 2026-08-21
+As of: 2026-08-21
 
-Status: **Implementiert (2026-08-21).** Alle neun Methoden (M1: contains/index_of/
-count/extend/remove_value; M2: reverse/sort/sort_desc/shuffle) sind in `ListImpl`
-(`src/core/list_impl.{h,cpp}`) + Dispatch (`src/core/ast_compiler_call.cpp`)
-umgesetzt und laufen identisch nativ + WASM (`tests/test_list_builtins.aiml`).
-Typ-Diagnosen (Struct-Suche, extend-Mismatch, sort-Elementtyp) mit Quellort.
+Status: **Implemented (2026-08-21).** All nine methods (M1: contains/index_of/
+count/extend/remove_value; M2: reverse/sort/sort_desc/shuffle) are implemented in `ListImpl`
+(`src/core/list_impl.{h,cpp}`) + dispatch (`src/core/ast_compiler_call.cpp`)
+and run identically native + WASM (`tests/test_list_builtins.aiml`).
+Type diagnostics (struct search, extend mismatch, sort element type) with source location.
 Spec: `spec/10_collections.md`, `spec/aiml_reference_guide.md`.
 
-## 1. Ziel
+## 1. Goal
 
-`list<T>` besitzt derzeit nur die grundlegenden mutierenden Operationen `push`,
-`pop`, `get`, `insert`, `remove`, `clear`, `free` sowie die Properties `len` und
-`empty`. In groesseren AIML-Projekten entstehen deshalb immer wieder lokale
-Schleifen fuer Suche, Mitgliedschaft, Kopieren, Entfernen nach Wert, Umdrehen,
-Sortieren und Mischen.
+`list<T>` currently only has the basic mutating operations `push`,
+`pop`, `get`, `insert`, `remove`, `clear`, `free` as well as the properties `len` and
+`empty`. In larger AIML projects, local loops for search, membership, copying,
+removal by value, reversing, sorting and shuffling therefore keep arising.
 
-Dieses Vorhaben fuehrt einen kleinen, typgesicherten Satz von List-Builtins ein:
+This project introduces a small, type-safe set of list builtins:
 
-| Methode | Signatur | Prioritaet | Mutation |
+| Method | Signature | Priority | Mutation |
 |---|---|---:|---|
-| `contains` | `(value: T) -> i32` | M1 | nein |
-| `index_of` | `(value: T) -> i32` | M1 | nein |
-| `count` | `(value: T) -> i32` | M1 | nein |
-| `extend` | `(other: list<T>) -> void` | M1 | ja |
-| `remove_value` | `(value: T) -> i32` | M1 | ja |
-| `reverse` | `() -> void` | M2 | ja |
-| `sort` | `() -> void` | M2 | ja |
-| `sort_desc` | `() -> void` | M2 | ja |
-| `shuffle` | `() -> void` | M2 | ja |
+| `contains` | `(value: T) -> i32` | M1 | no |
+| `index_of` | `(value: T) -> i32` | M1 | no |
+| `count` | `(value: T) -> i32` | M1 | no |
+| `extend` | `(other: list<T>) -> void` | M1 | yes |
+| `remove_value` | `(value: T) -> i32` | M1 | yes |
+| `reverse` | `() -> void` | M2 | yes |
+| `sort` | `() -> void` | M2 | yes |
+| `sort_desc` | `() -> void` | M2 | yes |
+| `shuffle` | `() -> void` | M2 | yes |
 
-`map`, `filter`, `find(predicate)` und comparator-basierte Sortierung gehoeren
-nicht in diesen ersten Umfang. AIML unterstuetzt noch keine benutzerdefinierten
-Generics; universelle Callback-Signaturen wuerden daher eine separate
-Spracherweiterung benoetigen.
+`map`, `filter`, `find(predicate)` and comparator-based sorting do not belong
+in this first scope. AIML does not yet support user-defined
+generics; universal callback signatures would therefore need a separate
+language extension.
 
-## 2. Bestehende Einbaupunkte
+## 2. Existing integration points
 
-Die Zeilennummern beziehen sich auf den Repository-Stand vom 2026-08-21. Sie
-sind Navigationshilfen; vor der Implementierung muss die jeweilige Funktion
-noch einmal per Symbol gesucht werden.
+The line numbers refer to the repository state of 2026-08-21. They
+are navigation aids; before the implementation, the respective function must
+be searched for by symbol again.
 
-| Bereich | Aktuelle Stelle | Bedeutung |
+| Area | Current place | Meaning |
 |---|---|---|
-| Sprachreferenz | `spec/10_collections.md:16-30` | dokumentiert die aktuellen List-Methoden |
-| Kurzreferenz | `spec/aiml_reference_guide.md:155-166` | kompakte Builtin-Liste |
-| Call-Dispatch | `src/core/ast_compiler_call.cpp:1223-1321` | erkennt `list<T>` und dispatcht die Methoden |
-| List-API | `src/core/list_impl.h:21-32` | Deklarationen der IR-Emitter |
-| List-Layout | `src/core/list_impl.cpp:6-20` | `{i32 size, i32 capacity, ptr data}` |
-| Wachstum | `src/core/list_impl.cpp:56-111` | `push` inklusive `realloc` |
-| Elementzugriff | `src/core/list_impl.cpp:129-146` | `get` und `getElementPtr` |
-| Schleifenbeispiel | `src/core/list_impl.cpp:148-187` | IR-Erzeugung fuer `slice` |
+| Language reference | `spec/10_collections.md:16-30` | documents the current list methods |
+| Short reference | `spec/aiml_reference_guide.md:155-166` | compact builtin list |
+| Call dispatch | `src/core/ast_compiler_call.cpp:1223-1321` | recognises `list<T>` and dispatches the methods |
+| List API | `src/core/list_impl.h:21-32` | declarations of the IR emitters |
+| List layout | `src/core/list_impl.cpp:6-20` | `{i32 size, i32 capacity, ptr data}` |
+| Growth | `src/core/list_impl.cpp:56-111` | `push` including `realloc` |
+| Element access | `src/core/list_impl.cpp:129-146` | `get` and `getElementPtr` |
+| Loop example | `src/core/list_impl.cpp:148-187` | IR generation for `slice` |
 | Mutation | `src/core/list_impl.cpp:200-324` | `clear`, `insert`, `remove` |
-| Properties | `src/core/utils.cpp:158-159` | `.len` und `.empty` |
-| Stringvergleich | `src/core/ast_compiler_expr.cpp:437-457` | null-sicherer `strcmp`-Pfad |
-| Primitive Vergleiche | `src/core/ast_compiler_expr.cpp:571-737` | `fcmp`, `icmp`, Pointer-/String-Semantik |
-| RNG-Builtin | `src/core/builtin_registry.cpp:3846-3858` | Emit fuer `math.random_int` |
-| RNG-Runtime | `src/sys/math_runtime.cpp:406-422` | thread-lokaler `mt19937` |
-| Basistest | `tests/test_list.aiml:1-30` | bisherige List-Abdeckung |
-| WASM-Testweg | `tools/run_wasm_test.sh` | Einzeltest unter WASM |
+| Properties | `src/core/utils.cpp:158-159` | `.len` and `.empty` |
+| String comparison | `src/core/ast_compiler_expr.cpp:437-457` | null-safe `strcmp` path |
+| Primitive comparisons | `src/core/ast_compiler_expr.cpp:571-737` | `fcmp`, `icmp`, pointer/string semantics |
+| RNG builtin | `src/core/builtin_registry.cpp:3846-3858` | emit for `math.random_int` |
+| RNG runtime | `src/sys/math_runtime.cpp:406-422` | thread-local `mt19937` |
+| Base test | `tests/test_list.aiml:1-30` | previous list coverage |
+| WASM test path | `tools/run_wasm_test.sh` | single test under WASM |
 
-Wichtig: List-Methoden sind aktuell kein Eintrag in `builtin_registry.cpp`.
-`Compiler::visitCallExpr` behandelt sie direkt in
-`src/core/ast_compiler_call.cpp`. Die neuen Methoden muessen fuer M1/M2 in
-demselben Dispatch ergaenzt werden, solange die bestehende Architektur nicht
-separat refaktoriert wird.
+Important: list methods are currently not an entry in `builtin_registry.cpp`.
+`Compiler::visitCallExpr` handles them directly in
+`src/core/ast_compiler_call.cpp`. The new methods must be added to
+the same dispatch for M1/M2, as long as the existing architecture is not
+refactored separately.
 
-## 3. Sprachvertrag
+## 3. Language contract
 
 ### 3.1 `contains`
 
@@ -78,21 +77,21 @@ separat refaktoriert wird.
 # has_a == 1
 ```
 
-- Gibt exakt `1` oder `0` zurueck.
-- Veraendert die Liste nicht.
-- Leere Liste ergibt `0`.
-- Verwendet dieselbe Gleichheitssemantik wie AIML-`eq`.
+- Returns exactly `1` or `0`.
+- Does not change the list.
+- An empty list yields `0`.
+- Uses the same equality semantics as AIML `eq`.
 
 ### 3.2 `index_of`
 
 ```aiml
 - decl: [idx, i32, { call: [ids.index_of, "a"] }]
-# erster Treffer; -1 wenn nicht vorhanden
+# first hit; -1 if not present
 ```
 
-- Gibt den ersten passenden Index zurueck.
-- Gibt bei leerer Liste oder fehlendem Wert `-1` zurueck.
-- Keine Exception fuer "nicht gefunden".
+- Returns the first matching index.
+- Returns `-1` for an empty list or a missing value.
+- No exception for "not found".
 
 ### 3.3 `count`
 
@@ -100,8 +99,8 @@ separat refaktoriert wird.
 - decl: [hits, i32, { call: [ids.count, "a"] }]
 ```
 
-- Zaehlt alle Werte mit AIML-`eq`-Semantik.
-- Ergebnis ist `i32` analog zu `.len`.
+- Counts all values with AIML `eq` semantics.
+- The result is `i32`, analogous to `.len`.
 
 ### 3.4 `extend`
 
@@ -111,16 +110,16 @@ separat refaktoriert wird.
 - call: [right.push, 2]
 - call: [right.push, 3]
 - call: [left.extend, right]
-# left == [2, 3], right unveraendert
+# left == [2, 3], right unchanged
 ```
 
-- Fuegt Wertkopien in Reihenfolge an.
-- `left.extend(left)` muss definiert funktionieren. Vor der ersten Mutation wird
-  deshalb die Quelllaenge festgehalten; bei moeglichem `realloc` darf kein alter
-  Datenpointer ueber einen `push` hinweg behalten werden.
-- `list<Model>` kopiert jedes Model wie `push` als Value.
-- `list<ptr<T>>` kopiert Pointeridentitaeten.
-- Ein inkompatibler Elementtyp ist ein Compile-Fehler.
+- Appends value copies in order.
+- `left.extend(left)` must work in a defined way. Before the first mutation,
+  the source length is therefore recorded; with a possible `realloc`, no old
+  data pointer may be kept across a `push`.
+- `list<Model>` copies every model as a value, like `push`.
+- `list<ptr<T>>` copies pointer identities.
+- An incompatible element type is a compile error.
 
 ### 3.5 `remove_value`
 
@@ -128,10 +127,10 @@ separat refaktoriert wird.
 - decl: [removed, i32, { call: [ids.remove_value, "a"] }]
 ```
 
-- Entfernt nur den ersten Treffer.
-- Gibt `1` bei Entfernung, sonst `0` zurueck.
-- Baut intern auf `index_of` plus dem bestehenden `ListImpl::remove` auf.
-- Bewusst nicht `remove`, weil `remove(index)` bereits eine andere Semantik hat.
+- Removes only the first hit.
+- Returns `1` on removal, otherwise `0`.
+- Builds internally on `index_of` plus the existing `ListImpl::remove`.
+- Deliberately not `remove`, because `remove(index)` already has different semantics.
 
 ### 3.6 `reverse`
 
@@ -139,34 +138,34 @@ separat refaktoriert wird.
 - call: [ids.reverse]
 ```
 
-- In-place, O(n), O(1) zusaetzlicher Speicher.
-- Fuer alle Elementtypen erlaubt, da nur ganze LLVM-Werte getauscht werden.
+- In place, O(n), O(1) additional memory.
+- Allowed for all element types, since only whole LLVM values are swapped.
 
-### 3.7 `sort` und `sort_desc`
+### 3.7 `sort` and `sort_desc`
 
 ```aiml
 - call: [scores.sort]
 - call: [scores.sort_desc]
 ```
 
-M2 unterstuetzt zunaechst:
+M2 initially supports:
 
-- Integer und Enums: signed Vergleich entsprechend dem AIML-Wertetyp.
-- Unsigned Integer: unsigned Vergleich.
-- `f32`/`f64`: `fcmp olt` beziehungsweise `ogt`; NaN bleibt stabil am Ende.
-- `string`: lexikographisch per `strcmp`, null wird wie leerer String behandelt.
+- Integers and enums: signed comparison according to the AIML value type.
+- Unsigned integers: unsigned comparison.
+- `f32`/`f64`: `fcmp olt` or `ogt` respectively; NaN stays stably at the end.
+- `string`: lexicographic via `strcmp`, null is treated like an empty string.
 
-Nicht in M2:
+Not in M2:
 
-- Models/Structs, Maps, verschachtelte Listen, `any` und Interface-Fat-Pointer.
-- Pointer werden nicht nach Adresse sortiert; ein solcher Aufruf ist ein
-  Compile-Fehler mit Typ und Methodenname.
-- Keine comparator-basierte Variante, bis Callback-Typen sauber spezifiziert sind.
+- Models/structs, maps, nested lists, `any` and interface fat pointers.
+- Pointers are not sorted by address; such a call is a
+  compile error with the type and method name.
+- No comparator-based variant until callback types are cleanly specified.
 
-Die erste Implementierung soll einen stabilen Insertion-Sort in IR emittieren.
-Er ist fuer typische AIML-Gameplay-/UI-Listen ausreichend, vermeidet eine
-typ-erased `qsort`-Callback-ABI und funktioniert identisch in AOT und WASM. Ein
-spaeterer Runtime-Sort kann nach Profiling folgen.
+The first implementation should emit a stable insertion sort in IR.
+It is sufficient for typical AIML gameplay/UI lists, avoids a
+type-erased `qsort` callback ABI and works identically in AOT and WASM. A
+later runtime sort can follow after profiling.
 
 ### 3.8 `shuffle`
 
@@ -174,23 +173,23 @@ spaeterer Runtime-Sort kann nach Profiling folgen.
 - call: [deck.shuffle]
 ```
 
-- Fisher-Yates in-place von `len - 1` bis `1`.
-- Fuer alle Elementtypen erlaubt.
-- Verwendet denselben RNG wie `math.random_int(0, hi)`.
-- Ergebnisreihenfolge ist absichtlich nicht deterministisch.
-- Seedbare/replay-faehige Zufallsquellen sind ein separates Vorhaben. Gameplay,
-  das deterministische Replays braucht, darf den Builtin bis dahin nicht nutzen.
+- Fisher-Yates in place from `len - 1` down to `1`.
+- Allowed for all element types.
+- Uses the same RNG as `math.random_int(0, hi)`.
+- The result order is deliberately non-deterministic.
+- Seedable/replayable random sources are a separate project. Gameplay
+  that needs deterministic replays must not use the builtin until then.
 
-## 4. Konkrete Compiler-Aenderungen
+## 4. Concrete compiler changes
 
-### 4.1 Gemeinsame Vergleichsemitter extrahieren
+### 4.1 Extract shared comparison emitters
 
-Die vorhandene `eq`-Logik in `src/core/ast_compiler_expr.cpp:437-457` und
-`src/core/ast_compiler_expr.cpp:571-737` darf nicht als zweite, leicht
-abweichende Implementierung in `ListImpl` kopiert werden.
+The existing `eq` logic in `src/core/ast_compiler_expr.cpp:437-457` and
+`src/core/ast_compiler_expr.cpp:571-737` must not be copied into `ListImpl` as a second, slightly
+diverging implementation.
 
-Vorschlag: in `Compiler` oder einem neuen kleinen Helper
-`src/core/value_compare.{h,cpp}` zentralisieren:
+Proposal: centralise it in `Compiler` or a new small helper
+`src/core/value_compare.{h,cpp}`:
 
 ```cpp
 enum class AimlCompareOp { Eq, Lt, Gt };
@@ -204,23 +203,23 @@ llvm::Value* emitAimlCompare(
     AimlCompareOp op);
 ```
 
-Anforderungen:
+Requirements:
 
-- `string` verwendet den bestehenden null-sicheren `strcmp`-Pfad.
-- Enums verwenden ihren zugrunde liegenden Integerwert.
-- Float-Eq bleibt `oeq`, Sortierung definiert das NaN-Verhalten explizit.
-- Opaque Handles und normale Pointer verwenden fuer `contains/index_of/count`
-  Identitaet, sofern es kein `string` ist.
-- Struct-Value-Eq bleibt in M1 unzulaessig, bis eine kanonische Modellgleichheit
-  existiert. `extend`, `reverse` und `shuffle` funktionieren trotzdem.
+- `string` uses the existing null-safe `strcmp` path.
+- Enums use their underlying integer value.
+- Float eq stays `oeq`; sorting defines the NaN behaviour explicitly.
+- Opaque handles and normal pointers use identity for `contains/index_of/count`,
+  unless it is a `string`.
+- Struct value eq stays inadmissible in M1 until a canonical model equality
+  exists. `extend`, `reverse` and `shuffle` work nevertheless.
 
-Wenn die Extraktion zu riskant fuer M1 ist, darf M1 lokal nur primitive,
-enum-, string- und pointerfaehige Vergleiche implementieren. Dann muss jedoch ein
-Follow-up zur Zusammenfuehrung fest im selben Change dokumentiert werden.
+If the extraction is too risky for M1, M1 may locally implement only primitive,
+enum, string and pointer-capable comparisons. In that case, however, a
+follow-up for merging them must be documented firmly in the same change.
 
-### 4.2 `ListImpl` erweitern
+### 4.2 Extend `ListImpl`
 
-In `src/core/list_impl.h:21-32` folgende Deklarationen ergaenzen:
+Add the following declarations in `src/core/list_impl.h:21-32`:
 
 ```cpp
 llvm::Value* indexOf(CompilerContext&, llvm::Value* listPtr,
@@ -237,16 +236,16 @@ void sort(CompilerContext&, llvm::Value* listPtr, llvm::Type* elemType,
 void shuffle(CompilerContext&, llvm::Value* listPtr, llvm::Type* elemType);
 ```
 
-`contains` wird im Dispatch als `indexOf(...) >= 0` erzeugt. `remove_value`
-verwendet ebenfalls `indexOf` und ruft nur bei Treffer
-`ListImpl::remove(...)`. Dadurch existiert nur eine Suchschleife.
+`contains` is generated in the dispatch as `indexOf(...) >= 0`. `remove_value`
+likewise uses `indexOf` and only calls `ListImpl::remove(...)` on a hit.
+That way only one search loop exists.
 
-Die neuen Implementierungen kommen in `src/core/list_impl.cpp` nach
-`ListImpl::remove`, aktuell ab Zeile 325. Gemeinsame private IR-Helfer fuer
-Loop-Blocks und Swap sollen im anonymen Namespace oberhalb von `namespace
-ListImpl` stehen.
+The new implementations go into `src/core/list_impl.cpp` after
+`ListImpl::remove`, currently from line 325. Shared private IR helpers for
+loop blocks and swap should be placed in the anonymous namespace above `namespace
+ListImpl`.
 
-Beispiel fuer den `indexOf`-Emitter:
+Example for the `indexOf` emitter:
 
 ```cpp
 llvm::Value* indexOf(CompilerContext& ctx, llvm::Value* listPtr,
@@ -261,10 +260,10 @@ llvm::Value* indexOf(CompilerContext& ctx, llvm::Value* listPtr,
 }
 ```
 
-### 4.3 Call-Dispatch erweitern
+### 4.3 Extend the call dispatch
 
-In `src/core/ast_compiler_call.cpp:1230-1319` werden nach `get` und vor den
-mutierenden Methoden neue Zweige eingefuegt. Konkrete Form:
+In `src/core/ast_compiler_call.cpp:1230-1319`, new branches are inserted after `get` and before the
+mutating methods. Concrete form:
 
 ```cpp
 } else if (methodName == "contains" && argVals.size() == 1) {
@@ -299,45 +298,45 @@ mutierenden Methoden neue Zweige eingefuegt. Konkrete Form:
 }
 ```
 
-Vor dem Dispatch muss `listPtr` einmal lokal berechnet werden, statt den langen
-`static_cast`/`unwrap`-Ausdruck pro Zweig zu wiederholen:
+Before the dispatch, `listPtr` must be computed once locally instead of repeating the long
+`static_cast`/`unwrap` expression per branch:
 
 ```cpp
 llvm::Value* listPtr =
     static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca));
 ```
 
-Argumentzahlfehler duerfen nicht in die generische Meldung `Unknown list method`
-fallen. Fuer jede bekannte Methode soll eine ortsbezogene Diagnose entstehen:
+Argument count errors must not fall into the generic message `Unknown list method`.
+For every known method a location-based diagnostic should arise:
 
 ```text
 file.aiml:42: list<i32>.contains expects 1 argument, got 0
 ```
 
-Die bestehende Diagnose bei `src/core/ast_compiler_call.cpp:1319` soll dafuer
-`ctx.fmtLoc(call->sourceNode)` erhalten.
+For that, the existing diagnostic at `src/core/ast_compiler_call.cpp:1319` should
+get `ctx.fmtLoc(call->sourceNode)`.
 
-### 4.4 Elementtyp des `extend`-Arguments pruefen
+### 4.4 Check the element type of the `extend` argument
 
-Der Receiver liefert `listElemName`. Fuer das Argument muss der statische
-`Symbol::typeName` beziehungsweise der Ausdruckstyp auf exakt dasselbe
-`list<T>` normalisiert werden. `cascade<X>` darf wie im bestehenden Code bei
-`src/core/ast_compiler_call.cpp:1223-1227` nur dann als `list<i32>` gelten, wenn
-beide Seiten dieses Layout besitzen.
+The receiver supplies `listElemName`. For the argument, the static
+`Symbol::typeName` or the expression type must be normalised to exactly the same
+`list<T>`. As in the existing code at
+`src/core/ast_compiler_call.cpp:1223-1227`, `cascade<X>` may only count as `list<i32>` if
+both sides have this layout.
 
-Fehlerbeispiel:
+Error example:
 
 ```text
 list<i32>.extend expects list<i32>, got list<string>
 ```
 
-Keine implizite numerische Konvertierung in M1. Das verhindert teilweise
-konvertierte Listen und unklare Ownership bei Struct-/Pointerelementen.
+No implicit numeric conversion in M1. That prevents partially
+converted lists and unclear ownership for struct/pointer elements.
 
-### 4.5 RNG fuer `shuffle`
+### 4.5 RNG for `shuffle`
 
-`shuffle` soll nicht fuer jedes Element einen AIML-Namespace-Dispatch erzeugen.
-`ListImpl::shuffle` deklariert direkt dieselbe externe Runtime-Funktion wie
+`shuffle` should not generate an AIML namespace dispatch for every element.
+`ListImpl::shuffle` directly declares the same external runtime function as
 `math.random_int` in `src/core/builtin_registry.cpp:3846-3858`:
 
 ```cpp
@@ -346,68 +345,68 @@ llvm::Function* randomInt = ctx.getFunction(
     {ctx.builder.getInt32Ty(), ctx.builder.getInt32Ty()});
 ```
 
-Der Runtime-Code bleibt in `src/sys/math_runtime.cpp:406-422` unveraendert.
-Damit gibt es keine zweite RNG-Quelle und Native/WASM verwenden denselben
-exportierten ABI-Namen.
+The runtime code in `src/sys/math_runtime.cpp:406-422` stays unchanged.
+That way there is no second RNG source, and native/WASM use the same
+exported ABI name.
 
-## 5. Sicherheit und Randfaelle
+## 5. Safety and edge cases
 
-### 5.1 Bounds und leere Listen
+### 5.1 Bounds and empty lists
 
-- `contains`, `index_of`, `count`, `extend`, `reverse`, `sort` und `shuffle`
-  duerfen bei `len == 0` keine Elementpointer bilden.
-- `reverse` und `shuffle` muessen bei `len < 2` sofort beenden.
-- Die neuen Methoden duerfen die vorhandenen Bounds-Probleme von `pop`,
-  `insert` und `remove` nicht erweitern. Deren Haertung ist ein separater Patch.
+- `contains`, `index_of`, `count`, `extend`, `reverse`, `sort` and `shuffle`
+  must not form element pointers when `len == 0`.
+- `reverse` and `shuffle` must return immediately when `len < 2`.
+- The new methods must not extend the existing bounds problems of `pop`,
+  `insert` and `remove`. Hardening those is a separate patch.
 
-### 5.2 Reallocation und Aliasing
+### 5.2 Reallocation and aliasing
 
-- `extend` darf einen Quelldatenpointer nicht ueber `push` hinweg cachen.
-- `self.extend(self)` muss explizit getestet werden.
-- Zwei List-Structs koennen wegen flacher Value-Kopie denselben Datenpointer
-  enthalten. Der Plan garantiert nur korrektes Verhalten bei identischem
-  List-Struct-Pointer. Allgemeines Alias-Tracking bleibt ausserhalb des Umfangs.
+- `extend` must not cache a source data pointer across `push`.
+- `self.extend(self)` must be tested explicitly.
+- Two list structs can contain the same data pointer because of a shallow value copy.
+  The plan only guarantees correct behaviour for an identical
+  list struct pointer. General alias tracking stays out of scope.
 
 ### 5.3 Strings
 
-- Stringgleichheit muss Inhalt vergleichen, nicht Pointeridentitaet.
-- `null` und `""` folgen exakt der bestehenden `eq`-Semantik.
-- `sort` nutzt `strcmp`; Pointer werden nur umgeordnet, Strings nicht kopiert.
+- String equality must compare content, not pointer identity.
+- `null` and `""` follow exactly the existing `eq` semantics.
+- `sort` uses `strcmp`; pointers are only reordered, strings are not copied.
 
-### 5.4 Structs und Fat-Pointer
+### 5.4 Structs and fat pointers
 
-- `extend`, `reverse`, `shuffle`: erlaubt, weil ganze LLVM-Werte bewegt werden.
-- `contains`, `index_of`, `count`, `remove_value`: in M1 nur erlaubt, wenn eine
-  kanonische Eq-Semantik existiert; sonst Compile-Fehler.
-- `sort`: Structs, normale Pointer und Interface-Fat-Pointer in M2 ablehnen.
+- `extend`, `reverse`, `shuffle`: allowed, because whole LLVM values are moved.
+- `contains`, `index_of`, `count`, `remove_value`: allowed in M1 only if a
+  canonical eq semantics exists; otherwise a compile error.
+- `sort`: reject structs, normal pointers and interface fat pointers in M2.
 
 ## 6. Tests
 
-Neue Datei: `tests/test_list_builtins.aiml`.
+New file: `tests/test_list_builtins.aiml`.
 
-### 6.1 M1-Funktionstests
+### 6.1 M1 functional tests
 
-- `list<i32>`: Treffer am Anfang, in der Mitte, am Ende und Miss.
-- `list<string>`: Inhaltsgleichheit mit getrennt erzeugten Strings.
+- `list<i32>`: hit at the start, in the middle, at the end, and a miss.
+- `list<string>`: content equality with separately created strings.
 - `list<Enum>`: `contains`, `index_of`, `count`.
-- Duplikate: `count == n`, `remove_value` entfernt nur den ersten Treffer.
-- Leere Liste fuer jede Suchmethode.
-- `extend` bewahrt Reihenfolge und laesst die Quelle unveraendert.
-- `extend` ueber Kapazitaetsgrenze, damit `realloc` ausgefuehrt wird.
-- `self.extend(self)` ergibt exakt die verdoppelte urspruengliche Folge.
-- `list<Model>.extend` kopiert ganze Values.
-- Negativtest: `list<i32>.extend(list<string>)` kompiliert nicht.
-- Negativtest: Struct-Suche meldet den nicht unterstuetzten Elementtyp.
+- Duplicates: `count == n`, `remove_value` removes only the first hit.
+- An empty list for every search method.
+- `extend` preserves order and leaves the source unchanged.
+- `extend` across the capacity limit, so that `realloc` is executed.
+- `self.extend(self)` yields exactly the doubled original sequence.
+- `list<Model>.extend` copies whole values.
+- Negative test: `list<i32>.extend(list<string>)` does not compile.
+- Negative test: struct search reports the unsupported element type.
 
-### 6.2 M2-Funktionstests
+### 6.2 M2 functional tests
 
-- `reverse` fuer 0, 1, 2 und ungerade/gerade Elementzahlen.
-- `sort` und `sort_desc` fuer Integer, Enum, Float und String.
-- Sortierung mit Duplikaten ist stabil.
-- Float-Sortierung dokumentiert und testet NaN.
-- `shuffle` erhaelt Laenge und Multimenge der Werte.
-- `shuffle` auf 0/1 Element crasht nicht.
-- Negativtest: `list<Model>.sort` erzeugt eine klare Compile-Diagnose.
+- `reverse` for 0, 1, 2 and odd/even element counts.
+- `sort` and `sort_desc` for integer, enum, float and string.
+- Sorting with duplicates is stable.
+- Float sorting documents and tests NaN.
+- `shuffle` preserves the length and the multiset of values.
+- `shuffle` on 0/1 elements does not crash.
+- Negative test: `list<Model>.sort` produces a clear compile diagnostic.
 
 ### 6.3 Backends
 
@@ -423,7 +422,7 @@ WASM:
 tools/run_wasm_test.sh tests/test_list_builtins.aiml
 ```
 
-Bestehende Regressionen:
+Existing regressions:
 
 ```bash
 ./out/aiml/aiml tests/test_list.aiml
@@ -432,66 +431,65 @@ Bestehende Regressionen:
 ./out/aiml/aiml tests/test_return_list_from_call.aiml
 ```
 
-Falls der regulaere Runner Output-basierte Tests erwartet, soll die neue Datei
-bei Erfolg `PASS test_list_builtins` ausgeben und bei der ersten Abweichung via
-`sys.exit(1)` abbrechen.
+If the regular runner expects output-based tests, the new file should
+print `PASS test_list_builtins` on success and abort via
+`sys.exit(1)` on the first deviation.
 
-## 7. Dokumentation
+## 7. Documentation
 
-Nach M1:
+After M1:
 
-- `spec/10_collections.md:16-30`: Methoden, Rueckgaben und Beispiele ergaenzen.
-- `spec/aiml_reference_guide.md:155-166`: Kurzreferenz synchronisieren.
-- `spec/54_iterators.md:40-50`: den Eintrag `list.iter()` weiterhin als Future
-  markieren; Such-Builtins sind eager und ersetzen keinen Iterator.
-- `spec/49_static_analysis.md`: neue Typdiagnosen fuer `extend`, Struct-Suche und
-  `sort` dokumentieren, sofern sie als always-on Static Checks implementiert
-  werden.
+- `spec/10_collections.md:16-30`: add methods, returns and examples.
+- `spec/aiml_reference_guide.md:155-166`: synchronise the short reference.
+- `spec/54_iterators.md:40-50`: keep marking the entry `list.iter()` as future;
+  search builtins are eager and do not replace an iterator.
+- `spec/49_static_analysis.md`: document new type diagnostics for `extend`, struct search and
+  `sort`, if they are implemented as always-on static checks.
 
-Nach M2 zusaetzlich RNG-/Determinismus-Hinweis fuer `shuffle` in
-`spec/43_0_math.md` verlinken.
+After M2, additionally link an RNG/determinism note for `shuffle` in
+`spec/43_0_math.md`.
 
-## 8. Umsetzungsschritte
+## 8. Implementation steps
 
-1. API-Vertrag fuer M1 in `spec/10_collections.md` festschreiben.
-2. Vergleichsemitter fuer primitive, enum-, string- und pointerfaehige Werte
-   bereitstellen oder aus `ast_compiler_expr.cpp` extrahieren.
-3. `indexOf`, `count` und `extend` in `ListImpl` implementieren.
-4. `contains` und `remove_value` aus `indexOf` zusammensetzen.
-5. Dispatch, Argumentzahl- und Typdiagnosen ergaenzen.
-6. M1 Native-Tests und danach WASM-Test ausfuehren.
-7. Referenzdokumentation aktualisieren.
-8. M2 mit `reverse` beginnen; diese Methode braucht keine Vergleichssemantik.
-9. `sort`/`sort_desc` mit stabilem Insertion-Sort implementieren.
-10. `shuffle` an `aiml_math_random_int` anbinden.
-11. M2 Native-/WASM-Tests und bestehende List-Regressionen ausfuehren.
+1. Fix the API contract for M1 in `spec/10_collections.md`.
+2. Provide comparison emitters for primitive, enum, string and pointer-capable values
+   or extract them from `ast_compiler_expr.cpp`.
+3. Implement `indexOf`, `count` and `extend` in `ListImpl`.
+4. Compose `contains` and `remove_value` from `indexOf`.
+5. Add the dispatch, argument count and type diagnostics.
+6. Run the M1 native tests and then the WASM test.
+7. Update the reference documentation.
+8. Start M2 with `reverse`; this method needs no comparison semantics.
+9. Implement `sort`/`sort_desc` with a stable insertion sort.
+10. Connect `shuffle` to `aiml_math_random_int`.
+11. Run the M2 native/WASM tests and the existing list regressions.
 
-## 9. Abnahmekriterien
+## 9. Acceptance criteria
 
-- Alle neun Methoden entsprechen den Signaturen aus Abschnitt 1.
-- Native und WASM liefern dieselben Ergebnisse, abgesehen von der zufaelligen
-  Reihenfolge von `shuffle`.
-- Keine neue Runtime-List-ABI; das Layout bleibt `{i32, i32, ptr}`.
-- Keine implizite Konvertierung zwischen unterschiedlichen `list<T>`.
-- Stringsuche vergleicht Inhalt.
-- Nicht unterstuetzte Typen erzeugen Compile-Fehler mit Quellort.
-- `self.extend(self)` und Reallocation sind getestet.
-- Bestehende List-, Serialisierungs-, Interface-List- und Return-List-Tests
-  bleiben gruen.
+- All nine methods match the signatures from section 1.
+- Native and WASM deliver the same results, apart from the random
+  order of `shuffle`.
+- No new runtime list ABI; the layout stays `{i32, i32, ptr}`.
+- No implicit conversion between different `list<T>`.
+- String search compares content.
+- Unsupported types produce compile errors with a source location.
+- `self.extend(self)` and reallocation are tested.
+- Existing list, serialisation, interface list and return list tests
+  stay green.
 
-## 10. Spaetere Erweiterungen
+## 10. Later extensions
 
-Erst nach stabilen Callback-/Generic-Semantiken bewerten:
+Evaluate only after stable callback/generic semantics:
 
-- `find(predicate) -> i32` oder `T`
+- `find(predicate) -> i32` or `T`
 - `find_index(predicate) -> i32`
 - `any(predicate)`, `all(predicate)`
 - `map<U>(fn) -> list<U>`
 - `filter(predicate) -> list<T>`
 - `sort_by(comparator)`
 - `unique`/`dedupe`
-- seedbarer `shuffle(rng)` fuer deterministische Replays
+- a seedable `shuffle(rng)` for deterministic replays
 
-Diese Funktionen duerfen nicht ueber `any`-Boxing simuliert werden, weil das
-Typinformation, Performance und AOT-/WASM-Gleichheit verschlechtern wuerde.
+These functions must not be simulated via `any` boxing, because that would worsen
+type information, performance and AOT/WASM parity.
 1
