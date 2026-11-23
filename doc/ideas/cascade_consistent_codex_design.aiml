@@ -1,83 +1,83 @@
 # Requires: library
 # ═══════════════════════════════════════════════════════════════════════════
-#  DESIGN-DRAFT — Codex-Vorschlag für ein konsistentes `cascade<T>`
+#  DESIGN DRAFT — Codex proposal for a consistent `cascade<T>`
 # ═══════════════════════════════════════════════════════════════════════════
 #
-# Wichtiger Hinweis
+# Important note
 # ─────────────────
-# Diese Datei ist AUSDRUECKLICH nicht als bestehende AIML-Spezifikation zu
-# lesen. Sie beschreibt meine Vorstellung eines konsistenten `cascade<T>`-
-# Konzepts, wenn wir verschachtelte Kaskaden als echten Sprachtyp modellieren
-# wollen.
+# This file is EXPLICITLY not to be read as an existing AIML specification.
+# It describes my idea of a consistent `cascade<T>` concept,
+# if we want to model nested cascades as a real language type.
 #
-# Ziel ist nicht, den aktuellen Card-Editor 1:1 abzubilden, sondern die
-# Kernidee sauber zu schneiden:
 #
-#   `cascade<T>` ist ein getaggter Variantenwert mit node-spezifischer Payload.
+# The goal is not to map the current card editor 1:1, but to cut the
+# core idea cleanly:
 #
-# Alles weitere — Prefab-Bindings, Widgets, Listen-Buttons, Bytecode-Encoder,
-# Inspector-Tools — sollte erst DANACH auf diese Invariante aufsetzen.
+#   `cascade<T>` is a tagged variant value with a node-specific payload.
 #
-# ═══════════════════════════════════════════════════════════════════════════
+# Everything else — prefab bindings, widgets, list buttons, bytecode encoder,
+# inspector tools — should only build on this invariant AFTERWARDS.
+#
+# 1) Core idea
 # 1) Kernidee
 # ═══════════════════════════════════════════════════════════════════════════
 #
-# Viele Gameplay-Strukturen sind keine flachen Enums und auch keine flachen
-# Models. Sie sind: "Wahl eines Knotens" + "Felder, die nur fuer diesen
-# Knoten existieren".
+# Many gameplay structures are neither flat enums nor flat
+# models. They are: "choice of a node" + "fields that only exist for this
+# node".
 #
-# Beispiele:
+# Examples:
 #   - ValueType.fixed(value)
 #   - ValueType.equal_to_attribute(attribute)
 #   - DurationType.turns(value_type)
 #   - EffectCode.modify_stat(owner, attribute, value, duration)
 #
-# Das ist konzeptionell ein Algebraic Data Type / Tagged Union / Sum Type.
-# In AIML nenne ich das hier `cascade<T>`.
+# Conceptually that is an algebraic data type / tagged union / sum type.
+# In AIML I call it `cascade<T>` here.
 #
 # ═══════════════════════════════════════════════════════════════════════════
-# 2) Semantische Invarianten
+# 2) Semantic invariants
 # ═══════════════════════════════════════════════════════════════════════════
 #
-# Ein Wert vom Typ `cascade<X>` hat immer genau diese Struktur:
+# A value of type `cascade<X>` always has exactly this structure:
 #
-#   - einen aktiven Node-Tag
-#   - genau die Payload-Felder dieses aktiven Nodes
-#   - keine Payload anderer Nodes
+#   - one active node tag
+#   - exactly the payload fields of this active node
+#   - no payload of other nodes
 #
-# Daraus folgen die wichtigsten Invarianten:
+# The most important invariants follow from that:
 #
-#   I1. `cascade<X>` ist niemals "mehrere Nodes gleichzeitig".
-#   I2. Ein Node-Wechsel verwirft die alte Node-Payload vollständig.
-#   I3. Die Payload ist typisiert; ein Feld kennt seinen echten Typ.
-#   I4. Rekursion ist erlaubt, aber nur als endlicher Baumwert.
-#   I5. Serialisierung verwendet Node-ID + Payload in deklarierter Reihenfolge.
+#   I1. `cascade<X>` is never "several nodes at the same time".
+#   I2. A node change discards the old node payload completely.
+#   I3. The payload is typed; a field knows its real type.
+#   I4. Recursion is allowed, but only as a finite tree value.
+#   I5. Serialisation uses the node ID + payload in declared order.
 #
-# Offene Frage, die eine echte Spezifikation explizit entscheiden MUSS:
+# Open question that a real specification MUST decide explicitly:
 #
-#   Gibt es einen leeren Zustand?
+#   Is there an empty state?
 #
-# Mein Vorschlag fuer Konsistenz:
-#   Nein, nicht implizit.
+# My proposal for consistency:
+#   No, not implicitly.
 #
-# Wenn "noch nicht gesetzt" gebraucht wird, dann explizit ueber:
-#   - `optional<cascade<X>>`, oder
-#   - einen echten Node wie `unset` / `none`
+# If "not set yet" is needed, then explicitly via:
+#   - `optional<cascade<X>>`, or
+#   - a real node like `unset` / `none`
 #
-# Damit bleibt `cascade<X>` selbst total und eindeutig.
+# That way `cascade<X>` itself stays total and unambiguous.
 #
 # ═══════════════════════════════════════════════════════════════════════════
-# 3) Sprachform
+# 3) Language form
 # ═══════════════════════════════════════════════════════════════════════════
 #
-# `cascade` ist ein Top-Level-Type-Builder, analog zu `model` oder `enum`.
-# Jeder Node hat:
-#   - eine stabile ID
-#   - einen Namen
-#   - optional ein Label
-#   - null oder mehr typisierte Felder
+# `cascade` is a top-level type builder, analogous to `model` or `enum`.
+# Every node has:
+#   - a stable ID
+#   - a name
+#   - optionally a label
+#   - zero or more typed fields
 #
-# Beispielsyntax:
+# Example syntax:
 
 - cascade:
     name: ValueType
@@ -151,20 +151,20 @@
       - as_long_as_equipped:     { id: 5, label: "As Long as Equipped" }
       - as_long_as_card_in_play: { id: 6, label: "As Long as Card in Play" }
 
-# Kompaktformen waeren spaeter moeglich, aber nur als Syntaxzucker ueber dieser
-# expliziten Form. Die explizite Form ist die semantische Wahrheit.
+# Compact forms would be possible later, but only as syntactic sugar over this
+# explicit form. The explicit form is the semantic truth.
 #
 # ═══════════════════════════════════════════════════════════════════════════
-# 4) Wertebene
+# 4) Value level
 # ═══════════════════════════════════════════════════════════════════════════
 #
-# Ein `cascade<X>`-Wert ist KEIN loses Map-Objekt, sondern ein echter Wert.
-# Denkmodell:
+# A `cascade<X>` value is NOT a loose map object, but a real value.
+# Mental model:
 #
 #   ValueType.fixed(value=3)
 #   DurationType.turns(value=ValueType.fixed(value=2))
 #
-# Beispiel-Modelle:
+# Example models:
 
 - model:
     name: ActiveAbility
@@ -179,33 +179,33 @@
       - [name, string]
       - [abilities, list<ActiveAbility>]
 
-# Wichtiger Punkt meines Vorschlags:
+# Important point of my proposal:
 #
-# Ein `cascade` wird wie ein eigener Typ benutzt.
-# Also `TriggerCode`, `EffectCode`, `ActivationCost`, `ValueType`,
-# `DurationType` sind hier NICHT Enums plus Seitentabellen, sondern direkt die
-# Variantentypen selbst.
+# A `cascade` is used like a type of its own.
+# So `TriggerCode`, `EffectCode`, `ActivationCost`, `ValueType`,
+# `DurationType` are NOT enums plus side tables here, but directly the
+# variant types themselves.
 #
-# `cascade<X>` als Schreibweise ist damit nur dann noetig, wenn man ueber den
-# Metatyp spricht. Im Feld reicht der konkrete Cascadetypname.
+# The notation `cascade<X>` is thus only needed when talking about the
+# meta type. In a field the concrete cascade type name is enough.
 #
 # ═══════════════════════════════════════════════════════════════════════════
 # 5) Defaulting
 # ═══════════════════════════════════════════════════════════════════════════
 #
-# Der kritischste Punkt fuer Konsistenz ist Default-Erzeugung.
+# The most critical point for consistency is default creation.
 #
-# Mein Vorschlag:
+# My proposal:
 #
-#   D1. `new SomeCascadeType` ist nur erlaubt, wenn der Typ einen Default-Node
-#       deklariert ODER alle Aufrufer einen Konstruktor mit Node angeben.
+#   D1. `new SomeCascadeType` is only allowed if the type declares a default node
+#       OR all callers specify a constructor with a node.
 #
-#   D2. Ohne Default-Node gibt es kein stilles "erstes Element gewinnt".
+#   D2. Without a default node there is no silent "first element wins".
 #
-#   D3. Wenn ein Default-Node existiert, muessen auch dessen Felder defaultbar
-#       sein.
+#   D3. If a default node exists, its fields must also be defaultable.
 #
-# Beispiel:
+#
+# Example:
 
 - cascade:
     name: TriggerCode
@@ -224,57 +224,57 @@
           fields:
             - [effect, EffectCode]
 
-# So ist `new TriggerCode` wohldefiniert.
-# Ohne `default:` waere nur so etwas zulaessig:
+# That way `new TriggerCode` is well-defined.
+# Without `default:` only something like this would be allowed:
 #   - decl: [trg, TriggerCode, { new: [TriggerCode.on_phase_start] }]
 #
 # ═══════════════════════════════════════════════════════════════════════════
-# 6) Node-Wechsel
+# 6) Node change
 # ═══════════════════════════════════════════════════════════════════════════
 #
-# Node-Wechsel ist keine partielle Mutation alter Felder, sondern ein Ersatz
-# des kompletten Variantenzustands.
+# A node change is not a partial mutation of old fields, but a replacement
+# of the complete variant state.
 #
-# Beispiel:
-#   Vorher: ValueType.equal_to_attribute(attribute=atk)
-#   Wechsel zu: ValueType.fixed(value=1)
+# Example:
+#   Before: ValueType.equal_to_attribute(attribute=atk)
+#   Change to: ValueType.fixed(value=1)
 #
-# Danach existiert `attribute` nicht mehr. Es gibt nur noch `value`.
+# Afterwards `attribute` no longer exists. There is only `value`.
 #
-# Das verhindert stale Payloads und macht UI, Validierung und Serialisierung
-# vorhersagbar.
+# That prevents stale payloads and makes UI, validation and serialisation
+# predictable.
 #
 # ═══════════════════════════════════════════════════════════════════════════
-# 7) Serialisierung
+# 7) Serialisation
 # ═══════════════════════════════════════════════════════════════════════════
 #
-# `cascade` muss ein stabiles Datenformat besitzen.
-# Mein Vorschlag:
+# `cascade` must have a stable data format.
+# My proposal:
 #
 #   serialize(cascade<X>) = [node_id, payload_field_0, payload_field_1, ...]
 #
-# Dabei gilt:
-#   - node_id kommt aus der Deklaration, nie aus auto-generated Positionsindizes
-#   - Feldreihenfolge ist exakt die deklarierte `fields:`-Reihenfolge
-#   - rekursive Cascades serialisieren sich nach demselben Prinzip weiter
+# Where:
+#   - node_id comes from the declaration, never from auto-generated position indices
+#   - the field order is exactly the declared `fields:` order
+#   - recursive cascades keep serialising by the same principle
 #
-# Das ist absichtlich einfach. Die Sprachstruktur und das Wire-Format fallen
-# zusammen, solange IDs explizit und stabil sind.
+# This is deliberately simple. The language structure and the wire format
+# coincide, as long as IDs are explicit and stable.
 #
 # ═══════════════════════════════════════════════════════════════════════════
-# 8) Prefab-Bindung als Folge, nicht als Kern
+# 8) Prefab binding as a consequence, not as the core
 # ═══════════════════════════════════════════════════════════════════════════
 #
-# Erst wenn `cascade` als Typ konsistent ist, darf die Prefab-Runtime davon
-# profitieren.
+# Only when `cascade` is consistent as a type may the prefab runtime
+# benefit from it.
 #
-# Minimaler Runtime-Vertrag fuer ein Widget `type: cascade`:
-#   - Root-Dropdown fuer Node-Auswahl
-#   - pro aktivem Payload-Feld genau ein Kind-Widget
-#   - rekursiv fuer verschachtelte Cascades
-#   - Widget-State ist nur eine Ansicht auf das Model, nicht zweite Wahrheit
+# Minimal runtime contract for a widget `type: cascade`:
+#   - root dropdown for node selection
+#   - exactly one child widget per active payload field
+#   - recursively for nested cascades
+#   - widget state is only a view onto the model, not a second truth
 #
-# Beispiel:
+# Example:
 
 - prefab:
     name: AbilityRowPrefab
@@ -297,42 +297,42 @@
     children:
       - { name: value, type: cascade, x: 0, y: 0, bind: . }
 
-# Wichtige konzeptionelle Grenze:
-# Diese Datei definiert NICHT, wie ListPush, ListPop, OnClick, Reflection oder
-# Editor-Actions im Detail implementiert werden. Das sind Folgefeatures.
+# Important conceptual limit:
+# This file does NOT define how ListPush, ListPop, OnClick, reflection or
+# editor actions are implemented in detail. Those are follow-up features.
 #
 # ═══════════════════════════════════════════════════════════════════════════
-# 9) Was ich bewusst NICHT in den Kern nehme
+# 9) What I deliberately do NOT take into the core
 # ═══════════════════════════════════════════════════════════════════════════
 #
-# Folgende Dinge gehoeren fuer mich nicht in die Grunddefinition von
+# For me the following things do not belong in the basic definition of
 # `cascade<T>`:
 #
-#   - generische Button-Handler
-#   - stdlib-ListPush/ListPop
-#   - automatische Method-Ref-Wrapping-Regeln
-#   - Lokalisierungsdetails
-#   - komplexe Runtime-Reflection-APIs
-#   - abgeleitete Label-Heuristiken als semantische Pflicht
+#   - generic button handlers
+#   - stdlib ListPush/ListPop
+#   - automatic method-ref wrapping rules
+#   - localisation details
+#   - complex runtime reflection APIs
+#   - derived label heuristics as a semantic obligation
 #
-# Alles davon kann sinnvoll sein. Aber wenn der Cascade-Kern davon abhaengt,
-# wird das Feature unnötig breit und schwer konsistent zu halten.
+# All of these can make sense. But if the cascade core depends on them,
+# the feature becomes needlessly broad and hard to keep consistent.
 #
 # ═══════════════════════════════════════════════════════════════════════════
-# 10) Kurzfassung meiner Position
+# 10) Short version of my position
 # ═══════════════════════════════════════════════════════════════════════════
 #
-# Mein konsistenter Vorschlag ist:
+# My consistent proposal is:
 #
-#   1. `cascade` ist ein echter Variantentyp.
-#   2. Ein Cascade-Wert hat genau einen aktiven Node.
-#   3. Payload anderer Nodes existiert nicht gleichzeitig weiter.
-#   4. "Leer" ist nicht implizit; Optionalitaet muss explizit modelliert sein.
-#   5. IDs muessen fuer wire-relevante Typen explizit und stabil sein.
-#   6. Prefab- und Editor-Verhalten ist eine direkte Projektion dieses Typs.
+#   1. `cascade` is a real variant type.
+#   2. A cascade value has exactly one active node.
+#   3. The payload of other nodes does not continue to exist at the same time.
+#   4. "Empty" is not implicit; optionality must be modelled explicitly.
+#   5. IDs must be explicit and stable for wire-relevant types.
+#   6. Prefab and editor behaviour is a direct projection of this type.
 #
-# Wenn wir diese sechs Punkte halten, wird `cascade<T>` fuer den Card-Editor,
-# fuer Serialisierung und fuer modellgebundene Prefabs deutlich konsistenter
-# als flache Slot-Modelle wie `p0..p3`.
+# If we keep these six points, `cascade<T>` becomes considerably more consistent
+# for the card editor, for serialisation and for model-bound prefabs
+# than flat slot models like `p0..p3`.
 #
 # ═══════════════════════════════════════════════════════════════════════════
