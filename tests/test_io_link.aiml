@@ -1,7 +1,7 @@
 # SPEC: 42_path_type
-# spec/42: io.link(src, dst) — harter Link, zwei Namen auf denselben Inhalt.
-# Grundlage für inhaltsadressierte Ablagen (cosmos doc/spec/92): aufnehmen und
-# materialisieren ohne zweiten Datenblock.
+# spec/42: io.link(src, dst) — hard link, two names for the same content.
+# The basis for content-addressed stores (cosmos doc/spec/92): take in and
+# materialise without a second data block.
 # Expected exit code: 0
 - def:
     name: main
@@ -17,31 +17,31 @@
       - call: [io.write, fhw, "inhalt"]
       - call: [io.close, fhw]
 
-      # verlinken: beide Namen zeigen auf denselben Inhalt
+      # link: both names point to the same content
       - decl: [rc_link, i32, { call: [io.link, src, dst] }]
       - if: { condition: { neq: [rc_link, 0] }, then: [{ print: ["FAIL link rc=${rc_link}"] }, { return: 1 }] }
       - if: { condition: { eq: [{ call: [io.is_file, dst] }, false] }, then: [{ print: ["FAIL Ziel fehlt"] }, { return: 1 }] }
       - if: { condition: { neq: [{ call: [io.read_file, dst] }, "inhalt"] }, then: [{ print: ["FAIL Inhalt"] }, { return: 1 }] }
-      # gleiche Inhaltsadresse — es IST derselbe Inhalt, keine Kopie.
-      # Zwei Call-Ergebnisse NICHT direkt vergleichen: eq/neq auf zwei Zeigern
-      # ohne auflösbaren Typ fällt auf Zeiger-Identität zurück (Compiler warnt).
+      # the same content address — it IS the same content, not a copy.
+      # Do NOT compare two call results directly: eq/neq on two pointers
+      # without a resolvable type falls back to pointer identity (the compiler warns).
       - decl: [hash_src, string, { call: [hash.sha256_file, src] }]
       - decl: [hash_dst, string, { call: [hash.sha256_file, dst] }]
       - if: { condition: { neq: [hash_dst, hash_src] }, then: [{ print: ["FAIL Hash ${hash_dst} != ${hash_src}"] }, { return: 1 }] }
 
-      # Quelle löschen: der Inhalt bleibt über den zweiten Namen erreichbar
+      # delete the source: the content stays reachable via the second name
       - call: [io.remove, src]
-      - if: { condition: { eq: [{ call: [io.is_file, dst] }, false] }, then: [{ print: ["FAIL nach remove"] }, { return: 1 }] }
-      - if: { condition: { neq: [{ call: [io.read_file, dst] }, "inhalt"] }, then: [{ print: ["FAIL Inhalt nach remove"] }, { return: 1 }] }
+      - if: { condition: { eq: [{ call: [io.is_file, dst] }, false] }, then: [{ print: ["FAIL after remove"] }, { return: 1 }] }
+      - if: { condition: { neq: [{ call: [io.read_file, dst] }, "inhalt"] }, then: [{ print: ["FAIL content after remove"] }, { return: 1 }] }
 
-      # bestehendes Ziel → -1 (der Aufrufer entscheidet, ob das ein Fehler ist)
+      # existing target → -1 (the caller decides whether that is an error)
       - decl: [again, string, "${dir}/noch_einer.txt"]
       - decl: [rc_ok, i32, { call: [io.link, dst, again] }]
       - if: { condition: { neq: [rc_ok, 0] }, then: [{ print: ["FAIL zweiter link"] }, { return: 1 }] }
       - decl: [rc_exists, i32, { call: [io.link, dst, again] }]
       - if: { condition: { eq: [rc_exists, 0] }, then: [{ print: ["FAIL vorhandenes Ziel haette -1 geben muessen"] }, { return: 1 }] }
 
-      # fehlende Quelle → -1, kein Crash
+      # missing source → -1, no crash
       - decl: [rc_missing, i32, { call: [io.link, "${dir}/gibts_nicht", "${dir}/egal"] }]
       - if: { condition: { eq: [rc_missing, 0] }, then: [{ print: ["FAIL fehlende Quelle"] }, { return: 1 }] }
 

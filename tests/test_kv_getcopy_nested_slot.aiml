@@ -1,19 +1,19 @@
 # SPEC?: 31_db_integration   # derived from the file name, to be confirmed
 # static-check: off
-# Regression: `set: [outer.inner, { call: [kv.get_copy, key] }]` — Zuweisung
-# eines kv.get_copy-Resultats DIREKT in ein verschachteltes Struct-Feld.
+# Regression: `set: [outer.inner, { call: [kv.get_copy, key] }]` — assigning
+# a kv.get_copy result DIRECTLY into a nested struct field.
 #
-# BUG (2026-07-10): Der Deep-Copy-Pfad für kv.get_copy (visitSetStmt) greift
-# nur bei einer Top-Level-Variable als Target, NICHT bei einem verschachtelten
-# Feld-Target (outer.inner).  Ergebnis: die Heap-Felder des verschachtelten
-# Structs (string/list/map) sind nach der Zuweisung Müll bzw. 0.
+# BUG (2026-07-10): the deep copy path for kv.get_copy (visitSetStmt) only applies
+# to a top-level variable as the target, NOT to a nested
+# field target (outer.inner).  Result: the heap fields of the nested
+# struct (string/list/map) are garbage or 0 after the assignment.
 #
-# Nachweis (siehe main):
-#   V1  outer.inner = <local Inner>         → OK   (kein get_copy)
-#   V2  outer.inner = kv.get_copy(key)      → BUG  (Heap-Felder korrupt)
-#   V3  outer.inner.field = tmp.field (FbF) → OK   (Workaround)
+# Evidence (see main):
+#   V1  outer.inner = <local Inner>         → OK   (no get_copy)
+#   V2  outer.inner = kv.get_copy(key)      → BUG  (heap fields corrupt)
+#   V3  outer.inner.field = tmp.field (FbF) → OK   (workaround)
 #
-# Erwartung nach Fix: exit 0.  Aktuell: exit 1 (V2 schlägt fehl).
+# Expectation after the fix: exit 0.  Currently: exit 1 (V2 fails).
 # Backlog: doc/backlog/2026-07-10_kv_getcopy_nested_slot_assign.md
 
 - model: { name: Inner, fields: [[name, string], [val, i32]] }

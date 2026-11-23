@@ -1,7 +1,7 @@
 # SPEC: 18_instantiation,18_refs_and_pointers
 # Probe: list<ptr<Class>> iteration + upcast to ptr<Interface> per element.
-# Saubere Architektur: Modell hält Daten, Klasse mit anderem Namen referenziert
-# via `models:` das Modell und implementiert das Interface.
+# Clean architecture: the model holds data, a class with a different name references
+# the model via `models:` and implements the interface.
 #
 # Borrow-safe convention: heap-owning pointers use `ptr<T>`.  `ref<T>` is
 # reserved for borrowed parameters (e.g. the implicit method-`this`).  See

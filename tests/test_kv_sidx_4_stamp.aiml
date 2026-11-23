@@ -1,10 +1,10 @@
-# SPEC?: 45_db_indexed_fields   # Persistence -- Stempelbruch
-# Phase 4: Phase 3 hat geschrieben und NICHT gecheckpointet.  Der Dump auf der
-# Platte beschreibt damit einen aelteren Stand der WAL; sein Stempel (wal_used,
-# wal_fp) muss fallen und das Feld voll aufgefuellt werden.  Geprueft wird
-# nicht, DASS aufgefuellt wurde, sondern dass das Ergebnis stimmt -- genau das
-# ist der Sinn: ein Zweifel kostet Zeit, nie Richtigkeit.
-# Am Ende wird gecheckpointet, damit Phase 5 einen frischen Dump hat.
+# SPEC?: 45_db_indexed_fields   # persistence -- broken stamp
+# Phase 4: phase 3 wrote and did NOT checkpoint.  So the dump on
+# disk describes an older state of the WAL; its stamp (wal_used,
+# wal_fp) must fall and the field must be refilled fully.  What is checked is
+# not THAT it was refilled, but that the result is right -- exactly that
+# is the point: a doubt costs time, never correctness.
+# At the end there is a checkpoint, so that phase 5 has a fresh dump.
 # Expected exit code: 0
 
 - model:
@@ -23,7 +23,7 @@
       - if:
           condition: { neq: [ist, erw] }
           then:
-            - print: ["FAIL ${was}: ${ist} Treffer, expected ${erw}"]
+            - print: ["FAIL ${was}: ${ist} hits, expected ${erw}"]
             - return: 1
       - return: 0
 
@@ -39,7 +39,7 @@
       - decl: [anzahl, i32, { call: [dinge.len] }]
       - set: [bad, { +: [bad, { call: [pruef_zahl, anzahl, 3, "len"] }] }]
 
-      # Stand nach Phase 3: aaa, ccc, ddd tragen Hammer; bbb ist weg.
+      # state after phase 3: aaa, ccc, ddd carry Hammer; bbb is gone.
       - decl: [tr_ham, list<string>, { call: [dinge.findings_by, "name", "Hammer"] }]
       - set: [bad, { +: [bad, { call: [pruef_zahl, tr_ham.len, 3, "name=Hammer"] }] }]
       - decl: [tr_sae, list<string>, { call: [dinge.findings_by, "name", "Saege"] }]

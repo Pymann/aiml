@@ -1,5 +1,5 @@
 # SPEC: 69_hashmap
-# hashmap<K:V> als Klassenfeld, Parameter, Rückgabewert und in Schleifen (Scope-Drop, retain/release).
+# hashmap<K:V> as a class field, parameter, return value and in loops (scope drop, retain/release).
 
 - class:
     name: WordIndex
@@ -58,7 +58,7 @@
           - set: [var_ok, 0]
       - free: [index]
 
-      # Rückgabe + Parameter
+      # return + parameter
       - decl: [squares, "hashmap<i32:i32>", { call: [fill_table, 100] }]
       - decl: [total, i64, { call: [sum_table, squares, 100] }]
       - if: [{ neq: [total, 328350] }, true]
@@ -66,7 +66,7 @@
           - print: ["FAIL 2: Summe = ${total}, expected 328350"]
           - set: [var_ok, 0]
 
-      # Viele kurzlebige Tabellen (Scope-Drop in der Schleife)
+      # many short-lived tables (scope drop in the loop)
       - decl: [round, i32, 0]
       - decl: [acc, i64, 0]
       - while: [{ lt: [round, 2000] }]
@@ -82,7 +82,7 @@
           - print: ["FAIL 3: acc = ${acc}"]
           - set: [var_ok, 0]
 
-      # Zuweisung ersetzt die Tabelle (alte wird freigegeben)
+      # assignment replaces the table (the old one is freed)
       - decl: [swap, "hashmap<i32:i32>"]
       - call: [swap.put, 1, 1]
       - set: [swap, squares]

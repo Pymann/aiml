@@ -1,7 +1,7 @@
-# SPEC: 26_concurrency — Repro-Stufen: wo genau stirbt ein Klassen-Member-Lock?
-#   Stufe 1: direkter Aufruf ohne Thread
-#   Stufe 2: EIN spawn-Thread (ptr<Class> + i32 als Argumente)
-#   Stufe 3: zwei Threads auf denselben Member-Lock
+# SPEC: 26_concurrency — repro stages: where exactly does a class member lock die?
+#   stage 1: direct call without a thread
+#   stage 2: ONE spawn thread (ptr<Class> + i32 as arguments)
+#   stage 3: two threads on the same member lock
 # Expected exit code: 0
 
 - class:
@@ -48,18 +48,18 @@
 
       - decl: [th_one, thread_handle, { spawn: [run_bump, box, 10] }]
       - call: [th_one.join]
-      - print: ["stage2 ein Thread: hits=${box.hits}"]
+      - print: ["stage2 one thread: hits=${box.hits}"]
 
       - decl: [th_a, thread_handle, { spawn: [run_bump, box, 1000] }]
       - decl: [th_b, thread_handle, { spawn: [run_bump, box, 1000] }]
       - call: [th_a.join]
       - call: [th_b.join]
-      - print: ["stage3 zwei Threads: hits=${box.hits}"]
+      - print: ["stage3 two threads: hits=${box.hits}"]
 
       - if:
           condition: { neq: [box.hits, 2020] }
           then:
-            - print: ["FAIL hits=${box.hits} statt 2020"]
+            - print: ["FAIL hits=${box.hits} instead of 2020"]
             - return: 1
       - print: ["PASS test_lock_member_thread_repro"]
       - return: 0

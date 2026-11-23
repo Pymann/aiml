@@ -1,16 +1,16 @@
 # SPEC: 61_memory_management
-# Mehrere VIEW-ALIASSE auf Elemente derselben Liste, nacheinander in einer
-# Schleife — und danach werden die Elemente erneut gelesen.
+# Several VIEW ALIASES onto elements of the same list, one after another in a
+# loop — and afterwards the elements are read again.
 #
-# spec/61 §6.3: `decl: [x, Model, { at: [liste, i] }]` ist ein ALIAS auf das
-# Element, keine Kopie.  Billig fuer reines Lesen — aber nur, wenn das Verwerfen
-# des Alias den inneren Speicher des Elements NICHT freigibt.  Taete es das,
-# waere die Liste nach der Schleife beschaedigt, und der naechste Lesezugriff
-# liefe in befreiten Speicher.
+# spec/61 §6.3: `decl: [x, Model, { at: [liste, i] }]` is an ALIAS onto the
+# element, not a copy.  Cheap for pure reading — but only if discarding
+# the alias does NOT free the element's inner memory.  If it did,
+# the list would be damaged after the loop, and the next read access
+# would run into freed memory.
 #
-# Anlass: der WASM-Client stuerzte in einer Funktion ab, die genau dieses Muster
-# hat (ein Alias ueber die Schleife gehalten, in der Schleife weitere Aliasse).
-# Nativ faellt so etwas still durch; WASM prueft Grenzen.
+# Occasion: the WASM client crashed in a function that has exactly this pattern
+# (one alias held across the loop, further aliases in the loop).
+# Natively something like this silently falls through; WASM checks bounds.
 # Expected exit code: 0
 
 - model:
@@ -49,12 +49,12 @@
             - call: [rows.push, fresh]
             - set: [fill, { +: [fill, 1] }]
 
-      # EIN Alias, der ueber die Schleife gehalten wird.
+      # ONE alias that is held across the loop.
       - decl: [held, Row, { at: [rows, 2] }]
-      - set: [fails, { +: [fails, { call: [expect, "gehaltener Alias liest vor der Schleife", { eq: [held.name, "zeile-2"] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "held alias reads before the loop", { eq: [held.name, "zeile-2"] }] }] }]
 
-      # Die Schleife legt fuer JEDES Element einen weiteren Alias an und
-      # verwirft ihn am Schleifenende — auch fuer Element 2.
+      # The loop creates a further alias for EVERY element and
+      # discards it at the end of the loop — also for element 2.
       - decl: [joined, string, ""]
       - decl: [idx, i32, 0]
       - while:
@@ -65,15 +65,15 @@
             - set: [idx, { +: [idx, 1] }]
       - set: [fails, { +: [fails, { call: [expect, "die Schleife liest alle sechs", { gt: [joined.len, 40] }] }] }]
 
-      # DANACH: der gehaltene Alias muss noch gueltig sein.
-      - set: [fails, { +: [fails, { call: [expect, "gehaltener Alias liest NACH der Schleife", { eq: [held.name, "zeile-2"] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "auch sein zweites Zeichenkettenfeld", { gt: [held.note.len, 20] }] }] }]
+      # AFTERWARDS: the held alias must still be valid.
+      - set: [fails, { +: [fails, { call: [expect, "held alias reads AFTER the loop", { eq: [held.name, "zeile-2"] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "its second string field too", { gt: [held.note.len, 20] }] }] }]
 
-      # Und die Liste selbst ist unbeschaedigt.
+      # And the list itself is undamaged.
       - decl: [again, Row, { at: [rows, 2] }]
       - set: [fails, { +: [fails, { call: [expect, "erneutes Lesen desselben Elements", { eq: [again.name, "zeile-2"] }] }] }]
       - decl: [last, Row, { at: [rows, 5] }]
-      - set: [fails, { +: [fails, { call: [expect, "und das letzte Element", { eq: [last.count, 5] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "and the last element", { eq: [last.count, 5] }] }] }]
 
       - if:
           condition: { neq: [fails, 0] }

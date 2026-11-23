@@ -1,8 +1,8 @@
 # SPEC?: 15_models,09_strings   # derived from the file name, to be confirmed
-# Repro Erweiterung: Model mit list<string>-Feld — verliert das Model
-# seine string-Felder beim push in list<Model>?
+# Repro extension: a model with a list<string> field — does the model lose
+# its string fields on push into list<Model>?
 #
-# Hypothese: die list<string>-Membervariable stört die Struct-Copy.
+# Hypothesis: the list<string> member variable disturbs the struct copy.
 
 - model:
     name: Bag

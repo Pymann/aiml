@@ -1,6 +1,6 @@
-# SPEC?: 45_db_indexed_fields   # Persistence -- Nebenindex-Dump
-# Phase 1: drei Zeilen schreiben, die Nebenindizes im Lauf pruefen, dann
-# checkpointen -- erst dort entstehen die .kvsidx-Dateien.
+# SPEC?: 45_db_indexed_fields   # persistence -- secondary index dump
+# Phase 1: write three rows, check the secondary indexes during the run, then
+# checkpoint -- only there are the .kvsidx files created.
 # Expected exit code: 0
 
 - model:
@@ -37,7 +37,7 @@
       - call: [lege_an, dinge, "bbb", "Hammer", "S2", "WERKZEUG"]
       - call: [lege_an, dinge, "ccc", "Saege",  "S3", "Holz"]
 
-      # Im Schreiblauf muss der Index schon stimmen -- ohne Dump, rein im Speicher.
+      # During the write run the index must already be right -- without a dump, purely in memory.
       - decl: [ham, list<string>, { call: [dinge.findings_by, "name", "Hammer"] }]
       - if:
           condition: { neq: [ham.len, 2] }
@@ -54,7 +54,7 @@
       - if:
           condition: { neq: [sku_zwei, "bbb"] }
           then:
-            - print: ["FAIL write: sku=S2 ergibt '${sku_zwei}', expected 'bbb'"]
+            - print: ["FAIL write: sku=S2 gives '${sku_zwei}', expected 'bbb'"]
             - return: 1
 
       - decl: [ckpt_rc, i32, { call: [db.checkpoint] }]

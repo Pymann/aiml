@@ -1,6 +1,6 @@
-# SPEC: 26_concurrency — Repro-Eingrenzung: `lock` als Klassen-Member, aber ueber
-# einen BENANNTEN Empfaenger (box.lock_one.init) statt ueber den Selbstbezug
-# (<.lock_one.init).  Trennt die beiden Member-Zugriffspfade im Compiler.
+# SPEC: 26_concurrency — repro narrowing: `lock` as a class member, but via
+# a NAMED receiver (box.lock_one.init) instead of via the self reference
+# (<.lock_one.init).  Separates the two member access paths in the compiler.
 # Expected exit code: 0
 
 - class:

@@ -1,8 +1,8 @@
 # SPEC: 42_path_type
 # spec/42: io.set_exec / io.symlink / io.is_symlink / io.read_link.
-# Bausteine für die Materialisierung inhaltsadressierter Bäume
-# (cosmos doc/spec/92 §92.5): das Ausführbar-Bit ist das einzige Modus-Bit im
-# Hash, und Link-Einträge müssen ohne Folgen erkannt und wiederhergestellt werden.
+# Building blocks for materialising content-addressed trees
+# (cosmos doc/spec/92 §92.5): the executable bit is the only mode bit in the
+# hash, and link entries must be recognised and restored without following them.
 # Expected exit code: 0
 - def:
     name: main
@@ -17,18 +17,18 @@
       - call: [io.write, fhw, "#!/bin/sh\necho hi\n"]
       - call: [io.close, fhw]
 
-      # ── Ausführbar-Bit setzen und entfernen ─────────────────────────────
-      - if: { condition: { eq: [{ call: [io.can_exec, plain] }, true] }, then: [{ print: ["FAIL vorher schon ausfuehrbar"] }, { return: 1 }] }
+      # ── set and remove the executable bit ───────────────────────────────
+      - if: { condition: { eq: [{ call: [io.can_exec, plain] }, true] }, then: [{ print: ["FAIL already executable before"] }, { return: 1 }] }
       - decl: [rc_on, i32, { call: [io.set_exec, plain, 1] }]
       - if: { condition: { neq: [rc_on, 0] }, then: [{ print: ["FAIL set_exec rc=${rc_on}"] }, { return: 1 }] }
-      - if: { condition: { eq: [{ call: [io.can_exec, plain] }, false] }, then: [{ print: ["FAIL nicht ausfuehrbar nach set_exec"] }, { return: 1 }] }
+      - if: { condition: { eq: [{ call: [io.can_exec, plain] }, false] }, then: [{ print: ["FAIL not executable after set_exec"] }, { return: 1 }] }
       - decl: [rc_off, i32, { call: [io.set_exec, plain, 0] }]
-      - if: { condition: { neq: [rc_off, 0] }, then: [{ print: ["FAIL set_exec aus rc=${rc_off}"] }, { return: 1 }] }
-      - if: { condition: { eq: [{ call: [io.can_exec, plain] }, true] }, then: [{ print: ["FAIL noch ausfuehrbar"] }, { return: 1 }] }
-      # Inhalt bleibt unberührt
+      - if: { condition: { neq: [rc_off, 0] }, then: [{ print: ["FAIL set_exec off rc=${rc_off}"] }, { return: 1 }] }
+      - if: { condition: { eq: [{ call: [io.can_exec, plain] }, true] }, then: [{ print: ["FAIL still executable"] }, { return: 1 }] }
+      # the content stays untouched
       - if: { condition: { neq: [{ call: [io.read_file, plain] }, "#!/bin/sh\necho hi\n"] }, then: [{ print: ["FAIL Inhalt veraendert"] }, { return: 1 }] }
       - decl: [rc_missing, i32, { call: [io.set_exec, "${dir}/gibts_nicht", 1] }]
-      - if: { condition: { eq: [rc_missing, 0] }, then: [{ print: ["FAIL set_exec auf fehlende Datei"] }, { return: 1 }] }
+      - if: { condition: { eq: [rc_missing, 0] }, then: [{ print: ["FAIL set_exec on a missing file"] }, { return: 1 }] }
 
       # ── Symlink anlegen, erkennen, Ziel lesen ───────────────────────────
       - decl: [link_path, string, "${dir}/zeiger"]
@@ -37,25 +37,25 @@
       - if: { condition: { eq: [{ call: [io.is_symlink, link_path] }, 0] }, then: [{ print: ["FAIL is_symlink"] }, { return: 1 }] }
       - decl: [target, string, { call: [io.read_link, link_path] }]
       - if: { condition: { neq: [target, "skript.sh"] }, then: [{ print: ["FAIL read_link '${target}'"] }, { return: 1 }] }
-      # Der Link folgt auf die Datei (relativ aufgelöst)
-      - if: { condition: { eq: [{ call: [io.is_file, link_path] }, false] }, then: [{ print: ["FAIL Link zeigt nicht auf die Datei"] }, { return: 1 }] }
+      # the link leads to the file (resolved relatively)
+      - if: { condition: { eq: [{ call: [io.is_file, link_path] }, false] }, then: [{ print: ["FAIL link does not point to the file"] }, { return: 1 }] }
 
-      # ── eine normale Datei ist KEIN Link (kein Folgen, kein Irrtum) ──────
-      - if: { condition: { neq: [{ call: [io.is_symlink, plain] }, 0] }, then: [{ print: ["FAIL Datei als Link erkannt"] }, { return: 1 }] }
+      # ── an ordinary file is NOT a link (no following, no mistake) ───────
+      - if: { condition: { neq: [{ call: [io.is_symlink, plain] }, 0] }, then: [{ print: ["FAIL file recognised as a link"] }, { return: 1 }] }
       - decl: [no_target, string, { call: [io.read_link, plain] }]
-      - if: { condition: { neq: [no_target.len, 0] }, then: [{ print: ["FAIL read_link auf Datei: '${no_target}'"] }, { return: 1 }] }
+      - if: { condition: { neq: [no_target.len, 0] }, then: [{ print: ["FAIL read_link on a file: '${no_target}'"] }, { return: 1 }] }
 
-      # ── Link auf ein (noch) fehlendes Ziel ist erlaubt ───────────────────
+      # ── a link to a (not yet) existing target is allowed ─────────────────
       - decl: [dangling, string, "${dir}/kommt_spaeter"]
       - decl: [rc_dang, i32, { call: [io.symlink, "entsteht_erst", dangling] }]
-      - if: { condition: { neq: [rc_dang, 0] }, then: [{ print: ["FAIL Link auf fehlendes Ziel"] }, { return: 1 }] }
-      - if: { condition: { eq: [{ call: [io.is_symlink, dangling] }, 0] }, then: [{ print: ["FAIL dangling nicht als Link"] }, { return: 1 }] }
+      - if: { condition: { neq: [rc_dang, 0] }, then: [{ print: ["FAIL link to a missing target"] }, { return: 1 }] }
+      - if: { condition: { eq: [{ call: [io.is_symlink, dangling] }, 0] }, then: [{ print: ["FAIL dangling not as a link"] }, { return: 1 }] }
       - decl: [dang_target, string, { call: [io.read_link, dangling] }]
       - if: { condition: { neq: [dang_target, "entsteht_erst"] }, then: [{ print: ["FAIL dangling Ziel"] }, { return: 1 }] }
 
       # bestehendes Ziel → -1
       - decl: [rc_twice, i32, { call: [io.symlink, "skript.sh", link_path] }]
-      - if: { condition: { eq: [rc_twice, 0] }, then: [{ print: ["FAIL symlink auf bestehenden Pfad"] }, { return: 1 }] }
+      - if: { condition: { eq: [rc_twice, 0] }, then: [{ print: ["FAIL symlink onto an existing path"] }, { return: 1 }] }
 
       - call: [io.remove_all, dir]
       - print: ["PASS io_symlink_exec"]

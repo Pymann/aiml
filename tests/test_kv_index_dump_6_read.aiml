@@ -1,7 +1,7 @@
-# SPEC?: 31_db_integration,45_db_indexed_fields   # §6.2.1 zusammen mit db_indexed
-# Phase 6: neuer Prozess auf demselben Gedaechtnis.  Der Nebenindex wird beim
-# Oeffnen aus dem Haupt-Kv aufgefuellt -- und der steht vollstaendig im Dump.
-# Faellt dieser Test, laeuft das Auffuellen wieder ueber den leeren Ueberlauf.
+# SPEC?: 31_db_integration,45_db_indexed_fields   # §6.2.1 together with db_indexed
+# Phase 6: a new process on the same memory.  The secondary index is
+# refilled from the main Kv when opening -- and that is entirely in the dump.
+# If this test fails, the refill is running via the empty overflow again.
 # Expected exit code: 0
 
 - model:
@@ -31,12 +31,12 @@
             - print: ["FAIL: len=${anz}, expected 3"]
             - return: 1
 
-      # Der eigentliche Punkt: der Nebenindex muss aus dem Dump aufgefuellt sein.
+      # The actual point: the secondary index must be refilled from the dump.
       - decl: [haemmer, list<string>, { call: [dinge.findings_by, "name", "Hammer"] }]
       - if:
           condition: { neq: [haemmer.len, 2] }
           then:
-            - print: ["FAIL: findings_by Hammer = ${haemmer.len}, expected 2 (Nebenindex aus dem Dump)"]
+            - print: ["FAIL: findings_by Hammer = ${haemmer.len}, expected 2 (secondary index from the dump)"]
             - return: 1
 
       - decl: [saegen, list<string>, { call: [dinge.findings_by, "name", "Saege"] }]
@@ -46,7 +46,7 @@
             - print: ["FAIL: findings_by Saege = ${saegen.len}, expected 1"]
             - return: 1
 
-      # Und die Zeile selbst, aus dem Dump gelesen.
+      # And the row itself, read from the dump.
       - decl: [var_c, Werkzeug, { call: [dinge.get_copy, "wc"] }]
       - if:
           condition: { eq: [{ eq: [var_c.name, "Saege"] }, 0] }
@@ -54,5 +54,5 @@
             - print: ["FAIL: Zeile wc.name='${var_c.name}', expected 'Saege'"]
             - return: 1
 
-      - print: ["Phase 6 ok: Nebenindex und Zeilen kommen aus dem Dump"]
+      - print: ["Phase 6 ok: secondary index and rows come from the dump"]
       - return: 0

@@ -1,8 +1,8 @@
 # SPEC: 04_1_precedence,05_logic
-# Backlog-Punkt 5: spec/04_1 versprach `{ and: [a, b, c] }` (Links-Fold mit Kurzschluss),
-# der Compiler lehnte ab ("expects exactly 2 operands, got 3"). Jetzt umgesetzt.
-# Der Kurzschluss ist mitgeprueft: ein Zaehler darf nach dem ersten falschen Operanden
-# nicht mehr hochgehen.
+# Backlog item 5: spec/04_1 promised `{ and: [a, b, c] }` (left fold with short circuit),
+# the compiler rejected it ("expects exactly 2 operands, got 3"). Implemented now.
+# The short circuit is checked as well: a counter must not go up any more after the
+# first false operand.
 # Expected exit code: 0
 
 - import: "tests/_cross/check.aiml"
@@ -36,7 +36,7 @@
       - if: { condition: { and: [true, true, true, true] }, then: [{ set: [res, 1] }] }
       - call: [chk.expect_i, "and mit vier Operanden", res, 1]
 
-      # Kurzschluss: nach dem ersten falschen darf tally nicht mehr laufen.
+      # short circuit: after the first false one tally must not run any more.
       - set: [g_calls, 0]
       - if: { condition: { and: [{ call: [tally, 0] }, { call: [tally, 1] }, { call: [tally, 1] }] }, then: [{ set: [res, 9] }] }
       - call: [chk.expect_i, "and bricht nach dem ersten falschen ab", g_calls, 1]

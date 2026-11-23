@@ -1,6 +1,6 @@
-# SPEC?: 45_db_indexed_fields   # Persistence -- nach dem Leeren bleibt leer
-# Phase 6: neu oeffnen nach `clear`.  Kommt hier wieder ein Treffer, hat ein
-# liegengebliebener Nebenindex-Dump den Store wiederbelebt.
+# SPEC?: 45_db_indexed_fields   # persistence -- after emptying it stays empty
+# Phase 6: reopen after `clear`.  If a hit comes back here, a
+# left-over secondary index dump has revived the store.
 # Expected exit code: 0
 
 - model:

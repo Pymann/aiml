@@ -1,12 +1,12 @@
 # SPEC?: 18_refs_and_pointers   # derived from the file name, to be confirmed
 # static-check: off
-# BUG-Repro: ein Interface-Methode nimmt ptr<Struct>; beim POLYMORPHEN
-# (vtable) Aufruf wird ein Struct-VARIABLEN-Argument by-value geladen statt
-# dessen Adresse übergeben → "Call parameter type does not match function
-# signature".  Der direkte (nicht-vtable) Methoden-Aufruf coerct korrekt;
-# der vtable-Dispatch-Pfad (ast_compiler_call.cpp ~595) noch nicht.
+# BUG repro: an interface method takes ptr<Struct>; on the POLYMORPHIC
+# (vtable) call a struct VARIABLE argument is loaded by value instead of
+# passing its address → "Call parameter type does not match function
+# signature".  The direct (non-vtable) method call coerces correctly;
+# the vtable dispatch path (ast_compiler_call.cpp ~595) does not yet.
 #
-# Erwartung nach Fix: kompiliert, dst.val wird via vtable-Call gesetzt.
+# Expectation after the fix: compiles, dst.val is set via the vtable call.
 
 - model: { name: Box, fields: [[val, i32]] }
 - model: { name: AData, fields: [[aid, i32]] }
@@ -34,7 +34,7 @@
       - decl: [imp, ptr<AImpl>, { new: AImpl }]
       - decl: [flr, ptr<Filler>, imp]
       - decl: [box, Box]
-      # POLYMORPHER vtable-Call mit Struct-Var-Arg (implicit-ref soll Adresse geben):
+      # POLYMORPHIC vtable call with a struct var arg (implicit ref should give the address):
       - call: [flr.fill, box]
       - if:
           condition: { eq: [box.val, 42] }

@@ -1,8 +1,8 @@
 # SPEC?: 02_types   # derived from the file name, to be confirmed
 # static-check: off
-# Probe: model + class via `models:` + `implements:` für Interface-Polymorphismus.
-# Saubere Architektur: Modell hält Daten, Klasse referenziert via `models:` das
-# Modell und implementiert das Interface.
+# Probe: model + class via `models:` + `implements:` for interface polymorphism.
+# Clean architecture: the model holds data, the class references the model via `models:`
+# and implements the interface.
 
 - interface:
     name: Sayable
@@ -41,7 +41,7 @@
 - print: ["cat direct: ${call: [var_c.say]}"]
 - print: ["dog direct: ${call: [var_d.say]}"]
 
-# Polymorphismus über ptr<Sayable>
+# polymorphism via ptr<Sayable>
 - decl: [var_s1, ptr<Sayable>, var_c]
 - decl: [var_s2, ptr<Sayable>, var_d]
 - print: ["cat poly:   ${call: [var_s1.say]}"]

@@ -1,10 +1,10 @@
 # SPEC?: 31_db_integration   # derived from the file name, to be confirmed
-# Einblick in die geoeffneten KV-Speicher (cosmos doc/spec/99 §99.2).
+# Insight into the opened KV stores (cosmos doc/spec/99 §99.2).
 #
-# Die Betriebssicht braucht Kennzahlen, keine Inhalte: Name, Pfad, WAL-Groesse,
-# Eintraege, Schreibzaehler.  Der Zaehler ist bewusst kein Zeitstempel — ein
-# Zeitstempel kostet auf dem Schreibpfad einen Uhrzugriff, und die Sicht
-# vergleicht ohnehin zwei Schnappschuesse.
+# The operations view needs metrics, not contents: name, path, WAL size,
+# entries, write counter.  The counter is deliberately not a timestamp — a
+# timestamp costs a clock access on the write path, and the view
+# compares two snapshots anyway.
 # Expected exit code: 0
 
 - def:
@@ -30,28 +30,28 @@
       - decl: [store, Kv<string:string>]
       - set: [store, { call: [db.open_kv, "introspect_demo", { persist: true, path: db_path }] }]
       - decl: [after_open, i32, { call: [db.open_count] }]
-      - set: [fails, { +: [fails, { call: [expect, "ein geoeffneter Speicher mehr", { gt: [after_open, before] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "one more opened store", { gt: [after_open, before] }] }] }]
 
       - decl: [idx, i32, { -: [after_open, 1] }]
       - decl: [name_txt, string, { call: [db.open_name, idx] }]
-      - set: [fails, { +: [fails, { call: [expect, "der Speicher nennt seinen Namen", { gt: [name_txt.len, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "the store names its name", { gt: [name_txt.len, 0] }] }] }]
       - decl: [path_txt, string, { call: [db.open_path, idx] }]
-      - set: [fails, { +: [fails, { call: [expect, "und seinen Pfad", { gt: [path_txt.len, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "and its path", { gt: [path_txt.len, 0] }] }] }]
 
       - decl: [writes_before, i64, { call: [db.open_writes, idx] }]
       - call: [store.set, "alpha", "eins"]
       - call: [store.set, "beta", "zwei"]
       - decl: [writes_after, i64, { call: [db.open_writes, idx] }]
-      - set: [fails, { +: [fails, { call: [expect, "der Schreibzaehler bewegt sich", { ge: [{ -: [writes_after, writes_before] }, 2] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "the write counter moves", { ge: [{ -: [writes_after, writes_before] }, 2] }] }] }]
 
       - decl: [entries, i64, { call: [db.open_entries, idx] }]
-      - set: [fails, { +: [fails, { call: [expect, "zwei Eintraege gezaehlt", { ge: [entries, 2] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "two entries counted", { ge: [entries, 2] }] }] }]
       - decl: [wal, i64, { call: [db.open_wal_used, idx] }]
-      - set: [fails, { +: [fails, { call: [expect, "die WAL hat eine Groesse", { gt: [wal, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "the WAL has a size", { gt: [wal, 0] }] }] }]
 
-      # Ein Index ausserhalb liefert Leeres statt abzustuerzen.
+      # An index out of range returns empty instead of crashing.
       - decl: [bad_name, string, { call: [db.open_name, 9999] }]
-      - set: [fails, { +: [fails, { call: [expect, "ungueltiger Index ist leer, kein Absturz", { eq: [bad_name.len, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "invalid index is empty, no crash", { eq: [bad_name.len, 0] }] }] }]
 
       - if:
           condition: { neq: [fails, 0] }

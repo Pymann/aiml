@@ -9,7 +9,7 @@
       - set: [var_p, req.params]
       - decl: [uid, string]
       - set: [uid, { call: [var_p.get, "id"] }]
-      # ein GET hat keinen Rumpf: req.body muss der LEERE String sein, kein Nullzeiger
+      # a GET has no body: req.body must be the EMPTY string, not a null pointer
       - decl: [get_body, string]
       - set: [get_body, req.body]
       - set: [resp.status, 200]

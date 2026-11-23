@@ -1,18 +1,18 @@
 # SPEC: 44_0_input
-# spec/44_0 §8.3a: die *_pending-Hooks auf dem DESKTOP.
+# spec/44_0 §8.3a: the *_pending hooks on the DESKTOP.
 #
-# Die Ereignis-Schicht (pend_*) gibt es nur im Browser-Zweig; dort prueft
-# tests/test_input_pending_layer_wasm.aiml die Zusicherung aus §2.3.  Nativ
-# schreiben die GLFW-Rueckrufe direkt die frame-sichtbaren Slots, es gibt also
-# keine zweite Schicht -- die Hooks sind hier dasselbe wie die Varianten ohne
-# Zusatz.
+# The event layer (pend_*) only exists in the browser branch; there
+# tests/test_input_pending_layer_wasm.aiml checks the promise from §2.3.  Natively
+# the GLFW callbacks write the frame-visible slots directly, so there is
+# no second layer -- the hooks are the same here as the variants without the
+# suffix.
 #
-# Dieser Test haelt zwei Dinge fest:
-#   1. es GIBT sie nativ.  Bis 2026-11-11 fehlten sie im Desktop-Zweig ganz
-#      (Android hatte Stubs), und wer sie rief, bekam erst beim LINKEN
-#      `undefined reference to aiml_input_post_mouse_down_pending` -- nicht
-#      beim Uebersetzen.  Ein Test, der sie aufruft, faengt genau das.
-#   2. sie verhalten sich wie post_mouse_* (§8.3a, Plattform-Tabelle).
+# This test records two things:
+#   1. they EXIST natively.  Until 2026-11-11 they were missing from the desktop branch entirely
+#      (Android had stubs), and whoever called them only got
+#      `undefined reference to aiml_input_post_mouse_down_pending` when LINKING -- not
+#      when compiling.  A test that calls them catches exactly that.
+#   2. they behave like post_mouse_* (§8.3a, platform table).
 # Requires: display
 # Expected exit code: 0
 
@@ -25,7 +25,7 @@
       - if: { condition: { eq: [win, null] }, then: [{ print: ["FAIL create_window"] }, { return: 1 }] }
       - call: [input.init, win]
 
-      # Injiziert wird NACH dem Swap: er leert die Latches (§8.3).
+      # Injection happens AFTER the swap: it clears the latches (§8.3).
       - call: [engine.swap, win]
       - call: [input.post_mouse_move_pending, 120.0, 80.0]
       - call: [input.post_mouse_down_pending, 0]
@@ -35,36 +35,36 @@
       - if:
           condition: { "||": [{ gt: [{ call: [math.abs, { "-": [pos_x, 120.0] }] }, 0.5] },
                               { gt: [{ call: [math.abs, { "-": [pos_y, 80.0] }] }, 0.5] }] }
-          then: [{ print: ["FAIL move_pending: Cursor bei (${pos_x},${pos_y}), expected (120,80)"] }, { return: 1 }]
+          then: [{ print: ["FAIL move_pending: cursor at (${pos_x},${pos_y}), expected (120,80)"] }, { return: 1 }]
 
       - if:
           condition: { neq: [{ call: [input.mouse_pressed, 0] }, 1] }
-          then: [{ print: ["FAIL down_pending: kein Druck-Rand im selben Frame (nativ = post_mouse_down)"] }, { return: 1 }]
+          then: [{ print: ["FAIL down_pending: no press edge in the same frame (native = post_mouse_down)"] }, { return: 1 }]
       - if:
           condition: { neq: [{ call: [input.mouse_button, 0] }, 1] }
-          then: [{ print: ["FAIL down_pending: Taste gilt nicht als gehalten"] }, { return: 1 }]
+          then: [{ print: ["FAIL down_pending: button does not count as held"] }, { return: 1 }]
 
       # Loslassen -- ebenfalls sofort sichtbar.
       - call: [input.post_mouse_up_pending, 0]
       - if:
           condition: { neq: [{ call: [input.mouse_released, 0] }, 1] }
-          then: [{ print: ["FAIL up_pending: kein Loslass-Rand"] }, { return: 1 }]
+          then: [{ print: ["FAIL up_pending: no release edge"] }, { return: 1 }]
       - if:
           condition: { neq: [{ call: [input.mouse_button, 0] }, 0] }
-          then: [{ print: ["FAIL up_pending: Taste gilt weiter als gehalten"] }, { return: 1 }]
+          then: [{ print: ["FAIL up_pending: button still counts as held"] }, { return: 1 }]
 
-      # Naechster Frame: die Raender sind weg (§8.3), der Cursor bleibt stehen.
+      # Next frame: the edges are gone (§8.3), the cursor stays where it is.
       - call: [engine.swap, win]
       - if:
           condition: { neq: [{ call: [input.mouse_pressed, 0] }, 0] }
-          then: [{ print: ["FAIL Druck-Rand ueberlebt den Frame"] }, { return: 1 }]
+          then: [{ print: ["FAIL press edge survives the frame"] }, { return: 1 }]
       - if:
           condition: { neq: [{ call: [input.mouse_released, 0] }, 0] }
-          then: [{ print: ["FAIL Loslass-Rand ueberlebt den Frame"] }, { return: 1 }]
+          then: [{ print: ["FAIL release edge survives the frame"] }, { return: 1 }]
       - decl: [bleibt_x, f32, { call: [input.mouse_pos_x] }]
       - if:
           condition: { gt: [{ call: [math.abs, { "-": [bleibt_x, 120.0] }] }, 0.5] }
-          then: [{ print: ["FAIL Cursor springt nach dem Frame auf ${bleibt_x}"] }, { return: 1 }]
+          then: [{ print: ["FAIL cursor jumps to ${bleibt_x} after the frame"] }, { return: 1 }]
 
       - call: [engine.destroy_window, win]
       - print: ["OK input pending layer (nativ = frame-sichtbar)"]

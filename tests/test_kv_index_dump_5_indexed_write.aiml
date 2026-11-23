@@ -1,12 +1,12 @@
-# SPEC?: 31_db_integration,45_db_indexed_fields   # §6.2.1 zusammen mit db_indexed
-# Phase 5: ein Kv mit db_indexed-Feld UND index_dump, danach checkpoint -- alle
-# Eintraege liegen also im Dump und NICHTS im Ueberlauf.
+# SPEC?: 31_db_integration,45_db_indexed_fields   # §6.2.1 together with db_indexed
+# Phase 5: a Kv with a db_indexed field AND index_dump, then checkpoint -- all
+# entries are therefore in the dump and NOTHING in the overflow.
 #
-# Hintergrund: genau diese Lage hat den Nebenindex zerstoert.  Das Auffuellen
-# beim Oeffnen lief ueber kv->index, und das ist mit Dump leer -- der Index
-# blieb leer, findings_by fand nichts.  Gemessen am cai-Wissensgraphen: 0 statt
-# 682593 exportierte Fakten, waehrend len und get korrekt blieben.  Darum
-# prueft Phase 6 ausdruecklich den Nebenindex und nicht nur die Werte.
+# Background: exactly this situation destroyed the secondary index.  The refill
+# on open went via kv->index, and with a dump that is empty -- the index
+# stayed empty, findings_by found nothing.  Measured on the cai knowledge graph: 0 instead of
+# 682593 exported facts, while len and get stayed correct.  That is why
+# phase 6 explicitly checks the secondary index and not just the values.
 # Expected exit code: 0
 
 - model:
@@ -39,7 +39,7 @@
       - set:  [var_c.name,    "Saege"]
       - call: [dinge.set, "wc", var_c]
 
-      # Alles in den Dump zwingen: danach ist der Ueberlauf leer.
+      # force everything into the dump: afterwards the overflow is empty.
       - decl: [rcc, i32, { call: [db.checkpoint] }]
       - print: ["checkpoint rc=${rcc}"]
 
@@ -47,7 +47,7 @@
       - if:
           condition: { neq: [vor.len, 2] }
           then:
-            - print: ["FAIL Phase 5: findings_by im Schreiblauf = ${vor.len}, expected 2"]
+            - print: ["FAIL phase 5: findings_by in the write run = ${vor.len}, expected 2"]
             - return: 1
       - print: ["Phase 5 ok"]
       - return: 0

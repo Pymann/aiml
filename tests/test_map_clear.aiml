@@ -1,6 +1,6 @@
 # SPEC: 10_collections
-# Backlog-Punkt 8: `map<K:V>` hatte kein `clear` ("Unknown map method: clear"), `hashmap`
-# schon. Jetzt nachgezogen.
+# Backlog item 8: `map<K:V>` had no `clear` ("Unknown map method: clear"), `hashmap`
+# did. Caught up now.
 # Expected exit code: 0
 
 - import: "tests/_cross/check.aiml"

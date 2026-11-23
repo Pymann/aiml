@@ -1,18 +1,18 @@
 # SPEC?: 18_refs_and_pointers   # derived from the file name, to be confirmed
 # static-check: off
-# Test B: interface + class Polymorphie mit heterogener list<ptr<CardBase>>.
+# Test B: interface + class polymorphism with a heterogeneous list<ptr<CardBase>>.
 #
-# Muster analog test_iface_list_ptr_heterogen: pro Model-Slice eine Klasse,
-# alle implementieren dasselbe Interface.  Die Liste ist typisiert auf das
-# Interface, nimmt aber jeden Impl-ptr.
+# Pattern analogous to test_iface_list_ptr_heterogen: one class per model slice,
+# all implement the same interface.  The list is typed on the
+# interface, but takes every impl ptr.
 #
-# Erwartung: PASS — virtual dispatch via VTable, wie Spec 19_inheritance
-# beschreibt.
+# Expectation: PASS — virtual dispatch via the vtable, as spec 19_inheritance
+# describes.
 
 - interface:
     name: CardBase
     methods:
-      - [render_label, string, []]     # name für UI
+      - [render_label, string, []]     # name for the UI
       - [get_type,     string, []]     # card_type discriminator
 
 - model:

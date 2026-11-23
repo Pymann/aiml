@@ -1,7 +1,7 @@
-# SPEC?: 45_db_indexed_fields   # Persistence -- kv.clear loescht die Dumps
-# Phase 5: Phase 4 hat einen frischen Dump hinterlassen.  `clear` muss die
-# .kvsidx-Dateien loeschen; bliebe eine liegen, wuerde sie den geleerten Store
-# beim naechsten Oeffnen wieder bevoelkern.
+# SPEC?: 45_db_indexed_fields   # persistence -- kv.clear deletes the dumps
+# Phase 5: phase 4 left a fresh dump behind.  `clear` must delete the
+# .kvsidx files; if one were left behind, it would repopulate the emptied store
+# at the next open.
 # Expected exit code: 0
 
 - model:
@@ -20,12 +20,12 @@
       - decl: [dinge, "Kv<string:Ding>"]
       - set: [dinge, { call: [db.open_kv, "sidx_dinge", {persist: true, index_dump: true, path: pfad}] }]
 
-      # Der Dump aus Phase 4 muss tragen, sonst prueft dieser Lauf nichts.
+      # The dump from phase 4 must hold, otherwise this run checks nothing.
       - decl: [vor, list<string>, { call: [dinge.findings_by, "name", "Hammer"] }]
       - if:
           condition: { neq: [vor.len, 3] }
           then:
-            - print: ["FAIL clear: Ausgangslage Hammer=${vor.len}, expected 3"]
+            - print: ["FAIL clear: starting point Hammer=${vor.len}, expected 3"]
             - return: 1
 
       - call: [dinge.clear]
@@ -34,19 +34,19 @@
       - if:
           condition: { neq: [anz, 0] }
           then:
-            - print: ["FAIL clear: len=${anz} nach clear, expected 0"]
+            - print: ["FAIL clear: len=${anz} after clear, expected 0"]
             - return: 1
       - decl: [nach, list<string>, { call: [dinge.findings_by, "name", "Hammer"] }]
       - if:
           condition: { neq: [nach.len, 0] }
           then:
-            - print: ["FAIL clear: Hammer=${nach.len} nach clear, expected 0"]
+            - print: ["FAIL clear: Hammer=${nach.len} after clear, expected 0"]
             - return: 1
       - decl: [sku_eins, string, { call: [dinge.finding_by, "sku", "S1"] }]
       - if:
           condition: { neq: [sku_eins.len, 0] }
           then:
-            - print: ["FAIL clear: sku=S1 lebt noch als '${sku_eins}'"]
+            - print: ["FAIL clear: sku=S1 still lives as '${sku_eins}'"]
             - return: 1
 
       - print: ["sidx clear PASS"]

@@ -1,13 +1,13 @@
 # SPEC?: 02_types   # derived from the file name, to be confirmed
 # static-check: off
-# Bodyless Interface-Methode: eine Klasse deklariert eine Interface-Methode
-# OHNE `body:` — das erfüllt syntaktisch das Interface (Methode existiert),
-# bedeutet aber "no-op / default".  Der Compiler emittiert einen Default-
-# Return (void→nichts, i32→0, ptr→null, struct→leer) statt eines
-# handgeschriebenen leeren Bodies.  Spart Boilerplate bei polymorphen
-# Interfaces mit vielen Methoden, die viele Typen nicht brauchen.
+# Bodyless interface method: a class declares an interface method
+# WITHOUT `body:` — that syntactically satisfies the interface (the method exists),
+# but means "no-op / default".  The compiler emits a default
+# return (void→nothing, i32→0, ptr→null, struct→empty) instead of a
+# hand-written empty body.  Saves boilerplate for polymorphic
+# interfaces with many methods that many types do not need.
 #
-# Erwartung: kompiliert, Interface erfüllt, bodyless-Methoden liefern Defaults.
+# Expectation: compiles, interface satisfied, bodyless methods return defaults.
 
 - interface:
     name: Named
@@ -30,7 +30,7 @@
       - def: { name: do_thing, return: void, args: [[amount, i32]] }
       # bodyless — default i32 (0):
       - def: { name: get_num, return: i32, args: [] }
-      # bodyless — default list<string> (leer):
+      # bodyless — default list<string> (empty):
       - def: { name: get_tags, return: list<string>, args: [] }
 
 - def:
@@ -42,7 +42,7 @@
       - decl: [nmd, ptr<Named>, foo]
       - decl: [fails, i32, 0]
       - if: { condition: { neq: [{ call: [nmd.get_label] }, "hello"] }, then: [{ print: ["FAIL get_label"] }, { set: [fails, { +: [fails, 1] }] }] }
-      - call: [nmd.do_thing, 5]   # no-op, darf nicht crashen
+      - call: [nmd.do_thing, 5]   # no-op, must not crash
       - if: { condition: { neq: [{ call: [nmd.get_num] }, 0] }, then: [{ print: ["FAIL get_num (bodyless default)"] }, { set: [fails, { +: [fails, 1] }] }] }
       - decl: [tgs, list<string>, { call: [nmd.get_tags] }]
       - if: { condition: { neq: [tgs.len, 0] }, then: [{ print: ["FAIL get_tags default not empty"] }, { set: [fails, { +: [fails, 1] }] }] }

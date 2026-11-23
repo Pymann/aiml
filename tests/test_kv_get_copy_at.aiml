@@ -1,17 +1,17 @@
 # SPEC: 31_db_integration
-# Akzeptanz-Test für kv.get_copy_at (spec/31 §6.7.2).  Spec-first: definiert das
-# Zielverhalten; läuft grün, sobald get_copy_at implementiert ist.
+# Acceptance test for kv.get_copy_at (spec/31 §6.7.2).  Spec-first: defines the
+# target behaviour; runs green as soon as get_copy_at is implemented.
 #
-# get_copy_at(key, dst) deep-copyt den Wert in einen CALLER-eigenen, wiederverwendeten
-# Puffer — gibt dst's vorigen Heap VOR dem Refill frei → keine per-Call-Allokation,
-# kein Wachstum bei Reuse.  Unabhängig vom decoded_cache (wie get_copy).
+# get_copy_at(key, dst) deep-copies the value into a CALLER-owned, reused
+# buffer — frees dst's previous heap BEFORE the refill → no per-call allocation,
+# no growth on reuse.  Independent of the decoded_cache (like get_copy).
 #
-# Erwartet:
-#   1. Korrektheit: füllt dst mit dem gespeicherten Wert; Rückgabe 1=gefunden, 0=fehlt.
-#   2. Refill: erneuter Aufruf in DENSELBEN Puffer zeigt den neuen Wert (alter Inhalt weg).
-#   3. Fehlender Key → Rückgabe 0, dst unverändert.
-#   4. Memory: 20 000 Aufrufe in EINEN Puffer wachsen NICHT (Regressionswächter);
-#      get_copy (Vergleich) leckt hier ~16 MB.
+# Expected:
+#   1. correctness: fills dst with the stored value; return 1=found, 0=missing.
+#   2. refill: a repeated call into THE SAME buffer shows the new value (old content gone).
+#   3. missing key → return 0, dst unchanged.
+#   4. memory: 20,000 calls into ONE buffer do NOT grow (regression guard);
+#      get_copy (comparison) leaks ~16 MB here.
 
 - model:
     name: Rec
@@ -46,7 +46,7 @@
                   - set: [tix, { +: [tix, 1] }]
             - call: [<.store.set, key, rec]
 
-      # fetch_into: get_copy_at in den wiederverwendeten <.work-Puffer.
+      # fetch_into: get_copy_at into the reused <.work buffer.
       - def:
           name: fetch_into
           args: [[key, string]]
@@ -54,20 +54,20 @@
           body:
             - return: { call: [<.store.get_copy_at, key, {'&': [<.work]}] }
 
-      # write_corrupt: schreibt einen absichtlich zu kurzen Blob (Längen-Präfix=1)
-      # ROH via set_blob → beim Decode läuft schon das erste Feld über `end` (F1)
-      # → aiml_ser_decode meldet -1 → get_copy_at gibt -1 zurück.
+      # write_corrupt: writes a deliberately too short blob (length prefix=1)
+      # RAW via set_blob → on decode the very first field already runs past `end` (F1)
+      # → aiml_ser_decode reports -1 → get_copy_at returns -1.
       - def:
           name: write_corrupt
           args: [[key, string]]
           body:
             - decl: [cbuf, buffer<u8>]
             - call: [cbuf.alloc, 8]
-            - call: [cbuf.write, 1, i32]     # data_len-Präfix = 1 (Felder laufen über end)
-            - call: [cbuf.write, 0, i32]     # Padding
+            - call: [cbuf.write, 1, i32]     # data_len prefix = 1 (fields run past end)
+            - call: [cbuf.write, 0, i32]     # padding
             - call: [<.store.set_blob, key, cbuf]
 
-      # probe_reuse: N Aufrufe in DENSELBEN Puffer → RSS-Delta (soll ~0 sein).
+      # probe_reuse: N calls into THE SAME buffer → RSS delta (should be ~0).
       - def:
           name: probe_reuse
           args: [[iters, i32]]
@@ -92,20 +92,20 @@
       - call: [svc.setup, "/tmp/aiml_get_copy_at/"]
       - decl: [fails, i32, 0]
 
-      # ── 1. Korrektheit: Erstbefüllung ─────────────────────────────────────
+      # ── 1. correctness: initial fill ──────────────────────────────────────
       - call: [svc.seed, "k", "hello", 1]
       - decl: [ok1, i32, { call: [svc.fetch_into, "k"] }]
       - if: { condition: { neq: [ok1, 1] }, then: [{ print: ["FAIL 1: get_copy_at returned ${ok1} (exp 1)"] }, { set: [fails, { +: [fails, 1] }] }] }
       - if: { condition: { neq: [svc.work.name, "hello"] }, then: [{ print: ["FAIL 2: work.name=${svc.work.name} (exp hello)"] }, { set: [fails, { +: [fails, 1] }] }] }
       - if: { condition: { neq: [svc.work.tags.len, 1] }, then: [{ print: ["FAIL 3: work.tags.len=${svc.work.tags.len} (exp 1)"] }, { set: [fails, { +: [fails, 1] }] }] }
 
-      # ── 2. Refill in DENSELBEN Puffer: neuer Wert, alter Inhalt weg ────────
+      # ── 2. refill into THE SAME buffer: new value, old content gone ────────
       - call: [svc.seed, "k", "world", 3]
       - decl: [ok2, i32, { call: [svc.fetch_into, "k"] }]
       - if: { condition: { neq: [svc.work.name, "world"] }, then: [{ print: ["FAIL 4: refill name=${svc.work.name} (exp world)"] }, { set: [fails, { +: [fails, 1] }] }] }
-      - if: { condition: { neq: [svc.work.tags.len, 3] }, then: [{ print: ["FAIL 5: refill tags.len=${svc.work.tags.len} (exp 3, alter Inhalt muss weg sein)"] }, { set: [fails, { +: [fails, 1] }] }] }
+      - if: { condition: { neq: [svc.work.tags.len, 3] }, then: [{ print: ["FAIL 5: refill tags.len=${svc.work.tags.len} (exp 3, old content must be gone)"] }, { set: [fails, { +: [fails, 1] }] }] }
 
-      # ── 3. Fehlender Key → 0, Puffer unverändert ──────────────────────────
+      # ── 3. missing key → 0, buffer unchanged ──────────────────────────────
       - decl: [ok3, i32, { call: [svc.fetch_into, "does-not-exist"] }]
       - if: { condition: { neq: [ok3, 0] }, then: [{ print: ["FAIL 6: missing key returned ${ok3} (exp 0)"] }, { set: [fails, { +: [fails, 1] }] }] }
       - if: { condition: { neq: [svc.work.name, "world"] }, then: [{ print: ["FAIL 7: missing key mutated buffer (name=${svc.work.name})"] }, { set: [fails, { +: [fails, 1] }] }] }
@@ -116,14 +116,14 @@
       - if: { condition: { neq: [okc, -1] }, then: [{ print: ["FAIL 9: corrupt blob returned ${okc} (exp -1)"] }, { set: [fails, { +: [fails, 1] }] }] }
       - if: { condition: { neq: [svc.work.tags.len, 0] }, then: [{ print: ["FAIL 10: corrupt blob left non-empty buffer (tags.len=${svc.work.tags.len}, exp 0/gezeroed)"] }, { set: [fails, { +: [fails, 1] }] }] }
 
-      # ── 4. Memory-Regression: Reuse wächst NICHT ──────────────────────────
+      # ── 4. memory regression: reuse does NOT grow ─────────────────────────
       - decl: [warm, i64, { call: [svc.probe_reuse, 2000] }]
       - decl: [delta, i64, { call: [svc.probe_reuse, 20000] }]
-      - call: [log.info, "get_copy_at reuse delta over 20000 calls: ${delta} bytes (Ziel ~0; get_copy leckte hier ~16 MB)"]
-      # Großzügige Schranke: < 4 MB = kein Akkumulieren (get_copy: ~16 MB).
+      - call: [log.info, "get_copy_at reuse delta over 20000 calls: ${delta} bytes (target ~0; get_copy leaked ~16 MB here)"]
+      # generous bound: < 4 MB = no accumulation (get_copy: ~16 MB).
       - if: { condition: { gt: [delta, 4194304] }, then: [{ print: ["FAIL 8: reuse leaked ${delta} bytes (>4MB — get_copy_at akkumuliert)"] }, { set: [fails, { +: [fails, 1] }] }] }
 
       - if:
           condition: { eq: [fails, 0] }
-          then: [{ print: ["PASS get_copy_at: Korrektheit + Refill + missing-key + korrupt-blob(-1) + kein Reuse-Leak"] }, { return: 0 }]
-          else: [{ print: ["FAIL get_copy_at: ${fails} Fehler"] }, { return: 1 }]
+          then: [{ print: ["PASS get_copy_at: correctness + refill + missing key + corrupt blob(-1) + no reuse leak"] }, { return: 0 }]
+          else: [{ print: ["FAIL get_copy_at: ${fails} errors"] }, { return: 1 }]

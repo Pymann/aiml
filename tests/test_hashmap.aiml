@@ -137,7 +137,7 @@
       - decl: [got_h, i32, { call: [hm_a.get, "delta"] }]
       - if: [{ neq: [got_h, 4] }, true]
         then:
-          - print: ["FAIL G1: Kopie teilt nicht, delta = ${got_h}"]
+          - print: ["FAIL G1: copy does not share, delta = ${got_h}"]
           - set: [var_ok, 0]
 
       - if:

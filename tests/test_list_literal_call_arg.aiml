@@ -1,7 +1,7 @@
 # SPEC: 10_collections
-# Backlog-Punkt 3: ein Listenliteral als Aufrufargument wurde aufgefaechert — aus
-# { call: [count_items, [1, 2, 3]] } wurden DREI Argumente, und der Fehler kam erst aus
-# der LLVM-Verifikation ("Incorrect number of arguments"). Es muss EIN Listenargument sein.
+# Backlog item 3: a list literal as a call argument was fanned out — from
+# { call: [count_items, [1, 2, 3]] } came THREE arguments, and the error only came from
+# LLVM verification ("Incorrect number of arguments"). It must be ONE list argument.
 # Expected exit code: 0
 
 - import: "tests/_cross/check.aiml"

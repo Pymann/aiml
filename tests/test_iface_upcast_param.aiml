@@ -1,11 +1,11 @@
 # SPEC: 19_inheritance
-# spec/19 zeigt fuer Polymorphie NUR `decl: [d, ptr<Iface>]` + `set: [d, { new: X }]`.
-# datacreatures benutzt drei weitere Formen; diese Datei haelt sie fest:
-#   (a) ptr<Iface> aus einer bestehenden ptr<Klasse>-Variablen
-#   (b) Uebergabe dieses Zeigers als FUNKTIONSARGUMENT vom Typ ptr<Iface>
-#   (c) Ablage in map<string:ptr<Iface>> und Aufruf nach dem Auslesen
-# Gemessen am 2026-11-10: genau dieser Weg stuerzte im Client beim Hovern ab
-# (valgrind: "Invalid read of size 8, Address 0x68" im virtuellen Aufruf).
+# For polymorphism spec/19 shows ONLY `decl: [d, ptr<Iface>]` + `set: [d, { new: X }]`.
+# datacreatures uses three more forms; this file records them:
+#   (a) ptr<Iface> from an existing ptr<Class> variable
+#   (b) passing this pointer as a FUNCTION ARGUMENT of type ptr<Iface>
+#   (c) storing it in a map<string:ptr<Iface>> and calling after reading it out
+# Measured on 2026-11-10: exactly this route crashed in the client on hover
+# (valgrind: "Invalid read of size 8, Address 0x68" in the virtual call).
 
 - interface:
     name: Tileish
@@ -41,8 +41,8 @@
       - def: { name: tile_count, return: i32,    args: [], body: [{ return: <.anzahl }] }
       - def: { name: tile_id,    return: string, args: [], body: [{ return: <.item_id }] }
 
-# (b) Argumenttyp ist die SCHNITTSTELLE, der Aufrufer reicht eine aufwaerts
-# gewandelte Klasse herein -- im Client ist das TileGrid.spawn.
+# (b) the argument type is the INTERFACE, the caller passes in an upcast
+# class -- in the client that is TileGrid.spawn.
 - def:
     name: stelle_auf
     args: [[tid, string], [verhalten, ptr<Tileish>], [karte, map<string:ptr<Tileish>>]]
@@ -62,17 +62,17 @@
       - set: [verhalten.item_id, "hammer"]
       - set: [verhalten.anzahl,  3]
 
-      # (a) Aufwaerts in eine eigene Variable.
+      # (a) upcast into a variable of its own.
       - decl: [sicht, ptr<Tileish>, verhalten]
       - decl: [direkt, string, { call: [sicht.tile_name] }]
       - if:
           condition: { neq: [direkt, "Hammer"] }
-          then: [{ print: ["FAIL A: ptr<Iface> aus ptr<Klasse> -> '${direkt}'"] }, { set: [var_ok, 0] }]
+          then: [{ print: ["FAIL A: ptr<Iface> from ptr<Class> -> '${direkt}'"] }, { set: [var_ok, 0] }]
 
-      # (b) + (c) ueber Argument und Karte.
+      # (b) + (c) via argument and map.
       - decl: [karte, map<string:ptr<Tileish>>]
       - call: [stelle_auf, "hammer", sicht, karte]
-      # (c) Auslesen und erneut virtuell aufrufen -- im Client der Tooltip.
+      # (c) read out and call virtually again -- in the client the tooltip.
       - decl: [aus_karte, string, ""]
       - if:
           condition: { eq: [{ call: [karte.contains, "hammer"] }, 1] }
@@ -81,7 +81,7 @@
             - set: [aus_karte, { call: [zurueck.tile_name] }]
       - if:
           condition: { neq: [aus_karte, "Hammer"] }
-          then: [{ print: ["FAIL B: ueber Argument+Karte -> '${aus_karte}'"] }, { set: [var_ok, 0] }]
+          then: [{ print: ["FAIL B: via argument+map -> '${aus_karte}'"] }, { set: [var_ok, 0] }]
 
       - if: { condition: { eq: [var_ok, 1] }, then: [{ print: ["PASS iface upcast"] }], else: [{ return: 1 }] }
       - return: 0

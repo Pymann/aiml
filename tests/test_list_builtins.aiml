@@ -22,7 +22,7 @@
             - print: ["FAIL ${label}: got '${got}' want '${want}'"]
             - call: [sys.exit, 1]
 
-# Fuellt eine lokale Liste und haengt sie an `dst`; die Quelle stirbt beim Rueckkehren.
+# Fills a local list and appends it to `dst`; the source dies on return.
 - def:
     name: fill_and_extend
     args: [[dst, list<string>]]
@@ -32,7 +32,7 @@
       - call: [tmp.push, "beta_value"]
       - call: [dst.extend, tmp]
 
-# Allokiert kraeftig, damit ein freigegebener Block wiederverwendet wuerde.
+# Allocates heavily, so that a freed block would be reused.
 - def:
     name: churn_heap
     return: string
@@ -71,10 +71,10 @@
       - call: [check, "empty_index_of", { call: [emp.index_of, 1] }, -1]
       - call: [check, "empty_count",    { call: [emp.count, 1] }, 0]
 
-      # ── remove_value (nur erster Treffer) ──
+      # ── remove_value (only the first hit) ──
       - call: [check, "rmv_hit",  { call: [nums.remove_value, 20] }, 1]
       - call: [check, "rmv_len",  nums.len, 3]
-      - call: [check, "rmv_left", { call: [nums.count, 20] }, 1]     # ein 20 bleibt
+      - call: [check, "rmv_left", { call: [nums.count, 20] }, 1]     # one 20 stays
       - call: [check, "rmv_miss", { call: [nums.remove_value, 99] }, 0]
 
       # ── string contains: Inhaltsgleichheit mit getrennt gebautem String ──
@@ -87,7 +87,7 @@
       - call: [check, "str_index",    { call: [strs.index_of, "beta"] }, 1]
       - call: [check, "str_miss",     { call: [strs.contains, "gamma"] }, 0]
 
-      # ── extend: Reihenfolge + Quelle unverändert + realloc + self.extend(self) ──
+      # ── extend: order + source unchanged + realloc + self.extend(self) ──
       - decl: [dst, list<i32>]
       - call: [dst.push, 1]
       - decl: [src, list<i32>]
@@ -99,7 +99,7 @@
       - call: [check, "ext_1", { at: [dst, 1] }, 2]
       - call: [check, "ext_2", { at: [dst, 2] }, 3]
       - call: [check, "ext_src_unchanged", src.len, 2]
-      # realloc: über Kapazität (>4) hinaus anhängen
+      # realloc: append beyond the capacity (>4)
       - decl: [big, list<i32>]
       - decl: [bidx, i32, 0]
       - while:
@@ -111,7 +111,7 @@
       - call: [grow.extend, big]
       - call: [check, "ext_realloc_len", grow.len, 10]
       - call: [check, "ext_realloc_9", { at: [grow, 9] }, 9]
-      # self.extend(self) verdoppelt die ursprüngliche Folge
+      # self.extend(self) doubles the original sequence
       - decl: [self_e, list<i32>]
       - call: [self_e.push, 7]
       - call: [self_e.push, 8]
@@ -122,10 +122,10 @@
       - call: [check, "self_2", { at: [self_e, 2] }, 7]
       - call: [check, "self_3", { at: [self_e, 3] }, 8]
 
-      # ── extend mit String-Elementen: die Kopien muessen MITBESITZEN ──
-      # spec/10 "value-copies" + spec/61 §5.4: ohne incref haelt das Ziel nach dem
-      # Scope-Ende der Quelle freigegebene Zeiger (use-after-free, erst unter valgrind
-      # sichtbar — der Inhalt steht zufaellig noch da).
+      # ── extend with string elements: the copies must CO-OWN ──
+      # spec/10 "value-copies" + spec/61 §5.4: without an incref the target holds freed
+      # pointers after the end of the source's scope (use-after-free, only visible under valgrind
+      # — the content happens to still be there).
       - decl: [kept, list<string>]
       - call: [fill_and_extend, kept]
       - decl: [churned, string, { call: [churn_heap] }]
@@ -135,7 +135,7 @@
 
       # ── M2: reverse ──
       - decl: [rv0, list<i32>]
-      - call: [rv0.reverse]                        # 0 Elemente: kein Crash
+      - call: [rv0.reverse]                        # 0 elements: no crash
       - call: [check, "rev0_len", rv0.len, 0]
       - decl: [rv1, list<i32>]
       - call: [rv1.push, 5]
@@ -176,7 +176,7 @@
       - decl: [str2, string, { at: [sstr, 2] }]
       - if: { condition: { neq: [str2, "cherry"] }, then: [{ print: ["FAIL sort_str_2: ${str2}"] }, { call: [sys.exit, 1] }] }
 
-      # ── shuffle: Länge + Multimenge erhalten, kein Crash bei 0/1 ──
+      # ── shuffle: length + multiset preserved, no crash at 0/1 ──
       - decl: [sh0, list<i32>]
       - call: [sh0.shuffle]
       - call: [check, "shuf0_len", sh0.len, 0]
@@ -189,7 +189,7 @@
             - set: [shidx, { +: [shidx, 1] }]
       - call: [shuf.shuffle]
       - call: [check, "shuf_len", shuf.len, 6]
-      # Multimenge: jeder Wert 0..5 genau einmal vorhanden
+      # multiset: every value 0..5 present exactly once
       - decl: [shcnt, i32, 0]
       - while:
           condition: { lt: [shcnt, 6] }

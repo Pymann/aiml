@@ -1,9 +1,9 @@
-# SPEC?: 31_db_integration   # §6.2.1 Index-Dump
-# index_dump Phase 1.  Fuenf Schluessel, dann checkpoint -- dort und NUR dort
-# entsteht <name>.kvidx mit dem Wasserstand.  Danach wird weiter in die WAL
-# geschrieben (k5, k6) und k1 geloescht, ohne erneuten checkpoint.  Das liegt
-# alles HINTER dem Wasserstand und muss Phase 2 beim Oeffnen nachspielen --
-# der Tombstone eingeschlossen, sonst taucht k1 nach dem Neustart wieder auf.
+# SPEC?: 31_db_integration   # §6.2.1 index dump
+# index_dump phase 1.  Five keys, then checkpoint -- there and ONLY there
+# <name>.kvidx is created with the watermark.  After that writing continues into the WAL
+# (k5, k6) and k1 is deleted, without another checkpoint.  All of that lies
+# BEHIND the watermark and phase 2 must replay it when opening --
+# the tombstone included, otherwise k1 reappears after the restart.
 # Expected exit code: 0
 
 - call: [io.write_file, "/tmp/aiml_kvidx_20261106/.keep", ""]
@@ -22,7 +22,7 @@
 - decl: [rcc, i32, { call: [db.checkpoint] }]
 - print: ["checkpoint rc=${rcc}"]
 
-# ── ab hier hinter dem Wasserstand ──────────────────────────────────────────
+# ── from here on behind the watermark ──────────────────────────────────────
 - call: [var_kv.set, "k5", "wert_5"]
 - call: [var_kv.set, "k6", "wert_6"]
 - call: [var_kv.delete, "k1"]
@@ -38,7 +38,7 @@
 - if:
     condition: { neq: [hat, 0] }
     then:
-      - print: ["FAIL Phase 1: k1 nach delete noch da"]
+      - print: ["FAIL phase 1: k1 still there after delete"]
       - call: [sys.exit, 1]
 
 - print: ["Phase 1 ok: len=${anz}, k1 geloescht"]

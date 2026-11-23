@@ -1,8 +1,8 @@
-# SPEC?: 45_db_indexed_fields   # Persistence -- clear raeumt auch die Indizes
-# Ein geleerter Store darf keine Treffer mehr liefern.  Das gilt OHNE
-# index_dump genauso: die Nebenindizes haengen am Store-Zeiger und ueberlebten
-# `clear` -- die Abfrage gab danach Schluessel zurueck, die es nicht mehr gab.
-# Dieser Lauf braucht keinen Dump und keinen Checkpoint.
+# SPEC?: 45_db_indexed_fields   # persistence -- clear also cleans the indexes
+# An emptied store must not deliver any hits any more.  That applies equally WITHOUT
+# index_dump: the secondary indexes hang on the store pointer and survived
+# `clear` -- the query afterwards returned keys that no longer existed.
+# This run needs no dump and no checkpoint.
 # Expected exit code: 0
 
 - model:
@@ -33,7 +33,7 @@
       - if:
           condition: { neq: [tr_vor.len, 2] }
           then:
-            - print: ["FAIL clear_plain: vor clear ${tr_vor.len} Treffer, expected 2"]
+            - print: ["FAIL clear_plain: before clear ${tr_vor.len} hits, expected 2"]
             - return: 1
 
       - call: [dinge.clear]
@@ -42,13 +42,13 @@
       - if:
           condition: { neq: [anzahl, 0] }
           then:
-            - print: ["FAIL clear_plain: len=${anzahl} nach clear, expected 0"]
+            - print: ["FAIL clear_plain: len=${anzahl} after clear, expected 0"]
             - return: 1
       - decl: [tr_nach, list<string>, { call: [dinge.findings_by, "name", "Hammer"] }]
       - if:
           condition: { neq: [tr_nach.len, 0] }
           then:
-            - print: ["FAIL clear_plain: ${tr_nach.len} Treffer nach clear, expected 0 -- der Nebenindex hat clear ueberlebt"]
+            - print: ["FAIL clear_plain: ${tr_nach.len} hits after clear, expected 0 -- the secondary index survived clear"]
             - return: 1
 
       - print: ["sidx clear_plain PASS"]

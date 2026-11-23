@@ -1,9 +1,9 @@
 # SPEC: 26_concurrency, 47_thread_safety (§2 Shared User State)
-# Test: `lock` als Klassen-Member — die Grundlage fuer Shard-Locks (mehrere
-# unabhaengige Locks in einem Objekt, nicht ein globaler Flaschenhals).
-#   - lock laesst sich als Member deklarieren und initialisieren
-#   - zwei Threads, die denselben Member-Lock nehmen, zaehlen exakt (kein Race)
-#   - zwei VERSCHIEDENE Member-Locks sind unabhaengig (jeder schuetzt sein Feld)
+# Test: `lock` as a class member — the basis for shard locks (several
+# independent locks in one object, not one global bottleneck).
+#   - a lock can be declared and initialised as a member
+#   - two threads that take the same member lock count exactly (no race)
+#   - two DIFFERENT member locks are independent (each protects its field)
 # Expected exit code: 0
 
 - class:
@@ -68,7 +68,7 @@
       - call: [box.prepare]
       - decl: [reps, i32, 50000]
 
-      # Zwei Threads auf DENSELBEN Lock (lock_one) + einer auf lock_two.
+      # two threads on THE SAME lock (lock_one) + one on lock_two.
       - decl: [th_a, thread_handle, { spawn: [run_one, box, reps] }]
       - decl: [th_b, thread_handle, { spawn: [run_one, box, reps] }]
       - decl: [th_c, thread_handle, { spawn: [run_two, box, reps] }]
@@ -81,19 +81,19 @@
       - if:
           condition: { neq: [box.hits_one, want_one] }
           then:
-            - print: ["FAIL lock_one schuetzt nicht: ${box.hits_one} statt ${want_one} (Race)"]
+            - print: ["FAIL lock_one does not protect: ${box.hits_one} instead of ${want_one} (race)"]
             - set: [fails, { +: [fails, 1] }]
       - if:
           condition: { neq: [box.hits_two, reps] }
           then:
-            - print: ["FAIL lock_two: ${box.hits_two} statt ${reps}"]
+            - print: ["FAIL lock_two: ${box.hits_two} instead of ${reps}"]
             - set: [fails, { +: [fails, 1] }]
 
       - free: [box]
       - if:
           condition: { eq: [fails, 0] }
           then:
-            - print: ["PASS test_lock_class_member: ${want_one} + ${reps} Inkremente ohne Verlust, zwei unabhaengige Member-Locks"]
+            - print: ["PASS test_lock_class_member: ${want_one} + ${reps} increments without loss, two independent member locks"]
             - return: 0
-      - print: ["FAIL test_lock_class_member: ${fails} Fehler"]
+      - print: ["FAIL test_lock_class_member: ${fails} errors"]
       - return: 1

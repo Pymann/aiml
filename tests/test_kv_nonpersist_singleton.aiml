@@ -1,11 +1,11 @@
 # SPEC?: 31_db_integration   # derived from the file name, to be confirmed
-# tests/test_kv_nonpersist_singleton.aiml — Repro: db.open_kv non-persistent singleton-by-name
+# tests/test_kv_nonpersist_singleton.aiml — repro: db.open_kv non-persistent singleton by name
 #
-# Testet: db.open_kv("name", {persist: false}) gibt bei gleichem Namen dieselbe
-# Instanz zurück (singleton), auch wenn sie aus unterschiedlichen Funktionen geöffnet wird.
+# Tests: db.open_kv("name", {persist: false}) returns the same instance for the same
+# name (singleton), even if it is opened from different functions.
 #
-# Vor dem Fix: aiml_db_kv_open ignorierte den name-Parameter und gab jedes Mal
-# eine neue leere KV zurück → var_kv.get in Funktion B fand den Key nicht → null-deref → SIGSEGV.
+# Before the fix: aiml_db_kv_open ignored the name parameter and returned a
+# new empty KV every time → var_kv.get in function B did not find the key → null deref → SIGSEGV.
 
 # ─── Hilfsfunktionen ──────────────────────────────────────────────────────────
 
@@ -89,7 +89,7 @@
             - call: [sys.exit, 1]
       - print: ["T3 PASS: Kv<string:i32> multiple keys singleton"]
 
-      # T4: Zwei verschiedene KV-Namen sind isoliert voneinander
+      # T4: two different KV names are isolated from each other
       - call: [kv_writer, "kv_alpha", "val", 1]
       - call: [kv_writer, "kv_beta",  "val", 2]
       - decl: [var_a, i32, { call: [kv_reader, "kv_alpha", "val"] }]
@@ -106,7 +106,7 @@
             - call: [sys.exit, 1]
       - print: ["T4 PASS: two different KV names are isolated"]
 
-      # T5: Spawn — Worker schreibt, Main liest aus derselben non-persist KV
+      # T5: spawn — the worker writes, main reads from the same non-persistent KV
       - decl: [var_tw, thread_handle,
                { spawn: [kv_writer, "test_kv_thread", "from_worker", 777] }]
       - call: [var_tw.join]

@@ -1,5 +1,5 @@
 # SPEC?: 02_types   # derived from the file name, to be confirmed
-# Debug-Probe: stelle sicher dass InterfaceDecl.methods im parser befüllt wird.
+# Debug probe: make sure that InterfaceDecl.methods is filled in the parser.
 
 - interface:
     name: Sayable

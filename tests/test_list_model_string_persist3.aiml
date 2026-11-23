@@ -1,5 +1,5 @@
 # SPEC?: 15_models,09_strings   # derived from the file name, to be confirmed
-# Repro Erweiterung 2: Model mit exakt der Deck-Struktur.
+# Repro extension 2: a model with exactly the Deck structure.
 
 - model:
     name: FakeDeck

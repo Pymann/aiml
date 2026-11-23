@@ -64,7 +64,7 @@
 - call: [bun.var_as.push, var_a1]
 - call: [bun.var_as.push, var_a2]
 - call: [bun.var_as.push, var_a3]
-# var_bs und var_cs bleiben leer
+# var_bs and var_cs stay empty
 
 - print: ["pre-ser: var_as=${bun.var_as.len} var_bs=${bun.var_bs.len} var_cs=${bun.var_cs.len}"]
 - decl: [var_s, string, { call: [sys.serialize, bun] }]

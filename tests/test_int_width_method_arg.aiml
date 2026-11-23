@@ -1,10 +1,10 @@
-# Ein ganzzahliges LITERAL an einem i64-Parameter einer METHODE.
+# An integer LITERAL on an i64 parameter of a METHOD.
 #
-# Regression: fuer freie Funktionen glich coerceArgs() die Breite an, fuer
-# Methoden nicht — das Literal kam als i32 an einem i64-Parameter an, und die
-# IR-Pruefung scheiterte mit "Call parameter type does not match function
-# signature".  Im Quelltext sah der Aufruf voellig richtig aus; gefunden
-# 2026-10-13 an einem Zuteiler mit `lease_ms`.
+# Regression: for free functions coerceArgs() adjusted the width, for
+# methods it did not — the literal arrived as i32 at an i64 parameter, and the
+# IR check failed with "Call parameter type does not match function
+# signature".  In the source text the call looked perfectly right; found
+# 2026-10-13 on an allocator with `lease_ms`.
 # Expected exit code: 0
 
 - class:
@@ -42,18 +42,18 @@
       - decl: [fails, i32, 0]
       - decl: [wide, ptr<Widener>, { new: Widener }]
 
-      # Literal an i64-Parameter — hier scheiterte die IR-Pruefung.
+      # literal on an i64 parameter — this is where the IR check failed.
       - decl: [doubled, i64, { call: [wide.twice, 30000] }]
       - set: [fails, { +: [fails, { call: [expect, "Literal an i64-Parameter", { eq: [doubled, 60000] }] }] }]
 
-      # i32-Variable an i64-Parameter (Vorzeichen muss erhalten bleiben).
+      # i32 variable on an i64 parameter (the sign must be preserved).
       - decl: [neg, i32, -7]
       - decl: [neg_doubled, i64, { call: [wide.twice, neg] }]
-      - set: [fails, { +: [fails, { call: [expect, "negative i32-Variable wird vorzeichenrichtig geweitet", { eq: [neg_doubled, -14] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "negative i32 variable is widened with the correct sign", { eq: [neg_doubled, -14] }] }] }]
 
-      # Gemischt, mit einem String dahinter (die Reihenfolge darf nicht rutschen).
+      # mixed, with a string after it (the order must not slip).
       - decl: [mixed_sum, i64, { call: [wide.mixed, 5, 1000000, "egal"] }]
-      - set: [fails, { +: [fails, { call: [expect, "gemischte Breiten in einem Aufruf", { eq: [mixed_sum, 1000005] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "mixed widths in one call", { eq: [mixed_sum, 1000005] }] }] }]
 
       - if:
           condition: { neq: [fails, 0] }

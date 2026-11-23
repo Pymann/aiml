@@ -1,7 +1,7 @@
 # engine.layout_hflow / layout_vflow / layout_stack — Spec 44_6 §Layout.
 # Requires: display
 #
-# Verifiziert dass die Helpers x/y/z_order korrekt setzen.
+# Verifies that the helpers set x/y/z_order correctly.
 
 - prefab:
     name: TestTile

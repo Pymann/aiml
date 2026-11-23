@@ -1,7 +1,7 @@
 # SPEC?: 15_models,09_strings   # derived from the file name, to be confirmed
-# Repro Erweiterung 3: String kommt aus einer INTERPOLATION (nicht Literal).
-# Hypothese: interpolated strings sind temporär und werden nicht deep-copiert
-# ins Model.
+# Repro extension 3: the string comes from an INTERPOLATION (not a literal).
+# Hypothesis: interpolated strings are temporary and are not deep-copied
+# into the model.
 
 - model:
     name: FakeDeck
@@ -19,7 +19,7 @@
           args: [[nam, string]]
           body:
             - decl: [fdk, FakeDeck]
-            # Statt direct assign: nutze interpolation um eine "new" string zu produzieren.
+            # Instead of a direct assign: use interpolation to produce a "new" string.
             - decl: [nam_i, string, "${nam}"]
             - set: [fdk.name, nam_i]
             - set: [fdk.tag,  1]
@@ -38,7 +38,7 @@
     return: i32
     body:
       - decl: [hld, ptr<Holder>, { new: Holder }]
-      # String kommt aus lokaler decl (nicht direktem Literal)
+      # the string comes from a local decl (not a direct literal)
       - decl: [local, string, "hhh"]
       - call: [hld.add, local]
       - decl: [nam, string, { call: [hld.read_name, 0] }]

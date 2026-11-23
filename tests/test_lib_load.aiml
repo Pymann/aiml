@@ -1,11 +1,11 @@
 # SPEC: 29_2_sys_exec,29_serialize
-# spec/29_2 §15: sys.lib_load — Bibliothek EINMAL uebersetzen.
+# spec/29_2 §15: sys.lib_load — compile a library ONCE.
 #
-# Die erste Fassung dieses Tests mass nichts: eine Bibliothek aus EINER
-# Funktion (`return 7`) kostet keine nennenswerte Codeerzeugung, also waren
-# lib_load und merge gleich schnell.  Hier ist die Bibliothek gross genug,
-# dass ihre Rumpfe ins Gewicht fallen — erst dann ist die Behauptung
-# "einmal uebersetzen statt jedes Mal" ueberhaupt pruefbar.
+# The first version of this test measured nothing: a library of ONE
+# function (`return 7`) costs no noticeable code generation, so
+# lib_load and merge were equally fast.  Here the library is big enough
+# that its bodies carry weight — only then is the claim
+# "compile once instead of every time" testable at all.
 # Expected exit code: 0
 
 - def:
@@ -1025,7 +1025,7 @@
       - print: ["Bundle enthaelt lib_calc_1=${has_c1} lib_calc_30=${has_c30}"]
       - decl: [nsym, i32, { call: [sys.lib_load, lib] }]
       - print: ["lib_load registrierte ${nsym} Symbole"]
-      - set: [fails, { +: [fails, { call: [expect, "lib_load registriert mehr als eine Funktion", { gt: [nsym, 1] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "lib_load registers more than one function", { gt: [nsym, 1] }] }] }]
 
       # Weg A: Pipeline OHNE Bibliothek im Bundle (nutzt die geladene).
       - decl: [one, Code, { call: [sys.bundle, "pipe_one", { context: true }] }]
@@ -1044,7 +1044,7 @@
       - print: ["B) merge-Weg:    rc=${rc_b} in ${ms_b} ms"]
       - set: [fails, { +: [fails, { call: [expect, "B laeuft", { eq: [rc_b, 0] }] }] }]
 
-      - print: ["Unterschied: ${ms_b} ms (merge) gegen ${ms_a} ms (lib_load)"]
+      - print: ["difference: ${ms_b} ms (merge) against ${ms_a} ms (lib_load)"]
 
       - if:
           condition: { neq: [fails, 0] }

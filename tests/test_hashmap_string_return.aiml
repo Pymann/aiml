@@ -1,9 +1,9 @@
 # SPEC: 69_hashmap
-# Regression: hashmap<string:string>.get aus einer Methode zurückgeben und im Aufrufer binden.
-# Auslöser: IRGENDEINE Funktion mit Kurznamen `get`, die einen string liefert (hier Notebook.get).
-# Der Compiler erkannte `return: { call: [x.get, k] }` dann nicht mehr als geliehenen Zugriff.
-# Vorher war get ein geliehener Zeiger: die aufrufende Methode übernahm ihn als eigenen Wert und
-# gab ihn am Ende frei, während die Tabelle ihn noch hielt -> danach Müll (gefunden von cai,
+# Regression: return hashmap<string:string>.get from a method and bind it in the caller.
+# Trigger: ANY function with the short name `get` that returns a string (here Notebook.get).
+# The compiler then no longer recognised `return: { call: [x.get, k] }` as a borrowed access.
+# Before, get was a borrowed pointer: the calling method took it over as its own value and
+# freed it at the end, while the table still held it -> garbage afterwards (found by cai,
 # AimlStructureLearner.role / main_program).
 
 - class:
@@ -48,7 +48,7 @@
           body:
             - decl: [first, string, { call: [<.name_at, 0] }]
             - return: "${first}"
-      # wie main_program in cai: mehrere Rollen lesen, zu einem Text zusammensetzen
+      # like main_program in cai: read several roles, assemble them into one text
       - def:
           name: render
           args: []
@@ -106,7 +106,7 @@
           - return: 1
       - if: [{ neq: [missing, ""] }, true]
         then:
-          - print: ["FAIL fehlender Schlüssel: '${missing}'"]
+          - print: ["FAIL missing key: '${missing}'"]
           - return: 1
       - free: [table]
       - print: ["PASS test_hashmap_string_return"]

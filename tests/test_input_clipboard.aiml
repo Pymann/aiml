@@ -1,24 +1,24 @@
 # SPEC: 44_0_input
 # spec/44_0 §2.5: input.clipboard_set/get.
-# Ohne Fenster (headless) ist das Clipboard nicht verfügbar: set ist ein No-op und
-# get liefert "" — beides muss null-sicher sein, nicht crashen.  Der echte
-# Round-Trip braucht ein Fenster (nativ GLFW / Browser) und ist nicht headless
-# prüfbar.
+# Without a window (headless) the clipboard is not available: set is a no-op and
+# get returns "" — both must be null-safe, not crash.  The real
+# round trip needs a window (native GLFW / browser) and is not testable
+# headless.
 # Expected exit code: 0
 - def:
     name: main
     return: i32
     body:
-      # get vor input.init: definiert leer, kein Crash
+      # get before input.init: defined empty, no crash
       - decl: [before, string, { call: [input.clipboard_get] }]
       - if: { condition: { neq: [before.len, 0] }, then: [{ print: ["FAIL get before init: '${before}'"] }, { return: 1 }] }
 
-      # set ohne Fenster: No-op, kein Crash
+      # set without a window: no-op, no crash
       - call: [input.clipboard_set, "cosmos-agent-token-probe"]
       - decl: [after, string, { call: [input.clipboard_get] }]
       - if: { condition: { neq: [after.len, 0] }, then: [{ print: ["FAIL get after set: '${after}'"] }, { return: 1 }] }
 
-      # leerer String und Mehrfachaufruf bleiben harmlos
+      # an empty string and repeated calls stay harmless
       - call: [input.clipboard_set, ""]
       - call: [input.clipboard_set, "zweimal"]
       - decl: [again, string, { call: [input.clipboard_get] }]

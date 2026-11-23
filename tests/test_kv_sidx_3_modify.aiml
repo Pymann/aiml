@@ -1,11 +1,11 @@
-# SPEC?: 45_db_indexed_fields   # Persistence -- Kopie je Feldwert
-# Phase 3: der Dump ist geladen, und JETZT wird geschrieben.  Jeder Feldwert,
-# den ein Schreibzugriff anfasst, muss aus dem Dump in den Speicher-Index
-# kopiert werden -- sonst sieht die Abfrage danach den alten Stand oder beide.
-# Geprueft werden alle drei Faelle: neuer Schluessel auf einen Feldwert, DER
-# SCHON IM DUMP STEHT; Umhaengen eines Schluessels von einem Dump-Feldwert auf
-# einen anderen; Loeschen.
-# Am Ende wird NICHT gecheckpointet -- Phase 4 lebt davon.
+# SPEC?: 45_db_indexed_fields   # persistence -- copy per field value
+# Phase 3: the dump is loaded, and NOW writing happens.  Every field value
+# that a write touches must be copied from the dump into the in-memory index
+# -- otherwise the query afterwards sees the old state or both.
+# All three cases are checked: a new key on a field value that IS
+# ALREADY IN THE DUMP; re-hanging a key from one dump field value to
+# another; deleting.
+# At the end there is NO checkpoint -- phase 4 depends on that.
 # Expected exit code: 0
 
 - model:
@@ -24,7 +24,7 @@
       - if:
           condition: { neq: [ist, erw] }
           then:
-            - print: ["FAIL ${was}: ${ist} Treffer, expected ${erw}"]
+            - print: ["FAIL ${was}: ${ist} hits, expected ${erw}"]
             - return: 1
       - return: 0
 
@@ -37,11 +37,11 @@
       - set: [dinge, { call: [db.open_kv, "sidx_dinge", {persist: true, index_dump: true, path: pfad}] }]
       - decl: [bad, i32, 0]
 
-      # Ausgangslage aus dem Dump.
+      # starting point from the dump.
       - decl: [tr_vor, list<string>, { call: [dinge.findings_by, "name", "Hammer"] }]
       - set: [bad, { +: [bad, { call: [pruef_zahl, tr_vor.len, 2, "start name=Hammer"] }] }]
 
-      # (1) Neuer Schluessel auf einen Feldwert, der im Dump steht.
+      # (1) a new key on a field value that is in the dump.
       - decl: [ding_d, Ding]
       - set: [ding_d.ding_id, "ddd"]
       - set: [ding_d.name, "Hammer"]
@@ -51,8 +51,8 @@
       - decl: [tr_neu, list<string>, { call: [dinge.findings_by, "name", "Hammer"] }]
       - set: [bad, { +: [bad, { call: [pruef_zahl, tr_neu.len, 3, "nach-neu name=Hammer"] }] }]
 
-      # (2) Umhaengen: ccc von Saege nach Hammer.  Der alte Feldwert steht im
-      #     Dump und muss ccc verlieren, nicht behalten.
+      # (2) re-hang: ccc from Saege to Hammer.  The old field value is in the
+      #     dump and must lose ccc, not keep it.
       - decl: [ding_c, Ding]
       - set: [ding_c.ding_id, "ccc"]
       - set: [ding_c.name, "Hammer"]
@@ -71,7 +71,7 @@
       - decl: [sku_zwei, string, { call: [dinge.finding_by, "sku", "S2"] }]
       - set: [bad, { +: [bad, { call: [pruef_zahl, sku_zwei.len, 0, "sku=S2 geloescht"] }] }]
 
-      # Der unangetastete Feldwert kommt weiter aus dem Dump.
+      # The untouched field value still comes from the dump.
       - decl: [tr_hol, list<string>, { call: [dinge.findings_by, "tag", "holz"] }]
       - set: [bad, { +: [bad, { call: [pruef_zahl, tr_hol.len, 1, "ende tag=holz"] }] }]
       - decl: [tr_wrk, list<string>, { call: [dinge.findings_by, "tag", "werkzeug"] }]

@@ -1,7 +1,7 @@
 # SPEC: 31_db_integration
-# Backlog-Punkt 4: `Kv<string:i32>.get` auf einen fehlenden Schluessel war ein SIGSEGV
-# (gemessen rc 139). `Kv<string:string>` liefert in diesem Fall schon "" — der Zahlfall
-# muss entsprechend den Nullwert liefern, nicht abstuerzen.
+# Backlog item 4: `Kv<string:i32>.get` on a missing key was a SIGSEGV
+# (measured rc 139). `Kv<string:string>` already returns "" in this case — the number case
+# must correspondingly return the zero value, not crash.
 # Expected exit code: 0
 
 - import: "tests/_cross/check.aiml"

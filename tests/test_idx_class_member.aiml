@@ -19,7 +19,7 @@
           name: mutate
           body:
             - decl: [target_idx, i32, 1]
-            # Fall A1: value ist inline binary op expression
+            # case A1: value is an inline binary op expression
             - decl: [text_a, list<string>]
             - call: [text_a.push, "ONE_A"]
             - idx: [<.items, target_idx, { call: [text_a.get, 0] }]
@@ -27,7 +27,7 @@
           name: mutate2
           body:
             - decl: [target_idx, i32, 2]
-            # Fall B: value ist ein call outside idx wrapped in expression
+            # case B: value is a call outside idx wrapped in an expression
             - decl: [tmp_val, string, { call: [<.get_new] }]
             - idx: [<.items, target_idx, tmp_val]
 

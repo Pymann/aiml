@@ -1,8 +1,8 @@
-# SPEC?: 31_db_integration   # §6.2.1 Index-Dump
-# index_dump Phase 2.  Oeffnet, was Phase 1 hinterlassen hat: ein Dump mit
-# k0..k4 plus ein WAL-Rest mit k5, k6 und dem Tombstone auf k1.  Geprueft wird
-# beides zusammen -- Werte aus dem Dump (binaere Suche im mmap), Werte aus dem
-# Ueberlauf, und dass der Tombstone den Dump-Eintrag verdeckt.
+# SPEC?: 31_db_integration   # §6.2.1 index dump
+# index_dump phase 2.  Opens what phase 1 left behind: a dump with
+# k0..k4 plus a WAL remainder with k5, k6 and the tombstone on k1.  Both are
+# checked together -- values from the dump (binary search in the mmap), values from the
+# overflow, and that the tombstone hides the dump entry.
 # Expected exit code: 0
 
 - def:
@@ -15,7 +15,7 @@
       - if:
           condition: { neq: [ist, erw] }
           then:
-            - print: ["FAIL ${key}: '${ist}' statt '${erw}'"]
+            - print: ["FAIL ${key}: '${ist}' instead of '${erw}'"]
             - return: 1
       - return: 0
 
@@ -29,25 +29,25 @@
       - if:
           condition: { neq: [anz, 6] }
           then:
-            - print: ["FAIL: len=${anz} nach Neustart, expected 6"]
+            - print: ["FAIL: len=${anz} after restart, expected 6"]
             - return: 1
 
       - decl: [bad, i32, 0]
-      # aus dem Dump
+      # from the dump
       - set: [bad, { +: [bad, { call: [pruefe, "k0", "wert_0"] }] }]
       - set: [bad, { +: [bad, { call: [pruefe, "k2", "wert_2"] }] }]
       - set: [bad, { +: [bad, { call: [pruefe, "k3", "wert_3"] }] }]
       - set: [bad, { +: [bad, { call: [pruefe, "k4", "wert_4"] }] }]
-      # aus dem WAL-Rest hinter dem Wasserstand
+      # from the WAL remainder behind the watermark
       - set: [bad, { +: [bad, { call: [pruefe, "k5", "wert_5"] }] }]
       - set: [bad, { +: [bad, { call: [pruefe, "k6", "wert_6"] }] }]
 
-      # Tombstone muss den Dump-Eintrag verdecken
+      # the tombstone must hide the dump entry
       - decl: [hat, i32, { call: [var_kv.has, "k1"] }]
       - if:
           condition: { neq: [hat, 0] }
           then:
-            - print: ["FAIL: k1 ist nach dem Neustart wieder da (Tombstone verloren)"]
+            - print: ["FAIL: k1 is back after the restart (tombstone lost)"]
             - set: [bad, { +: [bad, 1] }]
 
       - if:
