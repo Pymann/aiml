@@ -1,73 +1,73 @@
 # Store Multiopen Issue
 
-## Kurzfassung
+## Summary
 
-Ja, `Store_multiopen_issue.md` trifft den Kern.
+Yes, `Store_multiopen_issue.md` hits the core.
 
-Es gibt aktuell mehrere reproduzierbare Fehler im persistenten AionDB-Pfad. Der erste sichtbare und eindeutigste Fehler sitzt bei `Store<T>`, daher passt der Dateiname weiterhin.
+There are currently several reproducible bugs in the persistent AionDB path. The first visible and most unambiguous bug sits in `Store<T>`, so the file name still fits.
 
-Aktueller Stand:
+Current state:
 
-- Zwei `db.open(..., {persist: true, path: ...})`-Aufrufe mit demselben `name` und `path`
-- im selben Prozess
-- liefern offenbar keinen konsistent gemeinsam sichtbaren Live-Zustand
+- Two `db.open(..., {persist: true, path: ...})` calls with the same `name` and `path`
+- in the same process
+- apparently do not deliver a consistently shared live state
 
-Zusätzlich zeigen neue Reopen-Tests:
+In addition, new reopen tests show:
 
-- `Store<T>` scheitert bereits beim ersten persistenten `insert`
-- `Kv` und `TimeSeries` bestehen den Same-Process-Reuse-Test
-- `Kv` und `TimeSeries` verlieren ihren Zustand aber über getrennte Läufe hinweg
+- `Store<T>` already fails on the first persistent `insert`
+- `Kv` and `TimeSeries` pass the same-process reuse test
+- but `Kv` and `TimeSeries` lose their state across separate runs
 
-Damit ist der Befund:
+So the finding is:
 
-- `Store<T>` ist aktuell der sichtbar kaputteste Persistenzpfad
-- `Kv` und `TimeSeries` sind lokal im selben Prozess besser
-- echte Persistenz über mehrere Runs ist aber auch dort nicht verlässlich
+- `Store<T>` is currently the most visibly broken persistence path
+- `Kv` and `TimeSeries` are better locally within the same process
+- but real persistence across several runs is not reliable there either
 
 ## Repro
 
-Neuer Test:
+New test:
 
 - [test_aiondb_persist_reuse.aiml](../../tests/test_aiondb_persist_reuse.aiml)
 
-Ablauf:
+Flow:
 
 1. `players_a = db.open("persist_reuse_players", {persist: true, path: db_path})`
 2. `players_b = db.open("persist_reuse_players", {persist: true, path: db_path})`
-3. Insert über `players_a`
-4. `players_b.len()` und `players_b.get(eid)` prüfen
+3. Insert via `players_a`
+4. Check `players_b.len()` and `players_b.get(eid)`
 
-Ist-Ergebnis:
+Actual result:
 
 ```text
 FAIL store_reuse_len base=0 got=0
 ```
 
-Erwartung:
+Expectation:
 
-- Nach dem Insert über `players_a` müsste `players_b.len()` denselben neuen Stand sehen.
+- After the insert via `players_a`, `players_b.len()` should see the same new state.
 
-## Gegenprobe
+## Cross-check
 
-Neuer Test:
+New test:
 
 - [test_aiondb_persist_reuse_kv_ts.aiml](../../tests/test_aiondb_persist_reuse_kv_ts.aiml)
 
-Ergebnis:
+Result:
 
 ```text
 AionDB kv/ts persist reuse PASS
 ```
 
-Das grenzt den Fehler sauber ein:
+That narrows the bug down cleanly:
 
-- `Kv`-Multiopen im selben Prozess: ok
-- `TimeSeries`-Multiopen im selben Prozess: ok
-- `Store<T>`-Multiopen im selben Prozess: kaputt
+- `Kv` multiopen in the same process: ok
+- `TimeSeries` multiopen in the same process: ok
+- `Store<T>` multiopen in the same process: broken
 
-## Neue Reopen-Tests
+## New reopen tests
 
-Neue Tests:
+New tests:
 
 - [test_aiondb_store_reopen_write.aiml](../../tests/test_aiondb_store_reopen_write.aiml)
 - [test_aiondb_store_reopen_read.aiml](../../tests/test_aiondb_store_reopen_read.aiml)
@@ -76,7 +76,7 @@ Neue Tests:
 - [test_aiondb_ts_reopen_write.aiml](../../tests/test_aiondb_ts_reopen_write.aiml)
 - [test_aiondb_ts_reopen_read.aiml](../../tests/test_aiondb_ts_reopen_read.aiml)
 
-Ergebnisse:
+Results:
 
 ```text
 FAIL store_reopen_write_id=-1
@@ -88,44 +88,44 @@ FAIL ts_reopen_read_len=0
 
 Interpretation:
 
-- `Store<T>` scheitert schon beim ersten persistenten Schreibversuch
-- `Kv` und `TimeSeries` schreiben innerhalb eines Laufs erfolgreich
-- beim zweiten getrennten Lauf kommt der Zustand aber nicht mehr zurück
+- `Store<T>` already fails on the first persistent write attempt
+- `Kv` and `TimeSeries` write successfully within one run
+- but on the second, separate run the state does not come back
 
-## Zusätzlicher Befund: `path`-Option aus Variablen ist sehr verdächtig
+## Additional finding: the `path` option from variables is very suspicious
 
-Die neuen Reopen- und Reuse-Tests verwenden:
+The new reopen and reuse tests use:
 
 - `decl: [db_path, path, "/tmp/..."]`
-- danach `path: db_path` in `db.open` / `db.open_kv` / `db.open_timeseries`
+- then `path: db_path` in `db.open` / `db.open_kv` / `db.open_timeseries`
 
-Nach den Write-Tests existieren die erwarteten Verzeichnisse in `/tmp/` aber gar nicht:
+After the write tests, however, the expected directories in `/tmp/` do not exist at all:
 
-- `/tmp/aiml_test_aiondb_kv_reopen_20260319/` fehlt
-- `/tmp/aiml_test_aiondb_ts_reopen_20260319/` fehlt
-- `/tmp/aiml_test_aiondb_store_reopen_20260319/` fehlt
+- `/tmp/aiml_test_aiondb_kv_reopen_20260319/` is missing
+- `/tmp/aiml_test_aiondb_ts_reopen_20260319/` is missing
+- `/tmp/aiml_test_aiondb_store_reopen_20260319/` is missing
 
-Gleichzeitig funktionieren ältere Tests mit Literal-Pfaden weiterhin und erzeugen Dateien in `/tmp/`, z. B.:
+At the same time, older tests with literal paths still work and create files in `/tmp/`, e.g.:
 
 - `/tmp/aiml_test_deck_persist_ops/deck_persist_ops.kvwal`
 - `/tmp/aiml_test_card_heap_persist/card_heap_persist.kvwal`
 
-Das macht einen zusätzlichen Compiler-/Builtin-Verdacht sehr plausibel:
+That makes an additional compiler/builtin suspicion very plausible:
 
-- Die `path`-Option wird aus Variablen (`path: db_path`) nicht korrekt an die Runtime durchgereicht.
+- The `path` option from variables (`path: db_path`) is not passed through to the runtime correctly.
 
-Dann erklären sich die Symptome sauber:
+Then the symptoms are explained cleanly:
 
-- `Store<T>` schlägt sichtbar fehl, weil `aiml_db_store_open_persist(...)` bei Open-/Mmap-Problemen `nullptr` zurückgeben kann.
-- `Kv` und `TimeSeries` wirken zunächst erfolgreich, weil sie selbst bei fehlgeschlagenem `open()` trotzdem einen Handle zurückgeben und Fehler still maskieren.
+- `Store<T>` fails visibly, because `aiml_db_store_open_persist(...)` can return `nullptr` on open/mmap problems.
+- `Kv` and `TimeSeries` initially look successful, because they return a handle even when `open()` fails and silently mask errors.
 
-## Erwartete Semantik laut Runtime
+## Expected semantics according to the runtime
 
-In [db_runtime.cpp](../../src/sys/db_runtime.cpp#L279) bis [db_runtime.cpp](../../src/sys/db_runtime.cpp#L282) steht explizit:
+[db_runtime.cpp](../../src/sys/db_runtime.cpp#L279) to [db_runtime.cpp](../../src/sys/db_runtime.cpp#L282) explicitly state:
 
-- gleicher `name + path`
-- gleicher Prozess
-- vorhandenen persistenten Handle wiederverwenden
+- same `name + path`
+- same process
+- reuse the existing persistent handle
 
 Relevant:
 
@@ -133,207 +133,207 @@ Relevant:
 - `registry_key = bp + nm`
 - `if (it != g_persistent_stores_by_name.end()) return it->second;`
 
-Der Test zeigt aber, dass diese erwartete Reuse-Semantik beim `Store<T>` aus Sicht des AIML-Codes nicht ankommt.
+The test shows, however, that this expected reuse semantics does not reach the AIML code for `Store<T>`.
 
-## Wahrscheinlichste Interpretation
+## Most likely interpretation
 
-Der Fehler liegt nicht nur im WAL-/Checkpoint-Verhalten, sondern allgemeiner im persistenten Open-/Handle-Pfad.
+The bug is not only in the WAL/checkpoint behaviour, but more generally in the persistent open/handle path.
 
-Denn:
+Because:
 
-- Der Repro scheitert schon im selben Prozess.
-- Er scheitert sofort nach `insert`, also vor jedem echten Reopen in einem neuen Prozess.
-- `db.checkpoint` ist dafür nicht nötig.
+- The repro already fails in the same process.
+- It fails right after `insert`, i.e. before any real reopen in a new process.
+- `db.checkpoint` is not needed for it.
 
-## Mögliche C++-Ursachen
+## Possible C++ causes
 
-### 1. `Store<T>`-Open schlägt fehl und wird im AIML-Code nur indirekt sichtbar
+### 1. The `Store<T>` open fails and becomes visible in the AIML code only indirectly
 
-In [db_runtime.cpp](../../src/sys/db_runtime.cpp#L289) bis [db_runtime.cpp](../../src/sys/db_runtime.cpp#L350) kann `aiml_db_store_open_persist(...)` bei Fehlern `nullptr` zurückgeben:
+In [db_runtime.cpp](../../src/sys/db_runtime.cpp#L289) to [db_runtime.cpp](../../src/sys/db_runtime.cpp#L350), `aiml_db_store_open_persist(...)` can return `nullptr` on errors:
 
 - `open(db_path, ...) < 0`
 - `mmap(...) == MAP_FAILED`
-- initiales `mmap` nach `ftruncate` schlägt fehl
+- the initial `mmap` after `ftruncate` fails
 
-Das passt gut zu den beobachteten Symptomen:
+That fits the observed symptoms well:
 
-- `players.len()` auf `nullptr` ergibt in [db_runtime.cpp](../../src/sys/db_runtime.cpp#L497) bis [db_runtime.cpp](../../src/sys/db_runtime.cpp#L500) einfach `0`
-- `players.insert(...)` auf `nullptr` ergibt in [db_runtime.cpp](../../src/sys/db_runtime.cpp#L378) bis [db_runtime.cpp](../../src/sys/db_runtime.cpp#L381) `-1`
+- `players.len()` on `nullptr` simply yields `0` in [db_runtime.cpp](../../src/sys/db_runtime.cpp#L497) to [db_runtime.cpp](../../src/sys/db_runtime.cpp#L500)
+- `players.insert(...)` on `nullptr` yields `-1` in [db_runtime.cpp](../../src/sys/db_runtime.cpp#L378) to [db_runtime.cpp](../../src/sys/db_runtime.cpp#L381)
 
-Genau dieses Muster sehen die neuen Tests:
+Exactly this pattern is what the new tests see:
 
 - `len == 0`
 - `insert == -1`
 
-### 2. `Store<T>` könnte zusätzlich ein `elem_size`-Mismatch haben
+### 2. `Store<T>` could additionally have an `elem_size` mismatch
 
-In [db_runtime.cpp](../../src/sys/db_runtime.cpp#L378) bis [db_runtime.cpp](../../src/sys/db_runtime.cpp#L382) liefert `aiml_db_store_insert(...)` auch dann `-1`, wenn `elem_size != s->elem_size`.
+In [db_runtime.cpp](../../src/sys/db_runtime.cpp#L378) to [db_runtime.cpp](../../src/sys/db_runtime.cpp#L382), `aiml_db_store_insert(...)` also returns `-1` if `elem_size != s->elem_size`.
 
-Das ist die zweite plausible Erklärung für `FAIL store_reopen_write_id=-1`.
+That is the second plausible explanation for `FAIL store_reopen_write_id=-1`.
 
-Relevant ist dabei:
+Relevant here:
 
-- `db.open` berechnet `elemSize` in [builtin_registry.cpp](../../src/core/builtin_registry.cpp#L1773) bis [builtin_registry.cpp](../../src/core/builtin_registry.cpp#L1843)
-- `Store.insert` berechnet `elemSize` separat in [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp#L803) bis [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp#L823)
+- `db.open` computes `elemSize` in [builtin_registry.cpp](../../src/core/builtin_registry.cpp#L1773) to [builtin_registry.cpp](../../src/core/builtin_registry.cpp#L1843)
+- `Store.insert` computes `elemSize` separately in [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp#L803) to [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp#L823)
 
-Wenn diese beiden Pfade nicht exakt dieselbe Größe emittieren, ist `insert == -1` die direkte Folge.
+If these two paths do not emit exactly the same size, `insert == -1` is the direct consequence.
 
-### 3. `Kv` und `TimeSeries` maskieren `open()`-Fehler stillschweigend
+### 3. `Kv` and `TimeSeries` silently mask `open()` errors
 
-In [db_runtime.cpp](../../src/sys/db_runtime.cpp#L618) bis [db_runtime.cpp](../../src/sys/db_runtime.cpp#L643) und [db_runtime.cpp](../../src/sys/db_runtime.cpp#L908) bis [db_runtime.cpp](../../src/sys/db_runtime.cpp#L933) gilt:
+In [db_runtime.cpp](../../src/sys/db_runtime.cpp#L618) to [db_runtime.cpp](../../src/sys/db_runtime.cpp#L643) and [db_runtime.cpp](../../src/sys/db_runtime.cpp#L908) to [db_runtime.cpp](../../src/sys/db_runtime.cpp#L933):
 
-- `open(...)` kann fehlschlagen
-- trotzdem wird ein `AimlKv*` bzw. `AimlTimeSeries*` zurückgegeben
-- der Handle wird sogar in die globalen Persistent-Registries eingetragen
+- `open(...)` can fail
+- an `AimlKv*` or `AimlTimeSeries*` is returned anyway
+- the handle is even entered into the global persistent registries
 
-Das ist gefährlich, weil der Fehler damit wie ein leerer Store aussieht statt wie ein echter Open-Fehler.
+That is dangerous, because the error then looks like an empty store instead of a real open error.
 
-Das passt sehr gut zu den neuen Reopen-Ergebnissen:
+That fits the new reopen results very well:
 
-- Write-Test innerhalb eines Laufs kann gegen den in-memory Zustand funktionieren
-- `db.checkpoint` ist bei `wal_fd < 0` bzw. `log_fd < 0` in [db_runtime.cpp](../../src/sys/db_runtime.cpp#L645) bis [db_runtime.cpp](../../src/sys/db_runtime.cpp#L663) und [db_runtime.cpp](../../src/sys/db_runtime.cpp#L937) bis [db_runtime.cpp](../../src/sys/db_runtime.cpp#L944) ein stilles `0`
-- der zweite Prozess sieht dann einfach nichts mehr
+- the write test within one run can work against the in-memory state
+- `db.checkpoint` is a silent `0` when `wal_fd < 0` or `log_fd < 0` in [db_runtime.cpp](../../src/sys/db_runtime.cpp#L645) to [db_runtime.cpp](../../src/sys/db_runtime.cpp#L663) and [db_runtime.cpp](../../src/sys/db_runtime.cpp#L937) to [db_runtime.cpp](../../src/sys/db_runtime.cpp#L944)
+- the second process then simply sees nothing any more
 
-### 4. Die `path`-Option aus Variablen könnte im Compiler/Builtin verloren gehen
+### 4. The `path` option from variables could get lost in the compiler/builtin
 
-Der relevante Übergabepfad ist:
+The relevant hand-over path is:
 
-- Vorverarbeitung der Option Bags in [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp#L95) bis [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp#L136)
-- Nutzung von `ctx.dbOpenBasePathVal` in [builtin_registry.cpp](../../src/core/builtin_registry.cpp#L1829) bis [builtin_registry.cpp](../../src/core/builtin_registry.cpp#L1953)
+- preprocessing of the option bags in [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp#L95) to [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp#L136)
+- use of `ctx.dbOpenBasePathVal` in [builtin_registry.cpp](../../src/core/builtin_registry.cpp#L1829) to [builtin_registry.cpp](../../src/core/builtin_registry.cpp#L1953)
 
-Verdacht:
+Suspicion:
 
-- `path: <VariableExpr>` wird zwar formal erkannt,
-- aber der zur Laufzeit übergebene Wert ist offenbar nicht der erwartete `/tmp/...`-String.
+- `path: <VariableExpr>` is formally recognised,
+- but the value passed at runtime is apparently not the expected `/tmp/...` string.
 
-Indizien:
+Indications:
 
-- neue Tests mit `path`-Variable erzeugen keine Dateien am Zielort
-- ältere Tests mit Literal-Pfad funktionieren
-- `path` ist ein eigener Typ mit Interning in [ast_compiler_stmt.cpp](../../src/core/ast_compiler_stmt.cpp#L113) bis [ast_compiler_stmt.cpp](../../src/core/ast_compiler_stmt.cpp#L121) und [ast_compiler_stmt.cpp](../../src/core/ast_compiler_stmt.cpp#L296) bis [ast_compiler_stmt.cpp](../../src/core/ast_compiler_stmt.cpp#L304), also genau dort liegt ein plausibler Integrationsfehler
+- new tests with a `path` variable create no files at the target location
+- older tests with a literal path work
+- `path` is a type of its own with interning in [ast_compiler_stmt.cpp](../../src/core/ast_compiler_stmt.cpp#L113) to [ast_compiler_stmt.cpp](../../src/core/ast_compiler_stmt.cpp#L121) and [ast_compiler_stmt.cpp](../../src/core/ast_compiler_stmt.cpp#L296) to [ast_compiler_stmt.cpp](../../src/core/ast_compiler_stmt.cpp#L304), so exactly there lies a plausible integration bug
 
-### 5. `Kv`-/`TimeSeries`-Replay hat keinerlei harte Fehlerdiagnostik
+### 5. `Kv`/`TimeSeries` replay has no hard error diagnostics at all
 
-Auch wenn die Datei geöffnet wird, fehlen an kritischen Stellen belastbare Fehlerchecks:
+Even when the file is opened, reliable error checks are missing at critical places:
 
-- `write(...)`-Rückgaben werden ignoriert
-- `read(...)`-Abbrüche führen nur zu stillem `break`
-- `fsync(...)`-Rückgaben werden nicht ausgewertet
-- `mkdir(...)`-Fehler werden ignoriert
+- `write(...)` return values are ignored
+- `read(...)` aborts only lead to a silent `break`
+- `fsync(...)` return values are not evaluated
+- `mkdir(...)` errors are ignored
 
 Relevant:
 
-- [db_runtime.cpp](../../src/sys/db_runtime.cpp#L538) bis [db_runtime.cpp](../../src/sys/db_runtime.cpp#L574)
-- [db_runtime.cpp](../../src/sys/db_runtime.cpp#L644) bis [db_runtime.cpp](../../src/sys/db_runtime.cpp#L663)
-- [db_runtime.cpp](../../src/sys/db_runtime.cpp#L920) bis [db_runtime.cpp](../../src/sys/db_runtime.cpp#L944)
+- [db_runtime.cpp](../../src/sys/db_runtime.cpp#L538) to [db_runtime.cpp](../../src/sys/db_runtime.cpp#L574)
+- [db_runtime.cpp](../../src/sys/db_runtime.cpp#L644) to [db_runtime.cpp](../../src/sys/db_runtime.cpp#L663)
+- [db_runtime.cpp](../../src/sys/db_runtime.cpp#L920) to [db_runtime.cpp](../../src/sys/db_runtime.cpp#L944)
 
-## Noch nicht abgedeckt
+## Not yet covered
 
-Weiterhin offen:
+Still open:
 
-- `Store<T>`-Cross-Run-Reopen nach funktionierendem Erstschreibfall
-- `Store<T>` `update`/`delete` nach erfolgreichem persistenten Open
-- persistenter Column-Layout-Store
-- typed `Kv`-Cross-Run-Reopen
-- Diagnose, ob `Kv`/`TimeSeries` wirklich nicht schreiben oder nur still mit ungültigem FD laufen
+- `Store<T>` cross-run reopen after a working first write
+- `Store<T>` `update`/`delete` after a successful persistent open
+- persistent column layout store
+- typed `Kv` cross-run reopen
+- diagnosis whether `Kv`/`TimeSeries` really do not write or just run silently with an invalid FD
 
-Diese Folgefälle sind nachrangig, solange:
+These follow-up cases are secondary as long as:
 
-- `Store<T>` schon beim ersten persistenten Insert scheitert
-- und `Kv`/`TimeSeries` Reopen über getrennte Läufe den geschriebenen Zustand nicht wiederfinden
+- `Store<T>` already fails on the first persistent insert
+- and `Kv`/`TimeSeries` reopen across separate runs does not find the written state
 
-## Konkreter Fixplan
+## Concrete fix plan
 
-### 1. `path`-Übergabe zuerst verifizieren und härten
+### 1. Verify and harden the `path` hand-over first
 
-Betroffene Stellen:
+Affected places:
 
 - [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp#L95)
 - [builtin_registry.cpp](../../src/core/builtin_registry.cpp#L1829)
 
-Vorgehen:
+Approach:
 
-- `path: <VariableExpr>` im `db.*open`-Option-Bag gezielt instrumentieren
-- im Runtime-Open temporär den tatsächlich empfangenen `base_path` loggen
-- prüfen, ob bei `path: db_path` wirklich `/tmp/...` ankommt oder leer/default
+- instrument `path: <VariableExpr>` in the `db.*open` option bag specifically
+- temporarily log the actually received `base_path` in the runtime open
+- check whether `/tmp/...` really arrives for `path: db_path`, or empty/default
 
-Wahrscheinlich nötige Änderung:
+Probably necessary change:
 
-- Option-Bag-Parsing für `path` robuster machen
-- sicherstellen, dass `visitExpression(u->operand)` für `path`-Variablen stabil ein `i8*` liefert
-- gegebenenfalls den `path`-Wert vor Übergabe explizit als `char*`/interned path normalisieren
+- make option bag parsing for `path` more robust
+- make sure that `visitExpression(u->operand)` reliably yields an `i8*` for `path` variables
+- if needed, explicitly normalise the `path` value as a `char*`/interned path before passing it
 
-### 2. Persistente `open()`-Fehler in der Runtime nicht mehr still maskieren
+### 2. Stop silently masking persistent `open()` errors in the runtime
 
-Betroffene Stellen:
+Affected places:
 
 - [db_runtime.cpp](../../src/sys/db_runtime.cpp#L618)
 - [db_runtime.cpp](../../src/sys/db_runtime.cpp#L908)
 
-Vorgehen:
+Approach:
 
-- Wenn `open()` fehlschlägt, nicht trotzdem einen scheinbar gültigen `Kv`-/`TimeSeries`-Handle zurückgeben
-- Fehler sichtbar machen:
-  - `nullptr` zurückgeben, oder
-  - zumindest einen klaren `stderr`-Fehler loggen und den Handle nicht registrieren
+- If `open()` fails, do not return a seemingly valid `Kv`/`TimeSeries` handle anyway
+- Make errors visible:
+  - return `nullptr`, or
+  - at least log a clear `stderr` error and do not register the handle
 
-Nutzen:
+Benefit:
 
-- Der Unterschied zwischen “leer” und “Persistenz-Open kaputt” wird sofort sichtbar
-- Folgefehler wie `checkpoint == 0` trotz ungültigem FD verschwinden
+- The difference between "empty" and "persistence open broken" becomes visible immediately
+- Follow-up errors such as `checkpoint == 0` despite an invalid FD disappear
 
-### 3. `Store<T>`-Open gegen `insert`-Pfad auf `elem_size`-Konsistenz prüfen
+### 3. Check the `Store<T>` open against the `insert` path for `elem_size` consistency
 
-Betroffene Stellen:
+Affected places:
 
 - [builtin_registry.cpp](../../src/core/builtin_registry.cpp#L1773)
 - [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp#L803)
 - [db_runtime.cpp](../../src/sys/db_runtime.cpp#L378)
 
-Vorgehen:
+Approach:
 
-- für denselben Modelltyp den berechneten `elemSize` in `db.open` und `Store.insert` gegeneinander loggen
-- prüfen, ob `packed_size` vs. `DataLayout` an irgendeiner Stelle auseinanderläuft
-- bei Mismatch entweder:
-  - beide Pfade auf dieselbe Größenquelle zwingen, oder
-  - im Fehlerfall eine explizite Diagnose ausgeben statt nur `-1`
+- for the same model type, log the computed `elemSize` in `db.open` and `Store.insert` against each other
+- check whether `packed_size` vs. `DataLayout` diverges anywhere
+- on a mismatch, either:
+  - force both paths onto the same size source, or
+  - emit an explicit diagnostic in the error case instead of just `-1`
 
-### 4. `Store<T>`-Persistenzpfad bei Open/Mmap sauber diagnostizieren
+### 4. Diagnose the `Store<T>` persistence path cleanly on open/mmap
 
-Betroffene Stelle:
+Affected place:
 
 - [db_runtime.cpp](../../src/sys/db_runtime.cpp#L289)
 
-Vorgehen:
+Approach:
 
-- bei jedem frühen Fehlerpfad temporär Logging ergänzen:
-  - `open(db_fd)` fehlgeschlagen
-  - `mmap(existing)` fehlgeschlagen
-  - `mmap(initial)` fehlgeschlagen
-  - Header ungültig / `elem_size` stimmt nicht
+- temporarily add logging on every early error path:
+  - `open(db_fd)` failed
+  - `mmap(existing)` failed
+  - `mmap(initial)` failed
+  - header invalid / `elem_size` does not match
 
-Nutzen:
+Benefit:
 
-- trennt sofort `nullptr`-Open von `elem_size`-Mismatch
-- erklärt den aktuellen `len == 0` / `insert == -1`-Befund eindeutig
+- immediately separates a `nullptr` open from an `elem_size` mismatch
+- explains the current `len == 0` / `insert == -1` finding unambiguously
 
-### 5. `Kv`-/`TimeSeries`-Replay und Checkpoint mit echten Fehlercodes versehen
+### 5. Give `Kv`/`TimeSeries` replay and checkpoint real error codes
 
-Betroffene Stellen:
+Affected places:
 
 - [db_runtime.cpp](../../src/sys/db_runtime.cpp#L538)
 - [db_runtime.cpp](../../src/sys/db_runtime.cpp#L644)
 - [db_runtime.cpp](../../src/sys/db_runtime.cpp#L920)
 - [db_runtime.cpp](../../src/sys/db_runtime.cpp#L937)
 
-Vorgehen:
+Approach:
 
-- `write`, `read`, `fsync`, `mkdir`, `ftruncate`, `lseek` auf Rückgabewerte prüfen
-- bei Fehlern:
-  - klar loggen
-  - `checkpoint` nicht mehr blind `0` zurückgeben
+- check `write`, `read`, `fsync`, `mkdir`, `ftruncate`, `lseek` for return values
+- on errors:
+  - log clearly
+  - stop having `checkpoint` blindly return `0`
 
-### 6. Danach Tests in dieser Reihenfolge erneut fahren
+### 6. Then rerun the tests in this order
 
 1. [test_aiondb_store_reopen_write.aiml](../../tests/test_aiondb_store_reopen_write.aiml)
 2. [test_aiondb_persist_reuse.aiml](../../tests/test_aiondb_persist_reuse.aiml)
@@ -342,8 +342,8 @@ Vorgehen:
 5. [test_aiondb_ts_reopen_write.aiml](../../tests/test_aiondb_ts_reopen_write.aiml)
 6. [test_aiondb_ts_reopen_read.aiml](../../tests/test_aiondb_ts_reopen_read.aiml)
 
-Empfohlene Priorität:
+Recommended priority:
 
-- zuerst `path`-Übergabe und `Store<T>`-Open/Insert diagnostizieren
-- danach `Kv`/`TimeSeries`-Open-Fehlermaskierung beseitigen
-- erst dann Replay-/Checkpoint-Details nachziehen
+- first diagnose the `path` hand-over and the `Store<T>` open/insert
+- then remove the `Kv`/`TimeSeries` open error masking
+- only then follow up on replay/checkpoint details

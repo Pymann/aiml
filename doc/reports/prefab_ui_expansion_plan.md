@@ -1,118 +1,118 @@
-# Plan: Prefab-System UI-Expansion
+# Plan: prefab system UI expansion
 
-## Ziel
+## Goal
 
-UI-Widgets als wiederverwendbare Prefabs definieren statt jedes Frame
-imperativ über ui_runtime aufzubauen. Login-Panel von DataCreatures wird
-das erste echte Anwendungsbeispiel.
+Define UI widgets as reusable prefabs instead of building every frame
+imperatively via ui_runtime. The DataCreatures login panel becomes
+the first real application example.
 
-## Design-Entscheidungen (vom User bestätigt)
+## Design decisions (confirmed by the user)
 
-| Aspekt | Entscheidung |
+| Aspect | Decision |
 |--------|-------------|
-| ui_runtime | bleibt parallel — neue prefab-UI ist additiv |
-| Event-Modell | Callbacks: `on_click: fn_name` |
-| Callback-Signatur | `args: [[p, prefab_instance]]` — Instance + getter-methoden |
-| Layout | absolute x/y/w/h gegen prefab.design-size, Instance scaling via `is_relative` |
-| MVP-Widgets | button, text_input, label, rect/panel |
-| Migration | direkt DataCreatures `client_main.aiml` |
+| ui_runtime | stays in parallel — the new prefab UI is additive |
+| Event model | Callbacks: `on_click: fn_name` |
+| Callback signature | `args: [[p, prefab_instance]]` — instance + getter methods |
+| Layout | absolute x/y/w/h against the prefab design size, instance scaling via `is_relative` |
+| MVP widgets | button, text_input, label, rect/panel |
+| Migration | DataCreatures `client_main.aiml` directly |
 
 ## Architektur
 
-### Heutiger Stand
-- `prefab_runtime` hat `CHILD_SPRITE` und `CHILD_TEXT`. Children-x/y/w/h
-  absolut gegen `prefab.width/height`.
-- `Instance.is_relative` skaliert die ganze Instanz (alle Children
-  scalen mit) → eignet sich für UI das auf verschiedene Screen-Sizes
-  reagieren soll.
-- `ui_runtime` hat fertige Widget-Implementierungen (button, text_input,
-  Hit-Test, Focus-State, SDF-rounded-rects, Font-Rendering).
-- AIML-Compiler kann function-by-name als Callback nutzen (siehe
+### Current state
+- `prefab_runtime` has `CHILD_SPRITE` and `CHILD_TEXT`. Children x/y/w/h
+  are absolute against `prefab.width/height`.
+- `Instance.is_relative` scales the whole instance (all children
+  scale along) → suitable for UI that should react to different
+  screen sizes.
+- `ui_runtime` has finished widget implementations (button, text_input,
+  hit test, focus state, SDF rounded rects, font rendering).
+- The AIML compiler can use function-by-name as a callback (see
   `engine.run(win, update, render)`).
 
-### Neue Struktur
+### New structure
 
 ```
 prefab_runtime.cpp
-├── ChildDef { type, x,y,w,h, ... typespezifisch ... , on_click_fn,on_change_fn }
+├── ChildDef { type, x,y,w,h, ... type-specific ... , on_click_fn,on_change_fn }
 ├── Instance { existing fields + widget_states: vector<WidgetState> }
 ├── WidgetState { union: text{buf, cursor}, button{hot, pressed_now} }
 ├── render_instance() — dispatched per ChildType:
-│   ├── SPRITE/TEXT — wie heute
-│   ├── RECT — draw_widget_rect (re-use von ui_runtime, via shared helper)
-│   ├── BUTTON — draw_widget_rect + label, schreibt widget_state, prüft hit
+│   ├── SPRITE/TEXT — as today
+│   ├── RECT — draw_widget_rect (re-use from ui_runtime, via shared helper)
+│   ├── BUTTON — draw_widget_rect + label, writes widget_state, checks hit
 │   ├── TEXT_INPUT — draw_widget_rect + text + cursor
 │   └── LABEL — push_text (re-use)
-└── invoke_callback(inst, child_idx) — schaut ChildDef.on_click_fn,
-    schlägt FunctionInfo nach, ruft mit (inst*) auf
+└── invoke_callback(inst, child_idx) — looks at ChildDef.on_click_fn,
+    looks up FunctionInfo, calls it with (inst*)
 ```
 
 ## Implementation Steps
 
-### Schritt 1: ChildType enum + Parser
-**Datei**: `src/sys/prefab_runtime.cpp`
+### Step 1: ChildType enum + parser
+**File**: `src/sys/prefab_runtime.cpp`
 
 ```cpp
 enum PrefabChildType {
     CHILD_SPRITE,
     CHILD_TEXT,
-    CHILD_RECT,        // NEU
-    CHILD_BUTTON,      // NEU
-    CHILD_TEXT_INPUT,  // NEU
-    CHILD_LABEL,       // NEU (alias auf CHILD_TEXT mit anderer Style-Group)
+    CHILD_RECT,        // NEW
+    CHILD_BUTTON,      // NEW
+    CHILD_TEXT_INPUT,  // NEW
+    CHILD_LABEL,       // NEW (alias of CHILD_TEXT with a different style group)
 };
 
 struct PrefabChildDef {
-    // ... bestehende Felder ...
+    // ... existing fields ...
     // Style:
     int32_t   bg_color       = 0;
     int32_t   border_color   = 0;
     float     border_width   = 0.0f;
     float     corner_radius  = 0.0f;
     int32_t   label_color    = 0xFFFFFFFF;
-    std::string label_text;   // für button: anzuzeigender Text
-    bool      is_secret       = false; // password-mode für text_input
+    std::string label_text;   // for button: text to display
+    bool      is_secret       = false; // password mode for text_input
     // Callbacks:
-    std::string on_click_fn;  // function name (resolved zur Render-Zeit)
+    std::string on_click_fn;  // function name (resolved at render time)
     std::string on_change_fn;
 };
 ```
 
-`parse_children_array` erweitern um die neuen Keys.
+Extend `parse_children_array` with the new keys.
 
-### Schritt 2: WidgetState per Instance
-**Datei**: `src/sys/prefab_runtime.cpp`
+### Step 2: WidgetState per instance
+**File**: `src/sys/prefab_runtime.cpp`
 
 ```cpp
 struct PrefabWidgetState {
-    // Button-felder:
+    // Button fields:
     bool hot = false;
     bool pressed_now = false;
     bool clicked_this_frame = false;
 
-    // Text-Input-felder:
+    // Text input fields:
     std::string text;
     int cursor_pos = 0;
     bool focused = false;
 };
 
 struct AimlPrefabInstance {
-    // ... bestehende ...
-    std::vector<PrefabWidgetState> widget_states;  // parallel zu def->children
+    // ... existing ...
+    std::vector<PrefabWidgetState> widget_states;  // parallel to def->children
 };
 ```
 
-In `aiml_engine_instantiate` widget_states sizen auf children.size().
+In `aiml_engine_instantiate`, size widget_states to children.size().
 
-### Schritt 3: Drawing-Dispatch
-**Datei**: `src/sys/prefab_runtime.cpp::render_instance`
+### Step 3: drawing dispatch
+**File**: `src/sys/prefab_runtime.cpp::render_instance`
 
-Erweitere den existing dispatch:
+Extend the existing dispatch:
 
 ```cpp
 case CHILD_RECT: {
-    // Falls texture: textured quad mit alpha-blending
-    // Sonst: draw_widget_rect(x, y, w, h, bg_color, border_color, border_width, corner_radius)
+    // If texture: textured quad with alpha blending
+    // Otherwise: draw_widget_rect(x, y, w, h, bg_color, border_color, border_width, corner_radius)
 }
 case CHILD_BUTTON: {
     auto& ws = inst->widget_states[idx];
@@ -135,11 +135,11 @@ case CHILD_LABEL: {
 }
 ```
 
-Helper-Funktionen (`draw_widget_rect`, `push_text_centered`) ggf. aus
-ui_runtime extrahieren in einen gemeinsamen Header `gfx_primitives.h`.
+If needed, extract the helper functions (`draw_widget_rect`, `push_text_centered`) from
+ui_runtime into a shared header `gfx_primitives.h`.
 
-### Schritt 4: Input + Callbacks
-**Datei**: `src/sys/prefab_runtime.cpp::aiml_engine_update_hover` oder neue Funktion
+### Step 4: input + callbacks
+**File**: `src/sys/prefab_runtime.cpp::aiml_engine_update_hover` or a new function
 
 ```cpp
 void aiml_prefab_update_input(float mx, float my, int mouse_pressed, int mouse_released) {
@@ -148,7 +148,7 @@ void aiml_prefab_update_input(float mx, float my, int mouse_pressed, int mouse_r
             auto& ch = inst->def->children[i];
             if (ch.type != CHILD_BUTTON && ch.type != CHILD_TEXT_INPUT) continue;
 
-            // bbox in screen-space:
+            // bbox in screen space:
             float ax = inst_x + ch.x * inst_sx;
             // ... etc, scale-aware ...
 
@@ -174,45 +174,45 @@ void aiml_prefab_update_input(float mx, float my, int mouse_pressed, int mouse_r
         }
     }
 
-    // Text-Events an focused_input weiterleiten (Backspace, char-input)
+    // Forward text events to focused_input (backspace, char input)
     apply_text_events_to_focused();
 }
 
 void invoke_aiml_callback(const std::string& fn_name, AimlPrefabInstance* inst) {
-    auto it = g_fn_table.find(fn_name);  // <- ist in fptable.cpp
+    auto it = g_fn_table.find(fn_name);  // <- lives in fptable.cpp
     if (it == g_fn_table.end()) return;
     using cb_t = void(*)(void*);  // function takes instance ptr
     ((cb_t)it->second)(inst);
 }
 ```
 
-Function-Table: `g_fn_table` ist heute `__aiml_fptable_current[]`. Wir
-brauchen Name→Slot-Lookup. Schema_registry hat das vermutlich schon
+Function table: `g_fn_table` is `__aiml_fptable_current[]` today. We
+need a name→slot lookup. schema_registry probably already has it
 (check `src/core/schema_registry.h/cpp`).
 
-### Schritt 5: AIML-Compiler Callback-Resolution
-**Datei**: `src/core/ast_compiler.cpp::visitTopLevel` (prefab-Decl)
+### Step 5: AIML compiler callback resolution
+**File**: `src/core/ast_compiler.cpp::visitTopLevel` (prefab decl)
 
-Beim Parsen von `on_click: fn_name`: füge dem Funktion-Symbol-Table
-einen Eintrag hinzu, der die Funktion als `prefab_callback` markiert
-(damit sie nicht weggemüllt wird). Übergebe den String unmodifiziert
-an `aiml_prefab_register_child`.
+When parsing `on_click: fn_name`: add an entry to the function symbol table
+that marks the function as a `prefab_callback`
+(so that it is not garbage-collected away). Pass the string unmodified
+to `aiml_prefab_register_child`.
 
-### Schritt 6: prefab_instance Property-Accessors
-**Datei**: `src/core/builtin_registry.cpp`
+### Step 6: prefab_instance property accessors
+**File**: `src/core/builtin_registry.cpp`
 
 ```cpp
 ci.builtinMethods["__getattr__"] = [](ctx, base, call, eval) -> Value* {
-    // base = prefab_instance, call.member_name = z.B. "email_in"
-    // Returns a small handle-value (i8*) der child-name encodiert
-    // Compile-time: erzeuge call zu aiml_prefab_child_handle(inst, name)
+    // base = prefab_instance, call.member_name = e.g. "email_in"
+    // Returns a small handle value (i8*) that encodes the child name
+    // Compile time: emit a call to aiml_prefab_child_handle(inst, name)
 };
 ```
 
-Dann pro WidgetHandle: `.value()` → `aiml_prefab_child_text(handle)`,
+Then per WidgetHandle: `.value()` → `aiml_prefab_child_text(handle)`,
 `.clicked()` → `aiml_prefab_child_clicked(handle)`.
 
-Einfacher: direkte Methoden auf prefab_instance, name als string:
+Simpler: direct methods on prefab_instance, name as a string:
 
 ```aiml
 - decl: [email, string, { call: [p.text_value, "email_in"] }]
@@ -220,12 +220,12 @@ Einfacher: direkte Methoden auf prefab_instance, name als string:
     condition: { call: [p.was_clicked, "submit"] }
 ```
 
-Macht den Compiler-Aufwand viel kleiner — wir registrieren nur 2-3 Methoden auf `prefab_instance`, nicht pro Child-Name.
+Makes the compiler effort much smaller — we register only 2-3 methods on `prefab_instance`, not one per child name.
 
-### Schritt 7: DataCreatures Migration
-**Datei**: `sources/client/client_main.aiml`
+### Step 7: DataCreatures migration
+**File**: `sources/client/client_main.aiml`
 
-`render_login` durch Prefab-Definition + Instantiierung ersetzen:
+Replace `render_login` with a prefab definition + instantiation:
 
 ```aiml
 - def:
@@ -275,10 +275,10 @@ Macht den Compiler-Aufwand viel kleiner — wir registrieren nur 2-3 Methoden au
 
 # In setup:
 - decl: [panel, prefab_instance, { call: [engine.instantiate, "LoginPanel"] }]
-- call: [panel.set_relative_pos, 0.5, 0.7]   # mittig-unten, scale-aware
+- call: [panel.set_relative_pos, 0.5, 0.7]   # bottom centre, scale-aware
 ```
 
-Das `dc_render` wird damit:
+`dc_render` then becomes:
 
 ```aiml
 - def:
@@ -286,44 +286,44 @@ Das `dc_render` wird damit:
     args: []
     body:
       - call: [gl.clear, 0.02, 0.02, 0.04, 1.0]
-      - call: [engine.draw_scene]   # zeichnet bg + panel
+      - call: [engine.draw_scene]   # draws bg + panel
 ```
 
-**`render_login` entfällt komplett.**
+**`render_login` is dropped completely.**
 
 ## Tests
 
 **`tests/test_prefab_ui.aiml`** (~100 LOC):
-- Phase A: Button-click triggert callback → globaler counter inkrementiert
-- Phase B: Text-Input nimmt key-events, `text_value` returnt eingegebenen Text
-- Phase C: Label rendert (visuell, headless skip)
-- Phase D: Rect mit texture + bg_color (visuell, headless skip)
+- Phase A: a button click triggers the callback → a global counter is incremented
+- Phase B: the text input takes key events, `text_value` returns the entered text
+- Phase C: the label renders (visual, skipped headless)
+- Phase D: rect with texture + bg_color (visual, skipped headless)
 
-`# Requires: display` für visuelle Phasen, Phase A/B kann ohne display laufen indem wir mouse/keyboard programmatisch via test-helpers feuern.
+`# Requires: display` for the visual phases; phases A/B can run without a display by firing mouse/keyboard programmatically via test helpers.
 
-## Risiken & Open Questions
+## Risks & open questions
 
-1. **Font-Sharing**: ui_runtime hat `ui.set_default_font`. Prefab nutzt
-   `engine.prefab_set_font`. Heute zwei getrennte Fonts. Wir wollen
-   das Login-Panel mit der ui.ttf zeichnen → prüfen ob beide Wege
-   den gleichen Font teilen können.
+1. **Font sharing**: ui_runtime has `ui.set_default_font`. Prefab uses
+   `engine.prefab_set_font`. Today these are two separate fonts. We want
+   to draw the login panel with ui.ttf → check whether both paths
+   can share the same font.
 
-2. **SDF-Rendering aus prefab_runtime**: prefab_runtime hat eigenen
-   Shader (kein SDF). Wir wollen rounded-rect-Bordern. Optionen:
-   - prefab_shader erweitern um SDF-pfad (so wie ui_runtime),
-   - oder die UI-Quads über ui_runtime's draw_list emittieren (ui.begin/ui.end um den prefab-draw wrappen).
-   → letzteres ist sauberer.
+2. **SDF rendering from prefab_runtime**: prefab_runtime has its own
+   shader (no SDF). We want rounded-rect borders. Options:
+   - extend prefab_shader with an SDF path (like ui_runtime),
+   - or emit the UI quads via ui_runtime's draw_list (wrap ui.begin/ui.end around the prefab draw).
+   → the latter is cleaner.
 
-3. **Skalierung**: bei `is_relative` werden Children mit `inst_sx/sy`
-   skaliert. UI-Widgets wollen aber meistens KONSTANTE pixel-Größe für
-   Text (sonst wird er auf großen Screens riesig). Optional pro Child
-   ein `no_scale: true` flag — aber erst in Iteration 2.
+3. **Scaling**: with `is_relative`, children are scaled by `inst_sx/sy`.
+   UI widgets, however, mostly want a CONSTANT pixel size for
+   text (otherwise it becomes huge on large screens). Optionally a per-child
+   `no_scale: true` flag — but only in iteration 2.
 
-4. **Hot-Reload**: prefab-Definitionen sind compilation-time hardcoded.
-   Hot-Reload muss new ChildDefs erkennen → siehe fptable/schema_registry
-   Hot-Reload-Mechanismus.
+4. **Hot reload**: prefab definitions are hardcoded at compile time.
+   Hot reload must detect new ChildDefs → see the fptable/schema_registry
+   hot reload mechanism.
 
-## Größe
+## Size
 
 | Phase | Files | LOC |
 |-------|-------|-----|
@@ -331,20 +331,20 @@ Das `dc_render` wird damit:
 | 2: WidgetState | prefab_runtime.cpp | +50 |
 | 3: Drawing | prefab_runtime.cpp (+ gfx_primitives.h?) | +120 |
 | 4: Input+Callbacks | prefab_runtime.cpp | +100 |
-| 5: Compiler-Side | ast_compiler.cpp (prefab-decl) | +30 |
-| 6: Property-API | builtin_registry.cpp | +50 |
+| 5: Compiler side | ast_compiler.cpp (prefab decl) | +30 |
+| 6: Property API | builtin_registry.cpp | +50 |
 | 7: Tests | tests/test_prefab_ui.aiml | +100 |
-| 8: Migration | datacreatures client_main.aiml | net ~-50 (entfernt mehr als hinzufügt) |
+| 8: Migration | datacreatures client_main.aiml | net ~-50 (removes more than it adds) |
 
-**Gesamt: ~500 LOC**, ein halber Arbeitstag mit Test+Debug. Native Tests
-bleiben grün (alles additiv, ui_runtime unverändert).
+**Total: ~500 LOC**, half a working day with test+debug. Native tests
+stay green (everything additive, ui_runtime unchanged).
 
-## Reihenfolge der Implementierung
+## Implementation order
 
-1. Schritt 1+2 (Parser + State) ohne Drawing/Input → Build muss grün sein
-2. Schritt 3 (Drawing) → minimal test_prefab_ui Phase D (rect+label)
-3. Schritt 4 (Input/Callback) → test Phase A (button click)
-4. Schritt 6 (Property-API) → test Phase B (text_value)
-5. Schritt 7 (Migration) → DataCreatures muss visuell+funktional unverändert sein
+1. Steps 1+2 (parser + state) without drawing/input → the build must be green
+2. Step 3 (drawing) → minimal test_prefab_ui phase D (rect+label)
+3. Step 4 (input/callback) → test phase A (button click)
+4. Step 6 (property API) → test phase B (text_value)
+5. Step 7 (migration) → DataCreatures must be visually+functionally unchanged
 
-Jeder Schritt ist ein einzelner Build/Test-Cycle.
+Each step is a single build/test cycle.
