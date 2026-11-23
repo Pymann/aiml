@@ -1,10 +1,10 @@
-// spec/29 §5.4.1: chan/hashmap sind IN-PROZESS-Handles.  Der Blob traegt hinter
-// dem Zeiger einen Prozess-Stempel; passt er nicht, dekodiert das Feld als null
-// und setzt den Decode-Fehler -- der Zeiger wird NIE vorher angefasst.
+// spec/29 §5.4.1: chan/hashmap are IN-PROCESS handles.  The blob carries a process
+// stamp after the pointer; if it does not match, the field decodes as null
+// and sets the decode error -- the pointer is NEVER touched before that.
 //
-// Ohne das greift ein Server auf einen Zeiger zu, den ein laengst beendeter
-// Prozess geschrieben hat (gemessen in datacreatures: SIGSEGV in einem
-// Monate alten KV-Store).
+// Without this a server accesses a pointer that a long-finished
+// process wrote (measured in datacreatures: SIGSEGV in a
+// months-old KV store).
 #include <cassert>
 #include <cstdint>
 #include <cstdlib>
@@ -41,7 +41,7 @@ std::vector<uint8_t> encode(const UtBag& bag) {
 
 }  // namespace
 
-// Eingehaengt in tests/unit/test_fmt_loc.cpp (ein Binary, ein main).
+// Hooked into tests/unit/test_fmt_loc.cpp (one binary, one main).
 int ser_handle_stamp_unit_tests() {
     UtBag source{};
     source.table = aiml_hashmap_new(0 /* string */, 0 /* i32 */);
@@ -50,24 +50,24 @@ int ser_handle_stamp_unit_tests() {
 
     std::vector<uint8_t> blob = encode(source);
 
-    // 1. Im selben Prozess: der Handle kommt lebendig an.
+    // 1. In the same process: the handle arrives alive.
     UtBag same{};
     assert(aiml_ser_decode_sized((const char*)blob.data(), blob.size(), &same, kNodes, 3) == 0);
     assert(same.table == source.table);
     assert(same.count == 7);
     assert(aiml_hashmap_get_bits(same.table, "alpha", 0) == 42u);
 
-    // 2. Blob eines FREMDEN Prozesses: der Stempel hinter dem Zeiger wird
-    //    verdreht.  Erwartung: null, Fehler gemeldet, kein Zugriff, kein Sturz.
+    // 2. Blob of a FOREIGN process: the stamp after the pointer is
+    //    scrambled.  Expectation: null, error reported, no access, no crash.
     std::vector<uint8_t> fremd = blob;
-    const size_t zeiger = 4 /* Laengenkopf */ + sizeof(void*);   // danach der Stempel
+    const size_t zeiger = 4 /* length header */ + sizeof(void*);   // followed by the stamp
     assert(fremd.size() >= zeiger + 8);
     for (size_t i = 0; i < 8; ++i) fremd[zeiger + i] ^= 0xA5;
 
     UtBag other{};
     other.count = 123;
     int rc = aiml_ser_decode_sized((const char*)fremd.data(), fremd.size(), &other, kNodes, 3);
-    assert(rc != 0);              // Decode meldet den Fehler
-    assert(other.table == nullptr);  // und fasst den fremden Zeiger nicht an
+    assert(rc != 0);              // decode reports the error
+    assert(other.table == nullptr);  // and does not touch the foreign pointer
     return 0;
 }

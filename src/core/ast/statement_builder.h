@@ -20,17 +20,17 @@ class StatementBuilder : public StateHandler {
     // idx: everything after the container in source order — a ".field" name or an expression.
     std::vector<std::pair<std::string, std::unique_ptr<Expr>>> idxParts;
     bool expectingValue = false;
-    // Zahl der WIRKLICH gesehenen Skalare.  `args.size()` taugt dafuer nicht: der
-    // expectingValue-Zweig in OnScalar kehrt frueh zurueck, bevor er in args landet.
+    // Number of scalars REALLY seen.  `args.size()` is no good for that: the
+    // expectingValue branch in OnScalar returns early, before it lands in args.
     int scalarCount = 0;
-    // spec/10: ein Listenliteral als Aufrufargument.  Ohne das wandert jedes Element
-    // einzeln in orderedCallArgs und wird so zu mehreren Argumenten aufgefaechert
-    // (Backlog-Punkt 3).  Waehrend der inneren Sequenz sammeln wir hier.
+    // spec/10: a list literal as a call argument.  Without this every element moves
+    // individually into orderedCallArgs and is thus fanned out into several arguments
+    // (backlog item 3).  During the inner sequence we collect here.
     std::unique_ptr<BufferLiteralExpr> pendingCallLiteral;
-    // spec/10: ein Element eines Listen-/Buffer-Literals darf eine Expression sein
-    // (`decl: [tags, list<string>, ["P", { call: ... }]]`).  Eine Map-Expression waechst
-    // `args` NICHT, also haelt dieser Vektor sie mit der Stelle fest, an der sie stand:
-    // first = args.size() im Moment ihres Eintreffens.  Ohne das fiel sie still weg.
+    // spec/10: an element of a list/buffer literal may be an expression
+    // (`decl: [tags, list<string>, ["P", { call: ... }]]`).  A map expression does NOT grow
+    // `args`, so this vector keeps it together with the position where it stood:
+    // first = args.size() at the moment it arrived.  Without that it silently fell away.
     std::vector<std::pair<int, std::unique_ptr<Expr>>> innerSeqExprs;
     bool is_const = false;
     bool is_singleton = false;   // spec/21 §6.2 F21-S1
@@ -39,7 +39,7 @@ class StatementBuilder : public StateHandler {
     std::string decl_lifetime = "scope";   // {lifetime: scope|persistent|consumed} (spec/61)
     int decl_level = -1;                   // {level: N} (spec/65 F65-19); -1 = absent
     int seqDepth = 0;       // nesting depth of sequences seen
-    bool retSeq = false;    // `return: [a, b]` -- der Wert war eine Folge (spec/10)
+    bool retSeq = false;    // `return: [a, b]` -- the value was a sequence (spec/10)
     int innerSeqStart = -1; // args[] index where inner sequence elements begin
     int capturedLine = -1;  // 1-based line of this statement in the AIML source
     int capturedColumn = -1;  // dazugehoerige Spalte (spec/49 F49-100)
@@ -53,12 +53,12 @@ public:
     void receiveChildNode(std::unique_ptr<Node> node) override;
     std::unique_ptr<Node> finish() override;
 private:
-    // Baut das Literal aus args[from..] und flicht die Expressions an ihrer Stelle ein.
+    // Builds the literal from args[from..] and weaves the expressions in at their position.
     std::unique_ptr<BufferLiteralExpr> buildSeqLiteral(int from);
-    // Sind wir gerade INNERHALB der inneren Sequenz eines Literals?  Dann ist eine Map ein
-    // ELEMENT und kein Modifier-Block.
-    // Bei `decl`/`set` steckt das Literal EINE Ebene tiefer, bei `return` ist es die
-    // Folge selbst -- sonst waere eine Ausdrucks-Map darin kein Element (spec/10).
+    // Are we currently INSIDE the inner sequence of a literal?  Then a map is an
+    // ELEMENT and not a modifier block.
+    // For `decl`/`set` the literal sits ONE level deeper, for `return` it is the
+    // sequence itself -- otherwise an expression map in it would not be an element (spec/10).
     bool insideSeqLiteral() const { return (innerSeqStart >= 0 && seqDepth >= 2) || (retSeq && seqDepth >= 1); }
 };
 

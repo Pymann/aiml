@@ -9,7 +9,7 @@
 
 #include "engine_runtime.h"
 #include "input_runtime.h"
-#include "prefab_runtime.h"  /* aiml_prefab_scene_init für resize-callback */
+#include "prefab_runtime.h"  /* aiml_prefab_scene_init for the resize callback */
 
 #include <cstring>
 #include <cmath>
@@ -212,9 +212,9 @@ void* aiml_engine_create_window(int32_t w, int32_t h, const char* title) {
     }
 
     /* Keep viewport + prefab scene size in sync when the user resizes/
-     * maximizes the window.  scene_init's re-init-Branch updated nur
-     * screen_w/h + Projection — design_w/h bleibt vom ersten Aufruf
-     * → ratio (screen/design) ≠ 1 → UI skaliert mit. */
+     * maximizes the window.  scene_init's re-init branch only updated
+     * screen_w/h + projection — design_w/h stays from the first call
+     * → ratio (screen/design) ≠ 1 → the UI scales along. */
     glfwSetWindowRefreshCallback(glfw, [](GLFWwindow*) { aiml_engine_note_event(2); });
     glfwSetWindowFocusCallback(glfw, [](GLFWwindow*, int) { aiml_engine_note_event(4); });
     glfwSetWindowIconifyCallback(glfw, [](GLFWwindow*, int) { aiml_engine_note_event(4); });
@@ -222,11 +222,11 @@ void* aiml_engine_create_window(int32_t w, int32_t h, const char* title) {
     glfwSetFramebufferSizeCallback(glfw, [](GLFWwindow*, int fbw, int fbh) {
         aiml_engine_note_event(2);
         glViewport(0, 0, fbw, fbh);
-        /* scene_resize updated nur screen_w/h — design_w/h bleibt fixed
-         * vom ersten scene_init.  Wichtig: nicht scene_init nutzen, sonst
-         * würde das initial-create design = maximized-Dims setzen wenn
-         * der Callback vor dem explizten scene_init feuert (z.B. weil
-         * engine.maximize() aufgerufen wurde). */
+        /* scene_resize only updates screen_w/h — design_w/h stays fixed
+         * from the first scene_init.  Important: do not use scene_init, otherwise
+         * the initial create would set design = maximized dims if
+         * the callback fires before the explicit scene_init (e.g. because
+         * engine.maximize() was called). */
         aiml_prefab_scene_resize(fbw, fbh);
     });
 
@@ -303,11 +303,11 @@ void aiml_engine_maximize_window(void* win_ptr) {
 #endif
 }
 
-/* spec/44_1: Fensterposition auf dem Bildschirm.  Gebraucht, um eine
- * Widget-Fläche (Fenster-Pixel) in Bildschirmkoordinaten umzurechnen, wie sie
- * die OS-Ebenen-Injektion braucht (spec/44_0 §8.5).  0 ohne Fenster bzw. dort,
- * wo das Konzept nicht existiert (Browser/Android: das Canvas sitzt im
- * Dokument, nicht auf einem Bildschirm). */
+/* spec/44_1: window position on the screen.  Needed to convert a
+ * widget area (window pixels) into screen coordinates, as
+ * OS-level injection needs them (spec/44_0 §8.5).  0 without a window or where
+ * the concept does not exist (browser/Android: the canvas sits in the
+ * document, not on a screen). */
 int32_t aiml_engine_window_pos_x(void* win_ptr) {
     if (!win_ptr) return 0;
 #if !defined(__EMSCRIPTEN__) && !defined(__ANDROID__)

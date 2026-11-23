@@ -1,17 +1,17 @@
 #ifndef AIML_YAML_DUMP_H
 #define AIML_YAML_DUMP_H
 
-// Quelltext fuer ein Bundle wiederherstellen, OHNE die Zitierung zu verlieren.
+// Restore source text for a bundle WITHOUT losing the quoting.
 //
-// In aiml ist die Zitierung Bedeutung, nicht Formatierung: `nodeToExpr`
-// (src/core/ast_builder.cpp) unterscheidet ein String-Literal von einem Namen
-// genau am yaml-cpp-Tag "!", das nur zitierte Skalare tragen.  `YAML::Dump`
-// wirft dieses Tag weg — aus `call: [parts.push, "eins"]` wird
-// `call: [parts.push, eins]`, und beim Empfaenger ist "eins" plotzlich ein
-// Name.  Gemessen: der Rumpf meldete `Unknown Type: 'eins'`.
+// In aiml quoting is meaning, not formatting: `nodeToExpr`
+// (src/core/ast_builder.cpp) tells a string literal from a name
+// exactly by the yaml-cpp tag "!", which only quoted scalars carry.  `YAML::Dump`
+// throws this tag away — `call: [parts.push, "eins"]` becomes
+// `call: [parts.push, eins]`, and at the receiver "eins" is suddenly a
+// name.  Measured: the body reported `Unknown Type: 'eins'`.
 //
-// Darum hier ein Emitter, der zitierte Skalare zitiert laesst.  Er ist der
-// einzige erlaubte Weg, Bundle-Quelltext zu erzeugen (spec/29_2 §19).
+// Hence an emitter here that leaves quoted scalars quoted.  It is the
+// only permitted way to produce bundle source text (spec/29_2 §19).
 #include <string>
 #include <yaml-cpp/yaml.h>
 
@@ -24,11 +24,11 @@ inline void emitPreservingQuotes(YAML::Emitter& out, const YAML::Node& node) {
             else                   out << node.Scalar();
             break;
         case YAML::NodeType::Sequence:
-            // Auch der STIL ist Quelltext: `decl: [got, i32]` im Fluss-Stil
-            // wird im Block-Stil zu drei Zeilen.  yaml-cpp merkt sich den Stil
-            // am Knoten; wer ihn verwirft, verschickt eine andere Datei als
-            // die, die der Autor geschrieben hat (gemessen: der Socket-Test
-            // scheiterte daran, nicht an der Zitierung).
+            // The STYLE is source text too: `decl: [got, i32]` in flow style
+            // becomes three lines in block style.  yaml-cpp remembers the style
+            // on the node; whoever discards it sends a different file than
+            // the one the author wrote (measured: the socket test
+            // failed because of that, not because of the quoting).
             if (node.Style() == YAML::EmitterStyle::Flow) out << YAML::Flow;
             out << YAML::BeginSeq;
             for (const auto& item : node) emitPreservingQuotes(out, item);
