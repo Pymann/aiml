@@ -456,10 +456,10 @@ void Compiler::checkPtrIndirection(Program* prog) {
             for (const auto& a : fn->args) ps.push_back(a.second);
             freeSigs[fn->name] = std::move(ps);
         }
-    // spec/21 §6.2 F21-S2: die Gegenleistung fuer `singleton: true`.  Ein so
-    // erklaerter Anker darf GELESEN und benutzt werden, aber nicht an einen
-    // ptr<T>-Parameter gehen: dort besitzt ihn der Aufgerufene, sein Drop gibt
-    // frei, und der Anker zeigt ins Leere (zwei WASM-Abstuerze in cosmos).
+    // spec/21 §6.2 F21-S2: the price of `singleton: true`.  An anchor declared
+    // this way may be READ and used, but may not go to a
+    // ptr<T> parameter: there the callee owns it, its drop
+    // frees, and the anchor points into nothing (two WASM crashes in cosmos).
     std::set<std::string> singletonGlobals;
     for (const auto& d : prog->declarations)
         if (auto* dec = dynamic_cast<DeclStmt*>(d.get()))
@@ -517,9 +517,9 @@ void Compiler::checkPtrIndirection(Program* prog) {
         bool haveSig = (!isMethod && sig != freeSigs.end());
         for (size_t i = 0; i < args.size(); ++i) {
             std::string baseVar;
-            // F21-S2 zuerst: ein Anker steht nicht in `vt` (das sind die
-            // LOKALEN Typen), seine Tiefe waere UNKNOWN und die Pruefung
-            // darunter uebersprunge ihn.
+            // F21-S2 first: an anchor is not in `vt` (those are the
+            // LOCAL types), its depth would be UNKNOWN and the check
+            // below would skip it.
             if (!singletonGlobals.empty() && haveSig && i < sig->second.size()) {
                 if (auto* gvar = dynamic_cast<VariableExpr*>(args[i].get())) {
                     if (singletonGlobals.count(gvar->name) &&
@@ -866,11 +866,11 @@ void Compiler::checkPrefabUsage(Program* prog) {
         int ln = (c && c->sourceLine > 0) ? c->sourceLine : curStmtLine;
         return ctx.fmtLoc(c ? c->sourceNode : YAML::Node(), ln);
     };
-    // Tier 4 (spec/44_8): welche Instanzmethoden ueberhaupt auf Instanzen eines
-    // Prefabs gerufen werden -- JEDE, nicht nur die Kind-Methoden.  A1 braucht
-    // set_input_transparent als Notausgang, F44_8-5 die Zeige-, F44_8-6 die
-    // Lese-Methoden.  Ein Kindname, der kein Literal ist, macht die Lese-Analyse
-    // unvollstaendig und schaltet F44_8-6 fuer dieses Prefab ab.
+    // Tier 4 (spec/44_8): which instance methods are called on instances of a
+    // prefab at all -- EVERY one, not only the child methods.  A1 needs
+    // set_input_transparent as an escape hatch, F44_8-5 the pointing methods, F44_8-6 the
+    // reading methods.  A child name that is not a literal makes the read analysis
+    // incomplete and switches F44_8-6 off for this prefab.
     auto noteInstMethod = [&](const std::string& prefabName,
                               const std::string& method, CallExpr* call) {
         if (prefabName.empty() || !call) return;
@@ -1002,15 +1002,15 @@ void Compiler::checkPrefabUsage(Program* prog) {
     // {call:[engine.instantiate,"X"]}]` bindings only — conservative, so a
     // runtime-computed name is never falsely flagged), then verify every
     // `v.<child-method>("<child>", …)` against prefab X's declared children.
-    // ALLE Methoden, die ihren ersten Parameter durch das Laufzeit-`find_child`
-    // schicken (abgeglichen gegen src/sys/prefab_runtime.cpp, 2026-10-15).  Vorher
-    // standen hier 6 von 30 — die uebrigen 24 hatten genau dieselbe Fehlklasse,
-    // nur ohne Pruefung: `set_bg_color("stat_dot")` auf einen getippten Namen
-    // wirft zur Laufzeit (WASM: Programmabbruch), `is_checked("hakenx")` liefert
-    // stumm 0.  EINE Liste fuer Tier 2 und Tier 2b, damit nicht wieder zwei
-    // Haelften auseinanderlaufen.
+    // ALL methods that send their first parameter through the runtime `find_child`
+    // (cross-checked against src/sys/prefab_runtime.cpp, 2026-10-15).  Before,
+    // 6 of 30 were listed here — the other 24 had exactly the same error class,
+    // just without a check: `set_bg_color("stat_dot")` on a mistyped name
+    // throws at runtime (WASM: program abort), `is_checked("hakenx")` silently returns
+    // 0.  ONE list for Tier 2 and Tier 2b, so that two halves do not drift
+    // apart again.
     const std::set<std::string> childMethods = {
-        // schreibend — ein falscher Name WIRFT
+        // writing — a wrong name THROWS
         "set_text", "set_texture", "set_child_visible", "set_child_font_size",
         "set_dropdown_options", "set_dropdown_index", "set_dropdown_selected",
         "set_compact", "set_bg_color", "set_border_color", "set_color",
@@ -1018,7 +1018,7 @@ void Compiler::checkPrefabUsage(Program* prog) {
         "set_bar_value", "set_bar_max", "set_bar_fill",
         "set_slider_value", "set_slider_min", "set_slider_max",
         "focus", "select_all", "scroll_to_end", "bind_list",
-        // lesend — ein falscher Name liefert stumm einen Vorgabewert
+        // reading — a wrong name silently returns a default value
         "child_clicked", "text_value", "child_focused", "is_checked",
         "dropdown_value", "dropdown_index", "dropdown_enum",
         "get_slider_value", "selection", "container_row_count"
@@ -1144,10 +1144,10 @@ void Compiler::checkPrefabUsage(Program* prog) {
     // Tier 2 above only sees a scene in a LOCAL variable.  No screen is built
     // that way: it instantiates once in `init`, keeps the instance in a class
     // member and addresses children from every other method — so the entire
-    // production shape sat outside the check (gefunden 2026-10-11, geschlossen
-    // 2026-10-15, nachdem ein veraltetes `<.scene.set_texture("logo_img")` den
-    // WASM-Client von cosmos im ersten Rahmen abbrach: dort sind Ausnahmen aus,
-    // der Wurf aus find_child wird zum Programmabbruch).
+    // production shape sat outside the check (found 2026-10-11, closed
+    // 2026-10-15, after a stale `<.scene.set_texture("logo_img")` aborted the
+    // cosmos WASM client in the first frame: exceptions are off there,
+    // the throw from find_child becomes a program abort).
     //
     // Second half of the same gap sits in `childMethods` above: the READING
     // methods.  A typo in child_clicked is a silently dead button and one in
@@ -1268,8 +1268,8 @@ void Compiler::checkPrefabUsage(Program* prog) {
                 // No chained receivers: `<.state.menu.scene.set_text` names a
                 // field of ANOTHER object, whose binding lives in another class.
                 if (field.find('.') != std::string::npos) return;
-                // Tier 4: auch hier VOR dem Kind-Methoden-Filter mitschreiben --
-                // set_input_transparent und is_hovered sind keine Kind-Methoden.
+                // Tier 4: record here too, BEFORE the child method filter --
+                // set_input_transparent and is_hovered are not child methods.
                 if (!ambiguous.count(field)) {
                     auto fpIt = fieldPrefab.find(field);
                     if (fpIt != fieldPrefab.end())
@@ -1618,33 +1618,33 @@ static void serEmitGlobal(const std::string& name, const std::vector<AimlTypeNod
 // round4 (forward-ref fix): rebuild a type's serNodes after the registration fixpoint (defined below).
 static void rebuildSerNodesFor(CompilerContext& ctx, const std::string& typeName);
 
-// spec/21 §6.2 Regel 5: ein modulweites Global ist ein GERUCH, kein Fehler.
-// Zustand gehoert in eine Klasse oder eine Gruppen-Instanz; ein Global hat keinen
-// Eigentuemer.  Ein BESITZENDES Global (ptr<T>) ist der schlimmste Fall: wird es an
-// einen ptr<T>-Parameter gereicht, wandert der Besitz weg und jeder andere Leser
-// haelt einen toten Zeiger (gemessen in cosmos, zwei WASM-Abstuerze 2026-10-13/14).
+// spec/21 §6.2 rule 5: a module-wide global is a SMELL, not an error.
+// State belongs in a class or a group instance; a global has no
+// owner.  An OWNING global (ptr<T>) is the worst case: if it is passed to
+// a ptr<T> parameter, ownership moves away and every other reader
+// holds a dead pointer (measured in cosmos, two WASM crashes 2026-10-13/14).
 //
-// EINE Funktion fuer BEIDE Registrierungsstellen: zwei Kopien derselben Pruefung
-// laufen auseinander (so entstand der memV3-Doppelgate-Fehler), und eine Haelfte,
-// die schweigt, ist schlimmer als keine Pruefung.
+// ONE function for BOTH registration sites: two copies of the same check
+// drift apart (that is how the memV3 double-gate bug came about), and a half
+// that stays silent is worse than no check.
 static void lintModuleGlobal(CompilerContext& ctx, const DeclStmt* decl) {
     if (!decl) return;
     const char* lintEnv = getenv("AIML_LINT_GLOBALS");
     if (lintEnv && (lintEnv[0] == '0' || lintEnv[0] == 'n' || lintEnv[0] == 'f')) return;
-    // Eine KONSTANTE ist kein Zustand (User 2026-10-14): nie zugewiesen, nie
-    // weitergereicht, besitzt nichts — ein benanntes Literal.  Dafuer zu warnen
-    // hiesse, das Benennen zu bestrafen und eine nackte Zahl zu belohnen.
-    // Nicht-const bleibt gemeldet: ein schreibbares Primitiv ist geteilter
-    // veraenderlicher Zustand.
+    // A CONSTANT is not state (user 2026-10-14): never assigned, never
+    // passed on, owns nothing — a named literal.  Warning about it
+    // would punish naming and reward a bare number.
+    // Non-const stays reported: a writable primitive is shared
+    // mutable state.
     static const std::set<std::string> kPrimitive = {
         "i8","i16","i32","i64","u8","u16","u32","u64",
         "f32","f64","bool","string","char"
     };
     if (decl->is_const && kPrimitive.count(decl->typeName)) return;
-    // spec/21 §6.2 F21-S1: ein erklaerter Anker.  `engine.run` nimmt freie
-    // Funktionen — ohne Modul-Global gaebe es keinen Weg zum Zustand.  Das
-    // Schweigen ist bezahlt: F21-S2 verbietet, ihn an einen ptr<T>-Parameter
-    // zu reichen (geprueft im Ganzprogramm-Durchgang).
+    // spec/21 §6.2 F21-S1: a declared anchor.  `engine.run` takes free
+    // functions — without a module global there would be no way to the state.  The
+    // silence is paid for: F21-S2 forbids passing it to a ptr<T> parameter
+    // (checked in the whole-program pass).
     if (decl->is_singleton) return;
     bool owning = decl->typeName.rfind("ptr<", 0) == 0;
     LOG_WARNING(ctx.fmtLoc(decl->sourceNode, decl->sourceLine, decl->sourceColumn) +
@@ -1668,7 +1668,7 @@ void Compiler::compile(Program* prog) {
     // test_conditional_durations "free(): double free"), a SEGV (test_activate_ability), and a
     // behavioral regression (test_creature_costs "sac1 nicht im Friedhof" — a card dropped before
     // spec/61 lifetime drops are now the DEFAULT (paired with memV3 as the standard model,
-    // Entscheidung 2026-09-21). Opt OUT for pre-feature comparison with AIML_LIFETIME_DROPS=0.
+    // decision 2026-09-21). Opt OUT for pre-feature comparison with AIML_LIFETIME_DROPS=0.
     ctx.lifetimeDropsEnabled = true;
     if (const char* de = getenv("AIML_LIFETIME_DROPS")) {
         std::string s = de;
@@ -1974,8 +1974,8 @@ void Compiler::compile(Program* prog) {
             std::string symName = decl->is_extern
                 ? "__lib_" + decl->varName
                 : "__global_" + decl->varName;
-            // spec/29_2 §22: Quelltext merken, damit sys.bundle eine benutzte
-            // Globale mitschicken kann.
+            // spec/29_2 §22: remember the source text, so that sys.bundle can send
+            // along a global that is used.
             if (decl->sourceNode && ctx.globalSources.find(decl->varName) == ctx.globalSources.end())
                 ctx.globalSources[decl->varName] = aiml::dumpPreservingQuotes(decl->sourceNode);
             auto linkage = decl->is_extern
@@ -2100,14 +2100,14 @@ void Compiler::compile(Program* prog) {
         // Visit all declarations in file order (preserving execution order).
         // visitDeclStmt will detect is_global=true and skip alloca creation,
         // only emitting the initializer at the correct point in the sequence.
-        // Top-level-Style-Check: OPT-IN via env var `AIML_STRICT_TOPLEVEL`.
-        // Gesetzt (irgendein truthy Wert) → top-level imperative Statements
-        // sind Compile-Errors.  Default (env unset oder "0") → kein Check.
+        // Top-level style check: OPT-IN via env var `AIML_STRICT_TOPLEVEL`.
+        // Set (any truthy value) → top-level imperative statements
+        // are compile errors.  Default (env unset or "0") → no check.
         //
-        // Hintergrund: top-level Imperative laufen in __aiml_init und
-        // unterliegen dem decl-Hoisting-Problem (decl mit call-initializer
-        // feuert vor imperativen Statements).  In `main()` ist die Ordnung
-        // deterministisch.  `main` wird automatisch vom C-entrypoint gerufen.
+        // Background: top-level imperatives run in __aiml_init and
+        // are subject to the decl hoisting problem (decl with a call initializer
+        // fires before imperative statements).  In `main()` the order is
+        // deterministic.  `main` is called automatically by the C entry point.
         const char* strictEnv = getenv("AIML_STRICT_TOPLEVEL");
         bool strict = false;
         if (strictEnv && *strictEnv) {
@@ -2133,13 +2133,13 @@ void Compiler::compile(Program* prog) {
             ensureInitPoint();
             visitTopLevel(decl.get());
             if (!strict) continue;
-            // Erlaubt sind import/class/def/decl/extern_block/model.
+            // Allowed are import/class/def/decl/extern_block/model.
             if (auto* stmt = dynamic_cast<Stmt*>(decl.get())) {
                 if (auto* dst = dynamic_cast<DeclStmt*>(stmt)) {
                     if (dst->initialValue && dynamic_cast<CallExpr*>(dst->initialValue.get())) {
                         LOG_ERROR(ctx.fmtLoc(dst->sourceNode) + "top-level decl '" + dst->varName +
-                            "' has a call() initializer — wird gehoist und läuft VOR " +
-                            "imperative top-level Statements.  In main() verschieben.");
+                            "' has a call() initializer — it is hoisted and runs BEFORE " +
+                            "imperative top-level statements.  Move it into main().");
                     }
                 } else if (auto* ex = dynamic_cast<ExprStmt*>(stmt)) {
                     if (auto* ce = dynamic_cast<CallExpr*>(ex->expr.get())) {
@@ -2156,9 +2156,9 @@ void Compiler::compile(Program* prog) {
         }
         ctx.inTopLevelInit = false;
 
-        // `main` wird vom generateEntryPoint() in compiler.cpp automatisch
-        // gerufen (renamed → __aiml_user_main, dann aus dem C-entrypoint).
-        // Ein explizites `- call: [main]` am top-level würde main DOPPELT rufen.
+        // `main` is called automatically by generateEntryPoint() in compiler.cpp
+        // (renamed → __aiml_user_main, then from the C entry point).
+        // An explicit `- call: [main]` at top level would call main TWICE.
         if (strict && hasExplicitMainCall) {
             LOG_ERROR(ctx.fmtLoc() + "explicit `- call: [main]` at top-level causes a double-call: "
                       "`main` is already invoked by the C entry-point.  Remove the explicit call.");
@@ -2201,11 +2201,11 @@ void Compiler::compile(Program* prog) {
         }
 
         // ── Static check: same_arg ─────────────────────────────────────────
-        // 3+ freie Funktionen, die irgendwo in ihrer Arg-Liste dasselbe Pärchen
-        // (Name, Typ) tragen, sind ein starkes Signal dafür, dass sie Methoden
-        // auf einer Klasse sein sollten.  Pro Funktion via
-        // `static_off: ["same_arg"]` abschaltbar.  Class-Methoden werden NICHT
-        // geprüft — die sind schon klassen-organisiert.
+        // 3+ free functions that carry the same pair (name, type) somewhere in
+        // their arg list are a strong signal that they should be methods
+        // on a class.  Can be switched off per function via
+        // `static_off: ["same_arg"]`.  Class methods are NOT
+        // checked — they are already organised by class.
         {
             std::map<std::string, std::vector<FunctionDecl*>> byArg;
             for (const auto& d : prog->declarations) {
@@ -2221,9 +2221,9 @@ void Compiler::compile(Program* prog) {
                 if (fn->args.size() == 2 &&
                     fn->args[0].second == "http_request_handle" &&
                     fn->args[1].second == "http_response_handle") continue;
-                // Pro Arg-Pärchen in dieser Funktion einen Eintrag.  Dedup über
-                // Funktion: wenn dieselbe Funktion das Pärchen mehrfach hat
-                // (was eigentlich nicht vorkommt), nur einmal zählen.
+                // One entry per arg pair in this function.  Dedup per
+                // function: if the same function has the pair several times
+                // (which should not really happen), count it only once.
                 std::set<std::string> seen;
                 for (const auto& a : fn->args) {
                     std::string key = a.first + ":" + a.second;
@@ -2991,9 +2991,9 @@ void Compiler::synthesizeServices(Program* prog) {
         else LOG_ERROR("internal: could not synthesize model 'ServiceError' (spec/66 §8).");
     }
 
-    // §8 — die beiden Ausnahmen, die auf 404/400 abgebildet werden.  `Exception` ist in
-    // aiml nicht eingebaut (spec/22), also legen wir die Wurzel an, wenn das Projekt
-    // keine hat; eine vorhandene wird NICHT ersetzt.
+    // §8 — the two exceptions that are mapped to 404/400.  `Exception` is not
+    // built into aiml (spec/22), so we create the root if the project
+    // has none; an existing one is NOT replaced.
     auto knownType = [&](const std::string& tn) {
         if (ctx.classes.count(tn)) return true;
         for (auto& d : prog->declarations) {
@@ -3042,7 +3042,7 @@ void Compiler::synthesizeServices(Program* prog) {
             if (t == "rest") restTransport = true;
             if (t == "cli")  cliTransport  = true;
         }
-        // Das Projekt BESITZT das Auth-Objekt; die Fassade leiht es nur (spec/61).
+        // The project OWNS the auth object; the facade only borrows it (spec/61).
         const std::string gateType  = "ref<" + sv->auth + ">";
         const std::string gateGlobal = "service_gate_" + sv->name;
         std::string dispatchBody;                        // one branch per endpoint
@@ -3135,16 +3135,16 @@ void Compiler::synthesizeServices(Program* prog) {
                 else LOG_ERROR(ctx.fmtLoc(sv->sourceNode, sv->sourceLine, sv->sourceColumn) + "service '" + sv->name + "': internal — could not synthesize '" +
                                rpcName + "'.");
 
-                // Einrueckung: der Rumpf sitzt in einer Methode der Fassade.
+                // Indentation: the body sits in a method of the facade.
                 dispatchBody += "            - if:\n                condition: { eq: [evt.method, " + q(ep.name) + "] }\n"
                                 "                then:\n                  - return: { call: [" + rpcName +
                                 ", evt, sess" + (guarded ? std::string(", <.auth") : std::string()) + "] }\n";
             }
 
             if (restTransport && !ep.verb.empty()) {
-                // §4.2 — Quellenreihenfolge: JSON-Body, dann Pfadparameter.  Eine
-                // spaetere Quelle ueberschreibt nie eine fruehere, darum fuellt der
-                // Pfad nur, was der Body leer gelassen hat.
+                // §4.2 — source order: JSON body, then path parameters.  A
+                // later source never overwrites an earlier one, which is why the
+                // path only fills what the body left empty.
                 const std::string httpName = bodyName + "_http";
                 std::string ht = "- def:\n    name: " + httpName + "\n"
                     "    args: [[htreq, http_request_handle], [htresp, http_response_handle]]\n"
@@ -3167,8 +3167,8 @@ void Compiler::synthesizeServices(Program* prog) {
                               "          then:\n            - set: [model." + pn +
                               ", { call: [path_vals.get, " + q(pn) + "] }]\n";
                 }
-                // §8 — eine Fehlerantwort ist ein serialisiertes ServiceError, kein
-                // handgeschriebenes JSON: die Meldung wird dadurch korrekt escaped.
+                // §8 — an error response is a serialised ServiceError, not
+                // hand-written JSON: that way the message is escaped correctly.
                 auto httpFail = [&](const std::string& indent, int code,
                                     const std::string& msgExpr, const std::string& varName) {
                     return indent + "- decl: [" + varName + ", ServiceError]\n" +
@@ -3178,7 +3178,7 @@ void Compiler::synthesizeServices(Program* prog) {
                            indent + "- set: [htresp.body, { call: [sys.serialize, " + varName + ", plain] }]\n";
                 };
                 if (guarded) {
-                    // Token: erst das Feld (Body/Pfad), sonst der Authorization-Header.
+                    // Token: first the field (body/path), otherwise the Authorization header.
                     ht += "      - if:\n          condition: { eq: [model.token, \"\"] }\n          then:\n"
                           "            - decl: [head_val, string]\n"
                           "            - set: [head_val, { call: [htreq.header, \"Authorization\"] }]\n"
@@ -3231,20 +3231,20 @@ void Compiler::synthesizeServices(Program* prog) {
             }
 
             if (cliTransport) {
-                // Der Rumpf des Unterkommandos entsteht in synthesizeServiceBodies —
-                // er braucht die FELDER des Request-Modells, und ein importiertes
-                // Modell steht erst nach registerTypes in der Klassentabelle.
+                // The body of the subcommand is created in synthesizeServiceBodies —
+                // it needs the FIELDS of the request model, and an imported
+                // model is only in the class table after registerTypes.
                 const std::string sub = ep.cli.empty() ? ep.name : ep.cli.front();
                 cliBranches += "            - if:\n                condition: { eq: [sub, " + q(sub) + "] }\n"
                                "                then:\n                  - return: { call: [" + bodyName +
                                "_cli, args] }\n";
             }
 
-            // §3 Client-Stub: dieselbe Methode, nur ueber send_and_await.  Die
-            // Antwort kommt in einen vom Aufrufer gehaltenen ptr (spec/44_5).
+            // §3 client stub: the same method, only via send_and_await.  The
+            // response goes into a ptr held by the caller (spec/44_5).
             clientMethods += "      - def:\n          name: " + ep.name + "\n"
                 "          args: [[sess, mirror_session], [req, " + ep.requestType +
-                "], [out, " + q("ref<" + ep.returnType + ">") + "]]\n"   // Puffer gehoert dem Aufrufer
+                "], [out, " + q("ref<" + ep.returnType + ">") + "]]\n"   // buffer belongs to the caller
                 "          return: i32\n"
                 "          static_off: [\"str_cmp\", \"same_arg\", \"lines\"]\n"
                 "          body:\n            - return: { call: [sess.send_and_await, 0, " +
@@ -3293,8 +3293,8 @@ void Compiler::synthesizeServices(Program* prog) {
                       "            - return: 0\n";
         }
         if (guarded && !restRoutes.empty()) {
-            // Ein Routen-Handler ist ein Funktionszeiger ohne Zustand; das Gate
-            // liegt deshalb in einem Modul-Global, das serve_rest fuellt (§6).
+            // A route handler is a function pointer without state; the gate
+            // therefore lives in a module global that serve_rest fills (§6).
             std::string gy = "- decl: [" + gateGlobal + ", " + q(gateType) + ", null]\n";
             if (auto gd = parseDeclSnippet(gy)) models.push_back(std::move(gd));
             else LOG_ERROR(ctx.fmtLoc(sv->sourceNode, sv->sourceLine, sv->sourceColumn) + "service '" + sv->name + "': internal — could not synthesize the gate global.");
@@ -3306,8 +3306,8 @@ void Compiler::synthesizeServices(Program* prog) {
         }
         else LOG_ERROR("service '" + sv->name + "': internal — could not synthesize the facade.");
 
-        // §3 Client-Fassade.  Eigene Klasse, damit ein reiner Client (wasm, §4.4)
-        // sie ohne den Server-Teil halten kann.
+        // §3 client facade.  A class of its own, so that a pure client (wasm, §4.4)
+        // can hold it without the server part.
         if (!clientMethods.empty()) {
             std::string cy = "- class:\n    name: " + sv->name + "Client\n    members:\n"
                              "      - [timeout_ms, i32, 4000]\n    methods:\n"
@@ -3332,9 +3332,9 @@ void Compiler::synthesizeServices(Program* prog) {
     for (auto& n : toAppend) prog->declarations.push_back(std::move(n));
 }
 
-// spec/66 §4.3 — zweiter Durchgang, NACH registerTypes: hier sind auch importierte
-// Modelle bekannt, und nur hier laesst sich ein Unterkommando aus den FELDERN des
-// Request-Modells fuellen.  Die Fassade (Durchgang 1) ruft diese Funktionen bereits.
+// spec/66 §4.3 — second pass, AFTER registerTypes: here imported models are
+// known too, and only here can a subcommand be filled from the FIELDS of the
+// request model.  The facade (pass 1) already calls these functions.
 void Compiler::synthesizeServiceBodies(Program* prog) {
     if (!prog) return;
     std::vector<ServiceDecl*> services;
@@ -3363,9 +3363,9 @@ void Compiler::synthesizeServiceBodies(Program* prog) {
             if (!ep.captured) continue;
             const std::string bodyName = sv->name + "_" + ep.name;
             {
-                // §4.3 — Unterkommando: Flags in das Request-Modell, derselbe Rumpf,
-                // Antwort als JSON auf stdout.  Die Argumentliste wird UEBERGEBEN
-                // (ein JIT-Lauf hat gar kein argv, spec/23).
+                // §4.3 — subcommand: flags into the request model, the same body,
+                // response as JSON on stdout.  The argument list is PASSED IN
+                // (a JIT run has no argv at all, spec/23).
                 const std::string cliName = bodyName + "_cli";
                 std::string ct = "- def:\n    name: " + cliName + "\n"
                     "    args: [[args, " + q("list<string>") + "]]\n"
@@ -3398,7 +3398,7 @@ void Compiler::synthesizeServiceBodies(Program* prog) {
                               ", { call: [val.parse_i32] }]\n"
                               "                      else:\n                        - set: [model." + fld.first + ", 1]\n";
                     }
-                    // andere Typen: V1 fuellt sie nicht (spec/09 kennt nur parse_i32/parse_f32)
+                    // other types: V1 does not fill them (spec/09 only knows parse_i32/parse_f32)
                 }
                 ct += "            - set: [idx, { '+': [idx, step] }]\n"
                       "      - decl: [answer, " + ep.returnType + ", { call: [" + bodyName + ", model] }]\n"
@@ -3414,8 +3414,8 @@ void Compiler::synthesizeServiceBodies(Program* prog) {
             }
         }
     }
-    // VORNE einfuegen: die Fassade (Durchgang 1) ruft diese Funktionen, und eine
-    // Deklaration dahinter ist fuer sie nicht sichtbar.
+    // Insert at the FRONT: the facade (pass 1) calls these functions, and a
+    // declaration after it is not visible to it.
     for (auto it = toAppend.rbegin(); it != toAppend.rend(); ++it)
         prog->declarations.insert(prog->declarations.begin(), std::move(*it));
 }
@@ -4104,13 +4104,13 @@ void Compiler::synthesizeClassGroups(Program* prog) {
                 for (size_t ai = 1; ai < inst.constructor.size(); ++ai) {
                     const std::string& arg = inst.constructor[ai];
                     if (paramNames.count(arg)) { line += ", <." + arg; continue; }
-                    // spec/58 §4: was kein Gruppen-Parameter ist, ist ein LITERAL.
-                    // Die YAML-Analyse hat die Anführungszeichen eines Strings
-                    // bereits entfernt, also müssen sie hier zurück — sonst
-                    // emittiert `constructor: [init, "cas"]` ein nacktes `cas`,
-                    // das der Compiler als Typnamen liest ("Unknown Type: 'cas'").
-                    // Zahlen, Booleans und qualifizierte Namen (Enum-Member wie
-                    // `Kind.file`, sowie Fliesskommazahlen) gehen unverändert durch.
+                    // spec/58 §4: what is not a group parameter is a LITERAL.
+                    // The YAML analysis has already removed the quotation marks of a string,
+                    // so they have to go back here — otherwise
+                    // `constructor: [init, "cas"]` emits a bare `cas`,
+                    // which the compiler reads as a type name ("Unknown Type: 'cas'").
+                    // Numbers, booleans and qualified names (enum members like
+                    // `Kind.file`, as well as floating-point numbers) pass through unchanged.
                     auto looksNumeric = [](const std::string& s) {
                         if (s.empty()) return false;
                         size_t i = (s[0] == '-' || s[0] == '+') ? 1 : 0;
@@ -4319,19 +4319,19 @@ void Compiler::registerTypes(Program* prog) {
         };
     }
 
-    // spec/62 §7: CacheClass — die Wiederverwendungsklasse eines Schritts.
-    // Werte MUESSEN zu pipeline_runtime.cpp passen (0=opaque 1=resolved 2=pure).
+    // spec/62 §7: CacheClass — the reuse class of a step.
+    // Values MUST match pipeline_runtime.cpp (0=opaque 1=resolved 2=pure).
     if (!ctx.enums.count("CacheClass")) {
         ctx.enums["CacheClass"] = { {"opaque", 0}, {"resolved", 1}, {"pure", 2} };
     }
-    // spec/62 §5.6: Reichweite eines Fehlschlags (F62-39).
+    // spec/62 §5.6: reach of a failure (F62-39).
     if (!ctx.enums.count("OnFail")) {
         ctx.enums["OnFail"] = { {"lane", 0}, {"pipeline", 1}, {"proceed", 2} };
     }
-    // spec/62 §5.7: StepStatus — sechs Werte, die Bedeutungen sind offen
-    // (F62-42, §16 Punkt 6).  Die Reihenfolge hier ist NUR die Nummerierung,
-    // nicht die Praezedenz; die steht in pipeline_runtime.cpp (F62-93).
-    // spec/62 §5.5: laeuft ein Schritt je Lane oder einmal fuer die Matrix?
+    // spec/62 §5.7: StepStatus — six values, the meanings are open
+    // (F62-42, §16 item 6).  The order here is ONLY the numbering,
+    // not the precedence; that is in pipeline_runtime.cpp (F62-93).
+    // spec/62 §5.5: does a step run per lane or once for the matrix?
     if (!ctx.enums.count("Per")) {
         ctx.enums["Per"] = { {"lane", 0}, {"once", 1} };
     }
@@ -4350,10 +4350,10 @@ void Compiler::registerTypes(Program* prog) {
         "DivisionByZeroException", "StackOverflowException", "OutOfMemoryException", "TimeoutException",
         "SerializationException", "DeserializationException", "BufferOverflowException", "BufferUnderflowException",
         "InvalidThreadStateException",
-        // spec/29_2 §14a (F29_2-…d2): zwei Fehler beim Abgreifen eines Symbols
-        // aus einem Kontext — der Name ist unbekannt, oder der genannte Typ
-        // passt nicht.  Zwei Namen, damit ein `catch` sie unterscheiden kann;
-        // ohne Eintrag hier traegt der Wurf ein Tag, das kein `catch` kennt.
+        // spec/29_2 §14a (F29_2-…d2): two errors when grabbing a symbol
+        // from a context — the name is unknown, or the named type
+        // does not match.  Two names, so that a `catch` can tell them apart;
+        // without an entry here the throw carries a tag that no `catch` knows.
         "SymbolMissingException", "SymbolTypeException"
     };
 
@@ -4838,7 +4838,7 @@ static std::vector<AimlTypeNode> serBuildSubtree(
     // aiml_ser_free_decoded neither retain nor release the elements → LEAK on copy/scope-drop
     // (measured 6780 B/200 iters, tests/_inline_model_red/p2_array_field_leak_RED.aiml). Warn once per
     // element type so the latent leak is visible; the real fix is a STRUCT-composition lifecycle
-    // descriptor (Paket 2, not done here — it risks the schema-fp/wire, so it needs its own pass).
+    // descriptor (package 2, not done here — it risks the schema-fp/wire, so it needs its own pass).
     if (typeName.rfind("array<", 0) == 0 && typeName.back() == '>') {
         std::string inner = typeName.substr(6, typeName.size() - 7);   // "string:3" / "map<string:i32>:3" / "T:3:4"
         // Element type = up to the FIRST top-level ':' (dimensions follow). A ':' inside a nested
@@ -4903,34 +4903,34 @@ static void serEmitGlobal(
     }
     llvm::ArrayType* arrTy = llvm::ArrayType::get(nodeTy, elems.size());
     llvm::Constant* init = llvm::ConstantArray::get(arrTy, elems);
-    // LinkOnceODRLinkage: wenn zwei Compilation-Units denselben Typ
-    // serialisieren (z.B. Modul A öffnet `Kv<string:T>`, importiertes Modul B
-    // öffnet dieselbe Kv), emittieren beide identische ser_nodes-Arrays.
-    // Mit PrivateLinkage hätte jedes Modul seinen eigenen Pointer; der
-    // db-Singleton-Cache (aiml_db_kv_open_typed_persist) registriert beim
-    // ersten Open einen der beiden, ignoriert den zweiten — danach passt der
-    // Caller mit MISMATCH-Pointer encode mit anderen Offsets. Mit linkonce_odr
-    // werden die Symbole vom Linker gemerged: alle Module zeigen auf
-    // dieselbe ser_nodes-Definition.
+    // LinkOnceODRLinkage: when two compilation units serialise the same type
+    // (e.g. module A opens `Kv<string:T>`, imported module B
+    // opens the same Kv), both emit identical ser_nodes arrays.
+    // With PrivateLinkage each module would have its own pointer; the
+    // db singleton cache (aiml_db_kv_open_typed_persist) registers one of the two on
+    // the first open and ignores the second — after that the caller
+    // with the MISMATCHED pointer encodes with different offsets. With linkonce_odr
+    // the symbols are merged by the linker: all modules point to
+    // the same ser_nodes definition.
     //
-    // Dedup INNERHALB einer Compilation-Unit: serEmitGlobal wird für denselben Typ mehrfach
-    // aufgerufen — inline in registerTypeDecl und danach aus rebuildSerNodesFor bei JEDER
-    // registerTypes-Phase (imports, siblings, main, compileFromString). Ein jedes Mal ein frisches
-    // Global anzulegen ließ LLVM den kollidierenden Namen durchnummerieren
-    // (__aiml_sernodes_ServerRuntime.NNNNN); bei O0 werden diese LinkOnceODR-Duplikate nie
-    // dead-gestrippt, sodass ein einzelnes .o hunderte 59-KB-Kopien ansammelte (ServerRuntime
-    // allein: 495×) → jedes Objekt ~31 MB → der 5,5-GB-Server-Link sprengte das small code model
-    // (relocation truncated to fit). Deshalb die bestehende Definition wiederverwenden.
-    // Wiederverwenden NUR bei bit-identischem Inhalt: LLVM uniquet Constants, also liefert
-    // ConstantArray::get(arrTy, elems) für gleiche Elemente denselben Constant* → `init` ist
-    // pointer-identisch zum vorhandenen Initializer genau dann, wenn der Descriptor unverändert
-    // ist. Das ist der 185×-Fall (dieselbe registerTypes-Phase über Imports/Siblings/Main). Dann
-    // kein neues Global. Bei ABWEICHENDEM Inhalt NICHT den bestehenden Initializer mutieren (ein
-    // früherer setInitializer-Ansatz überschrieb bei zufällig gleicher Node-Zahl ein bereits
-    // korrektes Descriptor-Global mit anderem Inhalt → unter memV3 treibt der Descriptor
-    // Teardown/Free → Crash, siehe mkp_* rc139). Stattdessen frisch anlegen und das alte
-    // (forward-ref-unvollständige) per RAUW umbiegen + entfernen — semantisch wie vor dem Dedup,
-    // nur ohne die dead-Duplikate.
+    // Dedup WITHIN a compilation unit: serEmitGlobal is called several times for the same type
+    // — inline in registerTypeDecl and afterwards from rebuildSerNodesFor in EVERY
+    // registerTypes phase (imports, siblings, main, compileFromString). Creating a fresh
+    // global each time made LLVM number the colliding name
+    // (__aiml_sernodes_ServerRuntime.NNNNN); at O0 these LinkOnceODR duplicates are never
+    // dead-stripped, so a single .o accumulated hundreds of 59 KB copies (ServerRuntime
+    // alone: 495×) → each object ~31 MB → the 5.5 GB server link blew the small code model
+    // (relocation truncated to fit). Hence the existing definition is reused.
+    // Reuse ONLY with bit-identical contents: LLVM uniques constants, so
+    // ConstantArray::get(arrTy, elems) returns the same Constant* for equal elements → `init` is
+    // pointer-identical to the existing initializer exactly when the descriptor is unchanged.
+    // That is the 185× case (the same registerTypes phase across imports/siblings/main). Then
+    // no new global. With DIFFERING contents do NOT mutate the existing initializer (an
+    // earlier setInitializer approach, with a coincidentally equal node count, overwrote an already
+    // correct descriptor global with different contents → under memV3 the descriptor drives
+    // teardown/free → crash, see mkp_* rc139). Instead create a fresh one and redirect the old
+    // (forward-ref-incomplete) one via RAUW + remove it — semantically as before the dedup,
+    // just without the dead duplicates.
     std::string symName = "__aiml_sernodes_" + name;
     llvm::GlobalVariable* old = ctx.module().getNamedGlobal(symName);
     llvm::GlobalVariable* gv = nullptr;
@@ -5765,8 +5765,8 @@ void Compiler::registerTypeDecl(Node* node) {
             auto& declSet = ctx.enumDeclMembers[enumName];
             for (const auto& val : enm->values) declSet.insert(val.first);
             ctx.enumDeclLoc[enumName] = ctx.fmtLoc(enm->sourceNode);
-            // spec/49 §18.2a: `wire: true` zaehlt wie eine reflexive
-            // Ganz-Enum-Nutzung — der andere Build benennt die Mitglieder.
+            // spec/49 §18.2a: `wire: true` counts like a reflexive
+            // whole-enum use — the other build names the members.
             if (enm->wire) {
                 auto& useSet = ctx.enumUsedMembers[enumName];
                 for (const auto& val : enm->values) useSet.insert(val.first);
@@ -5987,8 +5987,8 @@ void Compiler::registerTypeDecl(Node* node) {
         // the Tier-2 child-known check.  See spec/44_8_prefab_static.md.
         ctx.prefabDeclLoc[prefab->name] =
             ctx.fmtLoc(prefab->sourceNode, prefab->sourceLine, prefab->sourceColumn);
-        // Tier 4 (spec/44_8): die Deklaration selbst mitschreiben.  Die Pruefung
-        // laeuft erst im Ganzprogramm-Durchgang, wo der AST weg ist.
+        // Tier 4 (spec/44_8): record the declaration itself.  The check
+        // only runs in the whole-program pass, where the AST is gone.
         {
             aiml::prefab::Meta meta;
             meta.loc    = ctx.prefabDeclLoc[prefab->name];
@@ -6304,15 +6304,15 @@ void Compiler::visitTopLevel(Node* node) {
             auto* init = llvm::ConstantArray::get(arrTy, slots);
             // Qualified like the upcast site's lookup (it names the class by its type).
             std::string vtableName = "__vtable_" + ctx.qualify(cls->name) + "_" + ifaceName;
-            // LinkOnceODR statt Private: vtables müssen über .o-Grenzen sichtbar
-            // sein, weil buildInterfaceUpcast aus einem ANDEREN compilation unit
-            // (z.B. Factory) sie referenziert.  ODR-Dedup vermeidet Linker-
-            // Konflikte falls dieselbe Klasse aus mehreren imports auftaucht.
-            // Vorher: PrivateLinkage → silent-null in cross-file upcast → SIGSEGV
-            // bei interface-method dispatch.
+            // LinkOnceODR instead of Private: vtables must be visible across .o boundaries,
+            // because buildInterfaceUpcast references them from a DIFFERENT compilation unit
+            // (e.g. Factory).  ODR dedup avoids linker
+            // conflicts if the same class shows up from several imports.
+            // Before: PrivateLinkage → silent null in cross-file upcast → SIGSEGV
+            // on interface method dispatch.
             if (auto* existing = ctx.module().getNamedGlobal(vtableName)) {
-                // Forward-decl (from cross-file upcast) wurde schon emitted.
-                // Jetzt mit Definition aufrüsten.
+                // Forward decl (from cross-file upcast) was already emitted.
+                // Now upgrade it with the definition.
                 if (!existing->hasInitializer()) {
                     existing->setInitializer(init);
                     existing->setLinkage(llvm::GlobalValue::LinkOnceODRLinkage);
@@ -6346,10 +6346,10 @@ void Compiler::visitTopLevel(Node* node) {
         std::string childrenJson = "[";
         for (size_t i = 0; i < prefab->children.size(); i++) {
             auto& c = prefab->children[i];
-            // Asset-Registry-Validierung: `texture: "<stem>"` muss zur
-            // Compile-Zeit auflösbar sein (gleicher Vertrag wie
-            // `gl.tex("<stem>")`).  Pfade mit Slash/Punkt = legacy raw paths
-            // — die laufen weiter durchs path-based fallback im Runtime.
+            // Asset registry validation: `texture: "<stem>"` must be
+            // resolvable at compile time (same contract as
+            // `gl.tex("<stem>")`).  Paths with slash/dot = legacy raw paths
+            // — those keep going through the path-based fallback in the runtime.
             if (!c.texture.empty() &&
                 c.texture.find('/') == std::string::npos &&
                 c.texture.find('.') == std::string::npos &&
@@ -6666,11 +6666,11 @@ void Compiler::visitTopLevel(Node* node) {
         /* Emit aiml_material_register(name, shader, uniforms_json) at program
          * init. uniforms_json uses a compact tagged format the runtime parser
          * understands; see prefab_runtime.h. */
-        /* Asset-Registry-Validierung: `shader: "<stem>"` muss zur Compile-Zeit
-         * auflösbar sein (gleicher Vertrag wie texture:/gl.tex).  Ohne diese
-         * Prüfung schlägt ein Tippfehler erst zur Laufzeit fehl — und dort nur
-         * still (Fallback auf den Default-Shader).  Pfade mit Slash/Punkt =
-         * legacy raw paths, die weiter durchs runtime fopen laufen. */
+        /* Asset registry validation: `shader: "<stem>"` must be resolvable at
+         * compile time (same contract as texture:/gl.tex).  Without this
+         * check a typo only fails at runtime — and there only
+         * silently (fallback to the default shader).  Paths with slash/dot =
+         * legacy raw paths that keep going through the runtime fopen. */
         if (!mat->shader.empty() &&
             mat->shader.find('/') == std::string::npos &&
             mat->shader.find('.') == std::string::npos &&
@@ -6887,10 +6887,10 @@ void Compiler::visitFunction(FunctionDecl* func) {
         const auto& arg = func->args[ai];
         ctx.validateIdentifier(arg.first, "argument", func->sourceNode,
                                func->sourceLine, func->sourceColumn);
-        // list<T>/map<K:V> args werden implizit by-reference übergeben (Python-/Java-Stil).
-        // LLVM-Signatur: opaque pointer statt struct-by-value, damit size++/data-Wachstum
-        // zum Caller propagiert.  Forward-decl in registerTypeDecl verwendet die GLEICHE
-        // Logik (sonst signature mismatch).  Spec/22_call_semantics.md.
+        // list<T>/map<K:V> args are implicitly passed by reference (Python/Java style).
+        // LLVM signature: opaque pointer instead of struct-by-value, so that size++/data growth
+        // propagates to the caller.  The forward decl in registerTypeDecl uses the SAME
+        // logic (otherwise signature mismatch).  Spec/22_call_semantics.md.
         // AIML v2 (P4): a refcount MODEL arg is likewise passed by-ref as a %M* (borrow) — the
         // callee shares the caller's object; in-place mutation is visible to the caller.
         bool byref = CompilerContext::isByrefParamType(arg.second);
@@ -7053,9 +7053,9 @@ void Compiler::visitFunction(FunctionDecl* func) {
             // dotted-write lvalue path does not apply). Borrow: no incref/decref for the arg itself.
             sym.ir_element_type = ctx.ir_gen->getPointerTy();
         } else if (i < argIsByref.size() && argIsByref[i]) {
-            // ir_element_type bleibt die echte struct shape (für member-dispatch),
-            // aber alloca hält tatsächlich nur einen pointer.  Method-dispatch
-            // muss is_byref_arg checken und einen extra-load machen.
+            // ir_element_type stays the real struct shape (for member dispatch),
+            // but the alloca actually holds only a pointer.  Method dispatch
+            // must check is_byref_arg and do an extra load.
             sym.ir_element_type = ctx.ir_gen->resolveType(func->args[i].second);
             sym.is_byref_arg = true;
         } else {
@@ -7430,10 +7430,10 @@ void Compiler::visitFunction(FunctionDecl* func) {
     ctx.currentFunctionStaticOff  = std::move(_saved_static_off);
 }
 Symbol* Compiler::resolveVariable(const std::string& name) {
-    // spec/29_2 §22: eine benutzte GLOBALE gehoert ins Bundle.  Hier ist die
-    // einzige Stelle, die Lesen, Schreiben und Interpolation gleich behandelt —
-    // darum wird genau hier aufgezeichnet, und nur fuer Symbole, die wirklich
-    // global sind (Symbol::is_global).
+    // spec/29_2 §22: a GLOBAL that is used belongs in the bundle.  This is the
+    // only place that treats reading, writing and interpolation the same —
+    // that is why it is recorded exactly here, and only for symbols that really
+    // are global (Symbol::is_global).
     auto trackGlobal = [this](const std::string& n, Symbol* sym) -> Symbol* {
         if (sym && sym->is_global && !ctx.bundleTrackingTarget.empty() &&
             ctx.functions.count(ctx.bundleTrackingTarget))
@@ -7527,8 +7527,8 @@ IRValue* Compiler::resolveProperty(Symbol* baseSym, const std::string& propName)
     IRValue* baseAlloca = baseSym->ir_alloca_inst ? baseSym->ir_alloca_inst : ctx.ir_gen->wrap(baseSym->alloca_inst);
     IRType* baseElemTy = baseSym->ir_element_type ? baseSym->ir_element_type : ctx.ir_gen->wrapType(baseSym->element_type);
 
-    // list/map by-ref args: alloca enthält den pointer auf das echte struct.
-    // Eine Stufe dereferenzieren bevor wir property-access machen.
+    // list/map by-ref args: the alloca contains the pointer to the real struct.
+    // Dereference one level before we do the property access.
     if (baseSym->is_byref_arg) {
         auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
         llvm::Value* allocaRaw = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca));
@@ -7784,9 +7784,9 @@ IRValue* Compiler::resolveProperty(Symbol* baseSym, const std::string& propName)
         }
     }
 
-    // Folgemeldung unterdruecken, wenn der TYP selbst schon als unbekannt
-    // gemeldet wurde — sonst meldet jede Eigenschaft erneut dieselbe Ursache
-    // (spec/49: eine Kaskade verdeckt die Zeile, auf die es ankommt).
+    // Suppress the follow-up message if the TYPE itself was already reported as
+    // unknown — otherwise every property reports the same cause again
+    // (spec/49: a cascade hides the line that matters).
     if (ctx.unknownTypeNames.count(className)) return nullptr;
     LOG_ERROR(ctx.fmtLoc() + "Undefined property: " + propName + " on type " + className);
     return nullptr;
@@ -8034,13 +8034,13 @@ IRValue* Compiler::resolvePropertyWritePtr(Symbol* baseSym, const std::string& p
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// declaredTypeOfExpr — den DEKLARIERTEN Typ eines Ausdrucks bestimmen, ohne IR
-// zu erzeugen (anders als emitLValueAddress, das Adressen emittiert).  Gebraucht
-// an der Argumentgrenze, um einen Interface-Upcast bauen zu können: dort liegt
-// der Objektzeiger schon vor, es fehlt nur der konkrete Klassenname.
-// Deckt ab: einfache Variable, gepunkteter Member-Zugriff (auch mehrstufig, z.B.
-// eine classgroup-Instanz `grp.handler`) und `{new: Konkret}`.
-// Leerer String = nicht auflösbar; der Aufrufer meldet das als Fehler.
+// declaredTypeOfExpr — determine the DECLARED type of an expression without generating IR
+// (unlike emitLValueAddress, which emits addresses).  Needed
+// at the argument boundary in order to build an interface upcast: there
+// the object pointer is already available, only the concrete class name is missing.
+// Covers: simple variable, dotted member access (also multi-level, e.g.
+// a classgroup instance `grp.handler`) and `{new: Concrete}`.
+// Empty string = not resolvable; the caller reports that as an error.
 std::string Compiler::declaredTypeOfExpr(Expr* e) {
     auto classMemberType = [&](const std::string& clsName,
                                const std::string& field) -> std::string {
@@ -8065,13 +8065,13 @@ std::string Compiler::declaredTypeOfExpr(Expr* e) {
     if (dot == std::string::npos) {
         Symbol* s = resolveVariable(full);
         if (!s) return "";
-        // Eine Klassen-Instanz per Wert verhält sich am Argument wie ptr<T>.
+        // A class instance by value behaves like ptr<T> at the argument.
         if (s->typeName.rfind("ptr<", 0) != 0 && s->typeName.rfind("ref<", 0) != 0 &&
             ctx.classes.count(s->typeName))
             return "ptr<" + s->typeName + ">";
         return s->typeName;
     }
-    // Gepunktet: Basis auflösen, dann Feld für Feld durch die Klassen laufen.
+    // Dotted: resolve the base, then walk through the classes field by field.
     Symbol* base = resolveVariable(full.substr(0, dot));
     if (!base) return "";
     std::string curType = base->typeName;
