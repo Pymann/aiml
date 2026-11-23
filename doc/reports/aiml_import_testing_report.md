@@ -1,74 +1,74 @@
-# AIML Import- und Test-Architektur
+# AIML Import and Test Architecture
 
-## Ausgangslage
+## Starting point
 
-Der aktuelle Fix fuer die Import-Aufloesung im AIML-Compiler funktioniert, ist aber semantisch unscharf:
+The current fix for import resolution in the AIML compiler works, but is semantically fuzzy:
 
-- ein `import` kann implizit ueber `cwd` aufgeloest werden
-- wenn das fehlschlaegt, wird relativ zur aktuell kompilierenden Datei nach oben gelaufen
-- bei verschachtelten Imports veraendert sich das Suchverhalten dynamisch ueber `currentSourceFile`
-- dieselbe `import`-Syntax wird fuer Produktions-Code, transitive Abhaengigkeiten und testartige Ersatzverdrahtung verwendet
+- an `import` can be resolved implicitly via `cwd`
+- if that fails, it walks upwards relative to the file currently being compiled
+- with nested imports, the search behaviour changes dynamically via `currentSourceFile`
+- the same `import` syntax is used for production code, transitive dependencies and test-like substitute wiring
 
-Das loest akute Probleme, macht aber das System schwer vorhersagbar:
+That solves acute problems, but makes the system hard to predict:
 
-- derselbe Code kann je nach Startverzeichnis andere Dateien finden
-- die Suchstrategie ist fuer Nutzer nicht im Code sichtbar
-- ein Import kann unbeabsichtigt eine gleichnamige Datei aus einem uebergeordneten Verzeichnis ziehen
-- Integrations- und Test-Faelle brauchen andere Semantik als normaler Produktions-Import
-- auch fuer KI-gestuetzte Analyse, Refactorings und Testgenerierung ist das Verhalten schwer zu modellieren, weil die Aufloesung nicht lokal aus dem AIML-Code selbst ableitbar ist
+- the same code can find different files depending on the start directory
+- the search strategy is not visible to users in the code
+- an import can unintentionally pull in a file of the same name from a parent directory
+- integration and test cases need different semantics from a normal production import
+- for AI-assisted analysis, refactorings and test generation the behaviour is also hard to model, because the resolution cannot be derived locally from the AIML code itself
 
-## Zielbild
+## Target picture
 
-Das Import-System sollte:
+The import system should:
 
-- explizit statt heuristisch sein
-- zwischen Produktions-Abhaengigkeit und Test-Ersatz unterscheiden
-- statisch nachvollziehbar bleiben
-- fuer Unit- und Integrationstests eigene, kontrollierte Mechanismen bieten
-- Mocking und Stubbing nicht ueber Dateisystem-Zufall, sondern ueber Sprach- und Compiler-Features loesen
+- be explicit instead of heuristic
+- distinguish between a production dependency and a test substitute
+- remain statically traceable
+- offer its own controlled mechanisms for unit and integration tests
+- solve mocking and stubbing not through file system coincidence, but through language and compiler features
 
-## Bewertung des aktuellen Fixes
+## Assessment of the current fix
 
-Positiv:
+Positive:
 
-- bestehender Code laeuft weiter
-- 9rooms-artige transitive Imports funktionieren robuster
-- verschachtelte Imports werden nicht mehr nur relativ zum Prozess-`cwd` aufgeloest
+- existing code keeps running
+- 9rooms-like transitive imports work more robustly
+- nested imports are no longer resolved only relative to the process `cwd`
 
-Negativ:
+Negative:
 
-- Aufloesungsregeln sind im AIML-Code nicht sichtbar
-- die Semantik ist implizit zustandsbehaftet (`currentSourceFile`)
-- "walk up and probe" kann ueberraschende Treffer produzieren
-- Fehleranalyse wird schwieriger, weil nicht klar ist, warum genau eine bestimmte Datei gefunden wurde
-- das ist ein schlechter Grundstein fuer einen sauberen Test-Stack
-- auch statische Werkzeuge und KI-Assistenten koennen Importbeziehungen nur unzuverlaessig rekonstruieren, weil sie dafuer Laufzeitkontext, Arbeitsverzeichnis und implizite Compilerzustandswechsel kennen muessen
+- the resolution rules are not visible in the AIML code
+- the semantics is implicitly stateful (`currentSourceFile`)
+- "walk up and probe" can produce surprising hits
+- error analysis becomes harder, because it is not clear why exactly a certain file was found
+- that is a poor foundation for a clean test stack
+- static tools and AI assistants too can only reconstruct import relationships unreliably, because for that they need to know the runtime context, the working directory and implicit compiler state changes
 
-## Zusatzproblem: schlechte Verstehbarkeit fuer KI und Tools
+## Additional problem: poor understandability for AI and tools
 
-Der aktuelle Mechanismus ist nicht nur fuer Menschen intransparent, sondern auch fuer KI-basierte Entwicklungswerkzeuge besonders unguenstig.
+The current mechanism is not only opaque for humans, but also particularly unfavourable for AI-based development tools.
 
-Probleme:
+Problems:
 
-- aus einem einzelnen AIML-File ist nicht eindeutig ablesbar, welche Datei ein `import` effektiv meint
-- die Aufloesung haengt von verstecktem Kontext ab: aktuelle Quelldatei, Aufrufort des Compilers, vorhandene Verzeichnisstruktur und rekursive Zustandsaenderungen
-- fuer Refactoring-Tools ist nicht stabil entscheidbar, welche Datei bei einer Umbenennung oder Verschiebung betroffen ist
-- fuer KI-generierte Tests oder Mocks ist nicht klar, welches Modul tatsaechlich ersetzt werden muss
-- auch Dokumentation, Architektur-Analyse und Dead-Code-Erkennung werden unzuverlaessiger
+- from a single AIML file it cannot be read unambiguously which file an `import` effectively means
+- the resolution depends on hidden context: the current source file, the compiler's call location, the existing directory structure and recursive state changes
+- for refactoring tools it cannot be decided stably which file is affected by a rename or move
+- for AI-generated tests or mocks it is not clear which module actually has to be replaced
+- documentation, architecture analysis and dead code detection also become less reliable
 
-Folge:
+Consequence:
 
-- die Semantik ist nicht gut maschinenlesbar
-- sie ist nicht sauber indexierbar
-- sie ist fuer automatische Code-Navigation und fuer KI-Assistenz deutlich schlechter geeignet als ein explizites, deklaratives Importsystem
+- the semantics is not well machine-readable
+- it is not cleanly indexable
+- it is considerably less suitable for automatic code navigation and AI assistance than an explicit, declarative import system
 
-Gerade wenn AIML staerker mit KI-gestuetzten Workflows verwendet werden soll, ist Determinismus nicht nur ein Build-Thema, sondern auch ein Verstehbarkeits- und Werkzeugthema.
+Especially if AIML is to be used more with AI-assisted workflows, determinism is not only a build topic, but also an understandability and tooling topic.
 
-## Vorschlag 1: Import-Arten explizit machen
+## Proposal 1: make import kinds explicit
 
-Das nackte `import` sollte auf einen klaren, engen Mechanismus reduziert werden. Fuer verschiedene Faelle sollte es verschiedene Formen geben.
+The bare `import` should be reduced to a clear, narrow mechanism. There should be different forms for different cases.
 
-Beispiel:
+Example:
 
 ```yaml
 - import:
@@ -76,24 +76,24 @@ Beispiel:
     kind: "relative"
 ```
 
-Moegliche `kind`-Werte:
+Possible `kind` values:
 
-- `relative`: relativ zur importierenden Datei, ohne Upward-Search
-- `project`: relativ zu einer expliziten Projektwurzel oder konfigurierten Import-Root
-- `package`: spaeter fuer wiederverwendbare AIML-Pakete
-- `test_double`: nur in Test-Builds erlaubt
+- `relative`: relative to the importing file, without upward search
+- `project`: relative to an explicit project root or configured import root
+- `package`: later for reusable AIML packages
+- `test_double`: only allowed in test builds
 
-Regel:
+Rule:
 
-- kein stilles Fallback auf `cwd`
-- kein automatisches Hochlaufen im Verzeichnisbaum als Default
-- wenn Aufloesung fehlschlaegt, harter und gut erklaerter Compilerfehler
+- no silent fallback to `cwd`
+- no automatic walking up the directory tree as the default
+- if resolution fails, a hard and well-explained compiler error
 
-## Vorschlag 2: Import-Roots explizit konfigurieren
+## Proposal 2: configure import roots explicitly
 
-Wenn mehrere Module wie `9rooms/client`, `9rooms/shared`, `9rooms/frontend` zusammenarbeiten, sollte das nicht ueber Suchheuristiken passieren, sondern ueber deklarierte Roots.
+When several modules such as `9rooms/client`, `9rooms/shared`, `9rooms/frontend` work together, that should not happen via search heuristics, but via declared roots.
 
-Beispiel in Compiler- oder Projekt-Config:
+Example in a compiler or project config:
 
 ```yaml
 import_roots:
@@ -103,19 +103,19 @@ import_roots:
   - "./client"
 ```
 
-Dann gilt:
+Then:
 
-- `kind: relative` nutzt nur die importierende Datei
-- `kind: project` sucht nur in `import_roots` in definierter Reihenfolge
-- der Compiler gibt auf Wunsch im Diagnosemodus den exakten Match-Pfad aus
+- `kind: relative` uses only the importing file
+- `kind: project` searches only in `import_roots`, in a defined order
+- on request, the compiler outputs the exact match path in diagnostic mode
 
-Das ist transparent und reproduzierbar.
+That is transparent and reproducible.
 
-## Vorschlag 3: Test-Build als eigenes Konzept
+## Proposal 3: test build as a concept of its own
 
-Der Compiler sollte einen echten Test-Modus kennen, statt Tests nur als normale Programme zu behandeln.
+The compiler should know a real test mode instead of treating tests only as normal programs.
 
-Beispiel:
+Example:
 
 ```yaml
 - test:
@@ -123,27 +123,27 @@ Beispiel:
     mode: "integration"
 ```
 
-Oder ueber Build-Flag:
+Or via a build flag:
 
 ```text
 aiml --test tests/test_mirror_ws_9rooms_imports.aiml
 ```
 
-Im Test-Modus sind dann eigene Sprachfeatures erlaubt:
+In test mode, dedicated language features are then allowed:
 
 - `test_import`
 - `mock`
 - `stub`
-- Assertions und Test-Fixtures
-- kontrollierte Override-Regeln
+- assertions and test fixtures
+- controlled override rules
 
-Der Produktions-Compiler bleibt damit einfacher und strenger.
+The production compiler thereby stays simpler and stricter.
 
-## Vorschlag 4: Eigenes Test-Import-Statement
+## Proposal 4: a dedicated test import statement
 
-Wenn ein Test absichtlich eine andere Implementierung ziehen soll, sollte das im Code klar erkennbar sein.
+If a test deliberately wants to pull in a different implementation, that should be clearly recognisable in the code.
 
-Beispiel:
+Example:
 
 ```yaml
 - test_import:
@@ -151,28 +151,28 @@ Beispiel:
     with: "tests/doubles/payment_stub.aiml"
 ```
 
-Semantik:
+Semantics:
 
-- nur im Test-Modus erlaubt
-- ersetzt exakt ein Zielmodul
-- Compiler prueft Typ-/Signatur-Kompatibilitaet
-- Build-Output dokumentiert die aktive Ersetzung
+- only allowed in test mode
+- replaces exactly one target module
+- the compiler checks type/signature compatibility
+- the build output documents the active replacement
 
-Das ist deutlich besser als "gleichnamige Datei irgendwo im Suchpfad".
+That is considerably better than "a file of the same name somewhere in the search path".
 
-## Vorschlag 5: Mock- und Stub-Generierung im Compiler
+## Proposal 5: mock and stub generation in the compiler
 
-Statt Doubles komplett manuell zu schreiben, kann der Compiler aus einem Modul oder Interface Test-Doubles erzeugen.
+Instead of writing doubles completely by hand, the compiler can generate test doubles from a module or interface.
 
-### 5.1 Stub-Generierung
+### 5.1 Stub generation
 
-Ziel:
+Goal:
 
-- feste Rueckgaben
-- keine Seiteneffekte
-- einfache Integrationstests
+- fixed returns
+- no side effects
+- simple integration tests
 
-Beispiel:
+Example:
 
 ```yaml
 - generate_stub:
@@ -180,22 +180,22 @@ Beispiel:
     out: "tests/generated/payment_stub.aiml"
 ```
 
-Der Compiler koennte:
+The compiler could:
 
-- alle exportierten Funktionen spiegeln
-- Default-Rueckgaben erzeugen
-- Modelle/Enums uebernehmen
-- fuer `extern` oder globale Symbole neutrale Testvarianten erzeugen
+- mirror all exported functions
+- generate default returns
+- take over models/enums
+- generate neutral test variants for `extern` or global symbols
 
-### 5.2 Mock-Generierung
+### 5.2 Mock generation
 
-Ziel:
+Goal:
 
-- Aufrufe aufzeichnen
-- Erwartungen pruefen
-- Rueckgaben gezielt konfigurieren
+- record calls
+- check expectations
+- configure returns specifically
 
-Beispiel:
+Example:
 
 ```yaml
 - generate_mock:
@@ -203,52 +203,52 @@ Beispiel:
     out: "tests/generated/payment_mock.aiml"
 ```
 
-Zusaetzliche Compiler-Hilfen:
+Additional compiler helpers:
 
-- automatisch generierte Call-Log-Strukturen
+- automatically generated call log structures
 - `mock.expect_called`
 - `mock.expect_not_called`
 - `mock.set_return`
 
-### 5.3 Praktische Machbarkeit im aktuellen C++-Compiler
+### 5.3 Practical feasibility in the current C++ compiler
 
-Nuechtern betrachtet ist Stub-Generierung im aktuellen Code deutlich einfacher als echte Mock-Generierung.
+Soberly considered, stub generation in the current code is considerably easier than real mock generation.
 
-Relativ einfach:
+Relatively easy:
 
-- Funktionssignaturen liegen nach dem Parse bereits strukturiert vor und werden in `registerTypeDecl(...)` und `visitFunction(...)` verarbeitet, siehe [compiler.cpp](../../compiler.cpp#L217) und [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L933)
-- Typen, Modelle und Enums werden ohnehin vorab registriert, also kann man fuer ein Stub-Modul die oeffentliche Form eines importierten Moduls grundsaetzlich schon ableiten, siehe [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L466)
-- fuer reine Funktionsmodule ohne globale mutable States waere ein generierter Stub im Wesentlichen nur ein zweites AIML-AST oder direkt erzeugtes IR mit Default-Rueckgaben
+- function signatures are already available in structured form after the parse and are processed in `registerTypeDecl(...)` and `visitFunction(...)`, see [compiler.cpp](../../compiler.cpp#L217) and [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L933)
+- types, models and enums are registered beforehand anyway, so the public shape of an imported module can in principle already be derived for a stub module, see [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L466)
+- for pure function modules without global mutable state, a generated stub would essentially only be a second AIML AST or directly generated IR with default returns
 
-Mittelschwer:
+Medium difficulty:
 
-- importierte Module laufen in `libraryMode` und bekommen eigene `__aiml_lib_init_*`-Funktionen, die vor Top-Level-Code des Hauptmoduls ausgefuehrt werden, siehe [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L24) und [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L172)
-- ein Stub fuer ein Modul mit Top-Level-Initialisierung muesste diese Init-Semantik kompatibel nachbilden, sonst veraendert sich das Verhalten gegenueber dem echten Modul
-- fuer globale Decl-Stmts erzeugt der Compiler echte LLVM-Globals und traegt sie sofort in `ctx.symbol_table` ein, siehe [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L53) und [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L93)
+- imported modules run in `libraryMode` and get their own `__aiml_lib_init_*` functions, which are executed before the top-level code of the main module, see [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L24) and [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L172)
+- a stub for a module with top-level initialisation would have to replicate this init semantics compatibly, otherwise the behaviour changes compared to the real module
+- for global decl stmts the compiler creates real LLVM globals and enters them into `ctx.symbol_table` immediately, see [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L53) and [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L93)
 
-Schwierig:
+Difficult:
 
-- die Symbolbindung ist aktuell stark datei- und zustandsabhaengig: `resolveImportCallback`, `currentSourceFile`, `libInitFuncNames`, `symbol_table` und sibling injection greifen ineinander, siehe [compiler.cpp](../../compiler.cpp#L145) und [compiler.cpp](../../compiler.cpp#L357)
-- ein Mock, der nur einzelne Funktionen ersetzen soll, braucht heute keine saubere Modulgrenze, sondern muss effektiv dieselben Symbolnamen, Globals und Initialisierungsreihenfolgen treffen wie das Original
-- `extern`-Globals werden absichtlich ueber plain `__lib_<name>` zusammengefuehrt, nicht-`extern`-Globals ueber dateinamenspezifische Symbole; ein generierter Mock muesste genau diese Regeln treffen, sonst entstehen stille Link- oder Laufzeitabweichungen, siehe [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L68)
-- weil sehr viel ueber `ctx.symbol_table` aufgeloest wird, ist teilweises Ersetzen eines Moduls schwieriger als komplettes Ersetzen eines Imports
+- symbol binding is currently strongly file- and state-dependent: `resolveImportCallback`, `currentSourceFile`, `libInitFuncNames`, `symbol_table` and sibling injection interlock, see [compiler.cpp](../../compiler.cpp#L145) and [compiler.cpp](../../compiler.cpp#L357)
+- a mock that is only meant to replace individual functions does not have a clean module boundary today, but effectively has to hit the same symbol names, globals and initialisation orders as the original
+- `extern` globals are deliberately merged via plain `__lib_<name>`, non-`extern` globals via file-name-specific symbols; a generated mock would have to hit exactly these rules, otherwise silent link or runtime deviations arise, see [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L68)
+- because a great deal is resolved via `ctx.symbol_table`, partially replacing a module is harder than completely replacing an import
 
-Konsequenz:
+Consequence:
 
-- Stub-Generierung fuer einfache, eher funktionale Module ist machbar
-- Mock-Generierung fuer Module mit Globals, Top-Level-Code, `extern`-State und mehreren sibling imports ist im aktuellen Compiler eher aufwendig
-- wirkliche Mock-Unterstuetzung wird deutlich einfacher, wenn AIML zuerst explizitere Modulvertraege und strengere Import-Semantik bekommt
+- stub generation for simple, rather functional modules is feasible
+- mock generation for modules with globals, top-level code, `extern` state and several sibling imports is rather laborious in the current compiler
+- real mock support becomes considerably easier if AIML first gets more explicit module contracts and stricter import semantics
 
-## Vorschlag 6: Sprachliche Trennung zwischen API und Implementierung
+## Proposal 6: linguistic separation between API and implementation
 
-Mocking wird einfacher, wenn AIML sauber zwischen Vertrag und Implementierung trennt.
+Mocking becomes easier if AIML cleanly separates contract and implementation.
 
-Empfehlung:
+Recommendation:
 
-- explizite Modul-API oder Interface-Dateien
-- Implementierungen binden gegen einen Vertrag, nicht direkt gegen konkrete Dateien
+- explicit module API or interface files
+- implementations bind against a contract, not directly against concrete files
 
-Beispielrichtung:
+Example direction:
 
 ```yaml
 - import:
@@ -256,24 +256,24 @@ Beispielrichtung:
     kind: "project"
 ```
 
-Und dann im Produktions- oder Test-Build:
+And then in the production or test build:
 
-- echte Implementierung bindet `payment.api`
-- Test bindet `payment.mock`
+- the real implementation binds `payment.api`
+- the test binds `payment.mock`
 
-Das ist architektonisch sauberer als globale Dateiersetzung.
+That is architecturally cleaner than global file replacement.
 
-## Vorschlag 7: Overrides auf Modulebene statt Dateisystemebene
+## Proposal 7: overrides at module level instead of file system level
 
-Der Compiler oder Build-Driver sollte Modul-Overrides explizit annehmen koennen.
+The compiler or build driver should be able to accept module overrides explicitly.
 
-Beispiel:
+Example:
 
 ```text
 aiml --override shared/payment.aiml=tests/doubles/payment_stub.aiml
 ```
 
-Oder in einer Test-Datei:
+Or in a test file:
 
 ```yaml
 - test_overrides:
@@ -281,128 +281,128 @@ Oder in einer Test-Datei:
     "client/api.aiml": "tests/doubles/api_mock.aiml"
 ```
 
-Vorteile:
+Advantages:
 
-- voll reproduzierbar
-- CI-freundlich
-- gut loggbar
-- keine impliziten Suchpfad-Nebenwirkungen
+- fully reproducible
+- CI-friendly
+- easy to log
+- no implicit search path side effects
 
-## Vorschlag 8: Compiler-Diagnostik fuer Import-Aufloesung
+## Proposal 8: compiler diagnostics for import resolution
 
-Unabhaengig von der finalen Syntax sollte der Compiler einen transparenten Diagnosemodus bekommen.
+Independently of the final syntax, the compiler should get a transparent diagnostic mode.
 
-Beispiel:
+Example:
 
 ```text
 aiml --trace-imports client/main.aiml
 ```
 
-Ausgabe:
+Output:
 
-- welche Datei importiert wen
-- nach welcher Regel wurde aufgeloest
-- welche Kandidaten wurden verworfen
-- welche Test-Overrides oder Doubles waren aktiv
+- which file imports which
+- by which rule it was resolved
+- which candidates were rejected
+- which test overrides or doubles were active
 
-Das waere sofort nuetzlich, auch schon vor einer groesseren Sprachreform.
+That would be useful immediately, even before a bigger language reform.
 
-## Vorschlag 9: Test-Pyramide fuer AIML
+## Proposal 9: a test pyramid for AIML
 
-Die Sprache braucht wahrscheinlich drei Test-Ebenen.
+The language probably needs three test levels.
 
-### 9.1 Compiler-Unit-Tests
+### 9.1 Compiler unit tests
 
-Ziel:
+Goal:
 
-- Parser
-- Import-Aufloesung
-- Symbolbindung
-- Typpruefung
-- Mock-/Stub-Kompatibilitaet
-
-Form:
-
-- kleine AIML-Dateien
-- erwartete Compilerdiagnosen
-- IR- oder Symboltabellen-Checks
-
-### 9.2 Modul-Tests
-
-Ziel:
-
-- einzelnes AIML-Modul gegen Stubs oder Mocks
-- keine echte Infrastruktur
+- parser
+- import resolution
+- symbol binding
+- type checking
+- mock/stub compatibility
 
 Form:
 
-- `test_import` oder `--override`
-- Assertions auf Rueckgaben, Modellzustand, Call-Logs
+- small AIML files
+- expected compiler diagnostics
+- IR or symbol table checks
 
-### 9.3 Integrations-Tests
+### 9.2 Module tests
 
-Ziel:
+Goal:
 
-- echte Module zusammen
-- echte mirror/ws/db-Flows
+- a single AIML module against stubs or mocks
+- no real infrastructure
 
 Form:
 
-- moeglichst wenig Overrides
-- echte Cross-Module-Interaktion
-- eher Szenario-Tests als kleinteilige Mocks
+- `test_import` or `--override`
+- assertions on returns, model state, call logs
 
-9rooms `mirror sync` gehoert klar in diese Ebene.
+### 9.3 Integration tests
 
-## Konkrete Empfehlung
+Goal:
 
-Ich wuerde nicht weiter auf den aktuellen "walk up and probe"-Mechanismus setzen. Stattdessen:
+- real modules together
+- real mirror/ws/db flows
 
-1. Kurzfristig:
-   `--trace-imports` und harte Logging-Ausgabe fuer Aufloesungsentscheidungen einfuehren.
+Form:
 
-2. Mittelfristig:
-   `import.kind` plus explizite `import_roots` einfuehren.
+- as few overrides as possible
+- real cross-module interaction
+- scenario tests rather than fine-grained mocks
 
-3. Fuer Tests:
-   `test_import` oder `--override` als offiziellen Mechanismus bauen.
+9rooms `mirror sync` clearly belongs on this level.
 
-4. Danach:
-   Mock-/Stub-Generierung auf Basis von Modul-APIs oder Interfaces einfuehren.
+## Concrete recommendation
 
-## Minimaler Migrationspfad
+I would not keep relying on the current "walk up and probe" mechanism. Instead:
 
-Ein realistischer Weg ohne Big Bang:
+1. Short term:
+   introduce `--trace-imports` and hard logging output for resolution decisions.
+
+2. Medium term:
+   introduce `import.kind` plus explicit `import_roots`.
+
+3. For tests:
+   build `test_import` or `--override` as the official mechanism.
+
+4. Afterwards:
+   introduce mock/stub generation based on module APIs or interfaces.
+
+## Minimal migration path
+
+A realistic way without a big bang:
 
 ### Phase 1
 
-- aktuellen Mechanismus beibehalten
-- aber Warning ausgeben, wenn Upward-Search verwendet wurde
-- `--trace-imports` implementieren
+- keep the current mechanism
+- but emit a warning when upward search was used
+- implement `--trace-imports`
 
 ### Phase 2
 
-- neue Syntax `import: { path, kind }`
-- alte Stringform weiter unter Deprecation
+- new syntax `import: { path, kind }`
+- the old string form continues under deprecation
 
 ### Phase 3
 
-- `test_import` und `--override`
-- erste Stub-Generierung fuer einfache Funktionsmodule
+- `test_import` and `--override`
+- first stub generation for simple function modules
 
 ### Phase 4
 
-- API-/Interface-basierte Mock-Generierung
-- alte implizite Heuristik entfernen
+- API/interface-based mock generation
+- remove the old implicit heuristic
 
-## Fazit
+## Conclusion
 
-Der aktuelle Fix ist als Notfallmassnahme verstaendlich, aber als langfristige Semantik zu implizit. Fuer AIML waere ein explizites Modulsystem mit eigenem Test-Overlay deutlich besser als dateisystembasierte Suchheuristik.
+The current fix is understandable as an emergency measure, but too implicit as long-term semantics. For AIML, an explicit module system with its own test overlay would be considerably better than a file-system-based search heuristic.
 
-Die wichtigste Designentscheidung ist aus meiner Sicht:
+In my view, the most important design decision is:
 
-- Produktions-Imports muessen deterministisch und streng sein
-- Test-Ersetzungen muessen explizit und sprachlich sichtbar sein
-- die Import-Semantik sollte so lokal und deklarativ sein, dass auch KI-Tools, Indexer und Refactoring-Werkzeuge sie ohne versteckten Laufzeitkontext verstehen koennen
+- production imports must be deterministic and strict
+- test replacements must be explicit and linguistically visible
+- the import semantics should be so local and declarative that AI tools, indexers and refactoring tools can understand it without hidden runtime context
 
-Dann werden sowohl 9rooms-Integrationsfaelle als auch spaetere Unit-Tests deutlich sauberer.
+Then both 9rooms integration cases and later unit tests become considerably cleaner.
