@@ -1,10 +1,10 @@
 # AIML Pointer And Struct Array Implementation Plan - 2026-04-16
 
-## Ziel
+## Goal
 
-`array<ptr<T>:N>` und `array<MyStruct:N>` sowie mehrdimensional `array<...:N:M:...>` in AIML unterstuetzen.
+Support `array<ptr<T>:N>` and `array<MyStruct:N>` as well as multidimensional `array<...:N:M:...>` in AIML.
 
-Beispiel:
+Example:
 
 ```aiml
 - decl: [nodes, "array<ptr<MyNode>:16>"]
@@ -16,93 +16,93 @@ Beispiel:
 - decl: [p1, Point, { at: [points, 0] }]
 ```
 
-## Warum das aktuell nicht sauber spezifiziert ist
+## Why this is currently not cleanly specified
 
-Die aktuelle Array-Implementierung ist auf primitive Werte ausgerichtet.
+The current array implementation is geared towards primitive values.
 
-Relevante Stellen:
+Relevant places:
 
-- Typauflösung: [context.h](../../src/core/context.h#L480)
-- Array-Read via `at`: [ast_compiler_expr.cpp](../../src/core/ast_compiler_expr.cpp#L882)
-- Array-Write via `idx`: [ast_compiler_stmt.cpp](../../src/core/ast_compiler_stmt.cpp#L854)
-- Array-Properties `.len/.data_ptr/.dimX`: [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L1212)
-- Aktuelle Tests: [test_array.aiml](../../tests/test_array.aiml#L1)
+- type resolution: [context.h](../../src/core/context.h#L480)
+- array read via `at`: [ast_compiler_expr.cpp](../../src/core/ast_compiler_expr.cpp#L882)
+- array write via `idx`: [ast_compiler_stmt.cpp](../../src/core/ast_compiler_stmt.cpp#L854)
+- array properties `.len/.data_ptr/.dimX`: [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L1212)
+- current tests: [test_array.aiml](../../tests/test_array.aiml#L1)
 
-Die Implementierung baut LLVM-Arrays schon generisch aus `elemType + count`. Das ist gut:
+The implementation already builds LLVM arrays generically from `elemType + count`. That is good:
 
-- `ptr<T>` ist auf LLVM-Ebene nur ein Pointer-Typ und damit array-faehig
-- `MyStruct` ist auf LLVM-Ebene ein echter Struct-Typ und damit ebenfalls array-faehig
+- `ptr<T>` is just a pointer type at LLVM level and therefore array-capable
+- `MyStruct` is a real struct type at LLVM level and therefore array-capable too
 
-Das eigentliche Thema ist also nicht LLVM, sondern:
+So the actual topic is not LLVM, but:
 
-1. Sprachregel
-2. Typvalidierung
-3. Initialisierung/Null-Semantik
-4. Copy-/Store-Semantik
-5. Cast-Regeln bei `idx`
-6. Tests und Doku
+1. language rule
+2. type validation
+3. initialisation/null semantics
+4. copy/store semantics
+5. cast rules for `idx`
+6. tests and docs
 
-## Grundentscheidung
+## Basic decision
 
-### Empfehlung
+### Recommendation
 
-Explizit erlauben:
+Explicitly allow:
 
 1. `array<ptr<T>:N>`
-2. `array<MyStruct:N>` mit C-naher Inline-Semantik
+2. `array<MyStruct:N>` with C-like inline semantics
 
-### Staffelung
+### Staging
 
-Sofort erlauben:
+Allow immediately:
 
 - `array<ptr<T>:N>`
-- `array<MyStruct:N>` fuer Structs mit klarer Value-Semantik
+- `array<MyStruct:N>` for structs with clear value semantics
 
-Noch nicht erlauben:
+Do not allow yet:
 
 - `array<string:N>`
 - `array<list<i32>:N>`
 - `array<any:N>`
 - `array<map<K:V>:N>`
 
-Grund:
+Reason:
 
-- Pointer-Arrays sind einfach und klar.
-- Struct-Arrays sind mit C-naher Value-Semantik gut machbar.
-- Heap-Container als direkte Array-Elemente oeffnen sofort Fragen zu Ownership, Serialize und Copy-Regeln.
+- pointer arrays are simple and clear.
+- struct arrays are quite feasible with C-like value semantics.
+- heap containers as direct array elements immediately open questions about ownership, serialize and copy rules.
 
-## Erwartetes Semantikmodell
+## Expected semantic model
 
-### 1. Pointer-Arrays
+### 1. Pointer arrays
 
-Erlaubt:
+Allowed:
 
 - `ptr<T>`
-- `ref<T>` nur wenn `ref<T>` intern ohnehin Pointer-Semantik hat und im Array nicht anders behandelt wird
-- roher `ptr`
+- `ref<T>` only if `ref<T>` internally has pointer semantics anyway and is not treated differently in the array
+- raw `ptr`
 
-Nicht Teil dieses ersten Schritts:
+Not part of this first step:
 
-- Pointer plus automatische Lebensdauerverwaltung
+- pointers plus automatic lifetime management
 
-### 2. Default-Wert
+### 2. Default value
 
-`array<ptr<T>:N>` wird null-initialisiert.
+`array<ptr<T>:N>` is null-initialised.
 
-Das bedeutet:
+That means:
 
-- jedes Element ist initial `null`
-- Read auf ungesetztes Element liefert `null`
+- every element is initially `null`
+- reading an unset element returns `null`
 
-### 3. Zugriff
+### 3. Access
 
-Lesen:
+Reading:
 
 ```aiml
 - decl: [p, "ptr<MyNode>", { at: [nodes, 3] }]
 ```
 
-Schreiben:
+Writing:
 
 ```aiml
 - idx: [nodes, 3, p]
@@ -111,39 +111,39 @@ Schreiben:
 
 ### 4. `.data_ptr`
 
-`.data_ptr` bleibt als rohes `i8*` erlaubt.
+`.data_ptr` stays allowed as a raw `i8*`.
 
-Das ist fuer C-Interop ausreichend und konsistent zur aktuellen Array-API.
+That is sufficient for C interop and consistent with the current array API.
 
-### 2. Struct-Arrays
+### 2. Struct arrays
 
-`array<MyStruct:N>` folgt C-naher Value-Semantik:
+`array<MyStruct:N>` follows C-like value semantics:
 
-1. Das Array ist ein zusammenhaengender Block aus `N` Struct-Werten.
-2. `at` liest den Struct-Wert am Index.
-3. `idx` schreibt den Struct-Wert am Index.
-4. Kein implizites Heap-Management.
-5. Keine Pointer-Indirektion, ausser sie steckt bereits in den Feldern des Structs.
+1. The array is a contiguous block of `N` struct values.
+2. `at` reads the struct value at the index.
+3. `idx` writes the struct value at the index.
+4. No implicit heap management.
+5. No pointer indirection, unless it is already in the fields of the struct.
 
-Wichtig:
+Important:
 
-- `array<MyStruct:N>` ist **nicht** dasselbe wie `array<ptr<MyStruct>:N>`
-- das erste speichert Werte inline
-- das zweite speichert nur Adressen
+- `array<MyStruct:N>` is **not** the same as `array<ptr<MyStruct>:N>`
+- the first stores values inline
+- the second only stores addresses
 
-### 3. C-nahe Copy-Semantik
+### 3. C-like copy semantics
 
-Fuer `array<MyStruct:N>` gilt zunaechst:
+For `array<MyStruct:N>`, initially:
 
-- Lesen per `at` ist ein Value-Load
-- Schreiben per `idx` ist ein Value-Store
-- semantisch wie bei einem C-Array von Structs
+- reading via `at` is a value load
+- writing via `idx` is a value store
+- semantically like a C array of structs
 
-Das ist besonders sauber fuer triviale/POD-artige Structs.
+That is particularly clean for trivial/POD-like structs.
 
-### 4. Nicht-triviale Structs
+### 4. Non-trivial structs
 
-Wenn `MyStruct` Felder wie diese enthaelt:
+If `MyStruct` contains fields such as these:
 
 - `string`
 - `list<T>`
@@ -151,233 +151,233 @@ Wenn `MyStruct` Felder wie diese enthaelt:
 - `buffer`
 - `ptr<U>`
 
-dann bleibt die Semantik trotzdem zunaechst **Value-Copy auf Feldebene**, also C-nah und nicht automatisch deep.
+then the semantics nevertheless initially stays **value copy at field level**, i.e. C-like and not automatically deep.
 
-Das bedeutet:
+That means:
 
-- Pointerfelder werden als Pointerwerte kopiert
-- Heap-Containerfelder verhalten sich nach ihrer bestehenden Repräsentation
+- pointer fields are copied as pointer values
+- heap container fields behave according to their existing representation
 
-Diese Semantik soll nicht versteckt "verbessert" werden. Falls spaeter Deep-Copy-Regeln gewuenscht sind, ist das ein eigenes Feature.
+These semantics should not be "improved" in hiding. If deep copy rules are wanted later, that is a feature of its own.
 
-## Implementierungsschritte
+## Implementation steps
 
-## P1 - Typsystem sauber definieren
+## P1 - define the type system cleanly
 
-### Ziel
+### Goal
 
-`array<ptr<T>:N>` und `array<MyStruct:N>` duerfen nicht mehr nur zufaellig funktionieren, sondern muessen explizit als erlaubte Faelle gelten.
+`array<ptr<T>:N>` and `array<MyStruct:N>` must no longer just work by accident, but must count explicitly as allowed cases.
 
-### Stellen
+### Places
 
 - [context.h](../../src/core/context.h#L480)
-- optional Diagnose-/Validation-Code in den AST-Buildern oder Type-Checker-Stellen
+- optionally diagnostic/validation code in the AST builders or type checker places
 
-### Aenderung
+### Change
 
-1. Beim Parsen von `array<...>` den Elementtyp nicht nur an `getLLVMType(parts[0])` delegieren.
-2. Zusaetzlich eine Sprachregel einziehen:
-   - primitive Typen erlaubt
-   - `ptr<...>` erlaubt
-   - `ref<...>` optional erlaubt
-   - Struct-/Model-Typen erlaubt
-   - Heap-Container-Typen wie `string`, `list<T>`, `map<K:V>`, `buffer` weiterhin erstmal nicht als direkte Array-Elementtypen
+1. When parsing `array<...>`, do not just delegate the element type to `getLLVMType(parts[0])`.
+2. Additionally introduce a language rule:
+   - primitive types allowed
+   - `ptr<...>` allowed
+   - `ref<...>` optionally allowed
+   - struct/model types allowed
+   - heap container types such as `string`, `list<T>`, `map<K:V>`, `buffer` still not allowed as direct array element types for now
 
-### Warum
+### Why
 
-Ohne diese Regel ist die aktuelle Situation instabil:
+Without this rule, the current situation is unstable:
 
-- LLVM kann Pointer-Arrays zwar bauen
-- aber die Sprache behauptet in der Doku bisher das Gegenteil
+- LLVM can build pointer arrays
+- but the language has so far claimed the opposite in the docs
 
-### Gewuenschte Fehlermeldung
+### Desired error message
 
-Beispiel:
+Example:
 
 `array element type 'string' is not supported; allowed: primitive scalars, ptr<T>, struct/model value types`
 
-## P2 - `at` fuer Pointer- und Struct-Arrays absichern
+## P2 - secure `at` for pointer and struct arrays
 
-### Ziel
+### Goal
 
-Lesen aus `array<ptr<T>:N>` und `array<MyStruct:N>` muss korrekt typisiert zurueckkommen.
+Reading from `array<ptr<T>:N>` and `array<MyStruct:N>` must come back correctly typed.
 
-### Stelle
+### Place
 
 - [ast_compiler_expr.cpp](../../src/core/ast_compiler_expr.cpp#L882)
 
-### Ist-Zustand
+### Current state
 
-Der Code macht:
+The code does:
 
 1. `elemTy = getLLVMType(parts[0])`
 2. `gep`
 3. `load elemTy`
 
-Das ist fuer Pointer und Structs grundsaetzlich schon richtig.
+That is in principle already right for pointers and structs.
 
-### Aenderung
+### Change
 
-1. Keine Sonderbehandlung im GEP-Pfad noetig.
-2. Aber:
-   - sicherstellen, dass `sym->typeName` wirklich `array<ptr<T>:...>` oder `array<MyStruct:...>` traegt
-   - ggf. Typcheck beim Zielausdruck/Assignment verbessern
-3. Tests fuer:
-   - load eines gesetzten Pointers
-   - load eines `null`-Slots
-   - Vergleich mit `null`
-   - load eines Struct-Werts
-   - load eines 2D Struct-Arrays
+1. No special handling needed in the GEP path.
+2. But:
+   - make sure that `sym->typeName` really carries `array<ptr<T>:...>` or `array<MyStruct:...>`
+   - possibly improve the type check for the target expression/assignment
+3. Tests for:
+   - loading a set pointer
+   - loading a `null` slot
+   - comparison with `null`
+   - loading a struct value
+   - loading from a 2D struct array
 
-## P3 - `idx` fuer Pointer- und Struct-Arrays korrigieren
+## P3 - correct `idx` for pointer and struct arrays
 
-### Ziel
+### Goal
 
-Schreiben in `array<ptr<T>:N>` muss Pointerwerte und `null` sauber akzeptieren.
-Schreiben in `array<MyStruct:N>` muss Value-Stores fuer Structs sauber akzeptieren.
+Writing into `array<ptr<T>:N>` must cleanly accept pointer values and `null`.
+Writing into `array<MyStruct:N>` must cleanly accept value stores for structs.
 
-### Stelle
+### Place
 
 - [ast_compiler_stmt.cpp](../../src/core/ast_compiler_stmt.cpp#L854)
 
 ### Problem
 
-Die aktuelle Cast-Logik ist stark numerisch gedacht:
+The current cast logic is strongly numerically oriented:
 
 - int -> float
 - float -> int
 - int width casts
 
-Fuer Pointer fehlt eine explizite Regel.
-Fuer Struct-Werte muss abgesichert werden, dass keine unnoetige numerische Cast-Logik dazwischenlaeuft.
+An explicit rule for pointers is missing.
+For struct values it must be ensured that no unnecessary numeric cast logic runs in between.
 
-### Aenderung
+### Change
 
-Im Array-`idx`-Pfad diese Faelle hinzufuegen:
+Add these cases in the array `idx` path:
 
-1. `storeVal` ist Pointer und `elemTy` ist derselbe Pointertyp:
-   - direkt speichern
+1. `storeVal` is a pointer and `elemTy` is the same pointer type:
+   - store directly
 
-2. `storeVal` ist `null` und `elemTy` ist Pointertyp:
-   - `ConstantPointerNull` oder passender null-pointer cast
+2. `storeVal` is `null` and `elemTy` is a pointer type:
+   - `ConstantPointerNull` or a matching null pointer cast
 
-3. `storeVal` ist anderer Pointertyp und `elemTy` ist Pointertyp:
-   - erstmal nur erlauben, wenn exakt gleicher Typ
-   - spaeter optional `bitcast` fuer kompatible Pointertypen
+3. `storeVal` is a different pointer type and `elemTy` is a pointer type:
+   - at first only allow if exactly the same type
+   - later optionally `bitcast` for compatible pointer types
 
-4. Pointer in Nicht-Pointer-Array:
-   - klare Fehlermeldung
+4. Pointer into a non-pointer array:
+   - clear error message
 
-5. `storeVal` ist Struct und `elemTy` ist exakt derselbe Struct-Typ:
-   - direkt speichern
+5. `storeVal` is a struct and `elemTy` is exactly the same struct type:
+   - store directly
 
-6. Struct in Nicht-Struct-Array oder Struct-Typ-Mismatch:
-   - klare Fehlermeldung
+6. Struct into a non-struct array or a struct type mismatch:
+   - clear error message
 
-### Empfehlung
+### Recommendation
 
-Am Anfang keine impliziten Pointer-Bitcasts zwischen `ptr<A>` und `ptr<B>`.
+At the start, no implicit pointer bitcasts between `ptr<A>` and `ptr<B>`.
 
-Warum:
+Why:
 
-- einfacher
-- typsicherer
-- weniger Debug-Horror
+- simpler
+- more type-safe
+- less debugging horror
 
-### Struct-Regel
+### Struct rule
 
-Bei Struct-Arrays keine impliziten Typanpassungen.
+No implicit type adjustments for struct arrays.
 
-Nur erlauben:
+Only allow:
 
-- identischer Struct-Typ
+- an identical struct type
 
-Nicht erlauben:
+Do not allow:
 
-- "aehnliche" Structs
-- Feld-fuer-Feld automatische Konvertierung
-- verdeckte Reinterpretation
+- "similar" structs
+- automatic field-by-field conversion
+- hidden reinterpretation
 
-## P4 - Initialisierung und Copy-Semantik explizit testen
+## P4 - test initialisation and copy semantics explicitly
 
-### Ziel
+### Goal
 
-Pointer-Arrays muessen garantiert null-initialisiert sein.
-Struct-Arrays muessen garantiert wertmaessig null-/zero-initialisiert sein, entsprechend der bestehenden Alloca-Initialisierung.
+Pointer arrays must be guaranteed to be null-initialised.
+Struct arrays must be guaranteed to be null/zero-initialised by value, according to the existing alloca initialisation.
 
-### Stellen
+### Places
 
-- Compiler-Alloca-Initialisierung fuer Arrays
-- Tests in [test_array.aiml](../../tests/test_array.aiml#L1)
+- compiler alloca initialisation for arrays
+- tests in [test_array.aiml](../../tests/test_array.aiml#L1)
 
-### Aenderung
+### Change
 
-Neue Testfaelle:
+New test cases:
 
-1. `array<ptr<T>:4>` deklarieren
-2. erstes Element lesen
-3. gegen `null` pruefen
-4. Pointer speichern
-5. denselben Pointer wieder lesen
-6. Slot wieder auf `null` setzen
+1. declare `array<ptr<T>:4>`
+2. read the first element
+3. check against `null`
+4. store a pointer
+5. read the same pointer again
+6. set the slot back to `null`
 
-Zusaetzliche Struct-Tests:
+Additional struct tests:
 
-1. `array<MyStruct:4>` deklarieren
-2. ersten Eintrag lesen
-3. Felder auf Default/Zero pruefen
-4. Struct-Wert speichern
-5. denselben Struct-Wert wieder lesen
-6. in 2D-Variante schreiben/lesen
+1. declare `array<MyStruct:4>`
+2. read the first entry
+3. check the fields for default/zero
+4. store a struct value
+5. read the same struct value again
+6. write/read in a 2D variant
 
-## P5 - Properties fuer Pointer- und Struct-Arrays pruefen
+## P5 - check properties for pointer and struct arrays
 
-### Ziel
+### Goal
 
-`.len`, `.dimX` und `.data_ptr` muessen auch mit Pointer- und Struct-Elementen korrekt bleiben.
+`.len`, `.dimX` and `.data_ptr` must also stay correct with pointer and struct elements.
 
-### Stelle
+### Place
 
 - [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L1212)
 
-### Bewertung
+### Assessment
 
-`.len` und `.dimX` sind unabhaengig vom Elementtyp schon korrekt.
+`.len` and `.dimX` are already correct independently of the element type.
 
-`data_ptr` ist ebenfalls prinzipiell korrekt, weil nur auf das erste Element gezeigt und danach nach `i8*` gecastet wird.
+`data_ptr` is in principle also correct, because it only points to the first element and is then cast to `i8*`.
 
-### Was zusaetzlich noetig ist
+### What is additionally necessary
 
-Nur Tests:
+Only tests:
 
 1. `arr.len`
 2. `arr.dim0`
-3. `arr.data_ptr` fuer Pointer-Array kompilieren
-4. `arr.data_ptr` fuer Struct-Array kompilieren
+3. compile `arr.data_ptr` for a pointer array
+4. compile `arr.data_ptr` for a struct array
 
-Nicht zwingend als Runtime-Test, aber mindestens Compile-Test.
+Not necessarily as a runtime test, but at least a compile test.
 
-## P6 - Dokumentation aktualisieren
+## P6 - update the documentation
 
-### Stellen
+### Places
 
 - [52_arrays.md](../../spec/52_arrays.md#L1)
-- evtl. [aiml_reference_guide.md](../../spec/aiml_reference_guide.md)
+- possibly [aiml_reference_guide.md](../../spec/aiml_reference_guide.md)
 
-### Aenderung
+### Change
 
-Die Doku sagt aktuell:
+The docs currently say:
 
-- keine Pointer/String/Struct-Elemente
+- no pointer/string/struct elements
 
-Das muss fuer diese Erweiterung ersetzt werden durch:
+For this extension, that must be replaced by:
 
-- primitive Typen erlaubt
-- `ptr<T>` erlaubt
-- Struct-/Model-Wertetypen erlaubt
-- `string`, `list<T>`, `map<K:V>`, `buffer` weiterhin nicht erlaubt
+- primitive types allowed
+- `ptr<T>` allowed
+- struct/model value types allowed
+- `string`, `list<T>`, `map<K:V>`, `buffer` still not allowed
 
-### Beispiele ergaenzen
+### Add examples
 
 ```aiml
 - model:
@@ -392,7 +392,7 @@ Das muss fuer diese Erweiterung ersetzt werden durch:
 - decl: [r, "ptr<Node>", { at: [nodes, 0] }]
 ```
 
-Und Struct-Beispiel:
+And a struct example:
 
 ```aiml
 - model:
@@ -409,30 +409,30 @@ Und Struct-Beispiel:
 - decl: [r, Point, { at: [pts, 0] }]
 ```
 
-## P7 - Tests erweitern
+## P7 - extend the tests
 
-### Datei
+### File
 
 - [test_array.aiml](../../tests/test_array.aiml#L1)
 
-### Neue Testgruppe
+### New test group
 
-#### Phase F: Pointer arrays
+#### Phase F: pointer arrays
 
-1. Declaration + null-init
-2. Store/load same pointer
-3. Store `null`
+1. declaration + null init
+2. store/load the same pointer
+3. store `null`
 4. 2D pointer array
-5. Optional `.data_ptr` compile smoke test
+5. optionally a `.data_ptr` compile smoke test
 
-#### Phase G: Struct arrays
+#### Phase G: struct arrays
 
-1. Declaration + zero-init
-2. Store/load same struct value
+1. declaration + zero init
+2. store/load the same struct value
 3. 2D struct array
-4. Optional struct array `.data_ptr`
+4. optionally struct array `.data_ptr`
 
-### Konkrete Testfaelle
+### Concrete test cases
 
 ```aiml
 - model:
@@ -455,7 +455,7 @@ Und Struct-Beispiel:
 # expect null
 ```
 
-Struct-Beispiel:
+Struct example:
 
 ```aiml
 - model:
@@ -473,51 +473,51 @@ Struct-Beispiel:
 # expect r.x == 3 and r.y == 7
 ```
 
-## Nicht in Phase 1 machen
+## Do not do in phase 1
 
-Diese Punkte bewusst verschieben:
+Deliberately postpone these points:
 
 1. `array<string:N>`
 2. `array<MyStruct:N>`
-3. implizite Pointer-Bitcasts
-4. Serialize/Deserialize fuer Pointer- oder Struct-Arrays als neues Spezialfeature
-5. Arrays von `any`
-6. Listen/Maps/Strings/Buffers als direkte Array-Elemente
+3. implicit pointer bitcasts
+4. serialize/deserialize for pointer or struct arrays as a new special feature
+5. arrays of `any`
+6. lists/maps/strings/buffers as direct array elements
 
-Grund:
+Reason:
 
-Das zieht sofort Ownership-, ABI- und Persistenzfragen nach sich.
+That immediately pulls in ownership, ABI and persistence questions.
 
-## Risiken
+## Risks
 
-### 1. Typinkonsistenzen bei `null`
+### 1. Type inconsistencies with `null`
 
-Wenn `null` im Compiler nicht sauber als Pointer-Null fuer den Zieltyp materialisiert wird, brechen `idx` oder Vergleiche.
+If `null` is not cleanly materialised in the compiler as a pointer null for the target type, `idx` or comparisons break.
 
-### 2. Pointertyp-Mismatch
+### 2. Pointer type mismatch
 
-Wenn implizite Pointercasts zu frueh erlaubt werden, wird das Debugging spaeter schwer.
+If implicit pointer casts are allowed too early, debugging becomes hard later.
 
-### 3. Structs mit Heap-Feldern
+### 3. Structs with heap fields
 
-Wenn ein Struct Heap-Felder enthaelt, ist eine Value-Copy weiterhin bewusst nur C-nah und nicht deep.
-Das muss dokumentiert werden, sonst erwarten Nutzer moeglicherweise automatisch "smarte" Semantik.
+If a struct contains heap fields, a value copy is still deliberately only C-like and not deep.
+That must be documented, otherwise users may automatically expect "smart" semantics.
 
-### 4. Doku und Implementierung laufen auseinander
+### 4. Docs and implementation drift apart
 
-Wenn Pointer-Arrays implementiert werden, aber die Spezifikation primitive-only behauptet, wird das wieder zu "zufaellig geht es"-Verhalten.
+If pointer arrays are implemented but the specification claims primitive-only, that again turns into "it works by accident" behaviour.
 
-## Empfohlene Reihenfolge
+## Recommended order
 
-1. Typregel fuer Array-Elementtypen einfuehren
-2. `idx` Pointer-Casts + Struct-Value-Store sauber machen
-3. Pointer- und Struct-Array-Tests schreiben
-4. Doku aktualisieren
-5. Optional 2D Pointer-/Struct-Array-Tests
+1. introduce the type rule for array element types
+2. make `idx` pointer casts + struct value store clean
+3. write pointer and struct array tests
+4. update the docs
+5. optionally 2D pointer/struct array tests
 
-## Minimaler erster Sprint
+## Minimal first sprint
 
-### Dateien
+### Files
 
 - `src/core/context.h`
 - `src/core/ast_compiler_stmt.cpp`
@@ -525,9 +525,9 @@ Wenn Pointer-Arrays implementiert werden, aber die Spezifikation primitive-only 
 - `tests/test_array.aiml`
 - `spec/52_arrays.md`
 
-### Ziel
+### Goal
 
-Nach Sprint 1 soll das hier stabil funktionieren:
+After sprint 1, this should work stably:
 
 ```aiml
 - decl: [nodes, "array<ptr<MyNode>:8>"]
@@ -536,7 +536,7 @@ Nach Sprint 1 soll das hier stabil funktionieren:
 - decl: [n, "ptr<MyNode>", { at: [nodes, 1] }]
 ```
 
-und:
+and:
 
 ```aiml
 - decl: [pts, "array<Point:8>"]
@@ -544,16 +544,16 @@ und:
 - decl: [p, Point, { at: [pts, 0] }]
 ```
 
-## Fazit
+## Conclusion
 
-`array<ptr<T>:N>` und `array<MyStruct:N>` sind in AIML technisch gut machbar.
+`array<ptr<T>:N>` and `array<MyStruct:N>` are technically quite feasible in AIML.
 
-Der LLVM-Unterbau ist bereits nah dran. Der eigentliche Aufwand liegt in:
+The LLVM foundation is already close. The actual effort lies in:
 
-1. expliziter Sprachfreigabe
-2. Pointer-/`null`-Regeln im `idx`-Pfad
-3. klarer Struct-Value-Semantik
-4. Tests
-5. Doku
+1. explicit language approval
+2. pointer/`null` rules in the `idx` path
+3. clear struct value semantics
+4. tests
+5. docs
 
-Das ist ein sinnvoller, eng begrenzter Ausbau. Kritisch sind nicht Pointer- oder Struct-Arrays an sich, sondern erst direkte Arrays von Heap-Containern.
+That is a sensible, narrowly bounded expansion. What is critical is not pointer or struct arrays as such, but only direct arrays of heap containers.
