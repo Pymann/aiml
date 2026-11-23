@@ -11,7 +11,7 @@ __pycache__/
 .git/
 logs/
 leak_probes/
-reports/
+doc/reports/
 doc/
 assets/
 *.log
