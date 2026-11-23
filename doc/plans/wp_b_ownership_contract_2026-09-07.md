@@ -1,140 +1,140 @@
-# WP-B: AIML Heap-Ownership-Vertrag
+# WP-B: AIML heap ownership contract
 
-Stand: 2026-09-07. Status: Design/Analyse (kein Compiler-Code). Umsetzung von
-[Arbeitspaket B](memory_lifetime_fix_plan_2026-09-07.md#L68) des Memory-Lifetime-Plans.
+As of: 2026-09-07. Status: design/analysis (no compiler code). Implementation of
+[work package B](memory_lifetime_fix_plan_2026-09-07.md#L68) of the memory lifetime plan.
 
-Grundlage: die empirischen Baselines in
+Basis: the empirical baselines in
 [findings_2026-09-07.md](../../../9rooms_v2/doc/analysis/memory_checks/findings_2026-09-07.md)
-(Leak-Probe A–G, Render-Probe A/A0/B/BL/C/CF) und der aktuelle Quellstand von
-`ser_runtime`, `list_impl`, `string_runtime` und den Deep-Copy-Sites im Codegen.
+(leak probes A–G, render probes A/A0/B/BL/C/CF) and the current source state of
+`ser_runtime`, `list_impl`, `string_runtime` and the deep copy sites in codegen.
 
-Zweck: BEVOR WP-C automatische Drops emittiert, für Compiler UND Runtime EINE
-gemeinsame, entscheidbare Ownership-Semantik festlegen. Der Vertrag ist die
-Voraussetzung für sicheres Cleanup ohne Double-Free/Use-After-Free.
+Purpose: BEFORE WP-C emits automatic drops, fix ONE shared, decidable ownership
+semantics for compiler AND runtime. The contract is the
+precondition for safe cleanup without double free/use-after-free.
 
-## 1. Ownership-Taxonomie
+## 1. Ownership taxonomy
 
-Jeder Wert (Local, Temporary, Feld, Container-Element, Rückgabe) trägt zur
-Compilezeit genau eine dieser Klassen; wo sie statisch nicht entscheidbar ist,
-braucht es ein Laufzeitflag oder eine Compilerdiagnose (kein stilles Default-Free).
+Every value (local, temporary, field, container element, return) carries exactly one
+of these classes at compile time; where it is not statically decidable,
+a runtime flag or a compiler diagnostic is needed (no silent default free).
 
-| Klasse | Bedeutung | Drop bei Scope-Ende? |
+| Class | Meaning | Drop at scope end? |
 |---|---|---|
-| **Static** | Zeigt auf unveränderliche Programmdaten (String-Literal in `.rodata`, konstante Deskriptoren). | **Nie freigeben.** |
-| **Borrowed** | Geliehene Sicht auf fremden Besitz (`kv.get`-Cache-View, `list.get`/`at`-Element-Alias, Feldreferenz, by-ref-Parameter). Besitzer und Invalidierung liegen woanders. | **Nie freigeben** (Besitzer räumt auf). |
-| **Owned** | Dieser Slot besitzt den Heap allein (frische Model-Instanz, Deep-Copy-Ziel, Interpolations-/Concat-Ergebnis, decode-Ergebnis in einen eigenen Puffer). | **Ja**, genau einmal, in umgekehrter Init-Reihenfolge. |
-| **Shared** | Mehrere Besitzer, refcount-verwaltet (managed `aiml_str_*`; künftige `chan<T>`-Handoffs). | **Release** (Refcount−−), nicht `free`. |
+| **Static** | Points to immutable program data (string literal in `.rodata`, constant descriptors). | **Never free.** |
+| **Borrowed** | Borrowed view of foreign ownership (`kv.get` cache view, `list.get`/`at` element alias, field reference, by-ref parameter). Owner and invalidation lie elsewhere. | **Never free** (the owner cleans up). |
+| **Owned** | This slot owns the heap alone (fresh model instance, deep copy target, interpolation/concat result, decode result into its own buffer). | **Yes**, exactly once, in reverse init order. |
+| **Shared** | Several owners, refcount-managed (managed `aiml_str_*`; future `chan<T>` handoffs). | **Release** (refcount−−), not `free`. |
 
-Datenflusszustände orthogonal zur Klasse (Plan §8.3): `initialized`,
-`maybe-initialized` (bedingte Init → Laufzeitflag), `moved` (Besitz übertragen →
-nicht mehr droppen). Ein reines C++-`bool` zur Compilezeit reicht bei bedingter
-Init/Move NICHT.
+Data flow states orthogonal to the class (plan §8.3): `initialized`,
+`maybe-initialized` (conditional init → runtime flag), `moved` (ownership transferred →
+no longer drop). A plain C++ `bool` at compile time is NOT enough for conditional
+init/move.
 
-## 2. Per-Herkunft-Vertrag
+## 2. Contract per origin
 
-Spalten: **Ist** = aktuelles Laufzeit-/Codegen-Verhalten (belegt); **Soll** =
-Zielvertrag; **Risiko** = was ein naives Cleanup hier brechen würde.
+Columns: **Actual** = current runtime/codegen behaviour (evidenced); **Target** =
+target contract; **Risk** = what a naive cleanup would break here.
 
-| Herkunft / Operation | Klasse | Ist (Quellstand) | Soll (WP-C) | Risiko |
+| Origin / operation | Class | Actual (source state) | Target (WP-C) | Risk |
 |---|---|---|---|---|
-| Stringliteral | Static | kein Header, `.rodata`-Adresse | nie droppen; nie Header davor lesen (string_runtime.cpp:81 liest Magic VOR beliebiger Adresse) | Free/Decref eines Literals → Crash/UB |
-| Interpolation `"${…}"` | Owned | frischer Heap-String, **wird NICHT gedroppt** (Probe F: ~144 B/iter) | am Ende des vollständigen Ausdrucks droppen, außer bei Transfer (store/return/push) | doppeltes Drop, wenn zugleich als Rückgabe transferiert |
-| Concat-Akkumulator (ast_compiler_expr.cpp:43–68) | Owned | neuer Akkumulator je Segment, ersetzter nicht released | ersetzten Akkumulator releasen, Endergebnis als owned weiterreichen | Borrowed-Segmente/Literale nicht freigeben |
-| String-returnende Runtime (`strdup`/`aiml_str_dup`) | Owned bzw. Shared | gemischt: `aiml_prefab_text_value` = `strdup` (prefab_runtime.cpp:6021), anderes refcounted | pro Producer als owned ODER shared kennzeichnen; Konsumenten daran angleichen | `free` auf refcounted / Decref auf `strdup` |
-| Frische Model-Instanz (`decl: [m, T]`) | Owned | Heap-Felder **nicht gedroppt** (Probe B: ~80 B/iter) | typspezifisches Feld-Drop bei Scope-Ende | gemischte Felder (Literal/Borrowed) im Model → kein Blanket-Free |
-| Model-Deep-Copy (`decl: [m, T, kv.get_copy]`, ast_compiler_stmt.cpp:586–607) | Owned | `aiml_ser_deep_copy` in zero-init dst; **nicht gedroppt** (Probe A: ~800 B/iter) | dst als owned markieren + Cleanup registrieren; KV-Cache-Slot NICHT mitfreigeben | Cache-Slot-Aliasing → UAF im Cache |
-| `kv.get` (Cache-View) | Borrowed | Zeiger in `decoded_cache` (LRU 1024, evict deep-freet) | nie droppen; Invalidierung = Cache-Eviction, dokumentieren | Drop einer Cache-View → Double-Free bei Eviction |
-| `kv.get_copy` (Rückgabe) | Owned | decoded_cache-Slot, aber Compiler deep-copyt in unabhängige Local | Local = Owned; Cache-Slot bleibt cache-verwaltet | s.o. Cache-Aliasing |
-| `kv.get_copy_at(key, dst)` | Owned (in fremdem Puffer) | frei-dann-decode in Caller-Puffer; **NEU**: `-1` bei ungültigem Blob (dst genullt) | dst = Owned; letzter Inhalt am Scope-Ende droppen; nur bei Ergebnis `1` lesen | dst-Alias auf Cache verbieten (Codegen-Check) |
-| `at`/`get` (Element, ENTSCHIEDEN) | Borrowed | heute: flache Kopie in Value-Local, Heap **geteilt** mit Container (kaputte Mitte) | **`at`/`get` → `ptr<T>` Borrowed-View** in den Container-Slot (kein Copy, nie gedroppt), analog `kv.get`. **Neu `at_copy` → `T` Owned-Deep-Copy** (droppable), analog `kv.get_copy`. | View invalidiert bei `push`/`remove`/`clear`/Grow (Realloc) — nicht über Mutation halten |
-| `push`/`insert` (list_impl.cpp:56, ENTSCHIEDEN) | Transfer bzw. Copy | kein Element-Lifetime-Descriptor; heute `push` von ptr in Value-Liste = Compile-Error („Zwingende Böe") | **`push` → MOVE**: Struct-Slot flach übernehmen (Heap-Pointer transferieren, kein Deep-Copy) **und Quelle als `moved` neutralisieren**. **Neu `push_from` → Deep-Copy** in den Container (Quelle bleibt gültig). | `push` OHNE Quell-Neutralisierung → zwei Owner → genau „Zwingende Böe"-Crash |
-| `clear` (list_impl.cpp:200) | — | setzt **nur size=0** (Elemente lecken; Probe D/G: ~48 B/iter = Buffer) | owned Elemente vorher droppen; Kapazität darf bleiben | Borrowed-Elemente nicht droppen |
-| `remove` (list_impl.cpp:287) | — | Slot-Verschiebung ohne Element-Drop | entferntes owned Element droppen; Slots als Transfer verschieben; letzten Slot neutralisieren | verschobene Elemente nicht zusätzlich releasen |
-| Container-Drop (Scope-Ende) | Owned | Buffer bleibt (Probe D: ~48 B/iter) | erst Elemente droppen, dann Buffer | Borrowed-Parameter-Container nicht zerstören |
-| Zuweisung/Überschreiben | Replace | RHS-Auswertung, altes Ziel bleibt | RHS zuerst sicher auswerten, altes Ziel droppen, neues übernehmen (Plan §8.4-Skizze) | Selbstzuweisung/Quelle zeigt auf alte Felder → nicht zuerst Ziel freigeben |
-| by-ref-Parameter (`ptr<T>`, `is_byref_arg`) | Borrowed | Callee besitzt nicht | Callee droppt nie; Caller behält Besitz | Drop im Callee → UAF beim Caller |
-| Return / dauerhafte Speicherung | Transfer | Return-Deep-Copy vorhanden (ast_compiler_stmt.cpp:1219–1236) | Ergebnis vor Cleanup sichern, an Caller übertragen, vom Callee-Cleanup ausnehmen | Callee droppt übertragenen Besitz erneut |
-| `set_text` (prefab_runtime.cpp:3662) | Borrowed input | `std::string`-Zuweisung kopiert synchron; Eingabe bleibt Caller-Sache (BL-Probe = 0 → set_text leckt NICHT) | Call-Vertrag „borrowed input, synchron kopiert"; owned Eingabe-Temporary danach vom Caller droppen | `free(text)` in set_text (Eingabe evtl. Literal) |
-| Pointer/Interface/Klasseninstanz | Borrowed (i.d.R.) | Repräsentation ≠ Besitz | nicht allein wegen Ptr-Repräsentation als besitzendes Model droppen; escaping erkennen | Klasseninstanz/Interface als Model gedroppt → UAF |
-| Explizites `free` | manueller Drop | vorhanden | Slot als `moved` markieren → kein zweites Auto-Drop | Doppel-Free Auto+manuell |
+| String literal | Static | no header, `.rodata` address | never drop; never read a header in front of it (string_runtime.cpp:81 reads the magic IN FRONT OF an arbitrary address) | free/decref of a literal → crash/UB |
+| Interpolation `"${…}"` | Owned | fresh heap string, **is NOT dropped** (probe F: ~144 B/iter) | drop at the end of the full expression, except on transfer (store/return/push) | double drop when transferred as a return at the same time |
+| Concat accumulator (ast_compiler_expr.cpp:43–68) | Owned | new accumulator per segment, the replaced one is not released | release the replaced accumulator, pass on the final result as owned | do not free borrowed segments/literals |
+| String-returning runtime (`strdup`/`aiml_str_dup`) | Owned or Shared | mixed: `aiml_prefab_text_value` = `strdup` (prefab_runtime.cpp:6021), others refcounted | mark per producer as owned OR shared; align consumers with it | `free` on refcounted / decref on `strdup` |
+| Fresh model instance (`decl: [m, T]`) | Owned | heap fields **not dropped** (probe B: ~80 B/iter) | type-specific field drop at scope end | mixed fields (literal/borrowed) in the model → no blanket free |
+| Model deep copy (`decl: [m, T, kv.get_copy]`, ast_compiler_stmt.cpp:586–607) | Owned | `aiml_ser_deep_copy` into a zero-init dst; **not dropped** (probe A: ~800 B/iter) | mark dst as owned + register cleanup; do NOT free the KV cache slot along with it | cache slot aliasing → UAF in the cache |
+| `kv.get` (cache view) | Borrowed | pointer into `decoded_cache` (LRU 1024, evict deep-frees) | never drop; invalidation = cache eviction, document it | drop of a cache view → double free on eviction |
+| `kv.get_copy` (return) | Owned | decoded_cache slot, but the compiler deep-copies into an independent local | local = Owned; the cache slot stays cache-managed | see above, cache aliasing |
+| `kv.get_copy_at(key, dst)` | Owned (in a foreign buffer) | free-then-decode into the caller's buffer; **NEW**: `-1` on an invalid blob (dst nulled) | dst = Owned; drop the last content at scope end; only read on result `1` | forbid a dst alias onto the cache (codegen check) |
+| `at`/`get` (element, DECIDED) | Borrowed | today: shallow copy into a value local, heap **shared** with the container (the broken middle) | **`at`/`get` → `ptr<T>` borrowed view** into the container slot (no copy, never dropped), analogous to `kv.get`. **New `at_copy` → `T` owned deep copy** (droppable), analogous to `kv.get_copy`. | the view is invalidated by `push`/`remove`/`clear`/grow (realloc) — do not hold it across a mutation |
+| `push`/`insert` (list_impl.cpp:56, DECIDED) | Transfer or copy | no element lifetime descriptor; today `push` of a ptr into a value list = compile error ("Zwingende Böe") | **`push` → MOVE**: take over the struct slot shallowly (transfer the heap pointers, no deep copy) **and neutralise the source as `moved`**. **New `push_from` → deep copy** into the container (the source stays valid). | `push` WITHOUT neutralising the source → two owners → exactly the "Zwingende Böe" crash |
+| `clear` (list_impl.cpp:200) | — | sets **only size=0** (elements leak; probes D/G: ~48 B/iter = buffer) | drop owned elements first; the capacity may stay | do not drop borrowed elements |
+| `remove` (list_impl.cpp:287) | — | slot shift without an element drop | drop the removed owned element; shift slots as a transfer; neutralise the last slot | do not additionally release shifted elements |
+| Container drop (scope end) | Owned | the buffer stays (probe D: ~48 B/iter) | drop the elements first, then the buffer | do not destroy borrowed parameter containers |
+| Assignment/overwrite | Replace | RHS evaluation, the old target stays | evaluate the RHS safely first, drop the old target, take over the new one (plan §8.4 sketch) | self-assignment/source points into old fields → do not free the target first |
+| by-ref parameter (`ptr<T>`, `is_byref_arg`) | Borrowed | the callee does not own | the callee never drops; the caller keeps ownership | drop in the callee → UAF at the caller |
+| Return / permanent storage | Transfer | return deep copy present (ast_compiler_stmt.cpp:1219–1236) | secure the result before cleanup, transfer it to the caller, exempt it from the callee's cleanup | the callee drops transferred ownership again |
+| `set_text` (prefab_runtime.cpp:3662) | Borrowed input | `std::string` assignment copies synchronously; the input stays the caller's business (BL probe = 0 → set_text does NOT leak) | call contract "borrowed input, copied synchronously"; the caller drops an owned input temporary afterwards | `free(text)` in set_text (the input may be a literal) |
+| Pointer/interface/class instance | Borrowed (as a rule) | representation ≠ ownership | do not drop as an owning model merely because of the ptr representation; detect escaping | class instance/interface dropped as a model → UAF |
+| Explicit `free` | manual drop | present | mark the slot as `moved` → no second auto-drop | double free auto+manual |
 
-## 3. Entscheidungen (Tore für WP-C)
+## 3. Decisions (gates for WP-C)
 
-1. **Kein pauschales `aiml_ser_free_decoded` auf beliebige Models.** Ein Model kann
-   Literal-, Borrowed- und Owned-Felder mischen sowie später ersetzte/flache Kopien
-   enthalten. Eine Owned-Markierung nur am ganzen Model genügt nicht → einheitlicher
-   **Feldvertrag** oder Per-Feld-Metadaten. `aiml_ser_free_decoded`/`fre`
-   (ser_runtime.cpp:471) nur für kompatibel besessene Decode-Felder; nach Listen-Free
-   auch size/capacity nullen.
-2. **Cache-Aliasing bleibt tabu.** Weder `kv.get`-Views noch der von `get_copy`
-   zurückgereichte Cache-Slot dürfen von Scope-Cleanup gedroppt werden. Nur die vom
-   Compiler erzeugte unabhängige Local-Kopie ist Owned.
-3. **Verb-Split für Container (ENTSCHIEDEN 2026-09-08), spiegelt `kv.get`/`get_copy`:**
-   - `at`/`get` → **Borrowed `ptr<T>`-View** in den Container-Slot (kein Copy, nie
-     gedroppt). `at_copy` → **Owned `T` Deep-Copy**. Die heutige kaputte flache
-     Value-Kopie (Heap geteilt) entfällt damit ganz.
-   - `push` → **MOVE, UNBEDINGT** (eine Bedeutung, KEIN typabhängiger Fork);
-     `push_from` → **Deep-Copy** (Quelle bleibt gültig).
-   - **`push` = Move-aus-Owned:** `push(x)` transferiert `x`s Heap-Pointer in den Slot
-     und **nullt `x`** (Heap-Felder = 0). Der Container ist danach einziger Owner
-     (gleiche Technik wie `get_copy_at` `-1`: Ziel genullt, sicher lesbar).
-   - **Sicherheits-Reichweite des Nullens (präzise, korrigiert):** das Nullen schützt
-     GEGEN Double-Free über den **Quell-Slot `x`** — ein Zeiger auf `x` selbst liest
-     danach ein leeres Objekt (definiert). Es macht **NICHT** automatisch bereits
-     entkommene Aliase auf `x`s **Heap-Felder** sicher (z.B. ein vor dem Move
-     genommenes `ptr` auf `x.name`): dieser Heap gehört jetzt dem Container, der Alias
-     zeigt weiter gültig darauf — wird der Container später zerstört, wird der Alias
-     zu **UAF**. D.h. Aliase auf gemovte Heap-Felder folgen der Lebensdauer des
-     **neuen Owners** (dieselbe Invalidierungsregel wie `at`-Views). „Kein UAF" gilt
-     also für den Quell-Slot, nicht unbedingt für vorbestehende Feld-Aliase.
-   - Kein Doppel-Owner über den Quell-Slot → kein Wiederaufleben des früheren
-     Listen-Einfüge-Crashes ([[aiml_list_push_ptr_value_check]]; Ursache damals war
-     Pointer- vs. Model-Größe beim Einfügen, KEIN nachgewiesenes Double-Free — der
-     Move-Kontrakt ist hier die saubere Semantik, nicht die „einzig mögliche" Rettung).
-   - **Vorbedingung (feste Regel, keine Verhaltens-Gabelung):** `push` verlangt eine
-     **Owned**-Quelle. Move aus einer Borrowed-`at`/`get`-View = **Compile-Error** →
-     `push_from` nutzen. Zusätzlich lexikalische **Use-after-move-Diagnose** auf `x`
-     (Logik-Hilfe, für Speichersicherheit dank Nullen nicht zwingend).
-   - **View-Invalidierung** ist eine Eigenschaft von `at` (Borrowed), NICHT von `push`:
-     `push`/`remove`/`clear`/Grow reallozieren den Buffer → offene `at`-Views ungültig
-     (wie `kv.get`/C++-Iteratoren) — dokumentiert, wo lexikalisch sichtbar diagnostiziert.
-   - Borrowed-Referenz-in-Container (Pointee überlebt Container) bleibt separat nur
-     über explizites `list<ptr<T>>` möglich.
-4. **Replace vor Free bei Überschreiben** (Plan §8.4): RHS zuerst in Temp auswerten,
-   dann Ziel droppen, dann Move — sicher bei Selbstzuweisung und Quelle-zeigt-auf-Ziel.
-   `aiml_ser_deep_copy` liefert `void` → eine **checked Replace-Variante** mit
-   Fehlervertrag ist nötig, bevor belegte Ziele überschrieben werden.
-5. **String-Refcounting nicht breiter einsetzen**, bis Managed-Herkunft im Codegen
-   gesichert ist. `aiml_str_incref/decref` (string_runtime.cpp:74/81) lesen den
-   Magic-Header VOR der übergebenen Adresse; der Größencheck beweist keinen gültigen
-   Speicher davor. Für gemischte Runtime-Grenzen sicheren Registry-/Handle-Vertrag
-   vorsehen, Registry nebenläufig absichern.
+1. **No blanket `aiml_ser_free_decoded` on arbitrary models.** A model can
+   mix literal, borrowed and owned fields and can contain later replaced/shallow copies.
+   An owned mark on the whole model alone is not enough → a uniform
+   **field contract** or per-field metadata. `aiml_ser_free_decoded`/`fre`
+   (ser_runtime.cpp:471) only for compatibly owned decode fields; after a list free
+   also null size/capacity.
+2. **Cache aliasing stays taboo.** Neither `kv.get` views nor the cache slot handed back by
+   `get_copy` may be dropped by scope cleanup. Only the independent local copy produced by the
+   compiler is Owned.
+3. **Verb split for containers (DECIDED 2026-09-08), mirrors `kv.get`/`get_copy`:**
+   - `at`/`get` → **borrowed `ptr<T>` view** into the container slot (no copy, never
+     dropped). `at_copy` → **owned `T` deep copy**. Today's broken shallow
+     value copy (shared heap) thereby disappears completely.
+   - `push` → **MOVE, UNCONDITIONALLY** (one meaning, NO type-dependent fork);
+     `push_from` → **deep copy** (the source stays valid).
+   - **`push` = move out of owned:** `push(x)` transfers `x`'s heap pointers into the slot
+     and **nulls `x`** (heap fields = 0). The container is then the only owner
+     (the same technique as `get_copy_at` `-1`: target nulled, safely readable).
+   - **Safety reach of the nulling (precise, corrected):** the nulling protects
+     AGAINST a double free via the **source slot `x`** — a pointer to `x` itself then
+     reads an empty object (defined). It does **NOT** automatically make already
+     escaped aliases onto `x`'s **heap fields** safe (e.g. a `ptr` to `x.name` taken before the move):
+     that heap now belongs to the container, the alias keeps pointing validly at it —
+     if the container is destroyed later, the alias becomes a
+     **UAF**. I.e. aliases onto moved heap fields follow the lifetime of the
+     **new owner** (the same invalidation rule as `at` views). So "no UAF" applies
+     to the source slot, not necessarily to pre-existing field aliases.
+   - No double owner via the source slot → no revival of the earlier
+     list insertion crash ([[aiml_list_push_ptr_value_check]]; the cause back then was
+     pointer vs. model size on insertion, NOT a demonstrated double free — the
+     move contract is the clean semantics here, not the "only possible" rescue).
+   - **Precondition (a fixed rule, no behavioural fork):** `push` requires an
+     **owned** source. A move out of a borrowed `at`/`get` view = **compile error** →
+     use `push_from`. Additionally a lexical **use-after-move diagnostic** on `x`
+     (a logic aid, not mandatory for memory safety thanks to the nulling).
+   - **View invalidation** is a property of `at` (borrowed), NOT of `push`:
+     `push`/`remove`/`clear`/grow reallocate the buffer → open `at` views become invalid
+     (like `kv.get`/C++ iterators) — documented, diagnosed where lexically visible.
+   - A borrowed reference in a container (the pointee outlives the container) stays possible
+     only via an explicit `list<ptr<T>>`.
+4. **Replace before free on overwrite** (plan §8.4): evaluate the RHS into a temp first,
+   then drop the target, then move — safe for self-assignment and source-points-into-target.
+   `aiml_ser_deep_copy` returns `void` → a **checked replace variant** with an
+   error contract is needed before occupied targets are overwritten.
+5. **Do not use string refcounting more widely** until managed origin is
+   secured in codegen. `aiml_str_incref/decref` (string_runtime.cpp:74/81) read the
+   magic header IN FRONT OF the address passed; the size check proves no valid
+   memory in front of it. For mixed runtime boundaries provide a safe registry/handle contract,
+   and secure the registry for concurrency.
 
-## 4. Semantik: was sich ändert vs. was bleibt
+## 4. Semantics: what changes vs. what stays
 
-**Bewusst geänderte Semantik (vom Nutzer freigegeben 2026-09-08, §3.3):** `at`/`get`
-werden Borrowed-Views statt flacher Value-Kopien; `push` wird Move (Quelle konsumiert);
-neu sind `at_copy` und `push_from`. Das ändert beobachtbares Verhalten und ist damit
-KEIN „Semantik nur wenn nötig"-Fall mehr, sondern eine bewusste Entscheidung. **Migration
-erforderlich:** bestehender 9rooms_v2-Code, der (a) `at`/`get` als unabhängige Kopie nutzt
-oder (b) nach `push(x)` `x` weiterverwendet, muss auf `at_copy`/`push_from` umgestellt
-werden. WP-C bringt dafür Diagnosen (Use-after-move; Move-aus-Borrowed = Fehler), sodass
-betroffene Stellen beim Build sichtbar werden statt still zu brechen. Ein Audit dieser
-Muster (Plan-Vorschlag) geht der Aktivierung voraus.
+**Deliberately changed semantics (released by the user 2026-09-08, §3.3):** `at`/`get`
+become borrowed views instead of shallow value copies; `push` becomes a move (the source is consumed);
+`at_copy` and `push_from` are new. That changes observable behaviour and is therefore
+NO LONGER a "semantics only when necessary" case, but a deliberate decision. **Migration
+required:** existing 9rooms_v2 code that (a) uses `at`/`get` as an independent copy
+or (b) keeps using `x` after `push(x)` must be switched to `at_copy`/`push_from`.
+WP-C brings diagnostics for this (use-after-move; move out of borrowed = error), so that
+affected places become visible at build time instead of breaking silently. An audit of these
+patterns (plan proposal) precedes activation.
 
-**Unverändert bleibt:**
-- Zuweisung/Parameterübergabe (by-ref-Listen/Maps, by-value-Model/Class-Args) — Cleanup
-  ist additive Freigabe, KEINE Umdeutung zu Deep-Copy-Zuweisungen.
-- KV decoded_cache-Verhalten (LRU 1024, Evict-Deep-Free) unverändert.
-- `get_copy_at`-Puffer-Wiederverwendung (spec/31 §6.7.2) unverändert; nur der
-  Fehler-Rückgabewert `-1` ist neu.
-- Nur wenn eine Semantik-/ABI-Änderung nachweislich unvermeidbar ist, wird der
-  konkrete Fall VOR der Umsetzung mit dem Nutzer geklärt (Plan §7.4).
+**What stays unchanged:**
+- Assignment/parameter passing (by-ref lists/maps, by-value model/class args) — cleanup
+  is an additive release, NOT a reinterpretation as deep copy assignments.
+- KV decoded_cache behaviour (LRU 1024, evict deep free) unchanged.
+- `get_copy_at` buffer reuse (spec/31 §6.7.2) unchanged; only the
+  error return value `-1` is new.
+- Only if a semantics/ABI change is demonstrably unavoidable is the
+  concrete case clarified with the user BEFORE implementation (plan §7.4).
 
-## 5. Abnahme des Vertrags (Plan §3)
+## 5. Acceptance of the contract (plan §3)
 
-Abgedeckt sind Locals, Temporaries, Parameter, Felder, Container, Rückgaben und
-Runtime-Grenzen. Ungeklärte Fälle werden NICHT unsicher automatisch freigegeben,
-sondern erhalten eine gezielte Compilerdiagnose. Die WP-C-Aktivierung folgt der
-Reihenfolge: Container-Element-Regeln → Replace/Return-Transfer → Model-Feld-Drops.
-Jeder Schritt wird gegen die isolierten Proben UND ASan/LSan (verbindlich) geprüft.
+Covered are locals, temporaries, parameters, fields, containers, returns and
+runtime boundaries. Unresolved cases are NOT freed automatically in an unsafe way,
+but get a targeted compiler diagnostic. WP-C activation follows the
+order: container element rules → replace/return transfer → model field drops.
+Every step is checked against the isolated probes AND ASan/LSan (mandatory).
