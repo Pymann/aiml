@@ -1,31 +1,31 @@
 # sprint_task_16
 
-Titel: Native Crash-Stacktraces und AIML-Stacktraces als gemeinsame Diagnostic-Architektur
+Title: native crash stacktraces and AIML stacktraces as a shared diagnostic architecture
 
 ## Status
 
-Dieses Dokument ersetzt:
+This document replaces:
 
 - `architecture_sprint_plan.md`
 - `sprint_task_15_source_locations_and_diagnostics.md`
 
-Beide Dokumente waren fuer den aktuellen Stand zu grob oder zu eng geschnitten:
+Both documents were too coarse or too narrowly cut for the current state:
 
-- das Architekturpapier war zu breit und nicht diagnostic-zentriert
-- der Source-Location-Task war zu schmal und hat Runtime-/Crash-Pfade nicht mitgedacht
+- the architecture paper was too broad and not diagnostic-centred
+- the source location task was too narrow and did not consider runtime/crash paths
 
-Ziel dieses Dokuments ist ein einziger umsetzbarer Plan fuer:
+The goal of this document is a single actionable plan for:
 
-- native Stacktraces auf `stderr`
-- AIML-Stacktraces auf `stderr`
-- zentrale Source-Locations und Compiler-Diagnostics
-- die dafuer noetigen Compiler-/Runtime-/JIT-/AOT-Schnittstellen
+- native stacktraces on `stderr`
+- AIML stacktraces on `stderr`
+- central source locations and compiler diagnostics
+- the compiler/runtime/JIT/AOT interfaces needed for that
 
-## Zielbild
+## Target picture
 
-Wenn AIML abstuerzt oder mit einem schweren Compiler-/Runtime-Fehler endet, soll die Ausgabe auf `stderr` deutlich besser sein.
+When AIML crashes or ends with a severe compiler/runtime error, the output on `stderr` should be considerably better.
 
-Zielbild 1: nativer Crash
+Target picture 1: native crash
 
 ```text
 === AIML NATIVE CRASH (SIGSEGV) ===
@@ -37,7 +37,7 @@ Native stacktrace:
   2: ...
 ```
 
-Zielbild 2: AIML-Runtime-Crash waehrend Codeausfuehrung
+Target picture 2: AIML runtime crash during code execution
 
 ```text
 === AIML NATIVE CRASH (SIGSEGV) ===
@@ -48,64 +48,64 @@ AIML stacktrace:
   2: main at main.aiml:7:1
 ```
 
-Zielbild 3: Compiler-/Semantikfehler ohne Prozesscrash
+Target picture 3: compiler/semantic error without a process crash
 
 ```text
 frontend/session.aiml:413:15 Undefined property 'hp_maxx' on model 'Player'
 ```
 
-## Warum das ein Architekturthema ist
+## Why this is an architecture topic
 
-Das Thema ist nicht nur ein Signal-Handler oder nur ein Compiler-Polish.
+The topic is not just a signal handler or just compiler polish.
 
-Es greift in mehrere Ebenen ein:
+It reaches into several levels:
 
-- Prozessstart und Fatal-Signal-Behandlung
-- zentrale Logging-/Diagnostic-Schnittstellen
-- AST-Source-Locations
-- CompilerContext und Error-Propagation
-- IR-Emission fuer AIML-Callframes
-- Runtime-Storage fuer thread-lokale AIML-Frames
-- JIT- und AOT-Paritaet
+- process start and fatal signal handling
+- central logging/diagnostic interfaces
+- AST source locations
+- CompilerContext and error propagation
+- IR emission for AIML call frames
+- runtime storage for thread-local AIML frames
+- JIT and AOT parity
 
-Wenn diese Teile separat geloest werden, entstehen wieder Punktloesungen:
+If these parts are solved separately, point solutions arise again:
 
-- Mirror hat eigenen Crash-Handler
-- Compilerfehler kennen nur C++-Dateien
-- JIT hat keine AIML-Frames
-- AOT und JIT verhalten sich unterschiedlich
+- mirror has its own crash handler
+- compiler errors only know C++ files
+- JIT has no AIML frames
+- AOT and JIT behave differently
 
-Genau das soll diese Sprint-Planung vermeiden.
+This is exactly what this sprint plan is meant to avoid.
 
-## Aktueller Stand
+## Current state
 
-### Bereits vorhanden
+### Already present
 
-- In `src/sys/mirror_runtime.cpp` existiert bereits ein lokaler POSIX-Crash-Handler mit `sigaction`, `backtrace()` und `backtrace_symbols_fd()`.
-- AST-Knoten tragen bereits `YAML::Node sourceNode` und teilweise `sourceLine`.
-- Fuer `log.*` gibt es schon Quellkontext-Injektion.
-- Top-Level-Decls werden beim Parse/Compile teilweise mit YAML-Nodes verknuepft.
+- In `src/sys/mirror_runtime.cpp` there is already a local POSIX crash handler with `sigaction`, `backtrace()` and `backtrace_symbols_fd()`.
+- AST nodes already carry `YAML::Node sourceNode` and partly `sourceLine`.
+- For `log.*` there is already source context injection.
+- Top-level decls are partly linked with YAML nodes during parse/compile.
 
-### Noch nicht vorhanden
+### Not yet present
 
-- ein globaler, offizieller Crash-Handler fuer den ganzen Prozess
-- `std::set_terminate(...)`-Handling fuer ungefangene C++-Exceptions
-- normalisierte `SourceLoc`-Abstraktion mit Datei/Zeile/Spalte
-- zentrale Diagnostic-API im CompilerContext
-- thread-local AIML-Frame-Stack
-- automatische Push/Pop-Instrumentierung bei AIML-Funktionsaufrufen
-- formatierter AIML-Stacktrace auf `stderr`
-- klare JIT/AOT-Paritaet fuer Diagnostics
+- a global, official crash handler for the whole process
+- `std::set_terminate(...)` handling for uncaught C++ exceptions
+- a normalised `SourceLoc` abstraction with file/line/column
+- a central diagnostic API in the CompilerContext
+- a thread-local AIML frame stack
+- automatic push/pop instrumentation on AIML function calls
+- a formatted AIML stacktrace on `stderr`
+- clear JIT/AOT parity for diagnostics
 
-## Betroffene C++-Stellen
+## Affected C++ places
 
-Prozess / Einstieg:
+Process / entry:
 
 - `main.cpp`
 - `logger.h`
-- optional neuer Datei-Block wie `src/core/crash_diagnostics.{h,cpp}`
+- optionally a new file block such as `src/core/crash_diagnostics.{h,cpp}`
 
-Compiler / Source-Locations / Diagnostics:
+Compiler / source locations / diagnostics:
 
 - `compiler.cpp`
 - `compiler.h`
@@ -117,517 +117,517 @@ Compiler / Source-Locations / Diagnostics:
 - `src/core/ast_compiler_stmt.cpp`
 - `src/core/ast_compiler_call.cpp`
 
-Runtime / Callstack / Crash-Dump:
+Runtime / call stack / crash dump:
 
 - `exec_impl.cpp`
 - `src/sys/mirror_runtime.cpp`
-- ggf. weitere Runtime-Einstiegspunkte fuer Host-Callbacks / Threads
+- possibly further runtime entry points for host callbacks / threads
 
-Tests / Repros:
+Tests / repros:
 
 - `tests/`
-- neue negative Crash-/Diagnostic-Repros
+- new negative crash/diagnostic repros
 
-## Leitplanken
+## Guard rails
 
-### 1. Native Crash-Ausgabe muss signal-safe bleiben
+### 1. Native crash output must stay signal-safe
 
-Im Fatal-Signal-Handler darf nur sehr defensiver Code laufen.
+Only very defensive code may run in the fatal signal handler.
 
-Erlaubt:
+Allowed:
 
 - `write(2, ...)`
-- `backtrace()` / `backtrace_symbols_fd()` als pragmatischer POSIX-Weg
-- einfache statische Buffer
-- Re-Raise des Signals nach Reset auf Default
+- `backtrace()` / `backtrace_symbols_fd()` as the pragmatic POSIX way
+- simple static buffers
+- re-raising the signal after resetting to default
 
-Nicht im Signal-Handler:
+Not in the signal handler:
 
 - `std::string`
 - `new`
 - iostreams
-- komplexe Locks
-- YAML / LLVM / sonstige grosse Libraries
+- complex locks
+- YAML / LLVM / other large libraries
 
-### 2. AIML-Frames muessen thread-local und robust sein
+### 2. AIML frames must be thread-local and robust
 
-Der AIML-Frame-Stack darf nicht an einem globalen Singleton haengen.
+The AIML frame stack must not hang on a global singleton.
 
-Vorgabe:
+Requirement:
 
-- `thread_local` Storage
-- einfacher POD-aehnlicher Frame-Eintrag
-- Push/Pop ueber RAII oder klar symmetrische Runtime-Calls
+- `thread_local` storage
+- a simple POD-like frame entry
+- push/pop via RAII or clearly symmetric runtime calls
 
-### 3. JIT und AOT muessen dieselbe Semantik sehen
+### 3. JIT and AOT must see the same semantics
 
-Es darf nicht passieren, dass:
+It must not happen that:
 
-- AOT native Stacktraces hat, JIT aber keine AIML-Frames
-- JIT bessere AIML-Frames hat als AOT
-- Compilerdiagnostics in einem Modus mehr Source-Info liefern als im anderen
+- AOT has native stacktraces, but JIT has no AIML frames
+- JIT has better AIML frames than AOT
+- compiler diagnostics deliver more source info in one mode than in the other
 
-### 4. Diagnostics muessen zentral werden
+### 4. Diagnostics must become central
 
-Kein weiteres Wachstum von rohen `LOG_ERROR(...)`-Pfaden ohne AIML-Kontext.
+No further growth of raw `LOG_ERROR(...)` paths without AIML context.
 
-Stattdessen:
+Instead:
 
 - `ctx.error(node, msg)`
 - `ctx.error(loc, msg)`
 - `ctx.runtimeError(loc, msg)`
-- optional `ctx.note(...)`
+- optionally `ctx.note(...)`
 
-## Architekturentscheidung
+## Architecture decision
 
-Es gibt zwei unterschiedliche, aber kombinierbare Stacktraces:
+There are two different but combinable stacktraces:
 
-### A. Nativer Stacktrace
+### A. Native stacktrace
 
-Quelle:
+Source:
 
-- C++ Frames
-- LLVM/JIT/AOT Runtime
-- Prozesssignal / `terminate`
+- C++ frames
+- LLVM/JIT/AOT runtime
+- process signal / `terminate`
 
-Nutzen:
+Benefit:
 
-- native Crashes finden
-- schlechte Pointer / LLVM / Runtime-Fehler eingrenzen
-- symbolisierte Backtraces fuer C++-Debugging
+- finding native crashes
+- narrowing down bad pointers / LLVM / runtime errors
+- symbolised backtraces for C++ debugging
 
-### B. AIML-Stacktrace
+### B. AIML stacktrace
 
-Quelle:
+Source:
 
-- explizit gepflegte AIML-Callframes
-- basiert auf Compiler-Metadaten und Runtime-Push/Pop
+- explicitly maintained AIML call frames
+- based on compiler metadata and runtime push/pop
 
-Nutzen:
+Benefit:
 
-- Nutzer sieht AIML-Funktionskette statt C++-Interna
-- Diagnosen bei JIT-Runtime-Problemen werden praktisch nutzbar
-- Compiler-/Runtime-Fehler koennen auf AIML-Datei/Zeile rueckbezogen werden
+- the user sees the AIML function chain instead of C++ internals
+- diagnostics for JIT runtime problems become practically usable
+- compiler/runtime errors can be related back to the AIML file/line
 
-Beide sollen nebeneinander existieren.
+Both should exist side by side.
 
-## Sprint-Struktur
+## Sprint structure
 
-### Phase 0: Foundation und Format festlegen
+### Phase 0: foundation and defining the format
 
-Ziel:
+Goal:
 
-- offizielles Diagnostic-Format definieren
-- keine parallelen Ad-hoc-Formate mehr
+- define the official diagnostic format
+- no more parallel ad-hoc formats
 
-Arbeit:
+Work:
 
-- Ausgabeformat fuer native Crash-Header definieren
-- Ausgabeformat fuer AIML-Frames definieren
-- `SourceLoc`-Format definieren: `file`, `line`, `column`, optional `function`, `kind`
-- Decide on relative paths statt absolute Pfade auf `stderr`
+- define the output format for native crash headers
+- define the output format for AIML frames
+- define the `SourceLoc` format: `file`, `line`, `column`, optionally `function`, `kind`
+- decide on relative paths instead of absolute paths on `stderr`
 
 Deliverables:
 
-- kleine Diagnostic-Spec im Code oder in diesem Dokument umgesetzt
-- benoetigte Zielstrings fuer Tests fixiert
+- a small diagnostic spec implemented in the code or in this document
+- the required target strings for tests fixed
 
-### Phase 1: Globalen nativen Crash-Handler zentralisieren
+### Phase 1: centralise the global native crash handler
 
-Ziel:
+Goal:
 
-- vorhandene lokale Crash-Logik aus `mirror_runtime.cpp` in einen offiziellen globalen Pfad ueberfuehren
+- move the existing local crash logic from `mirror_runtime.cpp` into an official global path
 
-Arbeit:
+Work:
 
-- neue zentrale Komponente z. B. `src/core/crash_diagnostics.cpp`
-- Install-Funktion frueh in `main.cpp`
-- Signale mindestens:
+- a new central component, e.g. `src/core/crash_diagnostics.cpp`
+- an install function early in `main.cpp`
+- signals at least:
   - `SIGSEGV`
   - `SIGABRT`
   - `SIGBUS`
-  - optional `SIGILL`
-  - optional `SIGFPE`
-- `std::set_terminate(...)` fuer ungefangene C++-Exceptions
-- Header auf `stderr` mit Signalname / Thread-Kontext / Hinweis auf Symbolisierung
-- vorhandene Mirror-spezifische Installation entfernen oder auf die zentrale API umbiegen
+  - optionally `SIGILL`
+  - optionally `SIGFPE`
+- `std::set_terminate(...)` for uncaught C++ exceptions
+- a header on `stderr` with the signal name / thread context / a hint about symbolisation
+- remove the existing mirror-specific installation or redirect it to the central API
 
-Architekturentscheidung:
+Architecture decision:
 
-- ein einziger Installer im Prozess
-- keine subsystem-spezifischen Constructor-Hooks mehr fuer Crash-Handling
+- a single installer in the process
+- no more subsystem-specific constructor hooks for crash handling
 
-Akzeptanzkriterien:
+Acceptance criteria:
 
-- absichtlicher `SIGSEGV` druckt nativen Stacktrace auf `stderr`
-- ungefangene C++-Exception druckt `terminate`-Hinweis auf `stderr`
-- Mirror nutzt keinen separaten Sonderweg mehr
+- a deliberate `SIGSEGV` prints a native stacktrace on `stderr`
+- an uncaught C++ exception prints a `terminate` hint on `stderr`
+- mirror no longer uses a separate special path
 
-### Phase 2: `SourceLoc` als offizielle Compiler-Abstraktion einfuehren
+### Phase 2: introduce `SourceLoc` as the official compiler abstraction
 
-Ziel:
+Goal:
 
-- AST-/Compiler-/Runtime-Pfade sprechen ueber eine normale Quellort-Struktur statt implizit ueber `YAML::Node`
+- AST/compiler/runtime paths communicate via a normal source location structure instead of implicitly via `YAML::Node`
 
-Arbeit:
+Work:
 
-- `SourceLoc`-Struct einfuehren
-- mindestens:
+- introduce a `SourceLoc` struct
+- at least:
   - `file`
   - `line`
   - `column`
-  - optional `function_name`
-  - optional `context_kind`
-- `Node` in `ast_nodes.h` erweitert oder begleitet durch `SourceLoc`
-- Helper zur Konvertierung von `YAML::Node` / `YAML::Mark`
-- relative Dateipfade zur Projektwurzel normalisieren
+  - optionally `function_name`
+  - optionally `context_kind`
+- `Node` in `ast_nodes.h` extended or accompanied by `SourceLoc`
+- helpers for converting `YAML::Node` / `YAML::Mark`
+- normalise relative file paths to the project root
 
-Wichtig:
+Important:
 
-- `YAML::Node sourceNode` kann vorerst bleiben
-- `SourceLoc` wird die offizielle Surface fuer Diagnostics
+- `YAML::Node sourceNode` can stay for now
+- `SourceLoc` becomes the official surface for diagnostics
 
-Akzeptanzkriterien:
+Acceptance criteria:
 
-- neue AST-Knoten koennen `SourceLoc` tragen
-- `sourceLine` als Sonderfall ist nicht mehr die Haupt-API
+- new AST nodes can carry `SourceLoc`
+- `sourceLine` as a special case is no longer the main API
 
-### Phase 3: Builder und AST-Propagation vervollstaendigen
+### Phase 3: complete the builder and AST propagation
 
-Ziel:
+Goal:
 
-- relevante Expressions, Statements und Top-Level-Declarations tragen verlässlich `SourceLoc`
+- relevant expressions, statements and top-level declarations reliably carry `SourceLoc`
 
-Arbeit:
+Work:
 
-- `ast_builder.cpp` auf systematische Loc-Propagation umstellen
-- Call-, Decl-, Set-, If-, While-, Return-, Throw-, Try- und Top-Level-Knoten absichern
-- bei aus YAML generierten Hilfsknoten Fallback-Regeln festlegen
+- switch `ast_builder.cpp` to systematic loc propagation
+- secure call, decl, set, if, while, return, throw, try and top-level nodes
+- define fallback rules for helper nodes generated from YAML
 
-Risiko:
+Risk:
 
-- heute werden manche Nodes nur punktuell annotiert; das fuehrt spaeter zu halbleeren AIML-Frames
+- today some nodes are only annotated selectively; that later leads to half-empty AIML frames
 
-Akzeptanzkriterien:
+Acceptance criteria:
 
-- Kernknoten der Sprache haben Locations
-- `log.*` bleibt kompatibel und nutzt idealerweise dieselbe Loc-Quelle
+- the core nodes of the language have locations
+- `log.*` stays compatible and ideally uses the same loc source
 
-### Phase 4: Compiler-Diagnostics zentralisieren
+### Phase 4: centralise compiler diagnostics
 
-Ziel:
+Goal:
 
-- semantische Fehler nicht mehr roh ueber verstreute `LOG_ERROR(...)`-Aufrufe melden
+- no longer report semantic errors raw via scattered `LOG_ERROR(...)` calls
 
-Arbeit:
+Work:
 
-- zentrale Helpers in `CompilerContext`
-- Fehlerformat: `aiml_file:line:column message`
-- haeufige Fehler zuerst umstellen:
+- central helpers in `CompilerContext`
+- error format: `aiml_file:line:column message`
+- switch the most frequent errors first:
   - unknown type
   - undefined variable
   - undefined property
-  - falsche Argumentzahl
-  - falscher Argumenttyp
-  - ungueltiger Memberzugriff
-- Parser-/Importfehler mit importierter Datei verbessern
-- IR-/Verifier-Fehler mit letztem bekannten AIML-Kontext anreichern
+  - wrong argument count
+  - wrong argument type
+  - invalid member access
+- improve parser/import errors with the imported file
+- enrich IR/verifier errors with the last known AIML context
 
-Architekturentscheidung:
+Architecture decision:
 
-- Diagnostic-Ausgabe kommt aus einer Stelle
-- Logging ist nur Transport, nicht Ort der Formatentscheidung
+- diagnostic output comes from one place
+- logging is only transport, not the place where the format is decided
 
-Akzeptanzkriterien:
+Acceptance criteria:
 
-- typische Semantikfehler zeigen AIML-Datei/Zeile/Spalte
-- spaete Compilerfehler zeigen mindestens den letzten verantwortlichen AIML-Kontext
+- typical semantic errors show the AIML file/line/column
+- late compiler errors show at least the last responsible AIML context
 
-### Phase 5: AIML-Frame-Stack in der Runtime einfuehren
+### Phase 5: introduce the AIML frame stack in the runtime
 
-Ziel:
+Goal:
 
-- eigene AIML-Callframes zur Laufzeit fuehren, unabhaengig vom nativen Stack
+- keep own AIML call frames at runtime, independently of the native stack
 
-Arbeit:
+Work:
 
-- Runtime-Struct `AimlFrame`
-- `thread_local` Stack oder einfacher thread-local Frame-Vector
-- Felder mindestens:
-  - AIML-Funktionsname
+- runtime struct `AimlFrame`
+- a `thread_local` stack or a simple thread-local frame vector
+- fields at least:
+  - AIML function name
   - `SourceLoc`
-  - optional Namespace / Datei / Call-Kind
-- Runtime-API:
+  - optionally namespace / file / call kind
+- runtime API:
   - `aiml_push_frame(...)`
   - `aiml_pop_frame()`
   - `aiml_dump_stacktrace_fd(int fd)`
 
-Wichtige Designfragen:
+Important design questions:
 
-- Push/Pop als echte Runtime-Funktionen oder Inline-Helfer
-- Max-Frame-Limit gegen Rekursions-/Corruption-Faelle
-- Verhalten bei Stack-Imbalance in Exceptions / early returns
+- push/pop as real runtime functions or inline helpers
+- a max frame limit against recursion/corruption cases
+- behaviour on stack imbalance in exceptions / early returns
 
-Akzeptanzkriterien:
+Acceptance criteria:
 
-- Runtime kann den aktuellen AIML-Frame-Stack unabhaengig vom nativen Stack dumpen
-- Multi-Threading verschmiert die Frames nicht zwischen Threads
+- the runtime can dump the current AIML frame stack independently of the native stack
+- multithreading does not smear frames between threads
 
-### Phase 6: Compiler-Instrumentierung fuer AIML-Frames
+### Phase 6: compiler instrumentation for AIML frames
 
-Ziel:
+Goal:
 
-- JIT- und AOT-generierter Code pflegt die AIML-Frames automatisch
+- JIT- and AOT-generated code maintains the AIML frames automatically
 
-Arbeit:
+Work:
 
-- bei Eintritt in AIML-Funktionen `push_frame`
-- bei allen Rueckkehrpfaden `pop_frame`
-- bei Throws / exceptional exits die Symmetrie sichern
-- nach Moeglichkeit RAII-artiges Muster auf IR-Ebene oder zentralisierte Epilog-Pfade
-- Builtins / Host-Callbacks pruefen:
-  - ob sie selbst AIML-Frames brauchen
-  - oder nur den aufrufenden AIML-Frame sichtbar lassen
+- `push_frame` on entry into AIML functions
+- `pop_frame` on all return paths
+- secure the symmetry on throws / exceptional exits
+- if possible a RAII-like pattern at IR level or centralised epilogue paths
+- check builtins / host callbacks:
+  - whether they need AIML frames themselves
+  - or only leave the calling AIML frame visible
 
-Betroffene Stellen:
+Affected places:
 
 - `ast_compiler.cpp`
 - `ast_compiler_call.cpp`
 - `ast_compiler_stmt.cpp`
-- ggf. Entry-Point-Generator
+- possibly the entry point generator
 
-Risiken:
+Risks:
 
-- mehrere Return-Blocks
-- Exception-Pfade
-- Tail-call-artige Optimierungen
-- JIT/AOT-Unterschiede bei Wrapper-Funktionen
+- several return blocks
+- exception paths
+- tail-call-like optimisations
+- JIT/AOT differences with wrapper functions
 
-Akzeptanzkriterien:
+Acceptance criteria:
 
-- bei normalem Lauf bleibt der Frame-Stack konsistent leer nach Funktionsende
-- bei Crash mitten in AIML-Code ist die letzte AIML-Kette sichtbar
+- in a normal run the frame stack consistently stays empty after the function ends
+- on a crash in the middle of AIML code the last AIML chain is visible
 
-### Phase 7: Native Crash-Handler und AIML-Frames verbinden
+### Phase 7: connect the native crash handler and AIML frames
 
-Ziel:
+Goal:
 
-- ein Fatal-Signal druckt beide Perspektiven
+- a fatal signal prints both perspectives
 
-Arbeit:
+Work:
 
-- Signal-Handler druckt erst nativen Header und nativen Stacktrace
-- danach, wenn robust moeglich, AIML-Frames ueber signal-sicheren Dump-Pfad ausgeben
-- fuer `std::terminate(...)` ebenfalls nativen + AIML-Stack dumpen
+- the signal handler first prints the native header and the native stacktrace
+- afterwards, if robustly possible, output the AIML frames via a signal-safe dump path
+- also dump the native + AIML stack for `std::terminate(...)`
 
-Wichtige Einschränkung:
+Important restriction:
 
-- Nicht alles am AIML-Dump darf signal-unsafe sein.
-- Falls `aiml_dump_stacktrace_fd(...)` nur mit rohen C-Strings/POD-Daten arbeitet, ist das realistisch.
-- Falls doch zu viele `std::string`-Abhaengigkeiten benoetigt werden, muss fuer Fatal-Signale ein vorbereiteter, signal-armer Snapshot-Ansatz gebaut werden.
+- Not everything in the AIML dump may be signal-unsafe.
+- If `aiml_dump_stacktrace_fd(...)` only works with raw C strings/POD data, that is realistic.
+- If too many `std::string` dependencies are needed after all, a prepared, signal-poor snapshot approach must be built for fatal signals.
 
-Pragmatische Entscheidung:
+Pragmatic decision:
 
-- lieber ein reduzierter, robuster AIML-Frame-Dump als ein "schicker" aber unzuverlaessiger Handler
+- rather a reduced, robust AIML frame dump than a "pretty" but unreliable handler
 
-Akzeptanzkriterien:
+Acceptance criteria:
 
-- bei absichtlichem Crash in AIML-Lauf erscheint nativer plus AIML-Stacktrace auf `stderr`
+- on a deliberate crash during an AIML run, the native plus AIML stacktrace appears on `stderr`
 
-### Phase 8: Symbolisierung und Build-Integration
+### Phase 8: symbolisation and build integration
 
-Ziel:
+Goal:
 
-- native Backtraces sind lesbar genug, um praktisch nuetzlich zu sein
+- native backtraces are readable enough to be practically useful
 
-Arbeit:
+Work:
 
-- Debug-Builds standardisieren: `-g`
-- fuer AOT moeglichst `-rdynamic` oder aequivalente Symbol-Export-Strategie
-- dokumentieren, was im Release-Build sichtbar bleibt
-- optional Umgebungsflag fuer erweiterten Crash-Output
+- standardise debug builds: `-g`
+- for AOT, if possible, `-rdynamic` or an equivalent symbol export strategy
+- document what remains visible in the release build
+- optionally an environment flag for extended crash output
 
-Nicht Ziel dieser Phase:
+Not the goal of this phase:
 
-- vollautomatische externe Symbolizer-Integration wie `addr2line` im Signal-Handler
+- fully automatic external symboliser integration such as `addr2line` in the signal handler
 
-Akzeptanzkriterien:
+Acceptance criteria:
 
-- Debug-Build liefert brauchbare C++-Symbolnamen
-- Verhalten in Release ist dokumentiert
+- the debug build delivers usable C++ symbol names
+- behaviour in release is documented
 
-## Testplan
+## Test plan
 
-### Native Crash-Tests
+### Native crash tests
 
-- absichtlicher `SIGSEGV` in kleinem Repro
-- `abort()`-Repro
-- ungefangene `throw`-Exception
+- a deliberate `SIGSEGV` in a small repro
+- an `abort()` repro
+- an uncaught `throw` exception
 
-### Compiler-Diagnostic-Tests
+### Compiler diagnostic tests
 
 - unknown type
 - undefined property
 - wrong argument type
 - import failure
-- verifier error with last known AIML context
+- verifier error with the last known AIML context
 
-### AIML-Stacktrace-Tests
+### AIML stacktrace tests
 
-- einfache Call-Kette `main -> a -> b -> c`
-- Crash in `c`
-- pruefen, dass `stderr` AIML-Frames in richtiger Reihenfolge zeigt
-- Rekursions-/Mehrfachreturn-Faelle
-- Throw/Catch-Pfade
+- a simple call chain `main -> a -> b -> c`
+- crash in `c`
+- check that `stderr` shows the AIML frames in the right order
+- recursion/multiple return cases
+- throw/catch paths
 
-### Paritaets-Tests
+### Parity tests
 
-- JIT-Lauf
-- AOT-Lauf
-- identischer AIML-Stacktrace in beiden Modi fuer denselben Repro
+- JIT run
+- AOT run
+- an identical AIML stacktrace in both modes for the same repro
 
-### Negativtests
+### Negative tests
 
-- Crash ausserhalb von AIML-Code: nur nativer Stacktrace, AIML-Stack evtl. leer
-- leerer Frame-Stack darf den Crash-Handler nicht selbst kaputt machen
+- a crash outside AIML code: only the native stacktrace, the AIML stack possibly empty
+- an empty frame stack must not break the crash handler itself
 
-## Risiken und offene Entscheidungen
+## Risks and open decisions
 
-### 1. Signal-Safety vs. Komfort
+### 1. Signal safety vs. comfort
 
-Ein schoener formattierter AIML-Stacktrace ist wertlos, wenn er im Crash-Handler selbst wieder crasht.
+A nicely formatted AIML stacktrace is worthless if it crashes again in the crash handler itself.
 
-Entscheidung:
+Decision:
 
-- Robustheit vor Schoenheit
+- robustness before beauty
 
-### 2. Frame-Lebensdauer bei Exceptions
+### 2. Frame lifetime with exceptions
 
-Wenn Push/Pop nicht ueber alle Exit-Pfade symmetrisch ist, ist der AIML-Stacktrace unbrauchbar.
+If push/pop is not symmetric across all exit paths, the AIML stacktrace is unusable.
 
-Entscheidung:
+Decision:
 
-- keine verstreuten ad-hoc Pops
-- zentralisierte Epilog-/Cleanup-Pfade bevorzugen
+- no scattered ad-hoc pops
+- prefer centralised epilogue/clean-up paths
 
-### 3. Host-Threads und Callbacks
+### 3. Host threads and callbacks
 
-Falls AIML-Funktionen spaeter auf Worker-Threads oder ueber Callbacks laufen, muss die Frame-Fuehrung das respektieren.
+If AIML functions later run on worker threads or via callbacks, the frame management must respect that.
 
-Entscheidung:
+Decision:
 
-- von Anfang an `thread_local`
+- `thread_local` from the start
 
-### 4. Source-Loc-Vollstaendigkeit
+### 4. Source loc completeness
 
-AIML-Frames sind nur so gut wie ihre `SourceLoc`-Daten.
+AIML frames are only as good as their `SourceLoc` data.
 
-Entscheidung:
+Decision:
 
-- zuerst AST-Propagation wirklich sauber machen, bevor viel Frame-Logik gebaut wird
+- first make the AST propagation really clean before building a lot of frame logic
 
-## Empfohlene Reihenfolge
+## Recommended order
 
-1. Phase 1: globaler nativer Crash-Handler
+1. Phase 1: global native crash handler
 2. Phase 2: `SourceLoc`
-3. Phase 3: AST-Propagation
-4. Phase 4: Compiler-Diagnostics zentralisieren
-5. Phase 5: Runtime-Frame-Stack
-6. Phase 6: Compiler-Instrumentierung
-7. Phase 7: kombinierter Crash-Dump
-8. Phase 8: Symbolisierung / Build-Integration
+3. Phase 3: AST propagation
+4. Phase 4: centralise compiler diagnostics
+5. Phase 5: runtime frame stack
+6. Phase 6: compiler instrumentation
+7. Phase 7: combined crash dump
+8. Phase 8: symbolisation / build integration
 
-## Minimaler erster vertikaler Slice
+## Minimal first vertical slice
 
-Wenn nur der kleinste nuetzliche Block zuerst gebaut werden soll:
+If only the smallest useful block is to be built first:
 
-1. globalen nativen Crash-Handler zentralisieren
-2. `SourceLoc` einfuehren
-3. einen einzigen Semantikfehlerpfad ueber `ctx.error(node, msg)` umbauen
-4. AIML-Frame-Stack fuer normale Funktionscalls instrumentieren
-5. bei `SIGSEGV` AIML-Frames mit ausgeben
+1. centralise the global native crash handler
+2. introduce `SourceLoc`
+3. rebuild a single semantic error path via `ctx.error(node, msg)`
+4. instrument the AIML frame stack for normal function calls
+5. also output the AIML frames on `SIGSEGV`
 
-Damit haette AIML schon frueh:
+That way AIML would early on already have:
 
-- brauchbare native `stderr`-Crash-Ausgabe
-- erste echte AIML-Frames
-- den Beweis, dass die Architektur durchgaengig funktioniert
+- usable native `stderr` crash output
+- the first real AIML frames
+- proof that the architecture works end to end
 
-## Umsetzungszuschnitt als Subtasks
+## Implementation cut as subtasks
 
-Damit `sprint_task_16` nicht als ein einziger Riesenblock endet, wird die Arbeit als sequenzielle Subtasks geschnitten.
+So that `sprint_task_16` does not end up as a single giant block, the work is cut into sequential subtasks.
 
 ### sprint_task_16_1
 
-Titel: Globalen nativen Crash-Handler zentralisieren
+Title: centralise the global native crash handler
 
 Scope:
 
-- zentrale Crash-Diagnostics-Komponente einfuehren
-- Signal-Handler aus `mirror_runtime.cpp` auf offiziellen Prozesspfad ueberfuehren
-- `std::set_terminate(...)` anbinden
+- introduce a central crash diagnostics component
+- move the signal handler from `mirror_runtime.cpp` onto the official process path
+- connect `std::set_terminate(...)`
 
-Betroffene Dateien:
+Affected files:
 
 - `main.cpp`
 - `src/sys/mirror_runtime.cpp`
-- neuer Block wie `src/core/crash_diagnostics.{h,cpp}`
+- a new block such as `src/core/crash_diagnostics.{h,cpp}`
 
-Akzeptanzkriterien:
+Acceptance criteria:
 
-- `SIGSEGV` und `SIGABRT` drucken nativen Stacktrace auf `stderr`
-- Mirror installiert keinen separaten Sonderweg mehr
+- `SIGSEGV` and `SIGABRT` print a native stacktrace on `stderr`
+- mirror no longer installs a separate special path
 
 ### sprint_task_16_2
 
-Titel: `SourceLoc` als offizielle Quellort-Abstraktion einfuehren
+Title: introduce `SourceLoc` as the official source location abstraction
 
 Scope:
 
-- `SourceLoc`-Struct definieren
-- AST-/Compiler-Helfer fuer Datei/Zeile/Spalte bauen
-- relative Pfade zur Projektwurzel normalisieren
+- define the `SourceLoc` struct
+- build AST/compiler helpers for file/line/column
+- normalise relative paths to the project root
 
-Betroffene Dateien:
+Affected files:
 
 - `src/core/ast_nodes.h`
 - `src/core/context.h`
 - `compiler.cpp`
 
-Akzeptanzkriterien:
+Acceptance criteria:
 
-- Kern-AST-Knoten koennen eine normalisierte Source-Location tragen
-- `sourceLine` ist nicht mehr die einzige Quellort-API
+- core AST nodes can carry a normalised source location
+- `sourceLine` is no longer the only source location API
 
 ### sprint_task_16_3
 
-Titel: AST-Builder und Parse-Pfade auf vollstaendige Source-Locations umstellen
+Title: switch the AST builder and parse paths to complete source locations
 
 Scope:
 
-- Expressions, Statements und Top-Level-Declarations konsequent annotieren
-- Fallback-Regeln fuer generierte Hilfsknoten definieren
+- annotate expressions, statements and top-level declarations consistently
+- define fallback rules for generated helper nodes
 
-Betroffene Dateien:
+Affected files:
 
 - `src/core/ast_builder.cpp`
-- Builder-Unterdateien in `src/core/ast/`
+- builder sub-files in `src/core/ast/`
 
-Akzeptanzkriterien:
+Acceptance criteria:
 
-- Funktionsaufrufe, Memberzugriffe, Returns, Throws und Top-Level-Decls tragen brauchbare Locations
+- function calls, member accesses, returns, throws and top-level decls carry usable locations
 
 ### sprint_task_16_4
 
-Titel: Compiler-Diagnostics zentralisieren
+Title: centralise compiler diagnostics
 
 Scope:
 
-- `ctx.error(node, msg)` / `ctx.error(loc, msg)` einfuehren
-- haeufige Semantikfehler auf die neue API umstellen
-- Parser-/Import-/Verifier-Kontext verbessern
+- introduce `ctx.error(node, msg)` / `ctx.error(loc, msg)`
+- switch frequent semantic errors to the new API
+- improve the parser/import/verifier context
 
-Betroffene Dateien:
+Affected files:
 
 - `src/core/context.h`
 - `src/core/ast_compiler.cpp`
@@ -636,93 +636,93 @@ Betroffene Dateien:
 - `src/core/ast_compiler_call.cpp`
 - `compiler.cpp`
 
-Akzeptanzkriterien:
+Acceptance criteria:
 
-- typische Compilerfehler zeigen AIML-Datei/Zeile/Spalte statt nur C++-Logstellen
+- typical compiler errors show the AIML file/line/column instead of only C++ log locations
 
 ### sprint_task_16_5
 
-Titel: AIML-Frame-Stack in der Runtime einfuehren
+Title: introduce the AIML frame stack in the runtime
 
 Scope:
 
-- `thread_local` AIML-Frame-Storage
-- Runtime-API fuer `push_frame`, `pop_frame`, `dump_stacktrace_fd`
-- robuste, signal-arme Frame-Datenstruktur
+- `thread_local` AIML frame storage
+- runtime API for `push_frame`, `pop_frame`, `dump_stacktrace_fd`
+- a robust, signal-poor frame data structure
 
-Betroffene Dateien:
+Affected files:
 
 - `exec_impl.cpp`
-- neuer Runtime-Block wie `src/core/aiml_stacktrace.{h,cpp}`
+- a new runtime block such as `src/core/aiml_stacktrace.{h,cpp}`
 
-Akzeptanzkriterien:
+Acceptance criteria:
 
-- Runtime kann den aktuellen AIML-Frame-Stack unabhaengig vom nativen Stack dumpen
+- the runtime can dump the current AIML frame stack independently of the native stack
 
 ### sprint_task_16_6
 
-Titel: Compiler-Instrumentierung fuer AIML-Frames in JIT und AOT
+Title: compiler instrumentation for AIML frames in JIT and AOT
 
 Scope:
 
-- Push/Pop bei AIML-Funktionsaufrufen emittieren
-- Return-/Throw-/Exceptional-Paths symmetrisch machen
-- Wrapper und Entry-Points angleichen
+- emit push/pop on AIML function calls
+- make return/throw/exceptional paths symmetric
+- align wrappers and entry points
 
-Betroffene Dateien:
+Affected files:
 
 - `src/core/ast_compiler.cpp`
 - `src/core/ast_compiler_call.cpp`
 - `src/core/ast_compiler_stmt.cpp`
 - `compiler.cpp`
 
-Akzeptanzkriterien:
+Acceptance criteria:
 
-- JIT und AOT pflegen denselben AIML-Frame-Stack-Stil
-- nach normalem Lauf bleibt kein Frame-Leck zurueck
+- JIT and AOT maintain the same AIML frame stack style
+- no frame leak remains after a normal run
 
 ### sprint_task_16_7
 
-Titel: Kombinierten nativen plus AIML-Crashdump ausgeben
+Title: output a combined native plus AIML crash dump
 
 Scope:
 
-- Crash-Handler und AIML-Frame-Dump zusammenfuehren
-- `stderr`-Format finalisieren
-- Verhalten bei leerem AIML-Stack absichern
+- merge the crash handler and the AIML frame dump
+- finalise the `stderr` format
+- secure the behaviour with an empty AIML stack
 
-Betroffene Dateien:
+Affected files:
 
 - `src/core/crash_diagnostics.{h,cpp}`
 - `src/core/aiml_stacktrace.{h,cpp}`
 - `main.cpp`
 
-Akzeptanzkriterien:
+Acceptance criteria:
 
-- Crash in AIML-Code zeigt nativen und AIML-Stacktrace auf `stderr`
+- a crash in AIML code shows the native and AIML stacktrace on `stderr`
 
 ### sprint_task_16_8
 
-Titel: Symbolisierung, Build-Integration und Repro-Tests abschliessen
+Title: complete symbolisation, build integration and repro tests
 
 Scope:
 
-- Debug-Symbolik fuer sinnvolle native Backtraces sichern
-- JIT/AOT-Repros und Crash-Tests ergänzen
-- Dokumentation fuer Debug- vs Release-Verhalten abschliessen
+- secure debug symbols for sensible native backtraces
+- add JIT/AOT repros and crash tests
+- complete the documentation for debug vs release behaviour
 
-Betroffene Dateien:
+Affected files:
 
-- Build-/Run-Skripte
+- build/run scripts
 - `tests/`
-- ggf. Doku in `aiml.md` oder separatem Runtime-Doc
+- possibly docs in `aiml.md` or a separate runtime doc
 
-Akzeptanzkriterien:
+Acceptance criteria:
 
-- native Backtraces sind im Debug-Build lesbar
-- gezielte Repros decken `SIGSEGV`, `terminate`, Compiler-Diagnostics und AIML-Frames ab
+- native backtraces are readable in the debug build
+- targeted repros cover `SIGSEGV`, `terminate`, compiler diagnostics and AIML frames
 
-## Empfohlene Reihenfolge der Subtasks
+## Recommended order of the subtasks
 
 1. `sprint_task_16_1`
 2. `sprint_task_16_2`
@@ -733,20 +733,20 @@ Akzeptanzkriterien:
 7. `sprint_task_16_7`
 8. `sprint_task_16_8`
 
-Diese Reihenfolge ist absichtlich streng:
+This order is deliberately strict:
 
-- erst nativer Crashpfad
-- dann Source-Locations
-- dann Compiler-Diagnostics
-- erst danach AIML-Frames und deren Instrumentierung
+- first the native crash path
+- then source locations
+- then compiler diagnostics
+- only afterwards AIML frames and their instrumentation
 
-## Done-Definition
+## Done definition
 
-Die Arbeit ist erst dann wirklich fertig, wenn alle folgenden Punkte gelten:
+The work is only really done when all of the following points hold:
 
-- native Fatal-Signale drucken zentral einen Backtrace auf `stderr`
-- ungefangene C++-Exceptions drucken einen `terminate`-Trace
-- typische Compilerdiagnostics zeigen AIML-Datei/Zeile/Spalte
-- JIT und AOT liefern fuer denselben Repro denselben AIML-Stacktrace-Stil
-- Mirror und andere Runtime-Teile nutzen keinen Sonderweg mehr fuer Crash-Handling
-- die Diagnostic-/Stacktrace-Architektur ist dokumentiert und ersetzt alte Planungsdokumente
+- native fatal signals centrally print a backtrace on `stderr`
+- uncaught C++ exceptions print a `terminate` trace
+- typical compiler diagnostics show the AIML file/line/column
+- JIT and AOT deliver the same AIML stacktrace style for the same repro
+- mirror and other runtime parts no longer use a special path for crash handling
+- the diagnostic/stacktrace architecture is documented and replaces old planning documents
