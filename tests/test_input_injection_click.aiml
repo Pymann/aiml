@@ -116,7 +116,7 @@
       - decl: [trace2, string, { call: [engine.prefab_last_hit] }]
       - if:
           condition: { neq: [trace2.len, 0] }
-          then: [{ print: ["FAIL Klick ins Leere meldet Treffer: '${trace2}'"] }, { return: 1 }]
+          then: [{ print: ["FAIL click into empty space reports a hit: '${trace2}'"] }, { return: 1 }]
 
       # ── 4. text into the focused field ───────────────────────────────────
       - call: [scene.focus, "name_input"]

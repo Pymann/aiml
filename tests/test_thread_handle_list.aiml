@@ -56,7 +56,7 @@
       - if:
           condition: { neq: [box.done, want] }
           then:
-            - print: ["FAIL ${box.done} von ${want} Workern gelaufen"]
+            - print: ["FAIL ${box.done} of ${want} workers ran"]
             - set: [fails, { +: [fails, 1] }]
       - free: [box]
       - if:

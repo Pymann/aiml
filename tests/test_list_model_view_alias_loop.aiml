@@ -63,7 +63,7 @@
             - decl: [cur, Row, { at: [rows, idx] }]
             - set: [joined, "${joined}${cur.name}:${cur.count} "]
             - set: [idx, { +: [idx, 1] }]
-      - set: [fails, { +: [fails, { call: [expect, "die Schleife liest alle sechs", { gt: [joined.len, 40] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "the loop reads all six", { gt: [joined.len, 40] }] }] }]
 
       # AFTERWARDS: the held alias must still be valid.
       - set: [fails, { +: [fails, { call: [expect, "held alias reads AFTER the loop", { eq: [held.name, "zeile-2"] }] }] }]

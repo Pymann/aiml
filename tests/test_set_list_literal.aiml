@@ -34,7 +34,7 @@
       - call: [chk.expect_s, "set-Literal: Element 0", { at: [pick, 0] }, "x"]
       - call: [chk.expect_s, "set-Literal: Element 1", { at: [pick, 1] }, "y"]
 
-      # 2) Variablen als Elemente — im Bericht ausdruecklich genannt.
+      # 2) variables as elements — named explicitly in the report.
       - decl: [one, string, "eins"]
       - decl: [two, string, "zwei"]
       - set: [pick, [one, two]]
@@ -47,7 +47,7 @@
 
       # 4) empty literal — did not compile before.
       - set: [pick, []]
-      - call: [chk.expect_i, "leeres Literal leert die Liste", pick.len, 0]
+      - call: [chk.expect_i, "an empty literal empties the list", pick.len, 0]
 
       # 5) numbers are converted into the element type (spec/13), as for decl.
       - decl: [nums, list<i32>, []]

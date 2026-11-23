@@ -116,7 +116,7 @@
       - decl: [weiter, list<string>, { call: [liste_weiter] }]
       - if:
           condition: { neq: [weiter.len, 1] }
-          then: [{ call: [log.error, "FEHL Durchlass Liste: ${weiter.len}"] }, { set: [fehler, { "+": [fehler, 1] }] }]
+          then: [{ call: [log.error, "FAIL pass-through list: ${weiter.len}"] }, { set: [fehler, { "+": [fehler, 1] }] }]
 
       - if:
           condition: { gt: [fehler, 0] }

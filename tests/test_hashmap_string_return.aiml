@@ -97,12 +97,12 @@
       - free: [book]
       - if: [{ gt: [list_bad, 0] }, true]
         then:
-          - print: ["FAIL list<string>.get return: ${list_bad}/20 falsche Texte"]
+          - print: ["FAIL list<string>.get return: ${list_bad}/20 wrong texts"]
           - return: 1
       - decl: [missing, string, { call: [table.role, "fehlt"] }]
       - if: [{ gt: [bad, 0] }, true]
         then:
-          - print: ["FAIL hashmap string return: ${bad}/20 falsche Texte"]
+          - print: ["FAIL hashmap string return: ${bad}/20 wrong texts"]
           - return: 1
       - if: [{ neq: [missing, ""] }, true]
         then:

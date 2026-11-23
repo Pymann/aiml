@@ -123,9 +123,9 @@
       - set: [fails, { +: [fails, { call: [expect, "the files are gone beforehand", { eq: [{ call: [io.exists, p_x86] }, false] }] }] }]
       - set: [g_round, "r2"]
       - decl: [rc_two, i32, { call: [pipe.run] }]
-      - set: [fails, { +: [fails, { call: [expect, "zweiter Lauf gelingt", { eq: [rc_two, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "second run succeeds", { eq: [rc_two, 0] }] }] }]
       - set: [fails, { +: [fails, { call: [expect, "the producer HIT (did not run again)", { eq: [{ call: [pipe.reused_count] }, 1] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "die beiden Verbraucher liefen neu", { eq: [{ call: [pipe.ran_count] }, 2] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "the two consumers ran anew", { eq: [{ call: [pipe.ran_count] }, 2] }] }] }]
       - set: [fails, { +: [fails, { call: [expect, "and got the value from the cache", { eq: [{ call: [io.read_file, p_x86] }, "commit-42"] }] }] }]
 
       # ── F62-119: without needs reading is an error ─────────────────────

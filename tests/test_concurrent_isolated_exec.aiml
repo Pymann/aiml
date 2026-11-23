@@ -123,8 +123,8 @@
             - set: [seq_idx, { +: [seq_idx, 1] }]
       - decl: [seq_ms, i64, { -: [{ call: [time.now] }, seq_start] }]
       - print: ["  dieselben 24 einthreadig in ${seq_ms} ms (ok=${g_ok})"]
-      - set: [fails, { +: [fails, { call: [expect, "jede isolierte Uebersetzung gelingt", { eq: [g_bad, 0] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "alle vierundzwanzig kommen zurueck", { eq: [g_ok, 24] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "every isolated compilation succeeds", { eq: [g_bad, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "all twenty-four come back", { eq: [g_ok, 24] }] }] }]
 
       - if:
           condition: { neq: [fails, 0] }

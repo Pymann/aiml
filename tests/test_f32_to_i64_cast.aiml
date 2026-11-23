@@ -1,6 +1,6 @@
 # SPEC?: 13_cast   # derived from the file name, to be confirmed
-# Isoliert f32→i64/i32-Konvertierung in WASM.  Erwartung: numerische Konvertierung
-# (64.0 → 64), NICHT Bit-Reinterpret (64.0-Bits = 1115619328).
+# Isolated f32→i64/i32 conversion in WASM.  Expectation: numeric conversion
+# (64.0 → 64), NOT a bit reinterpretation (64.0 bits = 1115619328).
 - def:
     name: main
     return: i32

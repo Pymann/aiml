@@ -25,7 +25,7 @@
       - [ident,      string, "", { alias: "id" }]
       - [status,     string]
       - [pid,        i32]
-      # Fuer §5.2c: leerer String, Liste mit leerem Element, leere Map, leeres Modell.
+      # For §5.2c: empty string, list with an empty element, empty map, empty model.
       - [label,      string]
       - [notes,      list<string>]
       - [tags,       map<string:string>]
@@ -99,7 +99,7 @@
       # ── 4. round trip via the bare form ─────────────────────────────────
       - decl: [round, ContainerState, { call: [sys.deserialize, bare_out, "ContainerState"] }]
       - set: [fails, { +: [fails, { call: [expect, "bare form reads back", { eq: [round.ident, "rt-1"] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "mit allen Feldern", { eq: [round.pid, 4711] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "with all fields", { eq: [round.pid, 4711] }] }] }]
 
       # ── 5. unknown keys do not disturb (F29-16) ─────────────────────────
       - decl: [extra, string, "{\"id\":\"rt-7\",\"status\":\"stopped\",\"annotations\":{\"a\":\"b\"},\"unbekannt\":42}"]
@@ -115,7 +115,7 @@
       - decl: [mapped, ContainerState]
       - set: [mapped.status, "created"]
       - call: [mapped.tags.put, "ort", "hier"]
-      - call: [log.info, "  map-feld len=${mapped.tags.len}"]
+      - call: [log.info, "  map field len=${mapped.tags.len}"]
       - decl: [map_out, string, { call: [sys.serialize, mapped] }]
       - call: [log.info, "  map:    ${map_out}"]
       - set: [fails, { +: [fails, { call: [expect, "map field is written with content", { call: [has_text, map_out, "\"tags\":{\"ort\":\"hier\"}"] }] }] }]

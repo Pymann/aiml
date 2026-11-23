@@ -69,7 +69,7 @@
       - decl: [tr_del, list<string>, { call: [dinge.findings_by, "name", "Hammer"] }]
       - set: [bad, { +: [bad, { call: [pruef_zahl, tr_del.len, 3, "after-delete name=Hammer"] }] }]
       - decl: [sku_zwei, string, { call: [dinge.finding_by, "sku", "S2"] }]
-      - set: [bad, { +: [bad, { call: [pruef_zahl, sku_zwei.len, 0, "sku=S2 geloescht"] }] }]
+      - set: [bad, { +: [bad, { call: [pruef_zahl, sku_zwei.len, 0, "sku=S2 deleted"] }] }]
 
       # The untouched field value still comes from the dump.
       - decl: [tr_hol, list<string>, { call: [dinge.findings_by, "tag", "holz"] }]

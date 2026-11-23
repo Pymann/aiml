@@ -65,7 +65,7 @@
       # ── basic case: key, value, comment ─────────────────────────────────
       - decl: [src, string, "name: build_matrix  # ein Kommentar\n"]
       - decl: [toks, list<i32>, { call: [yaml.tokens, src] }]
-      - set: [fails, { +: [fails, { call: [expect, "Tripel-Vielfaches von 3", { eq: [{ '%': [toks.len, 3] }, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "triple multiple of 3", { eq: [{ '%': [toks.len, 3] }, 0] }] }] }]
       - set: [fails, { +: [fails, { call: [expect, "non-overlapping and in order", { call: [covered_ok, toks, src.len] }] }] }]
       - set: [fails, { +: [fails, { call: [expect, "'name' is a key", { eq: [{ call: [kind_at, toks, 0] }, YamlTok.key] }] }] }]
       - set: [fails, { +: [fails, { call: [expect, "':' is punctuation", { eq: [{ call: [kind_at, toks, 4] }, YamlTok.punct] }] }] }]

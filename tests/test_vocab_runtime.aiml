@@ -196,7 +196,7 @@
       - print: ["FAIL I2: got ${rc_bad_vocab}"]
       - set: [var_ok, 0]
 
-# ── J: Reload mit weniger Sprachen re-clamped current_language ───────────
+# ── J: reload with fewer languages re-clamps current_language ───────────
 
 - set: [rc_load, { call: [vocab.load, '{"0":"en","1":"de","2":"fr"}', "{}"] }]
 - call: [vocab.set_language, 2]

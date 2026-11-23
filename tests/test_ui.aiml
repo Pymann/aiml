@@ -80,7 +80,7 @@
       - call: [ui.begin, win]
       - call: [ui.begin_grid, cols, rows]
 
-      # Linke Spalte
+      # left column
       - call: [ui.begin_cell, 0, 0, 1, 1]
       - call: [ui.label, "AIML UI Demo"]
       - call: [ui.separator]
@@ -93,7 +93,7 @@
       - call: [ui.progress_bar_colored, fps, -16711936, -2139062144]
       - call: [ui.end_cell]
 
-      # Rechte Spalte
+      # right column
       - call: [ui.begin_cell, 1, 0, 1, 1]
       - call: [ui.label, "Widgets:"]
       - call: [ui.separator]

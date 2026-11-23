@@ -38,7 +38,7 @@
       - decl: [ran, i32, { call: [api.run_cli, mine] }]
       - if: { condition: { neq: [ran, 0] }, then: [{ print: ["FAIL eigenes Unterkommando -> ${ran}"] }, { set: [bad, 1] }] }
 
-      - if: { condition: { neq: [seen_purl, "pkg:conan/zlib"] }, then: [{ print: ["FAIL --purl kam als '${seen_purl}' an"] }, { set: [bad, 1] }] }
+      - if: { condition: { neq: [seen_purl, "pkg:conan/zlib"] }, then: [{ print: ["FAIL --purl arrived as '${seen_purl}'"] }, { set: [bad, 1] }] }
 
       - decl: [foreign, list<string>, ["nicht-meins"]]
       - decl: [skipped, i32, { call: [api.run_cli, foreign] }]

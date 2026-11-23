@@ -39,7 +39,7 @@
 
       # without a selection: empty
       - decl: [none_sel, string, { call: [scene.selection, "log_box"] }]
-      - if: { condition: { neq: [none_sel.len, 0] }, then: [{ print: ["FAIL leere Auswahl: '${none_sel}'"] }, { return: 1 }] }
+      - if: { condition: { neq: [none_sel.len, 0] }, then: [{ print: ["FAIL empty selection: '${none_sel}'"] }, { return: 1 }] }
 
       # select_all marks the WHOLE source text — verbatim, with line breaks
       - call: [scene.select_all, "log_box"]

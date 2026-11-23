@@ -125,7 +125,7 @@
             - call: [sys.exit, 1]
       - print: ["T2 PASS: BigCfg struct copy into embedded field"]
 
-      # T3: Channel setzen + Worker spawnen + 3-level chain im Thread
+      # T3: set the channel + spawn a worker + 3-level chain in the thread
       - decl: [qch, "chan<i32>"]
       - set: [var_q.var_ch, qch]
       - decl: [var_wh, "ptr<BigWorker>", { new: BigWorker }]

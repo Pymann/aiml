@@ -65,7 +65,7 @@
       - call: [check, "count_dup",      { call: [nums.count, 20] }, 2]
       - call: [check, "count_zero",     { call: [nums.count, 99] }, 0]
 
-      # ── leere Liste ──
+      # ── empty list ──
       - decl: [emp, list<i32>]
       - call: [check, "empty_contains", { call: [emp.contains, 1] }, 0]
       - call: [check, "empty_index_of", { call: [emp.index_of, 1] }, -1]

@@ -81,7 +81,7 @@
       - decl: [mixed_wire, string, { call: [sys.serialize, mixed] }]
       - decl: [mixed_back, WrapperWithList, { call: [sys.deserialize, mixed_wire, "WrapperWithList"] }]
       - set: [fails, { +: [fails, { call: [expect, "i64 mit Liste dahinter", { eq: [mixed_back.inner.taken_ms, big] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "die Liste dahinter kommt an", { eq: [mixed_back.notes.len, 2] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "the list after it arrives", { eq: [mixed_back.notes.len, 2] }] }] }]
 
       # ── 4) The BINARY route: typed KV store (ser_encode/ser_decode),
       # the same route that mirror RPC takes too.  JSON and binary are two

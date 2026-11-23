@@ -103,8 +103,8 @@
       - call: [thr_h.join]
       - decl: [elapsed_ms, i64, { -: [{ call: [time.now] }, start_ms] }]
       - print: ["  96 starts from 8 threads in ${elapsed_ms} ms, ok=${g_ok} failed=${g_fails} swapped=${g_crossed}"]
-      - set: [fails, { +: [fails, { call: [expect, "jeder Prozessstart gelingt", { eq: [g_fails, 0] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "jeder Exit-Code kommt an", { eq: [g_ok, 96] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "every process start succeeds", { eq: [g_fails, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "every exit code arrives", { eq: [g_ok, 96] }] }] }]
       - set: [fails, { +: [fails, { call: [expect, "no output wanders into a foreign thread", { eq: [g_crossed, 0] }] }] }]
 
       - if:

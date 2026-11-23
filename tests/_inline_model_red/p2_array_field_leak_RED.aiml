@@ -5,7 +5,7 @@
 # branch) → aiml_ser_retain/release do NOT see the string elements → leak (measured 6780 B/200 iter,
 # no double free, a pure leak). Goal: map the array field as a STRUCT composition (N element subtrees with
 # real stride) in the lifecycle descriptor, OR handle heap array fields in the copy/release paths
-# mit gezielter Diagnose ablehnen — NICHT still als RAWBYTES-„sicher" behandeln.
+# reject them with a targeted diagnostic — do NOT silently treat them as RAWBYTES-"safe".
 # ⚠ RISK: serFieldSubtree changes serialisation descriptors → can change the schema fp/wire
 # → KV incompatibility (like the matches KV FATALs). Hence consider a separate lifecycle descriptor,
 # do NOT change the wire layout silently.

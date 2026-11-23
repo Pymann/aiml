@@ -191,7 +191,7 @@ Handler signature: always `req: http_request_handle` and `resp: http_response_ha
 
       - decl: [auth, string]
       - set: [auth, { call: [req.header, "Authorization"] }]
-      # ein fehlender Header ist der LEERE String, nie ein Nullzeiger
+      # a missing header is the EMPTY string, never a null pointer
 
       - print: ["Search: ${q}, limit: ${limit}, auth: ${auth}"]
       - call: [resp.headers.put, "Content-Type", "application/json"]

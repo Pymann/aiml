@@ -577,9 +577,9 @@ data initialisation, not the sender's heap.  A bundle is code, not a process ima
 Verified with `tests/bundle_socket/` (two **AOT** binaries, bundle over TCP):
 
 ```
-2) Bibliothek: 110 Bytes   Pipeline: 230 Bytes
-   lib_greet aus der Bibliothek
-   run_pipeline rief lib_greet, bekam 7     → rc=0
+2) library: 110 bytes   pipeline: 230 bytes
+   lib_greet from the library
+   run_pipeline called lib_greet, got 7     → rc=0
 ```
 
 The way to do it is `Code.merge`: library and pipeline are merged into **one** bundle and executed in

@@ -36,7 +36,7 @@
       # Deliberately SILENT: only after the poll window has expired does something come.
       # That way the test really measures the timer and not arriving data.
       - call: [time.sleep_ms, 2600]
-      - call: [ws.send, conn, "nach dem Signal"]
+      - call: [ws.send, conn, "after the signal"]
       - call: [time.sleep_ms, 300]
       - call: [ws.close, conn]
 
@@ -118,7 +118,7 @@
     else:
       - decl: [txt, string, { call: [ws.recv, cli] }]
       - if:
-          condition: { eq: [txt, "nach dem Signal"] }
+          condition: { eq: [txt, "after the signal"] }
           then: [{ set: [pass, { +: [pass, 1] }] }]
           else:
             - print: ["FAIL: wrong payload after the signal: '${txt}'"]

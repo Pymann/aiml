@@ -61,5 +61,5 @@
       - call: [g_halter.laden.set, "a", eins]
       - print: ["before the query"]
       - decl: [anzahl, i32, { call: [g_halter.frage] }]
-      - print: ["Treffer: ${anzahl}"]
+      - print: ["hits: ${anzahl}"]
       - return: 0

@@ -36,7 +36,7 @@
       - throw: { new: StepFailed, message: "geplatzt" }
       - return: 0
 
-# yellow_body: gelingt, setzt aber seine Farbe selbst (§5.7).
+# yellow_body: succeeds, but sets its colour itself (§5.7).
 - def:
     name: yellow_body
     return: i32
@@ -155,7 +155,7 @@
       - decl: [p_lane, pipeline, { call: [two_stage, OnFail.lane, CacheClass.opaque, 1] }]
       - decl: [rc_l, i32, { call: [p_lane.run, on_step] }]
       - set: [fails, { +: [fails, { call: [expect, "lane: the run reports the failure", { neq: [rc_l, 0] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "lane: JEDE Lane versucht es", { eq: [{ call: [p_lane.attempt_count] }, 2] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "lane: EVERY lane tries it", { eq: [{ call: [p_lane.attempt_count] }, 2] }] }] }]
       - set: [fails, { +: [fails, { call: [expect, "lane: no lane gets to the second stage", { eq: [g_b_runs, 0] }] }] }]
 
       # ── on_fail: pipeline ───────────────────────────────────────────────
@@ -171,7 +171,7 @@
       - decl: [p_cont, pipeline, { call: [two_stage, OnFail.proceed, CacheClass.opaque, 1] }]
       - decl: [rc_c, i32, { call: [p_cont.run, on_step] }]
       - set: [fails, { +: [fails, { call: [expect, "continue: the run succeeds despite the failure", { eq: [rc_c, 0] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "continue: die Lane laeuft weiter", { eq: [g_b_runs, 2] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "continue: the lane keeps running", { eq: [g_b_runs, 2] }] }] }]
 
       # ── retry: the body is attempted several times (F62-41) ───────────────
       - decl: [p_try, pipeline, { call: [two_stage, OnFail.pipeline, CacheClass.opaque, 3] }]
@@ -198,7 +198,7 @@
       - decl: [p_col, pipeline, { call: [one_step, 0] }]
       - decl: [rc_col, i32, { call: [p_col.run] }]
       - set: [fails, { +: [fails, { call: [expect, "set_status: the run succeeds", { eq: [rc_col, 0] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "set_status: die Farbe erreicht die Pipeline", { eq: [{ call: [p_col.status] }, StepStatus.yellow] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "set_status: the colour reaches the pipeline", { eq: [{ call: [p_col.status] }, StepStatus.yellow] }] }] }]
 
       # ── fail_lane from the body (F62-46) ─────────────────────────────────
       - decl: [p_fl, pipeline, { call: [one_step, 1] }]

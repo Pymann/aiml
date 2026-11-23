@@ -172,7 +172,7 @@
       # Fallen-Fenster (Sprint 5): 1 = Counter-Window offen, trap_window_ms = verbleibende Zeit
       - [trap_window,    i32, 0]
       - [trap_window_ms, i32, 0]
-      # Event-Historie — letzte Ereignisse (max. 5, ring-buffer, sprint_event_1)
+      # Event history — latest events (max. 5, ring buffer, sprint_event_1)
       - [event_seq,   i32, 0]
       - [event_count, i32, 0]
       - [events,      list<GameEventView>]

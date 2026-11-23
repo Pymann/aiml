@@ -76,5 +76,5 @@
           then:
             - call: [log.error, "sum wrong: ${got}+${plain_one}"]
             - return: [1]
-      - call: [log.info, "PASS 07 level-Syntax in allen Formen angenommen"]
+      - call: [log.info, "PASS 07 level syntax accepted in all forms"]
       - return: [0]

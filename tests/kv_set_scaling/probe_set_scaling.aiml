@@ -180,7 +180,7 @@
           return: i32
           body:
             - decl: [fehler, i32, 0]
-            # 20 Zeilen in EINEN Bucket, Einfuegereihenfolge o-0 .. o-19
+            # 20 rows into ONE bucket, insertion order o-0 .. o-19
             - decl: [num, i32, 0]
             - while: [{ lt: [num, 20] }]
               body:
@@ -329,7 +329,7 @@
 
       - if: [{ neq: [fehler, 0] }, true]
         then:
-          - print: ["FAIL kv_set_scaling: ${fehler} Befunde"]
+          - print: ["FAIL kv_set_scaling: ${fehler} findings"]
           - return: 1
       - print: ["PASS kv.set is O(1) amortized including the db_indexed hook"]
       - return: 0

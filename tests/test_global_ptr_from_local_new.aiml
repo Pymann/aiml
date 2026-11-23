@@ -45,8 +45,8 @@
       - call: [log.info, "  FAIL ${what}"]
       - return: 1
 
-# Genau die Form des Push-Handlers: frisch allozieren, fuellen, ins Global
-# haengen, zurueckkehren.
+# Exactly the form of the push handler: allocate fresh, fill, hang it into the global,
+# return.
 - def:
     name: apply_push
     static_off: ["str_cmp"]
@@ -78,8 +78,8 @@
 
       # first push: exactly the case that crashed in the client.
       - call: [apply_push, 5]
-      - set: [fails, { +: [fails, { call: [expect, "Global gesetzt", { pneq: [g_view, null] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "5 Eintraege ueberlebt", { eq: [g_view.items.len, 5] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "global set", { pneq: [g_view, null] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "5 entries survived", { eq: [g_view.items.len, 5] }] }] }]
       - set: [fails, { +: [fails, { call: [expect, "Zeichenkette ueberlebt", { eq: [g_view.tag, "schnappschuss-5"] }] }] }]
 
       # read the nested elements — this is where a dangling
@@ -91,9 +91,9 @@
           body:
             - decl: [cur, Inner, { at: [g_view.items, row_ix] }]
             - set: [sum, { +: [sum, cur.count] }]
-            - set: [fails, { +: [fails, { call: [expect, "Element ${row_ix} lesbar", { eq: [cur.status, "pending"] }] }] }]
+            - set: [fails, { +: [fails, { call: [expect, "element ${row_ix} readable", { eq: [cur.status, "pending"] }] }] }]
             - set: [row_ix, { +: [row_ix, 1] }]
-      - set: [fails, { +: [fails, { call: [expect, "Summe 0+1+2+3+4", { eq: [sum, 10] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "sum 0+1+2+3+4", { eq: [sum, 10] }] }] }]
 
       # several pushes in a row: each replaces the global.  The old
       # snapshot must be freed, the new one must stay readable.
@@ -102,7 +102,7 @@
           condition: { lt: [round, 9] }
           body:
             - call: [apply_push, round]
-            - set: [fails, { +: [fails, { call: [expect, "Runde ${round} lesbar", { eq: [g_view.items.len, round] }] }] }]
+            - set: [fails, { +: [fails, { call: [expect, "round ${round} readable", { eq: [g_view.items.len, round] }] }] }]
             - decl: [last, Inner, { at: [g_view.items, { -: [round, 1] }] }]
             - set: [fails, { +: [fails, { call: [expect, "Runde ${round} letztes Element", { eq: [last.count, { -: [round, 1] }] }] }] }]
             - set: [round, { +: [round, 1] }]

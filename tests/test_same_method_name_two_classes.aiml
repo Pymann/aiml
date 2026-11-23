@@ -54,7 +54,7 @@
       # The void call: this is where the compiler crashed.
       - call: [screen.render]
       - call: [screen.render]
-      - set: [fails, { +: [fails, { call: [expect, "void-Methode laeuft zweimal", { eq: [screen.draw_count, 2] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "void method runs twice", { eq: [screen.draw_count, 2] }] }] }]
 
       # And the other class's string method of the same name returns its value.
       - decl: [txt, string, { call: [maker.render] }]

@@ -37,7 +37,7 @@
       # existing target → -1 (the caller decides whether that is an error)
       - decl: [again, string, "${dir}/noch_einer.txt"]
       - decl: [rc_ok, i32, { call: [io.link, dst, again] }]
-      - if: { condition: { neq: [rc_ok, 0] }, then: [{ print: ["FAIL zweiter link"] }, { return: 1 }] }
+      - if: { condition: { neq: [rc_ok, 0] }, then: [{ print: ["FAIL second link"] }, { return: 1 }] }
       - decl: [rc_exists, i32, { call: [io.link, dst, again] }]
       - if: { condition: { eq: [rc_exists, 0] }, then: [{ print: ["FAIL vorhandenes Ziel haette -1 geben muessen"] }, { return: 1 }] }
 

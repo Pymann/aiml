@@ -257,7 +257,7 @@
           spawn:     CascadeRowPrefab,
           layout:    vflow, gap: 4 }
 
-      # Costs — beliebig viele.
+      # Costs — any number.
       - { name: cost_lbl,   type: label,  x: 0,  y: 200, label: "Costs" }
       - { name: cost_plus,  type: button, x: 80, y: 200, label: "+",
           on_click: { new: ListPush<ActivationCost>, target: <.costs } }
@@ -288,7 +288,7 @@
     members:
       - [initialized, i32]
       - [scene,       prefab_instance]
-      - [card,        Card]                   # Das komplette Editor-State-Modell
+      - [card,        Card]                   # the complete editor state model
     methods:
       - def:
           name: init

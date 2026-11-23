@@ -193,8 +193,8 @@ superfluous; what was missing was the error message.
 > Whoever needs the value longer (return, model field) must copy it, e.g. via
 > interpolation: `- return: "${raw}"`. See spec/61, section on container read access.
 # Access to environment variables as a map
-# Type: map<string:string>  (der Compiler akzeptiert NUR die Doppelpunkt-Form;
-# `map<string, string>` ist ein Uebersetzungsfehler)
+# Type: map<string:string>  (the compiler accepts ONLY the colon form;
+# `map<string, string>` is a compile error)
 - decl: [current_env, map<string:string>]
 - set: [current_env, sys.env]
 ```

@@ -24,7 +24,7 @@
     return: i32
     body:
       - decl: [got, i32, { call: [lib_greet] }]
-      - print: ["   run_pipeline rief lib_greet, bekam ${got}"]
+      - print: ["   run_pipeline called lib_greet, got ${got}"]
       - if: { condition: { neq: [got, 7] }, then: [{ return: 1 }] }
       - return: 0
 

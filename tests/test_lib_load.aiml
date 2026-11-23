@@ -1033,7 +1033,7 @@
       - decl: [rc_a, i32, { call: [sys.exec, one] }]
       - decl: [ms_a, i64, { -: [{ call: [time.mono_ms] }, t_a] }]
       - print: ["A) lib_load route: rc=${rc_a} in ${ms_a} ms"]
-      - set: [fails, { +: [fails, { call: [expect, "A laeuft", { eq: [rc_a, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "A runs", { eq: [rc_a, 0] }] }] }]
 
       # Route B: the same pipeline WITH the library bundled along (§14).
       - decl: [two, Code, { call: [sys.bundle, "pipe_two", { context: true }] }]
@@ -1042,7 +1042,7 @@
       - decl: [rc_b, i32, { call: [sys.exec, merged] }]
       - decl: [ms_b, i64, { -: [{ call: [time.mono_ms] }, t_b] }]
       - print: ["B) merge route:    rc=${rc_b} in ${ms_b} ms"]
-      - set: [fails, { +: [fails, { call: [expect, "B laeuft", { eq: [rc_b, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "B runs", { eq: [rc_b, 0] }] }] }]
 
       - print: ["difference: ${ms_b} ms (merge) against ${ms_a} ms (lib_load)"]
 

@@ -27,7 +27,7 @@
     name: Box
     models: [BoxData]
     methods:
-      # deprecated Klassenmethode → Warning an jeder Aufrufstelle.
+      # deprecated class method → warning at every call site.
       - def: { name: old_read, meta: [deprecated], return: i32, body: [{ return: <.num }] }
 
 - def:

@@ -39,7 +39,7 @@
       - if:
           condition: { and: [{ pneq: [host.link, null] }, { gt: [{ call: [host.link.get_value] }, 0] }] }
           then: [{ set: [hits_word, 1] }]
-      - if: { condition: { neq: [hits_word, 0] }, then: [{ print: ["FAIL: and-Zweig lief trotz null"] }, { return: 1 }] }
+      - if: { condition: { neq: [hits_word, 0] }, then: [{ print: ["FAIL: and branch ran despite null"] }, { return: 1 }] }
       # or: if the first operand is set, the second stays unread.
       - decl: [hits_or, i32, 0]
       - if:

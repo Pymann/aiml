@@ -74,7 +74,7 @@
       - decl: [var_n, i32, { call: [local_helper_b, "test"] }]
       - decl: [var_m, i32, { call: [local_helper_c, 1, 2] }]
       - print: ["var_s=${var_s} var_n=${var_n} var_m=${var_m}"]
-      # sys.serialize: erzeugt anonymen String-Konstanten + Schema-Lookup
+      # sys.serialize: produces anonymous string constants + schema lookup
       - decl: [json_str, string, { call: [sys.serialize, cfg] }]
       - print: ["${json_str}"]
       # sys.deserialize: the same schema lookup path backwards

@@ -59,7 +59,7 @@
           - if: [{ eq: [teil.len, 0] }, true]
             then:
               - set: [leere, { +: [leere, 1] }]
-              - print: ["LEER ${name}[${row}]"]
+              - print: ["EMPTY ${name}[${row}]"]
           - set: [row, { +: [row, 1] }]
       - return: leere
 
@@ -108,7 +108,7 @@
           - print: ["FAIL zwei[2]='${wert_zwei}' expected 'text-c2'"]
           - set: [fehler, { +: [fehler, 1] }]
 
-      # 4. string-Builtin als Element
+      # 4. string builtin as an element
       - decl: [roh, string, "GROSS"]
       - decl: [lst_builtin, list<string>, ["P", { call: [roh.lower] }]]
       - if: [{ neq: [lst_builtin.len, 2] }, true]
@@ -122,7 +122,7 @@
           - print: ["FAIL builtin[1]='${wert_builtin}' expected 'gross'"]
           - set: [fehler, { +: [fehler, 1] }]
 
-      # 5. sys.serialize als Element — die gemeldete Stelle
+      # 5. sys.serialize as an element — the reported spot
       - decl: [zeile, PropRow]
       - set: [zeile.quelle, "zim:1#2"]
       - set: [zeile.satz, "Kupfer leitet Strom"]
@@ -146,7 +146,7 @@
       - decl: [wert_hoch, string, { call: [wert_an, lst_hoch, 1] }]
       - if: [{ neq: [wert_inline, wert_hoch] }, true]
         then:
-          - print: ["FAIL inline != herausgehoben: '${wert_inline}' vs '${wert_hoch}'"]
+          - print: ["FAIL inline != hoisted: '${wert_inline}' vs '${wert_hoch}'"]
           - set: [fehler, { +: [fehler, 1] }]
 
       # 7. interpolation of a variable as an element (control case, must work)
@@ -197,7 +197,7 @@
 
       - if: [{ neq: [fehler, 0] }, true]
         then:
-          - print: ["FAIL call-in-list-literal: ${fehler} Befunde"]
+          - print: ["FAIL call-in-list-literal: ${fehler} findings"]
           - return: 1
       - print: ["PASS call in list literal keeps its return value"]
       - return: 0

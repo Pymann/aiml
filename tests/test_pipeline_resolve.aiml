@@ -66,27 +66,27 @@
     body:
       - decl: [fails, i32, 0]
 
-      # ── pure: zweiter Lauf trifft ───────────────────────────────────────
+      # ── pure: second run hits ───────────────────────────────────────────
       - decl: [pure_pipe, pipeline, { call: [one_step_pipe, CacheClass.pure, 0] }]
       - decl: [rc_p1, i32, { call: [pure_pipe.run] }]
       - decl: [rc_p2, i32, { call: [pure_pipe.run] }]
-      - set: [fails, { +: [fails, { call: [expect, "pure: zweiter Lauf trifft", { eq: [{ call: [pure_pipe.reused_count] }, 1] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "pure: second run hits", { eq: [{ call: [pure_pipe.reused_count] }, 1] }] }] }]
 
-      # ── opaque: trifft NIE ──────────────────────────────────────────────
+      # ── opaque: NEVER hits ──────────────────────────────────────────────
       - decl: [op_pipe, pipeline, { call: [one_step_pipe, CacheClass.opaque, 0] }]
       - decl: [rc_o1, i32, { call: [op_pipe.run] }]
       - decl: [rc_o2, i32, { call: [op_pipe.run] }]
       - set: [fails, { +: [fails, { call: [expect, "opaque never hits", { eq: [{ call: [op_pipe.reused_count] }, 0] }] }] }]
       - set: [fails, { +: [fails, { call: [expect, "opaque runs both times", { eq: [{ call: [op_pipe.ran_count] }, 1] }] }] }]
 
-      # ── resolved: Sonde laeuft IMMER ───────────────────────────────────
+      # ── resolved: the probe ALWAYS runs ────────────────────────────────
       - set: [g_probe_runs, 0]
       - decl: [res_pipe, pipeline, { call: [one_step_pipe, CacheClass.resolved, 1] }]
       - decl: [rc_r1, i32, { call: [res_pipe.run] }]
       - set: [fails, { +: [fails, { call: [expect, "resolved: first run executes", { eq: [{ call: [res_pipe.ran_count] }, 1] }] }] }]
       - decl: [rc_r2, i32, { call: [res_pipe.run] }]
-      - set: [fails, { +: [fails, { call: [expect, "Sonde lief BEIDE Male", { eq: [g_probe_runs, 2] }] }] }]
-      - set: [fails, { +: [fails, { call: [expect, "gleiche Adresse -> Treffer", { eq: [{ call: [res_pipe.reused_count] }, 1] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "probe ran BOTH times", { eq: [g_probe_runs, 2] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "same address -> hit", { eq: [{ call: [res_pipe.reused_count] }, 1] }] }] }]
 
       # ── the address changes -> the step reruns ──────────────────────────
       - set: [g_head, "commit-bbb"]

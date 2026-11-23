@@ -68,7 +68,7 @@
           then: [{ print: ["  FAIL second bundle did not see the library (rc=${rc_use})"] }, { set: [fails, { +: [fails, 1] }] }]
           else: [{ print: ["  ok   second bundle sees the first"] }]
 
-      # Symbol mit RICHTIGER Signatur: kommt wortlos zurueck.
+      # Symbol with the RIGHT signature: comes back without a word.
       - decl: [adr, i64, { call: [kontext.symbol, "lib_sieben", "fn() -> i32"] }]
       - if:
           condition: { le: [adr, 0] }
@@ -91,7 +91,7 @@
           catch:
             - type: Exception
               var: ex0
-              body: [{ print: ["  ok   blankes 'fn' wirft: ${ex0.message}"] }]
+              body: [{ print: ["  ok   bare 'fn' throws: ${ex0.message}"] }]
 
       # Wrong arity: throws although the name is a function.
       - try:
@@ -102,9 +102,9 @@
           catch:
             - type: Exception
               var: ex3
-              body: [{ print: ["  ok   falsche Stelligkeit wirft: ${ex3.message}"] }]
+              body: [{ print: ["  ok   wrong arity throws: ${ex3.message}"] }]
 
-      # FALSCHER Typ: wirft.
+      # WRONG type: throws.
       - try:
           body:
             - decl: [falsch, i64, { call: [kontext.symbol, "lib_sieben", "i32"] }]
@@ -113,9 +113,9 @@
           catch:
             - type: Exception
               var: ex
-              body: [{ print: ["  ok   falscher Typ wirft: ${ex.message}"] }]
+              body: [{ print: ["  ok   wrong type throws: ${ex.message}"] }]
 
-      # UNBEKANNTER Name: wirft ebenfalls.
+      # UNKNOWN name: throws as well.
       - try:
           body:
             - decl: [nix, i64, { call: [kontext.symbol, "gibtesnicht", "fn() -> i32"] }]
@@ -124,7 +124,7 @@
           catch:
             - type: Exception
               var: ex2
-              body: [{ print: ["  ok   unbekanntes Symbol wirft: ${ex2.message}"] }]
+              body: [{ print: ["  ok   unknown symbol throws: ${ex2.message}"] }]
 
       - if:
           condition: { neq: [fails, 0] }

@@ -56,7 +56,7 @@
             - print: ["FAIL stamp: sku=S1 gives '${sku_eins}', expected 'aaa'"]
             - set: [bad, { +: [bad, 1] }]
       - decl: [sku_zwei, string, { call: [dinge.finding_by, "sku", "S2"] }]
-      - set: [bad, { +: [bad, { call: [pruef_zahl, sku_zwei.len, 0, "sku=S2 geloescht"] }] }]
+      - set: [bad, { +: [bad, { call: [pruef_zahl, sku_zwei.len, 0, "sku=S2 deleted"] }] }]
       - decl: [sku_vier, string, { call: [dinge.finding_by, "sku", "S4"] }]
       - if:
           condition: { neq: [sku_vier, "ddd"] }

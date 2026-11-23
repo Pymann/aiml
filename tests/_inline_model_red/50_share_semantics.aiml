@@ -27,6 +27,6 @@
       - set: [copy.label, "changed"]        # independent string field → NOT visible in rows[0]
       - decl: [chk, Rec, { at: [rows, 0] }]
       - if: { condition: { neq: [chk.tags.len, 2] }, then: [{ print: ["FAIL shared container not visible: len=${chk.tags.len}"] }, { return: 1 }] }
-      - if: { condition: { neq: [chk.label, "orig"] }, then: [{ print: ["FAIL Scalar schrieb durch: ${chk.label}"] }, { return: 1 }] }
+      - if: { condition: { neq: [chk.label, "orig"] }, then: [{ print: ["FAIL scalar wrote through: ${chk.label}"] }, { return: 1 }] }
       - print: ["PASS 50 share_semantics"]
       - return: 0

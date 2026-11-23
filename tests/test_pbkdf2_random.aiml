@@ -1,5 +1,5 @@
 # Tests for hash.pbkdf2 (password KDF) + math.random_hex (CSPRNG).
-# Expected exit code: 0 (jeder Fehlschlag → sys.exit 1)
+# Expected exit code: 0 (every failure → sys.exit 1)
 
 # ── 1. PBKDF2 known-answer (RFC 6070 style, HMAC-SHA256) ───────────────────
 #     pbkdf2("password", "salt", 1) → 120fb6cf...be17b (32-byte key, 64 hex)

@@ -1,6 +1,6 @@
-# Repro-Helper: BaseCfg + TulConfig-aequivalent + viele Hilfsfunktionen
-# mit print-/log-Strings (analog train_transformer.aiml als grosses File mit
-# vielen anonymen rodata-Strings).
+# Repro helper: BaseCfg + TulConfig equivalent + many helper functions
+# with print/log strings (like train_transformer.aiml as a large file with
+# many anonymous rodata strings).
 
 - model:
     name: ReproBaseCfg

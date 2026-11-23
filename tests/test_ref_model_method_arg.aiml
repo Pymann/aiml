@@ -87,17 +87,17 @@
 
       # free function: was already fine, stands here for comparison.
       - call: [bump_free, one, 3]
-      - set: [fails, { +: [fails, { call: [expect, "freie Funktion aendert durch ref<>", { eq: [one.ticks, 8] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "free function changes through ref<>", { eq: [one.ticks, 8] }] }] }]
 
       # method, reading — this is where the IR check failed.
       - decl: [seen, i32, { call: [bumper.read_ticks, one] }]
-      - set: [fails, { +: [fails, { call: [expect, "Methode liest durch ref<>", { eq: [seen, 8] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "method reads through ref<>", { eq: [seen, 8] }] }] }]
 
       # method, changing: the caller MUST see it.
       - call: [bumper.bump, one, 4]
       - set: [fails, { +: [fails, { call: [expect, "method changes through ref<> (number)", { eq: [one.ticks, 12] }] }] }]
       - call: [bumper.rename, one, "umbenannt"]
-      - set: [fails, { +: [fails, { call: [expect, "Methode aendert durch ref<> (Zeichenkette)", { eq: [one.name, "umbenannt"] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "method changes through ref<> (string)", { eq: [one.name, "umbenannt"] }] }] }]
 
       # A model IN a model: the address must also come from a field.
       - decl: [pair, Pair]

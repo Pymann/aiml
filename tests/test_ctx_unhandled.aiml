@@ -20,7 +20,7 @@
       - decl: [kontext, ctx_handle, { call: [ctx.new] }]
       - decl: [lib, Code, { call: [sys.bundle, "lib_acht"] }]
       - decl: [rcl, i32, { call: [kontext.exec, lib] }]
-      # Eine Funktion, aber mit falschem Rueckgabetyp genannt: wirft.
+      # A function, but named with the wrong return type: throws.
       - decl: [adr, i64, { call: [kontext.symbol, "lib_acht", "fn() -> string"] }]
       - print: ["  FAIL not thrown (${adr})"]
       - return: 0

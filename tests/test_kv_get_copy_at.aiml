@@ -23,7 +23,7 @@
     name: Store
     members:
       - [store, Kv<string:Rec>]
-      - [work,  Rec]           # wiederverwendeter Zielpuffer (EINMAL alloziert)
+      - [work,  Rec]           # reused target buffer (allocated ONCE)
     methods:
       - def:
           name: setup

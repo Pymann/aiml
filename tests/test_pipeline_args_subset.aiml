@@ -92,7 +92,7 @@
 
       # ── and a second run hits throughout (the key is stable) ─
       - decl: [rc_b2, i32, { call: [p_both.run] }]
-      - set: [fails, { +: [fails, { call: [expect, "zweiter Lauf trifft in allen vier Lanes", { eq: [{ call: [p_both.reused_count] }, 4] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "second run hits in all four lanes", { eq: [{ call: [p_both.reused_count] }, 4] }] }] }]
 
       - if:
           condition: { neq: [fails, 0] }

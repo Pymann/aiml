@@ -31,7 +31,7 @@
             - print: ["FAIL: 'hello.json' ends_with '.md' expected 0, got ${var_r2}"]
             - set: [fail, { +: [fail, 1] }]
 
-      # Test 3: Suffix laenger als String
+      # Test 3: suffix longer than the string
       - decl: [var_s3, string, "ab"]
       - decl: [var_r3, i32, { call: [var_s3.ends_with, "abcdef"] }]
       - if:
@@ -55,7 +55,7 @@
             - print: ["FAIL: '.md' ends_with '.md' expected 1, got ${var_r4}"]
             - set: [fail, { +: [fail, 1] }]
 
-      # Test 5: leeres Suffix
+      # Test 5: empty suffix
       - decl: [var_r5, i32, { call: [var_s1.ends_with, ""] }]
       - if:
           condition: { eq: [var_r5, 1] }

@@ -53,7 +53,7 @@
       - decl: [lib_wire, string, { call: [recv_text, conn_two] }]
       - print: ["2) library: ${lib_wire.len} bytes"]
       - decl: [pipe_wire, string, { call: [recv_text, conn_two] }]
-      - print: ["2) Pipeline:   ${pipe_wire.len} Bytes"]
+      - print: ["2) pipeline: ${pipe_wire.len} bytes"]
 
       - decl: [lib_pkg, Code, { call: [sys.code_from, lib_wire, { context: true }] }]
       - decl: [pipe_pkg, Code, { call: [sys.code_from, pipe_wire, { start: "run_pipeline", context: true }] }]

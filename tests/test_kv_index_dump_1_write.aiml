@@ -41,4 +41,4 @@
       - print: ["FAIL phase 1: k1 still there after delete"]
       - call: [sys.exit, 1]
 
-- print: ["Phase 1 ok: len=${anz}, k1 geloescht"]
+- print: ["phase 1 ok: len=${anz}, k1 deleted"]

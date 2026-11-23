@@ -60,9 +60,9 @@
       - decl: [bad_owner, list<i32>, { call: [row3, 9, 99, 1] }]
       - call: [chk, { call: [cascade.validate, "Trig", bad_owner] }, 1, "OwnerRef invalid → idx 1"]
 
-      # ── unbekannte Node-id 7 → bad-index 0
+      # ── unknown node id 7 → bad-index 0
       - decl: [bad_id, list<i32>, { call: [row3, 7, 1, 1] }]
-      - call: [chk, { call: [cascade.validate, "Trig", bad_id] }, 0, "unbekannte Node-id → idx 0"]
+      - call: [chk, { call: [cascade.validate, "Trig", bad_id] }, 0, "unknown node id → idx 0"]
 
       # ── truncated: on_played without CardKind [9, 2] → bad-index 2 (missing)
       - decl: [trunc, list<i32>]
@@ -92,8 +92,8 @@
       - call: [nest_bad.push, 2]
       - call: [chk, { call: [cascade.validate, "Trig", nest_bad] }, 2, "nested: inner enum invalid → idx 2"]
 
-      # ── unbekannte Cascade → -2
-      - call: [chk, { call: [cascade.validate, "Nope", ok_played] }, -2, "unbekannte Cascade → -2"]
+      # ── unknown cascade → -2
+      - call: [chk, { call: [cascade.validate, "Nope", ok_played] }, -2, "unknown cascade → -2"]
 
       # ── explain: valid → "", invalid → non-empty
       - decl: [ex_ok, string, { call: [cascade.explain, "Trig", ok_played] }]

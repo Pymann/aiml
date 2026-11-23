@@ -61,7 +61,7 @@ Logical and comparison operators have fixed arity.
 
 - Unary operators: `!`, `?`, `&` — exactly 1 operand
 - Logical operators: `and`, `&&`, `or`, `||` — 2 or more operands (left fold, short-circuit;
-  spec/04_1). Implemented 01.11.2026; vorher lehnte der Compiler mehr als zwei ab.
+  spec/04_1). Implemented 01.11.2026; before that the compiler rejected more than two.
 - Comparison operators: `eq`, `neq`, `lt`, `gt`, `le`, `lte`, `ge`, `gte`, `peq`, `pneq` — exactly 2 operands
 
 ```yaml

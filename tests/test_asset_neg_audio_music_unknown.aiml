@@ -1,5 +1,5 @@
 # SPEC?: 44_2_audio   # derived from the file name, to be confirmed
-# Negative: audio.music mit string-literalem unbekanntem Stem → Compile-Hard-Error.
+# Negative: audio.music with an unknown stem as a string literal → hard compile error.
 #
 # AssetRoots: tests/_asset_fixtures/basic/resources/audio
 # Expected exit code: 1

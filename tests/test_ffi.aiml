@@ -47,7 +47,7 @@
 - decl: [len2, i64, { call: [strlen, "duplicate extern block"] }]
 - print: ["duplicate extern block ok: ${len2}"]
 
-# ── Phase D: ptr-Typ + Adresse-von (&) ────────────────────────────────────────
+# ── Phase D: ptr type + address-of (&) ────────────────────────────────────────
 
 - extern: "C"
   defs:

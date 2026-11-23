@@ -11,4 +11,4 @@
       - set: [var_i, { +: [var_i, 1] }]
 - decl: [rcc, i32, { call: [db.checkpoint] }]
 - decl: [anz, i32, { call: [var_kv.len] }]
-- print: ["geschrieben: ${anz}, checkpoint rc=${rcc}"]
+- print: ["written: ${anz}, checkpoint rc=${rcc}"]

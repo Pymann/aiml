@@ -51,7 +51,7 @@
             - call: [sys.exit, 1]
       - print: ["T1 PASS: new ERect embedded field defaults"]
 
-      # T2: embedded struct via lokale Variable setzen
+      # T2: set an embedded struct via a local variable
       - decl: [var_p, EPoint]
       - set: [var_p.var_x, 42]
       - set: [var_p.var_y, 99]
@@ -83,7 +83,7 @@
             - call: [sys.exit, 1]
       - print: ["T3 PASS: other fields unaffected"]
 
-      # T4: embedded field als by-value Funktionsargument
+      # T4: embedded field as a by-value function argument
       - decl: [var_s, i32, { call: [epoint_sum, var_r.origin] }]
       - if:
           condition: { neq: [var_s, 141] }

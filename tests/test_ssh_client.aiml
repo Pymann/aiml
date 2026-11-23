@@ -39,7 +39,7 @@
       - decl: [sess_a, ssh_session, { call: [ssh.connect, "127.0.0.1", port, "deploy", 5000] }]
       - if:
           condition: { eq: [sess_a, null] }
-          then: [{ print: ["FAIL connect fehlgeschlagen"] }, { return: 1 }]
+          then: [{ print: ["FAIL connect failed"] }, { return: 1 }]
 
       # Without accept_host the authentication MUST fail — that is the
       # promise from §3, and without this check it would only be an intention.
@@ -97,7 +97,7 @@
       - decl: [n_wrote, i32, { call: [ch_in.write, "durch-stdin\n"] }]
       - if:
           condition: { lt: [n_wrote, 1] }
-          then: [{ print: ["FAIL write schrieb ${n_wrote} Bytes"] }, { set: [fails, { +: [fails, 1] }] }]
+          then: [{ print: ["FAIL write wrote ${n_wrote} bytes"] }, { set: [fails, { +: [fails, 1] }] }]
       - decl: [eof_rc, i32, { call: [ch_in.send_eof] }]
       - decl: [echoed, string, { call: [ch_in.read_out, 4096] }]
       - if:
@@ -119,7 +119,7 @@
       - decl: [n_bin, i32, { call: [ch_bin.write_buffer, payload] }]
       - if:
           condition: { neq: [n_bin, 5] }
-          then: [{ print: ["FAIL write_buffer schrieb ${n_bin} von 5 Bytes"] }, { set: [fails, { +: [fails, 1] }] }]
+          then: [{ print: ["FAIL write_buffer wrote ${n_bin} of 5 bytes"] }, { set: [fails, { +: [fails, 1] }] }]
       - decl: [eof_bin, i32, { call: [ch_bin.send_eof] }]
       - decl: [counted, string, { call: [ch_bin.read_out, 256] }]
       - if:

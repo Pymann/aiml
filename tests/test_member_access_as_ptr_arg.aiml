@@ -24,7 +24,7 @@
     body:
       - decl: [out, Outer]
       - set: [out.tag, "T"]
-      # member-access als ptr<Inner>-Arg:
+      # member access as a ptr<Inner> arg:
       - call: [fill_inner, out.inner]
       - call: [log.info, "out.inner.label='${out.inner.label}' xval=${out.inner.xval} (want filled/42)"]
       - decl: [fails, i32, 0]

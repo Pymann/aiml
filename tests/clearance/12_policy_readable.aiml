@@ -38,5 +38,5 @@
           then:
             - call: [log.error, "clearance.replace_level = ${rpl}, expected 3"]
             - return: [1]
-      - call: [log.info, "PASS 12 Richtlinie lesbar"]
+      - call: [log.info, "PASS 12 policy readable"]
       - return: [0]

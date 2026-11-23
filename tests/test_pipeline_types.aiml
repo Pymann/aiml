@@ -11,7 +11,7 @@
     name: do_build
     return: i32
     body:
-      - print: ["   do_build laeuft"]
+      - print: ["   do_build runs"]
       - return: 0
 
 - def:
@@ -61,7 +61,7 @@
 
       # second run: the same body, the same bindings → cache hit.
       - decl: [rc_two, i32, { call: [pipe.run] }]
-      - set: [fails, { +: [fails, { call: [expect, "zweiter Lauf gelingt", { eq: [rc_two, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "second run succeeds", { eq: [rc_two, 0] }] }] }]
       - set: [fails, { +: [fails, { call: [expect, "second run came from the cache", { eq: [{ call: [pipe.reused_count] }, 2] }] }] }]
 
       # ── F62-84: a faulty structure fails BEFORE the first step ──────────

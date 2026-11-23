@@ -5,7 +5,7 @@
 
 - decl: [var_ok, i32, 1]
 
-# ── Setup: vocab load + Sprache setzen ───────────────────────────────────
+# ── Setup: vocab load + set the language ───────────────────────────────
 
 - decl: [langs, string, '{"0":"en","1":"de","2":"fr"}']
 - decl: [voc,   string, '{"Draw":["Draw","Ziehen","Piocher"],"card":["card","Karte","carte"],"UNK":["UNK","","---"]}']
@@ -59,7 +59,7 @@
     body:
       - return: 42
 
-# ── E: Unbekannter Decorator = Silent Ignore ─────────────────────────────
+# ── E: unknown decorator = silent ignore ─────────────────────────────────
 
 - def:
     name: unknown_decorator_ok

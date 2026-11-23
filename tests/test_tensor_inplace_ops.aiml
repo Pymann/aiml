@@ -68,7 +68,7 @@
 - decl: [buf, tensor, { call: [tensor.ones, 2] }]
 - call: [tensor.fill, buf, 99.0]
 
-# Erste Akkumulation
+# first accumulation
 - call: [tensor.fill, buf, 0.0]
 - decl: [var_x, tensor, { call: [tensor.ones, 2] }]
 - call: [tensor.fill, var_x, 7.0]

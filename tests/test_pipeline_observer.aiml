@@ -63,9 +63,9 @@
       - call: [pipe.add_param, "mode", modes]
       - call: [pipe.add_stage, stg]
 
-      # ── Erster Lauf mit Beobachter ──────────────────────────────────────
+      # ── first run with an observer ──────────────────────────────────────
       - decl: [rc_one, i32, { call: [pipe.run, watch] }]
-      - set: [fails, { +: [fails, { call: [expect, "Lauf gelingt", { eq: [rc_one, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "run succeeds", { eq: [rc_one, 0] }] }] }]
       - set: [fails, { +: [fails, { call: [expect, "observer called per (step, lane)", { eq: [g_calls, 2] }] }] }]
       - set: [fails, { +: [fails, { call: [expect, "every call carries a key", { eq: [g_keys, 2] }] }] }]
       - set: [fails, { +: [fails, { call: [expect, "first run reports nothing as reused", { eq: [g_reused, 0] }] }] }]
@@ -76,10 +76,10 @@
       - set: [g_calls, 0]
       - set: [g_reused, 0]
       - decl: [rc_two, i32, { call: [pipe.run, watch] }]
-      - set: [fails, { +: [fails, { call: [expect, "zweiter Lauf gelingt", { eq: [rc_two, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "second run succeeds", { eq: [rc_two, 0] }] }] }]
       - set: [fails, { +: [fails, { call: [expect, "second run reports both as reused", { eq: [g_reused, 2] }] }] }]
 
-      # ── Ohne Beobachter laeuft es ebenso (F62-79) ───────────────────────
+      # ── without an observer it runs just the same (F62-79) ───────────────
       - decl: [rc_three, i32, { call: [pipe.run] }]
       - set: [fails, { +: [fails, { call: [expect, "it runs without an observer too", { eq: [rc_three, 0] }] }] }]
 
