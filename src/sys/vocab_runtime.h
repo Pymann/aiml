@@ -1,27 +1,27 @@
 /* AIML — Vocab (i18n) Runtime
  *
- * Zero-friction Übersetzungs-Feature.  Zwei JSON-Assets tragen die Daten:
+ * Zero-friction translation feature.  Two JSON assets carry the data:
  *
- *   languages.json  — Index → Sprach-Code:
+ *   languages.json  — index → language code:
  *       {"0": "en", "1": "de", "2": "fr"}
  *
- *   vocab.json      — Source-String → Liste von Übersetzungen; Index in der
- *                     Liste korrespondiert mit dem Sprach-Index oben:
+ *   vocab.json      — source string → list of translations; the index in the
+ *                     list corresponds to the language index above:
  *       {"Save Card": ["Save Card", "Karte speichern", "Sauvegarder"],
  *        "Menu":      ["Menu",      "Menü",             "Menu"]}
  *
- * Missing-Translation-Policy: silent fallback auf den Source-String
- * (der bleibt english, wenn keine Übersetzung existiert).
+ * Missing-translation policy: silent fallback to the source string
+ * (which stays English if no translation exists).
  *
- * Interception-Punkte:
- *   1. push_text_batch() ruft aiml_vocab_lookup() als Präambel auf — deckt
- *      alle Prefab-YAML-Labels und set_text-Konstanten ab.
- *   2. Funktionen mit `decorator: [vocab]` wickeln jeden `return <string>`
- *      per Compiler-Wrap in einen aiml_vocab_lookup-Aufruf ein — für
- *      Formatter-Fragmente, die vor Konkatenation übersetzt werden müssen.
+ * Interception points:
+ *   1. push_text_batch() calls aiml_vocab_lookup() as a preamble — covers
+ *      all prefab YAML labels and set_text constants.
+ *   2. Functions with `decorator: [vocab]` wrap every `return <string>`
+ *      in an aiml_vocab_lookup call via a compiler wrap — for
+ *      formatter fragments that must be translated before concatenation.
  *
- * Alle Strings, die aiml_vocab_lookup zurückgibt, gehören dem Runtime;
- * Aufrufer dürfen sie NICHT modifizieren oder freigeben.
+ * All strings that aiml_vocab_lookup returns belong to the runtime;
+ * callers must NOT modify or free them.
  */
 
 #pragma once
@@ -32,29 +32,29 @@
 extern "C" {
 #endif
 
-/* Lädt beide JSON-Streams (Zero-terminated).  Rückgabe: 0 = OK,
- * -1 = languages-JSON invalid, -2 = vocab-JSON invalid.  Ein zweiter
- * Aufruf ersetzt die vorherigen Daten (Hot-Reload-freundlich).       */
+/* Loads both JSON streams (zero-terminated).  Return: 0 = OK,
+ * -1 = languages JSON invalid, -2 = vocab JSON invalid.  A second
+ * call replaces the previous data (hot-reload friendly).            */
 int32_t     aiml_vocab_load(const char* languages_json, const char* vocab_json);
 
-/* Setzt die aktive Sprache auf den gegebenen Index.  Index außerhalb
- * [0, aiml_vocab_language_count) wird geclampt auf 0.  Kein-op wenn
- * noch keine JSON geladen ist.                                       */
+/* Sets the active language to the given index.  An index outside
+ * [0, aiml_vocab_language_count) is clamped to 0.  No-op if
+ * no JSON has been loaded yet.                                       */
 void        aiml_vocab_set_language(int32_t idx);
 
-/* Gibt den aktuellen Sprach-Index zurück (0 = default = Source-Sprache). */
+/* Returns the current language index (0 = default = source language). */
 int32_t     aiml_vocab_current_language(void);
 
-/* Anzahl geladener Sprachen (für UI-Dropdowns).                       */
+/* Number of loaded languages (for UI dropdowns).                      */
 int32_t     aiml_vocab_language_count(void);
 
-/* Sprach-Code für den gegebenen Index (z.B. "de").  NULL falls
- * Index out-of-range oder noch nichts geladen wurde.                  */
+/* Language code for the given index (e.g. "de").  NULL if the
+ * index is out of range or nothing has been loaded yet.               */
 const char* aiml_vocab_language_code(int32_t idx);
 
-/* Der zentrale Lookup.  Rückgabe: Übersetzung wenn im vocab, sonst
- * das Source-Argument unverändert (silent fallback).  Nie NULL solange
- * `source` nicht NULL ist.                                            */
+/* The central lookup.  Return: the translation if in the vocab, otherwise
+ * the source argument unchanged (silent fallback).  Never NULL as long as
+ * `source` is not NULL.                                               */
 const char* aiml_vocab_lookup(const char* source);
 
 #ifdef __cplusplus

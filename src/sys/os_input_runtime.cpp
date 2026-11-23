@@ -1,20 +1,20 @@
-/* OS-Ebenen-Eingabe (spec/44_0 §8.5) — Mausbewegungen, Klicks und Tasten in den
- * X-Server einspeisen, nicht in den eigenen Prozess.
+/* OS-level input (spec/44_0 §8.5) — feed mouse movements, clicks and keys into the
+ * X server, not into our own process.
  *
- * Warum neben input.post_*: post_* schreibt den eigenen Frame-Zustand und prüft
- * damit alles AB der Anwendungsgrenze.  Was darunter liegt — Fensterfokus,
- * Fensterposition, ein fremdes Fenster darüber — bleibt dabei unberührt und
- * ungeprüft.  XTEST setzt eine Ebene tiefer an: die Anwendung kann ein so
- * erzeugtes Ereignis nicht von einem echten unterscheiden.
+ * Why next to input.post_*: post_* writes our own frame state and thereby tests
+ * everything FROM the application boundary up.  What lies below — window focus,
+ * window position, a foreign window on top — stays untouched and
+ * untested.  XTEST starts one level deeper: the application cannot tell an event
+ * produced this way from a real one.
  *
- * Preis dieser Treue: der Cursor ist eine GLOBALE Ressource.  Ein Lauf bewegt
- * den echten Zeiger des Sitzungsinhabers.  Darum gehören solche Tests auf einen
- * eigenen Display (Xvfb), nicht auf die Arbeitssitzung — siehe spec/44_0 §8.5.
+ * The price of this fidelity: the cursor is a GLOBAL resource.  A run moves
+ * the real pointer of the session owner.  That is why such tests belong on a
+ * display of their own (Xvfb), not on the working session — see spec/44_0 §8.5.
  *
- * Koordinaten sind ROOT-Koordinaten (ganzer Bildschirm).  Widget-Flächen aus
- * .child_rect_* sind FENSTER-Pixel, also muss der Aufrufer die Fensterposition
- * addieren (engine.window_pos_x/y).  Diese Umrechnung bleibt bewusst beim
- * Aufrufer: nur er weiß, auf welches Fenster sich eine Fläche bezieht. */
+ * Coordinates are ROOT coordinates (whole screen).  Widget areas from
+ * .child_rect_* are WINDOW pixels, so the caller must add the window position
+ * (engine.window_pos_x/y).  This conversion deliberately stays with the
+ * caller: only the caller knows which window an area refers to. */
 
 #include <cstdint>
 #include <cstdio>
@@ -33,20 +33,20 @@ Display* g_dpy      = nullptr;
 bool     g_probed   = false;
 bool     g_have_xtest = false;
 
-/* Verbindung + XTEST-Prüfung einmal, Ergebnis gemerkt.  Fehlt die Erweiterung,
- * bleibt alles ein No-op statt zu stürzen: ein Szenario soll "nicht verfügbar"
- * melden können, nicht abbrechen. */
+/* Connection + XTEST check once, result remembered.  If the extension is missing,
+ * everything stays a no-op instead of crashing: a scenario should be able to report
+ * "not available", not abort. */
 bool ensure_display() {
     if (g_probed) return g_have_xtest;
     g_probed = true;
     g_dpy = XOpenDisplay(nullptr);
     if (!g_dpy) {
-        fprintf(stderr, "[os_input] XOpenDisplay fehlgeschlagen — kein DISPLAY?\n");
+        fprintf(stderr, "[os_input] XOpenDisplay failed — no DISPLAY?\n");
         return false;
     }
     int ev = 0, err = 0, major = 0, minor = 0;
     if (!XTestQueryExtension(g_dpy, &ev, &err, &major, &minor)) {
-        fprintf(stderr, "[os_input] XTEST-Erweiterung nicht vorhanden\n");
+        fprintf(stderr, "[os_input] XTEST extension not present\n");
         XCloseDisplay(g_dpy);
         g_dpy = nullptr;
         return false;
@@ -55,12 +55,12 @@ bool ensure_display() {
     return true;
 }
 
-/* aiml zählt 0=links, 1=mitte, 2=rechts (spec/44_0 §2.2); X11 zählt
- * Button1=links, Button2=mitte, Button3=rechts. */
-/* spec/44_0 §2: die kanonische Reihenfolge ist 0=links, 1=RECHTS, 2=Mitte
- * (die von GLFW).  X11 nummeriert anders (Button2=Mitte, Button3=rechts), also
- * muss dieser Adapter umsetzen — vorher reichte er 1 als Button2 durch und ein
- * `os_mouse_down(1)` erzeugte einen MITTELklick, wo die Spec rechts sagt. */
+/* aiml counts 0=left, 1=middle, 2=right (spec/44_0 §2.2); X11 counts
+ * Button1=left, Button2=middle, Button3=right. */
+/* spec/44_0 §2: the canonical order is 0=left, 1=RIGHT, 2=middle
+ * (that of GLFW).  X11 numbers differently (Button2=middle, Button3=right), so
+ * this adapter must convert — before, it passed 1 through as Button2 and an
+ * `os_mouse_down(1)` produced a MIDDLE click where the spec says right. */
 unsigned int x_button(int32_t btn) {
     switch (btn) {
         case 0:  return Button1;   /* links  */
@@ -70,9 +70,9 @@ unsigned int x_button(int32_t btn) {
     }
 }
 
-/* Tastenname (spec/44_0 §5) → KeySym.  Nur was ein Szenario braucht; alles
- * andere wird über den Namen als Einzelzeichen versucht, damit "a".."z"/"0".."9"
- * ohne Tabelle funktionieren. */
+/* Key name (spec/44_0 §5) → KeySym.  Only what a scenario needs; everything
+ * else is attempted via the name as a single character, so that "a".."z"/"0".."9"
+ * work without a table. */
 KeySym keysym_for(const char* name) {
     if (!name || !*name) return NoSymbol;
     struct { const char* n; KeySym k; } map[] = {
@@ -120,7 +120,7 @@ extern "C" void aiml_os_key_down(const char* name) {
     KeySym ks = keysym_for(name);
     if (ks == NoSymbol) { fprintf(stderr, "[os_input] unbekannte Taste '%s'\n", name ? name : "(null)"); return; }
     KeyCode kc = XKeysymToKeycode(g_dpy, ks);
-    if (!kc) { fprintf(stderr, "[os_input] keine Keycode-Belegung fuer '%s'\n", name); return; }
+    if (!kc) { fprintf(stderr, "[os_input] no keycode mapping for '%s'\n", name); return; }
     XTestFakeKeyEvent(g_dpy, kc, True, 0);
     XFlush(g_dpy);
 }
@@ -135,8 +135,8 @@ extern "C" void aiml_os_key_up(const char* name) {
     XFlush(g_dpy);
 }
 
-/* Wo der Zeiger tatsaechlich steht — die Gegenprobe, dass eine Bewegung
- * angekommen ist, bevor geklickt wird. */
+/* Where the pointer actually is — the cross-check that a movement
+ * has arrived before clicking. */
 extern "C" int32_t aiml_os_pointer_x(void) {
     if (!ensure_display()) return -1;
     Window root_ret, child_ret;
@@ -157,7 +157,7 @@ extern "C" int32_t aiml_os_pointer_y(void) {
     return (int32_t)ry;
 }
 
-#else /* kein X11 (Browser, Android, andere Plattformen) */
+#else /* no X11 (browser, Android, other platforms) */
 
 extern "C" int32_t aiml_os_input_available(void) { return 0; }
 extern "C" void    aiml_os_mouse_move(int32_t, int32_t) {}
