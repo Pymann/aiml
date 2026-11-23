@@ -12,33 +12,33 @@ namespace AST {
 
 class Builder;
 
-// spec/04 "Operator-Schluessel zitieren": `{ op: [args] }` ist eine YAML-Flow-Map, und
-// ein Teil der symbolischen Operatoren kann dort nicht blank stehen -- `*` `%` `>` `>=`
-// `||` `?` werfen, `&` `&&` `!` `~` werfen NICHT und liefern einen leeren bzw.
-// `null`-Schluessel.  Liefert den ersten blanken reservierten Operatorschluessel in
-// Flow-Schluesselposition (`{ op:` oder `, op:`), sonst "".  Rein lexikalisch, darum nur
-// zum ERKLAEREN eines schon feststehenden Fehlschlags verwenden -- in Daten in
-// Anfuehrungszeichen trifft die Suche auch (`"{ *: [a, b] }"` als Testeingabe).
+// spec/04 "quoting operator keys": `{ op: [args] }` is a YAML flow map, and
+// some of the symbolic operators cannot stand bare there -- `*` `%` `>` `>=`
+// `||` `?` throw, `&` `&&` `!` `~` do NOT throw and yield an empty or
+// `null` key.  Returns the first bare reserved operator key in
+// flow key position (`{ op:` or `, op:`), otherwise "".  Purely lexical, so only
+// use it to EXPLAIN a failure that is already established -- the search also matches in data in
+// quotation marks (`"{ *: [a, b] }"` as test input).
 std::string bareOperatorKey(const std::string& text);
 
-// Die Zeile, die der Ereignis-Parser gerade liefert (1-basiert, 0 = unbekannt).
-// `parseInterpolatedString` bekommt nur die Zeichenkette und kommt sonst ohne
-// Fundort aus -- der Fundort ist bei einem 10.000-Zeilen-Modul aber die halbe
-// Meldung.  Thread-lokal, weil mehrere Quellen parallel uebersetzt werden.
+// The line the event parser is currently delivering (1-based, 0 = unknown).
+// `parseInterpolatedString` only gets the string and otherwise has no
+// location -- but in a 10,000-line module the location is half the
+// message.  Thread-local, because several sources are compiled in parallel.
 extern thread_local int g_builderLine;
 
 std::unique_ptr<Expr> parseInterpolatedString(const std::string& input);
 std::unique_ptr<Expr> parseScalarExpr(const std::string& val, const std::string& tag);
 std::unique_ptr<Expr> nodeToExpr(const YAML::Node& node);
 
-// Datei des gerade geparsten Stroms.  Die freien Helfer dieser Einheit
-// (nodeToExpr & Co.) haben keinen Builder, konnten also keine Datei nennen und
-// schrieben "line 42: " als Prosa (spec/49 F49-100).  Der Compiler setzt den
-// Namen vor dem Parsen; thread-lokal, weil Importe im selben Thread rekursiv
-// parsen und jeder Lauf seinen eigenen Namen braucht.
+// File of the stream currently being parsed.  The free helpers of this unit
+// (nodeToExpr & co.) have no builder, so they could not name a file and
+// wrote "line 42: " as prose (spec/49 F49-100).  The compiler sets the
+// name before parsing; thread-local, because imports parse recursively in the same thread
+// and every run needs its own name.
 void setCurrentParseFile(const std::string& file);
 std::string currentParseFile();
-// "datei:zeile:spalte: " aus der YAML-Marke, oder "line N: " ohne Datei.
+// "file:line:column: " from the YAML mark, or "line N: " without a file.
 std::string locOf(const YAML::Node& node);
 
 // Base class for object-oriented states in the streaming parser
@@ -75,26 +75,26 @@ public:
     // Current 1-based line in the AIML source (updated on every YAML event).
     // State handlers can read this to record source locations on AST nodes.
     int currentLine = 0;
-    // Spalte dazu, 1-basiert.  Die YAML-Marke trug sie immer; ohne sie kann ein
-    // Werkzeug einen Befund nur der ZEILE zuordnen, nicht dem Token
+    // Column as well, 1-based.  The YAML mark always carried it; without it a
+    // tool can only map a finding to the LINE, not to the token
     // (spec/49 F49-100).
     int currentColumn = 0;
 
-    // Quelldatei, gegen die gerade geparst wird.  Der Parser lief bisher ohne
-    // Dateinamen, darum konnte eine Meldung aus einem Builder nur den Text
-    // nennen, nicht die Fundstelle (gemessen am Listen-Default-Check: der
-    // Autor stand vor "field 'liste' has a non-empty list default" ohne zu
-    // wissen, in WELCHER Datei).  Leer bei synthetisierten Schnipseln.
+    // Source file being parsed right now.  Until now the parser ran without a
+    // file name, so a message from a builder could only name the text,
+    // not the location (measured on the list default check: the
+    // author was faced with "field 'liste' has a non-empty list default" without
+    // knowing in WHICH file).  Empty for synthesised snippets.
     std::string sourceFile;
 
-    // "datei:zeile:spalte: " fuer eine Meldung aus einem Builder, oder "" ohne
-    // Datei (spec/49 F49-100: der Ort ist ein Praefix in GENAU einer Form --
-    // nie Prosa wie "line 9: ", die kein Werkzeug lesen kann).
+    // "file:line:column: " for a message from a builder, or "" without a
+    // file (spec/49 F49-100: the location is a prefix in EXACTLY one form --
+    // never prose like "line 9: ", which no tool can read).
     std::string fmtLoc() const { return fmtLoc(currentLine, currentColumn); }
 
-    // Dieselbe Form fuer eine Stelle, die ihre Position frueher festgehalten hat
-    // (StatementBuilder::capturedLine/-Column): ein Builder meldet oft erst beim
-    // Schliessen des Knotens, und currentLine steht dann schon weiter.
+    // The same form for a site that captured its position earlier
+    // (StatementBuilder::capturedLine/-Column): a builder often reports only when
+    // closing the node, and by then currentLine has already moved on.
     std::string fmtLoc(int line, int col) const {
         if (sourceFile.empty()) return "";
         if (line <= 0) return sourceFile + ": ";

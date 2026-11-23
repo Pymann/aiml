@@ -1,13 +1,13 @@
-// spec/29_2 §14a — `ctx`: der Kontext als eigener Namensraum.
+// spec/29_2 §14a — `ctx`: the context as a namespace of its own.
 //
-// Ein Kontext ist eine lebende Compiler-Instanz: man gibt ihr Bundles, sie
-// behaelt, was sie uebersetzt hat, und spaetere Bundles sehen es.  Der Grund
-// ist die Grundlast — ein frischer Kontext kostet ~96 ms, unabhaengig davon,
-// wie wenig er tut (§15).
+// A context is a live compiler instance: you give it bundles, it
+// keeps what it has compiled, and later bundles see it.  The reason
+// is the base cost — a fresh context costs ~96 ms, regardless of
+// how little it does (§15).
 //
-// WICHTIG: das ist KEINE Sicherheitsgrenze (F29_2-…e).  Prozess, Adressraum
-// und dynamische Symboltabelle sind geteilt; fuer fremden Code bleibt die
-// Grenze ein eigener Prozess (spec/65 F65-15).
+// IMPORTANT: this is NOT a security boundary (F29_2-…e).  Process, address space
+// and dynamic symbol table are shared; for foreign code the
+// boundary remains a separate process (spec/65 F65-15).
 #ifndef AIML_CTX_RUNTIME_H
 #define AIML_CTX_RUNTIME_H
 
@@ -15,42 +15,42 @@
 
 extern "C" {
 
-// Einen Kontext oeffnen.  Rueckgabe ist der Griff; nullptr = ging nicht.
+// Open a context.  The return value is the handle; nullptr = it did not work.
 void*   aiml_ctx_new(void);
 
-// Freigeben.  Danach sind alle Adressen aus diesem Kontext ungueltig.
+// Free it.  Afterwards all addresses from this context are invalid.
 void    aiml_ctx_free(void* handle);
 
-// Die Compiler-Instanz hinter einem Griff.  Der Griff selbst ist ein Eintrag
-// der Tabelle, NICHT der Compiler — wer das verwechselt, ruft Methoden auf
-// einem fremden Objekt (gemessen: Absturz im ersten Lauf).
+// The compiler instance behind a handle.  The handle itself is an entry
+// of the table, NOT the compiler — whoever confuses the two calls methods on
+// a foreign object (measured: crash in the first run).
 void*   aiml_ctx_compiler(void* handle);
 
-// Ein Bundle im Kontext ausfuehren (implementiert in exec_impl.cpp, wo der
-// Weg vom Code-Objekt zum Quelltext schon steht).
+// Execute a bundle in the context (implemented in exec_impl.cpp, where the
+// path from the code object to the source text already exists).
 int32_t aiml_ctx_exec_code(void* handle, void* code_obj);
-// Uebersetzen und einhaengen, OHNE zu laufen (F29_2-…n).
+// Compile and link in, WITHOUT running (F29_2-…n).
 int32_t aiml_ctx_load_code(void* handle, void* code_obj);
 
-// Nach einem Lauf: die Typen des Bundles in die Tabelle des Kontexts
-// schreiben.  `exec_impl.cpp` ruft es direkt nach `execInContext` — ohne das
-// kennt `aiml_ctx_symbol` nur, was das LETZTE Bundle uebersetzt hat.
+// After a run: write the bundle's types into the context's table.
+// `exec_impl.cpp` calls it directly after `execInContext` — without that
+// `aiml_ctx_symbol` only knows what the LAST bundle compiled.
 void    aiml_ctx_record_symbols(void* handle);
 
-// Die Namen, die dieser Kontext mit genau diesem Typ bzw. dieser Signatur
-// traegt (F29_2-…i), und die Meldungen des letzten Laufs (F29_2-…l).  Beide
-// fuellen eine aiml-Liste, die der Aufrufer angelegt hat.
+// The names that this context carries with exactly this type or this signature
+// (F29_2-…i), and the messages of the last run (F29_2-…l).  Both
+// fill an aiml list that the caller created.
 int32_t aiml_ctx_names_fill(void* handle, const char* want_type, void* list_ptr);
 int32_t aiml_ctx_errors_fill(void* handle, void* list_ptr);
 int32_t aiml_ctx_use_packages(void* handle, const char* path);
 
-// Ein Symbol abgreifen — MIT genanntem Typ (F29_2-…d).
-//   0 = gefunden, `out_addr` traegt Adresse bzw. Wert
-//   1 = Name unbekannt            → SymbolMissingException
-//   2 = Name da, Typ passt nicht  → SymbolTypeException
-// `out_msg` zeigt danach auf die fertige Begruendung (statischer Puffer,
-// gueltig bis zum naechsten Aufruf): sie nennt BEIDE Typen, erwartet und
-// gefunden — ein „Typfehler" ohne die zwei Namen zwingt zum Suchen.
+// Grab a symbol — WITH a named type (F29_2-…d).
+//   0 = found, `out_addr` carries the address or value
+//   1 = name unknown              → SymbolMissingException
+//   2 = name present, type wrong  → SymbolTypeException
+// `out_msg` then points to the finished reason (static buffer,
+// valid until the next call): it names BOTH types, expected and
+// found — a "type error" without the two names forces one to search.
 int32_t aiml_ctx_symbol(void* handle, const char* name, const char* want_type,
                         int64_t* out_addr, const char** out_msg);
 

@@ -440,8 +440,8 @@ struct AimlWs {
 
 static AimlWs* to_ws(void* p) { return static_cast<AimlWs*>(p); }
 
-// Warum ein Lesen oder ein poll aufgab -- der Mirror haengt das an den
-// peer_disconnected-Grund (spec/44_5 §8: kein stiller Abbruch).
+// Why a read or a poll gave up -- the mirror attaches that to the
+// peer_disconnected reason (spec/44_5 §8: no silent abort).
 static void ws_err(AimlWs* ws, const char* what, int err) {
     if (!ws) return;
     if (err) snprintf(ws->last_err, sizeof(ws->last_err), "%s: %s", what, strerror(err));
@@ -458,10 +458,10 @@ extern "C" const char* aiml_ws_last_error(void* p) {
 // Low-level I/O (unified TCP / TLS)
 // ══════════════════════════════════════════════════════════════════════════════
 
-// spec/44_5 §8: ein Signal ist kein Verbindungsverlust.  `r <= 0` warf vorher
-// sauberen Abbruch, echten Fehler und EINTR in EINEN Topf -- der Mirror machte
-// daraus ein peer_disconnected, und zwar wortlos.  Der TCP-Zweig des Mirror
-// behandelt EINTR seit je richtig; dieser hier war die Ausnahme.
+// spec/44_5 §8: a signal is not a connection loss.  `r <= 0` used to throw
+// clean close, real error and EINTR into ONE pot -- the mirror made
+// a peer_disconnected out of it, and silently.  The mirror's TCP branch
+// has always handled EINTR correctly; this one was the exception.
 static int ws_read_n(AimlWs* ws, void* buf, int n) {
     int done = 0;
     while (done < n) {
@@ -472,10 +472,10 @@ static int ws_read_n(AimlWs* ws, void* buf, int n) {
         if (r > 0) { done += r; continue; }
         if (ws->ssl) {
             int e = SSL_get_error(ws->ssl, r);
-            // NUR das Signal wird wiederholt.  WANT_READ heisst auf einem
-            // blockierenden Socket "SO_RCVTIMEO ist abgelaufen" -- wer das
-            // wiederholt, dreht sich endlos (tests/test_ws_accept_stall.aiml
-            // haengt dann in conn.set_timeout(300)).
+            // ONLY the signal is retried.  On a blocking socket WANT_READ means
+            // "SO_RCVTIMEO has expired" -- whoever
+            // retries that spins forever (tests/test_ws_accept_stall.aiml
+            // then hangs in conn.set_timeout(300)).
             if (e == SSL_ERROR_SYSCALL && errno == EINTR) continue;
             if (e == SSL_ERROR_ZERO_RETURN) ws_err(ws, "peer closed (TLS)", 0);
             else if (e == SSL_ERROR_WANT_READ || e == SSL_ERROR_WANT_WRITE) ws_err(ws, "TLS read timed out", 0);
@@ -484,7 +484,7 @@ static int ws_read_n(AimlWs* ws, void* buf, int n) {
             return -1;
         }
         if (r == 0) { ws_err(ws, "peer closed", 0); return -1; }
-        if (errno == EINTR) continue;              // Signal, nicht Verlust
+        if (errno == EINTR) continue;              // signal, not loss
         ws_err(ws, "recv failed", errno);
         return -1;
     }
@@ -692,19 +692,19 @@ static int hs_step(WsHs* h) {
     }
     int fl = fcntl(ws->fd, F_GETFL, 0);
     fcntl(ws->fd, F_SETFL, fl & ~O_NONBLOCK);
-    /* Ein stehengebliebener Sender darf den Server nicht anhalten.
+    /* A stalled sender must not stop the server.
      *
-     * Der Leseweg ist: `poll(fd, 0)` meldet EIN Byte, danach verlangt
-     * `ws_read_n` den GANZEN Frame mit blockierendem recv.  Kommt der Rest nie
-     * (Gegenstelle getoetet, Leitung steht), wartet ein einfaediger Server
-     * endlos — er liest dann keinen anderen Peer mehr und nimmt nichts mehr an.
-     * Gemessen am cosmos-Controller 18.10.2026: Log bricht mitten im Takt ab,
-     * 13 kB ungelesen in der Warteschlange eines Peers, Send-Q ueberall 0,
+     * The read path is: `poll(fd, 0)` reports ONE byte, then
+     * `ws_read_n` demands the WHOLE frame with a blocking recv.  If the rest never comes
+     * (peer killed, line stalled), a single-threaded server waits
+     * forever — it then reads no other peer and accepts nothing more.
+     * Measured on the cosmos controller 2026-10-18: the log breaks off mid-tick,
+     * 13 kB unread in a peer's queue, Send-Q 0 everywhere,
      * `wchan = wait_woken`.
      *
-     * Dies ist der STOPFEN, nicht die Loesung: er macht aus „fuer immer" ein
-     * „nach 10 s abgebrochen".  Die Loesung ist ein schrittweiser, nicht
-     * blockierender Frame-Leser mit Puffer je Verbindung (spec/32_4 §Lesen). */
+     * This is the PLUG, not the solution: it turns "forever" into
+     * "aborted after 10 s".  The solution is an incremental, non-
+     * blocking frame reader with a buffer per connection (spec/32_4 §Reading). */
     struct timeval rto; rto.tv_sec = 10; rto.tv_usec = 0;
     setsockopt(ws->fd, SOL_SOCKET, SO_RCVTIMEO, &rto, sizeof(rto));
     return 1;
@@ -1352,11 +1352,11 @@ extern "C" int aiml_ws_poll(void* p, int32_t timeout_ms) {
     AimlWs* ws = to_ws(p);
     // Check TLS internal buffer first (data already decrypted but not yet read)
     if (ws->ssl && SSL_pending(ws->ssl) > 0) return 1;
-    // poll(2) wird von SA_RESTART NICHT fortgesetzt (siehe die Anmerkung an
-    // aiml_sys_catch_signals): jedes Signal im Prozess kam hier als -1 heraus,
-    // und der Mirror warf dafuer einen gesunden Peer weg (spec/44_5 §8).
-    // Fester Zielzeitpunkt, damit ein Signal die zugesagte Wartezeit nicht
-    // verlaengert (bei timeout_ms <= 0 gibt es nichts zu rechnen).
+    // poll(2) is NOT resumed by SA_RESTART (see the note on
+    // aiml_sys_catch_signals): every signal in the process came out here as -1,
+    // and the mirror threw away a healthy peer for it (spec/44_5 §8).
+    // A fixed target time, so that a signal does not extend the promised waiting time
+    // (with timeout_ms <= 0 there is nothing to compute).
     struct timespec t0;
     if (timeout_ms > 0) clock_gettime(CLOCK_MONOTONIC, &t0);
     int rest = timeout_ms;
@@ -1367,7 +1367,7 @@ extern "C" int aiml_ws_poll(void* p, int32_t timeout_ms) {
         if (r > 0) return 1;
         if (r == 0) return 0;
         if (errno != EINTR) { ws_err(ws, "poll failed", errno); return -1; }
-        if (timeout_ms > 0) {                     // Signal, nicht Verlust
+        if (timeout_ms > 0) {                     // signal, not loss
             struct timespec t1;
             clock_gettime(CLOCK_MONOTONIC, &t1);
             long weg = (t1.tv_sec - t0.tv_sec) * 1000 + (t1.tv_nsec - t0.tv_nsec) / 1000000;

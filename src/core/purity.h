@@ -1,13 +1,13 @@
 #ifndef AIML_PURITY_H
 #define AIML_PURITY_H
 
-// spec/62 §10.2 — Reinheit ist Eigenschaft einer FUNKTION, nicht eines
-// Namensraums: `yaml.parse` ist rein, `yaml.parse_file` liest eine Datei;
-// `path.join` ist rein, `path.home` haengt am Wirt.
+// spec/62 §10.2 — purity is a property of a FUNCTION, not of a
+// namespace: `yaml.parse` is pure, `yaml.parse_file` reads a file;
+// `path.join` is pure, `path.home` depends on the host.
 //
-// Darum: Vorgabe je Namensraum, Ausnahmen je Funktion.  Ein Namensraum, der
-// hier NICHT steht, gilt als unrein (F62-18) — nichts wird durch Weglassen
-// wiederverwendbar.
+// Hence: a default per namespace, exceptions per function.  A namespace that
+// is NOT listed here counts as impure (F62-18) — nothing becomes reusable
+// by being left out.
 #include <set>
 #include <string>
 
@@ -16,19 +16,19 @@ namespace aiml {
 inline bool namespaceDefaultPure(const std::string& ns) {
     static const std::set<std::string> kPure = {
         "math", "hash", "enums", "compress", "cascade",
-        // spec/62 F62-112: `step` ist REIN.  step.arg/step.host lesen genau
-        // das, was im Schluessel steht (die DEKLARIERTEN Achsen und
-        // Wirtswerte, §8) — sie unrein zu nennen hiesse, die
-        // Schluesselvollstaendigkeit gegen sich selbst zu wenden.
-        // step.workspace ist aus Lane und Stufe abgeleitet, also je Lane
-        // festgelegt; step.set_status/fail_lane/fail_pipeline sagen etwas
-        // ueber den AUSGANG, nicht ueber das Ergebnis (F62-92).
+        // spec/62 F62-112: `step` is PURE.  step.arg/step.host read exactly
+        // what is in the key (the DECLARED axes and
+        // host values, §8) — calling them impure would mean turning
+        // key completeness against itself.
+        // step.workspace is derived from lane and stage, so it is fixed
+        // per lane; step.set_status/fail_lane/fail_pipeline say something
+        // about the OUTCOME, not about the result (F62-92).
         "step"
     };
     return kPure.count(ns) > 0;
 }
 
-// Die gemischten Namensraeume, Funktion fuer Funktion (spec/62 §10.2).
+// The mixed namespaces, function by function (spec/62 §10.2).
 inline bool mixedNamespacePure(const std::string& ns, const std::string& fn, bool& known) {
     known = true;
     if (ns == "path") {
@@ -40,11 +40,11 @@ inline bool mixedNamespacePure(const std::string& ns, const std::string& fn, boo
         };
         if (kPure.count(fn))   return true;
         if (kImpure.count(fn)) return false;
-        known = false;   // unbekannt -> unrein, aber als "unklassifiziert"
+        known = false;   // unknown -> impure, but as "unclassified"
         return false;
     }
     if (ns == "yaml") {
-        // parse_file faellt unter die io-Regel (F62-19/F62-20), nicht hierher.
+        // parse_file falls under the io rule (F62-19/F62-20), not here.
         if (fn == "parse_file") return false;
         return true;
     }
@@ -56,33 +56,33 @@ inline bool isMixedNamespace(const std::string& ns) {
     return ns == "path" || ns == "yaml" || ns == "vocab" || ns == "tensor";
 }
 
-// Ergebnis der Einordnung eines einzelnen Aufrufs in einem reinen Rumpf.
+// Result of classifying a single call in a pure body.
 enum class PurityVerdict {
-    Allowed,        // rein, oder log
-    NeedsAssert,    // sys.exe — nur mit assert_pure (F62-22)
-    IoConstOutside, // io mit konstantem absolutem Pfad (F62-19, Fehler)
-    IoComputed,     // io mit berechnetem Pfad (F62-20, Warnung)
-    Impure          // alles andere (F62-18, Fehler)
+    Allowed,        // pure, or log
+    NeedsAssert,    // sys.exe — only with assert_pure (F62-22)
+    IoConstOutside, // io with a constant absolute path (F62-19, error)
+    IoComputed,     // io with a computed path (F62-20, warning)
+    Impure          // everything else (F62-18, error)
 };
 
 inline PurityVerdict classifyCall(const std::string& ns, const std::string& fn,
                                   bool firstArgIsLiteral, const std::string& firstArgLiteral) {
-    // log ist immer erlaubt: Protokollausgabe ist nicht Teil des Ergebnisses.
+    // log is always allowed: log output is not part of the result.
     if (ns == "log") return PurityVerdict::Allowed;
 
-    // io kann nicht verboten werden — Dateien zu schreiben ist der Sinn eines
-    // Build-Schritts.  Stattdessen die beiden Faelle aus §10.2.
+    // io cannot be forbidden — writing files is the point of a
+    // build step.  Instead, the two cases from §10.2.
     if (ns == "io") {
         if (firstArgIsLiteral) {
             if (!firstArgLiteral.empty() && firstArgLiteral[0] == '/')
                 return PurityVerdict::IoConstOutside;
-            return PurityVerdict::Allowed;   // konstant und relativ: im Arbeitsbereich
+            return PurityVerdict::Allowed;   // constant and relative: in the workspace
         }
         return PurityVerdict::IoComputed;
     }
 
     if (ns == "sys") {
-        // Das eine erlaubte unreine Ding — mit Unterschrift (F62-22).
+        // The one permitted impure thing — with a signature (F62-22).
         if (fn == "exe") return PurityVerdict::NeedsAssert;
         return PurityVerdict::Impure;
     }
