@@ -1,45 +1,45 @@
-# AIML C++ Architektur-Review
+# AIML C++ Architecture Review
 
-## Kurzfazit
+## Short conclusion
 
-Die AIML-C++-Implementierung hat ein tragfaehiges Grundgeruest:
+The AIML C++ implementation has a viable basic framework:
 
-- klar erkennbare Schichten aus Parser, AST, Compiler und Runtime
-- gute subsystemische Trennung in `src/sys/*`
-- eine bereits modularisierte AST-Builderschicht
+- clearly recognisable layers of parser, AST, compiler and runtime
+- good subsystem separation in `src/sys/*`
+- an already modularised AST builder layer
 
-Die groessten Probleme sind heute nicht "falsche Grundidee", sondern **architektonische Ueberlagerung**:
+The biggest problems today are not a "wrong basic idea", but **architectural layering on top of each other**:
 
-- zu viel mutable Zustandslogik in einem zentralen `CompilerContext`
-- mehrere nebeneinander existierende Dispatch- und Compilerpfade
-- zu grosse Monolithen in den Schluesseldateien
-- inkonsistente Semantik zwischen JIT/AOT und library/non-library
-- zu schwache Guardrails gegen invalide IR
+- too much mutable state logic in a central `CompilerContext`
+- several dispatch and compiler paths existing side by side
+- monoliths that are too large in the key files
+- inconsistent semantics between JIT/AOT and library/non-library
+- guard rails against invalid IR that are too weak
 
-Der Code wirkt wie ein System, das erfolgreich gewachsen ist, aber mehrere Evolutionsstufen gleichzeitig mittraegt.
+The code looks like a system that has grown successfully, but carries several evolutionary stages at the same time.
 
-## Was heute gut ist
+## What is good today
 
-### 1. Die grobe Schichtung ist richtig
+### 1. The rough layering is right
 
-Die Kernaufteilung ist sinnvoll:
+The core split makes sense:
 
-- Frontend-Treiber in `compiler.cpp`
-- AST-Parsing in `src/core/ast/*`
-- AST-zu-LLVM-Codegen in `src/core/ast_compiler*.cpp`
-- Builtin-/Methodenverdrahtung in `src/core/builtin_registry.cpp`
-- Laufzeitfunktionalitaet in `src/sys/*`
+- frontend driver in `compiler.cpp`
+- AST parsing in `src/core/ast/*`
+- AST-to-LLVM codegen in `src/core/ast_compiler*.cpp`
+- builtin/method wiring in `src/core/builtin_registry.cpp`
+- runtime functionality in `src/sys/*`
 
-Das ist konzeptionell deutlich besser als ein komplett vermischter Parser-/Runtime-Blob.
+That is conceptually much better than a completely mixed parser/runtime blob.
 
-### 2. Die AST-Builderschicht ist bereits relativ modular
+### 2. The AST builder layer is already relatively modular
 
-Positiv auffaellig:
+Notably positive:
 
 - `src/core/ast_builder.h`
 - `src/core/ast/*_builder.cpp`
 
-Hier ist die Sprache in zustaendige Builder zerlegt:
+Here the language is split into responsible builders:
 
 - `function_builder`
 - `expression_builder`
@@ -48,180 +48,180 @@ Hier ist die Sprache in zustaendige Builder zerlegt:
 - `extern_builder`
 - `control_flow_builder`
 
-Das ist einer der staerkeren Teile der Architektur und ein gutes Vorbild fuer den Rest des Systems.
+That is one of the stronger parts of the architecture and a good model for the rest of the system.
 
-### 3. Die Runtime ist sinnvoll nach Domaenen geteilt
+### 3. The runtime is sensibly split by domain
 
-`src/sys/*` ist trotz teils grosser Dateien inhaltlich sauberer getrennt als der Compilerkern:
+Despite partly large files, `src/sys/*` is separated more cleanly in content than the compiler core:
 
 - DB in `db_runtime.cpp`
-- Mirror in `mirror_runtime.cpp`
-- Netzwerk in `net_runtime.cpp`, `ws_runtime.cpp`, `tls_runtime.cpp`
-- Rendering/UI/Engine in `engine_runtime.cpp`, `ui_runtime.cpp`, `prefab_runtime.cpp`
-- Serialisierung in `ser_runtime.cpp`
+- mirror in `mirror_runtime.cpp`
+- network in `net_runtime.cpp`, `ws_runtime.cpp`, `tls_runtime.cpp`
+- rendering/UI/engine in `engine_runtime.cpp`, `ui_runtime.cpp`, `prefab_runtime.cpp`
+- serialisation in `ser_runtime.cpp`
 
-Das ist eine gute Basis fuer spaetere Stabilisierung.
+That is a good basis for later stabilisation.
 
-## Hauptprobleme
+## Main problems
 
-### 1. `CompilerContext` ist ein God Object
+### 1. `CompilerContext` is a god object
 
-Datei:
+File:
 - `src/core/context.h`
 
-Der `CompilerContext` traegt gleichzeitig:
+The `CompilerContext` simultaneously carries:
 
-- LLVM-Kontext und Builder
-- Symboltabellen
-- Funktionen, Klassen, Enums, Namespaces
-- Import- und Header-Only-Zustand
-- Hot-Reload-Zustand
-- Bundle-/Schema-Zustand
-- Deserialisierungszustand
-- DB-Open-Options
-- Exception-State
-- Runtime-/Builtin-Dispatch-Metadaten
+- LLVM context and builder
+- symbol tables
+- functions, classes, enums, namespaces
+- import and header-only state
+- hot reload state
+- bundle/schema state
+- deserialisation state
+- DB open options
+- exception state
+- runtime/builtin dispatch metadata
 
-Das fuehrt zu drei Problemen:
+That leads to three problems:
 
-- Features koppeln sich implizit ueber Ambient State
-- Fehler lassen sich schwer isolieren
-- JIT/AOT/libraryMode/headerOnlyMode beeinflussen sich indirekt
+- features couple implicitly via ambient state
+- errors are hard to isolate
+- JIT/AOT/libraryMode/headerOnlyMode influence each other indirectly
 
-Ein Symptom dafuer ist z. B. `dbOpenPersist`, `dbOpenColumnLayout` und `dbOpenBasePathVal` als globale Kontextflags fuer einen einzelnen Call-Pfad.
+One symptom of this is e.g. `dbOpenPersist`, `dbOpenColumnLayout` and `dbOpenBasePathVal` as global context flags for a single call path.
 
-### 2. `builtin_registry.cpp` ist zu gross und zu zentral
+### 2. `builtin_registry.cpp` is too large and too central
 
-Datei:
+File:
 - `src/core/builtin_registry.cpp`
 
-Groesse:
-- ca. `7250` Zeilen
+Size:
+- approx. `7250` lines
 
-Diese Datei ist aktuell:
+This file is currently:
 
-- Builtin-Katalog
-- Namespace-Dispatch
-- Klassen-/Methodenregistrierung
-- Typkonvertierungslogik
-- Spezialfall-Sammlung fuer Runtime-APIs
+- builtin catalogue
+- namespace dispatch
+- class/method registration
+- type conversion logic
+- a collection of special cases for runtime APIs
 
-Das ist einer der groessten strukturellen Risikofaktoren im Projekt.
+That is one of the biggest structural risk factors in the project.
 
-Folgen:
+Consequences:
 
-- aenderungsanfällig
-- schwer testbar
-- schlecht navigierbar
-- hohe Wahrscheinlichkeit fuer inkonsistente Spezialfaelle
+- prone to breakage on change
+- hard to test
+- hard to navigate
+- high probability of inconsistent special cases
 
-### 3. Es gibt mehrere uebereinander liegende Dispatch-Systeme
+### 3. There are several dispatch systems stacked on top of each other
 
-Es existieren mindestens diese Pfade:
+At least these paths exist:
 
 - `registerBuiltins(ctx)` in `src/core/builtin_registry.cpp`
 - `SystemRegistry` in `src/sys/registry.h`
 - `CallDispatcher` in `src/core/call_dispatcher.cpp`
-- dazu noch Altlasten wie `src/core/expression.cpp`
+- plus legacy remnants such as `src/core/expression.cpp`
 
-Das ist architektonisch ungesund.
+That is architecturally unhealthy.
 
-Besonders auffaellig:
+Particularly striking:
 
-- `ast_compiler.cpp` nutzt den neuen Builtin-Registry-Pfad
-- `call_dispatcher.cpp` nutzt noch `SystemRegistry`
-- `expression.cpp` ist ein alter YAML-Ausdruckspfad
+- `ast_compiler.cpp` uses the new builtin registry path
+- `call_dispatcher.cpp` still uses `SystemRegistry`
+- `expression.cpp` is an old YAML expression path
 
-Das bedeutet:
+That means:
 
-- mehrere "Wahrheiten" fuer Aufrufsemantik
-- erschwerte Feature-Erweiterung
-- hoehere Gefahr, dass ein Fix nur in einem Pfad landet
+- several "truths" for call semantics
+- harder feature extension
+- higher danger that a fix lands in only one path
 
-### 4. `compiler.cpp` mischt zu viele Rollen
+### 4. `compiler.cpp` mixes too many roles
 
-Datei:
+File:
 - `compiler.cpp`
 
-Groesse:
-- ca. `1826` Zeilen
+Size:
+- approx. `1826` lines
 
-Diese Datei macht gleichzeitig:
+This file simultaneously does:
 
-- YAML-Datei laden
-- CompilerContext initialisieren
-- Importauflösung
-- Header-Only-Propagation
-- Deferred-Import-Kompilation
-- JIT-Setup
-- AOT-Objekterzeugung
-- Entry-Point-Generierung
-- Linking
-- Hot-Reload-Chunk-Kompilation
-- Runtime-Symbol-Registrierung fuer JIT
+- loading YAML files
+- initialising the CompilerContext
+- import resolution
+- header-only propagation
+- deferred import compilation
+- JIT setup
+- AOT object generation
+- entry point generation
+- linking
+- hot reload chunk compilation
+- runtime symbol registration for the JIT
 
-Das ist faktisch ein Orchestrator, Linker-Glue, JIT-Launcher und Compiler-Frontend in einer Datei.
+That is effectively an orchestrator, linker glue, JIT launcher and compiler frontend in one file.
 
-Das fuehrt direkt zu den bereits sichtbaren JIT/AOT-Unterschieden.
+That leads directly to the already visible JIT/AOT differences.
 
-### 5. Der Code traegt gleichzeitig altes und neues IR-Abstraktionsmodell
+### 5. The code carries the old and the new IR abstraction model at the same time
 
-In `Symbol` und breiter im Compiler sieht man:
+In `Symbol` and more broadly in the compiler one sees:
 
-- rohe LLVM-Zeiger: `alloca_inst`, `type`, `element_type`
-- neue Wrapper: `ir_alloca_inst`, `ir_type`, `ir_element_type`
+- raw LLVM pointers: `alloca_inst`, `type`, `element_type`
+- new wrappers: `ir_alloca_inst`, `ir_type`, `ir_element_type`
 
-Datei:
+File:
 - `src/core/context.h`
 
-Das ist ein klassischer Migrationszustand, aber langfristig teuer:
+That is a classic migration state, but expensive in the long run:
 
-- doppelte Invarianten
-- doppelte Fehlerquellen
-- schwerer lesbarer Code
+- duplicate invariants
+- duplicate sources of error
+- code that is harder to read
 
-Dasselbe sieht man auch im Compilerfluss:
+The same can be seen in the compiler flow:
 
-- manche Pfade arbeiten direkt mit LLVM
-- andere ueber `IRGenerator`
-- wieder andere mischen beides im selben Block
+- some paths work directly with LLVM
+- others via `IRGenerator`
+- yet others mix both in the same block
 
-### 6. Top-Level-Semantik ist nicht sauber vereinheitlicht
+### 6. Top-level semantics are not cleanly unified
 
-Ein konkretes Architekturproblem, das bereits echte Bugs erzeugt:
+A concrete architectural problem that is already producing real bugs:
 
-- im `libraryMode` werden top-level `DeclStmt` als `GlobalVariable` materialisiert
-- im normalen Pfad werden top-level Statements in `__aiml_init` emittiert
+- in `libraryMode`, top-level `DeclStmt` are materialised as `GlobalVariable`
+- in the normal path, top-level statements are emitted into `__aiml_init`
 
-Datei:
+File:
 - `src/core/ast_compiler.cpp`
 
-Dadurch divergiert die Speichersemantik von top-level Variablen.
+As a result, the storage semantics of top-level variables diverge.
 
-Das ist kein kleiner Detailfehler, sondern ein Architekturbruch:
+That is not a small detail bug, but an architectural break:
 
-- dieselbe Sprachkonstruktion hat je nach Modus andere Storage-Semantik
-- das hat bereits zum Pointer-Return-Repro mit invalidem IR beigetragen
+- the same language construct has different storage semantics depending on the mode
+- that has already contributed to the pointer return repro with invalid IR
 
-### 7. Guardrails gegen invalide IR sind zu schwach
+### 7. Guard rails against invalid IR are too weak
 
-Ein wiederkehrendes Muster in den bisherigen Bugs:
+A recurring pattern in the bugs so far:
 
-- AIML erzeugt kein klares Diagnoseergebnis
-- stattdessen scheitert LLVM spaet oder die Runtime crasht
+- AIML does not produce a clear diagnostic result
+- instead LLVM fails late or the runtime crashes
 
-Beispiele:
+Examples:
 
-- Pointer-Return-Repro endet in LLVM `LiveVariables`
-- Mirror-Bugs kippten ueber Debug-Prints oder spaete Runtime-Symptome
+- the pointer return repro ends in LLVM `LiveVariables`
+- mirror bugs tipped over via debug prints or late runtime symptoms
 
-`compileToObject(...)` verifiziert das Modul, aber der gesamte JIT-/Chunk-/Run-Pfad ist architektonisch nicht gleich stark abgesichert.
+`compileToObject(...)` verifies the module, but the whole JIT/chunk/run path is not architecturally secured equally strongly.
 
-Das ist gefaehrlich, weil gerade bei einer experimentellen Sprache der Compiler aggressiv frueh scheitern sollte.
+That is dangerous, because especially with an experimental language the compiler should fail aggressively early.
 
-### 8. Viele Features sind ueber Stringtypen statt ueber explizite Semantik verdrahtet
+### 8. Many features are wired via string types instead of explicit semantics
 
-Im Code tauchen viele Entscheidungen ueber `typeName`-Stringvergleiche auf:
+Many decisions in the code appear via `typeName` string comparisons:
 
 - `list<...>`
 - `map<...>`
@@ -230,102 +230,102 @@ Im Code tauchen viele Entscheidungen ueber `typeName`-Stringvergleiche auf:
 - `"path"`
 - `"ui_style"`
 
-Das ist fuer einen Prototyp normal, skaliert aber schlecht.
+That is normal for a prototype, but scales badly.
 
-Folgen:
+Consequences:
 
-- viele verstreute Spezialfaelle
-- hoher Pflegeaufwand
-- schwerere Refactorings
-- mehr inkonsistente Eckfaelle
+- many scattered special cases
+- high maintenance effort
+- harder refactorings
+- more inconsistent corner cases
 
-### 9. Diagnostics und Source-Locations sind noch kein echter Compiler-Subsystem
+### 9. Diagnostics and source locations are not yet a real compiler subsystem
 
-Die meisten Compilerfehler zeigen heute vor allem:
+Most compiler errors today mainly show:
 
-- C++-Quelldatei
-- C++-Zeile
-- Fehltext
+- the C++ source file
+- the C++ line
+- the error text
 
-aber nicht die eigentlich betroffene AIML-Stelle.
+but not the actually affected AIML location.
 
-Das ist architektonisch unguenstig, weil die Grundlage dafuer bereits teilweise existiert:
+That is architecturally unfavourable, because the foundation for it already partly exists:
 
-- AST-Knoten tragen `sourceNode`
-- `YAML::Mark().line` wird fuer `log.*` schon verwendet
-- Top-Level-Declarations werden beim Parse bereits mit YAML-Nodes verknuepft
+- AST nodes carry `sourceNode`
+- `YAML::Mark().line` is already used for `log.*`
+- top-level declarations are already linked with YAML nodes during the parse
 
-Der Bruch ist also nicht fehlende Rohinformation, sondern fehlende Zentralisierung:
+So the break is not missing raw information, but missing centralisation:
 
-- keine offizielle `SourceLoc`-Abstraktion
-- keine zentrale Diagnostic-API
-- viele rohe `LOG_ERROR(...)`-Pfade ohne AST-/Kontextbezug
+- no official `SourceLoc` abstraction
+- no central diagnostic API
+- many raw `LOG_ERROR(...)` paths without an AST/context reference
 
-Folgen:
+Consequences:
 
-- hohe Debug-Kosten
-- schlechte Fehlermeldungen fuer Sprachbenutzer
-- langsamere Bearbeitung genau der Architektur- und Typfehler, die das System heute haeufig erzeugt
+- high debugging costs
+- poor error messages for language users
+- slower work on exactly the architecture and type errors the system frequently produces today
 
-## Konkrete Architekturspannungen
+## Concrete architectural tensions
 
-### A. Gute Frontend-Modularisierung vs. schwacher Midend/Backend-Zuschnitt
+### A. Good frontend modularisation vs. weak midend/backend cut
 
-Der Parser ist besser geschnitten als der Compiler.
+The parser is cut better than the compiler.
 
-Vergleich:
+Comparison:
 
-- Parser: viele kleine Builder
-- Compiler: grosse Dateien wie
-  - `ast_compiler.cpp` (`1312` Zeilen)
-  - `ast_compiler_call.cpp` (`1735` Zeilen)
-  - `builtin_registry.cpp` (`7250` Zeilen)
+- parser: many small builders
+- compiler: large files such as
+  - `ast_compiler.cpp` (`1312` lines)
+  - `ast_compiler_call.cpp` (`1735` lines)
+  - `builtin_registry.cpp` (`7250` lines)
 
-Das deutet darauf hin, dass die Frontend-Seite bereits in Richtung guter Architektur gegangen ist, der Backend-Teil aber noch nicht nachgezogen wurde.
+That indicates that the frontend side has already moved towards a good architecture, but the backend part has not yet followed.
 
-### B. Runtime sauber getrennt, aber ABI-/Dispatch-Schicht nicht
+### B. Runtime cleanly separated, but the ABI/dispatch layer is not
 
-Die Domaenenruntimes sind getrennt, aber die Bindung dorthin ist zentral und dicht gekoppelt.
+The domain runtimes are separated, but the binding to them is central and tightly coupled.
 
-Heute haengt viel davon ab, dass:
+Today a lot depends on
 
-- Builtin-Registrierung
-- Kontextflags
-- Typnamen
-- Methodennamen
-- spezielle Compiler-Sonderregeln
+- builtin registration
+- context flags
+- type names
+- method names
+- special compiler rules
 
-genau zusammenpassen.
+fitting together exactly.
 
-Das macht Featurearbeit teuer und Regressionen wahrscheinlich.
+That makes feature work expensive and regressions likely.
 
-### C. JIT und AOT sind keine zwei Backends, sondern zwei verschiedene Systeme
+### C. JIT and AOT are not two backends, but two different systems
 
-Die Architektur suggeriert "gleiche Sprache, zwei Ausgabemodi".
+The architecture suggests "same language, two output modes".
 
-Tatsaechlich sind es heute eher:
+In fact, today they are rather:
 
-- ein Datei-/AOT-Pfad mit vollem Import- und Objektmodell
-- ein reduzierter String-/JIT-Pfad
+- a file/AOT path with the full import and object model
+- a reduced string/JIT path
 
-Das ist einer der groessten systemischen Komplexitaetstreiber.
+That is one of the biggest systemic drivers of complexity.
 
-## Konkrete Verbesserungsvorschlaege
+## Concrete improvement proposals
 
-### sprint_task_1: `CompilerContext` in echte Teilkontexte aufspalten
+### sprint_task_1: split `CompilerContext` into real sub-contexts
 
-Empfohlene Teilung:
+Recommended split:
 
 - `SemanticContext`
-  - Symboltabellen
-  - Funktionen/Klassen/Enums/Namespaces
-  - aktuelle Namespace-/Scope-Infos
+  - symbol tables
+  - functions/classes/enums/namespaces
+  - current namespace/scope info
 
 - `CodegenContext`
   - LLVMContext
-  - Module
-  - Builder
-  - Insert-Point-/Exception-State
+  - module
+  - builder
+  - insert point/exception state
   - IRGenerator
 
 - `CompileSession`
@@ -333,16 +333,16 @@ Empfohlene Teilung:
   - headerOnlyMode
   - currentSourceFile
   - import/object tracking
-  - bundle/hot-reload state
+  - bundle/hot reload state
 
 - `CallContext`
-  - kurzlebige Call-Optionen wie DB-Open-Flags
+  - short-lived call options such as DB open flags
 
-Damit verschwinden viele implizite Seiteneffekte.
+That makes many implicit side effects disappear.
 
-### sprint_task_2: Builtin-Registry in Module aufspalten
+### sprint_task_2: split the builtin registry into modules
 
-`builtin_registry.cpp` sollte in registrierende Teilmodule zerlegt werden, z. B.:
+`builtin_registry.cpp` should be broken down into registering sub-modules, e.g.:
 
 - `builtin_registry_core.cpp`
 - `builtin_registry_io.cpp`
@@ -352,149 +352,149 @@ Damit verschwinden viele implizite Seiteneffekte.
 - `builtin_registry_mirror.cpp`
 - `builtin_registry_math.cpp`
 
-Ziel:
+Goal:
 
-- eine gemeinsame Registrierungsoberflaeche behalten
-- aber keine 7000-Zeilen-Sammeldatei mehr
+- keep a shared registration surface
+- but no 7000-line collection file any more
 
-### sprint_task_3: Einen einzigen offiziellen Call-/Builtin-Dispatch festlegen
+### sprint_task_3: settle on a single official call/builtin dispatch
 
-Entscheidung noetig:
+A decision is needed:
 
-- entweder `builtin_registry` ist der offizielle Weg
-- oder `CallDispatcher` bleibt zentral
+- either `builtin_registry` is the official path
+- or `CallDispatcher` stays central
 
-Aber:
+But:
 
 - `SystemRegistry`
 - `CallDispatcher`
 - `builtin_registry`
 
-sollten nicht dauerhaft parallel weiterleben.
+should not permanently keep living in parallel.
 
-Empfehlung:
+Recommendation:
 
-- `builtin_registry` als Hauptpfad
-- `SystemRegistry`/`CallDispatcher` als Legacy markieren und schrittweise entfernen
-- `expression.cpp` ganz klar als Legacy dokumentieren oder loeschen
+- `builtin_registry` as the main path
+- mark `SystemRegistry`/`CallDispatcher` as legacy and remove them step by step
+- document `expression.cpp` very clearly as legacy or delete it
 
-### sprint_task_4: Top-Level-Storage-Semantik vereinheitlichen
+### sprint_task_4: unify the top-level storage semantics
 
-Top-level `decl` sollte nicht vom Modus abhaengen.
+Top-level `decl` should not depend on the mode.
 
-Empfehlung:
+Recommendation:
 
-- top-level Storage immer als echte Modul-Globals modellieren
-- `__aiml_init` nur fuer Initialisierung, nicht fuer Ownership von Variablen
+- always model top-level storage as real module globals
+- `__aiml_init` only for initialisation, not for owning variables
 
-Das wuerde:
+That would:
 
-- JIT/AOT angleichen
-- library/non-library angleichen
-- Pointer-/Global-Bugs reduzieren
+- align JIT/AOT
+- align library/non-library
+- reduce pointer/global bugs
 
-### sprint_task_5: JIT/AOT auf gemeinsamen Compile-Kern zwingen
+### sprint_task_5: force JIT/AOT onto a shared compile core
 
-`compile()` und `compileFromString()` sollten denselben Kern benutzen:
+`compile()` and `compileFromString()` should use the same core:
 
-- gleicher Context-Aufbau
-- gleiche Importstrategie
-- gleiche Verifikation
-- gleiche Runtime-Symbolvorbereitung, soweit moeglich
+- the same context setup
+- the same import strategy
+- the same verification
+- the same runtime symbol preparation, as far as possible
 
-Wenn Unterschiede noetig sind, sollten sie explizit in einer kleinen Strategy-Schicht leben, nicht verteilt in `compiler.cpp`.
+Where differences are necessary, they should live explicitly in a small strategy layer, not scattered across `compiler.cpp`.
 
-### sprint_task_6: IR-Validierung vor jedem Codegen-Pfad erzwingen
+### sprint_task_6: enforce IR validation before every codegen path
 
-Empfehlung:
+Recommendation:
 
-- Modulverifikation immer vor JIT finalization
-- bei Chunk-Kompilation ebenfalls
-- optional zusaetzlich Funktionsverifikation nach `visitFunction`
+- always verify the module before JIT finalisation
+- likewise for chunk compilation
+- optionally, additionally verify functions after `visitFunction`
 
-Ziel:
+Goal:
 
-- frueher AIML-Compilerfehler
-- keine spaeten LLVM-Pass-Crashes
+- earlier AIML compiler errors
+- no late LLVM pass crashes
 
-### sprint_task_7: Legacy-IR-/LLVM-Doppelmodell abbauen
+### sprint_task_7: dismantle the legacy IR/LLVM dual model
 
-Entscheidung:
+Decision:
 
-- entweder `IRGenerator` ist die offizielle Abstraktion
-- oder der Compiler arbeitet direkt mit LLVM
+- either `IRGenerator` is the official abstraction
+- or the compiler works directly with LLVM
 
-Aber nicht dauerhaft beides parallel.
+But not both in parallel permanently.
 
-Praktisch:
+In practice:
 
-- `Symbol` schrittweise auf eine Repräsentation reduzieren
-- neue Codepfade nur noch ueber die Zielabstraktion bauen
-- Alt-Felder markieren und danach entfernen
+- reduce `Symbol` step by step to one representation
+- build new code paths only via the target abstraction
+- mark old fields and remove them afterwards
 
-### sprint_task_8: Typsystem-Regeln zentralisieren
+### sprint_task_8: centralise type system rules
 
-Heute sind viele Sonderregeln ueber Stringvergleiche im Code verteilt.
+Today many special rules are scattered across the code via string comparisons.
 
-Empfehlung:
+Recommendation:
 
-- eine zentrale `TypeSemantics`-Schicht
-- dort Antworten wie:
-  - ist Heap-Typ?
-  - ist Pointer-Typ?
-  - ist trivially copyable?
-  - braucht Init?
-  - braucht Serialize-Descriptor?
+- a central `TypeSemantics` layer
+- with answers there such as:
+  - is it a heap type?
+  - is it a pointer type?
+  - is it trivially copyable?
+  - does it need init?
+  - does it need a serialize descriptor?
 
-Dann muessen `visitDeclStmt`, Builtin-Dispatch und Serializer nicht jeweils eigene Typ-String-Logik nachbauen.
+Then `visitDeclStmt`, builtin dispatch and the serializer do not each have to rebuild their own type string logic.
 
-### sprint_task_9: Source-Locations und Diagnostics zentralisieren
+### sprint_task_9: centralise source locations and diagnostics
 
-Empfehlung:
+Recommendation:
 
-- offizielle `SourceLoc`-Struktur einfuehren
-- Builder soll Positionsdaten konsequent auf Nodes propagieren
-- zentrale Compiler-API wie `ctx.error(node, msg)` statt roher `LOG_ERROR(...)`
-- zunaechst die haeufigsten Semantikfehler umstellen:
-  - unbekannter Typ
+- introduce an official `SourceLoc` structure
+- the builder should consistently propagate position data onto nodes
+- a central compiler API such as `ctx.error(node, msg)` instead of raw `LOG_ERROR(...)`
+- switch the most frequent semantic errors first:
+  - unknown type
   - undefined property
   - undefined variable
-  - falsche Argumentzahl/-typen
+  - wrong argument count/types
 
-Nutzen:
+Benefit:
 
-- deutlich bessere AIML-Fehlermeldungen
-- geringere Debug-Kosten
-- schnelleres Arbeiten an allen anderen Architekturbaustellen
+- considerably better AIML error messages
+- lower debugging costs
+- faster work on all other architectural construction sites
 
-## Priorisierung
+## Prioritisation
 
-Wenn nur die wichtigsten Hebel umgesetzt werden sollen, waere meine Reihenfolge:
+If only the most important levers are to be implemented, my order would be:
 
-1. `CompilerContext` aufteilen
-2. Top-level-Storage vereinheitlichen
-3. Source-Locations und Diagnostics zentralisieren
-4. einen einzigen offiziellen Builtin-/Call-Dispatch festlegen
-5. `builtin_registry.cpp` zerlegen
-6. JIT/AOT ueber einen gemeinsamen Compile-Kern normalisieren
-7. harte IR-Verifikation vor jedem Codegen-Pfad
+1. split `CompilerContext`
+2. unify top-level storage
+3. centralise source locations and diagnostics
+4. settle on a single official builtin/call dispatch
+5. break down `builtin_registry.cpp`
+6. normalise JIT/AOT via a shared compile core
+7. hard IR verification before every codegen path
 
-## Gesamtbewertung
+## Overall assessment
 
-Die Architektur ist **nicht kaputt**, aber sie ist deutlich ueber den Punkt hinaus, an dem weitere Features noch billig auf die bestehende Struktur gesetzt werden koennen.
+The architecture is **not broken**, but it is well past the point at which further features can still be placed cheaply on the existing structure.
 
-Der Code zeigt zwei sehr unterschiedliche Reifestufen:
+The code shows two very different levels of maturity:
 
-- Frontend/AST-Building: schon relativ sauber
-- Compiler- und Bindungsschicht: funktional stark, aber strukturell ueberladen
+- frontend/AST building: already relatively clean
+- compiler and binding layer: functionally strong, but structurally overloaded
 
-Die wichtigste Einsicht ist:
+The most important insight is:
 
-Das System braucht jetzt weniger neue Einzel-Features und mehr **Entflechtung der zentralen Schichten**.
+The system now needs fewer new individual features and more **disentangling of the central layers**.
 
-Wenn diese Entflechtung gelingt, werden auch viele der aktuellen Fehlerklassen seltener:
+If this disentangling succeeds, many of the current error classes will also become rarer:
 
-- JIT/AOT-Divergenzen
-- Global-/Pointer-Semantikfehler
-- Builtin-Sonderfallregressionen
-- schwer erklaerbare Sync-/Serializer-/Call-Bugs
+- JIT/AOT divergences
+- global/pointer semantics errors
+- builtin special case regressions
+- hard-to-explain sync/serializer/call bugs
