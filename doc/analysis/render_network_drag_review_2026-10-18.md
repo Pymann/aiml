@@ -1,455 +1,455 @@
-# Analyse: Rendering, Netzwerk und Drag-and-drop in AIML / 9rooms_v2
+# Analysis: rendering, network and drag-and-drop in AIML / 9rooms_v2
 
-Stand: 18.10.2026. Ausschließlich statische Codeanalyse, keine Implementierung und keine Laufzeitmessung. Untersucht wurden die aktuellen Arbeitsdateien von AIML (HEAD `d216077`, mit vorhandenen lokalen Änderungen) und 9rooms_v2 (HEAD `ed4f3a7`). Aussagen beziehen sich auf diesen Quellstand, nicht auf einen nachgewiesenen Stand der ausgelieferten Browser-Binaries. Der gemeldete einmalige Deck-Editor-Fehler wurde nicht untersucht.
+As of: 18.10.2026. Exclusively static code analysis, no implementation and no runtime measurement. The current working files of AIML (HEAD `d216077`, with existing local changes) and 9rooms_v2 (HEAD `ed4f3a7`) were examined. Statements refer to this source state, not to a proven state of the shipped browser binaries. The reported one-off deck editor error was not investigated.
 
-**Ergebnis:** Die beobachteten Pausen passen sehr gut zur vorhandenen Architektur. Spielaktionen warten im UI-Frame auf RPC-Antworten; anschließend folgen häufig eine zweite Zustandsabfrage und ein vollständiger Board-Neuaufbau. Drag-and-drop hängt an denselben Frames. Dazu kommen eigenständige Schwächen in Gestenerkennung, Trefferprüfung und Browser-Frame-Taktung. Ein langsames Netzwerk verstärkt diese Probleme; es muss sie nicht erst verursachen.
+**Result:** the observed pauses fit the existing architecture very well. Game actions wait for RPC responses in the UI frame; afterwards there are often a second state query and a complete board rebuild. Drag-and-drop hangs on the same frames. On top of that come independent weaknesses in gesture detection, hit testing and browser frame timing. A slow network amplifies these problems; it does not have to cause them in the first place.
 
-**Evidenz:** „Belegt“ bedeutet direkt im Code nachvollziehbar. „Risiko“ bezeichnet einen daraus ableitbaren Fehlerpfad ohne Reproduktion. Kostenanteile und die konkrete Ursache des gelegentlich misslungenen Greifens bleiben ohne Messung offen. Quellverweise stehen relativ zu diesem Bericht; die genannten Zeilen beziehen sich auf den untersuchten Arbeitsstand.
+**Evidence:** "proven" means directly traceable in the code. "Risk" denotes an error path derivable from that without a reproduction. Cost shares and the concrete cause of the occasionally failed grab remain open without measurement. Source references are relative to this report; the lines named refer to the examined working state.
 
-## 1. Ablauf eines Frames und einer Aktion
+## 1. Flow of a frame and an action
 
-Die App legt Logik, Eingabeauswertung, RPCs, Board-Aufbau und Zeichnen in `MainMenuApp.frame`. Der separate Engine-Render-Callback bleibt leer. Erst am Ende von `frame` werden Canvas und Szene gezeichnet.
+The app puts logic, input evaluation, RPCs, board construction and drawing into `MainMenuApp.frame`. The separate engine render callback stays empty. Canvas and scene are only drawn at the end of `frame`.
 
-- [App-Loop und Callback-Anbindung](../../../9rooms_v2/client/main_menu_app.aiml#L546)
-- [Zeichnen am Frame-Ende](../../../9rooms_v2/client/main_menu_app.aiml#L1083)
-- [Engine-Loop](../../src/sys/engine_runtime.cpp#L491)
+- [App loop and callback wiring](../../../9rooms_v2/client/main_menu_app.aiml#L546)
+- [Drawing at the end of the frame](../../../9rooms_v2/client/main_menu_app.aiml#L1083)
+- [Engine loop](../../src/sys/engine_runtime.cpp#L491)
 
-Beim Angriff ist der Ablauf konkret:
+For an attack, the concrete flow is:
 
-1. `board.render` verarbeitet den Drag und erzeugt einen Angriffs-Intent.
-2. `net_attack_creature` wartet synchron auf `attack_creature` (Timeout 5 s).
-3. Bei Erfolg wartet `net_get_match_state` synchron auf den frischen Zustand (Timeout 4 s).
-4. Die App konvertiert die Antwort, verarbeitet Todesanzeigen, zerstört das Board und baut es durch einen weiteren `board.render` wieder auf.
-5. Erst später folgt `engine.draw_scene`.
+1. `board.render` processes the drag and creates an attack intent.
+2. `net_attack_creature` waits synchronously for `attack_creature` (timeout 5 s).
+3. On success, `net_get_match_state` waits synchronously for the fresh state (timeout 4 s).
+4. The app converts the response, processes death displays, destroys the board and rebuilds it through another `board.render`.
+5. Only later does `engine.draw_scene` follow.
 
-Belege: [Angriffspfad](../../../9rooms_v2/client/main_menu_app.aiml#L863), [RPC-Wrapper](../../../9rooms_v2/client/net/match_rpc.aiml#L213).
+Evidence: [attack path](../../../9rooms_v2/client/main_menu_app.aiml#L863), [RPC wrapper](../../../9rooms_v2/client/net/match_rpc.aiml#L213).
 
-**Folge:** Die sichtbare Reaktion hängt mindestens von zwei aufeinanderfolgenden Anfrage-/Antwortzyklen und der lokalen Aufbauzeit ab. Beispiel, keine Messung: Bereits zwei Zyklen zu je 80 ms ergeben ungefähr 160 ms vor zusätzlicher lokaler Arbeit. Ein schneller Renderer kann dieses Warten nicht ausgleichen.
+**Consequence:** the visible reaction depends on at least two consecutive request/response cycles and the local build time. Example, not a measurement: two cycles of 80 ms each already add up to about 160 ms before additional local work. A fast renderer cannot compensate for this waiting.
 
-Der Phasen-Check ruft ebenfalls synchron `net_confirm_phase` auf. Seine Antwort wird an dieser Stelle nicht ausgewertet; lediglich `board_poll=60` wird gesetzt. Die periodische Abfrage kann trotzdem noch am Eingabe-Cooldown scheitern. Der Kommentar „sofort neu pollen“ entspricht deshalb nicht in jeder Situation dem tatsächlichen Ablauf. Der Check wird bis zur bestätigten Zustandsübernahme wieder auf den alten Serverwert gesetzt.
+The phase check likewise calls `net_confirm_phase` synchronously. Its response is not evaluated at this point; only `board_poll=60` is set. The periodic query can nevertheless still fail on the input cooldown. The comment "poll again immediately" therefore does not match the actual flow in every situation. The check is reset to the old server value until the confirmed state is taken over.
 
-Belege: [Check-Verarbeitung](../../../9rooms_v2/client/main_menu_app.aiml#L792), [Cooldown](../../../9rooms_v2/client/main_menu_app.aiml#L676), [Check-Anzeige](../../../9rooms_v2/client/board_screen.aiml#L385).
+Evidence: [check processing](../../../9rooms_v2/client/main_menu_app.aiml#L792), [cooldown](../../../9rooms_v2/client/main_menu_app.aiml#L676), [check display](../../../9rooms_v2/client/board_screen.aiml#L385).
 
-**UX-Problem:** „Gesendet“, „Server wartet“, „abgelehnt“ und „noch nicht geklickt“ sind hier nicht sauber getrennt. Beim Angriff landen Ablehnungen im Log; beim Phasen-Check wird selbst das Ergebnis nicht explizit behandelt.
+**UX problem:** "sent", "server waiting", "rejected" and "not clicked yet" are not cleanly separated here. For the attack, rejections end up in the log; for the phase check not even the result is handled explicitly.
 
-## 2. Netzwerk: brauchbare Grundlage, blockierende Nutzung
+## 2. Network: usable foundation, blocking use
 
-### 2.1 Synchrone RPCs halten den Spiel-Frame an — belegt, höchste Priorität
+### 2.1 Synchronous RPCs stop the game frame — proven, highest priority
 
-`send_and_await` sendet eine korrelierte Anfrage und pumpt die Session in einer Warteschleife mit 2-ms-Sleeps. Es ruft währenddessen weder die App-Framefunktion noch den Renderer auf. Unter WASM führt der Sleep über Asyncify zurück zum Browser, aber der AIML-Spiel-Frame bleibt suspendiert. Der Browser kann somit weiter Ereignisse empfangen, während die Spieloberfläche ihr letztes Bild zeigt.
+`send_and_await` sends a correlated request and pumps the session in a wait loop with 2 ms sleeps. Meanwhile it calls neither the app frame function nor the renderer. Under WASM, the sleep returns to the browser via Asyncify, but the AIML game frame stays suspended. The browser can therefore keep receiving events while the game UI shows its last image.
 
-Belege: [send_and_await](../../src/sys/mirror_runtime.cpp#L1955), [Sleep unter WASM](../../src/sys/time_runtime.cpp#L39).
+Evidence: [send_and_await](../../src/sys/mirror_runtime.cpp#L1955), [sleep under WASM](../../src/sys/time_runtime.cpp#L39).
 
-Positiv: Request-ID und antwortender Peer werden geprüft; fremde Antworten bleiben in der Queue. Das frühere Problem einer rein FIFO-basierten Antwortzuordnung sollte diesem aktuellen Code nicht pauschal unterstellt werden. `send_request`/`take_response` existieren bereits; der Board-Eintritt nutzt sie. Es fehlt vor allem ihre konsequente Verwendung für normale Spielaktionen und Board-Polls.
+Positive: the request ID and the responding peer are checked; foreign responses stay in the queue. The earlier problem of a purely FIFO-based response assignment should not be blanket-attributed to this current code. `send_request`/`take_response` already exist; the board entry uses them. What is mainly missing is their consistent use for normal game actions and board polls.
 
-Trade-off: Synchrone Wrapper vereinfachen den Kontrollfluss und die Fehlerbehandlung. Asynchrone Aktionen benötigen explizite Zustände für ausstehend, erfolgreich, abgelehnt, Timeout und Verbindungsabbruch. Dafür bleiben Eingabe und Animation unabhängig von der Netzlatenz.
+Trade-off: synchronous wrappers simplify the control flow and error handling. Asynchronous actions need explicit states for pending, successful, rejected, timeout and connection loss. In return, input and animation stay independent of the network latency.
 
-### 2.2 Polling ist an Frames und Interaktionen gebunden — belegt
+### 2.2 Polling is bound to frames and interactions — proven
 
-Das Board fragt nach 60 Frames ab, setzt bei Press/Release einen Cooldown von 30 Frames und pollt nicht während eines aktiven Drags. Das schützt bestehende Prefab-Handles vor Zerstörung, koppelt aber Datenfrische an FPS und Nutzerverhalten.
+The board queries after 60 frames, sets a cooldown of 30 frames on press/release and does not poll during an active drag. That protects existing prefab handles from destruction, but couples data freshness to FPS and user behaviour.
 
-Bei 60 FPS sind 60 Frames ungefähr eine Sekunde; bei 30 FPS ungefähr zwei. Häufige Eingaben oder langes Festhalten können den Zustand weiter verzögern. Besonders ungünstig: Ein veraltetes `combat_pending=1` sperrt weiter das Draggen, und neue Klickversuche verschieben die Abfrage, die diesen Zustand korrigieren könnte.
+At 60 FPS, 60 frames are about one second; at 30 FPS about two. Frequent input or long holding can delay the state further. Particularly unfavourable: an outdated `combat_pending=1` keeps blocking dragging, and new click attempts postpone the very query that could correct this state.
 
-Trade-off: Polling ist einfach, robust und kann verpasste Updates heilen. Server-Push reduziert Leerlaufabfragen und Reaktionszeit, braucht aber Revisionen, Wiederanmeldung und eine vollständige Resynchronisation nach Lücken. Ein sinnvoller Zwischenschritt wäre nichtblockierendes Polling mit Zeitintervallen und höchstens einer ausstehenden Abfrage.
+Trade-off: polling is simple, robust and can heal missed updates. Server push reduces idle queries and reaction time, but needs revisions, re-registration and a complete resynchronisation after gaps. A sensible intermediate step would be non-blocking polling with time intervals and at most one pending query.
 
-### 2.3 Die Zustandsantwort ist teuerer als ein kleiner Status-Ping — belegt; Größenordnung ungemessen
+### 2.3 The state response is more expensive than a small status ping — proven; order of magnitude unmeasured
 
-`MatchService.get` lädt den Matchzustand, prüft Timeouts, kann Änderungen speichern und KI-Kampf fortsetzen, erzeugt eine gefilterte Spielersicht und sammelt sichtbare Kartendaten. Der Client konvertiert diese Antwort erneut in `MockState`. Auch unveränderte Matches durchlaufen damit relevante Arbeit.
+`MatchService.get` loads the match state, checks timeouts, can save changes and continue AI combat, creates a filtered player view and collects visible card data. The client converts this response again into `MockState`. Even unchanged matches therefore go through relevant work.
 
-Belege: [MatchService.get](../../../9rooms_v2/sources/match/match_service.aiml#L206), [Client-Konvertierung](../../../9rooms_v2/client/match_to_mock.aiml#L234).
+Evidence: [MatchService.get](../../../9rooms_v2/sources/match/match_service.aiml#L206), [client conversion](../../../9rooms_v2/client/match_to_mock.aiml#L234).
 
-Ein kompletter Snapshot ist leicht nachvollziehbar und heilt Abweichungen. Revisionen und Deltas sparen Bandbreite, Serialisierung und Projektion, verlangen aber eine definierte Reihenfolge, Baseline und Snapshot-Fallback. Auch statische Kartendefinitionen könnten getrennt von dynamischen Matchdaten versioniert werden.
+A complete snapshot is easy to follow and heals deviations. Revisions and deltas save bandwidth, serialisation and projection, but require a defined order, a baseline and a snapshot fallback. Static card definitions could also be versioned separately from dynamic match data.
 
-Die zweite Zustandsabfrage nach einer Aktion lässt sich **nicht blind** durch Verwendung der ersten Antwort streichen: Die Handler führen teilweise nach Erzeugung des Response-Objekts noch KI-/Auflösungsarbeit aus. Außerdem erstellt `get` die gefilterte Sicht samt `visible_cards`. Ein zusammengefasster Antwortvertrag müsste den endgültigen, für diesen Spieler gefilterten Zustand liefern.
+The second state query after an action can **not blindly** be dropped by using the first response: the handlers partly still do AI/resolution work after creating the response object. In addition, `get` creates the filtered view including `visible_cards`. A merged response contract would have to deliver the final state filtered for this player.
 
-Belege: [ConfirmPhaseHandler](../../../9rooms_v2/sources/game/rpc_handlers/match_play_handlers.aiml#L38), [AttackCreatureHandler](../../../9rooms_v2/sources/game/rpc_handlers/match_combat_handlers.aiml#L41).
+Evidence: [ConfirmPhaseHandler](../../../9rooms_v2/sources/game/rpc_handlers/match_play_handlers.aiml#L38), [AttackCreatureHandler](../../../9rooms_v2/sources/game/rpc_handlers/match_combat_handlers.aiml#L41).
 
-### 2.4 Server und nativer WebSocket-Pfad können andere Arbeit aufhalten — belegt
+### 2.4 The server and the native WebSocket path can hold up other work — proven
 
-Der Gameserver verarbeitet RPCs nacheinander in einer Schleife. KI-Aktionen und Regelauflösung laufen vor der Antwort; periodische Match-Ticks laufen ebenfalls dort. Ein langsamer Handler verzögert deshalb weitere Clients in diesem Prozess. Die tatsächliche Dauer dieser Arbeit wurde nicht gemessen.
+The game server processes RPCs one after another in a loop. AI actions and rule resolution run before the response; periodic match ticks also run there. A slow handler therefore delays further clients in this process. The actual duration of this work was not measured.
 
-Beleg: [Server-Schleife](../../../9rooms_v2/sources/game/game_server.aiml#L298).
+Evidence: [server loop](../../../9rooms_v2/sources/game/game_server.aiml#L298).
 
-Zusätzlich bedeutet `ws_poll(..., 0)` im nativen WS/WSS-Pfad nur, dass Daten bzw. ein Socket-Ereignis vorhanden sind. Anschließend liest `ws_recv_frame_raw` Header und vollständigen Payload mit blockierenden `ws_read_n`-Aufrufen. Ein Teilframe kann daher die gesamte Session-Pumpe blockieren. Auch der Schreibpfad schreibt synchron vollständig.
+Additionally, `ws_poll(..., 0)` in the native WS/WSS path only means that data or a socket event is present. Afterwards `ws_recv_frame_raw` reads the header and the complete payload with blocking `ws_read_n` calls. A partial frame can therefore block the entire session pump. The write path also writes synchronously and completely.
 
-Der aktuelle Accept-Pfad setzt bereits einen 10-s-Lesetimeout. Das begrenzt einzelne blockierende Reads, macht den Empfang aber nicht nichtblockierend und ist keine harte 10-s-Gesamtfrist für einen Frame. Die äußere RPC-Frist wird während eines darunter blockierenden Reads nicht laufend geprüft. Die 4-/5-s-RPC-Timeouts sind deshalb auf diesem Pfad keine garantierten maximalen Wandzeiten.
+The current accept path already sets a 10 s read timeout. That bounds individual blocking reads, but does not make receiving non-blocking and is not a hard 10 s total deadline for a frame. The outer RPC deadline is not checked continuously during a read blocking underneath. The 4/5 s RPC timeouts are therefore not guaranteed maximum wall times on this path.
 
-Belege: [Accept/Timeout](../../src/sys/ws_runtime.cpp#L615), [Low-level I/O](../../src/sys/ws_runtime.cpp#L424), [Frame-Empfang](../../src/sys/ws_runtime.cpp#L750), [Poll](../../src/sys/ws_runtime.cpp#L1172), [Mirror-Pumpe](../../src/sys/mirror_runtime.cpp#L882).
+Evidence: [accept/timeout](../../src/sys/ws_runtime.cpp#L615), [low-level I/O](../../src/sys/ws_runtime.cpp#L424), [frame receive](../../src/sys/ws_runtime.cpp#L750), [poll](../../src/sys/ws_runtime.cpp#L1172), [mirror pump](../../src/sys/mirror_runtime.cpp#L882).
 
-Abgrenzung: Der Browser-WebSocket-Empfang arbeitet mit bereits angekommenen Nachrichten; diese native Teilframe-Schwäche darf ihm nicht direkt zugeschrieben werden. Ein Browserclient kann ihre Folgen aber über den nativen Server spüren. Der Mirror-TCP-Pfad puffert bereits Teilpakete und arbeitet nichtblockierend. Auch die Annahme neuer WS-Verbindungen wird bereits schrittweise bearbeitet.
+Delimitation: browser WebSocket receiving works with messages that have already arrived; this native partial frame weakness must not be attributed to it directly. A browser client can, however, feel its consequences via the native server. The mirror TCP path already buffers partial packets and works non-blockingly. Accepting new WS connections is also already handled step by step.
 
-Trade-off: Ein inkrementeller Parser und gepufferte Writes brauchen mehr Zustand, Limits und Backpressure. Sie beseitigen jedoch das grundlegende Warten auf einen einzelnen Peer. Zusätzliche Threads können CPU-Arbeit entkoppeln, lösen diesen Vertrag nicht automatisch; Matchänderungen müssen weiterhin geordnet bleiben.
+Trade-off: an incremental parser and buffered writes need more state, limits and backpressure. They do, however, remove the fundamental waiting for a single peer. Additional threads can decouple CPU work, but do not automatically solve this contract; match changes must still stay ordered.
 
-## 3. Rendering und Frame-Taktung
+## 3. Rendering and frame timing
 
-### 3.1 Browser-Takt: Arbeitszeit plus 16 ms — belegt
+### 3.1 Browser timing: working time plus 16 ms — proven
 
-Die aktuelle WASM-Engine nutzt eine manuelle Asyncify-Schleife: `web_loop_tick`, danach `emscripten_sleep(16)`. Sie verwendet hier **nicht** `requestAnimationFrame`, obwohl einige App-Kommentare das noch nahelegen. Die Entscheidung ist als Workaround für frühere Asyncify/Main-loop-Probleme dokumentiert.
+The current WASM engine uses a manual Asyncify loop: `web_loop_tick`, then `emscripten_sleep(16)`. It does **not** use `requestAnimationFrame` here, although some app comments still suggest so. The decision is documented as a workaround for earlier Asyncify/main loop problems.
 
-Die Wartezeit kommt zusätzlich zur Frame-Arbeit. Rechnerisch ergeben 5 ms Arbeit plus 16 ms Schlaf rund 48 FPS, 10 ms plus 16 ms rund 38 FPS; Browser-Scheduling kann davon abweichen. Der Timer ist zudem nicht direkt an die Bildschirmpräsentation gekoppelt. Native Frames verwenden hingegen Swap/Poll und einen Restbudget-Limiter.
+The waiting time comes on top of the frame work. Arithmetically, 5 ms of work plus 16 ms of sleep give around 48 FPS, 10 ms plus 16 ms around 38 FPS; browser scheduling can deviate from that. The timer is moreover not directly coupled to the screen presentation. Native frames, on the other hand, use swap/poll and a remaining-budget limiter.
 
-Beleg: [Tatsächliche Loop-Implementierung](../../src/sys/engine_runtime.cpp#L503).
+Evidence: [actual loop implementation](../../src/sys/engine_runtime.cpp#L503).
 
-Trade-off: Der Workaround stabilisiert den beschriebenen Ablauf, kostet aber Taktqualität. Eine spätere Umstellung auf browsergesteuerte Frames sollte mit Entfernung der suspendierenden Arbeit aus Frame-Callbacks erfolgen und die dokumentierten Freeze-Szenarien erneut prüfen. Ein isolierter Austausch der Schleife wäre riskant.
+Trade-off: the workaround stabilises the described flow, but costs timing quality. A later switch to browser-driven frames should go together with removing the suspending work from frame callbacks and should re-check the documented freeze scenarios. An isolated swap of the loop would be risky.
 
-### 3.2 Vollständige Board-Rebuilds — belegt
+### 3.2 Complete board rebuilds — proven
 
-`reload` zerstört unter anderem Hintergrund, Phasenpanel, Handkarten, Zonen, Feldkarten, Vorschau und zahlreiche Overlays. Der nächste `render` initialisiert sie wieder. Erfolgreiche Aktionen erzwingen diesen Weg oft direkt.
+`reload` destroys, among other things, the background, phase panel, hand cards, zones, field cards, preview and numerous overlays. The next `render` initialises them again. Successful actions often force this path directly.
 
-Beleg: [BoardScreen.reload](../../../9rooms_v2/client/board_screen.aiml#L460).
+Evidence: [BoardScreen.reload](../../../9rooms_v2/client/board_screen.aiml#L460).
 
-Positiv: Periodische Polls vergleichen bereits eine Inhaltssignatur; Tap- und Angreiferanzeigen können ohne Rebuild aktualisiert werden. Floats bleiben beim Reload erhalten. Es wird also nicht bei jedem Frame oder jedem Poll alles neu erzeugt.
+Positive: periodic polls already compare a content signature; tap and attacker displays can be updated without a rebuild. Floats are preserved on reload. So not everything is recreated on every frame or every poll.
 
-Die Granularität bleibt trotzdem grob: Änderungen an Stats können das gesamte Board neu aufbauen. Das erzeugt CPU-/Allokationsspitzen und zerstört visuelle Identität, Hover-Bezüge und potenziell Interaktions-Handles. Der Drag-Schutz existiert ausdrücklich im periodischen Poll-Pfad und ist kein allgemeiner Vertrag für jede Zustandsübernahme.
+The granularity nevertheless stays coarse: stat changes can rebuild the whole board. That creates CPU/allocation spikes and destroys visual identity, hover references and potentially interaction handles. The drag protection exists explicitly in the periodic poll path and is not a general contract for every state takeover.
 
-Trade-off: Vollaufbau vereinfacht Konsistenz. Ein Abgleich über stabile Karten-Instanz-IDs hält Objekte und Gesten stabil, verlangt aber explizite Updates für Position, Stats, Ausstattung und Sichtbarkeit. Ein Zwischenweg wären begrenzte Aktualisierungen einzelner Zonen oder Karten.
+Trade-off: a full rebuild simplifies consistency. Reconciliation via stable card instance IDs keeps objects and gestures stable, but requires explicit updates for position, stats, equipment and visibility. A middle way would be limited updates of individual zones or cards.
 
-### 3.3 Rendering verarbeitet auch Eingaben — belegt
+### 3.3 Rendering also processes input — proven
 
-`BoardScreen.render` ruft `apply_drag`, Phasen-Check, Tastaturaktionen, Zielauswahl und Ability-UI auf. Nach einer erfolgreichen Aktion wird dieselbe Methode innerhalb desselben App-Frames erneut aufgerufen. Das ist keine reine Darstellung. Einzelne Pfade besitzen bereits Latches gegen doppelte Verarbeitung, aber diese Schutzlogik ist verteilt.
+`BoardScreen.render` calls `apply_drag`, the phase check, keyboard actions, target selection and the ability UI. After a successful action the same method is called again within the same app frame. That is not pure rendering. Individual paths already have latches against double processing, but this protection logic is scattered.
 
-Beleg: [BoardScreen.render](../../../9rooms_v2/client/board_screen.aiml#L675).
+Evidence: [BoardScreen.render](../../../9rooms_v2/client/board_screen.aiml#L675).
 
-Risiko: Ein Eingabeereignis kann auf einen neuen Zustand oder neu erzeugte Widgets erneut angewendet werden. Nach einem Reload liegt die globale Szene außerdem noch nicht zwingend in der vom nächsten Draw hergestellten Z-Reihenfolge vor. Eine saubere Reihenfolge wäre: Eingabesnapshot einmal verarbeiten, Ergebnisse übernehmen, Layout aktualisieren, zeichnen.
+Risk: an input event can be applied again to a new state or to newly created widgets. After a reload, the global scene is moreover not necessarily yet in the z order established by the next draw. A clean order would be: process the input snapshot once, take over the results, update the layout, draw.
 
-### 3.4 CPU-/GPU-Arbeit: plausible Zusatzkosten, kein nachgewiesenes GPU-Limit
+### 3.4 CPU/GPU work: plausible additional costs, no proven GPU limit
 
-Die Prefab-Runtime sortiert die globale Instanzliste in jedem Draw, kopiert sie für eine sichere Traversierung und synchronisiert Container/Cascade-Inhalte während des Renderns. Viele lokale Batches führen eigene Buffer-Uploads, Uniform-Abfragen, Texture-Bindings und Draw Calls aus. Text und komplexe Karten erhöhen diese Arbeit.
+The prefab runtime sorts the global instance list in every draw, copies it for safe traversal and synchronises container/cascade contents during rendering. Many local batches perform their own buffer uploads, uniform queries, texture bindings and draw calls. Text and complex cards increase this work.
 
-Belege: [draw_scene](../../src/sys/prefab_runtime.cpp#L5217), [render_instance](../../src/sys/prefab_runtime.cpp#L2104), [flush_batch](../../src/sys/prefab_runtime.cpp#L971).
+Evidence: [draw_scene](../../src/sys/prefab_runtime.cpp#L5217), [render_instance](../../src/sys/prefab_runtime.cpp#L2104), [flush_batch](../../src/sys/prefab_runtime.cpp#L971).
 
-Positiv: Texturen, Fonts und Materialprogramme haben Caches; unsichtbare Instanzen werden beim eigentlichen Rendern übersprungen. Ein Board-Rebuild bedeutet deshalb nicht automatisch erneutes Laden aller Texturen.
+Positive: textures, fonts and material programs have caches; invisible instances are skipped during the actual rendering. A board rebuild therefore does not automatically mean reloading all textures.
 
-Trade-offs: Dirty-Flags sparen Sortierung/Layout, benötigen verlässliche Invalidierung. Größere Batches reduzieren API-Aufrufe, dürfen aber transparente Zeichenreihenfolge, Clipping und Materialien nicht verfälschen. Diese Optimierungen sollten nach CPU-/GPU-Messung priorisiert werden. Für die aktionsgebundenen Pausen ist der synchrone Kontrollfluss wesentlich direkter belegt.
+Trade-offs: dirty flags save sorting/layout, but need reliable invalidation. Larger batches reduce API calls, but must not falsify transparent draw order, clipping and materials. These optimisations should be prioritised after a CPU/GPU measurement. For the action-bound pauses, the synchronous control flow is proven much more directly.
 
-### 3.5 Artwork kann beim Kartenaufbau synchron nachgeladen werden — belegt
+### 3.5 Artwork can be loaded synchronously during card construction — proven
 
-Token- und CardFull-Aufbau rufen `art_ensure` auf. Bei Cache-Miss folgen Verbindungsaufbau, Header-/Chunk-Empfang, Bilddekodierung und Texturregistrierung synchron. Eine neue Karte kann dadurch eine zusätzliche Pause verursachen. Bereits gecachte Bilder vermeiden den Transfer; das ist keine Erklärung für jeden wiederholten Klick.
+Token and CardFull construction call `art_ensure`. On a cache miss, connection setup, header/chunk receipt, image decoding and texture registration follow synchronously. A new card can therefore cause an additional pause. Already cached images avoid the transfer; this is not an explanation for every repeated click.
 
-Belege: [Token-Aufbau](../../../9rooms_v2/client/board_widgets.aiml#L42), [Artwork-Fetch](../../../9rooms_v2/client/net/card_art_cache.aiml#L84).
+Evidence: [token construction](../../../9rooms_v2/client/board_widgets.aiml#L42), [artwork fetch](../../../9rooms_v2/client/net/card_art_cache.aiml#L84).
 
-Ein Platzhalter mit Hintergrundladen würde den Aufbau entkoppeln. Dafür müssen Fehler, Wiederholungen, Ladepriorität und Speicherbudget explizit verwaltet werden.
+A placeholder with background loading would decouple the construction. For that, errors, retries, load priority and the memory budget must be managed explicitly.
 
-## 4. Drag-and-drop: konkrete Fehlerklassen
+## 4. Drag-and-drop: concrete error classes
 
-### 4.1 Ein schneller Drag kann vollständig zwischen zwei Spiel-Updates liegen
+### 4.1 A fast drag can lie completely between two game updates
 
-Die Browser-Eingabe speichert Press/Release-Flanken, aber `engine.update_drag` startet anhand von `btn_down`. Erfolgen Drücken und Loslassen während eines blockierten Frames, kann der nächste Snapshot gleichzeitig beide Flanken und `button=0` enthalten. Dann startet kein Prefab-Drag. Beginnt die Verarbeitung erst nach einer Mausbewegung, wird außerdem die aktuelle Position statt einer gespeicherten Press-Position zum Auswählen der Karte verwendet.
+Browser input stores press/release edges, but `engine.update_drag` starts based on `btn_down`. If pressing and releasing happen during a blocked frame, the next snapshot can contain both edges and `button=0` at the same time. Then no prefab drag starts. If processing only begins after a mouse movement, the current position instead of a stored press position is additionally used to select the card.
 
-Belege: [Browser-Snapshot](../../src/sys/input_runtime.cpp#L1491), [Browser-Mousedown](../../src/sys/input_runtime.cpp#L1051), [Prefab-Drag](../../src/sys/prefab_runtime.cpp#L6763).
+Evidence: [browser snapshot](../../src/sys/input_runtime.cpp#L1491), [browser mousedown](../../src/sys/input_runtime.cpp#L1051), [prefab drag](../../src/sys/prefab_runtime.cpp#L6763).
 
-**Das ist eine konkrete, zum Symptom passende Möglichkeit, keine Reproduktion deines Falls.** Das entgegengesetzte Verhalten ist ebenfalls möglich: Bei bereits gehaltener Taste startet ein Drag erst beim späteren Hineinfahren über eine Karte. Es gibt in diesem Prefab-Pfad keine vorgeschaltete Press-Kandidat-/Bewegungsschwellen-Phase.
+**This is a concrete possibility matching the symptom, not a reproduction of your case.** The opposite behaviour is possible too: with the button already held, a drag only starts when later moving over a card. In this prefab path there is no preceding press candidate/movement threshold phase.
 
-### 4.2 Kampfreaktionen sperren alle Drags
+### 4.2 Combat reactions lock all drags
 
-Bei `combat_pending=1` wird ein vorhandener Drag abgebrochen und vor `engine.update_drag` zurückgekehrt. Damit soll ein Reaktionsklick nicht versehentlich zum Drag werden. Das ist absichtliche Spiellogik, wirkt ohne eindeutig erkennbaren Sperrgrund aber wie ein Eingabefehler. Ein durch Polling veralteter Zustand kann die Sperre länger sichtbar halten.
+With `combat_pending=1`, an existing drag is aborted and the code returns before `engine.update_drag`. This is meant to keep a reaction click from accidentally becoming a drag. That is deliberate game logic, but without a clearly recognisable reason for the lock it looks like an input bug. A state made stale by polling can keep the lock visible for longer.
 
-Beleg: [BoardDragController.apply_drag](../../../9rooms_v2/client/board_drag_controller.aiml#L443).
+Evidence: [BoardDragController.apply_drag](../../../9rooms_v2/client/board_drag_controller.aiml#L443).
 
-### 4.3 Aufnahme und Ablage haben unterschiedliche Regeln
+### 4.3 Pick-up and drop have different rules
 
-Die Aufnahme durchsucht rückwärts alle sichtbaren, draggbaren Instanzen und berücksichtigt verschachtelte Transformationen. Nichtdraggbarer Vordergrund wird dabei übersprungen: Ein Overlay ist damit nicht automatisch eine Eingabesbarriere.
+The pick-up searches all visible, draggable instances backwards and takes nested transformations into account. Non-draggable foreground is skipped in the process: an overlay is therefore not automatically an input barrier.
 
-Die Ablage nutzt dagegen `hit_test`: nur Top-level-Instanzen, rechteckige Bounds, erstes sichtbares Objekt. Ein dekoratives Objekt kann deshalb das eigentliche Ziel verdecken. Rotation wird dort nicht in eine präzise gedrehte Trefferfläche umgesetzt. Beide Pfade verlassen sich auf die zuletzt sortierte Instanzliste; Z-Änderungen werden erst beim Zeichnen sortiert.
+The drop, on the other hand, uses `hit_test`: only top-level instances, rectangular bounds, first visible object. A decorative object can therefore cover the actual target. Rotation is not turned into a precisely rotated hit area there. Both paths rely on the last sorted instance list; z changes are only sorted when drawing.
 
-Belege: [Aufnahme](../../src/sys/prefab_runtime.cpp#L6763), [hit_test](../../src/sys/prefab_runtime.cpp#L5474), [Drop-Auswertung](../../../9rooms_v2/client/board_drag_controller.aiml#L220).
+Evidence: [pick-up](../../src/sys/prefab_runtime.cpp#L6763), [hit_test](../../src/sys/prefab_runtime.cpp#L5474), [drop evaluation](../../../9rooms_v2/client/board_drag_controller.aiml#L220).
 
-Das beweist nicht, dass ein bestimmtes Overlay deinen Drag blockierte. Es belegt aber fehlende einheitliche Regeln für Vordergrund, Durchklickbarkeit und Drop-Ziele.
+That does not prove that a particular overlay blocked your drag. It does, however, prove that uniform rules for foreground, click-through and drop targets are missing.
 
-### 4.4 Die gezogene Karte ist nicht zwingend der serverseitige Angreifer
+### 4.4 The dragged card is not necessarily the server-side attacker
 
-Feldkarten werden grundsätzlich mit `draggable=1` erzeugt, auch gegnerische. Beim Kreatur-auf-Kreatur-Drop wird für den Live-Angriff im Wesentlichen die Ziel-ID vorgemerkt; `AttackCreatureReq` enthält keine Quell-ID. Der Server benutzt seinen aktuellen Angreifer. Dadurch kann die visuelle Geste etwas anderes ausdrücken als das Kommando — oder erst serverseitig abgelehnt werden.
+Field cards are always created with `draggable=1`, including the opponent's. On a creature-on-creature drop, essentially only the target ID is noted for the live attack; `AttackCreatureReq` contains no source ID. The server uses its current attacker. The visual gesture can therefore express something other than the command — or only be rejected on the server side.
 
-Belege: [Feldkartenaufbau](../../../9rooms_v2/client/board_base.aiml#L244), [Drop-Regeln](../../../9rooms_v2/client/board_drag_controller.aiml#L305), [Request-Modell](../../../9rooms_v2/sources/models/match_play_reqs.aiml#L43).
+Evidence: [field card construction](../../../9rooms_v2/client/board_base.aiml#L244), [drop rules](../../../9rooms_v2/client/board_drag_controller.aiml#L305), [request model](../../../9rooms_v2/sources/models/match_play_reqs.aiml#L43).
 
-Serverautorität ist richtig. Für eindeutige Bedienung sollte trotzdem die beim Greifen gemeinte Quell-ID samt Zustandsrevision überprüfbar sein; erlaubte Gesten und Ablehnungsgründe sollten bereits lokal sichtbar werden.
+Server authority is right. For unambiguous operation, the source ID meant when grabbing should nevertheless be verifiable together with a state revision; allowed gestures and rejection reasons should already become visible locally.
 
-### 4.5 Zusätzliche Robustheitslücken
+### 4.5 Additional robustness gaps
 
-Der Prefab-Drag endet bei `btn_released`, nicht generell bei verlorenem Kontakt. Browser-Mouseup ist bereits fensterweit registriert, Touchcancel ebenfalls; das sind vorhandene Verbesserungen. In der untersuchten Input-Runtime fehlt jedoch ein allgemeiner Blur-/Visibility-Reset für gehaltene Tasten und Drags. Fokusverlust bleibt damit ein Prüfpunkt.
+The prefab drag ends on `btn_released`, not generally on lost contact. Browser mouseup is already registered window-wide, touchcancel too; those are existing improvements. In the examined input runtime, however, a general blur/visibility reset for held buttons and drags is missing. Focus loss therefore remains a check point.
 
-Die Board-Logik wertet Bewegungen unter 12 Pixeln als möglichen Pin-Klick statt Drop. Diese Entscheidung erfolgt nach dem Start des Drags und ist nicht ausdrücklich auf Touch beschränkt. Kurze Mausgesten können deshalb als Ability-Pinning erscheinen. Der Schwellwert verwendet Bildschirmkoordinaten, während Teile des Layouts Designkoordinaten verwenden.
+The board logic treats movements under 12 pixels as a possible pin click instead of a drop. This decision is made after the drag has started and is not explicitly restricted to touch. Short mouse gestures can therefore appear as ability pinning. The threshold uses screen coordinates, while parts of the layout use design coordinates.
 
-Trade-off: Eine gemeinsame Gestenmaschine mit Press-Ursprung, Pointer-ID, Capture, Schwelle und explizitem Cancel benötigt mehr Zustände. Sie macht Aufnahme, Bewegung, Drop, Tap und Abbruch dafür nachvollziehbar und unabhängig von temporären Prefab-Adressen.
+Trade-off: a shared gesture machine with press origin, pointer ID, capture, threshold and explicit cancel needs more states. In return it makes pick-up, movement, drop, tap and abort traceable and independent of temporary prefab addresses.
 
-## 5. Prioritäten und Architekturentscheidung
+## 5. Priorities and architecture decision
 
-| Priorität | Maßnahme für eine spätere Umsetzung | Nutzen | Aufwand / Trade-off |
+| Priority | Measure for a later implementation | Benefit | Effort / trade-off |
 |---|---|---|---|
-| P0 | Aktions-RPCs und Board-Poll nichtblockierend; UI-Pendingzustand | Frames laufen während Netzwerkwartezeit weiter | Explizite Request-Lebenszyklen und Fehleranzeige |
-| P0 | Native WS/WSS-Reads und Writes inkrementell, mit Budgets | Ein Peer hält die Session nicht an | Parserzustand, Queues, Limits, Backpressure |
-| P1 | Eingabe einmal je Frame; Drag an Press-Ursprung und stabile ID binden | Zuverlässiges Greifen, keine erneute Eingabe bei Rebuild | Zentrale Gesten-/Event-Verarbeitung |
-| P1 | Aktionsantwort nach sämtlicher Folgearbeit, gefiltert und versioniert | Weniger sequenzielle Roundtrips | Einheitlicher Response-Vertrag |
-| P1 | Browser-Frameplanung nach Entkopplung der RPCs überarbeiten | Gleichmäßigerer Takt | Asyncify-Regressionsprüfung |
-| P1 | Karten/Board inkrementell aktualisieren; Artwork asynchron | Weniger CPU-Spitzen und Handle-Wechsel | Gezielte Invalidierung und Cache-Lebenszyklus |
-| P2 | Push/Revisionen/Deltas plus Snapshot-Fallback | Frischer Zustand, weniger wiederholte Daten | Reconnect und Lückenbehandlung |
-| P2 | Renderer-Batching, Dirty-Sort und Layout-Caches nach Profiling | Niedrigere Grundkosten | Komplexere Renderverwaltung |
+| P0 | action RPCs and board poll non-blocking; UI pending state | frames keep running during network waiting time | explicit request lifecycles and error display |
+| P0 | native WS/WSS reads and writes incremental, with budgets | one peer does not stop the session | parser state, queues, limits, backpressure |
+| P1 | input once per frame; bind the drag to the press origin and a stable ID | reliable grabbing, no repeated input on rebuild | central gesture/event processing |
+| P1 | action response after all follow-up work, filtered and versioned | fewer sequential round trips | uniform response contract |
+| P1 | rework browser frame planning after decoupling the RPCs | more even timing | Asyncify regression check |
+| P1 | update cards/board incrementally; artwork asynchronous | fewer CPU spikes and handle changes | targeted invalidation and cache lifecycle |
+| P2 | push/revisions/deltas plus snapshot fallback | fresh state, less repeated data | reconnect and gap handling |
+| P2 | renderer batching, dirty sort and layout caches after profiling | lower base costs | more complex render management |
 
-WebSocket/WSS ist für ein rundenbasiertes Spiel grundsätzlich eine passende Grundlage. Ein Wechsel zu UDP, WebRTC oder HTTP würde die synchron wartende App und die vollständigen Rebuilds nicht beseitigen. Zunächst sind Kontrollfluss, Zustandsvertrag und Eingabeverarbeitung entscheidend.
+WebSocket/WSS is fundamentally a suitable foundation for a turn-based game. A switch to UDP, WebRTC or HTTP would not remove the synchronously waiting app and the complete rebuilds. First of all, control flow, state contract and input processing are decisive.
 
-Vollständige optimistische Spielsimulation ist dafür nicht erforderlich: Lokales Greifen, Hover, Pending-Indikator und eine Vorschau können sofort reagieren, während der Server den Zug entscheidet. Bei komplexen Effekten und verdeckten Informationen wäre vollständige Vorhersage deutlich aufwendiger und müsste sichtbare Rollbacks beherrschen.
+Complete optimistic game simulation is not required for this: local grabbing, hover, a pending indicator and a preview can react immediately while the server decides the move. With complex effects and hidden information, complete prediction would be considerably more laborious and would have to handle visible rollbacks.
 
-Bei asynchroner Umstellung muss ein Timeout als „Ausgang unklar“ behandelt werden. Transport-Request-IDs ersetzen keine fachliche Idempotenz. `ConfirmPhaseReq` enthält beispielsweise keine erwartete Phase/Runde; ein unbedachter Retry kann auf einen inzwischen fortgeschrittenen Zustand treffen. Aktions-ID und erwartete Revision sollten deshalb Teil des Entwurfs sein.
+When switching to asynchronous operation, a timeout must be treated as "outcome unclear". Transport request IDs do not replace domain-level idempotence. `ConfirmPhaseReq`, for example, contains no expected phase/round; a careless retry can hit a state that has meanwhile advanced. An action ID and an expected revision should therefore be part of the design.
 
-## 6. Was vor einer Umsetzung gemessen werden sollte
+## 6. What should be measured before an implementation
 
-Es wurden keine Benchmarks oder Live-Spiele gestartet. Für die Zuordnung der tatsächlichen Kosten wäre ein gemeinsamer Trace über folgende Zeitpunkte ausreichend:
+No benchmarks or live games were started. To attribute the actual costs, a shared trace over the following points in time would be sufficient:
 
-- Physisches Press/Release → Eingabesnapshot → Drag-Kandidat → sichtbarer Drag.
-- Klick/Drop → Request gesendet → Server empfangen → Handler/KI fertig → Antwort empfangen.
-- Decode → MockState-Konvertierung → Board-Abgleich/Rebuild → Draw → nächster präsentierter Frame.
-- Je Aktion: Zahl der RPCs, Antwortbytes, erstellte/zerstörte Prefabs, Draw Calls und Artwork-Cache-Misses.
+- physical press/release → input snapshot → drag candidate → visible drag.
+- click/drop → request sent → server received → handler/AI done → response received.
+- decode → MockState conversion → board reconciliation/rebuild → draw → next presented frame.
+- per action: number of RPCs, response bytes, created/destroyed prefabs, draw calls and artwork cache misses.
 
-Wichtiger als durchschnittliche FPS sind Roh-Framezeiten und lange Ausreißer. Die Engine begrenzt `dt` vor der FPS-Mittelung auf 100 ms; dieser bestehende FPS-Wert bildet lange Hänger daher nicht vollständig ab ([Engine-Timing](../../src/sys/engine_runtime.cpp#L373)).
+More important than average FPS are raw frame times and long outliers. The engine caps `dt` at 100 ms before FPS averaging; this existing FPS value therefore does not fully reflect long hangs ([engine timing](../../src/sys/engine_runtime.cpp#L373)).
 
-Gezielte Szenarien: Phasencheck und Angriff bei 0/50/150 ms Zusatzlatenz; schneller vollständiger Drag während einer RPC-Wartezeit; Wechsel von `combat_pending`; langes Festhalten über einen Poll-Termin; Fokusverlust; Drop unter einem Overlay; kalter und warmer Artwork-Cache; zwei Clients mit einem absichtlich verzögerten WS-Teilframe. Letzteres gehört in eine isolierte Testumgebung.
+Targeted scenarios: phase check and attack at 0/50/150 ms additional latency; a fast complete drag during an RPC wait; a change of `combat_pending`; long holding across a poll deadline; focus loss; a drop under an overlay; cold and warm artwork cache; two clients with a deliberately delayed WS partial frame. The latter belongs in an isolated test environment.
 
-Als Erfolgskriterien sollten getrennt gelten: sofortiges lokales Eingabefeedback, weiterlaufende Frames während Requests, eindeutig sichtbare Pending-/Fehlerzustände und keine verlorene oder doppelt ausgeführte Geste. Die serverseitige Zugbestätigung darf weiterhin Netzlatenz benötigen.
+The success criteria should apply separately: immediate local input feedback, frames that keep running during requests, clearly visible pending/error states and no lost or doubly executed gesture. The server-side move confirmation may still need network latency.
 
-## 7. Konkrete Fix-Möglichkeiten
+## 7. Concrete fix options
 
-Die folgenden Vorschläge sind Entwürfe für eine spätere Implementierung. Sie wurden nicht umgesetzt oder getestet. „Klein“, „mittel“ und „groß“ bezeichnen den relativen Eingriff in die Architektur, keine belastbare Aufwandsschätzung. Jeder Fix nennt eine begrenzte Einstiegslösung und, wo sinnvoll, einen weitergehenden Ausbau.
+The following proposals are drafts for a later implementation. They were neither implemented nor tested. "Small", "medium" and "large" denote the relative intervention in the architecture, not a reliable effort estimate. Each fix names a limited entry solution and, where sensible, a further-reaching expansion.
 
-### F1 — Aktions-RPCs aus dem Frame-Wartepfad entfernen
+### F1 — remove action RPCs from the frame waiting path
 
-**Betrifft:** `client/main_menu_app.aiml`, `client/net/match_rpc.aiml`; Befunde 1 und 2.1. **Eingriff: mittel.**
+**Concerns:** `client/main_menu_app.aiml`, `client/net/match_rpc.aiml`; findings 1 and 2.1. **Intervention: medium.**
 
-Für `confirm_phase`, `attack_creature` und `attack_soulmage` zuerst asynchrone Send-Wrapper nach dem vorhandenen Muster `net_get_match_state_send` ergänzen. Die App speichert Request-ID, Aktion, Match-ID, Startzeit und den lokalen Kontext. Pro Frame prüft sie mit `take_response`, ob ein Ergebnis vorliegt, und kehrt sofort zurück, solange nichts angekommen ist.
+For `confirm_phase`, `attack_creature` and `attack_soulmage`, first add asynchronous send wrappers following the existing pattern `net_get_match_state_send`. The app stores the request ID, action, match ID, start time and the local context. Per frame it checks with `take_response` whether a result is available, and returns immediately as long as nothing has arrived.
 
-Der Aktionsablauf erhält explizite Zustände: bereit → ausstehend → Zustandsabgleich → fertig beziehungsweise Fehler/Ausgang unklar. Als erste, überschaubare Variante bleibt höchstens eine zustandsändernde Aktion pro Match gleichzeitig ausstehend. Hover, Vorschau und unabhängige UI-Bedienung bleiben verfügbar. Abhängige Spielaktionen werden sichtbar gesperrt. Eine zweite asynchrone Zustandsabfrage darf zunächst bleiben; F3 beseitigt sie später.
+The action flow gets explicit states: ready → pending → state reconciliation → done, or error/outcome unclear. As a first, manageable variant, at most one state-changing action per match stays pending at a time. Hover, preview and independent UI operation remain available. Dependent game actions are visibly locked. A second asynchronous state query may stay for now; F3 removes it later.
 
-Beim Phasencheck wird unmittelbar „Bestätigung wird gesendet“ dargestellt. Der echte Server-Ack bleibt davon getrennt. Ablehnung und Verbindungsfehler werden am Board angezeigt. Ein lokales Pending-Symbol darf nicht als bereits erfolgter Phasenwechsel erscheinen.
+For the phase check, "confirmation is being sent" is shown immediately. The real server ack stays separate from that. Rejection and connection errors are shown on the board. A local pending symbol must not appear as an already completed phase change.
 
-**Wichtig:** Die Request-Zuordnung muss auch beim Verlassen des Matches oder bei Reconnect auslaufen können. Dafür eine lokale Sitzungs-/Ansichtsgeneration mitspeichern und Antworten alter Generationen nicht mehr auf die neue Ansicht anwenden. Ein Timeout darf keinen automatischen erneuten Spielzug auslösen; bis F3 existiert, erst den Zustand abgleichen beziehungsweise die Unsicherheit anzeigen.
+**Important:** the request assignment must also be able to expire when leaving the match or on reconnect. For that, also store a local session/view generation and no longer apply responses of old generations to the new view. A timeout must not trigger an automatic repeated game move; until F3 exists, reconcile the state first or show the uncertainty.
 
-**Prüfung:** Bei 150 ms Zusatzlatenz und bei ausbleibender Antwort laufen Hover und Animation weiter. Doppelklick sendet keine zweite identische Aktion. Eine Antwort für ein verlassenes Match verändert das aktuelle Board nicht. Fehler beenden den Pendingzustand nachvollziehbar.
+**Check:** at 150 ms additional latency and with a missing response, hover and animation keep running. A double click does not send a second identical action. A response for a left match does not change the current board. Errors end the pending state traceably.
 
-### F2 — Board-Polling zeitbasiert und unabhängig vom Drag machen
+### F2 — make board polling time-based and independent of the drag
 
-**Betrifft:** `poll_board_state`, `sync_board_poll`; Befund 2.2. **Eingriff: mittel.**
+**Concerns:** `poll_board_state`, `sync_board_poll`; finding 2.2. **Intervention: medium.**
 
-Die Framezähler durch monotone Zeitpunkte ersetzen. Einen Poll senden, wenn das Intervall abgelaufen ist und noch keiner aussteht; Antworten in späteren Frames übernehmen. Keine nachträgliche Serie „verpasster“ Polls senden. Das konkrete Intervall anhand der gemessenen Last und gewünschten Reaktionszeit wählen.
+Replace the frame counters with monotonic points in time. Send a poll when the interval has elapsed and none is pending yet; take over responses in later frames. Do not send a retroactive series of "missed" polls. Choose the concrete interval based on the measured load and the desired reaction time.
 
-Netzempfang und visuelle Aktualisierung trennen: Auch während eines Drags darf eine Antwort eingehen. Solange F6 noch nicht implementiert ist, kann der neueste Snapshot zwischengespeichert und der destruktive Board-Rebuild bis zum Gestenende verschoben werden. Entfernt der neue Zustand die gezogene Karte oder beendet die zulässige Interaktion, die Geste explizit abbrechen und den Snapshot anwenden. Dadurch wird ein langes Festhalten nicht zur dauerhaften Zustandsblockade.
+Separate network receipt and visual update: a response may also arrive during a drag. As long as F6 is not implemented yet, the newest snapshot can be buffered and the destructive board rebuild postponed until the end of the gesture. If the new state removes the dragged card or ends the permitted interaction, abort the gesture explicitly and apply the snapshot. That way long holding does not become a permanent state blockade.
 
-Ohne Serverrevisionen sollte ein alter, bereits laufender Poll nicht nach einer erfolgreichen Mutation deren neueren Zustand überschreiben: eine lokale Anforderungsgeneration nutzen und anschließend eine frische Abfrage starten. Mit F3 entscheidet die Serverrevision über die Reihenfolge.
+Without server revisions, an old, already running poll should not overwrite the newer state of a successful mutation: use a local request generation and then start a fresh query. With F3, the server revision decides the order.
 
-**Trade-off:** Das Zwischenspeichern ist eine Übergangslösung und kann Darstellung kurz verzögern. Mit stabilen Board-Objekten lassen sich Updates feiner übernehmen. Ein kürzeres Pollintervall allein verschärft dagegen Last und bisherige Frame-Pausen.
+**Trade-off:** the buffering is a transitional solution and can briefly delay rendering. With stable board objects, updates can be taken over more finely. A shorter poll interval alone, on the other hand, worsens the load and the existing frame pauses.
 
-**Prüfung:** Vergleichbare Aktualisierungsintervalle bei 30 und 60 FPS; höchstens ein laufender Poll; Gegnerzustand wird trotz wiederholter Klicks empfangen; kein Zugriff auf zerstörte Drag-Objekte.
+**Check:** comparable update intervals at 30 and 60 FPS; at most one running poll; the opponent's state is received despite repeated clicks; no access to destroyed drag objects.
 
-### F3 — Eindeutiger, versionierter Aktionsvertrag
+### F3 — an unambiguous, versioned action contract
 
-**Betrifft:** Request-/Response-Modelle, Match-Handler, Match-Service und Client; Befunde 2.3 und 4.4. **Eingriff: mittel bis groß.**
+**Concerns:** request/response models, match handlers, match service and client; findings 2.3 and 4.4. **Intervention: medium to large.**
 
-Eine Aktion erhält eine fachliche `action_id` und einen erwarteten Spielkontext. Für den Phasencheck sind Phase und Runde besonders wichtig; ein Angriff trägt zusätzlich die tatsächlich gewählte `source_iid`. Der Server validiert diese Quelle gegen seinen aktuellen Angreifer. Bei einer Abweichung lehnt er nachvollziehbar ab, statt die Geste still auf eine andere Kreatur zu beziehen.
+An action gets a domain-level `action_id` and an expected game context. For the phase check, phase and round are particularly important; an attack additionally carries the actually chosen `source_iid`. The server validates this source against its current attacker. On a mismatch it rejects traceably instead of silently applying the gesture to a different creature.
 
-Ein monotoner Match-Revisionswert wird bei relevanten Zustandsänderungen fortgeschrieben, einschließlich Änderungen durch Timer und KI. Die Antwort enthält Aktionsergebnis und Revision. Für einen einfacheren ersten Vertrag darf eine Änderung der erwarteten Revision zur Ablehnung mit frischem Zustand führen. Später können aktionsspezifische Vorbedingungen unnötige Ablehnungen bei unabhängigen Änderungen vermeiden.
+A monotonic match revision value is advanced on relevant state changes, including changes by timers and AI. The response contains the action result and the revision. For a simpler first contract, a change of the expected revision may lead to a rejection with a fresh state. Later, action-specific preconditions can avoid unnecessary rejections on independent changes.
 
-Nach der zum Request gehörenden Folgearbeit wird der endgültige Zustand neu gelesen und über eine gemeinsame, **rein lesende**, spielerbezogene Projektion ausgegeben. Diese Projektion sollte aus dem bestehenden `get`-Pfad herausgelöst werden: `get` unverändert aufzurufen könnte erneut Timer-/KI-Arbeit auslösen. Die Antwort muss dieselbe Sichtbarkeitsfilterung und benötigte Kartendaten wie der bisherige Snapshot besitzen. Erst danach kann der Client den zusätzlichen `get_match_state`-Roundtrip streichen.
+After the follow-up work belonging to the request, the final state is re-read and output via a shared, **purely reading**, player-specific projection. This projection should be extracted from the existing `get` path: calling `get` unchanged could trigger timer/AI work again. The response must have the same visibility filtering and required card data as the previous snapshot. Only then can the client drop the additional `get_match_state` round trip.
 
-Für Retries speichert der Server das Ergebnis einer `action_id`, gebunden an Spieler und Match. Mutation und Deduplizierungsentscheidung müssen zusammen konsistent sein. Soll der Schutz auch Serverneustarts überstehen, reicht ein flüchtiger Cache nicht. Aufbewahrungsdauer, Speicherlimit und Verhalten nach Ablauf explizit festlegen.
+For retries, the server stores the result of an `action_id`, bound to the player and match. Mutation and deduplication decision must be consistent together. If the protection is also to survive server restarts, a volatile cache is not enough. Define the retention period, memory limit and behaviour after expiry explicitly.
 
-**Prüfung:** Dieselbe Aktion zweimal übertragen, Antwort verlieren und erneut anfordern, Antworten vertauscht liefern. Der Zug wird einmal ausgeführt; die Ansicht fällt nicht auf eine ältere Revision zurück. Ein Phasencheck aus Runde N bestätigt nicht Runde N+1. Ein Angriff mit falscher Quell-ID wird abgelehnt. Verdeckte Karten bleiben in allen Antwortpfaden verdeckt.
+**Check:** transmit the same action twice, lose a response and request it again, deliver responses swapped. The move is executed once; the view does not fall back to an older revision. A phase check from round N does not confirm round N+1. An attack with a wrong source ID is rejected. Hidden cards stay hidden in all response paths.
 
-### F4 — Native WebSocket-Pumpe tatsächlich nichtblockierend machen
+### F4 — really make the native WebSocket pump non-blocking
 
-**Betrifft:** `src/sys/ws_runtime.cpp`, `src/sys/mirror_runtime.cpp`; Befund 2.4. **Eingriff: groß, innerhalb der Engine abgrenzbar.**
+**Concerns:** `src/sys/ws_runtime.cpp`, `src/sys/mirror_runtime.cpp`; finding 2.4. **Intervention: large, delimitable within the engine.**
 
-Für jede WS-Verbindung Empfangspuffer und Parserfortschritt halten: Header, erweiterte Länge, Maskierung und Payload. Nonblocking-Sockets verwenden; Lesen endet bei `EAGAIN`/`EWOULDBLOCK` und wird beim nächsten Pump-Aufruf fortgesetzt. Eine Nachricht wird erst nach vollständigem Empfang an Mirror übergeben. Ping/Pong, Close und gegebenenfalls fragmentierte Nachrichten müssen denselben inkrementellen Lebenszyklus verwenden.
+For every WS connection, keep a receive buffer and parser progress: header, extended length, masking and payload. Use non-blocking sockets; reading ends on `EAGAIN`/`EWOULDBLOCK` and is continued on the next pump call. A message is only handed to mirror after it has been received completely. Ping/pong, close and possibly fragmented messages must use the same incremental lifecycle.
 
-Ausgehende Frames in eine begrenzte Queue schreiben und Teilübertragungen mit Offset fortsetzen. Bei TLS `SSL_ERROR_WANT_READ` und `SSL_ERROR_WANT_WRITE` entsprechend behandeln, einschließlich des jeweils benötigten Readiness-Interesses. Nur `O_NONBLOCK` einzuschalten wäre kein vollständiger Fix: Der bisherige vollständige Lese-/Schreibvertrag könnte Teilergebnisse als Fehler behandeln.
+Write outgoing frames into a bounded queue and continue partial transfers with an offset. With TLS, handle `SSL_ERROR_WANT_READ` and `SSL_ERROR_WANT_WRITE` accordingly, including the respectively required readiness interest. Merely switching on `O_NONBLOCK` would not be a complete fix: the previous complete read/write contract could treat partial results as errors.
 
-Pro Verbindung und Pump-Durchlauf ein Byte-/Zeitbudget vorsehen. Zusätzlich maximale Nachrichtengröße, Queuegrößen und eine monotone Gesamtfrist für unvollständige Nachrichten definieren. Eine volle Queue muss als Backpressure oder klarer Verbindungsfehler sichtbar werden; sie darf nicht unbegrenzt wachsen oder den Frame warten lassen.
+Provide a byte/time budget per connection and pump pass. Additionally define a maximum message size, queue sizes and a monotonic total deadline for incomplete messages. A full queue must become visible as backpressure or a clear connection error; it must not grow without bound or make the frame wait.
 
-**API-Option:** Eine neue Try-Receive-/Pump-Schnittstelle für Mirror einführen und bestehende blockierende WS-Funktionen vorerst als ausdrücklich blockierende Komfortfunktionen behalten. Das begrenzt Änderungen an anderen AIML-Anwendungen. Mirror selbst darf die blockierenden Funktionen dann nicht mehr nutzen.
+**API option:** introduce a new try-receive/pump interface for mirror and keep the existing blocking WS functions for now as explicitly blocking convenience functions. That limits changes to other AIML applications. Mirror itself must then no longer use the blocking functions.
 
-**Prüfung:** Header und Payload byteweise verzögern; ein Peer liest nicht mehr; TLS kann vorübergehend nicht schreiben; nur Ping/Pong trifft ein; Gegenstelle trennt mitten im Frame. Andere Clients bleiben bedienbar, Speicher bleibt begrenzt und keine Nachricht geht durch einen Teilwrite verloren.
+**Check:** delay header and payload byte by byte; a peer no longer reads; TLS temporarily cannot write; only ping/pong arrives; the remote end disconnects in the middle of a frame. Other clients stay serviceable, memory stays bounded and no message is lost through a partial write.
 
-### F5 — Eine Geste besitzt Ursprung, Zielkontext und genau ein Ende
+### F5 — a gesture has an origin, a target context and exactly one end
 
-**Betrifft:** `input_runtime.cpp`, `prefab_runtime.cpp`, `board_drag_controller.aiml`; Befunde 3.3 und 4.1–4.5. **Eingriff: mittel bis groß.**
+**Concerns:** `input_runtime.cpp`, `prefab_runtime.cpp`, `board_drag_controller.aiml`; findings 3.3 and 4.1–4.5. **Intervention: medium to large.**
 
-Die Eingabe als geordnete Ereignisse mit Pointer-ID, Position und Zeitpunkt aufnehmen. Ein unveränderlicher Eingabesatz wird am Frameanfang konsumiert. Für Positionsänderungen darf zusammengefasst werden; Press, Release und Cancel müssen geordnet erhalten bleiben. Wenn eine komplette kurze Geste zwischen zwei Frames liegt, wird sie dadurch noch korrekt ausgewertet.
+Record input as ordered events with a pointer ID, position and point in time. An immutable input set is consumed at the start of the frame. Position changes may be merged; press, release and cancel must be preserved in order. If a complete short gesture lies between two frames, it is thereby still evaluated correctly.
 
-Ein Press führt zu einem Kandidaten anhand der **Press-Position** und der zu diesem Zeitpunkt sichtbaren Anordnung. Nach Überschreiten einer definierten Bewegungsschwelle wird daraus ein Drag. Die Geste besitzt die stabile Karten-ID, den anfänglichen Spielkontext und einen optionalen Render-Handle. Release führt genau einmal zu Tap oder Drop; Fokusverlust, Pointer-Cancel, Kartenentfernung und Szenenwechsel führen zu Cancel. Ein Cancel erzeugt keinen Spielzug.
+A press leads to a candidate based on the **press position** and the arrangement visible at that moment. After exceeding a defined movement threshold, it becomes a drag. The gesture holds the stable card ID, the initial game context and an optional render handle. Release leads exactly once to a tap or drop; focus loss, pointer cancel, card removal and scene change lead to cancel. A cancel produces no game move.
 
-Maus und Touch dürfen unterschiedliche Schwellen erhalten, sollten aber dieselbe Zustandsmaschine verwenden. Für den Browser eine einheitliche Pointer-Event-Anbindung mit Capture prüfen; bestehende Maus-/Touch-Callbacks dabei nicht parallel doppelt auslösen lassen. Schwellen in einer ausdrücklich definierten UI-Einheit messen und Geräte-/Canvas-Skalierung berücksichtigen.
+Mouse and touch may get different thresholds, but should use the same state machine. For the browser, check a uniform pointer event binding with capture; do not let existing mouse/touch callbacks fire in parallel twice. Measure thresholds in an explicitly defined UI unit and take device/canvas scaling into account.
 
-`BoardScreen.render` in Eingabeverarbeitung, visuelle Aktualisierung und Darstellung aufteilen. Ein zusätzlicher Rebuild oder Draw verarbeitet keine Eingabe erneut. Als Übergang kann ein Frame-/Event-Verbrauchsmarker die erneute Verarbeitung verhindern; er ersetzt die Trennung langfristig nicht.
+Split `BoardScreen.render` into input processing, visual update and rendering. An additional rebuild or draw does not process input again. As a transition, a frame/event consumption marker can prevent repeated processing; in the long run it does not replace the separation.
 
-**Board-Regeln:** Vor Dragbeginn klären, welche Geste erlaubt ist: Angriff, Bewegung, Ausrüstung oder reine Vorschau. Gegnerkarten können weiterhin betrachtet werden, müssen deshalb aber nicht als eigene Angreifer ziehbar sein. Bei `combat_pending` den konkreten Sperrgrund anzeigen und erlaubte Reaktionsklicks getrennt weiterführen.
+**Board rules:** before the drag starts, clarify which gesture is allowed: attack, movement, equipment or pure preview. Opponent cards can still be looked at, but do not therefore have to be draggable as one's own attackers. With `combat_pending`, show the concrete reason for the lock and keep permitted reaction clicks going separately.
 
-**Prüfung:** Schneller Drag während einer simulierten Frame-Pause; gehaltene Taste fährt erst später über eine Karte; Release außerhalb des Canvas; Fokusverlust; Szenenwechsel; erneutes Rendern im selben Frame. Pro physischer Geste entsteht höchstens ein Intent und nach jedem Abbruch ist die nächste Geste möglich.
+**Check:** a fast drag during a simulated frame pause; a held button only later moves over a card; release outside the canvas; focus loss; scene change; re-rendering in the same frame. Per physical gesture at most one intent arises, and after every abort the next gesture is possible.
 
-### F6 — Board-Objekte anhand ihrer IDs erhalten
+### F6 — preserve board objects by their IDs
 
-**Betrifft:** `board_screen.aiml`, `board_base.aiml`, `board_helpers.aiml`; Befund 3.2. **Eingriff: mittel bis groß.**
+**Concerns:** `board_screen.aiml`, `board_base.aiml`, `board_helpers.aiml`; finding 3.2. **Intervention: medium to large.**
 
-Eine Zuordnung von `iid` zu Kartenansicht und zugehörigen Badges führen. Bei einem Snapshot zunächst Änderungen ermitteln: neue/entfernte Karten, Zonenwechsel und geänderte Eigenschaften. Neue Karten erzeugen, entfernte kontrolliert abbauen, bestehende aktualisieren. Phasenpanel, Hintergrund und unveränderte Zonen bleiben bestehen.
+Keep a mapping of `iid` to card view and associated badges. On a snapshot, first determine the changes: new/removed cards, zone changes and changed properties. Create new cards, tear down removed ones in a controlled way, update existing ones. Phase panel, background and unchanged zones stay in place.
 
-Für eine begrenzte erste Umsetzung nur Stats, Tap, Angreifer und Zielrahmen direkt aktualisieren; strukturelle Änderungen dürfen noch zonenweise neu aufbauen. Später Karten bei Zonenwechsel umpositionieren beziehungsweise umhängen. Einen aktiven Drag als separate visuelle Vorschau behandeln, damit die autoritative Kartenposition aktualisiert werden kann, ohne die Geste an ein zerstörbares Prefab zu binden.
+For a limited first implementation, update only stats, tap, attacker and target frame directly; structural changes may still rebuild zone by zone. Later, reposition or re-parent cards on a zone change. Treat an active drag as a separate visual preview so that the authoritative card position can be updated without binding the gesture to a destroyable prefab.
 
-Die heutige Stringsignatur kann vorübergehend als Rückfallebene dienen. Langfristig tatsächliche Felddifferenzen oder lokale Dirty-Flags verwenden. Eine Matchrevision sagt, **dass** etwas geändert wurde; sie ersetzt nicht die Entscheidung, **welche** Ansicht betroffen ist.
+Today's string signature can serve temporarily as a fallback. In the long run, use actual field differences or local dirty flags. A match revision says **that** something changed; it does not replace the decision **which** view is affected.
 
-**Prüfung:** Eine reine Statänderung erzeugt keine neuen Karten-Prefabs. Hover und Vorschau bleiben bei unveränderten Karten erhalten. Tod, Ausstattung, Besitzer- und Zonenwechsel werden korrekt abgebildet. Bestehende Todes-/Schadensanzeigen laufen weiterhin genau einmal.
+**Check:** a pure stat change creates no new card prefabs. Hover and preview are preserved for unchanged cards. Death, equipment, owner and zone changes are represented correctly. Existing death/damage displays still run exactly once.
 
-### F7 — Gemeinsame Trefferprüfung mit expliziten Eingaberegeln
+### F7 — shared hit testing with explicit input rules
 
-**Betrifft:** `prefab_runtime.cpp` und Board-Drop-Auswertung; Befund 4.3. **Eingriff: mittel.**
+**Concerns:** `prefab_runtime.cpp` and the board drop evaluation; finding 4.3. **Intervention: medium.**
 
-Eine gemeinsame Picking-Grundlage für Klick, Dragstart und Drop verwenden: gleiche Welttransformation, Sichtbarkeit über die Elternkette, Clipping und aktuelle Z-Reihenfolge. Für rotierte Elemente den Punkt in lokale Koordinaten transformieren. Die Sortierung muss vor der Eingabe korrekt sein; ein Dirty-Flag bei Z-Änderung genügt, sofern alle Änderungen diesen Pfad benutzen.
+Use a shared picking foundation for click, drag start and drop: the same world transformation, visibility across the parent chain, clipping and the current z order. For rotated elements, transform the point into local coordinates. The sorting must be correct before the input; a dirty flag on z changes suffices, provided all changes use this path.
 
-Unabhängige Eigenschaften für „blockiert darunterliegende Eingabe“, „empfängt selbst Eingabe“, „draggbar“ und „akzeptiert diesen Drop-Typ“ vorsehen. Dekoration kann explizit durchlässig sein; ein modales Overlay blockiert auch dann, wenn es nicht draggbar ist. Beim Drop die eigene Drag-Vorschau aus der Kandidatenmenge ausschließen, statt sie vorübergehend unsichtbar zu schalten.
+Provide independent properties for "blocks input underneath", "receives input itself", "draggable" and "accepts this drop type". Decoration can be explicitly transparent; a modal overlay blocks even when it is not draggable. On drop, exclude the own drag preview from the candidate set instead of temporarily making it invisible.
 
-**Trade-off:** Bestehende Prefabs benötigen kompatible Standardwerte. Neue Regeln zunächst für das Board aktivieren oder vorhandene Oberflächen auf Durchklickverhalten prüfen; ein global veränderter Default kann andere Apps beeinträchtigen.
+**Trade-off:** existing prefabs need compatible default values. Activate new rules for the board first, or check existing surfaces for click-through behaviour; a globally changed default can impair other apps.
 
-**Prüfung:** Überlappende Karten, dekorativer Rahmen, modales Overlay, verschachteltes/gescrolltes Element, Rotation und Z-Wechsel im selben Frame. Das visuell erwartete zulässige Ziel wird gewählt, gesperrte Ebenen werden nicht durchklickt.
+**Check:** overlapping cards, a decorative frame, a modal overlay, a nested/scrolled element, rotation and a z change in the same frame. The visually expected permitted target is chosen; locked layers are not clicked through.
 
-### F8 — Browser-Takt ohne zusätzlichen Vollframe-Sleep
+### F8 — browser timing without an additional full-frame sleep
 
-**Betrifft:** `engine_runtime.cpp`; Befund 3.1. **Eingriff: klein als Zwischenlösung, mittel beim Loop-Wechsel.**
+**Concerns:** `engine_runtime.cpp`; finding 3.1. **Intervention: small as an interim solution, medium for the loop switch.**
 
-Als begrenzte Zwischenlösung kann die manuelle Schleife nur das verbleibende Framebudget schlafen, gemessen mit monotoner Zeit. Bei Überlast bleibt ein expliziter kooperativer Yield nötig; ein enges Nachholen mehrerer Frames wäre kontraproduktiv. Das verringert den additiven 16-ms-Effekt, koppelt die Präsentation aber noch nicht an den Bildschirmtakt.
+As a limited interim solution, the manual loop can sleep only for the remaining frame budget, measured with monotonic time. Under overload, an explicit cooperative yield stays necessary; tightly catching up on several frames would be counterproductive. That reduces the additive 16 ms effect, but does not yet couple presentation to the screen refresh.
 
-Die nachhaltige Variante verwendet browsergesteuerte Frames, nachdem alle darin erreichbaren suspendierenden Aufrufe einschließlich Artwork-Laden entfernt oder sicher ausgelagert sind. Netzwerk- und Assetpumpen liefern dann nur fertige Ergebnisse. Die in der Engine dokumentierte Asyncify-/Main-loop-Regression muss mit einem gezielten Minimalfall erneut abgesichert werden.
+The sustainable variant uses browser-driven frames once all suspending calls reachable in them, including artwork loading, have been removed or safely moved out. Network and asset pumps then only deliver finished results. The Asyncify/main loop regression documented in the engine must be secured again with a targeted minimal case.
 
-Roh-Wandzeit für Telemetrie und begrenztes Simulations-`dt` getrennt halten. Ein Hintergrundtab erhält eine definierte Pause-/Resume-Behandlung und holt keine unbeschränkte Zahl alter Simulationstakte nach.
+Keep raw wall time for telemetry and the bounded simulation `dt` separate. A background tab gets a defined pause/resume handling and does not catch up on an unbounded number of old simulation ticks.
 
-**Prüfung:** Framezeitverteilung bei leerer und voller Szene, wiederholte WS-Sends, langsame Antworten, Tabwechsel und Größenänderung. Die Loop darf weder aussetzen noch nach einer Pause in eine Aufholschleife geraten.
+**Check:** frame time distribution with an empty and a full scene, repeated WS sends, slow responses, tab switching and resizing. The loop must neither stall nor fall into a catch-up loop after a pause.
 
-### F9 — Artwork als Hintergrundauftrag mit Platzhalter
+### F9 — artwork as a background job with a placeholder
 
-**Betrifft:** `card_art_cache.aiml`, `board_widgets.aiml`, `card_full_populator.aiml`; Befund 3.5. **Eingriff: mittel.**
+**Concerns:** `card_art_cache.aiml`, `board_widgets.aiml`, `card_full_populator.aiml`; finding 3.5. **Intervention: medium.**
 
-`art_ensure` im UI-Pfad soll künftig den Cache prüfen und bei Bedarf einen Auftrag vormerken; Kartenaufbau liefert unmittelbar einen Platzhalter. Download, Decode und GPU-Upload erhalten getrennte Zustände und begrenzte Arbeit pro Frame. Fertige Texturen werden über den Artwork-Hash an weiterhin vorhandene Ansichten gebunden.
+In the future, `art_ensure` in the UI path should check the cache and queue a job if needed; card construction immediately returns a placeholder. Download, decode and GPU upload get separate states and bounded work per frame. Finished textures are bound via the artwork hash to views that still exist.
 
-Mehrere Anfragen desselben Hashs zusammenfassen, sichtbare Karten priorisieren und Fehler mit begrenztem Retry/Backoff behandeln. Negative Cacheeinträge verhindern Wiederholung pro Frame. Ein GPU-Speicherbudget mit Referenzierung beziehungsweise LRU verhindert unbegrenztes Wachstum; sichtbare Texturen dürfen dabei nicht unkontrolliert verdrängt werden.
+Merge several requests for the same hash, prioritise visible cards and handle errors with a bounded retry/backoff. Negative cache entries prevent repetition per frame. A GPU memory budget with reference counting or LRU prevents unbounded growth; visible textures must not be evicted in an uncontrolled way in the process.
 
-**Besonderheit des bestehenden Medienprotokolls:** Solange dessen Chunk-Antworten keine eigene Request-Zuordnung haben, auf derselben Verbindung höchstens einen Transfer gleichzeitig bearbeiten. Asynchronität benötigt keine parallelen Transfers. Bei einem nicht mehr benötigten Bild den laufenden Transfer sauber beenden oder die Verbindung kontrolliert zurücksetzen, damit folgende Antworten zuordenbar bleiben.
+**Peculiarity of the existing media protocol:** as long as its chunk responses have no request assignment of their own, process at most one transfer at a time on the same connection. Asynchrony does not need parallel transfers. For an image that is no longer needed, end the running transfer cleanly or reset the connection in a controlled way, so that subsequent responses stay assignable.
 
-**Prüfung:** Kalter Cache mit vielen Karten, langsamer/ausgefallener Medienserver und Szenenwechsel während eines Downloads. Das Board bleibt bedienbar, identische Bilder werden einmal geladen, und fertig geladene Bilder erscheinen nur an noch passenden Ansichten.
+**Check:** a cold cache with many cards, a slow/failed media server and a scene change during a download. The board stays usable, identical images are loaded once, and finished images only appear on views that still match.
 
-### F10 — CPU-/GPU-Kosten und Serverarbeit gezielt begrenzen
+### F10 — limit CPU/GPU costs and server work in a targeted way
 
-**Betrifft:** Prefab-Renderer, Match-Handler und Scheduler; Befunde 2.4 und 3.4. **Eingriff: abhängig vom Messergebnis.**
+**Concerns:** prefab renderer, match handlers and scheduler; findings 2.4 and 3.4. **Intervention: depends on the measurement result.**
 
-Im Renderer zunächst Draw Calls, Uploadbytes, Sortierzeit, Layout-/Textzeit und Allokationen erfassen. Danach Uniform-Locations pro Shader cachen, Sortierung nur bei Änderungen ausführen und unveränderte Text-/Layoutdaten wiederverwenden. Benachbarte kompatible Batches dürfen zusammengelegt werden, solange Zeichenreihenfolge, Clipping und Materialzustand erhalten bleiben. Ein globales Sortieren nach Textur würde transparente Überlagerungen verändern und ist deshalb kein sicherer pauschaler Fix.
+In the renderer, first record draw calls, upload bytes, sort time, layout/text time and allocations. Then cache uniform locations per shader, sort only on changes and reuse unchanged text/layout data. Adjacent compatible batches may be merged as long as draw order, clipping and material state are preserved. A global sort by texture would change transparent overlays and is therefore not a safe blanket fix.
 
-Wenn serverseitige KI-/Regelarbeit dominiert, diese in begrenzte Arbeitsschritte pro Match zerlegen. Der Server kann nach einer atomaren Entscheidung einen expliziten „Auflösung läuft“-Zustand melden und Folgearbeit später fortsetzen. Dabei müssen Spielregeln bestimmen, an welchen Grenzen ein Zustand sichtbar oder wieder bedienbar sein darf. Ein vorzeitiges Erfolgs-Response bei noch inkonsistenter Mutation wäre falsch.
+If server-side AI/rule work dominates, split it into bounded work steps per match. After an atomic decision, the server can report an explicit "resolution running" state and continue the follow-up work later. The game rules must determine at which boundaries a state may become visible or operable again. A premature success response while the mutation is still inconsistent would be wrong.
 
-Worker sind eine Alternative für tatsächlich isolierbare, CPU-intensive Berechnungen. Ergebnisse nur gegen die noch gültige Matchrevision übernehmen. Gemeinsame KV-/Matchobjekte ohne geklärte Besitz- und Synchronisationsregeln in Threads zu verschieben wäre kein belastbarer Fix.
+Workers are an alternative for actually isolatable, CPU-intensive computations. Take over results only against the still valid match revision. Moving shared KV/match objects into threads without clarified ownership and synchronisation rules would not be a reliable fix.
 
-**Prüfung:** Gleicher Spielausgang vor und nach Zerlegung, keine konkurrierenden Mutationen desselben Matches, begrenzte Wartezeit anderer Clients. Renderer-Änderungen zusätzlich mit überlappenden transparenten Karten und Clipping visuell vergleichen.
+**Check:** the same game outcome before and after splitting, no concurrent mutations of the same match, bounded waiting time for other clients. Additionally compare renderer changes visually with overlapping transparent cards and clipping.
 
-## 8. Empfohlene Umsetzung in überprüfbaren Etappen
+## 8. Recommended implementation in verifiable stages
 
-1. **Messbasis und unmittelbare Rückmeldung:** Die Tracepunkte aus Abschnitt 6 sowie explizite Pending-/Fehleranzeige vorsehen. Ausgangswerte für Phasencheck, Angriff und schnellen Drag erfassen.
-2. **Warten entkoppeln:** F1 und F2 zuerst für die genannten Board-Aktionen umsetzen. F4 separat auf Engine-Ebene bearbeiten; sonst bleibt auch eine asynchrone App gegenüber blockierenden nativen Pump-Aufrufen empfindlich.
-3. **Gesten stabilisieren:** F5 und F7; anschließend F6 zur Erhaltung der Kartenansichten. Dadurch benötigt die Interaktion immer weniger Ausnahmen für Reloads.
-4. **Roundtrips und kalte Ladepausen reduzieren:** F3 und F9. Die bisherige zweite Zustandsabfrage erst entfernen, wenn der neue Antwortvertrag endgültige, gefilterte Zustände garantiert.
-5. **Frameplanung und gemessene Restkosten:** F8 nach Prüfung aller suspendierenden Frame-Pfade; F10 anhand verbleibender Engpässe. Push/Deltas erst dann ergänzen, wenn Datenmenge oder Aktualisierungslatenz es rechtfertigen.
+1. **Measurement basis and immediate feedback:** provide the trace points from section 6 as well as an explicit pending/error display. Record baseline values for phase check, attack and fast drag.
+2. **Decouple the waiting:** implement F1 and F2 first for the named board actions. Handle F4 separately at engine level; otherwise even an asynchronous app stays sensitive to blocking native pump calls.
+3. **Stabilise gestures:** F5 and F7; then F6 to preserve the card views. As a result the interaction needs fewer and fewer exceptions for reloads.
+4. **Reduce round trips and cold loading pauses:** F3 and F9. Only remove the previous second state query once the new response contract guarantees final, filtered states.
+5. **Frame planning and measured remaining costs:** F8 after checking all suspending frame paths; F10 based on remaining bottlenecks. Add push/deltas only when the data volume or update latency justifies it.
 
-Für jede Etappe gelten die Szenarien aus Abschnitt 6 und die jeweilige Prüfung unter F1–F10. Ein gutes Zwischenziel ist bereits erreicht, wenn die Spielbestätigung noch dieselbe Netzzeit benötigt, die Oberfläche dabei aber weiter reagiert und jede Geste eindeutig angenommen, abgelehnt oder abgebrochen wird. Eine vollständige Neuschreibung von Engine oder Netzwerkstack ist dafür keine Voraussetzung.
+For every stage, the scenarios from section 6 and the respective check under F1–F10 apply. A good intermediate goal is already reached when the game confirmation still needs the same network time, but the UI keeps reacting meanwhile and every gesture is unambiguously accepted, rejected or aborted. A complete rewrite of the engine or network stack is not a precondition for that.
 
-## 9. Sollte AIML Netzwerk und Rendering stärker auf Engine-Ebene verbinden?
+## 9. Should AIML connect network and rendering more strongly at engine level?
 
-**Ja: Eine gemeinsame Ablaufsteuerung in der Engine ist sinnvoll.** Besonders wertvoll wären verbindliche Regeln dafür, wann Netzwerkfortschritt stattfindet, wann fertige Antworten angewendet werden und wann Eingabe, Layout und Darstellung laufen. Die Engine sollte dabei weiter Frames liefern können, solange Antworten ausstehen. Eine engere Verbindung darf deshalb keine zusätzliche Abhängigkeit der Bildausgabe vom Eingang einer Nachricht schaffen.
+**Yes: a shared flow control in the engine makes sense.** Particularly valuable would be binding rules for when network progress happens, when finished responses are applied and when input, layout and rendering run. The engine should keep being able to deliver frames while responses are pending. A tighter connection must therefore not create an additional dependency of the image output on the arrival of a message.
 
-Die folgenden API- und Architekturideen sind Entwurfsvorschläge, keine bereits vorhandenen oder überprüften AIML-Funktionen. Sie bauen auf den untersuchten Runtime-Pfaden auf. Ihre vollständige sprachliche und compilerseitige Integration müsste gesondert entworfen werden.
+The following API and architecture ideas are design proposals, not already existing or verified AIML functions. They build on the examined runtime paths. Their complete language and compiler integration would have to be designed separately.
 
-### 9.1 Was die heutige Trennung die Anwendung selbst lösen lässt
+### 9.1 What today's separation leaves the application to solve itself
 
-Die Bausteine existieren bereits: Die Engine besitzt den Frameablauf, Mirror besitzt Sessions und korrelierte Requests, Prefabs besitzen Szene und Eingabeinteraktion. In 9rooms verbindet jedoch `MainMenuApp.frame` diese Bausteine von Hand:
+The building blocks already exist: the engine owns the frame flow, mirror owns sessions and correlated requests, prefabs own the scene and input interaction. In 9rooms, however, `MainMenuApp.frame` connects these building blocks by hand:
 
-- `net_pump` muss rechtzeitig und regelmäßig aufgerufen werden.
-- Jeder Screen organisiert selbst Requests, Wartezeiten und Antwortübernahme.
-- Das Board verschiebt Polls, damit ein Reload keinen Drag zerstört.
-- `board.render` wertet Eingaben aus und kann nach einer Antwort erneut aufgerufen werden.
-- Clear und Draw wurden an das Frame-Ende verschoben, damit suspendierende Netzwerkaufrufe kein leeres Zwischenbild zeigen.
+- `net_pump` must be called on time and regularly.
+- Every screen organises requests, waiting times and response takeover itself.
+- The board postpones polls so that a reload does not destroy a drag.
+- `board.render` evaluates input and can be called again after a response.
+- Clear and draw were moved to the end of the frame so that suspending network calls do not show an empty intermediate image.
 
-Diese Verbindungen sind teilweise notwendige Anwendungspolitik, teilweise wiederkehrende Engine-Infrastruktur. Die wiederkehrenden Teile zentral zu übernehmen würde die Zahl der Sonderfälle in neuen Spielen und Screens senken. Allein die Existenz von `send_request` reicht dafür nicht: Ein einfach verwendbarer Lebenszyklus für dessen Ergebnis fehlt auf Anwendungsebene weiterhin.
+These connections are partly necessary application policy, partly recurring engine infrastructure. Taking over the recurring parts centrally would reduce the number of special cases in new games and screens. The mere existence of `send_request` is not enough for that: an easy-to-use lifecycle for its result is still missing at application level.
 
-### 9.2 Ein geeigneter gemeinsamer Framevertrag
+### 9.2 A suitable shared frame contract
 
-Ein möglicher Ablauf wäre:
+A possible flow would be:
 
-1. **Eingabe übernehmen:** Ereignisse bis zur Framegrenze in einen unveränderlichen Satz übernehmen. Pointer-Gesten behalten ihre Identität über mehrere Frames.
-2. **Netzwerk fortschreiben:** Empfang, Versand und Timeouts innerhalb eines begrenzten Budgets bearbeiten. Vollständige Antworten und Verbindungsereignisse nur bereitstellen.
-3. **Ergebnisse übernehmen:** Passende Antworten an einer definierten Stelle auf den Spielzustand anwenden. Dabei Sitzung, Match, Revision und Lebensdauer prüfen; ungültig gewordene Gesten abbrechen.
-4. **Eingaben und Spiel-Update ausführen:** Jede Eingabe genau einmal auswerten. Die zuvor sichtbare Karten-ID bleibt bei einer Geste erhalten; die Aktion wird gegen den aktuellen Zustand validiert. Neue Requests werden lediglich vorgemerkt.
-5. **Darstellung abgleichen:** Geänderte Karten, Overlays und Layouts aktualisieren. Assets dürfen Aufträge auslösen, aber nicht auf deren Fertigstellung warten.
-6. **Zeichnen und präsentieren:** Einen konsistenten Zustand darstellen. Ausgehende Requests können vorher noch budgetiert an den Transport übergeben werden, ohne auf die Antwort zu warten.
+1. **Take over input:** take events up to the frame boundary into an immutable set. Pointer gestures keep their identity across several frames.
+2. **Advance the network:** handle receiving, sending and timeouts within a bounded budget. Only provide complete responses and connection events.
+3. **Take over results:** apply matching responses to the game state at a defined point. Check session, match, revision and lifetime in the process; abort gestures that have become invalid.
+4. **Run input and the game update:** evaluate every input exactly once. The previously visible card ID is preserved for a gesture; the action is validated against the current state. New requests are only queued.
+5. **Reconcile the rendering:** update changed cards, overlays and layouts. Assets may trigger jobs, but not wait for their completion.
+6. **Draw and present:** render a consistent state. Outgoing requests can still be handed to the transport beforehand within a budget, without waiting for the response.
 
-Die genaue Reihenfolge von Netzwerkübernahme und Spiel-Update ist eine Designentscheidung. Wesentlich ist, dass sie dokumentiert und stabil ist. Netzwerk-Callbacks dürfen nicht beliebig mitten in `render_instance` die Szene verändern. Ebenso darf eine neue Antwort keine bereits eingelesene Press-Position nachträglich auf eine andere Karte umdeuten.
+The exact order of network takeover and game update is a design decision. What is essential is that it is documented and stable. Network callbacks must not change the scene at arbitrary points in the middle of `render_instance`. Likewise, a new response must not retroactively reinterpret an already read press position as a different card.
 
-**Nutzen:** Ein eintreffender Zustand besitzt einen klaren Übergabepunkt. Rendern, Input und Netzwerkzugriff müssen nicht mehr über verstreute Cooldowns und Latches gegeneinander abgesichert werden. Das hilft auch beim Nachstellen von Fehlern: Der Trace kann zeigen, welches Ereignis an welcher Framegrenze übernommen wurde.
+**Benefit:** an arriving state has a clear hand-over point. Rendering, input and network access no longer have to be secured against each other via scattered cooldowns and latches. That also helps when reproducing bugs: the trace can show which event was taken over at which frame boundary.
 
-**Grenze:** Ein Budget wirkt nur, wenn die darunterliegenden Operationen nichtblockierend oder unterbrechbar sind. Ein blockierendes `recv` wird durch die Einordnung in „Netzwerkphase mit 2-ms-Budget“ nicht plötzlich zeitlich begrenzt. F4 bleibt eine Voraussetzung. Auch das Deserialisieren einer einzelnen großen Nachricht kann das Budget überschreiten; Nachrichtenlimits und Messung bleiben nötig.
+**Limit:** a budget only works if the underlying operations are non-blocking or interruptible. A blocking `recv` does not suddenly become time-bounded by being placed into a "network phase with a 2 ms budget". F4 remains a precondition. Deserialising a single large message can also exceed the budget; message limits and measurement remain necessary.
 
-### 9.3 Welche Funktionen in die Engine gehören
+### 9.3 Which functions belong in the engine
 
-| Vorgeschlagene Fähigkeit | Zuständigkeit der Engine | Zuständigkeit der Anwendung |
+| Proposed capability | Responsibility of the engine | Responsibility of the application |
 |---|---|---|
-| Session an einen Laufkontext binden | Regelmäßiges Pumpen, klarer Besitzer, Deregistrierung | Welche Session zu welchem Spiel gehört |
-| Typisierte asynchrone Anfrage | Request-ID, Timeout, Decode, genau eine Fertigmeldung | Fachliche Bedeutung von Erfolg und Ablehnung |
-| Ergebniswarteschlange | Übernahme an einer definierten Framegrenze | Änderung des Match-/UI-Zustands |
-| Lebensdauerbereich für Requests | Geschlossene Bereiche liefern keine UI-Callbacks mehr | Bereich an Screen, Match oder Sitzung binden |
-| Pendingzustand | Abfragbarer Status und Benachrichtigung | Anzeige, Text und welche Aktionen gesperrt sind |
-| Darstellungsinvalidierung | Geänderte Ansichten gezielt aktualisieren | Zuordnung eines Matchfeldes zu einer Kartenansicht |
-| Netzwerk-/Frame-Telemetrie | Einheitliche Zeitpunkte und Korrelations-IDs | Fachliche Aktionsnamen und relevante Messszenarien |
+| bind a session to a run context | regular pumping, clear owner, deregistration | which session belongs to which game |
+| typed asynchronous request | request ID, timeout, decode, exactly one completion notice | domain meaning of success and rejection |
+| result queue | takeover at a defined frame boundary | change of the match/UI state |
+| lifetime scope for requests | closed scopes no longer deliver UI callbacks | bind the scope to a screen, match or session |
+| pending state | queryable status and notification | display, text and which actions are locked |
+| rendering invalidation | update changed views in a targeted way | mapping of a match field to a card view |
+| network/frame telemetry | uniform points in time and correlation IDs | domain action names and relevant measurement scenarios |
 
-Als denkbare API könnte ein Laufkontext eine Session registrieren und ein Request-Handle mit Zuständen wie ausstehend, erfolgreich, abgelehnt auf Transportebene, Timeout oder geschlossen liefern. Der Rückgabewert einer typisierten Spielantwort bleibt davon getrennt: Eine korrekt empfangene Antwort kann eine fachliche Ablehnung enthalten. Diese Trennung verhindert, dass „Nachricht angekommen“ mit „Angriff erlaubt“ verwechselt wird.
+As a conceivable API, a run context could register a session and return a request handle with states such as pending, successful, rejected at transport level, timeout or closed. The return value of a typed game response stays separate from that: a correctly received response can contain a domain-level rejection. This separation prevents "message arrived" from being confused with "attack allowed".
 
-Callbacks oder fortsetzbare Aufgaben müssten an der definierten Übernahmestelle laufen und innerhalb des Framebudgets bleiben. Eine einfache Poll-API für Handles wäre als erster Schritt ausreichend und könnte auf der vorhandenen Request-ID-Technik aufbauen. Sie vermeidet zunächst die zusätzliche Komplexität einer neuen Coroutine-Sprachfunktion.
+Callbacks or resumable tasks would have to run at the defined takeover point and stay within the frame budget. A simple poll API for handles would be sufficient as a first step and could build on the existing request ID technique. It avoids, for now, the additional complexity of a new coroutine language feature.
 
-Beim Schließen eines Screens wird dessen Ergebniszustellung abgemeldet. Das bedeutet **nicht**, dass ein bereits gesendeter Spielzug auf dem Server zurückgenommen wurde. Engine-Cancel und fachliches Rückgängigmachen sind verschiedene Operationen; diese Semantik muss im API-Vertrag ausdrücklich stehen.
+When a screen is closed, its result delivery is deregistered. That does **not** mean that an already sent game move was taken back on the server. Engine cancel and domain-level undo are different operations; these semantics must be stated explicitly in the API contract.
 
-### 9.4 Welche Verbindung zu eng wäre
+### 9.4 Which connection would be too tight
 
-Direkte Netzwerk-RPCs aus Prefab-Renderfunktionen würden die jetzigen Probleme weiter verbreiten. Eine Kartenansicht sollte ihre darzustellenden Daten erhalten und Benutzerabsichten melden. Tokenauflösung, KI-Arbeit oder ein serverseitiger Zug gehören nicht in das Zeichnen eines Widgets.
+Direct network RPCs from prefab render functions would spread the current problems further. A card view should receive the data to display and report user intents. Token resolution, AI work or a server-side move do not belong in drawing a widget.
 
-Auch eine automatische Spiegelung beliebiger Serverobjekte direkt in Prefabs wäre für 9rooms zu weitgehend. Spielerspezifisch verdeckte Informationen, stabile Kartenidentität, Animationen und lokale Vorschau verlangen eine bewusste Projektion. Die Engine kann bei Änderungsbenachrichtigung und Zuordnung helfen; die Anwendung muss entscheiden, welche Daten sichtbar werden und wie eine Änderung dargestellt wird.
+Automatically mirroring arbitrary server objects directly into prefabs would also go too far for 9rooms. Player-specific hidden information, stable card identity, animations and local preview require a deliberate projection. The engine can help with change notification and mapping; the application must decide which data becomes visible and how a change is rendered.
 
-Für die erste Integration sollten daher **explizite Zustandsübergaben** erhalten bleiben: Antwort → validierter Spielzustand → Ansichtsänderung. Eine spätere deklarative Datenbindung kann diese Schritte verkürzen, sollte aber Debugging, Kosten und Invalidierung nachvollziehbar lassen.
+For the first integration, **explicit state hand-overs** should therefore be kept: response → validated game state → view change. A later declarative data binding can shorten these steps, but should keep debugging, costs and invalidation traceable.
 
-### 9.5 Gemeinsamer Scheduler oder eigener Netzwerkthread?
+### 9.5 Shared scheduler or a dedicated network thread?
 
-**Empfohlener Einstieg: ein gemeinsamer, budgetierter Scheduler auf dem bisherigen Spielthread.** Nichtblockierende I/O-Pumpen und Ergebnisübernahme an Framegrenzen benötigen keine parallele Veränderung des Spielzustands. Das passt zur bestehenden nativen und WASM-Struktur und hält Prefab-Zugriffe auf einem Thread.
+**Recommended entry: a shared, budgeted scheduler on the existing game thread.** Non-blocking I/O pumps and result takeover at frame boundaries need no parallel modification of the game state. That fits the existing native and WASM structure and keeps prefab accesses on one thread.
 
-Vorteile sind einfache Besitzverhältnisse, stabile Reihenfolge und geringerer Synchronisationsaufwand. Nachteil: CPU-intensive Dekodierung oder Spiel-Updates können weiterhin lange Frames verursachen. Deshalb sollten Nachrichtengrößen, Pump-Budgets und Decode-Zeiten sichtbar sein.
+The advantages are simple ownership, a stable order and less synchronisation effort. The disadvantage: CPU-intensive decoding or game updates can still cause long frames. Message sizes, pump budgets and decode times should therefore be visible.
 
-Ein eigener Netzwerkthread wäre auf nativen Plattformen eine spätere Option: Er empfängt und verarbeitet Transportdaten, übergibt fertige Ergebnisse über eine begrenzte Queue und verändert selbst keine Szene. Auf Webplattformen müssten Worker, Speicherübergabe und die konkrete Build-Konfiguration eigens berücksichtigt werden. Ein einheitlicher öffentlicher Schedulervertrag kann bestehen bleiben, auch wenn der Transport intern je Plattform unterschiedlich arbeitet.
+A dedicated network thread would be a later option on native platforms: it receives and processes transport data, hands finished results over via a bounded queue and does not modify any scene itself. On web platforms, workers, memory hand-over and the concrete build configuration would have to be taken into account specifically. A uniform public scheduler contract can remain, even if the transport works differently internally per platform.
 
-Multithreading bringt zusätzlich Reihenfolge-, Shutdown- und Speicherbesitzfragen mit sich. Es lohnt sich erst, wenn Messungen zeigen, dass budgetierte Verarbeitung auf einem Thread nicht genügt. Es behebt weder einen zweiten unnötigen Roundtrip noch die fachliche Verwechslung von gezogener und tatsächlich angreifender Kreatur.
+Multithreading additionally brings order, shutdown and memory ownership questions. It is only worthwhile once measurements show that budgeted processing on one thread is not enough. It fixes neither a second unnecessary round trip nor the domain-level confusion between the dragged and the actually attacking creature.
 
-### 9.6 Backpressure und Fairness gehören zum gemeinsamen Vertrag
+### 9.6 Backpressure and fairness belong to the shared contract
 
-Sobald die Engine Netzwerk und Frames gemeinsam steuert, muss sie Überlast ausdrücklich behandeln. Sonst wird aus blockierendem Warten lediglich eine wachsende Nachrichtenwarteschlange.
+As soon as the engine controls network and frames together, it must handle overload explicitly. Otherwise blocking waiting merely turns into a growing message queue.
 
-- Ausgehende Queues brauchen Grenzen und einen sichtbaren „noch nicht angenommen“- beziehungsweise Fehlerzustand.
-- Zustands-Snapshots können gegebenenfalls auf die neueste Revision reduziert werden. Aktionsantworten und einmalige Spielevents dürfen nicht pauschal verworfen werden.
-- Aktive Spieleingaben sollten gegenüber Hintergrundlisten und Artwork priorisiert werden, ohne diese dauerhaft zu verdrängen.
-- Pro Session und Frame muss genügend Fairness bestehen, damit ein stark sendender Peer die anderen nicht monopolisiert.
-- Dekodierung, Zustandsübernahme und Darstellung benötigen jeweils eigene Messwerte. „Netzwerkdauer“ allein verdeckt lokale Arbeit.
+- Outgoing queues need limits and a visible "not yet accepted" or error state.
+- State snapshots can, where appropriate, be reduced to the newest revision. Action responses and one-off game events must not be discarded wholesale.
+- Active game input should be prioritised over background lists and artwork, without permanently crowding them out.
+- There must be enough fairness per session and frame so that a heavily sending peer does not monopolise the others.
+- Decoding, state takeover and rendering each need their own measurements. "Network duration" alone hides local work.
 
-Welche Nachrichten zusammengefasst werden dürfen, entscheidet deren fachlicher Vertrag. Das kann die Engine nicht aus beliebigen serialisierten Modellen ableiten. Eine optionale Kennzeichnung als ersetzbarer Snapshot wäre dafür geeigneter als eine automatische Heuristik.
+Which messages may be merged is decided by their domain contract. The engine cannot derive that from arbitrary serialised models. An optional marking as a replaceable snapshot would be more suitable for that than an automatic heuristic.
 
-### 9.7 Einstieg ohne Engine-Neuschreibung
+### 9.7 Entry without an engine rewrite
 
-Eine begrenzte Erweiterung könnte zunächst aus vier Bausteinen bestehen:
+A limited extension could initially consist of four building blocks:
 
-1. **Ein Session-Pump-Vertrag**, der für grafische und headless Anwendungen nutzbar ist und pro Aufruf begrenzten Fortschritt macht. Der Gameserver benötigt dieselbe Transportzuverlässigkeit, aber keine Rendering-Abhängigkeit.
-2. **Ein Request-Verwalter** auf Basis von `send_request`/`take_response`, mit monotonichem Timeout, Besitzerbereich und Ergebniswarteschlange.
-3. **Explizite Engine-Phasen** für Ergebnisübernahme, Input/Update und Draw; suspendierende Komfort-RPCs werden in Framephasen diagnostiziert. Eine Warnung kann zunächst optional sein, später ein strenger Entwicklungsmodus.
-4. **Ein gemeinsamer Trace**, der physische Eingabe, Request, Zustandsrevision und Frame miteinander verbindet.
+1. **A session pump contract** that can be used for graphical and headless applications and makes bounded progress per call. The game server needs the same transport reliability, but no rendering dependency.
+2. **A request manager** based on `send_request`/`take_response`, with a monotonic timeout, an owner scope and a result queue.
+3. **Explicit engine phases** for result takeover, input/update and draw; suspending convenience RPCs are diagnosed in frame phases. A warning can be optional at first, later a strict development mode.
+4. **A shared trace** that links physical input, request, state revision and frame.
 
-9rooms kann diese Erweiterung zuerst für Phasencheck und Angriff nutzen. Bestehende synchrone APIs bleiben für Skripte, Werkzeuge und Tests verfügbar; grafische Screens migrieren schrittweise. Nach jedem Schritt sollte geprüft werden, dass sich das Framework auch ohne Game-Loop headless benutzen lässt.
+9rooms can use this extension first for the phase check and attack. Existing synchronous APIs stay available for scripts, tools and tests; graphical screens migrate step by step. After every step it should be checked that the framework can also be used headless without a game loop.
 
-**Abnahmekriterien für diese Engine-Erweiterung:** Ein einfaches Beispiel kann eine Anfrage starten, Pendingstatus zeichnen und weiter bedient werden, ohne selbst eine Warteschleife zu schreiben. Das Schließen seiner Ansicht verhindert spätere Zugriffe auf zerstörte UI-Objekte. Eine langsame Session hält weder andere Sessions noch die Präsentation an. Ein schneller Drag wird auch dann genau einmal verarbeitet, wenn gleichzeitig eine Antwort eintrifft.
+**Acceptance criteria for this engine extension:** a simple example can start a request, draw a pending status and stay operable without writing a wait loop itself. Closing its view prevents later accesses to destroyed UI objects. A slow session stops neither other sessions nor the presentation. A fast drag is processed exactly once even if a response arrives at the same time.
 
-### 9.8 Bewertung
+### 9.8 Assessment
 
-Die engere Integration hat für AIML einen hohen Nutzen, weil die bisher sichtbaren Fehler mehrere Schichten gleichzeitig betreffen. Der größte Gewinn liegt in einem **gemeinsamen Lebenszyklus für Frame, Request und Eingabe**. Damit wird der flüssige Ablauf zum vorgesehenen Standard der Engine, statt von der Disziplin jedes Screens abzuhängen.
+The tighter integration has a high benefit for AIML, because the errors visible so far affect several layers at the same time. The biggest gain lies in a **shared lifecycle for frame, request and input**. That makes a smooth flow the intended standard of the engine instead of depending on the discipline of every screen.
 
-Die Kosten sind ein größerer öffentlicher API-Vertrag und die Verantwortung für Lebensdauer, Überlast und plattformübergreifende Reihenfolge. Dieser Ausbau sollte deshalb zunächst klein und explizit erfolgen. Er ersetzt die Fixes F1–F9 nicht; er liefert die gemeinsame Infrastruktur, auf der diese Fixes anschließend einfacher und konsistenter umgesetzt werden können.
+The costs are a larger public API contract and responsibility for lifetime, overload and cross-platform ordering. This expansion should therefore start small and explicit. It does not replace the fixes F1–F9; it provides the shared infrastructure on which these fixes can afterwards be implemented more easily and consistently.
