@@ -1,115 +1,115 @@
 # AIML Array Fast-Path Plan - 2026-04-16
 
-## Entscheidung
+## Decision
 
-Wir gehen den leistungsorientierten Weg:
+We take the performance-oriented route:
 
-1. `array<f32:N>` in AIML fuer kleine feste numerische Hotpaths nutzen
-2. neue C++-Builtins einfuehren, die direkt auf `array.data_ptr` arbeiten
-3. keine Rueckkonvertierung ueber `list<f32>` im Hotpath
+1. use `array<f32:N>` in AIML for small fixed numeric hot paths
+2. introduce new C++ builtins that work directly on `array.data_ptr`
+3. no conversion back via `list<f32>` in the hot path
 
-Ziel ist nicht nur eleganterer AIML-Code, sondern ein real messbarer Fast-Path fuer kleine Feature-Vektoren in TUL.
+The goal is not just more elegant AIML code, but a really measurable fast path for small feature vectors in TUL.
 
-## Zielbereich
+## Target area
 
-Erste Zielstelle:
+First target:
 
 - `tul/math/scoring.aiml`
 
-Spaetere Zielstellen:
+Later targets:
 
 - `tul/model/candidate_ranker.aiml`
 
-Nicht erstes Ziel:
+Not the first target:
 
-- grosser Transformer-Trainingspfad
-- Listen mit dynamischer Laenge
-- persistierte oder stringlastige Daten
+- the large transformer training path
+- lists with dynamic length
+- persisted or string-heavy data
 
-## Technischer Befund aus dem C++-Unterbau
+## Technical findings from the C++ foundation
 
-Die noetigen Grundlagen sind bereits da:
+The necessary foundations are already in place:
 
-1. Arrays werden direkt als LLVM-`[N x T]` gebaut:
+1. Arrays are built directly as LLVM `[N x T]`:
    [context.h](../../src/core/context.h#L480)
 
-2. Array-Lesen ist direkter `GEP + load`:
+2. Array reads are a direct `GEP + load`:
    [ast_compiler_expr.cpp](../../src/core/ast_compiler_expr.cpp#L882)
 
-3. Array-Schreiben ist direkter `GEP + store`:
+3. Array writes are a direct `GEP + store`:
    [ast_compiler_stmt.cpp](../../src/core/ast_compiler_stmt.cpp#L854)
 
-4. Arrays haben bereits `.data_ptr`:
+4. Arrays already have `.data_ptr`:
    [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L1212)
 
-5. Builtin-Seite kennt schon Pointer-basierte Stack-Array-Helfer:
+5. The builtin side already knows pointer-based stack array helpers:
    [builtin_registry.cpp](../../src/core/builtin_registry.cpp#L8068)
 
-Das bedeutet:
+That means:
 
-- die Sprachseite ist fuer `array<f32:N>` fast fertig
-- der fehlende Teil ist ein Satz kleiner numerischer Builtins, die `i8*`/Rohpointer direkt akzeptieren
+- the language side is almost ready for `array<f32:N>`
+- the missing part is a set of small numeric builtins that accept `i8*`/raw pointers directly
 
-## Kernproblem heute
+## Core problem today
 
-TUL baut kleine Feature-Vektoren aktuell ueber `list<f32>` und `push`.
+TUL currently builds small feature vectors via `list<f32>` and `push`.
 
-Beispiele:
+Examples:
 
 - `test/tul/math/scoring.aiml:34`
 - `test/tul/math/vector.aiml:12`
 
-`list<f32>` ist im Compiler und Runtime-System ein Heap-Container mit Layout `{size, capacity, data*}`:
+In the compiler and runtime system, `list<f32>` is a heap container with the layout `{size, capacity, data*}`:
 
-- Listenmethoden: [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp#L911)
+- list methods: [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp#L911)
 - `ListImpl` API: [list_impl.h](../../src/core/list_impl.h#L21)
 
-Das ist flexibel, aber fuer feste 10er-Features unnötig teuer.
+That is flexible, but unnecessarily expensive for fixed 10-element features.
 
-## Zielarchitektur
+## Target architecture
 
-### Phase-1-Typmodell
+### Phase 1 type model
 
-Wir fuehren **keinen** komplett neuen universellen Vektortyp ein.
+We do **not** introduce a completely new universal vector type.
 
-Stattdessen:
+Instead:
 
-1. kleine Hotpath-Funktionen in AIML nutzen lokale `array<f32:10>`
-2. neue Builtins lesen direkt aus `array.data_ptr`
-3. allgemeine `Vector`-/`list<f32>`-Pfade bleiben fuer den Rest des Systems bestehen
+1. small hot path functions in AIML use local `array<f32:10>`
+2. new builtins read directly from `array.data_ptr`
+3. general `Vector`/`list<f32>` paths remain for the rest of the system
 
-Das minimiert Risiko und macht den ersten Fast-Path eng und kontrolliert.
+That minimises risk and keeps the first fast path narrow and controlled.
 
-## P1 - Neue Native Builtins definieren
+## P1 - define new native builtins
 
-### Ziel
+### Goal
 
-Direkte numerische Operationen auf Rohdatenpointer, ohne `list<f32>`.
+Direct numeric operations on raw data pointers, without `list<f32>`.
 
-### Neue Builtins
+### New builtins
 
-Empfohlener erster Satz:
+Recommended first set:
 
 1. `ai.dot_ptr(ptr_a, ptr_b, n) -> f32`
 2. `ai.affine_score_ptr(w_ptr, x_ptr, n, bias) -> f32`
 3. `ai.argmax_ptr(x_ptr, n) -> i32`
-4. optional `ai.copy_f32_ptr(src_ptr, dst_ptr, n) -> void`
+4. optionally `ai.copy_f32_ptr(src_ptr, dst_ptr, n) -> void`
 
-### Warum genau diese
+### Why exactly these
 
-Sie decken den ersten Fast-Path fast komplett ab:
+They cover the first fast path almost completely:
 
-- Dot-Produkt
-- Affine Score
-- Argmax ueber wenige Scores
+- dot product
+- affine score
+- argmax over a few scores
 
-### C++-Dateien
+### C++ files
 
 - `src/sys/ai_runtime.h`
 - `src/sys/ai_runtime.cpp`
 - `src/core/builtin_registry.cpp`
 
-### API-Vorschlag
+### API proposal
 
 ```cpp
 float aiml_dot_ptr(const float* a, const float* b, int32_t n);
@@ -118,57 +118,57 @@ int32_t aiml_argmax_ptr(const float* x, int32_t n);
 void aiml_copy_f32_ptr(const float* src, float* dst, int32_t n);
 ```
 
-### AIML-Signatur
+### AIML signature
 
-Compilerseitig als `i8*`-basierte Builtins registrieren:
+Register on the compiler side as `i8*`-based builtins:
 
 - `ai.dot_ptr(i8*, i8*, i32) -> f32`
 - `ai.affine_score_ptr(i8*, i8*, i32, f32) -> f32`
 - `ai.argmax_ptr(i8*, i32) -> i32`
 
-## P2 - Builtin-Registry anbinden
+## P2 - wire up the builtin registry
 
-### Ziel
+### Goal
 
-Die neuen Runtime-Funktionen aus AIML aufrufbar machen.
+Make the new runtime functions callable from AIML.
 
-### Datei
+### File
 
 - [builtin_registry.cpp](../../src/core/builtin_registry.cpp)
 
-### Vorgehen
+### Approach
 
-An den bestehenden `ai.*`-Builtins orientieren.
+Follow the existing `ai.*` builtins.
 
-Vorbild:
+Model:
 
 - `tensor.from_data`: [builtin_registry.cpp](../../src/core/builtin_registry.cpp#L8325)
 
-### Implementierung
+### Implementation
 
-1. `i8*`-Pointerargumente direkt entgegennehmen
-2. `i32` fuer `n`
-3. `CreateCall(...)` auf die neuen Runtime-Funktionen
+1. accept `i8*` pointer arguments directly
+2. `i32` for `n`
+3. `CreateCall(...)` to the new runtime functions
 
-### Vorteil
+### Advantage
 
-`array.data_ptr` passt bereits natuerlich in dieses Modell.
+`array.data_ptr` already fits naturally into this model.
 
-## P3 - AIML-Scoring auf Array-Fast-Path umstellen
+## P3 - switch AIML scoring to the array fast path
 
-### Ziel
+### Goal
 
-`tul/math/scoring.aiml` soll fuer feste 10 Features keinen `list<f32>`-Container mehr aufbauen.
+`tul/math/scoring.aiml` should no longer build a `list<f32>` container for fixed 10 features.
 
-### Datei
+### File
 
 - `test/tul/math/scoring.aiml:1`
 
-### Umsetzung
+### Implementation
 
-#### 1. Neue lokale Builder
+#### 1. New local builders
 
-Statt `Vector` direkt:
+Instead of `Vector` directly:
 
 ```aiml
 - decl: [feat, "array<f32:10>"]
@@ -177,230 +177,230 @@ Statt `Vector` direkt:
 ...
 ```
 
-#### 2. Neue Scoring-Helfer
+#### 2. New scoring helpers
 
-Zusatzfunktionen:
+Additional functions:
 
 - `affine_score_fixed10(w: Vector, x: array<f32:10>, bias: f32) -> f32`
-- `compute_mode_scores_fixed10(x: array<f32:10>, mode_weights: list<Vector>, mode_biases: list<f32>) -> array<f32:K>` oder zunaechst `list<f32>`
+- `compute_mode_scores_fixed10(x: array<f32:10>, mode_weights: list<Vector>, mode_biases: list<f32>) -> array<f32:K>` or at first `list<f32>`
 
-#### 3. Erster Kompromiss
+#### 3. First compromise
 
-In Phase 1:
+In phase 1:
 
-- Features als `array<f32:10>`
-- Gewichte bleiben `Vector` / `list<f32>`
-- `ai.affine_score_ptr(w.data_as_ptr?, x.data_ptr, 10, bias)` ist noch nicht direkt moeglich, solange `Vector` nur `list<f32>` hat
+- features as `array<f32:10>`
+- weights stay `Vector` / `list<f32>`
+- `ai.affine_score_ptr(w.data_as_ptr?, x.data_ptr, 10, bias)` is not directly possible yet as long as `Vector` only has `list<f32>`
 
-Deshalb gibt es zwei Unteroptionen.
+That is why there are two sub-options.
 
-## P4 - Zugriff auf Gewichtsvektoren klaeren
+## P4 - clarify access to weight vectors
 
-Das ist der einzige echte Designknoten.
+This is the only real design knot.
 
 ### Problem
 
-`WeightVector.weights` und `Vector.data` sind heute `list<f32>`.
+`WeightVector.weights` and `Vector.data` are `list<f32>` today.
 
-`ai.affine_score_ptr(...)` braucht aber Rohpointer auf beide Seiten.
+`ai.affine_score_ptr(...)`, however, needs raw pointers on both sides.
 
-### Option A - Zusaetzliches Listen-Builtin fuer Rohdaten
+### Option A - an additional list builtin for raw data
 
-Neue Property oder Builtin fuer `list<f32>`:
+A new property or builtin for `list<f32>`:
 
 - `list.data_ptr`
 
-Oder Builtin:
+Or a builtin:
 
 - `ai.list_data_ptr(list<f32>) -> i8*`
 
-### Betroffene Stellen
+### Affected places
 
-- `ListImpl`-Layout ist bekannt: [list_impl.h](../../src/core/list_impl.h#L21)
-- `tensor.from_int_list` extrahiert bereits das Data-Feld aus einem Listenwert:
+- the `ListImpl` layout is known: [list_impl.h](../../src/core/list_impl.h#L21)
+- `tensor.from_int_list` already extracts the data field from a list value:
   [builtin_registry.cpp](../../src/core/builtin_registry.cpp#L8337)
 
-### Empfehlung
+### Recommendation
 
-Fuer Phase 1 ist das die beste Loesung.
+For phase 1 this is the best solution.
 
-Warum:
+Why:
 
-1. minimal-invasive Erweiterung
-2. keine neue generelle `Vector`-Repräsentation
-3. sofortiger Nutzen fuer `scoring.aiml`
+1. a minimally invasive extension
+2. no new general `Vector` representation
+3. immediate benefit for `scoring.aiml`
 
-### Ergebnis
+### Result
 
-Dann ist moeglich:
+Then this is possible:
 
 ```aiml
 - decl: [score, f32, { call: [ai.affine_score_ptr, w.weights.data_ptr, feat.data_ptr, 10, bias] }]
 ```
 
-## P5 - Listen-`data_ptr` fuer primitive Listen einfuehren
+## P5 - introduce list `data_ptr` for primitive lists
 
-### Ziel
+### Goal
 
-Primitive `list<T>` sollen optional einen rohen Datenpointer exponieren koennen.
+Primitive `list<T>` should optionally be able to expose a raw data pointer.
 
-### Datei
+### File
 
 - `src/core/ast_compiler.cpp`
-- evtl. `src/core/ast_compiler_call.cpp`
+- possibly `src/core/ast_compiler_call.cpp`
 
-### Vorbild
+### Model
 
-Array-Property `.data_ptr`:
+The array property `.data_ptr`:
 
 - [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L1231)
 
-### Regel
+### Rule
 
-Erlauben fuer:
+Allow for:
 
 - `list<i32>`
 - `list<i64>`
 - `list<f32>`
 - `list<f64>`
-- evtl. `list<u8>`
+- possibly `list<u8>`
 
-Nicht freigeben fuer:
+Do not enable for:
 
 - `list<string>`
 - `list<Model>`
 - `list<ptr<T>>`
 
-### Property-Vorschlag
+### Property proposal
 
 `my_list.data_ptr`
 
-Rueckgabe:
+Returns:
 
 - `i8*`
 
-### Nutzen
+### Benefit
 
-Das ist nicht nur fuer TUL hilfreich, sondern generell fuer numerische Builtins.
+That is helpful not only for TUL, but for numeric builtins in general.
 
-## P6 - TUL-Scoring wirklich umstellen
+## P6 - really switch TUL scoring
 
-### Ziel
+### Goal
 
-Die festen 10er-Featurevektoren gehen von:
+The fixed 10-element feature vectors go from:
 
 `push -> list<f32> -> Vector -> ai.dot`
 
-zu:
+to:
 
 `idx -> array<f32:10> -> data_ptr -> ai.affine_score_ptr`
 
-### Zielstellen
+### Targets
 
 - `build_shared_core_features`
 - `build_router_features`
 - `compute_mode_scores`
 - `argmax`
 
-### Phase-1-Pragmatik
+### Phase 1 pragmatics
 
-`compute_mode_scores` darf in Phase 1 noch `list<f32>` zurueckgeben, wenn nur die Input-Seite bereits array-basiert ist.
+`compute_mode_scores` may still return `list<f32>` in phase 1 if only the input side is already array-based.
 
-Der groesste Gewinn liegt im:
+The biggest gain lies in:
 
-1. Vermeiden des Feature-Listenaufbaus
-2. direkten Dot-/Affine-Calls
+1. avoiding building the feature list
+2. direct dot/affine calls
 
-## P7 - Candidate-Ranker danach
+## P7 - candidate ranker afterwards
 
-### Datei
+### File
 
 - `tul/model/candidate_ranker.aiml`
 
-### Ziel
+### Goal
 
-Kleine feste Featurevektoren fuer Kandidatenscoring ebenfalls auf Arrays plus Pointer-Builtins umstellen.
+Also switch small fixed feature vectors for candidate scoring to arrays plus pointer builtins.
 
-### Reihenfolge
+### Order
 
-Erst nach erfolgreichem `math/scoring.aiml`-Umbau.
+Only after a successful `math/scoring.aiml` rebuild.
 
-## P8 - Tests
+## P8 - tests
 
-### AIML-Compiler/Runtime-Tests
+### AIML compiler/runtime tests
 
-Neue Tests im AIML-Projekt:
+New tests in the AIML project:
 
-1. `array<f32:10>` + `.data_ptr` an Native-Builtin
-2. `list<f32>.data_ptr` fuer primitive Listen
-3. Vergleich Array-vs-List-Ergebnis fuer Dot/Affine
+1. `array<f32:10>` + `.data_ptr` to a native builtin
+2. `list<f32>.data_ptr` for primitive lists
+3. comparison of array vs. list results for dot/affine
 
-### TUL-Tests
+### TUL tests
 
-1. `build_shared_core_features` liefert identische numerische Werte wie vorher
-2. `compute_mode_scores` liefert identische Scores
-3. Router-/SharedCore-Training aendert sich numerisch nicht unkontrolliert
+1. `build_shared_core_features` returns numerically identical values as before
+2. `compute_mode_scores` returns identical scores
+3. router/SharedCore training does not change numerically in an uncontrolled way
 
-## P9 - Benchmark
+## P9 - benchmark
 
-### Ziel
+### Goal
 
-Nicht nur „sollte schneller sein“, sondern belegen.
+Not just "should be faster", but prove it.
 
-### Benchmark-Idee
+### Benchmark idea
 
-Mini-Benchmark fuer 1 Mio Aufrufe:
+Mini benchmark for 1 million calls:
 
-1. alter Pfad:
+1. old path:
    - `build_router_features` via `list.push`
    - `affine_score`
 
-2. neuer Pfad:
+2. new path:
    - `array<f32:10>`
    - `ai.affine_score_ptr`
 
-### Erwartung
+### Expectation
 
-Der Gewinn sollte vor allem aus diesen Punkten kommen:
+The gain should come mainly from these points:
 
-1. keine Heap-List fuer Features
-2. keine `push`-Kette
-3. direkter Pointer-Zugriff in Native Code
+1. no heap list for features
+2. no `push` chain
+3. direct pointer access in native code
 
-## Offene Designpunkte
+## Open design points
 
-Diese Punkte muessen noch final entschieden werden, sind aber klein:
+These points still have to be decided finally, but are small:
 
-### 1. `list.data_ptr` als Property oder Builtin?
+### 1. `list.data_ptr` as a property or builtin?
 
-Empfehlung:
+Recommendation:
 
-- Property, weil es zu `array.data_ptr` passt
+- property, because it matches `array.data_ptr`
 
-### 2. `argmax_ptr` nur fuer `f32`?
+### 2. `argmax_ptr` only for `f32`?
 
-Empfehlung:
+Recommendation:
 
-- ja, Phase 1 nur `f32`
+- yes, phase 1 only `f32`
 
-### 3. eigener `FixedVector10`-Typ sofort oder spaeter?
+### 3. a dedicated `FixedVector10` type right away or later?
 
-Empfehlung:
+Recommendation:
 
-- spaeter
-- Phase 1 nur lokale `array<f32:10>`
+- later
+- phase 1 only local `array<f32:10>`
 
-## Empfohlene Umsetzungsreihenfolge
+## Recommended implementation order
 
-1. neue Runtime-Funktionen in `ai_runtime.*`
-2. neue `ai.*_ptr`-Builtins in `builtin_registry.cpp`
-3. `list<f32>.data_ptr` fuer primitive Listen
-4. `tul/math/scoring.aiml` auf Array-Fast-Path umstellen
-5. Tests
-6. Benchmark
-7. danach `candidate_ranker`
+1. new runtime functions in `ai_runtime.*`
+2. new `ai.*_ptr` builtins in `builtin_registry.cpp`
+3. `list<f32>.data_ptr` for primitive lists
+4. switch `tul/math/scoring.aiml` to the array fast path
+5. tests
+6. benchmark
+7. afterwards `candidate_ranker`
 
-## Minimaler erster Sprint
+## Minimal first sprint
 
 ### AIML/C++
 
@@ -415,24 +415,24 @@ Empfehlung:
    - `ai.argmax_ptr`
 
 3. `src/core/ast_compiler.cpp`
-   - `list<f32>.data_ptr` fuer primitive Listen
+   - `list<f32>.data_ptr` for primitive lists
 
 ### TUL
 
 4. `tul/math/scoring.aiml`
-   - `array<f32:10>` fuer Features
-   - Pointer-Builtins fuer Scoring
+   - `array<f32:10>` for features
+   - pointer builtins for scoring
 
-## Fazit
+## Conclusion
 
-Das ist umsetzbar, ohne das Gesamtsystem umzubauen.
+This can be implemented without rebuilding the whole system.
 
-Der kritische Punkt ist nicht `array<>` selbst. Der kritische Punkt ist, den numerischen Hotpath von `list<f32>` zu entkoppeln, ohne gleich den gesamten AIML-Container-Stack neu zu designen.
+The critical point is not `array<>` itself. The critical point is decoupling the numeric hot path from `list<f32>` without immediately redesigning the entire AIML container stack.
 
-Der sauberste erste Schritt ist deshalb:
+The cleanest first step is therefore:
 
-1. Pointer-Builtins
-2. `list.data_ptr` fuer primitive Listen
+1. pointer builtins
+2. `list.data_ptr` for primitive lists
 3. `tul/math/scoring.aiml`
 
-Damit bekommt TUL einen echten kleinen Array-Fast-Path, der technisch eng begrenzt und messbar ist.
+That gives TUL a real small array fast path that is technically narrowly bounded and measurable.
