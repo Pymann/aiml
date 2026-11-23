@@ -1,71 +1,71 @@
-# AIML Snapshot-/Memory-Dump-Modus
+# AIML Snapshot/Memory Dump Mode
 
 ## Problem
 
-Der aktuelle Debug-Zyklus ist zu teuer:
+The current debug cycle is too expensive:
 
-1. Logs einfuegen
-2. neu kompilieren
-3. Prozesse neu starten
-4. Test manuell fahren
-5. Rueckmeldung auswerten
-6. wiederholen
+1. insert logs
+2. recompile
+3. restart processes
+4. run the test manually
+5. evaluate the feedback
+6. repeat
 
-Gerade bei Mirror-/Sync-/Runtime-Bugs ist das zu langsam. Man sieht oft erst nach mehreren Iterationen, welcher Teil des Zustands kippt.
+Especially with mirror/sync/runtime bugs this is too slow. Often one only sees after several iterations which part of the state tips over.
 
-## Idee
+## Idea
 
-Ein eigener AIML-Diagnosemodus, der waehrend der Laufzeit fortlaufend lesbare Zustandsabbilder schreibt.
+A dedicated AIML diagnostic mode that continuously writes readable state images during runtime.
 
-Nicht:
+Not:
 
-- rohe Debug-Logs an beliebigen Stellen
-- staendiges manuelles Instrumentieren
+- raw debug logs at arbitrary places
+- constant manual instrumentation
 
-Sondern:
+But:
 
-- strukturierte Dumps
-- aus vorhandenen Serialisierungs- und Hot-Reload-Bausteinen abgeleitet
-- gezielt fuer Modelle, Globals und Mirror-relevante Runtime-Objekte
+- structured dumps
+- derived from existing serialisation and hot reload building blocks
+- specifically for models, globals and mirror-relevant runtime objects
 
-## Warum das naheliegt
+## Why this is an obvious step
 
-AIML hat dafuer schon wesentliche Grundlagen:
+AIML already has essential foundations for it:
 
-- Serialisierung ist bereits vorhanden
-- Mirror braucht strukturierte Zustandsrepraesentationen
-- Hot Reload arbeitet bereits mit kompilierten Code-/State-Grenzen
-- der Compiler kennt Typen, Modelle, Globals und Symboltabellen
+- serialisation already exists
+- mirror needs structured state representations
+- hot reload already works with compiled code/state boundaries
+- the compiler knows types, models, globals and symbol tables
 
-Das heisst: man muss nicht bei null anfangen. Es geht eher darum, vorhandene Runtime-Informationen in einen expliziten Diagnosekanal zu bringen.
+That means: one does not have to start from zero. It is rather about bringing existing runtime information into an explicit diagnostic channel.
 
-## Zielbild
+## Target picture
 
-Ein Modus wie:
+A mode such as:
 
 ```text
 aiml --snapshot-runtime client/main.aiml
 ```
 
-oder zur Laufzeit:
+or at runtime:
 
 ```text
 AIML_SNAPSHOT_MODE=1
 ```
 
-Dann schreibt die Runtime in festen Intervallen oder an definierten Hooks Snapshots, zum Beispiel:
+Then the runtime writes snapshots at fixed intervals or at defined hooks, for example:
 
-- nach jedem `sess.update`
-- nach jedem Mirror-Delta
-- nach RPC-Empfang
-- nach Modell-Mutation
-- nach jedem Frame oder Tick
+- after every `sess.update`
+- after every mirror delta
+- after RPC receipt
+- after a model mutation
+- after every frame or tick
 
-## Form der Ausgabe
+## Form of the output
 
-Wichtig ist: nicht nur "mehr Logs", sondern lesbare Speicherabbilder.
+What matters: not just "more logs", but readable memory images.
 
-Beispiel:
+Example:
 
 ```yaml
 tick: 1842
@@ -85,97 +85,95 @@ objects:
   g_selected_deckset_id: "..."
 ```
 
-Alternativ JSON oder NDJSON. Fuer Diffing waere NDJSON oft praktischer.
+Alternatively JSON or NDJSON. For diffing, NDJSON would often be more practical.
 
-## Hauptnutzen
+## Main benefit
 
-Damit koennte man:
+With this one could:
 
-- den exakten Zeitpunkt sehen, an dem ein Feld kippt
-- server- und clientseitige Snapshots direkt vergleichen
-- Mirror-Probleme als State-Diff statt als Textlog lesen
-- Tests automatisieren: "Snapshot N muss Feld X = Y enthalten"
-- deutlich weniger haendisch instrumentieren
+- see the exact moment at which a field tips over
+- compare server-side and client-side snapshots directly
+- read mirror problems as a state diff instead of a text log
+- automate tests: "snapshot N must contain field X = Y"
+- instrument considerably less by hand
 
-Gerade fuer Bugs wie kaputte `reaction_kind`-Strings waere das viel hilfreicher als verstreute `print`-Zeilen.
+Especially for bugs like broken `reaction_kind` strings, this would be much more helpful than scattered `print` lines.
 
-## Minimalvariante
+## Minimal variant
 
-Die einfachste brauchbare Version waere kein generischer Memory-Dump, sondern ein fokussierter Runtime-Snapshot-Modus:
+The simplest usable version would not be a generic memory dump, but a focused runtime snapshot mode:
 
-- nur registrierte Mirror-Objekte
-- nur bekannte Globals
-- nur serialisierbare AIML-Typen
-- Ausgabe nach bestimmten Triggern
+- only registered mirror objects
+- only known globals
+- only serialisable AIML types
+- output after certain triggers
 
-Das waere technisch realistischer als ein kompletter Dump aller LLVM- oder Heap-Strukturen.
+That would be technically more realistic than a complete dump of all LLVM or heap structures.
 
-## Was vermutlich einfach waere
+## What would probably be easy
 
-Relativ gut machbar:
+Relatively feasible:
 
-- Modelle mit `sync:`-Feldern dumpen
-- AIML-Globals dumpen, wenn sie serialisierbar sind
-- Snapshot-Hooks an Stellen wie `mirror.update`, `register_id`, `send_rpc`, `next_event`
-- separate Dateien pro Tick oder NDJSON-Stream
+- dumping models with `sync:` fields
+- dumping AIML globals if they are serialisable
+- snapshot hooks at places such as `mirror.update`, `register_id`, `send_rpc`, `next_event`
+- separate files per tick or an NDJSON stream
 
-Warum:
+Why:
 
-- diese Objekte sind semantisch ohnehin schon "sichtbarer Zustand"
-- sie passen gut zu vorhandenem Serialize-/Mirror-Denken
+- these objects are semantically "visible state" anyway
+- they fit well with the existing serialize/mirror thinking
 
-## Was schwieriger waere
+## What would be harder
 
-Schwieriger ist ein echter generischer Speicherabbild-Modus:
+A real generic memory image mode is harder:
 
-- beliebige Pointer
-- nicht-serialisierbare Runtime-Typen
-- rohe interne Container
-- fluechtige C++-Objekte ausserhalb des AIML-Modells
-- direkte LLVM-nahe Speicherstrukturen
+- arbitrary pointers
+- non-serialisable runtime types
+- raw internal containers
+- volatile C++ objects outside the AIML model
+- memory structures close to LLVM directly
 
-Das waere schnell unlesbar und fragil.
+That would quickly become unreadable and fragile.
 
-Deshalb sollte das Ziel nicht "alle Bytes dumpen" sein, sondern:
+Therefore the goal should not be "dump all bytes", but:
 
-- semantische Zustands-Snapshots
-- mit optionalem Raw-Modus nur fuer Spezialfaelle
+- semantic state snapshots
+- with an optional raw mode only for special cases
 
-## Bezug zum Hot Reload
+## Relation to hot reload
 
-Hot Reload ist hier interessant, weil es bereits ueber stabile Grenzen zwischen:
+Hot reload is interesting here, because it already has to think about stable boundaries between:
 
-- Code
-- Symbolen
-- globalem Zustand
-- Reinitialisierung
+- code
+- symbols
+- global state
+- reinitialisation
 
-nachdenken muss.
+A snapshot mode could benefit from that:
 
-Ein Snapshot-Modus koennte davon profitieren:
+- enumerate the same known globals/symbols
+- use the same type context
+- address the same registered models
 
-- dieselben bekannten Globals/Symbole enumerieren
-- denselben Typkontext nutzen
-- dieselben registrierten Modelle adressieren
+I would nevertheless treat it as a separate diagnostic feature and not couple it too tightly to hot reload.
 
-Ich wuerde das aber trotzdem als separates Diagnosefeature behandeln und nicht zu eng an Hot Reload koppeln.
+## Concrete proposal
 
-## Konkreter Vorschlag
+### Phase 1: mirror snapshot mode
 
-### Phase 1: Mirror-Snapshot-Modus
+A focused mode only for mirror debugging:
 
-Ein fokussierter Modus nur fuer Mirror-Debugging:
+- dump client-side replica objects
+- dump server-side original objects
+- dump relevant globals
+- write snapshots before and after `sess.update`
 
-- dump clientseitige Replica-Objekte
-- dump serverseitige Originalobjekte
-- dump relevante Globals
-- schreibe Snapshots vor und nach `sess.update`
+That would speed up current debug cycles immediately.
 
-Das wuerde aktuelle Debug-Zyklen sofort beschleunigen.
+### Phase 2: runtime snapshot API
 
-### Phase 2: Runtime-Snapshot-API
-
-Eine kleine Runtime-API wie:
+A small runtime API such as:
 
 ```text
 snapshot.dump("after_update")
@@ -183,81 +181,81 @@ snapshot.dump_obj("view", g_view)
 snapshot.dump_var("selected_deckset", g_selected_deckset_id)
 ```
 
-Dann koennen Tests und Runtime dieselbe Mechanik nutzen.
+Then tests and the runtime can use the same mechanism.
 
-### Phase 3: Compiler-unterstuetzte Auto-Snapshots
+### Phase 3: compiler-supported auto snapshots
 
-Ein Compiler-Flag, das bestimmte Hooks automatisch instrumentiert:
+A compiler flag that automatically instruments certain hooks:
 
-- nach `set` auf `sync:`-Modelle
-- nach `mirror.update`
-- nach `register`
-- nach `register_id`
+- after `set` on `sync:` models
+- after `mirror.update`
+- after `register`
+- after `register_id`
 
-Dann muss man nicht mehr manuell Logs einfuegen.
+Then one no longer has to insert logs manually.
 
-## Format-Empfehlung
+## Format recommendation
 
-Ich wuerde mit NDJSON anfangen:
+I would start with NDJSON:
 
-- einfach zu schreiben
-- einfach zu diffen
-- einfach mit `rg`, `jq` oder Python auszuwerten
-- gut fuer lange Laeufe
+- easy to write
+- easy to diff
+- easy to evaluate with `rg`, `jq` or Python
+- good for long runs
 
-Beispiel:
+Example:
 
 ```json
 {"tick":1842,"side":"client","event":"mirror.update.after","view":{"event_seq":13,"reaction_kind":"","reactable_count":3}}
 ```
 
-## Warum das besser ist als der jetzige Prozess
+## Why this is better than the current process
 
-Der jetzige Prozess ist:
+The current process is:
 
-- langsam
-- invasiv
-- stark manuell
-- schwer reproduzierbar
+- slow
+- invasive
+- heavily manual
+- hard to reproduce
 
-Ein Snapshot-Modus waere:
+A snapshot mode would be:
 
-- schneller
-- vergleichbarer
-- testbarer
-- naeher an der eigentlichen State-Maschine des Systems
+- faster
+- more comparable
+- more testable
+- closer to the actual state machine of the system
 
-## Empfehlung
+## Recommendation
 
-Ja, so ein Modus ist sinnvoll und wahrscheinlich deutlich wertvoller als noch mehr ad-hoc-Logs.
+Yes, such a mode makes sense and is probably considerably more valuable than even more ad-hoc logs.
 
-Wichtig ist aber die Zielschärfe:
+What matters, however, is the sharpness of the goal:
 
-- nicht "beliebige Speicherabbilder"
-- sondern "lesbare semantische Zustands-Snapshots"
+- not "arbitrary memory images"
+- but "readable semantic state snapshots"
 
-Fuer AIML wuerde ich mit einem Mirror-/Runtime-Snapshot-Modus anfangen, weil dort der aktuelle Schmerz am groessten ist und bereits die meisten strukturierten Daten vorliegen.
+For AIML I would start with a mirror/runtime snapshot mode, because that is where the current pain is greatest and most of the structured data already exists.
 
-## Technischer Entwurf
+## Technical design
 
-### Betroffene C++-Dateien
+### Affected C++ files
 
-Die sinnvollsten Einstiegspunkte im aktuellen AIML-Code sind:
+The most sensible entry points in the current AIML code are:
 
 - [mirror_runtime.cpp](../../src/sys/mirror_runtime.cpp)
-  Dort sitzen die Mirror-Lifecycle-Hooks wie `aiml_mirror_session_update`, `register`, `register_id`, `next_event` und `send_rpc`.
+  That is where the mirror lifecycle hooks such as `aiml_mirror_session_update`, `register`, `register_id`, `next_event` and `send_rpc` sit.
 - [mirror_runtime.h](../../src/sys/mirror_runtime.h)
-  Fuer die Runtime-API des Snapshot-Modus.
+  For the runtime API of the snapshot mode.
 - [serialize_impl.cpp](../../src/core/serialize_impl.cpp)
-  Vorhandene Struktur-Serialisierung kann fuer lesbare Snapshot-Payloads wiederverwendet werden.
+  The existing structure serialisation can be reused for readable snapshot payloads.
 - [builtin_registry.cpp](../../src/core/builtin_registry.cpp)
-  Wenn eine AIML-seitige API wie `snapshot.dump(...)` angeboten werden soll.
+  If an AIML-side API such as `snapshot.dump(...)` is to be offered.
 - [context.h](../../src/core/context.h)
-  Dort liegen bereits Typinfos, Klasseninfos und Mirror-Metadaten wie `sync`-/`rpc`-Felder.
+  That is where type info, class info and mirror metadata such as `sync`/`rpc` fields already live.
 
-### Warum gerade dort
+### Why exactly there
 
-Im Mirror-Pfad sind die wichtigsten Hooks schon zentralisiert:
+In the mirror path, the most important hooks are already centralised:
 
 - `aiml_mirror_session_update(...)` in [mirror_runtime.cpp](../../src/sys/mirror_runtime.cpp#L794)
 - `aiml_mirror_session_register(...)` in [mirror_runtime.cpp](../../src/sys/mirror_runtime.cpp#L828)
@@ -266,22 +264,22 @@ Im Mirror-Pfad sind die wichtigsten Hooks schon zentralisiert:
 - `aiml_mirror_session_next_event(...)` in [mirror_runtime.cpp](../../src/sys/mirror_runtime.cpp#L1005)
 - `aiml_mirror_session_send_rpc(...)` in [mirror_runtime.cpp](../../src/sys/mirror_runtime.cpp#L1084)
 
-Das ist genau der Pfad, in dem der aktuelle Debug-Bedarf am groessten ist.
+That is exactly the path in which the current debugging need is greatest.
 
-### Vorschlag fuer neue Runtime-Komponente
+### Proposal for a new runtime component
 
-Neue Datei:
+New file:
 
 - `src/sys/snapshot_runtime.{h,cpp}`
 
-Aufgaben:
+Tasks:
 
-- Modus per Env oder API aktivieren
-- Snapshot-Output-Datei verwalten
-- NDJSON schreiben
-- Hilfsfunktionen fuer Strings, Events und strukturierte Payloads anbieten
+- activate the mode via env or API
+- manage the snapshot output file
+- write NDJSON
+- offer helper functions for strings, events and structured payloads
 
-Minimale API:
+Minimal API:
 
 ```cpp
 void aiml_snapshot_init_from_env(void);
@@ -290,7 +288,7 @@ void aiml_snapshot_emit_kv(const char* phase, const char* side, const char* even
 int  aiml_snapshot_enabled(void);
 ```
 
-Optional spaeter:
+Optionally later:
 
 ```cpp
 void aiml_snapshot_emit_model(const char* phase, const char* side,
@@ -298,9 +296,9 @@ void aiml_snapshot_emit_model(const char* phase, const char* side,
                               const char* type_name, const char* json_payload);
 ```
 
-### Empfohlene Aktivierung
+### Recommended activation
 
-Zunaechst nur per Environment:
+At first only via the environment:
 
 ```text
 AIML_SNAPSHOT_MODE=1
@@ -308,82 +306,82 @@ AIML_SNAPSHOT_FILE=/tmp/aiml_snapshot.ndjson
 AIML_SNAPSHOT_SIDE=client
 ```
 
-Optional:
+Optionally:
 
 ```text
 AIML_SNAPSHOT_FILTER=mirror.update,register_id,next_event
 ```
 
-Das ist einfacher als sofort neue CLI-Syntax durch den ganzen Compiler zu ziehen.
+That is simpler than pulling new CLI syntax through the whole compiler right away.
 
-## Hook-Punkte
+## Hook points
 
-### Phase 1: Mirror-Runtime Hooks
+### Phase 1: mirror runtime hooks
 
-Ich wuerde zuerst nur diese Hooks instrumentieren:
+I would first instrument only these hooks:
 
-- vor `aiml_mirror_session_update(...)`
-- nach `aiml_mirror_session_update(...)`
-- nach `aiml_mirror_session_register_id(...)`
-- nach `aiml_mirror_session_register_id_typed(...)`
-- direkt in `aiml_mirror_session_next_event(...)`
-- direkt in `aiml_mirror_session_send_rpc(...)`
+- before `aiml_mirror_session_update(...)`
+- after `aiml_mirror_session_update(...)`
+- after `aiml_mirror_session_register_id(...)`
+- after `aiml_mirror_session_register_id_typed(...)`
+- directly in `aiml_mirror_session_next_event(...)`
+- directly in `aiml_mirror_session_send_rpc(...)`
 
-Nutzen:
+Benefit:
 
-- man sieht den Zustand genau an den Uebergaengen, an denen sich Replica-State aendert
-- keine breite Instrumentierung im restlichen Compiler noetig
+- one sees the state exactly at the transitions at which the replica state changes
+- no broad instrumentation needed in the rest of the compiler
 
-### Konkrete Snapshots an diesen Hooks
+### Concrete snapshots at these hooks
 
 `update.before`
 
-- Session-Zustand
-- Queue-Laengen
-- bekannte registrierte Net-IDs
+- session state
+- queue lengths
+- known registered net IDs
 
 `update.after`
 
-- dasselbe erneut
-- plus Snapshots der registrierten typed objects
+- the same again
+- plus snapshots of the registered typed objects
 
 `register_id.after`
 
 - net_id
 - obj_size
-- ob typed oder untyped
-- initialer Objekt-Snapshot
+- whether typed or untyped
+- initial object snapshot
 
 `next_event`
 
-- Event-Typ
+- event type
 - net_id
-- Peer-ID
-- Queue-Status vor/nach Pop
+- peer ID
+- queue status before/after the pop
 
 `send_rpc`
 
 - net_id
 - method
 - arg_kind
-- arg oder Modell-Blob-Laenge
+- arg or model blob length
 
-## Was genau gesnapshottet werden sollte
+## What exactly should be snapshotted
 
-### Session-Metadaten
+### Session metadata
 
-Aus `AimlMirrorSession` in [mirror_runtime.cpp](../../src/sys/mirror_runtime.cpp#L121):
+From `AimlMirrorSession` in [mirror_runtime.cpp](../../src/sys/mirror_runtime.cpp#L121):
 
 - `is_host`
 - `next_net_id`
-- Anzahl `peers`
-- Anzahl `by_net_id`
-- Anzahl `event_queue`
-- Anzahl `rpc_queue`
+- number of `peers`
+- number of `by_net_id`
+- number of `event_queue`
+- number of `rpc_queue`
 
-### Registrierte Mirror-Objekte
+### Registered mirror objects
 
-Aus `AimlMirrorRegistered` in [mirror_runtime.cpp](../../src/sys/mirror_runtime.cpp#L86):
+From `AimlMirrorRegistered` in [mirror_runtime.cpp](../../src/sys/mirror_runtime.cpp#L86):
 
 - `net_id`
 - `obj_size`
@@ -392,21 +390,21 @@ Aus `AimlMirrorRegistered` in [mirror_runtime.cpp](../../src/sys/mirror_runtime.
 - `has_decoded`
 - typed/untyped
 
-Und fuer typed Objekte zusaetzlich:
+And additionally for typed objects:
 
-- serialisierte JSON-Darstellung des aktuellen Objekts
+- the serialised JSON representation of the current object
 
-### Mirror-Events
+### Mirror events
 
-Aus `AimlMirrorEvent`:
+From `AimlMirrorEvent`:
 
 - `type`
 - `net_id`
 - `peer_id`
 
-### RPC-Events
+### RPC events
 
-Aus `AimlRpcEvent`:
+From `AimlRpcEvent`:
 
 - `method`
 - `net_id`
@@ -414,37 +412,37 @@ Aus `AimlRpcEvent`:
 - `arg`
 - `arg_blob_len`
 
-## Wie der Objekt-Snapshot erzeugt werden kann
+## How the object snapshot can be produced
 
-### Typed Mirror-Objekte
+### Typed mirror objects
 
-Das ist der wichtigste Fall und auch der realistischste.
+This is the most important case and also the most realistic one.
 
-Wenn `AimlMirrorRegistered.ser_nodes != nullptr`, dann hat das Objekt bereits typisierte Serialisierungsmetadaten. Genau dort sollte der Snapshot-Modus ansetzen.
+If `AimlMirrorRegistered.ser_nodes != nullptr`, the object already has typed serialisation metadata. That is exactly where the snapshot mode should start.
 
-Pragmatischer Weg:
+Pragmatic way:
 
-1. neue Runtime-Hilfe in `ser_runtime.cpp` oder `snapshot_runtime.cpp`
-2. typed Objekt ueber vorhandene Ser-Information in JSON umwandeln
-3. Ergebnis als String in NDJSON schreiben
+1. a new runtime helper in `ser_runtime.cpp` or `snapshot_runtime.cpp`
+2. convert the typed object to JSON via the existing ser information
+3. write the result as a string into NDJSON
 
-Das ist besser als rohe Bytes.
+That is better than raw bytes.
 
-### Untyped Objekte
+### Untyped objects
 
-Fuer untyped Registrierungen zunaechst nur Metadaten dumpen:
+For untyped registrations, at first only dump metadata:
 
 - `net_id`
 - `obj_size`
-- hex preview der ersten N Bytes
+- a hex preview of the first N bytes
 
-Das reicht fuer Phase 1.
+That is enough for phase 1.
 
-## NDJSON-Schema
+## NDJSON schema
 
-Ich wuerde bewusst klein anfangen.
+I would deliberately start small.
 
-Beispiel:
+Example:
 
 ```json
 {
@@ -477,65 +475,65 @@ Beispiel:
 }
 ```
 
-Minimaler Pflichtsatz:
+Minimal mandatory set:
 
 - `ts_ms`
 - `side`
 - `phase`
 - `event`
 
-Der Rest kann je nach Hook variieren.
+The rest can vary depending on the hook.
 
-## Compiler-seitige Erweiterung spaeter
+## Compiler-side extension later
 
-Wenn Phase 1 funktioniert, kann man eine AIML-API dazunehmen.
+Once phase 1 works, an AIML API can be added.
 
-Beispiel:
+Example:
 
 ```yaml
 - call: [snapshot.dump, "after_update"]
 - call: [snapshot.dump_obj, "view", g_view]
 ```
 
-Dafuer waeren Anpassungen in [builtin_registry.cpp](../../src/core/builtin_registry.cpp) noetig.
+That would require adjustments in [builtin_registry.cpp](../../src/core/builtin_registry.cpp).
 
-Zuerst wuerde ich das aber vermeiden und nur die Runtime-Hooks bauen. Sonst landet man wieder bei einem groesseren Compiler-Thema, bevor der erste Nutzen da ist.
+At first, however, I would avoid that and only build the runtime hooks. Otherwise one ends up with a bigger compiler topic again before the first benefit is there.
 
-## Grobe Implementierungsreihenfolge
+## Rough implementation order
 
-1. `snapshot_runtime.{h,cpp}` anlegen
-2. Env-basierte Aktivierung und NDJSON-Writer bauen
-3. `mirror_runtime.cpp` an den sechs Hook-Punkten instrumentieren
-4. Session-Metadaten plus Event-/RPC-Dumps ausgeben
-5. typed Mirror-Objekte als JSON-Snapshots ausgeben
-6. erst danach AIML-API oder Auto-Instrumentierung im Compiler diskutieren
+1. create `snapshot_runtime.{h,cpp}`
+2. build env-based activation and the NDJSON writer
+3. instrument `mirror_runtime.cpp` at the six hook points
+4. output session metadata plus event/RPC dumps
+5. output typed mirror objects as JSON snapshots
+6. only afterwards discuss an AIML API or auto-instrumentation in the compiler
 
-## Risikoabschaetzung
+## Risk assessment
 
-Niedriges Risiko:
+Low risk:
 
-- NDJSON-Writer
-- Mirror-Hooks
-- Session-/Event-Metadaten
+- NDJSON writer
+- mirror hooks
+- session/event metadata
 
-Mittleres Risiko:
+Medium risk:
 
-- typed Objekt-JSON zur Laufzeit stabil und billig erzeugen
+- producing typed object JSON stably and cheaply at runtime
 
-Hoeheres Risiko:
+Higher risk:
 
-- generische Snapshots fuer beliebige nicht-typed Objekte
-- automatische Compiler-Instrumentierung auf `set`-/`sync:`-Mutationsebene
+- generic snapshots for arbitrary non-typed objects
+- automatic compiler instrumentation at the `set`/`sync:` mutation level
 
-## Meine Empfehlung
+## My recommendation
 
-Nicht sofort einen allumfassenden Snapshot-Modus bauen.
+Do not build an all-encompassing snapshot mode right away.
 
-Stattdessen:
+Instead:
 
-- Mirror-Runtime zuerst
-- typed Registrierungen zuerst
-- NDJSON zuerst
-- keine neue AIML-Syntax in Phase 1
+- mirror runtime first
+- typed registrations first
+- NDJSON first
+- no new AIML syntax in phase 1
 
-Damit bekommt man relativ schnell ein Werkzeug, das fuer den aktuellen `reaction_kind`-/Mirror-State-Bug deutlich nuetzlicher ist als der jetzige Log-und-Neustart-Zyklus.
+That quickly gives a tool that is considerably more useful for the current `reaction_kind`/mirror state bug than the current log-and-restart cycle.
