@@ -206,7 +206,7 @@ struct PrefabChildDef {
     std::string on_click_fn;         /* button */
     std::string on_change_fn;        /* text_input value changed; slider value changed */
 
-    /* ── Radio-Gruppe (exklusive Auswahl über Instances mit gleicher Gruppe) */
+    /* ── Radio group (exclusive selection across instances with the same group) */
     std::string group;
 
     /* ── Dropdown: Pipe-separierte Optionen ("A|B|C") */
@@ -253,10 +253,10 @@ struct PrefabChildDef {
     bool        visible = true;
     bool        scrollable = false;  /* container: engine-managed row window + visible scrollbar (track+thumb, wheel+drag) */
     bool        tail = false;         /* textbox: stick to bottom as content grows (chat) */
-    /* spec/44_6 §5f: `wrap: false` laesst eine Zeile eine Zeile bleiben, wie
-     * lang sie auch ist — die Box scrollt dann SEITWAERTS.  Das braucht ein
-     * Bau-Protokoll oder ein YAML: Umbruch macht aus 200-Zeichen-Zeilen Brei
-     * und nimmt dem Auge die Struktur, die der Autor hineingeschrieben hat. */
+    /* spec/44_6 §5f: `wrap: false` keeps a line a line, however
+     * long it is — the box then scrolls SIDEWAYS.  A build log or a YAML
+     * needs that: wrapping turns 200-character lines into mush
+     * and takes away from the eye the structure the author wrote into it. */
     bool        wrap = true;
     int32_t     tb_prev_max = -1;     /* textbox: last max scroll offset (for tail-follow detection) */
     int32_t     tb_total = 0;         /* textbox render cache: wrapped line count (read by input) */
@@ -268,7 +268,7 @@ struct PrefabDef {
     float width, height;
     std::string texture_path;
     bool draggable;
-    bool input_transparent = false;   /* spec/44_6: gilt fuer jede Instanz */
+    bool input_transparent = false;   /* spec/44_6: applies to every instance */
     /* Phase 6: which Model/cascade type this prefab is bound to.  Runtime
      * uses it to route per-child `bind:` lookups to the right Model instance
      * held by this prefab-instance.                                          */
@@ -316,13 +316,13 @@ struct Material {
 /* Forward — PrefabChild::spawned holds pointers to instances of THIS type. */
 struct AimlPrefabInstance;
 
-/* spec/44_6: Treffer-Spur, standardmäßig aus (prefab.trace_hits). */
+/* spec/44_6: hit trace, off by default (prefab.trace_hits). */
 extern "C" void aiml_log_info(const char* msg, const char* loc);
 static bool g_trace_hits = false;
-/* Letzte aufgeloeste Treffer, "|"-getrennt.  "" = Druck traf nichts,
- * "?" = nicht erhoben (Tracing aus).  Die Erhebung laeuft nur bei aktivem
- * Tracing, damit sie fremden Apps nichts kostet; "?" verhindert, dass eine
- * Pruefung auf "nichts getroffen" dann aus dem falschen Grund besteht. */
+/* Last resolved hits, "|"-separated.  "" = the press hit nothing,
+ * "?" = not collected (tracing off).  Collection only runs with active
+ * tracing, so that it costs other apps nothing; "?" prevents a
+ * check for "nothing hit" from then passing for the wrong reason. */
 static std::string g_last_hits;
 
 struct PrefabChild {
@@ -371,10 +371,10 @@ struct PrefabChild {
     std::string on_change_fn;
     std::string group;   /* radio */
     std::string options; /* dropdown: pipe-separiert */
-    /* Per-child buffer für aiml_prefab_dropdown_value: früher gab es einen
-     * einzigen thread_local buffer für alle dropdowns — bei zwei dropdown_value-
-     * Aufrufen in einer Expression überschrieb der zweite Aufruf den Puffer,
-     * der Pointer aus dem ersten Aufruf zeigte dann auf den zweiten Wert. */
+    /* Per-child buffer for aiml_prefab_dropdown_value: there used to be a
+     * single thread_local buffer for all dropdowns — with two dropdown_value
+     * calls in one expression the second call overwrote the buffer,
+     * and the pointer from the first call then pointed to the second value. */
     mutable std::string dd_value_cache;
     int32_t     selected_index = 0;
     bool        dropdown_open  = false;
@@ -382,7 +382,7 @@ struct PrefabChild {
     bool        sb_dragging    = false; /* Popup-Scrollbar-Drag */
     bool        tb_drag        = false; /* textbox: body drag-to-scroll active (touch/maus) */
     int32_t     tb_drag_off    = 0;     /* textbox: scroll_offset bei Drag-Beginn */
-    bool        sb_dragging_x  = false;  /* textbox: der UNTERE Balken wird gezogen */
+    bool        sb_dragging_x  = false;  /* textbox: the LOWER bar is being dragged */
 
     /* ── Bar/gauge runtime state + slider state ─────────────────────────── */
     float    bar_value     = 0.0f;
@@ -428,20 +428,20 @@ struct PrefabChild {
     std::string cascade_type;
     std::string payload_spawn;
     std::string cascade_flow;  /* "horizontal" (default) or "vertical" */
-    /* spec/44_6 §5h: waagerechtes Rollen der Payload-Kette.  GEFENSTERT WIRD
-     * UEBER SICHTBARKEIT (pi->visible), genau wie der scrollable-Container seine
-     * Zeilen fenstert — NICHT ueber den GL-Scissor-Clip aus §6c.  Der erste
-     * Versuch hing den Clip an die Zeile und liess den WASM-Client in
-     * render_instance abstuerzen ("index out of bounds", Firefox = ungueltiger
-     * Tabellen-Zugriff); das Sichtbarkeits-Fenstern laeuft im Client dagegen
-     * nachweislich (Spieler-/Duell-Listen).  Der Versatz rastet auf die
-     * Payload-Teilung — bei ganzen Feldern ist Fenstern == Beschneiden. */
+    /* spec/44_6 §5h: horizontal scrolling of the payload chain.  WINDOWING IS DONE
+     * VIA VISIBILITY (pi->visible), just as the scrollable container windows its
+     * rows — NOT via the GL scissor clip from §6c.  The first
+     * attempt hung the clip on the row and made the WASM client crash in
+     * render_instance ("index out of bounds", Firefox = invalid
+     * table access); windowing via visibility, on the other hand, demonstrably runs in the client
+     * (player/duel lists).  The offset snaps to the
+     * payload pitch — with whole fields, windowing == clipping. */
     bool        payload_scroll   = false;
     bool        payload_sb_drag  = false;
     float       payload_scroll_x = 0.0f;
-    float       payload_span     = 0.0f;  /* Gesamtbreite der Kette */
-    float       payload_start    = 0.0f;  /* linke Kante der Payload-Zone (lokal) */
-    float       payload_pitch    = 0.0f;  /* Breite eines Payloads + Luecke */
+    float       payload_span     = 0.0f;  /* total width of the chain */
+    float       payload_start    = 0.0f;  /* left edge of the payload zone (local) */
+    float       payload_pitch    = 0.0f;  /* width of one payload + gap */
     /* `enum: TypeName` — dropdown/radio bound to an enum; drives options and
      * lets aiml_prefab_dropdown_enum_value return the true member value. */
     std::string enum_type;
@@ -451,18 +451,18 @@ struct PrefabChild {
     bool        scrollable = false;  /* container: engine-managed row window + visible scrollbar (track+thumb, wheel+drag) */
     bool        tail = false;         /* textbox: stick to bottom as content grows (chat) */
     bool        wrap = true;          /* spec/44_6 §5f: false = seitwaerts scrollen statt umbrechen */
-    float       tb_off_x = 0.0f;      /* waagerechter Versatz in Pixeln (nur ohne Umbruch) */
-    float       tb_content_w = 0.0f;  /* Breite der laengsten Zeile (Render-Zwischenstand) */
-    float       tb_inner_w = 0.0f;    /* nutzbare Breite — der Eingabe-Pass rechnet damit */
+    float       tb_off_x = 0.0f;      /* horizontal offset in pixels (only without wrapping) */
+    float       tb_content_w = 0.0f;  /* width of the longest line (render intermediate) */
+    float       tb_inner_w = 0.0f;    /* usable width — the input pass computes with it */
     AimlUIFont* tb_font = nullptr;    /* dieselbe Schrift wie beim Zeichnen */
     int32_t     tb_prev_max = -1;     /* textbox: last max scroll offset (for tail-follow detection) */
-    /* text_input: mehrzeilig?  Entschieden wird das beim ZEICHNEN (Hoehe gegen
-     * Zeilenhoehe, spec/44_6 §5g) — der Eingabe-Pass liest dasselbe Ergebnis,
-     * statt die Entscheidung ein zweites Mal zu treffen. */
+    /* text_input: multi-line?  This is decided when DRAWING (height against
+     * line height, spec/44_6 §5g) — the input pass reads the same result
+     * instead of making the decision a second time. */
     bool        ti_multiline = false;
-    /* Der Leser hat selbst gerollt — dann NICHT mehr dem Cursor folgen, bis er
-     * sich wirklich bewegt (spec/44_6 §5f).  Ohne das zog jeder Rahmen die
-     * Ansicht zum Cursor zurueck, und Rollen war unmoeglich. */
+    /* The reader has scrolled themselves — then do NOT follow the cursor any more until it
+     * really moves (spec/44_6 §5f).  Without this every frame pulled the
+     * view back to the cursor, and scrolling was impossible. */
     bool        ti_free_scroll = false;
     int32_t     ti_caret_seen  = -1;
     int32_t     tb_total = 0;         /* textbox render cache: wrapped line count (read by input) */
@@ -526,18 +526,18 @@ struct AimlPrefabInstance {
     float alpha;
     bool visible;
     bool draggable;
-    /* spec/44_6: true = von hit_test/update_hover UEBERSPRUNGEN.  Trennt
-     * "wird gezeichnet" von "nimmt Eingabe": eine dekorative Flaeche (grosse
-     * Vorschau, Banner, Rahmen) macht sonst alles darunter unerreichbar, weil
-     * hit_test die oberste SICHTBARE Instanz liefert und `hovered` nur dieses
-     * eine Ergebnis bekommt. */
+    /* spec/44_6: true = SKIPPED by hit_test/update_hover.  Separates
+     * "is drawn" from "takes input": a decorative surface (large
+     * preview, banner, frame) otherwise makes everything beneath it unreachable, because
+     * hit_test returns the topmost VISIBLE instance and `hovered` only gets this
+     * one result. */
     bool input_transparent = false;
-    /* spec/44_6: true = diese Instanz BLOCKIERT Eingabe fuer alles mit
-     * kleinerem z.  Das Gegenstueck zu input_transparent: hit_test arbitriert
-     * schon ueber z, der Widget-Durchlauf aber NICHT — er laeuft bewusst ueber
-     * alle Instanzen, damit eine transparente Platte ihre Widgets durchlaesst.
-     * Folge war, dass ein Vollbild-Overlay den Hover korrekt sperrte, die
-     * Buttons darunter aber weiter klickbar blieben. */
+    /* spec/44_6: true = this instance BLOCKS input for everything with a
+     * smaller z.  The counterpart of input_transparent: hit_test already arbitrates
+     * by z, but the widget pass does NOT — it deliberately runs over
+     * all instances, so that a transparent panel lets its widgets through.
+     * The consequence was that a full-screen overlay correctly blocked the hover, but the
+     * buttons beneath it stayed clickable. */
     bool input_blocking = false;
     GLuint base_texture;
     std::vector<PrefabChild> children;
@@ -721,8 +721,8 @@ static std::string derive_label_from_name(const std::string& n) {
     return out;
 }
 
-/* Helper: get scale factor screen/design resolution (vor get_actual_pos
- * definiert weil dieser es jetzt auch nutzt). */
+/* Helper: get scale factor screen/design resolution (defined before get_actual_pos
+ * because it now uses it too). */
 static inline void get_rel_scale(float& rsx, float& rsy) {
     if (g_scene && g_scene->design_w > 0 && g_scene->design_h > 0) {
         rsx = (float)g_scene->screen_w / (float)g_scene->design_w;
@@ -734,10 +734,10 @@ static inline void get_rel_scale(float& rsx, float& rsy) {
 }
 
 /* Helper: get actual pixel position from coords.
- * Spec/44_6 §Coordinates: alle Pos/Size sind in design-space (1280×720,
- * or whatever scene_init wurde mit gerufen).  Render skaliert mit
- * screen_w/design_w  so dass das UI bei window-resize/maximize
- * mitwächst.  is_relative=true: x,y als 0..1 Ratios (legacy). */
+ * Spec/44_6 §Coordinates: all pos/size values are in design space (1280×720,
+ * or whatever scene_init was called with).  Rendering scales by
+ * screen_w/design_w  so that the UI grows along on window resize/maximize.
+ * is_relative=true: x,y as 0..1 ratios (legacy). */
 static inline void get_actual_pos(AimlPrefabInstance* inst,
                                    float& ax, float& ay) {
     if (!g_scene) { ax = inst->x; ay = inst->y; return; }
@@ -2066,9 +2066,9 @@ static void cascade_payload_sync(AimlPrefabInstance* inst) {
                 }
                 return b;
             };
-            /* spec/44_6 §5h: waagerechtes Rollen.  Begrenzt und gerastert wird mit
-             * den Werten des VORIGEN Frames (Spannweite/Teilung stehen erst nach dem
-             * Setzen fest) — ein Frame Verzug, den niemand sieht. */
+            /* spec/44_6 §5h: horizontal scrolling.  Clamping and snapping use
+             * the values of the PREVIOUS frame (span/pitch are only fixed after
+             * setting) — one frame of delay that nobody sees. */
             const float pay_start = pos_x;
             const float row_w     = inst->def ? inst->def->width : 0.0f;
             float viewport = row_w - pay_start;
@@ -2102,9 +2102,9 @@ static void cascade_payload_sync(AimlPrefabInstance* inst) {
                 ch.payload_start = pay_start;
                 ch.payload_pitch = pay_pitch;
                 ch.payload_span  = (pos_x + ch.payload_scroll_x) - pay_start;
-                /* Fenstern ueber SICHTBARKEIT (wie der scrollable-Container seine
-                 * Zeilen): ein Payload, das nicht ganz in die Zone passt, wird nicht
-                 * gezeichnet.  Kein Scissor, kein Eingriff in render_instance. */
+                /* Windowing via VISIBILITY (as the scrollable container does with its
+                 * rows): a payload that does not fit entirely into the zone is not
+                 * drawn.  No scissor, no intervention in render_instance. */
                 const float left  = pay_start;
                 const float right = pay_start + viewport;
                 for (auto* pi : ch.spawned_payload) {
@@ -2115,8 +2115,8 @@ static void cascade_payload_sync(AimlPrefabInstance* inst) {
                     pi->visible = (pi->x >= left - 0.5f && pi->x + pw <= right + 0.5f);
                 }
             } else {
-                /* Ohne Rollen (oder senkrecht) gehoert die Sichtbarkeit uns nicht
-                 * mehr — sonst bliebe ein einmal gefenstertes Payload unsichtbar. */
+                /* Without scrolling (or vertical) the visibility is no longer ours
+                 * — otherwise a payload windowed once would stay invisible. */
                 for (auto* pi : ch.spawned_payload)
                     if (pi && !pi->pending_delete) pi->visible = true;
             }
@@ -2665,11 +2665,11 @@ static void render_instance(AimlPrefabInstance* inst) {
                     if (deg != 0.0f) rotate_batch_verts(b, v0, px, py, deg);
                 };
                 /* Straight-edge tile counts (excluding the corner arcs).
-                 * ceil, nicht floor — so garantiert step_x/step_y ≤ fbs
-                 * und die Kacheln überlappen leicht statt Lücken zu
-                 * lassen bei nicht-glatt teilbarer Kantenlänge (z.B.
-                 * straight_x=88 / fbs=6 → step=6.286 mit floor → 0.29 px
-                 * Lücke pro Kante; mit ceil step=5.87 → 0.13 px Überlapp). */
+                 * ceil, not floor — that guarantees step_x/step_y ≤ fbs
+                 * and the tiles overlap slightly instead of leaving gaps
+                 * when the edge length does not divide evenly (e.g.
+                 * straight_x=88 / fbs=6 → step=6.286 with floor → 0.29 px
+                 * gap per edge; with ceil step=5.87 → 0.13 px overlap). */
                 float straight_x = cw   - 2.0f * R;
                 float straight_y = ch_h - 2.0f * R;
                 int nx = straight_x > 0.0f ? (int)ceilf(straight_x / fbs) : 0;
@@ -2702,8 +2702,8 @@ static void render_instance(AimlPrefabInstance* inst) {
                  * Tile CENTERS follow an arc of radius (R - fbs/2), not R,
                  * so they stay on the same fbs/2-inset locus as the
                  * straight-edge tile centers.  Using R itself put the
-                 * centers on the button's outer corner, making the halbe
-                 * Kachel nach außen ragen (siehe User-Screenshot). */
+                 * centers on the button's outer corner, making half a
+                 * tile stick out (see user screenshot). */
                 float arc_r   = R - fbs * 0.5f;
                 if (arc_r < 0.0f) arc_r = 0.0f;
                 int   corner_n = (int)ceilf((pi_f * 0.5f * (arc_r + fbs * 0.5f)) / fbs);
@@ -2746,9 +2746,9 @@ static void render_instance(AimlPrefabInstance* inst) {
                     float text_cx = cx + cw * 0.5f;
                     float text_cy = cy + (ch_h - lf->line_height) * 0.5f;
                     /* Optional outline halo — same 8-tap ring used for
-                     * CHILD_LABEL, ported so Text-Buttons can get a colored
-                     * schein (z.B. hellblau) um die Beschriftung.  Läuft nur
-                     * wenn outline_px > 0 UND outline_color eine Alpha hat. */
+                     * CHILD_LABEL, ported so text buttons can get a coloured
+                     * glow (e.g. light blue) around the caption.  Only runs
+                     * if outline_px > 0 AND outline_color has an alpha. */
                     if (ch.outline_px > 0.0f && (ch.outline_color & 0xFFu)) {
                         uint32_t ocol = rgba32_to_gl(ch.outline_color, alpha);
                         float d = ch.outline_px * sx;
@@ -2883,26 +2883,26 @@ static void render_instance(AimlPrefabInstance* inst) {
                         float vpad = 4.0f * sx;
                         int visible_lines = (int)floorf((ch_h - 2.0f * vpad) / line_h);
                         if (visible_lines < 1) visible_lines = 1;
-                        /* EINE Umbruch-Rechnung fuer alles: Zeichnen, Cursor und
-                         * Klick-Karte.  Vorher wurde fuer den Cursor der PRAEFIX
-                         * allein umgebrochen (`display.substr(0, cpos0)`) — ein
-                         * Praefix bricht anders als derselbe Text mit dem Rest
-                         * dahinter, also stand der Cursor auf einer anderen Zeile
-                         * und Spalte als das Zeichen, zu dem er gehoert.  Zusammen
-                         * mit der fehlenden Gutter-Breite (unten) ergab das den
-                         * „wild hin und her hoppsenden" Cursor. */
+                        /* ONE wrap computation for everything: drawing, cursor and
+                         * click map.  Previously the PREFIX alone was wrapped
+                         * for the cursor (`display.substr(0, cpos0)`) — a
+                         * prefix wraps differently from the same text with the rest
+                         * behind it, so the cursor stood on a different line
+                         * and column from the character it belongs to.  Together
+                         * with the missing gutter width (below) that produced the
+                         * cursor "hopping wildly back and forth". */
                         std::vector<std::pair<int32_t,int32_t>> cspans;
                         std::vector<std::string> clines =
                             wrap_text_lines(lf, display.c_str(), ch.wrap ? inner_w : 0.0f, &cspans);
-                        /* Was der Tasten-Pass braucht, um dieselbe Rechnung zu
-                         * machen (spec/44_6 §5f): Schrift, Breite, Fensterhoehe. */
+                        /* What the key pass needs to do the same computation
+                         * (spec/44_6 §5f): font, width, window height. */
                         ch.tb_font    = lf;
                         ch.tb_inner_w = inner_w;
                         ch.tb_visible = visible_lines;
                         ch.tb_total   = (int32_t)clines.size();
-                        /* Breite der Nummernspalte.  Sie haengt an der ZEILENZAHL
-                         * ("9 " vs "16 ") und aendert sich damit beim Tippen —
-                         * wer sie beim Cursor weglaesst, laesst ihn springen. */
+                        /* Width of the number column.  It depends on the LINE COUNT
+                         * ("9 " vs "16 ") and therefore changes while typing —
+                         * whoever leaves it out at the cursor makes it jump. */
                         float cgut = 0.0f;
                         if (ch.gutter) {
                             int src_total = 1;
@@ -2911,8 +2911,8 @@ static void render_instance(AimlPrefabInstance* inst) {
                             snprintf(wbuf, sizeof(wbuf), "%d ", src_total);
                             cgut = text_width_font(lf, wbuf) + 8.0f * sx;
                         }
-                        /* Cursor-Halte je Zeile, RELATIV zum Textanfang — eine
-                         * Quelle fuer Cursor-Position und Klick-Zuordnung. */
+                        /* Cursor stops per line, RELATIVE to the start of the text — one
+                         * source for the cursor position and the click mapping. */
                         std::vector<float>   all_cx;
                         std::vector<int32_t> all_cb;
                         std::vector<int32_t> all_rows;
@@ -2937,8 +2937,8 @@ static void render_instance(AimlPrefabInstance* inst) {
                             for (size_t r = 0; r + 1 < all_rows.size(); ++r)
                                 if ((int32_t)best >= all_rows[r]) caret_line = (int)r;
                         } else {
-                            /* secret-Modus: die gezeichneten Punkte sagen nichts
-                             * ueber die Bytes — dann die alte Naeherung. */
+                            /* secret mode: the drawn dots say nothing
+                             * about the bytes — then the old approximation. */
                             std::vector<std::string> pre_lines =
                                 wrap_text_lines(lf, display.substr(0, cpos0).c_str(), inner_w);
                             caret_line = pre_lines.empty() ? 0 : (int)pre_lines.size() - 1;
@@ -2946,12 +2946,12 @@ static void render_instance(AimlPrefabInstance* inst) {
                                          : text_width_font(lf, pre_lines.back().c_str());
                         }
                         int scroll_line = (int)ch.text_scroll_y;
-                        /* Dem Cursor folgen, wenn er sich BEWEGT hat (tippen,
-                         * Pfeiltasten) — sonst bleibt stehen, wo der Leser
-                         * hingerollt hat.  Vorher wurde jeder Rahmen zum
-                         * Cursor zurueckgezogen und ein unfokussiertes Feld
-                         * sprang auf Zeile 0: beides machte den Rollbalken
-                         * wirkungslos (gemeldet 22.10.2026). */
+                        /* Follow the cursor if it has MOVED (typing,
+                         * arrow keys) — otherwise stay where the reader
+                         * scrolled to.  Previously every frame pulled back to the
+                         * cursor and an unfocused field
+                         * jumped to line 0: both made the scrollbar
+                         * ineffective (reported 2026-10-22). */
                         if (ch.cursor_pos != ch.ti_caret_seen) {
                             ch.ti_caret_seen = ch.cursor_pos;
                             ch.ti_free_scroll = false;
@@ -2965,11 +2965,11 @@ static void render_instance(AimlPrefabInstance* inst) {
                         if (scroll_line > max_line) scroll_line = max_line;
                         if (scroll_line < 0) scroll_line = 0;
                         ch.text_scroll_y = (float)scroll_line;
-                        /* spec/44_6: Klick-Positionierung im MEHRZEILIGEN Feld.
-                         * Hier stand bis 2026-10-15 genau EIN Halt (Byte 0): jeder
-                         * Klick sprang an den Dokumentanfang.  Jetzt das sichtbare
-                         * Fenster derselben Karte, aus der auch der Cursor kommt —
-                         * mit der Gutter-Breite im Startpunkt. */
+                        /* spec/44_6: click positioning in the MULTI-LINE field.
+                         * Until 2026-10-15 there was exactly ONE stop here (byte 0): every
+                         * click jumped to the start of the document.  Now the visible
+                         * window of the same map the cursor comes from —
+                         * with the gutter width in the starting point. */
                         ch.caret_byte.clear();
                         ch.caret_x.clear();
                         ch.caret_byte.push_back(0);
@@ -3002,18 +3002,18 @@ static void render_instance(AimlPrefabInstance* inst) {
                                 rotate_batch_verts(batch, 0, rot_cx, rot_cy, rot);
                                 flush_batch(batch);
                             } else {
-                                /* spec/44_6 §5g: Gutter und/oder Farb-Laeufe — Zeile
-                                 * fuer Zeile, weil beide pro Zeile bzw. pro
-                                 * Byte-Abschnitt gelten.  Weil wrap_text_lines den
-                                 * Leerraum woertlich erhaelt, ist eine gerenderte
-                                 * Zeile ein glatter Ausschnitt der Quelle — die
-                                 * Abbildung Lauf→Zeile ist damit eine reine
-                                 * Schnittmenge, ohne zweite Zaehlweise. */
-                                /* DIESELBE Umbruch-Rechnung und Gutter-Breite wie
-                                 * oben (Cursor + Klick-Karte).  Hier stand eine
-                                 * zweite Kopie — und genau solche Kopien liefen
-                                 * auseinander, sobald eine davon etwas mehr
-                                 * beruecksichtigen musste. */
+                                /* spec/44_6 §5g: gutter and/or colour runs — line
+                                 * by line, because both apply per line or per
+                                 * byte section.  Because wrap_text_lines keeps
+                                 * whitespace literally, a rendered
+                                 * line is a clean excerpt of the source — the
+                                 * mapping run→line is thus a pure
+                                 * intersection, without a second way of counting. */
+                                /* THE SAME wrap computation and gutter width as
+                                 * above (cursor + click map).  There used to be a
+                                 * second copy here — and exactly such copies drifted
+                                 * apart as soon as one of them had to take
+                                 * a little more into account. */
                                 const std::vector<std::pair<int32_t,int32_t>>& spans = cspans;
                                 const std::vector<std::string>& dl = clines;
                                 const float gut_w = cgut;
@@ -3022,8 +3022,8 @@ static void render_instance(AimlPrefabInstance* inst) {
                                 for (size_t li = 0; li < dl.size(); ++li) {
                                     float ly = top_y + (float)li * line_h;
                                     int32_t sb = spans[li].first;
-                                    /* Nummern zaehlen QUELLzeilen: eine umbrochene
-                                     * Zeile behaelt ihre Nummer (spec/44_6 §5g). */
+                                    /* Numbers count SOURCE lines: a wrapped
+                                     * line keeps its number (spec/44_6 §5g). */
                                     bool starts_src = (sb == 0) ||
                                         (sb > 0 && (size_t)sb <= display.size() &&
                                          display[(size_t)sb - 1] == '\n');
@@ -3048,9 +3048,9 @@ static void render_instance(AimlPrefabInstance* inst) {
                                         flush_batch(tb);
                                         continue;
                                     }
-                                    /* Pro Byte die Farbe bestimmen (spaetere Laeufe
-                                     * gewinnen), dann gleichfarbige Nachbarn in einem
-                                     * Zug zeichnen. */
+                                    /* Determine the colour per byte (later runs
+                                     * win), then draw same-coloured neighbours in one
+                                     * go. */
                                     size_t n = ln.size();
                                     std::vector<uint32_t> cols(n, col);
                                     for (size_t r = 0; r + 2 < ch.color_runs.size(); r += 3) {
@@ -3078,9 +3078,9 @@ static void render_instance(AimlPrefabInstance* inst) {
                             }
                         }
                         if (ch.focused) {
-                            /* MIT der Nummernspalte: der Text wird um `cgut`
-                             * nach rechts gezeichnet, ein Cursor ohne diesen
-                             * Versatz stuende neben dem Zeichen, das er meint. */
+                            /* WITH the number column: the text is drawn shifted right by `cgut`,
+                             * a cursor without this
+                             * offset would stand next to the character it means. */
                             float bx = text_start + cgut + caret_lx;
                             float by = cy + vpad + (float)(caret_line - scroll_line) * line_h;
                             DrawBatch cbatch; cbatch.tex = s->white_tex; cbatch.mode = 0;
@@ -3093,10 +3093,10 @@ static void render_instance(AimlPrefabInstance* inst) {
                     if (prev_sc) glScissor(prev_box[0], prev_box[1], prev_box[2], prev_box[3]);
                     else         glDisable(GL_SCISSOR_TEST);
 
-                    /* Rollbalken auch hier (spec/44_6 §5f): ein mehrzeiliges
-                     * Feld ohne Balken verschweigt, dass es weitergeht — und
-                     * man sieht nicht, WO man im Text steht.  Senkrecht immer,
-                     * waagerecht nur ohne Umbruch. */
+                    /* Scrollbar here too (spec/44_6 §5f): a multi-line
+                     * field without a bar hides that it continues — and
+                     * one does not see WHERE in the text one is.  Vertical always,
+                     * horizontal only without wrapping. */
                     if (multiline && ch.tb_total > ch.tb_visible && ch.tb_visible > 0) {
                         float sb_w    = 6.0f * sx;
                         float sb_x    = cx + cw - sb_w - 2.0f * sx;
@@ -3141,9 +3141,9 @@ static void render_instance(AimlPrefabInstance* inst) {
             float pad     = 6.0f * sx;
             float inner_w = cw - 2.0f * pad - 8.0f * sx;     /* leave room for the scrollbar */
             std::vector<std::pair<int32_t,int32_t>> spans;
-            /* spec/44_6 §5f: ohne Umbruch bleibt eine Zeile eine Zeile — dafuer
-             * genuegt eine Breite von 0, dann bricht `wrap_text_lines` nur an
-             * '\n'/'|'.  Die Box scrollt stattdessen seitwaerts. */
+            /* spec/44_6 §5f: without wrapping a line stays a line — for that
+             * a width of 0 is enough, then `wrap_text_lines` only breaks at
+             * '\n'/'|'.  The box scrolls sideways instead. */
             std::vector<std::string> lines = wrap_text_lines(lf, ch.text.c_str(),
                                                              ch.wrap ? inner_w : 0.0f, &spans);
             ch.tb_inner_w = inner_w;
@@ -3165,7 +3165,7 @@ static void render_instance(AimlPrefabInstance* inst) {
             }
             int   total   = (int)lines.size();
             float line_h  = lf->line_height;
-            float bar_room = (!ch.wrap) ? (8.0f * sy) : 0.0f;   /* Platz fuer den unteren Balken */
+            float bar_room = (!ch.wrap) ? (8.0f * sy) : 0.0f;   /* room for the lower bar */
             int   visible = (line_h > 0.0f) ? (int)((ch_h - 2.0f * pad - bar_room) / line_h) : total;
             if (visible < 1) visible = 1;
             int   max_off = total > visible ? total - visible : 0;
@@ -3178,8 +3178,8 @@ static void render_instance(AimlPrefabInstance* inst) {
             }
             if (ch.scroll_offset > max_off) ch.scroll_offset = max_off;
             if (ch.scroll_offset < 0)       ch.scroll_offset = 0;
-            /* Caret-Stops je sichtbarer Zeile cachen (wie text_input, nur 2D) —
-             * der Input-Pass macht daraus Klick/Drag → Quell-Byte-Index. */
+            /* Cache caret stops per visible line (like text_input, only 2D) —
+             * the input pass turns them into click/drag → source byte index. */
             ch.tb_caret_x.clear();
             ch.tb_caret_byte.clear();
             ch.tb_row_start.clear();
@@ -3198,17 +3198,17 @@ static void render_instance(AimlPrefabInstance* inst) {
                 }
                 ch.tb_row_start.push_back((int32_t)ch.tb_caret_x.size());   /* Endmarke */
             }
-            /* SCHERE um den Textbereich: ohne Umbruch ragt eine lange Zeile
-             * sonst ueber den Rahmen hinaus und ueberschreibt, was daneben
-             * liegt.  Mit Umbruch aendert sie nichts (dort passt alles). */
+            /* SCISSOR around the text area: without wrapping a long line
+             * would otherwise stick out over the frame and overwrite what lies
+             * next to it.  With wrapping it changes nothing (everything fits there). */
             GLboolean tb_prev_sc = glIsEnabled(GL_SCISSOR_TEST);
             GLint tb_prev_box[4] = {0,0,0,0};
             glGetIntegerv(GL_SCISSOR_BOX, tb_prev_box);
             {
-                /* Der INNENraum, nicht der ganze Rahmen: sonst laeuft die
-                 * Schrift genau auf die Rahmenlinie (gemeldet 22.10.2026).
-                 * Rechts bleibt der senkrechte Balken frei, unten der
-                 * waagerechte, wenn es ihn gibt. */
+                /* The INTERIOR, not the whole frame: otherwise the
+                 * text runs right onto the frame line (reported 2026-10-22).
+                 * On the right the vertical bar stays free, at the bottom the
+                 * horizontal one, if there is one. */
                 float bar_b = (!ch.wrap && ch.tb_content_w > inner_w) ? (8.0f * sy) : 0.0f;
                 int sxp = (int)ceilf(cx + 1.0f * sx);
                 int syp = (int)ceilf((float)g_scene->screen_h - (cy + ch_h - bar_b));
@@ -3219,7 +3219,7 @@ static void render_instance(AimlPrefabInstance* inst) {
                 glEnable(GL_SCISSOR_TEST);
                 glScissor(sxp, syp, swp, shp);
             }
-            /* Markierung ZUERST (hinter dem Text), eine Fläche je sichtbarer Zeile. */
+            /* Selection FIRST (behind the text), one rectangle per visible line. */
             if (ch.focused && ch.sel_anchor != ch.cursor_pos) {
                 int32_t lo = ch.sel_anchor < ch.cursor_pos ? ch.sel_anchor : ch.cursor_pos;
                 int32_t hi = ch.sel_anchor < ch.cursor_pos ? ch.cursor_pos : ch.sel_anchor;
@@ -3251,8 +3251,8 @@ static void render_instance(AimlPrefabInstance* inst) {
                 if (ch.color_runs.empty()) {
                     DrawBatch tbx; tbx.tex = lf->atlas_tex; tbx.mode = 2;
                     for (int li = ch.scroll_offset; li < ch.scroll_offset + visible && li < total; ++li) {
-                        /* Ohne Umbruch darf die Zeile ueber den Rand hinausgehen —
-                         * die Schere unten schneidet sie ab. */
+                        /* Without wrapping the line may extend past the edge —
+                         * the scissor below cuts it off. */
                         push_text_batch(tbx, lf, lines[li].c_str(), cx + pad - ch.tb_off_x, ty,
                                         ch.wrap ? inner_w : 1.0e9f, col, "left");
                         ty += line_h;
@@ -3260,13 +3260,13 @@ static void render_instance(AimlPrefabInstance* inst) {
                     rotate_batch_verts(tbx, 0, rot_cx, rot_cy, rot);
                     flush_batch(tbx);
                 } else {
-                    /* spec/44_6 §5g: Farb-Laeufe gelten auch fuer die ANZEIGE,
-                     * nicht nur fuer das Eingabefeld.  Farbe ist eine
-                     * Eigenschaft von Text, nicht von Editierbarkeit — eine
-                     * Statusspalte (cosmos doc/spec/97 F97-17) braucht sie in
-                     * einer Textbox genauso.  Gleiche Logik wie im
-                     * text_input-Pfad: je Byte die Farbe bestimmen, dann
-                     * gleichfarbige Nachbarn in einem Zug zeichnen. */
+                    /* spec/44_6 §5g: colour runs also apply to the DISPLAY,
+                     * not only to the input field.  Colour is a
+                     * property of text, not of editability — a
+                     * status column (cosmos doc/spec/97 F97-17) needs it in
+                     * a text box just as much.  Same logic as in the
+                     * text_input path: determine the colour per byte, then
+                     * draw same-coloured neighbours in one go. */
                     for (int li = ch.scroll_offset; li < ch.scroll_offset + visible && li < total; ++li) {
                         const std::string& ln = lines[(size_t)li];
                         int32_t sb = (li < (int)spans.size()) ? (int32_t)spans[(size_t)li].first : 0;
@@ -3315,14 +3315,14 @@ static void render_instance(AimlPrefabInstance* inst) {
                 push_quad(th, sb_x, thumb_y, sb_w, thumb_h, 0,0,1,1, rgba32_to_gl(0x3A5578F0, alpha));
                 rotate_batch_verts(th, 0, rot_cx, rot_cy, rot); flush_batch(th);
             }
-            /* Der ZWEITE Balken, unten (spec/44_6 §5f): nur ohne Umbruch, und
-             * nur wenn der Inhalt wirklich breiter ist.  Ein Balken, der nichts
-             * zu rollen hat, ist eine Behauptung. */
+            /* The SECOND bar, at the bottom (spec/44_6 §5f): only without wrapping, and
+             * only if the content really is wider.  A bar that has nothing
+             * to scroll is a claim. */
             if (!ch.wrap && ch.tb_content_w > inner_w) {
                 float sb_h    = 6.0f * sy;
                 float sb_y    = cy + ch_h - sb_h - 2.0f * sy;
                 float track_x = cx + 2.0f * sx;
-                float track_w = cw - 4.0f * sx - 8.0f * sx;   /* Platz fuer den senkrechten */
+                float track_w = cw - 4.0f * sx - 8.0f * sx;   /* room for the vertical one */
                 { DrawBatch tk; tk.tex = s->white_tex; tk.mode = 0;
                   push_quad(tk, track_x, sb_y, track_w, sb_h, 0,0,1,1, rgba32_to_gl(0x101828A0, alpha));
                   rotate_batch_verts(tk, 0, rot_cx, rot_cy, rot); flush_batch(tk); }
@@ -3430,10 +3430,10 @@ static void render_instance(AimlPrefabInstance* inst) {
                 batch.tex  = s->white_tex;
                 batch.mode = 3;
                 batch.material = ch.material;
-                /* Default-Umrandung: ohne explizites border_color/border_width
-                 * wäre die Box unsichtbar (fg==bg oft 0).  Damit eine Checkbox
-                 * IMMER sichtbar ist, fällt sie auf einen dezenten Rahmen zurück
-                 * (überschreibbar via border_color/border_width im Prefab). */
+                /* Default border: without an explicit border_color/border_width
+                 * the box would be invisible (fg==bg often 0).  So that a checkbox
+                 * is ALWAYS visible, it falls back to a discreet frame
+                 * (overridable via border_color/border_width in the prefab). */
                 uint32_t box_border = ch.border_color ? ch.border_color : 0x8899AACC;
                 float    box_bw     = ch.border_width > 0.0f ? ch.border_width : 1.5f;
                 uint32_t fg = rgba32_to_gl(bg_rgba,     alpha);
@@ -3527,9 +3527,9 @@ static void render_instance(AimlPrefabInstance* inst) {
                                     text_cx, text_cy, cw - 24.0f * sx, lcol, "left");
                     rotate_batch_verts(tb, 0, rot_cx, rot_cy, rot);
                     flush_batch(tb);
-                    /* Arrow rechts — kleines nach-unten zeigendes Dreieck
-                     * statt "v"-Buchstabe.  3 Vertices als eigener Batch
-                     * (mode 0 = solid weiß-texture).                        */
+                    /* Arrow on the right — a small downward-pointing triangle
+                     * instead of the letter "v".  3 vertices as a batch of their own
+                     * (mode 0 = solid white texture).                        */
                     {
                         DrawBatch ab;
                         ab.tex  = s->white_tex;
@@ -3552,10 +3552,10 @@ static void render_instance(AimlPrefabInstance* inst) {
                     }
                 }
             }
-            /* spec/44_6 §5h: waagerechter Balken fuer die gerollte Payload-Kette —
-             * Spur + Daumen am unteren Rand der ZEILE ueber der Payload-Zone.  Nur
-             * wenn wirklich etwas zu rollen ist (ein Balken ohne Ueberhang ist eine
-             * Behauptung — dieselbe Regel wie beim Textbox-Balken). */
+            /* spec/44_6 §5h: horizontal bar for the scrolled payload chain —
+             * track + thumb at the bottom edge of the ROW above the payload zone.  Only
+             * if there really is something to scroll (a bar without overhang is a
+             * claim — the same rule as for the text box bar). */
             if (ch.payload_scroll && ch.payload_pitch > 0.0f && inst->def) {
                 float viewport = inst->def->width - ch.payload_start;
                 if (viewport > 0.0f && ch.payload_span > viewport + 0.5f) {
@@ -3579,9 +3579,9 @@ static void render_instance(AimlPrefabInstance* inst) {
             break;
         }
         case CHILD_RADIO: {
-            /* Kreisförmige Anzeige links + Label rechts (analog CHILD_CHECKBOX
-             * ohne Textur-Zweig).  corner_radius wird auf halbe Box-Größe
-             * gezwungen damit die Optik immer rund ist, unabhängig vom YAML. */
+            /* Circular indicator on the left + label on the right (like CHILD_CHECKBOX
+             * without the texture branch).  corner_radius is forced to half the box size
+             * so that the look is always round, regardless of the YAML. */
             float box_size = ch_h < cw ? ch_h : cw;
             uint32_t bg_rgba = ch.checked && ch.active_color    ? ch.active_color
                             : ch.pressed_now && ch.active_color ? ch.active_color
@@ -3638,18 +3638,18 @@ static void render_instance(AimlPrefabInstance* inst) {
                              ? font_for_size_named(s, ch.font_name, target_size)
                              : s->font;
             if (!lf) break;
-            /* Auto-fit: In eine „kurze" Box (Titel-Höhe ≈ eine Zeile) würde ein
-             * langer Text umbrechen und aus dem Rahmen laufen.  Statt umzubrechen
-             * die Schrift so verkleinern, dass der (umbruchfreie) Text in die
-             * Breite passt.  Nur bei kurzen Boxen OHNE expliziten Zeilenumbruch —
-             * mehrzeilige Labels (Ability-Text, valign:top, hohe Box) bleiben.
+            /* Auto-fit: in a "short" box (title height ≈ one line) a
+             * long text would wrap and run out of the frame.  Instead of wrapping,
+             * shrink the font so that the (unwrapped) text fits into the
+             * width.  Only for short boxes WITHOUT an explicit line break —
+             * multi-line labels (ability text, valign:top, tall box) stay.
              *
-             * WICHTIG: iterativ mit Sicherheits-Marge verkleinern.  Ein einmaliges
-             * fit_size = target*(fit_w/tw) trifft die Breite nur GESCHÄTZT — nach
-             * dem Neu-Backen bei der kleineren Größe rundet die (ganzzahlige) Glyph-
-             * Breite ggf. minimal über fit_w, sodass der Text DOCH auf 2 Zeilen
-             * umbricht und aus der Titelbox rutscht.  Deshalb: messen → schrumpfen
-             * (mit 4 % Marge) → neu messen, bis er sicher in EINE Zeile passt. */
+             * IMPORTANT: shrink iteratively with a safety margin.  A one-off
+             * fit_size = target*(fit_w/tw) only ESTIMATES the width — after
+             * re-baking at the smaller size the (integer) glyph
+             * width may round slightly above fit_w, so that the text DOES wrap onto 2 lines
+             * and slides out of the title box.  Therefore: measure → shrink
+             * (with a 4 % margin) → measure again, until it safely fits on ONE line. */
             if (target_size > 0.0f && ch.height > 0.0f &&
                 ch.text.find('\n') == std::string::npos &&
                 ch.text.find('|') == std::string::npos) {
@@ -3662,7 +3662,7 @@ static void render_instance(AimlPrefabInstance* inst) {
                     AimlUIFont* fitf = lf;
                     for (int fit_it = 0; fit_it < 6; ++fit_it) {
                         float tw = text_width_font(fitf, ch.text.c_str());
-                        if (tw <= fit_w) break;               /* passt auf eine Zeile */
+                        if (tw <= fit_w) break;               /* fits on one line */
                         cur_size = cur_size * (fit_w / tw) * 0.96f;  /* Marge gegen Rundung */
                         if (cur_size < min_size) cur_size = min_size;
                         AimlUIFont* nf = font_for_size(s, cur_size);
@@ -3680,8 +3680,8 @@ static void render_instance(AimlPrefabInstance* inst) {
              * via rgba32_to_gl. The legacy 0xRRGGBB interpretation would
              * shift channels and disagree with button/checkbox labels. */
             uint32_t col = rgba32_to_gl(ch.color ? ch.color : 0xFFFFFFFF, alpha);
-            /* anchor + valign aus dem Def (PrefabChild ist nur Render-Snapshot;
-             * Layout-Hints leben in PrefabChildDef). */
+            /* anchor + valign from the def (PrefabChild is only a render snapshot;
+             * layout hints live in PrefabChildDef). */
             const char* anchor = "left";
             const char* valign = "";
             auto it = inst->child_index.find(ch.name);
@@ -3692,10 +3692,10 @@ static void render_instance(AimlPrefabInstance* inst) {
                     valign = inst->def->children[idx].valign.c_str();
                 }
             }
-            /* Vertikal-Position: valign explizit (top/center/bottom) override't
-             * den Default.  Default = center wenn height>0, sonst Top
-             * (Baseline auf cy + ascent durch push_text_batch).
-             * Bei multi-line "bottom" / "top" → text-block-Höhe einrechnen. */
+            /* Vertical position: an explicit valign (top/center/bottom) overrides
+             * the default.  Default = center if height>0, otherwise top
+             * (baseline at cy + ascent via push_text_batch).
+             * For multi-line "bottom" / "top" → take the text block height into account. */
             float text_cy;
             if (valign && strcmp(valign, "top") == 0) {
                 text_cy = cy;
@@ -3706,15 +3706,15 @@ static void render_instance(AimlPrefabInstance* inst) {
                 float block_h = (float)lines.size() * lf->line_height;
                 text_cy = cy + (box_h - block_h);
             } else {
-                /* Default-Centered (oder top wenn height==0) — wie vorher. */
+                /* Default centred (or top if height==0) — as before. */
                 text_cy = (ch.height > 0.0f)
                               ? cy + (ch.height * sx - lf->line_height) * 0.5f
                               : cy;
             }
-            /* push_text_batch erwartet bei anchor="center"/"right" dass cx
-             * der Mittel- bzw. rechte-Rand-Referenzpunkt ist (siehe x-Formel
-             * dort: cx - tw*0.5f / cx - tw).  Für Labels haben wir aber die
-             * LINKE Kante als cx — verschieben anhand des anchors. */
+            /* With anchor="center"/"right", push_text_batch expects cx
+             * to be the centre or right-edge reference point (see the x formula
+             * there: cx - tw*0.5f / cx - tw).  For labels, however, we have the
+             * LEFT edge as cx — shift according to the anchor. */
             float text_w = ch.width > 0.0f ? ch.width * sx : inst->def->width * sx;
             float text_cx = cx;
             if (anchor && strcmp(anchor, "center") == 0) {
@@ -3722,10 +3722,10 @@ static void render_instance(AimlPrefabInstance* inst) {
             } else if (anchor && strcmp(anchor, "right") == 0) {
                 text_cx = cx + text_w;
             }
-            /* Optionaler Outline-Pass — bevor der Haupt-Text gezeichnet wird.
-             * 8-Sample-Ring bei ±outline_px in outline_color, dann Text drüber.
-             * Verhindert das Verschwinden weißer Zahlen auf hellen Icons
-             * (z.B. Count-Label auf Light-Mana). */
+            /* Optional outline pass — before the main text is drawn.
+             * 8-sample ring at ±outline_px in outline_color, then the text on top.
+             * Prevents white numbers from disappearing on light icons
+             * (e.g. a count label on light mana). */
             if (ch.outline_px > 0.0f && (ch.outline_color & 0xFFu)) {
                 uint32_t ocol = rgba32_to_gl(ch.outline_color, alpha);
                 float d = ch.outline_px * sx;
@@ -3839,9 +3839,9 @@ static void register_prefab_def(const char* name, float width, float height,
                                 const char* texture_path, int32_t draggable,
                                 const char* children_json, int32_t input_transparent);
 
-/* Resize: nur screen-Dims + Projection updaten, ohne g_scene zu erzeugen.
- * design_w/h bleibt von der initialen aiml_prefab_scene_init.  Wird vom
- * GLFW-framebuffer-size-Callback gerufen damit das UI mitwächst. */
+/* Resize: only update screen dims + projection, without creating g_scene.
+ * design_w/h stays from the initial aiml_prefab_scene_init.  Called from the
+ * GLFW framebuffer-size callback so that the UI grows along. */
 void aiml_prefab_scene_resize(int32_t screen_w, int32_t screen_h) {
     if (!g_scene) return;
     g_scene->screen_w = screen_w;
@@ -4078,12 +4078,12 @@ void* aiml_prefab_instantiate(const char* prefab_name) {
     return inst;
 }
 
-/* Jede Szenen-weite Referenz auf eine sterbende Instanz fallen lassen.  Muss
- * von JEDEM Pfad gerufen werden, der eine Instanz freigibt — `destroy` tat das
- * schon, der end-of-frame-Sweep fuer `pending_delete` nicht, und dort dangelte
- * vor allem `focused_input_inst`: der ist KLEBEND (bleibt bis zum naechsten
- * Klick woanders), also schrieb jeder weitere Tastendruck in freigegebenen
- * Speicher. */
+/* Drop every scene-wide reference to a dying instance.  Must
+ * be called from EVERY path that frees an instance — `destroy` already did
+ * that, the end-of-frame sweep for `pending_delete` did not, and there above all
+ * `focused_input_inst` dangled: it is STICKY (stays until the next
+ * click elsewhere), so every further key press wrote into freed
+ * memory. */
 static void scene_forget_instance(AimlPrefabInstance* inst) {
     if (!inst || !g_scene) return;
     if (g_scene->dragged == inst) g_scene->dragged = nullptr;
@@ -4214,11 +4214,11 @@ int32_t aiml_prefab_get_input_transparent(void* p) {
 }
 
 // ────────────────────────────────────────────────────────────────────────
-// Layout-Helpers (Spec 44_6 §Layout) — Sibling-Liste in einer Reihe / Spalte
-// / Stack auto-positionieren.  Spart die manuelle Schleife+Spacing-Math
-// die sonst in jedem Hand/Zone-Render-Code dupliziert wird.
+// Layout helpers (spec 44_6 §Layout) — auto-position a sibling list in a row / column
+// / stack.  Saves the manual loop + spacing math
+// that would otherwise be duplicated in every hand/zone render code.
 //
-// list_ptr ist ein `list<prefab_instance>` (also AimlList* mit i8*-Daten).
+// list_ptr is a `list<prefab_instance>` (i.e. AimlList* with i8* data).
 // ────────────────────────────────────────────────────────────────────────
 
 namespace {
@@ -4236,9 +4236,9 @@ namespace {
     }
 }
 
-// Signatur: data_ptr ist data[] der list<prefab_instance> (= i8**), count
-// ist die size der Liste.  Caller (Compiler-Glue) extrahiert via
-// CreateExtractValue auf dem AimlList-Struct.  Vermeidet bitcast struct→ptr.
+// Signature: data_ptr is data[] of the list<prefab_instance> (= i8**), count
+// is the size of the list.  The caller (compiler glue) extracts it via
+// CreateExtractValue on the AimlList struct.  Avoids a bitcast struct→ptr.
 void aiml_engine_layout_hflow(void* data_ptr, int32_t count, float x, float y, float gap) {
     if (!data_ptr || count <= 0) return;
     void** entries = static_cast<void**>(data_ptr);
@@ -4294,25 +4294,25 @@ static PrefabChild* find_child(void* p, const char* child_name) {
     if (!inst || !child_name) return nullptr;
     auto it = inst->child_index.find(child_name);
     if (it != inst->child_index.end()) return &inst->children[it->second];
-    // Unknown child name — von ALLEN scene-Methoden (set_child_visible/set_text/
-    // dropdown_value/…) zentral geprüft.  Fast immer ein Tippfehler / veralteter /
-    // falscher Widget-Name.  Früher no-op → Bugs blieben lange verborgen (z.B.
-    // dropdown "pa0" statt "pa_slot0" → Passive weder gerendert noch gespeichert).
-    // Jetzt LAUT: klare Fatal-Meldung mit Prefab-Name + allen gültigen Children.
-    // Escape-Hatch: AIML_PREFAB_LENIENT=1 stuft auf Warnung herab (return null).
+    // Unknown child name — checked centrally by ALL scene methods (set_child_visible/set_text/
+    // dropdown_value/…).  Almost always a typo / outdated /
+    // wrong widget name.  Formerly a no-op → bugs stayed hidden for a long time (e.g.
+    // dropdown "pa0" instead of "pa_slot0" → passive neither rendered nor saved).
+    // Now LOUD: a clear fatal message with the prefab name + all valid children.
+    // Escape hatch: AIML_PREFAB_LENIENT=1 downgrades to a warning (return null).
     std::string avail;
     for (auto& kv : inst->child_index) { if (!avail.empty()) avail += ", "; avail += kv.first; }
     const char* pf = (inst->def && !inst->def->name.empty()) ? inst->def->name.c_str() : "<unknown>";
     static const bool lenient = (getenv("AIML_PREFAB_LENIENT") != nullptr);
     char msg[512];
     snprintf(msg, sizeof(msg),
-             "prefab widget child '%s' not found in prefab '%s' — gültige Children: %s",
+             "prefab widget child '%s' not found in prefab '%s' — valid children: %s",
              child_name, pf, avail.c_str());
     fprintf(stderr, "[prefab-%s] %s\n", lenient ? "WARN" : "EXCEPTION", msg);
     if (lenient) return nullptr;
-    // Echte Exception: propagiert durch die AIML-C++-EH (Personality-Funktionen);
-    // per AIML try/catch (catch-all) fangbar, sonst → terminate mit klarer
-    // "what()"-Meldung + Crash-Handler-Backtrace zur Call-Site.
+    // A real exception: propagates through the AIML C++ EH (personality functions);
+    // catchable with AIML try/catch (catch-all), otherwise → terminate with a clear
+    // "what()" message + crash-handler backtrace to the call site.
     throw std::runtime_error(msg);
 }
 
@@ -4523,10 +4523,10 @@ void aiml_prefab_set_color(void* inst, const char* child_name, int32_t color) {
 /* Generic child fill/border color setters (mirror set_color).  For a rect the
  * visible fill is bg_color (color is usually 0) — needed to flash a whole panel
  * (e.g. the Soulmage banner on hit/heal). */
-/* spec/44_6 §5g: Farb-Laeufe setzen — flache Tripel (start, len, rgba) ueber
- * die TEXT-Bytes des Feldes.  Ein Lauf, der ueber das Textende hinausreicht,
- * wird beim Zeichnen beschnitten statt abgelehnt: ein Highlighter, der dem
- * Tippen einen Frame hinterherhinkt, darf kein Fehler sein. */
+/* spec/44_6 §5g: set colour runs — flat triples (start, len, rgba) over
+ * the TEXT bytes of the field.  A run that extends past the end of the text
+ * is clipped when drawing instead of rejected: a highlighter that lags
+ * typing by one frame must not be an error. */
 void aiml_prefab_set_color_runs(void* inst, const char* child_name,
                                 const void* triples, int32_t count) {
     PrefabChild* ch = find_child(inst, child_name);
@@ -5183,11 +5183,11 @@ extern "C" int32_t aiml_cascade_row_at(const char* cascade_name, int64_t k,
     return 0;
 }
 
-/* aiml_cascade_describe(name) -> string: Schema-Beschreibung eines Cascade —
- * pro Node (Opcode) die Feld-Struktur als `[werte]TypeName`.  Für enum-Felder
- * die Member-Werte, für nested-Cascade-Felder die Sub-Node-IDs, für value/alias
- * leer.  Eine Zeile pro Opcode.  Rein informativ (Review/Doku der möglichen
- * Datentyp-Kombinationen). */
+/* aiml_cascade_describe(name) -> string: schema description of a cascade —
+ * per node (opcode) the field structure as `[values]TypeName`.  For enum fields
+ * the member values, for nested cascade fields the sub-node IDs, for value/alias
+ * empty.  One line per opcode.  Purely informative (review/documentation of the possible
+ * data type combinations). */
 static std::string casc_range_of(const std::string& type) {
     std::string s;
     auto e = g_enum_values.find(type);
@@ -5201,7 +5201,7 @@ static std::string casc_range_of(const std::string& type) {
         for (const auto& n : c->second.nodes) { if (!first) s += ","; s += std::to_string(n.id); first = false; }
         return s;
     }
-    return "";   /* value/alias/i32 → kein Enum-Bereich */
+    return "";   /* value/alias/i32 → no enum range */
 }
 /* String-Listen-ABI (GenericList: {i32 size, i32 cap, void** data} mit
  * refcounted char*-Elementen; siehe string_runtime aiml_str_split_fill). */
@@ -5217,11 +5217,11 @@ static void casc_strlist_push(AimlStrListRaw* l, const std::string& s) {
     l->data[l->size++] = aiml_str_dup(s.c_str());
 }
 
-/* aiml_cascade_describe(cascade, opcodes, opc_len, out) → list<string>: die
- * möglichen Datentyp-Kombinationen der angegebenen Opcodes (opc_len==0 → ALLE).
- * Element 0 = Opcode-Enum-Name (z.B. "EffectCode"); danach je Opcode EINE Zeile
- * "[id]node [range]Type [range]Type …" (enum→Member-Werte, nested cascade→Sub-
- * Node-IDs).  Rückgabe = Elementanzahl. */
+/* aiml_cascade_describe(cascade, opcodes, opc_len, out) → list<string>: the
+ * possible data type combinations of the given opcodes (opc_len==0 → ALL).
+ * Element 0 = opcode enum name (e.g. "EffectCode"); after that ONE line per opcode
+ * "[id]node [range]Type [range]Type …" (enum→member values, nested cascade→sub-
+ * node IDs).  Returns the number of elements. */
 extern "C" int32_t aiml_cascade_describe(const char* cascade_name,
                                          const void* opcodes, int32_t opc_len,
                                          void* out_list) {
@@ -5232,7 +5232,7 @@ extern "C" int32_t aiml_cascade_describe(const char* cascade_name,
     const int32_t* ops = static_cast<const int32_t*>(opcodes);
     casc_strlist_push(out, c->second.opcode_enum);          /* Element 0: Opcode-Enum */
     for (const auto& n : c->second.nodes) {
-        if (opc_len > 0 && ops) {                            /* Filter auf gewählte Opcodes */
+        if (opc_len > 0 && ops) {                            /* filter on the selected opcodes */
             bool want = false;
             for (int i = 0; i < opc_len; ++i) if (ops[i] == n.id) { want = true; break; }
             if (!want) continue;
@@ -5245,9 +5245,9 @@ extern "C" int32_t aiml_cascade_describe(const char* cascade_name,
     return out->size;
 }
 
-/* aiml_cascade_type_range(type, out) → i32: die möglichen Werte eines Feld-Typs
- * als serialisierbare list<i32>.  enum → Member-Werte; nested cascade → Sub-Node-
- * IDs; value/alias → leer.  Anzahl als Rückgabe. */
+/* aiml_cascade_type_range(type, out) → i32: the possible values of a field type
+ * as a serialisable list<i32>.  enum → member values; nested cascade → sub-node
+ * IDs; value/alias → empty.  Returns the count. */
 extern "C" int32_t aiml_cascade_type_range(const char* type_name, void* out_list) {
     if (!type_name || !out_list) return 0;
     AimlI32ListRaw* out = static_cast<AimlI32ListRaw*>(out_list);
@@ -5586,7 +5586,7 @@ void aiml_prefab_draw_scene(void) {
     /* Frame is over: the mark drops back so the next frame draws everything. */
     g_scene->draw_z_floor = INT32_MIN;
 
-    /* Zweiter Pass: offene Dropdown-Popups über allem rendern. */
+    /* Second pass: render open dropdown popups above everything. */
     render_dropdown_popups();
 
     /* Phase 6f-2 sweep: retire any prefab-instance marked for delete by
@@ -5676,8 +5676,8 @@ static void render_dropdown_popups(void) {
             for (char c : ch.options) if (c == '|') n_opts++;
             if (n_opts <= 0) continue;
             const int MAX_VIS = 10;
-            /* scroll_offset auf gültigen Bereich clampen, damit visible immer
-             * MIN(n_opts, MAX_VIS) Rows füllt (keine leeren Rows am Ende). */
+            /* Clamp scroll_offset to the valid range, so that visible always
+             * fills MIN(n_opts, MAX_VIS) rows (no empty rows at the end). */
             int max_scroll = n_opts - MAX_VIS; if (max_scroll < 0) max_scroll = 0;
             if (ch.scroll_offset > max_scroll) ch.scroll_offset = max_scroll;
             if (ch.scroll_offset < 0) ch.scroll_offset = 0;
@@ -5692,9 +5692,9 @@ static void render_dropdown_popups(void) {
                 bg.tex  = g_scene->white_tex;
                 bg.mode = 3;
                 uint32_t fg = rgba32_to_gl(0x0C1424FF, 1.0f);
-                /* Border muted (früher 0x88BBEE hellblau) — passt jetzt zum
-                 * dunklen Popup und zieht die Aufmerksamkeit nicht mehr weg
-                 * von der markierten Zeile. */
+                /* Border muted (formerly 0x88BBEE light blue) — now matches the
+                 * dark popup and no longer draws attention away
+                 * from the highlighted row. */
                 uint32_t bd = rgba32_to_gl(0x4A6890FF, 1.0f);
                 push_quad_sdf(bg, popup_x, popup_y, popup_w, popup_h, fg, bd,
                               ch.corner_radius * sx, 1.5f * sx);
@@ -5772,9 +5772,9 @@ static void render_dropdown_popups(void) {
                                 / (float)std::max(1, n_opts - visible);
                 DrawBatch sb;
                 sb.tex = g_scene->white_tex; sb.mode = 0;
-                /* Thumb im Ton der neuen dunklen Palette (früher 0x88BBEE
-                 * hellblau) — sitzt jetzt kontrastreich aber ruhig auf dem
-                 * fast-schwarzen Popup. */
+                /* Thumb in the tone of the new dark palette (formerly 0x88BBEE
+                 * light blue) — now sits with good contrast but calmly on the
+                 * almost black popup. */
                 uint32_t col = color_with_alpha(0x3A5578, 0.95f);
                 push_quad(sb, sb_x, thumb_y, sb_w, thumb_h, 0, 0, 1, 1, col);
                 flush_batch(sb);
@@ -5797,7 +5797,7 @@ void* aiml_prefab_hit_test(float mx, float my) {
         auto* inst = g_scene->instances[i];
         if (!inst->visible) continue;
         if (inst->input_transparent) continue;   /* spec/44_6: click-through */
-        if (inst->pending_delete) continue;      /* stirbt am Frame-Ende: nimmt keine Eingabe mehr */
+        if (inst->pending_delete) continue;      /* dies at the end of the frame: takes no more input */
         if (inst->parent) continue;  /* nested children: not hit-tested (local coords) */
 
         float ax, ay;
@@ -5818,26 +5818,26 @@ void* aiml_prefab_hit_test(float mx, float my) {
 
 static int32_t s_mouse_btn_pressed[3] = {0, 0, 0};
 
-/* Die z-Stufe, die fuer die Arbitrierung zaehlt: die der obersten
- * Eltern-Instanz.  Genestete Instanzen (bind_list-Zeilen, spawn_child) haben
- * ein bedeutungsloses eigenes z_order — sie werden MIT dem Elternteil
- * gezeichnet.  Ohne das haette die modale Schwelle die Zeilen eines modalen
- * Dialogs ausgesperrt: Zeile z=0 < Dialog z=460, also waere die Kartenauswahl
- * im eigenen Overlay nicht mehr bedienbar gewesen. */
+/* The z level that counts for arbitration: that of the topmost
+ * parent instance.  Nested instances (bind_list rows, spawn_child) have
+ * a meaningless z_order of their own — they are drawn WITH the parent.
+ * Without this the modal threshold would have locked out the rows of a modal
+ * dialog: row z=0 < dialog z=460, so the card selection
+ * in its own overlay would no longer have been operable. */
 static int32_t effective_z(const AimlPrefabInstance* inst) {
     int guard = 0;
     while (inst && inst->parent && ++guard < 64) inst = inst->parent;
     return inst ? inst->z_order : 0;
 }
 
-/* spec/44_6 "Modal": z der OBERSTEN sichtbaren input_blocking-Instanz, deren
- * Flaeche (mx,my) enthaelt.  `found` sagt, ob es ueberhaupt eine gibt.
+/* spec/44_6 "Modal": z of the TOPMOST visible input_blocking instance whose
+ * area contains (mx,my).  `found` says whether there is one at all.
  *
- * Der Widget-Durchlauf arbitriert bewusst nicht ueber z — er muss alle
- * Instanzen sehen, damit eine transparente Platte ihre eigenen Widgets
- * durchlaesst.  Genau dadurch blieb unter einem Vollbild-Overlay alles
- * klickbar.  Diese Funktion liefert die Schwelle, unter der Widgets
- * uebersprungen werden. */
+ * The widget pass deliberately does not arbitrate by z — it must see all
+ * instances, so that a transparent panel lets its own widgets
+ * through.  Exactly because of that everything stayed clickable under a full-screen overlay.
+ * This function returns the threshold below which widgets
+ * are skipped. */
 static int32_t modal_block_z(float mx, float my, bool& found) {
     found = false;
     int32_t top = 0;
@@ -5899,13 +5899,13 @@ static void prefab_web_kbd_sync() {
 }
 #endif
 
-/* tb_follow_x: den waagerechten Ausschnitt der Schreibmarke nachfuehren
- * (spec/44_6 §5f).  Ohne Umbruch kann die Marke links oder rechts aus dem
- * Fenster wandern; dann wandert das Fenster mit.  Mit Umbruch gibt es nichts
- * zu tun — dort ist jede Zeile so breit wie die Box. */
+/* tb_follow_x: keep the horizontal window following the caret
+ * (spec/44_6 §5f).  Without wrapping the caret can wander out of the window
+ * to the left or right; then the window wanders along.  With wrapping there is nothing
+ * to do — there every line is as wide as the box. */
 static void tb_follow_x(PrefabChild& ch) {
     if (ch.wrap || !ch.tb_font || ch.tb_inner_w <= 0.0f) return;
-    /* Zeilenanfang suchen und die Breite bis zur Marke messen. */
+    /* Find the start of the line and measure the width up to the caret. */
     int32_t b = ch.cursor_pos;
     if (b > (int32_t)ch.text.size()) b = (int32_t)ch.text.size();
     while (b > 0 && ch.text[(size_t)b - 1] != '\n') --b;
@@ -5916,14 +5916,14 @@ static void tb_follow_x(PrefabChild& ch) {
     if (ch.tb_off_x < 0.0f)                  ch.tb_off_x = 0.0f;
 }
 
-/* tb_move_rows: die Schreibmarke um Zeilen bewegen (spec/44_6 §5f) — fuer
- * `textbox` UND fuer ein mehrzeiliges `text_input`.  Die Zeilenstruktur kommt
- * aus DERSELBEN Funktion wie beim Zeichnen; zwei Herleitungen waeren zwei
- * Gelegenheiten, sie auseinander laufen zu lassen.
+/* tb_move_rows: move the caret by lines (spec/44_6 §5f) — for
+ * `textbox` AND for a multi-line `text_input`.  The line structure comes
+ * from THE SAME function as for drawing; two derivations would be two
+ * opportunities to let them drift apart.
  *
- * Spalte heisst hier der Byte-Abstand im Zeilenanfang — fuer eine Mono-Schrift
- * (Protokoll, Quelltext) ist das genau die Spalte, und beide Felder, um die es
- * geht, sind mono. */
+ * Column here means the byte distance from the start of the line — for a mono font
+ * (log, source text) that is exactly the column, and both fields concerned
+ * are mono. */
 static void tb_move_rows(PrefabChild& ch, const char* key, bool shift_h, int32_t tlen) {
     if (!ch.tb_font) return;
     std::vector<std::pair<int32_t,int32_t>> ksp;
@@ -5950,9 +5950,9 @@ static void tb_move_rows(PrefabChild& ch, const char* key, bool shift_h, int32_t
     if (tgt > tlen) tgt = tlen;
     ch.cursor_pos = tgt;
     if (!shift_h) ch.sel_anchor = ch.cursor_pos;
-    /* Der Blick FOLGT der Marke — eine Taste, die sie aus dem Fenster bewegt,
-     * bewegt das Fenster.  Die Textbox fuehrt ihr Fenster in `scroll_offset`,
-     * das Eingabefeld in `text_scroll_y`. */
+    /* The view FOLLOWS the caret — a key that moves it out of the window
+     * moves the window.  The text box keeps its window in `scroll_offset`,
+     * the input field in `text_scroll_y`. */
     if (ch.type == CHILD_TEXTBOX) {
         if (want < ch.scroll_offset)        ch.scroll_offset = want;
         if (want >= ch.scroll_offset + vis) ch.scroll_offset = want - vis + 1;
@@ -5977,8 +5977,8 @@ static void apply_text_events_to_focus() {
     if (idx < 0 || idx >= (int32_t)inst->children.size()) return;
     PrefabChild& ch = inst->children[idx];
 
-    /* Textbox (spec/44_6 §5f): read-only — markieren und kopieren, nie tippen.
-     * Eigener Zweig, damit kein Editier-Pfad versehentlich Text verändert. */
+    /* Textbox (spec/44_6 §5f): read-only — select and copy, never type.
+     * A branch of its own, so that no editing path changes text by accident. */
     if (ch.type == CHILD_TEXTBOX) {
         int32_t tlen = (int32_t)ch.text.size();
         if (ch.cursor_pos > tlen) ch.cursor_pos = tlen;
@@ -5999,8 +5999,8 @@ static void apply_text_events_to_focus() {
             if (ctrl_h && strcmp(key, "A") == 0) {
                 ch.sel_anchor = 0; ch.cursor_pos = tlen;
             } else if (ctrl_h && strcmp(key, "C") == 0) {
-                /* Ohne Auswahl den GANZEN Inhalt kopieren — bei einer Log-/
-                 * Ausgabe-Box ist das praktisch immer das Gemeinte. */
+                /* Without a selection copy the WHOLE content — for a log/
+                 * output box that is practically always what is meant. */
                 if (lo != hi) aiml_input_clipboard_set(ch.text.substr((size_t)lo, (size_t)(hi - lo)).c_str());
                 else          aiml_input_clipboard_set(ch.text.c_str());
             } else if (strcmp(key, "Left") == 0) {
@@ -6015,14 +6015,14 @@ static void apply_text_events_to_focus() {
                 tb_follow_x(ch);
             } else if (strcmp(key, "Up") == 0 || strcmp(key, "Down") == 0 ||
                        strcmp(key, "PageUp") == 0 || strcmp(key, "PageDown") == 0) {
-                /* spec/44_6 §5f: alle vier Richtungen.  Die Zeilenstruktur
-                 * kommt aus DERSELBEN Funktion wie beim Zeichnen — zwei
-                 * Herleitungen waeren zwei Gelegenheiten, sie auseinander
-                 * laufen zu lassen.  Spalte heisst hier: Byte-Abstand im
-                 * Zeilenanfang; fuer eine Mono-Schrift ist das die Spalte. */
+                /* spec/44_6 §5f: all four directions.  The line structure
+                 * comes from THE SAME function as for drawing — two
+                 * derivations would be two opportunities to let them drift
+                 * apart.  Column here means: byte distance from the
+                 * start of the line; for a mono font that is the column. */
                 tb_move_rows(ch, key, shift_h, tlen);
             } else if (strcmp(key, "Home") == 0) {
-                /* Zeilenanfang; mit Strg der Anfang des GANZEN Textes. */
+                /* Start of line; with Ctrl the start of the WHOLE text. */
                 if (ctrl_h) { ch.cursor_pos = 0; }
                 else {
                     int32_t b = ch.cursor_pos;
@@ -6124,12 +6124,12 @@ static void apply_text_events_to_focus() {
             } else if (ch.ti_multiline &&
                        (strcmp(key, "Up") == 0 || strcmp(key, "Down") == 0 ||
                         strcmp(key, "PageUp") == 0 || strcmp(key, "PageDown") == 0)) {
-                /* spec/44_6 §5f: auch im mehrzeiligen Feld alle vier
-                 * Richtungen.  Vorher gab es Hoch/Runter gar nicht — die Marke
-                 * konnte Zeile eins per Tastatur nicht verlassen. */
+                /* spec/44_6 §5f: all four directions in the multi-line field
+                 * too.  Previously there was no up/down at all — the caret
+                 * could not leave line one by keyboard. */
                 tb_move_rows(ch, key, shift, len);
             } else if (strcmp(key, "Home") == 0) {
-                /* Zeilenanfang; mit Strg der Anfang des GANZEN Textes. */
+                /* Start of line; with Ctrl the start of the WHOLE text. */
                 if (ctrl || !ch.ti_multiline) { ch.cursor_pos = 0; }
                 else {
                     int32_t b = ch.cursor_pos;
@@ -6160,11 +6160,11 @@ static void apply_text_events_to_focus() {
                     ch.sel_anchor = ch.cursor_pos; changed = true;
                 }
             } else if (strcmp(key, "Enter") == 0) {
-                /* Ein mehrzeiliges Feld ist ein EDITOR: die Eingabetaste macht
-                 * dort eine neue Zeile.  Bis 2026-10-18 tat sie nichts dergleichen
-                 * — ein Code-Feld, in dem man keine Zeile anfangen kann, obwohl
-                 * spec/44_6 §5g mehrzeiliges Bearbeiten zusagt.  Im einzeiligen
-                 * Feld bleibt sie das Abschicken. */
+                /* A multi-line field is an EDITOR: the Enter key makes
+                 * a new line there.  Until 2026-10-18 it did nothing of the sort
+                 * — a code field in which one cannot start a line, although
+                 * spec/44_6 §5g promises multi-line editing.  In the single-line
+                 * field it stays the submit. */
                 if (ch.ti_multiline) {
                     if (has_sel()) del_sel();
                     ch.text.insert((size_t)ch.cursor_pos, "\n");
@@ -6218,8 +6218,8 @@ void aiml_prefab_update_hover(float mx, float my) {
      * a transparent panel must still let widgets through their own bbox. */
     int32_t mb_pressed  = aiml_input_mouse_pressed(0);
     int32_t mb_released = aiml_input_mouse_released(0);
-    /* spec/44_6 "Modal": liegt eine blockierende Instanz unter dem Cursor,
-     * bekommen Widgets mit kleinerem z keine Eingabe. */
+    /* spec/44_6 "Modal": if a blocking instance lies under the cursor,
+     * widgets with a smaller z get no input. */
     bool    modal_found = false;
     int32_t modal_z     = modal_block_z(mx, my, modal_found);
     /* spec/44_6: a click = press + release inside the widget rect, independent of the instance —
@@ -6228,17 +6228,17 @@ void aiml_prefab_update_hover(float mx, float my) {
     static float s_press_x = 0.f, s_press_y = 0.f;
     if (mb_pressed) { s_press_valid = true; s_press_x = (float)mx; s_press_y = (float)my; }
 
-    /* spec/44_6: Treffer-Spur.  Nennt JEDES Widget, dessen Fläche den Druckpunkt
-     * enthält — nicht ein einzelnes "Ziel": der Widget-Durchlauf unten gated
-     * bewusst nicht darauf, welche Instanz den Cursor besitzt, also können
-     * überlappende Widgets beide feuern.  Die Spur zeigt das, statt es zu
-     * verdecken.  "miss" ist ein eigener, prüfbarer Ausgang.  Ohne diese Zeilen
-     * ist "Button tut nichts" nicht von "Klick kam nie an" zu unterscheiden. */
+    /* spec/44_6: hit trace.  Names EVERY widget whose area contains the press point
+     * — not a single "target": the widget pass below deliberately does not gate
+     * on which instance owns the cursor, so
+     * overlapping widgets can both fire.  The trace shows that instead of
+     * hiding it.  "miss" is an outcome of its own that can be checked.  Without these lines
+     * "button does nothing" cannot be told apart from "click never arrived". */
     if (mb_pressed && g_scene && !g_trace_hits) {
-        /* Tracing aus (Normalfall jeder App): nichts erheben.  "?" heisst
-         * "nicht erhoben" und ist von "" (echter Fehlschlag) unterscheidbar —
-         * sonst bestaende eine Pruefung auf "nichts getroffen" bei
-         * abgeschaltetem Tracing aus dem falschen Grund. */
+        /* Tracing off (the normal case of every app): collect nothing.  "?" means
+         * "not collected" and can be told apart from "" (real miss) —
+         * otherwise a check for "nothing hit" would pass with
+         * tracing switched off for the wrong reason. */
         g_last_hits = "?";
     } else if (mb_pressed && g_scene) {
         g_last_hits.clear();
@@ -6283,9 +6283,9 @@ void aiml_prefab_update_hover(float mx, float my) {
     AimlPrefabInstance* new_focus_inst = nullptr;
     int32_t              new_focus_idx  = -1;
 
-    /* Erst über ALLE Widget-Children (auch hidden Instances) laufen und
-     * clicked_frame resetten — sonst bleibt der Flag stale bei zwischenzeit-
-     * lich unsichtbaren Prefabs (Overlays öffnen→schließen→öffnen crash). */
+    /* First run over ALL widget children (hidden instances too) and
+     * reset clicked_frame — otherwise the flag stays stale for prefabs that were
+     * invisible in the meantime (overlays open→close→open crash). */
     for (auto* inst : g_scene->instances) {
         for (auto& ch : inst->children) {
             if (ch.type == CHILD_BUTTON
@@ -6324,33 +6324,33 @@ void aiml_prefab_update_hover(float mx, float my) {
         if (click_absorbed_by_popup) break;
     }
 
-    /* ÜBER DEN INDEX, nicht ueber einen Iterator: ein on_click-Rueckruf darf
-     * Prefabs ERZEUGEN -- die Reisekarte baut acht Instanzen in ihrem
-     * Klick-Handler auf.  Jedes instantiate haengt an g_scene->instances an;
-     * waechst der Vektor dabei ueber seine Kapazitaet, ist ein laufender
-     * range-for-Iterator UNGUELTIG und der naechste Schritt liest
-     * freigegebenen Speicher.  Im Browser endete das als
-     * "RuntimeError: index out of bounds" mitten in aiml_prefab_update_hover,
-     * sobald die Reisekarte zum ersten Mal geoeffnet wurde.
+    /* BY INDEX, not by iterator: an on_click callback may
+     * CREATE prefabs -- the travel map builds eight instances in its
+     * click handler.  Every instantiate appends to g_scene->instances;
+     * if the vector grows beyond its capacity in the process, a running
+     * range-for iterator is INVALID and the next step reads
+     * freed memory.  In the browser this ended as
+     * "RuntimeError: index out of bounds" in the middle of aiml_prefab_update_hover
+     * as soon as the travel map was opened for the first time.
      *
-     * Die Obergrenze ist der Stand VOR dem Durchlauf: was erst durch diesen
-     * Klick entsteht, darf denselben Klick nicht noch einmal abbekommen --
-     * sonst nimmt ein frisch erschienenes Overlay den Druck, der es gerade
-     * geoeffnet hat (spec/44_6 "ein Druck, ein Abnehmer"). */
+     * The upper bound is the state BEFORE the pass: what only comes into being through this
+     * click must not get the same click once more --
+     * otherwise a freshly appeared overlay takes the press that has just
+     * opened it (spec/44_6 "one press, one taker"). */
     const size_t inst_count_at_entry = g_scene->instances.size();
     for (size_t ii_w = 0; ii_w < inst_count_at_entry; ii_w++) {
-        if (ii_w >= g_scene->instances.size()) break;   /* ein Rueckruf hat geloescht */
+        if (ii_w >= g_scene->instances.size()) break;   /* a callback has deleted */
         auto* inst = g_scene->instances[ii_w];
         if (!inst) continue;
         if (!inst->visible) continue;
-        /* spec/44_6: wer am Frame-Ende stirbt, nimmt keine Eingabe mehr — hier
-         * besonders wichtig, weil sonst eine Waise in ihrem einen Frame noch
-         * den Tastatur-Fokus greifen kann, und der KLEBT bis zum naechsten
-         * Klick woanders. */
+        /* spec/44_6: whoever dies at the end of the frame takes no more input — especially
+         * important here, because otherwise an orphan could still grab the keyboard focus
+         * in its one frame, and that STICKS until the next
+         * click elsewhere. */
         if (inst->pending_delete) continue;
-        /* spec/44_6 "Modal": unter einer blockierenden Instanz nimmt nichts
-         * mehr Eingabe — sonst ist ein Overlay nur optisch modal und ein Klick
-         * loest zusaetzlich aus, was darunter liegt. */
+        /* spec/44_6 "Modal": under a blocking instance nothing takes
+         * input any more — otherwise an overlay is only visually modal and a click
+         * additionally triggers whatever lies beneath. */
         if (modal_found && effective_z(inst) < modal_z) continue;
         for (size_t i = 0; i < inst->children.size(); i++) {
             PrefabChild& ch = inst->children[i];
@@ -6442,11 +6442,11 @@ void aiml_prefab_update_hover(float mx, float my) {
                     ch.pressed_now = false;
                 }
             } else if (ch.type == CHILD_DROPDOWN) {
-                /* spec/44_6 §5h: Payload-Balken bedienen.  Er liegt am unteren Rand
-                 * der ZEILE ueber der Payload-Zone, also ausserhalb der Dropdown-Box
-                 * — ein Zug daran toggelt das Popup nicht.  Das Rad rollt feldweise
-                 * (eine Teilung je Raste): gefenstert wird in ganzen Payloads, ein
-                 * Teilversatz liesse ein Feld verschwinden statt es halb zu zeigen. */
+                /* spec/44_6 §5h: operate the payload bar.  It lies at the bottom edge
+                 * of the ROW above the payload zone, i.e. outside the dropdown box
+                 * — a drag on it does not toggle the popup.  The wheel scrolls field by field
+                 * (one pitch per notch): windowing happens in whole payloads, a
+                 * partial offset would make a field disappear instead of showing it half. */
                 if (ch.payload_scroll && ch.payload_pitch > 0.0f && inst->def
                     && ch.width > 0.0f && ch.height > 0.0f) {
                     float scx2 = bw / ch.width;
@@ -6481,9 +6481,9 @@ void aiml_prefab_update_hover(float mx, float my) {
                     }
                 }
                 if (mb_released) ch.payload_sb_drag = false;
-                /* Dropdown: click on box toggles popup (dropdown_open).  Popup-
-                 * Handling (Row-Click, Scroll, Click-Outside) läuft in einer
-                 * separaten Loop nach dieser (siehe unten). */
+                /* Dropdown: click on box toggles popup (dropdown_open).  Popup
+                 * handling (row click, scroll, click outside) runs in a
+                 * separate loop after this one (see below). */
                 if (mb_pressed && over && !ch.dropdown_open) ch.pressed_now = true;
                 if (mb_released) {
                     if (ch.pressed_now && over) {
@@ -6552,9 +6552,9 @@ void aiml_prefab_update_hover(float mx, float my) {
                     }
                     return best;
                 };
-                /* Mehrzeilig: erst die ZEILE aus y, dann die Spalte aus x — eine
-                 * reine x-Suche wuerde ueber alle Zeilen hinweg den naechsten
-                 * Halt nehmen und damit fast immer in der falschen Zeile landen. */
+                /* Multi-line: first the LINE from y, then the column from x — a
+                 * pure x search would take the nearest stop across all lines
+                 * and thereby almost always land in the wrong line. */
                 auto idx_from_xy = [&](float x, float y) -> int32_t {
                     int rows = (int)ch.tb_row_y.size();
                     if (rows <= 0 || ch.tb_row_start.size() < (size_t)rows + 1)
@@ -6574,10 +6574,10 @@ void aiml_prefab_update_hover(float mx, float my) {
                     }
                     return best;
                 };
-                /* Mehrzeilig: Rad und Rollbalken wie bei der Textbox
-                 * (spec/44_6 §5f).  Ohne das hier war der Balken ein BILD:
-                 * gezeichnet, aber nichts bewegte ihn, und das Feld sprang in
-                 * jedem Rahmen zum Cursor zurueck (gemeldet 22.10.2026). */
+                /* Multi-line: wheel and scrollbar as in the text box
+                 * (spec/44_6 §5f).  Without this the bar was a PICTURE:
+                 * drawn, but nothing moved it, and the field jumped back to the cursor
+                 * in every frame (reported 2026-10-22). */
                 bool on_bar = false;
                 if (ch.ti_multiline) {
                     float scx = (ch.width  > 0.0f) ? bw / ch.width  : 1.0f;
@@ -6609,8 +6609,8 @@ void aiml_prefab_update_hover(float mx, float my) {
                         if (over && !ch.sb_dragging) {
                             float wy = aiml_input_mouse_scroll_y();
                             if (wy != 0.0f) {
-                                /* Shift+Rad rollt waagerecht — dieselbe Geste
-                                 * wie in der Textbox. */
+                                /* Shift+wheel scrolls horizontally — the same gesture
+                                 * as in the text box. */
                                 if (aiml_input_key_down("lshift") || aiml_input_key_down("rshift")) {
                                     ch.tb_off_x -= wy * 48.0f * scx;
                                     if (ch.tb_off_x < 0.0f) ch.tb_off_x = 0.0f;
@@ -6625,8 +6625,8 @@ void aiml_prefab_update_hover(float mx, float my) {
                     }
                 }
                 if (mb_released) ch.sb_dragging = false;
-                /* Ein Klick AUF den Balken setzt keinen Cursor und markiert
-                 * nichts — sonst zieht jedes Rollen Text mit (F44_6-…). */
+                /* A click ON the bar sets no cursor and selects
+                 * nothing — otherwise every scroll drags text along (F44_6-…). */
                 if (mb_pressed && over && !on_bar && !ch.sb_dragging) {
                     new_focus_inst = inst;
                     new_focus_idx  = (int32_t)i;
@@ -6677,10 +6677,10 @@ void aiml_prefab_update_hover(float mx, float my) {
                 }
                 if (mb_released) ch.sb_dragging = false;
             } else if (ch.type == CHILD_TEXTBOX) {
-                /* Auswahl (spec/44_6 §5f): Klick setzt Fokus + Cursor, Ziehen
-                 * erweitert, Ctrl+C kopiert (apply_text_events_to_focus).
-                 * Caret-Stops kommen aus dem Render-Pass.  Die Textbox ist
-                 * NICHT editierbar — nur markieren und kopieren. */
+                /* Selection (spec/44_6 §5f): a click sets focus + cursor, dragging
+                 * extends, Ctrl+C copies (apply_text_events_to_focus).
+                 * Caret stops come from the render pass.  The text box is
+                 * NOT editable — only select and copy. */
                 auto tb_idx_from_xy = [&](float x, float y) -> int32_t {
                     int rows = (int)ch.tb_row_y.size();
                     if (rows <= 0 || ch.tb_row_start.size() < (size_t)rows + 1) return ch.cursor_pos;
@@ -6703,10 +6703,10 @@ void aiml_prefab_update_hover(float mx, float my) {
                     return best;
                 };
                 bool on_scrollbar = false;
-                {   /* Klicks auf einen Scrollbalken bleiben Scrollen, nicht Auswahl —
-                     * auf BEIDEN.  Der untere fehlte: ein Zug am waagerechten
-                     * Griff markierte Text, statt zu rollen (gemeldet
-                     * 22.10.2026). */
+                {   /* Clicks on a scrollbar stay scrolling, not selection —
+                     * on BOTH.  The lower one was missing: a drag on the horizontal
+                     * handle selected text instead of scrolling (reported
+                     * 2026-10-22). */
                     float scx2 = (ch.width  > 0.0f) ? bw / ch.width  : 1.0f;
                     float scy2 = (ch.height > 0.0f) ? bh / ch.height : 1.0f;
                     float sb_w = 6.0f * scx2 + 4.0f * scx2;
@@ -6726,7 +6726,7 @@ void aiml_prefab_update_hover(float mx, float my) {
                 } else if (ch.tb_sel_dragging && ch.focused && aiml_input_mouse_button(0) &&
                            !ch.sb_dragging && !ch.sb_dragging_x) {
                     ch.cursor_pos = tb_idx_from_xy(mx, my);
-                    /* Ziehen über den Rand hinaus scrollt mit. */
+                    /* Dragging beyond the edge scrolls along. */
                     int max_off_sel = ch.tb_total > ch.tb_visible ? ch.tb_total - ch.tb_visible : 0;
                     if (my < by && ch.scroll_offset > 0)                    ch.scroll_offset--;
                     else if (my > by + bh && ch.scroll_offset < max_off_sel) ch.scroll_offset++;
@@ -6761,12 +6761,12 @@ void aiml_prefab_update_hover(float mx, float my) {
                         if (frac > 1.0f) frac = 1.0f;
                         ch.scroll_offset = (int)(frac * (float)max_off + 0.5f);
                     }
-                    /* Body-Drag-Scroll (Touch/Maus): ein button-0-Drag, dessen
-                     * URSPRUNG in dieser Textbox liegt, scrollt sie — so ist die
-                     * Textbox am Handy per Finger scrollbar (kein Wheel/Thumb nötig).
-                     * Nur wenn NICHT der Thumb gezogen wird.  Textboxen haben KEINE
-                     * ziehbaren Kinder → kein Konflikt mit Karten-Drag; Kosten fallen
-                     * nur an, während ein Drag aktiv ist. */
+                    /* Body drag scroll (touch/mouse): a button-0 drag whose
+                     * ORIGIN lies in this text box scrolls it — that way the
+                     * text box can be scrolled by finger on a phone (no wheel/thumb needed).
+                     * Only if the thumb is NOT being dragged.  Text boxes have NO
+                     * draggable children → no conflict with card drag; costs only arise
+                     * while a drag is active. */
                     if (!ch.sb_dragging && aiml_input_drag_active(0)) {
                         float ox = aiml_input_drag_origin_x(0);
                         float oy = aiml_input_drag_origin_y(0);
@@ -6784,10 +6784,10 @@ void aiml_prefab_update_hover(float mx, float my) {
                         ch.tb_drag = false;
                     }
                 }
-                /* Waagerecht (spec/44_6 §5f): Shift+Rad schiebt den Ausschnitt,
-                 * und der UNTERE Balken laesst sich ziehen.  Ohne das waere er
-                 * ein Zeichen ohne Griff — man sieht, dass es weitergeht, und
-                 * kommt nicht hin. */
+                /* Horizontal (spec/44_6 §5f): Shift+wheel moves the window,
+                 * and the LOWER bar can be dragged.  Without that it would be
+                 * a sign without a handle — one sees that it continues, and
+                 * cannot get there. */
                 if (!ch.wrap && ch.tb_content_w > ch.tb_inner_w && ch.tb_inner_w > 0.0f) {
                     float scx = (ch.width  > 0.0f) ? bw / ch.width  : 1.0f;
                     float scy = (ch.height > 0.0f) ? bh / ch.height : 1.0f;
@@ -6812,10 +6812,10 @@ void aiml_prefab_update_hover(float mx, float my) {
                                                ? denom_x * (ch.tb_off_x / max_x) : 0.0f);
                     bool over_tx = (my >= sb_y && my <= sb_y + sb_h &&
                                     mx >= thumb_x && mx <= thumb_x + thumb_w);
-                    /* Auch ein Klick NEBEN den Griff greift: er springt dorthin
-                     * und zieht weiter — sonst muss man den schmalen Griff
-                     * treffen, und genau das ist der Grund, warum ein Balken
-                     * „sich nicht bewegen laesst". */
+                    /* A click NEXT TO the handle grabs too: it jumps there
+                     * and keeps dragging — otherwise one has to hit the narrow handle,
+                     * and exactly that is the reason why a bar
+                     * "won't move". */
                     bool over_track = (my >= sb_y - 2.0f * scy && my <= sb_y + sb_h + 2.0f * scy &&
                                        mx >= track_x && mx <= track_x + track_w);
                     if (mb_pressed && (over_tx || over_track)) ch.sb_dragging_x = true;
@@ -6854,16 +6854,16 @@ void aiml_prefab_update_hover(float mx, float my) {
         }
     }
 
-    /* Popup-Dropdown Interaktion nach dem normalen Widget-Loop.  Iteriert
-     * alle offenen Dropdowns, resolved Row-Klick / Scroll / Click-Outside. */
+    /* Popup dropdown interaction after the normal widget loop.  Iterates over
+     * all open dropdowns, resolves row click / scroll / click outside. */
     float scroll_dy = aiml_input_mouse_scroll_y();
     int32_t mb_held = aiml_input_mouse_button(0);
     int32_t key_up_p    = aiml_input_key_pressed("Up");
     int32_t key_down_p  = aiml_input_key_pressed("Down");
     int32_t key_enter_p = aiml_input_key_pressed("Enter");
     int32_t key_esc_p   = aiml_input_key_pressed("Escape");
-    /* Index statt Iterator, gleiche Gefahr wie im Widget-Durchlauf: die
-     * Zeilen-Rueckrufe einer offenen Klappliste duerfen Prefabs erzeugen. */
+    /* Index instead of iterator, the same danger as in the widget pass: the
+     * row callbacks of an open dropdown list may create prefabs. */
     const size_t inst_count_dd = g_scene->instances.size();
     for (size_t ii_d = 0; ii_d < inst_count_dd; ii_d++) {
         if (ii_d >= g_scene->instances.size()) break;
@@ -6874,13 +6874,13 @@ void aiml_prefab_update_hover(float mx, float my) {
             if (ch.type != CHILD_DROPDOWN || !ch.dropdown_open) continue;
             float bx, by, bw, bh;
             child_screen_bbox(inst, ch, bx, by, bw, bh);
-            /* Options zählen */
+            /* count the options */
             int n_opts = ch.options.empty() ? 0 : 1;
             for (char c : ch.options) if (c == '|') n_opts++;
             if (n_opts <= 0) { ch.dropdown_open = false; continue; }
             const int MAX_VIS = 10;
             int visible = n_opts < MAX_VIS ? n_opts : MAX_VIS;
-            /* Row-Höhe: an Font gebunden, ca. Box-Höhe */
+            /* row height: bound to the font, approx. box height */
             float row_h = bh;
             float popup_x, popup_y, popup_w, popup_h;
             compute_popup_rect(bx, by, bw, bh, n_opts, popup_x, popup_y, popup_w, popup_h);
@@ -6888,7 +6888,7 @@ void aiml_prefab_update_hover(float mx, float my) {
                             && my >= popup_y && my < popup_y + popup_h);
             bool over_box   = (mx >= bx      && mx < bx + bw
                             && my >= by      && my < by + bh);
-            /* Scroll — solange popup offen (auch wenn Maus über der Box steht). */
+            /* Scroll — as long as the popup is open (even if the mouse is over the box). */
             if (n_opts > visible && scroll_dy != 0.0f) {
                 int step = 0;
                 if (scroll_dy > 0.0f) step =  (int)ceilf(scroll_dy);
@@ -6941,7 +6941,7 @@ void aiml_prefab_update_hover(float mx, float my) {
                 if (ch.scroll_offset < 0) ch.scroll_offset = 0;
                 if (ch.scroll_offset > n_opts - visible) ch.scroll_offset = n_opts - visible;
             }
-            /* Row-Klick (nicht während Scrollbar-Drag). */
+            /* Row click (not during a scrollbar drag). */
             if (mb_released && over_popup && !ch.sb_dragging && !over_sb) {
                 int row = (int)((my - popup_y) / row_h) + ch.scroll_offset;
                 if (row >= 0 && row < n_opts) {
@@ -7299,7 +7299,7 @@ void aiml_prefab_select_all(void* inst, const char* child_name) {
         auto* pi = (AimlPrefabInstance*)inst;
         auto it = pi->child_index.find(child_name ? child_name : "");
         if (it != pi->child_index.end()) {
-            /* Vorherigen Fokus einsammeln, damit nicht zwei Widgets fokussiert sind. */
+            /* Collect the previous focus, so that two widgets are not focused. */
             if (g_scene->focused_input_inst && g_scene->focused_input_child_idx >= 0) {
                 auto* old = g_scene->focused_input_inst;
                 int32_t oi = g_scene->focused_input_child_idx;
@@ -7314,11 +7314,11 @@ void aiml_prefab_select_all(void* inst, const char* child_name) {
     }
 }
 
-/* spec/44_0 §2.5 — was ein Ctrl+C im gerade fokussierten Widget kopieren würde:
- * die Auswahl, bei einer textbox ohne Auswahl der ganze Inhalt.  Der Browser
- * muss das INNERHALB des keydown wissen (Clipboard-Schreiben verlangt eine
- * laufende Nutzer-Interaktion), während die aiml-Frameschleife erst danach
- * läuft — darum dieser synchrone Hook für input_runtime. */
+/* spec/44_0 §2.5 — what a Ctrl+C in the currently focused widget would copy:
+ * the selection, for a textbox without a selection the whole content.  The browser
+ * must know this WITHIN the keydown (writing to the clipboard requires an
+ * ongoing user interaction), while the aiml frame loop only runs afterwards
+ * — hence this synchronous hook for input_runtime. */
 extern "C" const char* aiml_focused_copy_text(void) {
     if (!g_scene || !g_scene->focused_input_inst) return "";
     AimlPrefabInstance* inst = g_scene->focused_input_inst;
@@ -7333,7 +7333,7 @@ extern "C" const char* aiml_focused_copy_text(void) {
     if (hi > len) hi = len;
     static std::string out;
     if (hi > lo)                       out = ch.text.substr((size_t)lo, (size_t)(hi - lo));
-    else if (ch.type == CHILD_TEXTBOX) out = ch.text;    /* ohne Auswahl: ganze Box */
+    else if (ch.type == CHILD_TEXTBOX) out = ch.text;    /* without a selection: the whole box */
     else                               out.clear();
     return out.c_str();
 }
@@ -7365,11 +7365,11 @@ int32_t aiml_prefab_child_contains(void* inst_p, const char* child_name,
     return (sx >= bx && sx < bx + bw && sy >= by && sy < by + bh) ? 1 : 0;
 }
 
-/* spec/44_6: Trefferfläche eines Kindes in Bildschirmkoordinaten — die Umkehrung
- * von child_contains, das nur einen Punkt prüft, den man schon hat.  Nötig, damit
- * ein Testtreiber "Button X" in eine Cursorposition auflösen kann (spec/44_9).
- * -1 heisst "Kind existiert nicht"; es ist keine gültige Koordinate und dadurch
- * von einer echten Fläche unterscheidbar. */
+/* spec/44_6: hit area of a child in screen coordinates — the inverse
+ * of child_contains, which only checks a point one already has.  Needed so that
+ * a test driver can resolve "button X" into a cursor position (spec/44_9).
+ * -1 means "child does not exist"; it is not a valid coordinate and thereby
+ * distinguishable from a real area. */
 static int32_t child_bbox_or_fail(void* inst_p, const char* child_name,
                                   float& bx, float& by, float& bw, float& bh) {
     auto* inst = (AimlPrefabInstance*)inst_p;
@@ -7391,16 +7391,16 @@ PREFAB_RECT_GETTER(aiml_prefab_child_rect_w, bw)
 PREFAB_RECT_GETTER(aiml_prefab_child_rect_h, bh)
 #undef PREFAB_RECT_GETTER
 
-/* child_design_x/y/w/h — dasselbe Rechteck wie child_rect_*, aber in DESIGN-
- * Koordinaten (1280x720), also geteilt durch die Fenster-Skalierung.
+/* child_design_x/y/w/h — the same rectangle as child_rect_*, but in DESIGN
+ * coordinates (1280x720), i.e. divided by the window scaling.
  *
- * Warum beides: child_rect_* liefert SCREEN-Pixel (fuer Treffertests und
- * Cursor-Positionen), set_pos/x/y eines Prefabs erwarten aber DESIGN-Pixel.
- * Wer eine Instanz neben ein Kind stellen will (Tooltip, Sprechblase), mischte
- * bisher zwangslaeufig zwei Raeume: bei einem Fenster != 1280x720 landete die
- * Instanz daneben, und zwar um den Skalierungsfaktor verschoben.  Genau so ist
- * die Tour-Sprechblase in 9rooms aufgefallen (2026-10-25).
- * -1 heisst wie bei child_rect_* "Kind existiert nicht". */
+ * Why both: child_rect_* returns SCREEN pixels (for hit tests and
+ * cursor positions), but set_pos/x/y of a prefab expect DESIGN pixels.
+ * Whoever wanted to place an instance next to a child (tooltip, speech bubble) inevitably
+ * mixed two spaces until now: with a window != 1280x720 the
+ * instance landed off target, shifted by the scaling factor.  That is exactly how
+ * the tour speech bubble in 9rooms was noticed (2026-10-25).
+ * -1 means, as with child_rect_*, "child does not exist". */
 #define PREFAB_DESIGN_GETTER(fn, field)                                        \
     extern "C" float fn(void* inst_p, const char* child_name) {                \
         float bx, by, bw, bh;                                                  \
@@ -7417,9 +7417,9 @@ PREFAB_DESIGN_GETTER(aiml_prefab_child_design_h, bh / rsy)
 #undef PREFAB_DESIGN_GETTER
 
 extern "C" void aiml_prefab_trace_hits(int32_t on) { g_trace_hits = (on != 0); }
-/* spec/44_6: die aufgeloesten Treffer des letzten Drucks, "|"-getrennt.
- * "" = der Druck traf nichts.  Damit ist `expect_hit` (spec/44_9) ohne
- * Log-Parsing pruefbar — das Log ist fuer Menschen, das hier fuer Tests. */
+/* spec/44_6: the resolved hits of the last press, "|"-separated.
+ * "" = the press hit nothing.  That makes `expect_hit` (spec/44_9) checkable without
+ * log parsing — the log is for humans, this is for tests. */
 extern "C" const char* aiml_prefab_last_hit(void) { return g_last_hits.c_str(); }
 
 int32_t aiml_prefab_child_focused(void* inst, const char* child_name) {
@@ -7444,10 +7444,10 @@ void aiml_prefab_set_checked(void* inst, const char* child_name, int32_t checked
  * stays local for snap-back.  Shared by update_drag (picks at the cursor) and
  * update_drag_gesture (picks at the press point). */
 static bool prefab_drag_pick_at(float px, float py) {
-    /* spec/44_6 "Modal": unter einer blockierenden Instanz beginnt kein Zug.
-     * Ohne das hiesse "blockiert Eingabe darunter" nur "blockiert Klicks" —
-     * die Auswahl hier ueberspringt Nicht-Draggbares und griffe munter durch
-     * einen Dialog hindurch nach der Karte darunter. */
+    /* spec/44_6 "Modal": no drag begins under a blocking instance.
+     * Without this "blocks input beneath" would only mean "blocks clicks" —
+     * the selection here skips non-draggables and would happily reach through
+     * a dialog for the card beneath. */
     bool mod_found = false;
     int32_t mod_z = modal_block_z(px, py, mod_found);
     for (int i = (int)g_scene->instances.size() - 1; i >= 0; i--) {
@@ -7520,11 +7520,11 @@ int32_t aiml_prefab_update_drag_gesture(float mx, float my) {
         return 4;
     }
     if (aiml_input_drag_started(0) && !g_scene->dragged)
-        /* GELATCHTER Startpunkt, nicht der lebende Druckpunkt: `drag_origin_*`
-         * wird von jedem neuen Druck sofort ueberschrieben, die started-Kante
-         * aber erst im naechsten Frame gemeldet.  Bei "Druecken A -> ziehen ->
-         * loslassen -> Druecken B" in einer Frame-Luecke griff die Aufnahme
-         * sonst an B (spec/44_0 §2.3). */
+        /* LATCHED start point, not the live press point: `drag_origin_*`
+         * is overwritten immediately by every new press, but the started edge
+         * is only reported in the next frame.  With "press A -> drag ->
+         * release -> press B" in one frame gap the pick-up would otherwise
+         * grab at B (spec/44_0 §2.3). */
         prefab_drag_pick_at(aiml_input_drag_start_x(0), aiml_input_drag_start_y(0));
 
     prefab_drag_follow(mx, my);
@@ -7538,10 +7538,10 @@ int32_t aiml_prefab_update_drag_gesture(float mx, float my) {
     return 0;
 }
 
-/* spec/44_6: Breite von `text` in der Prefab-Schrift, inklusive der
- * Inline-Marken-Regeln ({icon:…} zaehlt ascent_px).  Macht
- * Zentrierung, Umbruch UND die Marken pruefbar — ohne das ist "die Marke wird
- * konsumiert statt gezeichnet" von aussen nicht beobachtbar. */
+/* spec/44_6: width of `text` in the prefab font, including the
+ * inline marker rules ({icon:…} counts ascent_px).  Makes
+ * centring, wrapping AND the markers checkable — without this "the marker is
+ * consumed instead of drawn" cannot be observed from outside. */
 float aiml_prefab_text_width(const char* text) {
     if (!g_scene || !g_scene->font || !text) return 0.0f;
     return text_width_font(g_scene->font, text);
