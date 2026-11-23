@@ -1,71 +1,71 @@
 # sprint_task_17
 
-## Titel
+## Title
 
-Compiler-Diagnostics auf verlässliche AIML-Datei/Zeile/Spalte zentralisieren
+Centralise compiler diagnostics on reliable AIML file/line/column
 
 ## Status
 
-Neu. Weiterhin offen und kurzfristig sinnvoll.
+New. Still open and sensible in the short term.
 
-## Ziel
+## Goal
 
-Compiler- und Semantikfehler sollen verlässlich als AIML-Diagnostics erscheinen, also im Format `aiml_file:line[:column] message`, statt nur als rohe `LOG_ERROR(...)`-Ausgabe mit C++-Datei oder ganz ohne AIML-Quellort.
+Compiler and semantic errors should reliably appear as AIML diagnostics, i.e. in the format `aiml_file:line[:column] message`, instead of only as raw `LOG_ERROR(...)` output with a C++ file or entirely without an AIML source location.
 
-## Warum dieser Task noetig ist
+## Why this task is necessary
 
-Der aktuelle Compiler hat bereits mehrere Vorarbeiten:
+The current compiler already has several pieces of groundwork:
 
-- [ast_nodes.h](../../src/core/ast_nodes.h) haengt `sourceNode` und `sourceLine` an AST-Knoten.
-- [ast_builder.cpp](../../src/core/ast_builder.cpp) aktualisiert `currentLine` aus `YAML::Mark()`.
-- [context.h](../../src/core/context.h) hat mit `currentSourceFile`, `currentLine`, `currentFunctionName` sowie `fmtLoc()` bereits eine primitive Location-Surface.
+- [ast_nodes.h](../../src/core/ast_nodes.h) attaches `sourceNode` and `sourceLine` to AST nodes.
+- [ast_builder.cpp](../../src/core/ast_builder.cpp) updates `currentLine` from `YAML::Mark()`.
+- [context.h](../../src/core/context.h) already has a primitive location surface with `currentSourceFile`, `currentLine`, `currentFunctionName` as well as `fmtLoc()`.
 
-Trotzdem ist die Fehleroberflaeche nicht konsistent zentralisiert.
+Still, the error surface is not consistently centralised.
 
-Im aktuellen Stand gibt es viele Compilerpfade, die weiterhin direkt `LOG_ERROR(...)` verwenden, ohne `fmtLoc(...)` oder node-basierte Diagnostics. Eine Stichprobe ueber den aktuellen Code zeigt:
+In the current state there are many compiler paths that still use `LOG_ERROR(...)` directly, without `fmtLoc(...)` or node-based diagnostics. A sample over the current code shows:
 
-- 142 `LOG_ERROR(...)`-Stellen im Compiler-/Core-Code
-- davon nur 12 mit `fmtLoc(...)`
-- also 130 Stellen ohne expliziten AIML-Quellort
+- 142 `LOG_ERROR(...)` sites in the compiler/core code
+- of which only 12 with `fmtLoc(...)`
+- so 130 sites without an explicit AIML source location
 
-Das erklaert den beobachteten Effekt: Manche Fehler zeigen AIML-Datei/Zeile, andere enden nur als generische Compiler- oder C++-interne Meldung.
+That explains the observed effect: some errors show the AIML file/line, others end only as a generic compiler or C++-internal message.
 
-## Aktueller Stand
+## Current state
 
-### Bereits vorhanden
+### Already present
 
-- Primitive Location-Tracking-Felder im [context.h](../../src/core/context.h)
-- AST-Knoten mit YAML-Ursprung in [ast_nodes.h](../../src/core/ast_nodes.h)
-- Teilweise lokalisierte Fehlerpfade, z. B. in [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp)
+- Primitive location tracking fields in [context.h](../../src/core/context.h)
+- AST nodes with YAML origin in [ast_nodes.h](../../src/core/ast_nodes.h)
+- Partly localised error paths, e.g. in [ast_compiler_call.cpp](../../src/core/ast_compiler_call.cpp)
 
-### Noch nicht sauber geloest
+### Not yet solved cleanly
 
-- Viele Semantikfehler in [ast_compiler.cpp](../../src/core/ast_compiler.cpp), [ast_compiler_expr.cpp](../../src/core/ast_compiler_expr.cpp), [ast_compiler_stmt.cpp](../../src/core/ast_compiler_stmt.cpp), [utils.cpp](../../src/core/utils.cpp) und [builtin_registry.cpp](../../src/core/builtin_registry.cpp) laufen noch ohne AIML-Quellort.
-- Parse-/Builder-Fehler wie in [expression_builder.cpp](../../src/core/ast/expression_builder.cpp) nutzen rohe `LOG_ERROR(...)`-Meldungen.
-- Top-Level-Fehler in [compiler.cpp](../../compiler.cpp) fangen YAML-/AST-/Import-Fehler nicht durchgaengig in einem einheitlichen AIML-Diagnostic-Format ab.
-- Es existiert sogar noch mindestens ein roher `throw std::runtime_error(...)`-Pfad in [context.h](../../src/core/context.h), der die zentrale Diagnostic-Schicht komplett umgeht.
+- Many semantic errors in [ast_compiler.cpp](../../src/core/ast_compiler.cpp), [ast_compiler_expr.cpp](../../src/core/ast_compiler_expr.cpp), [ast_compiler_stmt.cpp](../../src/core/ast_compiler_stmt.cpp), [utils.cpp](../../src/core/utils.cpp) and [builtin_registry.cpp](../../src/core/builtin_registry.cpp) still run without an AIML source location.
+- Parse/builder errors such as in [expression_builder.cpp](../../src/core/ast/expression_builder.cpp) use raw `LOG_ERROR(...)` messages.
+- Top-level errors in [compiler.cpp](../../compiler.cpp) do not catch YAML/AST/import errors consistently in a uniform AIML diagnostic format.
+- There is even at least one raw `throw std::runtime_error(...)` path in [context.h](../../src/core/context.h) that bypasses the central diagnostic layer completely.
 
-## Was an der bisherigen Planung fehlte
+## What the previous planning was missing
 
-Das Thema war bisher teilweise in [sprint_task_16_stacktraces_and_crash_diagnostics.md](../../sprint_task_16_stacktraces_and_crash_diagnostics.md) enthalten, dort aber als Teil einer viel breiteren Crash-/Runtime-Architektur.
+The topic was so far partly contained in [sprint_task_16_stacktraces_and_crash_diagnostics.md](../../sprint_task_16_stacktraces_and_crash_diagnostics.md), but there as part of a much broader crash/runtime architecture.
 
-Fuer die aktuelle Compiler-Qualitaet ist ein eigener Task sinnvoller, weil das Problem enger ist:
+For the current compiler quality a separate task makes more sense, because the problem is narrower:
 
-- keine Runtime-Frames
-- keine Signal-Handler
-- kein nativer Stacktrace
-- sondern die Vollstaendigkeit der AIML-Compilerdiagnostics
+- no runtime frames
+- no signal handlers
+- no native stack trace
+- but the completeness of the AIML compiler diagnostics
 
-Task 17 ist damit kein Ersatz fuer Task 16, sondern eine gezielte Vorstufe: Compilerfehler muessen erst verlässlich lokalisiert sein, bevor AIML-Stacktraces und groessere Diagnostic-Pipelines wirklich sauber wirken.
+Task 17 is thus not a replacement for task 16, but a targeted preliminary stage: compiler errors first have to be reliably localised before AIML stack traces and larger diagnostic pipelines really work cleanly.
 
-## Fokus
+## Focus
 
-1. Eine kleine zentrale Compiler-Diagnostic-API einfuehren.
-2. Rohe `LOG_ERROR(...)`-Pfade mit AST-/Node-/Location-kontext auf diese API umstellen.
-3. Parse-, Builder-, Semantik- und Top-Level-Compilefehler in ein einheitliches AIML-Diagnostic-Format bringen.
-4. Negative Repros hinzufuegen, die nicht nur auf Fehlerschlag pruefen, sondern explizit auf Datei/Zeile/Spalte im Fehlertext.
+1. Introduce a small central compiler diagnostic API.
+2. Switch raw `LOG_ERROR(...)` paths with AST/node/location context over to this API.
+3. Bring parse, builder, semantic and top-level compile errors into a uniform AIML diagnostic format.
+4. Add negative repros that do not just check for failure, but explicitly for file/line/column in the error text.
 
-## Betroffene Stellen
+## Affected places
 
 - [compiler.cpp](../../compiler.cpp)
 - [src/core/context.h](../../src/core/context.h)
@@ -80,11 +80,11 @@ Task 17 ist damit kein Ersatz fuer Task 16, sondern eine gezielte Vorstufe: Comp
 - [src/core/builtin_registry.cpp](../../src/core/builtin_registry.cpp)
 - [logger.h](../../logger.h)
 
-## Konkrete Problemklassen
+## Concrete problem classes
 
-### 1. AST-/Semantikfehler ohne Node-Lokalisierung
+### 1. AST/semantic errors without node localisation
 
-Beispiele:
+Examples:
 
 - `Unknown parent class`
 - `Unknown model`
@@ -93,104 +93,104 @@ Beispiele:
 - `Variable shadowing`
 - `Unknown class for new`
 
-Diese Fehler entstehen oft an AST-Knoten, loggen aber heute noch ohne deren `sourceNode`.
+These errors often arise at AST nodes, but today still log without their `sourceNode`.
 
-### 2. Builder-/Parsefehler ohne sauberen AIML-Ort
+### 2. Builder/parse errors without a clean AIML location
 
-Beispiele:
+Examples:
 
-- veraltete Operatoren in [expression_builder.cpp](../../src/core/ast/expression_builder.cpp)
-- String-Expansion-Parsefehler in [string_utils.h](../../src/core/string_utils.h)
-- YAML-Ausnahmen in [compiler.cpp](../../compiler.cpp)
+- outdated operators in [expression_builder.cpp](../../src/core/ast/expression_builder.cpp)
+- string expansion parse errors in [string_utils.h](../../src/core/string_utils.h)
+- YAML exceptions in [compiler.cpp](../../compiler.cpp)
 
-Hier muss klar getrennt werden zwischen:
+Here a clear distinction must be made between:
 
-- echter Parser-/YAML-Lokation
-- aktueller Builder-Zeile
-- importierter Datei
+- a real parser/YAML location
+- the current builder line
+- an imported file
 
-### 3. Top-Level-Compilefehler ohne einheitliches Diagnostic-Objekt
+### 3. Top-level compile errors without a uniform diagnostic object
 
-Beispiele:
+Examples:
 
-- Import-Aufloesung
+- import resolution
 - `compileFromString`
-- Objektdatei-/IR-Emission
-- `verifyModule`-Fehler
+- object file/IR emission
+- `verifyModule` errors
 
-Nicht jeder dieser Fehler hat eine AIML-Node. Der Task muss daher eine saubere Staffelung definieren:
+Not every one of these errors has an AIML node. The task must therefore define a clean staggering:
 
 - `loc from node`
-- sonst `loc from current compiler state`
-- sonst `file only`
-- sonst bewusst als nicht-AIML-internen Toolchainfehler kennzeichnen
+- otherwise `loc from current compiler state`
+- otherwise `file only`
+- otherwise mark it deliberately as a non-AIML internal toolchain error
 
-### 4. Rohe Exceptions statt Diagnostics
+### 4. Raw exceptions instead of diagnostics
 
-`throw std::runtime_error(...)` in Compiler-Core ist mit diesem Zielbild unvertraeglich, wenn der Fehler eigentlich ein lokalisierbarer AIML-Semantikfehler ist.
+`throw std::runtime_error(...)` in the compiler core is incompatible with this target picture when the error is actually a localisable AIML semantic error.
 
-## Zielarchitektur
+## Target architecture
 
-Es braucht eine kleine zentrale Surface, zum Beispiel im oder neben [context.h](../../src/core/context.h):
+A small central surface is needed, for example in or next to [context.h](../../src/core/context.h):
 
 - `DiagnosticLoc`
 - `ctx.error(node, message)`
 - `ctx.error(loc, message)`
 - `ctx.errorCurrent(message)`
-- optional `ctx.note(...)`
+- optionally `ctx.note(...)`
 
-Diese API sollte:
+This API should:
 
-- Datei, Zeile, Spalte und optional Funktion normalisieren
-- den finalen Text formatieren
-- einen `hadError`-Zustand zentral setzen koennen
-- spaeter mit Task 16 kompatibel bleiben
+- normalise file, line, column and optionally the function
+- format the final text
+- be able to set a `hadError` state centrally
+- stay compatible with task 16 later
 
-Wichtig ist, dass neue Compilerfehler nicht mehr direkt `LOG_ERROR(...)` aufrufen, wenn sie semantisch an AIML-Quellcode haengen.
+It is important that new compiler errors no longer call `LOG_ERROR(...)` directly when they semantically hang off AIML source code.
 
-## Abgrenzung zu Task 16
+## Delimitation from task 16
 
 Task 16:
 
-- native Crashdiagnostics
-- AIML-Runtime-Stacktraces
-- Crash-Handler
-- thread-local AIML-Frames
+- native crash diagnostics
+- AIML runtime stack traces
+- crash handler
+- thread-local AIML frames
 
 Task 17:
 
-- Compiler- und Semantikdiagnostics
-- Vollstaendigkeit und Konsistenz der AIML-Datei/Zeile/Spalte
-- Builder-/Parser-/Semantikfehler im normalen Fehlerrueckkanal
+- compiler and semantic diagnostics
+- completeness and consistency of the AIML file/line/column
+- builder/parser/semantic errors in the normal error return channel
 
-Empfohlene Reihenfolge:
+Recommended order:
 
-1. Task 17 zuerst fuer saubere Compilerfehler
-2. danach Task 16 fuer Runtime- und Crashdiagnostics
+1. Task 17 first, for clean compiler errors
+2. after that task 16, for runtime and crash diagnostics
 
-## Akzeptanzkriterien
+## Acceptance criteria
 
-- Ein typischer Semantikfehler wie unbekanntes Feld, unbekannter Typ, falscher Memberzugriff oder Shadowing erscheint verlässlich mit AIML-Datei und Zeile.
-- Parse-/Builder-Fehler verlieren die Datei nicht, auch bei Imports oder `compileFromString`.
-- Die ueblichen Compilerpfade nutzen keine rohen `LOG_ERROR(...)`-Meldungen mehr fuer lokalisierbare AIML-Semantikfehler.
-- Der verbleibende Einsatz roher `LOG_ERROR(...)` ist auf echte Toolchain-/Runtime-/Hostfehler begrenzt.
-- Es gibt Regressionstests fuer mindestens:
-  - unbekanntes Feld
-  - unbekannter Typ
-  - veralteter Operator
-  - Shadowing
-  - YAML-Parsefehler
-  - Fehler in importierter Datei
-  - Fehler ueber `compileFromString`
-- Fehlerformat ist fuer diese Faelle konsistent lesbar, bevorzugt `file:line[:column] message`.
+- A typical semantic error such as an unknown field, unknown type, wrong member access or shadowing reliably appears with the AIML file and line.
+- Parse/builder errors do not lose the file, even with imports or `compileFromString`.
+- The usual compiler paths no longer use raw `LOG_ERROR(...)` messages for localisable AIML semantic errors.
+- The remaining use of raw `LOG_ERROR(...)` is limited to real toolchain/runtime/host errors.
+- There are regression tests for at least:
+  - unknown field
+  - unknown type
+  - outdated operator
+  - shadowing
+  - YAML parse error
+  - error in an imported file
+  - error via `compileFromString`
+- The error format is consistently readable for these cases, preferably `file:line[:column] message`.
 
-## Empfohlene erste Umsetzung
+## Recommended first implementation
 
-1. `DiagnosticLoc` und `ctx.error(...)` definieren.
-2. Ein enges Paket besonders haeufiger AST-/Semantikfehler auf die neue API umstellen:
+1. Define `DiagnosticLoc` and `ctx.error(...)`.
+2. Switch a narrow package of particularly frequent AST/semantic errors over to the new API:
    - [ast_compiler.cpp](../../src/core/ast_compiler.cpp)
    - [ast_compiler_stmt.cpp](../../src/core/ast_compiler_stmt.cpp)
    - [ast_compiler_expr.cpp](../../src/core/ast_compiler_expr.cpp)
-3. Builder-/Parsefehler nachziehen.
-4. Top-Level-Compilerpfade in [compiler.cpp](../../compiler.cpp) vereinheitlichen.
-5. Negative Tests auf Diagnoseinhalt ergaenzen.
+3. Follow up with builder/parse errors.
+4. Unify the top-level compiler paths in [compiler.cpp](../../compiler.cpp).
+5. Add negative tests on diagnostic content.
