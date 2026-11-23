@@ -143,14 +143,14 @@ Sources of a cancel:
 | Window focus loss / tab becoming hidden while a button is held (`blur`, `visibilitychange`) | browser, desktop |
 | `input.post_touch_cancel()` | injection (§8.2) |
 
-Nur der Fokusverlust des **Fensters** zaehlt. Ein Element INNERHALB der Seite,
-das den Fokus abgibt, ist kein Abbruch — im Browser gibt genau das bei jedem
-Klick auf ein Bedienelement das versteckte Tastatur-Feld der Weichtastatur-
-Bruecke (§7, "Web (browser)") ab. Wer den `blur` in der Capture-Phase mitfaengt,
-sieht diesen Element-Blur wie einen Fensterwechsel und bricht den gerade
-begonnenen Druck ab; `mouseup` meldet die Freigabe dann nicht mehr (der Druck
-gilt als nie geschehen), und der **erste Knopfdruck nach jeder Texteingabe
-faellt aus**.
+Only the focus loss of the **window** counts. An element WITHIN the page
+giving up focus is not a cancel — in the browser, exactly that happens on every
+click on a control: the hidden keyboard field of the soft-keyboard
+bridge (§7, "Web (browser)") gives up focus. Whoever also catches `blur` in the capture phase
+sees this element blur as a window switch and cancels the press that has just
+begun; `mouseup` then no longer reports the release (the press
+counts as never having happened), and the **first button press after every text input
+is lost**.
 
 > **Why this is normative and not a detail.** Without a distinct cancel edge, an
 > aborted touch produces a release, a release completes a drag, and a completed
@@ -159,20 +159,20 @@ faellt aus**.
 
 Mouse button indices: `0` = left, `1` = right, `2` = middle.
 
-Diese Reihenfolge ist **normativ und plattformunabhängig**. Sie ist die von
-GLFW, also die des Desktop-Pfads. Andere Ereignisquellen nummerieren anders und
-**müssen umsetzen**:
+This order is **normative and platform-independent**. It is that of
+GLFW, i.e. of the desktop path. Other event sources number differently and
+**must translate**:
 
-| Quelle | deren Reihenfolge | Umsetzung |
+| Source | their order | Translation |
 |---|---|---|
-| GLFW (Desktop) | 0 links, 1 rechts, 2 Mitte | keine nötig |
-| DOM `MouseEvent.button` (WASM) | 0 links, **1 Mitte**, **2 rechts** | 1 ↔ 2 tauschen |
-| X11 / XTEST (`input.os_mouse_*`) | Button1 links, **Button2 Mitte**, **Button3 rechts** | 1 → Button3, 2 → Button2 |
+| GLFW (desktop) | 0 left, 1 right, 2 middle | none needed |
+| DOM `MouseEvent.button` (WASM) | 0 left, **1 middle**, **2 right** | swap 1 ↔ 2 |
+| X11 / XTEST (`input.os_mouse_*`) | Button1 left, **Button2 middle**, **Button3 right** | 1 → Button3, 2 → Button2 |
 
-Ohne diese Umsetzung bedeutet `input.mouse_pressed(2)` je nach Build „rechts"
-oder „Mitte", und derselbe Quelltext verhält sich im Browser anders als auf dem
-Desktop — ohne dass irgendwo ein Fehler auftritt. Genau das war bis 2026-10-20
-der Fall (WASM- und XTEST-Pfad reichten ihren Index unverändert durch).
+Without this translation `input.mouse_pressed(2)` means "right" or "middle"
+depending on the build, and the same source text behaves differently in the browser than on the
+desktop — without an error appearing anywhere. That was exactly the case until 2026-10-20
+(the WASM and XTEST paths passed their index through unchanged).
 
 > **Pixels vs. design coordinates.** `input.mouse_pos_*` returns raw **window pixels**. Prefab positions (`set_pos`, `get_x`/`get_y`) live in **design coordinates** — the engine scales the design canvas to the window by `rel_scale`. `engine.hit_test`/`update_drag`/`update_hover` take pixel input and convert internally, so mixing them is fine; but if you place a widget **directly at the cursor** with `set_pos`, feeding raw pixels is wrong on a scaled window (the widget lands far off). Use the design-space cursor helpers instead:
 >
@@ -220,10 +220,10 @@ than `threshold` pixels (default: 5.0) from the start position. The system track
 | `input.drag_ended(btn: i32)` | `bool` | Drag ended **this frame** by a release (completed → a drop) |
 | `input.drag_cancelled(btn: i32)` | `bool` | Drag ended **this frame** by a cancel (§2.2) — **no** drop |
 
-| `input.drag_origin_x(btn: i32)` | `f32` | X position where the drag began (= the press point, gültig ab `mousedown`, auch ohne aktiven Drag) |
+| `input.drag_origin_x(btn: i32)` | `f32` | X position where the drag began (= the press point, valid from `mousedown`, even without an active drag) |
 | `input.drag_origin_y(btn: i32)` | `f32` | Y position where the drag began |
-| `input.drag_start_x(btn: i32)` | `f32` | X des Punktes, an dem der Drag **begann** — gelatcht mit `drag_started` |
-| `input.drag_start_y(btn: i32)` | `f32` | Y dieses Punktes |
+| `input.drag_start_x(btn: i32)` | `f32` | X of the point where the drag **began** — latched with `drag_started` |
+| `input.drag_start_y(btn: i32)` | `f32` | Y of that point |
 | `input.drag_end_x(btn: i32)` | `f32` | X position of the release that ended the drag |
 | `input.drag_end_y(btn: i32)` | `f32` | Y position of that release |
 | `input.drag_delta_x(btn: i32)` | `f32` | Total movement X since drag start |
@@ -232,32 +232,32 @@ than `threshold` pixels (default: 5.0) from the start position. The system track
 | `input.drag_get_payload()` | `ptr` | Read drag payload (null if none) |
 | `input.drag_set_threshold(px: f32)` | — | Minimum movement in pixels (default: `5.0`) |
 
-**Die drei Drag-Flanken sind gelatcht, genau wie die Tastenflanken in §2.2.**
-`drag_started` / `drag_ended` / `drag_cancelled` sind Ein-Frame-Kanten: sie
-gelten für **den ganzen** Frame (jeder Leser sieht denselben Wert) und
-verschwinden mit dem nächsten `update()`. Entsteht eine Kante *während* eines
-Frames — ein Ereignis trifft ein, nachdem die Anwendung ihre Gesten schon
-ausgewertet hat, was bei langen Frames (blockierender Netzaufruf, §44_5 §5)
-der Normalfall ist — dann wird sie **aufbewahrt und im nächsten Frame
-gemeldet**, nicht verworfen. Ohne diese Zusicherung geht ein überschrittener
-Schwellwert gelegentlich verloren und der Drag startet nicht, obwohl der
-Benutzer gezogen hat — ununterscheidbar von „die Karte lässt sich nicht
-greifen".
+**The three drag edges are latched, just like the key edges in §2.2.**
+`drag_started` / `drag_ended` / `drag_cancelled` are one-frame edges: they
+apply to **the whole** frame (every reader sees the same value) and
+disappear with the next `update()`. If an edge arises *during* a
+frame — an event arrives after the application has already evaluated its gestures,
+which with long frames (blocking network call, §44_5 §5)
+is the normal case — then it is **kept and reported in the next
+frame**, not discarded. Without this guarantee an exceeded
+threshold is occasionally lost and the drag does not start although the
+user dragged — indistinguishable from "the card cannot be
+grabbed".
 
-Daraus folgt normativ: **ein neuer Druck löscht keine noch nicht ausgelieferte
-Kante.** Die Ereignis-Handler laufen zwischen den Frames *und* mitten im Frame
-(jeder blockierende Netzaufruf gibt an die Ereignisschleife ab). Lässt der
-Benutzer eine gezogene Karte los und drückt — weil nichts passiert — gleich
-wieder, liegen Release und Druck in derselben Lücke; dürfte der Druck die
-`ended`-Kante überschreiben, wäre der Drop ersatzlos weg.
+It follows normatively: **a new press does not erase an edge that has not yet been
+delivered.** The event handlers run between frames *and* in the middle of a frame
+(every blocking network call yields to the event loop). If the
+user releases a dragged card and — because nothing happens — presses again right
+away, release and press lie in the same gap; if the press were allowed to overwrite the
+`ended` edge, the drop would be gone without replacement.
 
-**Der Drop trägt seine eigene Position: `drag_end_x/y`.** Wird die `ended`-Kante
-erst einen Frame später gemeldet, steht der Cursor längst woanders — unter
-Umständen auf dem neuen Druckpunkt. Wer den Drop dann über `input.mouse_pos_*`
-auflöst, trifft das falsche Ziel; das ist schlimmer als ein verlorener Drop,
-weil es einen Spielzug auslöst, den niemand wollte. `drag_end_x/y` hält den
-Punkt des Loslassens und wird **gemeinsam** mit der Kante gelatcht. Eine
-Anwendung löst den Drop also so auf:
+**The drop carries its own position: `drag_end_x/y`.** If the `ended` edge
+is only reported one frame later, the cursor has long been elsewhere — possibly
+on the new press point. Whoever then resolves the drop via `input.mouse_pos_*`
+hits the wrong target; that is worse than a lost drop,
+because it triggers a move nobody wanted. `drag_end_x/y` holds the
+point of release and is latched **together** with the edge. An
+application therefore resolves the drop like this:
 
 ```yaml
 - if: [{ call: [input.drag_ended, 0] }, true]
@@ -265,30 +265,30 @@ Anwendung löst den Drop also so auf:
     - call: [drop_item, { call: [input.drag_end_x, 0] }, { call: [input.drag_end_y, 0] }]
 ```
 
-`input.mouse_pos_*` ist dafür ungeeignet: diese Werte sind **live**, nicht pro
-Frame gelatcht, und können sich innerhalb eines Frames ändern.
+`input.mouse_pos_*` is unsuitable for this: these values are **live**, not latched per
+frame, and can change within a frame.
 
-**`drag_origin_*` ist der lebende Druckpunkt, `drag_start_*` der gelatchte.**
-Das ist kein Duplikat, sondern die Gegenstücke zweier verschiedener Fragen:
+**`drag_origin_*` is the live press point, `drag_start_*` the latched one.**
+That is not a duplicate, but the counterparts of two different questions:
 
-| Frage | Antwort |
+| Question | Answer |
 |---|---|
-| „Wo wurde **jetzt** gedrückt?" (Klick, Tipp) | `drag_origin_x/y` — gesetzt bei jedem `mousedown`, auch ohne Drag |
-| „Wo begann der Drag, dessen `started`-Kante dieser Frame meldet?" | `drag_start_x/y` |
-| „Wo wurde der Drag losgelassen, dessen `ended`-Kante dieser Frame meldet?" | `drag_end_x/y` |
+| "Where was the press **just now**?" (click, tap) | `drag_origin_x/y` — set on every `mousedown`, even without a drag |
+| "Where did the drag begin whose `started` edge this frame reports?" | `drag_start_x/y` |
+| "Where was the drag released whose `ended` edge this frame reports?" | `drag_end_x/y` |
 
-`drag_origin_*` wird von **jedem** neuen Druck sofort überschrieben, die Kanten
-werden aber erst im nächsten Frame gemeldet. Bei der Folge *Drücken A → ziehen →
-loslassen → Drücken B*, alles in einer Frame-Lücke, liefert der nächste Frame
-`drag_started` **und** `drag_ended` von Drag A — während `drag_origin_*` längst
-auf B zeigt. Wer die Aufnahme daran hängt, greift die Karte an **B** statt an
-**A**: ein Zug, den niemand begonnen hat. Darum wird der Startpunkt
-**gemeinsam mit seiner Kante** gelatcht, genau wie der Loslasspunkt.
+`drag_origin_*` is overwritten immediately by **every** new press, but the edges
+are only reported in the next frame. With the sequence *press A → drag →
+release → press B*, all in one frame gap, the next frame delivers
+`drag_started` **and** `drag_ended` of drag A — while `drag_origin_*` has long
+pointed to B. Whoever hangs the pick-up on it grabs the card at **B** instead of at
+**A**: a move nobody started. That is why the start point is latched
+**together with its edge**, just like the release point.
 
-`engine.update_drag_gesture` (spec/44_6) nimmt deshalb an `drag_start_*` auf,
-nicht an `drag_origin_*`.
+`engine.update_drag_gesture` (spec/44_6) therefore picks up at `drag_start_*`,
+not at `drag_origin_*`.
 
-`drag_cancelled` hat bewusst keine Position — ein Abbruch ist kein Drop (§2.2).
+`drag_cancelled` deliberately has no position — a cancel is not a drop (§2.2).
 
 **Drag events** in the event queue (`input.next_event()`):
 
@@ -667,13 +667,13 @@ the person running it, and several tests can run in parallel.
 | `input.post_key_down(name: string)` | Press a key.  `name` uses the canonical names of §5 (`"lctrl"`, `"Left"`, `"a"`).  Sets the current state **and** the press latch. |
 | `input.post_key_up(name: string)` | Release a key: clears the current state **and** sets the release latch. |
 | `input.post_text(s: string)` | Queue `s` as character input for the focused `text_input` — one `char` event per code point, as typing would. |
-| `input.post_mouse_move_pending(x: f32, y: f32)` | wie `post_mouse_move`, schreibt aber in die **Ereignis-Schicht** (§8.3a) |
-| `input.post_mouse_down_pending(btn: i32)` | wie `post_mouse_down`, Ereignis-Schicht |
-| `input.post_mouse_up_pending(btn: i32)` | wie `post_mouse_up`, Ereignis-Schicht |
+| `input.post_mouse_move_pending(x: f32, y: f32)` | like `post_mouse_move`, but writes into the **event layer** (§8.3a) |
+| `input.post_mouse_down_pending(btn: i32)` | like `post_mouse_down`, event layer |
+| `input.post_mouse_up_pending(btn: i32)` | like `post_mouse_up`, event layer |
 
-`btn` ist überall der **kanonische** Index aus §2 (`0`=links, `1`=rechts,
-`2`=Mitte); die Injektion setzt nichts um, weil sie unterhalb der
-Plattform-Adapter ansetzt.
+`btn` is everywhere the **canonical** index from §2 (`0`=left, `1`=right,
+`2`=middle); the injection translates nothing, because it sits below the
+platform adapters.
 
 All calls are no-ops when input was never initialised (`input.init`), and
 `post_key_*` is a no-op for an unknown key name (it reports via `log.warn`
@@ -705,64 +705,64 @@ so. The browser injection therefore writes the frame-visible slots directly
 (`curr_*`, `frame_press/release`) and leaves the pending ones alone, so that an
 injected edge fires exactly once and the rule above holds everywhere.
 
-### 8.3a Die Ereignis-Schicht (`*_pending`)
+### 8.3a The event layer (`*_pending`)
 
-Die Hooks aus §8.2 ohne Zusatz schreiben die **frame-sichtbaren** Slots:
-injizieren, lesen, beim nächsten `update()` weg. Das ist der richtige Vertrag
-für ein Szenario, das Bedienung nachspielt — aber es macht eine Schicht
-unerreichbar.
+The hooks from §8.2 without a suffix write the **frame-visible** slots:
+inject, read, gone at the next `update()`. That is the right contract
+for a scenario that replays operation — but it makes one layer
+unreachable.
 
-Im Browser-Zweig schreiben die Ereignis-Handler nämlich nicht in die
-frame-sichtbaren Slots, sondern in eine **Ereignis-Schicht** (`pend_*`), die
-`update()` am Frame-Anfang in den Frame übernimmt. Diese Schicht trägt die
-Zusicherung aus §2.3: eine Kante, die *während* eines Frames entsteht, wird
-aufbewahrt und im nächsten Frame gemeldet. Und sie ist der Ort, an dem die
-interessanten Fälle liegen, weil die Handler **mitten im Frame** laufen,
-sobald ein blockierender Netzaufruf an die Ereignisschleife abgibt.
+In the browser branch the event handlers do not write into the
+frame-visible slots, but into an **event layer** (`pend_*`), which
+`update()` takes over into the frame at the start of the frame. This layer carries the
+guarantee from §2.3: an edge that arises *during* a frame is
+kept and reported in the next frame. And it is the place where the
+interesting cases lie, because the handlers run **in the middle of the frame**
+as soon as a blocking network call yields to the event loop.
 
-Die `*_pending`-Varianten tun genau das, was die Ereignis-Handler tun. Damit
-kann ein Szenario eine echte Ereignisfolge nachspielen — insbesondere die, auf
-die es ankommt: **Loslassen und erneutes Drücken in derselben Lücke.** Danach
-`input.update()` aufrufen und prüfen, was ausgeliefert wird:
+The `*_pending` variants do exactly what the event handlers do. With them
+a scenario can replay a real event sequence — in particular the one that
+matters: **release and press again in the same gap.** Then
+call `input.update()` and check what is delivered:
 
 ```yaml
-# Drag läuft, dann Release UND neuer Druck, beides vor dem nächsten update
+# drag running, then release AND a new press, both before the next update
 - call: [input.post_mouse_up_pending, 0]
 - call: [input.post_mouse_down_pending, 0]
 - call: [input.update]
-# drag_ended MUSS 1 sein — der Druck darf die Kante nicht gelöscht haben (§2.3)
+# drag_ended MUST be 1 — the press must not have erased the edge (§2.3)
 ```
 
-Ohne diese Hooks war genau diese Zusicherung von außen nicht prüfbar, und ein
-Verstoß dagegen blieb über Monate unentdeckt. Canonical:
+Without these hooks exactly this guarantee could not be checked from outside, and a
+violation of it went undetected for months. Canonical:
 `tests/test_input_pending_layer_wasm.aiml`.
 
-> Für Szenarien, die Bedienung nachspielen, bleiben die Hooks **ohne** Zusatz
-> die richtige Wahl. Die `*_pending`-Varianten sind dafür da, den Frame-Vertrag
-> selbst zu prüfen.
+> For scenarios that replay operation, the hooks **without** a suffix remain
+> the right choice. The `*_pending` variants are there to check the frame contract
+> itself.
 
-**Auf welcher Plattform was passiert.** Die Zwischenschicht gibt es nur im
-Browser-Zweig. Nativ schreiben die GLFW-Rückrufe direkt die frame-sichtbaren
-Slots — es gibt dort keine zweite Schicht, in die man injizieren könnte. „Tut,
-was die Ereignis-Handler tun" heißt deshalb je Plattform etwas anderes:
+**What happens on which platform.** The intermediate layer only exists in the
+browser branch. Natively, the GLFW callbacks write the frame-visible
+slots directly — there is no second layer one could inject into. "Does
+what the event handlers do" therefore means something different per platform:
 
-| Plattform | `post_mouse_*_pending` |
+| Platform | `post_mouse_*_pending` |
 |---|---|
-| Browser (wasm) | schreibt `pend_*`; `update()` übernimmt die Kante in den **nächsten** Frame |
-| Desktop (GLFW) | **identisch** mit `post_mouse_*` — dieselben Rückrufe, dieselben Latches |
-| Android | wie die übrige Injektion: no-op |
+| Browser (wasm) | writes `pend_*`; `update()` takes the edge over into the **next** frame |
+| Desktop (GLFW) | **identical** to `post_mouse_*` — the same callbacks, the same latches |
+| Android | like the rest of the injection: no-op |
 
-Die Funktionen sind damit auf **jeder** Plattform vorhanden. Das ist der Punkt:
-ein Programm, das sie ruft, muss überall linken. Bis 2026-11-11 fehlten sie im
-Desktop-Zweig ganz (Android hatte Stubs), und der native Link brach mit
-`undefined reference to aiml_input_post_mouse_down_pending` — ein Fehler, der
-erst beim Linken auffiel und nicht beim Übersetzen.
+The functions are thus present on **every** platform. That is the point:
+a program that calls them must link everywhere. Until 2026-11-11 they were missing
+entirely from the desktop branch (Android had stubs), and the native link broke with
+`undefined reference to aiml_input_post_mouse_down_pending` — an error that
+only showed up at link time and not at compile time.
 
-Was eine **Prüfung** daraus ziehen darf, ist entsprechend verschieden: die
-Zusicherung aus §2.3 (Loslassen und Drücken in derselben Lücke) lässt sich nur
-im wasm-Build prüfen (`tests/test_input_pending_layer_wasm.aiml`); nativ prüft
-`tests/test_input_pending_layer_native.aiml` nur, dass die Hooks da sind und
-sich wie die Varianten ohne Zusatz verhalten.
+What a **check** may conclude from this differs accordingly: the
+guarantee from §2.3 (release and press in the same gap) can only be checked
+in the wasm build (`tests/test_input_pending_layer_wasm.aiml`); natively,
+`tests/test_input_pending_layer_native.aiml` only checks that the hooks are there and
+behave like the variants without a suffix.
 
 ### 8.4 A click spans frames
 
@@ -797,7 +797,7 @@ real one.
 |------|-------------|
 | `input.os_available()` | `1` if a display could be opened **and** it has the XTEST extension. Everything below is a no-op otherwise, so a scenario can report "not available" instead of failing. |
 | `input.os_mouse_move(x, y)` | Move the pointer to **screen** coordinates. |
-| `input.os_mouse_down(btn)` / `input.os_mouse_up(btn)` | Press / release. `btn` ist der **kanonische** Index aus §2 (`0`=left, `1`=right, `2`=middle); der Adapter setzt auf X11s Button1/3/2 um. |
+| `input.os_mouse_down(btn)` / `input.os_mouse_up(btn)` | Press / release. `btn` is the **canonical** index from §2 (`0`=left, `1`=right, `2`=middle); the adapter translates to X11's Button1/3/2. |
 | `input.os_key_down(name)` / `input.os_key_up(name)` | Press / release a key by the §5 name. |
 | `input.os_pointer_x()` / `input.os_pointer_y()` | Where the pointer actually is — the check that a move arrived before clicking. |
 
