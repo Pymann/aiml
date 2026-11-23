@@ -1,11 +1,11 @@
 #pragma once
-// spec/65 — `level`/`grants` werden in JEDEM Build geprueft (F65-17: eine Annotation
-// wird nie still ignoriert, sonst verrottet sie).  Durchsetzung gegen WIRTS-Symbole
-// braucht eine Export-Tabelle (§5a) und steht noch aus; was hier schon wirkt, ist die
-// Sitzung selbst und die Selbstbeglaubigung.
+// spec/65 — `level`/`grants` are checked in EVERY build (F65-17: an annotation
+// is never silently ignored, otherwise it rots).  Enforcement against HOST symbols
+// needs an export table (§5a) and is still pending; what already takes effect here is the
+// session itself and self-certification.
 //
-// Eine Stelle, eine Wahrheit: jede Deklarationsform ruft dieselben Pruefer, damit die
-// Diagnose-Kennungen aus spec/65 §10 (F65-21) nicht auseinanderlaufen.
+// One place, one truth: every declaration form calls the same checkers, so that the
+// diagnostic identifiers from spec/65 §10 (F65-21) do not drift apart.
 #include <cstdlib>
 #include <string>
 #include "../../logger.h"
@@ -13,19 +13,19 @@
 namespace aiml {
 namespace clearance {
 
-constexpr int kAbsent = -1;    // keine Annotation — NICHT dasselbe wie Level 0
+constexpr int kAbsent = -1;    // no annotation — NOT the same as level 0
 constexpr int kMax    = 255;
 
-// F65-20/F65-22: die Freigabe der Sitzung.  Der WIRT setzt sie; `AIML_CLEARANCE` ist
-// der Hebel fuer Proben.  Rueckgabe 0 heisst "keine Sitzung" = vertrauenswuerdig
-// (F65-1/F65-7) und NICHT "Freigabe 0": 0 ist als Freigabe ungueltig, weil es der Wert
-// eines vergessenen Feldes ist und das nie "Admin" heissen darf (F65-22).
-// Der Speicher der aktuellen Freigabe.  -2 heisst "noch nicht aus der Umgebung gelesen".
+// F65-20/F65-22: the session's clearance.  The HOST sets it; `AIML_CLEARANCE` is
+// the lever for probes.  A return of 0 means "no session" = trusted
+// (F65-1/F65-7) and NOT "clearance 0": 0 is invalid as a clearance, because it is the value
+// of a forgotten field and that must never mean "admin" (F65-22).
+// The storage of the current clearance.  -2 means "not yet read from the environment".
 //
-// KEIN einmaliger Zwischenspeicher mehr (F65-36): ein Wirt fuehrt Skripte fuer verschiedene
-// Nutzer aus, und eine Freigabe, die einmal gelesen und gemerkt wird, ist keine Eigenschaft
-// einer SITZUNG, sondern des Prozesses.  `sys.exec` setzt sie fuer die Dauer eines Laufs und
-// stellt sie danach zurueck.
+// NO one-time cache any more (F65-36): a host runs scripts for different
+// users, and a clearance that is read once and remembered is not a property
+// of a SESSION but of the process.  `sys.exec` sets it for the duration of a run and
+// restores it afterwards.
 inline int& clearanceSlot() {
     static int slot = -2;
     return slot;
@@ -44,17 +44,17 @@ inline int sessionClearance() {
     bool ok = (pos == s.size()) && (val >= 1) && (val <= kMax);
     if (!ok) {
         LOG_ERROR("invalid-clearance: AIML_CLEARANCE=" + s +
-                  " — gueltig ist 1..255.  0 ist der Wert eines vergessenen Feldes und "
-                  "darf nie Admin bedeuten (spec/65 F65-22)");
+                  " — valid is 1..255.  0 is the value of a forgotten field and "
+                  "must never mean admin (spec/65 F65-22)");
         return slot;
     }
     slot = static_cast<int>(val);
     return slot;
 }
 
-// F65-36: Freigabe fuer EINE Sitzung setzen.  Darf nur VERSCHAERFEN (hoehere Zahl =
-// weniger Rechte), damit ein Aufruf sich nicht mehr nehmen kann als die Prozess-Vorgabe.
-// Rueckgabe ist die vorige Freigabe, damit der Aufrufer sie zurueckstellen kann.
+// F65-36: set the clearance for ONE session.  May only TIGHTEN (higher number =
+// fewer rights), so that a call cannot take more than the process default.
+// The return value is the previous clearance, so that the caller can restore it.
 inline int pushSessionClearance(int requested) {
     const int before = sessionClearance();
     if (requested >= 1 && requested <= kMax) {
@@ -70,13 +70,13 @@ inline void popSessionClearance(int previous) {
 
 inline bool restricted() { return sessionClearance() >= 1; }
 
-// ── §5b: die SCHREIBSEITE der Richtlinie (F65-26) ──────────────────────────────
+// ── §5b: the WRITE SIDE of the policy (F65-26) ────────────────────────────────
 //
-// `create_level` und `replace_level` werden GEGENLAEUFIG verglichen: erlaubt ist
-// `clearance <= create_level`, also ist die KLEINERE Zahl die strengere und 0 heisst
-// niemand (F65-22).  Darum ist "nicht gesetzt" hier NICHT 0, sondern "keine Vorgabe":
-// waere es 0, koennte die Umgebung das Recht nur abschalten und nie erteilen, weil die
-// Verschaerfungsregel aus F65-32 dann jeden Wert am Minimum festhielte.
+// `create_level` and `replace_level` are compared the OTHER WAY ROUND: allowed is
+// `clearance <= create_level`, so the SMALLER number is the stricter one and 0 means
+// nobody (F65-22).  That is why "not set" is NOT 0 here, but "no default":
+// if it were 0, the environment could only switch the right off and never grant it, because the
+// tightening rule from F65-32 would then pin every value at the minimum.
 constexpr int kPolicyUnset = -1;
 
 inline int readEnvPolicy(const char* var) {
@@ -88,7 +88,7 @@ inline int readEnvPolicy(const char* var) {
     try { val = std::stol(s, &pos); } catch (...) { pos = 0; }
     if (pos != s.size() || val < 0 || val > kMax) {
         LOG_ERROR("invalid-level: " + std::string(var) + "=" + s +
-                  " — gueltig ist 0..255 (spec/65 F65-26)");
+                  " — valid is 0..255 (spec/65 F65-26)");
         return kPolicyUnset;
     }
     return static_cast<int>(val);
@@ -115,11 +115,11 @@ inline int& replaceSlot() {
 inline int createLevel()  { return createSlot(); }
 inline int replaceLevel() { return replaceSlot(); }
 
-// F65-26: die drei Werte reisen zusammen, weil sie drei Antworten auf EINE Frage sind.
+// F65-26: the three values travel together, because they are three answers to ONE question.
 struct Policy { int clearance; int create; int replace; };
 
-// F65-32: die Umgebung ist die Vorgabe des Prozesses und darf nur VERSCHAERFEN —
-// bei den Schreibrechten also nach unten.  Ohne Vorgabe gilt der Wunsch der Sitzung.
+// F65-32: the environment is the process default and may only TIGHTEN —
+// for the write rights that means downwards.  Without a default the session's wish applies.
 inline int tightenWrite(int envDefault, int requested) {
     if (requested < 0 || requested > kMax) requested = 0;
     return (envDefault == kPolicyUnset) ? requested
@@ -140,94 +140,94 @@ inline void popSessionPolicy(const Policy& before) {
     replaceSlot()   = before.replace;
 }
 
-// Darf diese Sitzung in die Tabelle des Wirts schreiben?  `restricted()` davor: ohne
-// Sitzung gibt es keine Grenze und damit nichts zu pruefen (F65-1).
+// May this session write into the host's table?  `restricted()` first: without
+// a session there is no boundary and therefore nothing to check (F65-1).
 inline bool mayCreate()  { return !restricted() || sessionClearance() <= createLevel(); }
 inline bool mayReplace() { return !restricted() || sessionClearance() <= replaceLevel(); }
 
-// Reine SYNTAXpruefung: Ganzzahl 0..255, ohne jede Sitzungs-Richtlinie.
+// Pure SYNTAX check: integer 0..255, without any session policy.
 //
-// Warum getrennt von `parseLevel`: dieselbe Zeichenkette kommt aus zwei ganz
-// verschiedenen Quellen.  Aus der QUELLE eines Skripts ist ein `level:` in einer
-// eingeschraenkten Sitzung Selbstbeglaubigung (F65-27) — aus der EXPORT-TABELLE
-// des Wirts ist dasselbe Feld die Richtlinie selbst (§5a).  Eine Funktion mit
-// beiden Bedeutungen hat genau deshalb die Tabelle des Wirts als
-// Selbstbeglaubigung abgelehnt (gemessen 17.10.2026, `08_extern_admitted`).
-// Wer die beiden wieder zusammenlegt, baut diesen Fehler erneut ein.
+// Why separate from `parseLevel`: the same string comes from two entirely
+// different sources.  From a script's SOURCE a `level:` in a
+// restricted session is self-certification (F65-27) — from the host's EXPORT TABLE
+// the same field is the policy itself (§5a).  A function with
+// both meanings rejected the host's table as
+// self-certification for exactly that reason (measured 2026-10-17, `08_extern_admitted`).
+// Whoever merges the two again builds this bug back in.
 inline bool parseLevelSyntax(const std::string& text, const std::string& where, int& out) {
     if (text.empty()) {
-        LOG_ERROR("invalid-level: leeres `level:` bei " + where +
-                  " (spec/65 F65-4: Ganzzahl 0..255)");
+        LOG_ERROR("invalid-level: empty `level:` at " + where +
+                  " (spec/65 F65-4: integer 0..255)");
         return false;
     }
     size_t pos = 0;
     long val = 0;
     try { val = std::stol(text, &pos); } catch (...) { pos = 0; }
     if (pos != text.size()) {
-        LOG_ERROR("invalid-level: `level: " + text + "` bei " + where +
-                  " ist keine Ganzzahl (spec/65 F65-4: 0..255)");
+        LOG_ERROR("invalid-level: `level: " + text + "` at " + where +
+                  " is not an integer (spec/65 F65-4: 0..255)");
         return false;
     }
     if (val < 0 || val > kMax) {
-        LOG_ERROR("invalid-level: `level: " + text + "` bei " + where +
-                  " liegt ausserhalb 0..255 (spec/65 F65-4)");
+        LOG_ERROR("invalid-level: `level: " + text + "` at " + where +
+                  " lies outside 0..255 (spec/65 F65-4)");
         return false;
     }
     out = static_cast<int>(val);
     return true;
 }
 
-// F65-21 `invalid-level`: Ganzzahl 0..255 — fuer Annotationen in der QUELLE.
+// F65-21 `invalid-level`: integer 0..255 — for annotations in the SOURCE.
 inline bool parseLevel(const std::string& text, const std::string& where, int& out) {
-    // F65-27/F65-6: in einer eingeschraenkten Sitzung IST das Level eines angelegten
-    // Symbols die Freigabe der Sitzung.  Die Quelle darf es nicht selbst setzen —
-    // sonst legt sich ein Skript sein Privileg in einer Zeile selbst zu.
+    // F65-27/F65-6: in a restricted session the level of a created
+    // symbol IS the session's clearance.  The source may not set it itself —
+    // otherwise a script grants itself its privilege in one line.
     if (restricted()) {
-        LOG_ERROR("clearance-self-certify: `level:` bei " + where +
-                  " — das Level eines angelegten Symbols IST die Freigabe der Sitzung; "
-                  "Richtlinie gehoert dem Wirt (spec/65 F65-27)");
+        LOG_ERROR("clearance-self-certify: `level:` at " + where +
+                  " — the level of a created symbol IS the session's clearance; "
+                  "policy belongs to the host (spec/65 F65-27)");
         return false;
     }
     return parseLevelSyntax(text, where, out);
 }
 
-// F65-21 `invalid-grants`: Syntax.  Eigene Kennung, damit die Diagnose die Ursache nennt.
+// F65-21 `invalid-grants`: syntax.  An identifier of its own, so that the diagnostic names the cause.
 inline bool parseGrants(const std::string& text, const std::string& where, int& out) {
     if (restricted()) {
-        LOG_ERROR("clearance-self-certify: `grants:` bei " + where +
-                  " — ein Gateway ist Richtlinie des Wirts (spec/65 F65-6/F65-27)");
+        LOG_ERROR("clearance-self-certify: `grants:` at " + where +
+                  " — a gateway is the host's policy (spec/65 F65-6/F65-27)");
         return false;
     }
     size_t pos = 0;
     long val = 0;
     if (text.empty()) {
-        pos = 1;                            // erzwingt den Fehlerzweig
+        pos = 1;                            // forces the error branch
     } else {
         try { val = std::stol(text, &pos); } catch (...) { pos = 0; }
     }
     bool bad = text.empty() || (pos != text.size()) || val < 0 || val > kMax;
     if (bad) {
-        LOG_ERROR("invalid-grants: `grants: " + text + "` bei " + where +
-                  " ist keine Ganzzahl 0..255 (spec/65 F65-10)");
+        LOG_ERROR("invalid-grants: `grants: " + text + "` at " + where +
+                  " is not an integer 0..255 (spec/65 F65-10)");
         return false;
     }
     out = static_cast<int>(val);
     return true;
 }
 
-// F65-21 `invalid-grants`: braucht ein `level:` und darf es nicht UEBERSCHREITEN —
-// ein Gateway darf Privilegien nur fallen lassen (spec/65 F65-10).
+// F65-21 `invalid-grants`: needs a `level:` and must not EXCEED it —
+// a gateway may only drop privileges (spec/65 F65-10).
 inline bool checkGrants(int level, int grants, const std::string& where) {
     if (grants == kAbsent) return true;
     if (level == kAbsent) {
-        LOG_ERROR("invalid-grants: `grants:` ohne `level:` bei " + where +
+        LOG_ERROR("invalid-grants: `grants:` without `level:` at " + where +
                   " (spec/65 F65-10)");
         return false;
     }
     if (grants > level) {
         LOG_ERROR("invalid-grants: `grants: " + std::to_string(grants) +
-                  "` ueber `level: " + std::to_string(level) + "` bei " + where +
-                  " — ein Gateway darf Privilegien nur fallen lassen (spec/65 F65-10)");
+                  "` above `level: " + std::to_string(level) + "` at " + where +
+                  " — a gateway may only drop privileges (spec/65 F65-10)");
         return false;
     }
     return true;

@@ -1,17 +1,17 @@
-/* SSH-Client (spec/32_6) — Bindung an libssh.
+/* SSH client (spec/32_6) — binding to libssh.
  *
- * Bewusst KEINE eigene Protokoll-Implementierung (anders als WebSockets,
- * spec/32_4): über diese Verbindung laufen Authentifizierungs-Geheimnisse und
- * die Host-Identität.  Schlüsselaustausch, Cipher-Aushandlung und Host-Key-
- * Behandlung selbst zu schreiben hiesse, jeden Fehler darin zu einem
- * Sicherheitsfehler zu machen.
+ * Deliberately NO protocol implementation of our own (unlike WebSockets,
+ * spec/32_4): authentication secrets and the host identity travel over this
+ * connection.  Writing key exchange, cipher negotiation and host key
+ * handling ourselves would mean turning every bug in it into a
+ * security bug.
  *
- * Zwei Dinge an der Schnittstelle sehen ungewöhnlich aus und sind Absicht:
- *   - Host-Prüfung ist ein EIGENER Schritt (accept_host).  Eine unverifizierte
- *     Sitzung verweigert jede Authentifizierung — es gibt keinen Schalter, der
- *     das überspringt, und keinen Standard, der still akzeptiert.
- *   - stdin ist beschreibbar.  Ein sudo-Passwort darf nicht in argv stehen
- *     (cosmos doc/spec/94 §94.3 S3), also muss es über den Kanal gehen.
+ * Two things in the interface look unusual and are intentional:
+ *   - Host verification is a SEPARATE step (accept_host).  An unverified
+ *     session refuses every authentication — there is no switch that
+ *     skips this, and no default that silently accepts.
+ *   - stdin is writable.  A sudo password must not be in argv
+ *     (cosmos doc/spec/94 §94.3 S3), so it has to go over the channel.
  */
 
 #include <cstdint>
@@ -25,12 +25,12 @@
 #include <libssh/libssh.h>
 #include <libssh/server.h>
 
-/* RC-verwaltete Kopie (spec/61) — NICHT strdup: der zurückgegebene String trägt
- * den aiml-Refcount-Header, damit das empfangende Local ihn korrekt freigibt.
- * Ein Zeiger auf internen Zustand wäre hier doppelt falsch: read_out und
- * read_err teilten sich sonst einen Puffer, und der zweite Aufruf überschriebe,
- * worauf das Ergebnis des ersten noch zeigt (genau der Fehler, der stdout mit
- * stderr vertauscht erscheinen liess). */
+/* RC-managed copy (spec/61) — NOT strdup: the returned string carries
+ * the aiml refcount header, so that the receiving local frees it correctly.
+ * A pointer to internal state would be doubly wrong here: read_out and
+ * read_err would otherwise share a buffer, and the second call would overwrite
+ * what the result of the first still points to (exactly the bug that made stdout
+ * appear swapped with stderr). */
 extern "C" char* aiml_str_dup(const char* s);
 #include <pthread.h>
 #include <poll.h>
@@ -51,11 +51,11 @@ struct AimlSshSession {
     std::string  err;
 };
 
-/* Der Kanal puffert SELBST.  Grund: `exit_code` ist erst nach EOF der
- * Gegenseite bekannt, und bis dahin kann noch Ausgabe unterwegs sein.  Ohne
- * eigenen Puffer müsste exit_code entweder lügen (-1 trotz beendetem Befehl)
- * oder ungelesene Ausgabe verwerfen.  So pumpt es in die Puffer und verliert
- * nichts. */
+/* The channel buffers ITSELF.  Reason: `exit_code` is only known after the other
+ * side's EOF, and until then output may still be on its way.  Without
+ * a buffer of its own exit_code would either have to lie (-1 despite a finished command)
+ * or discard unread output.  This way it pumps into the buffers and loses
+ * nothing. */
 struct AimlSshChannel {
     ssh_channel      c     = nullptr;
     AimlSshSession*  owner = nullptr;
@@ -72,12 +72,12 @@ struct AimlSshTestServer {
     pthread_t    tid{};
 };
 
-/* thread_handle-Layout wie in http_runtime.cpp — `.join` erwartet genau das. */
+/* thread_handle layout as in http_runtime.cpp — `.join` expects exactly that. */
 struct ThreadHandle { int64_t tid; int8_t joined; int8_t detached; };
 
-/* Einmal abgefragt statt je Datenblock (AIML_SSH_TRACE=1).  Die Spur hat beim
- * Bauen drei Fehler gezeigt, die von aussen alle gleich aussahen — ein Hänger —
- * und bleibt deshalb drin. */
+/* Queried once instead of per data block (AIML_SSH_TRACE=1).  During the
+ * build the trace showed three bugs that all looked the same from outside — a hang —
+ * and therefore stays in. */
 bool trace_on() {
     static const bool on = getenv("AIML_SSH_TRACE") != nullptr;
     return on;
@@ -89,7 +89,7 @@ void note_err(AimlSshSession* sess) {
     sess->err = m ? m : "";
 }
 
-/* Liest, was gerade da ist, in die Puffer.  timeout_ms gilt je Strom. */
+/* Reads what is available right now into the buffers.  timeout_ms applies per stream. */
 void pump(AimlSshChannel* ch, int timeout_ms) {
     if (!ch || !ch->c) return;
     char buf[16384];
@@ -117,10 +117,10 @@ std::string take(std::string& from, int32_t max_bytes) {
     return out;
 }
 
-/* ── Test-Server: einen Befehl ausführen und relayen ─────────────────────────
- * Getrennte Rohre für stdout/stderr (die Trennung ist eine Zusage der
- * Schnittstelle), und der Kanal-Eingang wird an das stdin des Kindes
- * weitergegeben — sonst liesse sich `write`/`send_eof` nicht prüfen. */
+/* ── Test server: run a command and relay it ─────────────────────────────────
+ * Separate pipes for stdout/stderr (the separation is a promise of the
+ * interface), and the channel input is passed on to the child's stdin
+ * — otherwise `write`/`send_eof` could not be tested. */
 void relay_command(ssh_channel chan, const char* cmd) {
     if (!chan || !cmd) return;
     int in_p[2], out_p[2], err_p[2];
@@ -179,19 +179,19 @@ void relay_command(ssh_channel chan, const char* cmd) {
             }
         }
 
-        /* Das Kind wird GENAU EINMAL geerntet und das Ergebnis gemerkt.
-         * Vorher lautete die Bedingung `waitpid(...) == pid && !any`: in der
-         * Runde mit den letzten Daten war `any` wahr UND das Kind wurde dabei
-         * geerntet — danach gab waitpid nur noch -1, die Bedingung konnte nie
-         * mehr zutreffen, und die Schleife lief endlos (der Server schickte
-         * nie einen Exit-Status, der Client wartete darauf). */
+        /* The child is reaped EXACTLY ONCE and the result remembered.
+         * Before, the condition was `waitpid(...) == pid && !any`: in the
+         * round with the last data `any` was true AND the child was reaped
+         * at the same time — afterwards waitpid only returned -1, the condition could never
+         * be met again, and the loop ran forever (the server never sent
+         * an exit status, the client waited for it). */
         if (!reaped) {
             pid_t done = waitpid(pid, &st, WNOHANG);
             if (done == pid)      reaped = true;
             else if (done < 0)    { reaped = true; st = -1; }
         }
         if (reaped && !any) {
-            /* Reste abholen, bevor der Status geht — sonst fehlt die letzte Zeile. */
+            /* Fetch the remainder before the status goes out — otherwise the last line is missing. */
             for (int i = 0; i < 2; i++) {
                 for (;;) {
                     ssize_t n = read(i == 0 ? out_p[0] : err_p[0], buf, sizeof buf);
@@ -219,22 +219,22 @@ void serve_session(AimlSshTestServer* srv, ssh_session s) {
     bool authed = false;
     ssh_channel chan = nullptr;
 
-    /* ssh_message_get blockiert; ohne Zeitschranke könnte stop() den Thread
-     * nicht beenden (der pthread_join hing).  Den Sitzungs-fd zu pollen war
-     * der falsche Weg: libssh puffert intern, also liegt eine Nachricht
-     * bereit, während auf dem Socket nichts Neues ankommt — nach dem ersten
-     * Kommando kam dadurch nie wieder eine Nachricht an.  Stattdessen eine
-     * kurze Zeitschranke auf der Sitzung: message_get kehrt regelmässig
-     * zurück, und die Schleife prüft `running`. */
+    /* ssh_message_get blocks; without a time limit stop() could not end the
+     * thread (the pthread_join hung).  Polling the session fd was
+     * the wrong way: libssh buffers internally, so a message is
+     * ready while nothing new arrives on the socket — after the first
+     * command no message ever arrived again because of that.  Instead a
+     * short time limit on the session: message_get returns regularly,
+     * and the loop checks `running`. */
     long tmo_usec = 100000;
     ssh_options_set(s, SSH_OPTIONS_TIMEOUT_USEC, &tmo_usec);
     for (;;) {
         if (!srv->running) break;
         ssh_message m = ssh_message_get(s);
         if (!m) {
-            /* Kein Message heisst NICHT zwangsläufig "Verbindung weg" — nach
-             * einem beendeten Kanal kam hier sonst ein break, die Sitzung wurde
-             * getrennt, und jedes weitere exec des Clients scheiterte. */
+            /* No message does NOT necessarily mean "connection gone" — after
+             * a finished channel there used to be a break here, the session was
+             * disconnected, and every further exec of the client failed. */
             if (ssh_is_connected(s)) continue;
             break;
         }
@@ -283,11 +283,11 @@ void serve_session(AimlSshTestServer* srv, ssh_session s) {
 
 void* serve_loop(void* arg) {
     AimlSshTestServer* srv = static_cast<AimlSshTestServer*>(arg);
-    /* Auf dem LISTENER-fd zu pollen ist hier richtig (anders als beim
-     * Sitzungs-fd, wo libssh intern puffert): "lesbar" heisst bei einem
-     * Listener genau "eine Verbindung wartet".  `ssh_bind_set_blocking(b, 0)`
-     * allein genügte nicht — ssh_bind_accept blieb blockierend stehen, der
-     * Thread sah `running == 0` nie, und stop()+join hing. */
+    /* Polling the LISTENER fd is right here (unlike with the
+     * session fd, where libssh buffers internally): for a listener "readable"
+     * means exactly "a connection is waiting".  `ssh_bind_set_blocking(b, 0)`
+     * alone was not enough — ssh_bind_accept stayed blocked, the
+     * thread never saw `running == 0`, and stop()+join hung. */
     int bfd = ssh_bind_get_fd(srv->b);
     while (srv->running) {
         struct pollfd lpf = { bfd, POLLIN, 0 };
@@ -301,10 +301,10 @@ void* serve_loop(void* arg) {
             ssh_free(s);
             continue;
         }
-        /* Der nicht-blockierende Modus des bind geht auf die angenommene
-         * Sitzung über; dann liefert der Schlüsselaustausch nur SSH_AGAIN.
-         * Ab hier wird blockierend bedient — der Thread gehört ohnehin dieser
-         * einen Sitzung. */
+        /* The bind's non-blocking mode carries over to the accepted
+         * session; then the key exchange only returns SSH_AGAIN.
+         * From here on it is served blocking — the thread belongs to this
+         * one session anyway. */
         ssh_set_blocking(s, 1);
         int cfd = ssh_get_fd(s);
         if (cfd >= 0) fcntl(cfd, F_SETFD, fcntl(cfd, F_GETFD) | FD_CLOEXEC);
@@ -344,8 +344,8 @@ extern "C" void* aiml_ssh_connect(const char* host, int32_t port,
         return nullptr;
     }
 
-    /* Fingerprint sofort ermitteln: ab hier existiert der Host-Key, das
-     * Passwort noch nicht — genau die Reihenfolge, die §3 braucht. */
+    /* Determine the fingerprint immediately: from here on the host key exists, the
+     * password does not yet — exactly the order §3 needs. */
     ssh_key key = nullptr;
     if (ssh_get_server_publickey(sess->s, &key) == SSH_OK) {
         unsigned char* hash = nullptr;
@@ -368,7 +368,7 @@ extern "C" const char* aiml_ssh_fingerprint(void* s) {
 extern "C" int32_t aiml_ssh_accept_host(void* s, const char* expected) {
     AimlSshSession* sess = static_cast<AimlSshSession*>(s);
     if (!sess) return 0;
-    if (sess->fp.empty()) return 0;          /* ohne Key kein Vertrauen */
+    if (sess->fp.empty()) return 0;          /* no key, no trust */
     if (!expected || !*expected) {            /* trust on first use, ausgeschrieben */
         sess->verified = true;
         return 1;
@@ -458,10 +458,10 @@ extern "C" int32_t aiml_ssh_ch_is_eof(void* c) {
 extern "C" int32_t aiml_ssh_ch_exit_code(void* c) {
     AimlSshChannel* ch = static_cast<AimlSshChannel*>(c);
     if (!ch || !ch->c) return -1;
-    /* Pumpen, bis der Status da ist — die Ausgabe landet dabei in den Puffern
-     * und bleibt für read_out/read_err abholbar.  NICHT bei EOF abbrechen: die
-     * exit-status-Anfrage kommt als eigener Kanal-Request und kann nach dem
-     * EOF eintreffen; bei einem Abbruch auf EOF blieb der Status -1. */
+    /* Pump until the status is there — the output lands in the buffers on the way
+     * and stays fetchable for read_out/read_err.  Do NOT stop at EOF: the
+     * exit-status request comes as a channel request of its own and can arrive after the
+     * EOF; stopping on EOF left the status at -1. */
     for (int i = 0; i < 250; i++) {
         if (ch->status >= 0) break;
         pump(ch, 20);
@@ -496,9 +496,9 @@ extern "C" const char* aiml_ssh_last_error(void* s) {
     return aiml_str_dup(sess ? sess->err.c_str() : "");
 }
 
-/* ── Test-Server (spec/32_6 §7) — NUR für Tests ─────────────────────────────
- * Führt aus, was er empfängt.  Deshalb eingezäunt: nur 127.0.0.1, ein einziges
- * Zugangspaar, Einmal-Hostkey je Lauf, und `test_` im Namen. */
+/* ── Test server (spec/32_6 §7) — ONLY for tests ─────────────────────────────
+ * Executes what it receives.  Hence fenced in: only 127.0.0.1, a single
+ * credential pair, a one-time host key per run, and `test_` in the name. */
 
 extern "C" void* aiml_ssh_test_listen(int32_t port, const char* user, const char* pass) {
     if (!user || !pass || port <= 0) return nullptr;
@@ -511,8 +511,8 @@ extern "C" void* aiml_ssh_test_listen(int32_t port, const char* user, const char
     if (ssh_pki_generate(SSH_KEYTYPE_ED25519, 0, &host_key) != SSH_OK || !host_key) {
         ssh_bind_free(srv->b); delete srv; return nullptr;
     }
-    /* IMPORT_KEY nimmt den Schlüssel im Speicher — keine Datei auf der Platte,
-     * die liegen bleiben könnte.  Der bind übernimmt den Besitz. */
+    /* IMPORT_KEY takes the key in memory — no file on disk
+     * that could be left behind.  The bind takes over ownership. */
     const char* addr = "127.0.0.1";
     int p = port;
     ssh_bind_options_set(srv->b, SSH_BIND_OPTIONS_BINDADDR, addr);
@@ -535,9 +535,9 @@ extern "C" void* aiml_ssh_test_listen(int32_t port, const char* user, const char
                 port, ssh_get_error(srv->b));
         ssh_bind_free(srv->b); delete srv; return nullptr;
     }
-    /* FD_CLOEXEC: relay_command forkt und exec't /bin/sh.  Ohne das erbt jedes
-     * Kind den Listener — ein überlebendes Kind hielt den Port nach dem Ende
-     * des Servers weiter belegt, und der nächste Lauf fand ihn besetzt. */
+    /* FD_CLOEXEC: relay_command forks and execs /bin/sh.  Without it every
+     * child inherits the listener — a surviving child kept the port occupied after the
+     * server ended, and the next run found it taken. */
     int lfd = ssh_bind_get_fd(srv->b);
     if (lfd >= 0) fcntl(lfd, F_SETFD, fcntl(lfd, F_GETFD) | FD_CLOEXEC);
     return srv;
@@ -558,24 +558,24 @@ extern "C" void* aiml_ssh_test_serve_async(void* s) {
     return h;
 }
 
-/* Nur SIGNALISIEREN — nicht joinen.  Geerntet wird über den thread_handle, den
- * serve_async geliefert hat (Muster wie http_server_stop).  Hier zusätzlich zu
- * joinen hiess, dass das anschliessende `srv_thread.join` des Aufrufers dasselbe
- * pthread ein ZWEITES Mal joint — undefiniert, und in der Praxis ein Hänger
- * genau am Testende, nachdem alle Prüfungen schon durchgelaufen waren.
+/* Only SIGNAL — do not join.  Reaping happens via the thread_handle that
+ * serve_async returned (pattern as in http_server_stop).  Joining here as well
+ * meant that the caller's subsequent `srv_thread.join` joins the same
+ * pthread a SECOND time — undefined, and in practice a hang
+ * exactly at the end of the test, after all checks had already passed.
  *
- * Der ssh_bind wird vom Thread freigegeben, wenn er endet: ihn hier
- * freizugeben, während der Thread noch im accept steht, wäre eine
- * Use-after-free.  Die kleine Server-Struktur bleibt liegen (Testbereich,
- * ein Objekt je Lauf) — sie freizugeben wäre unsicher, weil `fingerprint`
- * danach noch aufgerufen werden darf. */
+ * The ssh_bind is freed by the thread when it ends: freeing it
+ * here while the thread is still in accept would be a
+ * use-after-free.  The small server struct is left behind (test area,
+ * one object per run) — freeing it would be unsafe, because `fingerprint`
+ * may still be called afterwards. */
 extern "C" void aiml_ssh_test_stop(void* s) {
     AimlSshTestServer* srv = static_cast<AimlSshTestServer*>(s);
     if (!srv) return;
     srv->running = 0;
 }
 
-#else /* wasm32 / Android: kein TCP, kein SSH (spec/32_6 §8) */
+#else /* wasm32 / Android: no TCP, no SSH (spec/32_6 §8) */
 
 extern "C" void*       aiml_ssh_connect(const char*, int32_t, const char*, int32_t) { return nullptr; }
 extern "C" const char* aiml_ssh_fingerprint(void*)                { return ""; }
