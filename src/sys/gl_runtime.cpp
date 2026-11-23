@@ -1,9 +1,9 @@
 /*
- * gl_runtime.cpp — AIML gl-Namespace Implementierung
+ * gl_runtime.cpp — AIML gl namespace implementation
  * Backend (Desktop): GLEW + Desktop GL 3.3 Core
  * Backend (Web):     Emscripten WebGL2 via <GLES3/gl3.h> (no extension loader)
  *
- * stb_image wird von gltf_runtime.cpp bereitgestellt (kein STB_IMAGE_IMPLEMENTATION hier)
+ * stb_image is provided by gltf_runtime.cpp (no STB_IMAGE_IMPLEMENTATION here)
  */
 
 #include "gl_runtime.h"
@@ -14,18 +14,18 @@
 #  include <GLES3/gl3.h>
 #  include <GLES2/gl2ext.h>
 #else
-/* GLEW muss VOR allen anderen GL-Headern eingebunden werden */
+/* GLEW must be included BEFORE all other GL headers */
 #  include <GL/glew.h>
 #endif
 
 /* stb_image: declarations only — the implementation lives in gltf_runtime.cpp,
  * in BOTH builds.
  *
- * Bis 2026-10-15 besass der Web-Build sie hier, mit der Begruendung, cgltf
- * lasse sich unter emcc nicht uebersetzen.  Das stimmt nicht: gltf_runtime.cpp
- * uebersetzt unveraendert (gemessen), es stand nur nicht in der Quellenliste
- * von exodus-wasm-runtime.json.  Seit es drinsteht, waeren es zwei
- * Implementierungen — der Linker meldete prompt doppelte Symbole. */
+ * Until 2026-10-15 the web build owned it here, on the grounds that cgltf
+ * could not be compiled under emcc.  That is not true: gltf_runtime.cpp
+ * compiles unchanged (measured), it just was not in the source list
+ * of exodus-wasm-runtime.json.  Now that it is in there, these would be two
+ * implementations — the linker promptly reported duplicate symbols. */
 #include <stb/stb_image.h>
 
 #include <cstdlib>
@@ -38,10 +38,10 @@
 #include <algorithm>
 #include <new>
 
-/* WebP-Texturdecode für gl.tex:
- *   Native — libwebp (WebPDecodeRGBA), wie img_runtime; libwebp ist verlinkt.
- *   Web     — der Browser (createImageBitmap) via aiml_art_decode_texture
- *             (art_runtime); libwebp ist unter emcc NICHT verlinkt. */
+/* WebP texture decode for gl.tex:
+ *   Native — libwebp (WebPDecodeRGBA), like img_runtime; libwebp is linked.
+ *   Web     — the browser (createImageBitmap) via aiml_art_decode_texture
+ *             (art_runtime); libwebp is NOT linked under emcc. */
 #ifndef __EMSCRIPTEN__
 #include <webp/decode.h>
 #endif
@@ -138,11 +138,11 @@ struct AimlGLMesh {
 
 /* ── Hilfsfunktionen ────────────────────────────────────────────────────── */
 
-/* WebGL legt die Art eines Puffers beim ERSTEN Binden fest (spec/43_2 §3.2):
-   ein Indexpuffer muss von Anfang an an GL_ELEMENT_ARRAY_BUFFER haengen,
-   sonst weist der Browser jede spaetere Index-Bindung mit INVALID_OPERATION
-   ab -- nativ faellt das nicht auf.  Die Index-Bindung gehoert zur gebundenen
-   VAO, darum wird sie fuer die Dauer des Hochladens geloest. */
+/* WebGL fixes the kind of a buffer at the FIRST bind (spec/43_2 §3.2):
+   an index buffer must be attached to GL_ELEMENT_ARRAY_BUFFER from the start,
+   otherwise the browser rejects every later index binding with INVALID_OPERATION
+   -- natively this goes unnoticed.  The index binding belongs to the bound
+   VAO, which is why it is released for the duration of the upload. */
 struct GlPufferZiel {
     GLenum ziel; GLint vorher = 0; GLint vao = 0; bool index;
     explicit GlPufferZiel(GLenum target) : index(target == GL_ELEMENT_ARRAY_BUFFER) {
@@ -339,7 +339,7 @@ int32_t aiml_gl_buffer_reserve_bytes(void* buf, int32_t capacity) {
     GLuint replacement = 0;
     glGenBuffers(1, &replacement);
     bool ok = false;
-    {   // Der Ersatz muss mit der Art des Originals geboren werden (§3.2).
+    {   // The replacement must be born with the kind of the original (§3.2).
         GlPufferZiel ziel(b->target);
         ziel.binde(replacement);
         glBufferData(ziel.ziel, capacity,
@@ -620,8 +620,8 @@ static inline bool aiml_gl_has_context() { return true; }
 
 void* aiml_gl_load_texture(const char* path) {
     if (!path) return nullptr;
-    // Datei komplett in den Speicher lesen — so kann JEDER Codec dieselben Bytes
-    // dekodieren (stb kann kein WebP; darum format-erkennend statt stbi_load(path)).
+    // Read the whole file into memory — that way EVERY codec can decode the same bytes
+    // (stb cannot do WebP; hence format-detecting instead of stbi_load(path)).
     FILE* fp = fopen(path, "rb");
     if (!fp) { fprintf(stderr, "[aiml_gl] load_texture: cannot open %s\n", path); return nullptr; }
     fseek(fp, 0, SEEK_END);
@@ -638,17 +638,17 @@ void* aiml_gl_load_texture(const char* path) {
         memcmp(bytes.data() + 8, "WEBP", 4) == 0);
 
 #ifdef __EMSCRIPTEN__
-    // Web: über den Browser dekodieren (createImageBitmap; PNG/JPG/WebP) — derselbe
-    // bewährte Pfad wie die Card-Art, inkl. FLIP_Y auf die Engine-Konvention.
+    // Web: decode via the browser (createImageBitmap; PNG/JPG/WebP) — the same
+    // proven path as the card art, incl. FLIP_Y to the engine convention.
     struct EncBuf { int32_t size, cap, rIdx, wIdx; char* data; } eb;
     eb.data = (char*)bytes.data();
     eb.size = (int32_t)flen; eb.cap = (int32_t)flen; eb.rIdx = 0; eb.wIdx = (int32_t)flen;
-    void* t = aiml_art_decode_texture(&eb);   // AimlArtTex* ist layout-gleich zu AimlGLTexture*
+    void* t = aiml_art_decode_texture(&eb);   // AimlArtTex* is layout-identical to AimlGLTexture*
     if (!t) { fprintf(stderr, "[aiml_gl] load_texture: browser decode failed %s\n", path); return nullptr; }
-    // gl.tex-Konvention an die native upload_texture angleichen: REPEAT (sonst
-    // kacheln Tiling-Texturen wie Lobby-Hintergrund/Rahmen NICHT) + Mipmaps.
-    // aiml_art_decode_texture setzt CLAMP_TO_EDGE (für Card-Art korrekt) — hier
-    // überschreiben.
+    // Align the gl.tex convention with the native upload_texture: REPEAT (otherwise
+    // tiling textures like the lobby background/frame do NOT tile) + mipmaps.
+    // aiml_art_decode_texture sets CLAMP_TO_EDGE (correct for card art) — override
+    // it here.
     glBindTexture(GL_TEXTURE_2D, ((AimlGLTexture*)t)->id);
     glGenerateMipmap(GL_TEXTURE_2D);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
@@ -662,7 +662,7 @@ void* aiml_gl_load_texture(const char* path) {
     uint8_t* px = nullptr;
     if (is_webp) {
         px = WebPDecodeRGBA(bytes.data(), (size_t)flen, &w, &h);   // top-down
-        if (px) {  // auf bottom-up flippen (Engine-Konvention wie stbi flip-on-load)
+        if (px) {  // flip to bottom-up (engine convention like stbi flip-on-load)
             const int stride = w * 4;
             for (int y = 0; y < h / 2; ++y) {
                 uint8_t* a = px + (size_t)y * stride;

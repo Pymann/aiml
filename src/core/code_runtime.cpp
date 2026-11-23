@@ -81,10 +81,10 @@ static char* aiml_list_concat(AimlList* l) {
 // ── Public C API ──────────────────────────────────────────────────────────────
 extern "C" {
 
-// aiml_code_id(void* code) -> const char* (FNV-1a der code_chunks)
-// spec/62 F62-85: die Inhaltsadresse eines Bundles ist der Teil des
-// Schritt-Schluessels, der den RUMPF erfasst — bei zusammengesetzten
-// Pipelines tritt sie an die Stelle des Quelltext-Hashes.
+// aiml_code_id(void* code) -> const char* (FNV-1a of the code_chunks)
+// spec/62 F62-85: the content address of a bundle is the part of the
+// step key that captures the BODY — for composed
+// pipelines it takes the place of the source text hash.
 const char* aiml_code_id(void* raw) {
     if (!raw) return "";
     AimlCode* c = (AimlCode*)raw;
@@ -105,10 +105,10 @@ int aiml_code_contains(void* raw, const char* needle) {
     return 0;
 }
 
-/* spec/62 F62-102/F62-103: welche Bundles mit `pure: true` geprueft wurden.
- * Eine Nebenmenge statt eines Feldes im Struct, weil das Struct-Layout exakt
- * mit dem LLVM-IR uebereinstimmen muss (siehe Kopf dieser Datei) — ein
- * zusaetzliches Feld waere eine ABI-Aenderung fuer eine reine Notiz. */
+/* spec/62 F62-102/F62-103: which bundles were checked with `pure: true`.
+ * A side set instead of a field in the struct, because the struct layout must
+ * match the LLVM IR exactly (see the head of this file) — an
+ * additional field would be an ABI change for a mere note. */
 static std::set<std::string>& pure_ids() {
     static std::set<std::string> ids;
     return ids;
@@ -135,16 +135,16 @@ extern "C" int32_t aiml_code_is_pure(void* raw) {
 // aiml_code_tostring(void* code) -> char* (refcounted; caller eventually
 // releases via aiml_str_decref).  Returns code_chunks + data_chunks
 // concatenated with '\n' separator.
-// Chunks als YAML-SEQUENZ zusammensetzen, nicht als Textkette.
+// Assemble chunks as a YAML SEQUENCE, not as a text chain.
 //
-// Jeder Chunk ist ein Mapping auf oberster Ebene (`def:` ...).  Klebt man zwei
-// davon aneinander, entsteht EIN Mapping mit zweimal dem Schluessel `def:` —
-// beim Wiedereinlesen ueberlebt nur der letzte, und der Empfaenger meldet
-// `Unknown function` fuer alles andere.  Aufgefallen, als die transitive
-// Einsammlung (spec/29_2 §16) Buendel mit mehr als einem Chunk normal machte:
-// der Socket-Test schickte run_pipeline + lib_greet und verlor run_pipeline.
-// Ein aiml-Programm IST eine Sequenz, also ist die Sequenz auch die richtige
-// Serialisierung (spec/29_2 §21).  exec_chunks_to_yaml macht dasselbe.
+// Every chunk is a top-level mapping (`def:` ...).  If you glue two
+// of them together, you get ONE mapping with the key `def:` twice —
+// when read back only the last one survives, and the receiver reports
+// `Unknown function` for everything else.  Noticed when the transitive
+// collection (spec/29_2 §16) made bundles with more than one chunk normal:
+// the socket test sent run_pipeline + lib_greet and lost run_pipeline.
+// An aiml program IS a sequence, so the sequence is also the right
+// serialisation (spec/29_2 §21).  exec_chunks_to_yaml does the same.
 static std::string chunks_as_sequence(AimlList* lst) {
     std::string out;
     if (!lst) return out;
@@ -155,9 +155,9 @@ static std::string chunks_as_sequence(AimlList* lst) {
         while (!chunk.empty() && (chunk.back() == '\n' || chunk.back() == '\r')) chunk.pop_back();
         if (chunk.empty()) continue;
         size_t head = chunk.find_first_not_of(" \t");
-        // Schon ein Sequenz-Element (z.B. ein ganzes Programm aus code_from)?
-        // Dann unveraendert uebernehmen, sonst entstuende eine Sequenz in
-        // einer Sequenz.
+        // Already a sequence element (e.g. a whole program from code_from)?
+        // Then take it over unchanged, otherwise there would be a sequence inside
+        // a sequence.
         if (head != std::string::npos && chunk.compare(head, 2, "- ") == 0) {
             out += chunk;
             out += "\n";
@@ -225,19 +225,19 @@ void* aiml_code_merge(void* a_raw, void* b_raw) {
     result->start_call  = a->start_call;
     result->code_chunks = cc;
     result->data_chunks = dc;
-    /* new_context blieb hier frueher UNinitialisiert — malloc-Muell in einem
-     * Feld, das ueber isoliert-vs-geteilt entscheidet.  Vom ersten Operanden
-     * erben, wie start_call auch. */
+    /* new_context used to stay UNinitialised here — malloc garbage in a
+     * field that decides isolated-vs-shared.  Inherit from the first operand,
+     * as start_call does too. */
     result->new_context = a->new_context;
     return result;
 }
 
-/* aiml_code_from_string — Gegenstueck zu aiml_code_tostring (spec/29_2 §13).
- * Baut aus aiml-Quelltext wieder ein Code-Objekt, damit ein Bundle ueber eine
- * Verbindung reisen kann: der Sender serialisiert mit toString, der Empfaenger
- * stellt hier wieder her und fuehrt mit sys.exec aus.
- *   start    — Funktionsname, der nach dem Uebersetzen gerufen wird ("" = keiner)
- *   new_ctx  — 1 = isolierter Kontext (das einzige, was in einem AOT-Binary geht) */
+/* aiml_code_from_string — counterpart to aiml_code_tostring (spec/29_2 §13).
+ * Builds a code object again from aiml source text, so that a bundle can travel over a
+ * connection: the sender serialises with toString, the receiver
+ * restores it here and runs it with sys.exec.
+ *   start    — function name that is called after compiling ("" = none)
+ *   new_ctx  — 1 = isolated context (the only thing that works in an AOT binary) */
 void* aiml_code_from_string(const char* src, const char* start, int8_t new_ctx) {
     if (!src) return nullptr;
     AimlList* cc = aiml_list_new(1);

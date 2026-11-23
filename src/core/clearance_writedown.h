@@ -1,21 +1,21 @@
 #pragma once
-// spec/65 F65-34 — die Write-down-Regel, OPT-IN wie F65-17 (derselbe Hebel wie die
-// Flusspruefung: ein Schalter, nicht zwei).
+// spec/65 F65-34 — the write-down rule, OPT-IN like F65-17 (the same lever as the
+// flow check: one switch, not two).
 //
-// Ein Wert von Level L darf nicht in einen Ort geschrieben werden, der WENIGER
-// eingeschraenkt ist als L.  Sonst ist ein eingeschraenkter Wert in einer Zuweisung
-// gewaschen: dort lesen, wo man darf, dort ablegen, wo jeder darf.
+// A value of level L must not be written into a place that is LESS
+// restricted than L.  Otherwise a restricted value is laundered in an assignment:
+// read it where one may, store it where anyone may.
 //
-// Zwei Bedeutungen je Lokale, die auseinandergehalten werden muessen:
-//   `level:`  = die SCHRANKE fuer das Speichern — was darf hier hinein.
-//   getragen  = das Strengste, was je hineinlief — und das reist weiter.
-// Darum traegt auch eine Lokale OHNE Annotation ein Level, sobald ein eingeschraenkter
-// Wert hineinlaeuft; ohne das waere die Regel mit `tmp = read_secret()` umgangen.
+// Two meanings per local that must be kept apart:
+//   `level:`  = the BARRIER for storing — what may go in here.
+//   carried   = the strictest thing that ever flowed in — and that travels on.
+// That is why a local WITHOUT an annotation carries a level too, as soon as a restricted
+// value flows in; without that the rule would be bypassed with `tmp = read_secret()`.
 //
-// Ohne Annotation UND ohne eingeschraenkte Herkunft traegt eine Lokale kein Level — nicht
-// Level 0.  Das ist der Unterschied zu F65-5: dort ist 0 die fail-closed-Vorgabe fuer den
-// ZUGRIFF; hier waere jedes Literal in einer annotierten Lokalen ein Verstoss, und eine
-// Regel, die jedes Programm bricht, schuetzt nichts.
+// Without an annotation AND without restricted origin a local carries no level — not
+// level 0.  That is the difference from F65-5: there 0 is the fail-closed default for
+// ACCESS; here every literal in an annotated local would be a violation, and a
+// rule that breaks every program protects nothing.
 #include <map>
 #include <string>
 #include "ast_nodes.h"
@@ -27,16 +27,16 @@ namespace clearance {
 
 using namespace AIML::AST;
 
-// Was eine Datei an Leveln kennt: eigene Funktionen und Globale.  Datei-UEBERGREIFEND
-// deckt das nichts ab — dieselbe Grenze wie bei der Flusspruefung, und aus demselben
-// Grund: eine importierte Deklaration traegt kein Level.
+// What levels a file knows: its own functions and globals.  ACROSS files
+// this covers nothing — the same limit as with the flow check, and for the same
+// reason: an imported declaration carries no level.
 struct LevelEnv {
     std::map<std::string, int> funcs;
     std::map<std::string, int> globals;
 };
 
-// Das Strengste (= kleinste) annotierte Level, das in diesen Ausdruck einflieszt.
-// kAbsent heiszt: keine eingeschraenkte Herkunft.
+// The strictest (= smallest) annotated level that flows into this expression.
+// kAbsent means: no restricted origin.
 inline int exprLevel(const Expr* e, const LevelEnv& env,
                      const std::map<std::string, int>& carried) {
     if (!e) return kAbsent;
@@ -79,8 +79,8 @@ inline int exprLevel(const Expr* e, const LevelEnv& env,
     return best;
 }
 
-// Ein Rumpf, ein Vorwaertsdurchlauf.  `bound` sind die Schranken (`level:` an der decl),
-// `carried` ist, was eine Lokale traegt.  Gibt die Zahl der Verstoesse zurueck.
+// One body, one forward pass.  `bound` are the barriers (`level:` on the decl),
+// `carried` is what a local carries.  Returns the number of violations.
 inline int walkBody(const BlockStmt* blk, const std::string& fname, const LevelEnv& env,
                     std::map<std::string, int>& bound,
                     std::map<std::string, int>& carried) {
@@ -98,12 +98,12 @@ inline int walkBody(const BlockStmt* blk, const std::string& fname, const LevelE
         auto b = bound.find(dst);
         if (b != bound.end() && from != kAbsent && b->second > from) {
             ++bad;
-            LOG_ERROR("clearance-writedown: in `" + fname + "` laeuft ein Wert von Level " +
-                      std::to_string(from) + " in `" + dst + "`, das auf Level " +
-                      std::to_string(b->second) + " deklariert ist — also in einen WENIGER "
-                      "eingeschraenkten Ort (spec/65 F65-34).  Entweder `" + dst +
-                      "` auf Level " + std::to_string(from) + " oder strenger deklarieren, "
-                      "oder den Wert hier nicht ablegen.");
+            LOG_ERROR("clearance-writedown: in `" + fname + "` a value of level " +
+                      std::to_string(from) + " flows into `" + dst + "`, which is declared at level " +
+                      std::to_string(b->second) + " — i.e. into a LESS "
+                      "restricted place (spec/65 F65-34).  Either declare `" + dst +
+                      "` at level " + std::to_string(from) + " or stricter, "
+                      "or do not store the value here.");
         }
         carry(dst, from);
     };
@@ -134,8 +134,8 @@ inline int walkBody(const BlockStmt* blk, const std::string& fname, const LevelE
     return bad;
 }
 
-// Einstieg: eine Datei, ein Durchlauf.  Laeuft nur auf ausdruecklichen Wunsch (F65-17) und
-// an derselben Stelle wie die Flusspruefung, damit es EINEN Hebel gibt und nicht zwei.
+// Entry: one file, one pass.  Runs only on explicit request (F65-17) and
+// at the same place as the flow check, so that there is ONE lever and not two.
 inline int checkWritedown(const Program* prog) {
     if (!prog) return 0;
     LevelEnv env;
@@ -150,8 +150,8 @@ inline int checkWritedown(const Program* prog) {
     for (const auto& d : prog->declarations) {
         auto* fn = dynamic_cast<const FunctionDecl*>(d.get());
         if (!fn || !fn->body) continue;
-        // Je Rumpf frische Karten: eine Lokale aus einer anderen Funktion hat hier nichts
-        // zu sagen.  Globale Schranken kommen aus `env`, nicht aus `bound`.
+        // Fresh maps per body: a local from another function has no say
+        // here.  Global barriers come from `env`, not from `bound`.
         std::map<std::string, int> bound, carried;
         for (const auto& g : env.globals) bound[g.first] = g.second;
         bad += walkBody(fn->body.get(), fn->name, env, bound, carried);
