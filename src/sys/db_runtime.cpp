@@ -55,30 +55,30 @@ struct AimlKvWalHeader {
 };
 static_assert(sizeof(AimlKvWalHeader) == 32, "AimlKvWalHeader must be 32 bytes");
 
-// ── Index-Dump (spec/31 §6.2.1) ─────────────────────────────────────────────
-// Der Index liegt sonst nur im Prozess und wird bei jedem open aus der WAL
-// aufgebaut.  Gemessen am cai-Wissensgraphen (18,17 Mio Schluessel): 19,5 GB
-// RSS und ~5 min je Prozessstart, bei 713 MB Schluesselbytes -- 434 Byte je
-// Schluessel, fast alles unordered_map-Aufwand.  Der Dump legt dieselbe
-// Information sortiert auf die Platte und wird von dort BENUTZT, nicht geladen.
+// ── Index dump (spec/31 §6.2.1) ─────────────────────────────────────────────
+// Otherwise the index only lives in the process and is built from the WAL on every
+// open.  Measured on the cai knowledge graph (18.17 million keys): 19.5 GB
+// RSS and ~5 min per process start, with 713 MB of key bytes -- 434 bytes per
+// key, almost all of it unordered_map overhead.  The dump puts the same
+// information sorted onto the disk and is USED from there, not loaded.
 struct AimlKvIdxHeader {
     char     magic[8];      // "AIMLKVIX"
     uint32_t version;
-    uint32_t wal_version;   // version der zugehoerigen WAL
-    int64_t  val_size;      // val_size der zugehoerigen WAL
-    uint64_t wal_used;      // Wasserstand: Stand der WAL beim Schreiben
-    uint64_t wal_dev;       // st_dev der WAL beim Schreiben
-    uint64_t wal_ino;       // st_ino der WAL beim Schreiben
+    uint32_t wal_version;   // version of the associated WAL
+    int64_t  val_size;      // val_size of the associated WAL
+    uint64_t wal_used;      // high-water mark: state of the WAL when written
+    uint64_t wal_dev;       // st_dev of the WAL when written
+    uint64_t wal_ino;       // st_ino of the WAL when written
     uint64_t wal_fp;        // Fingerabdruck des beschriebenen Bereichs
-    uint64_t count;         // Zahl der Eintraege
+    uint64_t count;         // number of entries
 };
 static_assert(sizeof(AimlKvIdxHeader) == 64, "AimlKvIdxHeader must be 64 bytes");
 
-// 24 Byte, natuerlich ausgerichtet -- kein pack(1), damit kein unausgerichteter
-// 64-Bit-Zugriff entsteht.  Eintraege stehen nach Schluesselbytes sortiert,
-// darum ist die Suche eine binaere Suche im mmap ohne jeden Aufbau.
+// 24 bytes, naturally aligned -- no pack(1), so that no unaligned
+// 64-bit access arises.  Entries are sorted by key bytes,
+// which is why the lookup is a binary search in the mmap without any build-up.
 struct AimlKvIdxEntry {
-    uint64_t val_off;       // Offset des Werts in der WAL
+    uint64_t val_off;       // offset of the value in the WAL
     uint32_t key_off;       // Offset im Schluesselblock
     uint32_t val_len;
     uint32_t key_len;
@@ -88,31 +88,31 @@ static_assert(sizeof(AimlKvIdxEntry) == 24, "AimlKvIdxEntry must be 24 bytes");
 
 static const char     KV_IDX_MAGIC[8] = {'A','I','M','L','K','V','I','X'};
 static const uint32_t KV_IDX_VERSION  = 1;
-// Grabstein im Ueberlauf-Index: verdeckt einen Dump-Eintrag.  Ohne das kaeme
-// ein geloeschter Schluessel nach dem Neustart aus dem Dump zurueck.
+// Tombstone in the overflow index: hides a dump entry.  Without it a
+// deleted key would come back from the dump after a restart.
 static const uint64_t KV_IDX_TOMB     = UINT64_MAX;
 
 static const char     KV_WAL_MAGIC[8] = {'A','I','M','L','K','V','W','L'};
-// Version 2 (Schritt 4): Strings im WAL haben jetzt Null-Terminator
-// (val_bytes = strlen+1). Macht zero-copy Reads moeglich.
+// Version 2 (step 4): strings in the WAL now have a null terminator
+// (val_bytes = strlen+1). Makes zero-copy reads possible.
 static const uint32_t KV_WAL_VERSION  = 2;
 static const uint32_t KV_WAL_FLAG_TYPED = 1u << 0;
 
-// Initial sparse-reserve fuer jede Kv-WAL-Datei. Der Kernel allokiert nur
-// tatsaechlich beschriebene Pages, aber das `apparent size` der Datei
-// (was `ls -la`, File-Watcher, Indexer und nicht-sparse-aware Tools sehen)
-// = die hier gewaehlte Reserve.
+// Initial sparse reserve for every Kv WAL file. The kernel only allocates
+// pages that are actually written, but the `apparent size` of the file
+// (what `ls -la`, file watchers, indexers and non-sparse-aware tools see)
+// = the reserve chosen here.
 //
-// 16 MB ist klein genug, dass Test-`/tmp` keinen IDE-File-Watcher kippt
-// (~22 Tests × 16 MB = 352 MB apparent), und gross genug, dass kleine
-// Stores ohne mremap-Wachstum auskommen. Bei Append-Overflow verdoppelt
-// `kv_mmap_grow` die Reserve via `ftruncate` + `mremap(MREMAP_MAYMOVE)`.
+// 16 MB is small enough that a test `/tmp` does not topple an IDE file watcher
+// (~22 tests × 16 MB = 352 MB apparent), and large enough that small
+// stores get by without mremap growth. On append overflow
+// `kv_mmap_grow` doubles the reserve via `ftruncate` + `mremap(MREMAP_MAYMOVE)`.
 static constexpr size_t KV_MMAP_RESERVE_INITIAL = (size_t)16 * 1024 * 1024;
 
-// Maximale Anzahl gleichzeitig dekodierter typed-Eintraege im Cache.
-// Bounded LRU (Schritt 7) verhindert unbegrenztes Wachstum von
-// `decoded_cache`. Pointer aus `kv.get` werden invalid, wenn ihr Eintrag
-// aus dem Cache faellt — dokumentiert in spec/migration/aiondb_kv_mmap_refactor.md.
+// Maximum number of typed entries decoded at the same time in the cache.
+// A bounded LRU (step 7) prevents unbounded growth of
+// `decoded_cache`. Pointers from `kv.get` become invalid when their entry
+// drops out of the cache — documented in spec/migration/aiondb_kv_mmap_refactor.md.
 static constexpr size_t MAX_DECODED_LRU = 1024;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -168,19 +168,19 @@ struct AimlKv {
     std::mutex  mtx;  // per-KV lock for thread-safe access
     int64_t val_size;
     bool    blob_only = false;  // true when only kv_set_blob was used (no strdup entries)
-    // ── Index (Schritt 3): source-of-truth fuer PERSISTENTE KVs ──────────────
-    // key → {offset, length} im mmap. Reads geben Pointer in mmap zurueck.
+    // ── Index (step 3): source of truth for PERSISTENT KVs ────────────────────
+    // key → {offset, length} in the mmap. Reads return pointers into the mmap.
     std::unordered_map<std::string, AimlKvValueLoc> index;
-    // ── Storage fuer NON-PERSISTENTE KVs (legacy heap-map) ──────────────────
-    // Wird in einer spaeteren Phase auf einen anonymen mmap-Buffer migriert.
+    // ── Storage for NON-PERSISTENT KVs (legacy heap map) ────────────────────
+    // To be migrated to an anonymous mmap buffer in a later phase.
     std::unordered_map<std::string, std::vector<uint8_t>> map;
     // Typed Kv: descriptor for recursive serialization of heap fields
     const AimlTypeNode* ser_nodes = nullptr;
     int32_t             ser_n     = 0;
     // Decoded cache: key → decoded struct (live heap pointers, freed on eviction).
-    // Bounded LRU (Schritt 7): `decoded_lru` traegt Keys in MRU-Reihenfolge
-    // (front = MRU, back = oldest). `decoded_lru_pos` mapped Key → Listen-iterator
-    // fuer O(1) splice. Eviction beim Cache-Insert wenn size > MAX_DECODED_LRU.
+    // Bounded LRU (step 7): `decoded_lru` carries keys in MRU order
+    // (front = MRU, back = oldest). `decoded_lru_pos` maps key → list iterator
+    // for O(1) splice. Eviction on cache insert when size > MAX_DECODED_LRU.
     std::unordered_map<std::string, std::vector<uint8_t>> decoded_cache;
     std::list<std::string>                                decoded_lru;
     std::unordered_map<std::string, std::list<std::string>::iterator> decoded_lru_pos;
@@ -192,17 +192,17 @@ struct AimlKv {
     void*       wal_mmap      = nullptr;   // base pointer (initial KV_MMAP_RESERVE_INITIAL)
     size_t      wal_mmap_size = 0;         // grow via kv_mmap_grow
     uint64_t    wal_used      = 0;         // naechster freier Offset im WAL
-    // ── Einblick fuer die Betriebssicht (cosmos doc/spec/99 F99-5) ──────────
-    // Name und ein SCHREIBZAEHLER.  Bewusst ein Zaehler und kein Zeitstempel:
-    // ein Zeitstempel kostet je Schreibvorgang einen Uhrzugriff auf dem heissen
-    // Pfad, waehrend die Sicht ohnehin zwei Schnappschuesse vergleicht — die
-    // Differenz sagt "bewegt sich", der Schnappschuss-Zeitpunkt sagt "wie alt".
+    // ── Insight for the operations view (cosmos doc/spec/99 F99-5) ───────────
+    // Name and a WRITE COUNTER.  Deliberately a counter and not a timestamp:
+    // a timestamp costs a clock access on the hot path for every write,
+    // while the view compares two snapshots anyway — the
+    // difference says "it is moving", the snapshot time says "how old".
     std::string store_name;
     uint64_t    writes = 0;
     // ── Index-Dump (spec/31 §6.2.1) ────────────────────────────────────────
     bool        index_dump = false;      // Option beim open
     std::string idx_path;                // <name>.kvidx
-    void*       idx_mmap      = nullptr; // nur lesend gemappt
+    void*       idx_mmap      = nullptr; // mapped read-only
     size_t      idx_mmap_size = 0;
     const AimlKvIdxEntry* idx_entries = nullptr;
     const char*           idx_keys    = nullptr;
@@ -421,34 +421,34 @@ static bool store_wal_replay(AimlStore* s) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// AionDB Pfad-Konfiguration (db.set_path / AIONDB_PATH env var)
-// ─────────────────────────────────────────────────────────────────────────────
+// AionDB path configuration (db.set_path / AIONDB_PATH env var)
+// ──────────────────────────────────────────────────────────────────────────
 //
-// Resolution-Reihenfolge fuer den Speicher-Root:
-//   1. AIONDB_PATH env var (dominiert immer, bei jedem Open neu gelesen)
-//   2. g_aiondb_root (gesetzt durch aiml_db_set_path)
-//   3. Fallback "./aiondb/"
+// Resolution order for the storage root:
+//   1. AIONDB_PATH env var (always dominates, re-read on every open)
+//   2. g_aiondb_root (set by aiml_db_set_path)
+//   3. fallback "./aiondb/"
 //
-// Sub-Pfad-Argument (`base_path` der open-Funktionen):
-//   - nullptr/empty   → reine Root nutzen
-//   - absolut (/...)  → as-is (backward-compat fuer Tests mit /tmp/aiml_test_*)
-//   - relativ          → root + sub_path
+// Sub-path argument (`base_path` of the open functions):
+//   - nullptr/empty   → use the root only
+//   - absolute (/...) → as-is (backward compat for tests with /tmp/aiml_test_*)
+//   - relative        → root + sub_path
 static std::mutex   g_aiondb_path_mutex;
 static std::string  g_aiondb_root;  // empty == not set via aiml_db_set_path
 
-// Helper: stellt sicher dass der Pfad mit '/' endet.
+// Helper: makes sure that the path ends with '/'.
 static void path_ensure_trailing_slash(std::string& s) {
     if (!s.empty() && s.back() != '/') s += '/';
 }
 
-// `mkdir -p` fuer den aufgeloesten Store-Pfad.
+// `mkdir -p` for the resolved store path.
 //
-// Einstufiges `mkdir` genuegt nicht: spec/31 erlaubt `path: "sub/dir/"`
-// ausdruecklich (Beispiel dort: `runs/trajectory.kvwal`), und ein solcher
-// Unterbau existiert beim ersten Oeffnen noch nicht.  Das einstufige mkdir
-// scheiterte dann mit ENOENT, der open-Pfad lief weiter, und der Store blieb
-// still leer — gefunden 2026-10-15 an cosmos' `cas_action_test` unter einem
-// frischen AIONDB_PATH.
+// A single-level `mkdir` is not enough: spec/31 explicitly allows `path: "sub/dir/"`
+// (example there: `runs/trajectory.kvwal`), and such a
+// substructure does not exist yet on the first open.  The single-level mkdir
+// then failed with ENOENT, the open path carried on, and the store stayed
+// silently empty — found 2026-10-15 on cosmos' `cas_action_test` under a
+// fresh AIONDB_PATH.
 static void db_mkdir_p(const std::string& dir) {
     if (dir.empty()) return;
     std::string acc;
@@ -461,15 +461,15 @@ static void db_mkdir_p(const std::string& dir) {
         if (!part.empty()) {
             if (!acc.empty() && acc.back() != '/') acc += "/";
             acc += part;
-            mkdir(acc.c_str(), 0755);   // existiert schon → EEXIST, egal
+            mkdir(acc.c_str(), 0755);   // already exists → EEXIST, does not matter
         }
         if (sl == std::string::npos) break;
         i = sl + 1;
     }
 }
 
-// Resolve AionDB-Verzeichnis fuer einen open-Call.
-// Caller bekommt einen Pfad mit Trailing-Slash.
+// Resolve the AionDB directory for an open call.
+// The caller gets a path with a trailing slash.
 static std::string resolve_aiondb_dir(const char* sub_path) {
     // 1. Root bestimmen
     std::string root;
@@ -482,7 +482,7 @@ static std::string resolve_aiondb_dir(const char* sub_path) {
     }
     path_ensure_trailing_slash(root);
 
-    // 2. Sub-Pfad anwenden
+    // 2. Apply the sub-path
     if (!sub_path || !*sub_path) return root;
     if (sub_path[0] == '/') {
         // Absolute Pfade haben Vorrang (backward compat).
@@ -495,8 +495,8 @@ static std::string resolve_aiondb_dir(const char* sub_path) {
     return combined;
 }
 
-// Setzt den globalen AionDB-Root. Wird von db.set_path("/path") gerufen.
-// Wert wird ignoriert wenn AIONDB_PATH env var gesetzt ist (env dominiert).
+// Sets the global AionDB root. Called by db.set_path("/path").
+// The value is ignored if the AIONDB_PATH env var is set (env dominates).
 extern "C" void aiml_db_set_path(const char* path) {
     std::lock_guard<std::mutex> lock(g_aiondb_path_mutex);
     if (!path || !*path) {
@@ -506,9 +506,9 @@ extern "C" void aiml_db_set_path(const char* path) {
     g_aiondb_root = path;
 }
 
-// Gibt den aktuell aufgeloesten Root zurueck (mit Trailing-Slash).
-// Single Source of Truth fuer AIML-Code, das den Pfad braucht
-// (z. B. StoreOrganisator zum gezielten Loeschen).
+// Returns the currently resolved root (with a trailing slash).
+// Single source of truth for AIML code that needs the path
+// (e.g. StoreOrganisator for targeted deletion).
 extern "C" const char* aiml_db_get_path(void) {
     std::string root;
     const char* env = std::getenv("AIONDB_PATH");
@@ -998,22 +998,22 @@ extern "C" int32_t aiml_db_checkpoint_all(void) {
 // Kv<K:V> implementation
 // ─────────────────────────────────────────────────────────────────────────────
 
-// spec/31 §6.10: Die Typisierung gehoert dem Store, nicht dem Oeffner.
+// spec/31 §6.10: the typing belongs to the store, not to whoever opens it.
 //
-// `db.open_kv` fuehrt eine Registratur je (Verzeichnis, Name) und gibt bei einer
-// zweiten Oeffnung denselben Handle zurueck -- mit val_size und Deskriptor der
-// ERSTEN Oeffnung.  Verlangt die zweite Oeffnung einen anderen Werttyp, dekodiert
-// `kv.get` weiter mit dem alten Deskriptor, waehrend die Aufrufstelle den Satz als
-// ihren eigenen deklarierten Typ liest: `has` sagt 1, der Satz sieht plausibel aus,
-// und der erste Zeichenketten-Zeiger, der auf Nicht-Zeiger-Bytes faellt, stirbt beim
-// Weitergeben (aiml_ser_encode <- aiml_ser_deep_copy).  Der Fingerabdruck, der jeden
-// Blob schuetzt, kann das nicht sehen -- Blob und Handle passen zusammen, nur der
-// Leser nicht.  Darum die Wache hier, am einzigen Punkt, der beide Typen sieht.
+// `db.open_kv` keeps a registry per (directory, name) and returns the same
+// handle on a second open -- with the val_size and descriptor of the
+// FIRST open.  If the second open requests a different value type, `kv.get`
+// keeps decoding with the old descriptor, while the call site reads the record as
+// its own declared type: `has` says 1, the record looks plausible,
+// and the first string pointer that lands on non-pointer bytes dies when
+// passed on (aiml_ser_encode <- aiml_ser_deep_copy).  The fingerprint that protects every
+// blob cannot see this -- blob and handle match, only the
+// reader does not.  Hence the guard here, at the only point that sees both types.
 //
-// Gefunden am 11.11.2026 in datacreatures (abgebrochener Repository-Pilot: ein Kv
-// als Klassenmitglied las einen fremd aufgebauten Satz).  AIML_DB_ALLOW_RETYPE=1
-// macht daraus eine Warnung -- fuer Werkzeuge, die einen Store absichtlich mit
-// einem anderen Aufbau lesen (Migration, Export).
+// Found on 2026-11-11 in datacreatures (an aborted repository pilot: a Kv
+// as a class member read a record with a foreign layout).  AIML_DB_ALLOW_RETYPE=1
+// turns this into a warning -- for tools that deliberately read a store with
+// a different layout (migration, export).
 static void kv_guard_reopen(AimlKv* kv, const std::string& nm, int64_t val_size,
                             const AimlTypeNode* nodes, int32_t n_nodes) {
     if (!kv) return;
@@ -1062,15 +1062,15 @@ static const uint8_t KV_WAL_SET      = 1;
 static const uint8_t KV_WAL_DELETE   = 2;
 static const uint8_t KV_WAL_SET_BLOB = 3;  // raw binary, no strdup on replay
 
-// ── mmap-Backing (Schritt 2) ────────────────────────────────────────────────
-// Bietet zero-copy Append in eine sparse-extended WAL-Datei. Alle Schreiber
-// halten die kv->mtx, daher ist `wal_used` race-frei.
+// ── mmap backing (step 2) ───────────────────────────────────────────────────
+// Offers zero-copy append into a sparse-extended WAL file. All writers
+// hold kv->mtx, therefore `wal_used` is race-free.
 
-// Setzt das mmap-Backing fuer einen frisch geoeffneten kv->wal_fd auf.
-// File wird auf eine geeignete Reserve sparse-extended, dann gemappt.
-// Wenn fstat() schon eine groessere Datei zeigt (bestehender, gewachsener
-// Store) wird die existierende Groesse beibehalten — sonst INITIAL.
-// `wal_used` wird aus dem Header uebernommen (Crash-Recovery: best-effort).
+// Sets up the mmap backing for a freshly opened kv->wal_fd.
+// The file is sparse-extended to a suitable reserve, then mapped.
+// If fstat() already shows a larger file (existing, grown
+// store) the existing size is kept — otherwise INITIAL.
+// `wal_used` is taken over from the header (crash recovery: best effort).
 // Returns true on success.
 static bool kv_mmap_attach(AimlKv* kv) {
     if (kv->wal_fd < 0) return false;
@@ -1081,9 +1081,9 @@ static bool kv_mmap_attach(AimlKv* kv) {
             kv->wal_path.c_str(), errno);
         return false;
     }
-    // Wunsch-Reserve: bestehende Dateigroesse behalten (gewachsener Store) oder
-    // INITIAL bei frischem Store. Bei ENOMEM fallen wir in mehreren Stufen
-    // zurueck, damit wir auch unter virt-Druck noch oeffnen koennen.
+    // Desired reserve: keep the existing file size (grown store) or
+    // INITIAL for a fresh store. On ENOMEM we fall back in several steps,
+    // so that we can still open even under virtual-memory pressure.
     size_t target = (size_t)st.st_size > KV_MMAP_RESERVE_INITIAL
                     ? (size_t)st.st_size
                     : KV_MMAP_RESERVE_INITIAL;
@@ -1099,8 +1099,8 @@ static bool kv_mmap_attach(AimlKv* kv) {
         hdr_aligned,
     };
     for (size_t reserve : candidates) {
-        // Zu klein gegenueber existierendem File-Inhalt: nicht versuchen,
-        // sonst gibt's SIGBUS auf Seiten ueber dem mmap-Ende.
+        // Too small compared with the existing file content: do not try,
+        // otherwise there is SIGBUS on pages beyond the mmap end.
         if (reserve < (size_t)st.st_size) continue;
         if ((size_t)st.st_size < reserve) {
             if (ftruncate(kv->wal_fd, (off_t)reserve) != 0) {
@@ -1119,7 +1119,7 @@ static bool kv_mmap_attach(AimlKv* kv) {
             kv->wal_used = (hdr.wal_used >= sizeof(hdr)) ? hdr.wal_used : sizeof(hdr);
             return true;
         }
-        // mmap-fail: Datei-Groesse zuruecksetzen und naechsten Kandidaten probieren
+        // mmap failed: reset the file size and try the next candidate
         if ((size_t)st.st_size < reserve) {
             ftruncate(kv->wal_fd, st.st_size);
         }
@@ -1129,22 +1129,22 @@ static bool kv_mmap_attach(AimlKv* kv) {
         "(target=%zu bytes; min=%zu bytes; errno=%d) — likely RLIMIT_AS or "
         "virt-fragmentation. Aborting to avoid silent data loss.\n",
         kv->wal_path.c_str(), target, hdr_aligned, errno);
-    _exit(1);  // strikt: kein silent skip — Caller wuerde sonst nullptr ignorieren
+    _exit(1);  // strict: no silent skip — the caller would otherwise ignore nullptr
     return false;  // unreachable
 }
 
-// Wachsen via ftruncate + mremap(MREMAP_MAYMOVE).
-// Versucht zuerst Verdopplung; bei ENOMEM (typisch durch
-// virt-Address-Space-Fragmentation, RLIMIT_AS oder vm.max_map_count)
-// degradiert in mehreren Stufen: 2x → +50% → +25% → +64 MB → +16 MB.
-// Mapping-Pointer kann sich aendern → Schreib-Helper lesen `kv->wal_mmap`
-// nach jedem Append neu, Index-Offsets sind file-relativ.
+// Grow via ftruncate + mremap(MREMAP_MAYMOVE).
+// First tries doubling; on ENOMEM (typically due to
+// virtual address space fragmentation, RLIMIT_AS or vm.max_map_count)
+// degrades in several steps: 2x → +50% → +25% → +64 MB → +16 MB.
+// The mapping pointer can change → write helpers re-read `kv->wal_mmap`
+// after every append, index offsets are file-relative.
 static bool kv_mmap_grow(AimlKv* kv, size_t need_size) {
     if (!kv->wal_mmap) return false;
     size_t cur = kv->wal_mmap_size;
     if (need_size <= cur) return true;
 
-    // Kandidaten-Groessen, vom optimistischsten zum konservativsten Schritt.
+    // Candidate sizes, from the most optimistic to the most conservative step.
     size_t candidates[] = {
         cur * 2,
         cur + cur / 2,
@@ -1154,12 +1154,12 @@ static bool kv_mmap_grow(AimlKv* kv, size_t need_size) {
         cur + (size_t)4  * 1024 * 1024,
     };
     for (size_t cand : candidates) {
-        if (cand < need_size) continue;  // muss mindestens das Ziel decken
-        if (cand <= cur) continue;       // muss strikt wachsen
+        if (cand < need_size) continue;  // must cover at least the target
+        if (cand <= cur) continue;       // must grow strictly
         if (ftruncate(kv->wal_fd, (off_t)cand) != 0) continue;
         void* p = mremap(kv->wal_mmap, kv->wal_mmap_size, cand, MREMAP_MAYMOVE);
         if (p == MAP_FAILED) {
-            // Datei-Groesse zuruecksetzen, naechsten kleineren Kandidaten probieren
+            // reset the file size, try the next smaller candidate
             ftruncate(kv->wal_fd, (off_t)cur);
             continue;
         }
@@ -1167,12 +1167,12 @@ static bool kv_mmap_grow(AimlKv* kv, size_t need_size) {
         kv->wal_mmap_size = cand;
         return true;
     }
-    // Letzter Fallback: explizit munmap → ftruncate → mmap.
-    // mremap(MREMAP_MAYMOVE) braucht kurzzeitig DOPPELTEN virt-Speicher
-    // (alter + neuer Bereich gleichzeitig). Bei extremer Fragmentation
-    // schlaegt das fehl. Ein expliziter unmap-then-mmap-Zyklus hat keinen
-    // Dual-Allokations-Moment — der Kernel kann den neuen Bereich frei plazieren.
-    // Daten bleiben durch das File-Backing erhalten.
+    // Last fallback: explicit munmap → ftruncate → mmap.
+    // mremap(MREMAP_MAYMOVE) briefly needs DOUBLE the virtual memory
+    // (old + new range at the same time). With extreme fragmentation
+    // this fails. An explicit unmap-then-mmap cycle has no
+    // dual-allocation moment — the kernel can place the new range freely.
+    // The data is preserved by the file backing.
     for (size_t cand : candidates) {
         if (cand < need_size) continue;
         if (cand <= cur) continue;
@@ -1180,7 +1180,7 @@ static bool kv_mmap_grow(AimlKv* kv, size_t need_size) {
         munmap(kv->wal_mmap, old_size);
         kv->wal_mmap = nullptr;
         if (ftruncate(kv->wal_fd, (off_t)cand) != 0) {
-            // Versuche, den alten Mapping wiederherzustellen
+            // Try to restore the old mapping
             kv->wal_mmap = mmap(nullptr, old_size, PROT_READ | PROT_WRITE,
                                 MAP_SHARED | MAP_NORESERVE, kv->wal_fd, 0);
             if (kv->wal_mmap == MAP_FAILED) kv->wal_mmap = nullptr;
@@ -1209,7 +1209,7 @@ static bool kv_mmap_grow(AimlKv* kv, size_t need_size) {
     return false;
 }
 
-// Schreibt aktuellen wal_used Wert in den Header und syncs nur die erste Page.
+// Writes the current wal_used value into the header and syncs only the first page.
 static void kv_mmap_persist_used(AimlKv* kv) {
     if (!kv->wal_mmap) return;
     AimlKvWalHeader* hdr = (AimlKvWalHeader*)kv->wal_mmap;
@@ -1219,7 +1219,7 @@ static void kv_mmap_persist_used(AimlKv* kv) {
     msync(kv->wal_mmap, (size_t)page, MS_ASYNC);
 }
 
-// Loest mmap auf (z.B. vor Compaction-Rewrite oder bei kv_clear).
+// Releases the mmap (e.g. before a compaction rewrite or on kv_clear).
 static void kv_mmap_detach(AimlKv* kv) {
     if (kv->wal_mmap) {
         munmap(kv->wal_mmap, kv->wal_mmap_size);
@@ -1228,13 +1228,13 @@ static void kv_mmap_detach(AimlKv* kv) {
     }
 }
 
-// Reserviert n Bytes im mmap und kopiert src hinein. Caller haelt kv->mtx.
-// Bei Reserve-Ueberlauf: kv_mmap_grow() verdoppelt via ftruncate+mremap.
+// Reserves n bytes in the mmap and copies src into it. The caller holds kv->mtx.
+// On reserve overflow: kv_mmap_grow() doubles via ftruncate+mremap.
 static bool kv_mmap_append(AimlKv* kv, const void* src, size_t n) {
     if (!kv->wal_mmap) return false;
     if (kv->wal_used + n > kv->wal_mmap_size) {
         if (!kv_mmap_grow(kv, kv->wal_used + n)) {
-            // kv_mmap_grow hat bereits FATAL geloggt — abbrechen
+            // kv_mmap_grow has already logged FATAL — abort
             _exit(1);
         }
     }
@@ -1314,13 +1314,13 @@ static void kv_decoded_clear_all(AimlKv* kv) {
 // After inserting a fresh decoded entry, evict the oldest entries until
 // the cache is within MAX_DECODED_LRU. Frees decoded heap data.
 //
-// spec/31 §6.7.3 Regel 1: der MRU-Eintrag bleibt stehen — das ist der Slot, den der
-// laufende `get`/`get_copy` gerade angelegt hat und zurueckgeben wird.  `size() > 1`
-// statt `!empty()`: lief der Cache einmal ueber die Grenze hinaus, ohne dass die
-// LRU-Liste davon weiss, kommt die Schleife durch Leerraeumen der Liste NIE unter den
-// Bound — sie nahm dann die ganze Liste mit, den gerade eingefuegten Eintrag zuletzt,
-// und der Aufrufer bekam einen Zeiger in einen freigegebenen Slot (cai 2026-11-04:
-// SIGSEGV in enc <- aiml_ser_deep_copy, strlen auf einen released String).
+// spec/31 §6.7.3 rule 1: the MRU entry stays — that is the slot that the
+// running `get`/`get_copy` has just created and will return.  `size() > 1`
+// instead of `!empty()`: if the cache once ran over the limit without the
+// LRU list knowing about it, emptying the list NEVER brings the loop under the
+// bound — it then took the whole list along, the just-inserted entry last,
+// and the caller got a pointer into a freed slot (cai 2026-11-04:
+// SIGSEGV in enc <- aiml_ser_deep_copy, strlen on a released string).
 static void kv_decoded_lru_trim(AimlKv* kv) {
     while (kv->decoded_cache.size() > MAX_DECODED_LRU
            && kv->decoded_lru.size() > 1) {
@@ -1384,12 +1384,12 @@ static bool kv_wal_check_header(int fd, const std::string& path,
             path.c_str(), hdr.version, KV_WAL_VERSION, path.c_str());
         _exit(1);
     }
-    // spec/31 §6.10: der Kopf traegt Typisierung und val_size der ERZEUGENDEN
-    // Oeffnung.  Eine Abweichung wird gemeldet, aber NICHT zum Abbruch gemacht:
-    // ein angehaengtes Feld (§7 Schema-Evolution) aendert val_size zulaessig, und
-    // beim Lesen sagt der Blob-Fingerabdruck, was mit alten Saetzen zu tun ist.
-    // Ein anderer Werttyp ist dagegen ein Fehler -- den faengt kv_guard_reopen,
-    // sobald derselbe Store im selben Prozess zweimal geoeffnet wird.
+    // spec/31 §6.10: the header carries typing and val_size of the CREATING
+    // open.  A deviation is reported, but NOT turned into an abort:
+    // an appended field (§7 schema evolution) changes val_size legitimately, and
+    // on read the blob fingerprint says what to do with old records.
+    // A different value type, on the other hand, is an error -- kv_guard_reopen catches it
+    // as soon as the same store is opened twice in the same process.
     const bool have_typed = (hdr.flags & KV_WAL_FLAG_TYPED) != 0;
     if (have_typed != want_typed || hdr.val_size != want_val_size) {
         fprintf(stderr,
@@ -1414,7 +1414,7 @@ static int kv_wal_open_with_header(const std::string& path, bool typed,
     if (st.st_size == 0) {
         if (!kv_wal_init_header(fd, typed, val_size)) { close(fd); return -1; }
     } else {
-        // spec/31 §6.10: Kopf gegen das Verlangte pruefen (laut, nicht fatal).
+        // spec/31 §6.10: check the header against what is requested (loud, not fatal).
         kv_wal_check_header(fd, path, typed, val_size);  // does not return on magic/version mismatch
     }
     return fd;
@@ -1424,19 +1424,19 @@ static int kv_wal_open_with_header(const std::string& path, bool typed,
 //  reads find offsets directly and the kernel re-faults pages on access.)
 
 // Replay WAL records, starting right after the file header.
-// Populiert kv->index (offset+length) ohne Werte zu kopieren — alle Reads
-// gehen ueber mmap. Bei Typed: decoded_cache wird invalidiert pro key.
-// Nebenindex-Dumps (spec/45 "Persistence").  Liegen beim Index-Code weiter
-// unten, werden aber von hier oben gerufen -- Checkpoint schreibt sie, clear
-// loescht sie.  Beide Aufrufer halten kv->mtx.
+// Populates kv->index (offset+length) without copying values — all reads
+// go through the mmap. For typed: decoded_cache is invalidated per key.
+// Secondary index dumps (spec/45 "Persistence").  They live with the index code further
+// down, but are called from up here -- checkpoint writes them, clear
+// deletes them.  Both callers hold kv->mtx.
 static void kv_sidx_write_all(AimlKv* kv);
 static void kv_sidx_unlink_all(AimlKv* kv);
 
 // ── Index-Dump: Lesen (spec/31 §6.2.1) ─────────────────────────────────────
 
-// Lexikographisch wie std::string: gemeinsamer Teil, dann die Laenge.  Muss mit
-// der Sortierung beim Schreiben uebereinstimmen, sonst findet die binaere Suche
-// nichts -- und zwar still.
+// Lexicographic like std::string: common part, then the length.  Must
+// match the sort order used when writing, otherwise the binary search finds
+// nothing -- and does so silently.
 static inline int kv_idx_cmp(const char* a, size_t alen, const char* b, size_t blen) {
     const size_t n = alen < blen ? alen : blen;
     const int c = n ? memcmp(a, b, n) : 0;
@@ -1445,10 +1445,10 @@ static inline int kv_idx_cmp(const char* a, size_t alen, const char* b, size_t b
     return alen < blen ? -1 : 1;
 }
 
-// Fingerabdruck ueber GENAU den Bereich, den der Dump beschreibt.  Anhaengen
-// liegt dahinter und aendert ihn nicht -- nur so bleibt der Ueberlauf-Pfad
-// nutzbar.  Deterministisch und ganzzahlig, damit Schreiben und Pruefen auf
-// jeder Maschine denselben Wert ergeben.
+// Fingerprint over EXACTLY the range the dump describes.  Appending
+// lies beyond it and does not change it -- only that way does the overflow path stay
+// usable.  Deterministic and integer-only, so that writing and checking yield
+// the same value on every machine.
 static uint64_t kv_idx_fingerprint(const uint8_t* base, size_t start, size_t end) {
     uint64_t h = 1469598103934665603ULL;
     auto mix = [&h](const uint8_t* p, size_t n) {
@@ -1476,10 +1476,10 @@ static void kv_idx_detach(AimlKv* kv) {
     kv->idx_count     = 0;
 }
 
-// Dump pruefen und mappen.  Gibt den Wasserstand zurueck, ab dem die WAL noch
-// nachgespielt werden muss, oder 0, wenn kein brauchbarer Dump vorliegt.  Der
-// Dump ist NIE maßgebend gegenueber der WAL: jeder Zweifel kostet einen vollen
-// Replay, nie falsche Daten.
+// Check and map the dump.  Returns the high-water mark from which the WAL still
+// has to be replayed, or 0 if there is no usable dump.  The
+// dump is NEVER authoritative over the WAL: every doubt costs a full
+// replay, never wrong data.
 static uint64_t kv_idx_try_load(AimlKv* kv) {
     kv_idx_detach(kv);
     if (!kv->index_dump || kv->idx_path.empty() || !kv->wal_mmap) return 0;
@@ -1504,22 +1504,22 @@ static uint64_t kv_idx_try_load(AimlKv* kv) {
     const AimlKvWalHeader* wh = (const AimlKvWalHeader*)kv->wal_mmap;
     if (h->wal_version != wh->version)               return verwerfen();
 
-    // Dateiidentitaet: der Checkpoint schreibt die WAL als Temp-Datei und zieht
-    // sie per rename herueber, die Inode wechselt also genau dann, wenn sich
-    // die Offsets verschieben.
+    // File identity: the checkpoint writes the WAL as a temp file and moves it
+    // over with rename, so the inode changes exactly when
+    // the offsets shift.
     struct stat ws{};
     if (fstat(kv->wal_fd, &ws) != 0)                 return verwerfen();
     if ((uint64_t)ws.st_dev != h->wal_dev)           return verwerfen();
     if ((uint64_t)ws.st_ino != h->wal_ino)           return verwerfen();
 
-    // Inhalt: faellt auch auf `cp fremd ziel`, das die Inode des Ziels behaelt.
+    // Content: also catches `cp foreign target`, which keeps the target's inode.
     const uint64_t fp = kv_idx_fingerprint((const uint8_t*)kv->wal_mmap,
                                            sizeof(AimlKvWalHeader), (size_t)h->wal_used);
     if (fp != h->wal_fp)                             return verwerfen();
 
-    // Aufbau pruefen, BEVOR Zeiger gesetzt werden: Eintragsfeld und
-    // Schluesselblock muessen in die Datei passen.  Ein zu kleines count waere
-    // harmlos, ein zu grosses laese hinter dem Dateiende.
+    // Check the layout BEFORE pointers are set: the entry array and
+    // the key block must fit into the file.  Too small a count would be
+    // harmless, too large a one would read beyond the end of the file.
     const uint64_t count  = h->count;
     const size_t   arr_at = sizeof(AimlKvIdxHeader);
     if (msize < arr_at) return verwerfen();
@@ -1530,7 +1530,7 @@ static uint64_t kv_idx_try_load(AimlKv* kv) {
     const AimlKvIdxEntry* ents = (const AimlKvIdxEntry*)((const char*)m + arr_at);
     const char* keys = (const char*)m + keys_at;
     const size_t keys_len = msize - keys_at;
-    // Jeder Schluessel muss im Block liegen, jeder Wert in der WAL.
+    // Every key must lie in the block, every value in the WAL.
     for (uint64_t i = 0; i < count; i++) {
         const AimlKvIdxEntry& e = ents[i];
         if ((size_t)e.key_off > keys_len || (size_t)e.key_len > keys_len - e.key_off) return verwerfen();
@@ -1545,7 +1545,7 @@ static uint64_t kv_idx_try_load(AimlKv* kv) {
     return h->wal_used;
 }
 
-// Binaere Suche im gemappten Dump -- kein Aufbau, keine Allokation.
+// Binary search in the mapped dump -- no build-up, no allocation.
 static bool kv_idx_find(AimlKv* kv, const char* key, size_t key_len, AimlKvValueLoc* out) {
     if (!kv->idx_entries || kv->idx_count == 0) return false;
     uint64_t lo = 0, hi = kv->idx_count;
@@ -1559,7 +1559,7 @@ static bool kv_idx_find(AimlKv* kv, const char* key, size_t key_len, AimlKvValue
     return false;
 }
 
-// Ueberlauf zuerst, dann Dump.  Ein Grabstein im Ueberlauf verdeckt den Dump.
+// Overflow first, then the dump.  A tombstone in the overflow hides the dump.
 static bool kv_lookup(AimlKv* kv, const char* key, size_t key_len, AimlKvValueLoc* out) {
     const std::string k(key, key_len);
     auto it = kv->index.find(k);
@@ -1577,13 +1577,13 @@ static inline bool kv_lookup(AimlKv* kv, const char* key, AimlKvValueLoc* out) {
     return kv_lookup(kv, key, key ? strlen(key) : 0, out);
 }
 
-// ── Index-Dump: Schreiben (spec/31 §6.2.1) ─────────────────────────────────
-// Nur bei checkpoint.  Dort wird die WAL neu geschrieben, alle Offsets aendern
-// sich.  `items` traegt ALLE lebenden Eintraege; die Zeiger muessen bis zur
-// Rueckkehr leben.  Rueckgabe true = die Datei steht.  false heisst nicht
-// "Daten verloren", sondern "kein Dump": der naechste Start ist langsam, nicht
-// falsch -- der Aufrufer muss dann aber den Ueberlauf tragen (spec/31 §6.2.1,
-// "Nach dem Checkpoint gibt der Store den RAM-Index her", Rueckfall).
+// ── Index dump: writing (spec/31 §6.2.1) ───────────────────────────────────
+// Only at checkpoint.  There the WAL is rewritten, all offsets
+// change.  `items` carries ALL live entries; the pointers must live until
+// return.  Return true = the file is in place.  false does not mean
+// "data lost" but "no dump": the next start is slow, not
+// wrong -- but then the caller must carry the overflow (spec/31 §6.2.1,
+// "After the checkpoint the store gives up its RAM index", fallback).
 static bool kv_idx_write_items(
         AimlKv* kv,
         std::vector<std::pair<std::string, AimlKvValueLoc>>& items) {
@@ -1592,10 +1592,10 @@ static bool kv_idx_write_items(
 
     size_t key_bytes = 0;
     for (auto& it : items) key_bytes += it.first.size();
-    // key_off ist 32 Bit.  Bei mehr als 4 GiB Schluesselbytes gibt es keinen
-    // Dump -- lieber kein Dump als ein stiller Ueberlauf.
+    // key_off is 32 bits.  With more than 4 GiB of key bytes there is no
+    // dump -- better no dump than a silent overflow.
     if (key_bytes > 0xFFFFFFFFull) return false;
-    // An der Liste selbst sortiert, nicht an einer Zeigerliste daneben.
+    // Sorted on the list itself, not on a pointer list next to it.
     std::sort(items.begin(), items.end(),
               [](const auto& a, const auto& b) { return a.first < b.first; });
 
@@ -1621,10 +1621,10 @@ static bool kv_idx_write_items(
 
     bool ok = (write(fd, &h, sizeof(h)) == (ssize_t)sizeof(h));
 
-    // Eintraege, danach der Schluesselblock in derselben Reihenfolge.  Beides
-    // laeuft durch einen 1-MiB-Puffer: ein eigener Eintragsvektor waere bei
-    // Millionen Schluesseln eine dritte Kopie derselben Liste, und genau diese
-    // Kopien soll §6.2.1 "Nach dem Checkpoint" einsparen.
+    // Entries, then the key block in the same order.  Both
+    // run through a 1 MiB buffer: an entry vector of its own would, with
+    // millions of keys, be a third copy of the same list, and exactly these
+    // copies are what §6.2.1 "After the checkpoint" is meant to save.
     std::string buf;
     buf.reserve(1u << 20);
     auto spuel = [&](bool erzwingen) {
@@ -1656,8 +1656,8 @@ static bool kv_idx_write_items(
     if (!ok) { close(fd); unlink(tmp.c_str()); return false; }
     fsync(fd);
     close(fd);
-    // Atomar einhaengen, wie der Checkpoint die WAL: ein halb geschriebener
-    // Dump darf nie unter dem Namen stehen.
+    // Link in atomically, as the checkpoint does with the WAL: a half-written
+    // dump must never stand under the name.
     if (rename(tmp.c_str(), kv->idx_path.c_str()) != 0) {
         unlink(tmp.c_str());
         return false;
@@ -1666,12 +1666,12 @@ static bool kv_idx_write_items(
 }
 
 
-// ALLE lebenden Eintraege: Ueberlauf (ohne Grabsteine), dann Dump (ohne die vom
-// Ueberlauf verdeckten).  Wer ueber einen persistenten Kv laeuft, MUSS das hier
-// benutzen und nicht kv->index: mit Dump steht im Ueberlauf nur, was seit dem
-// letzten Checkpoint geschrieben wurde -- bei einem frisch geoeffneten Store
-// also nichts.  Genau daran ist das Auffuellen der Nebenindizes zuerst
-// gescheitert (0 statt 682593 Fakten, gemessen 06.11.2026).
+// ALL live entries: overflow (without tombstones), then the dump (without those hidden by the
+// overflow).  Whoever iterates over a persistent Kv MUST use this and
+// not kv->index: with a dump the overflow only holds what has been written since the
+// last checkpoint -- for a freshly opened store
+// therefore nothing.  Exactly this is where filling the secondary indexes first
+// failed (0 instead of 682593 facts, measured 2026-11-06).
 template <typename F>
 static void kv_for_each_live(AimlKv* kv, F&& fn) {
     for (auto& kvp : kv->index) {
@@ -1686,9 +1686,9 @@ static void kv_for_each_live(AimlKv* kv, F&& fn) {
     }
 }
 
-// Lebende Eintraege zaehlen.  Ohne Dump ist es die Groesse des Ueberlaufs, mit
-// Dump dessen Zahl, korrigiert um die Eintraege, die der Ueberlauf verdeckt
-// oder hinzufuegt.
+// Count live entries.  Without a dump it is the size of the overflow, with
+// a dump the dump's count, corrected by the entries the overflow hides
+// or adds.
 static int32_t kv_live_count(AimlKv* kv) {
     if (!kv->idx_entries) return (int32_t)kv->index.size();
     int64_t n = (int64_t)kv->idx_count;
@@ -1700,7 +1700,7 @@ static int32_t kv_live_count(AimlKv* kv) {
     return n < 0 ? 0 : (int32_t)n;
 }
 
-// Rueckfallweg: Index per read() aufbauen, wenn kein mmap vorliegt.
+// Fallback route: build the index with read() if there is no mmap.
 static void kv_wal_replay_fd(AimlKv* kv) {
     lseek(kv->wal_fd, (off_t)sizeof(AimlKvWalHeader), SEEK_SET);
     off_t last_good_pos = (off_t)sizeof(AimlKvWalHeader);
@@ -1734,13 +1734,13 @@ static void kv_wal_replay_fd(AimlKv* kv) {
     kv->wal_used = (uint64_t)last_good_pos;
 }
 
-// Index aus der WAL aufbauen.  Die Datei ist hier schon gemappt -- alle drei
-// Aufrufstellen rufen kv_mmap_attach davor --, darum laeuft der Aufbau ueber den
-// mmap-Zeiger.  Bis 06.11.2026 las diese Schleife jedes Feld mit eigenem read()
-// plus lseek: fuenf Syscalls je Satz, bei 5,8 Mio Saetzen eines cai-Teilgraphen
-// rund 29 Mio Syscalls fuer 63 s Startzeit -- fuer Bytes, die bereits im
-// Adressraum lagen.  Gemessen war das die GESAMTE Abfragezeit: `graph stats`,
-// `ask` und ein Namensschlag lagen auf demselben Wert.
+// Build the index from the WAL.  The file is already mapped here -- all three
+// call sites call kv_mmap_attach before --, so the build runs via the
+// mmap pointer.  Until 2026-11-06 this loop read every field with its own read()
+// plus lseek: five syscalls per record, with 5.8 million records of a cai subgraph
+// around 29 million syscalls for 63 s of start time -- for bytes that were already in
+// the address space.  Measured, that was the ENTIRE query time: `graph stats`,
+// `ask` and a name lookup were at the same value.
 static void kv_wal_replay(AimlKv* kv, size_t from) {
     const uint8_t* base = (const uint8_t*)kv->wal_mmap;
     if (!base || kv->wal_mmap_size <= sizeof(AimlKvWalHeader)) {
@@ -1748,8 +1748,8 @@ static void kv_wal_replay(AimlKv* kv, size_t from) {
         return;
     }
     const size_t n = kv->wal_mmap_size;
-    // from > 0: ein brauchbarer Dump deckt alles davor ab, nachgespielt wird
-    // nur der Rest (spec/31 §6.2.1).
+    // from > 0: a usable dump covers everything before it, only
+    // the rest is replayed (spec/31 §6.2.1).
     size_t p        = from ? from : sizeof(AimlKvWalHeader);
     if (p < sizeof(AimlKvWalHeader) || p > n) p = sizeof(AimlKvWalHeader);
     size_t last_good = p;
@@ -1774,9 +1774,9 @@ static void kv_wal_replay(AimlKv* kv, size_t from) {
         } else if (op == KV_WAL_DELETE) {
             std::string key((const char*)base + key_at, key_len);
             if (kv->idx_entries) {
-                // Dump aktiv: der Schluessel kann dort stehen.  Loeschen im
-                // Ueberlauf wuerde ihn nach dem Neustart wieder hervorholen --
-                // es braucht einen Grabstein, der den Dump verdeckt.
+                // Dump active: the key can be in it.  Deleting in the
+                // overflow would bring it back after a restart --
+                // it needs a tombstone that hides the dump.
                 if (kv->ser_nodes) kv_decoded_evict(kv, key);
                 kv->index[key] = AimlKvValueLoc{KV_IDX_TOMB, 0};
             } else {
@@ -1788,16 +1788,16 @@ static void kv_wal_replay(AimlKv* kv, size_t from) {
             }
             p = key_at + key_len;
         } else {
-            break;  // unbekannter op -- auch der Nullbereich einer sparse-Datei
+            break;  // unknown op -- also the zero range of a sparse file
         }
         last_good = p;
     }
     kv->wal_used = (uint64_t)last_good;
 }
 
-// Getrennte _idx-Einsprungpunkte statt geaenderter Signatur: getFunction im
-// Compiler prueft Signaturen NICHT (erster Deklarierer gewinnt), und
-// aiml_db_kv_open_persist wird auch in tensor_runtime.cpp deklariert.
+// Separate _idx entry points instead of a changed signature: getFunction in the
+// compiler does NOT check signatures (the first declarer wins), and
+// aiml_db_kv_open_persist is also declared in tensor_runtime.cpp.
 static void* kv_open_persist_impl(const char* name, int64_t val_size,
                                   const char* base_path, bool index_dump) {
     std::string dir = resolve_aiondb_dir(base_path);
@@ -1840,8 +1840,8 @@ static void* kv_open_persist_impl(const char* name, int64_t val_size,
             delete kv;
             return nullptr;
         }
-        // spec/31 §6.2.1: liegt ein brauchbarer Dump vor, wird nur der WAL-Rest
-        // ab seinem Wasserstand nachgespielt -- sonst alles.
+        // spec/31 §6.2.1: if there is a usable dump, only the rest of the WAL from its
+        // high-water mark is replayed -- otherwise everything.
         kv_wal_replay(kv, kv_idx_try_load(kv));
     }
     kv->store_name = registry_key;
@@ -1912,9 +1912,9 @@ extern "C" int32_t aiml_db_kv_checkpoint(void* kv_ptr) {
     size_t old_mmap_size = kv->wal_mmap_size;
     int    old_fd        = kv->wal_fd;
     auto   old_index     = std::move(kv->index);
-    // spec/31 §6.2.1: die Dump-Eintraege zeigen ebenfalls in old_mmap und
-    // muessen mit umkopiert werden.  Wuerde der Checkpoint nur den Ueberlauf
-    // durchlaufen, verlore er alles, was NUR im Dump steht -- also fast alles.
+    // spec/31 §6.2.1: the dump entries also point into old_mmap and
+    // must be copied over as well.  If the checkpoint only iterated over the overflow,
+    // it would lose everything that is ONLY in the dump -- i.e. almost everything.
     const AimlKvIdxEntry* old_ents  = kv->idx_entries;
     const char*           old_keys  = kv->idx_keys;
     const uint64_t        old_count = kv->idx_count;
@@ -1933,22 +1933,22 @@ extern "C" int32_t aiml_db_kv_checkpoint(void* kv_ptr) {
     kv->index.clear();
     kv->blob_only = blob_only_save;  // preserve mode through rewrite
 
-    // Mit Dump sammeln die neuen Orte in einer LISTE statt im Ueberlauf: grob
-    // 60 Byte je Schluessel gegen 434 in der unordered_map, und der Ueberlauf
-    // bleibt danach leer (spec/31 §6.2.1, "Nach dem Checkpoint gibt der Store
-    // den RAM-Index her").  Ohne Dump bleibt der Ueberlauf der Index.
+    // With a dump, the new locations are collected in a LIST instead of in the overflow: roughly
+    // 60 bytes per key against 434 in the unordered_map, and the overflow
+    // stays empty afterwards (spec/31 §6.2.1, "After the checkpoint the store
+    // gives up its RAM index").  Without a dump the overflow stays the index.
     const bool want_dump = kv->index_dump && !kv->idx_path.empty();
     std::vector<std::pair<std::string, AimlKvValueLoc>> frisch;
     if (want_dump) frisch.reserve((size_t)old_count + old_index.size());
 
     // 4. Copy each record from old mmap → temp via kv_wal_write_* (uses memcpy
     //    into temp_mmap; kv_mmap_grow handles overflow within temp).
-    //    Zuerst der Dump, ohne die vom Ueberlauf verdeckten Schluessel; dann der
-    //    Ueberlauf ohne Grabsteine.  Jeder Schluessel landet so genau einmal.
+    //    First the dump, without the keys hidden by the overflow; then the
+    //    overflow without tombstones.  That way every key lands exactly once.
     for (uint64_t i = 0; i < old_count; i++) {
         const AimlKvIdxEntry& e = old_ents[i];
         std::string k(old_keys + e.key_off, e.key_len);
-        if (old_index.find(k) != old_index.end()) continue;  // Wert oder Grabstein im Ueberlauf
+        if (old_index.find(k) != old_index.end()) continue;  // value or tombstone in the overflow
         const void* old_val = (const char*)old_mmap + e.val_off;
         if (blob_only_save) {
             kv_wal_write_set_blob(kv, k.c_str(), old_val, e.val_len);
@@ -1971,8 +1971,8 @@ extern "C" int32_t aiml_db_kv_checkpoint(void* kv_ptr) {
         if (want_dump) frisch.emplace_back(k, loc);
         else           kv->index[k] = loc;
     }
-    // Der alte Ueberlauf ist abgeschrieben.  Mit Dump senkt das die Spitze um
-    // genau den Posten, den dieser Abschnitt sparen will.
+    // The old overflow is written off.  With a dump this lowers the peak by
+    // exactly the item this section wants to save.
     if (want_dump) { old_index.clear(); old_index.rehash(0); }
 
     // 5. Persist + sync temp
@@ -1990,24 +1990,24 @@ extern "C" int32_t aiml_db_kv_checkpoint(void* kv_ptr) {
             temp_path.c_str(), kv->wal_path.c_str(), errno);
         _exit(1);
     }
-    // 8. Alten Dump freigeben (seine Offsets zeigen in die eben geloeschte
-    //    Datei) und den neuen schreiben -- spec/31 §6.2.1 schreibt den Dump
-    //    ausschliesslich hier, weil hier die Offsets entstehen.  Erst NACH dem
-    //    rename, damit fstat die endgueltige Inode liefert.
+    // 8. Release the old dump (its offsets point into the file that was just
+    //    deleted) and write the new one -- spec/31 §6.2.1 writes the dump
+    //    exclusively here, because this is where the offsets come into being.  Only AFTER the
+    //    rename, so that fstat delivers the final inode.
     if (old_idx_mmap) munmap(old_idx_mmap, old_idx_mmap_size);
     if (want_dump) {
         const bool steht = kv_idx_write_items(kv, frisch);
-        // Erst laden, dann erst darf der Ueberlauf leer bleiben.  Laedt der
-        // frische Dump NICHT, muss der Ueberlauf aus der Liste aufgefuellt
-        // werden, bevor die Sperre faellt -- ein Store mit leerem Ueberlauf und
-        // ohne gueltigen Dump haette seinen ganzen Inhalt verloren, ohne dass
-        // eine Zeile fehlt (spec/31 §6.2.1, Rueckfall).
+        // Load first; only then may the overflow stay empty.  If the
+        // fresh dump does NOT load, the overflow must be filled from the list
+        // before the lock is released -- a store with an empty overflow and
+        // without a valid dump would have lost its entire content without
+        // a single line missing (spec/31 §6.2.1, fallback).
         if (!steht || kv_idx_try_load(kv) != kv->wal_used) {
             for (auto& p : frisch) kv->index[std::move(p.first)] = p.second;
         }
     }
-    // 9. Und die Nebenindizes (spec/45 "Geschrieben wird beim Checkpoint") --
-    //    mit dem Stempel der eben umbenannten WAL, also nach dem Primaerindex.
+    // 9. And the secondary indexes (spec/45 "Writing happens at checkpoint time") --
+    //    with the stamp of the WAL that was just renamed, i.e. after the primary index.
     kv_sidx_write_all(kv);
     return 0;
 }
@@ -2040,9 +2040,9 @@ extern "C" void aiml_db_kv_reload(void* kv_ptr) {
     kv->blob_only = false;  // reset — WAL replay will set it again if needed
     // Replay WAL. Append-position is tracked in kv->wal_used,
     // do NOT SEEK_END the fd — after ftruncate(RESERVE) it points to 16 GB.
-    // spec/31 §6.2.1: liegt ein brauchbarer Dump vor, nur den Rest ab seinem
-    // Wasserstand -- genau der Fall, fuer den reload gedacht ist (ein anderer
-    // Prozess hat angehaengt, die Inode ist dieselbe, der Dump bleibt gueltig).
+    // spec/31 §6.2.1: if there is a usable dump, only the rest from its
+    // high-water mark -- exactly the case reload is meant for (another
+    // process has appended, the inode is the same, the dump stays valid).
     kv_wal_replay(kv, kv_idx_try_load(kv));
 }
 
@@ -2096,8 +2096,8 @@ static void* kv_open_typed_persist_impl(const char* name, int64_t val_size,
             delete kv;
             return nullptr;
         }
-        // spec/31 §6.2.1: liegt ein brauchbarer Dump vor, wird nur der WAL-Rest
-        // ab seinem Wasserstand nachgespielt -- sonst alles.
+        // spec/31 §6.2.1: if there is a usable dump, only the rest of the WAL from its
+        // high-water mark is replayed -- otherwise everything.
         kv_wal_replay(kv, kv_idx_try_load(kv));
     }
     g_persistent_kvs_by_name[registry_key] = kv;
@@ -2124,7 +2124,7 @@ extern "C" void aiml_db_kv_set(void* kv_ptr, const char* key, const void* val, i
     SerGuardOn _sg_;
     if (!kv_ptr || !key) return;
     AimlKv* kv = static_cast<AimlKv*>(kv_ptr);
-    ++kv->writes;   // doc/spec/99 F99-5: Zaehler, kein Zeitstempel (kein Uhrzugriff)
+    ++kv->writes;   // doc/spec/99 F99-5: a counter, not a timestamp (no clock access)
     std::lock_guard<std::mutex> lock(kv->mtx);
     // A crippled persistent KV (its WAL could not be opened — see aiml_db_kv_open_persist)
     // has no backing store.  Refuse the write LOUDLY (once) instead of dereferencing a
@@ -2176,8 +2176,8 @@ extern "C" void aiml_db_kv_set(void* kv_ptr, const char* key, const void* val, i
         const char* str = val ? static_cast<const char*>(val) : "";
         uint32_t slen_with_nul = (uint32_t)strlen(str) + 1;  // include \0
         if (kv->persistent && kv->wal_fd >= 0) {
-            // String-Mode persistent: WAL haelt strlen+1 Bytes inkl. \0,
-            // damit kv_get einen direkten mmap-Pointer als C-String liefert.
+            // String mode, persistent: the WAL holds strlen+1 bytes incl. \0,
+            // so that kv_get returns a direct mmap pointer as a C string.
             kv_wal_write_set(kv, key, str, slen_with_nul);
             uint64_t value_offset = kv->wal_used - slen_with_nul;
             kv->index[key] = AimlKvValueLoc{value_offset, slen_with_nul};
@@ -2214,7 +2214,7 @@ extern "C" void* aiml_db_kv_get(void* kv_ptr, const char* key) {
     AimlKv* kv = static_cast<AimlKv*>(kv_ptr);
     std::lock_guard<std::mutex> lock(kv->mtx);
     if (kv->persistent) {
-        // Index-Pfad (Schritt 3)
+        // index path (step 3)
         AimlKvValueLoc loc{};
         if (!kv_lookup(kv, key, &loc)) return nullptr;
         const char* val_ptr = (const char*)kv->wal_mmap + loc.offset;
@@ -2232,8 +2232,8 @@ extern "C" void* aiml_db_kv_get(void* kv_ptr, const char* key) {
                 // (Zeroed slot rather than nullptr → ptr<T> view callers don't null-deref.)
                 aiml_ser_free_decoded(decoded.data(), kv->ser_nodes, kv->ser_n);
                 decoded.assign((size_t)kv->val_size, 0);
-                // Container-Handles wiederherstellen — ein genulltes Feld ist nie
-                // gueltig (siehe get_copy_at).  Ohne das stuerzt der erste `.len` ab.
+                // Restore container handles — a zeroed field is never
+                // valid (see get_copy_at).  Without this the first `.len` crashes.
                 aiml_ser_init_empty_containers(decoded.data(), kv->ser_nodes, kv->ser_n);
             }
             auto& cached = kv->decoded_cache[key];
@@ -2242,11 +2242,11 @@ extern "C" void* aiml_db_kv_get(void* kv_ptr, const char* key) {
             kv_decoded_lru_trim(kv);
             return cached.data();
         }
-        // String / Blob / Fixed: Pointer direkt in mmap (zero-copy).
-        // String hat \0-Terminator innerhalb der length Bytes (Schritt 4).
+        // String / blob / fixed: pointer directly into the mmap (zero-copy).
+        // The string has its \0 terminator within the length bytes (step 4).
         return (void*)val_ptr;
     }
-    // Non-persistent: legacy map-Pfad
+    // Non-persistent: legacy map path
     auto it = kv->map.find(key);
     if (it == kv->map.end()) return nullptr;
     if (kv->ser_nodes) {
@@ -2307,8 +2307,8 @@ extern "C" void* aiml_db_kv_get_copy(void* kv_ptr, const char* key) {
                 // Corrupt blob: free partial heap, publish a CLEAN zeroed slot (P0.3).
                 aiml_ser_free_decoded(decoded.data(), kv->ser_nodes, kv->ser_n);
                 decoded.assign((size_t)kv->val_size, 0);
-                // Container-Handles wiederherstellen — ein genulltes Feld ist nie
-                // gueltig (siehe get_copy_at).  Ohne das stuerzt der erste `.len` ab.
+                // Restore container handles — a zeroed field is never
+                // valid (see get_copy_at).  Without this the first `.len` crashes.
                 aiml_ser_init_empty_containers(decoded.data(), kv->ser_nodes, kv->ser_n);
             }
             auto& slot = kv->decoded_cache[key];
@@ -2428,9 +2428,9 @@ extern "C" void aiml_db_kv_delete(void* kv_ptr, const char* key) {
         kv_wal_write_delete(kv, key);
         if (kv->ser_nodes) kv_decoded_evict(kv, key);
         if (kv->idx_entries) {
-            // spec/31 §6.2.1: steht der Schluessel im Dump, muss ein Grabstein
-            // ihn verdecken -- ein erase im Ueberlauf wuerde ihn beim naechsten
-            // Lookup aus dem Dump zurueckholen.
+            // spec/31 §6.2.1: if the key is in the dump, a tombstone must
+            // hide it -- an erase in the overflow would fetch it back from the dump
+            // on the next lookup.
             kv->index[key] = AimlKvValueLoc{KV_IDX_TOMB, 0};
         } else {
             kv->index.erase(key);
@@ -2481,7 +2481,7 @@ extern "C" void* aiml_db_kv_get_blob(void* kv_ptr, const char* key, int32_t* out
         if (out_size) *out_size = (int32_t)loc.length;
         return (void*)((const char*)kv->wal_mmap + loc.offset);
     }
-    // Non-persistent: legacy map-Pfad
+    // Non-persistent: legacy map path
     auto it = kv->map.find(key);
     if (it == kv->map.end()) { if (out_size) *out_size = 0; return nullptr; }
     if (out_size) *out_size = (int32_t)it->second.size();
@@ -2509,7 +2509,7 @@ extern "C" void aiml_db_kv_clear(void* kv_ptr) {
             // the store in a zombie state where writes silently fail.
             _exit(1);
         }
-        // wal_used wurde von kv_mmap_attach aus dem Header gelesen
+        // wal_used was read from the header by kv_mmap_attach
     }
     // Decoded-Cache leeren (typed)
     kv_decoded_clear_all(kv);
@@ -2524,17 +2524,17 @@ extern "C" void aiml_db_kv_clear(void* kv_ptr) {
     kv->index.clear();
     kv->map.clear();
     kv->blob_only = false;
-    // spec/31 §6.2.1: ein liegengebliebener Dump wuerde den geleerten Store
-    // beim naechsten Oeffnen wieder bevoelkern.  Der Fingerabdruck faellt zwar
-    // ohnehin darauf, aber sich auf eine Pruefung zu verlassen, wo Loeschen
-    // eindeutig ist, waere nachlaessig.
+    // spec/31 §6.2.1: a dump left lying around would repopulate the emptied store
+    // on the next open.  The fingerprint would catch it anyway,
+    // but relying on a check where deletion is
+    // unambiguous would be careless.
     if (kv->index_dump) {
         kv_idx_detach(kv);
         if (!kv->idx_path.empty()) unlink(kv->idx_path.c_str());
     }
-    // Die Nebenindizes gehoeren zum Store: ein geleerter Store darf keine
-    // Treffer mehr liefern (spec/45).  Gilt auch ohne index_dump -- dann ist
-    // nur nichts zu loeschen.
+    // The secondary indexes belong to the store: an emptied store must not
+    // return hits any more (spec/45).  Applies without index_dump too -- then
+    // there is just nothing to delete.
     kv_sidx_unlink_all(kv);
 }
 
@@ -2550,10 +2550,10 @@ extern "C" void aiml_db_kv_evict(void* kv_ptr) {
     // Decoded-cache (typed) freigeben
     kv_decoded_clear_all(kv);
     if (kv->persistent) {
-        // 1) Mapping auf das tatsaechliche WAL-Ende schrumpfen → virt
-        //    address space wird zurueckgegeben, apparent file size sinkt.
-        // 2) Auf der verbleibenden Region madvise(MADV_DONTNEED) → RSS faellt.
-        // Index bleibt intakt; Reads paginate die Daten on-demand zurueck.
+        // 1) Shrink the mapping to the actual end of the WAL → virtual
+        //    address space is returned, the apparent file size drops.
+        // 2) madvise(MADV_DONTNEED) on the remaining region → RSS drops.
+        // The index stays intact; reads page the data back in on demand.
         long page = sysconf(_SC_PAGESIZE);
         if (page <= 0) page = 4096;
         if (kv->wal_mmap && kv->wal_used > 0) {
@@ -2567,11 +2567,11 @@ extern "C" void aiml_db_kv_evict(void* kv_ptr) {
                 if (p != MAP_FAILED) {
                     kv->wal_mmap      = p;
                     kv->wal_mmap_size = aligned_used;
-                    // ftruncate gibt apparent file size zurueck — Antigravity-friendly
+                    // ftruncate gives back the apparent file size — Antigravity-friendly
                     ftruncate(kv->wal_fd, (off_t)aligned_used);
                 }
-                // mremap-shrink Fehler ignorieren — Daten bleiben gueltig,
-                // nur der Footprint bleibt im current state
+                // ignore mremap-shrink errors — the data stays valid,
+                // only the footprint stays in its current state
             }
             (void)madvise(kv->wal_mmap, kv->wal_mmap_size, MADV_DONTNEED);
         }
@@ -2587,7 +2587,7 @@ extern "C" void aiml_db_kv_evict(void* kv_ptr) {
         kv->index.clear();
         kv->map.clear();
     }
-    // NOTE: WAL fd, mmap, Datei und (fuer persistent) der Index bleiben intakt
+    // NOTE: WAL fd, mmap, file and (for persistent) the index stay intact
 }
 
 
@@ -2605,17 +2605,17 @@ struct AimlIterator {
     std::unordered_map<std::string, AimlKvValueLoc>::iterator idx_end;
     std::unordered_map<std::string, std::vector<uint8_t>>::iterator map_cur;
     std::unordered_map<std::string, std::vector<uint8_t>>::iterator map_end;
-    // ── Index-Dump (spec/31 §6.2.1) ────────────────────────────────────────
-    // Mit Dump laeuft erst der Ueberlauf, dann der Dump ohne die von ihm
-    // verdeckten Schluessel.  Dump-Schluessel stehen im mmap OHNE \0, ein
-    // Zeiger darauf waere keine gueltige C-Zeichenkette -- darum je Schritt
-    // eine Kopie.  Ohne Dump bleibt der alte Weg unberuehrt, damit sich die
-    // Haltbarkeit der zurueckgegebenen Zeiger nicht aendert.
+    // ── Index dump (spec/31 §6.2.1) ────────────────────────────────────────
+    // With a dump the overflow runs first, then the dump without the keys hidden
+    // by it.  Dump keys are in the mmap WITHOUT \0, a
+    // pointer to them would not be a valid C string -- hence one
+    // copy per step.  Without a dump the old route stays untouched, so that the
+    // lifetime of the returned pointers does not change.
     bool        dump_path = false;
     uint64_t    dump_pos  = 0;
     bool        have      = false;
     std::string cur_key;   // naechster Schluessel
-    std::string ret_key;   // zuletzt zurueckgegebener, bis zum naechsten Aufruf
+    std::string ret_key;   // the last one returned, valid until the next call
 };
 
 // Naechsten lebenden Schluessel bereitstellen: Ueberlauf vor Dump.
@@ -2626,7 +2626,7 @@ static void iter_kv_advance(AimlIterator* it) {
         const std::string key  = it->idx_cur->first;
         const uint64_t    off  = it->idx_cur->second.offset;
         ++it->idx_cur;
-        if (off == KV_IDX_TOMB) continue;   // Grabstein ist kein Eintrag
+        if (off == KV_IDX_TOMB) continue;   // a tombstone is not an entry
         it->cur_key = key;
         it->have    = true;
         return;
@@ -3091,43 +3091,43 @@ extern "C" void aiml_db_store_query(void* store_ptr, void* pred_fn,
 // a 1:N map<field_val, vector<kv_key>> with set semantics (idempotent add,
 // no duplicate kv_keys per field_val — see backlog Edge-Cases).
 
-// Ein Bucket des 1:N-Index: die kv-Schluessel in EINFUEGEREIHENFOLGE, dazu die
-// Stelle jedes Schluessels darin.  spec/45 "Cost of index maintenance": add und
-// remove sind O(1) amortisiert, unabhaengig von der Bucketgroesse.
+// A bucket of the 1:N index: the kv keys in INSERTION ORDER, plus the
+// position of every key in it.  spec/45 "Cost of index maintenance": add and
+// remove are amortised O(1), independent of the bucket size.
 //
-// Vorher war der Bucket ein nackter vector<string>: `add` suchte ihn mit
-// std::find nach Duplikaten ab, `remove` verschob ihn mit std::remove — beides
-// O(Bucket) je kv.set.  Ein Bucket haelt alle Zeilen, die EINEN Feldwert
-// tragen, also waechst er bei einem Feld mit wenigen verschiedenen Werten auf
-// die Groesse des Speichers, und ein Schreibstapel wurde quadratisch: je 4000
-// set 487 ms bei 4k Zeilen und 4608 ms bei 24k (cai 2026-11-04, deutsche
-// Wikipedia: ein 69-s-Stapel war nach 600 s nicht fertig).
+// Previously the bucket was a bare vector<string>: `add` searched it with
+// std::find for duplicates, `remove` shifted it with std::remove — both
+// O(bucket) per kv.set.  A bucket holds all rows that carry ONE field value,
+// so for a field with few distinct values it grows to
+// the size of the store, and a write batch became quadratic: per 4000
+// sets, 487 ms with 4k rows and 4608 ms with 24k (cai 2026-11-04, German
+// Wikipedia: a 69 s batch was not finished after 600 s).
 //
-// `remove` setzt ein Grab statt zu verschieben und verdichtet erst, wenn die
-// Graeber die lebenden Eintraege ueberwiegen — damit bleibt die Reihenfolge
-// erhalten, und das Verdichten kostet amortisiert O(1).  Ein Grab ist nicht am
-// leeren Schluessel erkennbar ("" ist ein zulaessiger kv-Schluessel), sondern
-// an seiner eigenen Marke.
+// `remove` sets a grave instead of shifting and only compacts when the
+// graves outnumber the live entries — that way the order is
+// preserved, and compacting costs amortised O(1).  A grave is not recognisable by
+// the empty key ("" is a legitimate kv key), but
+// by its own marker.
 struct AimlIndexBucket {
-    // `pos` BESITZT die Schluessel, `slots` zeigt auf seine Knoten: die Knoten
-    // einer unordered_map sind stabil (ein Rehash verschiebt sie nicht), und so
-    // liegt jeder Schluessel nur EINMAL im Speicher.  Ein Grab ist nullptr —
-    // am leeren Schluessel waere es nicht erkennbar, "" ist ein zulaessiger
-    // kv-Schluessel.  Wer einen Slot raeumt, raeumt ihn VOR dem pos.erase.
+    // `pos` OWNS the keys, `slots` points to its nodes: the nodes
+    // of an unordered_map are stable (a rehash does not move them), and so
+    // every key is in memory only ONCE.  A grave is nullptr —
+    // it would not be recognisable by the empty key, "" is a legitimate
+    // kv key.  Whoever clears a slot clears it BEFORE the pos.erase.
     std::vector<const std::string*>         slots;  // Einfuegereihenfolge
     std::unordered_map<std::string, size_t> pos;    // Schluessel → Stelle in slots
     size_t graves = 0;
 
     void add(const char* kv_key) {
         auto [it, fresh] = pos.emplace(kv_key, slots.size());
-        if (!fresh) return;                         // schon drin — der Index ist eine Menge
+        if (!fresh) return;                         // already in — the index is a set
         slots.push_back(&it->first);
     }
-    // true, wenn der Bucket danach leer ist (der Aufrufer loescht ihn dann)
+    // true if the bucket is empty afterwards (the caller then deletes it)
     bool remove(const char* kv_key) {
         auto it = pos.find(kv_key);
         if (it == pos.end()) return pos.empty();
-        slots[it->second] = nullptr;                // vor dem erase, sonst haengt der Zeiger
+        slots[it->second] = nullptr;                // before the erase, otherwise the pointer dangles
         pos.erase(it);
         ++graves;
         if (pos.empty()) return true;
@@ -3139,18 +3139,18 @@ struct AimlIndexBucket {
         for (size_t read = 0; read < slots.size(); ++read)
             if (slots[read]) slots[write++] = slots[read];
         slots.resize(write);
-        // Nur vorhandene Schluessel neu beschriften — kein insert, also kein
-        // Rehash, also bleiben die Knoten gueltig, auf die slots zeigt.
+        // Only relabel existing keys — no insert, hence no
+        // rehash, hence the nodes that slots points to stay valid.
         for (size_t i = 0; i < slots.size(); ++i) pos[*slots[i]] = i;
         graves = 0;
     }
 };
 
-// ── Nebenindex-Dump: Format (spec/45 "Persistence") ───────────────────────
-// Eine Datei je (Store, Feld).  Die Eintraege sind nach dem NORMALISIERTEN
-// Feldwert sortiert -- genau danach sucht die Abfrage, und Schreiben und Suchen
-// muessen dieselbe Ordnung benutzen (kv_idx_cmp), sonst findet die binaere
-// Suche nichts, und zwar still.
+// ── Secondary index dump: format (spec/45 "Persistence") ───────────────────
+// One file per (store, field).  The entries are sorted by the NORMALISED
+// field value -- that is exactly what the query searches by, and writing and searching
+// must use the same order (kv_idx_cmp), otherwise the binary
+// search finds nothing, and does so silently.
 static const char     KV_SIDX_MAGIC[8] = {'A','I','M','L','K','V','S','X'};
 static const uint32_t KV_SIDX_VERSION  = 1;
 static const uint32_t KV_SIDX_F_UNIQUE = 1u << 0;
@@ -3159,10 +3159,10 @@ static const uint32_t KV_SIDX_F_LOWER  = 1u << 1;
 struct AimlSidxHeader {     // 64 Byte, natuerlich ausgerichtet
     char     magic[8];
     uint32_t version;
-    uint32_t flags;         // unique / lower -- muss zur Deklaration passen
+    uint32_t flags;         // unique / lower -- must match the declaration
     uint64_t wal_dev;
     uint64_t wal_ino;
-    uint64_t wal_used;      // Stempel der Haupt-WAL, wie spec/31 §6.2.1
+    uint64_t wal_used;      // stamp of the main WAL, as in spec/31 §6.2.1
     uint64_t wal_fp;
     uint32_t val_count;
     uint32_t key_count;
@@ -3183,10 +3183,10 @@ struct AimlIndex {
     std::unordered_map<std::string, AimlIndexBucket> map_1n;
     std::unordered_map<std::string, std::string>     map_unique;
 
-    // Nebenindex-Dump (spec/45 "Persistence").  Solange `loaded` steht,
-    // beantwortet die Datei-Abbildung jeden Feldwert, der NICHT in `owned`
-    // steht; fuer die in `owned` gilt nur noch der Speicher-Index.  Nie beide
-    // zugleich -- sonst kaeme ein Schluessel doppelt oder gar nicht.
+    // Secondary index dump (spec/45 "Persistence").  As long as `loaded` is set,
+    // the file mapping answers every field value that is NOT in `owned`;
+    // for those in `owned` only the memory index applies.  Never both
+    // at once -- otherwise a key would come twice or not at all.
     std::string path;                        // <name>__<feld>.kvsidx
     void*              dump       = nullptr;
     size_t             dump_size  = 0;
@@ -3225,7 +3225,7 @@ std::string idx_normalize(const std::string& v, const std::string& mode) {
 
 // ── Nebenindex-Dump: Lesen, Kopieren, Schreiben (spec/45 "Persistence") ────
 
-// <dir>/<name>__<feld>.kvsidx, abgeleitet aus dem WAL-Pfad.
+// <dir>/<name>__<field>.kvsidx, derived from the WAL path.
 static std::string sidx_path(AimlKv* kv, const std::string& field) {
     std::string base = kv->wal_path;
     const std::string suf = ".kvwal";
@@ -3251,7 +3251,7 @@ static void sidx_detach(AimlIndex* idx) {
     idx->loaded     = false;
 }
 
-// Binaere Suche im gemappten Dump -- kein Aufbau, keine Allokation.
+// Binary search in the mapped dump -- no build-up, no allocation.
 static const AimlSidxVal* sidx_find(const AimlIndex* idx, const std::string& k) {
     if (!idx->loaded || idx->dval_count == 0) return nullptr;
     const char* base = (const char*)idx->dump;
@@ -3266,9 +3266,9 @@ static const AimlSidxVal* sidx_find(const AimlIndex* idx, const std::string& k) 
     return nullptr;
 }
 
-// Dump pruefen und mappen.  Nimmt kv->mtx, darf also NICHT unter der
-// Registry-Sperre laufen (der Checkpoint haelt kv->mtx und greift dann in die
-// Registry -- die andere Reihenfolge waere eine Verklemmung).
+// Check and map the dump.  Takes kv->mtx, so it must NOT run under the
+// registry lock (the checkpoint holds kv->mtx and then reaches into the
+// registry -- the other order would be a deadlock).
 static bool sidx_try_load(AimlKv* kv, AimlIndex* idx, const char* field) {
     sidx_detach(idx);
     if (!kv || !field || !kv->index_dump) return false;
@@ -3289,8 +3289,8 @@ static bool sidx_try_load(AimlKv* kv, AimlIndex* idx, const char* field) {
 
     if (memcmp(h->magic, KV_SIDX_MAGIC, 8) != 0) return verwerfen();
     if (h->version != KV_SIDX_VERSION)           return verwerfen();
-    // Aus `db_indexed: true` ein `unique` oder ein "lower" gemacht: der alte
-    // Dump beschreibt eine andere Ordnung und ist unbrauchbar.
+    // `db_indexed: true` was turned into `unique` or "lower": the old
+    // dump describes a different order and is unusable.
     if (h->flags != sidx_flags(idx->unique, idx->mode)) return verwerfen();
     if (h->wal_used < sizeof(AimlKvWalHeader))   return verwerfen();
     if (h->wal_used != kv->wal_used)             return verwerfen();
@@ -3305,7 +3305,7 @@ static bool sidx_try_load(AimlKv* kv, AimlIndex* idx, const char* field) {
                                            sizeof(AimlKvWalHeader), (size_t)h->wal_used);
     if (fp != h->wal_fp)                         return verwerfen();
 
-    // Aufbau pruefen, BEVOR Zeiger gesetzt werden.
+    // Check the layout BEFORE pointers are set.
     const size_t vals_at = sizeof(AimlSidxHeader);
     if (msize < vals_at) return verwerfen();
     if ((size_t)h->val_count > (msize - vals_at) / sizeof(AimlSidxVal)) return verwerfen();
@@ -3317,9 +3317,9 @@ static bool sidx_try_load(AimlKv* kv, AimlIndex* idx, const char* field) {
 
     const AimlSidxVal* vals = (const AimlSidxVal*)((const char*)m + vals_at);
     const AimlSidxKey* keys = (const AimlSidxKey*)((const char*)m + keys_at);
-    // Jeder String muss im Stringblock liegen, mit seiner abschliessenden 0;
-    // jedes Schluesselfenster im Schluesselfeld.  Ein zu grosses count laese
-    // hinter dem Dateiende.
+    // Every string must lie in the string block, with its terminating 0;
+    // every key window in the key array.  Too large a count would read
+    // beyond the end of the file.
     for (uint32_t i = 0; i < h->val_count; i++) {
         const AimlSidxVal& v = vals[i];
         if ((size_t)v.val_off < str_at || (size_t)v.val_off >= msize)            return verwerfen();
@@ -3333,8 +3333,8 @@ static bool sidx_try_load(AimlKv* kv, AimlIndex* idx, const char* field) {
         const AimlSidxKey& ke = keys[i];
         if ((size_t)ke.key_off < str_at || (size_t)ke.key_off >= msize)          return verwerfen();
         if ((size_t)ke.key_len > msize - ke.key_off - 1)                         return verwerfen();
-        // finding_by gibt diesen Zeiger als C-String zurueck -- ohne die 0
-        // liest der Aufrufer hinter das Ende (spec/45 "Datei").
+        // finding_by returns this pointer as a C string -- without the 0
+        // the caller reads beyond the end (spec/45 "File").
         if (((const char*)m)[(size_t)ke.key_off + ke.key_len] != '\0')           return verwerfen();
     }
 
@@ -3347,12 +3347,12 @@ static bool sidx_try_load(AimlKv* kv, AimlIndex* idx, const char* field) {
     return true;
 }
 
-// Kopie je Feldwert: vor JEDER Aenderung an einem Feldwert sein Fenster aus dem
-// Dump in den Speicher-Index holen und ihn als dort gefuehrt vermerken.
-// Aufrufer haelt idx->mtx.
+// Copy per field value: before EVERY change to a field value, fetch its window from the
+// dump into the memory index and mark it as kept there.
+// The caller holds idx->mtx.
 static void sidx_materialize(AimlIndex* idx, const std::string& k) {
     if (!idx->loaded) return;
-    if (!idx->owned.insert(k).second) return;      // schon im Speicher gefuehrt
+    if (!idx->owned.insert(k).second) return;      // already kept in memory
     const AimlSidxVal* v = sidx_find(idx, k);
     if (!v) return;                                 // im Dump unbekannt
     const char* base = (const char*)idx->dump;
@@ -3370,10 +3370,10 @@ static void sidx_materialize(AimlIndex* idx, const std::string& k) {
     }
 }
 
-// Alle lebenden Paare (Feldwert, kv-Schluessel): Speicher-Index, dazu was im
-// Dump noch zustaendig ist.  Dasselbe Muster wie kv_for_each_live -- und
-// derselbe Fehler, wenn man es vergisst: eine Haelfte faellt still weg (0 statt
-// 682593 Fakten, gemessen 06.11.2026).  Aufrufer haelt idx->mtx.
+// All live pairs (field value, kv key): the memory index, plus whatever in the
+// dump is still responsible.  The same pattern as kv_for_each_live -- and
+// the same error if one forgets it: one half silently drops out (0 instead of
+// 682593 facts, measured 2026-11-06).  The caller holds idx->mtx.
 template <typename F>
 static void sidx_for_each(AimlIndex* idx, F&& fn) {
     if (idx->unique) {
@@ -3396,15 +3396,15 @@ static void sidx_for_each(AimlIndex* idx, F&& fn) {
     }
 }
 
-// Eine Nebenindex-Datei schreiben.  Nur beim Checkpoint; Aufrufer haelt
-// kv->mtx.  Scheitert es, ist das kein Fehler: ohne Dump ist das naechste
-// Oeffnen langsam, nicht falsch.
+// Write one secondary index file.  Only at checkpoint; the caller holds
+// kv->mtx.  If it fails, that is not an error: without a dump the next
+// open is slow, not wrong.
 static void sidx_write_one(AimlKv* kv, AimlIndex* idx, const std::string& field) {
     if (kv->wal_fd < 0 || !kv->wal_mmap) return;
     std::lock_guard<std::mutex> lk(idx->mtx);
 
-    // Flaches Layout: ein Feldwert-Feld, dazu alle Schluessel hintereinander.
-    // Zeiger statt Kopien -- die Maps und die Abbildung stehen unter der Sperre.
+    // Flat layout: one field-value array, plus all keys one after the other.
+    // Pointers instead of copies -- the maps and the mapping are under the lock.
     struct Tmp { const char* val; uint32_t val_len; uint32_t first, cnt; };
     std::vector<Tmp> vals;
     std::vector<std::pair<const char*, uint32_t>> keys;
@@ -3424,9 +3424,9 @@ static void sidx_write_one(AimlKv* kv, AimlIndex* idx, const std::string& field)
             }
             sammel[at].emplace_back(key, klen);
         });
-        // Die Feldwert-Zeiger muessen die der Map-Schluessel sein, nicht die
-        // der temporaeren `val`-Kopie aus sidx_for_each: dort lebt der String
-        // nur bis zum Lambda-Ende.  Darum die Namen aus nach_wert nehmen.
+        // The field-value pointers must be those of the map keys, not those
+        // of the temporary `val` copy from sidx_for_each: there the string only lives
+        // until the end of the lambda.  Hence take the names from nach_wert.
         for (auto& nw : nach_wert) {
             vals[nw.second].val     = nw.first.data();
             vals[nw.second].val_len = (uint32_t)nw.first.size();
@@ -3439,16 +3439,16 @@ static void sidx_write_one(AimlKv* kv, AimlIndex* idx, const std::string& field)
             vals[i].cnt   = (uint32_t)sammel[i].size();
             for (auto& ks : sammel[i]) keys.push_back(ks);
         }
-        // nach_wert haelt die Feldwert-Strings, bis die Datei geschrieben ist:
-        // vals[].val zeigt hinein.  Darum endet dieser Block erst nach dem
-        // Schreiben -- siehe unten.
+        // nach_wert holds the field-value strings until the file is written:
+        // vals[].val points into it.  That is why this block only ends after
+        // writing -- see below.
         if (vals.size() > 0xFFFFFFFFull || keys.size() > 0xFFFFFFFFull) return;
 
         std::sort(vals.begin(), vals.end(), [](const Tmp& a, const Tmp& b) {
             return kv_idx_cmp(a.val, a.val_len, b.val, b.val_len) < 0;
         });
 
-        // Offsets vorab rechnen, damit nichts gepuffert werden muss.
+        // Compute the offsets in advance, so that nothing has to be buffered.
         const size_t vals_at = sizeof(AimlSidxHeader);
         const size_t keys_at = vals_at + vals.size() * sizeof(AimlSidxVal);
         const size_t str_at  = keys_at + keys.size() * sizeof(AimlSidxKey);
@@ -3502,7 +3502,7 @@ static void sidx_write_one(AimlKv* kv, AimlIndex* idx, const std::string& field)
             voff += v.val_len + 1;
             run  += v.cnt;
         }
-        // Schluessel-Eintraege, in der Reihenfolge der sortierten Feldwerte.
+        // Key entries, in the order of the sorted field values.
         uint32_t koff = voff;
         for (auto& v : vals) {
             for (uint32_t i = 0; i < v.cnt; i++) {
@@ -3526,14 +3526,14 @@ static void sidx_write_one(AimlKv* kv, AimlIndex* idx, const std::string& field)
         if (!ok) { close(fd); unlink(tmp.c_str()); return; }
         fsync(fd);
         close(fd);
-        // Atomar einhaengen: ein halb geschriebener Dump darf nie unter dem
-        // Namen stehen.
+        // Link in atomically: a half-written dump must never stand under the
+        // name.
         if (rename(tmp.c_str(), pfad.c_str()) != 0) unlink(tmp.c_str());
     }
 }
 
-// Alle Nebenindizes dieses Stores.  Reihenfolge der Sperren:
-// kv->mtx (Aufrufer) -> g_index_registry_mtx -> idx->mtx.
+// All secondary indexes of this store.  Lock order:
+// kv->mtx (caller) -> g_index_registry_mtx -> idx->mtx.
 static void kv_sidx_for_all(AimlKv* kv, const std::function<void(AimlIndex*, const std::string&)>& fn) {
     std::lock_guard<std::mutex> lk(g_index_registry_mtx);
     for (auto& e : g_index_registry)
@@ -3547,11 +3547,11 @@ static void kv_sidx_write_all(AimlKv* kv) {
     });
 }
 
-// clear leert den Store -- damit muessen die Nebenindizes leer sein UND ihre
-// Dateien weg.  Ein liegengebliebener Dump wuerde den geleerten Store beim
-// naechsten Oeffnen wieder bevoelkern; der Stempel faellt zwar ohnehin darauf,
-// aber sich auf eine Pruefung zu verlassen, wo Loeschen eindeutig ist, waere
-// nachlaessig.
+// clear empties the store -- so the secondary indexes must be empty AND their
+// files gone.  A dump left lying around would repopulate the emptied store on the
+// next open; the stamp would catch it anyway,
+// but relying on a check where deletion is unambiguous would be
+// careless.
 static void kv_sidx_unlink_all(AimlKv* kv) {
     if (!kv) return;
     kv_sidx_for_all(kv, [&](AimlIndex* idx, const std::string& field) {
@@ -3576,14 +3576,14 @@ extern "C" void* aiml_db_index_open_for_kv(void* parent_kv, const char* field_na
     auto* idx = new AimlIndex();
     idx->unique = (unique != 0);
     idx->mode   = mode ? mode : "";
-    // Dump laden, BEVOR die Registry-Sperre genommen wird: das Laden braucht
-    // kv->mtx, und der Checkpoint haelt kv->mtx und greift dann in die
-    // Registry -- andere Reihenfolge waere eine Verklemmung (spec/45).
+    // Load the dump BEFORE the registry lock is taken: loading needs
+    // kv->mtx, and the checkpoint holds kv->mtx and then reaches into the
+    // registry -- the other order would be a deadlock (spec/45).
     sidx_try_load((AimlKv*)parent_kv, idx, field_name);
 
     std::lock_guard<std::mutex> lk(g_index_registry_mtx);
     auto ins = g_index_registry.emplace(IndexKey{parent_kv, field_name}, idx);
-    if (!ins.second) {                      // Rennen verloren: den fremden nehmen
+    if (!ins.second) {                      // lost the race: take the other one
         sidx_detach(idx);
         delete idx;
         return ins.first->second;
@@ -3638,12 +3638,12 @@ extern "C" void aiml_db_index_findings(void* idx_ptr, const char* field_val, voi
     std::lock_guard<std::mutex> lk(idx->mtx);
     std::string k = idx_normalize(field_val, idx->mode);
 
-    // Zeiger auf die Treffer, keine Kopie der Schluessel — die Liste wird gleich
-    // ohnehin Eintrag fuer Eintrag mit aiml_str_dup aufgebaut.  Graeber (spec/45)
-    // werden uebersprungen, die Reihenfolge bleibt die Einfuegereihenfolge.
-    // Zeiger auf 0-terminierte Schluessel -- aus dem Speicher-Index oder aus
-    // der Datei-Abbildung.  Welcher Weg gilt, entscheidet `owned`: ein Feldwert
-    // ist entweder im Speicher gefuehrt oder im Dump, nie in beidem (spec/45).
+    // Pointers to the hits, no copy of the keys — the list is built
+    // entry by entry with aiml_str_dup right afterwards anyway.  Graves (spec/45)
+    // are skipped, the order stays the insertion order.
+    // Pointers to 0-terminated keys -- from the memory index or from
+    // the file mapping.  Which route applies is decided by `owned`: a field value
+    // is kept either in memory or in the dump, never in both (spec/45).
     std::vector<const char*> hits;
     const bool im_dump = idx->loaded && idx->owned.find(k) == idx->owned.end();
     if (im_dump) {
@@ -3700,8 +3700,8 @@ extern "C" void aiml_db_index_backfill(void* kv_ptr, void* idx_ptr,
     AimlKv* kv = static_cast<AimlKv*>(kv_ptr);
     auto* idx  = (AimlIndex*)idx_ptr;
 
-    // Der Dump IST das Ergebnis des Auffuellens, gestempelt auf dieselben
-    // WAL-Bytes (spec/45 "Persistence") -- dann gibt es hier nichts zu tun.
+    // The dump IS the result of the fill, stamped onto the same
+    // WAL bytes (spec/45 "Persistence") -- then there is nothing to do here.
     {
         std::lock_guard<std::mutex> lk(idx->mtx);
         if (idx->loaded) return;
@@ -3764,20 +3764,20 @@ extern "C" void aiml_db_index_backfill(void* kv_ptr, void* idx_ptr,
         kv_for_each_live(kv, [&](const std::string& key, const AimlKvValueLoc& loc) {
             const uint8_t* val_ptr = (const uint8_t*)kv->wal_mmap + loc.offset;
             if (kv->ser_nodes) {
-                // spec/31 §6.7.3 Regel 2: nur Lesen fuellt den decoded_cache.  Ein schon
-                // dekodierter Eintrag wird MITBENUTZT (und nicht angefasst), eine selbst
-                // dekodierte Zeile gehoert in einen eigenen Puffer und wird gleich wieder
-                // freigegeben.  Vorher landete JEDE Zeile im Cache: beim Oeffnen eines
-                // Speichers mit N Zeilen haengen N dekodierte Zeilen fest (der 1024er-Bound
-                // ist dann keiner), und die LRU-Liste weiss von keiner davon — danach raeumt
-                // kv_decoded_lru_trim die Liste leer und gibt den Slot frei, den der naechste
-                // Lesevorgang zurueckgibt (cai 2026-11-04).
-                // extract_and_add kopiert Feldwert und Schluessel in den Index und behaelt
-                // keine Zeiger auf die Zeile — direkt danach freigeben ist sicher.
+                // spec/31 §6.7.3 rule 2: only reading fills the decoded_cache.  An already
+                // decoded entry is SHARED (and not touched), a row decoded here
+                // belongs in a buffer of its own and is freed again right away.
+                // Previously EVERY row ended up in the cache: when opening a
+                // store with N rows, N decoded rows got stuck (the 1024 bound
+                // then is none), and the LRU list knows about none of them — afterwards
+                // kv_decoded_lru_trim clears the list and frees the slot that the next
+                // read returns (cai 2026-11-04).
+                // extract_and_add copies the field value and key into the index and keeps
+                // no pointers to the row — freeing directly afterwards is safe.
                 auto dc = kv->decoded_cache.find(key);
                 if (dc != kv->decoded_cache.end()) {
                     extract_and_add(key, dc->second.data());
-                    return;   // naechster Eintrag (Lambda, kein continue)
+                    return;   // next entry (lambda, no continue)
                 }
                 std::vector<uint8_t> decoded((size_t)kv->val_size, 0);
                 if (aiml_ser_decode((const char*)val_ptr, decoded.data(),
@@ -3807,9 +3807,9 @@ extern "C" const char* aiml_db_index_finding(void* idx_ptr, const char* field_va
     auto* idx = (AimlIndex*)idx_ptr;
     std::lock_guard<std::mutex> lk(idx->mtx);
     std::string k = idx_normalize(field_val, idx->mode);
-    // Der Rueckgabewert ist ein C-String.  Im Dump tragen die Schluessel darum
-    // eine abschliessende 0 (spec/45 "Datei"), und sidx_try_load prueft sie --
-    // sonst laese der Aufrufer hinter das Ende der Abbildung.
+    // The return value is a C string.  In the dump the keys therefore carry
+    // a terminating 0 (spec/45 "File"), and sidx_try_load checks it --
+    // otherwise the caller would read beyond the end of the mapping.
     if (idx->loaded && idx->owned.find(k) == idx->owned.end()) {
         const AimlSidxVal* v = sidx_find(idx, k);
         if (v && v->key_cnt > 0)
@@ -3829,12 +3829,12 @@ extern "C" const char* aiml_db_index_finding(void* idx_ptr, const char* field_va
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Einblick in die GEOEFFNETEN Speicher (cosmos doc/spec/99 §99.2)
+// Insight into the OPEN stores (cosmos doc/spec/99 §99.2)
 //
-// Gezeigt werden nur offene, persistente Speicher — ein Speicher, den niemand
-// geoeffnet hat, ist kein Betriebszustand, sondern eine Datei (F99-6).  Und nur
-// KENNZAHLEN, nie Inhalte: eine Oberflaeche, die KV-Werte zeigt, zeigt frueher
-// oder spaeter ein Geheimnis (F99-7).
+// Only open, persistent stores are shown — a store that nobody has
+// opened is not operational state but a file (F99-6).  And only
+// METRICS, never contents: a UI that shows KV values will sooner
+// or later show a secret (F99-7).
 // ─────────────────────────────────────────────────────────────────────────────
 
 extern "C" int32_t aiml_db_kv_open_count(void) {
