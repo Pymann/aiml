@@ -1,173 +1,171 @@
-AIML Kontextdatei
+AIML context file
 =================
 
-Zweck
------
-Diese Datei haelt Projektwissen fest, das bei Analyse, Debugging, Compilerarbeit und Testentwurf
-nicht jedes Mal neu hergeleitet werden soll. Sie ist bewusst pragmatisch und soll typische
-Fehlannahmen verhindern.
+Purpose
+-------
+This file records project knowledge that should not have to be re-derived every time during analysis,
+debugging, compiler work and test design. It is deliberately pragmatic and is meant to prevent typical
+false assumptions.
 
 
-Wichtige Grundregeln
---------------------
+Important ground rules
+----------------------
 
-1. Nicht von allgemeiner Sprachintuition auf AIML schliessen.
-   AIML hat mehrere Eigenheiten, die sich von typischen Scriptsprachen, C++, Python oder YAML-
-   eingebetteten DSLs unterscheiden. Immer den echten Compilerpfad und vorhandene Repros beachten.
+1. Do not infer AIML behaviour from general language intuition.
+   AIML has several peculiarities that differ from typical scripting languages, C++, Python or YAML-
+   embedded DSLs. Always look at the real compiler path and existing repros.
 
-2. Spec und Implementierung sind nicht deckungsgleich.
-   Die Spec ist breiter als die aktuelle Implementierung. Bei Unklarheiten:
-   - zuerst echten Codepfad pruefen
-   - dann bestehende Reports und Repros lesen
-   - dann erst neue Aussagen treffen
+2. Spec and implementation are not congruent.
+   The spec is broader than the current implementation. When in doubt:
+   - check the real code path first
+   - then read existing reports and repros
+   - only then make new statements
 
-3. Nicht still "moderne" oder "naheliegende" Semantik hineininterpretieren.
-   Wenn ein Detail nicht verifiziert ist, nicht raten.
-
-
-Besonders wichtige AIML-Fakten
-------------------------------
-
-1. string.len ist keine Property, sondern eine Methode.
-   Richtig:
-   - { call: [my_string.len] }
-
-   Falsch:
-   - my_string.len als Attributwert
-
-   Wichtiger Hinweis:
-   - In der Spec wurde zwischen .len und .size differenziert, aber in realen Diskussionen ist
-     genau dieser Punkt oft verwechselt worden.
-   - Vor Aussagen zu len/size/string/list/map immer den aktuellen Implementierungsstand pruefen.
-
-2. Nicht jedes "dot" ist frei verschachtelbar.
-   Tiefe Member-Ketten wie a.b.c oder tiefe set-Ziele funktionieren in AIML nicht durchgaengig
-   robust. Genau deshalb gibt es viele Hilfsvariablen und Whole-Object-Reassigns.
-
-3. Importierte Globals verhalten sich nicht automatisch wie sauber geteilte Modulvariablen.
-   Hier gab es bereits reale Probleme mit mehrfachen Definitionen und `extern`-Semantik.
-   Deshalb bei globalem Zustand zwischen Dateien nie blind annehmen:
-   - "ist sicher dieselbe Instanz"
-   - "import macht das schon korrekt"
-
-4. JIT und AOT sind nicht automatisch semantisch identisch.
-   `compile()` und String-/Chunk-Pfade laufen nicht durch exakt denselben Compilerkontext.
-
-5. Mirror/WebSocket-Semantik nicht idealisieren.
-   `session.update()` war im realen Verhalten bereits enger als die intuitive Erwartung.
-   Queue-Drain, Event-Reihenfolge und WS-Framing muessen immer gegen echte Repros geprueft werden.
+3. Do not silently read "modern" or "obvious" semantics into it.
+   If a detail is not verified, do not guess.
 
 
-Modelle, Heap und Serialisierung
---------------------------------
-
-1. AIML-Builtins und Runtimepfade kuemmern sich an mehreren Stellen um Heap-getragene Pointer.
-   Das betrifft besonders:
-   - Serialisierung
-   - Mirror-Sync
-   - Modelluebergabe
-
-   Deshalb ist es falsch, pauschal anzunehmen:
-   - "pointerbasierte Modelle koennen nicht serialisiert werden"
-   - "nur stackartige Werte gehen durch Mirror"
-
-2. Trotzdem nie blind annehmen, dass jeder Pointerfall korrekt ist.
-   Die richtige Arbeitshypothese lautet:
-   - Es gibt bereits Runtime-Unterstuetzung fuer Pointer/Heap-Objekte in Builtins.
-   - Ob ein konkreter Fall funktioniert, muss am echten C++-Pfad und Repro verifiziert werden.
-
-3. Bei Modell-Sync und Serialisierung immer trennen:
-   - was das Sprachmodell verspricht
-   - was die aktuelle Runtime wirklich korrekt behandelt
-
-4. Wenn ein Fehler bei Serialisierung oder Mirror auftaucht, zuerst diese Ebenen unterscheiden:
-   - Compiler erzeugt falschen Zugriff
-   - Runtime serialisiert falsche Felder
-   - Runtime dekodiert falsch
-   - Test benutzt Objekt zu frueh
-   - Debug-Code crasht nur beim Logging
-
-
-Funktionsaufrufe und Typen
---------------------------
-
-1. Der Compiler meldet Typfehler bei Funktionsparametern nicht immer streng genug.
-   Nicht voraussetzen, dass ein falscher Parametertyp sofort als sauberer Compilerfehler endet.
-
-2. Builtins haben oft weichere oder speziellere Konvertierungspfade als User-Funktionen.
-   Aussagen ueber "AIML kann X an Funktion Y uebergeben" muessen zwischen
-   - allgemeinem Sprachverhalten
-   - Builtin-Sonderfall
-   unterscheiden.
-
-3. `map<string:any>`-, Struktur- und Modelluebergaben nicht romantisieren.
-   Die Spec verspricht hier mehr als der aktuelle Compiler an allen Stellen garantiert.
-
-
-Collections, len/size und Zugriff
+Particularly important AIML facts
 ---------------------------------
 
-1. `len` und `size` nicht vermischen.
-   Vor jeder Aussage pruefen, ob gerade
-   - Element-/Zeichenanzahl
-   - Bytegroesse
-   gemeint ist.
+1. string.len is not a property but a method.
+   Correct:
+   - { call: [my_string.len] }
 
-2. Bei Collections und Strings nie nur aufgrund der Syntax schliessen.
-   Manche Dinge wirken wie Properties, andere wie Methoden. Im Zweifel echte Nutzung im Projekt
-   und Compiler-/Builtin-Implementierung pruefen.
+   Wrong:
+   - my_string.len as an attribute value
 
-3. Null- und Missing-Key-Verhalten nicht raten.
-   Genau diese Punkte waren in der Spec und in Implementierungsdiskussionen schon mehrfach unscharf.
+   Important note:
+   - The spec differentiated between .len and .size, but in real discussions exactly
+     this point has often been mixed up.
+   - Before making statements about len/size/string/list/map, always check the current implementation state.
+
+2. Not every "dot" can be nested freely.
+   Deep member chains like a.b.c or deep set targets do not work robustly throughout in AIML.
+   That is exactly why there are many helper variables and whole-object reassigns.
+
+3. Imported globals do not automatically behave like cleanly shared module variables.
+   There have already been real problems with multiple definitions and `extern` semantics.
+   So for global state across files never blindly assume:
+   - "it is surely the same instance"
+   - "import will do this correctly"
+
+4. JIT and AOT are not automatically semantically identical.
+   `compile()` and string/chunk paths do not run through exactly the same compiler context.
+
+5. Do not idealise mirror/WebSocket semantics.
+   `session.update()` was already narrower in real behaviour than the intuitive expectation.
+   Queue drain, event order and WS framing must always be checked against real repros.
 
 
-Mirror und Sync
+Models, heap and serialisation
+------------------------------
+
+1. AIML builtins and runtime paths take care of heap-carried pointers in several places.
+   That concerns in particular:
+   - serialisation
+   - mirror sync
+   - model passing
+
+   It is therefore wrong to assume across the board:
+   - "pointer-based models cannot be serialised"
+   - "only stack-like values go through mirror"
+
+2. Still, never blindly assume that every pointer case is correct.
+   The right working hypothesis is:
+   - There is already runtime support for pointer/heap objects in builtins.
+   - Whether a concrete case works must be verified on the real C++ path and a repro.
+
+3. For model sync and serialisation always separate:
+   - what the language model promises
+   - what the current runtime really handles correctly
+
+4. When an error shows up in serialisation or mirror, first distinguish these levels:
+   - the compiler generates a wrong access
+   - the runtime serialises wrong fields
+   - the runtime decodes wrongly
+   - the test uses the object too early
+   - debug code only crashes while logging
+
+
+Function calls and types
+------------------------
+
+1. The compiler does not always report type errors in function parameters strictly enough.
+   Do not presuppose that a wrong parameter type immediately ends as a clean compiler error.
+
+2. Builtins often have softer or more special conversion paths than user functions.
+   Statements about "AIML can pass X to function Y" must distinguish between
+   - general language behaviour
+   - a builtin special case
+
+3. Do not romanticise `map<string:any>`, structure and model passing.
+   The spec promises more here than the current compiler guarantees in all places.
+
+
+Collections, len/size and access
+--------------------------------
+
+1. Do not mix up `len` and `size`.
+   Before every statement check whether what is meant is
+   - an element/character count
+   - a byte size
+
+2. For collections and strings never conclude from the syntax alone.
+   Some things look like properties, others like methods. When in doubt, check real usage in the project
+   and the compiler/builtin implementation.
+
+3. Do not guess null and missing-key behaviour.
+   Exactly these points have already been vague several times in the spec and in implementation discussions.
+
+
+Mirror and sync
 ---------------
 
-1. Bei Mirror-Problemen nie nur das AIML-Skript anschauen.
-   Immer auch diese Ebenen mitdenken:
+1. For mirror problems never look only at the AIML script.
+   Always keep these levels in mind as well:
    - `builtin_registry.cpp`
    - `mirror_runtime.cpp`
-   - generierte Modell-/Serializerpfade
+   - generated model/serializer paths
 
-2. Nicht zu schnell "register_id kaputt" oder "GameView wird nicht registriert" behaupten.
-   Mehrere fruehere Faelle waren in Wahrheit:
-   - zu fruehe Nutzung nach Registrierung
-   - noch nicht gedrainte Updates
-   - Debug-Crash im C++-Logging
-   - Test deckt Realfall nicht ab
+2. Do not claim "register_id broken" or "GameView is not registered" too quickly.
+   Several earlier cases were in truth:
+   - use too early after registration
+   - updates not yet drained
+   - a debug crash in the C++ logging
+   - the test does not cover the real case
 
-3. Mirror-Tests muessen reale Nutzungsfaelle nachbilden.
-   Besonders bei 9rooms-artigen Faellen:
-   - fruehe leere Registrierung
-   - spaetere Befuellung
-   - Gegenregister vom Client
-   - mehrere update()-Ticks
-
-
-Wie bei Unsicherheit vorgehen
------------------------------
-
-1. Vor jeder starken Behauptung zuerst echten Codepfad lesen.
-
-2. Vor jeder Sprachbehauptung pruefen:
-   - gibt es schon einen Report?
-   - gibt es schon einen Repro?
-   - gibt es schon einen Test?
-
-3. Wenn etwas kontraintuitiv wirkt, ist in AIML oft die richtige Reaktion:
-   - nicht umdeuten
-   - nicht "wahrscheinlich wie in Sprache X"
-   - sondern konkret verifizieren
-
-4. Bei wiederkehrenden Zweifeln diese Datei erweitern statt dieselben Fehler erneut zu machen.
+3. Mirror tests must recreate real use cases.
+   Especially for 9rooms-like cases:
+   - early empty registration
+   - later filling
+   - counter-registration from the client
+   - several update() ticks
 
 
-Merksaetze
-----------
+How to proceed when unsure
+--------------------------
 
-- Nicht raten. Verifizieren.
-- Spec ist nicht automatisch Runtime-Wahrheit.
-- Builtin-Verhalten ist nicht automatisch allgemeine Sprachsemantik.
-- Tiefe Memberpfade sind verdaechtig, bis das Gegenteil bewiesen ist.
-- Mirror-Fehler sitzen oft nicht dort, wo das AIML-Skript sie vermutet.
+1. Before every strong claim, read the real code path first.
+
+2. Before every language claim, check:
+   - is there already a report?
+   - is there already a repro?
+   - is there already a test?
+
+3. If something seems counter-intuitive, in AIML the right reaction often is:
+   - do not reinterpret
+   - not "probably like in language X"
+   - but verify concretely
+
+4. On recurring doubts, extend this file instead of making the same mistakes again.
+
+
+Maxims
+------
+
+- Do not guess. Verify.
+- The spec is not automatically runtime truth.
+- Builtin behaviour is not automatically general language semantics.
+- Deep member paths are suspect until proven otherwise.
+- Mirror errors often do not sit where the AIML script suspects them.
