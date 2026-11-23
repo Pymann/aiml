@@ -1,119 +1,119 @@
 # AIML — File Split Candidates (2026-05-16)
 
-## Ziel
+## Goal
 
-Diese Notiz sammelt die aktuell auffälligen großen Quelldateien in
-`aiml/src/` und bewertet, welche davon sinnvoll in kleinere Module
-zerlegt werden sollten.
+This note collects the currently conspicuous large source files in
+`aiml/src/` and assesses which of them should sensibly be split into smaller
+modules.
 
-Der Fokus liegt nicht auf Vendor-Dateien, sondern auf eigenen AIML-
-Dateien, die fachlich oder strukturell zu breit geworden sind.
+The focus is not on vendor files, but on AIML's own
+files that have become too broad in terms of domain or structure.
 
-## Kurzfazit
+## Short conclusion
 
-Die klarsten Split-Kandidaten sind aktuell:
+The clearest split candidates currently are:
 
 1. `src/sys/tensor_runtime.cpp`
 2. `src/sys/ui_runtime.cpp`
 3. `src/sys/db_runtime.cpp`
 4. `src/sys/prefab_runtime.cpp`
 
-Ein zusätzlicher, aber etwas anderer Kandidat ist:
+An additional, but somewhat different candidate is:
 
 5. `src/core/builtin_registry.cpp`
 
-## Gemessene Größen
+## Measured sizes
 
-Relevante große Nicht-Vendor-Dateien:
+Relevant large non-vendor files:
 
-- `src/core/builtin_registry.cpp` — `9069` Zeilen
-- `src/sys/tensor_runtime.cpp` — `2591` Zeilen
-- `src/sys/ui_runtime.cpp` — `2249` Zeilen
-- `src/sys/db_runtime.cpp` — `2166` Zeilen
-- `src/sys/prefab_runtime.cpp` — `1602` Zeilen
-- `src/core/ast_compiler.cpp` — `1560` Zeilen
-- `src/sys/http_runtime.cpp` — `1437` Zeilen
-- `src/sys/mirror_runtime.cpp` — `1221` Zeilen
-- `src/sys/input_runtime.cpp` — `1180` Zeilen
+- `src/core/builtin_registry.cpp` — `9069` lines
+- `src/sys/tensor_runtime.cpp` — `2591` lines
+- `src/sys/ui_runtime.cpp` — `2249` lines
+- `src/sys/db_runtime.cpp` — `2166` lines
+- `src/sys/prefab_runtime.cpp` — `1602` lines
+- `src/core/ast_compiler.cpp` — `1560` lines
+- `src/sys/http_runtime.cpp` — `1437` lines
+- `src/sys/mirror_runtime.cpp` — `1221` lines
+- `src/sys/input_runtime.cpp` — `1180` lines
 
-Nicht als Architekturproblem gewertet:
+Not counted as an architecture problem:
 
 - `src/vendor/miniaudio.h`
 - `src/vendor/cgltf.h`
 - `src/core/yyjson.cpp`
 - `src/core/yyjson.h`
 
-Vendor- oder eingebettete Third-Party-Dateien sind naturgemäß groß und
-werden hier nicht als Split-Ziel betrachtet.
+Vendor or embedded third-party files are large by nature and
+are not considered a split target here.
 
 ## 1. `src/sys/tensor_runtime.cpp`
 
-### Warum auffällig
+### Why conspicuous
 
-Diese Datei ist nicht nur groß, sondern mischt mehrere klar trennbare
-Verantwortlichkeiten:
+This file is not only large, but mixes several clearly separable
+responsibilities:
 
-- Arena- und Tensor-Allokation
-- Tensor-Grundoperationen
-- Neural-/Math-Ops
-- Autograd / Backward-Pfade
-- Persistenz / Save / Load / Hashing
-- KV-bezogene Hilfslogik
+- arena and tensor allocation
+- basic tensor operations
+- neural/math ops
+- autograd / backward paths
+- persistence / save / load / hashing
+- KV-related helper logic
 
-### Sichtbare Trennlinien
+### Visible dividing lines
 
-Frühe Basisfunktionen:
+Early basic functions:
 
-- Arena / Allocation
-- Tensor-Objekterzeugung
-- Shape- und Datenzugriff
+- arena / allocation
+- tensor object creation
+- shape and data access
 
-Mathematische Ops:
+Mathematical ops:
 
 - `add`, `sub`, `mul`, `matmul`, `softmax`, `layer_norm`, ...
 
-Autograd-Block:
+Autograd block:
 
 - `backward_add`, `backward_matmul`, `backward_softmax`, ...
 
-Persistenz-/Hilfsblock:
+Persistence/helper block:
 
 - `aiml_tensor_save`
 - `aiml_tensor_load`
 - `aiml_tensor_sha256`
 
-### Empfehlung
+### Recommendation
 
-Mindestens aufteilen in:
+Split at least into:
 
 - `tensor_arena.cpp`
 - `tensor_ops.cpp`
 - `tensor_autograd.cpp`
 - `tensor_io.cpp`
 
-Das ist aktuell der stärkste Split-Kandidat.
+That is currently the strongest split candidate.
 
 ## 2. `src/sys/ui_runtime.cpp`
 
-### Warum auffällig
+### Why conspicuous
 
-Die Datei kombiniert momentan:
+The file currently combines:
 
-- GL-/Shader-Setup
-- Font-Baking
-- Grid- und Cell-Layout
-- konkrete Widgets
-- komplette Style-API mit sehr vielen Settern
+- GL/shader setup
+- font baking
+- grid and cell layout
+- concrete widgets
+- a complete style API with very many setters
 
-Damit ist sie nicht nur groß, sondern auch schwer zu navigieren.
+So it is not only large, but also hard to navigate.
 
-### Sichtbare Trennlinien
+### Visible dividing lines
 
-Render-/Setup-nah:
+Close to render/setup:
 
-- Shader-Kompilierung
-- Font-Baking
-- Initialisierung
+- shader compilation
+- font baking
+- initialisation
 
 Layout / Grid:
 
@@ -121,22 +121,22 @@ Layout / Grid:
 - `aiml_ui_begin_cell`
 - `aiml_ui_set_gap`
 
-Widget-Implementierungen:
+Widget implementations:
 
 - `aiml_ui_button`
 - `aiml_ui_checkbox`
 - `aiml_ui_slider`
 - `aiml_ui_text_input`
 
-Style-API:
+Style API:
 
 - `aiml_ui_button_style_set_*`
 - `aiml_ui_slider_style_set_*`
 - `aiml_ui_progress_style_set_*`
 
-### Empfehlung
+### Recommendation
 
-Mindestens aufteilen in:
+Split at least into:
 
 - `ui_render.cpp`
 - `ui_layout.cpp`
@@ -145,40 +145,40 @@ Mindestens aufteilen in:
 
 ## 3. `src/sys/db_runtime.cpp`
 
-### Warum auffällig
+### Why conspicuous
 
-Die Datei enthält mehrere Subsysteme, die logisch getrennt sind:
+The file contains several subsystems that are logically separate:
 
 - typed store / column store
 - mmap / grow / replay
 - kv-store
-- WAL-Logik
+- WAL logic
 - decoded cache / LRU
 - vector store
 
-### Sichtbare Trennlinien
+### Visible dividing lines
 
-Store-/Column-Logik:
+Store/column logic:
 
 - `store_col_insert`
 - `store_col_get`
 - `store_col_delete`
 
-KV-Logik:
+KV logic:
 
 - `kv_mmap_attach`
 - `kv_wal_write_set`
 - `kv_wal_replay`
 - `kv_decoded_*`
 
-Vector-Store-Logik:
+Vector store logic:
 
 - `vec_wal_write_insert`
 - `vec_wal_replay`
 
-### Empfehlung
+### Recommendation
 
-Mindestens aufteilen in:
+Split at least into:
 
 - `db_store_runtime.cpp`
 - `db_kv_runtime.cpp`
@@ -187,45 +187,45 @@ Mindestens aufteilen in:
 
 ## 4. `src/sys/prefab_runtime.cpp`
 
-### Warum auffällig
+### Why conspicuous
 
-Die Datei mischt im Moment:
+The file currently mixes:
 
-- Renderpfad / Shader / VAO / Texture-Cache
-- Text-Wrapping und Font-Handling
-- JSON-Parsing
-- Prefab-Instanziierung
-- Child-Lookup
-- Hit-Test / Hover / Focus / Drag
-- Docking
+- render path / shader / VAO / texture cache
+- text wrapping and font handling
+- JSON parsing
+- prefab instantiation
+- child lookup
+- hit test / hover / focus / drag
+- docking
 
-Das sind mehrere natürliche Module.
+Those are several natural modules.
 
-### Sichtbare Trennlinien
+### Visible dividing lines
 
-Render- und GPU-Teil:
+Render and GPU part:
 
 - `compile_shader_src`
 - `create_prefab_shader`
 - `flush_batch`
 - `render_instance`
 
-JSON-/Definitionsteil:
+JSON/definition part:
 
 - `parse_json_string`
 - `parse_json_number`
 - `parse_children_json`
 
-Interaktions-/UI-Teil:
+Interaction/UI part:
 
 - `aiml_prefab_hit_test`
 - `aiml_prefab_update_hover`
 - `aiml_prefab_update_drag`
 - `aiml_prefab_child_clicked`
 
-### Empfehlung
+### Recommendation
 
-Mindestens aufteilen in:
+Split at least into:
 
 - `prefab_render.cpp`
 - `prefab_parse.cpp`
@@ -234,27 +234,27 @@ Mindestens aufteilen in:
 
 ## 5. `src/core/builtin_registry.cpp`
 
-### Warum auffällig
+### Why conspicuous
 
-Mit `9069` Zeilen ist dies die größte eigene Nicht-Vendor-Datei.
-Allerdings ist sie strukturell anders als die Runtime-Monolithen:
+At `9069` lines this is the largest own non-vendor file.
+However, it is structurally different from the runtime monoliths:
 
-- sie ist im Kern eine große Registry-Datei
-- zentraler Einstieg ist `registerBuiltins(CompilerContext&)`
+- at its core it is one large registry file
+- the central entry point is `registerBuiltins(CompilerContext&)`
 
-### Einschätzung
+### Assessment
 
-Das ist eher ein Fall von:
+This is rather a case of:
 
-- sehr groß
-- aber eventuell absichtlich zentral gehalten
+- very large
+- but possibly kept central on purpose
 
-Wenn sie manuell gepflegt wird, lohnt sich dennoch ein Split nach
-Fachbereichen.
+If it is maintained manually, a split by domain is still
+worthwhile.
 
-### Empfehlung
+### Recommendation
 
-Falls angefasst, eher so trennen:
+If it is touched, rather split it like this:
 
 - `builtin_registry_core.cpp`
 - `builtin_registry_io.cpp`
@@ -263,24 +263,24 @@ Falls angefasst, eher so trennen:
 - `builtin_registry_tensor.cpp`
 - `builtin_registry_db.cpp`
 
-Dann bleibt `registerBuiltins(...)` als Aggregator erhalten.
+Then `registerBuiltins(...)` remains as the aggregator.
 
-## Dateien, die aktuell noch okay wirken
+## Files that currently still look okay
 
-Diese Dateien sind zwar nicht klein, wirken aber noch nicht so stark
-überfrachtet:
+These files are not small, but do not yet look as heavily
+overloaded:
 
 - `src/sys/http_runtime.cpp`
 - `src/sys/mirror_runtime.cpp`
 - `src/sys/input_runtime.cpp`
 - `src/sys/gl_runtime.cpp`
 
-Sie können später trotzdem Kandidaten werden, sind aber aktuell nicht
-die dringendsten.
+They can still become candidates later, but are currently not
+the most urgent.
 
-## Priorisierte Reihenfolge
+## Prioritised order
 
-Wenn der Split in Etappen erfolgen soll, wäre die sinnvolle Reihenfolge:
+If the split is to happen in stages, the sensible order would be:
 
 1. `tensor_runtime.cpp`
 2. `ui_runtime.cpp`
@@ -288,23 +288,23 @@ Wenn der Split in Etappen erfolgen soll, wäre die sinnvolle Reihenfolge:
 4. `prefab_runtime.cpp`
 5. `builtin_registry.cpp`
 
-## Vorläufiges Fazit
+## Preliminary conclusion
 
-Die aktuelle Hauptbaustelle ist nicht einfach „große Dateien“ im
-Allgemeinen, sondern vor allem das erneute Zusammenwachsen mehrerer
-fachlich separater Subsysteme in einzelne Runtime-Dateien.
+The current main construction site is not simply "large files" in
+general, but above all the renewed growing together of several
+domain-wise separate subsystems into single runtime files.
 
-Besonders deutlich ist das in:
+This is particularly clear in:
 
 - Tensor
 - UI
 - DB
 - Prefab
 
-Dort lohnt sich ein Split nicht nur für die Dateigröße, sondern vor
-allem für:
+There a split is worthwhile not only for the file size, but above
+all for:
 
-- Navigierbarkeit
-- Testbarkeit
-- Build-Verständlichkeit
-- künftige Backend-Erweiterungen
+- navigability
+- testability
+- build comprehensibility
+- future backend extensions
