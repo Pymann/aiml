@@ -1,80 +1,80 @@
-# Implementierungsplan: Erkennung unbenutzter Enumeratoren in AIML
+# Implementation plan: detecting unused enumerators in AIML
 
-## Ziel
+## Goal
 
-Die statische AIML-Analyse soll eine nicht-blockierende Compiler-Diagnose erzeugen, wenn Enum-Mitglieder deklariert, aber innerhalb des aktuellen Builds nie verwendet werden.
+The static AIML analysis should produce a non-blocking compiler diagnostic when enum members are declared, but never used within the current build.
 
-Die Ausgabe soll **genauso wie andere statische Probleme** als Compiler-Diagnose erscheinen, nicht als Runtime-`log.*`-Aufruf.
+The output should appear as a compiler diagnostic **just like other static problems**, not as a runtime `log.*` call.
 
-Beispielrichtung:
+Example direction:
 
 ```text
 models/enums.aiml:12: warning: enum member 'PassiveAbility.armored' is never referenced in this build
 ```
 
-## Gewuenschte Semantik fuer V1
+## Desired semantics for V1
 
-### Was als Benutzung zaehlt
+### What counts as a use
 
-In der ersten Ausbaustufe zaehlen nur **explizite symbolische Referenzen** auf Enum-Mitglieder, insbesondere:
+In the first stage only **explicit symbolic references** to enum members count, in particular:
 
 - `EnumName.Member`
-- voll qualifizierte Enum-Zugriffe, soweit sie ueber denselben Resolver laufen
+- fully qualified enum accesses, as far as they go through the same resolver
 
-### Was in V1 noch nicht als Benutzung zaehlt
+### What does not yet count as a use in V1
 
-Diese Faelle sollen zunaechst **nicht** als sichere Verwendung gewertet werden:
+These cases should **not** be counted as a safe use at first:
 
-- rohe Integerwerte, die zufaellig einem Enum-Mitglied entsprechen
-- implizite Nutzung nur ueber Persistenz-/Netzwerkdaten
-- reine Enum-Typverwendung ohne Bezug auf konkrete Mitglieder
-- UI-Bindings wie `enum: SomeEnum` an Dropdowns oder Radios
+- raw integer values that happen to correspond to an enum member
+- implicit use only via persistence/network data
+- pure enum type use without reference to concrete members
+- UI bindings such as `enum: SomeEnum` on dropdowns or radios
 
-Das ist absichtlich konservativ: V1 meldet nur das, was der Compiler mit hoher Sicherheit als **konkrete Member-Verwendung** sieht.
+This is deliberately conservative: V1 only reports what the compiler sees with high certainty as a **concrete member use**.
 
-## Warum das in die bestehende Architektur passt
+## Why this fits the existing architecture
 
-Die bestehende Compiler-/Static-Analysis hat bereits ein sehr aehnliches Muster fuer **whole-program**-Checks:
+The existing compiler/static analysis already has a very similar pattern for **whole-program** checks:
 
-- Prefab-Deklarationen und Prefab-Verwendungen werden gesammelt in
+- prefab declarations and prefab uses are collected in
   [context.h](../../src/core/context.h#L299)
-- die Analyse laeuft in
+- the analysis runs in
   [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L269)
-- die Funktion wird sowohl fuer Entry- als auch fuer `libraryMode`-Module aufgerufen in
+- the function is called both for entry and for `libraryMode` modules in
   [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L968)
-  und
+  and
   [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L1207)
 
-Die Enum-Aufloesung existiert ebenfalls schon zentral:
+Enum resolution also already exists centrally:
 
-- Enum-Registry in
+- enum registry in
   [context.h](../../src/core/context.h#L262)
-- Enum-Registrierung in
+- enum registration in
   [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L1922)
-- explizite Enum-Referenz-Aufloesung in
+- explicit enum reference resolution in
   [ast_compiler_expr.cpp](../../src/core/ast_compiler_expr.cpp#L301)
-  und
+  and
   [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L2911)
 
-## Implementierungsstrategie
+## Implementation strategy
 
-### Phase 1: Deklarierte Enum-Mitglieder erfassen
+### Phase 1: capture declared enum members
 
-#### Ziel
+#### Goal
 
-Der Compiler soll fuer jedes Enum alle deklarierten Member inklusive Quellort registrieren.
+For every enum, the compiler should register all declared members including their source location.
 
-#### Betroffene Stellen
+#### Affected places
 
 - [ast_nodes.h](../../src/core/ast_nodes.h#L359)
 - [context.h](../../src/core/context.h#L262)
 - [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L1922)
 
-#### Konkrete Aenderungen
+#### Concrete changes
 
-1. In `CompilerContext` neue Strukturen anlegen, analog zu `prefabDecls` / `prefabUses`.
+1. Create new structures in `CompilerContext`, analogous to `prefabDecls` / `prefabUses`.
 
-Vorschlag:
+Proposal:
 
 ```cpp
 std::map<std::string, std::set<std::string>> enumDeclMembers;
@@ -83,7 +83,7 @@ std::map<std::string, YAML::Node> enumDeclNodes;
 std::map<std::string, std::map<std::string, YAML::Node>> enumMemberDeclNodes;
 ```
 
-Minimal reicht fuer V1:
+Minimally sufficient for V1:
 
 ```cpp
 std::map<std::string, std::set<std::string>> enumDeclMembers;
@@ -91,313 +91,313 @@ std::map<std::string, std::set<std::string>> enumUsedMembers;
 std::map<std::string, std::map<std::string, YAML::Node>> enumMemberDeclNodes;
 ```
 
-2. Beim Registrieren eines `EnumDecl` in `visitTopLevel(...)` zusaetzlich alle `values` in `enumDeclMembers[enumName]` eintragen.
+2. When registering an `EnumDecl` in `visitTopLevel(...)`, additionally enter all `values` into `enumDeclMembers[enumName]`.
 
-3. Dabei fuer jedes Mitglied auch den bestmoeglichen Quellort hinterlegen.
+3. In doing so, also store the best possible source location for every member.
 
-#### Wichtige Anmerkung
+#### Important note
 
-`EnumDecl::values` speichert derzeit nur `name -> int`, nicht den Quellort pro einzelnes Mitglied
+`EnumDecl::values` currently stores only `name -> int`, not the source location per individual member
 ([ast_nodes.h](../../src/core/ast_nodes.h#L362)).
 
-Deshalb gibt es zwei Optionen:
+Therefore there are two options:
 
-- **V1 pragmatisch:** Warnung auf Enum-Block-Position ausgeben
-- **V1.5 sauberer:** AST fuer Enum-Mitglieder um Member-spezifische `YAML::Node`-Marks erweitern
+- **V1 pragmatic:** emit the warning at the enum block position
+- **V1.5 cleaner:** extend the AST for enum members with member-specific `YAML::Node` marks
 
-Empfehlung:
+Recommendation:
 
-- zuerst pragmatisch mit Enum-Block-Position
-- spaeter Quellort pro Member nachruesten
+- pragmatically with the enum block position first
+- retrofit the per-member source location later
 
-## Phase 2: Verwendete Enum-Mitglieder erfassen
+## Phase 2: capture used enum members
 
-#### Ziel
+#### Goal
 
-Jede explizite symbolische Referenz wie `GamePhase.combat` soll als Verwendung markiert werden.
+Every explicit symbolic reference such as `GamePhase.combat` should be marked as a use.
 
-#### Betroffene Stellen
+#### Affected places
 
 - [ast_compiler_expr.cpp](../../src/core/ast_compiler_expr.cpp#L301)
 - [ast_compiler.cpp](../../src/core/ast_compiler.cpp#L2911)
 
-#### Konkrete Aenderungen
+#### Concrete changes
 
-1. Direkt vor oder in `resolveEnum(baseName, propName)` eine Hook einbauen:
+1. Build a hook directly before or in `resolveEnum(baseName, propName)`:
 
 ```cpp
 ctx.enumUsedMembers[resolvedEnumName].insert(propName);
 ```
 
-2. Falls Namespaces / Qualifizierung eine Rolle spielen, muss die **kanonische Enum-ID** verwendet werden, nicht nur `baseName`.
+2. If namespaces / qualification play a role, the **canonical enum ID** must be used, not just `baseName`.
 
-Deshalb ist die beste Stelle **innerhalb** von `resolveEnum(...)`, sobald sicher ist, welches Enum tatsaechlich aufgeloest wurde.
+That is why the best place is **inside** `resolveEnum(...)`, as soon as it is certain which enum was actually resolved.
 
-3. Falls `resolveEnum(...)` sowohl fuer globale als auch namespace-lokale Enums verwendet wird, muss die Speicherung dieselbe Qualifizierungslogik nutzen wie `ctx.enums`.
+3. If `resolveEnum(...)` is used both for global and namespace-local enums, the storage must use the same qualification logic as `ctx.enums`.
 
-#### Warum diese Stelle gut ist
+#### Why this place is good
 
-- nur echte, erfolgreich aufgeloeste Enum-Mitglieder werden gezaehlt
-- keine doppelte AST-Walk-Logik noetig
-- geringes False-Positive-Risiko
+- only real, successfully resolved enum members are counted
+- no duplicate AST walk logic needed
+- low false positive risk
 
-## Phase 3: Whole-Program-Merge wie bei dead-prefab
+## Phase 3: whole-program merge as for dead-prefab
 
-#### Ziel
+#### Goal
 
-Die Mitgliedsverwendungen aus importierten/libraryMode-Modulen sollen in den Top-Level-Compile zurueckfliessen.
+The member uses from imported/libraryMode modules should flow back into the top-level compile.
 
-#### Betroffene Stellen
+#### Affected places
 
-Die exakten Merge-Stellen fuer `allPrefabUses` muessen in der Compiler-Driver-/Import-Pipeline gespiegelt werden. Der Plan orientiert sich dabei explizit an dem schon existierenden `dead-prefab`-Pfad, der in den Kommentaren von `CompilerContext` referenziert ist
+The exact merge places for `allPrefabUses` must be mirrored in the compiler driver/import pipeline. The plan explicitly follows the already existing `dead-prefab` path, which is referenced in the comments of `CompilerContext`
 ([context.h](../../src/core/context.h#L303)).
 
-#### Konkrete Aenderungen
+#### Concrete changes
 
-1. Neue Aggregatstrukturen im uebergeordneten Compiler/Driver anlegen, analog zu:
+1. Create new aggregate structures in the parent compiler/driver, analogous to:
 
 - `allPrefabDecls`
 - `allPrefabUses`
 
-2. Beim Rueckmerge eines Sub-Compilers:
+2. When merging a sub-compiler back:
 
-- deklarierte Enum-Mitglieder vereinigen
-- verwendete Enum-Mitglieder vereinigen
+- unite the declared enum members
+- unite the used enum members
 
-3. Merge-Key muss der voll qualifizierte Enum-Name sein.
+3. The merge key must be the fully qualified enum name.
 
-#### Risiko
+#### Risk
 
-Wenn diese Merges nicht sauber entlang der Importkette passieren, entstehen False Positives bei Modulen, die Enums importieren, aber deren Verwendung nur in Geschwistermodulen stattfindet.
+If these merges do not happen cleanly along the import chain, false positives arise for modules that import enums whose use only takes place in sibling modules.
 
-## Phase 4: Top-Level-Diagnose ausgeben
+## Phase 4: emit the top-level diagnostic
 
-#### Ziel
+#### Goal
 
-Am Ende des Top-Level-Builds soll fuer jedes deklarierte, aber nie verwendete Enum-Mitglied genau eine Warnung ausgegeben werden.
+At the end of the top-level build, exactly one warning should be emitted for every declared but never used enum member.
 
-#### Betroffene Stellen
+#### Affected places
 
-- derselbe Top-Level-Postpass, der bereits whole-program-Warnungen wie `dead-prefab` ausgibt
-- Diagnoseformat ueber `fmtLoc(...)`-artige Pfade aus
+- the same top-level post-pass that already emits whole-program warnings such as `dead-prefab`
+- the diagnostic format via `fmtLoc(...)`-like paths from
   [context.h](../../src/core/context.h#L377)
 
-#### Konkrete Aenderungen
+#### Concrete changes
 
-1. Mengen-Differenz bilden:
+1. Compute the set difference:
 
 ```cpp
 unused = enumDeclMembers[enumName] - enumUsedMembers[enumName]
 ```
 
-2. Fuer jedes `unused`-Mitglied eine Warning ausgeben.
+2. Emit a warning for every `unused` member.
 
-Vorschlag:
+Proposal:
 
 ```text
 <loc>: enum member '<Enum>.<Member>' is never referenced in this build
 ```
 
-3. Die Diagnose soll nur im **vollstaendigen Build-Kontext** erscheinen, analog zur bestehenden Whole-Program-Gating-Idee bei `dead-prefab`.
+3. The diagnostic should only appear in the **complete build context**, analogous to the existing whole-program gating idea for `dead-prefab`.
 
-#### Empfehlung fuer Gating
+#### Recommendation for gating
 
-Warnung nur ausgeben, wenn der Use-Set als vollstaendig betrachtet werden kann:
+Only emit the warning if the use set can be considered complete:
 
-- echter Build ohne warme Import-Abkuerzung
-- oder Single-File ohne Imports
+- a real build without a warm import shortcut
+- or a single file without imports
 
-Damit bleibt das Verhalten konsistent mit
+That keeps the behaviour consistent with
 [44_8_prefab_static.md](../../spec/44_8_prefab_static.md#L131).
 
-## Phase 5: Spec ergaenzen
+## Phase 5: extend the spec
 
-#### Betroffene Dateien
+#### Affected files
 
 - [49_static_analysis.md](../../spec/49_static_analysis.md#L449)
-- optional neue dedizierte Spec-Datei, falls die Regel groesser beschrieben werden soll
+- optionally a new dedicated spec file, if the rule is to be described at greater length
 
-#### Inhalt
+#### Content
 
-Die Spec sollte festhalten:
+The spec should record:
 
-- dass unbenutzte Enumeratoren eine Warning sind
-- dass es sich um einen whole-program Check handelt
-- dass die Aussage `in this build` bewusst build-spezifisch ist
-- welche Verwendungsarten in V1 zaehlen
-- welche bewusst noch nicht gezaehlt werden
+- that unused enumerators are a warning
+- that it is a whole-program check
+- that the statement `in this build` is deliberately build-specific
+- which kinds of use count in V1
+- which are deliberately not counted yet
 
-## Phase 6: Tests
+## Phase 6: tests
 
-### Testgruppe A: Basisfaelle
+### Test group A: basic cases
 
-Neue AIML-Tests anlegen, zum Beispiel unter `tests/`:
+Create new AIML tests, for example under `tests/`:
 
-- ein Enum mit 3 Werten, davon 1 genutzt -> 2 Warnings
-- ein Enum, dessen alle Werte genutzt werden -> keine Warning
-- zwei Enums, nur eines teilweise genutzt -> Warnings nur fuer dieses
+- an enum with 3 values, 1 of them used -> 2 warnings
+- an enum whose values are all used -> no warning
+- two enums, only one partially used -> warnings only for that one
 
-### Testgruppe B: Importfaelle
+### Test group B: import cases
 
-- Enum in importierter Datei definiert, im Entry verwendet
-- Enum im Entry definiert, in importierter Datei verwendet
-- Enum in importierter Datei definiert und nur in anderer importierter Datei verwendet
+- enum defined in an imported file, used in the entry
+- enum defined in the entry, used in an imported file
+- enum defined in an imported file and only used in another imported file
 
-### Testgruppe C: Nicht-Zaehlfaelle fuer V1
+### Test group C: non-counting cases for V1
 
-- Enum-Typ als Feldtyp vorhanden, aber kein Member referenziert
-- Widget mit `enum: SomeEnum`, aber kein `SomeEnum.member`
-- Integerwert `3` an Stelle eines Enum-Members
+- enum type present as a field type, but no member referenced
+- widget with `enum: SomeEnum`, but no `SomeEnum.member`
+- integer value `3` in place of an enum member
 
-Diese Tests sollten dokumentieren, dass solche Faelle **noch nicht** als Benutzung gelten.
+These tests should document that such cases do **not yet** count as a use.
 
-## Empfohlene Reihenfolge der Umsetzung
+## Recommended implementation order
 
-1. Datenstrukturen fuer `enumDeclMembers` / `enumUsedMembers` in `CompilerContext`
-2. Member-Erfassung bei Enum-Registrierung
-3. Use-Erfassung in `resolveEnum(...)`
-4. Merge in der Import-/Subcompiler-Pipeline
-5. Top-Level-Warning-Ausgabe
-6. Tests
-7. Spec-Update
+1. data structures for `enumDeclMembers` / `enumUsedMembers` in `CompilerContext`
+2. member capture at enum registration
+3. use capture in `resolveEnum(...)`
+4. merge in the import/sub-compiler pipeline
+5. top-level warning output
+6. tests
+7. spec update
 
-## Aufwand nach Teilpaketen
+## Effort per sub-package
 
-### Paket 1: V1-Kern
+### Package 1: V1 core
 
-- Enum-Mitglieder deklarieren und nutzen sammeln
-- Top-Level-Warnung ausgeben
-- 2 bis 4 kleine Tests
+- collect declared and used enum members
+- emit the top-level warning
+- 2 to 4 small tests
 
-Schaetzung:
+Estimate:
 
-- etwa 0.75 bis 1.25 Tage
+- about 0.75 to 1.25 days
 
-### Paket 2: Sauberer Whole-Program-Ausbau
+### Package 2: clean whole-program expansion
 
-- Merge-/Gating robust machen
-- Importfaelle absichern
-- Spec sauber nachziehen
+- make merge/gating robust
+- secure the import cases
+- update the spec cleanly
 
-Schaetzung:
+Estimate:
 
-- zusaetzlich 0.5 bis 1 Tag
+- an additional 0.5 to 1 day
 
-### Paket 3: Member-genauer Quellort
+### Package 3: member-exact source location
 
-- AST/Builder fuer per-Member-Source-Locations erweitern
+- extend the AST/builder for per-member source locations
 
-Schaetzung:
+Estimate:
 
-- zusaetzlich 0.25 bis 0.5 Tage
+- an additional 0.25 to 0.5 days
 
-## Zukunft: Warning fuer Serialize/Deserialize-Mismatch bei Enums
+## Future: warning for serialize/deserialize mismatch with enums
 
 ## Problem
 
-Es soll spaeter eine Warning geben, wenn Enum-Werte serialisiert werden, bei der Deserialisierung aber **nicht korrekt wieder als Enum behandelt** werden.
+Later there should be a warning when enum values are serialised, but are **not correctly treated as an enum again** on deserialisation.
 
-Das ist relevant, weil Enums aktuell serialisierungsseitig wie Integer behandelt werden:
+This is relevant because enums are currently treated like integers on the serialisation side:
 
-- Serialisierung von Enums als Integer in
+- serialisation of enums as integers in
   [serialize_impl.cpp](../../src/core/serialize_impl.cpp#L1102)
-- `sys.deserialize` kennt den Zieltyp ueber `deserializeTargetType` in
+- `sys.deserialize` knows the target type via `deserializeTargetType` in
   [context.h](../../src/core/context.h#L451)
-- Deserialisierungspfad in
+- deserialisation path in
   [serialize_impl.cpp](../../src/core/serialize_impl.cpp#L1150)
 
-## Ziel des Zukunftschecks
+## Goal of the future check
 
-Warnung erzeugen fuer Muster wie:
+Produce a warning for patterns such as:
 
-- Enum-typisierte Daten werden serialisiert
-- spaeter aber in `i32`, `string` oder ein strukturell falsches Ziel zurueckdeserialisiert
+- enum-typed data is serialised
+- but later deserialised back into `i32`, `string` or a structurally wrong target
 
-Beispielrichtung:
+Example direction:
 
 ```text
 state.aiml:44: warning: serialized enum value from 'GamePhase' is deserialized into 'i32' instead of 'GamePhase'
 ```
 
-## Empfohlene V2-Strategie
+## Recommended V2 strategy
 
-### 1. Diagnose auf Compiler-Ebene, nicht zur Laufzeit
+### 1. Diagnostic at compiler level, not at runtime
 
-Der Check soll dieselbe Diagnoseklasse wie andere Static-Analysis-Faelle verwenden, nicht `log.warn`.
+The check should use the same diagnostic class as other static analysis cases, not `log.warn`.
 
-### 2. Tracking-Punkte
+### 2. Tracking points
 
-Beim Kompilieren von `sys.serialize(...)` sollte vermerkt werden:
+When compiling `sys.serialize(...)`, the following should be recorded:
 
-- Quelltyp `typeName`
-- wenn `ctx.enums.count(typeName)` gilt: es handelt sich um Enum-Serialisierung
-- idealerweise Quellort der Serialisierung
+- source type `typeName`
+- if `ctx.enums.count(typeName)` holds: it is an enum serialisation
+- ideally the source location of the serialisation
 
-Beim Kompilieren von `sys.deserialize(...)` sollte vermerkt werden:
+When compiling `sys.deserialize(...)`, the following should be recorded:
 
-- Zieltyp `typeName`
-- Quellort der Deserialisierung
+- target type `typeName`
+- source location of the deserialisation
 
-### 3. Mismatch-Regeln
+### 3. Mismatch rules
 
-Warning, wenn:
+Warning if:
 
-- Quelle Enum, Ziel Nicht-Enum
-- Quelle Enum `A`, Ziel Enum `B`
+- source enum, target non-enum
+- source enum `A`, target enum `B`
 
-Keine Warning, wenn:
+No warning if:
 
-- Quelle Enum `A`, Ziel Enum `A`
+- source enum `A`, target enum `A`
 
-### 4. Schwierigkeit
+### 4. Difficulty
 
-Das ist deutlich schwerer als `unused enumerator`, weil Serialize/Deserialize nicht immer lokal paarweise im selben Ausdruck auftreten.
+This is considerably harder than `unused enumerator`, because serialize/deserialize do not always occur locally as a pair in the same expression.
 
-Es braucht entweder:
+It needs either:
 
-- lokale Heuristik fuer direkte Muster
+- a local heuristic for direct patterns
   `set: [x, { call: [sys.deserialize, { call: [sys.serialize, y] }, T] }]`
-- oder spaeter eine Datenflussanalyse ueber temporale Werte
+- or later a data flow analysis over temporal values
 
-## Konkreter V2-Plan fuer einen ersten Heuristik-Check
+## Concrete V2 plan for a first heuristic check
 
-### Betroffene Stellen
+### Affected places
 
 - [serialize_impl.cpp](../../src/core/serialize_impl.cpp#L1098)
 - [serialize_impl.cpp](../../src/core/serialize_impl.cpp#L1150)
-- Call-Dispatch/Statement-Compile-Pfade, in denen `sys.deserialize`-Zieltypen bekannt sind
+- call dispatch/statement compile paths in which `sys.deserialize` target types are known
 
-### Heuristische V2-Regel
+### Heuristic V2 rule
 
-Zunaechst nur direkte AST-Muster pruefen:
+At first only check direct AST patterns:
 
 - `sys.deserialize(sys.serialize(expr), TargetType)`
-- `decl/set` mit klar erkennbarem enum-typisiertem Ursprung und unpassendem Zieltyp
+- `decl/set` with a clearly recognisable enum-typed origin and an unsuitable target type
 
-### Erwartete Diagnose
+### Expected diagnostic
 
-Nicht-blockierende Warning:
+Non-blocking warning:
 
 ```text
 ...: serialized enum value from 'Status' is deserialized as 'i32'; prefer deserializing back into 'Status'
 ```
 
-## Empfehlung
+## Recommendation
 
-Die beiden Themen sollten getrennt umgesetzt werden:
+The two topics should be implemented separately:
 
-1. **jetzt**: `unused enumerator` als simpler, robuster whole-program Check
-2. **spaeter**: Serialize/Deserialize-Mismatch als eigener Heuristik-Check
+1. **now**: `unused enumerator` as a simple, robust whole-program check
+2. **later**: serialize/deserialize mismatch as a heuristic check of its own
 
-So bleibt die erste Lieferung klein, klar und risikoarm.
+That keeps the first delivery small, clear and low-risk.
 
-## Fazit
+## Conclusion
 
-Die Erkennung unbenutzter Enumeratoren ist architektonisch ein sehr guter Fit fuer die bestehende AIML-Static-Analysis. Die sauberste V1 ist:
+Detecting unused enumerators is architecturally a very good fit for the existing AIML static analysis. The cleanest V1 is:
 
-- Use-Erfassung in `resolveEnum(...)`
-- Decl-Erfassung bei Enum-Registrierung
-- Whole-program-Auswertung analog zu `dead-prefab`
-- Ausgabe als Compiler-Warning mit Build-Kontext `in this build`
+- use capture in `resolveEnum(...)`
+- decl capture at enum registration
+- whole-program evaluation analogous to `dead-prefab`
+- output as a compiler warning with the build context `in this build`
 
-Der zusaetzliche Serialize/Deserialize-Check ist ebenfalls sinnvoll, sollte aber als eigenes zweites Feature geplant werden, weil er ueber einfache Symbolsammlung hinausgeht und mindestens eine kleine Datenfluss- bzw. Musteranalyse braucht.
+The additional serialize/deserialize check makes sense too, but should be planned as a second feature of its own, because it goes beyond simple symbol collection and needs at least a small data flow or pattern analysis.
