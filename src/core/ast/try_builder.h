@@ -77,7 +77,7 @@ public:
             return true;
         } else {
             if (currentKey == "type") {
-                tryStmt->catches.push_back(CatchClause{});     // spec/22: ein Zweig je `type:`
+                tryStmt->catches.push_back(CatchClause{});     // spec/22: one branch per `type:`
                 tryStmt->catches.back().type = value;
             } else if (currentKey == "var") {
                 if (tryStmt->catches.empty()) tryStmt->catches.push_back(CatchClause{});
@@ -96,8 +96,8 @@ public:
                     LOG_DEBUG("TryBuilder: Received tryBlock with " + std::to_string(b->statements.size()) + " statements");
                     tryStmt->tryBlock = std::unique_ptr<BlockStmt>(b);
                 } else {
-                    // Rumpf des zuletzt begonnenen catch-Zweigs (ein Zweig ohne `type:`
-                    // faengt alles).
+                    // Body of the most recently started catch branch (a branch without `type:`
+                    // catches everything).
                     if (tryStmt->catches.empty()) tryStmt->catches.push_back(CatchClause{});
                     if (tryStmt->catches.back().body)
                         tryStmt->catches.push_back(CatchClause{});

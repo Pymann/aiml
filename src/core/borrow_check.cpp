@@ -68,10 +68,10 @@ struct BorrowChecker {
     std::string fnName;   // enclosing function (for multi-file diagnostics)
     explicit BorrowChecker(const CompilerContext& c) : ctx(c) {}
 
-    // spec/49 F49-100/F49-102: Datei, Zeile und das Symbol, in dem der Befund
-    // sitzt.  Vorher stand hier "main line 42: " -- eine Prosa-Zeile ohne
-    // Dateinamen, also konnte --check weder Datei noch Zeile fuellen, und das
-    // ausgerechnet bei use-after-move, use-after-free und double free.
+    // spec/49 F49-100/F49-102: file, line and the symbol in which the finding
+    // sits.  Before, this said "main line 42: " -- a prose line without a
+    // file name, so --check could fill in neither file nor line, and that
+    // of all things for use-after-move, use-after-free and double free.
     std::string loc(int line) const {
         std::string out = ctx.currentSourceFile;
         if (line > 0 && !out.empty()) out += ":" + std::to_string(line);

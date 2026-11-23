@@ -397,9 +397,9 @@ namespace MapImpl {
         return ctx.builder.CreateLoad(ctx.builder.getInt1Ty(), resVar);
     }
     
-    // spec/10: `clear` leert die map.  Die Eintraege werden EINZELN freigegeben (wie in
-    // `remove`), bevor die Groesse auf 0 geht — ein blosses size=0 waere ein Leck pro
-    // Schluessel und Wert.  `map` hatte bis 01.11.2026 kein `clear` (Backlog-Punkt 8).
+    // spec/10: `clear` empties the map.  The entries are freed INDIVIDUALLY (as in
+    // `remove`) before the size goes to 0 — a bare size=0 would be a leak per
+    // key and value.  `map` had no `clear` until 2026-11-01 (backlog item 8).
     void clear(CompilerContext& ctx, llvm::Value* mapPtr, llvm::Type* keyType, llvm::Type* valType,
                llvm::StructType* mapType, bool keyIsString, bool valIsString,
                llvm::Value* relDesc, int relN, int relKind) {
@@ -435,7 +435,7 @@ namespace MapImpl {
         ctx.builder.CreateBr(loopBB);
 
         ctx.builder.SetInsertPoint(endBB);
-        // Kapazitaet und Puffer bleiben stehen: die map ist danach sofort wieder nutzbar.
+        // Capacity and buffer stay: the map is immediately usable again afterwards.
         ctx.builder.CreateStore(ctx.builder.getInt32(0), sizePtr);
     }
 

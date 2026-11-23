@@ -412,14 +412,14 @@ extern "C" void* aiml_tensor_grad_view(void* tv) {
     auto* t = (AimlTensor*)tv;
     auto* v = struct_alloc();
     memset(v, 0, sizeof(AimlTensor));
-    v->data          = t->data;                              // shared, kein memcpy
+    v->data          = t->data;                              // shared, no memcpy
     v->ndim          = t->ndim;
     v->size          = t->size;
     v->shape         = (int*)malloc(t->ndim * sizeof(int)); // eigene Shape-Kopie
     memcpy(v->shape, t->shape, t->ndim * sizeof(int));
-    v->owns_data     = 0;                                    // data NICHT freigeben
+    v->owns_data     = 0;                                    // do NOT free data
     v->requires_grad = 1;
-    v->is_param      = 1;                                    // überlebt begin_graph
+    v->is_param      = 1;                                    // survives begin_graph
     v->grad          = (float*)calloc(t->size, sizeof(float));
     v->grad_node_id  = -1;
     v->alloc_epoch   = g_graph_epoch;

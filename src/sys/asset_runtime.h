@@ -25,9 +25,9 @@ const char* aiml_asset_read_data(const char* stem);
 // includes size (same TTF at multiple sizes = multiple cached handles).
 void* aiml_asset_get_font(const char* stem, float size);
 
-// Mesh: resolves a .glb/.gltf stem to its on-disk path (spec/44_7).  Kein
-// Cache: eine gltf_scene ist eine eindeutige Ressource mit `free` (spec/61
-// §2.1) — zwei Aufrufer mit demselben Handle gaeben sie zweimal frei.
+// Mesh: resolves a .glb/.gltf stem to its on-disk path (spec/44_7).  No
+// cache: a gltf_scene is a unique resource with `free` (spec/61
+// §2.1) — two callers with the same handle would free it twice.
 const char* aiml_asset_mesh_path(const char* stem);
 
 // Shader: resolves a fragment-shader stem to its on-disk path for the current

@@ -41,9 +41,9 @@ AssetKind AssetScanner::classify(const std::string& filename) {
     if (ext == "ttf"  || ext == "otf") return AssetKind::Font;
     if (ext == "json" || ext == "yml"  || ext == "yaml" ||
         ext == "txt"  || ext == "md") return AssetKind::Data;
-    // spec/44_7: 3D-Modelle sind Assets wie Texturen.  `gltf.load` gibt es seit
-    // spec/43_1 — ohne Kind war die Datei eine unbekannte Endung, und der
-    // einzige Weg zum Modell ein Pfad im Quelltext (248 Warnungen in cosmos).
+    // spec/44_7: 3D models are assets like textures.  `gltf.load` has existed since
+    // spec/43_1 — without a kind the file was an unknown extension, and the
+    // only way to the model was a path in the source text (248 warnings in cosmos).
     if (ext == "glb"  || ext == "gltf") return AssetKind::Mesh;
     return AssetKind::Unknown;
 }

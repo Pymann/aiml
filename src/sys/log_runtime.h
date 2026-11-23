@@ -17,10 +17,10 @@ void aiml_log_system(const char* msg, const char* loc);
 void aiml_log_set_level(const char* level);   /* verbose/debug/info/warn/error/fatal */
 void aiml_log_set_file(const char* path);     /* NULL or "" to disable file mirror   */
 
-/* ── spec/22: Nachricht des letzten Wurfs ─────────────────────────────────────
- * Jede `throw`-Stelle hinterlegt hier ihre `message`, damit die oberste Ebene
- * sie melden kann, wenn niemand faengt. Gehoert in die Runtime, nicht in den
- * JIT-Host: AOT- und wasm32-Ziele linken denselben Wurfpfad. */
+/* ── spec/22: message of the last throw ────────────────────────────────────────
+ * Every `throw` site stores its `message` here, so that the top level
+ * can report it if nobody catches. Belongs in the runtime, not in the
+ * JIT host: AOT and wasm32 targets link the same throw path. */
 void        aiml_note_thrown_message(const char* msg);
 const char* aiml_last_thrown_message(void);
 

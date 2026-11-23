@@ -1,7 +1,7 @@
-/* Baseline fuer performance/cases/fib100.aiml (spec/70 §7, F70-60: gleicher
- * Algorithmus, gleiche Maschine, gleicher Lauf).  uint64_t, weil signierter
- * Ueberlauf in C UB ist -- die Arbeitslast ist dieselbe: 100 Additionen je
- * Runde, Summe als Wachwert, Kalibrierung auf >= 500 ms, sieben Proben. */
+/* Baseline for performance/cases/fib100.aiml (spec/70 §7, F70-60: same
+ * algorithm, same machine, same run).  uint64_t, because signed
+ * overflow is UB in C -- the workload is the same: 100 additions per
+ * round, sum as a guard value, calibration to >= 500 ms, seven samples. */
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>

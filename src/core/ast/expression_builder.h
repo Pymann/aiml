@@ -16,9 +16,9 @@ class ExpressionBuilder : public StateHandler {
     bool expectingKey = false;
     bool expectingArgs = false;
     bool hadSequence = false;   // true if args came from a [...] sequence (operator), false for dict
-    // spec/10: `{ call: [f, [v1, v2]] }` — die VERSCHACHTELTE Sequenz ist EIN Listenargument.
-    // Ohne das fiel sie durch OnSequenceStart und ihre Elemente wurden zu Einzelargumenten
-    // (Backlog-Punkt 3, "Incorrect number of arguments").
+    // spec/10: `{ call: [f, [v1, v2]] }` — the NESTED sequence is ONE list argument.
+    // Without this it fell through OnSequenceStart and its elements became individual arguments
+    // (backlog item 3, "Incorrect number of arguments").
     std::unique_ptr<AIML::AST::BufferLiteralExpr> pendingListLiteral;
     std::vector<std::unique_ptr<Expr>> args;
 public:
