@@ -6,28 +6,28 @@
 extern "C" {
 #endif
 
-// ── Globale Pfad-Konfiguration ───────────────────────────────────────────────
-// Setzt den globalen AionDB-Root. Nachfolgende open-Calls mit relativem
-// `base_path` haengen ihren Sub-Pfad an diesen Root an.
+// ── Global path configuration ────────────────────────────────────────────────
+// Sets the global AionDB root. Subsequent open calls with a relative
+// `base_path` append their sub-path to this root.
 //
-// Resolution-Reihenfolge:
-//   1. AIONDB_PATH env var (dominiert immer, bei jedem open neu gelesen)
-//   2. via aiml_db_set_path() gesetzter Wert
-//   3. Fallback "./aiondb/"
+// Resolution order:
+//   1. AIONDB_PATH env var (always dominates, re-read on every open)
+//   2. value set via aiml_db_set_path()
+//   3. fallback "./aiondb/"
 //
-// Sub-Pfad-Argument der open-Funktionen:
-//   - nullptr/empty   → Root direkt nutzen
-//   - absolut (/...)  → as-is (backward-compat fuer Tests mit /tmp/aiml_test_*)
-//   - relativ          → root + sub
+// Sub-path argument of the open functions:
+//   - nullptr/empty   → use the root directly
+//   - absolute (/...) → as-is (backward compat for tests with /tmp/aiml_test_*)
+//   - relative         → root + sub
 void    aiml_db_set_path(const char* path);
 
-// Liefert den aktuell aufgeloesten AionDB-Root mit Trailing-Slash.
-// Resolution-Reihenfolge wie bei jedem open-Call:
+// Returns the currently resolved AionDB root with a trailing slash.
+// Resolution order as for every open call:
 //   1. AIONDB_PATH env (live re-read)
-//   2. zuletzt via aiml_db_set_path() gesetzter Wert
-//   3. Fallback "./aiondb/"
-// Rueckgabe: heap-allocated char* (Caller-owned; AIML-Runtime managed Lifetime
-// implizit, Funktion wird selten gerufen, kein Pool-Zwang).
+//   2. value last set via aiml_db_set_path()
+//   3. fallback "./aiondb/"
+// Return: heap-allocated char* (caller-owned; the AIML runtime manages the lifetime
+// implicitly, the function is rarely called, no pool needed).
 const char* aiml_db_get_path(void);
 
 // ── Store<T> ──────────────────────────────────────────────────────────────────
@@ -83,7 +83,7 @@ void*   aiml_db_store_open_col(const char* name, const char* type_name,
 void*   aiml_db_kv_open(const char* name, int64_t val_size);
 // Persistent Kv: WAL-backed append-only log (.kvwal file).
 void*   aiml_db_kv_open_persist(const char* name, int64_t val_size, const char* base_path);
-// spec/31 §6.2.1: wie oben, plus Index-Dump neben der WAL.
+// spec/31 §6.2.1: as above, plus an index dump next to the WAL.
 void*   aiml_db_kv_open_persist_idx(const char* name, int64_t val_size,
                                     const char* base_path, int32_t index_dump);
 // Typed Kv: value type contains heap fields (strings, lists, …).

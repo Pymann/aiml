@@ -1,23 +1,23 @@
 #pragma once
-// spec/65 §5a — die Export-Tabelle des Wirts (F65-23/F65-24).
+// spec/65 §5a — the host's export table (F65-23/F65-24).
 //
-// EINE Tabelle, nicht zwei: je angebotenem Symbol eine Zeile mit Name, Level und
-// (spaeter) Signatur und Adresse.  Zwei getrennte Listen — „was ist exportiert"
-// neben „welches Level hat es" — waeren die Drift, die dieses Projekt schon
-// mehrfach bezahlt hat.
+// ONE table, not two: per offered symbol one row with name, level and
+// (later) signature and address.  Two separate lists — "what is exported"
+// next to "which level does it have" — would be the drift this project has already
+// paid for several times.
 //
-// Diese Fassung traegt **Name und Level**.  Das genuegt fuer die beiden
-// Pruefungen, die zur UEBERSETZUNGSZEIT stattfinden: die Zugriffspruefung
-// (F65-4/F65-5) und die `extern`-Zulassung (F65-13).  Signatur und Adresse
-// braucht erst das AUFRUFEN, und dafuer muss ein echter Wirt sie anmelden
-// (F65-24, `DynamicLibrary::AddSymbol` + Funktionszeiger auf den eigenen `def`).
+// This version carries **name and level**.  That is enough for the two
+// checks that take place at COMPILE TIME: the access check
+// (F65-4/F65-5) and the `extern` admission (F65-13).  Signature and address
+// are only needed for CALLING, and for that a real host must register them
+// (F65-24, `DynamicLibrary::AddSymbol` + function pointer to its own `def`).
 //
-// Die Tabelle kommt vom WIRT, nicht aus der Quelle (F65-6).  `AIML_EXPORTS` nennt
-// die Datei; wer sie setzt, ist der Wirt — dieselbe Begruendung wie bei
-// `AIML_CLEARANCE`.  Das ist KEIN Widerspruch zu F65-32 („env darf nur
-// verschaerfen"): dort geht es um die Grenzen der SITZUNG (clearance,
-// create_level, replace_level).  Ein Eintrag hier ist das ANGEBOT des Wirts, und
-// anzubieten ist sein Vorrecht.
+// The table comes from the HOST, not from the source (F65-6).  `AIML_EXPORTS` names
+// the file; whoever sets it is the host — the same reasoning as for
+// `AIML_CLEARANCE`.  That is NO contradiction to F65-32 ("env may only
+// tighten"): that is about the limits of the SESSION (clearance,
+// create_level, replace_level).  An entry here is the host's OFFER, and
+// offering is its prerogative.
 #include <cstdlib>
 #include <fstream>
 #include <map>
@@ -27,8 +27,8 @@
 namespace aiml {
 namespace clearance {
 
-// Nicht-konstant, weil der Wirt zur Laufzeit Zeilen HINZUFUEGT (F65-37).  Die Datei aus
-// `AIML_EXPORTS` wird einmal eingelesen, danach ist die Tabelle das Gedaechtnis des Prozesses.
+// Non-constant, because the host ADDS rows at runtime (F65-37).  The file from
+// `AIML_EXPORTS` is read once, after that the table is the memory of the process.
 inline std::map<std::string, int>& exportTable() {
     static std::map<std::string, int> table;
     static bool loaded = false;
@@ -38,7 +38,7 @@ inline std::map<std::string, int>& exportTable() {
     if (!file || !*file) return table;
     std::ifstream in(file);
     if (!in) {
-        LOG_WARNING("AIML_EXPORTS: Datei nicht lesbar: " + std::string(file));
+        LOG_WARNING("AIML_EXPORTS: file not readable: " + std::string(file));
         return table;
     }
     std::string line;
@@ -57,17 +57,17 @@ inline std::map<std::string, int>& exportTable() {
     return table;
 }
 
-// Level des angebotenen Symbols, oder kAbsent, wenn der Wirt es nicht anbietet.
-// F65-5: Auslassen gewaehrt nie — „nicht angeboten" ist nicht „offen".
+// Level of the offered symbol, or kAbsent if the host does not offer it.
+// F65-5: omission never grants — "not offered" is not "open".
 inline int exportedLevel(const std::string& name) {
     auto& table = exportTable();
     auto it = table.find(name);
     return it == table.end() ? kAbsent : it->second;
 }
 
-// F65-37: der Wirt traegt eine Zeile ein (Name + Level).  Die Adresse hat der Aufrufer
-// schon per `AddSymbol` angemeldet; hier kommt die Richtlinie dazu, damit beides aus
-// EINEM Aufruf stammt und nicht driften kann (F65-23).
+// F65-37: the host enters a row (name + level).  The caller has already registered the
+// address via `AddSymbol`; here the policy is added, so that both come from
+// ONE call and cannot drift (F65-23).
 inline void registerExport(const std::string& name, int level) {
     exportTable()[name] = level;
 }

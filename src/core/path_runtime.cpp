@@ -250,9 +250,9 @@ extern "C" int aiml_io_rename(const char* src, const char* dst) {
     try { fs::rename(src, dst); return 0; } catch (...) { return -1; }
 }
 
-// spec/42: Ausführbar-Bit setzen/entfernen.  Für inhaltsadressierte Bäume ist es
-// das EINZIGE Modus-Bit, das im Hash steckt (doc/spec/92 §92.2): es ändert das
-// Verhalten, während uid/gid/Zeitstempel Builds nur unreproduzierbar machen.
+// spec/42: set/remove the executable bit.  For content-addressed trees it is
+// the ONLY mode bit that goes into the hash (doc/spec/92 §92.2): it changes the
+// behaviour, while uid/gid/timestamps only make builds unreproducible.
 extern "C" int aiml_io_set_exec(const char* p, int on) {
     if (!p || !*p) return -1;
     try {
@@ -264,22 +264,22 @@ extern "C" int aiml_io_set_exec(const char* p, int on) {
     } catch (...) { return -1; }
 }
 
-// spec/42: symbolischer Link.  `target` darf relativ sein und muss (noch) nicht
-// existieren — genau das braucht die Materialisierung eines Baums, dessen
-// Link-Ziel erst später entsteht.
+// spec/42: symbolic link.  `target` may be relative and need not exist (yet)
+// — that is exactly what materialising a tree needs, whose
+// link target only comes into being later.
 extern "C" int aiml_io_symlink(const char* target, const char* link_path) {
     if (!target || !link_path || !*target || !*link_path) return -1;
     try { fs::create_symlink(target, link_path); return 0; } catch (...) { return -1; }
 }
 
-// spec/42: ist der Pfad SELBST ein symbolischer Link (ohne ihm zu folgen)?
+// spec/42: is the path ITSELF a symbolic link (without following it)?
 extern "C" int aiml_io_is_symlink(const char* p) {
     if (!p || !*p) return 0;
     try { return fs::is_symlink(fs::symlink_status(p)) ? 1 : 0; } catch (...) { return 0; }
 }
 
-// spec/42 + spec/61 §7: Ziel eines symbolischen Links als owned rc-string;
-// "" wenn der Pfad keiner ist oder nicht gelesen werden kann.
+// spec/42 + spec/61 §7: target of a symbolic link as an owned rc string;
+// "" if the path is not one or cannot be read.
 extern "C" char* aiml_io_read_link(const char* p) {
     if (!p || !*p) return aiml_str_dup("");
     try {
@@ -288,22 +288,22 @@ extern "C" char* aiml_io_read_link(const char* p) {
     } catch (...) { return aiml_str_dup(""); }
 }
 
-// spec/42: harter Link — zwei Namen auf denselben Inhalt, ohne zu kopieren.
-// Grundlage für inhaltsadressierte Ablagen: eine Datei in den Store aufnehmen
-// und einen Baum daraus materialisieren kostet so keinen zweiten Datenblock.
-// -1 auch bei Dateisystem-Grenze (dann muss der Aufrufer kopieren) oder wenn
-// das Ziel existiert — der Aufrufer entscheidet, ob das ein Fehler ist.
+// spec/42: hard link — two names for the same content, without copying.
+// The basis for content-addressed stores: taking a file into the store
+// and materialising a tree from it this way costs no second data block.
+// -1 also on a file system boundary (then the caller must copy) or if
+// the target exists — the caller decides whether that is an error.
 extern "C" int aiml_io_link(const char* src, const char* dst) {
     if (!src || !dst || !*src || !*dst) return -1;
     try { fs::create_hard_link(src, dst); return 0; } catch (...) { return -1; }
 }
 
 // spec/42 + spec/61 §7: owned rc string; "" when the file cannot be read.
-// Virtuelle Dateien (/proc, /sys) melden GROESSE 0 und liefern trotzdem Inhalt.  Wer die
-// Groesse zum Dimensionieren nimmt, bekommt dort eine leere Zeichenkette — gemessen
-// 17.10.2026 an `/proc/self/stat` (cosmos doc/spec/109 wollte die eigene CPU-Last lesen
-// und bekam 0).  Darum: Groesse als HINWEIS fuer die erste Allokation, gelesen wird bis
-// EOF.  Fuer gewoehnliche Dateien bleibt es bei genau einem `fread`.
+// Virtual files (/proc, /sys) report SIZE 0 and still deliver content.  Whoever
+// takes the size for sizing gets an empty string there — measured
+// 2026-10-17 on `/proc/self/stat` (cosmos doc/spec/109 wanted to read its own CPU load
+// and got 0).  Hence: the size as a HINT for the first allocation, reading goes on until
+// EOF.  For ordinary files it stays at exactly one `fread`.
 static char* aiml_io_read_stream(FILE* f, size_t hint) {
     size_t cap = hint > 0 ? hint : 4096;
     size_t len = 0;
@@ -323,7 +323,7 @@ static char* aiml_io_read_stream(FILE* f, size_t hint) {
         }
         size_t rd = std::fread(buf + len, 1, room, f);
         len += rd;
-        if (rd < room) break;          // EOF oder Fehler
+        if (rd < room) break;          // EOF or error
     }
     buf[len] = '\0';
     return buf;
