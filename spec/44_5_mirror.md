@@ -158,7 +158,7 @@ In the browser (WASM), only `ws://` and `wss://` are available.
 
 | Call | Return | Description |
 |--------|----------|--------------|
-| `mirror.listen(url: string)` | `mirror_session` | Listen for incoming connections; non-blocking. **`null` bei Fehlschlag** (belegter Port u.a.) — die Rueckgabe MUSS mit `peq: [sess, null]` geprueft werden, sonst laeuft der Server als Zombie weiter: er loggt und tickt, hat aber keinen Socket und beantwortet nichts. |
+| `mirror.listen(url: string)` | `mirror_session` | Listen for incoming connections; non-blocking. **`null` on failure** (port in use, among others) — the return value MUST be checked with `peq: [sess, null]`, otherwise the server keeps running as a zombie: it logs and ticks, but has no socket and answers nothing. |
 | `mirror.listen_max(url: string, max_peers: i32)` | `mirror_session` | With peer limit |
 | `mirror.listen_tls(url: string, cert: string, key: string)` | `mirror_session` | `wss://` host with a server cert (PEM cert + key paths) |
 
@@ -281,21 +281,21 @@ Both queries are answered from the session thread (no implicit thread safety).
 3. Execute RPC calls from peers
 4. Enqueue peer events (connect/disconnect)
 
-> **„Once per frame" ist eine Empfehlung, keine Zusicherung — und die
-> blockierenden Komfort-Aufrufe unterlaufen sie.** `session.send_and_await`,
-> `mirror.connect` und `connect_timeout` pumpen die Session **selbst**, in
-> 2-ms-Ticks, bis ihre Antwort da ist (§7, Request/Response). Wird einer davon
-> aus einer Frameloop gerufen, läuft `update()` also dutzende Male **pro Frame**
-> und an einem unvorhersehbaren Punkt — eingehende Snapshots und RPCs werden
-> dann mitten im Render-Durchlauf angewandt, nicht an einer definierten
-> Framegrenze. Die halbe Szene kann den alten, die andere Hälfte den neuen
-> Zustand zeigen.
+> **"Once per frame" is a recommendation, not a guarantee — and the
+> blocking convenience calls undermine it.** `session.send_and_await`,
+> `mirror.connect` and `connect_timeout` pump the session **themselves**, in
+> 2 ms ticks, until their answer is there (§7, Request/Response). If one of them
+> is called from a frame loop, `update()` therefore runs dozens of times **per frame**
+> and at an unpredictable point — incoming snapshots and RPCs are
+> then applied in the middle of the render pass, not at a defined
+> frame boundary. Half the scene can show the old state, the other half the new
+> one.
 >
-> Für Anwendungen mit Frameloop (Spiel, UI) heißt das: **eigene Anfragen über
-> `send_request` + `take_response`** stellen (§7, „For asynchronous clients"),
-> `update()` genau einmal am Framebeginn rufen und die blockierenden Varianten
-> Werkzeugen, Skripten und Tests überlassen. `send_and_await` ist dort richtig,
-> wo es keinen Frame gibt, den es anhalten könnte.
+> For applications with a frame loop (game, UI) this means: **make your own requests via
+> `send_request` + `take_response`** (§7, "For asynchronous clients"),
+> call `update()` exactly once at the start of the frame and leave the blocking variants to
+> tools, scripts and tests. `send_and_await` is right there,
+> where there is no frame it could stall.
 
 ---
 

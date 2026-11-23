@@ -320,20 +320,19 @@ The following escape sequences are supported inside string literals:
 
 All other `\X` sequences are a CompilationError.
 
-**Escapes gehören dem YAML, nicht aiml.**  Ein aiml-Programm ist ein YAML-Dokument: was in
-`"…"` steht, löst der YAML-Leser auf, und aiml sieht das Ergebnis.  In einem **einfach**
-quotierten Skalar (`'…'`) löst YAML nichts auf — dort bleibt `\n` buchstäblich ein
-Backslash und ein `n`.  Gemessen am 18.10.2026: ein mit `'set -e\ntar …'` gebauter
-Shell-Befehl kam als EINE Zeile an (`/bin/sh: 1: set: Illegal option -t`).  Die Regel für
-mehrzeilige Zeichenketten:
+**Escapes belong to YAML, not to aiml.**  An aiml program is a YAML document: whatever is in
+`"…"` is resolved by the YAML reader, and aiml sees the result.  In a **single**-quoted
+scalar (`'…'`) YAML resolves nothing — there `\n` literally stays a
+backslash and an `n`.  Measured on 2026-10-18: a shell command built with `'set -e\ntar …'`
+arrived as ONE line (`/bin/sh: 1: set: Illegal option -t`).  The rule for
+multi-line strings:
 
-- **doppelte** Quotes, wenn `\n`/`\t` wirken sollen — dann müssen innen liegende
-  Anführungszeichen für aiml als `\\\"` geschrieben werden, weil YAML die erste Ebene
-  bereits wegnimmt;
-- **einfache** Quotes, wenn der Text wörtlich gelten soll (Shell-Befehle mit `"` und `$(…)`)
-  — dann **keine** Backslashes verwenden (ein unbekanntes `\X` wäre ein Übersetzungsfehler)
-  und Zeilen mit `;` statt mit `\n` trennen.
-- `${…}` interpoliert aiml in **beiden** Formen; `$(…)` und `$var` bleiben unberührt.
+- **double** quotes if `\n`/`\t` should take effect — then quotation marks inside
+  must be written as `\\\"` for aiml, because YAML already removes the first level;
+- **single** quotes if the text should apply literally (shell commands with `"` and `$(…)`)
+  — then use **no** backslashes (an unknown `\X` would be a compile error)
+  and separate lines with `;` instead of `\n`.
+- aiml interpolates `${…}` in **both** forms; `$(…)` and `$var` remain untouched.
 
 ## `print`
 

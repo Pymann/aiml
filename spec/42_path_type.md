@@ -258,12 +258,12 @@ The `io` namespace accepts only `path`, never `string`:
 # io.read_file(p) → string: the whole file content as an owned string (spec/61 §7);
 # "" when the file cannot be read (use io.is_file to tell a missing file from an empty one).
 #
-# Liest bis EOF, nicht bis zur gemeldeten GROESSE (korrigiert 17.10.2026).  Virtuelle
-# Dateien unter /proc und /sys melden Groesse 0 und liefern trotzdem Inhalt; die frühere
-# Fassung dimensionierte den Puffer per `ftell` und gab dort IMMER "" zurueck.  Gefunden,
-# als cosmos (doc/spec/109) die eigene CPU-Last aus `/proc/self/stat` lesen wollte und
-# eine leere Zeichenkette bekam — ohne Fehler, was die Suche teuer machte.
-# Fuer gewoehnliche Dateien bleibt es bei einer Allokation und einem `fread`.
+# Reads up to EOF, not up to the reported SIZE (corrected 2026-10-17).  Virtual
+# files under /proc and /sys report size 0 and still deliver content; the earlier
+# version sized the buffer via `ftell` and therefore ALWAYS returned "" there.  Found
+# when cosmos (doc/spec/109) wanted to read its own CPU load from `/proc/self/stat` and
+# got an empty string — without an error, which made the search expensive.
+# For ordinary files it stays at one allocation and one `fread`.
 
 # Filesystem operations
 - decl: [exists, bool]
@@ -295,8 +295,8 @@ The `io` namespace accepts only `path`, never `string`:
 - decl: [dest, path]
 - set: [dest, "/etc/hosts.bak"]
 - call: [io.rename, p, dest]
-# Harter Link: zweiter Name auf denselben Inhalt, ohne Kopie (0 = ok, -1 = Fehler,
-# z.B. über Dateisystem-Grenzen oder wenn das Ziel existiert).
+# Hard link: a second name for the same content, without a copy (0 = ok, -1 = error,
+# e.g. across file system boundaries or if the target exists).
 - decl: [linked, i32, { call: [io.link, p, dest] }]
 
 # Delete

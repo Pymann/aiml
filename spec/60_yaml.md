@@ -239,16 +239,16 @@ A flat `list<i32>` with triples rather than a list of models, because builtins r
       - set: [idx, { +: [idx, 3] }]
 ```
 
-## 10. Verfügbarkeit in WASM
+## 10. Availability in WASM
 
-`yaml.tokens` ist in **beiden** Zielen verfügbar, der Rest des Namensraums nur **native**.
+`yaml.tokens` is available in **both** targets, the rest of the namespace only **natively**.
 
-Der Grund ist nicht Geschmack, sondern eine Abhängigkeit: Parsen, Zugriff und `dump` setzen
-yaml-cpp voraus, der Lexer nicht — er liest Bytes.  `yaml.tokens` liegt deshalb in einer eigenen
-Übersetzungseinheit (`src/sys/yaml_tokens_runtime.cpp`), die in der WASM-Laufzeit mitgebaut wird.
+The reason is not taste but a dependency: parsing, access and `dump` require
+yaml-cpp, the lexer does not — it reads bytes.  `yaml.tokens` therefore lives in its own
+translation unit (`src/sys/yaml_tokens_runtime.cpp`), which is built into the WASM runtime.
 
-Aufgefallen ist das daran, dass die cosmos-Oberfläche ihre Pipeline-Hervorhebung mit
-`yaml.tokens` macht und der WASM-Client mit `undefined symbol: aiml_yaml_tokens` nicht mehr
-linkte (gemessen 2026-10-12) — die Hervorhebung war nur native getestet.  Lehre: ein Builtin, das
-eine **Oberfläche** benutzt, braucht einen Link-Test im WASM-Ziel, nicht nur einen Lauf.
+This was noticed because the cosmos UI does its pipeline highlighting with
+`yaml.tokens` and the WASM client no longer linked with `undefined symbol: aiml_yaml_tokens`
+(measured 2026-10-12) — the highlighting had only been tested natively.  Lesson: a builtin that
+a **UI** uses needs a link test in the WASM target, not just a run.
 

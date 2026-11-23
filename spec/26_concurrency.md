@@ -14,17 +14,17 @@
 - decl: [t1, thread_handle]
 - set: [t1, { spawn: [worker_function, 10] }]
 
-> ⚠️ **`spawn`-Argumente: keine Container direkt übergeben.** Der Trampolin
-> (`__aiml_spawn_<fn>`) baut seine Argument-Struktur aus dem Typ des
-> AUSGEWERTETEN Ausdrucks, nicht aus der Zielsignatur
-> (`ast_compiler_expr.cpp`, `visitSpawn`). Für `list<T>`/`map<K:V>` packt er
-> deshalb das Struct **by value**, während die Funktion unter memV3 den
-> Handle-Zeiger erwartet → `Function '__aiml_spawn_<fn>' verification FAILED:
-> Call parameter type does not match function signature`. Das bricht den Build
-> (also keine stille Falle), kostet aber Zeit.
+> ⚠️ **`spawn` arguments: do not pass containers directly.** The trampoline
+> (`__aiml_spawn_<fn>`) builds its argument structure from the type of the
+> EVALUATED expression, not from the target signature
+> (`ast_compiler_expr.cpp`, `visitSpawn`). For `list<T>`/`map<K:V>` it therefore packs
+> the struct **by value**, while under memV3 the function expects the
+> handle pointer → `Function '__aiml_spawn_<fn>' verification FAILED:
+> Call parameter type does not match function signature`. That breaks the build
+> (so it is not a silent trap), but it costs time.
 >
-> Tragfähige Form: den geteilten Zustand in eine Klasse legen und `ref<T>`
-> übergeben — belegt durch `tests/test_chan_class_member.aiml` und
+> Workable form: put the shared state into a class and pass `ref<T>`
+> — demonstrated by `tests/test_chan_class_member.aiml` and
 > `tests/test_lock_class_member.aiml`:
 >
 > ```yaml
@@ -37,9 +37,9 @@
 > - decl: [handle, thread_handle, { spawn: [worker, job, 0] }]
 > ```
 >
-> Skalare (`i32`/`i64`/`f32`) und `chan<T>` funktionieren direkt; ein
-> `ptr<T>`-Argument wird vom Thread ÜBERNOMMEN (spec/61 §8, `movePtrArg`) —
-> wer das Objekt weiterbenutzt, übergibt `ref<T>`.
+> Scalars (`i32`/`i64`/`f32`) and `chan<T>` work directly; a
+> `ptr<T>` argument is TAKEN OVER by the thread (spec/61 §8, `movePtrArg`) —
+> whoever keeps using the object passes `ref<T>`.
 
 # 2. Thread API
 # join(): Blocks until thread completes.
