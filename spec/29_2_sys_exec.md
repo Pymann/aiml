@@ -138,19 +138,19 @@ elif bundle_version > current_version:
     HOT-RELOAD — recompile (initially: skip + warning; later: real reload)
 ```
 
-**Achtung bei fremdem Code (spec/65) — seit 17.10.2026 UMGESETZT, nicht nur vermerkt:** beide
-Zweige sind an einer Vertrauensgrenze nicht zulaessig, wie sie oben stehen, und `tryHotReload`
-in `exec_impl.cpp` prueft das jetzt in dieser Reihenfolge:
+**Caution with foreign code (spec/65) — IMPLEMENTED since 2026-10-17, not just noted:** at a
+trust boundary neither branch is admissible as written above, and `tryHotReload`
+in `exec_impl.cpp` now checks in this order:
 
-1. `replace_level` der Sitzung — die Version stammt von dem, der das Bundle geschrieben hat,
-   ist also **Eingabe** und keine Berechtigung (spec/65 F65-29).  Fehlt das Recht:
-   `clearance-replace`, und der Lauf bricht mit `-3` ab.
-2. erst danach der Versionsvergleich.  Der SKIP-Zweig ist in einer eingeschraenkten Sitzung ein
-   **Fehler** (`clearance-collision`, spec/65 F65-30), kein Ueberspringen: ein Skript, das sein
-   eigenes `helper` definiert, bekaeme sonst stillschweigend das `helper` des Wirts.
+1. the session's `replace_level` — the version comes from whoever wrote the bundle,
+   so it is **input**, not an authorisation (spec/65 F65-29).  If the right is missing:
+   `clearance-replace`, and the run aborts with `-3`.
+2. only then the version comparison.  In a restricted session the SKIP branch is an
+   **error** (`clearance-collision`, spec/65 F65-30), not a skip: a script that defines its
+   own `helper` would otherwise silently get the host's `helper`.
 
-Fuer Code aus derselben Quelle — also ohne gesetzte Freigabe — bleibt die Logik oben
-unveraendert gueltig; die Pruefungen haengen an `restricted()`.
+For code from the same source — i.e. without a clearance set — the logic above
+remains valid unchanged; the checks hinge on `restricted()`.
 
 ### 4.3 Hot-Reload (Implementation — later phase)
 
@@ -173,17 +173,17 @@ For the initial implementation (JIT and AOT):
 - Same or older version → SKIP
 - Newer version → SKIP + `LOG_WARNING("hot-reload not yet supported: " + name)`
 
-**Zwei Auflagen aus spec/65 fuer den, der §4.3 wirklich baut** (Befund 17.10.2026): heute kann
-ein Buendel keinen FREMDEN Namen tragen — `sys.bundle` nimmt den Namen einer Funktion, die der
-Wirt selbst uebersetzt hat (§16) —, und darum ist der Pfad „neues Symbol" unerreichbar.  Sobald
-er erreichbar wird, gilt:
+**Two requirements from spec/65 for whoever actually builds §4.3** (finding 2026-10-17): today
+a bundle cannot carry a FOREIGN name — `sys.bundle` takes the name of a function the
+host compiled itself (§16) — and so the "new symbol" path is unreachable.  As soon as
+it becomes reachable, the following applies:
 
-- Das Anlegen braucht `create_level` (spec/65 F65-26).  Der Waechter `clearance-create` steht
-  schon in `tryHotReload` und ist fail closed; er wartet nur auf diesen Pfad.
-- Das Level eines angelegten Symbols IST die Freigabe der Sitzung (spec/65 F65-27) — nicht 0
-  und nicht ein Wert, den die ankommende Quelle waehlt.  Dieses Kapitel ist die Stelle, an der
-  das Level gesetzt wird, also muss es hier passieren; spec/65 kann es nicht nachtraeglich
-  anbringen.  Die zugehoerigen Proben sind `tests/clearance/11_create_allowed.aiml` und
+- Creating needs `create_level` (spec/65 F65-26).  The guard `clearance-create` is
+  already in `tryHotReload` and fails closed; it is only waiting for this path.
+- The level of a created symbol IS the session's clearance (spec/65 F65-27) — not 0
+  and not a value chosen by the incoming source.  This chapter is the place where
+  the level is set, so it has to happen here; spec/65 cannot add it
+  afterwards.  The corresponding probes are `tests/clearance/11_create_allowed.aiml` and
   `neg/n20_create_without_level.aiml` (`# NEEDS: dynload`).
 
 ## 5. Global Context Pointer
@@ -229,19 +229,19 @@ aiml_set_active_context(nullptr, nullptr);
 # Default: shared context, no start_call
 - set: [rc, { call: [sys.exec, pkg] }]
 
-# Der Kontext haengt am BUENDEL, nicht an der Ausfuehrung: er beschreibt, WIE uebersetzt wird.
+# The context belongs to the BUNDLE, not to the execution: it describes HOW it is compiled.
 - decl: [pkg, Code, { call: [sys.bundle, "user_script", { context: true }] }]
 
-# Die Argumente 2..4 sind die RICHTLINIE der Sitzung (spec/65 F65-26/F65-36), in dieser
-# Reihenfolge: clearance, create_level, replace_level.  Sie beschreibt, WER ausfuehrt, und
-# gehoert darum hierher und nicht an das Buendel.  Fehlende hintere Werte sind 0 = niemand.
-- set: [rc, { call: [sys.exec, pkg, 7] }]         # Freigabe 7, darf nichts schreiben
-- set: [rc, { call: [sys.exec, pkg, 7, 7, 0] }]   # ... darf anlegen, nicht ersetzen
+# Arguments 2..4 are the session's POLICY (spec/65 F65-26/F65-36), in this
+# order: clearance, create_level, replace_level.  It describes WHO executes, and
+# therefore belongs here and not on the bundle.  Missing trailing values are 0 = nobody.
+- set: [rc, { call: [sys.exec, pkg, 7] }]         # clearance 7, may not write anything
+- set: [rc, { call: [sys.exec, pkg, 7, 7, 0] }]   # ... may create, not replace
 ```
 
-(Ein frueherer Entwurf dieses Abschnitts stellte ein zweites Argument `true` fuer den
-ISOLIERTEN Kontext in Aussicht.  Das ist ueberholt: `context` ist eine Eigenschaft des Codes
-und steht an `sys.bundle`; der zweite Platz traegt die Freigabe.)
+(An earlier draft of this section promised a second argument `true` for the
+ISOLATED context.  That is outdated: `context` is a property of the code
+and is set on `sys.bundle`; the second position carries the clearance.)
 
 ## 8. Implementation Plan
 
@@ -464,17 +464,17 @@ This would make `context=false` work in AOT mode as well:
 `libaiml` provides a persistent `CompilerContext` + `ExecutionEngine`
 into which sys.exec can load new modules.
 
-## 12. Isolierter Kontext in einem AOT-Binary — funktioniert
+## 12. Isolated context in an AOT binary — it works
 
-**Richtigstellung.**  §3.1 und §11 lesen sich so, als sei `sys.exec` in einem AOT-Binary nicht
-benutzbar, und §3.2 fuehrt den isolierten Kontext als "Phase 2".  Beides ist ueberholt:
-`aiml_isolated_exec` ist implementiert und haengt **nicht** an `g_active_context`.
+**Correction.**  §3.1 and §11 read as if `sys.exec` could not be used in an AOT binary,
+and §3.2 lists the isolated context as "Phase 2".  Both are outdated:
+`aiml_isolated_exec` is implemented and does **not** depend on `g_active_context`.
 
-Nachgewiesen mit einem `exodus build`-Binary (kein JIT):
+Verified with an `exodus build` binary (no JIT):
 
 ```yaml
 - decl: [pkg, Code, { call: [sys.bundle, "worker_task", { context: true }] }]
-- decl: [rcx, i32, { call: [sys.exec, pkg] }]      # rc=0, worker_task laeuft
+- decl: [rcx, i32, { call: [sys.exec, pkg] }]      # rc=0, worker_task runs
 ```
 
 ```
@@ -483,98 +483,98 @@ aiml_isolated_exec: compiled source (160 bytes)
 aiml_isolated_exec: finished with rc=0
 ```
 
-Der Ablauf: `sys.bundle(name, { context: true })` setzt `new_context = 1`, `aiml_exec_code`
-verzweigt sofort nach `aiml_isolated_exec`, das aus den `code_chunks` YAML baut, einen frischen
-`AIMLCompiler` anlegt, `compileAndRun` ruft, die Globals des Aufrufers wiederherstellt und beim
-Verlassen des Scopes LLVMContext, Module und CompilerContext freigibt.
+The sequence: `sys.bundle(name, { context: true })` sets `new_context = 1`, `aiml_exec_code`
+branches straight to `aiml_isolated_exec`, which builds YAML from the `code_chunks`, creates a fresh
+`AIMLCompiler`, calls `compileAndRun`, restores the caller's globals and, on leaving the
+scope, frees the LLVMContext, module and CompilerContext.
 
-Die Voraussetzung dafuer ist, dass der Compiler in der Laufzeitbibliothek steckt — er tut es:
-`libaiml.so` enthaelt LLVM und exportiert `aiml_exec_code` sowie `aiml_set_active_context`.
+The prerequisite is that the compiler is part of the runtime library — and it is:
+`libaiml.so` contains LLVM and exports `aiml_exec_code` as well as `aiml_set_active_context`.
 
-**Was weiterhin NICHT geht:** `context = false` in AOT.  Dort sucht `sys.exec` den geteilten
-JIT-Kontext, findet keinen und liefert `-2` (§11).  Das ist richtig so — Hot-Reload in die
-laufende Sitzung setzt eine Sitzung voraus.
+**What still does NOT work:** `context = false` in AOT.  There `sys.exec` looks for the shared
+JIT context, finds none and returns `-2` (§11).  That is correct — hot reload into the
+running session presupposes a session.
 
-**Was zu messen bleibt:** die Lebensdauer.  Jeder isolierte Lauf baut einen vollstaendigen
-LLVM-Kontext auf und wieder ab.  Dass dabei nichts zurueckbleibt, ist plausibel (der Destruktor
-raeumt), aber bei einem Agenten, der tausende Schritte ausfuehrt, gehoert es gemessen und nicht
-angenommen.
+**What remains to be measured:** the lifetime.  Every isolated run builds up and tears down a complete
+LLVM context.  That nothing is left behind is plausible (the destructor
+cleans up), but for an agent that executes thousands of steps it should be measured, not
+assumed.
 
-### Befund 16.10.2026: der Objekt-Cache hat im AOT-Fall keinen Versionsschluessel
+### Finding 2026-10-16: the object cache has no version key in the AOT case
 
-`aiml_isolated_exec` uebernimmt den Compilerpfad nur, wenn es einen aktiven Kontext gibt:
+`aiml_isolated_exec` takes over the compiler path only if there is an active context:
 
 ```cpp
 if (g_active_context) iso.compilerPath = g_active_context->compilerPath;
 ```
 
-Im AOT-Binary ist `g_active_context` immer `nullptr` (§11), der Subcompiler bekommt also **keinen**
-`compilerPath`.  Dieser Pfad ist aber die Quelle des Cache-Versionsschluessels:
-`compilerBinaryRev()` liest Groesse und mtime der Compiler-Datei und liefert bei leerem Pfad
-`"unknown"`, woraufhin `cacheRevDir()` in `rev_unknown` landet.
+In the AOT binary `g_active_context` is always `nullptr` (§11), so the sub-compiler gets **no**
+`compilerPath`.  But this path is the source of the cache version key:
+`compilerBinaryRev()` reads size and mtime of the compiler file and returns
+`"unknown"` for an empty path, whereupon `cacheRevDir()` ends up in `rev_unknown`.
 
-**Folge:** uebersetzte Objekte eines isolierten Laufs im AOT-Binary liegen unter einem Schluessel,
-der **Compiler-Versionen nicht unterscheidet**.  Nach einem `libaiml`-Update kann veralteter Code
-wiederverwendet werden — genau die Klasse von Fehler, die in diesem Projekt schon zweimal teuer
-war (stale KV-Blobs, stale `__aiml_cache`).
+**Consequence:** compiled objects of an isolated run in the AOT binary are stored under a key
+that **does not distinguish compiler versions**.  After a `libaiml` update, stale code can
+be reused — exactly the class of bug that has already been expensive twice in this project
+(stale KV blobs, stale `__aiml_cache`).
 
-Aufgefallen ist es bisher niemandem, weil `context = true` im AOT praktisch nicht benutzt wird.
-Fuer eine Skript-Konsole in einem AOT-Wirt (spec/65) ist es ein Stolperstein, denn dort ist der
-isolierte Kontext der **einzige** verfuegbare Pfad.
+Nobody has noticed so far, because `context = true` is practically unused in AOT.
+For a script console in an AOT host (spec/65) it is a stumbling block, because there the
+isolated context is the **only** available path.
 
-**Behoben am 17.10.2026.**  Der Schluessel haengt nicht mehr am Compilerpfad, sondern an der
-Datei, die den Uebersetzer **tatsaechlich enthaelt**: `dladdr` auf eine Funktion der
-betreffenden Uebersetzungseinheit liefert im JIT-Lauf das `aiml`-Binary und im AOT-Binary die
-`libaiml.so`; daraus wird wie bisher `<groesse>_<mtime>`.  Gibt auch das nichts her, ist die
-Rueckgabe **leer** statt `"unknown"` — `computeImportCacheKey` liefert dann keinen Schluessel,
-`checkCache` behandelt das als „kein Treffer", und der Cache **schaltet sich ab** statt einen
-gemeinsamen Eimer fuer alle Versionen aufzumachen (fail closed, mit Warnung).
+**Fixed on 2026-10-17.**  The key no longer depends on the compiler path but on the
+file that **actually contains** the compiler: `dladdr` on a function of the
+translation unit in question yields the `aiml` binary in a JIT run and
+`libaiml.so` in an AOT binary; from that, `<size>_<mtime>` is formed as before.  If that yields nothing
+either, the return value is **empty** instead of `"unknown"` — `computeImportCacheKey` then returns no key,
+`checkCache` treats that as "no hit", and the cache **switches itself off** instead of opening a
+shared bucket for all versions (fail closed, with a warning).
 
-Gemessen im JIT-Lauf: nach einem Neubau heisst das Cache-Verzeichnis `rev_83002216_…` und
-entspricht damit Groesse und mtime des neuen Binaries; das Verzeichnis der Vorversion wird
-von `sweepCache` geraeumt.  **Noch nicht gemessen** ist der AOT-Zweig: dafuer muesste ein
-AOT-Binary ein isoliert uebersetztes Buendel mit einem `import` ausfuehren, denn ohne Import
-wird der Cache gar nicht befragt — `tests/bundle_socket` (der vorhandene AOT-Pfad) buendelt
-ohne Imports und hat den Fehler deshalb nie ausgeloest.  Der Fehler war also **latent**: kein
-`rev_unknown` ist im Baum je entstanden.
+Measured in a JIT run: after a rebuild the cache directory is called `rev_83002216_…` and
+so matches size and mtime of the new binary; the previous version's directory is
+cleaned up by `sweepCache`.  The AOT branch is **not measured yet**: that would need an
+AOT binary to execute an isolated-compiled bundle with an `import`, because without an import
+the cache is not consulted at all — `tests/bundle_socket` (the existing AOT path) bundles
+without imports and therefore never triggered the bug.  The bug was thus **latent**: no
+`rev_unknown` ever came into being in the tree.
 
 
-## 13. `sys.code_from` — ein Bundle aus Quelltext bauen
+## 13. `sys.code_from` — building a bundle from source text
 
-`pkg.toString()` verkettet `code_chunks` + `data_chunks` zu **aiml-Quelltext**; `start_call` und
-`new_context` sind darin **nicht** enthalten.  Das ist die Drahtform, in der ein Bundle über eine
-Verbindung reist (cosmos `doc/spec/96`: der Controller schickt den Schritt an den Agenten).  Bis
-hierher fehlte die Gegenrichtung: ein Empfänger konnte aus dem Text kein `Code` mehr machen.
+`pkg.toString()` concatenates `code_chunks` + `data_chunks` into **aiml source text**; `start_call` and
+`new_context` are **not** included.  That is the wire form in which a bundle travels over a
+connection (cosmos `doc/spec/96`: the controller sends the step to the agent).  Until
+now the opposite direction was missing: a receiver could not turn the text back into a `Code`.
 
 ```
 sys.code_from(src: string [, { start: "<fn>", context: true }]) → Code
 ```
 
-| Option | Vorgabe | Bedeutung |
+| Option | Default | Meaning |
 |---|---|---|
-| `start` | `""` | Funktion, die nach dem Übersetzen gerufen wird (wird `start_call`) |
-| `context` | `false` | `true` = isolierter Kontext — **das einzige, was in einem AOT-Binary geht** (§11) |
+| `start` | `""` | function called after compilation (becomes `start_call`) |
+| `context` | `false` | `true` = isolated context — **the only thing that works in an AOT binary** (§11) |
 
 ```yaml
 # Sender
 - decl: [pkg, Code, { call: [sys.bundle, "worker_task"] }]
 - decl: [wire, string, { call: [pkg.toString] }]
 
-# Empfaenger
+# Receiver
 - decl: [job, Code, { call: [sys.code_from, wire, { start: "worker_task", context: true }] }]
 - decl: [rc, i32, { call: [sys.exec, job] }]
 ```
 
-Die Optionen spiegeln `sys.bundle` absichtlich: `context` heisst hier dasselbe wie dort, und ein
-Empfaenger, der in einem AOT-Binary laeuft, muss `context: true` setzen — sonst sucht `sys.exec`
-einen aktiven JIT-Kontext, den es dort nicht gibt, und liefert `-2`.
+The options deliberately mirror `sys.bundle`: `context` means the same here as there, and a
+receiver running in an AOT binary must set `context: true` — otherwise `sys.exec` looks for
+an active JIT context that does not exist there and returns `-2`.
 
-**Was NICHT mitreist:** der Absender-Zustand.  Der Text enthaelt Definitionen und
-Daten-Initialisierung, nicht den Heap des Senders.  Ein Bundle ist Code, kein Prozessabbild.
+**What does NOT travel along:** the sender's state.  The text contains definitions and
+data initialisation, not the sender's heap.  A bundle is code, not a process image.
 
-## 14. Eine Bibliothek laden und Pipelines dagegen fahren
+## 14. Loading a library and running pipelines against it
 
-Nachgewiesen mit `tests/bundle_socket/` (zwei **AOT**-Binaries, Bundle über TCP):
+Verified with `tests/bundle_socket/` (two **AOT** binaries, bundle over TCP):
 
 ```
 2) Bibliothek: 110 Bytes   Pipeline: 230 Bytes
@@ -582,530 +582,530 @@ Nachgewiesen mit `tests/bundle_socket/` (zwei **AOT**-Binaries, Bundle über TCP
    run_pipeline rief lib_greet, bekam 7     → rc=0
 ```
 
-Der Weg ist `Code.merge`: Bibliothek und Pipeline werden zu **einem** Bundle verschmolzen und in
-**einem** `sys.exec` ausgeführt.  Die Reihenfolge zählt — `start_call` erbt vom **ersten**
-Operanden, also muss die Pipeline links stehen (`pipe.merge(lib)`), sonst wird die Bibliothek
-gestartet.
+The way to do it is `Code.merge`: library and pipeline are merged into **one** bundle and executed in
+**one** `sys.exec`.  The order matters — `start_call` is inherited from the **first**
+operand, so the pipeline must be on the left (`pipe.merge(lib)`), otherwise the library
+is started.
 
-**Was damit NICHT geht, und das ist die eigentliche Einschränkung:** eine Bibliothek *einmal*
-laden und danach mehrere Pipelines dagegen fahren.  Jeder `sys.exec` mit `context: true` legt
-einen **frischen** `AIMLCompiler` an, übersetzt, läuft und räumt ihn beim Verlassen des Scopes
-wieder ab — zwischen zwei Aufrufen bleibt nichts stehen.  `sys.load_bundle`, das genau dafür
-gedacht wäre, ist nach §9 zurückgestellt.
+**What does NOT work this way, and this is the real limitation:** loading a library *once*
+and then running several pipelines against it.  Every `sys.exec` with `context: true` creates
+a **fresh** `AIMLCompiler`, compiles, runs and tears it down again on leaving the scope
+— nothing remains between two calls.  `sys.load_bundle`, which would be meant for exactly
+this, is deferred according to §9.
 
-Folge: ein Agent, der 500 Schritte gegen dieselbe Bibliothek fährt, übersetzt sie **500-mal mit**.
-Funktional richtig, aber bei einer großen Bibliothek der dominierende Posten.
+Consequence: an agent that runs 500 steps against the same library compiles it **500 times along with them**.
+Functionally correct, but for a large library the dominant cost.
 
-### 14a `ctx` — der Kontext als eigener Namensraum (Entscheid 25.10.2026)
+### 14a `ctx` — the context as a namespace of its own (decision 2026-10-25)
 
-Vorgabe des Nutzers: *„Wir legen lieber einen neuen Namensraum an, den wir `ctx` nennen.  Und aus
-diesem Raum können wir quasi eine Compiler-Instanz beziehen, darin Code ausführen und auch auf
-die Symbole dieser Ausführung zugreifen."*
+User requirement: *"We would rather create a new namespace that we call `ctx`.  And from
+this space we can, so to speak, obtain a compiler instance, execute code in it and also access
+the symbols of that execution."*
 
 ```yaml
-- decl: [cx, ctx_handle, { call: [ctx.new] }]          # eine Compiler-Instanz
-- decl: [n_lib, i32, { call: [cx.exec, lib_bundle] }]  # Bibliothek EINMAL
-- decl: [r_a,   i32, { call: [cx.exec, pipe_a] }]      # sieht die Bibliothek
-- decl: [r_b,   i32, { call: [cx.exec, pipe_b] }]      # auch
-- decl: [zahl,  i32, { call: [cx.symbol, "zaehler", "i32"] }]       # Wert, MIT Typ
-- decl: [adr,   i64, { call: [cx.symbol, "lib_greet", "fn(string) -> i32"] }]  # Funktion: MIT Signatur
+- decl: [cx, ctx_handle, { call: [ctx.new] }]          # one compiler instance
+- decl: [n_lib, i32, { call: [cx.exec, lib_bundle] }]  # library ONCE
+- decl: [r_a,   i32, { call: [cx.exec, pipe_a] }]      # sees the library
+- decl: [r_b,   i32, { call: [cx.exec, pipe_b] }]      # so does this one
+- decl: [zahl,  i32, { call: [cx.symbol, "zaehler", "i32"] }]       # value, WITH type
+- decl: [adr,   i64, { call: [cx.symbol, "lib_greet", "fn(string) -> i32"] }]  # function: WITH signature
 ```
 
-- **F29_2-…a: `ctx` ist ein NAMENSRAUM, kein zweites `sys`.**  `sys.exec` bleibt, was es ist: ein
-  Bundle einmal ausführen.  `ctx.*` ist der Fall, in dem der Kontext **länger lebt als der
-  Aufruf** — und das ist ein anderer Umstand, kein Zusatzargument.  Wer beides in `sys` legt,
-  bekommt eine Funktion mit einem Schalter, der die Lebensdauer ändert; das ist die Art Schalter,
-  die man später nicht mehr los wird.
-- **F29_2-…b: Der Kontext ist eine EINDEUTIGE RESSOURCE.**  Derselbe Typ Wert wie `process` oder
-  `thread_handle` (spec/61 §2.1): move-only, und beim Drop des Besitzers wird die Engine
-  freigegeben.  Nicht kopierbar — zwei Besitzer einer JIT-Engine wären zwei, die sie freigeben.
-- **F29_2-…c: Der Grund ist die Grundlast, nicht die Eleganz.**  Gemessen (§15): **~96 ms** je
-  isoliertem Lauf — LLVMContext, Modul, Einstiegspunkt, Engine —, unabhängig davon, wie wenig er
-  tut.  Für einen Agenten mit 500 Schritten sind das ~50 Sekunden, bevor ein einziger Befehl
-  läuft.  `ctx` macht daraus **einmal** Aufbau und 500-mal Ausführen.  Das ist der ganze Zweck;
-  wäre die Grundlast 1 ms, bräuchte es `ctx` nicht.
-- **F29_2-…d: Beim Abgreifen wird der Typ GENANNT — und zur Laufzeit geprüft.**
-  (Vorgabe des Nutzers, 25.10.2026.)  `cx.symbol(name, typ)` nimmt den erwarteten Typ als
-  zweites Argument: `"i32"`, `"string"`, ein Modellname, oder — bei einer Funktion — ihre
-  **volle Signatur** (F29_2-…d3).  Geprüft wird **immer zur Laufzeit**: der Kontext hat das Symbol selbst
-  übersetzt und kennt seinen Typ; stimmt er nicht mit dem genannten überein, **wird geworfen**
-  (spec/22).  Nur dann — ein passendes Symbol kommt wortlos zurück.
-  Damit fällt die frühere Einschränkung „Werte nicht": ein Wert hinter einer Adresse hat ohne
-  Typ keine Bedeutung, aber mit genanntem **und geprüftem** Typ hat er eine.  Der Leser sagt,
-  was er erwartet, und erfährt es, wenn er sich irrt — statt Bytes falsch zu deuten.
-- **F29_2-…d4: Wo der Übersetzer es SCHON WEISS, sagt er es sofort.**  (Nachtrag des Nutzers:
-  *„der Compiler müsste ja den Datentyp kennen und kann vergleichen, ob das, was programmiert
-  wurde, und das, was gerade kompiliert wurde, übereinstimmt."*)  Richtig — aber nur in einem
-  der beiden Fälle, und der Unterschied ist, WANN übersetzt wird:
+- **F29_2-…a: `ctx` is a NAMESPACE, not a second `sys`.**  `sys.exec` stays what it is: execute a
+  bundle once.  `ctx.*` is the case in which the context **lives longer than the
+  call** — and that is a different circumstance, not an extra argument.  Putting both into `sys`
+  produces one function with a switch that changes the lifetime; that is the kind of switch
+  one can never get rid of later.
+- **F29_2-…b: The context is a UNIQUE RESOURCE.**  The same kind of value as `process` or
+  `thread_handle` (spec/61 §2.1): move-only, and when its owner is dropped the engine is
+  released.  Not copyable — two owners of a JIT engine would be two that free it.
+- **F29_2-…c: The reason is the base cost, not elegance.**  Measured (§15): **~96 ms** per
+  isolated run — LLVMContext, module, entry point, engine — regardless of how little it
+  does.  For an agent with 500 steps that is ~50 seconds before a single command
+  runs.  `ctx` turns this into **one** setup and 500 executions.  That is the whole purpose;
+  if the base cost were 1 ms, `ctx` would not be needed.
+- **F29_2-…d: When reading a symbol, the type is NAMED — and checked at runtime.**
+  (User requirement, 2026-10-25.)  `cx.symbol(name, type)` takes the expected type as the
+  second argument: `"i32"`, `"string"`, a model name, or — for a function — its
+  **full signature** (F29_2-…d3).  The check is **always done at runtime**: the context compiled the symbol itself
+  and knows its type; if it does not match the named one, **an exception is thrown**
+  (spec/22).  Only then — a matching symbol comes back without comment.
+  This removes the earlier restriction "no values": a value behind an address has no
+  meaning without a type, but with a named **and checked** type it has one.  The reader says
+  what they expect and finds out when they are wrong — instead of misreading bytes.
+- **F29_2-…d4: Where the compiler ALREADY KNOWS, it says so immediately.**  (User addendum:
+  *"the compiler should know the data type and can compare whether what was
+  programmed and what was just compiled match."*)  Right — but only in one
+  of the two cases, and the difference is WHEN compilation happens:
 
-  | Wer liest das Symbol | Was der Übersetzer in dem Moment weiß | Prüfung |
+  | Who reads the symbol | What the compiler knows at that moment | Check |
   |---|---|---|
-  | Ein **Bundle im selben Kontext**, übersetzt **nachdem** das definierende Bundle lief | beides: den genannten Typ und den des Symbols in seiner Tabelle | **zur Übersetzungszeit** — Fehler sofort, kein Lauf |
-  | Das **Wirtsprogramm** (AOT gebaut, z. B. cosmosd) | nur den genannten Typ; der Kontext existiert zu diesem Zeitpunkt noch nicht | **erst zur Laufzeit** |
+  | A **bundle in the same context**, compiled **after** the defining bundle ran | both: the named type and the symbol's type in its table | **at compile time** — error immediately, no run |
+  | The **host program** (built AOT, e.g. cosmosd) | only the named type; the context does not exist yet at this point | **only at runtime** |
 
-  Also: der Kontext prüft beim Übersetzen eines Bundles, was er prüfen kann, und wirft sonst
-  beim Zugriff.  Die Laufzeitprüfung bleibt **Pflicht** — sie ist die einzige, die es in beiden
-  Fällen gibt; die frühe ist der Gewinn und nicht der Ersatz.  Eine Zusage, die nur manchmal
-  greift, darf nicht die sein, auf die man sich verlässt.
-- **F29_2-…d2: Zwei Fehler, zwei Ausnahmen.**  `SymbolMissingException` — der Kontext kennt
-  diesen Namen nicht (nichts hat ihn definiert, oder ein Tippfehler).  `SymbolTypeException` —
-  der Name ist da, der Typ passt nicht; die Meldung nennt **beide** Typen (erwartet / gefunden),
-  denn ein „Typfehler" ohne die zwei Namen zwingt zum Suchen.  Beide erben von `Exception` und
-  sind mit `catch` fangbar wie jede andere.
-- **F29_2-…d3: Bei einer Funktion wird die VOLLE SIGNATUR genannt.**  (Vorgabe des Nutzers,
-  25.10.2026: *„Auch wenn man Funktionssymbole abruft, muss man bitte die vollständige Signatur
-  angeben."*)  Nicht `"fn"`, sondern `"fn(i32,string) -> i32"`: die Argumenttypen in ihrer
-  Reihenfolge, dann der Rückgabetyp — `void`, wenn es keinen gibt, `fn() -> i32` ohne Argumente.
-  Der Kontext hat die Funktion selbst übersetzt und kennt beides (`FunctionInfo::argTypeNames`
-  und `returnTypeName`), also wird beides verglichen; Leerzeichen zählen dabei nicht, so dass
-  `"fn(i32, string) -> i32"` und `"fn(i32,string)->i32"` dasselbe sagen.
+  So: the context checks what it can when compiling a bundle, and otherwise throws
+  on access.  The runtime check remains **mandatory** — it is the only one that exists in both
+  cases; the early one is the gain, not the replacement.  A guarantee that only applies
+  sometimes must not be the one people rely on.
+- **F29_2-…d2: Two errors, two exceptions.**  `SymbolMissingException` — the context does not know
+  this name (nothing defined it, or a typo).  `SymbolTypeException` —
+  the name exists, the type does not match; the message names **both** types (expected / found),
+  because a "type error" without the two names forces a search.  Both inherit from `Exception` and
+  can be caught with `catch` like any other.
+- **F29_2-…d3: For a function, the FULL SIGNATURE is named.**  (User requirement,
+  2026-10-25: *"Even when retrieving function symbols, please give the complete
+  signature."*)  Not `"fn"` but `"fn(i32,string) -> i32"`: the argument types in their
+  order, then the return type — `void` if there is none, `fn() -> i32` without arguments.
+  The context compiled the function itself and knows both (`FunctionInfo::argTypeNames`
+  and `returnTypeName`), so both are compared; whitespace does not count, so that
+  `"fn(i32, string) -> i32"` and `"fn(i32,string)->i32"` say the same thing.
 
-  Der Grund ist, dass hier das Gegenteil der sonstigen Lage gilt: ein Wert mit falsch genanntem
-  Typ wird falsch gedeutet, aber eine **Adresse** mit falscher Signatur zu rufen gibt überhaupt
-  keinen Fehler — sie gibt einen kaputten Stapel, und zwar irgendwo später.  Ein Typname, der
-  genau an der gefährlichsten Stelle nichts prüft, ist schlimmer als keiner, weil er beruhigt.
-  Ein blankes `"fn"` ist deshalb ein Typfehler wie jeder andere (`SymbolTypeException`), und
-  die Meldung sagt ausdrücklich, dass die Signatur fehlt.
+  The reason is that the opposite of the usual situation applies here: a value with a wrongly named
+  type is misread, but calling an **address** with the wrong signature produces no
+  error at all — it produces a broken stack, somewhere later.  A type name that
+  checks nothing at exactly the most dangerous spot is worse than none, because it reassures.
+  A bare `"fn"` is therefore a type error like any other (`SymbolTypeException`), and
+  the message says explicitly that the signature is missing.
 
-  Was die Signatur **nicht** nennt: die Lebensdauer-Qualifizierer der Argumente
-  (`consumed`/`persistent`, spec/61 §3.1).  Sie stehen in derselben Tabelle und wären
-  prüfbar, gehören aber zum Aufruf-**Vertrag** und nicht zum Typ; da fast jedes Argument das
-  stillschweigende `scope` trägt, würde jede Nennung einer Signatur um Rauschen wachsen, das
-  in fast allen Fällen nichts unterscheidet.  Wird ein `consumed`-Argument über eine
-  `ctx`-Adresse gerufen, bleibt der Besitz-Übergang also Sache des Aufrufers.
-- **F29_2-…e: `ctx` ist KEINE Sicherheitsgrenze.**  Der Kontext teilt Prozess, Adressraum und die
-  dynamische Symboltabelle mit seinem Wirt; `DynamicLibrary::AddSymbol` hat keine Sicht je
-  Kontext.  Für fremden Code bleibt die Grenze ein **eigener Prozess** (spec/65 F65-15,
-  `doc/analysis/symbol_clearance_2026-10-16.md`).  `ctx` trennt **Namen**, nicht **Rechte** — wer
-  das verwechselt, hält eine Bequemlichkeit für einen Schutz.
-- **F29_2-…f: Was der Kontext sieht, ist die Reihenfolge seiner Aufrufe.**  Bundle 2 sieht, was
-  Bundle 1 definiert hat; mehr nicht.  Keine Rückwärts-Sicht, kein impliziter Neuaufbau.  Damit
-  ist `ctx.exec` nachvollziehbar wie eine Liste von Anweisungen — und nicht wie ein Zustand, der
-  irgendwann irgendwie entstanden ist.
+  What the signature does **not** name: the lifetime qualifiers of the arguments
+  (`consumed`/`persistent`, spec/61 §3.1).  They are in the same table and would be
+  checkable, but they belong to the call **contract** and not to the type; since almost every argument carries the
+  implicit `scope`, every signature would grow by noise that
+  distinguishes nothing in almost all cases.  If a `consumed` argument is called through a
+  `ctx` address, the ownership transfer therefore remains the caller's responsibility.
+- **F29_2-…e: `ctx` is NOT a security boundary.**  The context shares process, address space and the
+  dynamic symbol table with its host; `DynamicLibrary::AddSymbol` has no per-context
+  view.  For foreign code the boundary remains a **separate process** (spec/65 F65-15,
+  `doc/analysis/symbol_clearance_2026-10-16.md`).  `ctx` separates **names**, not **rights** — whoever
+  confuses the two mistakes a convenience for a protection.
+- **F29_2-…f: What the context sees is the order of its calls.**  Bundle 2 sees what
+  bundle 1 defined; nothing more.  No backward view, no implicit rebuild.  This makes
+  `ctx.exec` traceable like a list of statements — and not like a state that
+  came about somehow at some point.
 
-- **F29_2-…g: Der Kontext führt seine EIGENE Typtabelle — weil der Übersetzer seine wegwirft.**
-  `compileFromString` zerstört und baut den `CompilerContext` bei **jedem** Aufruf neu; die lebende
-  Tabelle kennt also nur, was das **letzte** Bundle übersetzt oder deklariert hat.  Gemessen
-  (25.10.2026): nach drei Bundles war `lib_summe` „kennt dieser Kontext nicht", obwohl sein Bundle
-  mit 0 gelaufen war — sichtbar blieb nur, was das dritte Bundle zufällig mitdeklarierte.  Das
-  widerspricht F29_2-…f, und zwar nicht sichtbar, sondern **zufällig**: dieselbe Abfrage trägt
-  oder trägt nicht, je nachdem, was danach lief.  Deshalb schreibt `aiml_ctx_record_symbols` nach
-  **jedem** `ctx.exec` Namen → Typ in eine Tabelle AM KONTEXT fort (später definiert gewinnt,
-  §4 Neuladen), und `cx.symbol` liest zuerst dort.  Die Adresse holt weiterhin die Engine
-  (`symbolAddress`, neueste zuerst) — ein Name in der Tabelle ohne Adresse heißt „deklariert, nie
-  definiert" und wird als **fehlendes** Symbol gemeldet, nicht als Typfehler.
-- **F29_2-…h: Ein vom Übersetzer gelegter Wurf notiert seine Meldung wie ein `throw` in aiml.**
-  Die oberste Ebene (`jitRun`) berichtet die Begründung einer ungefangenen Ausnahme aus
-  `aiml_note_thrown_message`; `emitThrowMsg` rief das nicht, also stand dort „(no message)" —
-  für **jede** eingebaute Ausnahme, nicht nur die von `ctx`.  Behoben; `tests/test_ctx_unhandled.aiml`
-  hält es fest (Lauf endet mit 2 **und** nennt erwartet/gefunden).
+- **F29_2-…g: The context keeps its OWN type table — because the compiler throws its own away.**
+  `compileFromString` destroys and rebuilds the `CompilerContext` on **every** call; the live
+  table therefore only knows what the **last** bundle compiled or declared.  Measured
+  (2026-10-25): after three bundles, `lib_summe` was "unknown to this context", although its bundle
+  had run with 0 — only what the third bundle happened to declare as well remained visible.  That
+  contradicts F29_2-…f, and not visibly but **randomly**: the same query works
+  or does not, depending on what ran afterwards.  Therefore `aiml_ctx_record_symbols` writes
+  name → type into a table ON THE CONTEXT after **every** `ctx.exec` (later definitions win,
+  §4 reloading), and `cx.symbol` reads from there first.  The address is still fetched from the engine
+  (`symbolAddress`, newest first) — a name in the table without an address means "declared, never
+  defined" and is reported as a **missing** symbol, not as a type error.
+- **F29_2-…h: A throw raised by the compiler records its message like a `throw` in aiml.**
+  The top level (`jitRun`) reports the reason of an uncaught exception from
+  `aiml_note_thrown_message`; `emitThrowMsg` did not call it, so it said "(no message)" —
+  for **every** built-in exception, not only the ones from `ctx`.  Fixed; `tests/test_ctx_unhandled.aiml`
+  pins it down (the run ends with 2 **and** names expected/found).
 
-**Stand der Umsetzung** (25.10.2026 — umgesetzt und durch `tests/test_ctx.aiml` belegt):
+**Implementation status** (2026-10-25 — implemented and covered by `tests/test_ctx.aiml`):
 
-| Stück | Lage |
+| Piece | Status |
 |---|---|
-| `AIMLCompiler` mehrfach benutzbar | **da** — `execInContext` (`compiler.cpp`): Modul neu binden, frühere Quellen als Deklarationen voranstellen, Engine behalten (`ctx_engines_`), Funktionsadressen per `AddSymbol` veröffentlichen |
-| Kontext-Registry + Wert-Typ | **da** — `src/sys/ctx_runtime.cpp` hält die Instanzen, `ctx_handle` ist der Griff |
-| `ctx.*` im Builtin-Register | **da** — `ctx.new`, `cx.exec`, `cx.symbol`, `cx.close` (`src/core/builtin_registry.cpp`) |
-| `cx.symbol` | **da** — Typtabelle je Kontext (F29_2-…g), Prüfung samt `SymbolMissingException`/`SymbolTypeException`, Funktionen mit **voller Signatur** (F29_2-…d3) |
-| `ctx_handle` als eindeutige Ressource | **offen** — move-only und Freigabe beim Drop des Besitzers (F29_2-…b) fehlen noch; heute gibt nur `cx.close` die Engine frei |
-| Frühe Prüfung beim Übersetzen (F29_2-…d4) | **offen** — heute prüft nur die Laufzeit.  Das ist die Pflichtprüfung und deckt beide Fälle; die frühe bleibt der Gewinn, nicht der Ersatz, und wird hier als fehlend geführt statt als zugesagt |
-| Aufruf einer `fn`-Adresse aus aiml | **offen** — `cx.symbol` liefert die Adresse, aiml hat noch keinen Weg, sie zu rufen; mit F29_2-…d3 ist die Signatur dafür jetzt geprüft vorhanden |
+| `AIMLCompiler` reusable | **done** — `execInContext` (`compiler.cpp`): rebind the module, prepend earlier sources as declarations, keep the engine (`ctx_engines_`), publish function addresses via `AddSymbol` |
+| Context registry + value type | **done** — `src/sys/ctx_runtime.cpp` holds the instances, `ctx_handle` is the handle |
+| `ctx.*` in the builtin registry | **done** — `ctx.new`, `cx.exec`, `cx.symbol`, `cx.close` (`src/core/builtin_registry.cpp`) |
+| `cx.symbol` | **done** — type table per context (F29_2-…g), check including `SymbolMissingException`/`SymbolTypeException`, functions with **full signature** (F29_2-…d3) |
+| `ctx_handle` as a unique resource | **open** — move-only and release on the owner's drop (F29_2-…b) are still missing; today only `cx.close` releases the engine |
+| Early check at compile time (F29_2-…d4) | **open** — today only the runtime checks.  That is the mandatory check and covers both cases; the early one remains the gain, not the replacement, and is listed here as missing instead of promised |
+| Calling a `fn` address from aiml | **open** — `cx.symbol` returns the address, aiml has no way to call it yet; with F29_2-…d3 the signature for doing so is now available and checked |
 
-**Wie cosmos es benutzen würde:** ein Kontext **je Agent**, beim Start die Bibliothek hinein,
-danach jeder Schritt als Bundle dagegen.  Das ist genau der Satz, der heute schon als Kommentar
-in `exec_impl.cpp` steht — „ein Agent lädt beim Start seine Bibliothek und fährt danach Schritte"
-— nur dass es dafür bisher keinen Wert gibt, an dem der Kontext hängt.
+**How cosmos would use it:** one context **per agent**, the library loaded into it at start,
+then every step as a bundle against it.  That is exactly the sentence that already stands as a comment
+in `exec_impl.cpp` — "an agent loads its library at start and then runs steps"
+— except that until now there was no value for the context to hang on.
 
-### Offen: wiederverwendbarer Kontext als aiml-Wert  *(überholt durch §14a)*
+### Open: reusable context as an aiml value  *(superseded by §14a)*
 
-Der Entwurf, aus dem §14a wurde — hier belassen, weil er die Begründung trägt.  Der Ausweg wäre,
-die Compiler-Instanz nicht mehr lokal zu halten, sondern als **eindeutige Ressource**
-sichtbar zu machen — derselbe Typ Wert wie `process` oder `thread_handle` (spec/61
-§2.1): move-only, beim Besitzer-Drop freigegeben.
+The draft that became §14a — left here because it carries the reasoning.  The way out would be
+to no longer keep the compiler instance local, but to make it visible as a **unique resource**
+— the same kind of value as `process` or `thread_handle` (spec/61
+§2.1): move-only, released on the owner's drop.
 
 ```yaml
 - decl: [ectx, exec_context, { call: [sys.context_new] }]
-- decl: [r_lib,  i32, { call: [ectx.exec, lib_bundle] }]   # einmal
-- decl: [r_one,  i32, { call: [ectx.exec, pipe_a] }]       # sieht die Bibliothek
+- decl: [r_lib,  i32, { call: [ectx.exec, lib_bundle] }]   # once
+- decl: [r_one,  i32, { call: [ectx.exec, pipe_a] }]       # sees the library
 - decl: [r_two,  i32, { call: [ectx.exec, pipe_b] }]
 ```
 
-Das Hindernis ist nicht die Sichtbarkeit, sondern dass `AIMLCompiler` heute **einmalig** ist:
-`compileAndRun` ruft `jitRun`, und das macht `EngineBuilder eb(std::move(module_))` — das Modul
-ist danach weg, ein zweiter Lauf hätte nichts mehr, worin er übersetzen könnte.  Zwei Entwürfe:
+The obstacle is not visibility but that `AIMLCompiler` is **single-use** today:
+`compileAndRun` calls `jitRun`, and that does `EngineBuilder eb(std::move(module_))` — the module
+is gone afterwards; a second run would have nothing left to compile into.  Two designs:
 
-1. **Eine Engine, frisches Modul je Bundle**, `addModule` hinein; der `CompilerContext` bleibt
-   stehen, damit Bundle 2 die Symbole von Bundle 1 sieht.  Das ist, was "Bibliothek laden" meint.
-2. **Je Bundle eine eigene Engine**, Adressen behalten und über die fptable erreichbar machen —
-   im Ansatz vorhanden (`compileChunkAndGetAddress` plus der Zeiger-Tausch des Hot-Reload-Pfads).
+1. **One engine, a fresh module per bundle**, `addModule` into it; the `CompilerContext` stays
+   in place, so that bundle 2 sees the symbols of bundle 1.  That is what "loading a library" means.
+2. **A separate engine per bundle**, keep the addresses and make them reachable through the fptable —
+   present in outline (`compileChunkAndGetAddress` plus the pointer swap of the hot-reload path).
 
-Dazu ein Befund an §9: die Zurückstellung von `sys.load_bundle` ist dort mit "braucht ORC JIT"
-begründet.  Der vorhandene geteilte Pfad benutzt aber gar kein `addModule`, sondern übersetzt den
-Chunk in eine **eigene** Engine und tauscht einen Zeiger.  Für Entwurf 2 trifft die Begründung
-also nicht zu; für Entwurf 1 wäre sie an MCJIT zu prüfen statt aus der Spec zu übernehmen.
+In addition, a finding regarding §9: the deferral of `sys.load_bundle` is justified there with "needs ORC JIT".
+But the existing shared path does not use `addModule` at all; it compiles the
+chunk into a **separate** engine and swaps a pointer.  For design 2 the justification
+therefore does not apply; for design 1 it would have to be checked against MCJIT instead of being taken over from the spec.
 
-### Entwurf 3 (vermutlich der richtige): Objekt-Cache statt Übersetzen
+### Design 3 (probably the right one): object cache instead of compiling
 
-Die Frage "lazy oder eager" ist für einen Build-Agenten die falsche Achse.  Beide Antworten
-übersetzen dieselbe Bibliothek wieder und wieder; sie verschieben nur, **wann** es wehtut.
+The question "lazy or eager" is the wrong axis for a build agent.  Both answers
+compile the same library again and again; they only shift **when** it hurts.
 
-LLVM hat dafür `llvm/ExecutionEngine/ObjectCache.h` — von MCJIT (`setObjectCache`) wie von ORC
-nutzbar: das übersetzte **Objekt** wird behalten und beim nächsten Mal **geladen statt
-übersetzt**, auch über Prozessgrenzen hinweg.
+LLVM has `llvm/ExecutionEngine/ObjectCache.h` for this — usable from MCJIT (`setObjectCache`) as well as from ORC:
+the compiled **object** is kept and next time **loaded instead of
+compiled**, even across process boundaries.
 
-Der Schlüssel dafür liegt bereits vor: der Hash des Bundles (`AimlCode.id`, FNV-1a über alle
-`code_chunks`).  Gleiches Bundle → gleiches Objekt.  Das ist dieselbe Mechanik wie der
-Schritt-Cache einer Pipeline (cosmos `doc/spec/96`), nur eine Ebene tiefer, und sie unterliegt
-derselben Regel: der Schlüssel muss **alles** erfassen, was das Ergebnis beeinflusst — hier also
-auch Zielarchitektur und LLVM-Version, sonst lädt ein Knoten ein Objekt, das nicht zu ihm passt.
+The key for it already exists: the bundle's hash (`AimlCode.id`, FNV-1a over all
+`code_chunks`).  Same bundle → same object.  This is the same mechanism as the
+step cache of a pipeline (cosmos `doc/spec/96`), only one level deeper, and it is subject to
+the same rule: the key must capture **everything** that influences the result — here that means
+target architecture and LLVM version too, otherwise a node loads an object that does not fit it.
 
-Damit wird aus "500 Schritte, 500-mal die Bibliothek übersetzen" ein einmaliges Übersetzen und
-499-mal Laden — **ohne** dass ein wiederverwendbarer Kontext (Entwurf 1/2) dafür nötig wäre.
-Die beiden Entwürfe bleiben trotzdem sinnvoll, aber für einen anderen Zweck: sie sparen das
-Laden **und** erlauben, dass Bundle 2 die Symbole von Bundle 1 sieht.
+This turns "500 steps, compiling the library 500 times" into compiling once and
+loading 499 times — **without** needing a reusable context (design 1/2) for it.
+The two designs still make sense, but for a different purpose: they save the
+loading **and** allow bundle 2 to see the symbols of bundle 1.
 
-### Zur Einordnung von "lazy"
+### On classifying "lazy"
 
-ORCs Faulheit ist eine **eigene Schicht**, keine Eigenschaft: `CompileOnDemandLayer` und
-`LazyReexports` muss man einbauen.  Ohne sie übersetzt `IRCompileLayer` bei der **Symbolsuche**,
-und ein `lookup()` direkt nach dem Hinzufügen erzwingt das sofort.  "Erst beim ersten Aufruf" ist
-also wählbar, nicht aufgezwungen — und MCJIT, das immer alles sofort übersetzt und nichts behält,
-ist für wiederholte Läufe die teurere Variante.
+ORC's laziness is a **separate layer**, not a property: `CompileOnDemandLayer` and
+`LazyReexports` have to be added.  Without them `IRCompileLayer` compiles at **symbol lookup**,
+and a `lookup()` right after adding forces this immediately.  "Only on first call" is
+therefore a choice, not imposed — and MCJIT, which always compiles everything immediately and keeps nothing,
+is the more expensive variant for repeated runs.
 
-### 14b Was ein Wirt mit einem Kontext tun kann: nennen, rufen, Fehler lesen (25.10.2026)
+### 14b What a host can do with a context: list, call, read errors (2026-10-25)
 
-§14a gibt einem Wirt einen Kontext, einen Weg Code hineinzugeben und eine geprüfte Adresse heraus.
-Für den Fall, um den es geht — ein **Kontroller** nimmt fremden Quelltext an, lässt ihn übersetzen
-und arbeitet mit dem Ergebnis (cosmos `doc/spec/96`) — fehlen drei Stücke, und jedes fehlende
-zwingt den Wirt zurück zum Selberlesen des Quelltexts:
+§14a gives a host a context, a way to put code into it and a checked address out of it.
+For the case at stake — a **controller** accepts foreign source text, has it compiled
+and works with the result (cosmos `doc/spec/96`) — three pieces are missing, and each missing one
+forces the host back to reading the source text itself:
 
 ```yaml
 - decl: [kontext, ctx_handle, { call: [ctx.new] }]
 - decl: [code, Code, { call: [sys.code_from, eingereicht] }]
 - decl: [rcx, i32, { call: [kontext.exec, code] }]
-- if:                                         # ging nicht: WAS war falsch?
+- if:                                         # failed: WHAT was wrong?
     condition: { lt: [rcx, 0] }
     then:
       - decl: [why, list<string>, { call: [kontext.errors] }]
       - return: { at: [why, 0] }
-# Wie heisst die Pipeline darin?  Der Kontext weiss es — der Wirt muss nicht suchen.
+# What is the pipeline in it called?  The context knows — the host does not have to search.
 - decl: [found, list<string>, { call: [kontext.names, "fn() -> pipeline"] }]
 - decl: [pipe, pipeline, { call: [kontext.call, { at: [found, 0] }, "fn() -> pipeline"] }]
 ```
 
-- **F29_2-…i: `cx.names(typ)` — nach Typ fragen, nicht nach Namen raten.**  Gibt die Namen, die
-  dieser Kontext mit genau diesem Typ bzw. dieser Signatur trägt, in der Reihenfolge der Tabelle
-  (Leerzeichen zählen nicht, §14a F29_2-…d3); keiner passt → leere Liste, kein Fehler.  Der Grund
-  ist der Kontroller: er nimmt eine **eingereichte** Pipeline an und kennt ihren Namen nicht.  Ihn
-  aus dem Quelltext zu lesen heisst, den Quelltext zu lesen — also genau das, was der Kontext
-  übernehmen sollte.  Ein Wirt, der nur `cx.symbol` hat, muss raten oder parsen; mit `cx.names`
-  fragt er.
-- **F29_2-…j: `cx.call(name, signatur)` ruft, was der Kontext übersetzt hat.**  Erst wird die
-  Signatur geprüft (dieselbe Prüfung wie `cx.symbol`, F29_2-…d3), dann gerufen; der Rückgabewert
-  hat den Typ, der in der Signatur steht.  **Heute ohne Argumente** (`fn() -> T`) mit
-  `T ∈ {void, i32, i64, string, eingebaute Griffklasse}`: das ist der Fall, der gebraucht wird —
-  eine deklarierte Pipeline ist `fn() -> pipeline` (spec/62 F62-108) —, und jeder weitere
-  Parameter braucht die Argumentumwandlung, die ohne Nutzer nur Gewicht wäre.  Mehr Argumente
-  kommen, wenn ein Fall sie verlangt; die Signatur steht dann schon da.
-- **F29_2-…k: `cx.symbol` gibt den WERT, wenn der genannte Typ ein Wert ist.**  `i32`, `i64`,
-  `string` und die eingebauten Griffklassen kommen als Wert zurück, eine Funktion als Adresse
-  (`i64`).  Der genannte Typ entscheidet also nicht nur, ob der Zugriff erlaubt ist, sondern auch,
-  was man in der Hand hält — anders herum müsste der Leser aus einer Adresse selbst einen Wert
-  machen, und das kann er in aiml nicht, ohne das Typsystem zu umgehen.
-- **F29_2-…l: `cx.errors` gehört dem KONTEXT, nicht dem Prozess.**  Die Meldungen des **letzten**
-  `cx.exec`, in ihrer Reihenfolge; ein neues `cx.exec` setzt sie zurück.  Zwei Gründe: `-3` heisst
-  „ging nicht" und ist für einen Wirt wertlos, der einem Menschen sagen muss, was falsch war —
-  und zwei Kontexte dürfen ihre Meldungen nicht vermischen, sonst erklärt die eine Einreichung
-  den Fehler der anderen.  Zurückgesetzt wird, weil sonst der dritte Lauf die Fehler des ersten
-  als seine eigenen berichtet.
-- **F29_2-…n: `cx.load` übersetzt und hängt ein, OHNE zu laufen.**  `cx.exec` ruft den
-  Einstiegspunkt des Bundles — bei **eingereichtem** Quelltext wäre das fremder Code im
-  Controller-Prozess, und genau das verbietet cosmos F96-28.  `cx.load` tut alles außer dem
-  Aufruf: übersetzen, Meldungen sammeln, Symbole bekannt machen.  Danach ruft der Wirt **genau
-  die eine** Funktion, die er wollte (`cx.call`), und nichts sonst.  Der Unterschied ist nicht
-  Vorsicht, sondern Zuständigkeit: ein Rumpf gehört zum Agenten, nicht zum Kontroller.
-- **F29_2-…m: Was ein Wirt NICHT bekommt.**  Keine AST-Knoten, keine LLVM-Typen, keinen Zeiger in
-  die Tabellen des Übersetzers — nur Namen, Werte, Adressen und Meldungen.  Alles andere bindet
-  den Kontroller an den Innenbau des Übersetzers, und dann ist jede Änderung am Übersetzer eine
-  Änderung am Kontroller.  Die Grenze ist absichtlich eng: `ctx` ist eine **Schnittstelle**, kein
-  Fenster.
+- **F29_2-…i: `cx.names(type)` — ask by type, do not guess by name.**  Returns the names that
+  this context carries with exactly this type or signature, in table order
+  (whitespace does not count, §14a F29_2-…d3); none matches → empty list, no error.  The reason
+  is the controller: it accepts a **submitted** pipeline and does not know its name.  Reading it
+  from the source text means reading the source text — exactly what the context
+  was supposed to take over.  A host that only has `cx.symbol` has to guess or parse; with `cx.names`
+  it asks.
+- **F29_2-…j: `cx.call(name, signature)` calls what the context compiled.**  First the
+  signature is checked (the same check as `cx.symbol`, F29_2-…d3), then the call is made; the return value
+  has the type stated in the signature.  **Currently without arguments** (`fn() -> T`) with
+  `T ∈ {void, i32, i64, string, built-in handle class}`: that is the case that is needed —
+  a declared pipeline is `fn() -> pipeline` (spec/62 F62-108) — and every further
+  parameter needs argument conversion, which without users would only be dead weight.  More arguments
+  come when a case demands them; the signature will already be in place then.
+- **F29_2-…k: `cx.symbol` returns the VALUE if the named type is a value.**  `i32`, `i64`,
+  `string` and the built-in handle classes come back as a value, a function as an address
+  (`i64`).  So the named type decides not only whether access is allowed, but also
+  what one holds in hand — the other way round, the reader would have to make a value out of an address
+  themselves, and that is impossible in aiml without bypassing the type system.
+- **F29_2-…l: `cx.errors` belongs to the CONTEXT, not to the process.**  The messages of the **last**
+  `cx.exec`, in their order; a new `cx.exec` resets them.  Two reasons: `-3` means
+  "failed" and is worthless to a host that has to tell a human what was wrong —
+  and two contexts must not mix their messages, otherwise one submission explains
+  the error of the other.  They are reset because otherwise the third run would report the errors of the first
+  as its own.
+- **F29_2-…n: `cx.load` compiles and links in, WITHOUT running.**  `cx.exec` calls the
+  bundle's entry point — with **submitted** source text that would be foreign code in the
+  controller process, and that is exactly what cosmos F96-28 forbids.  `cx.load` does everything except the
+  call: compile, collect messages, make symbols known.  Afterwards the host calls **exactly
+  the one** function it wanted (`cx.call`), and nothing else.  The difference is not
+  caution but responsibility: a body belongs to the agent, not to the controller.
+- **F29_2-…m: What a host does NOT get.**  No AST nodes, no LLVM types, no pointer into
+  the compiler's tables — only names, values, addresses and messages.  Anything else binds
+  the controller to the compiler's internals, and then every change to the compiler is a
+  change to the controller.  The boundary is deliberately narrow: `ctx` is an **interface**, not a
+  window.
 
-**Wofür das zusammen reicht:** ein Kontroller kann eine eingereichte Pipeline übersetzen lassen,
-die Meldungen des Übersetzers weitergeben, die Pipeline bauen und sie lesen (spec/62 §20) — ohne
-eine einzige Zeile YAML selbst anzufassen.  Das ist der Punkt: die Sprache hat **einen** Leser,
-und der steht im Übersetzer.
+**What all this together is enough for:** a controller can have a submitted pipeline compiled,
+pass on the compiler's messages, build the pipeline and read it (spec/62 §20) — without
+touching a single line of YAML itself.  That is the point: the language has **one** reader,
+and it lives in the compiler.
 
-## 15. `sys.lib_load` — eine Bibliothek einmal übersetzen
+## 15. `sys.lib_load` — compiling a library once
 
 ```
-sys.lib_load(pkg: Code) → i32      # Zahl der registrierten Funktionen, -1 Fehler
+sys.lib_load(pkg: Code) → i32      # number of registered functions, -1 error
 ```
 
-Der Unterschied zu `merge` (§14) ist nicht die Sichtbarkeit, sondern die **Kosten**: `merge`
-übersetzt die Bibliothek bei **jedem** Lauf mit, `lib_load` übersetzt sie **einmal**.
+The difference from `merge` (§14) is not visibility but **cost**: `merge`
+compiles the library along with **every** run, `lib_load` compiles it **once**.
 
-Ablauf:
+Sequence:
 
-1. **Laden** (`compileLibraryAndRegister`): Bundle übersetzen, eine Engine erzeugen, für jede
-   Funktion ihre Adresse über `llvm::sys::DynamicLibrary::AddSymbol` bekannt machen.  Die Engine
-   wird am Compiler **festgehalten** — gibt man sie frei, wird der Code freigegeben und die eben
-   registrierten Adressen zeigen ins Leere.
-2. **Ausführen** (`sys.exec`, isolierter Kontext): vor dem Bundle werden die gemerkten
-   Bibliotheks-Quelltexte im **headerOnlyMode** eingespielt — `visitFunction` trägt die Signatur
-   in `ctx.functions` ein und legt die `llvm::Function` an, **überspringt aber den Rumpf**.  Die
-   Aufrufe der Pipeline werden damit zu externen Symbolen, die MCJIT über die registrierten
-   Adressen auflöst.
+1. **Load** (`compileLibraryAndRegister`): compile the bundle, create an engine, for every
+   function make its address known via `llvm::sys::DynamicLibrary::AddSymbol`.  The engine
+   is **held on to** by the compiler — if it were released, the code would be freed and the addresses
+   just registered would point into nothing.
+2. **Execute** (`sys.exec`, isolated context): before the bundle, the remembered
+   library source texts are fed in **headerOnlyMode** — `visitFunction` enters the signature
+   in `ctx.functions` and creates the `llvm::Function`, **but skips the body**.  The
+   pipeline's calls thus become external symbols, which MCJIT resolves via the registered
+   addresses.
 
-Je Lauf bleibt also das Parsen und Deklarieren der Bibliothek; die Codeerzeugung für ihre Rümpfe
-entfällt.
+Per run, parsing and declaring the library therefore remain; code generation for its bodies
+is dropped.
 
-### Gemessen: der Vorteil ist nicht nachweisbar — und warum
+### Measured: the advantage cannot be demonstrated — and why
 
-`tests/test_lib_load.aiml`, Bibliothek aus vier Funktionen, fünf Läufe:
+`tests/test_lib_load.aiml`, library of four functions, five runs:
 
-| | Läufe (ms) | Mittel |
+| | Runs (ms) | Mean |
 |---|---|---|
-| `merge` (Bibliothek jedes Mal mit) | 98, 97, 104, 99, 101 | ~100 |
-| `lib_load` (einmal geladen) | 93, 94, 97, 95, 104 | ~97 |
+| `merge` (library included every time) | 98, 97, 104, 99, 101 | ~100 |
+| `lib_load` (loaded once) | 93, 94, 97, 95, 104 | ~97 |
 
-**~3 %, und in einem Lauf war `lib_load` langsamer.** Das ist Streuung, kein Vorteil.  Die
-Behauptung "spart die teure Übersetzung" gilt in der engen Lesart (die Rümpfe werden nicht erneut
-erzeugt), ist aber ohne praktische Wirkung — **bei dieser Bibliotheksgröße**.
+**~3 %, and in one run `lib_load` was slower.** That is noise, not an advantage.  The
+claim "saves the expensive compilation" holds in the narrow reading (the bodies are not generated
+again), but has no practical effect — **at this library size**.
 
-Der Grund ist die Zahl, die dabei sichtbar wurde und die wichtiger ist als der Vergleich: **ein
-isolierter Lauf kostet rund 96 ms Grundlast** — LLVMContext, Modul, Einstiegspunkt, Engine —
-unabhängig davon, wie wenig er tut.  Vier Bibliotheksfunktionen gehen darin unter.
+The reason is the number that became visible along the way and that matters more than the comparison: **an
+isolated run costs about 96 ms of base cost** — LLVMContext, module, entry point, engine —
+regardless of how little it does.  Four library functions disappear in that.
 
-**Folge für cosmos:** 500 Schritte in isolierten Kontexten kosten ~50 Sekunden reine Grundlast,
-bevor ein einziger Build-Befehl läuft.  Der Hebel ist damit nicht, die Bibliothek seltener zu
-übersetzen, sondern den **Kontext seltener aufzubauen** — also der wiederverwendbare Kontext
-(§14, Entwurf 1), für den `CompilerContext::module` jetzt rebindbar ist.  `sys.lib_load` bleibt
-nützlich für die **Sichtbarkeit** (eine Pipeline kann eine Bibliothek benutzen, ohne sie
-mitzubringen), nicht für die Geschwindigkeit.
+**Consequence for cosmos:** 500 steps in isolated contexts cost ~50 seconds of pure base cost
+before a single build command runs.  The lever is therefore not to compile the library less often,
+but to **build the context less often** — i.e. the reusable context
+(§14, design 1), for which `CompilerContext::module` is now rebindable.  `sys.lib_load` remains
+useful for **visibility** (a pipeline can use a library without bringing it
+along), not for speed.
 
-### Bekannte Grenze: genau eine Version
+### Known limit: exactly one version
 
-`AddSymbol` schreibt in eine **flache, prozessweite** Tabelle und laut LLVM-Header *"permanently
-adds the symbol"*.  Daraus folgt beides:
+`AddSymbol` writes into a **flat, process-wide** table and, according to the LLVM header, *"permanently
+adds the symbol"*.  Both of the following follow from that:
 
-- **Zwei Versionen derselben Bibliothek gehen nicht.**  Ein Name, ein Eintrag — eine Version
-  gewinnt, die andere verschwindet **ohne Meldung**.  Dieselbe Fehlerklasse wie ein zu grober
-  Cache-Schlüssel: es läuft, und es läuft falsch.
-- **Entladen geht nicht.**  "Permanently" ist wörtlich gemeint.
+- **Two versions of the same library do not work.**  One name, one entry — one version
+  wins, the other disappears **without a message**.  The same class of bug as a too coarse
+  cache key: it runs, and it runs wrongly.
+- **Unloading does not work.**  "Permanently" is meant literally.
 
-Dazu kommt, dass `compileDeclarationsOnly` **alle** gemerkten Quelltexte in jeden neuen Compiler
-einspielt: zwei Versionen deklarieren denselben Namen, die zweite überschreibt
-`ctx.functions[name]` — womöglich mit anderer Signatur.
+On top of that, `compileDeclarationsOnly` feeds **all** remembered source texts into every new compiler:
+two versions declare the same name, the second overwrites
+`ctx.functions[name]` — possibly with a different signature.
 
-`sys.lib_load` ist deshalb ausdrücklich der **Ein-Versionen-Fall**: ein Agent lädt beim Start
-seine Bibliothek und fährt danach Schritte.  Sobald zwei Versionen nebeneinander gebraucht werden
-(aiml `spec/62` §16, `runtime: own`), reicht es nicht mehr, und es braucht einen **Symbolraum je
-Kontext** — entweder einen eigenen Resolver je Engine (bleibt bei MCJIT) oder ORCs JITDylibs.
+`sys.lib_load` is therefore explicitly the **single-version case**: an agent loads its library
+at start and then runs steps.  As soon as two versions are needed side by side
+(aiml `spec/62` §16, `runtime: own`), it is no longer enough, and a **symbol space per
+context** is needed — either a resolver of its own per engine (staying with MCJIT) or ORC's JITDylibs.
 
-### Voraussetzung, die dafür geschaffen wurde
+### Prerequisite created for this
 
-`CompilerContext::module` war eine **Referenz** und ist jetzt ein Zeiger mit `module()` und
-`setModule()` (602 Zugriffsstellen umgestellt).  Eine Referenz lässt sich nicht neu binden; damit
-konnte ein Kontext nie ein zweites Modul bedienen.  Das ist die Grundlage für mehrere Module in
-einem Kontext — benutzt wird sie von `sys.lib_load` noch **nicht**.
+`CompilerContext::module` was a **reference** and is now a pointer with `module()` and
+`setModule()` (602 access sites converted).  A reference cannot be rebound; so
+a context could never serve a second module.  This is the basis for several modules in
+one context — `sys.lib_load` does **not** use it yet.
 
-### Was in aiml NICHT sichtbar ist
+### What is NOT visible in aiml
 
-Es gibt weiterhin **keinen** aiml-Datentyp für einen Kontext oder ein Modul.  `sys.lib_load` wirkt
-auf eine prozessweite Registry; ein `exec_context` als eindeutige Ressource (wie `process`) wäre
-der nächste Schritt und setzt den Symbolraum je Kontext voraus — sonst wäre er ein Besitz ohne
-Wirkung.
+There is still **no** aiml data type for a context or a module.  `sys.lib_load` acts
+on a process-wide registry; an `exec_context` as a unique resource (like `process`) would be
+the next step and presupposes a symbol space per context — otherwise it would be ownership without
+effect.
 
-## 16. Befund: `sys.bundle` ist NICHT transitiv über aufgerufene Funktionen
+## 16. Finding: `sys.bundle` is NOT transitive over called functions
 
-`spec/30_3` §297 schreibt "(sys.bundle includes dependencies transitively)".  Das gilt für
-**Typen**, nicht für **Funktionen**.  `dfsCollect` (`ast_compiler_call.cpp`) folgt ausschließlich
-`referencedTypes`; eine Funktion, die eine andere **aufruft**, nimmt sie nicht mit.
+`spec/30_3` §297 says "(sys.bundle includes dependencies transitively)".  That holds for
+**types**, not for **functions**.  `dfsCollect` (`ast_compiler_call.cpp`) follows only
+`referencedTypes`; a function that **calls** another does not take it along.
 
 ```yaml
 - def: { name: helper,  return: i32, body: [{ return: 7 }] }
 - def: { name: worker,  return: i32, body: [ { decl: [got, i32, { call: [helper] }] }, ... ] }
 
-- decl: [pkg, Code, { call: [sys.bundle, "worker"] }]   # enthaelt helper NICHT
+- decl: [pkg, Code, { call: [sys.bundle, "worker"] }]   # does NOT contain helper
 ```
 
-Beim Ausführen meldet der isolierte Lauf dann `Unknown function: helper` — erst zur Laufzeit, in
-einem Bundle, das längst unterwegs war.
+When executed, the isolated run then reports `Unknown function: helper` — only at runtime, in
+a bundle that has long since been on its way.
 
-**Folge für cosmos:** ein Pipeline-Schritt, der eine Hilfsfunktion ruft, trägt sie nicht mit.  Wer
-ein vollständiges Bundle will, muss die Teile ausdrücklich zusammenführen (`Code.merge`, §14) oder
-die Bibliothek getrennt laden (§15).  Das ist heute Handarbeit des Autors und damit eine
-Fehlerquelle, die nach einer Prüfung verlangt.
+**Consequence for cosmos:** a pipeline step that calls a helper function does not carry it along.  Whoever
+wants a complete bundle must merge the parts explicitly (`Code.merge`, §14) or
+load the library separately (§15).  Today that is manual work for the author and therefore a
+source of errors that calls for a check.
 
-**Entschieden: `dfsCollect` folgt auch Aufrufen.**  Ein Bundle ist damit von sich aus
-vollständig — das ist die Eigenschaft, auf der alles andere aufbaut (ein Schritt, der beim
-Empfänger `Unknown function` meldet, ist über die Leitung gegangen, ohne benutzbar zu sein).
+**Decided: `dfsCollect` also follows calls.**  A bundle is therefore complete
+by itself — that is the property everything else builds on (a step that reports `Unknown function` at the
+receiver has gone over the wire without being usable).
 
-Erfasst wird dasselbe wie bei Typen: während ein Funktionsrumpf übersetzt wird, trägt
-`bundleTrackingTarget` die gerade übersetzte Funktion, und jeder aufgelöste Aufruf einer
-**benutzerdefinierten** Funktion wird dort vermerkt (`referencedFuncs`).  Builtins bleiben außen
-vor — sie stecken in der Laufzeitbibliothek, nicht im Bundle.
+The same is captured as for types: while a function body is being compiled,
+`bundleTrackingTarget` carries the function currently being compiled, and every resolved call to a
+**user-defined** function is recorded there (`referencedFuncs`).  Builtins stay
+out — they live in the runtime library, not in the bundle.
 
-Der Preis ist die Kehrseite der Vollständigkeit: ein Bundle kann groß werden, wenn die gerufene
-Funktion ihrerseits weit verzweigt.  Das ist hinnehmbar, weil es **sichtbar** ist (`pkg.size()`)
-und weil die Alternative — ein unvollständiges Bundle, das erst beim Empfänger auffällt — die
-schlechtere Sorte Überraschung ist.
+The price is the flip side of completeness: a bundle can grow large if the called
+function in turn branches widely.  That is acceptable because it is **visible** (`pkg.size()`)
+and because the alternative — an incomplete bundle that is only noticed at the receiver — is the
+worse kind of surprise.
 
-## 17. Befund: Übersetzungsfehler im Bundle kamen als Erfolg zurück
+## 17. Finding: compile errors in the bundle came back as success
 
-`aiml_isolated_exec` rief `compileAndRun`, und das übersetzte, erzeugte den Einstiegspunkt und
-lief los — **ohne zu prüfen, ob das Übersetzen überhaupt gelungen war**.  `main.cpp` macht diese
-Prüfung (`Logger::instance().hasErrors()`), `compileAndRun` nicht.
+`aiml_isolated_exec` called `compileAndRun`, and that compiled, generated the entry point and
+started running — **without checking whether compilation had succeeded at all**.  `main.cpp` does this
+check (`Logger::instance().hasErrors()`), `compileAndRun` did not.
 
-Beobachtet beim Schreiben von `tests/test_bundle_callees.aiml`:
+Observed while writing `tests/test_bundle_callees.aiml`:
 
 ```
 [ERROR] ... Unknown function: mid_level
 sys.exec rc=0
 ```
 
-Das ist die gefährlichste Sorte Fehlverhalten für cosmos: ein Agent hätte einen Schritt als
-**erfolgreich** gemeldet, dessen Code nie übersetzt wurde — und der Layer-Cache hätte dieses
-„Ergebnis" aufgezeichnet und beim nächsten Lauf ausgeliefert.
+That is the most dangerous kind of misbehaviour for cosmos: an agent would have reported a step as
+**successful** whose code was never compiled — and the layer cache would have recorded this
+"result" and delivered it on the next run.
 
-**Behoben:** `compileAndRun` merkt sich den Fehlerstand vor dem Übersetzen, vergleicht danach und
-gibt `-3` zurück, statt zu laufen.  Der Stand wird *verglichen*, nicht auf null geprüft — ein
-langlebiger Agent hat womöglich schon frühere Fehler gezählt, und uns interessieren nur die aus
-diesem Bundle.
+**Fixed:** `compileAndRun` remembers the error count before compiling, compares afterwards and
+returns `-3` instead of running.  The count is *compared*, not checked for zero — a
+long-lived agent may already have counted earlier errors, and we are only interested in the ones from
+this bundle.
 
-**Nebenbefund:** `Code.contains(name)` ist eine reine Textsuche (`strstr` über die code_chunks).
-Eine Funktion, die `mid_level` nur **aufruft**, lässt `contains("mid_level")` wahr werden, obwohl
-die Funktion gar nicht im Bundle ist.  Als Prüfung auf Vollständigkeit taugt `contains` deshalb
-nicht — nur ein Lauf taugt dafür.
+**Side finding:** `Code.contains(name)` is a plain text search (`strstr` over the code_chunks).
+A function that merely **calls** `mid_level` makes `contains("mid_level")` true, although
+the function is not in the bundle at all.  `contains` is therefore no good as a completeness check
+— only a run is.
 
-## 18. Vollständigkeitsprüfung beim Bündeln
+## 18. Completeness check at bundling time
 
-Ein Bundle, dem eine gerufene Funktion fehlt, fällt erst beim **Empfänger** auf — als
-`Unknown function`, nachdem es über die Leitung gegangen ist.  Für cosmos heißt das: der Schritt
-ist beim Agenten, der Agent kann ihn nicht ausführen, und die Ursache liegt beim Absender.
+A bundle that lacks a called function is only noticed at the **receiver** — as
+`Unknown function`, after it has gone over the wire.  For cosmos this means: the step
+is at the agent, the agent cannot execute it, and the cause lies with the sender.
 
-Drei Stellen kämen für eine Prüfung in Frage, und zwei taugen nicht:
+Three places would be candidates for a check, and two are no good:
 
-| Stelle | Warum sie nicht taugt |
+| Place | Why it is no good |
 |---|---|
-| `Code.contains(name)` | reine Textsuche (`strstr`).  Eine Funktion, die `helper` nur **aufruft**, lässt `contains("helper")` wahr werden, obwohl `helper` nicht im Bundle ist (§17) |
-| beim Empfänger | zu spät: das Bundle ist bereits unterwegs, und der Fehler sieht aus wie ein Fehler des Empfängers |
-| **beim Bündeln** | der letzte Punkt, an dem der **Autor** es erfährt |
+| `Code.contains(name)` | plain text search (`strstr`).  A function that merely **calls** `helper` makes `contains("helper")` true, although `helper` is not in the bundle (§17) |
+| at the receiver | too late: the bundle is already on its way, and the error looks like an error of the receiver |
+| **at bundling time** | the last point at which the **author** finds out |
 
-Umgesetzt an der dritten: `dfsCollect` sammelt jeden gerufenen Namen, für den **keine Quelle
-hinterlegt** ist, und `sys.bundle` meldet sie:
+Implemented at the third: `dfsCollect` collects every called name for which **no source
+is stored**, and `sys.bundle` reports them:
 
 ```
 sys.bundle('worker'): unvollstaendig — gerufene Funktion(en) ohne hinterlegte Quelle:
 helper.  Der Empfaenger meldet dafuer 'Unknown function'.
 ```
 
-Zwei Eigenschaften, die dabei beabsichtigt sind:
+Two properties that are intended here:
 
-- Es ist eine **Warnung**, kein Fehler.  Ein Bundle kann absichtlich unvollständig sein — wenn der
-  Empfänger die Funktion über eine geladene Bibliothek (§15) schon kennt.  Ein Fehler würde diesen
-  gültigen Fall verbieten.
-- `--check` sammelt Warnungen ein (`spec/49`).  Die Prüfung ist damit **maschinenlesbar** und
-  landet ohne Zusatzarbeit in der Befundliste einer Pipeline-Oberfläche (cosmos `doc/spec/98`).
+- It is a **warning**, not an error.  A bundle can be deliberately incomplete — when the
+  receiver already knows the function through a loaded library (§15).  An error would forbid this
+  valid case.
+- `--check` collects warnings (`spec/49`).  The check is therefore **machine-readable** and
+  ends up in the findings list of a pipeline UI without extra work (cosmos `doc/spec/98`).
 
-Was sie **nicht** erfasst: einen Namen, den der Compiler gar nicht kennt — der ist schon vorher ein
-Fehler (`Unknown function` beim Übersetzen des Rumpfes).  Die Prüfung greift genau für den Fall
-dazwischen: bekannt, aber ohne hinterlegte Quelle.
+What it does **not** capture: a name the compiler does not know at all — that is already an
+error before (`Unknown function` when compiling the body).  The check applies exactly to the case
+in between: known, but without a stored source.
 
-## 19. Die Zitierung ist Bedeutung, nicht Formatierung
+## 19. Quoting is meaning, not formatting
 
-Ein Bundle traegt **Quelltext**.  Dieser Quelltext wird aus dem geparsten
-YAML-Knoten wiederhergestellt — und genau dabei ging bis 2026-10-11 die
-Zitierung verloren: `YAML::Dump` wirft das yaml-cpp-Tag `!` weg, das nur
-zitierte Skalare tragen.
+A bundle carries **source text**.  This source text is reconstructed from the parsed
+YAML node — and exactly there, until 2026-10-11, the
+quoting was lost: `YAML::Dump` throws away the yaml-cpp tag `!` that only
+quoted scalars carry.
 
-Das ist in aiml kein Schoenheitsfehler, sondern ein Bedeutungswechsel:
-`nodeToExpr` (`src/core/ast_builder.cpp`) unterscheidet ein **String-Literal**
-von einem **Namen** ausschliesslich an diesem Tag.  Aus
+In aiml this is not a cosmetic flaw but a change of meaning:
+`nodeToExpr` (`src/core/ast_builder.cpp`) distinguishes a **string literal**
+from a **name** solely by this tag.  So
 
 ```yaml
       - call: [parts.push, "eins"]
 ```
 
-wurde beim Buendeln
+became, after bundling,
 
 ```yaml
       - call: [parts.push, eins]
 ```
 
-und der Empfaenger meldete `Unknown Type: 'eins'`.  Betroffen war **jedes**
-String-Literal in **jedem** Bundle; aufgefallen ist es erst, als ein
-Pipeline-Schritt (`spec/62` §5.6) ein `sleep` an `sys.exe` uebergeben wollte,
-weil die vorherigen Buendel-Tests zufaellig keine String-Literale enthielten.
+and the receiver reported `Unknown Type: 'eins'`.  **Every**
+string literal in **every** bundle was affected; it was only noticed when a
+pipeline step (`spec/62` §5.6) wanted to pass a `sleep` to `sys.exe`,
+because the earlier bundling tests happened to contain no string literals.
 
-- **F29_2-19** Bundle-Quelltext wird ausschliesslich mit
-  `aiml::dumpPreservingQuotes` (`src/core/yaml_dump.h`) erzeugt, nie mit
-  `YAML::Dump`.  Der Emitter laesst zitierte Skalare zitiert.  `YAML::Dump`
-  bleibt fuer den **Benutzer**-Aufruf `yaml.dump` richtig, wo es um Daten und
-  nicht um Quelltext geht — die beiden Faelle sehen gleich aus und sind es
-  nicht.
-- **F29_2-19a** Ein Test, der Buendelung prueft, enthaelt mindestens ein
-  String-Literal **im Rumpf**.  Ohne eines faellt diese ganze Fehlerklasse
-  durch jede Pruefung (so geschehen).
+- **F29_2-19** Bundle source text is generated exclusively with
+  `aiml::dumpPreservingQuotes` (`src/core/yaml_dump.h`), never with
+  `YAML::Dump`.  The emitter keeps quoted scalars quoted.  `YAML::Dump`
+  remains correct for the **user** call `yaml.dump`, where it is about data and
+  not about source text — the two cases look the same and are
+  not.
+- **F29_2-19a** A test that checks bundling contains at least one
+  string literal **in the body**.  Without one, this entire class of errors slips
+  through every check (as happened).
 
-## 20. Was ein Bundle einsammelt: auch `new X`
+## 20. What a bundle collects: `new X` as well
 
-- **F29_2-20** Eine Klasse, die im Rumpf nur in einem `new` vorkommt, gehoert
-  ins Bundle.  `visitNewExpr` schlaegt sie direkt in `ctx.classes` nach und
-  umgeht damit `resolveType`, wo das Einsammeln haengt (`context.h`) — der
-  haeufigste Fall dafuer ist `throw: { new: MeinFehler, message: ... }`, also
-  ausgerechnet der Pfad, auf dem ein Schritt scheitert (`spec/62` §5.6).  Der
-  Empfaenger meldete `Unknown class for new`.  Aufgezeichnet wird deshalb in
-  `visitNewExpr` selbst.
+- **F29_2-20** A class that occurs in the body only in a `new` belongs
+  in the bundle.  `visitNewExpr` looks it up directly in `ctx.classes` and
+  thereby bypasses `resolveType`, where the collecting is hooked in (`context.h`) — the
+  most common case for this is `throw: { new: MeinFehler, message: ... }`, i.e.
+  precisely the path on which a step fails (`spec/62` §5.6).  The
+  receiver reported `Unknown class for new`.  Recording therefore happens in
+  `visitNewExpr` itself.
 
-## 21. `toString` serialisiert eine Sequenz
+## 21. `toString` serialises a sequence
 
-- **F29_2-21** `Code.toString` liefert eine YAML-**Sequenz** (`- def:` …), nicht
-  die aneinandergeklebten Chunks.  Jeder Chunk ist ein Mapping auf oberster
-  Ebene; zwei aneinandergeklebte ergeben ein Mapping mit zweimal dem Schluessel
-  `def:`, und beim Wiedereinlesen ueberlebt nur der letzte.  Ein aiml-Programm
-  ist selbst eine Sequenz, also ist das auch die richtige Serialisierung.
-  `exec_chunks_to_yaml` baut dieselbe Sequenz — die beiden Wege muessen
-  dasselbe liefern, sonst verhaelt sich ein Bundle ueber die Leitung anders
-  als eines im Prozess.
-- **F29_2-21a** Aufgefallen ist das erst, als §16 (transitive Einsammlung)
-  Buendel mit **mehr als einem** Chunk zur Regel machte: der Socket-Test
-  schickte `run_pipeline` samt `lib_greet` und verlor `run_pipeline`.  Mit
-  einem Chunk war der Fehler unsichtbar — ein Test fuer Serialisierung
-  braucht daher mindestens **zwei** Chunks.
+- **F29_2-21** `Code.toString` returns a YAML **sequence** (`- def:` …), not
+  the chunks glued together.  Every chunk is a top-level
+  mapping; two glued together produce a mapping with the key
+  `def:` twice, and on re-reading only the last one survives.  An aiml program
+  is itself a sequence, so this is also the right serialisation.
+  `exec_chunks_to_yaml` builds the same sequence — the two paths must
+  deliver the same, otherwise a bundle over the wire behaves differently
+  from one in the process.
+- **F29_2-21a** This was only noticed when §16 (transitive collection)
+  made bundles with **more than one** chunk the rule: the socket test
+  sent `run_pipeline` together with `lib_greet` and lost `run_pipeline`.  With
+  one chunk the bug was invisible — a test for serialisation
+  therefore needs at least **two** chunks.
 
-## 22. Was ein Bundle vom Wirt sieht — und was nicht
+## 22. What a bundle sees of the host — and what it does not
 
-Die Frage stellt sich sofort, wenn eine Pipeline **im Controller** laeuft: kommt ein Schritt-Rumpf
-an die Symbole und den Zustand des Wirts?  Gemessen in
-`tests/test_bundle_state_boundary.aiml`, drei getrennte Antworten:
+The question arises immediately when a pipeline runs **in the controller**: does a step body get
+at the host's symbols and state?  Measured in
+`tests/test_bundle_state_boundary.aiml`, three separate answers:
 
-| Was | Erreichbar? | Wie |
+| What | Reachable? | How |
 |---|---|---|
-| Eingebaute Funktionen (`io`, `net`, `db`, `sys`, `step`, …) | **ja** | im isolierten Kontext frisch registriert |
-| Eine **Funktion** des Wirts | **ja, als Kopie** | ihr Quelltext wird transitiv mitgebuendelt (§16) und neu uebersetzt |
-| Globale **Variablen** des Wirts | **nein** | sie werden mitgebuendelt, aber **frisch initialisiert** (§22 unten) |
-| Laufender Zustand des Wirts (offene Handles, Caches) | **nein** | ein Bundle traegt Code, kein Prozessabbild (§13) |
-| Dateien, Sockets, Datenbank | **ja, geteilt** | derselbe Prozess, dieselbe Maschine |
+| Built-in functions (`io`, `net`, `db`, `sys`, `step`, …) | **yes** | freshly registered in the isolated context |
+| A **function** of the host | **yes, as a copy** | its source text is bundled transitively (§16) and recompiled |
+| Global **variables** of the host | **no** | they are bundled along, but **freshly initialised** (§22 below) |
+| Running state of the host (open handles, caches) | **no** | a bundle carries code, not a process image (§13) |
+| Files, sockets, database | **yes, shared** | the same process, the same machine |
 
-- **F29_2-22** Eine globale Variable, die eine mitgebuendelte Funktion anfasst, gehoert ins
-  Bundle.  Vorher brach genau der haeufigste Fall — eine Hilfsfunktion des Wirts, die einen
-  Zaehler oder eine Konfiguration liest — mit `Undefined variable (set target)` ab, und zwar erst
-  beim **Empfaenger**.  Aufgezeichnet wird in `resolveVariable` (die einzige Stelle, die Lesen,
-  Schreiben und Interpolation gleich behandelt) ueber `Symbol::is_global`; mitgeschickt wird der
-  Quelltext des Top-Level-`decl`.
-- **F29_2-22a** Mitgeschickt wird die **Deklaration**, nicht der Wert: im Bundle beginnt die
-  Globale bei ihrem Initialwert.  Gemessen: der Wirt zaehlte auf 2, im Bundle lieferte dieselbe
-  Funktion `1`, und der Zaehler des Wirts blieb unberuehrt.  Das ist die richtige Bedeutung — ein
-  Bundle kann auf einem anderen Rechner laufen (`spec/62` §5.8), und ein dorthin kopierter
-  Momentanwert waere eine stille Luege ueber geteilten Zustand.
-- **F29_2-22b** **Die Trennung ist lexikalisch, keine Sandbox.**  Der Rumpf laeuft im **selben
-  Prozess**: `io` schreibt in dieselben Verzeichnisse, `db` in dieselbe Datenbank, `sys.exe`
-  startet Prozesse mit denselben Rechten, und MCJIT loest unbekannte Symbole ueber
-  `DynamicLibrary::LoadLibraryPermanently(nullptr)` gegen die exportierten Symbole des Prozesses
-  auf.  Wer fremden Pipeline-Quelltext ausfuehrt, fuehrt ihn also mit den Rechten des Wirts aus —
-  dieselbe Fehlerklasse wie eine Remote-Shell, nicht eine abgeschwaechte.  Isolation im Sinne von
-  **Rechten** braucht einen eigenen Prozess (und darunter rootless/userns, Kata oder gVisor), nicht
-  einen eigenen `LLVMContext`.
+- **F29_2-22** A global variable touched by a bundled function belongs in the
+  bundle.  Before, exactly the most common case — a helper function of the host that reads a
+  counter or a configuration — broke with `Undefined variable (set target)`, and only
+  at the **receiver**.  Recording happens in `resolveVariable` (the only place that treats reading,
+  writing and interpolation alike) via `Symbol::is_global`; what is sent along is the
+  source text of the top-level `decl`.
+- **F29_2-22a** What is sent along is the **declaration**, not the value: in the bundle the
+  global starts at its initial value.  Measured: the host counted to 2, in the bundle the same
+  function returned `1`, and the host's counter remained untouched.  That is the right meaning — a
+  bundle can run on another machine (`spec/62` §5.8), and a snapshot value copied there
+  would be a silent lie about shared state.
+- **F29_2-22b** **The separation is lexical, not a sandbox.**  The body runs in the **same
+  process**: `io` writes into the same directories, `db` into the same database, `sys.exe`
+  starts processes with the same rights, and MCJIT resolves unknown symbols via
+  `DynamicLibrary::LoadLibraryPermanently(nullptr)` against the process's exported
+  symbols.  Whoever executes foreign pipeline source text therefore executes it with the host's rights —
+  the same class of error as a remote shell, not a weakened one.  Isolation in the sense of
+  **rights** needs a separate process (and underneath it rootless/userns, Kata or gVisor), not
+  a separate `LLVMContext`.
 
