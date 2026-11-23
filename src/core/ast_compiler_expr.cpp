@@ -28,14 +28,14 @@ IRValue* Compiler::visitExpression(Expr* expr) {
     return nullptr;
 }
 
-// spec/10: ein Listenliteral als WERT (heute: Aufrufargument).  Es entsteht eine frische
-// Liste, die das Literal fuellt; der Besitz liegt beim Aufrufer der Auswertung.  Vorher
-// wurde das Literal am Aufruf aufgefaechert und erzeugte "Incorrect number of arguments"
-// erst in der LLVM-Verifikation (Backlog-Punkt 3).
+// spec/10: a list literal as a VALUE (today: call argument).  A fresh list is created
+// that the literal fills; ownership lies with the caller of the evaluation.  Before,
+// the literal was fanned out at the call and produced "Incorrect number of arguments"
+// only in LLVM verification (backlog item 3).
 IRValue* Compiler::visitListLiteralValue(BufferLiteralExpr* lit) {
     llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
-    // Elementtyp: der erwartete Parametertyp gewinnt (nur so ist `[]` typisierbar),
-    // sonst aus dem ersten Element abgeleitet.
+    // Element type: the expected parameter type wins (only that way is `[]` typeable),
+    // otherwise derived from the first element.
     std::string elemName;
     const std::string& want = ctx.listLiteralArgType;
     if (want.rfind("list<", 0) == 0 && want.back() == '>')
@@ -50,8 +50,8 @@ IRValue* Compiler::visitListLiteralValue(BufferLiteralExpr* lit) {
         }
     }
     if (elemName.empty()) {
-        LOG_ERROR(ctx.fmtLoc(lit->sourceNode) + "Listenliteral als Argument: der Elementtyp ist"
-                  " nicht bestimmbar — der Parameter muss `list<T>` sein (spec/10).");
+        LOG_ERROR(ctx.fmtLoc(lit->sourceNode) + "list literal as argument: the element type cannot"
+                  " be determined — the parameter must be `list<T>` (spec/10).");
         return nullptr;
     }
     llvm::Type* elemTy = ctx.isRefcountModel(elemName)
@@ -66,7 +66,7 @@ IRValue* Compiler::visitListLiteralValue(BufferLiteralExpr* lit) {
         ctx.getFunction("aiml_list_handle_new", i8p, {}), {}, "litarg_new");
     ListImpl::initList(ctx, handle, elemTy, 4);
     const std::string saved = ctx.listLiteralArgType;
-    ctx.listLiteralArgType.clear();           // verschachtelte Literale erben den Hinweis nicht
+    ctx.listLiteralArgType.clear();           // nested literals do not inherit the hint
     for (auto& elem : lit->elements) {
         IRValue* ev = visitExpression(elem.get());
         if (!ev) continue;
@@ -174,12 +174,12 @@ IRValue* Compiler::visitNewArrayExpr(NewArrayExpr* na) {
 
 IRValue* Compiler::visitNewExpr(NewExpr* newExpr) {
     std::string className = newExpr->typeName;
-    // spec/29_2 §20: `new X` hier aufzeichnen, damit X mitgebuendelt wird.
-    // visitNewExpr schlaegt die Klasse direkt in ctx.classes nach und umgeht
-    // damit resolveType, wo das Bundle-Tracking haengt (context.h).  Folge war:
-    // eine Klasse, die NUR in einem `new` vorkommt — typisch
-    // `throw: { new: StepFailed }` — fehlte im Bundle, und der Empfaenger
-    // meldete `Unknown class for new`.  Gemessen in
+    // spec/29_2 §20: record `new X` here, so that X is bundled along.
+    // visitNewExpr looks the class up directly in ctx.classes and thereby bypasses
+    // resolveType, where the bundle tracking hangs (context.h).  The consequence was:
+    // a class that occurs ONLY in a `new` — typically
+    // `throw: { new: StepFailed }` — was missing from the bundle, and the receiver
+    // reported `Unknown class for new`.  Measured in
     // tests/test_bundle_exec_semantics.aiml.
     if (!className.empty() && ctx.classes.count(className) &&
         !ctx.classes[className].isBuiltin &&
@@ -188,7 +188,7 @@ IRValue* Compiler::visitNewExpr(NewExpr* newExpr) {
         ctx.functions[ctx.bundleTrackingTarget].referencedTypes.insert(className);
     if (!ctx.inServiceSynthFn) {                                       // spec/66 §5.6
         if (ctx.serviceDecls.count(className)) ctx.serviceUses.insert(className);
-        // ein reiner Client benutzt den Service ueber seinen Stub
+        // a pure client uses the service via its stub
         if (className.size() > 6 && className.compare(className.size() - 6, 6, "Client") == 0) {
             const std::string base = className.substr(0, className.size() - 6);
             if (ctx.serviceDecls.count(base)) ctx.serviceUses.insert(base);
@@ -508,25 +508,25 @@ IRValue* Compiler::visitVariable(VariableExpr* var) {
             return ctx.ir_gen->wrap(ctx.builder.CreateCall(stdFn, {ctx.builder.getInt32(fd)}));
         }
 
-        // `${ns.name}` — ein Name mit Punkt, der keine Variable ist, aber eine
-        // FUNKTION OHNE Argumente: dann ist er gemeint wie ein Wert und wird
-        // gerufen.  Das ist der Lesezugang zu einem Namensraum voller
-        // Konstanten (cosmos: die Job-Parameter in `prm`, doc/spec/106
-        // §106.5): `${prm.branch}` statt `${ { call: [prm.branch] } }`.
+        // `${ns.name}` — a name with a dot that is not a variable but a
+        // FUNCTION WITHOUT arguments: then it is meant like a value and is
+        // called.  This is the read access to a namespace full of
+        // constants (cosmos: the job parameters in `prm`, doc/spec/106
+        // §106.5): `${prm.branch}` instead of `${ { call: [prm.branch] } }`.
         //
-        // Nur bei PUNKT und nur bei Stelligkeit 0: ein nackter Funktionsname
-        // bleibt ein Funktionszeiger (siehe unten), und eine Funktion mit
-        // Argumenten laesst sich ohne Argumente nicht rufen.  Eine Variable
-        // gewinnt immer, denn sie wurde oben schon gefunden.
+        // Only with a DOT and only with arity 0: a bare function name
+        // stays a function pointer (see below), and a function with
+        // arguments cannot be called without arguments.  A variable
+        // always wins, because it was already found above.
         if (dotPos != std::string::npos) {
             llvm::Function* zero = nullptr;
             auto fit = ctx.functions.find(varName);
             if (fit != ctx.functions.end() && fit->second.func) zero = fit->second.func;
-            // Auch eine bloss DEKLARIERTE Funktion zaehlt: in einem
-            // Compiler-Kontext (spec/29_2 §14a) steht ein frueheres Bundle nur
-            // noch als Deklaration im Modul — seine Tabelle ist weg.  Ohne
-            // diesen Zweig wurde `${prm.branch}` zum Funktionszeiger und als
-            // Zeichenkette gedruckt (gemessen: Datenmuell im Befehl).
+            // A merely DECLARED function counts too: in a
+            // compiler context (spec/29_2 §14a) an earlier bundle is only
+            // present as a declaration in the module — its table is gone.  Without
+            // this branch `${prm.branch}` became a function pointer and was printed as a
+            // string (measured: data garbage in the command).
             if (!zero) zero = ctx.module().getFunction(varName);
             if (zero && zero->arg_size() == 0 && !zero->getReturnType()->isVoidTy())
                 return ctx.ir_gen->wrap(ctx.builder.CreateCall(zero, {}, varName + "_val"));
@@ -558,8 +558,8 @@ IRValue* Compiler::visitVariable(VariableExpr* var) {
     IRValue* baseAlloca = sym->ir_alloca_inst ? sym->ir_alloca_inst : ctx.ir_gen->wrap(sym->alloca_inst);
     IRType* baseElemTy = sym->ir_element_type ? sym->ir_element_type : ctx.ir_gen->wrapType(sym->element_type);
 
-    // list/map by-ref args: alloca enthält den Pointer, nicht den Struct.
-    // Lese-Pfade müssen einmal dereferenzieren bevor sie auf den Struct zugreifen.
+    // list/map by-ref args: the alloca contains the pointer, not the struct.
+    // Read paths must dereference once before they access the struct.
     if (sym->is_byref_arg) {
         auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
         llvm::Value* allocaRaw = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca));
@@ -568,9 +568,9 @@ IRValue* Compiler::visitVariable(VariableExpr* var) {
     }
 
     if (propName.empty()) {
-        // Für byref-args: baseAlloca ist jetzt der struct-Pointer.  Load des
-        // Structs liefert eine Kopie der aktuellen size/capacity/data-Werte des
-        // CALLER-Structs — genau was beim Weitergeben gebraucht wird.
+        // For byref args: baseAlloca is now the struct pointer.  Loading the
+        // struct yields a copy of the current size/capacity/data values of the
+        // CALLER struct — exactly what is needed when passing it on.
         return ctx.ir_gen->createLoad(baseElemTy, baseAlloca, baseName + "_val");
     } else {
         llvm::Type* llvmBaseElemTy = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(baseElemTy));
@@ -690,18 +690,18 @@ static llvm::Value* coerceToBool(CompilerContext& ctx, llvm::Value* v) {
 }
 
 // spec/04_1 §7: { cast: [value, type] } — exactly the conversions of the table.
-// spec/13 §6 + spec/04_1 §7.  EINE Umwandlung float→Ganzzahl fuer alle Speicherpfade
-// (Member-Store, idx-Element, decl-Init, lokales set, Vorgabewert) UND fuer `cast` selbst:
-// zwei Eingaben haben kein Ganzzahl-Bild und ergaeben bei blankem CreateFPToSI poison,
-// also sind sie hier festgelegt -- NaN → 0, ausserhalb des Bereichs geklammert.  Geklammert
-// wird VOR der Umwandlung, denn danach wuerde man poison vergleichen.
+// spec/13 §6 + spec/04_1 §7.  ONE float→integer conversion for all store paths
+// (member store, idx element, decl init, local set, default value) AND for `cast` itself:
+// two inputs have no integer image and would yield poison with a bare CreateFPToSI,
+// so they are fixed here -- NaN → 0, out of range clamped.  Clamping happens
+// BEFORE the conversion, because afterwards one would be comparing poison.
 llvm::Value* coerceFloatToIntegral(CompilerContext& ctx, llvm::Value* v, llvm::Type* dstTy,
                                    const std::string& dstName) {
     if (!v || !dstTy || !v->getType()->isFloatingPointTy() || !dstTy->isIntegerTy()) return v;
     auto& bld = ctx.builder;
     llvm::Type* from = v->getType();
-    // `bool` ist als i8 abgelegt: dieselbe Antwort wie `cast` und wie eine Bedingung
-    // (ONE, also ist NaN false) -- nicht die Klammerung weiter unten.
+    // `bool` is stored as i8: the same answer as `cast` and as a condition
+    // (ONE, so NaN is false) -- not the clamping further below.
     if (dstName == "bool" || dstTy->isIntegerTy(1)) {
         llvm::Value* nz = bld.CreateFCmpONE(v, llvm::ConstantFP::get(from, 0.0), "st_f2b");
         return dstTy->isIntegerTy(1) ? nz : bld.CreateZExt(nz, dstTy, "st_f2b_w");
@@ -714,15 +714,15 @@ llvm::Value* coerceFloatToIntegral(CompilerContext& ctx, llvm::Value* v, llvm::T
     llvm::Value* zero  = llvm::ConstantFP::get(from, 0.0);
     llvm::Value* isNan = bld.CreateFCmpUNO(v, v, "st_nan");
     llvm::Value* safe  = bld.CreateSelect(isNan, zero, v, "st_nan0");
-    // Grenzen im QUELLtyp bilden: bei f32 sind sie nicht exakt darstellbar und werden
-    // gerundet -- genau deshalb wird geklammert und nicht nur verglichen.
+    // Form the limits in the SOURCE type: for f32 they are not exactly representable and are
+    // rounded -- that is exactly why we clamp and do not just compare.
     llvm::Value* loV = llvm::ConstantFP::get(from, lo);
     llvm::Value* hiV = llvm::ConstantFP::get(from, hi);
     safe = bld.CreateSelect(bld.CreateFCmpOLT(safe, loV), loV, safe, "st_clamp_lo");
     safe = bld.CreateSelect(bld.CreateFCmpOGT(safe, hiV), hiV, safe, "st_clamp_hi");
     llvm::Value* conv = uns ? bld.CreateFPToUI(safe, dstTy, "st_f2u")
                             : bld.CreateFPToSI(safe, dstTy, "st_f2i");
-    // Nach dem Klammern kann die gerundete Obergrenze noch ueberlaufen → festnageln.
+    // After clamping the rounded upper limit can still overflow → pin it down.
     llvm::Value* atHi = bld.CreateFCmpOGE(safe, hiV, "st_at_hi");
     llvm::Value* hiI  = llvm::ConstantInt::get(dstTy, uns ? llvm::APInt::getMaxValue(bits)
                                                           : llvm::APInt::getSignedMaxValue(bits));
@@ -741,10 +741,10 @@ IRValue* Compiler::visitCast(BinaryExpr* bin) {
     llvm::Type* from = val->getType();
     const std::string& to = target->name;
 
-    // spec/65 F65-14: eine eingeschraenkte Sitzung bekommt KEINEN Zeiger-Cast.
-    // Mit Zeigerarithmetik erreicht Code im selben Prozess jedes Byte, unabhaengig
-    // von jeder Namensregel — auch den Laufzeitzustand des Wirts.  Eine Level-
-    // Pruefung, die das zulaesst, prueft die Haustuer eines Hauses ohne Waende.
+    // spec/65 F65-14: a restricted session gets NO pointer cast.
+    // With pointer arithmetic, code in the same process reaches every byte, regardless
+    // of any naming rule — including the host's runtime state.  A level
+    // check that allows this checks the front door of a house without walls.
     if (aiml::clearance::restricted()) {
         const bool to_ptr  = (to.rfind("ptr<", 0) == 0) || to == "ptr";
         const bool from_ptr = from->isPointerTy();
@@ -753,9 +753,9 @@ IRValue* Compiler::visitCast(BinaryExpr* bin) {
         };
         if (to_ptr || (from_ptr && kIntTypes.count(to))) {
             LOG_ERROR(ctx.fmtLoc(bin->sourceNode) +
-                      "clearance-dialect: `cast:` auf/aus einem Zeiger ist in einer "
-                      "eingeschraenkten Sitzung nicht zulaessig (spec/65 F65-14) — "
-                      "Zeigerarithmetik erreicht im selben Prozess jedes Byte.");
+                      "clearance-dialect: `cast:` to/from a pointer is not allowed in a "
+                      "restricted session (spec/65 F65-14) — "
+                      "pointer arithmetic reaches every byte in the same process.");
             return nullptr;
         }
     }
@@ -786,9 +786,9 @@ IRValue* Compiler::visitCast(BinaryExpr* bin) {
     }
     if (to == "f32" || to == "f64") {
         llvm::Type* dst = (to == "f32") ? bld.getFloatTy() : bld.getDoubleTy();
-        /* bool zuerst: es ist als i8 gespeichert, also wäre SIToFP auf dem
-         * Rohwert zwar meist richtig, aber true ist garantiert 0/1 nur über
-         * die Null-Prüfung. */
+        /* bool first: it is stored as i8, so SIToFP on the
+         * raw value would mostly be right, but true is guaranteed 0/1 only via
+         * the zero check. */
         if (fromBool) {
             llvm::Value* one = bld.CreateICmpNE(val, llvm::ConstantInt::get(from, 0), "cast_b_nz");
             return ctx.ir_gen->wrap(bld.CreateUIToFP(one, dst, "cast_b2f"));
@@ -803,9 +803,9 @@ IRValue* Compiler::visitCast(BinaryExpr* bin) {
     if (to == "bool") {
         if (fromBool) return ctx.ir_gen->wrap(bld.CreateICmpNE(val, llvm::ConstantInt::get(from, 0), "cast_b2b"));
         if (fromInt)  return ctx.ir_gen->wrap(bld.CreateICmpNE(val, llvm::ConstantInt::get(from, 0), "cast_i2b"));
-        /* ONE, nicht UNE: NaN ist damit false — dieselbe Antwort, die
-         * coerceToBool einer Bedingung gibt.  `cast` und `if` dürfen über
-         * denselben Wert nicht verschieden urteilen (spec/04_1 §7). */
+        /* ONE, not UNE: NaN is therefore false — the same answer that
+         * coerceToBool gives a condition.  `cast` and `if` must not judge
+         * the same value differently (spec/04_1 §7). */
         if (fromFloat) return ctx.ir_gen->wrap(bld.CreateFCmpONE(val, llvm::ConstantFP::get(from, 0.0), "cast_f2b"));
         return unsupported();
     }
@@ -828,16 +828,16 @@ IRValue* Compiler::visitBinary(BinaryExpr* bin) {
         bin->rhs = std::move(tmp.indices[0]);
         return r;
     }
-    // spec/04_1 §4: `and` / `or` werten KURZ aus — "if first operand is false,
-    // remaining operands are not evaluated".  Das MUSS hier stehen, vor der
-    // Auswertung der Operanden: bis 2026-10-15 wurden beide Seiten ausgewertet
-    // und erst danach bitweise verknuepft (CreateAnd/CreateOr), die Spec-Regel
-    // war also schlicht nicht umgesetzt.  Damit war das haeufigste Schutzmuster
-    // der Sprache wirkungslos:
+    // spec/04_1 §4: `and` / `or` evaluate SHORT-circuit — "if first operand is false,
+    // remaining operands are not evaluated".  That MUST be here, before the
+    // evaluation of the operands: until 2026-10-15 both sides were evaluated
+    // and only then combined bitwise (CreateAnd/CreateOr), so the spec rule
+    // was simply not implemented.  That made the language's most common guard pattern
+    // ineffective:
     //     { '&&': [{ pneq: [p, null] }, { gt: [{ call: [p.has] }, 0] }] }
-    // Die Wache bestand, der zweite Operand lief trotzdem → SIGSEGV (gemessen
-    // im cosmos-Client, addr=0x8).  `equiv`/`xor` brauchen beide Seiten und
-    // bleiben unten.
+    // The guard held, the second operand ran anyway → SIGSEGV (measured
+    // in the cosmos client, addr=0x8).  `equiv`/`xor` need both sides and
+    // stay below.
     if (bin->op == "and" || bin->op == "&&" || bin->op == "or" || bin->op == "||") {
         const bool isAnd = (bin->op == "and" || bin->op == "&&");
         IRValue* lhsV = visitExpression(bin->lhs.get());
@@ -853,7 +853,7 @@ IRValue* Compiler::visitBinary(BinaryExpr* bin) {
         if (!fnOwner) return nullptr;
         llvm::BasicBlock* rhsBB  = llvm::BasicBlock::Create(ctx.context, isAnd ? "and.rhs" : "or.rhs", fnOwner);
         llvm::BasicBlock* endBB  = llvm::BasicBlock::Create(ctx.context, isAnd ? "and.end" : "or.end", fnOwner);
-        // AND: nur weiterrechnen, wenn links wahr.  OR: nur, wenn links falsch.
+        // AND: only continue if the left is true.  OR: only if the left is false.
         if (isAnd) ctx.builder.CreateCondBr(lb, rhsBB, endBB);
         else       ctx.builder.CreateCondBr(lb, endBB, rhsBB);
         ctx.builder.SetInsertPoint(rhsBB);
@@ -865,8 +865,8 @@ IRValue* Compiler::visitBinary(BinaryExpr* bin) {
                 "Cannot apply logical operator '" + bin->op + "' to non-scalar type");
             return nullptr;
         }
-        // Der rechte Operand darf selbst Bloecke erzeugt haben — der Sprung
-        // kommt aus dem AKTUELLEN Block, nicht aus rhsBB.
+        // The right operand may itself have created blocks — the branch
+        // comes from the CURRENT block, not from rhsBB.
         llvm::BasicBlock* rhsEndBB = ctx.builder.GetInsertBlock();
         if (!rhsEndBB->getTerminator()) ctx.builder.CreateBr(endBB);
         ctx.builder.SetInsertPoint(endBB);
@@ -913,21 +913,21 @@ IRValue* Compiler::visitBinary(BinaryExpr* bin) {
             rhs = ctx.ir_gen->wrap(ctx.builder.CreateBitCast(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(rhs)), lTy));
         } else if ((lTy->isFloatingPointTy() || lTy->isIntegerTy()) &&
                    (rTy->isFloatingPointTy() || rTy->isIntegerTy())) {
-            /* spec/04_1 §7a: ein LITERAL hat keinen eigenen Typ — es wird im Typ
-             * des anderen Operanden gebildet.  Das wandelt nichts zur Laufzeit
-             * um (die Konstante entsteht direkt im Zieltyp), ist also kein
-             * impliziter Cast.  Zwei TYPISIERTE Werte verschiedener Breite sind
-             * dagegen ein Fehler: ob f64→f32 (Genauigkeit) oder f32→i32 (Bruch)
-             * verloren gehen darf, entscheidet der Autor.
+            /* spec/04_1 §7a: a LITERAL has no type of its own — it is formed in the type
+             * of the other operand.  That converts nothing at runtime
+             * (the constant is created directly in the target type), so it is not an
+             * implicit cast.  Two TYPED values of different width, on the other hand,
+             * are an error: whether f64→f32 (precision) or f32→i32 (fraction)
+             * may be lost is the author's decision.
              *
-             * Ohne diesen Zweig fiel das Paar unverändert durch und erreichte
-             * LLVM als Instruktion mit zwei Operandentypen → die Modul-Prüfung
-             * scheiterte ("Both operands ... not of the same type!"), statt die
-             * hier zugesagte Meldung zu geben. */
+             * Without this branch the pair fell through unchanged and reached
+             * LLVM as an instruction with two operand types → the module check
+             * failed ("Both operands ... not of the same type!"), instead of giving
+             * the message promised here. */
             auto* lv = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(lhs));
             auto* rv = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(rhs));
 
-            /* Konstante im Zieltyp neu bilden; nullptr, wenn es keine ist. */
+            /* Form the constant anew in the target type; nullptr if it is none. */
             auto asFloatConst = [&](llvm::Value* v, llvm::Type* dstTy) -> llvm::Value* {
                 if (auto* cfp = llvm::dyn_cast<llvm::ConstantFP>(v)) {
                     llvm::APFloat apf = cfp->getValueAPF();
@@ -941,10 +941,10 @@ IRValue* Compiler::visitBinary(BinaryExpr* bin) {
             };
 
             bool handled = false;
-            /* Ein ausgeschriebenes Literal wird aus seinem QUELLTEXT im Zieltyp gebildet.
-             * Der Weg ueber asFloatConst() sieht nur die bereits auf f32 gerundete
-             * Konstante: `{ gt: [wert_f64, 0.1234567891] }` verglich gegen
-             * 0.123456791043282, weil die Stellen vor dem Verbreitern schon weg waren. */
+            /* A written-out literal is formed from its SOURCE TEXT in the target type.
+             * The route via asFloatConst() only sees the constant already rounded to f32:
+             * `{ gt: [wert_f64, 0.1234567891] }` compared against
+             * 0.123456791043282, because the digits were already gone before widening. */
             if (lTy->isFloatingPointTy()) {
                 if (llvm::Constant* c = floatLiteralIn(bin->rhs.get(), lTy)) { rhs = ctx.ir_gen->wrap(static_cast<llvm::Value*>(c)); handled = true; }
                 else if (llvm::Value* c = asFloatConst(rv, lTy)) { rhs = ctx.ir_gen->wrap(c); handled = true; }
@@ -1012,9 +1012,9 @@ IRValue* Compiler::visitBinary(BinaryExpr* bin) {
             if (bin->op == "*" && !rhsIsScalar) return ctx.ir_gen->wrap(callVoidFn((pre+"mul").c_str(),{op,op,op},{store(lv,structTy),store(rv,structTy)},structTy));
             if (bin->op == "*" &&  rhsIsScalar) return ctx.ir_gen->wrap(callVoidFn((pre+"scale").c_str(),{op,ctx.builder.getFloatTy(),op},{store(lv,structTy),rv},structTy));
             if (bin->op == "/" &&  rhsIsScalar) return ctx.ir_gen->wrap(callVoidFn((pre+"div").c_str(),{op,ctx.builder.getFloatTy(),op},{store(lv,structTy),rv},structTy));
-            // spec/43_0: `neq` ist die Negation von `eq` — dieselbe Laufzeitfunktion, nur
-            // andere Vergleichsrichtung.  Vorher fiel `neq` in den allgemeinen Struktur-Pfad
-            // und endete in "Cannot apply eq/neq to struct type without __eq__" (Backlog 7).
+            // spec/43_0: `neq` is the negation of `eq` — the same runtime function, only
+            // the other comparison direction.  Before, `neq` fell into the general struct path
+            // and ended in "Cannot apply eq/neq to struct type without __eq__" (backlog 7).
             if (bin->op == "eq" || bin->op == "neq") {
                 llvm::Function* fn=ctx.module().getFunction((pre+"eq").c_str());
                 if (!fn) fn=llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getInt32Ty(),{op,op},false),llvm::Function::ExternalLinkage,(pre+"eq").c_str(),ctx.module());
@@ -1072,19 +1072,19 @@ IRValue* Compiler::visitBinary(BinaryExpr* bin) {
             return nullptr;
         }
         if (rv->getType() != lv->getType()) rv = ctx.builder.CreateSExtOrTrunc(rv, lv->getType(), "bit_rhs");
-        // spec/04_1: die Schiebeweite muss in [0, Breite) liegen.  Eine KONSTANTE ausserhalb
-        // ist statisch erkennbar und daher ein Fehler; eine dynamische wird explizit auf die
-        // Breite maskiert.  Vorher schlug das C-UB durch: `{ shl: [6, -4] }` ergab Muell
-        // (gemessen 372022024), und auf einem anderen Ziel etwas anderes (Backlog-Punkt 2).
+        // spec/04_1: the shift amount must lie in [0, width).  A CONSTANT outside
+        // is statically recognisable and therefore an error; a dynamic one is explicitly masked
+        // to the width.  Before, the C UB came through: `{ shl: [6, -4] }` yielded garbage
+        // (measured 372022024), and something else on a different target (backlog item 2).
         if (bin->op == "shl" || bin->op == "shr" || bin->op == "ushr") {
             const unsigned bits = lv->getType()->getIntegerBitWidth();
             if (auto* amountConst = llvm::dyn_cast<llvm::ConstantInt>(rv)) {
                 const llvm::APInt& amount = amountConst->getValue();
                 if (amount.isNegative() || amount.uge(bits)) {
-                    LOG_ERROR(ctx.fmtLoc(bin->sourceNode) + "Schiebeweite " +
-                              std::to_string(amount.getSExtValue()) + " liegt ausserhalb [0, " +
-                              std::to_string(bits) + ") fuer '" + bin->op + "' — eine konstante" +
-                              " Weite muss gueltig sein (spec/04_1).");
+                    LOG_ERROR(ctx.fmtLoc(bin->sourceNode) + "shift amount " +
+                              std::to_string(amount.getSExtValue()) + " lies outside [0, " +
+                              std::to_string(bits) + ") for '" + bin->op + "' — a constant" +
+                              " amount must be valid (spec/04_1).");
                     return nullptr;
                 }
             } else {
@@ -1201,20 +1201,20 @@ IRValue* Compiler::visitBinary(BinaryExpr* bin) {
         // this?" lookups.
         if (lTy->isPointerTy() && rTy->isPointerTy()) {
             // Resolve type-name for VariableExpr (incl. dotted member-access
-            // wie `tick.terrain_id`) und LiteralExpr.  Ohne den Dot-Pfad würde
-            // string-typed Struct-Feld als unbekannt durchlaufen und auf
-            // Pointer-Identity statt strcmp fallen → bricht spec/39 §0
+            // like `tick.terrain_id`) and LiteralExpr.  Without the dot path a
+            // string-typed struct field would pass through as unknown and fall back to
+            // pointer identity instead of strcmp → breaks spec/39 §0
             // ("For string pointers: byte-by-byte content comparison").
             auto resolveTypeName = [&](Expr* expr) {
                 std::string name;
                 if (auto* varEx = dynamic_cast<VariableExpr*>(expr)) {
-                    // Ein Member des AKTUELLEN Objekts steht in der Quelle als `<.feld`
-                    // (oder `<`), nicht als `this.feld`.  Ohne diese Umschrift schlug
-                    // resolveVariable("<") fehl, der Typname blieb leer und ein Vergleich
-                    // ZWEIER string-Member derselben Klasse fiel auf Pointer-Identity
-                    // zurueck — lautlos "immer ungleich", obwohl beide Typen statisch
-                    // bekannt sind.  (cai-Wikipedia-Leser: `{ eq: [<.tag_name, <.skip_tag] }`
-                    // traf nie, 10.000 Artikel verworfen.)  `this.feld` ging schon.
+                    // A member of the CURRENT object appears in the source as `<.field`
+                    // (or `<`), not as `this.field`.  Without this rewrite
+                    // resolveVariable("<") failed, the type name stayed empty and a comparison
+                    // of TWO string members of the same class fell back to pointer identity
+                    // — silently "always unequal", although both types are statically
+                    // known.  (cai Wikipedia reader: `{ eq: [<.tag_name, <.skip_tag] }`
+                    // never matched, 10,000 articles discarded.)  `this.field` already worked.
                     std::string vname = varEx->name;
                     if (vname == "<") vname = "this";
                     else if (vname.rfind("<.", 0) == 0) vname = "this." + vname.substr(2);
@@ -1240,15 +1240,15 @@ IRValue* Compiler::visitBinary(BinaryExpr* bin) {
                 } else if (auto* ce = dynamic_cast<CallExpr*>(expr)) {
                     // spec/39 §4: a string-returning call compares by content, not identity
                     if (auto* fi = resolveCallTarget(ce->functionName)) name = fi->returnTypeName;
-                    // Ein string-Builtin steht in keiner FunctionInfo, hat aber einen
-                    // statisch bekannten Rueckgabetyp.  Ohne das fiel
-                    // `{ eq: [zeichen.lower(), zeichen.upper()] }` auf Pointer-Identity
-                    // zurueck — zwei FRISCHE Allokationen, also lautlos "immer ungleich".
-                    // Der kurze Name allein genuegt nicht: `slice`/`reverse`/`replace`
-                    // gibt es auch auf Listen, darum muss der Empfaenger ein string sein.
-                    // Verwandt mit der Namensliste in `ownedStringReturnExpr`
-                    // (ast_compiler.cpp), die aber FRISCHHEIT prueft, nicht den Typ —
-                    // dort gehoert `split` dazu, das eine Liste liefert.
+                    // A string builtin is in no FunctionInfo, but has a
+                    // statically known return type.  Without that
+                    // `{ eq: [zeichen.lower(), zeichen.upper()] }` fell back to pointer identity
+                    // — two FRESH allocations, so silently "always unequal".
+                    // The short name alone is not enough: `slice`/`reverse`/`replace`
+                    // exist on lists too, that is why the receiver must be a string.
+                    // Related to the name list in `ownedStringReturnExpr`
+                    // (ast_compiler.cpp), which however checks FRESHNESS, not the type —
+                    // there `split`, which returns a list, belongs to it.
                     if (name.empty()) {
                         const std::string& fn = ce->functionName;
                         size_t dp = fn.rfind('.');
@@ -1286,10 +1286,10 @@ IRValue* Compiler::visitBinary(BinaryExpr* bin) {
             if (lhsTypeName == "string" || rhsTypeName == "string") {
                 return visitStringCompare(isNeq, lv, rv);
             }
-            // Warning wenn beide Typen unbekannt UND wir auf Pointer-Identity
-            // fallen müssen — sehr wahrscheinlich ein User-Bug (z.B. eq auf
-            // einem string-Feld dessen Typ-Resolver gefailed hat).  peq/pneq
-            // ist der explizite Pointer-Compare; eq sollte content meinen.
+            // Warning if both types are unknown AND we have to fall back to pointer identity
+            // — very likely a user bug (e.g. eq on
+            // a string field whose type resolver failed).  peq/pneq
+            // is the explicit pointer compare; eq should mean content.
             if (lhsTypeName.empty() && rhsTypeName.empty()) {
                 LOG_WARNING(ctx.fmtLoc(bin->sourceNode) +
                             "eq/neq on two pointers without resolvable type — "
@@ -1604,10 +1604,10 @@ IRValue* Compiler::visitSpawn(SpawnExpr* spawn) {
         ctx.builder.CreateStructGEP(handleTy, handlePtr, 2, "detached_ptr"));
 
     // 6. pthread_create(&handle->tid, NULL, trampoline, args)
-    // `pthread_t` ist zeigerbreit (i64 nativ, i32 auf wasm32), der Handle-Slot
-    // dagegen ueberall i64 — `thread.id` soll pro Ziel nicht den Typ wechseln.
-    // Also schreibt pthread_create in ein passend breites Zwischenfeld, und das
-    // wandert von dort in den Slot; sonst bliebe dessen obere Haelfte Muell.
+    // `pthread_t` is pointer-wide (i64 native, i32 on wasm32), the handle slot
+    // on the other hand is i64 everywhere — `thread.id` should not change type per target.
+    // So pthread_create writes into a suitably wide temporary field, and that
+    // moves from there into the slot; otherwise its upper half would stay garbage.
     llvm::Type* tidTy = ctx.getSizeType();
     llvm::Value* tidTmp = ctx.createEntryAlloca(tidTy, "tid_tmp");
     ctx.builder.CreateStore(llvm::ConstantInt::get(tidTy, 0), tidTmp);
@@ -1637,8 +1637,8 @@ IRValue* Compiler::visitAtExpr(AtExpr* at) {
         return nullptr;
     }
 
-    // Class-method this-shortcut: `<` und `<.member` → `this` / `this.member`,
-    // analog visitVariable.
+    // Class-method this-shortcut: `<` and `<.member` → `this` / `this.member`,
+    // analogous to visitVariable.
     std::string varName = varExpr->name;
     if (varName == "<") {
         varName = "this";
@@ -1665,8 +1665,8 @@ IRValue* Compiler::visitAtExpr(AtExpr* at) {
                 if (propPtr && !propTypeName.empty()) {
                     tempSym.typeName        = propTypeName;
                     tempSym.ir_alloca_inst  = propPtr;
-                    // ir_element_type ist nicht zwingend nötig — die Branches
-                    // unten lesen nur typeName + alloca_inst (über ir_alloca_inst).
+                    // ir_element_type is not strictly needed — the branches
+                    // below only read typeName + alloca_inst (via ir_alloca_inst).
                     sym = &tempSym;
                 }
             }
