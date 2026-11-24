@@ -73,6 +73,9 @@ jobs:
       - name: Smoke test
         run: |
           set +e
+          for f in out/aiml/aiml out/libaiml/libaiml.so; do
+            echo "$f RUNPATH entries: $(readelf -d "$f" | sed -n 's/.*(RUNPATH).*\[\(.*\)\]/\1/p' | tr ':' '\n' | grep -c .), via epoch alias: $(readelf -d "$f" | grep -o '%3a' | wc -l)"
+          done
           out/aiml/aiml tests/test.aiml
           rc=$?
           echo "exit code $rc"
