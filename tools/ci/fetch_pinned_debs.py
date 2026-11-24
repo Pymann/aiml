@@ -77,6 +77,8 @@ def fetch(cache: Path, name: str, arch: str, version: str, digest: str) -> str:
     if digest and got != digest:
         shutil.rmtree(cdir)
         raise RuntimeError(f"{name}={version}: sha256 {got} != pinned {digest}")
+    if not digest:
+        print(f"NO PINNED DIGEST: {name}={version} sha256={got}")
     payload.mkdir()
     subprocess.run(["dpkg-deb", "-x", str(deb), str(payload)], check=True)
     return src

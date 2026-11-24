@@ -15,8 +15,7 @@ clean machine, it says so.
 | Python | 3.12 | for the build tool |
 | `apt-get`, `dpkg-deb` | from the base system | the build tool downloads and unpacks `.deb` payloads with them |
 | Exodus | current `master` | the build tool, see below |
-| System headers | `libx11-dev`, `libxi-dev`, `liblzma-dev`, `libsharpyuv-dev`, `linux-libc-dev` | the only headers not yet pinned; install with apt |
-| System libraries | 162 pinned apt packages | fetched by Exodus into `__exodus_cache/`, **no root required** |
+| System libraries | 171 pinned apt packages | fetched by Exodus into `__exodus_cache/`, **no root required** |
 
 The dependency set is large: LLVM 18, yaml-cpp, OpenSSL, zlib/brotli/zstd/lz4/xz,
 libzip, Assimp, OpenGL/GLEW/GLFW, libpng, libwebp, OpenBLAS, X11/Xtst, libssh,
@@ -44,7 +43,7 @@ exodus --version
 From the repository root:
 
 ```bash
-exodus pkg install          # the 162 apt packages of exodus.json
+exodus pkg install          # the 171 apt packages of exodus.json
 exodus pkg install --all    # additionally the git packages of the other configs
                             # (emsdk 3.1.74 and yaml-cpp 0.8.0 — only needed for
                             # the wasm32 target; a large download)

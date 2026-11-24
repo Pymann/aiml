@@ -24,8 +24,7 @@ jobs:
       - name: System packages
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends g++ python3-venv dpkg-dev valgrind \
-            libx11-dev libxi-dev liblzma-dev libsharpyuv-dev linux-libc-dev
+          sudo apt-get install -y --no-install-recommends g++ python3-venv dpkg-dev valgrind
 
       - name: Restore pinned .deb cache
         id: debcache

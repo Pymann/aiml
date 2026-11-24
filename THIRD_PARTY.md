@@ -71,7 +71,7 @@ SOFTWARE.
 
 The compiler and `libaiml` link against system libraries. They are **not** part
 of this repository; `exodus.json` pins the exact Ubuntu 24.04 package versions
-and digests it was built against (162 entries, see
+and digests it was built against (171 entries, see
 [BUILDING.md](BUILDING.md)). The ones the `aiml` target links directly:
 
 | Library | Package | License (upstream) |
@@ -82,15 +82,15 @@ and digests it was built against (162 entries, see
 | zlib | `zlib1g-dev` | Zlib |
 | Brotli | `libbrotli-dev` | MIT |
 | zstd | `libzstd-dev` | BSD-3-Clause / GPL-2.0 dual |
-| xz / lzma | `liblzma5` | public domain / 0BSD |
+| xz / lzma | `liblzma5`, `liblzma-dev` | public domain / 0BSD |
 | lz4 | `liblz4-dev` | BSD-2-Clause |
 | libzip | `libzip-dev` | BSD-3-Clause |
 | Assimp | `libassimp-dev` | BSD-3-Clause |
 | OpenGL / GLEW / GLFW | `libgl-dev`, `libglew-dev`, `libglfw3-dev` | MIT / BSD-3-Clause / Zlib |
 | libpng | `libpng-dev` | PNG Reference Library License v2 |
-| libwebp, sharpyuv | `libwebp-dev` | BSD-3-Clause |
+| libwebp, sharpyuv | `libwebp-dev`, `libsharpyuv-dev` | BSD-3-Clause |
 | OpenBLAS | `libopenblas-serial-dev` | BSD-3-Clause |
-| X11, Xtst | `libx11-6`, `libxtst-dev` | MIT (X11) |
+| X11, Xi, Xtst | `libx11-dev`, `libxi-dev`, `libxtst-dev` | MIT (X11) |
 | libssh | `libssh-dev` | LGPL-2.1 |
 | OpenLDAP (`ldap`, `lber`) | `libldap-dev` | OLDAP-2.8 |
 | GnuTLS | `libgnutls28-dev` | LGPL-2.1-or-later |

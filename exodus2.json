@@ -43,7 +43,13 @@
         "__exodus_cache/apt/libxmlsec1-dev/amd64/1.2.39-5build2/payload/usr/include/xmlsec1",
         "__exodus_cache/apt/libxslt1-dev/amd64/1.1.39-0exp1ubuntu0.24.04.3/payload/usr/include",
         "__exodus_cache/apt/libgnutls28-dev/amd64/3.8.3-1.1ubuntu3.6/payload/usr/include",
-        "__exodus_cache/apt/libsasl2-dev/amd64/2.1.28+dfsg1-5ubuntu3.1/payload/usr/include"
+        "__exodus_cache/apt/libsasl2-dev/amd64/2.1.28+dfsg1-5ubuntu3.1/payload/usr/include",
+        "__exodus_cache/apt/libx11-dev/amd64/2:1.8.7-1build1/payload/usr/include",
+        "__exodus_cache/apt/libxi-dev/amd64/2:1.8.1-1build1/payload/usr/include",
+        "__exodus_cache/apt/libxext-dev/amd64/2:1.3.4-1build2/payload/usr/include",
+        "__exodus_cache/apt/libxfixes-dev/amd64/1:6.0.0-2build1/payload/usr/include",
+        "__exodus_cache/apt/x11proto-dev/all/2023.2-1/payload/usr/include",
+        "__exodus_cache/apt/liblzma-dev/amd64/5.6.1+really5.4.5-1ubuntu0.2/payload/usr/include"
     ],
     "sources": [
         "compiler.cpp",
@@ -185,7 +191,15 @@
             "__exodus_cache/apt/libgnutls28-dev/amd64/3.8.3-1.1ubuntu3.6/payload/usr/lib/x86_64-linux-gnu",
             "__exodus_cache/apt/libsasl2-modules-db/amd64/2.1.28+dfsg1-5ubuntu3.1/payload/usr/lib/x86_64-linux-gnu",
             "__exodus_cache/apt/libsasl2-2/amd64/2.1.28+dfsg1-5ubuntu3.1/payload/usr/lib/x86_64-linux-gnu",
-            "__exodus_cache/apt/libsasl2-dev/amd64/2.1.28+dfsg1-5ubuntu3.1/payload/usr/lib/x86_64-linux-gnu"
+            "__exodus_cache/apt/libsasl2-dev/amd64/2.1.28+dfsg1-5ubuntu3.1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libx11-dev/amd64/2:1.8.7-1build1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libxi-dev/amd64/2:1.8.1-1build1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libxi6/amd64/2:1.8.1-1build1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libxfixes-dev/amd64/1:6.0.0-2build1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libxfixes3/amd64/1:6.0.0-2build1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libxext-dev/amd64/2:1.3.4-1build2/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/liblzma-dev/amd64/5.6.1+really5.4.5-1ubuntu0.2/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libsharpyuv-dev/amd64/1.3.2-0.4build3/payload/usr/lib/x86_64-linux-gnu"
         ]
     },
     "apt_packages": [
@@ -503,6 +517,68 @@
             "arch": "amd64",
             "required": true,
             "digest": "9e9dc22265ecbe203387645347e3442b6af7f2998086f4a7d478baf7b141887b"
+        },
+        {
+            "name": "libsharpyuv-dev",
+            "version": "1.3.2-0.4build3",
+            "arch": "amd64",
+            "required": true,
+            "digest": "50fd7a62a400cecd8fb69839eb4713361ac5d7ad6d6dfdcd8d0e922823151952"
+        },
+        {
+            "name": "libx11-dev",
+            "version": "2:1.8.7-1build1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "1969e200607ffe34070b92fe1bd3ba76ac2e2bd2f3a54530800c5872076fad24"
+        },
+        {
+            "name": "libxext-dev",
+            "version": "2:1.3.4-1build2",
+            "arch": "amd64",
+            "required": true,
+            "digest": "b5bdb6724f228cb8eee8cf39cbbe1289dd3f8f06dd022748312df7844c94dcf2"
+        },
+        {
+            "name": "libxfixes-dev",
+            "version": "1:6.0.0-2build1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "069723527566ef0fc12738f63b789110c211b85bf96c3dbe9a94d9e77f5c479b"
+        },
+        {
+            "name": "libxfixes3",
+            "version": "1:6.0.0-2build1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "0ee1015cccd063249e01c0cd0bf45f513c8ac9a1e5e485070c12e69192455e4a"
+        },
+        {
+            "name": "libxi-dev",
+            "version": "2:1.8.1-1build1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "a1f0f0b4a8c1c43e5300871464080920859d3fa466ef46a584fec800fe890860"
+        },
+        {
+            "name": "libxi6",
+            "version": "2:1.8.1-1build1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "0ea7acb5e8a8ce4d6653b30e03a319bfe136db7bfb5ee7cad34c2aa1272ea8d9"
+        },
+        {
+            "name": "x11proto-dev",
+            "version": "2023.2-1",
+            "arch": "all",
+            "required": true,
+            "digest": "3bf13a2ffb79ecd4014d438936014e5863f79eb59ebf76e8f43356271c90e7ce"
+        },
+        {
+            "name": "liblzma-dev",
+            "version": "5.6.1+really5.4.5-1ubuntu0.2",
+            "arch": "amd64",
+            "required": true
         }
     ]
 }
