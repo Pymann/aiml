@@ -190,6 +190,11 @@ cannot block the host tick (`tests/test_mirror_wss_stall.aiml`). Example:
 > - Production: deploy a CA-signed certificate (e.g. Let's Encrypt) for the host name
 >   clients connect to — verification then passes with no extra config.
 > - A private/internal CA: point `AIML_WSS_CA=/path/to/ca.pem` at its bundle.
+> - **A host without a domain name:** `wss://<ip>:<port>` verifies against the
+>   certificate's `iPAddress` SAN (spec/32_2 §2.1), so a cert issued with
+>   `subjectAltName=IP:<addr>` plus `AIML_WSS_CA` needs no DNS entry at all; a cert
+>   with only `DNS:` names is refused for the IP form.  Asserted by
+>   `tests/test_mirror_wss_ip_san.aiml` — the one wss test that leaves verification on.
 > - Local dev with a self-signed cert: `mirror.tls_insecure(1)` (or env
 >   `AIML_WSS_INSECURE=1`) disables verification, with a stderr warning. **Never in
 >   production.** (In the browser build the browser's own TLS stack enforces this;

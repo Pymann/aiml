@@ -56,6 +56,16 @@ Returns `nullptr` if OpenSSL cannot be initialized.
 `tls.connect` automatically sets **SNI** (Server Name Indication) to `host` — required
 for virtual hosting on HTTPS servers.
 
+`host` is also the name the certificate is checked against under `set_verify "peer"`.
+When it is an **IP literal**, the match is against the certificate's `iPAddress` SAN,
+not its DNS names: a cert that carries only `DNS:` entries is refused for
+`tls.connect(sock, "10.0.0.5", 8443)` and accepted for the same server under its
+hostname. A `CN=` is no substitute for either. So a host without a domain name can
+still be a verified TLS target — issue its certificate with
+`subjectAltName=IP:<addr>` and give the client the CA with `tls.set_ca`. Asserted by
+`tests/test_tls_client_ip_san.aiml`; the same rule holds for the https client
+(spec/32_2 §2.1) and the wss client (`tests/test_mirror_wss_ip_san.aiml`).
+
 ### 2.3 Certificate Configuration (before connect/bind)
 
 ```aiml

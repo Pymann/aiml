@@ -1,0 +1,72 @@
+# SPEC: 32_1_network_tls,32_network
+# Expected exit code: 0
+# spec/32_1 §2.2: `tls.connect` verifies the server certificate against the name
+# it was given.  With an IP literal that name lives in the iPAddress SAN, so a
+# cert carrying only DNS names is refused — the same rule the https and wss
+# clients follow (spec/32_2 §2.1), here on the raw socket.
+#   server_ip.crt   SAN = DNS:localhost, IP:127.0.0.1  → connect succeeds
+#   server_dns.crt  SAN = DNS:localhost                → connect fails by IP,
+#                                                        succeeds by hostname
+
+- def:
+    name: handle_root
+    args: [[req, http_request_handle], [resp, http_response_handle]]
+    body:
+      - set: [resp.status, 200]
+      - set: [resp.body, "tls-ip-ok"]
+      - call: [resp.send]
+
+# verified_connect: TLS to `host`:`port` with the test CA and peer verification
+# on; 0 when the handshake completed, -1 when it did not.
+- def:
+    name: verified_connect
+    args: [[host, string], [port, i32]]
+    return: i32
+    body:
+      - decl: [sock, tls_socket_handle, { call: [tls.socket] }]
+      - call: [tls.set_ca, sock, "tests/tls_certs/ca.crt"]
+      - call: [tls.set_verify, sock, "peer"]
+      - call: [tls.set_timeout, sock, 5000]
+      - decl: [rc_conn, i32, { call: [tls.connect, sock, host, port] }]
+      - call: [tls.close, sock]
+      - if: { condition: { neq: [rc_conn, 0] }, then: [{ return: -1 }] }
+      - return: 0
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [fail, i32, 0]
+      - decl: [srv_ip, http_server_handle, { call: [http.server_tls, "127.0.0.1", 23481, "tests/tls_certs/server_ip.crt", "tests/tls_certs/server_ip.key"] }]
+      - call: [srv_ip.set_timeout, 3]
+      - call: [srv_ip.route, "GET", "/", handle_root]
+      - decl: [thr_ip, thread_handle, { call: [srv_ip.start_async] }]
+      - decl: [srv_dns, http_server_handle, { call: [http.server_tls, "127.0.0.1", 23482, "tests/tls_certs/server_dns.crt", "tests/tls_certs/server_dns.key"] }]
+      - call: [srv_dns.set_timeout, 3]
+      - call: [srv_dns.route, "GET", "/", handle_root]
+      - decl: [thr_dns, thread_handle, { call: [srv_dns.start_async] }]
+      - call: [time.sleep_ms, 400]
+
+      - decl: [by_ip_with_san, i32, { call: [verified_connect, "127.0.0.1", 23481] }]
+      - if:
+          condition: { neq: [by_ip_with_san, 0] }
+          then: [{ print: ["FAIL IP against a cert with an IP SAN was refused"] }, { set: [fail, { +: [fail, 1] }] }]
+          else: [{ print: ["  ok  tls.connect by IP accepted the iPAddress SAN"] }]
+
+      - decl: [by_ip_without_san, i32, { call: [verified_connect, "127.0.0.1", 23482] }]
+      - if:
+          condition: { eq: [by_ip_without_san, 0] }
+          then: [{ print: ["FAIL IP against a DNS-only cert was accepted"] }, { set: [fail, { +: [fail, 1] }] }]
+          else: [{ print: ["  ok  tls.connect by IP refused the DNS-only cert"] }]
+
+      - decl: [by_name, i32, { call: [verified_connect, "localhost", 23482] }]
+      - if:
+          condition: { neq: [by_name, 0] }
+          then: [{ print: ["FAIL the same cert was refused under its hostname"] }, { set: [fail, { +: [fail, 1] }] }]
+          else: [{ print: ["  ok  the same cert is fine under its hostname"] }]
+
+      - call: [srv_ip.stop]
+      - call: [srv_dns.stop]
+      - if: { condition: { gt: [fail, 0] }, then: [{ print: ["FAILED ${fail} check(s)"] }, { return: 1 }] }
+      - print: ["PASS tls_client_ip_san"]
+      - return: 0
