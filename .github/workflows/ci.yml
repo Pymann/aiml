@@ -99,6 +99,7 @@ jobs:
         run: |
           TEST_TIMEOUT=300 bash run_all_tests.sh --no-build > corpus.log 2>&1 || true
           tail -n 8 test_results.txt
+          grep -E '^\[ FAIL \]' test_results.txt || true
           {
             echo "## Test corpus"
             echo '```'
