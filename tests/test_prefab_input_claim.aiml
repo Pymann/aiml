@@ -1,0 +1,332 @@
+# SPEC: 44_6_prefabs
+# spec/44_6 "Input claim: claim_input".
+#
+# The gap this test nails down: set_input_transparent and set_input_blocking
+# arbitrate by AREA (and z).  An open dropdown draws its list with
+# compute_popup_rect OUTSIDE the instance box, so an area rule over that box
+# does not protect it at all.  And what needs protecting here is not
+# "everything with a smaller z" but "everything that does not belong to me".
+# That is why the claim arbitrates by IDENTITY.
+#
+# Part A - explicit claim (claim_input/release_input):
+#   A1..A3 baseline WITHOUT a claim: the button beneath fires AND the card
+#          beneath can be dragged - on BOTH drag paths.  Without these three
+#          steps A5..A8 would be worthless.
+#   A4     claim taken, the owner queries agree
+#   A5     the button beneath no longer fires
+#   A6     ... the owner's OWN button still fires (children stay active - an
+#          opened menu needs its entries)
+#   A7     no drag beneath via update_drag_gesture
+#   A8     no drag beneath via engine.update_drag - the SECOND entry.  A claim
+#          that holds on only one of two paths is not a claim.
+#   A9     a second claim is REFUSED, not stolen
+#   A10    a click-through instance may claim nothing
+#   A11    released, the button beneath fires again (effective both ways)
+#   A12    if the owner dies holding the claim, the claim falls - otherwise the
+#          scene would stay locked for good
+#
+# Part B - implicit claim (the case it was built for):
+#   B1..B5 an open dropdown holds the pointer BY ITSELF; game code calls
+#          nothing for it.  Click and drag beneath do not get through, and once
+#          it closes the pointer is free again.
+# Requires: display
+# Expected exit code: 0
+
+- prefab:
+    name: ClmUnder
+    width: 200
+    height: 60
+    children:
+      - { name: und_btn, type: button, pos_x: 0, pos_y: 0, width: 200, height: 60,
+          label: "below", bg_color: 0x334455FF, color: 0xFFFFFFFF, font_size: 12 }
+
+- prefab:
+    name: ClmCard
+    width: 60
+    height: 80
+    draggable: true
+    children:
+      - { name: card_face, type: rect, pos_x: 0, pos_y: 0, width: 60, height: 80,
+          bg_color: 0x3A5A8AFF }
+
+- prefab:
+    name: ClmMenu
+    width: 400
+    height: 300
+    children:
+      - { name: dim_rect, type: rect, pos_x: 0, pos_y: 0, width: 400, height: 300,
+          bg_color: 0x20202080 }
+      - { name: own_btn, type: button, pos_x: 10, pos_y: 10, width: 100, height: 40,
+          label: "above", bg_color: 0x553333FF, color: 0xFFFFFFFF, font_size: 12 }
+
+- prefab:
+    name: ClmOther
+    width: 40
+    height: 40
+    children:
+      - { name: oth_rect, type: rect, pos_x: 0, pos_y: 0, width: 40, height: 40,
+          bg_color: 0x335533FF }
+
+- prefab:
+    name: ClmPick
+    width: 150
+    height: 24
+    children:
+      - { name: pick_dd, type: dropdown, pos_x: 0, pos_y: 0, width: 150, height: 24,
+          options: "one|two|three", bg_color: 0x223040FF, border_color: 0x88AACCFF,
+          border_width: 1.0, color: 0xFFFFFFFF, font_size: 10 }
+
+- class:
+    name: Poker
+    members:
+      - [win, window_handle]
+    methods:
+      - def:
+          name: click_at
+          args: [[clk_x, f32], [clk_y, f32]]
+          body:
+            # spec/44_0 §8.3: inject AFTER engine.swap, swap clears the latches.
+            # One click = press in one frame, release in the next (§8.4).
+            - call: [engine.swap, <.win]
+            - call: [input.post_mouse_move, clk_x, clk_y]
+            - call: [engine.update_hover, clk_x, clk_y]
+            - call: [engine.swap, <.win]
+            - call: [input.post_mouse_down, 0]
+            - call: [engine.update_hover, clk_x, clk_y]
+            - call: [engine.swap, <.win]
+            - call: [input.post_mouse_up, 0]
+            - call: [engine.update_hover, clk_x, clk_y]
+
+      # Drag attempt via the gesture entry: press, drag past the threshold,
+      # see who got picked up, then release again.
+      - def:
+          name: try_drag_gesture
+          args: [[drg_x, f32], [drg_y, f32]]
+          return: prefab_instance
+          body:
+            - decl: [far_y, f32, { add: [drg_y, 12.0] }]
+            - call: [engine.swap, <.win]
+            - call: [input.post_mouse_move, drg_x, drg_y]
+            - call: [engine.update_hover, drg_x, drg_y]
+            - call: [engine.swap, <.win]
+            - call: [input.post_mouse_down, 0]
+            - call: [engine.update_hover, drg_x, drg_y]
+            - call: [engine.swap, <.win]
+            - call: [input.post_mouse_move, drg_x, far_y]
+            - call: [engine.update_hover, drg_x, far_y]
+            - call: [engine.update_drag_gesture, drg_x, far_y]
+            - decl: [got, prefab_instance, { call: [engine.get_dragged] }]
+            - call: [engine.swap, <.win]
+            - call: [input.post_mouse_up, 0]
+            - call: [engine.update_hover, drg_x, far_y]
+            - call: [engine.update_drag_gesture, drg_x, far_y]
+            - return: got
+
+      # The same attempt via the older entry
+      # engine.update_drag(mx, my, down, rel).
+      - def:
+          name: try_drag_raw
+          args: [[drg_x, f32], [drg_y, f32]]
+          return: prefab_instance
+          body:
+            - call: [engine.swap, <.win]
+            - call: [input.post_mouse_move, drg_x, drg_y]
+            - call: [engine.update_hover, drg_x, drg_y]
+            - call: [engine.update_drag, drg_x, drg_y, 1, 0]
+            - decl: [got, prefab_instance, { call: [engine.get_dragged] }]
+            - call: [engine.update_drag, drg_x, drg_y, 0, 1]
+            - call: [engine.swap, <.win]
+            - return: got
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [win, window_handle, { call: [engine.create_window, 400, 300, "claim"] }]
+      - if: { condition: { eq: [win, null] }, then: [{ call: [log.error, "FAIL create_window"] }, { return: 1 }] }
+      - call: [gl.init]
+      - call: [ui.init]
+      - call: [engine.prefab_scene_init, 400, 300]
+      - call: [input.init, win]
+      - decl: [pkr, Poker]
+      - set: [pkr.win, win]
+
+      - decl: [under, prefab_instance, { call: [engine.instantiate, "ClmUnder"] }]
+      - call: [under.set_pos, 50.0, 200.0]
+      - call: [under.set_z, 5]
+      - decl: [card, prefab_instance, { call: [engine.instantiate, "ClmCard"] }]
+      - call: [card.set_pos, 300.0, 200.0]
+      - call: [card.set_z, 5]
+      - decl: [menu, prefab_instance, { call: [engine.instantiate, "ClmMenu"] }]
+      - call: [menu.set_pos, 0.0, 0.0]
+      - call: [menu.set_z, 100]
+      - decl: [other, prefab_instance, { call: [engine.instantiate, "ClmOther"] }]
+      - call: [other.set_pos, 350.0, 10.0]
+      - call: [other.set_z, 100]
+      - decl: [ghost, prefab_instance, { call: [engine.instantiate, "ClmOther"] }]
+      - call: [ghost.set_pos, 350.0, 60.0]
+      - call: [ghost.set_z, 100]
+      - call: [ghost.set_input_transparent, 1]
+      - decl: [pick, prefab_instance, { call: [engine.instantiate, "ClmPick"] }]
+      - call: [pick.set_pos, 20.0, 100.0]
+      - call: [pick.set_z, 100]
+      - call: [engine.draw_scene]
+
+      # Centre of the lower button (50..250 / 200..260), the menu button
+      # (10..110 / 10..50), the card (300..360 / 200..280) and the dropdown box.
+      - decl: [und_x, f32, 150.0]
+      - decl: [und_y, f32, 230.0]
+      - decl: [own_x, f32, 60.0]
+      - decl: [own_y, f32, 30.0]
+      - decl: [crd_x, f32, 330.0]
+      - decl: [crd_y, f32, 240.0]
+      - decl: [ddx, f32, 95.0]
+      - decl: [ddy, f32, 112.0]
+
+      # ── A1 baseline: the button beneath fires ─────────────────────────────
+      - call: [pkr.click_at, und_x, und_y]
+      - if:
+          condition: { neq: [{ call: [under.child_clicked, "und_btn"] }, 1] }
+          then: [{ call: [log.error, "FAIL A1 baseline: the click never reaches the lower button at all - the test would be worthless"] }, { return: 1 }]
+
+      # ── A2 baseline: the card can be grabbed via the gesture ──────────────
+      - if:
+          condition: { pneq: [{ call: [pkr.try_drag_gesture, crd_x, crd_y] }, card] }
+          then: [{ call: [log.error, "FAIL A2 baseline: the card was not picked up via the gesture - A7 would be worthless"] }, { return: 1 }]
+
+      # ── A3 baseline: the card can be grabbed via update_drag too ──────────
+      - if:
+          condition: { pneq: [{ call: [pkr.try_drag_raw, crd_x, crd_y] }, card] }
+          then: [{ call: [log.error, "FAIL A3 baseline: the card was not picked up via update_drag - A8 would be worthless"] }, { return: 1 }]
+
+      # ── A4 take the claim ─────────────────────────────────────────────────
+      - if:
+          condition: { neq: [{ call: [menu.claim_input] }, 1] }
+          then: [{ call: [log.error, "FAIL A4 claim_input was refused although nobody holds the pointer"] }, { return: 1 }]
+      - if:
+          condition: { neq: [{ call: [engine.input_claimed] }, 1] }
+          then: [{ call: [log.error, "FAIL A4 input_claimed reports no claim"] }, { return: 1 }]
+      - decl: [own_a, prefab_instance, { call: [engine.input_owner] }]
+      - if:
+          condition: { pneq: [own_a, menu] }
+          then: [{ call: [log.error, "FAIL A4 input_owner does not return the claimant"] }, { return: 1 }]
+      - if:
+          condition: { neq: [{ call: [menu.holds_input] }, 1] }
+          then: [{ call: [log.error, "FAIL A4 holds_input is not set on the owner"] }, { return: 1 }]
+      - if:
+          condition: { neq: [{ call: [under.holds_input] }, 0] }
+          then: [{ call: [log.error, "FAIL A4 holds_input is set on a non-owner"] }, { return: 1 }]
+
+      # ── A5 the button beneath no longer fires ─────────────────────────────
+      - call: [pkr.click_at, und_x, und_y]
+      - if:
+          condition: { neq: [{ call: [under.child_clicked, "und_btn"] }, 0] }
+          then: [{ call: [log.error, "FAIL A5 the button beneath the owner fired anyway"] }, { return: 1 }]
+
+      # ── A6 the owner's own button still fires ─────────────────────────────
+      - call: [pkr.click_at, own_x, own_y]
+      - if:
+          condition: { neq: [{ call: [menu.child_clicked, "own_btn"] }, 1] }
+          then: [{ call: [log.error, "FAIL A6 the owner blocks its OWN children - a menu needs entries"] }, { return: 1 }]
+
+      # ── A7 no drag beneath (gesture path) ─────────────────────────────────
+      - if:
+          condition: { pneq: [{ call: [pkr.try_drag_gesture, crd_x, crd_y] }, null] }
+          then: [{ call: [log.error, "FAIL A7 a drag was started beneath the owner via the gesture"] }, { return: 1 }]
+
+      # ── A8 no drag beneath (update_drag) ──────────────────────────────────
+      - if:
+          condition: { pneq: [{ call: [pkr.try_drag_raw, crd_x, crd_y] }, null] }
+          then: [{ call: [log.error, "FAIL A8 a drag was started beneath the owner via update_drag - the second drag path does not know the claim"] }, { return: 1 }]
+
+      # ── A9 a second claim is refused, not stolen ──────────────────────────
+      - if:
+          condition: { neq: [{ call: [other.claim_input] }, 0] }
+          then: [{ call: [log.error, "FAIL A9 a second claim was accepted - silent stealing"] }, { return: 1 }]
+      - decl: [own_b, prefab_instance, { call: [engine.input_owner] }]
+      - if:
+          condition: { pneq: [own_b, menu] }
+          then: [{ call: [log.error, "FAIL A9 the refused claim changed the owner"] }, { return: 1 }]
+
+      # ── A10 click-through may claim nothing ───────────────────────────────
+      - call: [menu.release_input]
+      - if:
+          condition: { neq: [{ call: [ghost.claim_input] }, 0] }
+          then: [{ call: [log.error, "FAIL A10 a click-through instance claimed the pointer"] }, { return: 1 }]
+      - if:
+          condition: { neq: [{ call: [engine.input_claimed] }, 0] }
+          then: [{ call: [log.error, "FAIL A10 after the refused claim the pointer counts as taken"] }, { return: 1 }]
+
+      # ── A11 released, the button beneath fires again ──────────────────────
+      - call: [pkr.click_at, und_x, und_y]
+      - if:
+          condition: { neq: [{ call: [under.child_clicked, "und_btn"] }, 1] }
+          then: [{ call: [log.error, "FAIL A11 after release_input the lower button does not fire again"] }, { return: 1 }]
+
+      # ── A12 the claim dies with its owner ─────────────────────────────────
+      - if:
+          condition: { neq: [{ call: [menu.claim_input] }, 1] }
+          then: [{ call: [log.error, "FAIL A12 the renewed claim was refused"] }, { return: 1 }]
+      - call: [engine.destroy, menu]
+      - call: [engine.draw_scene]
+      - if:
+          condition: { neq: [{ call: [engine.input_claimed] }, 0] }
+          then: [{ call: [log.error, "FAIL A12 the claim outlived its owner - the scene stays locked"] }, { return: 1 }]
+      - call: [pkr.click_at, und_x, und_y]
+      - if:
+          condition: { neq: [{ call: [under.child_clicked, "und_btn"] }, 1] }
+          then: [{ call: [log.error, "FAIL A12 after the owner's death the button beneath stays mute"] }, { return: 1 }]
+
+      # ── B1 a closed dropdown holds nothing ────────────────────────────────
+      - if:
+          condition: { neq: [{ call: [engine.input_claimed] }, 0] }
+          then: [{ call: [log.error, "FAIL B1 a closed dropdown holds the pointer"] }, { return: 1 }]
+
+      # ── B2 once open it holds the pointer BY ITSELF ───────────────────────
+      - call: [pkr.click_at, ddx, ddy]
+      - if:
+          condition: { neq: [{ call: [engine.input_claimed] }, 1] }
+          then: [{ call: [log.error, "FAIL B2 the opened dropdown did not claim the pointer"] }, { return: 1 }]
+      - decl: [own_c, prefab_instance, { call: [engine.input_owner] }]
+      - if:
+          condition: { pneq: [own_c, pick] }
+          then: [{ call: [log.error, "FAIL B2 the owner is not the instance with the open dropdown"] }, { return: 1 }]
+
+      # ── B3 no drag beneath while the list is open ─────────────────────────
+      # Every probe presses and releases, and a press next to the list CLOSES
+      # it - so the second probe would otherwise run against a closed list
+      # and be worthless.  Hence: re-open before each probe, and prove it.
+      - if:
+          condition: { pneq: [{ call: [pkr.try_drag_gesture, crd_x, crd_y] }, null] }
+          then: [{ call: [log.error, "FAIL B3 with the list open the card beneath was picked up"] }, { return: 1 }]
+      - call: [pkr.click_at, ddx, ddy]
+      - if:
+          condition: { neq: [{ call: [engine.input_claimed] }, 1] }
+          then: [{ call: [log.error, "FAIL B3 the list could not be re-opened - the second probe would be worthless"] }, { return: 1 }]
+      - if:
+          condition: { pneq: [{ call: [pkr.try_drag_raw, crd_x, crd_y] }, null] }
+          then: [{ call: [log.error, "FAIL B3 with the list open update_drag picked up the card beneath"] }, { return: 1 }]
+
+      # ── B4 the click outside does not get through ─────────────────────────
+      # Re-open first here too: the probe in B3 closed it.
+      - call: [pkr.click_at, ddx, ddy]
+      - if:
+          condition: { neq: [{ call: [engine.input_claimed] }, 1] }
+          then: [{ call: [log.error, "FAIL B4 the list is not open - the probe would be worthless"] }, { return: 1 }]
+      - call: [pkr.click_at, und_x, und_y]
+      - if:
+          condition: { neq: [{ call: [under.child_clicked, "und_btn"] }, 0] }
+          then: [{ call: [log.error, "FAIL B4 the click next to the open list triggered the button beneath"] }, { return: 1 }]
+
+      # ── B5 once closed the pointer is free again ──────────────────────────
+      - if:
+          condition: { neq: [{ call: [engine.input_claimed] }, 0] }
+          then: [{ call: [log.error, "FAIL B5 after closing, the dropdown still holds the pointer"] }, { return: 1 }]
+      - call: [pkr.click_at, und_x, und_y]
+      - if:
+          condition: { neq: [{ call: [under.child_clicked, "und_btn"] }, 1] }
+          then: [{ call: [log.error, "FAIL B5 after closing, the button beneath stays mute"] }, { return: 1 }]
+
+      - call: [engine.destroy_window, win]
+      - call: [log.info, "PASS prefab_input_claim"]
+      - return: 0

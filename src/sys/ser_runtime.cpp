@@ -578,7 +578,7 @@ static void dec_node(const uint8_t* blob, int& pos, int end,
         break;
     case AIML_TD_CHAN:
     case AIML_TD_HASHMAP: {
-        // §5.4.1: Zeiger UND Stempel lesen, vergleichen, erst dann adoptieren.
+        // §5.4.1: read pointer AND stamp, compare, and only then adopt.
         void* handle = nullptr;
         if (end - pos >= (int)(sizeof(void*) + sizeof(uint64_t))) {
             uint64_t stamp = 0;

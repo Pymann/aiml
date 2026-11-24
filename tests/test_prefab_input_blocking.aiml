@@ -17,7 +17,11 @@
 #   3. switched to blocking → the button below does NOT fire any more
 #   4. ... the overlay's OWN button keeps firing (it does not block
 #      itself, a dialog needs buttons of its own)
-#   5. ... and no move starts below the overlay any more
+#   5. ... and no move starts below the overlay any more - on BOTH drag
+#      entries.  The spec names `update_drag` AND `update_drag_gesture`; until
+#      2026-11-22 only the gesture was tested, and precisely the other entry
+#      held a second copy of the selection loop without the modal gate.  A gate
+#      only one entry knows is not a gate.
 #   6. switched back, the button below fires again (effective both ways)
 # Requires: display
 # Expected exit code: 0
@@ -154,6 +158,18 @@
       - call: [input.post_mouse_up, 0]
       - call: [engine.update_hover, 330.0, 252.0]
       - call: [engine.update_drag_gesture, 330.0, 252.0]
+
+      # ── 5b. ... via the older entry engine.update_drag as well ───────
+      - call: [engine.swap, win]
+      - call: [input.post_mouse_move, 330.0, 240.0]
+      - call: [engine.update_hover, 330.0, 240.0]
+      - call: [engine.update_drag, 330.0, 240.0, 1, 0]
+      - decl: [drg_c, prefab_instance, { call: [engine.get_dragged] }]
+      - call: [engine.update_drag, 330.0, 240.0, 0, 1]
+      - if:
+          condition: { pneq: [drg_c, null] }
+          then: [{ call: [log.error, "FAIL engine.update_drag picked up the card beneath the modal overlay"] }, { return: 1 }]
+      - call: [engine.swap, win]
 
       # ── 6. switched back, the button below fires again ─────────────────
       - call: [modal.set_input_blocking, 0]

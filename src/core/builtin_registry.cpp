@@ -10612,6 +10612,20 @@ void registerBuiltins(CompilerContext& ctx) {
             return ctx.ir_gen->wrap(ctx.builder.CreateCall(
                 ctx.getFunction("aiml_prefab_hit_test", i8p, {f32, f32}), {mx, my}));
         };
+        // engine.input_claimed() → i32, engine.input_owner() → prefab_instance
+        // spec/44_6: the raw input layer stays a broadcast (spec/44_0 §2.2);
+        // game code that must hold back asks here.
+        eng.builtinFuncs["input_claimed"] = [](CompilerContext& ctx,
+            const std::vector<AIML::IRValue*>&) -> AIML::IRValue* {
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                ctx.getFunction("aiml_prefab_input_claimed", ctx.builder.getInt32Ty(), {}), {}));
+        };
+        eng.builtinFuncs["input_owner"] = [](CompilerContext& ctx,
+            const std::vector<AIML::IRValue*>&) -> AIML::IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                ctx.getFunction("aiml_prefab_input_owner", i8p, {}), {}));
+        };
         // engine.get_dragged() → prefab_instance
         eng.builtinFuncs["get_dragged"] = [](CompilerContext& ctx,
             const std::vector<AIML::IRValue*>&) -> AIML::IRValue* {
@@ -10938,6 +10952,18 @@ void registerBuiltins(CompilerContext& ctx) {
         PI_I32_GETTER("get_input_transparent", "aiml_prefab_get_input_transparent")
         PI_I32_SETTER("set_input_blocking", "aiml_prefab_set_input_blocking")
         PI_I32_GETTER("get_input_blocking", "aiml_prefab_get_input_blocking")
+        // spec/44_6 "Input claim": the claim goes by IDENTITY, not by area.
+        // claim_input() returns 0 when somebody else holds the pointer — the
+        // claim is refused, not stolen.
+        PI_I32_GETTER("claim_input", "aiml_prefab_claim_input")
+        PI_I32_GETTER("holds_input", "aiml_prefab_holds_input")
+        ci.builtinMethods["release_input"] = [](CompilerContext& ctx, llvm::Value* base,
+            AIML::AST::CallExpr*, auto) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            ctx.builder.CreateCall(ctx.getFunction("aiml_prefab_release_input",
+                ctx.builder.getVoidTy(), {i8p}), {base});
+            return nullptr;
+        };
         PI_I32_GETTER("is_hovered", "aiml_prefab_is_hovered")
 
         // cancel_drag() — restore position to before drag started, clear dragged state

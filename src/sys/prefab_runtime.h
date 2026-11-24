@@ -232,6 +232,12 @@ int32_t aiml_prefab_update_drag_gesture(float mx, float my);
 void* aiml_prefab_get_drag_source(void);
 /* Returns currently dragged instance, or NULL. */
 void* aiml_prefab_get_dragged(void);
+/* spec/44_6 "Input claim" */
+int32_t aiml_prefab_claim_input(void* p);
+void    aiml_prefab_release_input(void* p);
+int32_t aiml_prefab_holds_input(void* p);
+int32_t aiml_prefab_input_claimed(void);
+void*   aiml_prefab_input_owner(void);
 /* Cancel active drag: restore position to drag_origin and clear dragged state. */
 void  aiml_prefab_cancel_drag(void* inst);
 /* Cursor position in DESIGN coords (raw pixel / rel_scale). */

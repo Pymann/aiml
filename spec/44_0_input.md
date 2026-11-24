@@ -117,6 +117,20 @@ blocking network call). Edges are latched, never lost: a press and release that 
 between two frame boundaries report `mouse_pressed` **and** `mouse_released` in the next frame
 (`mouse_button` is then already false).
 
+#### The mouse is a broadcast, and stays one (normative)
+
+Every reader in a frame gets the same answer. This layer knows nothing about
+prefabs, widgets or `z`, so it does **not** arbitrate: there is no consume slot
+for the mouse the way `key_pressed_once` is one for keys, and the scroll delta
+in particular is read by several independent consumers per frame.
+
+Arbitration is the prefab layer's job. When an instance holds the pointer
+exclusively (the **input claim**, spec/44_6 `claim_input`), the calls here keep
+answering unchanged -- silently gating them would break every game loop that
+drives its own camera or picking without prefabs. Game code that must hold back
+while a widget owns the pointer asks `engine.input_claimed()` and skips its own
+handling; it does not need to know who the owner is.
+
 #### Cancel is not release (normative)
 
 A press can end two ways, and they mean opposite things:
