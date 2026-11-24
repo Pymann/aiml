@@ -88,7 +88,10 @@ bool load_smb() {
     // a -dev package that need not be installed on a node.
     g_smb.handle = dlopen("libsmbclient.so.0", RTLD_NOW | RTLD_LOCAL);
     if (!g_smb.handle) {
-        set_error(std::string("libsmbclient cannot be loaded: ") + (dlerror() ? dlerror() : "?"));
+        // dlerror() clears the error it returns: call it ONCE. Calling it again
+        // for the message gave nullptr, and std::string + nullptr crashed.
+        const char* why = dlerror();
+        set_error(std::string("libsmbclient cannot be loaded: ") + (why ? why : "?"));
         return false;
     }
     auto sym = [&](const char* n) { return dlsym(g_smb.handle, n); };

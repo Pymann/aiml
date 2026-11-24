@@ -1,4 +1,5 @@
 # SPEC?: 15_models   # derived from the file name, to be confirmed
+# Requires: display
 # Widget↔model binding (spec 44.6 §5d): a prefab with `binds: T` and children
 # carrying `bind: field` syncs to/from a bound model via sync_from/to_model.
 # Phase 1: i32 / f32 / enum fields (sliders + enum dropdown).
