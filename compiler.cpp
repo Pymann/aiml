@@ -2486,27 +2486,32 @@ int AIMLCompiler::jitRun(int argc, char** argv) {
                 // Collect library_paths for fallback search
                 std::vector<std::string> libPaths;
                 if (ecfg["linker"] && ecfg["linker"]["library_paths"]) {
-                    for (const auto& lp : ecfg["linker"]["library_paths"])
-                        libPaths.push_back(lp.as<std::string>());
+                    // __exodus_cache means $EXODUS_CACHE when set (as in exodus itself).
+                    const char* exoCache = std::getenv("EXODUS_CACHE");
+                    for (const auto& lp : ecfg["linker"]["library_paths"]) {
+                        std::string p = lp.as<std::string>();
+                        if (exoCache && *exoCache && p.rfind("__exodus_cache", 0) == 0)
+                            p = std::string(exoCache) + p.substr(std::string("__exodus_cache").size());
+                        libPaths.push_back(p);
+                    }
                 }
 
-                // Helper: try to load soName; if that fails, search libPaths for
-                // soName or soName.N (versioned) and load the first match found.
+                // Helper: load soName from the project's library_paths first (exact
+                // name, then soName.N), and only then by bare name from the system
+                // search path.  Bare name first loaded a SECOND copy of a library the
+                // compiler already has from its pinned cache whenever the host also
+                // has one (libLLVM-18.so from /usr/lib next to the cached
+                // libLLVM.so.18.1): two LLVMs register their command-line options
+                // twice and abort ("Option ... registered more than once").
                 auto tryLoad = [&](const std::string& soName) {
                     std::string err;
-                    if (!llvm::sys::DynamicLibrary::LoadLibraryPermanently(soName.c_str(), &err)) {
-                        LOG_DEBUG("JIT: loaded " + soName);
-                        return;
-                    }
-                    // Fallback: search library_paths
                     for (const auto& dir : libPaths) {
-                        // Try exact name first
                         std::string full = dir + "/" + soName;
                         if (!llvm::sys::DynamicLibrary::LoadLibraryPermanently(full.c_str(), &err)) {
                             LOG_DEBUG("JIT: loaded " + full);
                             return;
                         }
-                        // Try versioned names: libfoo.so.3, .2, .1
+                        // Try versioned names: libfoo.so.9 … libfoo.so.1
                         for (int v = 9; v >= 1; --v) {
                             std::string vfull = full + "." + std::to_string(v);
                             if (!llvm::sys::DynamicLibrary::LoadLibraryPermanently(vfull.c_str(), &err)) {
@@ -2514,6 +2519,10 @@ int AIMLCompiler::jitRun(int argc, char** argv) {
                                 return;
                             }
                         }
+                    }
+                    if (!llvm::sys::DynamicLibrary::LoadLibraryPermanently(soName.c_str(), &err)) {
+                        LOG_DEBUG("JIT: loaded " + soName);
+                        return;
                     }
                     LOG_DEBUG("JIT: could not load " + soName + ": " + err);
                 };
