@@ -1,0 +1,95 @@
+# SPEC: 32_2_network_http_s,32_1_network_tls,32_network
+# Expected exit code: 0
+# spec/32_2 §2.1a: an HTTPS client whose URL carries an IP literal verifies the
+# certificate against its iPAddress SAN (and sends no SNI — RFC 6066 forbids an
+# IP there).  A cert without a matching IP SAN is still rejected.
+#   server_ip.crt   SAN = DNS:localhost, IP:127.0.0.1   → both URL forms pass
+#   server_dns.crt  SAN = DNS:localhost                 → the IP form must fail
+# Both are signed by tests/tls_certs/ca.crt, trusted here via AIML_WSS_CA.
+
+- def:
+    name: handle_root
+    args: [[req, http_request_handle], [resp, http_response_handle]]
+    body:
+      - set: [resp.status, 200]
+      - set: [resp.body, "ip-san-ok"]
+      - call: [resp.send]
+
+# get_status: GET `target`, return the HTTP status, or -1 when there was no
+# answer (TLS verification failure closes the connection without one).
+- def:
+    name: get_status
+    args: [[target, string]]
+    return: i32
+    body:
+      - decl: [dest, url, { call: [http.parse_url, target] }]
+      - decl: [client, http_client_handle, { call: [http.new_request, "GET", dest] }]
+      - set: [client.timeout, 5000]
+      - decl: [answer, http_response_handle, { call: [client.send] }]
+      - call: [client.free]
+      - if:
+          condition: { eq: [answer, null] }
+          then:
+            - print: ["      (no answer: ${{ call: [http.last_error] }})"]
+            - return: -1
+      - decl: [code, i32, { call: [answer.status] }]
+      - call: [answer.free]
+      - return: code
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [fail, i32, 0]
+      - call: [sys.setenv, "AIML_WSS_CA", "tests/tls_certs/ca.crt"]
+
+      # ── Server 1: cert with DNS *and* IP SAN ────────────────────────────────
+      - decl: [ip_cert, path, "tests/tls_certs/server_ip.crt"]
+      - decl: [ip_key,  path, "tests/tls_certs/server_ip.key"]
+      - decl: [srv_ip, http_server_handle, { call: [http.server_tls, "127.0.0.1", 23471, ip_cert, ip_key] }]
+      - call: [srv_ip.set_timeout, 3]
+      - call: [srv_ip.route, "GET", "/", handle_root]
+      - decl: [thr_ip, thread_handle, { call: [srv_ip.start_async] }]
+
+      # ── Server 2: cert with a DNS SAN only ─────────────────────────────────
+      - decl: [dns_cert, path, "tests/tls_certs/server_dns.crt"]
+      - decl: [dns_key,  path, "tests/tls_certs/server_dns.key"]
+      - decl: [srv_dns, http_server_handle, { call: [http.server_tls, "127.0.0.1", 23472, dns_cert, dns_key] }]
+      - call: [srv_dns.set_timeout, 3]
+      - call: [srv_dns.route, "GET", "/", handle_root]
+      - decl: [thr_dns, thread_handle, { call: [srv_dns.start_async] }]
+      - call: [time.sleep_ms, 400]
+
+      # 1. hostname against the DNS SAN — the case that always worked
+      - decl: [code_host_ip_cert, i32, { call: [get_status, "https://localhost:23471/"] }]
+      - if:
+          condition: { neq: [code_host_ip_cert, 200] }
+          then: [{ print: ["FAIL https://localhost (DNS SAN) → ${code_host_ip_cert}, expected 200"] }, { set: [fail, { +: [fail, 1] }] }]
+          else: [{ print: ["  ok  https://localhost:23471/ → 200"] }]
+
+      # 2. IP literal against the iPAddress SAN — the point of this test
+      - decl: [code_ip_ip_cert, i32, { call: [get_status, "https://127.0.0.1:23471/"] }]
+      - if:
+          condition: { neq: [code_ip_ip_cert, 200] }
+          then: [{ print: ["FAIL https://127.0.0.1 (IP SAN present) → ${code_ip_ip_cert}, expected 200"] }, { set: [fail, { +: [fail, 1] }] }]
+          else: [{ print: ["  ok  https://127.0.0.1:23471/ → 200 (IP SAN matched)"] }]
+
+      # 3. the same IP literal against a cert WITHOUT an IP SAN — must be refused
+      - decl: [code_ip_dns_cert, i32, { call: [get_status, "https://127.0.0.1:23472/"] }]
+      - if:
+          condition: { eq: [code_ip_dns_cert, 200] }
+          then: [{ print: ["FAIL https://127.0.0.1 accepted a cert without an IP SAN"] }, { set: [fail, { +: [fail, 1] }] }]
+          else: [{ print: ["  ok  cert without IP SAN refused for the IP form (${code_ip_dns_cert})"] }]
+
+      # 4. that same server answers under its hostname
+      - decl: [code_host_dns_cert, i32, { call: [get_status, "https://localhost:23472/"] }]
+      - if:
+          condition: { neq: [code_host_dns_cert, 200] }
+          then: [{ print: ["FAIL https://localhost:23472 (DNS SAN) → ${code_host_dns_cert}, expected 200"] }, { set: [fail, { +: [fail, 1] }] }]
+          else: [{ print: ["  ok  https://localhost:23472/ → 200"] }]
+
+      - call: [srv_ip.stop]
+      - call: [srv_dns.stop]
+      - if: { condition: { gt: [fail, 0] }, then: [{ print: ["FAILED ${fail} check(s)"] }, { return: 1 }] }
+      - print: ["PASS http_client_ip_san"]
+      - return: 0

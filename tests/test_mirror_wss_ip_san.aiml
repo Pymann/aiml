@@ -1,0 +1,110 @@
+# SPEC: 44_5_mirror,32_1_network_tls
+# Expected exit code: 0
+# The wss client verifies the server cert like the https client does (spec/32_2 §2.1):
+# with an IP literal in the URL the iPAddress SAN decides.  tests/test_mirror_wss.aiml
+# switches verification off (mirror.tls_insecure) — this one leaves it ON and trusts
+# the test CA through AIML_WSS_CA, so a cosmos/9rooms deployment reachable only by
+# IP:port has a proven path.
+#   server_ip.crt   SAN = DNS:localhost, IP:127.0.0.1  → wss://127.0.0.1 connects
+#   server_dns.crt  SAN = DNS:localhost                → wss://127.0.0.1 is refused
+
+- model:
+    name: EchoReq
+    fields: [[message, string]]
+
+- model:
+    name: EchoResp
+    fields: [[success, i32], [echoed, string]]
+
+- def:
+    name: serve_once
+    args: [[bind_url, string], [cert_file, path], [key_file, path]]
+    body:
+      - decl: [sess, mirror_session, { call: [mirror.listen_tls, bind_url, cert_file, key_file] }]
+      - decl: [running, i32, 1]
+      - decl: [tries,   i32, 0]
+      - while:
+          condition: { eq: [running, 1] }
+          body:
+            - call: [sess.update]
+            - if:
+                condition: { gt: [{ call: [sess.has_rpc] }, 0] }
+                then:
+                  - decl: [rpc, rpc_event, { call: [sess.next_rpc] }]
+                  - if:
+                      condition: { eq: [rpc.method, "echo"] }
+                      then:
+                        - decl: [req, EchoReq]
+                        - decl: [rc_val, i32, { call: [sess.decode_rpc, rpc, req] }]
+                        - if:
+                            condition: { eq: [rc_val, 0] }
+                            then:
+                              - decl: [resp, EchoResp]
+                              - set: [resp.success, 1]
+                              - set: [resp.echoed, "got: ${req.message}"]
+                              - call: [sess.reply_rpc, rpc, "set_result", 0, resp]
+                              - set: [running, 0]
+            - call: [time.sleep_ms, 20]
+            - set: [tries, { +: [tries, 1] }]
+            - if: { condition: { gt: [tries, 250] }, then: [{ set: [running, 0] }] }
+
+- def:
+    name: serve_ip
+    body:
+      - call: [serve_once, "wss://127.0.0.1:19985", "tests/tls_certs/server_ip.crt", "tests/tls_certs/server_ip.key"]
+
+- def:
+    name: serve_dns
+    body:
+      - call: [serve_once, "wss://127.0.0.1:19986", "tests/tls_certs/server_dns.crt", "tests/tls_certs/server_dns.key"]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [fail, i32, 0]
+      - call: [sys.setenv, "AIML_WSS_CA", "tests/tls_certs/ca.crt"]
+
+      - decl: [th_ip,  thread_handle, { spawn: [serve_ip] }]
+      - decl: [th_dns, thread_handle, { spawn: [serve_dns] }]
+      - call: [time.sleep_ms, 350]
+
+      # ── 1. IP literal, cert carries the matching IP SAN → verified connect ──
+      - decl: [conn, mirror_session, { call: [mirror.connect_timeout, "wss://127.0.0.1:19985", 4000] }]
+      - if:
+          condition: { eq: [conn, null] }
+          then:
+            - print: ["FAIL wss://127.0.0.1 refused although the cert has IP:127.0.0.1"]
+            - set: [fail, { +: [fail, 1] }]
+          else:
+            - call: [time.sleep_ms, 100]
+            - call: [conn.update]
+            - decl: [req, EchoReq]
+            - set: [req.message, "wss-ip-san"]
+            - decl: [answer, ptr<EchoResp>, { new: EchoResp }]
+            - decl: [got, i32, { call: [conn.send_and_await, 0, "echo", req, answer, 5000] }]
+            - if:
+                condition: { eq: [got, 0] }
+                then: [{ print: ["FAIL verified wss roundtrip timed out"] }, { set: [fail, { +: [fail, 1] }] }]
+                else:
+                  - if:
+                      condition: { neq: [answer.echoed, "got: wss-ip-san"] }
+                      then: [{ print: ["FAIL echoed='${answer.echoed}'"] }, { set: [fail, { +: [fail, 1] }] }]
+                      else: [{ print: ["  ok  wss://127.0.0.1:19985 verified against the IP SAN"] }]
+            - call: [conn.close]
+
+      # ── 2. same IP literal, cert without an IP SAN → must be refused ────────
+      - decl: [bad_conn, mirror_session, { call: [mirror.connect_timeout, "wss://127.0.0.1:19986", 4000] }]
+      - if:
+          condition: { eq: [bad_conn, null] }
+          then: [{ print: ["  ok  cert without IP SAN refused for wss://127.0.0.1"] }]
+          else:
+            - print: ["FAIL wss accepted a cert without a matching IP SAN"]
+            - set: [fail, { +: [fail, 1] }]
+            - call: [bad_conn.close]
+
+      - call: [th_ip.join]
+      - call: [th_dns.join]
+      - if: { condition: { gt: [fail, 0] }, then: [{ print: ["FAILED ${fail} check(s)"] }, { return: 1 }] }
+      - print: ["PASS mirror_wss_ip_san"]
+      - return: 0
