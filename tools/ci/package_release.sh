@@ -26,21 +26,28 @@ cp LICENSE THIRD_PARTY.md "$STAGE/"
 # Belongs to the target system (driver stack, display, audio, libc).
 SKIP='^(ld-linux|libc\.|libm\.|libmvec\.|libdl\.|libpthread\.|librt\.|libresolv\.|libgcc_s|libstdc\+\+|libGL\.|libGLX|libEGL|libGLdispatch|libOpenGL|libgallium|libdrm|libgbm|libvulkan|libwayland|libX|libxcb|libxshmfence|libasound|libpulse|libjack|libudev|libsystemd)'
 
-cache="$(pwd)/__exodus_cache/"
+# Index the pinned shared libraries by file name.  A NEEDED entry is bundled
+# when the cache has it — whether or not the build host also has a system copy
+# (CI runners ship LLVM, zlib, ... system-wide; a user's machine need not).
+declare -A pinned=()
+while IFS= read -r p; do
+    n="${p##*/}"; [ -n "${pinned[$n]:-}" ] || pinned[$n]="$p"
+done < <(find "${EXODUS_CACHE:-__exodus_cache}/apt" -path '*/payload/*' \( -type f -o -type l \) -name 'lib*.so*' 2>/dev/null | sort)
+
 declare -A seen=()
 queue=("$STAGE/bin/aiml" "$STAGE/lib/libaiml.so")
 while [ "${#queue[@]}" -gt 0 ]; do
     f="${queue[0]}"; queue=("${queue[@]:1}")
-    while read -r lib path; do
-        [ -n "$path" ] || continue
-        case "$path" in "$cache"*) ;; *) continue ;; esac
+    while read -r lib; do
         [[ "$lib" =~ $SKIP ]] && continue
         [ -n "${seen[$lib]:-}" ] && continue
+        src="${pinned[$lib]:-}"
+        [ -n "$src" ] && [ -e "$src" ] || continue   # not pinned: the target system provides it
         seen[$lib]=1
-        cp -L "$path" "$STAGE/lib/$lib"
+        cp -L "$src" "$STAGE/lib/$lib"
         chmod u+w "$STAGE/lib/$lib"
         queue+=("$STAGE/lib/$lib")
-    done < <(ldd "$f" | awk '$2 == "=>" && $3 ~ /^\// {print $1, $3}')
+    done < <(readelf -d "$f" | sed -n 's/.*(NEEDED).*\[\(.*\)\]/\1/p')
 done
 
 for f in "$STAGE"/lib/*.so*; do patchelf --set-rpath '$ORIGIN' "$f"; done

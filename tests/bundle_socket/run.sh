@@ -3,7 +3,7 @@
 # Proves spec/29_2 §11/§13 — an isolated context runs WITHOUT a JIT.
 set -uo pipefail
 cd "$(dirname "$0")/../.."
-source ../../exvenv/bin/activate
+[ -f ../../exvenv/bin/activate ] && source ../../exvenv/bin/activate
 LOG_DIR="tests/bundle_socket"
 for n in listener sender; do
     AIML_MEM_V3=1 exodus build -c tests/bundle_socket/exodus-$n.json > "$LOG_DIR/build_$n.log" 2>&1 \
