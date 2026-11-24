@@ -121,6 +121,8 @@ target, not a host. There is no CI yet.
   language in the order you meet them, how to run things.
 * [BUILDING.md](BUILDING.md) — building the compiler from source, the pinned
   dependency set, the test suite, the container recipe.
+* [TEST_SUITES.md](TEST_SUITES.md) — what the test suites cover, which failures are
+  expected, and what the CI does and does not run.
 * [spec/00_reference_guide.md](spec/00_reference_guide.md) — index of the 115
   specification chapters. The spec is normative: where it and the implementation
   disagree, the spec wins.

@@ -14,6 +14,17 @@
     name: main
     return: i32
     body:
+      # engine.instantiate returns null without a scene (prefab_runtime.cpp:
+      # `if (!g_scene || !prefab_name) return nullptr;`).  Without these three
+      # calls all three tiles were null, layout_hflow skipped them all, and
+      # get_x returned 0 -- the test asserted layout behaviour it never
+      # exercised.  It carries `# Requires: display`, so it was skipped on every
+      # run without one and nobody saw it fail.
+      - decl: [win, window_handle, { call: [engine.create_window, 640, 480, "layout"] }]
+      - if: { condition: { eq: [win, null] }, then: [{ print: ["FAIL create_window"] }, { call: [sys.exit, 1] }] }
+      - call: [gl.init]
+      - call: [engine.prefab_scene_init, 640, 480]
+
       - decl: [items, list<prefab_instance>]
       - decl: [tile_a, prefab_instance, { call: [engine.instantiate, "TestTile"] }]
       - decl: [tile_b, prefab_instance, { call: [engine.instantiate, "TestTile"] }]

@@ -1,73 +1,210 @@
 # AIML test suites — status & overview
 
-As of: 2026-09-23 · branch `mem-v3-compiler` · build: `exodus build --all` (from `exvenv`) · gates: `AIML_MEM_V3=1 AIML_LIFETIME_DROPS=1` (memV3, compiler default)
+What exists, what each suite actually covers, which failures are expected, and
+what nothing covers yet. Every figure here is measured and carries its date and
+commit; a number without those is worse than none.
 
-## TL;DR — are all suites green?
+A green run is not the same as a covered feature, and this document exists
+because the suite cannot tell an expected failure from a regression. Until it
+can, that separation lives in §3.
 
-**Almost — the memV3/lifetime/memory-safety core is green, with four exceptions, none of which is an open memV3 bug:**
+Earlier revisions of this file were a session report for the `mem-v3-compiler`
+branch (as of 2026-09-23). That narrative is in the git history; what follows is
+the current state.
 
-- ✅ **Lifetime (spec/61)**: 47/0, 13 neg, 2 warn — fully green.
-- ✅ **Memory sanitizer (valgrind)**: 41/41 memory-safe (the former leak-probe-A violation was the `sys.env` bug, now fixed).
-- ✅ **JSON serialize**: all serialize tests green + **deterministic** — the long-standing non-deterministic bug #2 is fixed at the root.
-- 🟢 **Main corpus**: the only red test is **1 open design question** (`test_model_inherits_hetero_list`). The `lifetime/neg` negative tests are now (correctly) run only by `run_lifetime.sh`, no longer by the corpus. **No flaky tests, no more harness noise.**
-- ⚠️ **AOT smoke**: 1/3 — 2 **pre-existing** multi-file linking failures (a separate infra domain, untouched by the memV3 work).
-- ⏸️ **WASM**: **not** run in this session (needs the node/wasm toolchain).
+## 1. The runners
 
----
+| Runner | What it covers | Size | Gates? |
+|--------|----------------|------|--------|
+| `run_all_tests.sh` | the corpus: every `tests/*.aiml` plus the 23 `tests/*/run.sh` drivers | 1092 entries | **no** — see §5 |
+| `run_aot_tests.sh` | AOT smoke: compile to an object, link, run | 3 cases | yes (its own exit code) |
+| `run_wasm_tests.sh` | the Emscripten path under node | 12 cases | yes |
+| `tests/run_memory_sanitizers.sh` | valgrind memcheck: **memory safety only**, leaks are counted but not judged | 111 probes | yes |
+| `tests/run_lifetime_leak_gates.sh` | valgrind leak **counts** (spec/61 §7), AOT-compiled and linked against `libaiml` | 182 probes | yes |
+| `tests/lifetime/run_lifetime.sh` | the spec/61 **lab** — acceptance targets written before the implementation | lab probes | no (red by design) |
 
-## The suites in detail
+The two valgrind runners answer different questions and must not be conflated:
+the sanitizer run passes `--errors-for-leak-kinds=none`, so it fails only on
+invalid free / use-after-free / invalid read-write / signal death, while the leak
+gate fails on `definite` or `indirect` bytes > 0. A probe can be memory-safe and
+still leak.
 
-| Suite | Runner | Purpose | Status |
-|---|---|---|---|
-| Main corpus | `run_all_tests.sh` | All `tests/**/*.aiml` via native JIT (`aiml <file> -r`); cleans up DB state + `__aiml_cache` | **421/466 OK** |
-| Lifetime (spec/61) | `tests/lifetime/run_lifetime.sh` | Ownership/borrow/move + teardown leaks (pos + neg + warn), MODE=spec61 | **47/0, 13 neg, 2 warn** ✅ |
-| Memory sanitizer | `tests/run_memory_sanitizers.sh` | 41 probes, 2× each (native = correctness + valgrind = no UAF/double free/invalid access) | **40/41** |
-| AOT smoke | `run_aot_tests.sh` | Compile `.aiml` → `.o`, link against `libaiml.so`, run the binary | **1/3** ⚠️ |
-| WASM | `run_wasm_tests.sh` | `.aiml` → wasm32, run via node | **not run** ⏸️ |
-| (wrapper, not a suite) | `run_safe.sh` | ulimit wrapper (RAM/stack/CPU) for debugging compiler crashes | — |
+**Never run two suites at once.** A sanitizer gate and the normal suite
+interfere, and two `run_all_tests.sh` runs overwrite each other's
+`test_results.txt`.
 
----
-
-## Non-green items — classification
-
-### Main corpus (419/466) — the 47 "not OK" break down as follows:
-- **38 SKIP** — library/fixture files imported by other tests (no standalone run).
-- **9× `tests/lifetime/neg/n01…n13`** — **harness noise, not a bug**: these are negative tests (they must raise a compile error), but `run_all_tests.sh` expects exit 0 → counts them as failures. They are validated by `run_lifetime.sh` (13/13 green there).
-- **1 real open question: `test_model_inherits_hetero_list`** — `list<any>` with base-slice semantics for heterogeneous model lists. **Marked by the test author as an open type-system design question** ("It remains to be decided how the compiler will be designed with regard to typing") — needs a fundamental decision + a feature, not a bug fix.
-### JSON serialize (✅ solved)
-- `test_json_style_serialize` + `test_serialize_ext` were the known non-deterministic serialize bug #2 (~75% SIGSEGV, layout/ASLR dependent, invisible to valgrind). **Root cause:** for a `list/map/buffer` argument under memV3, `sys.serialize` passed the **alloca address** instead of the **handle pointer** → `emitSerializeList` read the pointer bytes as `{size,cap,data}` → `size` = low bits of a heap address → garbage iteration → crash (sometimes small/ok, mostly huge). **Fix:** load the handle under memV3 before serialising. Now **30/30 deterministic, valgrind 0 invalid access**, all serialize tests 5/5.
-
-### Flaky cluster test_system + test_mem_leak_probe (✅ solved)
-- SIGABRT "corrupted size vs. prev_size" / sanitizer leak-probe A. **Root cause:** `sys.env()` returned an `AimlHttpMap*` WITHOUT the memV3 `[rc][pad]` header (open addressing, libc strdup strings) — but the `map<string:string>` local is a handle whose scope drop `aiml_map_handle_release` reads+writes the rc header 8 B BEFORE the block → heap corruption. **Fix:** a real memV3 map handle (`aiml_map_handle_new`) + DENSE store with aiml-managed strings. Additionally `io.read_all` → aiml-managed string (was a bare malloc, OOB read). Now **test_system 20/20 + valgrind 0, test_mem_leak_probe 10/10, sanitizer 41/41**.
-
-### AOT smoke (1/3)
-- 2 failures in **multi-file AOT linking** (`undefined reference to testlib.inc_counter` and others) and one `.ll` output test. That is the object file/linker infrastructure — a domain of its own, **untouched** by the memV3/ownership changes.
-
-### WASM
-- Not run in this session (separate target, needs node + the wasm toolchain). No statement about green/red.
-
----
-
-## Fixed in this session (branch `mem-v3-compiler`)
-
-memV3/spec 61 consolidation, every fix verified with valgrind, lifetime 47/0 throughout:
-
-- **§6.2/§10** — pushing a pointer expression into a `value list<Model>` = compile error (3 diagnostic tests).
-- **§5.1** — cycle guard in the free walker (recursive `ptr<>` back-ref, `test_recursive_ptr_ser`).
-- **§5.4/§7** — move-only resources (`tensor`, `ptr<>`) are not value-copyable; tests migrated to `ref<>`/`{clone}` (`test_class_member_shared_tensor`, `test_list_model_push_value_and_pointer`) + compiler enforcement.
-- **§5** — `srv.filesystem` loads the `list<path>` handle (memV3); `get_copy_at` re-initialises empty container handles; `db_indexed list<string>` (default/backfill/`aiml_str_dup`).
-- **§5.4 (solution c)** — `.get`/`.at`/`{at:}` return a `ref<T>` borrow; a `ptr<T>` binding = compile error (use `ref<T>` or `get_copy`); **`ref<Interface>` unified** (= fat pointer like `ptr<Interface>`, incl. dispatch + cross-interface upcast); ~14 tests migrated + negative test `test_ptr_bind_get_borrow_error`.
-- **§5 (JSON serialize #2)** — for `list/map/buffer` arguments `sys.serialize` loads the memV3 handle instead of the slot address → fixes the non-deterministic serialize crash at the root (`test_json_style_serialize`, `test_serialize_ext`).
-- **§5 (sys.env / io.read_all)** — `sys.env()` returns a real memV3 map handle (instead of a header-less `AimlHttpMap*`), `io.read_all` an aiml-managed string → fixes the heap corruption cluster (`test_system`, `test_mem_leak_probe`, sanitizer leak-probe A).
-
-## Reproducing
+Running everything, in the order that keeps the measurements apart:
 
 ```bash
-source /media/.../python/exvenv/bin/activate
-cd .../test/aiml
-exodus build --all
-bash run_all_tests.sh --no-build          # main corpus (only ONE run at a time!)
-bash tests/lifetime/run_lifetime.sh        # lifetime spec61
-bash tests/run_memory_sanitizers.sh        # valgrind gate (~20–30 min)
-bash run_aot_tests.sh                       # AOT smoke
+exodus build --all                          # library, compiler, wasm runtime, asan, zim
+DISPLAY=:99 script -qec "bash run_all_tests.sh" /dev/null
+bash run_aot_tests.sh
+bash run_wasm_tests.sh
+bash tests/run_memory_sanitizers.sh
+bash tests/run_lifetime_leak_gates.sh
 ```
+
+Display tests need **both** an X display and a TTY (`run_all_tests.sh` checks
+`tty -s` and then `xdpyinfo`); without a TTY they are silently skipped, which is
+how two of them stayed broken for months (§4). `Xvfb :99 -screen 0 1280x1024x24`
+plus `script -qec` satisfies both.
+
+## 2. How a test declares what it expects
+
+In the test's own header, read by `run_all_tests.sh`:
+
+| Marker | Meaning |
+|--------|---------|
+| `# Expected exit code: N` | the run passes iff the program exits with `N`. 400 of the 680 top-level tests carry one; 49 of those expect non-zero. |
+| `# Requires: display` | needs an X/Wayland display **and** a TTY, else skipped (41 tests) |
+| `# Requires: library` | not a test — imported by other tests, never run standalone (40 files) |
+| `# Requires: driver` | belongs to the `run.sh` of its own directory; running it alone would look like a failure, because a negative case is *supposed* not to compile (125 files) |
+| `# Requires: wasm` | only meaningful in the Emscripten build; `run_wasm_tests.sh` runs these (3) |
+| `# Requires: peer` | needs a paired server/client process; always fails solo (4) |
+| `# Requires: manual` | opens a window and waits for a human; run with `--manual` (3) |
+| `# AssetRoots: …` | run through `tests/_asset_helper/run_asset_test.sh`, which passes `--asset-roots` |
+| `# SPEC: <chapter>` | which spec chapter the test holds to account |
+
+A hard-coded list in `run_all_tests.sh` **overrides** the header for 36 file
+patterns. That list is older than the header mechanism and is kept so no
+existing entry silently changes meaning. Most of it is negative tests
+(`*_error.aiml`, `test_asset_neg_*`, `test_classgroup_neg_*` → exit 1); two are
+programs whose own exit code is the assertion (`test.aiml` → 42,
+`test_collections.aiml` → 30).
+
+When you add a negative test, give it an `# Expected exit code: 1` header rather
+than extending that list.
+
+## 3. Known failures
+
+Measured 2026-11-24 on `15ff4ddc` plus the two fixes below, whole corpus under
+Xvfb with a TTY:
+
+```
+Total: 1092 · Passed: 917 · Failed: 7 · Skipped: 168
+```
+
+**All 7 failures are the expected ones listed below** — there is no unexplained
+red. The other runners on the same build: AOT 3/3, WASM 12/12, memory sanitizer
+PASS (control double-free detected, every probe correct and memory-safe),
+lifetime leak gate 0 required failures.
+
+Of the 168 skips, 125 are driver-owned files (the driver is counted instead), 40
+are libraries imported by other tests, 3 need wasm, 4 need a peer process, 3 are
+manual-only. With no display and no TTY, 41 more would be skipped — that is what
+happens in CI (§4).
+
+### Expected — acceptance targets written before the implementation
+
+These are red because the chapter they test is not implemented. They are the
+spec-first working method, not breakage, and they must stay red until the
+respective chapter lands.
+
+| Test | Chapter | Why |
+|------|---------|-----|
+| `tests/test_pipeline_failure.aiml` | spec/62 | pipelines are `[PROPOSAL]` |
+| `tests/test_pipeline_graph.aiml` | spec/62 | — |
+| `tests/test_pipeline_lane_access.aiml` | spec/62 | — |
+| `tests/test_pipeline_parallel.aiml` | spec/62 | — |
+| `tests/test_pipeline_results.aiml` | spec/62 | — |
+| `tests/closures/run.sh` (16 negative cases) | spec/64 | `callable` is an unknown top-level key and `capture` an unknown operator — the feature does not exist in this build, so no negative case can be rejected *for the right reason* |
+| `tests/test_bundle_exec_semantics.aiml` | spec/29_1 | `sys.bundle` has no handler yet |
+| `tests/lifetime/run_lifetime.sh` | spec/61 | the lab's own header says it will not be green until the compiler rewrite lands |
+
+### Expected — the leak gate's RED list
+
+`tests/run_lifetime_leak_gates.sh` keeps two probes outside the gate:
+
+| Probe | State on 2026-11-24 |
+|-------|---------------------|
+| `p2_array_field_leak_RED.aiml` | genuinely red: `rc=99`, 6,780 bytes definitely lost |
+| `50_share_semantics.aiml` | **reports clean** (`rc=0`, 0/0) — per the script's own rule ("then move them to GREEN") this one is ready to move into the gate |
+
+### Fixed on 2026-11-24 — and why nobody had seen them
+
+Both had been failing for a long time behind `# Requires: display`: every run
+without a TTY skipped them, and the skip was silent.
+
+| Test | Cause |
+|------|-------|
+| `tests/test_gl_vfx.aiml` | real runtime bug. In `aiml_gl_buffer_reserve_bytes` the RAII guard `GlPufferZiel` binds the replacement buffer to `GL_COPY_WRITE_BUFFER`, but its scope closed one line before the `glCopyBufferSubData` that needs that binding; the copy went into buffer 0, `GL_INVALID_OPERATION`, and **every grow of a non-empty vertex buffer returned false**. Index buffers passed because they skip the copy. |
+| `tests/test_layout_helpers.aiml` | broken test. It never called `engine.prefab_scene_init`, so `engine.instantiate` returned `nullptr` for all three tiles, `layout_hflow` skipped them via `if (!pi) continue`, and `get_x` returned 0. It asserted layout behaviour it never exercised. |
+
+The second one is the more useful lesson: a test can be green-looking, skipped,
+or failing for a reason that has nothing to do with its subject. Hence the
+baseline steps in newer tests — `tests/test_prefab_input_claim.aiml` proves
+before each probe that the thing it is about to block is reachable at all, so a
+green run cannot be green for the wrong reason.
+
+## 4. What the CI covers
+
+`.github/workflows/ci.yml`, on push to `master`, on tags `v*`, on every pull
+request, and via `workflow_dispatch` (input `only` → `run_all_tests.sh --only`).
+
+**Hard gates** (a failure fails the job): system packages, the pinned `.deb`
+fetch, `exodus pkg install`, the three builds (`exodus.json`, `exodus2.json`,
+`exodus-zim.json`), the **smoke test** (`tests/test.aiml` must exit 42),
+packaging via `tools/ci/package_release.sh`, artifact upload, and on a `v*` tag a
+draft release.
+
+**Advisory** (`continue-on-error: true`, reported but never blocking):
+
+* **Test corpus** — `run_all_tests.sh --no-build`, `TEST_TIMEOUT=300`. It writes
+  the tail of `test_results.txt` and every `[ FAIL ]` line into the job summary,
+  and a separate always-run step prints the last 150 lines of each failed test
+  in a collapsed group.
+* **Lifetime suite** — `tests/lifetime/run_lifetime.sh`, the lab (§3), red by
+  design.
+
+What the CI does **not** run: `run_aot_tests.sh`, `run_wasm_tests.sh`,
+`tests/run_memory_sanitizers.sh`, `tests/run_lifetime_leak_gates.sh`. The two
+valgrind gates — the only thing that checks memory safety and leak counts — are
+local-only.
+
+The CI has no display, so all 41 `Requires: display` tests are skipped there.
+That is the gap that hid the two bugs in §3.
+
+## 5. Gaps, stated plainly
+
+* **`run_all_tests.sh` ends without an exit code of its own**, so it returns 0
+  even with failing tests. Read the `Test Run Summary` block or grep for
+  `[ FAIL ]`; do not trust `$?`. The CI works around this with
+  `! grep -qE '^\[ FAIL \]' test_results.txt`, but under `continue-on-error`.
+* **The suite cannot distinguish an expected failure from a regression.** §3 is
+  the register, maintained by hand. A machine-readable one — a file of expected
+  failures the suite reads, so that an unexpected pass is also a finding — is the
+  prerequisite for making the corpus step a hard gate.
+* **No memory gate in CI.** Both valgrind runners need `valgrind` and a few
+  minutes; neither runs on a push.
+* **`run_aot_tests.sh` is 3 smoke cases**, not an AOT corpus. The name promises
+  more than the script does. Nothing systematically runs the corpus through AOT.
+* **No language check.** The sources were translated from German in one pass
+  (2026-11-24); nothing stops German from coming back, and a check would have to
+  split CamelCase identifiers to catch cases like `GlPufferZiel`.
+* **4 peer tests and 3 manual tests never run** in any automated context.
+
+## 6. Keeping this document honest
+
+When you add a runner, a `Requires:` marker, or a test that is expected to fail,
+change this file in the same commit. When a number here no longer matches a run,
+re-measure rather than adjust it by hand: a figure without a date and a commit
+is worse than none.
+
+See also [BUILDING.md](BUILDING.md) §5 for the commands and §6 for the other
+targets.
+
+## 7. Reproducing
+
+```bash
+source ../../exvenv/bin/activate            # the exodus venv
+exodus build --all                          # library, compiler, wasm runtime, asan, zim
+Xvfb :99 -screen 0 1280x1024x24 &           # display tests need a display AND a TTY
+DISPLAY=:99 script -qec "bash run_all_tests.sh --no-build" /dev/null
+bash run_aot_tests.sh
+bash run_wasm_tests.sh                      # needs emsdk + node
+bash tests/run_memory_sanitizers.sh         # valgrind, ~30 min
+bash tests/run_lifetime_leak_gates.sh       # valgrind, ~15 min
+bash tests/lifetime/run_lifetime.sh         # the spec/61 lab (red by design)
+```
+
+Only ever one suite at a time.

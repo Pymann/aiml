@@ -127,30 +127,25 @@ g++ -o prog prog.o $(cat prog.o.deps) \
     -Wl,-rpath,out/libaiml
 ```
 
-Expectations for a clean run, measured on 2026-11-07
-(1052 entries: 866 passed, 8 failed, 178 skipped):
+Which failures are expected, which are regressions, what each runner actually
+covers and what nothing covers yet: **[TEST_SUITES.md](TEST_SUITES.md)**. Do not read a
+clean exit code as a clean run — `run_all_tests.sh` ends without an exit code of
+its own and returns 0 even with failing tests, so read its `Test Run Summary`
+block.
 
-* **7 of the 8 failures are expected.** They are acceptance targets written
-  before the implementation (spec first): `spec/62` pipelines and `spec/64`
-  closures are `[PROPOSAL]`, and `sys.bundle` (`spec/29_1`) has no handler yet.
-  They are supposed to be red until those chapters are implemented.
-* The 8th, `tests/venv/kontor_stub.aiml`, exceeds the 600 s per-test limit and is
-  a genuine open failure.
-* Of the 178 skips, 103 are files executed by their own `run.sh` driver (the
-  driver is counted instead), 35 need an interactive display, 4 need a network
-  peer, 2 need a wasm toolchain, 1 is manual-only. Display tests also need a TTY;
-  `script -qec` with `DISPLAY=:99` (Xvfb) runs them.
-
-There is **no CI yet**, and the suite does not distinguish expected failures from
-regressions — that separation is a prerequisite for a public CI.
+Display tests need an X display **and** a TTY; `script -qec` with `DISPLAY=:99`
+(Xvfb) satisfies both. Without a TTY they are skipped silently.
 
 ## 6. Other targets
 
 * **wasm32** — `exodus build -c exodus-wasm-runtime.json` plus `run_wasm_tests.sh`.
   Needs an `emsdk` installation and node; see `doc/wasm_frame_loop.md`.
 * **Sanitizers / leak gates** — `exodus-asan.json` for ASan; the valgrind gates
-  live under `tests/lifetime/` and `tests/_mem_sanitize/`. Never run a sanitizer
-  gate and the normal suite at the same time; the measurements interfere.
+  are `tests/run_memory_sanitizers.sh` (memory safety) and
+  `tests/run_lifetime_leak_gates.sh` (leak counts, spec/61 §7), with probes under
+  `tests/lifetime/` and `tests/_mem_sanitize/`. Never run a sanitizer gate and
+  the normal suite at the same time; the measurements interfere. Neither gate
+  runs in CI — see [TEST_SUITES.md](TEST_SUITES.md) §4.
 
 ## 7. Container build
 

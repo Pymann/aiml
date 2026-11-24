@@ -345,11 +345,18 @@ int32_t aiml_gl_buffer_reserve_bytes(void* buf, int32_t capacity) {
         glBufferData(ziel.ziel, capacity,
             indices.empty() ? nullptr : indices.data(), GL_DYNAMIC_DRAW);
         ok = glGetError() == GL_NO_ERROR && replacement;
-    }
-    if (ok && b->capacity && b->target != GL_ELEMENT_ARRAY_BUFFER) {
-        glBindBuffer(GL_COPY_READ_BUFFER, b->id);
-        glCopyBufferSubData(GL_COPY_READ_BUFFER, GL_COPY_WRITE_BUFFER, 0, 0, b->capacity);
-        ok = glGetError() == GL_NO_ERROR;
+        /* The copy MUST happen inside this scope.  For a non-index buffer the
+         * guard's target IS GL_COPY_WRITE_BUFFER, and its destructor restores
+         * the previous binding -- which used to run one line too early, so the
+         * copy below wrote into whatever had been bound before (usually 0) and
+         * every grow of a non-empty vertex buffer failed with
+         * GL_INVALID_OPERATION.  Index buffers skip the copy: they are
+         * re-filled from b->indices above. */
+        if (ok && b->capacity && b->target != GL_ELEMENT_ARRAY_BUFFER) {
+            glBindBuffer(GL_COPY_READ_BUFFER, b->id);
+            glCopyBufferSubData(GL_COPY_READ_BUFFER, GL_COPY_WRITE_BUFFER, 0, 0, b->capacity);
+            ok = glGetError() == GL_NO_ERROR;
+        }
     }
     if (!ok) {
         glBindBuffer(GL_COPY_READ_BUFFER, read);
