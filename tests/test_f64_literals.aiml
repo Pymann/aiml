@@ -6,7 +6,7 @@
 #   spec/43_0 §7.1  a scalar math function computes in the width it is asked for (point 4)
 #   spec/09        string.parse_f64 (point 5)
 #   spec/23 F23-78 sys.format_fixed (point 6)
-# Found in the cai W5-W8 work, doc/backlog/2026-11-03_todo_aus_cai_w8.md points 1, 4, 5, 6.
+# Found in the cai W5-W8 work, doc/backlog/2026-11-03_todo_from_cai_w8.md points 1, 4, 5, 6.
 # Expected exit code: 0
 
 - import: "tests/_cross/check.aiml"

@@ -14,7 +14,7 @@ to learn the language or the toolchain:
 * using the language: [`../GETTING_STARTED.md`](../GETTING_STARTED.md);
 * building it: [`../BUILDING.md`](../BUILDING.md).
 
-Notable subdirectories: `analysis/` (audits with their probe sources and logs,
-deliberately kept), `plans/` and `backlog/` (what was intended, incl. `done/`),
-`issues/` and `issue/` (investigations), `reports/` and `volatile_reports/`
-(generated output), `archived/`, `ideas/`, `embedded/`, `review/`.
+Notable subdirectories: `analysis/` (audits), `plans/` and `backlog/` (open work),
+`issues/` and `issue/` (investigations), `reports/`, `ideas/`, `embedded/`,
+`review/`. Completed plans, superseded memory-model drafts and raw probe logs were
+removed on 2026-11-24; they remain in the git history (before that, HEAD `6e7c9e8`).

@@ -1,2 +1,0 @@
-[ERROR] [<repo>/src/core/ast_compiler_call.cpp:1245] tests/test_ptr_call_push_into_value_list_error.aiml:14: list<Payload>.push() got a pointer instead of a value: storing pointer-sized elements would corrupt the list layout. Copy/dereference the element into a local Payload value before push(), or use list<ptr<Payload>>.
-[ERROR] [<repo>/main.cpp:183] Compilation failed with errors.

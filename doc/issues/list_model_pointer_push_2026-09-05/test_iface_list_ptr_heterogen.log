@@ -1,3 +1,0 @@
-pre-ser: var_as=3 var_bs=0 var_cs=0
-wire: {"__type":"Bundle","name":"test","var_as":[{"var_an":1},{"var_an":2},{"var_an":3}],"var_bs":[],"var_cs":[]}
-post-deser: var_as=3 var_bs=0 var_cs=0

@@ -14,7 +14,7 @@
 #   V3  outer.inner.field = tmp.field (FbF) → OK   (workaround)
 #
 # Expectation after the fix: exit 0.  Currently: exit 1 (V2 fails).
-# Backlog: doc/backlog/2026-07-10_kv_getcopy_nested_slot_assign.md
+# Fixed 2026-07-10 (ast_compiler_stmt.cpp member-write branch).
 
 - model: { name: Inner, fields: [[name, string], [val, i32]] }
 - model: { name: Outer, fields: [[tag, string], [inner, Inner]] }

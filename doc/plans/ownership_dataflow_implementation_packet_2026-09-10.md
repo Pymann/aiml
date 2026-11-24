@@ -1,6 +1,6 @@
 # Implementation packet: §4 ownership data flow
 
-As of: 2026-09-10. Basis: `lifetime_hard_packages_progress_2026-09-09.md`, chapter 61 and direct reading of the current compiler. Git was not used. This document contains proposed C++ changes; it is not an already applied patch and not a passed test run.
+As of: 2026-09-10. Basis: the (since removed) lifetime hard-packages progress note of 2026-09-09, chapter 61 and direct reading of the current compiler. Git was not used. This document contains proposed C++ changes; it is not an already applied patch and not a passed test run.
 
 ## 1. Assignment and scope
 

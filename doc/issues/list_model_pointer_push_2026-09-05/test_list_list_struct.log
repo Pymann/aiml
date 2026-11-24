@@ -1,3 +1,0 @@
-[WARNING]  [<repo>/src/core/ast_compiler.cpp:256] <repo>/tests/test_list_list_struct.aiml:16: variable 'sh2.name' is compared against a string literal in 'main' — consider a regular expression for string matching.
-serialized={"__type":"Shape","name":"poly","segments":[[{"var_x":1,"var_y":2},{"var_x":3,"var_y":4}],[{"var_x":5,"var_y":6}]]}
-list<list<Struct>> PASS

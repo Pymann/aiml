@@ -1,1 +1,0 @@
-[WARNING]  [<repo>/src/core/ast_compiler.cpp:256] tests/test_list_model_push_value_and_pointer.aiml:16: variable 'value.title' is compared against a string literal in 'main' — consider a regular expression for string matching.

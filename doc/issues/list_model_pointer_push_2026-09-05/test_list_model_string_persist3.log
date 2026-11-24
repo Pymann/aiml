@@ -1,3 +1,0 @@
-[WARNING]  [<repo>/src/core/ast_compiler.cpp:256] <repo>/tests/test_list_model_string_persist3.aiml:37: variable 'nam' is compared against a string literal in 'main' — consider a regular expression for string matching.
-decks[0].name='hhh'
-PASS

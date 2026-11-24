@@ -2765,7 +2765,7 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
          } else if (methodName == "len") {
              return ctx.ir_gen->wrap(ListImpl::getSize(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca))));
          }
-         // ── List-Builtins (doc/ideas/list_builtins_plan.md) ────────────────
+         // ── List-Builtins (spec/10_collections.md) ────────────────
          else if (methodName == "contains" || methodName == "index_of" ||
                   methodName == "count"    || methodName == "remove_value") {
              // Value-lists only: struct/model elements have no canonical equality in M1.

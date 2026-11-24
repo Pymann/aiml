@@ -3,7 +3,7 @@
 #         gives the same numbers — before this it used libc rand() and nothing was repeatable.
 #   keep: begin_graph collects user-allocated tensors older than one epoch; a marked tensor
 #         survives, so an index/constant tensor built before a loop stays readable.
-# Found in the cai W5-W8 work, doc/backlog/2026-11-03_todo_aus_cai_w8.md points 7 and 8.
+# Found in the cai W5-W8 work, doc/backlog/2026-11-03_todo_from_cai_w8.md points 7 and 8.
 # Expected exit code: 0
 
 - import: "tests/_cross/check.aiml"

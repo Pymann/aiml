@@ -7,9 +7,7 @@
 > this spec and the implementation disagree, **this spec wins** (Arbeitsprinzip 2).
 > The `DRAFT` marker was dropped from the title and from the file name on 2026-11-16
 > (`61_memory_management_DRAFT.md` → `61_memory_management.md`); §11 had been resolved
-> throughout for some time. Only the two audit records under
-> `doc/analysis/container_leak_audit_2026-09-29/` keep the old file name, because they
-> record a past state.
+> throughout for some time.
 
 ## 0. Terminology & abbreviations
 

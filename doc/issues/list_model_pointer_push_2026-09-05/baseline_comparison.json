@@ -1,9 +1,0 @@
-{
-  "before_exit": -11,
-  "before_compile_exit": 0,
-  "before_ir_sha256": "6cfa2c14804a28b4b80afceaec49def563a62756af488bc03492d74260de72ae",
-  "after_exit": -11,
-  "after_compile_exit": 0,
-  "after_ir_sha256": "6cfa2c14804a28b4b80afceaec49def563a62756af488bc03492d74260de72ae",
-  "same_ir": true
-}

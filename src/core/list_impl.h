@@ -41,7 +41,7 @@ namespace ListImpl {
     void insert(CompilerContext& ctx, llvm::Value* listPtr, llvm::Value* indexVal, llvm::Value* val);
     void remove(CompilerContext& ctx, llvm::Value* listPtr, llvm::Value* indexVal, llvm::Type* elemType, bool elemIsString = false);
 
-    // ── List-Builtins (doc/ideas/list_builtins_plan.md) ─────────────────────
+    // ── List-Builtins (spec/10_collections.md) ─────────────────────
     // M1: search + bulk-append.  indexOf returns i32 (first match, -1 if none);
     // count returns i32; extend appends value-copies of src into dst (snapshotting
     // src length up front so self.extend(self) and realloc are safe).

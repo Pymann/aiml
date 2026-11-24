@@ -1,3 +1,0 @@
-seeded
-fetch okv=1 items.len=1
-PASS repro_getcopy_list_of_model

@@ -1,5 +1,7 @@
 # AIML: prevent pointers in model value lists — 2026-09-05
 
+> Raw probe logs, sources and build logs were removed on 2026-11-24; they are in the git history (commit `6e7c9e8`).
+
 ## Change
 
 `src/core/ast_compiler_call.cpp` now checks the actual LLVM representation of the argument for `list<T>.push()`. A pointer argument for a struct value element leads to a compile error regardless of the AST form. That covers variables, members and nested CallExprs such as `destination.push(source.get(index))`. After the diagnostic no faulty push IR is generated.

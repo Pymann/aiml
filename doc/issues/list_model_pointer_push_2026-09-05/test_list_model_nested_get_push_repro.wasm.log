@@ -1,3 +1,0 @@
-[WARNING]  [<repo>/src/core/ast_compiler.cpp:256] tests/test_list_model_nested_get_push_repro.aiml:28: variable 'control.title' is compared against a string literal in 'main' — consider a regular expression for string matching.
-[ERROR] [<repo>/src/core/ast_compiler_call.cpp:1245] tests/test_list_model_nested_get_push_repro.aiml:63: list<ReproCard>.push() got a pointer instead of a value: storing pointer-sized elements would corrupt the list layout. Copy/dereference the element into a local ReproCard value before push(), or use list<ptr<ReproCard>>.
-[ERROR] [<repo>/main.cpp:183] Compilation failed with errors.

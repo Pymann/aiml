@@ -1,3 +1,0 @@
-[WARNING]  [<repo>/src/core/ast_compiler.cpp:256] <repo>/tests/test_list_builtins.aiml:14: variable 'str0' is compared against a string literal in 'main' — consider a regular expression for string matching.
-[WARNING]  [<repo>/src/core/ast_compiler.cpp:256] <repo>/tests/test_list_builtins.aiml:14: variable 'str2' is compared against a string literal in 'main' — consider a regular expression for string matching.
-PASS test_list_builtins

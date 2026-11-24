@@ -1395,7 +1395,7 @@ void Compiler::checkPrefabUsage(Program* prog) {
     //   O  field operation:        O \t <class> \t <field> \t <op> \t <bucket> \t <def> \t <arg0>
     // so the report can show, per prefab, its owner field, the methods that drive
     // it, and — via the buckets — whether it is populated / animated / handled.
-    // See doc/prefab_report_v2_plan.md.
+    // See spec/44_8_prefab_static.md (prefab report).
     if (ctx.reportPrefabs) {
         // Pre-pass A: spawn-helper registry — a function returning prefab_instance
         // whose body instantiates exactly ONE distinct prefab is a helper for it

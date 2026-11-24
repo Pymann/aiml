@@ -2,7 +2,7 @@
 # spec/10 "Struct/Model Elements in Lists": for a struct element `get` yields an element
 # pointer, and "a typed model local materializes a VALUE COPY".  A value copy owns its own
 # string references (spec/61 §4), so `remove` may not free strings the local still holds.
-# Found in the cai W5-W8 work, doc/backlog/2026-11-03_todo_aus_cai_w8.md points 2 and 3.
+# Found in the cai W5-W8 work, doc/backlog/2026-11-03_todo_from_cai_w8.md points 2 and 3.
 # Expected exit code: 0
 
 - import: "tests/_cross/check.aiml"

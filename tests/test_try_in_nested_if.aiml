@@ -1,7 +1,7 @@
 # A `try` inside a nested `if` must not stop the REST of the method from resolving its own
 # methods.  In cai `Cli.run` (over 250 lines) every later `<.out` reported "Unknown method"
 # until the block was moved into a method of its own.
-# Found in the cai W5-W8 work, doc/backlog/2026-11-03_todo_aus_cai_w8.md point 11 (observed,
+# Found in the cai W5-W8 work, doc/backlog/2026-11-03_todo_from_cai_w8.md point 11 (observed,
 # not reduced at the time) — this is the reduction.
 # Expected exit code: 0
 

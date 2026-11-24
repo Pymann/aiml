@@ -349,7 +349,7 @@ All five existing probes recompiled unchanged into native objects, linked with g
 
 - Compiler SHA256: `ec1b66547c4aebc50e74c0cc2c448bd44be3ae74803a519b6d133c61ed774c7b`
 - libaiml SHA256: `233596daaad53729ba867d10ea5abead2fcd6036295333809f66b23349451d9d`
-- Raw logs permanently: [analysis/inline_value_model_review_2026-09-24](analysis/inline_value_model_review_2026-09-24/). Temporary compiled files: `/tmp/inline-plan-review-wp17hded/`.
+- Raw logs: removed 2026-11-24, in the git history (`doc/analysis/inline_value_model_review_2026-09-24/` at `6e7c9e8`). Temporary compiled files: `/tmp/inline-plan-review-wp17hded/`.
 
 | Probe | Native exit | Definitely / indirectly lost | Valgrind exit |
 |---|---:|---:|---:|

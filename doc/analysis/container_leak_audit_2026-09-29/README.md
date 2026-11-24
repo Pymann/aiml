@@ -1,5 +1,7 @@
 # Review and proof tests — container leaks, 2026-09-29
 
+> Raw probe logs, sources and build logs were removed on 2026-11-24; they are in the git history (commit `6e7c9e8`).
+
 [Plan](../../spec61_container_leak_fix_plan_2026-09-29.md) · [Tests/runner](../../../tests/lifetime/container_leaks/README.md)
 
 ## Result
@@ -30,36 +32,36 @@ All figures are bytes. Safety cases can report 0 lost bytes but still failed bec
 
 | Probe | N | Status | Definite | Indirect | Native Exit | Evidence |
 |---|---:|---|---:|---:|---:|---|
-| map_nested_control | 200 | SAFETY_FAIL | 0 | 0 | -11 | [source](initial/map_nested_control-200/main.aiml), [Valgrind](initial/map_nested_control-200/valgrind.log) |
-| map_nested_control | 400 | SAFETY_FAIL | 0 | 0 | -11 | [source](initial/map_nested_control-400/main.aiml), [Valgrind](initial/map_nested_control-400/valgrind.log) |
-| map_nested_self_put | 200 | SAFETY_FAIL | 0 | 0 | -11 | [source](initial/map_nested_self_put-200/main.aiml), [Valgrind](initial/map_nested_self_put-200/valgrind.log) |
-| map_nested_self_put | 400 | SAFETY_FAIL | 0 | 0 | -11 | [source](initial/map_nested_self_put-400/main.aiml), [Valgrind](initial/map_nested_self_put-400/valgrind.log) |
-| list_string_insert | 200 | SAFETY_FAIL | 0 | 0 | 0 | [source](initial/list_string_insert-200/main.aiml), [Valgrind](initial/list_string_insert-200/valgrind.log) |
-| list_string_insert | 400 | SAFETY_FAIL | 0 | 0 | 0 | [source](initial/list_string_insert-400/main.aiml), [Valgrind](initial/list_string_insert-400/valgrind.log) |
-| map_shared_control | 200 | LEAK | 3200 | 3800 | 0 | [source](initial/map_shared_control-200/main.aiml), [Valgrind](initial/map_shared_control-200/valgrind.log) |
-| map_shared_control | 400 | LEAK | 6400 | 7600 | 0 | [source](initial/map_shared_control-400/main.aiml), [Valgrind](initial/map_shared_control-400/valgrind.log) |
-| map_nested_remove | 200 | LEAK | 4800 | 3200 | 0 | [source](initial/map_nested_remove-200/main.aiml), [Valgrind](initial/map_nested_remove-200/valgrind.log) |
-| map_nested_remove | 400 | LEAK | 9600 | 6400 | 0 | [source](initial/map_nested_remove-400/main.aiml), [Valgrind](initial/map_nested_remove-400/valgrind.log) |
-| map_model_remove | 200 | LEAK | 3800 | 0 | 0 | [source](initial/map_model_remove-200/main.aiml), [Valgrind](initial/map_model_remove-200/valgrind.log) |
-| map_model_remove | 400 | LEAK | 7600 | 0 | 0 | [source](initial/map_model_remove-400/main.aiml), [Valgrind](initial/map_model_remove-400/valgrind.log) |
-| map_model_replace | 200 | LEAK | 3400 | 0 | 0 | [source](targeted/map_model_replace-200/main.aiml), [Valgrind](targeted/map_model_replace-200/valgrind.log) |
-| map_model_replace | 400 | LEAK | 6800 | 0 | 0 | [source](targeted/map_model_replace-400/main.aiml), [Valgrind](targeted/map_model_replace-400/valgrind.log) |
-| list_pop_bound | 200 | LEAK | 3400 | 0 | 0 | [source](initial/list_pop_bound-200/main.aiml), [Valgrind](initial/list_pop_bound-200/valgrind.log) |
-| list_pop_bound | 400 | LEAK | 6800 | 0 | 0 | [source](initial/list_pop_bound-400/main.aiml), [Valgrind](initial/list_pop_bound-400/valgrind.log) |
-| list_pop_arg | 200 | LEAK | 3400 | 0 | 0 | [source](initial/list_pop_arg-200/main.aiml), [Valgrind](initial/list_pop_arg-200/valgrind.log) |
-| list_pop_arg | 400 | LEAK | 6800 | 0 | 0 | [source](initial/list_pop_arg-400/main.aiml), [Valgrind](initial/list_pop_arg-400/valgrind.log) |
-| map_model_control | 200 | PASS | 0 | 0 | 0 | [source](targeted/map_model_control-200/main.aiml), [Valgrind](targeted/map_model_control-200/valgrind.log) |
-| map_model_control | 400 | PASS | 0 | 0 | 0 | [source](targeted/map_model_control-400/main.aiml), [Valgrind](targeted/map_model_control-400/valgrind.log) |
-| map_string_control | 200 | PASS | 0 | 0 | 0 | [source](initial/map_string_control-200/main.aiml), [Valgrind](initial/map_string_control-200/valgrind.log) |
-| map_string_control | 400 | PASS | 0 | 0 | 0 | [source](initial/map_string_control-400/main.aiml), [Valgrind](initial/map_string_control-400/valgrind.log) |
-| map_shared_string_key_control | 200 | PASS | 0 | 0 | 0 | [source](initial/map_shared_string_key_control-200/main.aiml), [Valgrind](initial/map_shared_string_key_control-200/valgrind.log) |
-| map_shared_string_key_control | 400 | PASS | 0 | 0 | 0 | [source](initial/map_shared_string_key_control-400/main.aiml), [Valgrind](initial/map_shared_string_key_control-400/valgrind.log) |
-| list_nested_control | 200 | PASS | 0 | 0 | 0 | [source](initial/list_nested_control-200/main.aiml), [Valgrind](initial/list_nested_control-200/valgrind.log) |
-| list_nested_control | 400 | PASS | 0 | 0 | 0 | [source](initial/list_nested_control-400/main.aiml), [Valgrind](initial/list_nested_control-400/valgrind.log) |
-| list_pop_discard | 200 | PASS | 0 | 0 | 0 | [source](initial/list_pop_discard-200/main.aiml), [Valgrind](initial/list_pop_discard-200/valgrind.log) |
-| list_pop_discard | 400 | PASS | 0 | 0 | 0 | [source](initial/list_pop_discard-400/main.aiml), [Valgrind](initial/list_pop_discard-400/valgrind.log) |
-| map_model_get_borrow | 200 | SAFETY_FAIL | 0 | 0 | -11 | [source](targeted/map_model_get_borrow-200/main.aiml), [Valgrind](targeted/map_model_get_borrow-200/valgrind.log) |
-| map_model_get_borrow | 400 | SAFETY_FAIL | 0 | 0 | -11 | [source](targeted/map_model_get_borrow-400/main.aiml), [Valgrind](targeted/map_model_get_borrow-400/valgrind.log) |
+| map_nested_control | 200 | SAFETY_FAIL | 0 | 0 | -11 | source, Valgrind |
+| map_nested_control | 400 | SAFETY_FAIL | 0 | 0 | -11 | source, Valgrind |
+| map_nested_self_put | 200 | SAFETY_FAIL | 0 | 0 | -11 | source, Valgrind |
+| map_nested_self_put | 400 | SAFETY_FAIL | 0 | 0 | -11 | source, Valgrind |
+| list_string_insert | 200 | SAFETY_FAIL | 0 | 0 | 0 | source, Valgrind |
+| list_string_insert | 400 | SAFETY_FAIL | 0 | 0 | 0 | source, Valgrind |
+| map_shared_control | 200 | LEAK | 3200 | 3800 | 0 | source, Valgrind |
+| map_shared_control | 400 | LEAK | 6400 | 7600 | 0 | source, Valgrind |
+| map_nested_remove | 200 | LEAK | 4800 | 3200 | 0 | source, Valgrind |
+| map_nested_remove | 400 | LEAK | 9600 | 6400 | 0 | source, Valgrind |
+| map_model_remove | 200 | LEAK | 3800 | 0 | 0 | source, Valgrind |
+| map_model_remove | 400 | LEAK | 7600 | 0 | 0 | source, Valgrind |
+| map_model_replace | 200 | LEAK | 3400 | 0 | 0 | source, Valgrind |
+| map_model_replace | 400 | LEAK | 6800 | 0 | 0 | source, Valgrind |
+| list_pop_bound | 200 | LEAK | 3400 | 0 | 0 | source, Valgrind |
+| list_pop_bound | 400 | LEAK | 6800 | 0 | 0 | source, Valgrind |
+| list_pop_arg | 200 | LEAK | 3400 | 0 | 0 | source, Valgrind |
+| list_pop_arg | 400 | LEAK | 6800 | 0 | 0 | source, Valgrind |
+| map_model_control | 200 | PASS | 0 | 0 | 0 | source, Valgrind |
+| map_model_control | 400 | PASS | 0 | 0 | 0 | source, Valgrind |
+| map_string_control | 200 | PASS | 0 | 0 | 0 | source, Valgrind |
+| map_string_control | 400 | PASS | 0 | 0 | 0 | source, Valgrind |
+| map_shared_string_key_control | 200 | PASS | 0 | 0 | 0 | source, Valgrind |
+| map_shared_string_key_control | 400 | PASS | 0 | 0 | 0 | source, Valgrind |
+| list_nested_control | 200 | PASS | 0 | 0 | 0 | source, Valgrind |
+| list_nested_control | 400 | PASS | 0 | 0 | 0 | source, Valgrind |
+| list_pop_discard | 200 | PASS | 0 | 0 | 0 | source, Valgrind |
+| list_pop_discard | 400 | PASS | 0 | 0 | 0 | source, Valgrind |
+| map_model_get_borrow | 200 | SAFETY_FAIL | 0 | 0 | -11 | source, Valgrind |
+| map_model_get_borrow | 400 | SAFETY_FAIL | 0 | 0 | -11 | source, Valgrind |
 
 ## Repeating
 

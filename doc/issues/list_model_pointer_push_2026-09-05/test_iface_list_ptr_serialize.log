@@ -1,4 +1,0 @@
-serialized = {"__type":"Bag","items":[{"name":"alpha","var_n":1},{"name":"beta","var_n":2}]}
-bag2.items.len = 2
-bag2[0] poly: tag=alpha#1
-bag2[1] poly: tag=beta#2
