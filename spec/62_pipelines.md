@@ -528,7 +528,7 @@ supplies `workspace` and `host_env` as arguments (§5.2).
             - if:
                 condition: { eq: [{ call: [io.exists, "src/BROKEN"] }, true] }
                 then:
-                  - call: [fail_pipeline, "Quellbaum unbrauchbar — jede Lane waere sinnlos"]
+                  - call: [fail_pipeline, "source tree unusable — every lane would be pointless"]
 ```
 
 - **F62-45** `set_status`, `fail_lane` and `fail_pipeline` are generated functions in scope of a
