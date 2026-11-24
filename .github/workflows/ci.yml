@@ -6,6 +6,11 @@ on:
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
+    inputs:
+      only:
+        description: "run_all_tests.sh --only <pattern> (empty = whole corpus)"
+        required: false
+        default: ""
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -97,7 +102,8 @@ jobs:
         id: corpus
         continue-on-error: true
         run: |
-          TEST_TIMEOUT=300 bash run_all_tests.sh --no-build > corpus.log 2>&1 || true
+          only=(); [ -n "${{ github.event.inputs.only }}" ] && only=(--only "${{ github.event.inputs.only }}")
+          TEST_TIMEOUT=300 bash run_all_tests.sh --no-build "${only[@]}" > corpus.log 2>&1 || true
           tail -n 8 test_results.txt
           grep -E '^\[ FAIL \]' test_results.txt || true
           {
@@ -111,6 +117,21 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
           ! grep -qE '^\[ FAIL \]' test_results.txt
+
+      - name: Output of failed tests
+        if: always()
+        run: |
+          [ -f test_results.txt ] || exit 0
+          python3 - <<'PY'
+          import re
+          blocks = re.split(r"^-{20,}\n", open("test_results.txt", errors="replace").read(), flags=re.M)
+          for b in blocks:
+              if "[ FAIL ]" in b:
+                  lines = b.splitlines()
+                  print("::group::" + next((l for l in lines if "[ FAIL ]" in l), "FAIL"))
+                  print("\n".join(lines[-150:]))
+                  print("::endgroup::")
+          PY
 
       - name: Lifetime suite (spec/61)
         continue-on-error: true
