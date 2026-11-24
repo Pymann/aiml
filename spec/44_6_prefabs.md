@@ -1088,8 +1088,9 @@ test.
 - call: [preview.set_input_transparent, 1]   # preview shows, but does not block
 ```
 
-Applies to `hit_test` and `update_hover`. The drag start (`update_drag`,
-`update_drag_gesture`) only checks `draggable` anyway, so it is not affected.
+Applies to `hit_test` and `update_hover`. The drag start checks `draggable`,
+not `input_transparent`, so **this** flag does not affect it — but
+`set_input_blocking` and the input claim do; see there.
 
 #### Modal: `set_input_blocking`
 
@@ -1128,6 +1129,129 @@ Normative:
   card beneath.
 
 Canonical: `tests/test_prefab_input_blocking.aiml`.
+
+#### Input claim: `claim_input`
+
+`set_input_transparent` and `set_input_blocking` arbitrate by **area** (and, for
+blocking, additionally by `z`). For the most common real case that is not
+enough: an **open dropdown**. Its list is drawn with `compute_popup_rect`
+*outside* the instance box, so an area rule over that box does not protect it at
+all. And what needs protecting here is not "everything with a smaller `z`" but
+"everything that does not belong to me": a click on a list entry used to pick up
+a card beneath it as well, and the wheel that scrolls the list moved the
+container underneath in the same frame — the wheel has seven independent readers
+and **no** arbitration (spec/44_0 §2.2).
+
+That is what the **input claim** is for: an instance claims the pointer
+exclusively, by its *identity*, without an area and without `z`.
+
+> Not to be confused with `input.set_capture` (spec/44_0 §1), which is the
+> **OS pointer grab** — hide the cursor and lock it to the window, for FPS
+> controls. The input claim here distributes input *within* the scene and leaves
+> the cursor alone. That is why it is called `claim`, not `capture`.
+
+| Means | Criterion | Duration | Typical case |
+|-------|-----------|----------|--------------|
+| `set_input_transparent` | area | while set | preview, decorative panel |
+| `set_input_blocking` | area **+ `z`** | while set | modal dialog |
+| `claim_input` | **identity** | **one interaction** | open dropdown, opened menu |
+
+These do not replace one another. A dialog that stays up is `blocking`; a state
+that ends with the interaction is a claim.
+
+| Instance Method | Signature | Description |
+|-----------------|-----------|-------------|
+| `.claim_input()` | `-> i32` | claims the pointer exclusively. `1` = taken, `0` = **refused** (somebody else holds it, or this instance may not claim) |
+| `.release_input()` | `-> void` | releases the claim. No error if it did not hold it |
+| `.holds_input()` | `-> i32` | `1` = this instance is the owner |
+
+| Engine Call | Return | Description |
+|-------------|--------|-------------|
+| `engine.input_owner()` | `prefab_instance` | the owner, or `null` |
+| `engine.input_claimed()` | `i32` | `1` = somebody holds the pointer |
+
+```yaml
+- if:
+    condition: { eq: [{ call: [menu.claim_input] }, 0] }
+    then: [{ call: [log.warn, "pointer is taken — menu not opened"] }, { return: 0 }]
+```
+
+##### What belongs to me
+
+Normative. The owner comprises:
+
+- the owner instance itself and **all of its children** (widgets),
+- the **popup rects** of its children, including the parts outside the instance
+  box — otherwise the open dropdown list would be exactly the thing that is no
+  longer operable, i.e. the opposite of the purpose,
+- all **nested instances** below the owner instance, recursively. An opened
+  panel may contain prefabs of its own and those stay active.
+
+Everything else is mute for the duration of the claim: no hover, no click, no
+press, no keyboard focus, **no drag start** and **no wheel**. The claim is
+consulted on all five paths — `hit_test`/`update_hover`, the widget pass (click,
+press, focus change), **both** drag starts (`update_drag` *and*
+`update_drag_gesture`), the wheel readers of the prefab layer, and focus
+assignment. A claim that holds on only one of two drag paths is not a claim.
+
+The **raw input layer stays a broadcast**: `input.mouse_pos`,
+`input.mouse_button` and `input.mouse_scroll` keep answering every reader alike
+(spec/44_0 §2.2 specifies that explicitly). It knows nothing about instances,
+and silently switching seven readers would break every game loop that runs
+without prefabs. Game code that must hold back asks `engine.input_claimed()`:
+
+```yaml
+- if:
+    condition: { eq: [{ call: [engine.input_claimed] }, 0] }
+    then: [{ call: [<.zoom_camera, { call: [input.mouse_scroll] }] }]
+```
+
+##### How a claim begins
+
+- **Explicitly**: game code calls `claim_input()`.
+- **Implicitly**: the runtime takes it **itself** while a widget is in a holding
+  state. Right now that state is **exactly one: an open dropdown list**. Game
+  code need do *nothing* for it — which makes the dropdown case correct out of
+  the box.
+
+  Not covered so far are a held slider, a held scrollbar, a running text
+  selection and a pressed spinbox. They belong here conceptually, but each has
+  its own older special case which **remains in force**: the
+  `click_absorbed_by_popup` window of click dispatch and the previous-frame rect
+  shield of the spinbox (spec/44_5). Whoever unifies them replaces each with an
+  implicit claim — until then no promise stands here that the code does not
+  keep.
+- A **click-through** (`input_transparent`) instance can claim nothing — it has
+  declared that it takes no input. `claim_input()` returns `0`.
+- An **invisible** instance can claim nothing.
+- If somebody already holds the pointer, the second claim is **refused** (`0`),
+  not stolen. Silent stealing leaves the first owner in a half-open state — list
+  open, nobody reading it any more. Whoever really must cut in uses
+  `set_input_blocking`.
+
+##### How a claim ends
+
+- `release_input()`.
+- The owner is destroyed, marked for deletion or made invisible: the claim falls
+  **in the same step**. A claim that outlives an owner locks the scene for good
+  (see "Dying instances take no input").
+- An **implicit** claim ends **with its state**: when the list closes, the
+  pointer is free. It does not end on its own at the cancel edge
+  (`input.mouse_cancelled`, spec/44_0 §2.2) nor on focus loss — what counts is
+  solely the state carrying it. If a cancel closes the list, it ends through
+  that.
+- An **explicit** claim ends only through `release_input` or with its owner. It
+  belongs to the game code: a second finger on the screen must not unlock a
+  dialog.
+
+##### Interaction with `set_input_blocking`
+
+Both may hold at once; they do not fight, because the claim is the **narrower**
+means and takes precedence. Normative: if a claim is in force, **only** it
+decides — a blocking instance that is not the owner is itself blocked. With no
+claim in force, `set_input_blocking` applies unchanged (area + `z`).
+
+Canonical: `tests/test_prefab_input_claim.aiml`.
 
 #### Dying instances take no input
 

@@ -132,7 +132,7 @@ enum PrefabChildType {
     CHILD_BAR        = 6,
     CHILD_SLIDER     = 7,
     CHILD_RADIO      = 8,   /* exklusive Auswahl innerhalb `group` */
-    CHILD_DROPDOWN   = 9,   /* Klick cycled durch `options` (pipe-getrennt) */
+    CHILD_DROPDOWN   = 9,   /* click cycles through `options` (pipe-separated) */
     CHILD_CONTAINER  = 10,  /* Phase 6: bind_list-driven dynamic spawner       */
     CHILD_CASCADE    = 11,  /* Phase 6: cascade root-dropdown + payload sub-UI */
     CHILD_TEXTBOX    = 12,  /* multi-line scrollable text area (chat/log): wrap + window + scrollbar */
@@ -636,6 +636,14 @@ struct PrefabScene {
     AimlPrefabInstance* focused_input_inst = nullptr;
     int32_t             focused_input_child_idx = -1;
 
+    /* spec/44_6 "Input claim": identity-based pointer ownership.  Unlike
+     * input_blocking (area + z) it arbitrates by BELONGING — while an owner
+     * holds the pointer, only it and its subtree take input.  Needed because an
+     * open dropdown list is drawn OUTSIDE the instance box: an area rule over
+     * that box does not protect it. */
+    AimlPrefabInstance* input_owner = nullptr;
+    bool input_owner_implicit = false;   /* taken by the runtime (open list) */
+
     /* shared rendering resources */
     GLuint quad_vao, quad_vbo;
     GLuint shader;
@@ -676,6 +684,11 @@ struct PrefabScene {
 };
 
 static PrefabScene* g_scene = nullptr;
+
+/* spec/44_6 "Input claim": the C API sits with its siblings
+ * (set_input_blocking), the reconciliation below with the hit-test helpers. */
+static void claim_sync(void);
+static bool claim_allows(const AimlPrefabInstance* inst);
 
 /* ── Phase 6f: cascade metadata registry ───────────────────────────────
  *  Populated at program init via aiml_prefab_register_cascade().  Widget
@@ -2808,7 +2821,7 @@ static void render_instance(AimlPrefabInstance* inst) {
                      * caret-follow scroll); otherwise SINGLE-LINE (horizontal
                      * caret-follow scroll).  Both clip to the inner box. */
                     bool multiline = ch_h >= 1.8f * line_h;
-                    ch.ti_multiline = multiline;   /* vom Eingabe-Pass gelesen */
+                    ch.ti_multiline = multiline;   /* read by the input pass */
 
                     GLboolean prev_sc = glIsEnabled(GL_SCISSOR_TEST);
                     GLint prev_box[4] = {0,0,0,0};
@@ -4093,6 +4106,12 @@ static void scene_forget_instance(AimlPrefabInstance* inst) {
         g_scene->focused_input_inst = nullptr;
         g_scene->focused_input_child_idx = -1;
     }
+    /* spec/44_6: a claim outliving its owner locks the scene for good — and the
+     * pointer would be freed memory. */
+    if (g_scene->input_owner == inst) {
+        g_scene->input_owner = nullptr;
+        g_scene->input_owner_implicit = false;
+    }
 }
 
 void aiml_prefab_destroy(void* p) {
@@ -4211,6 +4230,47 @@ int32_t aiml_prefab_get_input_blocking(void* p) {
 }
 int32_t aiml_prefab_get_input_transparent(void* p) {
     auto* inst = (AimlPrefabInstance*)p; return inst ? (inst->input_transparent ? 1 : 0) : 0;
+}
+
+/* ── spec/44_6 "Input claim" ─────────────────────────────────────────────
+ * Claims the pointer exclusively, by the instance's identity.  If somebody
+ * already holds it the claim is REFUSED, not stolen: a silent handover would
+ * leave the first owner half-open (list open, nobody reading it).  Whoever must
+ * cut in uses set_input_blocking. */
+int32_t aiml_prefab_claim_input(void* p) {
+    auto* inst = (AimlPrefabInstance*)p;
+    if (!inst || !g_scene) return 0;
+    claim_sync();
+    if (inst->input_transparent) return 0;   /* declared it takes no input */
+    if (!inst->visible || inst->pending_delete) return 0;
+    if (g_scene->input_owner == inst) return 1;
+    if (g_scene->input_owner) return 0;
+    g_scene->input_owner = inst;
+    g_scene->input_owner_implicit = false;
+    return 1;
+}
+void aiml_prefab_release_input(void* p) {
+    auto* inst = (AimlPrefabInstance*)p;
+    if (!inst || !g_scene) return;
+    if (g_scene->input_owner != inst) return;   /* no error: it did not hold it */
+    g_scene->input_owner = nullptr;
+    g_scene->input_owner_implicit = false;
+}
+int32_t aiml_prefab_holds_input(void* p) {
+    auto* inst = (AimlPrefabInstance*)p;
+    if (!inst || !g_scene) return 0;
+    claim_sync();
+    return g_scene->input_owner == inst ? 1 : 0;
+}
+int32_t aiml_prefab_input_claimed(void) {
+    if (!g_scene) return 0;
+    claim_sync();
+    return g_scene->input_owner ? 1 : 0;
+}
+void* aiml_prefab_input_owner(void) {
+    if (!g_scene) return nullptr;
+    claim_sync();
+    return g_scene->input_owner;
 }
 
 // ────────────────────────────────────────────────────────────────────────
@@ -5798,6 +5858,7 @@ void* aiml_prefab_hit_test(float mx, float my) {
         if (!inst->visible) continue;
         if (inst->input_transparent) continue;   /* spec/44_6: click-through */
         if (inst->pending_delete) continue;      /* dies at the end of the frame: takes no more input */
+        if (!claim_allows(inst)) continue;       /* spec/44_6: input claim */
         if (inst->parent) continue;  /* nested children: not hit-tested (local coords) */
 
         float ax, ay;
@@ -5838,6 +5899,57 @@ static int32_t effective_z(const AimlPrefabInstance* inst) {
  * through.  Exactly because of that everything stayed clickable under a full-screen overlay.
  * This function returns the threshold below which widgets
  * are skipped. */
+/* ── spec/44_6 "Input claim" ─────────────────────────────────────────────── */
+
+/* May this instance take input right now?  Free when nobody holds the pointer;
+ * otherwise only the owner and its subtree — so the children of an opened menu
+ * stay operable while everything else is mute. */
+static bool claim_allows(const AimlPrefabInstance* inst) {
+    if (!g_scene || !g_scene->input_owner) return true;
+    if (!inst) return false;
+    int guard = 0;
+    for (const AimlPrefabInstance* q = inst; q && ++guard < 64; q = q->parent)
+        if (q == g_scene->input_owner) return true;
+    return false;
+}
+
+/* Does a visible child hold an open dropdown list?  That is the only implicit
+ * claim: it begins and ends with that state, without game code calling
+ * anything. */
+static AimlPrefabInstance* implicit_claim_holder(void) {
+    if (!g_scene) return nullptr;
+    for (auto* inst : g_scene->instances) {
+        if (!inst || !inst->visible || inst->pending_delete) continue;
+        if (inst->input_transparent) continue;
+        for (auto& ch : inst->children)
+            if (ch.type == CHILD_DROPDOWN && ch.dropdown_open && ch.visible) return inst;
+    }
+    return nullptr;
+}
+
+/* Reconcile the claim with reality.  An explicit claim stays with the game
+ * code; an implicit one follows its state.  An owner that went invisible or is
+ * dying loses the claim — otherwise a switched-off instance locks the scene for
+ * good. */
+static void claim_sync(void) {
+    if (!g_scene) return;
+    AimlPrefabInstance* own = g_scene->input_owner;
+    if (own && (!own->visible || own->pending_delete)) {
+        g_scene->input_owner = nullptr;
+        g_scene->input_owner_implicit = false;
+        own = nullptr;
+    }
+    if (own && !g_scene->input_owner_implicit) return;
+    AimlPrefabInstance* holder = implicit_claim_holder();
+    if (holder) {
+        g_scene->input_owner = holder;
+        g_scene->input_owner_implicit = true;
+    } else if (g_scene->input_owner_implicit) {
+        g_scene->input_owner = nullptr;
+        g_scene->input_owner_implicit = false;
+    }
+}
+
 static int32_t modal_block_z(float mx, float my, bool& found) {
     found = false;
     int32_t top = 0;
@@ -6192,6 +6304,7 @@ static void apply_text_events_to_focus() {
 
 void aiml_prefab_update_hover(float mx, float my) {
     if (!g_scene) return;
+    claim_sync();   /* spec/44_6: reconcile the input claim with reality */
 
     auto* hit = (AimlPrefabInstance*)aiml_prefab_hit_test(mx, my);
 
@@ -6247,6 +6360,7 @@ void aiml_prefab_update_hover(float mx, float my) {
             if (!inst || !inst->visible) continue;
             if (inst->input_transparent) continue;   /* spec/44_6: click-through */
             if (modal_found && effective_z(inst) < modal_z) continue;  /* spec/44_6: modal */
+            if (!claim_allows(inst)) continue;        /* spec/44_6: input claim */
             for (auto& ch : inst->children) {
                 if (!ch.visible) continue;
                 float bx, by, bw, bh;
@@ -6352,6 +6466,7 @@ void aiml_prefab_update_hover(float mx, float my) {
          * input any more — otherwise an overlay is only visually modal and a click
          * additionally triggers whatever lies beneath. */
         if (modal_found && effective_z(inst) < modal_z) continue;
+        if (!claim_allows(inst)) continue;   /* spec/44_6: input claim */
         for (size_t i = 0; i < inst->children.size(); i++) {
             PrefabChild& ch = inst->children[i];
             if (!ch.visible) continue;
@@ -6870,6 +6985,7 @@ void aiml_prefab_update_hover(float mx, float my) {
         auto* inst = g_scene->instances[ii_d];
         if (!inst) continue;
         if (!inst->visible) continue;
+        if (!claim_allows(inst)) continue;   /* spec/44_6: input claim */
         for (auto& ch : inst->children) {
             if (ch.type != CHILD_DROPDOWN || !ch.dropdown_open) continue;
             float bx, by, bw, bh;
@@ -7454,6 +7570,7 @@ static bool prefab_drag_pick_at(float px, float py) {
         auto* inst = g_scene->instances[i];
         if (!inst->visible || !inst->draggable) continue;
         if (inst->pending_delete) continue;
+        if (!claim_allows(inst)) continue;   /* spec/44_6: input claim */
         if (mod_found && effective_z(inst) < mod_z) continue;
         float ax, ay, w, h;
         inst_bounds(inst, ax, ay, w, h);
@@ -7514,6 +7631,7 @@ static void prefab_drag_release(void) {
  * 0 none, 1 candidate, 2 dragging, 3 dropped this frame, 4 cancelled this frame. */
 int32_t aiml_prefab_update_drag_gesture(float mx, float my) {
     if (!g_scene) return 0;
+    claim_sync();   /* spec/44_6: reconcile the input claim with reality */
 
     if (aiml_input_mouse_cancelled(0) || aiml_input_drag_cancelled(0)) {
         prefab_drag_release();
@@ -7553,6 +7671,7 @@ void* aiml_prefab_get_drag_source(void) {
 
 void aiml_prefab_update_drag(float mx, float my, int32_t btn_down, int32_t btn_released) {
     if (!g_scene) return;
+    claim_sync();   /* spec/44_6: reconcile the input claim with reality */
 
     /* spec/44_0 §2.2 + spec/44_6: an ABORTED press (touchcancel, second finger,
      * focus loss) ends the drag without a drop.  It must not look like a release:
@@ -7568,30 +7687,13 @@ void aiml_prefab_update_drag(float mx, float my, int32_t btn_down, int32_t btn_r
     }
 
     if (btn_down && !g_scene->dragged) {
-        /* Start drag: find topmost draggable instance under cursor.
-         * Use the full world-transform bounds (inst_bounds) — the SAME transform
-         * that rendering + widget hit-testing use — so NESTED (container-row)
-         * draggables are picked at their actual drawn location, not at raw local
-         * coords.  drag_offset is stored in WORLD pixels; drag_origin stays local
-         * for snap-back. */
-        for (int i = (int)g_scene->instances.size() - 1; i >= 0; i--) {
-            auto* inst = g_scene->instances[i];
-            if (!inst->visible || !inst->draggable) continue;
-
-            float ax, ay, w, h;
-            inst_bounds(inst, ax, ay, w, h);
-            bool inside = (mx >= ax && mx <= ax + w && my >= ay && my <= ay + h);
-            if (inside) {
-                inst->is_dragging = true;
-                inst->drag_offset_x = mx - ax;
-                inst->drag_offset_y = my - ay;
-                inst->drag_origin_x = inst->x;
-                inst->drag_origin_y = inst->y;
-                g_scene->dragged = inst;
-                g_scene->drag_source = inst;
-                break;
-            }
-        }
+        /* Start the drag through the SAME selection as update_drag_gesture.  A
+         * second copy of the loop used to live here that only checked
+         * visible+draggable — so without the modal gate (spec/44_6 "Modal"
+         * names BOTH entries), without pending_delete and without the input
+         * claim.  Two drag paths with different rules are no rule: a gate only
+         * one entry knows is not a gate. */
+        prefab_drag_pick_at(mx, my);
     }
 
     if (g_scene->dragged && g_scene->dragged->is_dragging) {
