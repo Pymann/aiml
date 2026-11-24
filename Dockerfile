@@ -20,6 +20,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
         g++ \
         libx11-dev \
+        libxi-dev \
         liblzma-dev \
         linux-libc-dev \
         git \
