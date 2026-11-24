@@ -183,7 +183,7 @@ Natively it wraps `http.get`. Pair it with `sys.deserialize` to parse a served m
 > substitute. That makes a host without a domain name — an IP and a port — a usable
 > HTTPS target: issue the server cert with `subjectAltName=IP:<addr>` from a private
 > CA and point `AIML_WSS_CA` at that CA. The same holds for the `tls.*` client
-> (spec/32_1 §2.2) and the wss client (spec/32_4). Asserted by
+> (spec/32_1 §2.2) and the wss client of `mirror` (spec/44_5 §3.2). Asserted by
 > `tests/test_http_client_ip_san.aiml` (IP SAN matches; DNS-only cert refused for the
 > IP form yet accepted under its hostname).
 
