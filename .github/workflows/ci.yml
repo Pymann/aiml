@@ -16,6 +16,8 @@ jobs:
     name: Build (Ubuntu 24.04) and test
     runs-on: ubuntu-24.04
     timeout-minutes: 240
+    permissions:
+      contents: write   # draft release on tags
     env:
       EXODUS_CACHE: ${{ github.workspace }}/__exodus_cache
     steps:
@@ -24,7 +26,7 @@ jobs:
       - name: System packages
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends g++ python3-venv dpkg-dev valgrind
+          sudo apt-get install -y --no-install-recommends g++ python3-venv dpkg-dev valgrind patchelf
 
       - name: Restore pinned .deb cache
         id: debcache
@@ -67,6 +69,29 @@ jobs:
           rc=$?
           echo "exit code $rc"
           test "$rc" -eq 42   # tests/test.aiml ends in sys.exit(42)
+
+      - name: Package
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then v="${GITHUB_REF_NAME}"; else v="git-${GITHUB_SHA::7}"; fi
+          bash tools/ci/package_release.sh "$v" dist
+
+      - name: Upload package
+        uses: actions/upload-artifact@v4
+        with:
+          name: aiml-linux-x86_64
+          path: dist/*
+
+      - name: Draft release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="$GITHUB_REF_NAME"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" dist/* --clobber
+          else
+            gh release create "$tag" dist/* --draft --verify-tag --title "$tag" --notes-from-tag
+          fi
 
       - name: Test corpus
         id: corpus
