@@ -15,7 +15,7 @@ clean machine, it says so.
 | Python | 3.12 | for the build tool |
 | `apt-get`, `dpkg-deb` | from the base system | the build tool downloads and unpacks `.deb` payloads with them |
 | Exodus | current `master` | the build tool, see below |
-| System headers | `libx11-dev`, `libxi-dev`, `liblzma-dev`, `linux-libc-dev` | the only headers not yet pinned; install with apt |
+| System headers | `libx11-dev`, `libxi-dev`, `liblzma-dev`, `libsharpyuv-dev`, `linux-libc-dev` | the only headers not yet pinned; install with apt |
 | System libraries | 162 pinned apt packages | fetched by Exodus into `__exodus_cache/`, **no root required** |
 
 The dependency set is large: LLVM 18, yaml-cpp, OpenSSL, zlib/brotli/zstd/lz4/xz,

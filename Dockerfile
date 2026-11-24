@@ -22,6 +22,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libx11-dev \
         libxi-dev \
         liblzma-dev \
+        libsharpyuv-dev \
         linux-libc-dev \
         git \
         python3 \
