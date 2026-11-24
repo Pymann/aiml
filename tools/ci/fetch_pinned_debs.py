@@ -61,6 +61,8 @@ def fetch(cache: Path, name: str, arch: str, version: str, digest: str) -> str:
     dl, payload = cdir / "_download", cdir / "payload"
     debs = sorted(dl.glob("*.deb")) if dl.exists() else []
     if payload.exists() and debs and (not digest or sha256(debs[0]) == digest):
+        if not digest:
+            print(f"::notice title=No pinned digest::{name}={version} sha256={sha256(debs[0])}")
         return "cached"
     if cdir.exists():
         shutil.rmtree(cdir)

@@ -24,7 +24,7 @@ cp out/libaiml/libaiml.so "$STAGE/lib/libaiml.so"
 cp LICENSE THIRD_PARTY.md "$STAGE/"
 
 # Belongs to the target system (driver stack, display, audio, libc).
-SKIP='^(ld-linux|libc|libm|libdl|libpthread|librt|libresolv|libgcc_s|libstdc\+\+|libGL|libGLX|libEGL|libGLdispatch|libOpenGL|libgallium|libdrm|libgbm|libvulkan|libwayland|libX|libxcb|libxshmfence|libasound|libpulse|libjack|libudev|libsystemd)'
+SKIP='^(ld-linux|libc|libm|libdl|libpthread|librt|libresolv|libgcc_s|libstdc\+\+|libGL\.|libGLX|libEGL|libGLdispatch|libOpenGL|libgallium|libdrm|libgbm|libvulkan|libwayland|libX|libxcb|libxshmfence|libasound|libpulse|libjack|libudev|libsystemd)'
 
 cache="$(pwd)/__exodus_cache/"
 declare -A seen=()
