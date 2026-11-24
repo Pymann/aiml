@@ -1,0 +1,90 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: Build (Ubuntu 24.04) and test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    env:
+      EXODUS_CACHE: ${{ github.workspace }}/__exodus_cache
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: System packages
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends g++ python3-venv dpkg-dev valgrind
+
+      - name: Restore pinned .deb cache
+        uses: actions/cache@v4
+        with:
+          path: __exodus_cache/apt
+          key: apt-${{ hashFiles('exodus.json', 'exodus2.json', 'exodus-test.json') }}
+
+      - name: Install Exodus
+        run: |
+          python3 -m venv "$RUNNER_TEMP/exvenv"
+          "$RUNNER_TEMP/exvenv/bin/pip" install -q "git+https://github.com/Pymann/exodus.git"
+          echo "$RUNNER_TEMP/exvenv/bin" >> "$GITHUB_PATH"
+
+      - name: Fetch pinned dependencies
+        run: |
+          python3 tools/ci/fetch_pinned_debs.py exodus.json exodus2.json exodus-test.json
+          exodus pkg install
+
+      - name: Build compiler
+        run: exodus build -c exodus.json -j "$(nproc)"
+
+      - name: Build runtime
+        run: exodus build -c exodus2.json -j "$(nproc)"
+
+      - name: Smoke test
+        run: |
+          set +e
+          out/aiml/aiml tests/test.aiml
+          rc=$?
+          echo "exit code $rc"
+          test "$rc" -eq 42   # tests/test.aiml ends in sys.exit(42)
+
+      - name: Test corpus
+        id: corpus
+        continue-on-error: true
+        run: |
+          TEST_TIMEOUT=300 bash run_all_tests.sh --no-build > corpus.log 2>&1 || true
+          tail -n 8 test_results.txt
+          {
+            echo "## Test corpus"
+            echo '```'
+            tail -n 8 test_results.txt
+            echo '```'
+            echo "### Failures"
+            echo '```'
+            grep -E '^\[ FAIL \]' test_results.txt || echo "none"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          ! grep -qE '^\[ FAIL \]' test_results.txt
+
+      - name: Lifetime suite (spec/61)
+        continue-on-error: true
+        run: bash tests/lifetime/run_lifetime.sh 2>&1 | tail -n 40
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: |
+            test_results.txt
+            corpus.log
+          if-no-files-found: ignore
