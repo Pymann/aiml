@@ -28,10 +28,12 @@ jobs:
             libx11-dev libxi-dev liblzma-dev libsharpyuv-dev linux-libc-dev
 
       - name: Restore pinned .deb cache
-        uses: actions/cache@v4
+        id: debcache
+        uses: actions/cache/restore@v4
         with:
           path: __exodus_cache/apt
           key: apt-${{ hashFiles('exodus.json', 'exodus2.json', 'exodus-test.json') }}
+          restore-keys: apt-
 
       - name: Install Exodus
         run: |
@@ -42,7 +44,16 @@ jobs:
       - name: Fetch pinned dependencies
         run: |
           python3 tools/ci/fetch_pinned_debs.py exodus.json exodus2.json exodus-test.json
-          exodus pkg install
+
+      - name: Save pinned .deb cache
+        if: steps.debcache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: __exodus_cache/apt
+          key: ${{ steps.debcache.outputs.cache-primary-key }}
+
+      - name: Exodus package setup
+        run: exodus pkg install
 
       - name: Build compiler
         run: exodus build -c exodus.json -j "$(nproc)"
