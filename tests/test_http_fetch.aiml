@@ -1,0 +1,111 @@
+# SPEC: 32_2_network_http_s
+# http.fetch / http.fetch_status (spec/32_2 F32-2-60…F32-2-65), natively,
+# against a server in the same process: method, headers and body arrive; the
+# body comes back whatever the status; fetch_status is the last status, 0 when
+# there was no answer.
+#
+# Expected exit code: 0
+
+# Echoes what arrived: "<method>|<x-probe header>|<authorization>|<body>".
+- def:
+    name: handle_echo
+    args: [[req, http_request_handle], [resp, http_response_handle]]
+    body:
+      - decl: [probe, string, { call: [req.header, "x-probe"] }]
+      - if: { condition: { eq: [probe, null] }, then: [{ set: [probe, "-"] }] }
+      - decl: [auth, string, { call: [req.header, "authorization"] }]
+      - if: { condition: { eq: [auth, null] }, then: [{ set: [auth, "-"] }] }
+      - decl: [payload, string, req.body]
+      - if: { condition: { eq: [payload, null] }, then: [{ set: [payload, ""] }] }
+      - set: [resp.status, 200]
+      - set: [resp.body, "${req.method}|${probe}|${auth}|${payload}"]
+      - call: [resp.send]
+
+- def:
+    name: handle_conflict
+    args: [[req, http_request_handle], [resp, http_response_handle]]
+    body:
+      - call: [resp.headers.put, "content-type", "application/json"]
+      - set: [resp.status, 409]
+      - set: [resp.body, "{\"code\":\"conflict\"}"]
+      - call: [resp.send]
+
+- def:
+    name: handle_gone
+    args: [[req, http_request_handle], [resp, http_response_handle]]
+    body:
+      - set: [resp.status, 204]
+      - set: [resp.body, ""]
+      - call: [resp.send]
+
+- class:
+    name: FetchCheck
+    members:
+      - [fails, i32, 0, { access: public }]
+    methods:
+      - def:
+          name: same
+          args: [[label, string], [got, string], [want, string]]
+          body:
+            - if:
+                condition: { neq: [got, want] }
+                then:
+                  - print: ["FAIL ${label}: got '${got}' want '${want}'"]
+                  - set: [<.fails, { +: [<.fails, 1] }]
+
+      - def:
+          name: status
+          args: [[label, string], [want, i32]]
+          body:
+            - decl: [got, i32, { call: [http.fetch_status] }]
+            - if:
+                condition: { neq: [got, want] }
+                then:
+                  - print: ["FAIL ${label}: status ${got} want ${want}"]
+                  - set: [<.fails, { +: [<.fails, 1] }]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [check, ptr<FetchCheck>, { new: FetchCheck }]
+      - call: [check.status, "before the first fetch", 0]
+
+      - decl: [srv, http_server_handle]
+      - set: [srv, { call: [http.server, "127.0.0.1", 23211] }]
+      - call: [srv.route, "*", "/echo", handle_echo]
+      - call: [srv.route, "PUT", "/conflict", handle_conflict]
+      - call: [srv.route, "DELETE", "/thing", handle_gone]
+      - decl: [thr, thread_handle, { call: [srv.start_async] }]
+      - call: [time.sleep_ms, 300]
+      - decl: [base, string, "http://127.0.0.1:23211"]
+
+      # F32-2-60/61/62: method, header lines and body arrive
+      - decl: [posted, string, { call: [http.fetch, "POST", "${base}/echo", "X-Probe: one\nAuthorization: Bearer abc", "{\"a\":1}"] }]
+      - call: [check.same, "POST echo", posted, "POST|one|Bearer abc|{\"a\":1}"]
+      - call: [check.status, "POST status", 200]
+      - decl: [lowered, string, { call: [http.fetch, "put", "${base}/echo", "", "x"] }]
+      - call: [check.same, "method upper-cased", lowered, "PUT|-|-|x"]
+      - decl: [plain, string, { call: [http.fetch, "GET", "${base}/echo", "no colon here\nX-Probe:  spaced ", ""] }]
+      - call: [check.same, "bad header line ignored, value trimmed", plain, "GET|spaced|-|"]
+
+      # F32-2-63: the body whatever the status, and the status
+      - decl: [refused, string, { call: [http.fetch, "PUT", "${base}/conflict", "", "v"] }]
+      - call: [check.same, "409 body", refused, "{\"code\":\"conflict\"}"]
+      - call: [check.status, "409 status", 409]
+      - decl: [deleted, string, { call: [http.fetch, "DELETE", "${base}/thing", "", ""] }]
+      - call: [check.same, "204 body", deleted, ""]
+      - call: [check.status, "204 status", 204]
+      - decl: [missing, string, { call: [http.fetch, "GET", "${base}/nope", "", ""] }]
+      - call: [check.status, "404 status", 404]
+
+      - call: [srv.stop]
+      - call: [time.sleep_ms, 200]
+      # no answer at all → "" and 0
+      - decl: [nobody, string, { call: [http.fetch, "GET", "http://127.0.0.1:23212/echo", "", ""] }]
+      - call: [check.same, "refused body", nobody, ""]
+      - call: [check.status, "refused status", 0]
+
+      - if: { condition: { gt: [check.fails, 0] }, then: [{ return: [1] }] }
+      - print: ["PASS http_fetch: method, headers, body, status, no answer"]
+      - return: [0]

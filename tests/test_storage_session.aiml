@@ -1,0 +1,46 @@
+# SPEC: 23_2_storage
+# storage.session_* and storage.hash / set_hash (spec/23_2), natively: the
+# session store lives in this process only and never touches the file store;
+# the fragment is what set_hash last set.
+#
+# Expected exit code: 0
+
+- class:
+    name: SessionCheck
+    members:
+      - [fails, i32, 0, { access: public }]
+    methods:
+      - def:
+          name: same
+          args: [[label, string], [got, string], [want, string]]
+          body:
+            - if:
+                condition: { neq: [got, want] }
+                then:
+                  - print: ["FAIL ${label}: got '${got}' want '${want}'"]
+                  - set: [<.fails, { +: [<.fails, 1] }]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [check, ptr<SessionCheck>, { new: SessionCheck }]
+      - call: [check.same, "missing key", { call: [storage.session_get, "aiml_test_tok"] }, ""]
+      - call: [storage.session_set, "aiml_test_tok", "s3cret"]
+      - call: [check.same, "set then get", { call: [storage.session_get, "aiml_test_tok"] }, "s3cret"]
+      - call: [storage.session_set, "aiml_test_tok", "other"]
+      - call: [check.same, "overwrite", { call: [storage.session_get, "aiml_test_tok"] }, "other"]
+      - call: [check.same, "not in the file store", { call: [storage.get, "aiml_test_tok"] }, ""]
+      - call: [storage.session_remove, "aiml_test_tok"]
+      - call: [check.same, "removed", { call: [storage.session_get, "aiml_test_tok"] }, ""]
+      - call: [storage.session_remove, "aiml_test_tok"]
+
+      - call: [check.same, "no fragment at start", { call: [storage.hash] }, ""]
+      - call: [storage.set_hash, "token=ab12:cd34"]
+      - call: [check.same, "fragment", { call: [storage.hash] }, "token=ab12:cd34"]
+      - call: [storage.set_hash, ""]
+      - call: [check.same, "fragment cleared", { call: [storage.hash] }, ""]
+
+      - if: { condition: { gt: [check.fails, 0] }, then: [{ return: [1] }] }
+      - print: ["PASS storage_session: session store and fragment"]
+      - return: [0]

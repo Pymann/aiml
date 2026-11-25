@@ -1,0 +1,98 @@
+# SPEC: 32_2_network_http_s
+# F32-2-66: a file response answers a matching If-None-Match with 304 and no
+# body; a different ETag, or none, gets the file.
+#
+# Expected exit code: 0
+
+- def:
+    name: probe
+    args: [[raw, string]]
+    return: string
+    body:
+      - decl: [sock, socket_handle]
+      - set: [sock, { call: [net.socket, "tcp"] }]
+      - call: [net.connect, sock, "127.0.0.1", 23213]
+      - call: [net.send_string, sock, raw]
+      - decl: [rsp, string]
+      - set: [rsp, { call: [net.recv_string, sock, 4096] }]
+      - call: [net.close, sock]
+      - return: rsp
+
+- def:
+    name: handle_file
+    args: [[req, http_request_handle], [resp, http_response_handle]]
+    body:
+      - call: [resp.headers.put, "content-type", "application/wasm"]
+      - set: [resp.body_file, "/tmp/aiml_inm_test/app.wasm"]
+      - call: [resp.send]
+
+- class:
+    name: InmCheck
+    members:
+      - [fails, i32, 0, { access: public }]
+    methods:
+      - def:
+          name: has
+          args: [[label, string], [answer, string], [needle, string]]
+          body:
+            - if:
+                condition: { lt: [{ call: [answer.index_of, needle] }, 0] }
+                then:
+                  - print: ["FAIL ${label}: no '${needle}' in ${answer}"]
+                  - set: [<.fails, { +: [<.fails, 1] }]
+
+      - def:
+          name: lacks
+          args: [[label, string], [answer, string], [needle, string]]
+          body:
+            - if:
+                condition: { ge: [{ call: [answer.index_of, needle] }, 0] }
+                then:
+                  - print: ["FAIL ${label}: unexpected '${needle}' in ${answer}"]
+                  - set: [<.fails, { +: [<.fails, 1] }]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [check, ptr<InmCheck>, { new: InmCheck }]
+      - call: [io.mkdir, "/tmp/aiml_inm_test"]
+      - call: [io.write_file, "/tmp/aiml_inm_test/app.wasm", "WASMBYTES-0123456789"]
+      - decl: [srv, http_server_handle]
+      - set: [srv, { call: [http.server, "127.0.0.1", 23213] }]
+      - call: [srv.route, "GET", "/app.wasm", handle_file]
+      - decl: [dirs, list<path>]
+      - call: [dirs.push, "/tmp/aiml_inm_test"]
+      - decl: [opts, fs_options]
+      - call: [srv.filesystem, "/static", dirs, opts]
+      - decl: [thr, thread_handle, { call: [srv.start_async] }]
+      - call: [time.sleep_ms, 300]
+
+      - decl: [first, string, { call: [probe, "GET /app.wasm HTTP/1.1\r\nHost: x\r\n\r\n"] }]
+      - call: [check.has, "first is 200", first, "HTTP/1.1 200"]
+      - decl: [found, list<string>, { call: [regex.find, "etag: (\"[^\"]*\")", first] }]
+      - if:
+          condition: { lt: [found.len, 2] }
+          then:
+            - print: ["FAIL no etag in ${first}"]
+            - return: [1]
+      - decl: [etag, string, { call: [found.get, 1] }]
+
+      - decl: [same, string, { call: [probe, "GET /app.wasm HTTP/1.1\r\nHost: x\r\nIf-None-Match: ${etag}\r\n\r\n"] }]
+      - call: [check.has, "matching etag -> 304", same, "HTTP/1.1 304"]
+      - call: [check.has, "304 repeats the etag", same, "etag: ${etag}"]
+      - call: [check.lacks, "304 has no body", same, "WASMBYTES"]
+      - decl: [listed, string, { call: [probe, "GET /app.wasm HTTP/1.1\r\nHost: x\r\nIf-None-Match: \"other\", ${etag}\r\n\r\n"] }]
+      - call: [check.has, "etag in a list -> 304", listed, "HTTP/1.1 304"]
+      - decl: [star, string, { call: [probe, "GET /app.wasm HTTP/1.1\r\nHost: x\r\nIf-None-Match: *\r\n\r\n"] }]
+      - call: [check.has, "* -> 304", star, "HTTP/1.1 304"]
+      - decl: [other, string, { call: [probe, "GET /app.wasm HTTP/1.1\r\nHost: x\r\nIf-None-Match: \"other\"\r\n\r\n"] }]
+      - call: [check.has, "other etag -> 200", other, "HTTP/1.1 200"]
+      - decl: [fs_first, string, { call: [probe, "GET /static/app.wasm HTTP/1.1\r\nHost: x\r\nIf-None-Match: ${etag}\r\n\r\n"] }]
+      - call: [check.has, "srv.filesystem too", fs_first, "HTTP/1.1 304"]
+
+      - call: [srv.stop]
+      - call: [io.remove_all, "/tmp/aiml_inm_test"]
+      - if: { condition: { gt: [check.fails, 0] }, then: [{ return: [1] }] }
+      - print: ["PASS http_if_none_match: 304 for a matching ETag, 200 otherwise"]
+      - return: [0]
