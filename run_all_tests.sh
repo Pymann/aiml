@@ -52,6 +52,9 @@ OUTPUT_FILE="test_results.txt"
 # Clear the output file
 > "$OUTPUT_FILE"
 
+# Tests write scratch files to logs/ (gitignored, so a fresh checkout has none).
+mkdir -p logs
+
 # Check for custom AIML_CACHE environment variable
 if [ -z "$AIML_CACHE" ]; then
     AIML_CACHE="__aiml_cache"

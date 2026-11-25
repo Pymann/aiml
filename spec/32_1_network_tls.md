@@ -56,6 +56,13 @@ Returns `nullptr` if OpenSSL cannot be initialized.
 `tls.connect` automatically sets **SNI** (Server Name Indication) to `host` — required
 for virtual hosting on HTTPS servers.
 
+`host` is resolved with `AF_UNSPEC`, and **every address the resolver returns is tried
+in its order**, with the timeout of `tls.set_timeout` as the budget for the whole call —
+the client rule of spec/32_4 §1.1. `"localhost"` therefore reaches a server that
+listens on `127.0.0.1` only, also where the resolver lists `::1` first. The socket
+`tls.socket` returned keeps its descriptor (`tls.fd`): a candidate of the other
+family gets a fresh socket in its place.
+
 `host` is also the name the certificate is checked against under `set_verify "peer"`.
 When it is an **IP literal**, the match is against the certificate's `iPAddress` SAN,
 not its DNS names: a cert that carries only `DNS:` entries is refused for

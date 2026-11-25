@@ -176,6 +176,15 @@ extern "C" int aiml_tls_connect(void* sock, const char* host, int32_t port) {
     int fd = s->fd;
 
     // ── TCP connect ────────────────────────────────────────────────────────
+    // spec/32_4 §1.1: EVERY address getaddrinfo returns is tried, in its order,
+    // and the timeout is the budget for the whole call.  Only the first address
+    // was tried, on the AF_INET socket tls.socket made: "localhost" resolves to
+    // ::1 first wherever /etc/hosts lists it (CI runners do), and the connect
+    // failed outright instead of falling back to 127.0.0.1.  A candidate of
+    // another family -- and every retry, since a failed connect leaves the
+    // socket unusable -- gets a fresh socket dup2'ed onto s->fd, so the
+    // descriptor tls.fd reported stays valid; the options tls.socket and
+    // tls.set_timeout set are applied to it again.
     char port_str[16];
     std::snprintf(port_str, sizeof(port_str), "%d", port);
 
@@ -185,25 +194,54 @@ extern "C" int aiml_tls_connect(void* sock, const char* host, int32_t port) {
     struct addrinfo* res = nullptr;
     if (::getaddrinfo(host, port_str, &hints, &res) != 0 || !res) return -1;
 
-    int tcp_rc;
-    if (s->timeout_ms <= 0) {
-        tcp_rc = ::connect(fd, res->ai_addr, res->ai_addrlen);
-    } else {
-        int flags = ::fcntl(fd, F_GETFL, 0);
-        ::fcntl(fd, F_SETFL, flags | O_NONBLOCK);
-        tcp_rc = ::connect(fd, res->ai_addr, res->ai_addrlen);
-        if (tcp_rc != 0 && errno == EINPROGRESS) {
-            struct pollfd pfd{ fd, POLLOUT, 0 };
-            int ready = ::poll(&pfd, 1, s->timeout_ms);
-            if (ready > 0) {
-                int err = 0; socklen_t len = sizeof(err);
-                ::getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &len);
-                tcp_rc = (err == 0) ? 0 : -1;
-            } else {
-                tcp_rc = -1;
+    int n_addrs = 0;
+    for (struct addrinfo* ai = res; ai; ai = ai->ai_next) ++n_addrs;
+    int per = s->timeout_ms;
+    if (per > 0 && n_addrs > 1) {
+        per = s->timeout_ms / n_addrs;
+        if (per < 250) per = s->timeout_ms < 250 ? s->timeout_ms : 250;
+    }
+
+    int tcp_rc = -1;
+    bool fresh = true;  // s->fd has not seen a connect yet
+    for (struct addrinfo* ai = res; ai && tcp_rc != 0; ai = ai->ai_next) {
+        int domain = -1; socklen_t dl = sizeof(domain);
+        ::getsockopt(fd, SOL_SOCKET, SO_DOMAIN, &domain, &dl);
+        if (!fresh || domain != ai->ai_family) {
+            int nfd = ::socket(ai->ai_family, SOCK_STREAM | SOCK_CLOEXEC, 0);
+            if (nfd < 0) continue;
+            if (::dup3(nfd, fd, O_CLOEXEC) < 0) { ::close(nfd); continue; }
+            ::close(nfd);
+            int yes = 1;
+            ::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+            if (s->timeout_ms > 0) {
+                struct timeval tv{};
+                tv.tv_sec  = s->timeout_ms / 1000;
+                tv.tv_usec = (s->timeout_ms % 1000) * 1000;
+                ::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+                ::setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
             }
         }
-        ::fcntl(fd, F_SETFL, flags);
+        fresh = false;
+        if (per <= 0) {
+            tcp_rc = ::connect(fd, ai->ai_addr, ai->ai_addrlen);
+        } else {
+            int flags = ::fcntl(fd, F_GETFL, 0);
+            ::fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+            tcp_rc = ::connect(fd, ai->ai_addr, ai->ai_addrlen);
+            if (tcp_rc != 0 && errno == EINPROGRESS) {
+                struct pollfd pfd{ fd, POLLOUT, 0 };
+                int ready = ::poll(&pfd, 1, per);
+                if (ready > 0) {
+                    int err = 0; socklen_t len = sizeof(err);
+                    ::getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &len);
+                    tcp_rc = (err == 0) ? 0 : -1;
+                } else {
+                    tcp_rc = -1;
+                }
+            }
+            ::fcntl(fd, F_SETFL, flags);
+        }
     }
     ::freeaddrinfo(res);
     if (tcp_rc != 0) return -1;
