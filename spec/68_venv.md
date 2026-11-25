@@ -122,7 +122,7 @@ aiml venv <dir> install <name> --git <url> [--ref <tag|branch|commit>]
 aiml venv <dir> install <name> --path <dir>
 aiml venv <dir> install <name> --kontor <url> [--version <v>]      (§6.1)
 aiml venv <dir> install --all --kontor <url>                       (§6.1, F68-66)
-aiml venv <dir> publish [<name>] [--path <dir>] --kontor <url>     (§6.3)
+aiml venv <dir> publish [<name>] [--path <dir>] --kontor <url> [--overwrite]   (§6.3)
 aiml venv <dir> list
 aiml venv <dir> remove <name>
 ```
@@ -286,7 +286,7 @@ its own repository (ufo `scripts/publish.sh`, cosmos `tools/kontor_publish.sh`);
 can now be published the same way, from the venv it is built with, without a script in between.
 
 ```
-KONTOR_TOKEN=… aiml venv <dir> publish [<name>] [--path <repo>] --kontor <url>
+KONTOR_TOKEN=… aiml venv <dir> publish [<name>] [--path <repo>] --kontor <url> [--overwrite]
 ```
 
 - **F68-70** **The repository says what it is**, in the same `aiml.tool.json` as for `install`
@@ -311,6 +311,9 @@ KONTOR_TOKEN=… aiml venv <dir> publish [<name>] [--path <repo>] --kontor <url>
   same on its side: once a version's package is there, a PUT of its manifest or package is `409`
   (kontor `README`), so neither a second `publish` nor a hand-made `curl` replaces bytes that
   somebody may have installed.  A half publish (manifest there, package not) can be repeated.
+  A version kontor **deleted** (a tombstone, `GET` answers `410`, kontor FW-47) is refused the
+  same way, with its own reason („was deleted — a deleted version number is not reused"):
+  kontor keeps the number from being given out again.
 - **F68-74** **The token.**  `$KONTOR_TOKEN`, a kontor token with the role `writer`, becomes the
   `Authorization: Bearer` header as in F68-63 — never an argument.  Without one, `publish` refuses
   before it touches the network; a `401`/`403` is reported with kontor's own message.
@@ -319,13 +322,22 @@ KONTOR_TOKEN=… aiml venv <dir> publish [<name>] [--path <repo>] --kontor <url>
   now).  Reading is the instance's affair: a kontor whose `anonymous` role is `none` needs
   `$KONTOR_TOKEN` for `install --kontor` too (F68-63); a tool without a token is installed with
   `--git`.
+- **F68-76** **An admin may overwrite** (decided 2026-11-25, kontor `doc/spec/web_ui.md`
+  FW-47a).  `--overwrite` skips the refusal of F68-73 for a version that is there (`200`) or was
+  deleted (`410`) and sends both PUTs anyway; **kontor** decides.  It replaces them only for a
+  token with the `admin` right and answers everyone else `409` as before — `publish` then names
+  the admin right instead of F68-73.  The line says `replaced` instead of `published`.  The flag
+  belongs to `publish` alone (anywhere else it is a usage error), and it changes nothing about
+  F68-72: what goes out is still one committed state.  A venv that installed the old bytes keeps
+  them; its record (F68-65) names their digest, so `list` shows which one it has.
 
 Tests: `tests/venv/run.sh` §6.3 against `tests/venv/kontor_stub.aiml`, which also takes kontor's
 two PUTs (with a token, and `409` for a published version): no token, a wrong token, a wrong name,
 `exodus.json` and `aiml.tool.json` disagreeing, uncommitted changes, the files where `install`
 looks, one tree of tracked files only, the digest in the line, nothing staged in the venv, a second
-publish refused with the bytes unchanged, the next version beside it, and an install of what was
-published.
+publish refused with the bytes unchanged, `--overwrite` refused for a writer and done for an
+admin (F68-76), `--overwrite` on `install` refused, a deleted version refused with its reason and
+written again by the admin, the next version beside it, and an install of what was published.
 
 ## 7. Building — `aiml build` (decided 2026-11-25)
 

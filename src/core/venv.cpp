@@ -132,7 +132,7 @@ int usage() {
                  "       aiml venv <dir> install <name> (--git <url> [--ref <r>] | --path <dir>\n"
                  "                                       | --kontor <url> [--version <v>])\n"
                  "       aiml venv <dir> install --all --kontor <url>\n"
-                 "       aiml venv <dir> publish [<name>] [--path <dir>] --kontor <url>\n"
+                 "       aiml venv <dir> publish [<name>] [--path <dir>] --kontor <url> [--overwrite]\n"
                  "       aiml venv <dir> list | remove <name>" << std::endl;
     return 1;
 }
@@ -955,7 +955,8 @@ bool stageTracked(const fs::path& repo, const fs::path& stage, std::vector<std::
     return true;
 }
 
-int cmdPublish(const std::string& wantName, const std::string& pathArg, const std::string& kontorUrl) {
+int cmdPublish(const std::string& wantName, const std::string& pathArg, const std::string& kontorUrl,
+               bool overwrite) {
     if (kontorUrl.empty()) return fail("publish needs a target: --kontor <url> (spec/68 §6.3)");
     const char* token = std::getenv("KONTOR_TOKEN");
     if (!token || !*token)
@@ -1007,18 +1008,24 @@ int cmdPublish(const std::string& wantName, const std::string& pathArg, const st
 
     // F68-73: a version that kontor has is not overwritten — asked before
     // anything is sent, so an older kontor that would overwrite never gets the chance.
+    // F68-76: --overwrite asks too, and then leaves the verdict to kontor, which
+    // lets only a token with the admin right replace (kontor FW-47a).
     int32_t status = 0;
     std::string answer;
     if (!httpCall("GET", prefix + "/package", {}, work / "existing", status, answer, err))
         return fail(err);
     fs::remove(work / "existing", ec);
-    if (status == 200)
+    if (status == 200 && !overwrite)
         return fail(man.name + "@" + man.version + " is already in kontor at " + base +
                     " — a published version is not replaced; raise \"version\" in aiml.tool.json (F68-73)");
+    if (status == 410 && !overwrite)
+        return fail(man.name + "@" + man.version + " was deleted in kontor at " + base +
+                    " — a deleted version number is not reused; raise \"version\" in aiml.tool.json (F68-73)");
     if (status == 401 || status == 403)
         return fail(prefix + "/package: HTTP " + std::to_string(status) + " — " + kontorMessage(answer));
-    if (status != 404)
+    if (status != 404 && !(overwrite && (status == 200 || status == 410)))
         return fail(prefix + "/package: HTTP " + std::to_string(status));
+    bool replacing = status == 200 || status == 410;
 
     std::vector<std::string> files;
     if (!stageTracked(repo, work / "stage" / dirName, files, err)) return fail(err);
@@ -1049,12 +1056,13 @@ int cmdPublish(const std::string& wantName, const std::string& pathArg, const st
                            Put{"package", archive, prefix + "/package"}}) {
         if (!httpCall("PUT", put.url, put.file, {}, status, answer, err)) return fail(err);
         if (status == 409)
-            return fail(put.url + ": HTTP 409 — " + kontorMessage(answer) + " (F68-73)");
+            return fail(put.url + ": HTTP 409 — " + kontorMessage(answer) +
+                        (overwrite ? " (F68-76: only a token with the admin right overwrites)" : " (F68-73)"));
         if (status != 200 && status != 201)
             return fail(put.url + ": HTTP " + std::to_string(status) + " — " + kontorMessage(answer));
     }
     fs::remove_all(work / "stage", ec);
-    std::cout << "published " << man.name << " " << man.version << " (" << files.size()
+    std::cout << (replacing ? "replaced " : "published ") << man.name << " " << man.version << " (" << files.size()
               << " files, " << size << " bytes, " << digest << ") → " << prefix << "\n"
               << "  install it with: aiml venv <dir> install " << man.name << " --kontor " << base
               << " --version " << man.version << std::endl;
@@ -1134,7 +1142,7 @@ int runProgram(const std::vector<std::string>& args, const std::string& cwd,
 int command(int argc, char** argv) {
     std::string dirArg, runtimeArg, verb, name;
     std::string gitUrl, ref, pathArg, kontorUrl, versionArg;
-    bool all = false;
+    bool all = false, overwrite = false;
     for (int i = 0; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "--runtime" && i + 1 < argc) runtimeArg = argv[++i];
@@ -1144,6 +1152,7 @@ int command(int argc, char** argv) {
         else if (arg == "--kontor" && i + 1 < argc) kontorUrl = argv[++i];
         else if (arg == "--version" && i + 1 < argc) versionArg = argv[++i];
         else if (arg == "--all") all = true;
+        else if (arg == "--overwrite") overwrite = true;
         else if (!arg.empty() && arg[0] != '-') {
             if (dirArg.empty()) dirArg = arg;
             else if (verb.empty()) verb = arg;
@@ -1169,7 +1178,8 @@ int command(int argc, char** argv) {
         if (all) return name.empty() ? cmdInstallAll(root, kontorUrl) : usage();
         return cmdInstall(root, name, gitUrl, ref, pathArg, kontorUrl, versionArg);
     }
-    if (verb == "publish") return all ? usage() : cmdPublish(name, pathArg, kontorUrl);
+    if (overwrite && verb != "publish") return usage();
+    if (verb == "publish") return all ? usage() : cmdPublish(name, pathArg, kontorUrl, overwrite);
     if (verb == "list")    return name.empty() ? cmdList(root) : usage();
     if (verb == "remove")  return name.empty() ? usage() : cmdRemove(root, name);
     return usage();
