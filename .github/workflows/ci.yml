@@ -250,15 +250,22 @@ jobs:
           test -f "$work/venv/lib/libaiml.so"
           tar -czf "$work/package.tar.gz" -C "$work/venv" bin lib env
           summe=$(sha256sum "$work/package.tar.gz" | cut -d' ' -f1)
-          ziel="$KONTOR_URL/generic/aiml/${GITHUB_SHA}/aiml-x86_64-linux.tar.gz"
-          # No `curl -k`: without certificate checking a man in the middle could take
-          # the write token.
-          curl --silent --show-error --fail-with-body --max-time 1800 \
-               --cacert "$work/ca.crt" \
-               -H "Authorization: Bearer $KONTOR_TOKEN" \
-               -H "X-Checksum-Sha256: $summe" \
-               -X PUT -T "$work/package.tar.gz" "$ziel"
-          echo "stored: generic/aiml/${GITHUB_SHA}/ ($(stat -c%s "$work/package.tar.gz") B)"
+          # Keyed on the commit (what consumers pin); a v* tag also files it under
+          # the tag name and as latest/.  Same bytes, so kontor's content store
+          # keeps one blob; a generic PUT replaces the pointer, so latest/ moves.
+          keys=("$GITHUB_SHA")
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then keys+=("$GITHUB_REF_NAME" latest); fi
+          for key in "${keys[@]}"; do
+            ziel="$KONTOR_URL/generic/aiml/${key}/aiml-x86_64-linux.tar.gz"
+            # No `curl -k`: without certificate checking a man in the middle could
+            # take the write token.
+            curl --silent --show-error --fail-with-body --max-time 1800 \
+                 --cacert "$work/ca.crt" \
+                 -H "Authorization: Bearer $KONTOR_TOKEN" \
+                 -H "X-Checksum-Sha256: $summe" \
+                 -X PUT -T "$work/package.tar.gz" "$ziel"
+            echo "stored: generic/aiml/${key}/ ($(stat -c%s "$work/package.tar.gz") B)"
+          done
           rm -rf "$work"
 
       - name: Release
