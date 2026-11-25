@@ -178,6 +178,7 @@ jobs:
       # uploaded an artifact while the tests had not been asked yet -- the one
       # build whose verification matters most was the one that published first.
       - name: Package
+        id: package
         run: |
           if [ -n "${{ github.event.inputs.release_tag }}" ]; then v="${{ github.event.inputs.release_tag }}"
           elif [[ "$GITHUB_REF" == refs/tags/v* ]]; then v="${GITHUB_REF_NAME}"; else v="git-${GITHUB_SHA::7}"; fi
@@ -188,6 +189,54 @@ jobs:
         with:
           name: aiml-linux-x86_64
           path: dist/*
+
+      # The same bundle into kontor's GENERIC store, as a venv (bin/ lib/ env) keyed
+      # on the COMMIT. Two reasons it is not /exodus/<name>/<version>/package: there
+      # name and version must match the manifest, and aiml carries ONE version across
+      # all commits, so every build would overwrite the last and a second upload of a
+      # version is 409 anyway. Consumers (dc_traincorp, chart) already read exactly
+      # this path, so this closes the loop: until now the store was filled by whoever
+      # happened to need a commit first.
+      #
+      # Best effort on purpose: a missing secret or a reader-only token must not fail
+      # a build that is otherwise green. The release asset above is the primary
+      # artifact; kontor is the cache that saves everyone else the LLVM build.
+      - name: Put the bundle into kontor
+        if: always() && steps.package.outcome == 'success'
+        continue-on-error: true
+        env:
+          KONTOR_URL: ${{ secrets.KONTOR_URL }}
+          KONTOR_TOKEN: ${{ secrets.KONTOR_TOKEN }}
+          KONTOR_CA: ${{ secrets.KONTOR_CA }}
+        run: |
+          set -eu
+          if [ -z "${KONTOR_URL:-}" ] || [ -z "${KONTOR_TOKEN:-}" ] || [ -z "${KONTOR_CA:-}" ]; then
+            echo "KONTOR_* secrets missing -- nothing stored, the release asset stands."
+            exit 0
+          fi
+          work="$(mktemp -d)"
+          printf '%s\n' "$KONTOR_CA" > "$work/ca.crt"
+          mkdir -p "$work/venv"
+          # The release tarball carries one wrapper directory; the venv layout does
+          # not, so it is stripped (aiml spec/68 §1).
+          tar -xzf dist/aiml-*-linux-x86_64.tar.gz -C "$work/venv" --strip-components=1
+          # The venv marker of spec/68 §3 F68-20, so `. <venv>/env` works and
+          # `aiml venv <dir>` accepts the directory as a venv rather than refusing it.
+          printf '%s\n' "# aiml venv" > "$work/venv/env"
+          test -x "$work/venv/bin/aiml"
+          test -f "$work/venv/lib/libaiml.so"
+          tar -czf "$work/package.tar.gz" -C "$work/venv" bin lib env
+          summe=$(sha256sum "$work/package.tar.gz" | cut -d' ' -f1)
+          ziel="$KONTOR_URL/generic/aiml/${GITHUB_SHA}/aiml-x86_64-linux.tar.gz"
+          # No `curl -k`: without certificate checking a man in the middle could take
+          # the write token.
+          curl --silent --show-error --fail-with-body --max-time 1800 \
+               --cacert "$work/ca.crt" \
+               -H "Authorization: Bearer $KONTOR_TOKEN" \
+               -H "X-Checksum-Sha256: $summe" \
+               -X PUT -T "$work/package.tar.gz" "$ziel"
+          echo "stored: generic/aiml/${GITHUB_SHA}/ ($(stat -c%s "$work/package.tar.gz") B)"
+          rm -rf "$work"
 
       - name: Draft release
         if: startsWith(github.ref, 'refs/tags/v') || github.event.inputs.release_tag != ''
