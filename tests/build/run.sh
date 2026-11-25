@@ -257,8 +257,10 @@ if [ -n "$EMDIR" ] && [ -n "$NODE" ] && [ -f "$RTW/libaiml_wasm.a" ]; then
     R2="$WORK/wasmreal"; mkdir -p "$R2/assets" "$R2/rt"; cp "$P/main.aiml" "$R2/"; cp -r "$P/lib" "$R2/"; : > "$R2/assets/a.txt"
     cp "$RTW/libaiml_wasm.a" "$R2/rt/"
     W="$R2" wcfg "$R2/exodus.json" real main.aiml
+    # No $NOPY here: emcc itself is a Python program.  That aiml build runs no
+    # Python is what the fake-emcc checks above already show.
     out=$(cd "$R2" && env -i HOME="$WORK" AIML_CACHE="$AIML_CACHE" AIML_MEM_V3=1 EM_CONFIG="${EMDIR%/upstream/emscripten}/.emscripten" \
-          PATH="$NOPY:$EMDIR:$(dirname "$NODE"):$CLEANPATH" AIML_VENV="$VENV" AIML="$VENV/bin/aiml" "$VENV/bin/aiml" build 2>&1); rc=$?
+          PATH="$EMDIR:$(dirname "$NODE"):$CLEANPATH" AIML_VENV="$VENV" AIML="$VENV/bin/aiml" "$VENV/bin/aiml" build 2>&1); rc=$?
     check "with a real emsdk: real.html, real.js, real.wasm (F68-88)" '[ $rc -eq 0 ] && [ -f "$R2/real.js" ] && [ -f "$R2/real.wasm" ]'
     [ $rc -eq 0 ] || echo "$out" | tail -8
     o=$(cd "$R2" && "$NODE" real.js 2>&1); r=$?

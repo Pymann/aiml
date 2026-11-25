@@ -1174,11 +1174,11 @@ int command(int argc, char** argv) {
     // §6 works ON a venv, so there has to be one.
     if (!isVenv(root))
         return fail(root.string() + " is not a venv — create it with `aiml venv " + dirArg + "`");
+    if (overwrite && verb != "publish") return usage();   // F68-76: publish only
     if (verb == "install") {
         if (all) return name.empty() ? cmdInstallAll(root, kontorUrl) : usage();
         return cmdInstall(root, name, gitUrl, ref, pathArg, kontorUrl, versionArg);
     }
-    if (overwrite && verb != "publish") return usage();
     if (verb == "publish") return all ? usage() : cmdPublish(name, pathArg, kontorUrl, overwrite);
     if (verb == "list")    return name.empty() ? cmdList(root) : usage();
     if (verb == "remove")  return name.empty() ? usage() : cmdRemove(root, name);
