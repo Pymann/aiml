@@ -70,6 +70,18 @@ void        aiml_ui_label_colored (const char* text, int32_t color, void* preset
 const char* aiml_ui_text_input    (const char* id, const char* buf, void* preset);
 const char* aiml_ui_text_area     (const char* id, const char* buf, void* preset);
 
+/* spec/44_3 §4.1 — metrics of the font ui.label would use.  preset may be NULL.
+ * Window pixels, like widget rects.  0.0 when there is no font: a guessed size
+ * would be indistinguishable from a measurement at the call site. */
+float aiml_ui_measure_text (const char* text, void* preset);
+float aiml_ui_text_height  (void* preset);
+
+/* spec/44_3 §4.6 — free drawing.  Coordinates are window pixels (same space as
+ * input.mouse_pos); width is logical pixels (DPI-scaled). */
+void aiml_ui_draw_line     (float x0, float y0, float x1, float y1,
+                            float width, int32_t color);
+void aiml_ui_draw_polyline (void* pts_buf, float width, int32_t color);
+
 /* ── Interactive widgets ──────────────────────────────────────────────────── */
 
 /* Returns 1 on the frame the button is clicked, 0 otherwise.

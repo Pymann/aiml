@@ -7665,6 +7665,22 @@ float aiml_prefab_text_width(const char* text) {
     return text_width_font(g_scene->font, text);
 }
 
+/* spec/44_6 §5i */
+float aiml_prefab_text_width_sized(const char* text, float font_size) {
+    if (!g_scene || !text) return 0.0f;
+    AimlUIFont* f = (font_size > 0.0f) ? font_for_size(g_scene, font_size)
+                                       : g_scene->font;
+    if (!f) return 0.0f;
+    return text_width_font(f, text);
+}
+
+float aiml_prefab_text_height(float font_size) {
+    if (!g_scene) return 0.0f;
+    AimlUIFont* f = (font_size > 0.0f) ? font_for_size(g_scene, font_size)
+                                       : g_scene->font;
+    return f ? f->line_height : 0.0f;
+}
+
 void* aiml_prefab_get_drag_source(void) {
     return g_scene ? g_scene->drag_source : nullptr;
 }

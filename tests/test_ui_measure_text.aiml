@@ -1,0 +1,70 @@
+# SPEC: 44_3_ui
+# spec/44_3 §4.1: ui.measure_text / ui.text_height — metrics of the UI font,
+# resolved exactly the way ui.label resolves it.  Sizing a box around text needs
+# this; without it a caller can only guess an advance and clips the last glyph.
+# Requires: display
+# Expected exit code: 0
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [win, window_handle, { call: [engine.create_window, 400, 300, "color"] }]
+      - if: { condition: { eq: [win, null] }, then: [{ call: [log.error, "FAIL create_window"] }, { return: 1 }] }
+      - call: [gl.init]
+      - call: [ui.init]
+
+      # 1. No font yet -> 0.0.  The spec forbids guessing a size here, because a
+      #    guess is indistinguishable from a measurement at the call site.
+      - decl: [before, f32, { call: [ui.measure_text, "Angriff"] }]
+      - if:
+          condition: { gt: [before, 0.0] }
+          then: [{ call: [log.error, "FAIL measure_text gave ${before} with no font; spec says 0.0"] }, { return: 1 }]
+
+      - decl: [font, ui_font, { call: [ui.load_font_default, 14.0] }]
+      - if: { condition: { peq: [font, null] }, then: [{ call: [log.error, "FAIL no font"] }, { return: 1 }] }
+      - call: [ui.set_default_font, font]
+
+      # 2. Measures at all.
+      - decl: [long_w, f32, { call: [ui.measure_text, "Angriff abgelehnt"] }]
+      - if:
+          condition: { le: [long_w, 0.0] }
+          then: [{ call: [log.error, "FAIL measure_text gave ${long_w} for real text"] }, { return: 1 }]
+
+      # 3. Monotone: more text is wider.  This is the property a text box relies on.
+      - decl: [short_w, f32, { call: [ui.measure_text, "Angriff"] }]
+      - if:
+          condition: { ge: [short_w, long_w] }
+          then: [{ call: [log.error, "FAIL shorter text not narrower (${short_w} vs ${long_w})"] }, { return: 1 }]
+
+      # 4. Empty string has no width.
+      - decl: [empty_w, f32, { call: [ui.measure_text, ""] }]
+      - if:
+          condition: { gt: [empty_w, 0.0] }
+          then: [{ call: [log.error, "FAIL empty string measured ${empty_w}"] }, { return: 1 }]
+
+      # 5. A newline is NOT a line break here.  Pinned because the opposite guess
+      #    is reasonable and fails quietly: measure_text answers "how wide is this
+      #    ONE line", so \n is skipped like every other control codepoint and both
+      #    strings must come out identical.
+      - decl: [with_nl, f32, { call: [ui.measure_text, "ab\ncd"] }]
+      - decl: [flat, f32, { call: [ui.measure_text, "abcd"] }]
+      - if:
+          condition: { gt: [with_nl, { +: [flat, 0.01] }] }
+          then: [{ call: [log.error, "FAIL newline widened the string (${with_nl} vs ${flat})"] }, { return: 1 }]
+      - if:
+          condition: { lt: [with_nl, { -: [flat, 0.01] }] }
+          then: [{ call: [log.error, "FAIL newline narrowed the string (${with_nl} vs ${flat})"] }, { return: 1 }]
+
+      # 6. Line height is positive and plausible for a 14 px font.
+      - decl: [line_h, f32, { call: [ui.text_height] }]
+      - if:
+          condition: { le: [line_h, 0.0] }
+          then: [{ call: [log.error, "FAIL text_height gave ${line_h}"] }, { return: 1 }]
+      - if:
+          condition: { gt: [line_h, 80.0] }
+          then: [{ call: [log.error, "FAIL text_height ${line_h} implausible for a 14 px font"] }, { return: 1 }]
+
+      # 7. Measuring must not lay out: it may be called outside any cell (done
+      #    above, there is no grid in this test) and emits nothing.
+      - call: [log.info, "ui.measure_text / ui.text_height OK (w=${long_w}, line_h=${line_h})"]
+      - return: 0

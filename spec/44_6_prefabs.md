@@ -655,6 +655,47 @@ deliberately loud — it is almost always a typo).
 
 ---
 
+## 5i. Text metrics — `engine.text_width` / `engine.text_height`
+
+| Call | Return | Description |
+|------|--------|-------------|
+| `engine.text_width(text: string [, font_size: f32])` | `f32` | Width of `text` in the prefab font, in pixels |
+| `engine.text_height([font_size: f32])` | `f32` | Line height of the prefab font, in pixels |
+
+This is what a prefab needs in order to size a box around its own text: a `label` that must
+not clip, a `text_input` that grows with its content, a panel as wide as its longest row.
+
+**Which font is measured.** Without `font_size`, both measure the **scene font** — the one
+set by `engine.prefab_set_font` (§3). With `font_size`, they measure the font baked for
+exactly that size.
+
+**`font_size` is the final pixel size, not the declared one.** A prefab scene does not
+scale one baked font; it bakes **a separate font per size** and caches it by size, and a
+child renders at `font_size * instance_scale` (§1 *Child Style Fields*). Per-size baking
+and hinting mean the advances are **not** proportional between sizes, so a width measured
+at one size must never be scaled to another. To match a child of a scaled instance, pass
+the number the renderer uses: `child_font_size * instance_scale`.
+
+That is the entire reason the size argument exists. Measuring in the scene font and scaling
+afterwards lands close enough to look right and wrong enough to clip the last glyph — and
+a text box one glyph too narrow is not a visible failure, it is a silently truncated word.
+
+**Markup counts.** The width includes inline icon tokens at `ascent_px` each, by the same
+formula the renderer uses, so a measured string and a drawn string stay in lockstep. A
+divergence here does not raise an error; it shows up as mis-centred text and as wrapping
+at the wrong column.
+
+**No scene, no answer.** With no scene or no font, both return `0.0` rather than inventing
+a metric. One line is measured: `\n` is not split (as in spec/44_3 §4.1) — measure the
+lines and take the maximum.
+
+> `ui.measure_text` / `ui.text_height` (spec/44_3 §4.1) are the **separate** pair for the
+> `ui.*` immediate-mode widgets. They read the UI style stack, not the prefab scene font,
+> and the two fonts are independent: measuring with one and drawing with the other is
+> wrong even when both happen to be loaded at the same size.
+
+---
+
 ## 5a. Materials
 
 A **material** bundles a fragment shader (loaded from disk) with a set of
