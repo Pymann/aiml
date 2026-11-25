@@ -30,7 +30,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 240
     permissions:
-      contents: write   # draft release on tags
+      contents: write   # tag + release
     env:
       EXODUS_CACHE: ${{ github.workspace }}/__exodus_cache
     steps:
@@ -266,7 +266,7 @@ jobs:
           echo "stored: generic/aiml/${GITHUB_SHA}/ ($(stat -c%s "$work/package.tar.gz") B)"
           rm -rf "$work"
 
-      - name: Draft release
+      - name: Release
         if: startsWith(github.ref, 'refs/tags/v') || github.event.inputs.release_tag != ''
         env:
           GH_TOKEN: ${{ github.token }}
@@ -290,10 +290,14 @@ jobs:
             if [ "$kind" = tag ]; then new=(--verify-tag --notes-from-tag)
             else new=(--verify-tag --generate-notes); fi
           fi
+          # Published, not a draft: the tag run is the release.  A release that
+          # already exists (made by hand, or a draft from before) gets the files
+          # and is published.
           if gh release view "$tag" >/dev/null 2>&1; then
             gh release upload "$tag" dist/* --clobber
+            gh release edit "$tag" --draft=false
           else
-            gh release create "$tag" dist/* --draft --title "$tag" "${new[@]}"
+            gh release create "$tag" dist/* --title "$tag" "${new[@]}"
           fi
 
       - name: Upload results
