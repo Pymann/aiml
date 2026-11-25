@@ -367,11 +367,12 @@ aiml build [-c <config.json>]… [--all]
   accepted and
   ignored: for an `.aiml` source exodus passed none of them on either, so ignoring them builds the
   same binary.
-- **F68-82** **What is refused, by name**: `output_type` `wasm` or `static_lib`, C/C++ sources,
+- **F68-82** **What is refused, by name**: `output_type` `static_lib`, C/C++ sources,
   `apt_packages`, `git_packages`, a hook that is no `.aiml` file (F68-87) and any path containing
   `__exodus_cache` — those are the build system of aiml and of the wasm client, not of a tool, and
   a build that silently skipped them would build something else.  The message says „needs
-  exodus".  A tool whose `configs` (F68-53) avoid them installs; `--all` over a directory that has
+  exodus".  `output_type: wasm` is no longer among them (F68-88, 2026-11-25); its emsdk comes from
+  the environment like the native linker does, so `git_packages` stays refused there too.  A tool whose `configs` (F68-53) avoid them installs; `--all` over a directory that has
   one of them fails, as `exodus build --all` would without emsdk.
 - **F68-83** **Compile**: for each `.aiml` source,
   `<compiler> <source> -o <build>/<source without .aiml>.o [--asset-roots=<dirs>]` with
@@ -409,13 +410,43 @@ aiml build [-c <config.json>]… [--all]
   never written then looks like a stamp that was).  A `.py` hook is refused with „port it to an
   `.aiml` hook" (F68-82).
 
+### 7.1 A browser build — `output_type: wasm` (2026-11-25, proposed)
+
+A browser client (cosmos' web client, kontor's web UI) is an aiml program compiled for wasm32
+and linked by emscripten against the wasm32 runtime of §8.  exodus did that; `aiml build` does
+it the same way, so the last exodus project files of the tools (cosmos `exodus-client.json` and
+its wasm tests) build without exodus too.
+
+- **F68-88** **Compile and link as exodus did.**  Each `.aiml` source is compiled with
+  `--target wasm32 --emit-main` to `<build>/<source>.ll` (LLVM IR — emcc does not link native
+  objects); the imports' IR lands next to it (`<dir>_<file>_aiml.ll`), and every `.ll` in the
+  emptied build directory is linked, like the `.o` of F68-83.  A native `.o` source is refused.
+  The linker is `linker.name`, else `$EMCC`, else `emcc` from `PATH`.  The link line is
+  `<emcc> <.ll…> -o <name>.html --preload-file=<asset_directory>… <linker.flags> -L<path>…
+  -l<lib>…` — no `-shared`, no `-Wl,-rpath` (a wasm module loads nothing at run time).  The
+  output is `<name>.html`, and emcc writes `<name>.js` and `<name>.wasm` beside it, in the working
+  directory with `artifact_in_cwd`, else in `<build>`.  The runtime is named like any library:
+  `"library_paths": ["$AIML_VENV/lib/wasm32"], "libraries": ["aiml_wasm"]` (F68-94 puts it
+  there), with the flags of F68-92.  Hooks (F68-87) run as for a native build.
+- **F68-89** **One emsdk.**  When a library path holds `libaiml_wasm.a` **and** its
+  `emsdk.version` (F68-90), the build asks the linker for `--version` before compiling anything;
+  another version ends the build naming both („built with emsdk 3.1.74, but emcc is 4.0.1 —
+  activate emsdk 3.1.74").  An archive and an emcc of different versions do not link reliably
+  (§8), and a mismatch found by the linker an hour later names neither.  A linker that cannot be
+  run ends the build the same way, naming `$EMCC`.  The emsdk itself is the environment's
+  (`. <emsdk>/emsdk_env.sh`, or `$EMCC`): a build that cloned one, as exodus' `git_packages` did,
+  would put a compiler into every project's tree.
+
 Tests: `tests/build/run.sh` — an executable and a shared library from one `.aiml` file that
 imports a module (the side object is linked), `-c` several times and `--all` by `$schema`, a
 configuration in a subdirectory with paths relative to the working directory, `artifact_in_cwd`
 on and off, the RUNPATH starting with `$ORIGIN`, `env` reaching the compiler, an unresolvable
 `$AIML_VENV`, each refusal of F68-82, a compile error and a missing linker; the three hooks in
 order with their variables, a hook's file seen by the compile, a failing hook ending the build, a
-missing hook and a `.py` hook refused.  `tests/venv/run.sh`
+missing hook and a `.py` hook refused; for wasm (F68-88/89) against a stand-in emcc the compile
+line, the `.ll` of module and import on the link line, `--preload-file`, no rpath, an emcc of
+another emsdk refused, a native object and `git_packages` refused — and, where the CI has emsdk
+and the wasm32 runtime, a real build that node runs with the module's output and exit code.  `tests/venv/run.sh`
 installs with `PATH` free of exodus and Python.
 
 ## 8. The wasm32 runtime in the release (decided 2026-11-25)
