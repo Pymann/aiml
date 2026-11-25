@@ -168,10 +168,11 @@ GREEN=(
   tests/_inline_model_red/55_jsonstyle_field_no_leak.aiml
   tests/_inline_model_red/56_list_share_alias_no_leak.aiml
   tests/_inline_model_red/57_at_elem_into_field_no_leak.aiml
+  # Clean since 2026-11-24 (rc=0, 0/0 in CI under valgrind); was RED.
+  tests/_inline_model_red/50_share_semantics.aiml
 )
 # RED: known open findings (documented) — run + report, but do NOT fail the gate yet.
 RED=(
-  tests/_inline_model_red/50_share_semantics.aiml
   tests/_inline_model_red/p2_array_field_leak_RED.aiml
 )
 

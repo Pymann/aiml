@@ -129,12 +129,14 @@ stays red until the spec/61 rewrite lands (§1).
 
 ### Expected — the leak gate's RED list
 
-`tests/run_lifetime_leak_gates.sh` keeps two probes outside the gate:
+`tests/run_lifetime_leak_gates.sh` keeps one probe outside the gate:
 
 | Probe | State on 2026-11-24 |
 |-------|---------------------|
 | `p2_array_field_leak_RED.aiml` | genuinely red: `rc=99`, 6,780 bytes definitely lost |
-| `50_share_semantics.aiml` | **reports clean** (`rc=0`, 0/0) — per the script's own rule ("then move them to GREEN") this one is ready to move into the gate |
+
+`50_share_semantics.aiml` reported clean (`rc=0`, 0/0) and moved into the gate on
+2026-11-25.
 
 ### Fixed on 2026-11-24 — and why nobody had seen them
 

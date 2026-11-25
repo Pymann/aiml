@@ -21,7 +21,7 @@ AIML_MEM_V3=1 AIML_LIFETIME_DROPS=1 valgrind --leak-check=full /tmp/r/bin
 | Test | Content (JIT) | Leak (valgrind) | Meaning |
 |---|---|---|---|
 | `49_value_survives_remove` | **PASS** | **RED: 47 def + 16 indirect lost** | The copy survives `remove` content-wise — BUT the removed elemKind-2 element is not released (remove defers kind 2). |
-| `50_share_semantics` | **PASS** | **RED: 16 B def lost** (Codex re-measurement 2026-09-24) | Container-shared + scalar-independent is observably correct, BUT `copy.label = "changed"` leaks the old string (`aiml_str_dup ← main`). → **SECOND leak path: scalar/string field reassignment on a value-model view**, not only the release leak. Test 50 is NOT green. |
+| `50_share_semantics` | **PASS** | **RED: 16 B def lost** (Codex re-measurement 2026-09-24) | Container-shared + scalar-independent is observably correct, BUT `copy.label = "changed"` leaks the old string (`aiml_str_dup ← main`). → **SECOND leak path: scalar/string field reassignment on a value-model view**, not only the release leak. Test 50 is NOT green. **Since 2026-11-24 clean (0/0), in the leak gate's GREEN list.** |
 
 ## Central insight (empirical, important for the implementation)
 
