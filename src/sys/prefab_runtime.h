@@ -225,6 +225,11 @@ int32_t aiml_prefab_get_input_transparent(void* inst);
 void  aiml_prefab_set_input_blocking(void* inst, int32_t on);      /* spec/44_6 modal */
 int32_t aiml_prefab_get_input_blocking(void* inst);
 float aiml_prefab_text_width(const char* text);                    /* prefab font, incl. markup */
+/* spec/44_6 §5i: measured at a GIVEN size.  A prefab bakes one font PER size,
+ * so advances are not proportional between sizes and a measurement must never
+ * be scaled.  font_size <= 0 means the scene font. */
+float aiml_prefab_text_width_sized(const char* text, float font_size);
+float aiml_prefab_text_height(float font_size);
 void  aiml_prefab_update_drag(float mx, float my, int32_t btn_down, int32_t btn_released);
 /* spec/44_6: gesture-driven drag — picks at the press point after the movement
  * threshold.  0 none, 1 candidate, 2 dragging, 3 dropped, 4 cancelled. */

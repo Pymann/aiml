@@ -1,0 +1,59 @@
+# SPEC: 44_3_ui
+# spec/44_3 §4.6: ui.draw_line / ui.draw_polyline — free drawing at caller
+# coordinates, batched with every other UI draw.
+#
+# This is a ROBUSTNESS test, not a pixel test: there is no read_pixels builtin,
+# so it cannot assert what landed on screen.  What it does assert is where the
+# real risk sits — parsing a buffer<f32> of points, the degenerate inputs the
+# spec says must draw NOTHING (zero width, one point, a trailing odd float, an
+# empty buffer), and that a clipped polyline does not leak its scissor into the
+# widget drawn after it.  Each of those would otherwise be a crash or a silent
+# visual corruption.
+# Requires: display
+# Expected exit code: 0
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [win, window_handle, { call: [engine.create_window, 400, 300, "color"] }]
+      - if: { condition: { eq: [win, null] }, then: [{ call: [log.error, "FAIL create_window"] }, { return: 1 }] }
+      - call: [gl.init]
+      - call: [ui.init]
+      - decl: [font, ui_font, { call: [ui.load_font_default, 14.0] }]
+      - if: { condition: { peq: [font, null] }, then: [{ call: [log.error, "FAIL no font"] }, { return: 1 }] }
+      - call: [ui.set_default_font, font]
+
+      - decl: [pts,  buffer<f32>, [20.0, 20.0, 120.0, 60.0, 220.0, 20.0]]
+      - decl: [one,  buffer<f32>, [10.0, 10.0]]
+      - decl: [odd,  buffer<f32>, [10.0, 10.0, 50.0]]
+      - decl: [cols, buffer<f32>, [1.0]]
+      - decl: [rows, buffer<f32>, [1.0]]
+
+      - call: [gl.clear_all, 0.0, 0.0, 0.0, 1.0]
+      - call: [ui.begin, win]
+
+      # 1. Normal use, outside any cell: absolute window coordinates.
+      - call: [ui.draw_line, 10.0, 10.0, 390.0, 290.0, 2.0, 0xFF4040FF]
+      - call: [ui.draw_polyline, pts, 3.0, 0x40FF40FF]
+
+      # 2. Degenerate inputs — each must draw nothing and must not crash.
+      - call: [ui.draw_line, 10.0, 10.0, 390.0, 290.0, 0.0, 0xFF4040FF]
+      - call: [ui.draw_line, 10.0, 10.0, 390.0, 290.0, -4.0, 0xFF4040FF]
+      - call: [ui.draw_line, 50.0, 50.0, 50.0, 50.0, 2.0, 0xFF4040FF]
+      - call: [ui.draw_polyline, one, 2.0, 0x40FF40FF]
+      - call: [ui.draw_polyline, odd, 2.0, 0x40FF40FF]
+
+      # 3. Inside a cell the drawing is clipped — and the clip must be cleared
+      #    again, so the label after it is not swallowed by a stale scissor.
+      - call: [ui.begin_grid, cols, rows]
+      - call: [ui.begin_cell, 0, 0, 1, 1]
+      - call: [ui.draw_polyline, pts, 2.0, 0x4080FFFF]
+      - call: [ui.label, "after a clipped polyline"]
+      - call: [ui.end_cell]
+      - call: [ui.end_grid]
+
+      - call: [ui.end]
+      - call: [engine.swap, win]
+
+      - call: [log.info, "ui.draw_line / ui.draw_polyline OK"]
+      - return: 0

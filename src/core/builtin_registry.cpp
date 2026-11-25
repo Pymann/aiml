@@ -10828,9 +10828,10 @@ void registerBuiltins(CompilerContext& ctx) {
                 ctx.getFunction("aiml_prefab_update_drag_gesture", i32, {f32, f32}),
                 {mx, my}));
         };
-        // engine.text_width(text) -> f32 (spec/44_6)
+        // engine.text_width(text [, font_size]) -> f32 (spec/44_6 §5i)
         // Width in the prefab font, including the inline marker rules.
         // Makes centring/wrapping and the markers checkable at all.
+        // font_size omitted (or <= 0) = the scene font, the original behaviour.
         eng.builtinFuncs["text_width"] = [](CompilerContext& ctx,
             const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
             auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
@@ -10838,8 +10839,20 @@ void registerBuiltins(CompilerContext& ctx) {
             llvm::Value* txt = args.empty()
                 ? static_cast<llvm::Value*>(ctx.builder.CreateGlobalStringPtr(""))
                 : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            llvm::Value* sz = args.size() < 2 ? (llvm::Value*)llvm::ConstantFP::get(f32, 0.0)
+                : ctx.builder.CreateFPCast(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1])), f32);
             return ctx.ir_gen->wrap(ctx.builder.CreateCall(
-                ctx.getFunction("aiml_prefab_text_width", f32, {i8p}), {txt}));
+                ctx.getFunction("aiml_prefab_text_width_sized", f32, {i8p, f32}), {txt, sz}));
+        };
+
+        // engine.text_height([font_size]) -> f32 (spec/44_6 §5i)
+        eng.builtinFuncs["text_height"] = [](CompilerContext& ctx,
+            const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto* f32 = ctx.builder.getFloatTy();
+            llvm::Value* sz = args.empty() ? (llvm::Value*)llvm::ConstantFP::get(f32, 0.0)
+                : ctx.builder.CreateFPCast(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])), f32);
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                ctx.getFunction("aiml_prefab_text_height", f32, {f32}), {sz}));
         };
         // engine.get_drag_source() -> prefab_instance
         eng.builtinFuncs["get_drag_source"] = [](CompilerContext& ctx,
@@ -12902,6 +12915,71 @@ void registerBuiltins(CompilerContext& ctx) {
                 : ctx.builder.CreateZExtOrTrunc(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])), i32);
             ctx.builder.CreateCall(ctx.getFunction("aiml_ui_rect",
                 ctx.builder.getVoidTy(), {i32}), {c});
+            return nullptr; };
+
+        // ui.measure_text(text: string [, preset: ui_label_style]) -> f32 (spec/44_3 §4.1)
+        ui.builtinFuncs["measure_text"] = [](CompilerContext& ctx,
+            const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto* p   = llvm::PointerType::get(ctx.context, 0);
+            auto* f32 = ctx.builder.getFloatTy();
+            auto  null = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(p));
+            llvm::Value* t = args.empty() ? (llvm::Value*)null
+                : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            llvm::Value* preset = args.size() < 2 ? (llvm::Value*)null
+                : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]));
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                ctx.getFunction("aiml_ui_measure_text", f32, {p, p}), {t, preset})); };
+
+        // ui.text_height([preset: ui_label_style]) -> f32 (spec/44_3 §4.1)
+        ui.builtinFuncs["text_height"] = [](CompilerContext& ctx,
+            const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto* p   = llvm::PointerType::get(ctx.context, 0);
+            auto* f32 = ctx.builder.getFloatTy();
+            auto  null = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(p));
+            llvm::Value* preset = args.empty() ? (llvm::Value*)null
+                : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                ctx.getFunction("aiml_ui_text_height", f32, {p}), {preset})); };
+
+        // ui.draw_line(x0, y0, x1, y1, width: f32, color: i32) (spec/44_3 §4.6)
+        ui.builtinFuncs["draw_line"] = [](CompilerContext& ctx,
+            const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto* f32 = ctx.builder.getFloatTy();
+            auto* i32 = ctx.builder.getInt32Ty();
+            auto farg = [&](int i) -> llvm::Value* {
+                if ((int)args.size() <= i) return llvm::ConstantFP::get(f32, 0.0);
+                return ctx.builder.CreateFPCast(
+                    static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[i])), f32); };
+            llvm::Value* c = args.size() < 6 ? ctx.builder.getInt32(-1)
+                : ctx.builder.CreateZExtOrTrunc(
+                    static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[5])), i32);
+            ctx.builder.CreateCall(ctx.getFunction("aiml_ui_draw_line",
+                ctx.builder.getVoidTy(), {f32, f32, f32, f32, f32, i32}),
+                {farg(0), farg(1), farg(2), farg(3), farg(4), c});
+            return nullptr; };
+
+        // ui.draw_polyline(pts: buffer<f32>, width: f32, color: i32) (spec/44_3 §4.6)
+        ui.builtinFuncs["draw_polyline"] = [](CompilerContext& ctx,
+            const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto* p   = llvm::PointerType::get(ctx.context, 0);
+            auto* f32 = ctx.builder.getFloatTy();
+            auto* i32 = ctx.builder.getInt32Ty();
+            auto  null = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(p));
+            llvm::Value* pts = null;
+            if (!args.empty()) {
+                llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+                if (v->getType()->isPointerTy()) pts = v;
+                else { auto* tmp = ctx.createEntryAlloca(v->getType(), "ui_pbuf");
+                       ctx.builder.CreateStore(v, tmp); pts = tmp; }
+            }
+            llvm::Value* w = args.size() < 2 ? (llvm::Value*)llvm::ConstantFP::get(f32, 0.0)
+                : ctx.builder.CreateFPCast(
+                    static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1])), f32);
+            llvm::Value* c = args.size() < 3 ? ctx.builder.getInt32(-1)
+                : ctx.builder.CreateZExtOrTrunc(
+                    static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[2])), i32);
+            ctx.builder.CreateCall(ctx.getFunction("aiml_ui_draw_polyline",
+                ctx.builder.getVoidTy(), {p, f32, i32}), {pts, w, c});
             return nullptr; };
 
         // ui.rect_rounded(color: i32, radius: f32, preset: ui_panel_style = null)

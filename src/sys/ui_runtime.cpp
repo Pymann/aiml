@@ -352,6 +352,24 @@ static void push_quad(float x, float y, float w, float h,
     g_ui->cmds.back().count += 6;
 }
 
+/* Free-form quad from four explicit corners (p0=tl, p1=tr, p2=bl, p3=br).
+ * push_quad builds its corners from x/y/w/h and so can only be axis-aligned;
+ * a line segment at an angle needs the corners given. Never SDF: the rounding
+ * fields describe a rect, which this is not. */
+static void push_quad_pts(float x0, float y0, float x1, float y1,
+                          float x2, float y2, float x3, float y3,
+                          uint32_t rgba, GLuint tex, int image_mode)
+{
+    ensure_cmd(tex, image_mode);
+    UiVertex tl = {x0, y0, 0, 0, 0, 0, 0, 0, rgba, 0};
+    UiVertex tr = {x1, y1, 1, 0, 0, 0, 0, 0, rgba, 0};
+    UiVertex bl = {x2, y2, 0, 1, 0, 0, 0, 0, rgba, 0};
+    UiVertex br = {x3, y3, 1, 1, 0, 0, 0, 0, rgba, 0};
+    g_ui->verts.push_back(tl); g_ui->verts.push_back(tr); g_ui->verts.push_back(bl);
+    g_ui->verts.push_back(tr); g_ui->verts.push_back(br); g_ui->verts.push_back(bl);
+    g_ui->cmds.back().count += 6;
+}
+
 /* Decode one UTF-8 codepoint (Latin-1 Supplement only — 2-byte sequences).
  * Duplicated inline from prefab_runtime.cpp so ui_runtime stays independent;
  * both callers loop over the SAME atlas layout (32..255 baked). */
@@ -1317,6 +1335,95 @@ static void draw_label_in_rect(const char* text, float x, float y, float w, floa
 }
 
 /* ── Text widgets ─────────────────────────────────────────────────────────── */
+
+/* ── Text metrics (spec/44_3 §4.1) ───────────────────────────────────────── */
+
+/* Deliberately does NOT lazily aiml_ui_init(): measuring must not create GL
+ * state, and a caller before ui.init gets the documented 0.0. */
+float aiml_ui_measure_text(const char* text, void* preset) {
+    if (!g_ui || !text) return 0.0f;
+    AimlUILabelStyle* st = (AimlUILabelStyle*)preset;
+    if (st) g_ui->style_stack.push_back(st->base);
+    AimlUIFont* f = active_font();
+    float w = f ? text_width(f, text) : 0.0f;
+    if (st) g_ui->style_stack.pop_back();
+    return w;
+}
+
+float aiml_ui_text_height(void* preset) {
+    if (!g_ui) return 0.0f;
+    AimlUILabelStyle* st = (AimlUILabelStyle*)preset;
+    if (st) g_ui->style_stack.push_back(st->base);
+    AimlUIFont* f = active_font();
+    float h = f ? f->line_height : 0.0f;
+    if (st) g_ui->style_stack.pop_back();
+    return h;
+}
+
+/* ── Free drawing (spec/44_3 §4.6) ───────────────────────────────────────── */
+
+/* Clip free drawing to the current cell's padded rect.  Unlike
+ * apply_widget_layout this clips UNCONDITIONALLY: a drawing surface is expected
+ * to overflow its cell — that is precisely why it is being clipped. */
+static bool cell_clip_scissor(int out[4]) {
+    if (!g_ui || g_ui->cell_stack.empty()) return false;
+    const AimlUIStyle& st = cur_style();
+    UiCellState& cell = cur_cell();
+    float ax = cell.x + cell.w * st.padding_x;
+    float aw = cell.w * (1.0f - 2.0f * st.padding_x);
+    float ay = cell.y + cell.h * st.padding_y;
+    float ah = cell.h * (1.0f - 2.0f * st.padding_y);
+    if (aw <= 0.5f || ah <= 0.5f) return false;
+    out[0] = (int)ax;
+    out[1] = g_ui->win_h - (int)(ay + ah + 0.5f);   /* flip Y for GL */
+    out[2] = (int)(aw + 0.5f);
+    out[3] = (int)(ah + 0.5f);
+    return out[2] > 0 && out[3] > 0;
+}
+
+/* One segment as a quad across the line's normal.  A zero-length segment draws
+ * nothing rather than a dot: it carries no direction, so it has no quad. */
+static void draw_segment(float x0, float y0, float x1, float y1,
+                         float half, uint32_t rgba) {
+    float dx = x1 - x0, dy = y1 - y0;
+    float len = sqrtf(dx * dx + dy * dy);
+    if (len < 1e-4f) return;
+    float nx = -dy / len * half;
+    float ny =  dx / len * half;
+    push_quad_pts(x0 + nx, y0 + ny, x1 + nx, y1 + ny,
+                  x0 - nx, y0 - ny, x1 - nx, y1 - ny,
+                  rgba, g_ui->white_tex, 1);
+}
+
+void aiml_ui_draw_line(float x0, float y0, float x1, float y1,
+                       float width, int32_t color) {
+    if (!g_ui || width <= 0.0f) return;
+    uint32_t rgba = style_rgba(color, cur_style().opacity);
+    /* push_scissor_cmd clones the last cmd, so there must be one. */
+    ensure_cmd(g_ui->white_tex, 1);
+    int sc[4];
+    bool clip = cell_clip_scissor(sc);
+    if (clip) push_scissor_cmd(sc);
+    draw_segment(x0, y0, x1, y1, lp(width) * 0.5f, rgba);
+    if (clip) { int clear[4] = {0,0,0,0}; push_scissor_cmd(clear); }
+}
+
+void aiml_ui_draw_polyline(void* pts_buf, float width, int32_t color) {
+    if (!g_ui || width <= 0.0f || !pts_buf) return;
+    AimlGLRawBuf* b = (AimlGLRawBuf*)pts_buf;
+    if (!b->data || b->size < 4) return;   /* fewer than two points: nothing */
+    int pt_count = b->size / 2;            /* a trailing odd float is ignored */
+    const float* p = (const float*)b->data;
+    uint32_t rgba = style_rgba(color, cur_style().opacity);
+    float half = lp(width) * 0.5f;
+    ensure_cmd(g_ui->white_tex, 1);
+    int sc[4];
+    bool clip = cell_clip_scissor(sc);
+    if (clip) push_scissor_cmd(sc);
+    for (int i = 0; i + 1 < pt_count; ++i)
+        draw_segment(p[2*i], p[2*i+1], p[2*i+2], p[2*i+3], half, rgba);
+    if (clip) { int clear[4] = {0,0,0,0}; push_scissor_cmd(clear); }
+}
 
 void aiml_ui_label(const char* text, void* preset) {
     if (!text || g_ui->cell_stack.empty()) return;
