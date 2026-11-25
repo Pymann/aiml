@@ -101,7 +101,8 @@ jobs:
           # test_gl_vfx (a real GL buffer bug) and test_layout_helpers (a test
           # that asserted behaviour it never exercised) stayed broken unnoticed.
           cmd="TEST_TIMEOUT=300 bash run_all_tests.sh --no-build"
-          if [ -n "${ONLY:-}" ]; then cmd="$cmd --only $ONLY"; fi
+          # Quoted: the pattern is an ERE, and `a|b` unquoted is a shell pipe inside `script -c`.
+          if [ -n "${ONLY:-}" ]; then cmd="$cmd --only $(printf '%q' "$ONLY")"; fi
           set +e
           xvfb-run -a script -qec "$cmd" /dev/null > corpus.log 2>&1
           rc=$?
