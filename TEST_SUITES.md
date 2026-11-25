@@ -100,6 +100,12 @@ are libraries imported by other tests, 3 need wasm, 4 need a peer process, 3 are
 manual-only. With no display and no TTY, 41 more would be skipped — that is what
 happens in CI (§4).
 
+**2026-11-25:** six of those seven were one bug, not missing chapters.
+`sys.exec` of an isolated bundle never called its start function
+(`aiml_isolated_exec`, fixed in `84e5a2b`), so `test_bundle_exec_semantics` and
+the five spec/62 pipeline tests left the register; a fresh CI checkout exposed it,
+where a developer's `logs/` still held the files an earlier run had written.
+
 ### Expected — acceptance targets written before the implementation
 
 These are red because the chapter they test is not implemented. They are the
@@ -113,13 +119,7 @@ respective chapter lands.
 
 | Test | Chapter | Why |
 |------|---------|-----|
-| `tests/test_pipeline_failure.aiml` | spec/62 | pipelines are `[PROPOSAL]` |
-| `tests/test_pipeline_graph.aiml` | spec/62 | — |
-| `tests/test_pipeline_lane_access.aiml` | spec/62 | — |
-| `tests/test_pipeline_parallel.aiml` | spec/62 | — |
-| `tests/test_pipeline_results.aiml` | spec/62 | — |
 | `tests/closures/run.sh` (16 negative cases) | spec/64 | `callable` is an unknown top-level key and `capture` an unknown operator — the feature does not exist in this build, so no negative case can be rejected *for the right reason* |
-| `tests/test_bundle_exec_semantics.aiml` | spec/29_1 | `sys.bundle` has no handler yet |
 
 <!-- expected-failures:end -->
 
