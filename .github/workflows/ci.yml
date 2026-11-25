@@ -94,6 +94,19 @@ jobs:
           echo "exit code $rc"
           test "$rc" -eq 42   # tests/test.aiml ends in sys.exit(42)
 
+      - name: Diagnose
+        if: always() && github.event.inputs.diagnose != ''
+        env:
+          DIAGNOSE: ${{ github.event.inputs.diagnose }}
+        run: |
+          mkdir -p logs
+          for f in $DIAGNOSE; do
+            echo "::group::$f"
+            out/aiml/aiml --log-level INFO "$f" 2>&1 | tail -n 300
+            echo "exit ${PIPESTATUS[0]}"
+            echo "::endgroup::"
+          done
+
       - name: Test corpus
         id: corpus
         env:
@@ -161,19 +174,6 @@ jobs:
       # used to run before the corpus, so a v* tag drafted a release and
       # uploaded an artifact while the tests had not been asked yet -- the one
       # build whose verification matters most was the one that published first.
-      - name: Diagnose
-        if: github.event.inputs.diagnose != ''
-        env:
-          DIAGNOSE: ${{ github.event.inputs.diagnose }}
-        run: |
-          mkdir -p logs
-          for f in $DIAGNOSE; do
-            echo "::group::$f"
-            out/aiml/aiml --log-level INFO "$f" 2>&1 | tail -n 300
-            echo "exit ${PIPESTATUS[0]}"
-            echo "::endgroup::"
-          done
-
       - name: Package
         run: |
           if [ -n "${{ github.event.inputs.release_tag }}" ]; then v="${{ github.event.inputs.release_tag }}"
