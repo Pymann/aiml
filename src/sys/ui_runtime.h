@@ -83,6 +83,15 @@ float aiml_ui_text_height  (void* preset);
 void aiml_ui_draw_line     (float x0, float y0, float x1, float y1,
                             float width, int32_t color);
 void aiml_ui_draw_polyline (void* pts_buf, float width, int32_t color);
+/* Text at a caller-chosen position; x/y is the TOP-LEFT of the line box, like every
+ * other draw_* coordinate.  preset may be NULL. */
+void aiml_ui_draw_text     (float x, float y, const char* text, int32_t color,
+                            void* preset);
+/* A filled rect at a caller-chosen position.  ui.rect fills the CELL; this fills what
+ * it is given, in window pixels -- no DPI scaling, unlike a line's width. */
+void aiml_ui_draw_rect     (float x, float y, float w, float h, int32_t color);
+/* A texture at a caller-chosen rect; x/y is its top-left, as for every draw_*. */
+void aiml_ui_draw_image    (float x, float y, float w, float h, void* tex);
 
 /* ── Interactive widgets ──────────────────────────────────────────────────── */
 

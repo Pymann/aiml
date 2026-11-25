@@ -12982,6 +12982,63 @@ void registerBuiltins(CompilerContext& ctx) {
                 ctx.builder.getVoidTy(), {p, f32, i32}), {pts, w, c});
             return nullptr; };
 
+        // ui.draw_text(x, y: f32, text: string, color: i32, preset: ui_label_style = null)
+        ui.builtinFuncs["draw_text"] = [](CompilerContext& ctx,
+            const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto* p   = llvm::PointerType::get(ctx.context, 0);
+            auto* f32 = ctx.builder.getFloatTy();
+            auto* i32 = ctx.builder.getInt32Ty();
+            auto  null = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(p));
+            auto farg = [&](int i) -> llvm::Value* {
+                if ((int)args.size() <= i) return llvm::ConstantFP::get(f32, 0.0);
+                return ctx.builder.CreateFPCast(
+                    static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[i])), f32); };
+            llvm::Value* t = args.size() < 3 ? (llvm::Value*)null
+                : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[2]));
+            llvm::Value* c = args.size() < 4 ? ctx.builder.getInt32(-1)
+                : ctx.builder.CreateZExtOrTrunc(
+                    static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[3])), i32);
+            llvm::Value* preset = args.size() < 5 ? (llvm::Value*)null
+                : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[4]));
+            ctx.builder.CreateCall(ctx.getFunction("aiml_ui_draw_text",
+                ctx.builder.getVoidTy(), {f32, f32, p, i32, p}),
+                {farg(0), farg(1), t, c, preset});
+            return nullptr; };
+
+        // ui.draw_rect(x, y, w, h: f32, color: i32)
+        ui.builtinFuncs["draw_rect"] = [](CompilerContext& ctx,
+            const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto* f32 = ctx.builder.getFloatTy();
+            auto* i32 = ctx.builder.getInt32Ty();
+            auto farg = [&](int i) -> llvm::Value* {
+                if ((int)args.size() <= i) return llvm::ConstantFP::get(f32, 0.0);
+                return ctx.builder.CreateFPCast(
+                    static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[i])), f32); };
+            llvm::Value* c = args.size() < 5 ? ctx.builder.getInt32(-1)
+                : ctx.builder.CreateZExtOrTrunc(
+                    static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[4])), i32);
+            ctx.builder.CreateCall(ctx.getFunction("aiml_ui_draw_rect",
+                ctx.builder.getVoidTy(), {f32, f32, f32, f32, i32}),
+                {farg(0), farg(1), farg(2), farg(3), c});
+            return nullptr; };
+
+        // ui.draw_image(x, y, w, h: f32, tex: gl_texture)
+        ui.builtinFuncs["draw_image"] = [](CompilerContext& ctx,
+            const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto* p   = llvm::PointerType::get(ctx.context, 0);
+            auto* f32 = ctx.builder.getFloatTy();
+            auto  null = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(p));
+            auto farg = [&](int i) -> llvm::Value* {
+                if ((int)args.size() <= i) return llvm::ConstantFP::get(f32, 0.0);
+                return ctx.builder.CreateFPCast(
+                    static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[i])), f32); };
+            llvm::Value* tex = args.size() < 5 ? (llvm::Value*)null
+                : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[4]));
+            ctx.builder.CreateCall(ctx.getFunction("aiml_ui_draw_image",
+                ctx.builder.getVoidTy(), {f32, f32, f32, f32, p}),
+                {farg(0), farg(1), farg(2), farg(3), tex});
+            return nullptr; };
+
         // ui.rect_rounded(color: i32, radius: f32, preset: ui_panel_style = null)
         ui.builtinFuncs["rect_rounded"] = [](CompilerContext& ctx,
             const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
