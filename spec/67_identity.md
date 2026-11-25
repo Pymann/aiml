@@ -198,6 +198,11 @@ libraries `ldap lber xmlsec1-openssl xmlsec1 xml2 xslt`.  An AOT program
 linked against `libaiml.so` needs the same libraries at run time (they are
 `NEEDED` entries of `libaiml.so`).
 
+`base64` needs no library and is part of the wasm32 runtime too
+(`exodus-wasm-runtime.json`), so a browser client can build an HTTP Basic
+`Authorization` header (kontor's web UI does).  `ldap` and `saml` are native
+only.
+
 ## 7. Tests
 
 | Test | What |
