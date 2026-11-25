@@ -49,7 +49,12 @@
         "__exodus_cache/apt/libxext-dev/amd64/2:1.3.4-1build2/payload/usr/include",
         "__exodus_cache/apt/libxfixes-dev/amd64/1:6.0.0-2build1/payload/usr/include",
         "__exodus_cache/apt/x11proto-dev/all/2023.2-1/payload/usr/include",
-        "__exodus_cache/apt/liblzma-dev/amd64/5.6.1+really5.4.5-1ubuntu0.2/payload/usr/include"
+        "__exodus_cache/apt/liblzma-dev/amd64/5.6.1+really5.4.5-1ubuntu0.2/payload/usr/include",
+        "__exodus_cache/apt/libxmlsec1-dev/amd64/1.2.39-5build2/payload/usr/include",
+        "__exodus_cache/apt/libxml2-dev/amd64/2.9.14+dfsg-1.3ubuntu3.10/payload/usr/include",
+        "__exodus_cache/apt/libzim-dev/amd64/8.2.1-2build1/payload/usr/include",
+        "__exodus_cache/apt/libsharpyuv-dev/amd64/1.3.2-0.4build3/payload/usr/include",
+        "__exodus_cache/apt/liblzma-dev/amd64/5.6.1+really5.4.5-1ubuntu0.4/payload/usr/include"
     ],
     "sources": [
         "compiler.cpp",
@@ -128,7 +133,7 @@
             "__exodus_cache/apt/libsharpyuv0/amd64/1.3.2-0.4build3/payload/usr/lib/x86_64-linux-gnu",
             "__exodus_cache/apt/libyaml-cpp-dev/amd64/0.8.0+dfsg-6build1/payload/usr/lib/x86_64-linux-gnu",
             "__exodus_cache/apt/llvm-18-dev/amd64/1:18.1.3-1ubuntu1/payload/usr/lib/llvm-18/lib",
-            "__exodus_cache/apt/libssl-dev/amd64/3.0.13-0ubuntu3.7/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libssl-dev/amd64/3.0.13-0ubuntu3.16/payload/usr/lib/x86_64-linux-gnu",
             "__exodus_cache/apt/libc6-dev/amd64/2.39-0ubuntu8.7/payload/usr/lib/x86_64-linux-gnu",
             "__exodus_cache/apt/libllvm18/amd64/1:18.1.3-1ubuntu1/payload/usr/lib/llvm-18/lib",
             "__exodus_cache/apt/libllvm18/amd64/1:18.1.3-1ubuntu1/payload/usr/lib/x86_64-linux-gnu",
@@ -144,8 +149,8 @@
             "__exodus_cache/apt/libgl1/amd64/1.7.0-1build1/payload/usr/lib/x86_64-linux-gnu",
             "__exodus_cache/apt/libglfw3/amd64/3.3.10-1build1/payload/usr/lib/x86_64-linux-gnu",
             "__exodus_cache/apt/libglfw3-dev/amd64/3.3.10-1build1/payload/usr/lib/x86_64-linux-gnu",
-            "__exodus_cache/apt/libpng-dev/amd64/1.6.43-5ubuntu0.5/payload/usr/lib/x86_64-linux-gnu",
-            "__exodus_cache/apt/libpng16-16t64/amd64/1.6.43-5ubuntu0.5/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libpng-dev/amd64/1.6.43-5ubuntu0.7/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libpng16-16t64/amd64/1.6.43-5ubuntu0.7/payload/usr/lib/x86_64-linux-gnu",
             "__exodus_cache/apt/libglew-dev/amd64/2.2.0-4build1/payload/usr/lib/x86_64-linux-gnu",
             "__exodus_cache/apt/libglew2.2/amd64/2.2.0-4build1/payload/usr/lib/x86_64-linux-gnu",
             "__exodus_cache/apt/libopenblas-serial-dev/amd64/0.3.26+ds-1/payload/usr/lib/x86_64-linux-gnu",
@@ -198,13 +203,55 @@
             "__exodus_cache/apt/libxfixes-dev/amd64/1:6.0.0-2build1/payload/usr/lib/x86_64-linux-gnu",
             "__exodus_cache/apt/libxfixes3/amd64/1:6.0.0-2build1/payload/usr/lib/x86_64-linux-gnu",
             "__exodus_cache/apt/libxext-dev/amd64/2:1.3.4-1build2/payload/usr/lib/x86_64-linux-gnu",
-            "__exodus_cache/apt/liblzma-dev/amd64/5.6.1+really5.4.5-1ubuntu0.2/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/liblzma-dev/amd64/5.6.1+really5.4.5-1ubuntu0.4/payload/usr/lib/x86_64-linux-gnu",
             "__exodus_cache/apt/libsharpyuv-dev/amd64/1.3.2-0.4build3/payload/usr/lib/x86_64-linux-gnu",
             "__exodus_cache/apt/libyaml-cpp0.8/amd64/0.8.0+dfsg-6build1/payload/usr/lib/x86_64-linux-gnu",
             "__exodus_cache/apt/libbrotli1/amd64/1.1.0-2build2/payload/usr/lib/x86_64-linux-gnu",
             "__exodus_cache/apt/libzstd1/amd64/1.5.5+dfsg2-2build1.1/payload/usr/lib/x86_64-linux-gnu",
-            "__exodus_cache/apt/liblzma5/amd64/5.6.1+really5.4.5-1ubuntu0.2/payload/usr/lib/x86_64-linux-gnu",
-            "__exodus_cache/apt/liblz4-1/amd64/1.9.4-1build1.1/payload/usr/lib/x86_64-linux-gnu"
+            "__exodus_cache/apt/liblzma5/amd64/5.6.1+really5.4.5-1ubuntu0.4/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/liblz4-1/amd64/1.9.4-1build1.1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libnspr4/amd64/2:4.35-1.1build1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libsqlite3-0/amd64/3.45.1-1ubuntu2.8/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libnss3/amd64/2:3.98-1ubuntu0.3/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libxmlsec1t64-nss/amd64/1.2.39-5build2/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libicu74/amd64/74.2-1ubuntu3.1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libgpg-error0/amd64/1.47-3build2.1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libgcrypt20/amd64/1.10.3-2ubuntu0.2/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libffi8/amd64/3.4.6-1build1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libdb5.3t64/amd64/5.3.28+dfsg2-7/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libzim-dev/amd64/8.2.1-2build1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libzim8/amd64/8.2.1-2build1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libuuid1/amd64/2.39.3-9ubuntu6.6/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libxapian30/amd64/1.4.22-1build1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libtinfo6/amd64/6.4+20240113-1ubuntu2.2/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libedit2/amd64/3.1-20230828-1build1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libbz2-1.0/amd64/1.0.8-5.1ubuntu0.1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libglvnd0/amd64/1.7.0-1build1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libdrm2/amd64/2.4.125-1ubuntu0.1~24.04.2/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libexpat1/amd64/2.6.1-2ubuntu0.6/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libx11-xcb1/amd64/2:1.8.7-1ubuntu0.1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libxcb-dri3-0/amd64/1.15-1ubuntu2/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libxcb-glx0/amd64/1.15-1ubuntu2/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libxcb-present0/amd64/1.15-1ubuntu2/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libxcb-shm0/amd64/1.15-1ubuntu2/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libxcb-xfixes0/amd64/1.15-1ubuntu2/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libxxf86vm1/amd64/1:1.1.4-1build4/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libdrm-amdgpu1/amd64/2.4.125-1ubuntu0.1~24.04.2/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libpciaccess0/amd64/0.17-3ubuntu0.24.04.3/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libdrm-intel1/amd64/2.4.125-1ubuntu0.1~24.04.2/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libelf1t64/amd64/0.190-1.1ubuntu0.1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libllvm20/amd64/1:20.1.2-0ubuntu1~24.04.3/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libsensors5/amd64/1:3.6.0-9build1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libxcb-randr0/amd64/1.15-1ubuntu2/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libxcb-sync1/amd64/1.15-1ubuntu2/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libxshmfence1/amd64/1.3-1build5/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/mesa-libgallium/amd64/25.2.8-0ubuntu0.24.04.2/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libgbm1/amd64/25.2.8-0ubuntu0.24.04.2/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libvulkan1/amd64/1.3.275.0-1build1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libgl1-mesa-dri/amd64/25.2.8-0ubuntu0.24.04.2/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libglx-mesa0/amd64/25.2.8-0ubuntu0.24.04.2/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libglx0/amd64/1.7.0-1build1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libgfortran5/amd64/14.2.0-4ubuntu2~24.04.1/payload/usr/lib/x86_64-linux-gnu"
         ],
         "rpath": true
     },
@@ -582,10 +629,10 @@
         },
         {
             "name": "liblzma-dev",
-            "version": "5.6.1+really5.4.5-1ubuntu0.2",
+            "version": "5.6.1+really5.4.5-1ubuntu0.4",
             "arch": "amd64",
             "required": true,
-            "digest": "f32c9c79c0d9eb88a3267fea803b4ae9f295c9e2a5cc69f030a298d8a238fa79"
+            "digest": "a6af1ee2bd2d5c532465734f474d03d8e08977c881f10898eda0c88b70ff2e5d"
         },
         {
             "name": "libyaml-cpp0.8",
@@ -617,10 +664,10 @@
         },
         {
             "name": "liblzma5",
-            "version": "5.6.1+really5.4.5-1ubuntu0.2",
+            "version": "5.6.1+really5.4.5-1ubuntu0.4",
             "arch": "amd64",
             "required": true,
-            "digest": "4c31cc76391ca47dbb4585edc740728f43fe7b6b090f5b3947fc8072db698aca"
+            "digest": "5bcf5da2339331e21d3f42a831e82c61c54c6b2f29804010e8d59abd0ae52167"
         },
         {
             "name": "liblz4-1",
@@ -652,10 +699,10 @@
         },
         {
             "name": "libpng16-16t64",
-            "version": "1.6.43-5ubuntu0.5",
+            "version": "1.6.43-5ubuntu0.7",
             "arch": "amd64",
             "required": true,
-            "digest": "074c954a7a01069c3b3db9146911666f6ac75c1277e034eba901ee274554dadc"
+            "digest": "863d6abb089b2820ceba98e6b18f06eaacc55f9b05827001e7b4021a9a7b246c"
         },
         {
             "name": "libwebp7",
@@ -684,6 +731,307 @@
             "arch": "amd64",
             "required": true,
             "digest": "18bc35bb2cb8a20db1774400386e49f257ba46b4935b8ab233c42055e349b16a"
+        },
+        {
+            "name": "libxmlsec1t64-nss",
+            "version": "1.2.39-5build2",
+            "arch": "amd64",
+            "required": true,
+            "digest": "233651eb2d56a207934efa740c05af77db0ebbab4b1fc55c81400d0638b89fda"
+        },
+        {
+            "name": "libnspr4",
+            "version": "2:4.35-1.1build1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "e579e72d091f6c7a13f5a756c31065b15aae5b81840d61b069355aa2283c07b4"
+        },
+        {
+            "name": "libnss3",
+            "version": "2:3.98-1ubuntu0.3",
+            "arch": "amd64",
+            "required": true,
+            "digest": "e11fdf8c09a068d0f0c3fd90ed971253dfed7227cc20d3d487fd615d4771f1bb"
+        },
+        {
+            "name": "libsqlite3-0",
+            "version": "3.45.1-1ubuntu2.8",
+            "arch": "amd64",
+            "required": true,
+            "digest": "b1190bb72359f5fcc47406aa46065eaf4f1ca208085c51224a52b04bedc0b4bb"
+        },
+        {
+            "name": "libicu74",
+            "version": "74.2-1ubuntu3.1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "c9a70989678660eed9a1e904c74fa043da8bec8e2036856fc16e31ced79b04f8"
+        },
+        {
+            "name": "libgcrypt20",
+            "version": "1.10.3-2ubuntu0.2",
+            "arch": "amd64",
+            "required": true,
+            "digest": "957b9eeaa83cf6f2d5d5d76dbb8aa31d3297e6781d8a02fa08dcc897ae650a0b"
+        },
+        {
+            "name": "libgpg-error0",
+            "version": "1.47-3build2.1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "93654ee8180a73a0363f25c51dc673d67cbabcbecd164187b8a2deb54d007aef"
+        },
+        {
+            "name": "libffi8",
+            "version": "3.4.6-1build1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "637e6a7744de08cd331a41f4efd0d24e6ea9064843dea9d1c6ca87bdb5f038a2"
+        },
+        {
+            "name": "libdb5.3t64",
+            "version": "5.3.28+dfsg2-7",
+            "arch": "amd64",
+            "required": true,
+            "digest": "a78a25c8fad8fdd0b7bc6b297da5d5685579be1e57732aa47870830e4a13161e"
+        },
+        {
+            "name": "libuuid1",
+            "version": "2.39.3-9ubuntu6.6",
+            "arch": "amd64",
+            "required": true,
+            "digest": "7e2992d3a79fc05514dc5966558ee9c66a7214a47edf2a36017b9e2777528665"
+        },
+        {
+            "name": "xorg-sgml-doctools",
+            "version": "1:1.11-1.1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "277f662c6d94606c22078f2af82ac1b6e01386d5a4dec6ca7487bca4c5b23c07"
+        },
+        {
+            "name": "libedit2",
+            "version": "3.1-20230828-1build1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "3afbc8ddf835049dd4d88275b9d13680e4c4cdd59e191cbd63424152cc08e00e"
+        },
+        {
+            "name": "libtinfo6",
+            "version": "6.4+20240113-1ubuntu2.2",
+            "arch": "amd64",
+            "required": true,
+            "digest": "b67a6df2bdab61d273eabebd208bb6a3fb12618a390a067e1ee305a409ff03d9"
+        },
+        {
+            "name": "libbz2-1.0",
+            "version": "1.0.8-5.1ubuntu0.1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "36ee08b00b1ee5018b2fce02881b7d2d73c9b4e32990bde3388400d86c48126a"
+        },
+        {
+            "name": "libgl1",
+            "version": "1.7.0-1build1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "e2b2fadeb883f073b566ad1d7874f6702397514d258473e96152a89d4d502a09"
+        },
+        {
+            "name": "libglvnd0",
+            "version": "1.7.0-1build1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "33f5e07c74f73c2bfb44086ae0f9e6da52acd6c104d30ffe8fd768d8253d5e82"
+        },
+        {
+            "name": "libglx0",
+            "version": "1.7.0-1build1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "aa4953182f30abde90cb5b072e83d7286b557b325769b8686196a7bd396d8795"
+        },
+        {
+            "name": "libglx-mesa0",
+            "version": "25.2.8-0ubuntu0.24.04.2",
+            "arch": "amd64",
+            "required": true,
+            "digest": "83ff69f8d68c073efd1e1ea66e5709562b677d0e3e17b8bcd65850cab887c4f6"
+        },
+        {
+            "name": "libdrm2",
+            "version": "2.4.125-1ubuntu0.1~24.04.2",
+            "arch": "amd64",
+            "required": true,
+            "digest": "4d3e858dd57be617c49d87c5ddcdb35df744a4f0a559981256ae2ba174718584"
+        },
+        {
+            "name": "libdrm-common",
+            "version": "2.4.125-1ubuntu0.1~24.04.2",
+            "arch": "amd64",
+            "required": true,
+            "digest": "0b60996bc18fa1545e60a47bb0fe1a7f360ec06fe62ba35fb8d8ba2a54e62166"
+        },
+        {
+            "name": "libexpat1",
+            "version": "2.6.1-2ubuntu0.6",
+            "arch": "amd64",
+            "required": true,
+            "digest": "494b8e672f722130c6bca6a7bc4cc31a43ca891a31d60d868bfdd699a3c20b13"
+        },
+        {
+            "name": "libx11-xcb1",
+            "version": "2:1.8.7-1ubuntu0.1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "5ce7093e58aaaf753ed0904351a4e07f209e0c282ee8ef4f5f7988d0b40dccc1"
+        },
+        {
+            "name": "libxcb-dri3-0",
+            "version": "1.15-1ubuntu2",
+            "arch": "amd64",
+            "required": true,
+            "digest": "3d3d0e95e56ae16010a84883196b8153cba62d6831f9aaee2a68c46f20c7c004"
+        },
+        {
+            "name": "libxcb-glx0",
+            "version": "1.15-1ubuntu2",
+            "arch": "amd64",
+            "required": true,
+            "digest": "d07cde26c70fe92df7c327928371e495cc4570fed2d6518758a5db5715cb34c1"
+        },
+        {
+            "name": "libxcb-present0",
+            "version": "1.15-1ubuntu2",
+            "arch": "amd64",
+            "required": true,
+            "digest": "2e36e6557e87dbfd64df3143cbf81a4f75c3447501a545b4730511d228b0dd17"
+        },
+        {
+            "name": "libxcb-shm0",
+            "version": "1.15-1ubuntu2",
+            "arch": "amd64",
+            "required": true,
+            "digest": "229d1280d459f1ba44c22939d3f9b61d9d20932d9a646b3fe4ce50be4cdf2325"
+        },
+        {
+            "name": "libxcb-xfixes0",
+            "version": "1.15-1ubuntu2",
+            "arch": "amd64",
+            "required": true,
+            "digest": "0b2ab64af92a71e3d1a35e3c819880ee28d04bfac81360df68ae8d8e9663ebd2"
+        },
+        {
+            "name": "libxxf86vm1",
+            "version": "1:1.1.4-1build4",
+            "arch": "amd64",
+            "required": true,
+            "digest": "48b2799f52b86505d2bc91dcb1bfa6536545635b9849cb693d274d934116a8da"
+        },
+        {
+            "name": "mesa-libgallium",
+            "version": "25.2.8-0ubuntu0.24.04.2",
+            "arch": "amd64",
+            "required": true,
+            "digest": "e46e42e305339765f51f994543cef2a8bf4a7d9ab7004161db1a6d1f291694de"
+        },
+        {
+            "name": "libdrm-amdgpu1",
+            "version": "2.4.125-1ubuntu0.1~24.04.2",
+            "arch": "amd64",
+            "required": true,
+            "digest": "aa29b7898bae596bf07e55ba178cf8d5ea698fe83688e1b34520d86010251a7a"
+        },
+        {
+            "name": "libdrm-intel1",
+            "version": "2.4.125-1ubuntu0.1~24.04.2",
+            "arch": "amd64",
+            "required": true,
+            "digest": "847195765b9ef7e7886677aeae9987aa54e496758b4e6e5a4ed2cb580b252244"
+        },
+        {
+            "name": "libpciaccess0",
+            "version": "0.17-3ubuntu0.24.04.3",
+            "arch": "amd64",
+            "required": true,
+            "digest": "87a3b1c2a09f54d229e5e1f5424adc806e8f99bbb8aa8c8dea114b727f7a5a96"
+        },
+        {
+            "name": "libelf1t64",
+            "version": "0.190-1.1ubuntu0.1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "b4aee123a37472d213647594b4f7d4a0d13615b0ca2a6fd33926b768d6b232c2"
+        },
+        {
+            "name": "libllvm20",
+            "version": "1:20.1.2-0ubuntu1~24.04.3",
+            "arch": "amd64",
+            "required": true,
+            "digest": "f018e71c72c7a4742fb1aff9dc98b45586f42e6ea464d4918af7e3772b7f0658"
+        },
+        {
+            "name": "libsensors5",
+            "version": "1:3.6.0-9build1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "515ed1fbe2bc99926c44fe10b1beb9c3510068c344adda334303098d669ba1e5"
+        },
+        {
+            "name": "libsensors-config",
+            "version": "1:3.6.0-9build1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "148103a436fd273dabfe0fe41dc54873df46227b59b2c7ac7339d7e2ddfd033b"
+        },
+        {
+            "name": "libxcb-randr0",
+            "version": "1.15-1ubuntu2",
+            "arch": "amd64",
+            "required": true,
+            "digest": "b5cb519823a05a617b543dc9b6a9289b7648b20048244abe021caa706309835a"
+        },
+        {
+            "name": "libxcb-sync1",
+            "version": "1.15-1ubuntu2",
+            "arch": "amd64",
+            "required": true,
+            "digest": "14286795a258593259923619073e50c15345673befae2733f7b0577b07359aa8"
+        },
+        {
+            "name": "libxshmfence1",
+            "version": "1.3-1build5",
+            "arch": "amd64",
+            "required": true,
+            "digest": "bc6de4bfaf9050a8ba83d4bcfb114131b081084a7972c03417f8523d52b5c742"
+        },
+        {
+            "name": "libgl1-mesa-dri",
+            "version": "25.2.8-0ubuntu0.24.04.2",
+            "arch": "amd64",
+            "required": true,
+            "digest": "cb46b5d0cdaa9174b7f5362ead3f794d1e3674fcdfb9631950216f5acc9c591d"
+        },
+        {
+            "name": "libgbm1",
+            "version": "25.2.8-0ubuntu0.24.04.2",
+            "arch": "amd64",
+            "required": true,
+            "digest": "1c0b8daf0130d68de428334ce6d1e11bd11f7369bf9099bbc65ac88117336dc3"
+        },
+        {
+            "name": "libvulkan1",
+            "version": "1.3.275.0-1build1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "ccf4fe8f4461442f27ea2494c7ae650b60bd396fec2688b0c44a27d66a222f74"
+        },
+        {
+            "name": "libgfortran5",
+            "version": "14.2.0-4ubuntu2~24.04.1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "2b05896c477275ad3473bb63a5ac5a5b8a7e4a6ad6ed7cb23c442ccd1abc28f5"
         }
     ]
 }
