@@ -98,11 +98,12 @@ jobs:
         if: always() && github.event.inputs.diagnose != ''
         env:
           DIAGNOSE: ${{ github.event.inputs.diagnose }}
+          DIAGNOSE_LEVEL: DEBUG
         run: |
           mkdir -p logs
           for f in $DIAGNOSE; do
             echo "::group::$f"
-            out/aiml/aiml --log-level INFO "$f" 2>&1 | tail -n 300
+            out/aiml/aiml --log-level "${DIAGNOSE_LEVEL:-INFO}" "$f" 2>&1 | grep -v "no owner" | tail -n 400
             echo "exit ${PIPESTATUS[0]}"
             echo "::endgroup::"
           done
