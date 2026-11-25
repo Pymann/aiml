@@ -122,6 +122,7 @@ aiml venv <dir> install <name> --git <url> [--ref <tag|branch|commit>]
 aiml venv <dir> install <name> --path <dir>
 aiml venv <dir> install <name> --kontor <url> [--version <v>]      (§6.1)
 aiml venv <dir> install --all --kontor <url>                       (§6.1, F68-66)
+aiml venv <dir> publish [<name>] [--path <dir>] --kontor <url>     (§6.3)
 aiml venv <dir> list
 aiml venv <dir> remove <name>
 ```
@@ -276,3 +277,51 @@ wrong `name`, a failing build, a missing `git`; nothing fetched into the venv). 
 kontor: a version named and a version found through the graph, the digest in the record, the
 no-op on the same digest, `--all` with a project that is no tool, a 404 and an archive with two
 top-level entries.
+
+### 6.3 Publishing to kontor — `aiml venv <dir> publish` (decided 2026-11-25)
+
+The way into kontor for what §6.1 takes out of it.  Before, a tool went there through a script of
+its own repository (ufo `scripts/publish.sh`, cosmos `tools/kontor_publish.sh`); every aiml tool
+can now be published the same way, from the venv it is built with, without a script in between.
+
+```
+KONTOR_TOKEN=… aiml venv <dir> publish [<name>] [--path <repo>] --kontor <url>
+```
+
+- **F68-70** **The repository says what it is**, in the same `aiml.tool.json` as for `install`
+  (F68-54); for publishing, `name` **and** `version` are required.  `--path` is the repository's
+  root (default: the current directory).  A `<name>` given must be the manifest's.
+- **F68-71** **Two PUTs, in kontor's order.**  `PUT <url>/exodus/<name>/<version>/exodus.json`,
+  then `PUT …/package` (kontor takes no package without a manifest).  The manifest is the
+  repository's `exodus.json` where there is one, otherwise its `aiml.tool.json` (cosmos: many
+  configurations, no `exodus.json`).  Where both exist they must say the same name and version —
+  kontor files the package under the manifest's, `install` checks the archive's.  The requests
+  are the runtime's own HTTP client (F68-62), TLS as there: a private CA via `AIML_WSS_CA`.
+- **F68-72** **The package is what git tracks, committed.**  `git ls-files` decides what goes in
+  (build trees, caches and run data stay out without a list of exclusions); a repository with
+  uncommitted changes to tracked files is **refused**, because a published version cannot be
+  replaced (F68-73) and must be something one can name afterwards.  `aiml.tool.json` and the
+  manifest must be tracked.  The archive unpacks to **exactly one directory** `<name>-<version>/`
+  (F68-62) and is **reproducible** — sorted, mtime 0, owner 0:0, `gzip -n` — so the same commit
+  gives the same digest on every machine.  It is staged under `$AIML_CACHE/venv_publish/`, never in
+  the venv (F68-52).  `git`, `tar` and `gzip` come from `PATH`; missing → exit 1, named.
+- **F68-73** **A published version is not overwritten.**  Before anything is sent, `publish` asks
+  for `…/package`; `200` ends it („already in kontor — raise the version").  kontor enforces the
+  same on its side: once a version's package is there, a PUT of its manifest or package is `409`
+  (kontor `README`), so neither a second `publish` nor a hand-made `curl` replaces bytes that
+  somebody may have installed.  A half publish (manifest there, package not) can be repeated.
+- **F68-74** **The token.**  `$KONTOR_TOKEN`, a kontor token with the role `writer`, becomes the
+  `Authorization: Bearer` header as in F68-63 — never an argument.  Without one, `publish` refuses
+  before it touches the network; a `401`/`403` is reported with kontor's own message.
+- **F68-75** **What this is not.**  No build before the upload (that is CI's business and the
+  install's, F68-64), no signature, no automatic publish from CI (decided 2026-11-25: by hand for
+  now).  Reading is the instance's affair: a kontor whose `anonymous` role is `none` needs
+  `$KONTOR_TOKEN` for `install --kontor` too (F68-63); a tool without a token is installed with
+  `--git`.
+
+Tests: `tests/venv/run.sh` §6.3 against `tests/venv/kontor_stub.aiml`, which also takes kontor's
+two PUTs (with a token, and `409` for a published version): no token, a wrong token, a wrong name,
+`exodus.json` and `aiml.tool.json` disagreeing, uncommitted changes, the files where `install`
+looks, one tree of tracked files only, the digest in the line, nothing staged in the venv, a second
+publish refused with the bytes unchanged, the next version beside it, and an install of what was
+published.

@@ -28,6 +28,7 @@ void*   aiml_http_new_request(const char* method, void* url);
 void*   aiml_http_client_get_headers(void* client);
 void    aiml_http_map_put(void* map, const char* key, const char* val);
 void    aiml_http_client_set_download_to(void* client, const char* path);
+void    aiml_http_client_set_body_file(void* client, const char* path);
 void    aiml_http_client_set_timeout(void* client, int32_t timeout_ms);
 void*   aiml_http_client_send(void* client);
 void    aiml_http_client_free(void* client);
@@ -131,6 +132,7 @@ int usage() {
                  "       aiml venv <dir> install <name> (--git <url> [--ref <r>] | --path <dir>\n"
                  "                                       | --kontor <url> [--version <v>])\n"
                  "       aiml venv <dir> install --all --kontor <url>\n"
+                 "       aiml venv <dir> publish [<name>] [--path <dir>] --kontor <url>\n"
                  "       aiml venv <dir> list | remove <name>" << std::endl;
     return 1;
 }
@@ -541,19 +543,24 @@ int cmdRemove(const fs::path& root, const std::string& name) {
 
 // ── §6.1: kontor as a source ──────────────────────────────────────────────
 
-// One GET.  `toFile` empty: the body comes back in `body` (a manifest, the
-// graph); otherwise it is streamed into that file (the package, binary).
+// One request.  `bodyFile` non-empty: the request body is streamed from that
+// file (a PUT of §6.3).  `toFile` empty: the answer's body comes back in `body`;
+// otherwise a 2xx body is streamed into that file (the package, binary) and
+// any other answer stays in `body`.  `status` is the HTTP status, 0 when there
+// was no answer at all (then `err` says why and the call returns false).
 // F68-63: a token goes into the request, never onto a command line.
-bool httpGet(const std::string& url, const fs::path& toFile, std::string& body,
-             std::string& err) {
+bool httpCall(const std::string& method, const std::string& url, const fs::path& bodyFile,
+              const fs::path& toFile, int32_t& status, std::string& body, std::string& err) {
+    status = 0;
     void* u = aiml_url_parse(url.c_str());
     if (!u) { err = "not a URL: " + url; return false; }
-    void* req = aiml_http_new_request("GET", u);
+    void* req = aiml_http_new_request(method.c_str(), u);
     if (!req) { err = "cannot build a request for " + url; return false; }
     const char* token = std::getenv("KONTOR_TOKEN");
     if (token && *token)
         aiml_http_map_put(aiml_http_client_get_headers(req), "Authorization",
                           (std::string("Bearer ") + token).c_str());
+    if (!bodyFile.empty()) aiml_http_client_set_body_file(req, bodyFile.string().c_str());
     if (!toFile.empty()) aiml_http_client_set_download_to(req, toFile.string().c_str());
     aiml_http_client_set_timeout(req, 120000);
     void* resp = aiml_http_client_send(req);
@@ -563,19 +570,25 @@ bool httpGet(const std::string& url, const fs::path& toFile, std::string& body,
         aiml_http_client_free(req);
         return false;
     }
-    int32_t status = aiml_http_resp_status(resp);
-    if (status != 200) {
-        err = url + ": HTTP " + std::to_string(status);
-        aiml_http_resp_free(resp);
-        aiml_http_client_free(req);
-        return false;
-    }
-    if (toFile.empty()) {
-        char* text = aiml_http_resp_body(resp);
-        body = text ? text : "";
-    }
+    status = aiml_http_resp_status(resp);
+    char* text = aiml_http_resp_body(resp);
+    body = text ? text : "";
     aiml_http_resp_free(resp);
     aiml_http_client_free(req);
+    return true;
+}
+
+// One GET that must be answered with 200.
+bool httpGet(const std::string& url, const fs::path& toFile, std::string& body,
+             std::string& err) {
+    int32_t status = 0;
+    std::string answer;
+    if (!httpCall("GET", url, {}, toFile, status, answer, err)) return false;
+    if (status != 200) {
+        err = url + ": HTTP " + std::to_string(status);
+        return false;
+    }
+    if (toFile.empty()) body = answer;
     return true;
 }
 
@@ -884,6 +897,169 @@ int cmdInstall(const fs::path& root, const std::string& name, const std::string&
     return 0;
 }
 
+// ── §6.3: publishing a tool to kontor ─────────────────────────────────────
+//
+// The counterpart of `install --kontor`: what `install` fetches from
+// /exodus/<name>/<version>/ is put there by `publish`, in the shape install
+// expects (F68-62) — so a tool goes from one venv into kontor and out into the
+// next without a script in between.
+
+// A field of a JSON manifest, "" when it is missing or no scalar.
+std::string jsonField(const fs::path& file, const char* key) {
+    try {
+        YAML::Node doc = YAML::LoadFile(file.string());
+        if (doc[key] && doc[key].IsScalar()) return doc[key].as<std::string>();
+    } catch (const std::exception&) {}
+    return "";
+}
+
+// The `message` kontor puts in a JSON error, else the body as it came.
+std::string kontorMessage(const std::string& body) {
+    try {
+        YAML::Node doc = YAML::Load(body);
+        if (doc.IsMap() && doc["error"] && doc["error"].IsScalar()) return doc["error"].as<std::string>();
+        if (doc.IsMap() && doc["message"] && doc["message"].IsScalar()) return doc["message"].as<std::string>();
+    } catch (const std::exception&) {}
+    return body.size() > 200 ? body.substr(0, 200) + "…" : body;
+}
+
+// F68-72: what git tracks, in the working tree's state, as <stage>/<dir>/.
+bool stageTracked(const fs::path& repo, const fs::path& stage, std::vector<std::string>& files,
+                  std::string& err) {
+    std::string out;
+    int rc = runProg({"git", "-C", repo.string(), "ls-files", "-z"}, {}, {}, &out);
+    if (rc == 127) { err = "git is not on PATH (F68-51)"; return false; }
+    if (rc != 0) {
+        err = repo.string() + " is no git checkout — publish packs what git tracks (F68-72)";
+        return false;
+    }
+    std::error_code ec;
+    size_t at = 0;
+    while (at < out.size()) {
+        size_t end = out.find('\0', at);
+        if (end == std::string::npos) end = out.size();
+        std::string rel = out.substr(at, end - at);
+        at = end + 1;
+        if (rel.empty()) continue;
+        fs::path from = repo / rel, to = stage / rel;
+        fs::file_status st = fs::symlink_status(from, ec);
+        if (!fs::exists(st)) continue;            // deleted in the tree, not yet in git
+        fs::create_directories(to.parent_path(), ec);
+        if (fs::is_symlink(st)) fs::copy_symlink(from, to, ec);
+        else if (fs::is_regular_file(st)) fs::copy_file(from, to, fs::copy_options::overwrite_existing, ec);
+        else continue;                            // a submodule: not ours to pack
+        if (ec) { err = "cannot stage " + rel + ": " + ec.message(); return false; }
+        files.push_back(rel);
+    }
+    return true;
+}
+
+int cmdPublish(const std::string& wantName, const std::string& pathArg, const std::string& kontorUrl) {
+    if (kontorUrl.empty()) return fail("publish needs a target: --kontor <url> (spec/68 §6.3)");
+    const char* token = std::getenv("KONTOR_TOKEN");
+    if (!token || !*token)
+        return fail("publish needs $KONTOR_TOKEN, a kontor token with the role writer (F68-74)");
+
+    std::error_code ec;
+    fs::path repo = fs::weakly_canonical(fs::absolute(pathArg.empty() ? "." : pathArg), ec);
+    if (ec || !fs::is_directory(repo, ec)) return fail("--path " + pathArg + ": no such directory");
+
+    // F68-70: aiml.tool.json says what the tool is, as it does for install.
+    Manifest man;
+    std::string err;
+    if (!readManifest(repo, man, err)) return fail(err);
+    if (man.name.empty() || man.version.empty())
+        return fail((repo / "aiml.tool.json").string() + " must name both name and version to be published");
+    if (!wantName.empty() && wantName != man.name)
+        return fail("aiml.tool.json names '" + man.name + "', not '" + wantName + "'");
+
+    // F68-71: the manifest kontor keeps — exodus.json where there is one, and
+    // it must say the same name and version as aiml.tool.json.
+    fs::path manifest = repo / "exodus.json";
+    if (fs::is_regular_file(manifest, ec)) {
+        std::string en = jsonField(manifest, "name"), ev = jsonField(manifest, "version");
+        if (en != man.name || ev != man.version)
+            return fail("exodus.json says " + en + "@" + ev + ", aiml.tool.json says " +
+                        man.name + "@" + man.version + " — one version, one name");
+    } else {
+        manifest = repo / "aiml.tool.json";
+    }
+
+    // F68-72: a committed state.  A version is published once (F68-73), so
+    // what goes out has to be something that can be named afterwards.
+    std::string dirty;
+    int rc = runProg({"git", "-C", repo.string(), "status", "--porcelain", "--untracked-files=no"},
+                     {}, {}, &dirty);
+    if (rc == 127) return fail("git is not on PATH (F68-51)");
+    if (rc != 0) return fail(repo.string() + " is no git checkout — publish packs what git tracks (F68-72)");
+    if (!dirty.empty())
+        return fail(repo.string() + " has uncommitted changes — commit them first, a published "
+                    "version cannot be replaced (F68-72/73)");
+
+    std::string base = kontorBase(kontorUrl);
+    std::string prefix = base + "/exodus/" + man.name + "/" + man.version;
+    std::string dirName = man.name + "-" + man.version;
+    fs::path work = cacheRoot() / "venv_publish" / dirName;
+    fs::remove_all(work, ec);
+    fs::create_directories(work / "stage" / dirName, ec);
+    if (ec) return fail("cannot make " + work.string() + ": " + ec.message());
+
+    // F68-73: a version that kontor has is not overwritten — asked before
+    // anything is sent, so an older kontor that would overwrite never gets the chance.
+    int32_t status = 0;
+    std::string answer;
+    if (!httpCall("GET", prefix + "/package", {}, work / "existing", status, answer, err))
+        return fail(err);
+    fs::remove(work / "existing", ec);
+    if (status == 200)
+        return fail(man.name + "@" + man.version + " is already in kontor at " + base +
+                    " — a published version is not replaced; raise \"version\" in aiml.tool.json (F68-73)");
+    if (status == 401 || status == 403)
+        return fail(prefix + "/package: HTTP " + std::to_string(status) + " — " + kontorMessage(answer));
+    if (status != 404)
+        return fail(prefix + "/package: HTTP " + std::to_string(status));
+
+    std::vector<std::string> files;
+    if (!stageTracked(repo, work / "stage" / dirName, files, err)) return fail(err);
+    for (const fs::path& need : {fs::path("aiml.tool.json"), manifest.filename()})
+        if (!fs::exists(work / "stage" / dirName / need, ec))
+            return fail(need.string() + " is in " + repo.string() + " but not in git — 'git add " +
+                        need.string() + "' (F68-72)");
+
+    // F68-72: reproducible bytes — sorted, mtime 0, owner 0:0, gzip without a
+    // name or a time.  The same commit gives the same digest on every machine.
+    fs::path tarFile = work / "package.tar";
+    rc = runProg({"tar", "--sort=name", "--mtime=@0", "--owner=0", "--group=0", "--numeric-owner",
+                  "--mode=u+rwX,go+rX,go-w", "-C", (work / "stage").string(), "-cf",
+                  tarFile.string(), dirName}, {}, {}, nullptr);
+    if (rc == 127) return fail("tar is not on PATH (F68-72)");
+    if (rc != 0) return fail("tar failed (exit " + std::to_string(rc) + ")");
+    rc = runProg({"gzip", "-n", "-9", "-f", tarFile.string()}, {}, {}, nullptr);
+    if (rc == 127) return fail("gzip is not on PATH (F68-72)");
+    if (rc != 0) return fail("gzip failed (exit " + std::to_string(rc) + ")");
+    fs::path archive = work / "package.tar.gz";
+    char* hex = aiml_sha256_file(archive.string().c_str());
+    std::string digest = hex && *hex ? std::string("sha256:") + hex : std::string();
+    uintmax_t size = fs::file_size(archive, ec);
+
+    // F68-71: manifest first — kontor takes no package without one.
+    struct Put { std::string what; fs::path file; std::string url; };
+    for (const Put& put : {Put{"manifest", manifest, prefix + "/exodus.json"},
+                           Put{"package", archive, prefix + "/package"}}) {
+        if (!httpCall("PUT", put.url, put.file, {}, status, answer, err)) return fail(err);
+        if (status == 409)
+            return fail(put.url + ": HTTP 409 — " + kontorMessage(answer) + " (F68-73)");
+        if (status != 200 && status != 201)
+            return fail(put.url + ": HTTP " + std::to_string(status) + " — " + kontorMessage(answer));
+    }
+    fs::remove_all(work / "stage", ec);
+    std::cout << "published " << man.name << " " << man.version << " (" << files.size()
+              << " files, " << size << " bytes, " << digest << ") → " << prefix << "\n"
+              << "  install it with: aiml venv <dir> install " << man.name << " --kontor " << base
+              << " --version " << man.version << std::endl;
+    return 0;
+}
+
 }  // namespace
 
 std::string ownRoot() {
@@ -976,6 +1152,7 @@ int command(int argc, char** argv) {
         if (all) return name.empty() ? cmdInstallAll(root, kontorUrl) : usage();
         return cmdInstall(root, name, gitUrl, ref, pathArg, kontorUrl, versionArg);
     }
+    if (verb == "publish") return all ? usage() : cmdPublish(name, pathArg, kontorUrl);
     if (verb == "list")    return name.empty() ? cmdList(root) : usage();
     if (verb == "remove")  return name.empty() ? usage() : cmdRemove(root, name);
     return usage();

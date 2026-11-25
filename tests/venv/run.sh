@@ -291,7 +291,7 @@ cat > "$SRV/api/v1/graph" <<'EOT'
 EOT
 
 PORT=$((18600 + RANDOM % 300))
-KONTOR_STUB_DIR="$SRV" AIML_MEM_V3=1 "$AIML" tests/venv/kontor_stub.aiml -- "$PORT" \
+KONTOR_STUB_DIR="$SRV" KONTOR_STUB_TOKEN=stub-writer AIML_MEM_V3=1 "$AIML" tests/venv/kontor_stub.aiml -- "$PORT" \
   > "$WORK/stub.log" 2>&1 &
 STUB=$!
 trap 'kill $STUB 2>/dev/null; rm -rf "$WORK"' EXIT
@@ -342,6 +342,75 @@ else
     check "and skips what is no aiml tool, with a line (F68-66)" \
       'echo "$out" | grep -q "fremd" && echo "$out" | grep -q "aiml.tool.json"'
     check "and counts what it did" 'echo "$out" | grep -q "1 installed, 1 skipped, 0 failed"'
+
+    echo "── §6.3: publish to kontor ──"
+    if command -v git > /dev/null; then
+        PUB="$WORK/pub"; cp -r "$TOOL" "$PUB"
+        sed -i 's/"werkzeug"/"pubtool"/; s/"0\.3\.0"/"1.0.0"/' "$PUB/exodus.json"
+        printf '{ "name": "pubtool", "version": "1.0.0", "programs": ["pubtool"], "package": "lib" }\n' \
+          > "$PUB/aiml.tool.json"
+        git -C "$PUB" init -q
+        git -C "$PUB" add -A
+        git -C "$PUB" -c user.name=t -c user.email=t@t commit -qm v1
+        echo "scratch" > "$PUB/untracked.txt"
+        pub() { env KONTOR_TOKEN="${1}" "$AIML" venv "$V6" publish --path "$PUB" --kontor "$URL" 2>&1; }
+
+        out=$(env -u KONTOR_TOKEN "$AIML" venv "$V6" publish --path "$PUB" --kontor "$URL" 2>&1); rc=$?
+        check "publish without \$KONTOR_TOKEN is refused, named (F68-74)" \
+          '[ $rc -ne 0 ] && echo "$out" | grep -q KONTOR_TOKEN'
+        out=$(pub wrong); rc=$?
+        check "a token kontor does not take: the status and kontor's word (F68-74)" \
+          '[ $rc -ne 0 ] && echo "$out" | grep -q "401"'
+        out=$(KONTOR_TOKEN=stub-writer "$AIML" venv "$V6" publish nicht-pubtool --path "$PUB" --kontor "$URL" 2>&1); rc=$?
+        check "a name that is not the manifest's is refused (F68-70)" \
+          '[ $rc -ne 0 ] && echo "$out" | grep -q "pubtool"'
+        sed -i 's/1\.0\.0/1.0.9/' "$PUB/exodus.json"
+        out=$(pub stub-writer); rc=$?
+        check "exodus.json and aiml.tool.json must agree on the version (F68-71)" \
+          '[ $rc -ne 0 ] && echo "$out" | grep -q "1.0.9"'
+        git -C "$PUB" checkout -q exodus.json
+        echo "# changed" >> "$PUB/hallo.aiml"
+        out=$(pub stub-writer); rc=$?
+        check "uncommitted changes are refused (F68-72)" \
+          '[ $rc -ne 0 ] && echo "$out" | grep -q "uncommitted"'
+        git -C "$PUB" checkout -q hallo.aiml
+
+        out=$(pub stub-writer); rc=$?
+        check "publish puts manifest and package where install looks (F68-71)" \
+          '[ $rc -eq 0 ] && [ -f "$SRV/exodus/pubtool/1.0.0/exodus.json" ] && [ -f "$SRV/exodus/pubtool/1.0.0/package" ]'
+        [ $rc -eq 0 ] || echo "$out" | tail -3
+        check "the manifest is the repository's exodus.json (F68-71)" \
+          'cmp -s "$PUB/exodus.json" "$SRV/exodus/pubtool/1.0.0/exodus.json"'
+        lst=$(tar -tzf "$SRV/exodus/pubtool/1.0.0/package" 2>/dev/null)
+        check "the package is one tree <name>-<version>/ of what git tracks (F68-72)" \
+          'echo "$lst" | grep -qx "pubtool-1.0.0/aiml.tool.json" && echo "$lst" | grep -qx "pubtool-1.0.0/lib/greet.aiml" && ! echo "$lst" | grep -q untracked && [ -z "$(echo "$lst" | grep -v "^pubtool-1.0.0/")" ]'
+        check "the line names the digest of the bytes kontor got" \
+          'echo "$out" | grep -q "sha256:$(sha256sum "$SRV/exodus/pubtool/1.0.0/package" | cut -d" " -f1)"'
+        check "no staging left inside the venv (F68-52)" '[ -z "$(find "$V6" -name "*.tar*")" ]'
+
+        cp "$SRV/exodus/pubtool/1.0.0/package" "$WORK/first.pkg"
+        out=$(pub stub-writer); rc=$?
+        check "a published version is not replaced (F68-73)" \
+          '[ $rc -ne 0 ] && echo "$out" | grep -q "already" && cmp -s "$WORK/first.pkg" "$SRV/exodus/pubtool/1.0.0/package"'
+
+        sed -i 's/1\.0\.0/1.0.1/' "$PUB/exodus.json" "$PUB/aiml.tool.json"
+        git -C "$PUB" -c user.name=t -c user.email=t@t commit -qam v1.0.1
+        out=$(pub stub-writer); rc=$?
+        check "a new version is published next to it" \
+          '[ $rc -eq 0 ] && [ -f "$SRV/exodus/pubtool/1.0.1/package" ]'
+        rm -rf "$WORK/x1" "$WORK/x2"; mkdir -p "$WORK/x1" "$WORK/x2"
+        tar -xzf "$WORK/first.pkg" -C "$WORK/x1"; tar -xzf "$SRV/exodus/pubtool/1.0.1/package" -C "$WORK/x2"
+        check "with the same layout (only the version differs)" \
+          'diff -r "$WORK/x1/pubtool-1.0.0/lib" "$WORK/x2/pubtool-1.0.1/lib" > /dev/null'
+
+        V8="$WORK/v8"; "$AIML" venv "$V8" > /dev/null 2>&1
+        out=$("$AIML" venv "$V8" install pubtool --kontor "$URL" --version 1.0.0 2>&1); rc=$?
+        check "and what was published installs from there (F68-64)" \
+          '[ $rc -eq 0 ] && [ -x "$V8/bin/pubtool" ] && env -i "$V8/bin/pubtool" 2>&1 | grep -q "werkzeug laeuft"'
+        [ $rc -eq 0 ] || echo "$out" | tail -3
+    else
+        echo "  skip publish (no git)"
+    fi
     kill $STUB 2>/dev/null
 fi
 

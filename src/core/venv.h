@@ -9,6 +9,8 @@
 //                                  | --kontor <url> [--version <v>])`
 // fetches a tool, builds it WITH THIS VENV and places its results (§6);
 // `install --all --kontor <url>` takes every tool that kontor holds (§6.1).
+// `publish [<name>] [--path <dir>] --kontor <url>` puts a tool's sources into
+// kontor, where `install --kontor` finds them (§6.3).
 // `list` and `remove` work off the record the install leaves behind.
 #pragma once
 #include <string>
