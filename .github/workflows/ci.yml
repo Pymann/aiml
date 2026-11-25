@@ -275,8 +275,13 @@ jobs:
           if [ -n "$INPUT_TAG" ]; then
             tag="$INPUT_TAG"
             [[ "$tag" == v* ]] || { echo "release_tag must start with v"; exit 1; }
-            # The tag does not exist yet: the release creates it on this commit.
-            new=(--target "$GITHUB_SHA" --generate-notes)
+            # A draft release creates its tag only when it is published, so the tag
+            # is pushed here, on the commit that was built and tested.
+            if ! gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" >/dev/null 2>&1; then
+              gh api "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/$tag" -f sha="$GITHUB_SHA" >/dev/null
+              echo "tag $tag created on $GITHUB_SHA"
+            fi
+            new=(--verify-tag --generate-notes)
           else
             tag="$GITHUB_REF_NAME"
             # The tag message becomes the release text; a lightweight tag has
