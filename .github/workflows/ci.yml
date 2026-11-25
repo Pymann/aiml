@@ -11,6 +11,10 @@ on:
         description: "run_all_tests.sh --only <pattern> (empty = whole corpus)"
         required: false
         default: ""
+      diagnose:
+        description: "Space-separated .aiml tests to run with --log-level INFO right after the smoke test"
+        required: false
+        default: ""
       release_tag:
         description: "Create this tag on the built commit and draft a release (e.g. v1.0.2.4)"
         required: false
@@ -157,6 +161,19 @@ jobs:
       # used to run before the corpus, so a v* tag drafted a release and
       # uploaded an artifact while the tests had not been asked yet -- the one
       # build whose verification matters most was the one that published first.
+      - name: Diagnose
+        if: github.event.inputs.diagnose != ''
+        env:
+          DIAGNOSE: ${{ github.event.inputs.diagnose }}
+        run: |
+          mkdir -p logs
+          for f in $DIAGNOSE; do
+            echo "::group::$f"
+            out/aiml/aiml --log-level INFO "$f" 2>&1 | tail -n 300
+            echo "exit ${PIPESTATUS[0]}"
+            echo "::endgroup::"
+          done
+
       - name: Package
         run: |
           if [ -n "${{ github.event.inputs.release_tag }}" ]; then v="${{ github.event.inputs.release_tag }}"
