@@ -51,7 +51,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: __exodus_cache/apt
-          key: apt-${{ hashFiles('exodus.json', 'exodus2.json', 'exodus-test.json', 'exodus-zim.json') }}
+          key: apt-${{ hashFiles('exodus.json', 'exodus2.json', 'exodus-test.json', 'exodus-zim.json', 'exodus-wasm-runtime.json') }}
           restore-keys: apt-
 
       - name: Install Exodus
@@ -62,7 +62,7 @@ jobs:
 
       - name: Fetch pinned dependencies
         run: |
-          python3 tools/ci/fetch_pinned_debs.py exodus.json exodus2.json exodus-test.json exodus-zim.json
+          python3 tools/ci/fetch_pinned_debs.py exodus.json exodus2.json exodus-test.json exodus-zim.json exodus-wasm-runtime.json
 
       - name: Save pinned .deb cache
         if: steps.debcache.outputs.cache-hit != 'true'
@@ -82,6 +82,34 @@ jobs:
 
       - name: Build ZIM support (libaiml_zim.so)
         run: exodus build -c exodus-zim.json -j "$(nproc)"
+
+      # spec/68 §8: the release carries the wasm32 runtime.  emsdk and
+      # yaml-cpp are git packages of exodus-wasm-runtime.json only, so its
+      # packages are installed from a copy named exodus.json (pkg install
+      # reads that name); the cache is the same $EXODUS_CACHE.
+      - name: Restore emsdk
+        id: emsdkcache
+        uses: actions/cache/restore@v4
+        with:
+          path: __exodus_cache/git
+          key: wasm-git-${{ hashFiles('exodus-wasm-runtime.json') }}
+
+      - name: wasm32 packages (emsdk, yaml-cpp)
+        if: steps.emsdkcache.outputs.cache-hit != 'true'
+        run: |
+          d="$RUNNER_TEMP/wasmpkg"; mkdir -p "$d"
+          cp exodus-wasm-runtime.json "$d/exodus.json"
+          (cd "$d" && exodus pkg install)
+
+      - name: Save emsdk
+        if: steps.emsdkcache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: __exodus_cache/git
+          key: ${{ steps.emsdkcache.outputs.cache-primary-key }}
+
+      - name: Build wasm32 runtime (libaiml_wasm.a)
+        run: exodus build -c exodus-wasm-runtime.json -j "$(nproc)"
 
       - name: Smoke test
         run: |
@@ -181,7 +209,7 @@ jobs:
         run: |
           if [ -n "${{ github.event.inputs.release_tag }}" ]; then v="${{ github.event.inputs.release_tag }}"
           elif [[ "$GITHUB_REF" == refs/tags/v* ]]; then v="${GITHUB_REF_NAME}"; else v="git-${GITHUB_SHA::7}"; fi
-          bash tools/ci/package_release.sh "$v" dist
+          REQUIRE_WASM=1 bash tools/ci/package_release.sh "$v" dist
 
       - name: Upload package
         uses: actions/upload-artifact@v4
