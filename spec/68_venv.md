@@ -405,3 +405,39 @@ on and off, the RUNPATH starting with `$ORIGIN`, `env` reaching the compiler, an
 order with their variables, a hook's file seen by the compile, a failing hook ending the build, a
 missing hook and a `.py` hook refused.  `tests/venv/run.sh`
 installs with `PATH` free of exodus and Python.
+
+## 8. The wasm32 runtime in the release (decided 2026-11-25)
+
+A program that runs in the browser is compiled by the same compiler (`--target wasm32`) and
+linked by emscripten against `libaiml_wasm.a`, the runtime built from
+`exodus-wasm-runtime.json`.  A project that builds a browser client from the release (kontor's
+web UI) needs that archive and must know which emsdk made it, because an archive and an `emcc` of
+different versions do not link reliably.
+
+```
+aiml-<version>-linux-x86_64/
+  lib/wasm32/libaiml_wasm.a      the wasm32 runtime
+  lib/wasm32/emsdk.version       one line: the emsdk version it was built with, e.g. 3.1.74
+```
+
+- **F68-90** The release tarball (and the `aiml-linux-x86_64` CI artifact) carries
+  `lib/wasm32/libaiml_wasm.a` and `lib/wasm32/emsdk.version`.  Packaging fails when the archive
+  was not built: a release without it is not made.
+- **F68-91** `emsdk.version` is the version `exodus-wasm-runtime.json` installs (its emsdk
+  `setup_commands`), not a guess: packaging reads it from there.
+- **F68-92** The link line a project uses (the one `tools/run_wasm_test.sh` uses):
+  `aiml prog.aiml --target wasm32 --emit-main -o prog.ll`, then
+  `emcc prog.ll -o prog.js -L<lib/wasm32> -laiml_wasm -fexceptions -sASYNCIFY=1
+  -sALLOW_MEMORY_GROWTH=1` plus the project's own `-sENVIRONMENT=…`.
+- **F68-93** Packaging proves it: it compiles the one-line program `- call: [sys.exit, 42]`,
+  links it against the **packaged** archive (not `out/`) with the line of F68-92 and the emsdk
+  named in `emsdk.version`, and runs it with that emsdk's node; the exit code must be 42, like
+  the native smoke test.
+- **F68-94** `aiml venv <dir>` copies `lib/wasm32/` along when the runtime it takes has a
+  `wasm32/` directory next to it (the release layout and a venv made from a venv), so
+  `$AIML_VENV/lib/wasm32` is where a project finds it.  Without one, nothing is copied and
+  nothing fails: a venv for native tools does not need it.
+
+Tests: packaging itself (F68-90, F68-91, F68-93) in CI; `tests/venv/run.sh` for F68-94 — a
+release-shaped directory with `lib/wasm32/` gives a venv with the same two files, one without it
+gives a venv without `lib/wasm32/`.

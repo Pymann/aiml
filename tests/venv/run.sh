@@ -90,6 +90,15 @@ check "update from inside the venv keeps packages and table" \
   '[ $rc -eq 0 ] && [ -d "$VENV/lib/aiml/demo" ] && grep -q "\"demo\"" "$VENV/lib/aiml/aiml.packages.json" && cmp -s "$AIML" "$VENV/bin/aiml"'
 check "a venv-made venv takes its runtime from lib/ (F68-11)" \
   '"$VENV/bin/aiml" venv "$WORK/v3" >/dev/null 2>&1 && cmp -s "$VENV/lib/libaiml.so" "$WORK/v3/lib/libaiml.so"'
+check "no lib/wasm32 without one next to the runtime (F68-94)" '[ ! -e "$WORK/v3/lib/wasm32" ]'
+REL="$WORK/release"; mkdir -p "$REL/bin" "$REL/lib/wasm32"
+cp "$VENV/bin/aiml" "$REL/bin/aiml"; cp "$VENV/lib/libaiml.so" "$REL/lib/libaiml.so"
+printf 'archive' > "$REL/lib/wasm32/libaiml_wasm.a"; printf '3.1.74\n' > "$REL/lib/wasm32/emsdk.version"
+out=$("$REL/bin/aiml" venv "$WORK/vw" 2>&1); rc=$?
+check "lib/wasm32 next to the runtime comes along into the venv (F68-94)" \
+  '[ $rc -eq 0 ] && cmp -s "$REL/lib/wasm32/libaiml_wasm.a" "$WORK/vw/lib/wasm32/libaiml_wasm.a" && cmp -s "$REL/lib/wasm32/emsdk.version" "$WORK/vw/lib/wasm32/emsdk.version"'
+check "and on to a venv made from that venv (F68-94)" \
+  '"$WORK/vw/bin/aiml" venv "$WORK/vw2" >/dev/null 2>&1 && [ -f "$WORK/vw2/lib/wasm32/libaiml_wasm.a" ]'
 mv "$VENV" "$WORK/moved"; MOVED="$WORK/moved"
 out=$("$MOVED/bin/aiml" venv "$MOVED" 2>&1); rc=$?
 check "a moved venv rewrites env for its new place" \

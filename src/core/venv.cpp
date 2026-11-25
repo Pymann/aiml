@@ -1104,6 +1104,17 @@ int createVenv(const fs::path& root, const std::string& runtimeArg) {
     std::string err;
     if (!installFile(exe, root / "bin" / "aiml", exec, err)) return fail(err);
     if (!installFile(runtime, root / "lib" / "libaiml.so", data, err)) return fail(err);
+    // F68-94: the wasm32 runtime of a release (or of the venv we run from) comes along.
+    fs::path wasmSrc = runtime.parent_path() / "wasm32";
+    if (fs::is_directory(wasmSrc, ec)) {
+        fs::path wasmDst = root / "lib" / "wasm32";
+        fs::create_directories(wasmDst, ec);
+        if (ec) return fail("cannot create " + wasmDst.string() + ": " + ec.message());
+        for (const auto& ent : fs::directory_iterator(wasmSrc, ec)) {
+            if (!ent.is_regular_file(ec)) continue;
+            if (!installFile(ent.path(), wasmDst / ent.path().filename(), data, err)) return fail(err);
+        }
+    }
     fs::path table = tableFile(root);
     if (!fs::exists(table, ec) && !writeText(table, "{\"packages\": {}}\n", err)) return fail(err);
     if (!writeText(root / "env", envText(root.string()), err)) return fail(err);
