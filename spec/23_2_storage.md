@@ -17,6 +17,15 @@
 | `storage.clear()` | `() -> void` | Wipe everything for this origin / namespace. |
 | `storage.host()` | `() -> string` | Web: the page hostname (`window.location.hostname`); native: `"localhost"`. |
 | `storage.is_secure()` | `() -> i32` | Web: `1` if the page is served over HTTPS (`location.protocol === "https:"`), else `0`; native: always `0`. |
+| `storage.session_get(key)` | `(string) -> string` | Web: `window.sessionStorage` (this tab only, gone when it closes); native: an in-memory map of this process. `""` if missing. |
+| `storage.session_set(key, value)` | `(string, string) -> void` | Write/overwrite in the session store. |
+| `storage.session_remove(key)` | `(string) -> void` | Delete from the session store; no-op if missing. |
+| `storage.hash()` | `() -> string` | Web: the page's URL fragment without the `#` (`location.hash`), `""` if none; native: what `set_hash` last set (`""` at start). |
+| `storage.set_hash(value)` | `(string) -> void` | Web: replaces the fragment **without** a navigation or a history entry (`history.replaceState`); `""` removes it including the `#`. Native: remembered for `hash()`. |
+
+The session store and the fragment calls (added 2026-11-25, kontor `web_ui.md` FW-93)
+let a web client keep a login for the life of one tab, and take a token that a server
+redirect put into the fragment (`/ui/#token=…`) out of the address bar at once.
 
 `storage.host` / `storage.is_secure` let a web build derive its server URL from the
 page it was served by — e.g. pick `wss://` on an HTTPS page (a browser blocks a plain

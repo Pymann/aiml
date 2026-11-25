@@ -169,6 +169,38 @@ Natively it wraps `http.get`. Pair it with `sys.deserialize` to parse a served m
 - decl: [list, ptr<ServerList>, { call: [sys.deserialize, raw, "ServerList"] }]
 ```
 
+**`http.fetch(method: string, url: string, headers: string, body: string) → string`**
+— the general form of `fetch_text` for a browser client that talks to a REST API
+(added 2026-11-25 for the kontor web UI, kontor `doc/spec/web_ui.md` FW-90).  It
+returns the response body as text whatever the status; **`http.fetch_status() → i32`**
+then gives the status of the last `http.fetch` on this thread.
+
+- **F32-2-60** `method` is any HTTP method (`GET`, `POST`, `PUT`, `DELETE`, …), sent as
+  given in upper case.
+- **F32-2-61** `headers` is `"Name: value"` lines separated by `\n` (an empty string is
+  no headers); a line without `:` is ignored.  This keeps the call to plain strings, so
+  the same code compiles natively and to wasm32.
+- **F32-2-62** `body` is sent when it is not empty (also for `GET`, natively; the browser
+  refuses a body on `GET`/`HEAD`, so there it is dropped).
+- **F32-2-63** `http.fetch_status()` is the HTTP status (`200`, `401`, `409`, …) of the
+  last `http.fetch` on the calling thread, `0` when that one did not get an answer at all
+  (connection refused, DNS, TLS, CORS) — the body is then `""`.  Before the first call it
+  is `0`.
+- **F32-2-64** Browser (wasm32): `window.fetch(url, {method, headers, body})`, awaited
+  through Asyncify like `fetch_text`; relative URLs are same-origin; credentials are
+  only what `headers` carries (`credentials: "omit"` — no cookies).  Native: the
+  `http_client` of this chapter, redirects and TLS rules as for `http.get`.
+- **F32-2-65** A response body with a NUL byte is cut there (text API); binary bodies
+  are for `http_client` natively.
+
+```aiml
+- decl: [answer, string, { call: [http.fetch, "POST", "/api/v1/sessions", "Authorization: Basic ${auth}", ""] }]
+- if:
+    condition: { eq: [{ call: [http.fetch_status] }, 201] }
+    then:
+      - decl: [session, ptr<Session>, { call: [sys.deserialize, answer, "Session"] }]
+```
+
 > **HTTPS client verification (strict by default):** `http.get` / `http.fetch_text`
 > over `https://` verify the server certificate — chain against the system CA store
 > plus hostname match — so a self-signed, expired, or name-mismatched cert makes the
@@ -750,6 +782,12 @@ Public routes directly on `srv` (no guard):
 The directories are searched in order — first match wins.
 File resolution (`<dir> + request_path`) happens dynamically per request;
 the `list<path>` is passed once at startup.
+
+- **F32-2-66** A file response — `srv.filesystem` and a handler's `resp.body_file` —
+  carries an `ETag` (`"<size hex>-<mtime hex>"`); a request whose `If-None-Match` names
+  that ETag (exactly, or as one entry of a comma list, or `*`) gets `304 Not Modified`
+  with the same `ETag` and no body, instead of the file.  A `Range` request is not
+  affected.  (Added 2026-11-25, kontor `web_ui.md` FW-94.)
 
 #### `fs_options` — Members
 
