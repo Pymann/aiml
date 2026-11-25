@@ -301,6 +301,28 @@ extern "C" int aiml_isolated_exec(void* raw) {
         return 0;
     }
 
+    // ── Step 2: the start call as a top-level statement ──────────────────────
+    // Without it the fresh compiler only DEFINES the bundled functions and its
+    // main runs nothing: sys.exec(sys.bundle(fn, {context: true})) returned 0
+    // and fn never ran (spec/29_2 §12: "worker_task runs").  It went unnoticed
+    // where an earlier run had left the files the tests look for in logs/.
+    if (code->start_call && code->start_call[0] != '\0') {
+        try {
+            YAML::Node sc = YAML::Load(std::string(code->start_call));
+            if (sc["call"] && sc["call"].IsSequence() && sc["call"].size() >= 1) {
+                YAML::Node seq = YAML::Load(yaml_source);
+                if (seq.IsSequence()) {
+                    YAML::Node stmt(YAML::NodeType::Map);
+                    stmt["call"] = sc["call"];
+                    seq.push_back(stmt);
+                    yaml_source = aiml::dumpPreservingQuotes(seq);
+                }
+            }
+        } catch (const std::exception& e) {
+            LOG_WARNING(std::string("aiml_isolated_exec: cannot parse start_call: ") + e.what());
+        }
+    }
+
     LOG_INFO("aiml_isolated_exec: compiled source (" +
              std::to_string(yaml_source.size()) + " bytes)");
 
