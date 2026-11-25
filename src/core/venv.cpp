@@ -790,8 +790,9 @@ int cmdInstall(const fs::path& root, const std::string& name, const std::string&
 
     // F68-53: built by the compiler it will live next to.
     if (!man.programs.empty() || !man.libraries.empty()) {
-        const char* exoEnv = std::getenv("EXODUS");
-        std::string exodus = (exoEnv && *exoEnv) ? exoEnv : "exodus";
+        // §7: the venv's own `aiml build`, as a child of the target venv's
+        // compiler — no exodus, no Python (F68-53).
+        std::string aimlBin = (root / "bin" / "aiml").string();
         const char* oldPath = std::getenv("PATH");
         std::vector<std::string> env = {
             "AIML_VENV=" + root.string(),
@@ -804,19 +805,19 @@ int cmdInstall(const fs::path& root, const std::string& name, const std::string&
         // targets would never install (F68-53).
         std::vector<std::vector<std::string>> builds;
         if (man.configs.empty()) {
-            builds.push_back({exodus, "build", "--all"});
+            builds.push_back({aimlBin, "build", "--all"});
         } else {
             for (const std::string& cfg : man.configs) {
                 if (!fs::is_regular_file(srcDir / cfg, ec))
                     return fail("aiml.tool.json names the configuration '" + cfg +
                                 "', but " + (srcDir / cfg).string() + " is not there");
-                builds.push_back({exodus, "build", "-c", cfg});
+                builds.push_back({aimlBin, "build", "-c", cfg});
             }
         }
         for (const auto& cmd : builds) {
             int rc = runProg(cmd, srcDir, env, nullptr);
             if (rc == 127)
-                return fail("exodus is not on PATH — a tool is built by its own project (F68-53)");
+                return fail("cannot run " + aimlBin + " build (F68-53)");
             if (rc != 0) {
                 std::string what = man.configs.empty() ? std::string("--all") : cmd.back();
                 return fail("building " + name + " (" + what + ") failed (exit " +
@@ -1113,6 +1114,11 @@ int createVenv(const fs::path& root, const std::string& runtimeArg) {
 }
 
 }  // namespace
+
+int runProgram(const std::vector<std::string>& args, const std::string& cwd,
+               const std::vector<std::string>& env, std::string* out) {
+    return runProg(args, cwd.empty() ? fs::path() : fs::path(cwd), env, out);
+}
 
 int command(int argc, char** argv) {
     std::string dirArg, runtimeArg, verb, name;

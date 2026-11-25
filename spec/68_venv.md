@@ -59,7 +59,7 @@ export PATH='/opt/aiml/bin'"${PATH:+:$PATH}"
 - **F68-20** The first line is the marker F68-13 checks.  The file is POSIX `sh`, and it sets
   only these three variables.  A path is single-quoted; a path with a single quote is refused
   (exit 1), so the file cannot be made to run anything.
-- **F68-21** `AIML` names the compiler.  A tool that runs the compiler (exodus, test drivers)
+- **F68-21** `AIML` names the compiler.  A tool that runs the compiler (`aiml build`, test drivers)
   takes `$AIML`, then `$AIML_VENV/bin/aiml` when a venv is named, then `aiml` from `PATH` —
   never a path of its own.  The venv comes before `PATH`: a build that links against one venv
   must not be compiled by another venv's compiler that happens to be first on the path.
@@ -67,8 +67,8 @@ export PATH='/opt/aiml/bin'"${PATH:+:$PATH}"
   installed into `<venv>/bin`, it gets `RUNPATH $ORIGIN/../lib`; elsewhere it gets
   `RUNPATH $AIML_VENV/lib`.  `env` sets neither `LIBRARY_PATH` nor `LD_LIBRARY_PATH`: what a
   binary needs is in the binary, so it runs without the venv's environment too.
-- **F68-23** **How a project says that** — in an `exodus.json`, two placeholders are expanded, next
-  to the existing `__exodus_cache`:
+- **F68-23** **How a project says that** — in a build configuration (`exodus.json`, §7), two
+  placeholders are expanded:
 
   ```json
   "compiler": { "name": "$AIML" },
@@ -139,13 +139,14 @@ aiml venv <dir> remove <name>
   under `$AIML_CACHE/venv_tools/<name>/<commit>/`, else `./__aiml_cache/venv_tools/…`.  A
   directory that already holds that commit is reused, so a second install does not clone again.
   The venv receives **results only** — it stays what §5 can cut as a layer.
-- **F68-53** **The build is the tool's own.**  In the fetched tree, `install` runs
-  `$EXODUS build --all` (else `exodus` from `PATH`, F68-21), with `AIML_VENV`, `AIML` and `PATH`
-  pointing at the **target venv**: a tool is built by the compiler it will live next to, and links
-  against that venv's runtime (F68-22).  A failed build installs nothing (exit 1, the build's
-  output is passed through).
+- **F68-53** **The build is the tool's own.**  In the fetched tree, `install` runs the venv's own
+  `aiml build --all` (§7) — no exodus, no Python (decided 2026-11-25) — with `AIML_VENV`, `AIML`
+  and `PATH` pointing at the **target venv**: a tool is built by the compiler it will live next
+  to, and links against that venv's runtime (F68-22).  The build runs as a child process of the
+  target venv's `bin/aiml`, so an install from one venv into another uses the target's compiler.
+  A failed build installs nothing (exit 1, the build's output is passed through).
   **`configs` names them instead** when `--all` is not what makes the tool: then each named
-  configuration is built on its own (`$EXODUS build -c <file>`), in the order given, and the first
+  configuration is built on its own (`aiml build -c <file>`), in the order given, and the first
   failure ends the install.  cosmos is the reason the field exists — its `--all` is 62
   configurations, among them every test binary and five wasm builds that need an emsdk clone, so a
   tool that waited for `--all` to be green would never install.  A repository with one
@@ -325,3 +326,82 @@ two PUTs (with a token, and `409` for a published version): no token, a wrong to
 looks, one tree of tracked files only, the digest in the line, nothing staged in the venv, a second
 publish refused with the bytes unchanged, the next version beside it, and an install of what was
 published.
+
+## 7. Building — `aiml build` (decided 2026-11-25)
+
+A tool used to be built by exodus, a Python build tool, so a venv that could install had to have
+Python and exodus next to it.  exodus is the build system of **aiml itself** (171 pinned apt
+packages, C++ sources, wasm); what an aiml **tool** needs from it is two steps — compile the entry
+file, link the objects — and those the compiler does itself now.  exodus stays for the build of
+aiml; nothing in a venv needs it.
+
+```
+aiml build [-c <config.json>]… [--all]
+```
+
+- **F68-80** **The configuration is the one the projects already have.**  An exodus project file
+  (`"$schema": "exodus.project.config-1.0"`) is read as it is, so cosmos, kontor and ufo keep
+  their files and their names.  Without `-c` the file is `./exodus.json`; `-c` may be given more
+  than once and builds in that order; `--all` builds every `*.json` in the working directory that
+  carries that `$schema`, sorted by file name.  Every path in it is relative to the **working
+  directory** (exodus' `source_root: "."`), also for a file in a subdirectory
+  (cosmos `runtime/exodus-rt.json`).
+- **F68-81** **What is read**: `name`, `output_type` (`executable` or `shared_lib`), `sources`
+  (`.aiml` files and glob patterns of them, and `.o` files taken as they are), `compiler.name`,
+  `search_paths` (`-I`) and `defines` (`-D`) as exodus passed them, `linker.name` (default `cc`), `linker.flags`, `linker.libraries`, `linker.library_paths`, `linker.rpath`
+  (default `true`), `artifact_in_cwd`, `asset_directories` and `env`.  `version`, `license`,
+  `pre_compilation`, `pre_linkage` and `post_linkage` (F68-87).
+  `optimization`, `debug`, `warnings`, `jobs`, `compiler.flags` and `compiler.lang_standard` are
+  accepted and
+  ignored: for an `.aiml` source exodus passed none of them on either, so ignoring them builds the
+  same binary.
+- **F68-82** **What is refused, by name**: `output_type` `wasm` or `static_lib`, C/C++ sources,
+  `apt_packages`, `git_packages`, a hook that is no `.aiml` file (F68-87) and any path containing
+  `__exodus_cache` — those are the build system of aiml and of the wasm client, not of a tool, and
+  a build that silently skipped them would build something else.  The message says „needs
+  exodus".  A tool whose `configs` (F68-53) avoid them installs; `--all` over a directory that has
+  one of them fails, as `exodus build --all` would without emsdk.
+- **F68-83** **Compile**: for each `.aiml` source,
+  `<compiler> <source> -o <build>/<source without .aiml>.o [--asset-roots=<dirs>]` with
+  `<build> = out/<name>/` (exodus' `build_root`).  The compiler writes the objects of the modules
+  the source imports next to that object (`<dir>_<file>_aiml.o`); the build directory is emptied
+  first, so every `.o` in it belongs to this build and **all of them are linked**.  Incremental
+  work is the compiler's object cache (`$AIML_CACHE`, spec/29_2 §12), not a second one here.
+- **F68-84** **Link**: `<linker> <objects> -o <output> [-shared] <linker.flags>
+  -L<path>… [-Wl,-rpath,<path>]… -l<lib>…`, in that order, as exodus did — so a RUNPATH that
+  starts with `$ORIGIN` from `linker.flags` stays first (F68-55).  An rpath entry containing `:`
+  is left out (it would split the RUNPATH).  The output is `<name>` (`lib<name>.so` for
+  `shared_lib`, a `lib` prefix not doubled) in the working directory with `artifact_in_cwd`, else
+  in `<build>`.  The linker stays an external program — `g++`/`cc`, whatever `linker.name`
+  says — and missing → exit 1, named.
+- **F68-85** **Placeholders** are those of F68-23 and nothing else: `$AIML_VENV`, then `$AIML`,
+  in every compiler/linker name, flag, path and `env` value; `$ORIGIN` reaches the linker as those
+  seven characters.  An unresolvable placeholder ends the build naming `. <venv>/env`.  `env`
+  is set for the compile and the link.
+- **F68-86** **No shell.**  Every command is run with its arguments as given (the `runProg` of
+  §6), so nothing in a configuration is interpreted.  Each command is printed before it runs.
+  Exit 0 when every configuration built; otherwise the first failure ends the build with exit 1,
+  naming the configuration.
+- **F68-87** **Hooks are aiml, run by the JIT.**  exodus' hooks were Python modules whose
+  `run(config)` it imported; here a hook is an `.aiml` file, run as
+  `<compiler> <hook.aiml>` (JIT, no `-o`) in the working directory: `pre_compilation` before the
+  first compile, `pre_linkage` after the last compile and before the link, `post_linkage` after a
+  successful link (new — exodus had none).  The hook sees the configuration's `env` and
+  `AIML_BUILD_STAGE` (`pre_compilation` / `pre_linkage` / `post_linkage`), `AIML_BUILD_CONFIG`
+  (the configuration file), `AIML_BUILD_NAME`, `AIML_BUILD_DIR` (the object directory, F68-83)
+  and `AIML_BUILD_OUTPUT` (the linked file, F68-84).  A hook works on files and does **not**
+  change the configuration: what a Python hook did to `config` in memory has no counterpart, and a
+  build whose inputs are rewritten by a script while it runs could not be read from its file.
+  Its exit code is the hook's verdict: non-zero ends the build, naming the hook and the stage.
+  A hook that is named but missing is an error (exodus skipped it silently, and a stamp that was
+  never written then looks like a stamp that was).  A `.py` hook is refused with „port it to an
+  `.aiml` hook" (F68-82).
+
+Tests: `tests/build/run.sh` — an executable and a shared library from one `.aiml` file that
+imports a module (the side object is linked), `-c` several times and `--all` by `$schema`, a
+configuration in a subdirectory with paths relative to the working directory, `artifact_in_cwd`
+on and off, the RUNPATH starting with `$ORIGIN`, `env` reaching the compiler, an unresolvable
+`$AIML_VENV`, each refusal of F68-82, a compile error and a missing linker; the three hooks in
+order with their variables, a hook's file seen by the compile, a failing hook ending the build, a
+missing hook and a `.py` hook refused.  `tests/venv/run.sh`
+installs with `PATH` free of exodus and Python.

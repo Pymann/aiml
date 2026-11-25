@@ -102,6 +102,13 @@ check "and its AOT program still runs (relocatable, F68-1)" '[ $rc -eq 0 ]'
 echo "── installing tools (§6) ──"
 # The cache the install must use (F68-52) — and must not put in the venv.
 export AIML_CACHE="$WORK/cache"
+# F68-53/§7: an install builds with the venv's own `aiml build`.  exodus and Python on PATH
+# are traps that fail loudly, so a build that still reached for them would show.
+NOPY="$WORK/nopy"; mkdir -p "$NOPY"
+for t in exodus python3 python; do
+    printf '#!/bin/sh\necho "%s must not run" >&2; exit 99\n' "$t" > "$NOPY/$t"; chmod +x "$NOPY/$t"
+done
+export PATH="$NOPY:$PATH"
 # A tool: a program plus an importable package, built with the venv's own compiler.
 TOOL="$WORK/tool"; mkdir -p "$TOOL/lib"
 cat > "$TOOL/hallo.aiml" <<'EOT'
@@ -144,6 +151,8 @@ V2="$WORK/v2"
 out=$("$AIML" venv "$V2" install werkzeug --path "$TOOL" 2>&1); rc=$?
 check "install --path builds and places the program (F68-50/53/54)" \
   '[ $rc -eq 0 ] && [ -x "$V2/bin/werkzeug" ]'
+check "built by the venv's aiml build: neither exodus nor Python ran (F68-53, §7)" \
+  '! echo "$out" | grep -q "must not run"'
 [ $rc -eq 0 ] || echo "$out" | tail -4
 check "the program runs out of the venv" \
   'out2=$(env -i "$V2/bin/werkzeug" 2>&1); echo "$out2" | grep -q "werkzeug laeuft"'

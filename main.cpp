@@ -7,12 +7,15 @@
 #include "src/core/asset_scanner.h"   // AssetScanner::all_stores() → write asset deps into the .d
 #include "logger.h"
 #include "src/core/venv.h"
+#include "src/core/build.h"
 #include <filesystem>
 
 
 int main(int argc, char** argv) {
     // `aiml venv <dir>` (spec/68) — a subcommand, not an input file.
     if (argc > 1 && std::string(argv[1]) == "venv") return aiml::venv::command(argc - 2, argv + 2);
+    // `aiml build` (spec/68 §7) — builds an aiml project without exodus.
+    if (argc > 1 && std::string(argv[1]) == "build") return aiml::build::command(argc - 2, argv + 2);
 
     std::string inputFile;
     std::string outputFile;
@@ -93,7 +96,8 @@ int main(int argc, char** argv) {
     if (inputFile.empty()) {
         std::cerr << "Usage: aiml <input.aiml> [-o output.o|output.ll] [--log-level DEBUG|INFO|WARN|ERROR] [-r]\n"
                      "       aiml <input.aiml> --check | --parse-only | --phase-times | --no-cache   (spec/70 §11.3)\n"
-                     "       aiml venv <dir> [--runtime <libaiml.so>]" << std::endl;
+                     "       aiml venv <dir> [--runtime <libaiml.so>]\n"
+                     "       aiml build [-c <config.json>]... [--all]" << std::endl;
         return 1;
     }
 

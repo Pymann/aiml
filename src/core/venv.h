@@ -14,6 +14,7 @@
 // `list` and `remove` work off the record the install leaves behind.
 #pragma once
 #include <string>
+#include <vector>
 
 namespace aiml {
 namespace venv {
@@ -28,6 +29,13 @@ std::string ownRoot();
 // `aiml venv <dir> [--runtime <libaiml.so>]` — args after "venv".  Prints
 // what it did or why not; returns the process exit code.
 int command(int argc, char** argv);
+
+// Run a program without a shell (argv as given), in `cwd` when not empty,
+// with `env` ("K=V") added to this process's environment.  `out` captures
+// stdout when given.  Returns the exit code, 127 when it could not be started.
+// Shared with `aiml build` (spec/68 §7, F68-86).
+int runProgram(const std::vector<std::string>& args, const std::string& cwd,
+               const std::vector<std::string>& env, std::string* out);
 
 }  // namespace venv
 }  // namespace aiml
