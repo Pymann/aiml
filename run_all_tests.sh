@@ -425,3 +425,16 @@ if [ $SKIPPED -gt 0 ]; then
 fi
 
 echo "Detailed results saved to $OUTPUT_FILE"
+
+# A summary nobody is obliged to read is not a verdict.  Until 2026-11-25 this
+# script ended here and returned 0 even with failing tests, so every caller --
+# the CI included -- had to grep for "[ FAIL ]" to find out.  Now the run is
+# judged against the expected-failure register and the exit code says it.
+if [ -x tools/check_expected_failures.sh ]; then
+    VERDICT=$(tools/check_expected_failures.sh "$OUTPUT_FILE")
+    VERDICT_RC=$?
+    echo "$VERDICT" | tee -a "$OUTPUT_FILE"
+    exit $VERDICT_RC
+fi
+echo "WARNING: tools/check_expected_failures.sh is missing, so this run has no verdict" | tee -a "$OUTPUT_FILE"
+exit 1

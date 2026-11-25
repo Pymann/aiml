@@ -75,6 +75,12 @@ programs whose own exit code is the assertion (`test.aiml` → 42,
 When you add a negative test, give it an `# Expected exit code: 1` header rather
 than extending that list.
 
+A test that is expected to **fail as a whole** declares nothing in its header --
+there is no `xfail` marker. It is registered in the table in §3, which
+`tools/check_expected_failures.sh` parses and the suite exits on. Registering a
+test is therefore a visible, reviewable act, and un-registering is forced: once
+it passes, the gate fails until the row is gone.
+
 ## 3. Known failures
 
 Measured 2026-11-24 on `15ff4ddc` plus the two fixes below, whole corpus under
@@ -100,6 +106,11 @@ These are red because the chapter they test is not implemented. They are the
 spec-first working method, not breakage, and they must stay red until the
 respective chapter lands.
 
+<!-- expected-failures:begin -- read by tools/check_expected_failures.sh.
+     One corpus entry per row, its path first and in backticks.  This table is
+     the only register: people read it, the gate parses it.  A row that starts
+     passing fails the gate too, so it cannot rot here unnoticed. -->
+
 | Test | Chapter | Why |
 |------|---------|-----|
 | `tests/test_pipeline_failure.aiml` | spec/62 | pipelines are `[PROPOSAL]` |
@@ -109,7 +120,12 @@ respective chapter lands.
 | `tests/test_pipeline_results.aiml` | spec/62 | — |
 | `tests/closures/run.sh` (16 negative cases) | spec/64 | `callable` is an unknown top-level key and `capture` an unknown operator — the feature does not exist in this build, so no negative case can be rejected *for the right reason* |
 | `tests/test_bundle_exec_semantics.aiml` | spec/29_1 | `sys.bundle` has no handler yet |
-| `tests/lifetime/run_lifetime.sh` | spec/61 | the lab's own header says it will not be green until the compiler rewrite lands |
+
+<!-- expected-failures:end -->
+
+`tests/lifetime/run_lifetime.sh` belongs here by nature but not in the table: it
+is a runner of its own, never executed by the corpus, and its own header says it
+stays red until the spec/61 rewrite lands (§1).
 
 ### Expected — the leak gate's RED list
 
@@ -141,43 +157,46 @@ green run cannot be green for the wrong reason.
 `.github/workflows/ci.yml`, on push to `master`, on tags `v*`, on every pull
 request, and via `workflow_dispatch` (input `only` → `run_all_tests.sh --only`).
 
-**Hard gates** (a failure fails the job): system packages, the pinned `.deb`
-fetch, `exodus pkg install`, the three builds (`exodus.json`, `exodus2.json`,
-`exodus-zim.json`), the **smoke test** (`tests/test.aiml` must exit 42),
-packaging via `tools/ci/package_release.sh`, artifact upload, and on a `v*` tag a
-draft release.
+**Hard gates** — a failure fails the job:
+
+* system packages, the pinned `.deb` fetch, `exodus pkg install`;
+* the three builds (`exodus.json`, `exodus2.json`, `exodus-zim.json`);
+* the **smoke test**: `tests/test.aiml` must exit 42;
+* the **test corpus** — `run_all_tests.sh --no-build`, `TEST_TIMEOUT=300`, run
+  under `xvfb-run -a script`, which gives it both an X display and a TTY, so the
+  41 `Requires: display` tests actually run. The suite judges itself against the
+  register in §3 and exits with that verdict, so an unregistered failure is a
+  regression **and** a registered one that starts passing is a finding too;
+* **AOT** (`run_aot_tests.sh`, 3 smoke cases);
+* **memory safety** (`tests/run_memory_sanitizers.sh`, valgrind);
+* the **leak gate** (`tests/run_lifetime_leak_gates.sh`, valgrind, spec/61 §7);
+* packaging, artifact upload, and on a `v*` tag a draft release — **after** the
+  gates, not before them. They used to run first, so a tag published a release
+  while the tests had not been asked yet.
 
 **Advisory** (`continue-on-error: true`, reported but never blocking):
 
-* **Test corpus** — `run_all_tests.sh --no-build`, `TEST_TIMEOUT=300`. It writes
-  the tail of `test_results.txt` and every `[ FAIL ]` line into the job summary,
-  and a separate always-run step prints the last 150 lines of each failed test
-  in a collapsed group.
-* **Lifetime suite** — `tests/lifetime/run_lifetime.sh`, the lab (§3), red by
-  design.
+* the **lifetime lab** (`tests/lifetime/run_lifetime.sh`), red by design (§3);
+* a step that prints the last 150 lines of every failed test in a collapsed
+  group, so a red corpus is readable from the job log alone.
 
-What the CI does **not** run: `run_aot_tests.sh`, `run_wasm_tests.sh`,
-`tests/run_memory_sanitizers.sh`, `tests/run_lifetime_leak_gates.sh`. The two
-valgrind gates — the only thing that checks memory safety and leak counts — are
-local-only.
+What the CI still does **not** run: `run_wasm_tests.sh`. It needs an `emsdk`
+installation, and an untested CI step is a guess, so the wasm32 target remains
+local-only (§5).
 
-The CI has no display, so all 41 `Requires: display` tests are skipped there.
-That is the gap that hid the two bugs in §3.
+exodus has a CI of its own (`Pymann/exodus`, `.github/workflows/ci.yml`): wheel
+install, an import check from outside the repository, `pytest`,
+`flake8 --select=F`, `black --check` and `mypy`. aiml's CI installs exodus
+straight from that repository's `main`, so a broken exodus fails aiml's build
+too — the pair is verified from both ends.
 
 ## 5. Gaps, stated plainly
 
-* **`run_all_tests.sh` ends without an exit code of its own**, so it returns 0
-  even with failing tests. Read the `Test Run Summary` block or grep for
-  `[ FAIL ]`; do not trust `$?`. The CI works around this with
-  `! grep -qE '^\[ FAIL \]' test_results.txt`, but under `continue-on-error`.
-* **The suite cannot distinguish an expected failure from a regression.** §3 is
-  the register, maintained by hand. A machine-readable one — a file of expected
-  failures the suite reads, so that an unexpected pass is also a finding — is the
-  prerequisite for making the corpus step a hard gate.
-* **No memory gate in CI.** Both valgrind runners need `valgrind` and a few
-  minutes; neither runs on a push.
 * **`run_aot_tests.sh` is 3 smoke cases**, not an AOT corpus. The name promises
-  more than the script does. Nothing systematically runs the corpus through AOT.
+  more than the script does, and nothing runs the corpus through AOT. It is a
+  gate in CI now, but a narrow one.
+* **wasm32 is not in CI** (see §4), so a wasm-only regression is found only by a
+  local `run_wasm_tests.sh`.
 * **No language check.** The sources were translated from German in one pass
   (2026-11-24); nothing stops German from coming back, and a check would have to
   split CamelCase identifiers to catch cases like `GlPufferZiel`.

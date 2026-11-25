@@ -35,7 +35,12 @@ jobs:
       - name: System packages
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends g++ python3-venv dpkg-dev valgrind patchelf
+          sudo apt-get install -y --no-install-recommends \
+            g++ python3-venv dpkg-dev valgrind patchelf \
+            xvfb x11-utils libgl1-mesa-dri
+          # xvfb + x11-utils: run_all_tests.sh asks xdpyinfo whether the display
+          # is real before it runs a display test.  libgl1-mesa-dri gives that
+          # display a software GL, without which the GL tests cannot run at all.
 
       - name: Restore pinned .deb cache
         id: debcache
@@ -85,6 +90,72 @@ jobs:
           echo "exit code $rc"
           test "$rc" -eq 42   # tests/test.aiml ends in sys.exit(42)
 
+      - name: Test corpus
+        id: corpus
+        env:
+          ONLY: ${{ github.event.inputs.only }}
+        run: |
+          # Display tests need an X display AND an interactive terminal:
+          # xvfb-run provides the first, `script` the second.  Without the TTY
+          # the suite skips all 41 of them in silence -- which is exactly how
+          # test_gl_vfx (a real GL buffer bug) and test_layout_helpers (a test
+          # that asserted behaviour it never exercised) stayed broken unnoticed.
+          cmd="TEST_TIMEOUT=300 bash run_all_tests.sh --no-build"
+          if [ -n "${ONLY:-}" ]; then cmd="$cmd --only $ONLY"; fi
+          set +e
+          xvfb-run -a script -qec "$cmd" /dev/null > corpus.log 2>&1
+          rc=$?
+          set -e
+          # The suite judges itself against the expected-failure register in
+          # TEST_SUITES.md and exits with that verdict, so this step gates: an
+          # unregistered failure is a regression, and a registered one that
+          # starts passing is a finding too.
+          tail -n 30 test_results.txt
+          {
+            echo "## Test corpus"
+            echo '```'
+            tail -n 30 test_results.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit $rc
+
+      - name: Output of failed tests
+        if: always()
+        run: |
+          [ -f test_results.txt ] || exit 0
+          python3 - <<'PY'
+          import re
+          blocks = re.split(r"^-{20,}\n", open("test_results.txt", errors="replace").read(), flags=re.M)
+          for b in blocks:
+              if "[ FAIL ]" in b:
+                  lines = b.splitlines()
+                  print("::group::" + next((l for l in lines if "[ FAIL ]" in l), "FAIL"))
+                  print("\n".join(lines[-150:]))
+                  print("::endgroup::")
+          PY
+
+      - name: AOT smoke tests
+        run: bash run_aot_tests.sh
+
+      # The two valgrind runners answer different questions and are both gates.
+      # Neither ran in CI before, so memory safety and leak counts were checked
+      # on one developer machine or not at all.
+      - name: Memory safety (valgrind)
+        run: bash tests/run_memory_sanitizers.sh
+
+      - name: Leak gate (spec/61 §7, valgrind)
+        run: bash tests/run_lifetime_leak_gates.sh
+
+      # The lab, not a gate: its own header says it stays red until the spec/61
+      # rewrite lands (TEST_SUITES.md §3).  Reported so the distance is visible.
+      - name: Lifetime lab (spec/61, red by design)
+        continue-on-error: true
+        run: bash tests/lifetime/run_lifetime.sh 2>&1 | tail -n 40
+
+      # Packaging and the draft release come AFTER the gates on purpose.  They
+      # used to run before the corpus, so a v* tag drafted a release and
+      # uploaded an artifact while the tests had not been asked yet -- the one
+      # build whose verification matters most was the one that published first.
       - name: Package
         run: |
           if [ -n "${{ github.event.inputs.release_tag }}" ]; then v="${{ github.event.inputs.release_tag }}"
@@ -117,45 +188,6 @@ jobs:
           else
             gh release create "$tag" dist/* --draft --title "$tag" "${new[@]}"
           fi
-
-      - name: Test corpus
-        id: corpus
-        continue-on-error: true
-        run: |
-          only=(); [ -n "${{ github.event.inputs.only }}" ] && only=(--only "${{ github.event.inputs.only }}")
-          TEST_TIMEOUT=300 bash run_all_tests.sh --no-build "${only[@]}" > corpus.log 2>&1 || true
-          tail -n 8 test_results.txt
-          grep -E '^\[ FAIL \]' test_results.txt || true
-          {
-            echo "## Test corpus"
-            echo '```'
-            tail -n 8 test_results.txt
-            echo '```'
-            echo "### Failures"
-            echo '```'
-            grep -E '^\[ FAIL \]' test_results.txt || echo "none"
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-          ! grep -qE '^\[ FAIL \]' test_results.txt
-
-      - name: Output of failed tests
-        if: always()
-        run: |
-          [ -f test_results.txt ] || exit 0
-          python3 - <<'PY'
-          import re
-          blocks = re.split(r"^-{20,}\n", open("test_results.txt", errors="replace").read(), flags=re.M)
-          for b in blocks:
-              if "[ FAIL ]" in b:
-                  lines = b.splitlines()
-                  print("::group::" + next((l for l in lines if "[ FAIL ]" in l), "FAIL"))
-                  print("\n".join(lines[-150:]))
-                  print("::endgroup::")
-          PY
-
-      - name: Lifetime suite (spec/61)
-        continue-on-error: true
-        run: bash tests/lifetime/run_lifetime.sh 2>&1 | tail -n 40
 
       - name: Upload results
         if: always()
