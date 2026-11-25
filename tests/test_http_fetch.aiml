@@ -6,6 +6,7 @@
 #
 # Expected exit code: 0
 
+# A missing header reads as null or "" -- both are shown as "-".
 # Echoes what arrived: "<method>|<x-probe header>|<authorization>|<body>".
 - def:
     name: handle_echo
@@ -13,8 +14,10 @@
     body:
       - decl: [probe, string, { call: [req.header, "x-probe"] }]
       - if: { condition: { eq: [probe, null] }, then: [{ set: [probe, "-"] }] }
+      - if: { condition: { eq: [probe, ""] }, then: [{ set: [probe, "-"] }] }
       - decl: [auth, string, { call: [req.header, "authorization"] }]
       - if: { condition: { eq: [auth, null] }, then: [{ set: [auth, "-"] }] }
+      - if: { condition: { eq: [auth, ""] }, then: [{ set: [auth, "-"] }] }
       - decl: [payload, string, req.body]
       - if: { condition: { eq: [payload, null] }, then: [{ set: [payload, ""] }] }
       - set: [resp.status, 200]
