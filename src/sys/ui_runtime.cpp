@@ -1374,7 +1374,30 @@ void aiml_ui_label_colored(const char* text, int32_t color, void* preset) {
     if (st) g_ui->style_stack.pop_back();
 }
 
+/* One "•" (U+2022) per UTF-8 character of `text` (spec/44_3 F44-3-21).  The
+ * result lives until the next call on this thread. */
+const char* aiml_ui_password_mask(const char* text) {
+    static thread_local std::string out;
+    out.clear();
+    if (text) {
+        for (const unsigned char* p = (const unsigned char*)text; *p; ++p)
+            if ((*p & 0xC0) != 0x80) out += "\xE2\x80\xA2";
+    }
+    return out.c_str();
+}
+
+static const char* text_input_impl(const char* id, const char* buf, void* preset, bool masked);
+
 const char* aiml_ui_text_input(const char* id, const char* buf, void* preset) {
+    return text_input_impl(id, buf, preset, false);
+}
+
+/* ui.password_input — text_input that draws bullets (F44-3-20). */
+const char* aiml_ui_password_input(const char* id, const char* buf, void* preset) {
+    return text_input_impl(id, buf, preset, true);
+}
+
+static const char* text_input_impl(const char* id, const char* buf, void* preset, bool masked) {
     if (!id || g_ui->cell_stack.empty()) return buf ? buf : "";
     AimlUILabelStyle* st = (AimlUILabelStyle*)preset;
     if (st) g_ui->style_stack.push_back(st->base);
@@ -1403,7 +1426,8 @@ const char* aiml_ui_text_input(const char* id, const char* buf, void* preset) {
     int32_t bg = (g_ui->focused == wid) ? cur_style().active_color : cur_style().bg_color;
     draw_filled_rect(x, y, w, h, bg);
     draw_border(x, y, w, h, cur_style().border_color, lp(cur_style().border_width));
-    draw_label_in_rect(it->second.c_str(), x, y, w, h, cur_style().color);
+    draw_label_in_rect(masked ? aiml_ui_password_mask(it->second.c_str()) : it->second.c_str(),
+                       x, y, w, h, cur_style().color);
 
     if (scissor[2] > 0) { int clear[4]={0,0,0,0}; push_scissor_cmd(clear); }
 

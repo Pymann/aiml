@@ -1869,6 +1869,39 @@ void registerBuiltins(CompilerContext& ctx) {
             llvm::Function* f = ctx.getFunction("aiml_storage_is_secure", ctx.builder.getInt32Ty(), {});
             return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {}));
         };
+        // Session store and URL fragment (spec/23_2): sessionStorage / location.hash on WASM.
+        storage.builtinFuncs["session_get"] = [i8p](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            if (args.empty()) return ctx.ir_gen->wrap(llvm::ConstantPointerNull::get(i8p));
+            llvm::Function* f = ctx.getFunction("aiml_storage_session_get", i8p, {i8p});
+            llvm::Value* k = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {k}));
+        };
+        storage.builtinFuncs["session_set"] = [i8p, vd](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            if (args.size() < 2) return ctx.ir_gen->getInt32(0);
+            llvm::Function* f = ctx.getFunction("aiml_storage_session_set", vd, {i8p, i8p});
+            llvm::Value* k = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]));
+            ctx.builder.CreateCall(f, {k, v});
+            return ctx.ir_gen->getInt32(0);
+        };
+        storage.builtinFuncs["session_remove"] = [i8p, vd](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            if (args.empty()) return ctx.ir_gen->getInt32(0);
+            llvm::Function* f = ctx.getFunction("aiml_storage_session_remove", vd, {i8p});
+            llvm::Value* k = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            ctx.builder.CreateCall(f, {k});
+            return ctx.ir_gen->getInt32(0);
+        };
+        storage.builtinFuncs["hash"] = [i8p](CompilerContext& ctx, const std::vector<IRValue*>&) -> IRValue* {
+            llvm::Function* f = ctx.getFunction("aiml_storage_hash", i8p, {});
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {}));
+        };
+        storage.builtinFuncs["set_hash"] = [i8p, vd](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            if (args.empty()) return ctx.ir_gen->getInt32(0);
+            llvm::Function* f = ctx.getFunction("aiml_storage_set_hash", vd, {i8p});
+            llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            ctx.builder.CreateCall(f, {v});
+            return ctx.ir_gen->getInt32(0);
+        };
     }
 
     // -----------------------------------------------------------------------
@@ -5971,6 +6004,26 @@ void registerBuiltins(CompilerContext& ctx) {
                     ? llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(i8p))
                     : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
                 return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {url}));
+            };
+            // http.fetch(method, url, headers, body) → string (spec/32_2 F32-2-60…65;
+            // WASM: window.fetch, native: http_client).  Missing arguments are "".
+            http.builtinFuncs["fetch"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+                llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Function* fn = ctx.module().getFunction("aiml_fetch");
+                if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(i8p, {i8p, i8p, i8p, i8p}, false), llvm::Function::ExternalLinkage, "aiml_fetch", ctx.module());
+                std::vector<llvm::Value*> call_args;
+                for (size_t i = 0; i < 4; ++i) {
+                    if (i < args.size()) call_args.push_back(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[i])));
+                    else call_args.push_back(ctx.builder.CreateGlobalStringPtr(""));
+                }
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, call_args));
+            };
+            // http.fetch_status() → i32: status of the last http.fetch on this thread, 0 = no answer
+            http.builtinFuncs["fetch_status"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+                (void)args;
+                llvm::Function* fn = ctx.module().getFunction("aiml_fetch_status");
+                if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getInt32Ty(), {}, false), llvm::Function::ExternalLinkage, "aiml_fetch_status", ctx.module());
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {}));
             };
             // http.get(url) → http_response_handle
             http.builtinFuncs["get"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
@@ -12731,6 +12784,29 @@ void registerBuiltins(CompilerContext& ctx) {
             return ctx.ir_gen->wrap(ctx.builder.CreateCall(
                 ctx.getFunction("aiml_ui_drag_f32", f32, {p, f32, f32, p}),
                 {id, farg(1), farg(2), preset})); };
+
+        // ui.password_input(id, buf, preset = null) → string — text_input drawn as bullets (spec/44_3 F44-3-20)
+        ui.builtinFuncs["password_input"] = [](CompilerContext& ctx,
+            const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto* p   = llvm::PointerType::get(ctx.context, 0);
+            auto  null = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(p));
+            auto sarg = [&](int i) -> llvm::Value* {
+                if ((int)args.size() <= i) return null;
+                return static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[i]));
+            };
+            llvm::Value* preset = args.size() < 3 ? (llvm::Value*)null : sarg(2);
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                ctx.getFunction("aiml_ui_password_input", p, {p, p, p}), {sarg(0), sarg(1), preset})); };
+
+        // ui.password_mask(text) → string — the caption password_input draws (F44-3-21)
+        ui.builtinFuncs["password_mask"] = [](CompilerContext& ctx,
+            const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto* p   = llvm::PointerType::get(ctx.context, 0);
+            llvm::Value* text = args.empty()
+                ? (llvm::Value*)llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(p))
+                : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                ctx.getFunction("aiml_ui_password_mask", p, {p}), {text})); };
 
         // ui.text_input(id: string, buf: string, preset: ui_label_style = null) → string
         ui.builtinFuncs["text_input"] = [](CompilerContext& ctx,

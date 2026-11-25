@@ -56,6 +56,7 @@ typedef struct AimlHttpResponse {
     int64_t      raw_len;      /* exact byte length of raw_body */
     int8_t       head_only;    /* server-side: answering a HEAD request — headers only, no body */
     char*        final_url;    /* client-side: the URL that answered (after redirects), malloc'd */
+    char*        req_inm;      /* server-side: the request's If-None-Match header (or NULL) */
 } AimlHttpResponse;
 
 /* ─── http_request_handle ─────────────────────────────────────── */
@@ -254,6 +255,7 @@ void aiml_http_client_set_proxy(void* client, const char* proxy);
 void aiml_http_client_set_max_redirects(void* client, int32_t count);
 void aiml_http_client_set_stream(void* client, int8_t stream);
 void* aiml_http_client_get_headers(void* client);   /* AimlHttpMap* */
+void  aiml_http_client_free(void* client);
 
 /* ══════════════════════════════════════════════════════════════
  * http_response_handle getters (client-side)

@@ -69,6 +69,8 @@ void        aiml_ui_label_colored (const char* text, int32_t color, void* preset
 /* Returns currently edited string (static buffer, valid until next text_input call). */
 const char* aiml_ui_text_input    (const char* id, const char* buf, void* preset);
 const char* aiml_ui_text_area     (const char* id, const char* buf, void* preset);
+const char* aiml_ui_password_input(const char* id, const char* buf, void* preset);
+const char* aiml_ui_password_mask (const char* text);
 
 /* ── Interactive widgets ──────────────────────────────────────────────────── */
 

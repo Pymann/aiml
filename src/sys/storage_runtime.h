@@ -35,6 +35,11 @@ void        aiml_storage_clear (void);
  * Returned pointer is valid until the next call to this function. */
 const char* aiml_storage_host  (void);
 int32_t     aiml_storage_is_secure(void);   /* 1 if the page is served over https (WASM); 0 native */
+const char* aiml_storage_session_get   (const char* key);   /* sessionStorage (WASM) / process map */
+void        aiml_storage_session_set   (const char* key, const char* value);
+void        aiml_storage_session_remove(const char* key);
+const char* aiml_storage_hash          (void);              /* URL fragment without '#' */
+void        aiml_storage_set_hash      (const char* value); /* replaceState, no navigation */
 
 #ifdef __cplusplus
 }

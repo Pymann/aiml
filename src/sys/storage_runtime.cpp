@@ -139,6 +139,81 @@ extern "C" int32_t aiml_storage_is_secure(void) {
     return js_storage_is_secure();
 }
 
+
+/* ── Session store and URL fragment (spec/23_2, kontor web_ui.md FW-93) ─── */
+
+EM_JS(char*, js_session_get, (const char* key), {
+    let v;
+    try { v = window.sessionStorage.getItem(UTF8ToString(key)); } catch (e) { v = null; }
+    if (v === null) v = "";
+    const len = lengthBytesUTF8(v) + 1;
+    const ptr = _malloc(len);
+    stringToUTF8(v, ptr, len);
+    return ptr;
+});
+
+EM_JS(void, js_session_set, (const char* key, const char* value), {
+    try { window.sessionStorage.setItem(UTF8ToString(key), UTF8ToString(value)); }
+    catch (e) { console.warn("storage.session_set failed:", e); }
+});
+
+EM_JS(void, js_session_remove, (const char* key), {
+    try { window.sessionStorage.removeItem(UTF8ToString(key)); } catch (e) {}
+});
+
+EM_JS(char*, js_location_hash, (), {
+    let v = window.location.hash || "";
+    if (v.startsWith("#")) v = v.slice(1);
+    const len = lengthBytesUTF8(v) + 1;
+    const ptr = _malloc(len);
+    stringToUTF8(v, ptr, len);
+    return ptr;
+});
+
+EM_JS(void, js_set_location_hash, (const char* value), {
+    const v = UTF8ToString(value);
+    const base = window.location.pathname + window.location.search;
+    try { history.replaceState(history.state, "", v.length ? base + "#" + v : base); }
+    catch (e) {}
+});
+
+static std::unordered_map<std::string, char*>& g_session_cache() {
+    static std::unordered_map<std::string, char*> m;
+    return m;
+}
+
+extern "C" const char* aiml_storage_session_get(const char* key) {
+    if (!key) return "";
+    auto& cache = g_session_cache();
+    auto it = cache.find(key);
+    if (it != cache.end()) { free(it->second); cache.erase(it); }
+    char* p = js_session_get(key);
+    if (!p) return "";
+    cache[key] = p;
+    return p;
+}
+
+extern "C" void aiml_storage_session_set(const char* key, const char* value) {
+    if (!key) return;
+    js_session_set(key, value ? value : "");
+}
+
+extern "C" void aiml_storage_session_remove(const char* key) {
+    if (!key) return;
+    js_session_remove(key);
+}
+
+extern "C" const char* aiml_storage_hash(void) {
+    static char* last = nullptr;
+    if (last) { free(last); last = nullptr; }
+    last = js_location_hash();
+    return last ? last : "";
+}
+
+extern "C" void aiml_storage_set_hash(const char* value) {
+    js_set_location_hash(value ? value : "");
+}
+
 #else
 /* ── Native POSIX backend: in-memory map mirrored to a flat file ────────── */
 
@@ -243,6 +318,46 @@ extern "C" const char* aiml_storage_host(void) {
 
 extern "C" int32_t aiml_storage_is_secure(void) {
     return 0;   /* native has no page protocol */
+}
+
+
+/* Session store: this process only, never on disk (spec/23_2). */
+static std::unordered_map<std::string, std::string>& g_session_map() {
+    static std::unordered_map<std::string, std::string> m;
+    return m;
+}
+static std::string& g_hash_value() {
+    static std::string h;
+    return h;
+}
+
+extern "C" const char* aiml_storage_session_get(const char* key) {
+    if (!key) return "";
+    std::lock_guard<std::mutex> lk(g_storage_mtx);
+    auto it = g_session_map().find(key);
+    return it == g_session_map().end() ? "" : it->second.c_str();
+}
+
+extern "C" void aiml_storage_session_set(const char* key, const char* value) {
+    if (!key) return;
+    std::lock_guard<std::mutex> lk(g_storage_mtx);
+    g_session_map()[key] = value ? value : "";
+}
+
+extern "C" void aiml_storage_session_remove(const char* key) {
+    if (!key) return;
+    std::lock_guard<std::mutex> lk(g_storage_mtx);
+    g_session_map().erase(key);
+}
+
+extern "C" const char* aiml_storage_hash(void) {
+    std::lock_guard<std::mutex> lk(g_storage_mtx);
+    return g_hash_value().c_str();
+}
+
+extern "C" void aiml_storage_set_hash(const char* value) {
+    std::lock_guard<std::mutex> lk(g_storage_mtx);
+    g_hash_value() = value ? value : "";
 }
 
 #endif

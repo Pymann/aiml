@@ -1370,7 +1370,7 @@ static void free_request(AimlHttpRequest* req) {
 static void free_response(AimlHttpResponse* resp) {
     if (!resp) return;
     aiml_http_map_free(resp->headers);
-    free(resp->body); free(resp->body_file); free(resp->req_range);
+    free(resp->body); free(resp->body_file); free(resp->req_range); free(resp->req_inm);
     for (int i = 0; i < resp->n_set_cookies; ++i) free(resp->set_cookies[i]);
     free(resp->set_cookies);
     free(resp);
@@ -1697,6 +1697,28 @@ static std::string resolve_under(const std::string& root,
     return std::string();
 }
 
+// If-None-Match (RFC 9110 §13.1.2): `*`, or any listed tag equal to ours
+// under weak comparison (a leading W/ is ignored).
+static bool etag_matches(const char* header, const char* etag) {
+    std::string h(header);
+    size_t pos = 0;
+    while (pos <= h.size()) {
+        size_t comma = h.find(',', pos);
+        std::string tok = h.substr(pos, comma == std::string::npos ? std::string::npos : comma - pos);
+        size_t a = tok.find_first_not_of(" \t");
+        size_t b = tok.find_last_not_of(" \t");
+        if (a != std::string::npos) {
+            tok = tok.substr(a, b - a + 1);
+            if (tok == "*") return true;
+            if (tok.compare(0, 2, "W/") == 0) tok = tok.substr(2);
+            if (tok == etag) return true;
+        }
+        if (comma == std::string::npos) break;
+        pos = comma + 1;
+    }
+    return false;
+}
+
 // Serve a single file: status 200 + content-type + cache-control + body.
 static void serve_file(AimlHttpResponse* resp,
                         const std::string& file_path,
@@ -1724,6 +1746,7 @@ static void serve_file(AimlHttpResponse* resp,
         return;
     }
     size_t total = static_cast<size_t>(st.st_size);
+    bool not_modified = false;
 
     // A content-type chosen by the handler (resp.body_file path) wins over the
     // extension guess; srv.filesystem responses start without one.
@@ -1745,6 +1768,10 @@ static void serve_file(AimlHttpResponse* resp,
                  (unsigned long long)st.st_size,
                  (unsigned long long)st.st_mtime);
         aiml_http_map_put(resp->headers, "etag", etag);
+        // F32-2-66: a matching If-None-Match (the tag itself, one of a comma
+        // list, a weak W/ form of it, or `*`) gets 304 with no body.
+        if (resp->req_inm && etag_matches(resp->req_inm, etag))
+            not_modified = true;
         char lm[48]; struct tm gmt;
         time_t mt = (time_t)st.st_mtime;
         if (gmtime_r(&mt, &gmt)) {
@@ -1763,6 +1790,14 @@ static void serve_file(AimlHttpResponse* resp,
         // a rebuilt client.js (loaded via a <script> tag) is served from cache while
         // the fresh client.wasm is fetched → EM_ASM address mismatch → crash.
         aiml_http_map_put(resp->headers, "cache-control", "no-cache");
+    }
+
+    if (not_modified) {
+        ::close(ffd);
+        resp->status = 304;
+        resp->head_only = 1;
+        send_response(resp);
+        return;
     }
 
     // ── Parse a single `Range: bytes=START-END` (START or END may be empty;
@@ -2043,6 +2078,8 @@ static void* handle_connection(void* arg) {
     resp->ssl     = ssl;
     if (const char* rng = aiml_http_map_get(req->req_headers, "range"))
         resp->req_range = xstrdup(rng);
+    if (const char* inm = aiml_http_map_get(req->req_headers, "if-none-match"))
+        resp->req_inm = xstrdup(inm);
     resp->head_only = (req->method && strcmp(req->method, "HEAD") == 0) ? 1 : 0;
 
     // Apply default server headers
