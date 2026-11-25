@@ -16,6 +16,16 @@ AIML="${AIML_BIN:-out/aiml/aiml}"
 ONLY="${ONLY:-}"
 LIB="out/libaiml"
 RPATH="$(pwd)/$LIB"
+# The pinned library directories of the runtime (exodus2.json), so -lyaml-cpp,
+# -lssl, ... resolve without a system-wide install (a fresh CI runner has none).
+EXODUS_L=()
+while IFS= read -r p; do [ -n "$p" ] && EXODUS_L+=("-L$p"); done < <(python3 - <<'PY'
+import json, os
+cache = os.environ.get("EXODUS_CACHE") or "__exodus_cache"
+for p in json.load(open("exodus2.json"))["linker"]["library_paths"]:
+    print(p.replace("__exodus_cache", cache, 1) if p.startswith("__exodus_cache") else p)
+PY
+)
 VG="valgrind --leak-check=full --show-leak-kinds=definite,indirect --errors-for-leak-kinds=definite,indirect --error-exitcode=99 --num-callers=20"
 command -v valgrind >/dev/null 2>&1 || { echo "FAIL: valgrind not installed (mandatory for the leak gate)"; exit 2; }
 [ -x "$AIML" ] || { echo "FAIL: compiler not found at $AIML"; exit 2; }
@@ -169,8 +179,8 @@ run_probe() {   # $1 = file ; prints "def/ind" ; returns valgrind rc
   local f="$1" d; d="$(mktemp -d /tmp/leakgate-XXXXXX)"
   if ! AIML_MEM_V3=1 AIML_LIFETIME_DROPS=1 "$AIML" "$f" -o "$d/main.o" --log-level ERROR >"$d/build.log" 2>&1; then
     echo "BUILD-FAIL"; rm -rf "$d"; return 98; fi
-  if ! g++ "$d"/*.o -o "$d/bin" -L"$LIB" -Wl,-rpath,"$RPATH" -laiml -lyaml-cpp -lpthread -lssl -lcrypto -ldl >"$d/link.log" 2>&1; then
-    echo "LINK-FAIL"; rm -rf "$d"; return 97; fi
+  if ! g++ "$d"/*.o -o "$d/bin" -L"$LIB" "${EXODUS_L[@]}" -Wl,-rpath,"$RPATH" -laiml -lyaml-cpp -lpthread -lssl -lcrypto -ldl >"$d/link.log" 2>&1; then
+    echo "LINK-FAIL"; sed -n '1,5p' "$d/link.log" | sed 's/^/      /' >&2; rm -rf "$d"; return 97; fi
   ( ulimit -v 6000000; AIML_MEM_V3=1 AIML_LIFETIME_DROPS=1 timeout 300 $VG --log-file="$d/vg.txt" "$d/bin" >/dev/null 2>&1 ); local rc=$?
   local def ind
   def=$(grep -aE 'definitely lost:' "$d/vg.txt" | tail -1 | grep -aoE '[0-9,]+ bytes' | head -1)

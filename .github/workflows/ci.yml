@@ -202,7 +202,11 @@ jobs:
             new=(--target "$GITHUB_SHA" --generate-notes)
           else
             tag="$GITHUB_REF_NAME"
-            new=(--verify-tag --notes-from-tag)
+            # The tag message becomes the release text; a lightweight tag has
+            # none, so its notes are generated from the commits instead.
+            kind=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" --jq .object.type)
+            if [ "$kind" = tag ]; then new=(--verify-tag --notes-from-tag)
+            else new=(--verify-tag --generate-notes); fi
           fi
           if gh release view "$tag" >/dev/null 2>&1; then
             gh release upload "$tag" dist/* --clobber
