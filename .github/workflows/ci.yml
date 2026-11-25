@@ -15,10 +15,6 @@ on:
         description: "Space-separated .aiml tests to run with --log-level INFO right after the smoke test"
         required: false
         default: ""
-      release_tag:
-        description: "Create this tag on the built commit and draft a release (e.g. v1.0.2.4)"
-        required: false
-        default: ""
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -201,15 +197,14 @@ jobs:
         continue-on-error: true
         run: bash tests/lifetime/run_lifetime.sh 2>&1 | tail -n 40
 
-      # Packaging and the draft release come AFTER the gates on purpose.  They
+      # Packaging and the release come AFTER the gates on purpose.  They
       # used to run before the corpus, so a v* tag drafted a release and
       # uploaded an artifact while the tests had not been asked yet -- the one
       # build whose verification matters most was the one that published first.
       - name: Package
         id: package
         run: |
-          if [ -n "${{ github.event.inputs.release_tag }}" ]; then v="${{ github.event.inputs.release_tag }}"
-          elif [[ "$GITHUB_REF" == refs/tags/v* ]]; then v="${GITHUB_REF_NAME}"; else v="git-${GITHUB_SHA::7}"; fi
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then v="${GITHUB_REF_NAME}"; else v="git-${GITHUB_SHA::7}"; fi
           REQUIRE_WASM=1 bash tools/ci/package_release.sh "$v" dist
 
       - name: Upload package
@@ -267,29 +262,15 @@ jobs:
           rm -rf "$work"
 
       - name: Release
-        if: startsWith(github.ref, 'refs/tags/v') || github.event.inputs.release_tag != ''
+        if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
-          INPUT_TAG: ${{ github.event.inputs.release_tag }}
         run: |
-          if [ -n "$INPUT_TAG" ]; then
-            tag="$INPUT_TAG"
-            [[ "$tag" == v* ]] || { echo "release_tag must start with v"; exit 1; }
-            # A draft release creates its tag only when it is published, so the tag
-            # is pushed here, on the commit that was built and tested.
-            if ! gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" >/dev/null 2>&1; then
-              gh api "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/$tag" -f sha="$GITHUB_SHA" >/dev/null
-              echo "tag $tag created on $GITHUB_SHA"
-            fi
-            new=(--verify-tag --generate-notes)
-          else
-            tag="$GITHUB_REF_NAME"
-            # The tag message becomes the release text; a lightweight tag has
-            # none, so its notes are generated from the commits instead.
-            kind=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" --jq .object.type)
-            if [ "$kind" = tag ]; then new=(--verify-tag --notes-from-tag)
-            else new=(--verify-tag --generate-notes); fi
-          fi
+          tag="$GITHUB_REF_NAME"
+          # The tag message becomes the release text; a lightweight tag has
+          # none, so its notes are generated from the commits instead.
+          kind=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" --jq .object.type)
+          if [ "$kind" = tag ]; then notes=(--notes-from-tag); else notes=(--generate-notes); fi
           # Published, not a draft: the tag run is the release.  A release that
           # already exists (made by hand, or a draft from before) gets the files
           # and is published.
@@ -297,7 +278,7 @@ jobs:
             gh release upload "$tag" dist/* --clobber
             gh release edit "$tag" --draft=false
           else
-            gh release create "$tag" dist/* --title "$tag" "${new[@]}"
+            gh release create "$tag" dist/* --verify-tag --title "$tag" "${notes[@]}"
           fi
 
       - name: Upload results
