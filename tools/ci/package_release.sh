@@ -24,8 +24,24 @@ cp out/aiml/aiml "$STAGE/bin/aiml"
 cp out/libaiml/libaiml.so "$STAGE/lib/libaiml.so"
 cp LICENSE THIRD_PARTY.md "$STAGE/"
 
-# Belongs to the target system (driver stack, display, audio, libc).
-SKIP='^(ld-linux|libc\.|libm\.|libmvec\.|libdl\.|libpthread\.|librt\.|libresolv\.|libgcc_s|libstdc\+\+|libGL\.|libGLX|libEGL|libGLdispatch|libOpenGL|libgallium|libdrm|libgbm|libvulkan|libwayland|libX|libxcb|libxshmfence|libasound|libpulse|libjack|libudev|libsystemd)'
+# Belongs to the target system, for one of two reasons.
+#
+# MUST come from the host: glibc and its loader (a bundled libc beside the host's
+# loader is the classic unexplainable crash), and the driver stack -- libGL,
+# libGLX, libEGL, libgallium, libdrm, libgbm, libvulkan have to match the kernel
+# driver on the machine that runs this.
+#
+# libstdc++ / libgcc_s are skipped for a subtler reason: the host's libGL (Mesa)
+# links libstdc++ too, and because every bundled library carries RUNPATH $ORIGIN
+# the bundled copy wins process-wide. On a host newer than the build runner that
+# turns a working driver into an unresolved symbol -- so these two stay host even
+# though bundling them would be only 2.7 MiB.
+#
+# The X11/audio CLIENT libraries are bundled (since 2026-11-25): libX11, libxcb,
+# libXext, libXtst, libXau, libXdmcp and friends are ~1.6 MiB together, have a
+# stable ABI and no coupling to the driver, and without them the bundle needs the
+# X client libraries preinstalled on the target.
+SKIP='^(ld-linux|libc\.|libm\.|libmvec\.|libdl\.|libpthread\.|librt\.|libresolv\.|libgcc_s|libstdc\+\+|libGL\.|libGLX|libEGL|libGLdispatch|libOpenGL|libgallium|libdrm|libgbm|libvulkan|libudev|libsystemd)'
 
 # Index the pinned shared libraries by file name.  A NEEDED entry is bundled
 # when the cache has it — whether or not the build host also has a system copy
