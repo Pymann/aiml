@@ -1,0 +1,11 @@
+# Requires: driver
+# spec/71 §8 / F71-7 / §3: a compile error naming the replacement.
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [bff, buffer<f32>]
+      - decl: [oth, buffer<f32>]
+      - call: [bff.alloc, 8]
+      - call: [bff.append, oth]
+      - return: 0

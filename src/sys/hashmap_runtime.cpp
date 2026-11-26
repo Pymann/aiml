@@ -79,6 +79,7 @@ extern "C" void aiml_hashmap_retain(void* h) {
 }
 
 extern "C" void aiml_cap_forget(const void* c);
+extern "C" void aiml_cap_copy(const void* from, const void* to);
 extern "C" void aiml_hashmap_release(void* h) {
     if (!h) return;
     AimlHashMap* m = as_map(h);
@@ -106,6 +107,7 @@ extern "C" void* aiml_hashmap_clone(void* h) {
         for (auto& kv : m->skeys) dup(kv.second);
         for (auto& kv : m->ikeys) dup(kv.second);
     }
+    aiml_cap_copy(h, m);   // spec/71 F71-6: a copy keeps the capacity
     return m;
 }
 

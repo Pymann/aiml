@@ -58,7 +58,7 @@ In the test's own header, read by `run_all_tests.sh`:
 | `# Expected exit code: N` | the run passes iff the program exits with `N`. 400 of the 680 top-level tests carry one; 49 of those expect non-zero. |
 | `# Requires: display` | needs an X/Wayland display **and** a TTY, else skipped (41 tests) |
 | `# Requires: library` | not a test — imported by other tests, never run standalone (40 files) |
-| `# Requires: driver` | belongs to the `run.sh` of its own directory; running it alone would look like a failure, because a negative case is *supposed* not to compile (125 files) |
+| `# Requires: driver` | belongs to the `run.sh` of its own directory; running it alone would look like a failure, because a negative case is *supposed* not to compile (160 files; 35 of them are `tests/collection_retired/`, added 2026-11-26) |
 | `# Requires: wasm` | only meaningful in the Emscripten build; `run_wasm_tests.sh` runs these (3) |
 | `# Requires: peer` | needs a paired server/client process; always fails solo (4) |
 | `# Requires: manual` | opens a window and waits for a human; run with `--manual` (3) |
@@ -82,6 +82,19 @@ test is therefore a visible, reviewable act, and un-registering is forced: once
 it passes, the gate fails until the row is gone.
 
 ## 3. Known failures
+
+**2026-11-26, spec/71 (collection vocabulary), branch `feature/collection-vocabulary`:** the
+corpus was migrated to the new names with the help of the compiler itself — every retired name
+is a compile error that names its replacement, so `aiml --check` over all 1,315 `.aiml` files
+listed every site.  New: `tests/test_collection_{vocabulary,capacity,get_default,bounds}.aiml`
+and the driver `tests/collection_retired/run.sh` (one snippet per retired name, F71-7 and the
+§3 default rule).  Behaviour that changed and the tests that pin it: a missing string key is
+the null string (`test_hashmap` C3, `test_storage_session`), `buffer<T>.len` counts elements
+(`test_buffer_typed_surface`), reading past a buffer's written data raises
+`BufferUnderflowException` (`test_media_store` now checks a frame's length first).  Local run
+without a display: 1137 entries, 4 failures — `tests/closures/run.sh` (registered below),
+`compress_zim` (no `libaiml_zim.so` built locally), `test_mirror_dualstack` (no IPv6 in the
+container), `test_media_store` (fixed after the run).
 
 Measured 2026-11-24 on `15ff4ddc` plus the two fixes below, whole corpus under
 Xvfb with a TTY:

@@ -20,7 +20,7 @@ This document serves as a comprehensive reference for AIML's built-in data types
     - [String Methods (ptr<i8>)](#31-string-methods-ptri8)
     - [List Methods (list<T>)](#32-list-methods-listt)
     - [Map Methods (map<K:V>)](#33-map-methods-mapkv)
-    - [Memory & Size Properties](#34-memory--size-properties)
+    - [Memory Size](#36-memory-size)
 4. [Namespaces & Standard Library](#4-namespaces--standard-library)
     - [System & Environment (`sys`)](#41-system--environment-sys)
     - [Time (`time`)](#42-time-time)
@@ -80,7 +80,7 @@ Stack-allocated, bounded arrays. See `spec/52_arrays.md` for the full reference.
 ### 1.5 Collections
 Heap-allocated, dynamic collections.
 - `list<T>`: Dynamic list of type `T`.
-- `map<K:V>`: Key-value map. (e.g., `map<string:i32>`). `map<string:any>` supports heterogeneous boxed values.
+- `map<K:V>`: Key-value map (e.g., `map<string:i32>`). `any` is never an element type (`map<string:any>` is a compile error, spec/02).
 - `buffer<T>`: Buffer slices for direct memory blocks.
 - `Kv<K:V>`: Persistent key-value store handle from AionDB.
 - `Store<T>`: Typed persistent entity store.
@@ -139,13 +139,24 @@ Logical chains with more than 2 elements must be explicitly nested.
 
 ## 3. Built-in Methods & Properties
 
+### 3.0 One vocabulary for every collection (spec/71)
+Every collection uses the same names; spec/71 holds the complete matrix.  The queries
+**`.len`** (element count), **`.empty`** (`1` if none), **`.byte_len`** (bytes of the elements) and
+**`.capacity`** (most elements, `0` = unbounded) are **properties**, never calls.  Positions are
+read with **`{ at: [s, i] }`** and written with **`idx: [s, i, v]`**; a position outside
+`[0, len)` raises `IndexOutOfBoundsException`.  Keyed containers use **`set` / `get` / `has` /
+`delete` / `keys` / `clear`**; `get` never throws.  A retired name (`size`, `length`, `count`,
+`put`, `contains` on a map, `remove(k)`, `append`, `insert` on a store, …) is a compile error
+that names its replacement.
+
 ### 3.1 String Methods (`ptr<i8>`)
 Strings are null-terminated, immutable UTF-8 C-strings. Methods return new allocated strings.
-- **`.len`** `(property)`: Returns logical character length (`i32`).
-- **`[substr, start: i32] -> string`**: Returns substring from start index.
+- **`.len`** `(property)`: Number of **bytes** of the UTF-8 text (`i32`); `.byte_len` is the same; `.empty` is `1` for `""` and a null string.
+- **`[substr, start: i32] -> string`**: Returns substring from start (byte) index.
 - **`[substr, start: i32, len: i32] -> string`**: Returns up to `len` bytes from start index.
 - **`[starts_with, prefix: string] -> i32`**: Returns `1` if starting with prefix, `0` otherwise.
 - **`[ends_with, suffix: string] -> i32`**: Returns `1` if ending with suffix, `0` otherwise.
+- **`[contains, needle: string] -> i32`**: `1` if `needle` occurs in the string.
 - **`[index_of, needle: string] -> i32`**: Returns first byte offset, or `-1` if missing.
 - **`[lower] -> string`**: Returns lowercased string (ASCII).
 - **`[trim] -> string`**: Removes leading/trailing whitespace.
@@ -153,68 +164,54 @@ Strings are null-terminated, immutable UTF-8 C-strings. Methods return new alloc
 - **`[split, delimiter: string] -> list<string>`**: Splits string at occurrences.
 
 ### 3.2 List Methods (`list<T>`)
+- **`{ at: [lst, i] }`** / **`idx: [lst, i, v]`**: Read / write the element at `i`; out of range throws.
 - **`[push, val: T]`**: Appends a value.
-- **`[pop] -> T`**: Removes and returns last value.
-- **`[insert, index: i32, val: T]`**: Inserts a value at index.
+- **`[pop] -> T`**: Removes and returns last value; an empty list throws `IndexOutOfBoundsException`.
+- **`[insert, index: i32, val: T]`**: Inserts a value at index (`0..len`).
 - **`[remove, index: i32]`**: Removes value at index.
-- **`[get, index: i32] -> T`**: Returns value at index. Often used as method call `lst.get(i)`.
 - **`[clear]`**: Empties the list.
-- **`[free]`**: Explicit memory release if no RAII.
-- **`.empty`** `(property)`: Returns `bool`, `true` if empty.
-- **`.len`** `(property)`: Returns element count `i32`.
+- **`[free]`**: Early release; otherwise released at owner drop.
+- **`.len`**, **`.empty`**, **`.byte_len`** `(properties)`: Element count, `1` if empty, `len × element size`.
+- **`.capacity`** `(property, settable)`: `set: [lst.capacity, n]` caps the list at `n` elements (`0` = unbounded); growing past it raises `CapacityExceededException`.
 - **`[contains, val: T] -> i32`**: `1`/`0`. `eq`-semantics (strings by content).
 - **`[index_of, val: T] -> i32`**: First matching index, or `-1`.
-- **`[count, val: T] -> i32`**: Number of matches.
+- **`[count_of, val: T] -> i32`**: Number of matches.
 - **`[remove_value, val: T] -> i32`**: Removes the FIRST match; `1`/`0`.
-- **`[extend, other: list<T>]`**: Appends value-copies of `other` (same `T`; `self.extend(self)` ok).
+- **`[extend, other: list<T>]`**: Appends value-copies of `other` or of a list literal (same `T`; `self.extend(self)` ok).
 - **`[reverse]`**: In-place reverse.
-- **`[sort]` / `[sort_desc]`**: In-place stable insertion sort. Only int/enum/float/string.
+- **`[sort]` / `[sort_desc]`**: In-place stable sort. Only int/enum/float/bool/string.
 - **`[shuffle]`**: In-place Fisher-Yates (uses `math.random_int`; non-deterministic).
-- **Type rules:** `contains/index_of/count/remove_value` reject struct/model elements; `extend` rejects a different `list<U>`; unsupported types are compile errors with a source location.
-- **Index syntax:** `list-0`, `list-idx` and `set: [list-idx, value]` are actively used for dynamic list access and mutation.
+- **`[slice, a: i32, b: i32] -> list<T>`**, **`[join, sep: string] -> string`** (`list<string>` only).
+- **Type rules:** `contains/index_of/count_of/remove_value` reject struct/model elements; `extend` rejects a different `list<U>`; unsupported types are compile errors with a source location.
 
-### 3.3 Map Methods (`map<K:V>`)
-- **`[put, key: K, val: V]`**: Inserts or updates key.
-- **`[get, key: K] -> ptr<V>`** (or `V` / `null`): Retrieves value. Auto-unboxes in `map<string:any>`.
-- **`[remove, key: K]`**: Deletes a key. Throws if missing.
+### 3.3 Map Methods (`map<K:V>`, `hashmap<K:V>`)
+- **`[set, key: K, val: V]`**: Inserts or updates key.
+- **`[get, key: K] -> V`** / **`[get, key: K, default: V] -> V`**: Retrieves value; a missing key is the default, else the zero value (`0`, null string/handle). Never throws.
+- **`[has, key: K] -> i32`**: `1` if present.
+- **`[delete, key: K] -> i32`**: Deletes a key; `1` if it was there, else `0`.
+- **`[keys] -> list<K>`**: All keys, sorted (`map`: string keys only).
 - **`[clear]`**: Empties the map.
-- **`.len`** `(property)`: Returns key count `i32`.
+- **`.len`**, **`.empty`** `(properties)`; **`.capacity`** `(property, settable)`: a new key past it raises `CapacityExceededException`.
+- **`[incr, key: K, d] -> V`** (`hashmap` with integer values): `v += d`; a missing key counts as 0.
 
 ### 3.4 Persistent Store Handles (`Kv`, `Store`, `VecStore`, `TimeSeries`)
-- **`Kv<K:V>`**: Persistent AionDB map handle. Common API: `[set, key, val]`, `[get, key]`, `[has, key]`, `[delete, key]`, `[clear]`, `.len`.
-- **`Store<T>`**: Typed entity store. Used with `db.open`, `insert`, `update`, `delete`, `get`, query-style helpers.
-- **`VecStore`**: Embedding index for nearest-neighbor search. Common API: `insert`, `search`.
-- **`TimeSeries<T>`**: Append-only timeline/event store.
+- **`Kv<K:V>`**: Persistent AionDB map handle: `[set, key, val]`, `[get, key]` / `[get, key, default]`, `[has, key]`, `[delete, key] -> i32`, `[keys]`, `[clear]`, `.len`, `.empty`, `.capacity` (settable).
+- **`Store<T>`**: Typed entity store: `[add, row] -> i32` (the id), `[get, id] -> ref<T>`, `[update, id, row]`, `[delete, id] -> i32`, `.len`, `.empty`, query helpers.
+- **`VecStore`**: Embedding index: `[set, id, vec]` (one vector per id), `[search, query, k]`, `[delete, id] -> i32`, `.len`, `.empty`.
+- **`TimeSeries<T>`**: Append-only timeline: `[append, v, t]`, `[at_time, t]`, `[range, a, b]`, `.len`, `.empty`.
 
-### 3.5 Buffer Methods (`buffer`)
+### 3.5 Buffer Methods (`buffer`, `buffer<T>`)
 Binary memory slices with unified read/write cursor pointers.
-- **`[alloc, size: i32]`**: Allocates `size` bytes.
-- **`[write, value: any, type: Type]`**: Writes the value natively. Serializes primitives and deep-copies complex structs.
-- **`[read, type: Type] -> any`**: Reconstructs/deserializes value from cursor.
-- **`.size`** `(property)`: Amount of bytes currently written (`i32`).
-- **`.capacity`** `(property)`: Max allocated size (`i32`).
+- **`[alloc, size: i32]`**: Allocates `size` **bytes**.
+- **`[write, value: any, type: Type]`**: Writes the value natively; past the capacity `BufferOverflowException`.
+- **`[read, type: Type] -> any`**: Reads from the cursor; past the written data `BufferUnderflowException`.
+- **`.len`** `(property)`: Bytes written on a `buffer`, **elements** written on a `buffer<T>`; **`.byte_len`** is always bytes; **`.empty`**.
+- **`.capacity`** `(property, read-only)`: Allocated size — bytes on a `buffer`, elements on a `buffer<T>`.
+- **`buffer<T>`** also has `[push, v]`, `[pop] -> T`, `{ at: [b, i] }`, `idx: [b, i, v]`, `[extend, other]`, `[clear]`.
 
-### 3.6 Memory Size Methods
-- **`.len`** `(property)`: Element count specific to collections (`list`, `map`, `string`, `Kv`).
-- **`[size]`** `(intrinsic method)`: Usable across all generic types (`{call: [obj.size]}`). Represents the pure byte count residing in memory (`u64`). Also available via `[sys.size, Type]`.
-
-### 3.7 Path Methods (`path`)
-Paths are interned 64-bit pointers guaranteeing `O(1)` comparisons.
-- **`[path.join, p1, p2, ...]`** / **`[p.join, suffix]`**: Normalizes and concatenates, generating a new interned path.
-- **`[parent] -> path`**: Returns directory portion.
-- **`[name] -> string`**: Returns full filename.
-- **`[stem] -> string`**: Returns filename without extension.
-- **`[extension] -> string`**: Returns the extension.
-- **`[parts] -> list<string>`**: Returns all path fragments.
-- **`[depth] -> i32`**: Number of components.
-- **`[root] -> path`**: Returns platform root.
-- **`[is_absolute] -> bool`**, **`[is_relative] -> bool`**, **`[is_empty] -> bool`**: State checks.
-- **`[relative_to, base: path] -> path`**: Calculates relative offset.
-- **`[normalize] -> path`**: Eliminates `.` / `..` resolving cleanly.
-- **`[to_string] -> string`**, **`[to_os_string] -> string`**, **`[path.from_string, s: string] -> path`**: Explicit string bridges.
-- **Environment Context**: **`[path.home] -> path`**, **`[path.temp_dir] -> path`**, **`[path.config_dir, name: string] -> path`**, **`[path.current_exe] -> path`**, **`[path.cwd] -> path`**.
-
----
+### 3.6 Memory Size
+- **`.len`** `(property)`: Element count of every collection (spec/71 §1.1).
+- **`[sys.size, x] -> u64`**: The size of the **type** of `x` in bytes, like C's `sizeof` — not a collection query.
 
 ## 4. Namespaces & Standard Library
 
@@ -265,7 +262,7 @@ Always emits location strings `(<relative_source_path>:<line_number>)` implicitl
 ### 4.5 Database & Storage (`db` & AionDB)
 The core embedded database API.
 - **`[db.open, name: string, options: map] -> Store<T>`**: Opens/Builds an Entity table.
-- **`[db.open_kv, name: string] -> Kv<K,V>`**: Opens persistent KV map. API: `[set, key, val]`, `[get, key]`, `[has, key] -> i32`, `[delete, key]`, `.len` (property), `[clear]`. *(Note: Uses `set` and `delete`, unlike `map`).*
+- **`[db.open_kv, name: string] -> Kv<K:V>`**: Opens persistent KV map with the keyed-container API of §3.4.
 - **`[db.open_timeseries, name: string] -> TimeSeries<T>`**: Opens append-only event log.
 - **`[db.open_vec, name: string, {dims: i32}] -> VecStore`**: Initializes vector index. In current codebase there are also variants with an explicit dimensions argument plus options.
 - **`[db.query, st: Store, ops: map] -> list<ptr<T>>`**: O(N)/O(logN) filter evaluator `{where: filter_fn, order_by: "prop", limit: X}` native array mapping.

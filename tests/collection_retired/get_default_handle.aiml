@@ -1,0 +1,9 @@
+# Requires: driver
+# spec/71 §8 / F71-7 / §3: a compile error naming the replacement.
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [mpp, "map<string:list<i32>>"]
+      - decl: [lst, list<i32>, { call: [mpp.get, "k", [1]] }]
+      - return: 0

@@ -312,8 +312,8 @@ In v1 the pool is limited to one connection per domain.
 
 ## 6. Open Design Questions
 
-- **JSON parsing**: `resp.body` returns a string — AIML does not yet have a built-in
-  JSON parser. Short term: manual string parsing or FFI to `cjson`.
-  Long term: `json.*` namespace with `json.parse(str) → map<string:any>`.
+- **JSON parsing**: `resp.body` returns a string; `sys.deserialize(body, "Model")` parses it
+  into a typed model (spec/29).  There is no untyped JSON value: `map<string:any>` is a compile
+  error (spec/02).
 - **Pagination**: `rest_client_handle` has no built-in cursor/pagination logic.
   Must be implemented manually with `api.get("/users?page=2")`.

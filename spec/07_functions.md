@@ -67,16 +67,8 @@
 #    b) Named (trailing map overrides specific defaults):
 #    - call: [connect, "localhost", {timeout: 10.0}]  # port = 8080
 
-# 3. Model Validation (Auto-Unboxing)
-# When passing a map<string:any> to a function, the system validates fields
-# against the signature and unboxes compatible types.
-#
-# - def: { name: config, args: [[timeout, f64], [debug, bool]] }
-#
-# - decl: [options, map<string:any>]
-# - call: [options.set, "timeout", 10.0]
-# - call: [options.set, "debug", true]
-# - call: [config, options]
+# 3. There is no map-to-arguments unboxing: `map<string:any>` is a compile error (spec/02).
+#    Pass a model, or the arguments themselves (named overrides as in 2b above).
 #
 # Logic:
 # 1. "timeout" found in map? -> Yes. Value is 10.0 (f64). Compatible? -> Yes. Unbox.

@@ -181,44 +181,23 @@
     then:
       - print: ["Key not found"]
 
-# 4. Heterogeneous Map — map<string:any>
-# Values are stored as tagged variants: the runtime keeps the real type alongside the value.
-# get() auto-unboxes: the returned value has the REAL runtime type.
-# set: infers the correct type automatically.
-# Comparisons work on the returned value because the real type is known at runtime.
-- decl: [meta, map<string:any>]
-
-- call: [meta.set, "count", 42]          # stored as i32 (tagged)
-- call: [meta.set, "label", "hello"]     # stored as string (tagged)
-- call: [meta.set, "ratio", 3.14]        # stored as f64 (tagged)
-
-# Auto-unboxed retrieval — set: infers real type:
-- set: [count, { call: [meta.get, "count"] }]  # count is i32
-- set: [label, { call: [meta.get, "label"] }]  # label is string
-
-# Comparisons work because the real type is returned:
-- if:
-    condition: { eq: [count, 42] }
-    then:
-      - print: ["count matches"]
-
-# Null check still required for missing keys:
-- set: [missing, { call: [meta.get, "nonexistent"] }]
-- if:
-    condition: { eq: [missing, null] }
-    then:
-      - print: ["Key not found"]
+# 4. There is no heterogeneous map: `map<K:any>` is a compile error (spec/02 — `any` is never a
+# container element).  Heterogeneous values go into an interface list (`list<ptr<Iface>>`,
+# spec/19 §2) or a common base model.
 ```
 
-## Size vs Len
+## Queries: `.len`, `.empty`, `.byte_len`, `.capacity`
 
-| Attribute | Syntax | Returns | Description |
-|-----------|--------|---------|-------------|
-| `.len` | `obj.len` (property) | `i32` | Element/character count |
-| `.size` | `{ call: [obj.size] }` (method) | `u64` | Byte count in memory |
+| Property | Returns | Description |
+|----------|---------|-------------|
+| `.len` | `i32` | Element count |
+| `.empty` | `i32` | `1` if there is no element |
+| `.byte_len` | `i32` | Bytes of the elements (`list`: `len` × element size) |
+| `.capacity` | `i32` | Most elements the collection takes; `0` = unbounded; settable with `set:` |
 
-`.len` is available on `list`, `map`, and `string`.
-`.size` is an intrinsic method available on all types.
+They are properties, never calls — `{ call: [xs.len] }` is a compile error that names `xs.len`.
+Which type has which query is the table of spec/71 §1.1.  The size of a **type** in bytes is
+`sys.size(x)` (spec/23), the way C's `sizeof` is.
 
 ## Struct/Model Elements in Lists
 
@@ -238,12 +217,14 @@ is stored directly into the data array. For structs this is a full byte-for-byte
 A numeric value is first converted to the element type: `[vals.push, 1.5]` on a `list<f64>`
 stores a double (a float literal is `f32`), an integer pushed into a float list converts its value.
 
-A pointer expression cannot be pushed directly into an aggregate value list. This is
-a compile-time error for variables, members and nested calls alike. For example,
-`destination.push(source.get(index))` is invalid when both lists hold model values:
-`get()` returns an element pointer. Declare a local `MyModel` initialized from the
-`get()` result, then push that value; use `list<ptr<MyModel>>` when pointer sharing
-is intended. Calls returning actual model values remain valid push arguments.
+A pointer expression — a `ptr<T>`/`ref<T>`/`shared<T>` variable, member or call result —
+cannot be pushed directly into an aggregate value list. This is a compile-time error for
+variables, members and nested calls alike. `{ at: [source, index] }` is different: pushed
+into a value list it is **copied** (a value read of the element), pushed into a
+`list<ref<MyModel>>` it is the element's **address** (a borrow, spec/61 §5.4).  Returned from
+a function whose return type is `ref<MyModel>` / `ptr<MyModel>`, or `set:` into such a
+variable, it is the address as well.  Use `list<ptr<MyModel>>` only for boxes the list owns.
+Calls returning actual model values remain valid push arguments.
 
 **As an argument**, by contrast, an element pointer **is** accepted where the parameter is a
 model by value: the element is loaded and the callee gets a value copy, exactly as it would

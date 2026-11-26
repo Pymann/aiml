@@ -1911,7 +1911,7 @@ IRValue* Compiler::visitAtExpr(AtExpr* at) {
 
     // ── tensor ──
     if (tName == "tensor") {
-        // Call aiml_tensor_get(tensor*, i32 index) → f32
+        // aiml_tensor_get_flat(tensor*, i32 index) → f32, after the bounds check (spec/71 §4)
         llvm::Value* tPtr = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(
             sym->ir_alloca_inst ? sym->ir_alloca_inst : ctx.ir_gen->wrap(sym->alloca_inst)));
         llvm::Value* tensorVal = ctx.builder.CreateLoad(ctx.builder.getInt8Ty()->getPointerTo(), tPtr, "tensor_ptr");

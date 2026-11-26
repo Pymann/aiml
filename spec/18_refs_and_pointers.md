@@ -97,7 +97,7 @@ every context that has both the source class name and the target interface:
 
 - **decl** — `decl: [b, ptr<CardBase>, concrete]`
 - **method / call argument** — passing `concrete` to a `ptr<Iface>` param
-- **container insert** — `list<ptr<Iface>>.push(concrete)`, `map.put(k, concrete)`
+- **container insert** — `list<ptr<Iface>>.push(concrete)`, `map.set(k, concrete)`
 - **return** — `return: obj` where `obj` is `ptr<Concrete>` and the function
   returns `ptr<Iface>`. The fat pointer is built at the return site; a bare
   `return` of a concrete pointer does **not** reinterpret the object's first

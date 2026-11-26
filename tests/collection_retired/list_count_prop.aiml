@@ -1,0 +1,9 @@
+# Requires: driver
+# spec/71 §8 / F71-7 / §3: a compile error naming the replacement.
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [lst, list<i32>, [1, 2]]
+      - decl: [num, i32, lst.count]
+      - return: 0

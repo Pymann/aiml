@@ -1,0 +1,8 @@
+# Requires: driver
+# spec/71 §8 / F71-7 / §3: a compile error naming the replacement.
+- def:
+    name: main
+    return: i32
+    body:
+      - call: [storage.session_remove, "k"]
+      - return: 0

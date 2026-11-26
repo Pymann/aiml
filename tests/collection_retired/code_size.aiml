@@ -1,0 +1,9 @@
+# Requires: driver
+# spec/71 §8 / F71-7 / §3: a compile error naming the replacement.
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [src, Code]
+      - decl: [num, i32, { call: [src.size] }]
+      - return: 0

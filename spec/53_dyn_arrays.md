@@ -1,8 +1,8 @@
 # 53 — Dynamic Arrays (Heap-Allocated, Runtime-Sized)
 
 Heap-allocated arrays whose element count is determined at runtime. Complement to
-`array<T:N>` (stack, compile-time size). Element access compiles to the same GEP+load/store
-as fixed arrays — no overhead per element access.
+`array<T:N>` (stack, compile-time size). Element access compiles to the same bounds check and
+GEP+load/store as fixed arrays; the count lives in a header in front of the elements.
 
 ## 1. Declaration & Allocation
 
@@ -10,8 +10,9 @@ as fixed arrays — no overhead per element access.
 - decl: [arr, "dyn_array<i32>", { new_array: [i32, n] }]
 ```
 
-`new_array: [ElemType, CountExpr]` allocates `count * sizeof(ElemType)` bytes via `malloc`.
-The variable `arr` holds an `i8*` internally (heap pointer).
+`new_array: [ElemType, CountExpr]` allocates `count * sizeof(ElemType)` bytes plus a 16-byte
+header that stores `count` (spec/71 §6).  The variable `arr` holds an `i8*` internally: the
+pointer to the first element, so handing `arr` to native code passes the data as before.
 
 ### Supported element types
 
@@ -27,7 +28,9 @@ use `list<T>` for those.
 - decl: [y, f32, { at: [farr, j] }]
 ```
 
-Compiles to: load `i8*` pointer → bitcast to `T*` → GEP with index → load.
+Compiles to: load `i8*` pointer → bounds check against the stored count → bitcast to `T*` →
+GEP with index → load.  `i` outside `[0, arr.len)` raises `IndexOutOfBoundsException`
+("index 7 of 5", spec/71 §4).
 
 ## 3. Write — `idx` statement
 
@@ -36,7 +39,18 @@ Compiles to: load `i8*` pointer → bitcast to `T*` → GEP with index → load.
 - idx: [farr, j, 3.14]
 ```
 
-Compiles to: load `i8*` pointer → bitcast to `T*` → GEP with index → store.
+Compiles to: load `i8*` pointer → bounds check → bitcast to `T*` → GEP with index → store.
+Out of range raises `IndexOutOfBoundsException` like `at`.
+
+## 3a. Queries — `.len`, `.empty`, `.byte_len`
+
+```yaml
+- decl: [n, i32, arr.len]          # the count given to new_array
+- decl: [none, i32, arr.empty]     # 1 if the count is 0
+- decl: [bytes, i32, arr.byte_len] # len × sizeof(T)
+```
+
+They are properties (spec/71 §2), read from the header in front of the elements.
 
 ## 4. Free — scope-default, with `arr.free` as an optional early release
 
@@ -61,10 +75,11 @@ Compiles to: load `i8*` pointer → bitcast to `T*` → GEP with index → store
 |-----------------------|-------------------------|-------------------------|
 | Size known at         | Compile time            | Runtime                 |
 | Allocation            | Stack (LLVM alloca)     | Heap (malloc)           |
-| Per-access overhead   | 0 (GEP only)            | 0 (GEP only, after load)|
+| Per-access overhead   | bounds check + GEP      | bounds check + GEP, after load |
 | Per-alloc cost        | 0 (hoisted to entry)    | malloc call             |
 | Max size              | ~8 MB (thread stack)    | Limited by heap/RAM     |
 | Lifetime              | Function scope          | Owner drop (scope); `.free`=early |
+| Length                | `.len` = N (static)     | `.len` = count (stored header) |
 | Use case              | Fixed inner-loop buffers| Runtime-sized buffers   |
 
 ## 6. Example
@@ -90,11 +105,14 @@ Compiles to: load `i8*` pointer → bitcast to `T*` → GEP with index → store
 ## 7. Implementation Notes
 
 - `dyn_array<T>` is stored as `i8*` at the LLVM level (same as all other pointer types).
-- `new_array` emits `malloc(count * sizeof(elemTy))`.
-- `at` / `idx` load the `i8*`, bitcast to `T*`, then emit GEP + load/store.
-- `.free` emits a `free(ptr)` call and nulls the slot (early release; spec/61 §5.6).
+- `new_array` emits `aiml_darr_new(count, sizeof(elemTy))`: `malloc(16 + count * sizeof)`,
+  the count in the first 8 bytes, and the returned pointer 16 bytes in (16-byte aligned).
+- `at` / `idx` load the `i8*`, check the index against `aiml_darr_len` (the header), bitcast to
+  `T*`, then emit GEP + load/store.
+- `.free` and `free: [arr]` emit `aiml_darr_free(ptr)` (frees from the header) and null the
+  slot (early release; spec/61 §5.6).
 - Under the memory model (spec/61 §5.6) a `dyn_array` local registers a **scope-default free**
   (Class-4 unique resource, freed once at owner drop) — gated on the memory-model build flag; the
   legacy/OFF path keeps the manual-`.free`-or-leak behavior byte-for-byte.
-- No bounds checking — same raw-pointer semantics as `array<T:N>`.
+- Bounds are checked on every `at` / `idx`, as on `array<T:N>` and `list<T>` (spec/71 §4).
 - Element types must be LLVM primitive types; structs and pointer elements are not yet supported.

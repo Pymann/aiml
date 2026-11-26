@@ -57,8 +57,13 @@
                               - decl: [chunk, buffer]
                               - call: [chunk.alloc, 131072]
                               - decl: [cby, i32, { call: [chunk.ws_recv, conn] }]
+                              # A WebP header is 12 bytes; reading past a shorter frame
+                              # raises BufferUnderflowException (spec/11), so check the length.
                               - if:
-                                  condition: { eq: [upi, 0] }
+                                  condition: { "&&": [{ eq: [upi, 0] }, { "<": [cby, 12] }] }
+                                  then: [ { set: [valid, 0] } ]
+                              - if:
+                                  condition: { "&&": [{ eq: [upi, 0] }, { ">=": [cby, 12] }] }
                                   then:
                                     - call: [chunk.seek, 0]
                                     - decl: [mr0, i32, { call: [chunk.read, u8] }]

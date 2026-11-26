@@ -27,11 +27,14 @@ Tensors store `float32` data with up to 8 dimensions.
 
 ## 3. Scalar Access
 
-| Method | Signature | Description |
+| Form | Signature | Description |
 |--------|-----------|-------------|
-| `t.get` | `(idx) -> f32` | Flat-index read |
-| `t.set` | `(idx, val) -> void` | Flat-index write |
+| `{ at: [t, i] }` | `-> f32` | Flat-index read; `i` outside `[0, t.len)` raises `IndexOutOfBoundsException` |
+| `idx: [t, i, v]` | statement | Flat-index write (`v` converted to `f32`); same bounds as `at` |
 | `t.item` | `() -> f32` | Scalar tensor to float |
+
+Elements are read and written like every sequence (spec/71 §1.5); the methods `t.get(i)` and
+`t.set(i, v)` are retired and name the forms above.
 
 ## 4. Shape / Metadata
 
@@ -39,7 +42,8 @@ Tensors store `float32` data with up to 8 dimensions.
 |--------|-----------|-------------|
 | `t.shape` | `(dim) -> i32` | Size along dimension |
 | `t.ndim` | `() -> i32` | Number of dimensions |
-| `t.size` | `() -> i32` | Total element count |
+| `t.len` | property `-> i32` | Total element count (spec/71 §2; `t.size()` is retired) |
+| `t.empty` | property `-> i32` | `1` if the tensor has no element |
 | `t.data_ptr` | `() -> i8*` | Raw float pointer |
 | `t.sha256` | `() -> string` | SHA-256 over tensor shape and raw `float32` payload |
 

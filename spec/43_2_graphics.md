@@ -185,7 +185,7 @@ vertex shader blends `uBones[int(aJoints[i])]` by `aWeights[i]`, see `uniform_ma
 - decl: [ok, bool, { call: [mesh.set_attribute, 6, 2, uv1] }]   # location, components 1..4, f32 data
 ```
 
-The data is borrowed for the call and uploaded into a mesh-owned VBO (freed by `mesh.delete`);
+The data is borrowed for the call and uploaded into a mesh-owned VBO (freed by `mesh.free`);
 setting the same location again replaces it. Returns `false` (no GPU change) for a location
 outside 6..15, components outside 1..4, empty data, a byte size that is not a multiple of
 `components * 4`, or more than 4 extra attributes per mesh. Locations 0..5 keep the fixed layout.
@@ -193,7 +193,7 @@ outside 6..15, components outside 1..4, empty data, a byte size that is not a mu
 **Cleanup:**
 
 ```aiml
-- call: [mesh.delete]   # frees VAO + all VBOs + IBO
+- call: [mesh.free]   # frees VAO + all VBOs + IBO
 ```
 
 ---
@@ -242,7 +242,7 @@ or retains the caller's Class-3 buffer.
 Constructors/producer returns transfer ownership to the receiving slot. Local
 owners release at scope exit, including return and exception unwind. Owning model
 fields release with their model; assignment transfers the handle and clears the
-source, while reassignment releases the previous destination. `delete()` is an
+source, while reassignment releases the previous destination. `free()` is an
 optional early release and clears the slot so the eventual drop is harmless.
 A `persistent` local explicitly opts out of scope release; the escaping owner
 must release it. Parameters used by rendering/upload calls are borrows.
@@ -358,7 +358,7 @@ path decodes in the browser). A caller may therefore load in any order.
 - call: [tex.gen_mipmaps]
 ```
 
-`img` is a `gltf_image` handle (from `tex.image()` or `scene.images().get(i)`).
+`img` is a `gltf_image` handle (from `tex.image()` or `{ at: [scene.images(), i] }`).
 Internally: stb_image decodes directly → `glTexImage2D`, no AIML-side pixel buffer.
 
 ### 5.3 Setting Sampler Parameters
@@ -388,12 +388,12 @@ the field's previous owned texture. A model with a `gl_texture` field is move-on
 (borrow it with `ref<T>`). A local initialised from any other expression (a field, a
 user call without `producer`, `gl.tex`) is a borrow and is not dropped.
 
-`tex.delete()` is the optional early close: it deletes the owned texture and nulls the
+`tex.free()` is the optional early close: it deletes the owned texture and nulls the
 variable or field, so the later drop is a no-op.
 
 Not owned by the program: `gl.tex(stem)` (asset cache), `gl.source_texture` (one
 runtime-held preview texture), `fbo.color_texture()` (a view of the framebuffer's
-attachment — the local holding it frees only the view at drop or `delete()`, never the
+attachment — the local holding it frees only the view at drop or `free()`, never the
 attachment).
 `gl.register_texture(stem, tex)` hands the texture to the asset cache, which keeps it
 for the process; the program's later drop of `tex` does not delete it.
@@ -590,10 +590,10 @@ Usage:
     - call: [SDL_GL_SwapWindow, win]
 
 # --- Cleanup ---
-- call: [vbo.delete]
-- call: [vao.delete]
-- call: [tex.delete]
-- call: [sh.delete]
+- call: [vbo.free]
+- call: [vao.free]
+- call: [tex.free]
+- call: [sh.free]
 - call: [SDL_DestroyWindow, win]
 - call: [SDL_Quit]
 ```
@@ -627,8 +627,8 @@ in just a few lines. Manual VBO/VAO setup is entirely unnecessary.
 - call: [mesh.draw]
 
 # Cleanup
-- call: [mesh.delete]
-- call: [tex.delete]
+- call: [mesh.free]
+- call: [tex.free]
 - call: [scene.free]
 ```
 
@@ -702,7 +702,7 @@ in just a few lines. Manual VBO/VAO setup is entirely unnecessary.
 | `attrib` | `index, components, stride, offset: i32` | `glVertexAttribPointer` (f32) |
 | `attrib_i` | `index, components, stride, offset: i32` | `glVertexAttribIPointer` (i32) |
 | `attrib_divisor` | `location, divisor: i32` | `bool`: 0 = per vertex, positive = per N instances |
-| `delete` | — | `glDeleteVertexArrays` |
+| `free` | — | `glDeleteVertexArrays` |
 
 ### `gl_buffer` Methods
 
@@ -711,7 +711,7 @@ in just a few lines. Manual VBO/VAO setup is entirely unnecessary.
 | `update` | `data: buffer<f32>` | `glBufferSubData` (same size) |
 | `reserve_bytes` | `capacity: i32` | `bool`: reserve at least this many bytes, never shrink |
 | `update_range` | `offset: i32, data: buffer<u8>` | `bool`: synchronous checked byte upload, no reallocation |
-| `delete` | — | `glDeleteBuffers` |
+| `free` | — | `glDeleteBuffers` |
 
 ### `gl_shader` Methods
 
@@ -727,7 +727,7 @@ in just a few lines. Manual VBO/VAO setup is entirely unnecessary.
 | `uniform_mat4_array` | `name: string, buf: buffer<f32>, count: i32` | For skinning |
 | `uniform_location` | `name: string` → `i32` | Where the name sits in the LINKED program; `-1` it is not there (absent or optimised out), `-2` no shader/name |
 | `attrib_location` | `name: string` → `i32` | Same for a vertex input (`glGetAttribLocation`) |
-| `delete` | — | `glDeleteProgram` |
+| `free` | — | `glDeleteProgram` |
 
 ### `gl_texture` Methods
 
@@ -736,7 +736,7 @@ in just a few lines. Manual VBO/VAO setup is entirely unnecessary.
 | `set_wrap` | `s, t: i32` | `GL_REPEAT` / `GL_CLAMP_TO_EDGE` / ... |
 | `set_filter` | `min, mag: i32` | Filter modes |
 | `gen_mipmaps` | — | `glGenerateMipmap` |
-| `delete` | — | `glDeleteTextures` |
+| `free` | — | `glDeleteTextures` |
 
 ### `gl_mesh` Methods
 
@@ -745,7 +745,7 @@ in just a few lines. Manual VBO/VAO setup is entirely unnecessary.
 | `draw` | — | — | `gl.draw_elements` with stored index_count |
 | `draw_count` | `n: i32` | — | Draw with override index_count |
 | `index_count` | — | `i32` | Number of indices |
-| `delete` | — | — | Free VAO + all VBOs + IBO |
+| `free` | — | — | Free VAO + all VBOs + IBO |
 
 ### `gl_framebuffer` Methods
 
@@ -753,7 +753,7 @@ in just a few lines. Manual VBO/VAO setup is entirely unnecessary.
 |---------|----------|--------------|
 | `color_texture` | `gl_texture` | The color attachment texture (for post-processing) |
 | `resize` | `w, h: i32` | Reallocate FBO + textures |
-| `delete` | — | Free FBO + attachments |
+| `free` | — | Free FBO + attachments |
 
 ---
 

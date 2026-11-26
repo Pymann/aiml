@@ -948,7 +948,7 @@ The same is captured as for types: while a function body is being compiled,
 out — they live in the runtime library, not in the bundle.
 
 The price is the flip side of completeness: a bundle can grow large if the called
-function in turn branches widely.  That is acceptable because it is **visible** (`pkg.size()`)
+function in turn branches widely.  That is acceptable because it is **visible** (`pkg.len`)
 and because the alternative — an incomplete bundle that is only noticed at the receiver — is the
 worse kind of surprise.
 

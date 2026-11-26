@@ -735,11 +735,11 @@ so access and ownership-transfer are **distinct verbs**. The rule per verb, by e
 
 | Verb | `list<ptr<T>>` (unique) | `list<shared<T>>` | `list<string>` | `list<T>` value / `list<Model>` |
 |---|---|---|---|---|
-| **`at` / `get`(i)** — read | returns a **`ref<T>` borrow** (the list keeps ownership; never moves out) | `ref<T>` borrow | `string` (shared handle, incref) | **scalar → by value**; **value-model → `ref` borrow** into the slot |
-| **`get_copy`(i)** — independent read | forbidden (would duplicate a unique owner — use `clone`) | `shared<T>` (incref, co-own) | `string` (incref) | member-wise **copy** — **forbidden if the model is move-only** (ptr/resource field); use `clone` |
-| **`pop` / `take`(i)** — extract | **moves** the owned `ptr<T>` **out** and returns it (caller now owns; slot removed) | returns the `shared<T>` (the list's ref transfers out) | returns the `string` | returns the value |
-| **`remove` / `delete`(i)** — drop | **releases** the element (frees the `ptr` box) and removes the slot; returns nothing | decref | decref | drop (release members) |
-| **`set`(i, v)** — replace (§5.5 order: **secure new first, then release old**) | move `v` in (`v` moved-out), then **free** the old box | incref/move new, then decref old | incref new, then decref old | copy/move new, then drop old |
+| **`{ at: [l, i] }`** — read (keyed: `get(k)`) | returns a **`ref<T>` borrow** (the list keeps ownership; never moves out) | `ref<T>` borrow | `string` (shared handle, incref) | **scalar → by value**; **value-model → `ref` borrow** into the slot |
+| **`get_copy`(k)** — independent read (keyed containers; a list element: `clone` the `at` read) | forbidden (would duplicate a unique owner — use `clone`) | `shared<T>` (incref, co-own) | `string` (incref) | member-wise **copy** — **forbidden if the model is move-only** (ptr/resource field); use `clone` |
+| **`pop`()** — extract the last element | **moves** the owned `ptr<T>` **out** and returns it (caller now owns; slot removed) | returns the `shared<T>` (the list's ref transfers out) | returns the `string` | returns the value |
+| **`remove`(i)** — drop (keyed: `delete(k)`) | **releases** the element (frees the `ptr` box) and removes the slot; returns nothing | decref | decref | drop (release members) |
+| **`idx: [l, i, v]`** — replace (keyed: `set(k, v)`; §5.5 order: **secure new first, then release old**) | move `v` in (`v` moved-out), then **free** the old box | incref/move new, then decref old | incref new, then decref old | copy/move new, then drop old |
 | **`push`/`insert`(v)** | **move** `v` in (`v` moved-out) | incref | incref | copy/move in |
 
 > ⚠️ **Deviation (found 2026-10-11, cosmos): for `map<string:string>` the promised
@@ -759,11 +759,12 @@ so access and ownership-transfer are **distinct verbs**. The rule per verb, by e
 > valid only as long as the map lives" (then a spec fix) — the two versions
 > contradict each other, and that decides whether `get_copy` becomes necessary for `map`.
 
-So: **`at`/`get` = borrow** (ownership stays in the list), **`pop`/`take` = move out** (the only
-way to get an owning `ptr<T>` back), **`remove` = release**. There is no verb that both keeps
+So: **`at` (keyed: `get`) = borrow** (ownership stays in the container), **`pop` = move out**
+(the only way to get an owning `ptr<T>` back out of a list), **`remove` (keyed: `delete`) =
+release**.  The names are spec/71's. There is no verb that both keeps
 the element in the list *and* hands a second owner out — that would break unique ownership.
 
-> **Binding an `at`/`get` read to `ptr<T>` is a compile error.** Because the read is a `ref<T>`
+> **Binding an `at` / keyed `get` read to `ptr<T>` is a compile error.** Because the read is a `ref<T>`
 > borrow (never a second owner), a `ptr<T>` binding — a *unique owner* — would let the borrow be
 > freed on drop/reassign (double-free of the container's box). The legal bindings are **`ref<T>`**
 > (borrow it) or, for an independent owned copy, **`get_copy`** (which duplicates the referent).
@@ -987,7 +988,7 @@ slot is just another place an owning reference lives):
 | Operation | Ownership behaviour |
 |---|---|
 | `push(inner)` / `insert` | store the handle. A **copy** source (aliasing) → **incref** (the container co-owns); a genuine **move** source → take over the source's owning reference (no incref, source moved-out). |
-| `at(outer, i)` **or** `outer.get(i)` read as a `list<T>` **value** | load the handle and **secure an owning reference** for the result value (incref) — the result is an owning handle, aliasing the same inner container (mutation is visible in the outer, §5.4). The `at` and `.get` accessors are **identical** for a nested-container element: both load the handle at pointer stride and incref when bound; neither may fall back to the inline-struct getter (which would read the element at struct stride and return garbage). |
+| `{ at: [outer, i] }` read as a `list<T>` **value** | load the handle and **secure an owning reference** for the result value (incref) — the result is an owning handle, aliasing the same inner container (mutation is visible in the outer, §5.4). The read loads the handle at pointer stride and increfs when bound; it never falls back to the inline-struct getter (which would read the element at struct stride and return garbage). |
 | `idx(outer, i, inner)` (replace) | **secure-before-release** (§5.5): incref/adopt the new handle, **decref the old** slot handle, then store the new handle. **No-op only when the source and destination are the *same slot*** (writing a slot back into itself). When they are **different slots that happen to hold the same handle value**: a **copy** source (it keeps its own reference) may be **optimised away** (the decref-old and incref-new cancel); a **move** source must still **clear the source slot** and **decref the surplus reference** so the count stays balanced. The provenance of the source (e.g. that it came from an earlier `at` on this same index) is **irrelevant** — only slot identity, and copy-vs-move, decide. |
 | `pop(outer)` / `take` | **transfer** the slot's owning reference into the result: remove it from the container and hand back its existing owning handle. **No decref** of the returned element — ownership moves to the caller. |
 | `remove(outer, i)` / replace-old / **outer drop** | **decref** the inner handle; its recursive drop (releasing the inner container's own elements + block) runs only at **its** rc 0. |

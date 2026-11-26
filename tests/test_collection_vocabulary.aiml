@@ -15,6 +15,12 @@
       - [val, i32]
 
 - def:
+    name: helper_fn
+    return: i32
+    body:
+      - return: 1
+
+- def:
     name: main
     return: i32
     body:
@@ -51,6 +57,8 @@
         then: [{ print: ["FAIL buffer.byte_len = ${raw.byte_len}"] }, { set: [fails, { +: [fails, 1] }] }]
       - if: [{ neq: [raw.capacity, 8] }, true]
         then: [{ print: ["FAIL buffer.capacity = ${raw.capacity}"] }, { set: [fails, { +: [fails, 1] }] }]
+      - if: [{ neq: [raw.empty, 0] }, true]
+        then: [{ print: ["FAIL buffer.empty"] }, { set: [fails, { +: [fails, 1] }] }]
 
       - decl: [arr, "array<i32:4>"]
       - if: [{ neq: [arr.len, 4] }, true]
@@ -74,6 +82,13 @@
         then: [{ print: ["FAIL string.len = ${str.len} (bytes)"] }, { set: [fails, { +: [fails, 1] }] }]
       - if: [{ neq: [str.byte_len, 5] }, true]
         then: [{ print: ["FAIL string.byte_len = ${str.byte_len}"] }, { set: [fails, { +: [fails, 1] }] }]
+      - if: [{ neq: [str.empty, 0] }, true]
+        then: [{ print: ["FAIL string.empty"] }, { set: [fails, { +: [fails, 1] }] }]
+      - decl: [nostr, string]
+      - if: [{ neq: [nostr.len, 0] }, true]
+        then: [{ print: ["FAIL null string .len"] }, { set: [fails, { +: [fails, 1] }] }]
+      - if: [{ neq: [nostr.empty, 1] }, true]
+        then: [{ print: ["FAIL null string .empty"] }, { set: [fails, { +: [fails, 1] }] }]
       - decl: [est, string, ""]
       - if: [{ neq: [est.empty, 1] }, true]
         then: [{ print: ["FAIL string.empty"] }, { set: [fails, { +: [fails, 1] }] }]
@@ -162,7 +177,13 @@
         then: [{ print: ["FAIL list.index_of"] }, { set: [fails, { +: [fails, 1] }] }]
       - if: [{ neq: [{ call: [lst.contains, 7] }, 0] }, true]
         then: [{ print: ["FAIL list.contains"] }, { set: [fails, { +: [fails, 1] }] }]
+      - if: [{ neq: [{ call: [lst.remove_value, 2] }, 1] }, true]
+        then: [{ print: ["FAIL list.remove_value"] }, { set: [fails, { +: [fails, 1] }] }]
+      - if: [{ neq: [{ call: [lst.count_of, 2] }, 3] }, true]
+        then: [{ print: ["FAIL list.remove_value removed more than one"] }, { set: [fails, { +: [fails, 1] }] }]
       - call: [lst.clear]
+      - decl: [tmp_lst, list<i32>, [1]]
+      - call: [tmp_lst.free]
       - if: [{ neq: [lst.len, 0] }, true]
         then: [{ print: ["FAIL list.clear"] }, { set: [fails, { +: [fails, 1] }] }]
 
@@ -202,6 +223,8 @@
         then: [{ print: ["FAIL Store.delete"] }, { set: [fails, { +: [fails, 1] }] }]
       - if: [{ neq: [{ call: [rows.delete, nid] }, 0] }, true]
         then: [{ print: ["FAIL Store.delete twice"] }, { set: [fails, { +: [fails, 1] }] }]
+      - if: [{ neq: [rows.empty, 1] }, true]
+        then: [{ print: ["FAIL Store.empty after delete"] }, { set: [fails, { +: [fails, 1] }] }]
 
       - decl: [vec, VecStore, { call: [db.open_vec, "coll_vocab_vec", 2] }]
       - decl: [emb, list<f32>, [1.0, 0.0]]
@@ -224,6 +247,8 @@
         then: [{ print: ["FAIL TimeSeries.at_time"] }, { set: [fails, { +: [fails, 1] }] }]
       - if: [{ neq: [tser.len, 1] }, true]
         then: [{ print: ["FAIL TimeSeries.len"] }, { set: [fails, { +: [fails, 1] }] }]
+      - if: [{ neq: [tser.empty, 0] }, true]
+        then: [{ print: ["FAIL TimeSeries.empty"] }, { set: [fails, { +: [fails, 1] }] }]
 
       - decl: [tns, tensor, { call: [tensor.zeros, 3] }]
       - idx: [tns, 2, 0.5]
@@ -231,11 +256,18 @@
         then: [{ print: ["FAIL tensor at/idx"] }, { set: [fails, { +: [fails, 1] }] }]
       - if: [{ neq: [tns.len, 3] }, true]
         then: [{ print: ["FAIL tensor.len"] }, { set: [fails, { +: [fails, 1] }] }]
+      - if: [{ neq: [tns.empty, 0] }, true]
+        then: [{ print: ["FAIL tensor.empty"] }, { set: [fails, { +: [fails, 1] }] }]
 
       - decl: [doc, ptr<yaml_doc>, { call: [yaml.parse, "[1, 2, 3]"] }]
       - decl: [root, ref<yaml_node>, { call: [yaml.root, doc] }]
       - if: [{ neq: [{ call: [yaml.len, root] }, 3] }, true]
         then: [{ print: ["FAIL yaml.len"] }, { set: [fails, { +: [fails, 1] }] }]
+      - decl: [pkg, Code, { call: [sys.bundle, "helper_fn"] }]
+      - if: [{ lt: [pkg.len, 1] }, true]
+        then: [{ print: ["FAIL Code.len = ${pkg.len}"] }, { set: [fails, { +: [fails, 1] }] }]
+      - if: [{ neq: [pkg.empty, 0] }, true]
+        then: [{ print: ["FAIL Code.empty"] }, { set: [fails, { +: [fails, 1] }] }]
 
       - if: [{ eq: [fails, 0] }, true]
         then: [{ print: ["collection vocabulary: all ok"] }]

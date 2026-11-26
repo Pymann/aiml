@@ -1,7 +1,8 @@
 # 52 — Arrays (Stack-Allocated Fixed-Size)
 
-Native fixed-size arrays that compile to LLVM `alloca [N x T]`. Zero overhead element access
-via GEP instructions — no function calls, no bounds checks, no heap allocation.
+Native fixed-size arrays that compile to LLVM `alloca [N x T]`. Element access is a bounds
+check against the static shape and a GEP — no function calls, no heap allocation.  A position
+outside a dimension raises `IndexOutOfBoundsException` (spec/71 §4).
 
 ## 1. Declaration
 
@@ -130,21 +131,14 @@ The `at` expression works polymorphically based on the container type:
 
 | Container | `{ at: [x, i] }` compiles to | Overhead |
 |-----------|------------------------------|----------|
-| `array<T:N>` | GEP + load | **1 instruction** |
-| `list<T>` | `aiml_list_get(x, i)` | Function call + bounds check |
-| `tensor` | `aiml_tensor_get(x, i)` | Function call |
+| `array<T:N>` | bounds check + GEP + load | a compare against a constant |
+| `dyn_array<T>` | bounds check against the stored count + GEP + load | one load of the count |
+| `list<T>` | bounds check + element load | inline, no call |
+| `buffer<T>` | bounds check + element load | inline, no call |
+| `tensor` | bounds check + `aiml_tensor_get_flat(x, i)` | function call |
 
-This replaces the `-` indexing syntax (which is deprecated but still supported for backward compatibility).
-
-### Migrating from `-` syntax
-
-```yaml
-# Old (deprecated)
-- decl: [x, i32, my_list-i]
-
-# New (recommended)
-- decl: [x, i32, { at: [my_list, i] }]
-```
+`at` (read) and `idx` (write) are the only element accessors of every sequence (spec/71 §1.3);
+the `-` indexing syntax is removed (spec/01) and `get(i)` / `set(i, v)` are retired (spec/71 §8).
 
 ### Slice (lists only)
 
@@ -161,6 +155,8 @@ Arrays do not support slicing (fixed size, stack-allocated).
 | Property | Type | Description |
 |----------|------|-------------|
 | `.len` | `i32` | Total element count (compile-time constant) |
+| `.empty` | `i32` | `1` if the array has no element (compile-time constant) |
+| `.byte_len` | `i32` | `len × sizeof(T)` (compile-time constant) |
 | `.data_ptr` | `i8*` | Pointer to first element (for C interop) |
 | `.dim0` | `i32` | Size of first dimension (compile-time constant) |
 | `.dim1` | `i32` | Size of second dimension (compile-time constant) |
@@ -407,8 +403,9 @@ This compiles to a tight loop of GEP+load+add+store — same speed as C.
 ## 11. Implementation Notes
 
 - Arrays compile to LLVM `alloca` with `zeroinitializer` in the function entry block
-- Element access compiles to `getelementptr` + `load`/`store` (single instruction each)
-- No runtime bounds checking (same as C arrays) — use `list<T>` if bounds checks needed
+- Element access compiles to a bounds check, then `getelementptr` + `load`/`store`
+- Every index is checked against its dimension (spec/71 §4); the check is a compare against a
+  constant, which LLVM drops when the index is a constant in range
 - Multi-dim indices are flattened at compile time when constant, or with `mul`+`add` when dynamic
 - `.len`, `.dim0`, `.dim1` etc. are compile-time constants (emitted as LLVM `i32` constants)
 - Arrays cannot be returned from functions (stack-allocated) — return via out-parameter or use `tensor`

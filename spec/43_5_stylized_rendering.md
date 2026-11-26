@@ -45,7 +45,7 @@ and method dispatch must agree on one ABI; no raw GL IDs exposed to AIML code.
 
 All input buffers/strings/handles are borrowed for the call. Uploads copy data
 before returning; no retained pointer into a caller's buffer. Returned GPU handles
-are unique Class-4 owners with automatic drop and existing explicit delete as
+are unique Class-4 owners with automatic drop and explicit `free()` as
 early close. Early close marks the owner invalid; a later drop is a no-op. Failed
 constructors return null and free every partial allocation. Setters returning
 bool return false on invalid input/unsupported capability without changing old
@@ -122,7 +122,7 @@ interchangeable with gl_texture; bind target is fixed by type.
 | gl.create_cubemap(size:i32,levels:i32) -> gl_cubemap | RGBA16F faces, 1<=levels<=floor(log2(size))+1; positive size within limit |
 | gl_cubemap.upload_face(face:i32,level:i32,pixels:buffer<f32>) -> bool | exact levelWidth^2*4 finite floats, copied synchronously |
 | gl.bind_cubemap(cube:gl_cubemap,unit:i32) -> void | unit range validated against fragment-stage limit |
-| gl_cubemap.delete() -> void | optional early close |
+| gl_cubemap.free() -> void | optional early close |
 
 Face enums POSITIVE_X, NEGATIVE_X, POSITIVE_Y, NEGATIVE_Y, POSITIVE_Z, NEGATIVE_Z
 are accepted; bundle face numbers 0..5 are explicitly mapped to these constants.
@@ -233,14 +233,14 @@ New unique Class-4 `gl_timer_query`:
 | gl_timer_query.end() -> bool | end this active query; invalid ordering fails |
 | gl_timer_query.ready() -> bool | nonblocking availability; false for active/invalid |
 | gl_timer_query.result_ns() -> i64 | elapsed ns when ready/valid, otherwise -1 without waiting |
-| gl_timer_query.delete() -> void | close; active query ended before release |
+| gl_timer_query.free() -> void | close; active query ended before release |
 
 Results can be read repeatedly until next begin. Begin while a prior result is
 pending fails; renderer skips a sample instead of blocking. Disjoint GPU timing
 invalidates samples on affected backends. Implement 64-bit native query retrieval,
 not truncated 32-bit milliseconds. Profiling must never issue glFinish.
 Ownership as gl_cubemap (spec/61 Class 4): a local from gl.create_timer_query or an
-owning producer is released at owner drop (an active query is ended first); delete()
+owning producer is released at owner drop (an active query is ended first); free()
 nulls the slot; model fields release with the model and are move-only. Desktop GL
 reports no disjoint state, so valid results are never marked invalid there. The web
 build reports timer_query unsupported (create returns null) until the disjoint path exists.
