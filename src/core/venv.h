@@ -37,5 +37,13 @@ int command(int argc, char** argv);
 int runProgram(const std::vector<std::string>& args, const std::string& cwd,
                const std::vector<std::string>& env, std::string* out);
 
+// GET `url` (redirects, proxy from the environment, TLS) into `toFile`; false with
+// `err` set unless the answer was 200.  Shared with `aiml build`'s apt fetch
+// (spec/68 F68-100a).
+bool download(const std::string& url, const std::string& toFile, std::string& err);
+
+// The sha256 of a file as 64 hex digits, "" when it cannot be read.
+std::string sha256File(const std::string& path);
+
 }  // namespace venv
 }  // namespace aiml

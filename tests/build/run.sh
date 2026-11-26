@@ -246,9 +246,6 @@ printf 'int x;\n' > "$W/x.c"; cc -c "$W/x.c" -o "$W/x.o" 2>/dev/null
 wcfg "$W/exodus-o.json" probe_o x.o
 out=$(winv -c exodus-o.json); rc=$?
 check "a native object in a wasm build is refused (F68-88)" '[ $rc -ne 0 ] && echo "$out" | grep -q "native object"'
-wcfg "$W/exodus-g.json" probe_g main.aiml ', "git_packages": [{ "name": "emsdk", "url": "x" }]'
-out=$(winv -c exodus-g.json); rc=$?
-check "git_packages stay refused in a wasm build: emsdk is the environment's (F68-82)" '[ $rc -ne 0 ] && echo "$out" | grep -q "needs exodus"'
 # The real thing where the CI has an emsdk and the wasm32 runtime (tools/run_wasm_test.sh's places).
 EMDIR=$(ls -d "$ROOT"/__exodus_cache/git/emsdk/*/upstream/emscripten 2>/dev/null | head -1)
 NODE=$(ls "$ROOT"/__exodus_cache/git/emsdk/*/node/*/bin/node 2>/dev/null | head -1)
@@ -269,19 +266,212 @@ else
     echo "  skip a real wasm build (no emsdk in __exodus_cache or no out/aiml_wasm)"
 fi
 
-echo "── refused: needs exodus (F68-82) ──"
+echo "── refused (F68-82) ──"
 R="$WORK/refuse"; mkdir -p "$R"; cp "$P/main.aiml" "$R/"; cp -r "$P/lib" "$R/"
-refused() {  # refused <label> <extra json> [output_type] [source]
-    cfg "$R/exodus-x.json" x "${3:-executable}" "${4:-main.aiml}" "$2"
-    out=$(inv "$R" -c exodus-x.json); rc=$?
-    check "$1 is refused: needs exodus" '[ $rc -ne 0 ] && echo "$out" | grep -q "needs exodus"'
+refused() {  # refused <label> <needle> <extra json> [output_type] [source]
+    cfg "$R/exodus-x.json" x "${4:-executable}" "${5:-main.aiml}" "$3"
+    out=$(inv "$R" -c exodus-x.json); rc=$?; needle="$2"
+    check "$1 is refused, named" '[ $rc -ne 0 ] && echo "$out" | grep -q -- "$needle"'
 }
-refused "output_type static_lib" '' static_lib
-echo 'int x;' > "$R/c.cpp"
-refused "a C++ source" '' executable c.cpp
-refused "apt_packages" ', "apt_packages": [{ "name": "zlib1g-dev", "version": "1" }]'
-refused "git_packages" ', "git_packages": [{ "name": "emsdk", "url": "x" }]'
-ENVJ='{ "X": "__exodus_cache/apt" }' refused "a path into __exodus_cache" ''
+refused "conan_packages" "conan_packages" ', "conan_packages": [{ "name": "fmt", "version": "10", "arch": "x86_64" }]'
+echo 'fn main() {}' > "$R/x.rs"
+refused "a source that is neither aiml, an object nor C/C++" "x.rs" '' executable x.rs
+
+echo "── C and C++ sources (§7.4) ──"
+C="$WORK/cproj"; mkdir -p "$C/src/util" "$C/include"
+cat > "$C/include/u.h" <<'EOT'
+#pragma once
+#ifdef __cplusplus
+extern "C" {
+#endif
+int u_twice(int x);
+#ifdef __cplusplus
+}
+#endif
+EOT
+cat > "$C/src/util/u.c" <<'EOT'
+#include "u.h"
+int u_twice(int x) { return 2 * x; }
+EOT
+cat > "$C/src/main.cpp" <<'EOT'
+#include <cstdio>
+#include <string_view>
+#include "u.h"
+int main() {
+    std::string_view g = GREETING;          // a define, and C++17 (string_view)
+    std::printf("%s %d\n", g.data(), u_twice(LEVEL));
+    return u_twice(LEVEL);
+}
+EOT
+ccfg() {  # ccfg <file> <name> <output_type> <sources json> [extra json]
+cat > "$1" <<EOT
+{
+    "\$schema": "exodus.project.config-1.0",
+    "name": "$2", "version": "0.1.0", "output_type": "$3",
+    "sources": $4,
+    "search_paths": ["include"],
+    "defines": { "GREETING": "\"servus\"", "LEVEL": "21" },
+    "compiler": { "name": "gcc", "lang_standard": "17", "flags": ["-fPIC"] },
+    "linker": { "name": "g++", "flags": [], "libraries": [], "library_paths": [] },
+    "optimization": "1", "debug": false, "warnings": ["all"],
+    "artifact_in_cwd": true${5:-}
+}
+EOT
+}
+ccfg "$C/exodus.json" capp executable '["src/**/*.cpp", "src/**/*.c"]'
+out=$(inv "$C" -j 2); rc=$?
+check "C and C++ sources build, ** reaching src/util (F68-81, F68-110)" '[ $rc -eq 0 ] && [ -x "$C/capp" ]'
+[ $rc -eq 0 ] || echo "$out" | tail -8
+check "the program runs with its define and the C function (F68-111)" 'o=$("$C/capp"); r=$?; [ $r -eq 42 ] && [ "$o" = "servus 42" ]'
+check "the compile line is exodus' (F68-111)" \
+  'echo "$out" | grep -q "gcc -fPIC -c $C/src/main.cpp -o $C/out/capp/src/main.o -MMD -MP -std=c++17 -O1 -Wall -Iinclude -DGREETING=\"servus\" -DLEVEL=21"'
+check "a .c source gets -std=c17 (F68-111)" 'echo "$out" | grep -q "src/util/u.c .*-std=c17"'
+check "objects and depfiles mirror the sources (F68-110)" '[ -f "$C/out/capp/src/util/u.o" ] && [ -f "$C/out/capp/src/main.d" ]'
+out=$(inv "$C"); rc=$?
+check "a second build compiles nothing (F68-112)" '[ $rc -eq 0 ] && ! echo "$out" | grep -q -- " -c " && [ "$(echo "$out" | grep -c "up to date")" -eq 2 ]'
+sleep 1; touch "$C/include/u.h"
+out=$(inv "$C"); rc=$?
+check "a touched header compiles the source that includes it (F68-112)" \
+  '[ $rc -eq 0 ] && echo "$out" | grep -q -- "-c $C/src/main.cpp" && echo "$out" | grep -q -- "-c $C/src/util/u.c"'
+sleep 1; touch "$C/src/util/u.c"
+out=$(inv "$C"); rc=$?
+check "a touched source compiles only itself (F68-112)" \
+  '[ $rc -eq 0 ] && echo "$out" | grep -q -- "-c $C/src/util/u.c" && ! echo "$out" | grep -q -- "-c $C/src/main.cpp"'
+ccfg "$C/exodus-lib.json" ustat static_lib '["src/util/*.c"]' ', "artifact_in_cwd": false'
+sed -i 's/"artifact_in_cwd": true, "artifact_in_cwd": false/"artifact_in_cwd": false/' "$C/exodus-lib.json"
+sed -i 's/"name": "g++", "flags": \[\], "libraries"/"flags": [], "libraries"/' "$C/exodus-lib.json"
+out=$(inv "$C" -c exodus-lib.json); rc=$?
+check "static_lib: lib<name>.a by ar rcs (F68-113)" \
+  '[ $rc -eq 0 ] && [ -f "$C/out/ustat/libustat.a" ] && ar t "$C/out/ustat/libustat.a" | grep -qx "u.o" && echo "$out" | grep -q "ar rcs"'
+[ $rc -eq 0 ] || echo "$out" | tail -5
+ccfg "$C/exodus-use.json" cuse executable '["src/main.cpp"]' ', "env": {}'
+sed -i 's|"libraries": \[\], "library_paths": \[\]|"libraries": ["ustat"], "library_paths": ["out/ustat"]|' "$C/exodus-use.json"
+out=$(inv "$C" -c exodus-use.json); rc=$?
+check "the archive links into a program (F68-113)" '[ $rc -eq 0 ] && [ "$("$C/cuse")" = "servus 42" ]'
+[ $rc -eq 0 ] || echo "$out" | tail -5
+printf 'int broken(;\n' > "$C/src/util/bad.c"
+out=$(inv "$C"); rc=$?
+check "a failing C compile ends the build, naming the source (F68-112)" '[ $rc -ne 0 ] && echo "$out" | grep -q "bad.c"'
+rm -f "$C/src/util/bad.c"
+
+echo "── apt packages (§7.2) ──"
+if command -v dpkg-deb >/dev/null && command -v python3 >/dev/null; then
+    A="$WORK/apt"; DEBS="$WORK/debs"; mkdir -p "$A" "$DEBS"
+    mkdeb() {  # mkdeb <name> <version> <dir with the files>
+        mkdir -p "$3/DEBIAN"
+        printf 'Package: %s\nVersion: %s\nArchitecture: amd64\nMaintainer: t <t@t>\nDescription: t\n' "$1" "$2" > "$3/DEBIAN/control"
+        dpkg-deb --root-owner-group --build "$3" "$DEBS/$1_${2#*:}_amd64.deb" > /dev/null
+    }
+    RT="$WORK/pk_rt"; DV="$WORK/pk_dev"; mkdir -p "$RT/usr/lib/x86_64-linux-gnu" "$DV/usr/include" "$DV/usr/lib/x86_64-linux-gnu"
+    printf 'int fakez(int x) { return x + 1; }\n' > "$WORK/fz.c"
+    cc -shared -fPIC -Wl,-soname,libfakez.so.1 "$WORK/fz.c" -o "$RT/usr/lib/x86_64-linux-gnu/libfakez.so.1"
+    printf 'int fakez(int x);\n' > "$DV/usr/include/fakez.h"
+    ln -s libfakez.so.1 "$DV/usr/lib/x86_64-linux-gnu/libfakez.so"
+    mkdeb libfakez1 1:2.0-1 "$RT"; mkdeb libfakez-dev 1:2.0-1 "$DV"
+    D_RT=$(sha256sum "$DEBS/libfakez1_2.0-1_amd64.deb" | cut -d' ' -f1)
+    D_DV=$(sha256sum "$DEBS/libfakez-dev_2.0-1_amd64.deb" | cut -d' ' -f1)
+    PORT=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
+    (cd "$DEBS" && exec python3 -m http.server "$PORT" --bind 127.0.0.1 > /dev/null 2>&1) & SRV=$!
+    for _ in $(seq 50); do (exec 3<>"/dev/tcp/127.0.0.1/$PORT") 2>/dev/null && break; sleep 0.1; done
+    printf '#include <stdio.h>\n#include "fakez.h"\nint main(void) { printf("fakez %%d\\n", fakez(40)); return fakez(40); }\n' > "$A/main.c"
+    PL='__exodus_cache/apt/libfakez1/amd64/1:2.0-1/payload/usr/lib/x86_64-linux-gnu'
+    PD='__exodus_cache/apt/libfakez-dev/amd64/1:2.0-1/payload'
+    acfg() {  # acfg <file> <name> <runtime digest>
+    cat > "$1" <<EOT
+{
+    "\$schema": "exodus.project.config-1.0",
+    "name": "$2", "version": "0.1.0", "output_type": "executable",
+    "sources": ["main.c"],
+    "apt_packages": [
+        { "name": "libfakez1", "version": "1:2.0-1", "arch": "amd64", "required": true, "digest": "$3" },
+        { "name": "libfakez-dev", "version": "1:2.0-1", "arch": "amd64", "required": true, "digest": "$D_DV" },
+        { "name": "libnichtda", "version": "9", "arch": "amd64", "required": false }
+    ],
+    "search_paths": ["$PD/usr/include"],
+    "compiler": { "name": "cc", "flags": [] },
+    "linker": { "name": "cc", "flags": [], "libraries": ["fakez"],
+                "library_paths": ["$PD/usr/lib/x86_64-linux-gnu", "$PL"] },
+    "artifact_in_cwd": true
+}
+EOT
+    }
+    acfg "$A/exodus.json" aptprobe "$D_RT"
+    ainv() { (cd "$A" && env -i HOME="$WORK" AIML_CACHE="$AIML_CACHE" AIML_DEB_URL="http://127.0.0.1:$PORT" \
+              PATH="$NOPY:$CLEANPATH" AIML_VENV="$VENV" AIML="$VENV/bin/aiml" "$VENV/bin/aiml" build "$@" 2>&1); }
+    out=$(ainv); rc=$?
+    check "the pinned packages are fetched and the program links against them (F68-100a)" '[ $rc -eq 0 ] && [ -x "$A/aptprobe" ]'
+    [ $rc -eq 0 ] || echo "$out" | tail -8
+    check "exodus' layout: _download/<deb> and payload/ (F68-100)" \
+      '[ -f "$A/__exodus_cache/apt/libfakez1/amd64/1:2.0-1/_download/libfakez1_2.0-1_amd64.deb" ] && [ -f "$A/$PL/libfakez.so.1" ]'
+    check "the program runs, the library found through the RUNPATH (F68-102)" 'o=$("$A/aptprobe"); r=$?; [ $r -eq 41 ] && [ "$o" = "fakez 41" ]'
+    check "a colon path goes through <cache>/rpath/ with %3a (F68-102)" \
+      'rp=$(runpath "$A/aptprobe"); [[ "$rp" == *"/rpath/apt/libfakez1/amd64/1%3a2.0-1/"* ]] && [[ "$rp" != *"1:2.0-1"* ]]'
+    check "the -dev link points into the runtime payload (F68-100d)" \
+      '[ "$(readlink "$A/$PD/usr/lib/x86_64-linux-gnu/libfakez.so")" = "$A/$PL/libfakez.so.1" ]'
+    check "an optional package that is not there is skipped, named (F68-100c)" 'echo "$out" | grep -q "libnichtda"'
+    check "the configuration is not written (F68-100b)" '! grep -q "\"digest\": \"\"" "$A/exodus.json" && grep -c digest "$A/exodus.json" | grep -qx 2'
+    kill $SRV 2>/dev/null; wait $SRV 2>/dev/null
+    rm -f "$A/aptprobe"
+    out=$(ainv); rc=$?
+    check "a cached package is not fetched again (F68-100)" '[ $rc -eq 0 ] && [ -x "$A/aptprobe" ]'
+    (cd "$DEBS" && exec python3 -m http.server "$PORT" --bind 127.0.0.1 > /dev/null 2>&1) & SRV=$!
+    for _ in $(seq 50); do (exec 3<>"/dev/tcp/127.0.0.1/$PORT") 2>/dev/null && break; sleep 0.1; done
+    rm -rf "$A/__exodus_cache/apt/libfakez1"
+    acfg "$A/exodus-bad.json" aptbad "0000000000000000000000000000000000000000000000000000000000000000"
+    out=$(ainv -c exodus-bad.json); rc=$?
+    check "a wrong digest ends the build naming both sums, nothing unpacked (F68-100b)" \
+      '[ $rc -ne 0 ] && echo "$out" | grep -q "$D_RT" && echo "$out" | grep -q "0000000000000000" && [ ! -d "$A/__exodus_cache/apt/libfakez1/amd64/1:2.0-1/payload" ]'
+    sed -i 's/"required": false/"required": true/' "$A/exodus-bad.json"
+    sed -i "s/0000000000000000000000000000000000000000000000000000000000000000/$D_RT/" "$A/exodus-bad.json"
+    out=$(ainv -c exodus-bad.json); rc=$?
+    check "a required package that is nowhere ends the build, named (F68-100c)" '[ $rc -ne 0 ] && echo "$out" | grep -q "libnichtda"'
+    kill $SRV 2>/dev/null; wait $SRV 2>/dev/null
+    # exodus' cache holds entries whose .deb is not the pinned one: a failed fetch leaves them
+    sed -i "s/$D_RT/1111111111111111111111111111111111111111111111111111111111111111/" "$A/exodus.json"
+    out=$(ainv); rc=$?
+    check "a cached entry that is not the pinned one survives a failed fetch (F68-100b)" \
+      '[ $rc -ne 0 ] && echo "$out" | grep -q "left as it was" && [ -f "$A/$PL/libfakez.so.1" ] && [ -z "$(ls -A "$A/__exodus_cache/apt/libfakez1/amd64" | grep fetch)" ]'
+else
+    echo "  skip apt packages (no dpkg-deb or no python3 for the archive server)"
+fi
+
+echo "── git packages (§7.3) ──"
+if command -v git >/dev/null; then
+    G="$WORK/gitproj"; REPO="$WORK/gitrepo"; mkdir -p "$G" "$REPO/inc"
+    printf '#define GITVAL 33\n' > "$REPO/inc/gitlib.h"
+    (cd "$REPO" && git init -q && git add . && git -c user.name=t -c user.email=t@t commit -qm one && git tag v1) || true
+    SHA=$(git -C "$REPO" rev-parse HEAD)
+    printf '#include "gitlib.h"\nint main(void) { return GITVAL; }\n' > "$G/main.c"
+    gcfg() {
+    cat > "$G/exodus.json" <<EOT
+{
+    "\$schema": "exodus.project.config-1.0",
+    "name": "gitprobe", "version": "0.1.0", "output_type": "executable",
+    "sources": ["main.c"],
+    "git_packages": [{ "name": "gl", "repo": "file://$REPO", "ref": "v1", "digest": "$1",
+                       "setup_commands": [["sh", "-c", "echo ran >> setup.count"]] }],
+    "search_paths": ["__exodus_cache/git/gl/current/inc"],
+    "compiler": { "name": "cc", "flags": [] },
+    "linker": { "name": "cc", "flags": [], "libraries": [], "library_paths": [] },
+    "artifact_in_cwd": true
+}
+EOT
+    }
+    gcfg "$SHA"
+    out=$(inv "$G"); rc=$?
+    check "a git package is cloned at its pinned commit and its header used (F68-105)" \
+      '[ $rc -eq 0 ] && "$G/gitprobe"; [ $? -eq 33 ] && [ -f "$G/__exodus_cache/git/gl/$SHA/inc/gitlib.h" ]'
+    [ $rc -eq 0 ] || echo "$out" | tail -8
+    check "current names the commit directory (F68-107)" '[ "$(readlink "$G/__exodus_cache/git/gl/current")" = "$SHA" ]'
+    out=$(inv "$G"); rc=$?
+    check "setup_commands ran once, not again in the next build (F68-106)" \
+      '[ $rc -eq 0 ] && [ "$(wc -l < "$G/__exodus_cache/git/gl/$SHA/setup.count")" -eq 1 ]'
+    gcfg "1111111111111111111111111111111111111111"
+    out=$(inv "$G"); rc=$?
+    check "a pinned commit that does not exist ends the build, named (F68-105)" '[ $rc -ne 0 ] && echo "$out" | grep -q "1111111111"'
+else
+    echo "  skip git packages (no git)"
+fi
 
 echo "── failures ──"
 F="$WORK/broken"; mkdir -p "$F"

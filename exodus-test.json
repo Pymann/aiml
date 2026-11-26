@@ -53,7 +53,7 @@
         "tests/unit/**/*.cpp"
     ],
     "defines": {},
-    "pre_compilation": "hook_example.py",
+    "pre_compilation": null,
     "pre_linkage": null,
     "architecture": {
         "arch": "x86_64",
