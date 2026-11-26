@@ -3044,6 +3044,8 @@ void registerBuiltins(CompilerContext& ctx) {
         stageInfo.builtinMethods["requires"]   = mkAttrStr("aiml_stage_attr", "requires");
         stageInfo.builtinMethods["shares"]     = mkAttrStr("aiml_stage_attr", "shares");
         stageInfo.builtinMethods["command"]    = mkAttrStr("aiml_stage_attr", "command");
+        stageInfo.builtinMethods["cache"]      = mkAttrStr("aiml_stage_attr", "cache");
+        stageInfo.builtinMethods["resolve"]    = mkAttrStr("aiml_stage_attr", "resolve");
         stageInfo.builtinMethods["cpu_cores"]  = mkAttrI32("aiml_stage_limit", "cpu");
         stageInfo.builtinMethods["mem_mb"]     = mkAttrI32("aiml_stage_limit", "mem");
         stageInfo.builtinMethods["pids_max"]   = mkAttrI32("aiml_stage_limit", "pids");

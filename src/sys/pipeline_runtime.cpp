@@ -107,6 +107,10 @@ struct PStage {
     std::string        requires_on;  // "git,gcc>=13" (§18.2, F62-126)
     std::string        shares;       // "name:/target:mode,…" (§18.1b, F62-136)
     std::string        command;      // `run:` — the command of slice 1
+    // spec/62 §9.1: the stage's class after F62-159/161 and the probe line
+    // of a run: stage (F62-160).  Resolved by the rewrite, as above.
+    std::string        cache = "opaque";
+    std::string        resolve;
     int32_t            cpu_cores = 0;   // 0 = host default, NOT unlimited
     int32_t            mem_mb    = 0;
     int32_t            pids_max  = 0;
@@ -974,6 +978,8 @@ static std::string* stage_text(PStage* g, const std::string& key) {
     if (key == "requires")   return &g->requires_on;
     if (key == "shares")     return &g->shares;
     if (key == "command")    return &g->command;
+    if (key == "cache")      return &g->cache;
+    if (key == "resolve")    return &g->resolve;
     return nullptr;
 }
 
@@ -1014,6 +1020,15 @@ void aiml_stage_set_limit(void* g, const char* key, int32_t value) {
 
 char* aiml_stage_attr(void* g, const char* key) {
     if (!g || !key) return aiml_str_alloc(0);
+    // F62-161: a stage with steps is as reusable as its weakest step.
+    // Computed from the steps, so the composed form (§13.3) reads the same
+    // as the declared one — there is no rewrite there to resolve it.
+    auto* stg = static_cast<PStage*>(g);
+    if (std::string(key) == "cache" && !stg->steps.empty()) {
+        int32_t weakest = 2;
+        for (const auto& one : stg->steps) weakest = std::min(weakest, one.cache);
+        return str_out(weakest == 2 ? "pure" : (weakest == 1 ? "resolved" : "opaque"));
+    }
     std::string* slot = stage_text(static_cast<PStage*>(g), key);
     return str_out(slot ? *slot : std::string());
 }

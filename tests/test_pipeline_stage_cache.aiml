@@ -1,0 +1,133 @@
+# SPEC: 62_pipelines
+# spec/62 §9.1: `cache:` and `resolve:` on the stage, read the way a host
+# reads them (stg.cache / stg.resolve, F62-164).
+#
+#   * F62-159 pipeline → stage → step, innermost wins
+#   * F62-160 beside `run:` the probe is a line, beside `steps:` a body
+#   * F62-161 the weakest step decides the stage
+#   * the composed form gives the same answer as the declared one
+# Expected exit code: 0
+
+- pipeline:
+    name: stufen_cache
+    cache: pure
+    params:
+      - [arch, string, [x86_64]]
+    steps:
+      - stage:
+          name: quellen
+          cache: resolved
+          resolve: "git ls-remote https://example.org/app.git refs/heads/main"
+          run: "git clone --depth 1 https://example.org/app.git /ws/app"
+      - stage:
+          name: bauen
+          run: "make -j8"
+      - stage:
+          name: pruefen
+          steps:
+            - step: { name: build, return: i32, body: [{ return: 0 }] }
+            - step: { name: zeit, cache: opaque, return: i32, body: [{ return: 0 }] }
+      - stage:
+          name: holen
+          steps:
+            - step: { name: kompiliere, return: i32, body: [{ return: 0 }] }
+            - step:
+                name: lade
+                cache: resolved
+                return: i32
+                resolve: [{ return: "rev-1" }]
+                body: [{ return: 0 }]
+      - stage:
+          name: zufall
+          cache: opaque
+          run: "date"
+
+- def:
+    name: expect_str
+    static_off: ["str_cmp"]
+    args: [[what, string], [got, string], [want, string]]
+    return: i32
+    body:
+      - if:
+          condition: { eq: [got, want] }
+          then: [{ print: ["  ok   ${what}"] }, { return: 0 }]
+      - print: ["  FAIL ${what}: '${got}' instead of '${want}'"]
+      - return: 1
+
+- def:
+    name: class_of
+    static_off: ["same_arg"]
+    args: [[pipe, ref<pipeline>], [idx, i32]]
+    return: { type: string, lifetime: producer }
+    body:
+      - decl: [stg, stage, { call: [pipe.stage_at, idx] }]
+      - return: { call: [stg.cache] }
+
+- def:
+    name: probe_of
+    static_off: ["same_arg"]
+    args: [[pipe, ref<pipeline>], [idx, i32]]
+    return: { type: string, lifetime: producer }
+    body:
+      - decl: [stg, stage, { call: [pipe.stage_at, idx] }]
+      - return: { call: [stg.resolve] }
+
+- def:
+    name: step_class
+    static_off: ["same_arg"]
+    args: [[pipe, ref<pipeline>], [idx, i32], [sidx, i32]]
+    return: { type: string, lifetime: producer }
+    body:
+      - decl: [stg, stage, { call: [pipe.stage_at, idx] }]
+      - decl: [stp, step, { call: [stg.step_at, sidx] }]
+      - return: { call: [stp.cache] }
+
+- def:
+    name: noop_body
+    return: i32
+    body:
+      - return: 0
+
+- def:
+    name: composed
+    return: pipeline
+    body:
+      - decl: [first, step, { call: [step.new] }]
+      - call: [first.set_name, "eins"]
+      - call: [first.set_body, { call: [sys.bundle, "noop_body", { context: true, pure: true }] }]
+      - call: [first.set_cache, CacheClass.pure]
+      - decl: [second, step, { call: [step.new] }]
+      - call: [second.set_name, "zwei"]
+      - call: [second.set_body, { call: [sys.bundle, "noop_body", { context: true }] }]
+      - call: [second.set_cache, CacheClass.opaque]
+      - decl: [stg, stage, { call: [stage.new] }]
+      - call: [stg.set_name, "gemischt"]
+      - call: [stg.add_step, first]
+      - call: [stg.add_step, second]
+      - decl: [pipe, pipeline, { call: [pipeline.new] }]
+      - call: [pipe.set_name, "zusammengesetzt"]
+      - call: [pipe.add_stage, stg]
+      - return: pipe
+
+- def:
+    name: main
+    static_off: ["str_cmp"]
+    return: i32
+    body:
+      - decl: [fails, i32, 0]
+      - decl: [pipe, pipeline, { call: [stufen_cache] }]
+      - set: [fails, { +: [fails, { call: [expect_str, "run: stage keeps its own class", { call: [class_of, pipe, 0] }, "resolved"] }] }]
+      - set: [fails, { +: [fails, { call: [expect_str, "and its probe line", { call: [probe_of, pipe, 0] }, "git ls-remote https://example.org/app.git refs/heads/main"] }] }]
+      - set: [fails, { +: [fails, { call: [expect_str, "run: stage inherits pure from the pipeline", { call: [class_of, pipe, 1] }, "pure"] }] }]
+      - set: [fails, { +: [fails, { call: [expect_str, "without a probe", { call: [probe_of, pipe, 1] }, ""] }] }]
+      - set: [fails, { +: [fails, { call: [expect_str, "a step inherits pure", { call: [step_class, pipe, 2, 0] }, "pure"] }] }]
+      - set: [fails, { +: [fails, { call: [expect_str, "one opaque step makes the stage opaque", { call: [class_of, pipe, 2] }, "opaque"] }] }]
+      - set: [fails, { +: [fails, { call: [expect_str, "one resolved step makes a pure stage resolved", { call: [class_of, pipe, 3] }, "resolved"] }] }]
+      - set: [fails, { +: [fails, { call: [expect_str, "stage opaque beats pipeline pure", { call: [class_of, pipe, 4] }, "opaque"] }] }]
+      - decl: [comp, pipeline, { call: [composed] }]
+      - set: [fails, { +: [fails, { call: [expect_str, "composed form: weakest step decides too", { call: [class_of, comp, 0] }, "opaque"] }] }]
+      - if:
+          condition: { neq: [fails, 0] }
+          then: [{ print: ["test_pipeline_stage_cache FAIL (${fails})"] }, { return: 1 }]
+      - print: ["test_pipeline_stage_cache PASS"]
+      - return: 0

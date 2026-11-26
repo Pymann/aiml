@@ -868,6 +868,59 @@ because there is no shell to split them.  A list-valued input is built in the bo
 (`argv.extend`) like any other list.  Where a pipe or a glob is genuinely wanted, `shell: true` is
 available — and in a `resolve:` it costs nothing in soundness, because a probe is never reused.
 
+### 9.1 `cache:` and `resolve:` on the stage — the weakest step decides
+
+A stage is the host's `PipelineStage` (F62-57), and a host reuses **stages**: cosmos keeps one
+layer per stage and skips a stage whose key it has seen (cosmos `doc/spec/96` §96.6).  So the
+reuse class has to be readable on the stage, and it has to mean the same thing whether the stage
+carries one `run:` line or a list of steps.
+
+- **F62-159** `cache:` resolves pipeline → stage → step, innermost wins (F62-58).  A step without
+  its own `cache:` takes the stage's, a stage without one takes the pipeline's, and the default
+  stays `opaque` (§7).
+- **F62-160** `resolve:` may stand on a stage.  Its form follows the stage:
+  - on a stage with `run:` it is a **shell line** (a string), because the stage's command is one.
+    It is the probe of §9 with the same contract: it runs before the key, every time, on the
+    executor; its trimmed stdout is the address; a non-zero exit fails the stage, it never
+    degrades to "run anyway".
+  - on a stage with `steps:` it is a **body** (a list) and the default probe for every step in it
+    that is `resolved` and declares no `resolve:` of its own (innermost wins).
+  `resolve:` is not inherited from the pipeline and is an unknown key there (F62-65): a probe
+  belongs to what it probes.
+- **F62-161 The weakest step decides.**  The class of a stage with `steps:` is the **weakest**
+  effective class of its steps, ordered `opaque` < `resolved` < `pure`.  One `opaque` step makes
+  the whole stage `opaque`; one `resolved` step in an otherwise `pure` stage makes it `resolved`.
+  A stage with `run:` has its own effective class (F62-159).
+- **F62-162** A stage is reused as a whole only when its class is not `opaque`.  Its key covers
+  the keys of all its steps, so the probe output of every `resolved` step moves it.  The steps
+  before an `opaque` step stay reusable **one by one** (§8): their keys do not depend on what
+  comes after them.  What is lost is only skipping the stage as a unit.
+- **F62-163** F62-16 holds for the stage as well, with the effective class: a `resolved` stage
+  with `run:` needs a `resolve:` line, a `pure` one must not carry one.  A string `resolve:` on a
+  stage with `steps:`, or a body on a stage with `run:`, is an error — not a guess at what was
+  meant.
+- **F62-164** The readers return the **resolved** values (§20.3): `stg.cache` is the class after
+  F62-159 and F62-161, `stg.resolve` the probe line of a `run:` stage ("" otherwise).  A host
+  computes neither itself; otherwise it would be a second parser (§20.1).
+
+```yaml
+    cache: pure                         # pipeline default (F62-159)
+    steps:
+      - stage:
+          name: quellen
+          cache: resolved
+          resolve: "git ls-remote https://example.org/app.git refs/heads/main"
+          run: "git clone --depth 1 https://example.org/app.git /ws/app"
+      - stage:
+          name: bauen                   # inherits pure from the pipeline
+          run: "make -C /ws/app -j8"
+      - stage:
+          name: pruefen                 # stg.cache == opaque: `zeit` is opaque (F62-161)
+          steps:
+            - step: { name: build, return: i32, body: [...] }          # pure, reusable alone
+            - step: { name: zeit, cache: opaque, return: i32, body: [...] }
+```
+
 ## 10. Static Checks
 
 Extends `spec/49_static_analysis.md`.  Errors unless stated otherwise.  F62-1…F62-5 (parameters),
@@ -876,6 +929,7 @@ F62-8/F62-9 (graph) and F62-13 (workspaces) are checks as well and are stated wh
 ### 10.1 Structure
 
 - **F62-16** `cache: resolved` requires a non-empty `resolve:`; `cache: pure` must not carry one.
+  The same holds for a stage with `run:` (F62-163).
 - **F62-7** Every `${NAME}` interpolated in a step or `resolve:` body must resolve to a declared
   parameter or to a name listed in `host:`.  This closes the blind-key hole of §1.1 item 3 at
   compile time, and it is the check that makes an untyped environment unnecessary.
@@ -2187,13 +2241,15 @@ All **read-only**; a value that has been read does not change the pipeline.
 | `stg.cpu_cores` / `stg.mem_mb` / `stg.pids_max` | i32 | limits, 0 = host default (§18.1a) |
 | `stg.timeout_ms` | i32 | 0 = executor default (F62-40) |
 | `stg.command` | string | `run:` — the command of slice 1 (cosmos F103-1) |
+| `stg.cache` | string | reuse class after F62-159/161: `pure` \| `resolved` \| `opaque` |
+| `stg.resolve` | string | the probe line of a `run:` stage (F62-160), otherwise empty |
 | `stg.step_count` / `stg.step_at(i)` | i32 / step | the steps of the stage (§5) |
 
 | Step | returns | Meaning |
 |---|---|---|
 | `stp.name` | string | |
 | `stp.needs_count` / `stp.need_at(i)` | i32 / string | `needs:` (§5.1) |
-| `stp.cache` | string | reuse class (§7) |
+| `stp.cache` | string | reuse class (§7), inherited after F62-159 |
 | `stp.per` | string | `lane` \| `once` (§5.5) |
 | `stp.command` | string | `run:` on the step, otherwise empty |
 

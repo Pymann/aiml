@@ -113,12 +113,12 @@ const OldName kOldNames[] = {
 const char* kPipelineKeys[] = {
     "name", "params", "exclude", "parallel", "workspace_root", "steps", "host",
     "agent", "steplayer", "image", "base", "requires", "shares", "resources",
-    "timeout", "push", "runtime",
+    "timeout", "push", "runtime", "cache",
 };
 const char* kStageKeys[] = {
     "name", "steps", "run", "args", "host", "cache", "on_fail", "timeout",
     "retry", "exec_defaults", "agent", "steplayer", "image", "base",
-    "requires", "shares", "resources",
+    "requires", "shares", "resources", "resolve",
 };
 
 bool knownKey(const std::string& key, const char* const* list, size_t n) {
@@ -239,6 +239,17 @@ int32_t numAt(const YAML::Node& node, const char* key) {
 std::string textAt(const YAML::Node& node, const char* key) {
     if (!node || !node[key] || !node[key].IsScalar()) return std::string();
     return node[key].Scalar();
+}
+
+// spec/62 §7: the order of the reuse classes, weakest first (F62-161).
+int cacheRank(const std::string& cls) {
+    if (cls == "pure") return 2;
+    if (cls == "resolved") return 1;
+    return 0;
+}
+
+bool cacheKnown(const std::string& cls) {
+    return cls == "pure" || cls == "resolved" || cls == "opaque";
 }
 
 // A value that goes as a LITERAL into generated source text is ESCAPED.
@@ -389,6 +400,13 @@ bool expandPipelineDeclarations(const std::string& text, const std::string& wher
         const std::string headRequires  = csvOf(pl["requires"]);
         const std::string headShares    = sharesOf(pl["shares"], where, pname, "pipeline", ok);
         const int32_t     headTimeout   = numAt(pl, "timeout");
+        // F62-159: the pipeline's `cache:` is the default of every stage.
+        const std::string headCache     = scalarOr(pl["cache"], "opaque");
+        if (!cacheKnown(headCache)) {
+            LOG_ERROR(where + ": pipeline '" + pname + "': `cache: " + headCache +
+                      "` — there are `pure`, `resolved` and `opaque` (spec/62 §7)");
+            ok = false;
+        }
         const YAML::Node  headRes       = pl["resources"];
         const int32_t     headCpu       = numAt(headRes, "cpu");
         const int32_t     headPids      = numAt(headRes, "pids");
@@ -586,6 +604,53 @@ bool expandPipelineDeclarations(const std::string& text, const std::string& wher
                     mergeShares(headShares, sharesOf(stg["shares"], where, pname, "stage", ok));
                 int32_t stTimeout = numAt(stg, "timeout");
                 if (stTimeout == 0) stTimeout = headTimeout;
+
+                // ── reuse (spec/62 §9.1) ─────────────────────────────────
+                // F62-159: stage beats pipeline.  F62-160: `resolve:` takes the
+                // form of the stage — a line beside `run:`, a body beside
+                // `steps:`.  The stage's class is fixed after its steps
+                // (F62-161), so `stCacheEff` starts at the declared one.
+                const std::string stCache = scalarOr(stg["cache"], headCache);
+                if (!cacheKnown(stCache)) {
+                    LOG_ERROR(where + ": pipeline '" + pname + "': stage '" + sname +
+                              "': `cache: " + stCache + "` — there are `pure`, `resolved` "
+                              "and `opaque` (spec/62 §7)");
+                    ok = false;
+                }
+                const YAML::Node stResolve = stg["resolve"];
+                std::string stProbe;   // the line of a run: stage
+                if (stResolve && stg["run"]) {
+                    if (!stResolve.IsScalar() || stResolve.Scalar().empty()) {
+                        LOG_ERROR(where + ": pipeline '" + pname + "': stage '" + sname +
+                                  "': beside `run:` the probe is a shell line — `resolve: \"<command>\"` "
+                                  "(spec/62 F62-160/163)");
+                        ok = false;
+                    } else {
+                        stProbe = stResolve.Scalar();
+                    }
+                } else if (stResolve && !stResolve.IsSequence()) {
+                    LOG_ERROR(where + ": pipeline '" + pname + "': stage '" + sname +
+                              "': beside `steps:` the probe is a body (a list), the default of "
+                              "its `resolved` steps (spec/62 F62-160/163)");
+                    ok = false;
+                }
+                if (stg["run"]) {
+                    // F62-163 = F62-16 on the stage, with the EFFECTIVE class.
+                    if (stCache == "resolved" && stProbe.empty() && !stResolve) {
+                        LOG_ERROR(where + ": pipeline '" + pname + "': stage '" + sname +
+                                  "' is `resolved` but has no `resolve:` — the key would hold "
+                                  "nothing that moves with the name (spec/62 F62-16/163)");
+                        ok = false;
+                    }
+                    if (stCache == "pure" && stResolve) {
+                        LOG_ERROR(where + ": pipeline '" + pname + "': stage '" + sname +
+                                  "' is `pure` and carries a `resolve:` — a probe belongs to "
+                                  "`resolved` (spec/62 F62-16/163)");
+                        ok = false;
+                    }
+                }
+                std::string stCacheEff = stCache;
+                bool sawStep = false;
                 const YAML::Node stRes = stg["resources"];
                 int32_t stCpu  = numAt(stRes, "cpu");
                 if (stCpu == 0) stCpu = headCpu;
@@ -628,6 +693,7 @@ bool expandPipelineDeclarations(const std::string& text, const std::string& wher
                 ctor += attrLine(svar, "requires",  stReq);
                 ctor += attrLine(svar, "shares",    stShares);
                 ctor += attrLine(svar, "command",   textAt(stg, "run"));
+                ctor += attrLine(svar, "resolve",   stProbe);
                 ctor += limitLine(svar, "cpu",     stCpu);
                 ctor += limitLine(svar, "mem",     stMem);
                 ctor += limitLine(svar, "pids",    stPids);
@@ -647,7 +713,8 @@ bool expandPipelineDeclarations(const std::string& text, const std::string& wher
                         }
                         const std::string stepName =
                             scalarOr(sp["name"], "step" + std::to_string(stepNo));
-                        const std::string cache = scalarOr(sp["cache"], "opaque");
+                        // F62-159: step beats stage beats pipeline.
+                        const std::string cache = scalarOr(sp["cache"], stCache);
                         if (cache != "pure" && cache != "resolved" && cache != "opaque") {
                             LOG_ERROR(where + ": pipeline '" + pname + "': step '" + stepName +
                                       "': `cache: " + cache + "` — there are `pure`, `resolved` "
@@ -655,6 +722,17 @@ bool expandPipelineDeclarations(const std::string& text, const std::string& wher
                             ok = false;
                             continue;
                         }
+                        // F62-161: the weakest step decides the stage.
+                        if (!sawStep || cacheRank(cache) < cacheRank(stCacheEff)) stCacheEff = cache;
+                        sawStep = true;
+                        // F62-160: the stage's body is the probe of a
+                        // `resolved` step that brings none of its own.
+                        // (A default YAML::Node is a defined null and tests TRUE,
+                        // so "none" is a flag here, not an empty node.)
+                        const bool inheritProbe = !sp["resolve"] && cache == "resolved" &&
+                                                  stResolve && stResolve.IsSequence();
+                        const bool hasProbe = sp["resolve"] || inheritProbe;
+                        const YAML::Node spResolve = inheritProbe ? stResolve : sp["resolve"];
                         const std::string perMode = scalarOr(sp["per"], "lane");
                         if (perMode != "lane" && perMode != "once") {
                             LOG_ERROR(where + ": pipeline '" + pname + "': step '" + stepName +
@@ -830,13 +908,13 @@ bool expandPipelineDeclarations(const std::string& text, const std::string& wher
                         if (assertPure) bundleOpts += ", assert_pure: true";
                         bundleOpts += " }";
 
-                        if (sp["resolve"] && sp["resolve"].IsSequence()) {
+                        if (hasProbe && spResolve.IsSequence()) {
                             helpers += "- def:\n";
                             helpers += "    name: " + fnBase + "_resolve\n";
                             helpers += "    return: { type: string, lifetime: producer }\n";
                             helpers += "    body:\n";
                             helpers += prelude;
-                            helpers += bodyBlock(sp["resolve"], "      ");
+                            helpers += bodyBlock(spResolve, "      ");
                             helpers += "\n";
                         }
 
@@ -849,7 +927,7 @@ bool expandPipelineDeclarations(const std::string& text, const std::string& wher
                         ctor += "      - call: [" + pvar + ".set_cache, CacheClass." + cache + "]\n";
                         for (const auto& axis : declaredArgs)
                             ctor += "      - call: [" + pvar + ".use_arg, \"" + axis + "\"]\n";
-                        if (sp["resolve"])
+                        if (hasProbe)
                             ctor += "      - call: [" + pvar + ".set_resolve, " + fnBase +
                                     "_resolve]\n";
                         if (sp["on_fail"]) {
@@ -876,6 +954,8 @@ bool expandPipelineDeclarations(const std::string& text, const std::string& wher
                         ++stepNo;
                     }
                 }
+                // F62-164: the reader returns the resolved class.
+                ctor += attrLine(svar, "cache", stCacheEff);
                 ctor += "      - call: [pipe_obj.add_stage, " + svar + "]\n";
                 ++stageNo;
             }
