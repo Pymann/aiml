@@ -247,6 +247,69 @@ check "install --all without a source is refused (F68-66)" \
 out=$("$AIML" venv "$V2" remove gibtsnicht 2>&1); rc=$?
 check "removing something that is not installed is refused" '[ $rc -ne 0 ]'
 
+echo "── install --all --path (F68-68) ──"
+ALLD="$WORK/alltools"; mkdir -p "$ALLD/a-werkzeug" "$ALLD/b-zweites" "$ALLD/c-nix"
+cp -r "$TOOL/." "$ALLD/a-werkzeug/"; rm -rf "$ALLD/a-werkzeug/out" "$ALLD/a-werkzeug/werkzeug"
+cp "$TOOL/hallo.aiml" "$ALLD/b-zweites/"
+sed 's|"name": "werkzeug"|"name": "zweites"|' "$TOOL/exodus.json" > "$ALLD/b-zweites/exodus.json"
+printf '{ "name": "zweites", "version": "1.0.0", "programs": ["zweites"] }\n' > "$ALLD/b-zweites/aiml.tool.json"
+printf 'kein werkzeug\n' > "$ALLD/c-nix/README"
+VALL="$WORK/vall"; "$AIML" venv "$VALL" > /dev/null 2>&1
+out=$("$AIML" venv "$VALL" install --all --path "$ALLD" 2>&1); rc=$?
+check "install --all --path installs every tool in the directory (F68-68)" \
+  '[ $rc -eq 0 ] && [ -x "$VALL/bin/werkzeug" ] && [ -x "$VALL/bin/zweites" ]'
+[ $rc -eq 0 ] || echo "$out" | tail -6
+check "a directory without aiml.tool.json is skipped with a line (F68-68)" 'echo "$out" | grep -q "c-nix"'
+check "the closing line counts installed, skipped and failed (F68-68)" \
+  'echo "$out" | tail -1 | grep -q "2 installed" && echo "$out" | tail -1 | grep -q "1 skipped" && echo "$out" | tail -1 | grep -q "0 failed"'
+out=$("$AIML" venv "$VALL" install --all --path "$ALLD/b-zweites" 2>&1); rc=$?
+check "a directory that is a tool itself is that one tool (F68-68)" '[ $rc -eq 0 ] && echo "$out" | tail -1 | grep -q "1 installed"'
+
+echo "── libraries from apt packages land in the venv (F68-58, F68-58a) ──"
+if command -v dpkg-deb >/dev/null && command -v ldd >/dev/null && [ -x /usr/bin/python3 ]; then
+    DEBS="$WORK/debs"; PKR="$WORK/pk_rt"; mkdir -p "$DEBS" "$PKR/usr/lib/x86_64-linux-gnu" "$PKR/DEBIAN"
+    printf 'int fakez(int x) { return x + 1; }\n' > "$WORK/fz.c"
+    cc -shared -fPIC -Wl,-soname,libfakez.so.1 "$WORK/fz.c" -o "$PKR/usr/lib/x86_64-linux-gnu/libfakez.so.1.0"
+    ln -s libfakez.so.1.0 "$PKR/usr/lib/x86_64-linux-gnu/libfakez.so.1"
+    ln -s libfakez.so.1 "$PKR/usr/lib/x86_64-linux-gnu/libfakez.so"
+    printf 'Package: libfakez1\nVersion: 2.0-1\nArchitecture: amd64\nMaintainer: t <t@t>\nDescription: t\n' > "$PKR/DEBIAN/control"
+    dpkg-deb --root-owner-group --build "$PKR" "$DEBS/libfakez1_2.0-1_amd64.deb" > /dev/null
+    DIG=$(sha256sum "$DEBS/libfakez1_2.0-1_amd64.deb" | cut -d' ' -f1)
+    PORT=$(/usr/bin/python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
+    (cd "$DEBS" && exec /usr/bin/python3 -m http.server "$PORT" --bind 127.0.0.1 > /dev/null 2>&1) & HSRV=$!
+    for _ in $(seq 50); do (exec 3<>"/dev/tcp/127.0.0.1/$PORT") 2>/dev/null && break; sleep 0.1; done
+    LT="$WORK/libtool"; mkdir -p "$LT"
+    printf 'int fakez(int x);\nint main(void) { return fakez(6); }\n' > "$LT/main.c"
+    cat > "$LT/exodus.json" <<EOT
+{
+    "\$schema": "exodus.project.config-1.0",
+    "name": "fzprog", "version": "1.0.0", "output_type": "executable",
+    "sources": ["main.c"],
+    "apt_packages": [{ "name": "libfakez1", "version": "2.0-1", "arch": "amd64", "digest": "$DIG" }],
+    "compiler": { "name": "cc", "flags": [] },
+    "linker": { "name": "cc", "flags": ["-Wl,-rpath,\$ORIGIN/../lib"], "libraries": ["fakez"],
+                "library_paths": ["__exodus_cache/apt/libfakez1/amd64/2.0-1/payload/usr/lib/x86_64-linux-gnu"] },
+    "artifact_in_cwd": true
+}
+EOT
+    printf '{ "name": "fzprog", "version": "1.0.0", "programs": ["fzprog"] }\n' > "$LT/aiml.tool.json"
+    V7="$WORK/v7"; "$AIML" venv "$V7" > /dev/null 2>&1
+    out=$(AIML_DEB_URL="http://127.0.0.1:$PORT" "$AIML" venv "$V7" install fzprog --path "$LT" 2>&1); rc=$?
+    kill $HSRV 2>/dev/null; wait $HSRV 2>/dev/null
+    check "a tool with an apt package installs, no root (F68-58)" '[ $rc -eq 0 ] && [ -x "$V7/bin/fzprog" ]'
+    [ $rc -eq 0 ] || echo "$out" | tail -6
+    check "the library it loads from the cache is in <venv>/lib under its SONAME, as a file (F68-58a)" \
+      '[ -f "$V7/lib/libfakez.so.1" ] && [ ! -L "$V7/lib/libfakez.so.1" ]'
+    check "libc is not copied (F68-58a)" '[ ! -e "$V7/lib/libc.so.6" ]'
+    check "the record lists the library (F68-58a)" 'grep -q "lib/libfakez.so.1" "$V7/lib/aiml/aiml.installed.json"'
+    rm -rf "$LT/__exodus_cache" "$AIML_CACHE/venv_tools/fzprog"
+    check "the program runs with the cache gone, from \$ORIGIN/../lib (F68-58a)" 'env -i "$V7/bin/fzprog"; [ $? -eq 7 ]'
+    out=$("$AIML" venv "$V7" remove fzprog 2>&1); rc=$?
+    check "remove takes the library out again (F68-58a)" '[ $rc -eq 0 ] && [ ! -e "$V7/lib/libfakez.so.1" ] && [ -f "$V7/lib/libaiml.so" ]'
+else
+    echo "  skip apt libraries into the venv (no dpkg-deb, ldd or python3)"
+fi
+
 echo "── install from a git repository (F68-50/51/52) ──"
 if command -v git > /dev/null 2>&1; then
   REPO="$WORK/repo.git"
