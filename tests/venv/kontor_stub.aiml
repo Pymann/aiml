@@ -9,8 +9,11 @@
 # api/v1/graph.  Whoever writes the fixture decides what kontor "says".
 #
 # PUT /exodus/<name>/<version>/{exodus.json,package} writes there, as kontor
-# does: only with `Authorization: Bearer $KONTOR_STUB_TOKEN` (else 401), and a
-# version whose package is there already is not overwritten (409).
+# does: only with `Authorization: Bearer $KONTOR_STUB_TOKEN` or
+# `$KONTOR_STUB_ADMIN_TOKEN` (else 401).  A version whose package is there, or
+# that was deleted (a `tombstone.json` in its directory, GET answers 410), is
+# not overwritten (409) — except with the admin token (kontor FW-47a), which
+# replaces it and takes the tombstone away.
 
 - def:
     name: stub_dir
@@ -25,6 +28,15 @@
     body:
       - decl: [root, string, { call: [stub_dir] }]
       - decl: [file, string, "${root}${req.path}"]
+      - decl: [file_p, path, file]
+      - decl: [dir_p, path, { call: [file_p.parent] }]
+      - if:
+          condition: { and: [{ not: [{ call: [io.exists, file] }] }, { call: [io.exists, "${dir_p}/tombstone.json"] }] }
+          then:
+            - set: [resp.status, 410]
+            - set: [resp.body, "{\"error\":\"deleted\",\"code\":\"gone\"}"]
+            - call: [resp.send]
+            - return: []
       - if:
           condition: { not: [{ call: [io.exists, file] }] }
           then:
@@ -43,9 +55,19 @@
     body:
       - decl: [vars, map<string:string>, { call: [sys.env] }]
       - decl: [token, string, { call: [vars.get, "KONTOR_STUB_TOKEN"] }]
-      - decl: [auth, string, { call: [req.header, "authorization"] }]
+      - decl: [admin_token, string, "-"]
       - if:
-          condition: { or: [{ eq: [auth, null] }, { neq: [auth, "Bearer ${token}"] }] }
+          condition: { call: [vars.contains, "KONTOR_STUB_ADMIN_TOKEN"] }
+          then:
+            - set: [admin_token, { call: [vars.get, "KONTOR_STUB_ADMIN_TOKEN"] }]
+      - decl: [auth, string, { call: [req.header, "authorization"] }]
+      - decl: [is_admin, bool, false]
+      - if:
+          condition: { and: [{ neq: [auth, null] }, { eq: [auth, "Bearer ${admin_token}"] }] }
+          then:
+            - set: [is_admin, true]
+      - if:
+          condition: { and: [{ not: [is_admin] }, { or: [{ eq: [auth, null] }, { neq: [auth, "Bearer ${token}"] }] }] }
           then:
             - set: [resp.status, 401]
             - set: [resp.body, "{\"error\":\"authentication required\",\"code\":\"unauthorized\"}"]
@@ -58,13 +80,17 @@
       - decl: [root, string, { call: [stub_dir] }]
       - decl: [dir, string, "${root}/exodus/${name}/${version}"]
       - if:
-          condition: { call: [io.exists, "${dir}/package"] }
+          condition: { and: [{ not: [is_admin] }, { or: [{ call: [io.exists, "${dir}/package"] }, { call: [io.exists, "${dir}/tombstone.json"] }] }] }
           then:
             - set: [resp.status, 409]
             - set: [resp.body, "{\"error\":\"${name}@${version} is published; a version is not overwritten\",\"code\":\"conflict\"}"]
             - call: [resp.send]
             - return: []
       - call: [io.mkdir_all, dir]
+      - if:
+          condition: { call: [io.exists, "${dir}/tombstone.json"] }
+          then:
+            - call: [io.remove, "${dir}/tombstone.json"]
       - decl: [payload, buffer<u8>]
       - set: [payload, req.body_bytes]
       - call: [io.write_file, "${dir}/${file}", payload]

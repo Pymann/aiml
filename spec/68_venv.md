@@ -122,7 +122,7 @@ aiml venv <dir> install <name> --git <url> [--ref <tag|branch|commit>]
 aiml venv <dir> install <name> --path <dir>
 aiml venv <dir> install <name> --kontor <url> [--version <v>]      (§6.1)
 aiml venv <dir> install --all --kontor <url>                       (§6.1, F68-66)
-aiml venv <dir> publish [<name>] [--path <dir>] --kontor <url>     (§6.3)
+aiml venv <dir> publish [<name>] [--path <dir>] --kontor <url> [--overwrite]   (§6.3)
 aiml venv <dir> list
 aiml venv <dir> remove <name>
 ```
@@ -231,7 +231,9 @@ toolbox: the venv, and a URL.
   unpack to **exactly one directory**; that directory is the tree that gets built.  An archive
   that unpacks into several top-level entries is refused rather than guessed at.
 - **F68-63** **A token when the instance wants one.**  kontor's `anonymous` role is `reader` by
-  default, so reading usually needs nothing.  Where it does, `$KONTOR_TOKEN` becomes an
+  default, so reading usually needs nothing; an instance that must not be read without a token
+  sets `auth.anonymous: none` (decided 2026-11-26: this stays the instance's configuration, not a
+  default of kontor or of `install`).  Where a token is needed, `$KONTOR_TOKEN` becomes an
   `Authorization: Bearer …` header — set in the request, never as an argument, because arguments
   are readable in `/proc` for anyone on the machine.
 - **F68-64** **From there it is §6.**  The unpacked tree needs its `aiml.tool.json` like any other
@@ -286,7 +288,7 @@ its own repository (ufo `scripts/publish.sh`, cosmos `tools/kontor_publish.sh`);
 can now be published the same way, from the venv it is built with, without a script in between.
 
 ```
-KONTOR_TOKEN=… aiml venv <dir> publish [<name>] [--path <repo>] --kontor <url>
+KONTOR_TOKEN=… aiml venv <dir> publish [<name>] [--path <repo>] --kontor <url> [--overwrite]
 ```
 
 - **F68-70** **The repository says what it is**, in the same `aiml.tool.json` as for `install`
@@ -311,6 +313,9 @@ KONTOR_TOKEN=… aiml venv <dir> publish [<name>] [--path <repo>] --kontor <url>
   same on its side: once a version's package is there, a PUT of its manifest or package is `409`
   (kontor `README`), so neither a second `publish` nor a hand-made `curl` replaces bytes that
   somebody may have installed.  A half publish (manifest there, package not) can be repeated.
+  A version kontor **deleted** (a tombstone, `GET` answers `410`, kontor FW-47) is refused the
+  same way, with its own reason („was deleted — a deleted version number is not reused"):
+  kontor keeps the number from being given out again.
 - **F68-74** **The token.**  `$KONTOR_TOKEN`, a kontor token with the role `writer`, becomes the
   `Authorization: Bearer` header as in F68-63 — never an argument.  Without one, `publish` refuses
   before it touches the network; a `401`/`403` is reported with kontor's own message.
@@ -319,13 +324,22 @@ KONTOR_TOKEN=… aiml venv <dir> publish [<name>] [--path <repo>] --kontor <url>
   now).  Reading is the instance's affair: a kontor whose `anonymous` role is `none` needs
   `$KONTOR_TOKEN` for `install --kontor` too (F68-63); a tool without a token is installed with
   `--git`.
+- **F68-76** **An admin may overwrite** (decided 2026-11-25, kontor `doc/spec/web_ui.md`
+  FW-47a).  `--overwrite` skips the refusal of F68-73 for a version that is there (`200`) or was
+  deleted (`410`) and sends both PUTs anyway; **kontor** decides.  It replaces them only for a
+  token with the `admin` right and answers everyone else `409` as before — `publish` then names
+  the admin right instead of F68-73.  The line says `replaced` instead of `published`.  The flag
+  belongs to `publish` alone (anywhere else it is a usage error), and it changes nothing about
+  F68-72: what goes out is still one committed state.  A venv that installed the old bytes keeps
+  them; its record (F68-65) names their digest, so `list` shows which one it has.
 
 Tests: `tests/venv/run.sh` §6.3 against `tests/venv/kontor_stub.aiml`, which also takes kontor's
 two PUTs (with a token, and `409` for a published version): no token, a wrong token, a wrong name,
 `exodus.json` and `aiml.tool.json` disagreeing, uncommitted changes, the files where `install`
 looks, one tree of tracked files only, the digest in the line, nothing staged in the venv, a second
-publish refused with the bytes unchanged, the next version beside it, and an install of what was
-published.
+publish refused with the bytes unchanged, `--overwrite` refused for a writer and done for an
+admin (F68-76), `--overwrite` on `install` refused, a deleted version refused with its reason and
+written again by the admin, the next version beside it, and an install of what was published.
 
 ## 7. Building — `aiml build` (decided 2026-11-25)
 
@@ -355,11 +369,12 @@ aiml build [-c <config.json>]… [--all]
   accepted and
   ignored: for an `.aiml` source exodus passed none of them on either, so ignoring them builds the
   same binary.
-- **F68-82** **What is refused, by name**: `output_type` `wasm` or `static_lib`, C/C++ sources,
+- **F68-82** **What is refused, by name**: `output_type` `static_lib`, C/C++ sources,
   `apt_packages`, `git_packages`, a hook that is no `.aiml` file (F68-87) and any path containing
   `__exodus_cache` — those are the build system of aiml and of the wasm client, not of a tool, and
   a build that silently skipped them would build something else.  The message says „needs
-  exodus".  A tool whose `configs` (F68-53) avoid them installs; `--all` over a directory that has
+  exodus".  `output_type: wasm` is no longer among them (F68-88, 2026-11-25); its emsdk comes from
+  the environment like the native linker does, so `git_packages` stays refused there too.  A tool whose `configs` (F68-53) avoid them installs; `--all` over a directory that has
   one of them fails, as `exodus build --all` would without emsdk.
 - **F68-83** **Compile**: for each `.aiml` source,
   `<compiler> <source> -o <build>/<source without .aiml>.o [--asset-roots=<dirs>]` with
@@ -397,13 +412,43 @@ aiml build [-c <config.json>]… [--all]
   never written then looks like a stamp that was).  A `.py` hook is refused with „port it to an
   `.aiml` hook" (F68-82).
 
+### 7.1 A browser build — `output_type: wasm` (2026-11-25, proposed)
+
+A browser client (cosmos' web client, kontor's web UI) is an aiml program compiled for wasm32
+and linked by emscripten against the wasm32 runtime of §8.  exodus did that; `aiml build` does
+it the same way, so the last exodus project files of the tools (cosmos `exodus-client.json` and
+its wasm tests) build without exodus too.
+
+- **F68-88** **Compile and link as exodus did.**  Each `.aiml` source is compiled with
+  `--target wasm32 --emit-main` to `<build>/<source>.ll` (LLVM IR — emcc does not link native
+  objects); the imports' IR lands next to it (`<dir>_<file>_aiml.ll`), and every `.ll` in the
+  emptied build directory is linked, like the `.o` of F68-83.  A native `.o` source is refused.
+  The linker is `linker.name`, else `$EMCC`, else `emcc` from `PATH`.  The link line is
+  `<emcc> <.ll…> -o <name>.html --preload-file=<asset_directory>… <linker.flags> -L<path>…
+  -l<lib>…` — no `-shared`, no `-Wl,-rpath` (a wasm module loads nothing at run time).  The
+  output is `<name>.html`, and emcc writes `<name>.js` and `<name>.wasm` beside it, in the working
+  directory with `artifact_in_cwd`, else in `<build>`.  The runtime is named like any library:
+  `"library_paths": ["$AIML_VENV/lib/wasm32"], "libraries": ["aiml_wasm"]` (F68-94 puts it
+  there), with the flags of F68-92.  Hooks (F68-87) run as for a native build.
+- **F68-89** **One emsdk.**  When a library path holds `libaiml_wasm.a` **and** its
+  `emsdk.version` (F68-90), the build asks the linker for `--version` before compiling anything;
+  another version ends the build naming both („built with emsdk 3.1.74, but emcc is 4.0.1 —
+  activate emsdk 3.1.74").  An archive and an emcc of different versions do not link reliably
+  (§8), and a mismatch found by the linker an hour later names neither.  A linker that cannot be
+  run ends the build the same way, naming `$EMCC`.  The emsdk itself is the environment's
+  (`. <emsdk>/emsdk_env.sh`, or `$EMCC`): a build that cloned one, as exodus' `git_packages` did,
+  would put a compiler into every project's tree.
+
 Tests: `tests/build/run.sh` — an executable and a shared library from one `.aiml` file that
 imports a module (the side object is linked), `-c` several times and `--all` by `$schema`, a
 configuration in a subdirectory with paths relative to the working directory, `artifact_in_cwd`
 on and off, the RUNPATH starting with `$ORIGIN`, `env` reaching the compiler, an unresolvable
 `$AIML_VENV`, each refusal of F68-82, a compile error and a missing linker; the three hooks in
 order with their variables, a hook's file seen by the compile, a failing hook ending the build, a
-missing hook and a `.py` hook refused.  `tests/venv/run.sh`
+missing hook and a `.py` hook refused; for wasm (F68-88/89) against a stand-in emcc the compile
+line, the `.ll` of module and import on the link line, `--preload-file`, no rpath, an emcc of
+another emsdk refused, a native object and `git_packages` refused — and, where the CI has emsdk
+and the wasm32 runtime, a real build that node runs with the module's output and exit code.  `tests/venv/run.sh`
 installs with `PATH` free of exodus and Python.
 
 ## 8. The wasm32 runtime in the release (decided 2026-11-25)
