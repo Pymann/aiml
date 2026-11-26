@@ -552,6 +552,22 @@ supplies `workspace` and `host_env` as arguments (§5.2).
   alternatives of the same kind and for which no aggregation rule can be stated.  Two enums, read
   together: a step is `running`, and when it is `done` it has its colour.
 
+- **F62-47** **Magenta means a version incompatibility** (decided 2026-11-26).  It is the first of
+  the six values whose meaning is fixed (§16 item 6): a step is magenta when something it built or
+  ran was made against a version outside its pin — `aiml build` says so with a
+  `version-mismatch` line (aiml spec/68 F68-99), and a host that sees the line in a step's output
+  marks the step magenta.  A body can set it itself with `set_status(StepStatus.magenta)`.
+  Magenta is not a failure: the step ran and its result stands; what it says is "this worked
+  against something it was not pinned to" — the signal the person who maintains the pin needs,
+  and one a red step would drown.
+- **F62-48** **A lane and a pipeline show every colour that occurred, not one.**  The aggregate of
+  F62-43 still exists and still answers "did anything fail" at a glance, but it is no longer all a
+  lane or pipeline carries: next to it stands the **set** of the colours its steps ended in.  A
+  pipeline that is green overall and had one magenta step is shown green **and** magenta, so a
+  version incompatibility is never hidden by a precedence order that ranks it below success or
+  failure.  The set is a set, not a count and not a mixture: it says which signals are present,
+  F62-43 says which one decides.
+
 ### 5.8 Where a stage runs — and what travels there
 
 `runs_on` names a node label and sits on the **stage**, never on a step (F62-60): the steps of a
@@ -1685,7 +1701,8 @@ The language defines the form, the parameter space, the classification, the key 
    more than needed; globs are cheaper and can miss a file a later step needs.  Not in this draft.
 6. **What the six statuses mean, and their precedence order.**  F62-42 fixes that there are six
    and what they are called; the meanings are open, and the aggregation order of F62-43 follows
-   from them.  The obvious reading treats the three primaries as facets that combine — failure,
+   from them.  Decided so far: magenta = version incompatibility (F62-47), and lanes and
+   pipelines carry the set of occurred colours next to the aggregate (F62-48).  The obvious reading treats the three primaries as facets that combine — failure,
    success, and "did not run" — which would make the mixtures "succeeded without running" (a cache
    hit), "failed without running" (a replayed failure) and "failure and success at once".  That
    reading is consistent and is *not* adopted here, because the naming should be settled once
