@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [master]
+    branches: [master, masterv2]
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
@@ -231,6 +231,7 @@ jobs:
           KONTOR_URL: ${{ secrets.KONTOR_URL }}
           KONTOR_TOKEN: ${{ secrets.KONTOR_TOKEN }}
           KONTOR_CA: ${{ secrets.KONTOR_CA }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -eu
           if [ -z "${KONTOR_URL:-}" ] || [ -z "${KONTOR_TOKEN:-}" ] || [ -z "${KONTOR_CA:-}" ]; then
@@ -251,10 +252,21 @@ jobs:
           tar -czf "$work/package.tar.gz" -C "$work/venv" bin lib env
           summe=$(sha256sum "$work/package.tar.gz" | cut -d' ' -f1)
           # Keyed on the commit (what consumers pin); a v* tag also files it under
-          # the tag name and as latest/.  Same bytes, so kontor's content store
-          # keeps one blob; a generic PUT replaces the pointer, so latest/ moves.
+          # the tag name.  Same bytes, so kontor's content store keeps one blob; a
+          # generic PUT replaces the pointer, so latest/ moves.
+          # latest/ only moves for a tag whose commit is ON master: a tag on another
+          # line (masterv2 -> v2.x, the spec/71 vocabulary) is filed under its name and
+          # its commit, never as latest, so consumers of latest are not switched over.
           keys=("$GITHUB_SHA")
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then keys+=("$GITHUB_REF_NAME" latest); fi
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            keys+=("$GITHUB_REF_NAME")
+            lage=$(gh api "repos/$GITHUB_REPOSITORY/compare/master...$GITHUB_SHA" --jq .status 2>/dev/null || echo unknown)
+            if [ "$lage" = identical ] || [ "$lage" = behind ]; then
+              keys+=(latest)
+            else
+              echo "tag $GITHUB_REF_NAME is not on master ($lage) -- not filed as latest/"
+            fi
+          fi
           for key in "${keys[@]}"; do
             ziel="$KONTOR_URL/generic/aiml/${key}/aiml-x86_64-linux.tar.gz"
             # No `curl -k`: without certificate checking a man in the middle could
@@ -281,11 +293,15 @@ jobs:
           # Published, not a draft: the tag run is the release.  A release that
           # already exists (made by hand, or a draft from before) gets the files
           # and is published.
+          # Same rule as kontor's latest/: a tag that is not on master (masterv2 -> v2.x)
+          # is published as a PRE-release, so GitHub's "Latest" stays on the master line.
+          lage=$(gh api "repos/$GITHUB_REPOSITORY/compare/master...$GITHUB_SHA" --jq .status 2>/dev/null || echo unknown)
+          if [ "$lage" = identical ] || [ "$lage" = behind ]; then pre=(); else pre=(--prerelease); fi
           if gh release view "$tag" >/dev/null 2>&1; then
             gh release upload "$tag" dist/* --clobber
-            gh release edit "$tag" --draft=false
+            gh release edit "$tag" --draft=false "${pre[@]}"
           else
-            gh release create "$tag" dist/* --verify-tag --title "$tag" "${notes[@]}"
+            gh release create "$tag" dist/* --verify-tag --title "$tag" "${notes[@]}" "${pre[@]}"
           fi
 
       - name: Upload results
