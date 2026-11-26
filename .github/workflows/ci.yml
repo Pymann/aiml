@@ -50,10 +50,26 @@ jobs:
           key: apt-${{ hashFiles('exodus.json', 'exodus2.json', 'exodus-test.json', 'exodus-zim.json', 'exodus-wasm-runtime.json') }}
           restore-keys: apt-
 
+      # exodus is a private repository: github.token reaches only this one, so the
+      # clone pip makes is authenticated with the GH_TOKEN repository secret (a
+      # token of the owner that can read Pymann/exodus).  The token goes to git
+      # through its environment config (GIT_CONFIG_*), for this step only: it is
+      # on no command line, in no file and in no git config that later steps see.
       - name: Install Exodus
+        env:
+          EXODUS_READ_TOKEN: ${{ secrets.GH_TOKEN }}
         run: |
+          if [ -z "${EXODUS_READ_TOKEN:-}" ]; then
+            echo "::error::The GH_TOKEN secret is missing (or not given to this run, e.g. a pull request from a fork) -- exodus is private and cannot be installed without it."
+            exit 1
+          fi
+          export GIT_TERMINAL_PROMPT=0
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0="url.https://x-access-token:${EXODUS_READ_TOKEN}@github.com/Pymann/exodus.insteadOf"
+          export GIT_CONFIG_VALUE_0="https://github.com/Pymann/exodus"
           python3 -m venv "$RUNNER_TEMP/exvenv"
           "$RUNNER_TEMP/exvenv/bin/pip" install -q "git+https://github.com/Pymann/exodus.git"
+          "$RUNNER_TEMP/exvenv/bin/exodus" --help > /dev/null
           echo "$RUNNER_TEMP/exvenv/bin" >> "$GITHUB_PATH"
 
       - name: Fetch pinned dependencies
