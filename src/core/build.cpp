@@ -120,6 +120,18 @@ std::string venvRoot() {
     return "";
 }
 
+// F68-121/128: <venv>/assets of the venv a compiler binary lies in ("" when it lies
+// in none or the venv has no asset packages) — the root that compiler scans.
+std::string compilerVenvAssets(const std::string& compiler) {
+    if (compiler.empty()) return "";
+    std::error_code ec;
+    fs::path exe = fs::canonical(compiler, ec);
+    if (ec || exe.parent_path().filename() != "bin") return "";
+    fs::path root = exe.parent_path().parent_path();
+    fs::path dir = root / "assets";
+    return isVenvRoot(root) && fs::is_directory(dir, ec) ? dir.string() : std::string();
+}
+
 // F68-100: exodus' cache — $EXODUS_CACHE, else <working directory>/__exodus_cache.
 fs::path cacheRoot() {
     const char* env = std::getenv("EXODUS_CACHE");
@@ -1174,8 +1186,13 @@ void buildOne(const std::string& file, int jobsArg) {
         cmd.push_back("-o");
         cmd.push_back(output.string());
         if (c.outputType == "shared_lib") cmd.push_back("-shared");
-        if (wasm)                                              // F68-88: assets go into the bundle
+        if (wasm) {                                            // F68-88: assets go into the bundle
             for (const std::string& a : c.assets) cmd.push_back("--preload-file=" + a);
+            // F68-128: the compiler's venv asset root, under the absolute path the
+            // module registers its files by.
+            std::string venvAssets = compilerVenvAssets(compilerFromEnv());
+            if (!venvAssets.empty()) cmd.push_back("--preload-file=" + venvAssets + "@" + venvAssets);
+        }
         cmd.insert(cmd.end(), c.linkerFlags.begin(), c.linkerFlags.end());
         if (!c.script.empty()) cmd.push_back("-T" + c.script);
         if (!c.mapFile.empty()) cmd.push_back("-Wl,-Map=" + c.mapFile);

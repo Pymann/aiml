@@ -17,6 +17,8 @@ out again (`ufo layer apply`), so a venv is built once and then only moved aroun
   lib/aiml/aiml.installed.json   what `install` placed, and where it came from (§6; only
                                  once something is installed)
   lib/aiml/<package>/…           installed packages, one directory each
+  lib/aiml/aiml.assets.json      the asset packages `asset install` placed (§9)
+  assets/<name>/…                asset packages, one directory each, the venv's asset root (§9)
   env                            the environment, for `. <venv>/env`
 ```
 
@@ -686,3 +688,99 @@ aiml-<version>-linux-x86_64/
 Tests: packaging itself (F68-90, F68-91, F68-93) in CI; `tests/venv/run.sh` for F68-94 — a
 release-shaped directory with `lib/wasm32/` gives a venv with the same two files, one without it
 gives a venv without `lib/wasm32/`.
+
+## 9. Asset packages — `aiml venv <dir> asset …` (decided 2026-11-26)
+
+Assets (spec/44_7) that a project does not keep in its own repository — a texture set, a sound
+bank, a font family — come into a venv as **asset packages**: blobs in kontor's generic store,
+fetched by name and version like a tool (§6.1), and found by every compile and every run of the
+venv's compiler without a line in the project's configuration.
+
+```
+aiml venv <dir> asset install <name> --kontor <url> --version <v>
+aiml venv <dir> asset install <name> --path <archive.tar.gz>
+aiml venv <dir> asset publish <name> --version <v> --path <dir> --kontor <url> [--overwrite]
+aiml venv <dir> asset list
+aiml venv <dir> asset remove <name>
+```
+
+```
+<venv>/assets/                   the one asset root of the venv (F68-121)
+  <name>/…                       one directory per asset package, as its archive has it
+<venv>/lib/aiml/aiml.assets.json what `asset install` placed, and where it came from (F68-126)
+```
+
+- **F68-120** **What an asset package is.**  One `tar.gz` in kontor's **generic** store at
+  `<url>/generic/<name>/<version>/<name>.tar.gz` — not `/exodus/…`, because an asset package is
+  no project: it has no `exodus.json`, nothing is built from it, and it only carries files.  The
+  archive's root **is** the package: `icons/hammer.png` in the archive is
+  `<venv>/assets/<name>/icons/hammer.png` (no wrapper directory, unlike F68-62).  It holds
+  directories and regular files of the kinds of spec/44_7 and nothing else.
+- **F68-121** **One root, one directory per package.**  Every package lies in
+  `<venv>/assets/<name>/`, and `<venv>/assets` is the venv's **one** asset root: the compiler of
+  the venv (F68-31: found from its own image, not from `AIML_VENV`) adds it to the roots of
+  `--asset-roots` on every compile and every JIT run, when the directory exists.  The scanner
+  walks it recursively, so lookup stays by stem (`gl.tex("hammer")`) and the directory a file
+  lies in means nothing to the code; the directory per package is for the venv — an update
+  replaces it and a removal deletes it, with no file list to keep and no file of an older
+  version left behind to be found.  Project assets and venv assets are one store: a stem in both
+  is the duplicate error of spec/44_7 at compile time.
+- **F68-122** **Names are snake_case — every one.**  The package name is `[a-z][a-z0-9]*(_[a-z0-9]+)*`;
+  every directory in the archive and every file's stem is `[a-z0-9]+(_[a-z0-9]+)*` (lowercase
+  letters and digits in words joined by single underscores: no uppercase, no `-`, no space, no
+  leading, trailing or double `_`).  A file is `<stem>.<ext>` with exactly one dot and an
+  extension spelled in lowercase as spec/44_7 lists it.  The version is
+  `[0-9A-Za-z][0-9A-Za-z.+_-]*`.  The scanner merely warns about and skips an uppercase name
+  (spec/44_7); a package with one is **refused as a whole**, naming every offending path, because
+  a package that loses files on the way into the store is not the package that was published.
+- **F68-123** **No duplicates.**  A stem is unique **per kind** (spec/44_7's stores: texture,
+  audio, shader, font, data, mesh) — within the package (`icons/hammer.png` and
+  `items/hammer.webp` are two textures `hammer`) and across all packages of the venv.  The same
+  stem in two kinds (`golem.png`, `golem.ogg`) is allowed, as in spec/44_7.  A duplicate is
+  refused naming both paths and, across packages, both packages; nothing is placed.
+- **F68-124** **What else is refused**: an empty package, a symbolic link, a hard link that
+  unpacks as a second name, any entry that is not a directory or a regular file, a file whose
+  extension is no asset kind (spec/44_7's "warn + skip" is for a project's working tree, not for
+  a package), and everything the untar of spec/33_2 §3.7a refuses (an absolute path, `..`).
+- **F68-125** **The rules hold when publishing.**  `asset publish` checks F68-122 to F68-124 on
+  `--path <dir>` **before it touches the network**, and F68-123 also against the other packages
+  installed in `<dir>`'s venv, so a package that cannot be installed is never published.  The
+  archive is reproducible as in F68-72 (sorted, mtime 0, owner 0:0, `gzip -n`), its root the
+  directory's content.  A version that kontor has (`GET` answers `200`) is refused as in F68-73 —
+  kontor's generic store replaces on `PUT`, so the refusal is the client's — unless
+  `--overwrite`.  The `PUT` carries `$KONTOR_TOKEN` as in F68-74 and `X-Checksum-Sha256`, so
+  kontor stores exactly the bytes that were checked.  The line names files, bytes and digest.
+- **F68-126** **Installing.**  `--kontor`: the blob is streamed into
+  `$AIML_CACHE/venv_assets/<name>/<version>/<name>.tar.gz` (F68-52: nothing is fetched inside the
+  venv), `--path`: that archive is taken as it is.  It is unpacked into a staging directory in
+  the same cache, checked (F68-122 to F68-124, F68-123 against every **other** installed
+  package), and only then moved into place: the new tree is renamed to `<venv>/assets/<name>`,
+  the old one, if any, is removed after that — a failed install leaves the old version in use.
+  The record `lib/aiml/aiml.assets.json` holds per name `source` (`kontor:<url>` or
+  `path:<archive>`), `version` and `digest` (`sha256:` over the archive).  The same name with the
+  same digest again is a no-op; another version or digest is the update.  A name that is also an
+  installed tool's or that the venv's package table uses is no conflict: assets have a root of
+  their own.
+- **F68-127** **`asset list`** prints per package name, version, source, digest and the number
+  of files; **`asset remove <name>`** deletes `<venv>/assets/<name>/` and its record.  Neither
+  touches the cache.
+- **F68-128** **Where the stores point.**  A compiled program (AOT and wasm32) registers its
+  assets at start-up (spec/44_7 "Persistent paths"); a file of the venv's asset root is
+  registered by its **absolute** path, a project file cwd-relative as before — the venv's files
+  do not move with the working directory.  For `output_type: wasm`, `aiml build` preloads the
+  venv's asset root under the same absolute path (`--preload-file=<root>@<root>`), next to the
+  `asset_directories` (F68-88).
+- **F68-129** **What this is not.**  No dependency between packages, no "latest" (the version is
+  always named), no partial install, no per-project selection — every package of the venv is in
+  every compile of that venv's compiler; a project that must not see one uses another venv.
+
+Tests: `tests/venv/run.sh` §9 against `tests/venv/kontor_stub.aiml` (which also serves and takes
+`/generic/<name>/<version>/<file>`): publish refused without a token, with an uppercase file, a
+`-` in a directory, a double `_`, an unknown extension, a symbolic link, a duplicate stem within
+the package and one against an installed package — each before anything is sent, the stub's
+store unchanged; a published version refused a second time and replaced with `--overwrite`;
+install from kontor and from a local archive into `<venv>/assets/<name>/`, the record, the same
+digest a no-op, an update without a file of the old version left, a refused archive leaving the
+old version in place, `list` and `remove`; and a program that finds a texture and a data asset
+of a package by stem, through the JIT and as an AOT program run from another directory, without
+`--asset-roots`.

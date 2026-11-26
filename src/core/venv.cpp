@@ -6,6 +6,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cerrno>
 #include <cstdlib>
 #include <filesystem>
@@ -16,6 +17,8 @@
 #include <vector>
 
 #include <yaml-cpp/yaml.h>
+
+#include "asset_scanner.h"
 
 namespace fs = std::filesystem;
 
@@ -134,7 +137,10 @@ int usage() {
                  "                                       | --kontor <url> [--version <v>])\n"
                  "       aiml venv <dir> install --all --kontor <url>\n"
                  "       aiml venv <dir> publish [<name>] [--path <dir>] --kontor <url> [--overwrite]\n"
-                 "       aiml venv <dir> list | remove <name>" << std::endl;
+                 "       aiml venv <dir> list | remove <name>\n"
+                 "       aiml venv <dir> asset install <name> (--kontor <url> --version <v> | --path <archive.tar.gz>)\n"
+                 "       aiml venv <dir> asset publish <name> --version <v> --path <dir> --kontor <url> [--overwrite]\n"
+                 "       aiml venv <dir> asset list | asset remove <name>" << std::endl;
     return 1;
 }
 
@@ -559,7 +565,8 @@ int cmdRemove(const fs::path& root, const std::string& name) {
 // was no answer at all (then `err` says why and the call returns false).
 // F68-63: a token goes into the request, never onto a command line.
 bool httpCall(const std::string& method, const std::string& url, const fs::path& bodyFile,
-              const fs::path& toFile, int32_t& status, std::string& body, std::string& err) {
+              const fs::path& toFile, int32_t& status, std::string& body, std::string& err,
+              const std::vector<std::pair<std::string, std::string>>& headers = {}) {
     status = 0;
     void* u = aiml_url_parse(url.c_str());
     if (!u) { err = "not a URL: " + url; return false; }
@@ -569,6 +576,8 @@ bool httpCall(const std::string& method, const std::string& url, const fs::path&
     if (token && *token)
         aiml_http_map_put(aiml_http_client_get_headers(req), "Authorization",
                           (std::string("Bearer ") + token).c_str());
+    for (const auto& h : headers)
+        aiml_http_map_put(aiml_http_client_get_headers(req), h.first.c_str(), h.second.c_str());
     if (!bodyFile.empty()) aiml_http_client_set_body_file(req, bodyFile.string().c_str());
     if (!toFile.empty()) aiml_http_client_set_download_to(req, toFile.string().c_str());
     aiml_http_client_set_timeout(req, 120000);
@@ -1194,6 +1203,384 @@ int cmdPublish(const std::string& wantName, const std::string& pathArg, const st
     return 0;
 }
 
+
+// ── §9: asset packages ────────────────────────────────────────────────────
+//
+// One root, <venv>/assets, one directory per package (F68-121).  The rules of
+// F68-122…124 are checked on the tree before it is published and on the
+// unpacked archive before it is placed, so a package that a compile would
+// lose files of, or trip over, never gets into kontor or into a venv.
+
+fs::path assetDir(const fs::path& root) { return root / "assets"; }
+fs::path assetRecordFile(const fs::path& root) { return root / "lib" / "aiml" / "aiml.assets.json"; }
+
+struct AssetRecord {
+    std::string source, version, digest;
+};
+using AssetRecords = std::map<std::string, AssetRecord>;
+
+AssetRecords readAssetRecords(const fs::path& file) {
+    AssetRecords r;
+    std::error_code ec;
+    if (!fs::is_regular_file(file, ec)) return r;
+    try {
+        YAML::Node doc = YAML::LoadFile(file.string());
+        YAML::Node assets = doc["assets"];
+        if (!assets || !assets.IsMap()) return r;
+        for (const auto& kv : assets) {
+            AssetRecord rec;
+            const YAML::Node& v = kv.second;
+            if (v["source"]) rec.source = v["source"].as<std::string>();
+            if (v["version"]) rec.version = v["version"].as<std::string>();
+            if (v["digest"]) rec.digest = v["digest"].as<std::string>();
+            r[kv.first.as<std::string>()] = rec;
+        }
+    } catch (const std::exception&) {}
+    return r;
+}
+
+bool writeAssetRecords(const fs::path& file, const AssetRecords& r, std::string& err) {
+    std::ostringstream ss;
+    ss << "{\"assets\": {";
+    bool first = true;
+    for (const auto& kv : r) {
+        ss << (first ? "\n  " : ",\n  ") << "\"" << jsonEscape(kv.first) << "\": {"
+           << "\"source\": \"" << jsonEscape(kv.second.source) << "\", "
+           << "\"version\": \"" << jsonEscape(kv.second.version) << "\", "
+           << "\"digest\": \"" << jsonEscape(kv.second.digest) << "\"}";
+        first = false;
+    }
+    ss << (first ? "}}\n" : "\n}}\n");
+    return writeText(file, ss.str(), err);
+}
+
+// F68-122: [a-z0-9]+(_[a-z0-9]+)* — words of lowercase letters and digits,
+// joined by single underscores.
+bool snakeWord(const std::string& s) {
+    if (s.empty() || s.front() == '_' || s.back() == '_') return false;
+    char prev = 0;
+    for (char c : s) {
+        bool word = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9');
+        if (!word && c != '_') return false;
+        if (c == '_' && prev == '_') return false;
+        prev = c;
+    }
+    return true;
+}
+
+bool assetPackageName(const std::string& s) { return !s.empty() && s[0] >= 'a' && s[0] <= 'z' && snakeWord(s); }
+
+bool assetVersion(const std::string& s) {
+    if (s.empty() || !std::isalnum(static_cast<unsigned char>(s[0]))) return false;
+    for (char c : s)
+        if (!std::isalnum(static_cast<unsigned char>(c)) && c != '.' && c != '+' && c != '_' && c != '-')
+            return false;
+    return true;
+}
+
+// (kind, stem) → the path it was found at, relative to its package.
+using AssetIndex = std::map<std::pair<int, std::string>, std::string>;
+
+// Walk one package tree.  `problems` gets one line per violation of
+// F68-122…124; `index` every asset file by (kind, stem).  `inArchive`: the
+// tree was unpacked from an archive, so a second name of one file is a hard
+// link the archive carried (a working tree may well have hard links elsewhere).
+void checkAssetTree(const fs::path& tree, bool inArchive, AssetIndex& index,
+                    std::vector<std::string>& problems) {
+    std::error_code ec;
+    size_t files = 0;
+    auto it = fs::recursive_directory_iterator(tree, fs::directory_options::none, ec);
+    if (ec) { problems.push_back(tree.string() + ": " + ec.message()); return; }
+    for (; it != fs::recursive_directory_iterator(); it.increment(ec)) {
+        if (ec) { problems.push_back(tree.string() + ": " + ec.message()); return; }
+        const fs::path p = it->path();
+        const std::string rel = p.lexically_relative(tree).generic_string();
+        const std::string leaf = p.filename().string();
+        fs::file_status st = fs::symlink_status(p, ec);
+        if (fs::is_symlink(st)) {
+            problems.push_back(rel + ": a symbolic link — a package holds files and directories only (F68-124)");
+            continue;
+        }
+        if (fs::is_directory(st)) {
+            if (!snakeWord(leaf))
+                problems.push_back(rel + "/: the directory name '" + leaf + "' is no snake_case (F68-122)");
+            continue;
+        }
+        if (!fs::is_regular_file(st)) {
+            problems.push_back(rel + ": neither a file nor a directory (F68-124)");
+            continue;
+        }
+        ++files;
+        if (inArchive && fs::hard_link_count(p, ec) > 1) {
+            problems.push_back(rel + ": a hard link — one file, one name (F68-124)");
+            continue;
+        }
+        size_t dot = leaf.find('.');
+        if (dot == std::string::npos || leaf.find('.', dot + 1) != std::string::npos) {
+            problems.push_back(rel + ": a file is <stem>.<ext> with exactly one dot (F68-122)");
+            continue;
+        }
+        std::string stem = leaf.substr(0, dot), ext = leaf.substr(dot + 1);
+        AIML::AssetKind kind = AIML::AssetScanner::classify(leaf);
+        bool lowerExt = std::none_of(ext.begin(), ext.end(), [](char c) { return std::isupper(static_cast<unsigned char>(c)); });
+        if (kind == AIML::AssetKind::Unknown) {
+            problems.push_back(rel + ": '." + ext + "' is no asset kind of spec/44_7 (F68-124)");
+            continue;
+        }
+        if (!lowerExt) {
+            problems.push_back(rel + ": the extension is spelled in lowercase (F68-122)");
+            continue;
+        }
+        if (!snakeWord(stem)) {
+            problems.push_back(rel + ": the name '" + stem + "' is no snake_case (F68-122)");
+            continue;
+        }
+        auto key = std::make_pair(static_cast<int>(kind), stem);
+        auto hit = index.find(key);
+        if (hit != index.end()) {
+            problems.push_back(rel + ": the " + std::string(AIML::AssetScanner::kind_name(kind)) + " '" + stem +
+                               "' is there already as " + hit->second + " — a stem is unique per kind (F68-123)");
+            continue;
+        }
+        index.emplace(key, rel);
+    }
+    if (files == 0) problems.push_back(tree.string() + ": the package holds no file (F68-124)");
+}
+
+// F68-123 across packages: every stem of `mine` against the other packages
+// installed in the venv.
+void checkAgainstInstalled(const fs::path& root, const std::string& name, const AssetIndex& mine,
+                           std::vector<std::string>& problems) {
+    std::error_code ec;
+    fs::path dir = assetDir(root);
+    if (!fs::is_directory(dir, ec)) return;
+    std::vector<fs::path> others;
+    for (const auto& ent : fs::directory_iterator(dir, ec))
+        if (ent.is_directory(ec) && ent.path().filename() != name) others.push_back(ent.path());
+    std::sort(others.begin(), others.end());
+    for (const fs::path& other : others) {
+        AssetIndex theirs;
+        std::vector<std::string> ignored;
+        checkAssetTree(other, false, theirs, ignored);
+        for (const auto& kv : mine) {
+            auto hit = theirs.find(kv.first);
+            if (hit == theirs.end()) continue;
+            problems.push_back(name + ": " + kv.second + ": the " +
+                               std::string(AIML::AssetScanner::kind_name(static_cast<AIML::AssetKind>(kv.first.first))) +
+                               " '" + kv.first.second + "' is in the installed package " +
+                               other.filename().string() + " already, as " + hit->second + " (F68-123)");
+        }
+    }
+}
+
+int reportProblems(const std::string& what, const std::vector<std::string>& problems) {
+    for (const std::string& p : problems) std::cerr << "  " << p << std::endl;
+    return fail(what + ": " + std::to_string(problems.size()) + " problem" +
+                (problems.size() == 1 ? "" : "s") + " — nothing done (spec/68 §9)");
+}
+
+size_t countFiles(const fs::path& dir) {
+    size_t n = 0;
+    std::error_code ec;
+    for (auto it = fs::recursive_directory_iterator(dir, ec); !ec && it != fs::recursive_directory_iterator(); it.increment(ec))
+        if (it->is_regular_file(ec)) ++n;
+    return n;
+}
+
+// F68-125
+int cmdAssetPublish(const fs::path& root, const std::string& name, const std::string& version,
+                    const std::string& pathArg, const std::string& kontorUrl, bool overwrite) {
+    if (name.empty() || version.empty() || pathArg.empty() || kontorUrl.empty()) return usage();
+    if (!assetPackageName(name))
+        return fail("'" + name + "' is no asset package name: [a-z][a-z0-9]*(_[a-z0-9]+)* (F68-122)");
+    if (!assetVersion(version)) return fail("'" + version + "' is no version (F68-122)");
+    const char* token = std::getenv("KONTOR_TOKEN");
+    if (!token || !*token)
+        return fail("asset publish needs $KONTOR_TOKEN, a kontor token with the role writer (F68-125)");
+    std::error_code ec;
+    fs::path dir = fs::weakly_canonical(fs::absolute(pathArg), ec);
+    if (ec || !fs::is_directory(dir, ec)) return fail("--path " + pathArg + ": no such directory");
+
+    AssetIndex index;
+    std::vector<std::string> problems;
+    checkAssetTree(dir, false, index, problems);
+    checkAgainstInstalled(root, name, index, problems);
+    if (!problems.empty()) return reportProblems("asset publish " + name + " " + version, problems);
+
+    std::string base = kontorBase(kontorUrl);
+    std::string url = base + "/generic/" + name + "/" + version + "/" + name + ".tar.gz";
+    fs::path work = cacheRoot() / "venv_publish_assets" / (name + "-" + version);
+    fs::remove_all(work, ec);
+    fs::create_directories(work, ec);
+    if (ec) return fail("cannot make " + work.string() + ": " + ec.message());
+
+    int32_t status = 0;
+    std::string answer, err;
+    if (!httpCall("GET", url, {}, work / "existing", status, answer, err)) return fail(err);
+    fs::remove(work / "existing", ec);
+    if (status == 200 && !overwrite)
+        return fail(name + " " + version + " is already in kontor at " + base +
+                    " — a published version is not replaced; raise the version, or --overwrite (F68-125)");
+    if (status == 401 || status == 403)
+        return fail(url + ": HTTP " + std::to_string(status) + " — " + kontorMessage(answer));
+    if (status != 404 && status != 200) return fail(url + ": HTTP " + std::to_string(status));
+    bool replacing = status == 200;
+
+    // F68-125/F68-72: reproducible — sorted, mtime 0, owner 0:0, gzip -n; the
+    // root is the directory's content (F68-120).
+    std::vector<std::string> top;
+    for (const auto& ent : fs::directory_iterator(dir, ec)) top.push_back(ent.path().filename().string());
+    std::sort(top.begin(), top.end());
+    fs::path tarFile = work / (name + ".tar");
+    std::vector<std::string> cmd = {"tar", "--sort=name", "--mtime=@0", "--owner=0", "--group=0",
+                                    "--numeric-owner", "--hard-dereference", "--mode=u+rw,go+r,go-w,a-s",
+                                    "-C", dir.string(), "-cf", tarFile.string()};
+    cmd.insert(cmd.end(), top.begin(), top.end());
+    int rc = runProg(cmd, {}, {}, nullptr);
+    if (rc == 127) return fail("tar is not on PATH (F68-125)");
+    if (rc != 0) return fail("tar failed (exit " + std::to_string(rc) + ")");
+    rc = runProg({"gzip", "-n", "-9", "-f", tarFile.string()}, {}, {}, nullptr);
+    if (rc == 127) return fail("gzip is not on PATH (F68-125)");
+    if (rc != 0) return fail("gzip failed (exit " + std::to_string(rc) + ")");
+    fs::path archive = work / (name + ".tar.gz");
+    std::string hex = sha256File(archive.string());
+    if (hex.empty()) return fail("cannot read back " + archive.string());
+    uintmax_t size = fs::file_size(archive, ec);
+
+    if (!httpCall("PUT", url, archive, {}, status, answer, err, {{"X-Checksum-Sha256", hex}})) return fail(err);
+    if (status != 200 && status != 201)
+        return fail(url + ": HTTP " + std::to_string(status) + " — " + kontorMessage(answer));
+    std::cout << (replacing ? "replaced " : "published ") << name << " " << version << " (" << index.size()
+              << " files, " << size << " bytes, sha256:" << hex << ") → " << url << "\n"
+              << "  install it with: aiml venv <dir> asset install " << name << " --kontor " << base
+              << " --version " << version << std::endl;
+    return 0;
+}
+
+// F68-126
+int cmdAssetInstall(const fs::path& root, const std::string& name, const std::string& kontorUrl,
+                    const std::string& version, const std::string& pathArg) {
+    if (name.empty() || kontorUrl.empty() == pathArg.empty()) return usage();
+    if (!kontorUrl.empty() && version.empty())
+        return fail("asset install --kontor needs --version <v> — an asset package has no latest (F68-129)");
+    if (!assetPackageName(name))
+        return fail("'" + name + "' is no asset package name: [a-z][a-z0-9]*(_[a-z0-9]+)* (F68-122)");
+    if (!version.empty() && !assetVersion(version)) return fail("'" + version + "' is no version (F68-122)");
+    std::error_code ec;
+    std::string err, source;
+    fs::path archive;
+    fs::path at = cacheRoot() / "venv_assets" / name / (version.empty() ? std::string("_path") : version);
+    fs::create_directories(at, ec);
+    if (ec) return fail("cannot make " + at.string() + ": " + ec.message());
+    if (!kontorUrl.empty()) {
+        std::string base = kontorBase(kontorUrl);
+        archive = at / (name + ".tar.gz");
+        std::string body;
+        if (!httpGet(base + "/generic/" + name + "/" + version + "/" + name + ".tar.gz", archive, body, err)) {
+            fs::remove(archive, ec);
+            return fail(err);
+        }
+        source = "kontor:" + base;
+    } else {
+        archive = fs::weakly_canonical(fs::absolute(pathArg), ec);
+        if (ec || !fs::is_regular_file(archive, ec)) return fail("--path " + pathArg + ": no such file");
+        source = "path:" + archive.string();
+    }
+    std::string hex = sha256File(archive.string());
+    if (hex.empty()) return fail("cannot read " + archive.string());
+    std::string digest = "sha256:" + hex;
+
+    fs::path recAt = assetRecordFile(root);
+    AssetRecords recs = readAssetRecords(recAt);
+    fs::path target = assetDir(root) / name;
+    auto old = recs.find(name);
+    if (old != recs.end() && old->second.digest == digest && fs::is_directory(target, ec)) {
+        std::cout << name << " " << (old->second.version.empty() ? "" : old->second.version + " ")
+                  << "is installed already (" << digest << ")" << std::endl;
+        return 0;
+    }
+
+    // Unpacked and checked in the cache (F68-52), placed only when it passed.
+    fs::path stage = at / ("_stage." + std::to_string(getpid()));
+    fs::remove_all(stage, ec);
+    fs::create_directories(stage, ec);
+    auto cleanup = [&]() { std::error_code e; fs::remove_all(stage, e); };
+    int32_t urc = aiml_compress_untar(archive.string().c_str(), stage.string().c_str());
+    if (urc != 0) {
+        cleanup();
+        return fail(archive.string() + ": not a readable tar.gz, or an entry outside the package "
+                    "(compress.untar " + std::to_string(urc) + ", F68-124)");
+    }
+    AssetIndex index;
+    std::vector<std::string> problems;
+    checkAssetTree(stage, true, index, problems);
+    checkAgainstInstalled(root, name, index, problems);
+    if (!problems.empty()) {
+        cleanup();
+        return reportProblems("asset install " + name, problems);
+    }
+
+    // Into the venv beside the root (not under assets/, where a compile would
+    // see it), then renamed into place; the old tree goes after that.
+    fs::path pid = std::to_string(getpid());
+    fs::path incoming = root / "lib" / "aiml" / (".asset_new." + pid.string());
+    fs::path outgoing = root / "lib" / "aiml" / (".asset_old." + pid.string());
+    fs::remove_all(incoming, ec);
+    fs::copy(stage, incoming, fs::copy_options::recursive, ec);
+    cleanup();
+    if (ec) { fs::remove_all(incoming, ec); return fail("cannot copy the package into " + root.string() + ": " + ec.message()); }
+    fs::create_directories(assetDir(root), ec);
+    bool hadOld = fs::exists(target, ec);
+    if (hadOld) {
+        fs::rename(target, outgoing, ec);
+        if (ec) { fs::remove_all(incoming, ec); return fail("cannot move " + target.string() + " aside: " + ec.message()); }
+    }
+    fs::rename(incoming, target, ec);
+    if (ec) {
+        std::error_code e2;
+        if (hadOld) fs::rename(outgoing, target, e2);
+        fs::remove_all(incoming, e2);
+        return fail("cannot place " + target.string() + ": " + ec.message());
+    }
+    fs::remove_all(outgoing, ec);
+    recs[name] = AssetRecord{source, version, digest};
+    if (!writeAssetRecords(recAt, recs, err)) return fail(err);
+    std::cout << (hadOld ? "updated " : "installed ") << name << (version.empty() ? "" : " " + version)
+              << " (" << index.size() << " files, " << digest << ") → " << target.string() << std::endl;
+    return 0;
+}
+
+// F68-127
+int cmdAssetList(const fs::path& root) {
+    AssetRecords recs = readAssetRecords(assetRecordFile(root));
+    if (recs.empty()) {
+        std::cout << "no asset packages installed in " << root.string() << std::endl;
+        return 0;
+    }
+    for (const auto& kv : recs) {
+        std::cout << kv.first;
+        if (!kv.second.version.empty()) std::cout << " " << kv.second.version;
+        std::cout << "  " << kv.second.source << " @ " << kv.second.digest << "  "
+                  << countFiles(assetDir(root) / kv.first) << " file(s)" << std::endl;
+    }
+    return 0;
+}
+
+int cmdAssetRemove(const fs::path& root, const std::string& name) {
+    fs::path recAt = assetRecordFile(root);
+    AssetRecords recs = readAssetRecords(recAt);
+    auto it = recs.find(name);
+    std::error_code ec;
+    if (it == recs.end()) return fail("no asset package '" + name + "' in " + root.string());
+    fs::remove_all(assetDir(root) / name, ec);
+    if (ec) return fail("cannot remove " + (assetDir(root) / name).string() + ": " + ec.message());
+    recs.erase(it);
+    std::string err;
+    if (!writeAssetRecords(recAt, recs, err)) return fail(err);
+    std::cout << "removed the asset package " << name << " from " << root.string() << std::endl;
+    return 0;
+}
+
 }  // namespace
 
 std::string ownRoot() {
@@ -1206,6 +1593,14 @@ std::string ownRoot() {
         return placed && isVenv(dir.parent_path()) ? dir.parent_path().string() : std::string();
     }();
     return root;
+}
+
+std::string ownAssetRoot() {
+    std::string root = ownRoot();
+    if (root.empty()) return "";
+    std::error_code ec;
+    fs::path dir = fs::path(root) / "assets";
+    return fs::is_directory(dir, ec) ? dir.string() : std::string();
 }
 
 namespace {
@@ -1279,7 +1674,7 @@ std::string sha256File(const std::string& path) {
 }
 
 int command(int argc, char** argv) {
-    std::string dirArg, runtimeArg, verb, name;
+    std::string dirArg, runtimeArg, verb, name, sub;
     std::string gitUrl, ref, pathArg, kontorUrl, versionArg;
     bool all = false, overwrite = false;
     for (int i = 0; i < argc; ++i) {
@@ -1295,6 +1690,7 @@ int command(int argc, char** argv) {
         else if (!arg.empty() && arg[0] != '-') {
             if (dirArg.empty()) dirArg = arg;
             else if (verb.empty()) verb = arg;
+            else if (verb == "asset" && sub.empty()) sub = arg;   // §9: asset <sub> [<name>]
             else if (name.empty()) name = arg;
             else return usage();
         }
@@ -1313,7 +1709,16 @@ int command(int argc, char** argv) {
     // §6 works ON a venv, so there has to be one.
     if (!isVenv(root))
         return fail(root.string() + " is not a venv — create it with `aiml venv " + dirArg + "`");
-    if (overwrite && verb != "publish") return usage();   // F68-76: publish only
+    if (overwrite && verb != "publish" && !(verb == "asset" && sub == "publish"))
+        return usage();                                    // F68-76/F68-125: publish only
+    if (verb == "asset") {                                 // §9
+        if (all) return usage();
+        if (sub == "install") return cmdAssetInstall(root, name, kontorUrl, versionArg, pathArg);
+        if (sub == "publish") return cmdAssetPublish(root, name, versionArg, pathArg, kontorUrl, overwrite);
+        if (sub == "list")    return name.empty() ? cmdAssetList(root) : usage();
+        if (sub == "remove")  return name.empty() ? usage() : cmdAssetRemove(root, name);
+        return usage();
+    }
     if (verb == "install") {
         if (all) {
             if (!name.empty() || (!pathArg.empty() && !kontorUrl.empty())) return usage();

@@ -42,6 +42,14 @@ build tools have to replicate the flag convention.
 No manifest file on disk.  The compiler scans the roots at the
 start of compilation (singleton `AIML::AssetScanner`).
 
+**The venv's asset root comes on top** (spec/68 §9, F68-121): a compiler
+that belongs to a venv adds `<venv>/assets` — where `aiml venv <dir> asset
+install` puts asset packages, one directory each — to the roots it was given,
+on every compile and every JIT run.  Its files join the same stores; a stem
+both in the project and in a package is the duplicate error below.  Asset
+packages follow stricter rules than a working tree: snake_case only and no
+duplicate stem, refused when publishing and when installing (F68-122/123).
+
 ### Asset kinds (stores)
 
 Classification by extension:

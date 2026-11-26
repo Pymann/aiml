@@ -518,6 +518,132 @@ else
     else
         echo "  skip publish (no git)"
     fi
+
+    echo "── §9: asset packages ──"
+    AV="$WORK/va"; "$AIML" venv "$AV" > /dev/null 2>&1
+    AP="$WORK/apkg/ui_icons"; mkdir -p "$AP/icons" "$AP/data"
+    cp tests/_asset_fixtures/basic/resources/textures/hammer.png "$AP/icons/"
+    printf '{"level": 7}\n' > "$AP/data/balance.json"
+    GEN="$SRV/generic/ui_icons"
+    apub() {  # apub <token> <version> [extra…] — publish $AP as ui_icons
+        local tok="$1" ver="$2"; shift 2
+        KONTOR_TOKEN="$tok" "$AIML" venv "$AV" asset publish ui_icons --version "$ver" --path "$AP" --kontor "$URL" "$@" 2>&1
+    }
+    out=$(env -u KONTOR_TOKEN "$AIML" venv "$AV" asset publish ui_icons --version 1.0.0 --path "$AP" --kontor "$URL" 2>&1); rc=$?
+    check "asset publish without a token is refused before the network (F68-125)" '[ $rc -ne 0 ] && echo "$out" | grep -q KONTOR_TOKEN && [ ! -e "$GEN" ]'
+    # one bad name at a time: refused, named, nothing sent (F68-122/124/125)
+    refused() {  # refused <label> <needle> — publish must fail naming <needle>, store untouched
+        out=$(apub stub-writer 1.0.0); rc=$?; needle="$2"
+        check "publish refuses $1, naming it, nothing sent (F68-125)" \
+          '[ $rc -ne 0 ] && echo "$out" | grep -qF -- "$needle" && [ ! -e "$GEN" ]'
+    }
+    cp "$AP/icons/hammer.png" "$AP/icons/Axe.png";           refused "an uppercase file name (F68-122)" "icons/Axe.png"; rm "$AP/icons/Axe.png"
+    mkdir -p "$AP/sub-dir"; cp "$AP/icons/hammer.png" "$AP/sub-dir/saw.png"; refused "a '-' in a directory (F68-122)" "sub-dir"; rm -r "$AP/sub-dir"
+    cp "$AP/icons/hammer.png" "$AP/icons/big__axe.png";      refused "a double underscore (F68-122)" "icons/big__axe.png"; rm "$AP/icons/big__axe.png"
+    cp "$AP/icons/hammer.png" "$AP/icons/hammer.PNG";        refused "an uppercase extension (F68-122)" "icons/hammer.PNG"; rm "$AP/icons/hammer.PNG"
+    echo x > "$AP/icons/notes.bak";                          refused "an extension that is no asset kind (F68-124)" "icons/notes.bak"; rm "$AP/icons/notes.bak"
+    ln -s hammer.png "$AP/icons/link.png";                   refused "a symbolic link (F68-124)" "icons/link.png"; rm "$AP/icons/link.png"
+    mkdir -p "$AP/other"; cp "$AP/icons/hammer.png" "$AP/other/hammer.jpg"
+    refused "a stem twice in one kind (F68-123)" "other/hammer.jpg"
+    check "and names the first one too (F68-123)" 'echo "$out" | grep -qF "icons/hammer.png"'
+    rm -r "$AP/other"
+    out=$(KONTOR_TOKEN=stub-writer "$AIML" venv "$AV" asset publish Ui-Icons --version 1.0.0 --path "$AP" --kontor "$URL" 2>&1); rc=$?
+    check "a package name that is no snake_case is refused (F68-122)" '[ $rc -ne 0 ] && echo "$out" | grep -q "Ui-Icons"'
+
+    out=$(apub stub-writer 1.0.0); rc=$?
+    check "asset publish puts <name>.tar.gz into kontor's generic store (F68-120/125)" \
+      '[ $rc -eq 0 ] && [ -f "$GEN/1.0.0/ui_icons.tar.gz" ] && echo "$out" | grep -q "sha256:"'
+    [ $rc -eq 0 ] || echo "$out" | tail -3
+    check "with the X-Checksum-Sha256 of the bytes it sent (F68-125)" \
+      '[ "$(cat "$GEN/1.0.0/ui_icons.tar.gz.sha256" 2>/dev/null)" = "$(sha256sum "$GEN/1.0.0/ui_icons.tar.gz" | cut -d" " -f1)" ]'
+    check "the archive's root is the package, no wrapper directory (F68-120)" \
+      'tar -tzf "$GEN/1.0.0/ui_icons.tar.gz" | grep -qx "icons/hammer.png" && tar -tzf "$GEN/1.0.0/ui_icons.tar.gz" | grep -qx "data/balance.json"'
+    cp "$GEN/1.0.0/ui_icons.tar.gz" "$WORK/assets_first.tgz"
+    out=$(apub stub-writer 1.0.0); rc=$?
+    check "a version kontor has is not published again (F68-125)" '[ $rc -ne 0 ] && echo "$out" | grep -q "already"'
+    out=$(apub stub-writer 1.0.0 --overwrite); rc=$?
+    check "--overwrite replaces it, and the bytes are reproducible (F68-125)" \
+      '[ $rc -eq 0 ] && echo "$out" | grep -q "^replaced" && cmp -s "$WORK/assets_first.tgz" "$GEN/1.0.0/ui_icons.tar.gz"'
+
+    out=$("$AIML" venv "$AV" asset install ui_icons --kontor "$URL" --version 1.0.0 2>&1); rc=$?
+    check "asset install from kontor lands in <venv>/assets/<name>/ (F68-121/126)" \
+      '[ $rc -eq 0 ] && [ -f "$AV/assets/ui_icons/icons/hammer.png" ] && [ -f "$AV/assets/ui_icons/data/balance.json" ]'
+    [ $rc -eq 0 ] || echo "$out" | tail -3
+    check "the record names source, version and digest (F68-126)" \
+      'grep -q "\"source\": \"kontor:$URL\"" "$AV/lib/aiml/aiml.assets.json" && grep -q "\"version\": \"1.0.0\"" "$AV/lib/aiml/aiml.assets.json" && grep -q "sha256:$(sha256sum "$GEN/1.0.0/ui_icons.tar.gz" | cut -d" " -f1)" "$AV/lib/aiml/aiml.assets.json"'
+    check "the blob was fetched into the cache, not into the venv (F68-126)" \
+      '[ -f "$WORK/cache/venv_assets/ui_icons/1.0.0/ui_icons.tar.gz" ] && [ -z "$(find "$AV" -name "*.tar.gz")" ]'
+    out=$("$AIML" venv "$AV" asset install ui_icons --kontor "$URL" --version 1.0.0 2>&1); rc=$?
+    check "the same digest again is a no-op (F68-126)" '[ $rc -eq 0 ] && echo "$out" | grep -q "installed already"'
+
+    # a program finds the package's assets by stem — no --asset-roots (F68-121/128)
+    mkdir -p "$WORK/aprog" "$WORK/elsewhere/much/deeper"
+    cat > "$WORK/aprog/useassets.aiml" <<'EOT'
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [tex, gl_texture, { call: [gl.tex, "hammer"] }]
+      - if:
+          condition: { eq: [tex, null] }
+          then:
+            - print: ["FAIL hammer"]
+            - call: [sys.exit, 1]
+      - decl: [cfg, string, { call: [io.read_asset, "balance"] }]
+      - print: ["balance ${cfg}"]
+      - return: 0
+EOT
+    out=$(cd "$WORK/aprog" && AIML_MEM_V3=1 "$AV/bin/aiml" useassets.aiml 2>&1); rc=$?
+    check "the JIT finds a texture and a data asset of the package by stem (F68-121)" \
+      '[ $rc -eq 0 ] && echo "$out" | grep -q "balance {\"level\": 7}"'
+    [ $rc -eq 0 ] || echo "$out" | grep -v "no owner" | tail -3
+    out=$(cd "$WORK/aprog" && AIML_MEM_V3=1 "$AV/bin/aiml" useassets.aiml -o "$WORK/aprog/useassets.o" 2>&1); rc=$?
+    if [ $rc -eq 0 ] && g++ -o "$WORK/aprog/useassets" "$WORK/aprog/useassets.o" -L"$AV/lib" -laiml \
+         "-Wl,-rpath,$AV/lib" -lpthread -ldl 2> "$WORK/alink.err"; then
+        out=$(cd "$WORK/elsewhere/much/deeper" && "$WORK/aprog/useassets" 2>&1); rc=$?
+        check "an AOT program finds them from another directory: absolute paths (F68-128)" \
+          '[ $rc -eq 0 ] && echo "$out" | grep -q "balance {\"level\": 7}"'
+        check "the object registers the package's files by absolute path (F68-128)" \
+          'grep -qaF "$AV/assets/ui_icons/icons/hammer.png" "$WORK/aprog/useassets.o"'
+    else
+        bad "compile/link the AOT asset program (rc=$rc)"; echo "$out" | tail -3; head -3 "$WORK/alink.err"
+    fi
+    mkdir -p "$WORK/aprog/own"; cp "$AP/icons/hammer.png" "$WORK/aprog/own/hammer.png"
+    out=$(cd "$WORK/aprog" && AIML_MEM_V3=1 "$AV/bin/aiml" --asset-roots=own useassets.aiml 2>&1); rc=$?
+    check "a stem in the project and in a package is the duplicate of spec/44_7 (F68-121)" \
+      '[ $rc -ne 0 ] && echo "$out" | grep -q "duplicate stem"'
+
+    # a second package that clashes with the installed one
+    AQ="$WORK/apkg/ui_more"; mkdir -p "$AQ/x"; cp "$AP/icons/hammer.png" "$AQ/x/hammer.png"
+    out=$(KONTOR_TOKEN=stub-writer "$AIML" venv "$AV" asset publish ui_more --version 1.0.0 --path "$AQ" --kontor "$URL" 2>&1); rc=$?
+    check "publish refuses a stem an installed package has, naming it (F68-123/125)" \
+      '[ $rc -ne 0 ] && echo "$out" | grep -q "ui_icons" && [ ! -e "$SRV/generic/ui_more" ]'
+    tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner -C "$AQ" -czf "$WORK/ui_more.tar.gz" x
+    out=$("$AIML" venv "$AV" asset install ui_more --path "$WORK/ui_more.tar.gz" 2>&1); rc=$?
+    check "install refuses it too, naming both packages, nothing placed (F68-123/126)" \
+      '[ $rc -ne 0 ] && echo "$out" | grep -q "ui_icons" && echo "$out" | grep -q "ui_more" && [ ! -e "$AV/assets/ui_more" ]'
+
+    # the update: 1.1.0 drops balance.json and brings golem.png
+    rm "$AP/data/balance.json"; rmdir "$AP/data"; cp tests/_asset_fixtures/basic/resources/textures/golem.png "$AP/icons/"
+    out=$(apub stub-writer 1.1.0); rc=$?
+    out=$("$AIML" venv "$AV" asset install ui_icons --kontor "$URL" --version 1.1.0 2>&1); rc=$?
+    check "another version is the update, no file of the old one left (F68-121/126)" \
+      '[ $rc -eq 0 ] && [ -f "$AV/assets/ui_icons/icons/golem.png" ] && [ ! -e "$AV/assets/ui_icons/data" ] && grep -q "\"version\": \"1.1.0\"" "$AV/lib/aiml/aiml.assets.json"'
+    [ $rc -eq 0 ] || echo "$out" | tail -3
+    BADT="$WORK/badtree"; mkdir -p "$BADT/icons"; cp "$AP/icons/hammer.png" "$BADT/icons/Hammer.png"
+    tar --sort=name --mtime=@0 -C "$BADT" -czf "$WORK/ui_icons_bad.tar.gz" icons
+    out=$("$AIML" venv "$AV" asset install ui_icons --path "$WORK/ui_icons_bad.tar.gz" 2>&1); rc=$?
+    check "a refused archive leaves the installed version in use (F68-122/126)" \
+      '[ $rc -ne 0 ] && echo "$out" | grep -q "icons/Hammer.png" && [ -f "$AV/assets/ui_icons/icons/golem.png" ] && grep -q "\"version\": \"1.1.0\"" "$AV/lib/aiml/aiml.assets.json" && [ -z "$(ls -A "$AV/assets" | grep -v "^ui_icons$")" ]'
+    out=$("$AIML" venv "$AV" asset list 2>&1); rc=$?
+    check "asset list names version, source and digest (F68-127)" \
+      '[ $rc -eq 0 ] && echo "$out" | grep -q "ui_icons 1.1.0" && echo "$out" | grep -q "kontor:$URL" && echo "$out" | grep -q "sha256:"'
+    out=$("$AIML" venv "$AV" asset remove ui_icons 2>&1); rc=$?
+    check "asset remove takes the directory and the record (F68-127)" \
+      '[ $rc -eq 0 ] && [ ! -e "$AV/assets/ui_icons" ] && ! grep -q ui_icons "$AV/lib/aiml/aiml.assets.json"'
+    out=$("$AIML" venv "$AV" asset install ui_more --path "$WORK/ui_more.tar.gz" 2>&1); rc=$?
+    check "with ui_icons gone, ui_more installs from a local archive (F68-126)" \
+      '[ $rc -eq 0 ] && [ -f "$AV/assets/ui_more/x/hammer.png" ] && grep -q "\"source\": \"path:$WORK/ui_more.tar.gz\"" "$AV/lib/aiml/aiml.assets.json"'
     kill $STUB 2>/dev/null
 fi
 

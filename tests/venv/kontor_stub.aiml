@@ -14,6 +14,10 @@
 # that was deleted (a `tombstone.json` in its directory, GET answers 410), is
 # not overwritten (409) — except with the admin token (kontor FW-47a), which
 # replaces it and takes the tombstone away.
+#
+# PUT /generic/<name>/<version>/<file> (spec/68 §9) writes there with the same
+# tokens, and — as kontor's generic store does — replaces what is there; it
+# wants an X-Checksum-Sha256 header (400 without one).
 
 - def:
     name: stub_dir
@@ -111,6 +115,49 @@
       - call: [on_put, req, resp, "package"]
 
 - def:
+    name: on_put_generic
+    args: [[req, http_request_handle], [resp, http_response_handle]]
+    body:
+      - decl: [vars, map<string:string>, { call: [sys.env] }]
+      - decl: [token, string, { call: [vars.get, "KONTOR_STUB_TOKEN"] }]
+      - decl: [admin_token, string, "-"]
+      - if:
+          condition: { call: [vars.has, "KONTOR_STUB_ADMIN_TOKEN"] }
+          then:
+            - set: [admin_token, { call: [vars.get, "KONTOR_STUB_ADMIN_TOKEN"] }]
+      - decl: [auth, string, { call: [req.header, "authorization"] }]
+      - if:
+          condition: { or: [{ eq: [auth, null] }, { and: [{ neq: [auth, "Bearer ${token}"] }, { neq: [auth, "Bearer ${admin_token}"] }] }] }
+          then:
+            - set: [resp.status, 401]
+            - set: [resp.body, "{\"error\":\"authentication required\",\"code\":\"unauthorized\"}"]
+            - call: [resp.send]
+            - return: []
+      - decl: [sum, string, { call: [req.header, "x-checksum-sha256"] }]
+      - if:
+          condition: { eq: [sum, null] }
+          then:
+            - set: [resp.status, 400]
+            - set: [resp.body, "{\"error\":\"X-Checksum-Sha256 missing\",\"code\":\"bad_request\"}"]
+            - call: [resp.send]
+            - return: []
+      - decl: [params, map<string:string>]
+      - set: [params, req.params]
+      - decl: [name, string, { call: [params.get, "name"] }]
+      - decl: [version, string, { call: [params.get, "version"] }]
+      - decl: [file, string, { call: [params.get, "file"] }]
+      - decl: [root, string, { call: [stub_dir] }]
+      - decl: [dir, string, "${root}/generic/${name}/${version}"]
+      - call: [io.mkdir_all, dir]
+      - decl: [payload, buffer<u8>]
+      - set: [payload, req.body_bytes]
+      - call: [io.write_file, "${dir}/${file}", payload]
+      - call: [io.write_file, "${dir}/${file}.sha256", sum]
+      - set: [resp.status, 201]
+      - set: [resp.body, "{}"]
+      - call: [resp.send]
+
+- def:
     name: main
     return: i32
     body:
@@ -124,6 +171,7 @@
       - call: [srv.route, "GET", "/*", on_get]
       - call: [srv.route, "PUT", "/exodus/:name/:version/exodus.json", on_put_manifest]
       - call: [srv.route, "PUT", "/exodus/:name/:version/package", on_put_package]
+      - call: [srv.route, "PUT", "/generic/:name/:version/:file", on_put_generic]
       - decl: [root, string, { call: [stub_dir] }]
       - print: ["kontor-stub ${port} ${root}"]
       - call: [srv.start]

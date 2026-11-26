@@ -12,6 +12,8 @@
 // `publish [<name>] [--path <dir>] --kontor <url>` puts a tool's sources into
 // kontor, where `install --kontor` finds them (§6.3).
 // `list` and `remove` work off the record the install leaves behind.
+// `asset install|publish|list|remove` handles asset packages: blobs in kontor's
+// generic store, placed under <venv>/assets/<name>/ (§9).
 #pragma once
 #include <string>
 #include <vector>
@@ -25,6 +27,10 @@ extern const char* const kMarker;
 // The venv that contains this compiler image (aiml binary or libaiml.so),
 // "" when it is in none (F68-31).
 std::string ownRoot();
+
+// <venv>/assets of that venv when the directory exists, else "" — the asset root
+// every compile of this compiler adds to its --asset-roots (spec/68 F68-121).
+std::string ownAssetRoot();
 
 // `aiml venv <dir> [--runtime <libaiml.so>]` — args after "venv".  Prints
 // what it did or why not; returns the process exit code.
