@@ -178,6 +178,22 @@ request, and via `workflow_dispatch` (input `only` →
   gates, not before them. They used to run first, so a tag published a release
   while the tests had not been asked yet.
 
+**Advisory** (`continue-on-error: true`, reported but never blocking):
+
+* the **lifetime lab** (`tests/lifetime/run_lifetime.sh`), red by design (§3);
+* a step that prints the last 150 lines of every failed test in a collapsed
+  group, so a red corpus is readable from the job log alone.
+
+What the CI still does **not** run: `run_wasm_tests.sh`. It needs an `emsdk`
+installation, and an untested CI step is a guess, so the wasm32 target remains
+local-only (§5).
+
+exodus has a CI of its own (`Pymann/exodus`, `.github/workflows/ci.yml`): wheel
+install, an import check from outside the repository, `pytest`,
+`flake8 --select=F`, `black --check` and `mypy`. aiml's CI installs exodus
+straight from that repository's `main`, so a broken exodus fails aiml's build
+too — the pair is verified from both ends.
+
 ### 4.1 Which tests a run selects — from the git diff (2026-11-26)
 
 aiml is **always built** (compiler, runtime, ZIM, wasm32), the smoke test always
@@ -224,22 +240,6 @@ ERE matching the real paths and nothing else, a sum of needs, the full scope
 markers, and the base: in a scratch repository with a stand-in `gh`, the newest
 successful ancestor is taken, a successful run that is no ancestor (a force
 push) is skipped, and no such run means everything.
-
-**Advisory** (`continue-on-error: true`, reported but never blocking):
-
-* the **lifetime lab** (`tests/lifetime/run_lifetime.sh`), red by design (§3);
-* a step that prints the last 150 lines of every failed test in a collapsed
-  group, so a red corpus is readable from the job log alone.
-
-What the CI still does **not** run: `run_wasm_tests.sh`. It needs an `emsdk`
-installation, and an untested CI step is a guess, so the wasm32 target remains
-local-only (§5).
-
-exodus has a CI of its own (`Pymann/exodus`, `.github/workflows/ci.yml`): wheel
-install, an import check from outside the repository, `pytest`,
-`flake8 --select=F`, `black --check` and `mypy`. aiml's CI installs exodus
-straight from that repository's `main`, so a broken exodus fails aiml's build
-too — the pair is verified from both ends.
 
 ## 5. Gaps, stated plainly
 
