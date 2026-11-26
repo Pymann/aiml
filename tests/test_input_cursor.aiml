@@ -1,0 +1,44 @@
+# SPEC: 44_0_input
+# spec/44_0 §2.5: input.set_cursor picks the pointer's shape.
+#
+# There is no way to read the shape back -- GLFW offers no getter -- so this is a
+# robustness test, not a pixel test: it pins that every documented name is accepted,
+# that an unknown name does NOT crash or reset the pointer, and that the call is a
+# no-op before input.init rather than a null dereference.
+# Requires: display
+# Expected exit code: 0
+- def:
+    name: main
+    return: i32
+    body:
+      # before input.init: must be a harmless no-op (spec §2.5)
+      - call: [input.set_cursor, "crosshair"]
+
+      - decl: [win, window_handle, { call: [engine.create_window, 320, 240, "color"] }]
+      - if: { condition: { eq: [win, null] }, then: [{ call: [log.error, "FAIL create_window"] }, { return: 1 }] }
+      - call: [gl.init]
+      - call: [ui.init]
+      - call: [input.init, win]
+
+      # every documented shape
+      - decl: [names, list<string>, ["arrow", "text", "crosshair", "hand", "resize_ew", "resize_ns"]]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, names.len] }
+          body:
+            - decl: [shape, string, { at: [names, idx] }]
+            - call: [input.set_cursor, shape]
+            - set: [idx, { +: [idx, 1] }]
+
+      # setting the same shape again is free, and must stay harmless
+      - call: [input.set_cursor, "crosshair"]
+      - call: [input.set_cursor, "crosshair"]
+
+      # an unknown name leaves the pointer alone instead of resetting it: a typo
+      # must not snap the cursor back to an arrow in the middle of a drag
+      - call: [input.set_cursor, "resize_nwse"]
+      - call: [input.set_cursor, ""]
+      - call: [input.set_cursor, "voellig unbekannt"]
+
+      - call: [log.info, "input.set_cursor OK"]
+      - return: 0

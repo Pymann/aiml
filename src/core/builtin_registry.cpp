@@ -11877,6 +11877,17 @@ void registerBuiltins(CompilerContext& ctx) {
             ctx.builder.CreateCall(ctx.getFunction("aiml_input_update", ctx.builder.getVoidTy(), {}), {});
             return nullptr;
         };
+        // input.set_cursor(shape: string) -- spec/44_0 §2.5
+        inp.builtinFuncs["set_cursor"] = [](CompilerContext& ctx,
+            const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto* p = llvm::PointerType::get(ctx.context, 0);
+            llvm::Value* name = args.empty()
+                ? static_cast<llvm::Value*>(ctx.builder.CreateGlobalStringPtr("arrow"))
+                : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            ctx.builder.CreateCall(ctx.getFunction("aiml_input_set_cursor",
+                ctx.builder.getVoidTy(), {p}), {name});
+            return nullptr; };
+
         inp.builtinFuncs["set_capture"] = [](CompilerContext& ctx,
             const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
             llvm::Value* on = args.empty() ? ctx.builder.getInt32(0)

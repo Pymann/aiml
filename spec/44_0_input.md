@@ -44,6 +44,7 @@ It swaps prev/curr state, flushes the scroll accumulator into the queue, and set
 | `input.init(win: window_handle)` | Register the window (from `engine.create_window`; a raw GLFW `ptr` from FFI is accepted too); call once before the game loop |
 | `input.update()` | Swap frame state; called automatically by `engine.swap()` |
 | `input.set_capture(on: bool)` | Hide cursor and lock it to the window (FPS look); `false` = visible |
+| `input.set_cursor(shape: string)` | The pointer's **shape**: `"arrow"`, `"text"`, `"crosshair"`, `"hand"`, `"resize_ew"`, `"resize_ns"` |
 
 ---
 
@@ -60,6 +61,20 @@ prefer the mapping layer in game code.
 | `input.key_pressed(key: string)` | `bool` | Key went down **this frame** (rising edge). Idempotent: returns the same value however many times it is polled this frame. |
 | `input.key_pressed_once(key: string)` | `bool` | Rising edge, **consumed on first read per frame**: the first poll this frame returns `true`, every later poll returns `false` until the edge resets next frame. Use for edge-triggered *actions* (skip, toggle, confirm) in code paths that may run more than once per frame — e.g. an input handler invoked from `render()`, which is often called several times per frame (once per reactive redraw after an action). Polling `key_pressed` there would fire the action once per redraw. |
 | `input.key_released(key: string)` | `bool` | Key came up **this frame** (falling edge) |
+
+### The cursor shape (`input.set_cursor`)
+
+Six shapes, and only six: they are what the pinned GLFW (3.3) provides as standard
+cursors. The diagonal resize shapes, "resize all" and "not allowed" arrived in GLFW 3.4
+and are **not offered** rather than silently mapped to a neighbour — a pointer that means
+the wrong thing is worse than one that did not change.
+
+- An **unknown name leaves the pointer alone**. A typo should not reset the cursor to an
+  arrow in the middle of a drag, where the shape is the only feedback the user has.
+- Setting the **same shape again is free**: the call tracks what is set and does nothing
+  when it matches, so a caller can set it every frame from whatever is under the pointer,
+  which is the only way a shape can track hovering at all.
+- Without a window (`input.init`, §2.1) it is a no-op, like every other input call.
 
 Key state is a **per-frame snapshot**, exactly like the button state in §2.2:
 every consumer in one frame sees the same `key_down` / `key_pressed` /
