@@ -20,9 +20,9 @@ Rows are operations, columns are types.  `·` = the type does not have the opera
 
 | Operation | Name | `list<T>` | `buffer<T>` | `buffer` | `array<T:N>` | `dyn_array<T>` | `string` | `map` | `hashmap` | `Kv` | `Store` | `VecStore` | `TimeSeries` | `tensor` | `Code` |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| element count | `.len` | ✓ | ✓ | ✓ (bytes = elements) | ✓ | ✓ | ✓ (code points) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| element count | `.len` | ✓ | ✓ | ✓ (bytes = elements) | ✓ | ✓ | ✓ (bytes) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | no elements | `.empty` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| bytes of the elements | `.byte_len` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ (UTF-8 bytes) | · | · | · | · | · | · | · | · |
+| bytes of the elements | `.byte_len` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ (= `.len`) | · | · | · | · | · | · | · | · |
 | maximum element count | `.capacity` | ✓ settable | ✓ read-only | ✓ read-only | · | · | · | ✓ settable | ✓ settable | ✓ settable | · | · | · | · | · |
 
 `sys.size(x)` is not a collection property: it is the size of the **type** of `x` in bytes, the
@@ -138,7 +138,9 @@ native code passes the data as before.
 ## 7. Bytes and elements
 
 `.len` always counts **elements**.  On a `buffer<f32>` with 4 floats, `.len` is 4 and `.byte_len`
-is 16.  On an untyped `buffer` an element is a byte, so `.len` = `.byte_len`.  `alloc(n)` reserves
+is 16.  On an untyped `buffer` an element is a byte, so `.len` = `.byte_len`.  The same holds for a
+`string`: its elements are the bytes of its UTF-8 encoding, because every string position
+(`substr`, `index_of`) is a byte offset (spec/09).  `"grün"` has `.len` 5.  `alloc(n)` reserves
 `n` **bytes** (spec/11).
 
 ## 8. Retired names

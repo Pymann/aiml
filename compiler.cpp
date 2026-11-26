@@ -2796,7 +2796,9 @@ int AIMLCompiler::jitRun(int argc, char** argv) {
     llvm::sys::DynamicLibrary::AddSymbol("aiml_iter_free",             (void*)(intptr_t)aiml_iter_free);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_db_vec_open",            (void*)(intptr_t)aiml_db_vec_open);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_db_vec_open_persist",   (void*)(intptr_t)aiml_db_vec_open_persist);
-    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_vec_insert",          (void*)(intptr_t)aiml_db_vec_insert);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_vec_set",             (void*)(intptr_t)aiml_db_vec_set);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_vec_delete",          (void*)(intptr_t)aiml_db_vec_delete);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_kv_keys_fill",        (void*)(intptr_t)aiml_db_kv_keys_fill);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_db_vec_search",          (void*)(intptr_t)aiml_db_vec_search);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_db_vec_checkpoint",     (void*)(intptr_t)aiml_db_vec_checkpoint);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_db_vec_len",             (void*)(intptr_t)aiml_db_vec_len);
@@ -3376,7 +3378,7 @@ int AIMLCompiler::jitRun(int argc, char** argv) {
     // storage namespace
     llvm::sys::DynamicLibrary::AddSymbol("aiml_storage_get",                       (void*)(intptr_t)aiml_storage_get);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_storage_set",                       (void*)(intptr_t)aiml_storage_set);
-    llvm::sys::DynamicLibrary::AddSymbol("aiml_storage_remove",                    (void*)(intptr_t)aiml_storage_remove);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_storage_delete",                    (void*)(intptr_t)aiml_storage_delete);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_storage_has",                       (void*)(intptr_t)aiml_storage_has);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_storage_clear",                     (void*)(intptr_t)aiml_storage_clear);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_storage_host",                      (void*)(intptr_t)aiml_storage_host);

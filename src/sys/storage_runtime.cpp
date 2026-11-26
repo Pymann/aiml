@@ -90,13 +90,14 @@ static std::unordered_map<std::string, char*>& g_emjs_cache() {
     return m;
 }
 
+// spec/71 §3: a missing key yields the zero value of string — the null pointer.
 extern "C" const char* aiml_storage_get(const char* key) {
-    if (!key) return "";
+    if (!key) return nullptr;
     auto& cache = g_emjs_cache();
     auto it = cache.find(key);
     if (it != cache.end()) { free(it->second); cache.erase(it); }
     char* p = js_storage_get(key);
-    if (!p) return "";
+    if (!p) return nullptr;
     cache[key] = p;
     return p;
 }
@@ -109,12 +110,15 @@ extern "C" void aiml_storage_set(const char* key, const char* value) {
     js_storage_set(key, value ? value : "");
 }
 
-extern "C" void aiml_storage_remove(const char* key) {
-    if (!key) return;
+// spec/71 §1.2: delete(k) → 1 if k was there, else 0.
+extern "C" int32_t aiml_storage_delete(const char* key) {
+    if (!key) return 0;
     auto& cache = g_emjs_cache();
     auto it = cache.find(key);
     if (it != cache.end()) { free(it->second); cache.erase(it); }
+    int32_t had = js_storage_has(key) ? 1 : 0;
     js_storage_remove(key);
+    return had;
 }
 
 extern "C" int32_t aiml_storage_has(const char* key) {
@@ -183,12 +187,12 @@ static std::unordered_map<std::string, char*>& g_session_cache() {
 }
 
 extern "C" const char* aiml_storage_session_get(const char* key) {
-    if (!key) return "";
+    if (!key) return nullptr;
     auto& cache = g_session_cache();
     auto it = cache.find(key);
     if (it != cache.end()) { free(it->second); cache.erase(it); }
     char* p = js_session_get(key);
-    if (!p) return "";
+    if (!p) return nullptr;
     cache[key] = p;
     return p;
 }
@@ -198,9 +202,16 @@ extern "C" void aiml_storage_session_set(const char* key, const char* value) {
     js_session_set(key, value ? value : "");
 }
 
-extern "C" void aiml_storage_session_remove(const char* key) {
-    if (!key) return;
+extern "C" int32_t aiml_storage_session_delete(const char* key) {
+    if (!key) return 0;
+    auto& cache = g_session_cache();
+    auto it = cache.find(key);
+    if (it != cache.end()) { free(it->second); cache.erase(it); }
+    char* p = js_session_get(key);
+    int32_t had = p ? 1 : 0;
+    free(p);
     js_session_remove(key);
+    return had;
 }
 
 extern "C" const char* aiml_storage_hash(void) {
@@ -276,12 +287,13 @@ static void persist_locked_unsafe() {
     rename(tmp.c_str(), p.c_str());
 }
 
+// spec/71 §3: a missing key yields the zero value of string — the null pointer.
 extern "C" const char* aiml_storage_get(const char* key) {
-    if (!key) return "";
+    if (!key) return nullptr;
     std::lock_guard<std::mutex> lk(g_storage_mtx);
     load_locked_unsafe();
     auto it = g_storage_map().find(key);
-    return it == g_storage_map().end() ? "" : it->second.c_str();
+    return it == g_storage_map().end() ? nullptr : it->second.c_str();
 }
 
 extern "C" void aiml_storage_set(const char* key, const char* value) {
@@ -292,11 +304,14 @@ extern "C" void aiml_storage_set(const char* key, const char* value) {
     persist_locked_unsafe();
 }
 
-extern "C" void aiml_storage_remove(const char* key) {
-    if (!key) return;
+// spec/71 §1.2: delete(k) → 1 if k was there, else 0.
+extern "C" int32_t aiml_storage_delete(const char* key) {
+    if (!key) return 0;
     std::lock_guard<std::mutex> lk(g_storage_mtx);
     load_locked_unsafe();
-    if (g_storage_map().erase(key)) persist_locked_unsafe();
+    if (!g_storage_map().erase(key)) return 0;
+    persist_locked_unsafe();
+    return 1;
 }
 
 extern "C" int32_t aiml_storage_has(const char* key) {
@@ -332,10 +347,10 @@ static std::string& g_hash_value() {
 }
 
 extern "C" const char* aiml_storage_session_get(const char* key) {
-    if (!key) return "";
+    if (!key) return nullptr;
     std::lock_guard<std::mutex> lk(g_storage_mtx);
     auto it = g_session_map().find(key);
-    return it == g_session_map().end() ? "" : it->second.c_str();
+    return it == g_session_map().end() ? nullptr : it->second.c_str();
 }
 
 extern "C" void aiml_storage_session_set(const char* key, const char* value) {
@@ -344,10 +359,10 @@ extern "C" void aiml_storage_session_set(const char* key, const char* value) {
     g_session_map()[key] = value ? value : "";
 }
 
-extern "C" void aiml_storage_session_remove(const char* key) {
-    if (!key) return;
+extern "C" int32_t aiml_storage_session_delete(const char* key) {
+    if (!key) return 0;
     std::lock_guard<std::mutex> lk(g_storage_mtx);
-    g_session_map().erase(key);
+    return g_session_map().erase(key) ? 1 : 0;
 }
 
 extern "C" const char* aiml_storage_hash(void) {

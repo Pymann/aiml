@@ -350,6 +350,8 @@ extern "C" void aiml_list_pop_free(void* list_ptr, int32_t elemKind, int64_t ele
 // bytes before the returned pointer. Assignment increfs (aliasing); scope-exit
 // decrefs and frees data + block at rc 0. Kept out of the OFF/deployed path
 // (list stays an inline value struct there).
+extern "C" void aiml_cap_forget(const void* c);
+extern "C" void aiml_cap_copy(const void* from, const void* to);
 extern "C" void* aiml_list_handle_new() {
     // 8-byte header + AimlListRaw (16 bytes on 64-bit); calloc → size=cap=0, data=null.
     char* block = static_cast<char*>(calloc(1, 8 + sizeof(AimlListRaw)));
@@ -373,6 +375,7 @@ extern "C" void aiml_list_handle_release(void* h, int32_t elemKind,
     aiml_trace_fre_log("LREL", h, *rc - 1);
     if (--(*rc) > 0) return;
     aiml_trace_fre_log("LFREE", h, *rc);
+    aiml_cap_forget(h);                                               // spec/71 §5
     aiml_list_free(h, elemKind, elemSize, serNodes, serNodesCount);  // frees data + elements
     free(static_cast<char*>(h) - 8);                                  // free the handle block
 }
@@ -382,6 +385,7 @@ extern "C" void aiml_list_handle_release(void* h, int32_t elemKind,
 extern "C" void* aiml_list_handle_copy(void* src, int64_t elemSize, int32_t elemKind) {
     void* h = aiml_list_handle_new();
     if (!h || !src) return h;
+    aiml_cap_copy(src, h);   // spec/71 F71-6
     AimlListRaw* s = static_cast<AimlListRaw*>(src);
     AimlListRaw* d = static_cast<AimlListRaw*>(h);
     int32_t n = s->size;
@@ -531,6 +535,7 @@ extern "C" void aiml_map_handle_release(void* h, int32_t keyKind, int64_t keyStr
     aiml_trace_fre_log("MREL", h, *rc - 1);
     if (--(*rc) > 0) return;
     aiml_trace_fre_log("MFREE", h, *rc);
+    aiml_cap_forget(h);                                               // spec/71 §5
     aiml_map_free(h, keyKind, keyStride, valKind, valStride, valNodes, valNodesCount);
     free(static_cast<char*>(h) - 8);
 }
@@ -540,6 +545,7 @@ extern "C" void* aiml_map_handle_copy(void* src, int64_t keyStride, int64_t valS
                                       int32_t keyKind, int32_t valKind) {
     void* h = aiml_map_handle_new();
     if (!h || !src) return h;
+    aiml_cap_copy(src, h);   // spec/71 F71-6
     AimlMapRaw* s = static_cast<AimlMapRaw*>(src);
     AimlMapRaw* d = static_cast<AimlMapRaw*>(h);
     int32_t n = s->size;

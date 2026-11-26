@@ -528,7 +528,8 @@ The current AIML spec/test corpus documents several runtime exception types that
 | :--- | :--- |
 | `DivisionByZeroException` | Integer division by zero. |
 | `NullPointerException` | Dereferencing a null pointer or calling through a null function pointer. |
-| `IndexOutOfBoundsException` | Invalid list/array index access or removal. |
+| `IndexOutOfBoundsException` | A position outside `[0, len)` on any sequence (spec/71 §4). |
+| `CapacityExceededException` | Growing a collection past its `.capacity` (spec/71 §5). |
 | `BufferOverflowException` | Writing past buffer capacity. |
 | `BufferUnderflowException` | Reading past written buffer data. |
 | `InvalidThreadStateException` | Illegal thread lifecycle operation such as invalid/double join state. |

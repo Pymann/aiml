@@ -1824,11 +1824,16 @@ void registerBuiltins(CompilerContext& ctx) {
         auto* i32 = ctx.builder.getInt32Ty();
         auto* vd  = ctx.builder.getVoidTy();
 
+        // spec/71 §3: get(k) / get(k, d) — a missing key is d, else null; never throws.
         storage.builtinFuncs["get"] = [i8p](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
             if (args.empty()) return ctx.ir_gen->wrap(llvm::ConstantPointerNull::get(i8p));
             llvm::Function* f = ctx.getFunction("aiml_storage_get", i8p, {i8p});
             llvm::Value* k = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
-            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {k}));
+            llvm::Value* got = ctx.builder.CreateCall(f, {k}, "storage_got");
+            if (args.size() < 2) return ctx.ir_gen->wrap(got);
+            llvm::Value* d = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]));
+            if (d->getType() != i8p) d = ctx.builder.CreateBitCast(d, i8p);
+            return ctx.ir_gen->wrap(ctx.builder.CreateSelect(ctx.builder.CreateIsNull(got), d, got, "storage_get_or"));
         };
 
         storage.builtinFuncs["set"] = [i8p, vd](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
@@ -1840,12 +1845,12 @@ void registerBuiltins(CompilerContext& ctx) {
             return ctx.ir_gen->getInt32(0);
         };
 
-        storage.builtinFuncs["remove"] = [i8p, vd](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+        // spec/71 §1.2: delete(k) → 1 if k was there, else 0.
+        storage.builtinFuncs["delete"] = [i8p, i32](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
             if (args.empty()) return ctx.ir_gen->getInt32(0);
-            llvm::Function* f = ctx.getFunction("aiml_storage_remove", vd, {i8p});
+            llvm::Function* f = ctx.getFunction("aiml_storage_delete", i32, {i8p});
             llvm::Value* k = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
-            ctx.builder.CreateCall(f, {k});
-            return ctx.ir_gen->getInt32(0);
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {k}, "storage_had"));
         };
 
         storage.builtinFuncs["has"] = [i8p, i32](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
@@ -1884,12 +1889,11 @@ void registerBuiltins(CompilerContext& ctx) {
             ctx.builder.CreateCall(f, {k, v});
             return ctx.ir_gen->getInt32(0);
         };
-        storage.builtinFuncs["session_remove"] = [i8p, vd](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+        storage.builtinFuncs["session_delete"] = [i8p, i32](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
             if (args.empty()) return ctx.ir_gen->getInt32(0);
-            llvm::Function* f = ctx.getFunction("aiml_storage_session_remove", vd, {i8p});
+            llvm::Function* f = ctx.getFunction("aiml_storage_session_delete", i32, {i8p});
             llvm::Value* k = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
-            ctx.builder.CreateCall(f, {k});
-            return ctx.ir_gen->getInt32(0);
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {k}, "session_had"));
         };
         storage.builtinFuncs["hash"] = [i8p](CompilerContext& ctx, const std::vector<IRValue*>&) -> IRValue* {
             llvm::Function* f = ctx.getFunction("aiml_storage_hash", i8p, {});
@@ -1979,6 +1983,16 @@ void registerBuiltins(CompilerContext& ctx) {
         AIML::AST::CallExpr*, std::function<IRValue*(AIML::AST::Expr*)>) -> IRValue* {
         auto* sizePtr = ctx.builder.CreateStructGEP(ctx.getLLVMType("buffer"), baseAlloca, 0, "buf_len_ptr");
         return ctx.ir_gen->wrap(ctx.builder.CreateLoad(ctx.builder.getInt32Ty(), sizePtr, "buf_len"));
+    };
+
+    // spec/71 §2: on an untyped buffer an element is a byte — .byte_len = .len; .empty.
+    bufInfo.builtinMethods["byte_len"] = bufInfo.builtinMethods["len"];
+    bufInfo.builtinMethods["empty"] = [](CompilerContext& ctx, llvm::Value* baseAlloca,
+        AIML::AST::CallExpr*, std::function<IRValue*(AIML::AST::Expr*)>) -> IRValue* {
+        auto* sizePtr = ctx.builder.CreateStructGEP(ctx.getLLVMType("buffer"), baseAlloca, 0, "buf_len_ptr");
+        llvm::Value* n = ctx.builder.CreateLoad(ctx.builder.getInt32Ty(), sizePtr, "buf_len");
+        return ctx.ir_gen->wrap(ctx.builder.CreateZExt(ctx.builder.CreateICmpEQ(n, ctx.builder.getInt32(0)),
+                                                       ctx.builder.getInt32Ty(), "buf_empty"));
     };
 
     // buffer.capacity — spec/11 §Methods: total allocated bytes, as alloc set them.
@@ -2739,11 +2753,20 @@ void registerBuiltins(CompilerContext& ctx) {
         return ctx.ir_gen->wrap(CodeImpl::contains(ctx, codePtr, name));
     };
 
-    codeInfo.builtinMethods["size"] = [](CompilerContext& ctx, llvm::Value* baseAlloca,
+    // spec/71 §2: .len / .empty are properties (the property getter dispatches here).
+    codeInfo.builtinMethods["len"] = [](CompilerContext& ctx, llvm::Value* baseAlloca,
         AIML::AST::CallExpr*, std::function<IRValue*(AIML::AST::Expr*)>) -> IRValue* {
         llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
         llvm::Value* codePtr = ctx.builder.CreateLoad(i8p, baseAlloca, "code_ptr");
         return ctx.ir_gen->wrap(CodeImpl::size(ctx, codePtr));
+    };
+    codeInfo.builtinMethods["empty"] = [](CompilerContext& ctx, llvm::Value* baseAlloca,
+        AIML::AST::CallExpr*, std::function<IRValue*(AIML::AST::Expr*)>) -> IRValue* {
+        llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+        llvm::Value* codePtr = ctx.builder.CreateLoad(i8p, baseAlloca, "code_ptr");
+        llvm::Value* n = CodeImpl::size(ctx, codePtr);
+        return ctx.ir_gen->wrap(ctx.builder.CreateZExt(ctx.builder.CreateICmpEQ(n, llvm::ConstantInt::get(n->getType(), 0)),
+                                                       ctx.builder.getInt32Ty(), "code_empty"));
     };
 
     codeInfo.builtinMethods["toString"] = [](CompilerContext& ctx, llvm::Value* baseAlloca,
@@ -3526,7 +3549,7 @@ void registerBuiltins(CompilerContext& ctx) {
         yaml.builtinFuncs["error"] = unaryStrOwned("aiml_yaml_error");
         yaml.builtinFuncs["root"] = unaryPtr("aiml_yaml_root");
         yaml.builtinFuncs["kind"] = unaryI32("aiml_yaml_kind");
-        yaml.builtinFuncs["size"] = unaryI32("aiml_yaml_size");
+        yaml.builtinFuncs["len"] = unaryI32("aiml_yaml_size");   // spec/71 §1.5: element count of a node
         yaml.builtinFuncs["line"] = unaryI32("aiml_yaml_line");
         yaml.builtinFuncs["column"] = unaryI32("aiml_yaml_column");
         yaml.builtinFuncs["scalar"] = unaryStrOwned("aiml_yaml_scalar");
@@ -14682,12 +14705,20 @@ void registerBuiltins(CompilerContext& ctx) {
             return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {tPtr}));
         };
 
-        // t.size() → i32
-        ci.builtinMethods["size"] = [](CompilerContext& ctx, llvm::Value* tPtr,
+        // spec/71 §1.5: t.len — total element count; t.empty (properties).
+        ci.builtinMethods["len"] = [](CompilerContext& ctx, llvm::Value* tPtr,
             AIML::AST::CallExpr*, std::function<IRValue*(AIML::AST::Expr*)>) -> IRValue* {
             auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
             llvm::Function* f = ctx.getFunction("aiml_tensor_size", ctx.builder.getInt32Ty(), {i8p});
             return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {tPtr}));
+        };
+        ci.builtinMethods["empty"] = [](CompilerContext& ctx, llvm::Value* tPtr,
+            AIML::AST::CallExpr*, std::function<IRValue*(AIML::AST::Expr*)>) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Function* f = ctx.getFunction("aiml_tensor_size", ctx.builder.getInt32Ty(), {i8p});
+            llvm::Value* n = ctx.builder.CreateCall(f, {tPtr});
+            return ctx.ir_gen->wrap(ctx.builder.CreateZExt(ctx.builder.CreateICmpEQ(n, ctx.builder.getInt32(0)),
+                                                           ctx.builder.getInt32Ty(), "tensor_empty"));
         };
 
         // t.item() → f32
@@ -14698,30 +14729,7 @@ void registerBuiltins(CompilerContext& ctx) {
             return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {tPtr}));
         };
 
-        // t.get(idx) → f32
-        ci.builtinMethods["get"] = [](CompilerContext& ctx, llvm::Value* tPtr,
-            AIML::AST::CallExpr* call, std::function<IRValue*(AIML::AST::Expr*)> evalExpr) -> IRValue* {
-            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
-            auto* i32 = ctx.builder.getInt32Ty();
-            llvm::Function* f = ctx.getFunction("aiml_tensor_get_flat", ctx.builder.getFloatTy(), {i8p, i32});
-            llvm::Value* idx = call->args.empty() ? ctx.builder.getInt32(0)
-                : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
-            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {tPtr, idx}));
-        };
-
-        // t.set(idx, val)
-        ci.builtinMethods["set"] = [](CompilerContext& ctx, llvm::Value* tPtr,
-            AIML::AST::CallExpr* call, std::function<IRValue*(AIML::AST::Expr*)> evalExpr) -> IRValue* {
-            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
-            auto* i32 = ctx.builder.getInt32Ty();
-            auto* f32 = ctx.builder.getFloatTy();
-            llvm::Function* f = ctx.getFunction("aiml_tensor_set_flat", ctx.builder.getVoidTy(), {i8p, i32, f32});
-            if (call->args.size() < 2) return nullptr;
-            llvm::Value* idx = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
-            llvm::Value* val = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[1].get())));
-            ctx.builder.CreateCall(f, {tPtr, idx, val});
-            return nullptr;
-        };
+        // spec/71 §1.5: elements are read with `{ at: [t, i] }` and written with `idx: [t, i, v]`.
 
         // t.fill(val)
         ci.builtinMethods["fill"] = [](CompilerContext& ctx, llvm::Value* tPtr,

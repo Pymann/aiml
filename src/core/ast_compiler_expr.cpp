@@ -167,8 +167,12 @@ IRValue* Compiler::visitNewArrayExpr(NewArrayExpr* na) {
             ctx.builder.getInt8Ty()->getPointerTo(), {ctx.getSizeType()}, false);
         mallocFn = llvm::Function::Create(ft, llvm::Function::ExternalLinkage, "malloc", ctx.module());
     }
-    llvm::Value* bytes = ctx.builder.CreateMul(count, ctx.getSizeConst(elemSize), "darr_bytes");
-    llvm::Value* ptr   = ctx.builder.CreateCall(mallocFn, {bytes}, "darr_ptr");
+    (void)mallocFn;
+    // spec/71 §6: the count lives in a header in front of the elements (aiml_darr_new).
+    llvm::Type* i64 = ctx.builder.getInt64Ty();
+    llvm::Value* ptr = ctx.builder.CreateCall(
+        ctx.getFunction("aiml_darr_new", ctx.builder.getInt8Ty()->getPointerTo(), {i64, i64}),
+        {ctx.builder.CreateSExtOrTrunc(count, i64), ctx.builder.getInt64(elemSize)}, "darr_ptr");
     return ctx.ir_gen->wrap(ptr);
 }
 
@@ -1709,6 +1713,16 @@ IRValue* Compiler::visitAtExpr(AtExpr* at) {
         for (size_t i = 1; i < parts.size(); ++i)
             dims.push_back(std::stoull(parts[i]));
 
+        // spec/71 §4: every index inside its dimension (one index → the flat element count).
+        {
+            uint64_t total = 1;
+            for (auto d : dims) total *= d;
+            if (indexVals.size() == 1)
+                ListImpl::checkBounds(ctx, indexVals[0], ctx.builder.getInt32((uint32_t)total));
+            else
+                for (size_t i = 0; i < indexVals.size() && i < dims.size(); ++i)
+                    ListImpl::checkBounds(ctx, indexVals[i], ctx.builder.getInt32((uint32_t)dims[i]));
+        }
         // Compute flat index from multi-dim indices (row-major)
         llvm::Value* flatIdx = nullptr;
         if (indexVals.size() == 1) {
@@ -1746,9 +1760,33 @@ IRValue* Compiler::visitAtExpr(AtExpr* at) {
         llvm::Value* rawPtr  = ctx.builder.CreateLoad(i8p, ptrAlloca, "darr_base");
         llvm::Value* typedPtr = ctx.builder.CreatePointerCast(rawPtr, elemTy->getPointerTo(), "darr_typed");
         if (indexVals.empty()) { LOG_ERROR(ctx.fmtLoc() + "at: dyn_array requires index"); return nullptr; }
+        ListImpl::checkBounds(ctx, indexVals[0], ctx.builder.CreateCall(
+            ctx.getFunction("aiml_darr_len", ctx.builder.getInt32Ty(), {i8p}), {rawPtr}, "darr_len"));   // spec/71 §4
         llvm::Value* elemPtr = ctx.builder.CreateGEP(elemTy, typedPtr, indexVals[0], "darr_gep");
         llvm::Value* val     = ctx.builder.CreateLoad(elemTy, elemPtr, "darr_at");
         return ctx.ir_gen->wrap(val);
+    }
+
+    // ── buffer<T> (spec/71 §1.3): element i of the written data; out of range throws ──
+    if (tName.rfind("buffer<", 0) == 0 && tName.back() == '>') {
+        std::string elemName = tName.substr(7, tName.size() - 8);
+        llvm::Type* elemTy = ctx.getLLVMType(elemName);
+        llvm::Type* bufTy  = ctx.getLLVMType("buffer");
+        llvm::Type* i8p    = llvm::PointerType::get(ctx.context, 0);
+        llvm::Value* buf = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(
+            sym->ir_alloca_inst ? sym->ir_alloca_inst : ctx.ir_gen->wrap(sym->alloca_inst)));
+        if (sym->is_byref_arg) buf = ctx.builder.CreateLoad(i8p, buf, "byref_deref_bat");
+        if (indexVals.empty() || !elemTy) { LOG_ERROR(ctx.fmtLoc() + "at: buffer<T> requires one index"); return nullptr; }
+        uint32_t esz = (uint32_t)ctx.module().getDataLayout().getTypeAllocSize(elemTy);
+        llvm::Value* bytes = ctx.builder.CreateLoad(ctx.builder.getInt32Ty(),
+                                 ctx.builder.CreateStructGEP(bufTy, buf, 0, "bsz_ptr"), "buf_bytes");
+        llvm::Value* n = esz > 1 ? ctx.builder.CreateSDiv(bytes, ctx.builder.getInt32(esz), "buf_n") : bytes;
+        ListImpl::checkBounds(ctx, indexVals[0], n);
+        llvm::Value* data = ctx.builder.CreateLoad(i8p, ctx.builder.CreateStructGEP(bufTy, buf, 4, "bdata_fld"), "bdata");
+        llvm::Value* off = ctx.builder.CreateMul(ctx.builder.CreateSExtOrTrunc(indexVals[0], ctx.builder.getInt64Ty()),
+                                                 ctx.builder.getInt64(esz), "boff");
+        llvm::Value* ep = ctx.builder.CreateInBoundsGEP(ctx.builder.getInt8Ty(), data, off, "belem_ptr");
+        return ctx.ir_gen->wrap(ctx.builder.CreateLoad(elemTy, ep, "buf_at"));
     }
 
     // ── list<T> ──

@@ -1,4 +1,5 @@
 #pragma once
+#include <functional>
 #include "context.h"
 #include <llvm/IR/IRBuilder.h>
 
@@ -33,6 +34,20 @@ namespace ListImpl {
     // spec/10: an index outside [0, len) throws IndexOutOfBoundsException ("index 5 of 1").
     // `allowEnd` admits idx == len (insert at the end).
     void checkIndex(CompilerContext& ctx, llvm::Value* listPtr, llvm::Value* indexVal, bool allowEnd = false);
+    // spec/71 §4: raise IndexOutOfBoundsException("index <i> of <len>") unless 0 <= idx < len
+    // (allowEnd: <= len).  For every sequence — list, buffer<T>, array, dyn_array.
+    void checkBounds(CompilerContext& ctx, llvm::Value* indexVal, llvm::Value* len, bool allowEnd = false);
+    // spec/71 §5 (F71-2): raise CapacityExceededException if growing `container` to `newLen`
+    // elements exceeds its .capacity.  Skipped at run time while no capacity is set anywhere.
+    // Works for any container handle (list, map, hashmap, Kv) — the maximum lives in a side table.
+    void checkCapacity(CompilerContext& ctx, llvm::Value* container, llvm::Value* newLen);
+    // Same, but `newLen` is only computed (inside the guarded block) while some capacity is set —
+    // for keyed containers, where "is this key new?" costs a lookup.
+    void checkCapacityLazy(CompilerContext& ctx, llvm::Value* container,
+                           const std::function<llvm::Value*()>& newLen);
+    // spec/71 §5: read / set .capacity of any container handle.
+    llvm::Value* getCapacity(CompilerContext& ctx, llvm::Value* container);
+    void setCapacity(CompilerContext& ctx, llvm::Value* container, llvm::Value* n, llvm::Value* len);
     llvm::Value* getElementPtr(CompilerContext& ctx, llvm::Value* listPtr, llvm::Value* indexVal, llvm::Type* elemType);
     llvm::Value* slice(CompilerContext& ctx, llvm::Value* listPtr, llvm::Value* startVal, llvm::Value* endVal, llvm::Type* elemType, const char* retainFnName = nullptr);
     llvm::Value* getSize(CompilerContext& ctx, llvm::Value* listPtr);

@@ -63,20 +63,21 @@
         then: [{ print: ["FAIL capacity 0 is unbounded"] }, { set: [fails, { +: [fails, 1] }] }]
 
       # extend is checked for the whole sequence before the first element
-      - decl: [err, list<i32>]
-      - set: [err.capacity, 3]
-      - call: [err.push, 1]
+      - decl: [ext, list<i32>]
+      - decl: [more, list<i32>, [2, 3, 4]]
+      - set: [ext.capacity, 3]
+      - call: [ext.push, 1]
       - set: [caught, 0]
       - try:
-          body: [{ call: [err.extend, [2, 3, 4]] }]
+          body: [{ call: [ext.extend, more] }]
           catch:
             - type: CapacityExceededException
               var: xval
               body: [{ set: [caught, 1] }]
       - if: [{ neq: [caught, 1] }, true]
         then: [{ set: [fails, { +: [fails, { call: [over, "list.extend"] }] }] }]
-      - if: [{ neq: [err.len, 1] }, true]
-        then: [{ print: ["FAIL extend partly applied: len ${err.len}"] }, { set: [fails, { +: [fails, 1] }] }]
+      - if: [{ neq: [ext.len, 1] }, true]
+        then: [{ print: ["FAIL extend partly applied: len ${ext.len}"] }, { set: [fails, { +: [fails, 1] }] }]
 
       # map: a new key past the capacity is refused, an overwrite is not
       - decl: [mpp, "map<string:i32>"]

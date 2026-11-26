@@ -126,9 +126,19 @@ llvm::Value* method(CompilerContext& ctx, const std::string& typeName, llvm::Val
     llvm::Value* sk = nullptr;
     llvm::Value* ik = nullptr;
 
-    if (methodName == "put" || methodName == "set") {
+    // spec/71 F71-2: a NEW key past .capacity raises CapacityExceededException; an overwrite is free.
+    auto checkNewKey = [&]() {
+        ListImpl::checkCapacityLazy(ctx, h, [&]() {
+            llvm::Value* has = ctx.builder.CreateCall(ctx.getFunction("aiml_hashmap_contains", i32, {ptr, ptr, i64}),
+                                                      {h, sk, ik}, "hm_cap_has");
+            llvm::Value* len = ctx.builder.CreateCall(ctx.getFunction("aiml_hashmap_len", i32, {ptr}), {h}, "hm_cap_len");
+            return ctx.builder.CreateAdd(len, ctx.builder.CreateSub(ctx.builder.getInt32(1), has), "hm_cap_next");
+        });
+    };
+    if (methodName == "set") {
         if (!expectArgs(ctx, methodName, args, 2)) return nullptr;
         keyArgs(ctx, k, args[0], sk, ik);
+        checkNewKey();
         if (k.val == 2) {
             llvm::Value* v = args[1]->getType()->isPointerTy() ? ctx.builder.CreateBitCast(args[1], ptr) : args[1];
             ctx.builder.CreateCall(ctx.getFunction("aiml_hashmap_put_str", ctx.builder.getVoidTy(), {ptr, ptr, i64, ptr}),
@@ -140,31 +150,54 @@ llvm::Value* method(CompilerContext& ctx, const std::string& typeName, llvm::Val
         return nullptr;
     }
     if (methodName == "get") {
-        if (!expectArgs(ctx, methodName, args, 1)) return nullptr;
-        keyArgs(ctx, k, args[0], sk, ik);
-        if (k.val == 2)
-            return ctx.builder.CreateCall(ctx.getFunction("aiml_hashmap_get_str", ptr, {ptr, ptr, i64}), {h, sk, ik}, "hm_get_s");
-        llvm::Value* bits = ctx.builder.CreateCall(ctx.getFunction("aiml_hashmap_get_bits", i64, {ptr, ptr, i64}), {h, sk, ik}, "hm_get");
-        return fromBits(ctx, k, bits);
-    }
-    if (methodName == "add") {
-        if (!expectArgs(ctx, methodName, args, 2)) return nullptr;
-        if (k.val != 0) {
-            LOG_ERROR(ctx.fmtLoc() + "hashmap.add only exists for integer values, not for '" + k.valName + "'");
+        // spec/71 §3: get(k) never throws — a missing key yields get(k, d)'s d, else the zero value
+        // (0 / 0.0 / null string).
+        if (args.size() != 1 && args.size() != 2) {
+            LOG_ERROR(ctx.fmtLoc() + "hashmap.get expects get(k) or get(k, default), got " +
+                      std::to_string(args.size()) + " argument(s)");
             return nullptr;
         }
         keyArgs(ctx, k, args[0], sk, ik);
+        llvm::Value* got = nullptr;
+        if (k.val == 2)
+            got = ctx.builder.CreateCall(ctx.getFunction("aiml_hashmap_get_str", ptr, {ptr, ptr, i64}), {h, sk, ik}, "hm_get_s");
+        else
+            got = fromBits(ctx, k, ctx.builder.CreateCall(ctx.getFunction("aiml_hashmap_get_bits", i64, {ptr, ptr, i64}),
+                                                          {h, sk, ik}, "hm_get"));
+        if (args.size() == 1) return got;
+        llvm::Value* dflt = args[1];
+        if (k.val == 2) {
+            if (dflt->getType() != ptr) dflt = ctx.builder.CreateBitCast(dflt, ptr);
+        } else if (dflt->getType() != got->getType()) {
+            if (got->getType()->isFloatingPointTy())
+                dflt = dflt->getType()->isFloatingPointTy() ? ctx.builder.CreateFPCast(dflt, got->getType())
+                                                            : ctx.builder.CreateSIToFP(dflt, got->getType());
+            else
+                dflt = ctx.builder.CreateSExtOrTrunc(dflt, got->getType());
+        }
+        llvm::Value* has = ctx.builder.CreateCall(ctx.getFunction("aiml_hashmap_contains", i32, {ptr, ptr, i64}),
+                                                  {h, sk, ik}, "hm_has");
+        return ctx.builder.CreateSelect(ctx.builder.CreateICmpNE(has, ctx.builder.getInt32(0)), got, dflt, "hm_get_or");
+    }
+    if (methodName == "incr") {
+        if (!expectArgs(ctx, methodName, args, 2)) return nullptr;
+        if (k.val != 0) {
+            LOG_ERROR(ctx.fmtLoc() + "hashmap.incr only exists for integer values, not for '" + k.valName + "'");
+            return nullptr;
+        }
+        keyArgs(ctx, k, args[0], sk, ik);
+        checkNewKey();
         llvm::Value* sum = ctx.builder.CreateCall(ctx.getFunction("aiml_hashmap_add", i64, {ptr, ptr, i64, i64}),
-                                                  {h, sk, ik, toI64(ctx, args[1], false)}, "hm_add");
+                                                  {h, sk, ik, toI64(ctx, args[1], false)}, "hm_incr");
         return fromBits(ctx, k, sum);
     }
-    if (methodName == "contains" || methodName == "has" || methodName == "remove") {
+    if (methodName == "has" || methodName == "delete") {
         if (!expectArgs(ctx, methodName, args, 1)) return nullptr;
         keyArgs(ctx, k, args[0], sk, ik);
-        const char* fname = methodName == "remove" ? "aiml_hashmap_remove" : "aiml_hashmap_contains";
+        const char* fname = methodName == "delete" ? "aiml_hashmap_remove" : "aiml_hashmap_contains";
         return ctx.builder.CreateCall(ctx.getFunction(fname, i32, {ptr, ptr, i64}), {h, sk, ik}, "hm_flag");
     }
-    if (methodName == "len" || methodName == "size") {
+    if (methodName == "len") {   // internal: the .len / .empty properties (spec/71 §2)
         return ctx.builder.CreateCall(ctx.getFunction("aiml_hashmap_len", i32, {ptr}), {h}, "hm_len");
     }
     if (methodName == "clear") {
@@ -193,7 +226,7 @@ llvm::Value* method(CompilerContext& ctx, const std::string& typeName, llvm::Val
     }
     known = false;
     LOG_ERROR(ctx.fmtLoc() + "Unknown hashmap method: " + methodName +
-              " (put, get, add, contains, remove, len, clear, keys)");
+              " (set, get, has, delete, incr, keys, clear; .len, .empty, .capacity are properties)");
     return nullptr;
 }
 

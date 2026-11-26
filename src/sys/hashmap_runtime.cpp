@@ -78,10 +78,12 @@ extern "C" void aiml_hashmap_retain(void* h) {
     if (h) as_map(h)->rc.fetch_add(1, std::memory_order_relaxed);
 }
 
+extern "C" void aiml_cap_forget(const void* c);
 extern "C" void aiml_hashmap_release(void* h) {
     if (!h) return;
     AimlHashMap* m = as_map(h);
     if (m->rc.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+        aiml_cap_forget(h);   // spec/71 §5
         clear_values(m);
         delete m;
     }
@@ -129,9 +131,10 @@ extern "C" uint64_t aiml_hashmap_get_bits(void* h, const char* sk, int64_t ik) {
 }
 
 extern "C" const char* aiml_hashmap_get_str(void* h, const char* sk, int64_t ik) {
-    if (!h) return aiml_str_empty();
+    // spec/71 §3: a missing key yields the zero value of string — the null pointer.
+    if (!h) return nullptr;
     uint64_t* slot = find_slot(as_map(h), sk, ik);
-    if (!slot || !*slot) return aiml_str_empty();
+    if (!slot || !*slot) return nullptr;
     return reinterpret_cast<const char*>(static_cast<uintptr_t>(*slot));
 }
 

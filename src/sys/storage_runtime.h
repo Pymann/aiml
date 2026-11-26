@@ -25,7 +25,7 @@ extern "C" {
 
 const char* aiml_storage_get   (const char* key);
 void        aiml_storage_set   (const char* key, const char* value);
-void        aiml_storage_remove(const char* key);
+int32_t     aiml_storage_delete(const char* key);
 int32_t     aiml_storage_has   (const char* key);
 void        aiml_storage_clear (void);
 
@@ -37,7 +37,7 @@ const char* aiml_storage_host  (void);
 int32_t     aiml_storage_is_secure(void);   /* 1 if the page is served over https (WASM); 0 native */
 const char* aiml_storage_session_get   (const char* key);   /* sessionStorage (WASM) / process map */
 void        aiml_storage_session_set   (const char* key, const char* value);
-void        aiml_storage_session_remove(const char* key);
+int32_t     aiml_storage_session_delete(const char* key);
 const char* aiml_storage_hash          (void);              /* URL fragment without '#' */
 void        aiml_storage_set_hash      (const char* value); /* replaceState, no navigation */
 

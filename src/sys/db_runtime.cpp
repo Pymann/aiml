@@ -911,7 +911,7 @@ extern "C" void* aiml_db_store_get_by_key(void* store_ptr, const void* key_ptr,
     return nullptr;
 }
 
-extern "C" void aiml_db_store_delete(void* store, int32_t id) {
+static void store_delete_impl(void* store, int32_t id) {
     if (!store || id < 1) return;
     AimlStore* s = static_cast<AimlStore*>(store);
     std::lock_guard<std::mutex> lock(s->mtx);
@@ -943,6 +943,17 @@ extern "C" void aiml_db_store_delete(void* store, int32_t id) {
 
     if (idx >= s->total) return;
     if (s->mem_active[idx]) { s->mem_active[idx] = 0; s->count--; }
+}
+
+// spec/71 §1.4: delete(id) → 1 if the row was there, else 0.
+extern "C" int32_t aiml_db_store_delete(void* store, int32_t id) {
+    if (!store) return 0;
+    AimlStore* s = static_cast<AimlStore*>(store);
+    int32_t before;
+    { std::lock_guard<std::mutex> lock(s->mtx); before = s->count; }
+    store_delete_impl(store, id);
+    std::lock_guard<std::mutex> lock(s->mtx);
+    return s->count < before ? 1 : 0;
 }
 
 extern "C" int32_t aiml_db_store_len(void* store) {
@@ -2419,6 +2430,43 @@ extern "C" int32_t aiml_db_kv_len(void* kv_ptr) {
     return (int32_t)kv->map.size();
 }
 
+// spec/71 §1.2: Kv.keys() — every live key, sorted, appended as owned strings to the
+// list<string> at `list_ptr` ({i32 size, i32 cap, void* data}, the list header layout).
+extern "C" int32_t aiml_db_kv_keys_fill(void* kv_ptr, void* list_ptr) {
+    struct ListRaw { int32_t size; int32_t capacity; void* data; };
+    if (!kv_ptr || !list_ptr) return 0;
+    AimlKv* kv = static_cast<AimlKv*>(kv_ptr);
+    auto* list = static_cast<ListRaw*>(list_ptr);
+    std::vector<std::string> keys;
+    {
+        std::lock_guard<std::mutex> lock(kv->mtx);
+        if (!kv->persistent) {
+            for (auto& e : kv->map) keys.push_back(e.first);
+        } else {
+            std::unordered_map<std::string, bool> live;   // key -> live
+            for (uint64_t i = 0; kv->idx_entries && i < kv->idx_count; ++i) {
+                const AimlKvIdxEntry& e = kv->idx_entries[i];
+                live[std::string(kv->idx_keys + e.key_off, e.key_len)] = true;
+            }
+            for (auto& e : kv->index) live[e.first] = e.second.offset != KV_IDX_TOMB;
+            for (auto& e : live) if (e.second) keys.push_back(e.first);
+        }
+    }
+    std::sort(keys.begin(), keys.end());
+    int32_t need = list->size + static_cast<int32_t>(keys.size());
+    if (need > list->capacity) {
+        int32_t cap = list->capacity > 0 ? list->capacity : 8;
+        while (cap < need) cap *= 2;
+        void* grown = std::realloc(list->data, static_cast<size_t>(cap) * sizeof(char*));
+        if (!grown) return list->size;
+        list->data = grown;
+        list->capacity = cap;
+    }
+    char** out = static_cast<char**>(list->data);
+    for (const std::string& k : keys) out[list->size++] = aiml_str_dup(k.c_str());
+    return list->size;
+}
+
 extern "C" void aiml_db_kv_delete(void* kv_ptr, const char* key) {
     if (!kv_ptr || !key) return;
     AimlKv* kv = static_cast<AimlKv*>(kv_ptr);
@@ -2724,7 +2772,11 @@ extern "C" void* aiml_db_vec_open(const char* name, int32_t dims) {
     return vs;
 }
 
-// WAL format per record: [id_len:u32][id:N bytes][dims * sizeof(float) bytes]
+// WAL format per record: [id_len:u32][id:N bytes][dims * sizeof(float) bytes] sets an id;
+// [id_len | VEC_WAL_DELETE : u32][id:N bytes] deletes it (spec/71 §1.4).  Files written before
+// delete existed never have the bit set (ids are capped at 1 MiB).
+static const uint32_t VEC_WAL_DELETE = 0x80000000u;
+
 static void vec_wal_write_insert(AimlVecStore* vs, const char* id, const float* emb) {
     if (vs->wal_fd < 0) return;
     uint32_t id_len = (uint32_t)strlen(id);
@@ -2733,22 +2785,59 @@ static void vec_wal_write_insert(AimlVecStore* vs, const char* id, const float* 
     write(vs->wal_fd, emb, (size_t)vs->dims * sizeof(float));
 }
 
+static void vec_wal_write_delete(AimlVecStore* vs, const char* id) {
+    if (vs->wal_fd < 0) return;
+    uint32_t id_len = (uint32_t)strlen(id);
+    uint32_t tag = id_len | VEC_WAL_DELETE;
+    write(vs->wal_fd, &tag, 4);
+    write(vs->wal_fd, id, id_len);
+}
+
+static long vec_find(const AimlVecStore* vs, const std::string& id) {
+    for (size_t i = 0; i < vs->ids.size(); i++) if (vs->ids[i] == id) return (long)i;
+    return -1;
+}
+
+// spec/71 §1.4: set(k, vec) — one vector per id; an existing id is overwritten.
+static void vec_mem_set(AimlVecStore* vs, const std::string& id, const float* emb) {
+    float norm = 0.0f;
+    for (int32_t d = 0; d < vs->dims; d++) norm += emb[d] * emb[d];
+    long at = vec_find(vs, id);
+    if (at >= 0) {
+        std::copy(emb, emb + vs->dims, vs->embeddings.begin() + (size_t)at * vs->dims);
+        vs->norms[(size_t)at] = sqrtf(norm);
+        return;
+    }
+    vs->ids.push_back(id);
+    vs->embeddings.insert(vs->embeddings.end(), emb, emb + vs->dims);
+    vs->norms.push_back(sqrtf(norm));
+}
+
+static int32_t vec_mem_delete(AimlVecStore* vs, const std::string& id) {
+    long at = vec_find(vs, id);
+    if (at < 0) return 0;
+    vs->ids.erase(vs->ids.begin() + at);
+    auto b = vs->embeddings.begin() + (size_t)at * vs->dims;
+    vs->embeddings.erase(b, b + vs->dims);
+    vs->norms.erase(vs->norms.begin() + at);
+    return 1;
+}
+
 static void vec_wal_replay(AimlVecStore* vs) {
     if (vs->wal_fd < 0) return;
     lseek(vs->wal_fd, 0, SEEK_SET);
     size_t emb_bytes = (size_t)vs->dims * sizeof(float);
     std::vector<float> buf((size_t)vs->dims);
-    uint32_t id_len;
-    while (read(vs->wal_fd, &id_len, 4) == 4) {
+    uint32_t tag;
+    while (read(vs->wal_fd, &tag, 4) == 4) {
+        const bool del = (tag & VEC_WAL_DELETE) != 0;
+        uint32_t id_len = tag & ~VEC_WAL_DELETE;
         if (id_len > 1024 * 1024) break; // sanity limit
         std::string id(id_len, '\0');
         if (id_len > 0 && (uint32_t)read(vs->wal_fd, id.data(), id_len) != id_len) break;
+        if (del) { vec_mem_delete(vs, id); continue; }
         if (read(vs->wal_fd, buf.data(), emb_bytes) != (ssize_t)emb_bytes) break;
-        vs->ids.push_back(std::move(id));
-        vs->embeddings.insert(vs->embeddings.end(), buf.begin(), buf.end());
-        float norm = 0.0f;
-        for (int32_t d = 0; d < vs->dims; d++) norm += buf[d] * buf[d];
-        vs->norms.push_back(sqrtf(norm));
+        vec_mem_set(vs, id, buf.data());
     }
 }
 
@@ -2797,16 +2886,22 @@ extern "C" int32_t aiml_db_vec_checkpoint(void* vs_ptr) {
     return 0;
 }
 
-extern "C" void aiml_db_vec_insert(void* vs_ptr, const char* id, const float* emb, int32_t dims) {
+extern "C" void aiml_db_vec_set(void* vs_ptr, const char* id, const float* emb, int32_t dims) {
     if (!vs_ptr || !id || !emb) return;
     AimlVecStore* vs = static_cast<AimlVecStore*>(vs_ptr);
+    if (dims != vs->dims) return;
     std::lock_guard<std::mutex> lock(vs->mtx);
-    vs->ids.push_back(id);
-    vs->embeddings.insert(vs->embeddings.end(), emb, emb + dims);
-    float norm = 0.0f;
-    for (int32_t d = 0; d < dims; d++) norm += emb[d] * emb[d];
-    vs->norms.push_back(sqrtf(norm));
+    vec_mem_set(vs, id, emb);
     if (vs->persistent) vec_wal_write_insert(vs, id, emb);
+}
+
+extern "C" int32_t aiml_db_vec_delete(void* vs_ptr, const char* id) {
+    if (!vs_ptr || !id) return 0;
+    AimlVecStore* vs = static_cast<AimlVecStore*>(vs_ptr);
+    std::lock_guard<std::mutex> lock(vs->mtx);
+    int32_t had = vec_mem_delete(vs, id);
+    if (had && vs->persistent) vec_wal_write_delete(vs, id);
+    return had;
 }
 
 // dot-only similarity helper — norms are precomputed

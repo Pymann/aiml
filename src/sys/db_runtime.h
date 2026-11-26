@@ -39,7 +39,7 @@ void*   aiml_db_store_get(void* store, int32_t id);
 // is_string=1: strcmp; is_string=0: memcmp(key_size bytes).
 void*   aiml_db_store_get_by_key(void* store, const void* key_ptr,
                                   int32_t key_offset, int32_t key_size, int32_t is_string);
-void    aiml_db_store_delete(void* store, int32_t id);
+int32_t aiml_db_store_delete(void* store, int32_t id);
 int32_t aiml_db_store_len(void* store);
 
 // ── Store<T> — Persistent (WAL + mmap) ───────────────────────────────────────
@@ -110,6 +110,7 @@ void*   aiml_db_kv_get_copy(void* kv, const char* key);
 int32_t aiml_db_kv_get_copy_at(void* kv, const char* key, void* dst);
 int32_t aiml_db_kv_has(void* kv, const char* key);
 int32_t aiml_db_kv_len(void* kv);
+int32_t aiml_db_kv_keys_fill(void* kv, void* list);
 void    aiml_db_kv_delete(void* kv, const char* key);
 void    aiml_db_kv_clear(void* kv);
 void    aiml_db_kv_evict(void* kv);    // free in-memory map, keep WAL on disk
@@ -157,7 +158,8 @@ void    aiml_iter_free(void* iter);             // release snapshot memory
 void*   aiml_db_vec_open(const char* name, int32_t dims);
 void*   aiml_db_vec_open_persist(const char* name, int32_t dims, const char* base_path);
 int32_t aiml_db_vec_checkpoint(void* vs);
-void    aiml_db_vec_insert(void* vs, const char* id, const float* emb, int32_t dims);
+void    aiml_db_vec_set(void* vs, const char* id, const float* emb, int32_t dims);
+int32_t aiml_db_vec_delete(void* vs, const char* id);
 void    aiml_db_vec_search(void* vs, const float* query, int32_t k, void* result_list);
 int32_t aiml_db_vec_len(void* vs);
 

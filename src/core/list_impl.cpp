@@ -56,6 +56,9 @@ namespace ListImpl {
     
     void push(CompilerContext& ctx, llvm::Value* listPtr, llvm::Value* val) {
         llvm::StructType* structType = getListStructType(ctx);
+        // spec/71 §5 (F71-2): one more element must fit the .capacity; nothing changes otherwise.
+        checkCapacityLazy(ctx, listPtr, [&]() {
+            return ctx.builder.CreateAdd(getSize(ctx, listPtr), ctx.builder.getInt32(1), "cap_next"); });
         
         llvm::Value* sizePtr = ctx.builder.CreateStructGEP(structType, listPtr, 0, "sizePtr");
         llvm::Value* capPtr = ctx.builder.CreateStructGEP(structType, listPtr, 1, "capPtr");
@@ -154,9 +157,13 @@ namespace ListImpl {
     }
 
     void checkIndex(CompilerContext& ctx, llvm::Value* listPtr, llvm::Value* indexVal, bool allowEnd) {
+        checkBounds(ctx, indexVal, getSize(ctx, listPtr), allowEnd);
+    }
+
+    void checkBounds(CompilerContext& ctx, llvm::Value* indexVal, llvm::Value* len, bool allowEnd) {
         llvm::Type* i32 = ctx.builder.getInt32Ty();
         llvm::Value* idx = indexVal->getType() == i32 ? indexVal : ctx.builder.CreateSExtOrTrunc(indexVal, i32);
-        llvm::Value* size = getSize(ctx, listPtr);
+        llvm::Value* size = len->getType() == i32 ? len : ctx.builder.CreateSExtOrTrunc(len, i32);
         llvm::Value* below = ctx.builder.CreateICmpSLT(idx, ctx.builder.getInt32(0), "idx_neg");
         llvm::Value* above = allowEnd ? ctx.builder.CreateICmpSGT(idx, size, "idx_past")
                                       : ctx.builder.CreateICmpSGE(idx, size, "idx_past");
@@ -169,6 +176,65 @@ namespace ListImpl {
         ctx.builder.SetInsertPoint(msgBB);       // the message is built only on the failing path
         llvm::Value* msg = ctx.builder.CreateCall(ctx.getFunction("aiml_index_message", p, {i32, i32}), {idx, size});
         AIML::AST::aimlEmitThrowIf(ctx, ctx.builder.getTrue(), "IndexOutOfBoundsException", msg);
+        ctx.builder.CreateBr(okBB);
+        ctx.builder.SetInsertPoint(okBB);
+    }
+
+    static llvm::Value* capActive(CompilerContext& ctx) {
+        llvm::Type* i32 = ctx.builder.getInt32Ty();
+        llvm::GlobalVariable* g = ctx.module().getNamedGlobal("aiml_cap_active");
+        if (!g) g = new llvm::GlobalVariable(ctx.module(), i32, false,
+                                             llvm::GlobalValue::ExternalLinkage, nullptr, "aiml_cap_active");
+        return ctx.builder.CreateLoad(i32, g, "cap_active");
+    }
+
+    void checkCapacityLazy(CompilerContext& ctx, llvm::Value* container,
+                           const std::function<llvm::Value*()>& newLen) {
+        llvm::Type* i32 = ctx.builder.getInt32Ty();
+        llvm::Type* p = llvm::PointerType::get(ctx.context, 0);
+        llvm::Function* pf = ctx.builder.GetInsertBlock()->getParent();
+        auto* askBB = llvm::BasicBlock::Create(ctx.context, "cap_ask", pf);
+        auto* msgBB = llvm::BasicBlock::Create(ctx.context, "cap_msg", pf);
+        auto* okBB  = llvm::BasicBlock::Create(ctx.context, "cap_fine", pf);
+        ctx.builder.CreateCondBr(ctx.builder.CreateICmpNE(capActive(ctx), ctx.builder.getInt32(0)), askBB, okBB);
+        ctx.builder.SetInsertPoint(askBB);
+        llvm::Value* c = ctx.builder.CreateBitCast(container, p);
+        llvm::Value* n = newLen();
+        if (n->getType() != i32) n = ctx.builder.CreateSExtOrTrunc(n, i32);
+        llvm::Value* over = ctx.builder.CreateCall(ctx.getFunction("aiml_cap_exceeds", i32, {p, i32}), {c, n});
+        ctx.builder.CreateCondBr(ctx.builder.CreateICmpNE(over, ctx.builder.getInt32(0)), msgBB, okBB);
+        ctx.builder.SetInsertPoint(msgBB);
+        llvm::Value* msg = ctx.builder.CreateCall(ctx.getFunction("aiml_capacity_message", p, {i32, p}), {n, c});
+        AIML::AST::aimlEmitThrowIf(ctx, ctx.builder.getTrue(), "CapacityExceededException", msg);
+        ctx.builder.CreateBr(okBB);
+        ctx.builder.SetInsertPoint(okBB);
+    }
+
+    void checkCapacity(CompilerContext& ctx, llvm::Value* container, llvm::Value* newLen) {
+        checkCapacityLazy(ctx, container, [newLen]() { return newLen; });
+    }
+
+    llvm::Value* getCapacity(CompilerContext& ctx, llvm::Value* container) {
+        llvm::Type* i32 = ctx.builder.getInt32Ty();
+        llvm::Type* p = llvm::PointerType::get(ctx.context, 0);
+        return ctx.builder.CreateCall(ctx.getFunction("aiml_cap_get", i32, {p}),
+                                      {ctx.builder.CreateBitCast(container, p)}, "capacity");
+    }
+
+    void setCapacity(CompilerContext& ctx, llvm::Value* container, llvm::Value* n, llvm::Value* len) {
+        llvm::Type* i32 = ctx.builder.getInt32Ty();
+        llvm::Type* p = llvm::PointerType::get(ctx.context, 0);
+        llvm::Value* c = ctx.builder.CreateBitCast(container, p);
+        llvm::Value* nn = n->getType() == i32 ? n : ctx.builder.CreateSExtOrTrunc(n, i32);
+        llvm::Value* ll = len->getType() == i32 ? len : ctx.builder.CreateSExtOrTrunc(len, i32);
+        llvm::Value* refused = ctx.builder.CreateCall(ctx.getFunction("aiml_cap_set", i32, {p, i32, i32}), {c, nn, ll});
+        llvm::Function* pf = ctx.builder.GetInsertBlock()->getParent();
+        auto* msgBB = llvm::BasicBlock::Create(ctx.context, "capset_msg", pf);
+        auto* okBB  = llvm::BasicBlock::Create(ctx.context, "capset_fine", pf);
+        ctx.builder.CreateCondBr(ctx.builder.CreateICmpNE(refused, ctx.builder.getInt32(0)), msgBB, okBB);
+        ctx.builder.SetInsertPoint(msgBB);
+        llvm::Value* msg = ctx.builder.CreateCall(ctx.getFunction("aiml_capacity_message", p, {i32, p}), {ll, c});
+        AIML::AST::aimlEmitThrowIf(ctx, ctx.builder.getTrue(), "CapacityExceededException", msg);
         ctx.builder.CreateBr(okBB);
         ctx.builder.SetInsertPoint(okBB);
     }
@@ -266,6 +332,9 @@ namespace ListImpl {
 
     void insert(CompilerContext& ctx, llvm::Value* listPtr, llvm::Value* indexVal, llvm::Value* val) {
         llvm::StructType* structType = getListStructType(ctx);
+        // spec/71 §5 (F71-2): one more element must fit the .capacity; nothing changes otherwise.
+        checkCapacityLazy(ctx, listPtr, [&]() {
+            return ctx.builder.CreateAdd(getSize(ctx, listPtr), ctx.builder.getInt32(1), "cap_next"); });
         llvm::Value* sizePtr = ctx.builder.CreateStructGEP(structType, listPtr, 0, "sizePtr");
         llvm::Value* capPtr = ctx.builder.CreateStructGEP(structType, listPtr, 1, "capPtr");
         

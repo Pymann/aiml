@@ -94,7 +94,7 @@ built AOT via `exodus-aot-repro.json` — must be checked in AOT, not only JIT.
 |-----------|---------|
 | `NullPointerException` | Dereferencing a null pointer |
 | `TypeMismatchException` | Dynamic type cast failure (`any` vs concrete type) |
-| `IndexOutOfBoundsException` | Array/list access out of range |
+| `IndexOutOfBoundsException` | A position outside `[0, len)` on any sequence: `at`, `idx`, `insert`, `remove`, `pop` on an empty sequence (spec/71 §4) |
 | `DivisionByZeroException` | Integer division or modulo by zero |
 | `StackOverflowException` | Recursion depth exceeded |
 | `OutOfMemoryException` | Heap allocation failed |
@@ -104,7 +104,7 @@ built AOT via `exodus-aot-repro.json` — must be checked in AOT, not only JIT.
 | `BufferOverflowException` | `write()` when `size + sizeof(value) > capacity` |
 | `BufferUnderflowException` | `read()` past written data |
 | `InvalidThreadStateException` | e.g. `join()` on a detached thread |
-| `MissingKeyError` | `map.remove()` on a non-existent key |
+| `CapacityExceededException` | Growing a collection past its `.capacity`, or setting a `.capacity` below `len` (spec/71 §5) |
 | `NamespaceCollisionError` | Two imports define the same FQN |
 
 ## wasm32

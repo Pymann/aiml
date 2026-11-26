@@ -1,6 +1,7 @@
 #define DEBUG_MODE
 #include "ast_compiler.h"
 #include "list_impl.h"
+#include "collection_vocab.h"
 #include "map_impl.h"
 #include "buffer_impl.h"
 #include "chan_impl.h"
@@ -2552,7 +2553,7 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
                     IRValue* vv = visitExpression(valExpr.get());
                     if (!vv) continue;
                     bool known = true;
-                    HashmapImpl::method(ctx, tName, unwrappedAlloca, "put",
+                    HashmapImpl::method(ctx, tName, unwrappedAlloca, "set",
                                         {kVal, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(vv))}, known);
                 }
                 return; // done — skip normal expression init
@@ -3183,6 +3184,48 @@ static bool setTargetSharesLocalHandle(SetStmt* setStmt) {
 }
 
 void Compiler::visitSetStmt(SetStmt* setStmt) {
+    // spec/71 §2/§5: the queries are read-only properties — except `.capacity` of a list, map,
+    // hashmap or Kv, which `set:` changes (F71-1; refused below len → F71-3).
+    {
+        const std::string& tg = setStmt->target;
+        size_t dp = tg.rfind('.');
+        std::string q = dp == std::string::npos ? "" : tg.substr(dp + 1);
+        if (aiml::vocab::isQueryName(q)) {
+            std::string base = tg.substr(0, dp);
+            std::string bn = base.rfind("<.", 0) == 0 ? "this." + base.substr(2) : base;
+            std::string bt;
+            if (bn.find('.') == std::string::npos) { if (Symbol* s = resolveVariable(bn)) bt = s->typeName; }
+            else bt = dottedPathType(bn);
+            if ((bt.rfind("ptr<", 0) == 0 || bt.rfind("ref<", 0) == 0) && bt.back() == '>') bt = bt.substr(4, bt.size() - 5);
+            if (aiml::vocab::hasQueryProperties(bt)) {
+                bool settable = q == "capacity" && (aiml::vocab::isList(bt) || aiml::vocab::isMap(bt) ||
+                                                   aiml::vocab::isHashmap(bt) || aiml::vocab::isKv(bt));
+                if (!settable) {
+                    LOG_ERROR(ctx.fmtLoc(setStmt->sourceNode) + "`" + tg + "` is read-only: " +
+                              (q == "capacity" ? "the capacity of a " + bt + " cannot be set (spec/71 §5)"
+                                               : "." + q + " is a query (spec/71 §2)"));
+                    return;
+                }
+                IRValue* nv = setStmt->value ? visitExpression(setStmt->value.get()) : nullptr;
+                VariableExpr lenExpr(base + ".len");
+                lenExpr.sourceNode = setStmt->sourceNode;
+                IRValue* lv = visitExpression(&lenExpr);
+                VariableExpr baseExpr(base);
+                std::string lt;
+                IRValue* addr = emitLValueAddress(&baseExpr, lt);
+                if (!nv || !lv || !addr) {
+                    LOG_ERROR(ctx.fmtLoc(setStmt->sourceNode) + "cannot set `" + tg + "`");
+                    return;
+                }
+                llvm::Value* c = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(addr));
+                if (aiml::vocab::isHashmap(bt) || aiml::vocab::isKv(bt))
+                    c = ctx.builder.CreateLoad(llvm::PointerType::get(ctx.context, 0), c, "cap_set_h");
+                ListImpl::setCapacity(ctx, c, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(nv)),
+                                      static_cast<llvm::Value*>(ctx.ir_gen->unwrap(lv)));
+                return;
+            }
+        }
+    }
     // spec/10: `set: [target, [v1, v2, ...]]` REPLACES the contents — a `clear`, then a `push`
     // per element.  Deliberately via the ordinary method dispatch (`target.clear`/`target.push`),
     // so that members, memV3 handles, string ownership and number conversion are treated exactly
@@ -5870,7 +5913,7 @@ static void emitScopeDrop(CompilerContext& ctx, const CompilerContext::ScopeDrop
         // spec/61 §5.6 (memV3): dyn_array<T> Class-4 unique buffer — load the raw i8* and free it.
         // free(NULL) is a no-op, so an earlier `.free` (which nulls the slot) makes this safe.
         llvm::Value* rawptr = ctx.builder.CreateLoad(i8p, it.addr, "drop_dynarr");
-        llvm::Function* fr = ctx.getFunction("free", ctx.builder.getVoidTy(), {i8p});
+        llvm::Function* fr = ctx.getFunction("aiml_darr_free", ctx.builder.getVoidTy(), {i8p});   // spec/71 §6 header
         ctx.builder.CreateCall(fr, { rawptr });
     } else if (it.kind == 11) {
         // cascade_class instance: release its own fields (the block share), then the shell; the
@@ -6514,6 +6557,16 @@ void Compiler::visitIdxStmt(IdxStmt* idx) {
         for (size_t i = 1; i < parts.size(); ++i)
             dims.push_back(std::stoull(parts[i]));
 
+        // spec/71 §4: every index inside its dimension (one index → the flat element count).
+        {
+            uint64_t total = 1;
+            for (auto d : dims) total *= d;
+            if (indexVals.size() == 1)
+                ListImpl::checkBounds(ctx, indexVals[0], ctx.builder.getInt32((uint32_t)total));
+            else
+                for (size_t i = 0; i < indexVals.size() && i < dims.size(); ++i)
+                    ListImpl::checkBounds(ctx, indexVals[i], ctx.builder.getInt32((uint32_t)dims[i]));
+        }
         // Compute flat index (row-major)
         llvm::Value* flatIdx = nullptr;
         if (indexVals.size() == 1) {
@@ -6572,6 +6625,38 @@ void Compiler::visitIdxStmt(IdxStmt* idx) {
         return;
     }
 
+    // ── buffer<T> (spec/71 §1.3): overwrite element i of the written data; out of range throws ──
+    if (tName.rfind("buffer<", 0) == 0 && tName.back() == '>') {
+        std::string elemName = tName.substr(7, tName.size() - 8);
+        llvm::Type* elemTy = ctx.getLLVMType(elemName);
+        llvm::Type* bufTy  = ctx.getLLVMType("buffer");
+        llvm::Type* i8p    = llvm::PointerType::get(ctx.context, 0);
+        llvm::Value* buf = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(
+            sym->ir_alloca_inst ? sym->ir_alloca_inst : ctx.ir_gen->wrap(sym->alloca_inst)));
+        if (sym->is_byref_arg) buf = ctx.builder.CreateLoad(i8p, buf, "byref_deref_bidx");
+        if (indexVals.empty() || !elemTy) { LOG_ERROR(ctx.fmtLoc() + "idx: buffer<T> requires one index"); return; }
+        uint32_t esz = (uint32_t)ctx.module().getDataLayout().getTypeAllocSize(elemTy);
+        llvm::Value* bytes = ctx.builder.CreateLoad(ctx.builder.getInt32Ty(),
+                                 ctx.builder.CreateStructGEP(bufTy, buf, 0, "bsz_ptr"), "buf_bytes");
+        llvm::Value* n = esz > 1 ? ctx.builder.CreateSDiv(bytes, ctx.builder.getInt32(esz), "buf_n") : bytes;
+        ListImpl::checkBounds(ctx, indexVals[0], n);
+        if (storeVal->getType() != elemTy) {
+            if (elemTy->isFloatingPointTy() && storeVal->getType()->isIntegerTy())
+                storeVal = ctx.builder.CreateSIToFP(storeVal, elemTy, "bidx_i2f");
+            else if (elemTy->isFloatingPointTy() && storeVal->getType()->isFloatingPointTy())
+                storeVal = ctx.builder.CreateFPCast(storeVal, elemTy, "bidx_fcast");
+            else if (elemTy->isIntegerTy() && storeVal->getType()->isIntegerTy())
+                storeVal = ctx.builder.CreateSExtOrTrunc(storeVal, elemTy, "bidx_icast");
+            else if (elemTy->isIntegerTy() && storeVal->getType()->isFloatingPointTy())
+                storeVal = coerceFloatToIntegral(ctx, storeVal, elemTy, elemName);
+        }
+        llvm::Value* data = ctx.builder.CreateLoad(i8p, ctx.builder.CreateStructGEP(bufTy, buf, 4, "bdata_fld"), "bdata");
+        llvm::Value* off = ctx.builder.CreateMul(ctx.builder.CreateSExtOrTrunc(indexVals[0], ctx.builder.getInt64Ty()),
+                                                 ctx.builder.getInt64(esz), "boff");
+        ctx.builder.CreateStore(storeVal, ctx.builder.CreateInBoundsGEP(ctx.builder.getInt8Ty(), data, off, "belem_ptr"));
+        return;
+    }
+
     // ── dyn_array<T> ──
     if (tName.rfind("dyn_array<", 0) == 0 && tName.back() == '>') {
         std::string elemName = tName.substr(10, tName.size() - 11);
@@ -6582,6 +6667,8 @@ void Compiler::visitIdxStmt(IdxStmt* idx) {
         llvm::Value* rawPtr  = ctx.builder.CreateLoad(i8p, ptrAlloca, "darr_base");
         llvm::Value* typedPtr = ctx.builder.CreatePointerCast(rawPtr, elemTy->getPointerTo(), "darr_typed");
         if (indexVals.empty()) { LOG_ERROR("idx: dyn_array requires index"); return; }
+        ListImpl::checkBounds(ctx, indexVals[0], ctx.builder.CreateCall(
+            ctx.getFunction("aiml_darr_len", ctx.builder.getInt32Ty(), {i8p}), {rawPtr}, "darr_len"));   // spec/71 §4
         llvm::Value* elemPtr = ctx.builder.CreateGEP(elemTy, typedPtr, indexVals[0], "darr_idx_gep");
         if (storeVal->getType() != elemTy) {
             if (elemTy->isFloatingPointTy() && storeVal->getType()->isIntegerTy())

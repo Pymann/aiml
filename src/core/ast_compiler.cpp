@@ -12,6 +12,7 @@
 #include "fptable.h"
 #include "schema_registry.h"
 #include "list_impl.h"
+#include "collection_vocab.h"
 #include "map_impl.h"
 #include "buffer_impl.h"
 #include "chan_impl.h"
@@ -4349,6 +4350,7 @@ void Compiler::registerTypes(Program* prog) {
         "Exception", "NullPointerException", "TypeMismatchException", "IndexOutOfBoundsException",
         "DivisionByZeroException", "StackOverflowException", "OutOfMemoryException", "TimeoutException",
         "SerializationException", "DeserializationException", "BufferOverflowException", "BufferUnderflowException",
+        "CapacityExceededException",
         "InvalidThreadStateException",
         // spec/29_2 §14a (F29_2-…d2): two errors when grabbing a symbol
         // from a context — the name is unknown, or the named type
@@ -7536,6 +7538,84 @@ IRValue* Compiler::resolveProperty(Symbol* baseSym, const std::string& propName)
         baseAlloca = ctx.ir_gen->wrap(loaded);
     }
 
+    // ── spec/71 §2: the queries .len / .empty / .byte_len / .capacity are properties ──
+    {
+        std::string vc = baseSym->typeName;
+        if ((vc.rfind("ptr<", 0) == 0 || vc.rfind("ref<", 0) == 0) && vc.back() == '>') vc = vc.substr(4, vc.size() - 5);
+        else if (vc.rfind("shared<", 0) == 0 && vc.back() == '>') vc = vc.substr(7, vc.size() - 8);
+        std::string repl = aiml::vocab::retiredProperty(vc, propName);
+        if (!repl.empty()) {
+            LOG_ERROR(ctx.fmtLoc() + aiml::vocab::retiredMessage(vc + "." + propName, repl));
+            return ctx.ir_gen->getInt32(0);
+        }
+        llvm::Value* slot = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca));
+        auto* i8p = llvm::PointerType::get(ctx.context, 0);
+        auto* i32 = ctx.builder.getInt32Ty();
+        auto emptyOf = [&](llvm::Value* n) {
+            return ctx.ir_gen->wrap(ctx.builder.CreateZExt(ctx.builder.CreateICmpEQ(n, ctx.builder.getInt32(0)),
+                                                           i32, "q_empty"));
+        };
+        // .capacity — list / map / hashmap / Kv (settable, F71-1); 0 = unbounded.
+        if (propName == "capacity" && !aiml::vocab::startsWith(vc, "cascade<")) {
+            if (aiml::vocab::isList(vc) || aiml::vocab::isMap(vc))
+                return ctx.ir_gen->wrap(ListImpl::getCapacity(ctx, slot));
+            if (aiml::vocab::isHashmap(vc) || aiml::vocab::isKv(vc))
+                return ctx.ir_gen->wrap(ListImpl::getCapacity(ctx, ctx.builder.CreateLoad(i8p, slot, "cap_h")));
+        }
+        // .byte_len of a list: len × the element slot size.
+        if (propName == "byte_len" && aiml::vocab::isList(vc)) {
+            std::string en = vc.substr(5, vc.size() - 6);
+            llvm::Type* et = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(en)));
+            uint64_t esz = et ? llvm::DataLayout(&ctx.module()).getTypeAllocSize(et) : 0;
+            if (!esz) esz = ctx.ptrStride();
+            return ctx.ir_gen->wrap(ctx.builder.CreateMul(ListImpl::getSize(ctx, slot),
+                                                          ctx.builder.getInt32((uint32_t)esz), "list_bytes"));
+        }
+        // Kv / Store / VecStore / TimeSeries: .len and .empty from the runtime.
+        const char* lenFn = aiml::vocab::isKv(vc) ? "aiml_db_kv_len"
+                          : aiml::vocab::isStore(vc) ? "aiml_db_store_len"
+                          : aiml::vocab::isVecStore(vc) ? "aiml_db_vec_len"
+                          : aiml::vocab::isTimeSeries(vc) ? "aiml_db_ts_len" : nullptr;
+        if (lenFn && (propName == "len" || propName == "empty")) {
+            llvm::Value* n = ctx.builder.CreateCall(ctx.getFunction(lenFn, i32, {i8p}),
+                                                    {ctx.builder.CreateLoad(i8p, slot, "db_h")}, "db_len");
+            return propName == "len" ? ctx.ir_gen->wrap(n) : emptyOf(n);
+        }
+        // array<T:N...>: .byte_len / .empty from the static shape (.len below).
+        if (aiml::vocab::isArray(vc) && (propName == "byte_len" || propName == "empty")) {
+            std::string inner = vc.substr(6, vc.size() - 7);
+            std::vector<std::string> parts;
+            for (size_t pos = 0; pos <= inner.size();) {
+                size_t sep = inner.find(':', pos);
+                parts.push_back(inner.substr(pos, sep == std::string::npos ? std::string::npos : sep - pos));
+                if (sep == std::string::npos) break;
+                pos = sep + 1;
+            }
+            uint64_t total = 1;
+            for (size_t i = 1; i < parts.size(); ++i) total *= std::stoull(parts[i]);
+            if (propName == "empty") return ctx.ir_gen->getInt32(total == 0 ? 1 : 0);
+            llvm::Type* et = ctx.getLLVMType(parts[0]);
+            uint64_t esz = et ? llvm::DataLayout(&ctx.module()).getTypeAllocSize(et) : 0;
+            return ctx.ir_gen->getInt32((int32_t)(total * esz));
+        }
+        // dyn_array<T>: the count from its header (spec/71 §6).
+        if (aiml::vocab::isDynArray(vc) && (propName == "len" || propName == "byte_len" || propName == "empty")) {
+            llvm::Value* n = ctx.builder.CreateCall(ctx.getFunction("aiml_darr_len", i32, {i8p}),
+                                                    {ctx.builder.CreateLoad(i8p, slot, "darr_q")}, "darr_len");
+            if (propName == "empty") return emptyOf(n);
+            if (propName == "len") return ctx.ir_gen->wrap(n);
+            llvm::Type* et = ctx.getLLVMType(vc.substr(10, vc.size() - 11));
+            uint64_t esz = et ? llvm::DataLayout(&ctx.module()).getTypeAllocSize(et) : 0;
+            return ctx.ir_gen->wrap(ctx.builder.CreateMul(n, ctx.builder.getInt32((uint32_t)esz), "darr_bytes"));
+        }
+        // string: .len = .byte_len (bytes of the UTF-8 text), .empty; null-safe.
+        if (vc == "string" && (propName == "len" || propName == "byte_len" || propName == "empty")) {
+            llvm::Value* sp = ctx.builder.CreateLoad(i8p, slot, "q_str");
+            llvm::Value* n = ctx.builder.CreateCall(ctx.getFunction("aiml_str_len_safe", i32, {i8p}), {sp}, "str_len");
+            return propName == "empty" ? emptyOf(n) : ctx.ir_gen->wrap(n);
+        }
+    }
+
     // spec/69: hashmap<K:V>.len / .empty
     if (HashmapImpl::isHashmapType(className) && (propName == "len" || propName == "empty")) {
         bool known = true;
@@ -7772,26 +7852,29 @@ IRValue* Compiler::resolveProperty(Symbol* baseSym, const std::string& propName)
             return ctx.ir_gen->createLoad(propTy, gep, propName + "_val");
         }
 
-        // spec/11 §Typed buffers: `count` counts ELEMENTS and needs the element type,
-        // which the buffer<T> → buffer normalization above has just discarded -- so it
-        // is answered here, from the symbol's own type, before the shared `buffer`
-        // class is asked. `byte_len` lands here for the same reason; it is `len`.
-        if ((propName == "count" || propName == "byte_len")
+        // spec/71 §7: on a buffer<T>, .len and .capacity count ELEMENTS (bytes / sizeof(T)) and
+        // .byte_len counts bytes.  They need the element type, which the buffer<T> → buffer
+        // normalization above discarded — so they are answered here, from the symbol's own type.
+        if ((propName == "len" || propName == "byte_len" || propName == "capacity" || propName == "empty")
             && baseSym->typeName.rfind("buffer<", 0) == 0 && baseSym->typeName.back() == '>') {
             llvm::Value* rawBuf = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca));
-            llvm::Value* szPtr  = ctx.builder.CreateStructGEP(ctx.getLLVMType("buffer"), rawBuf, 0, "buf_sz_ptr");
-            llvm::Value* bytes  = ctx.builder.CreateLoad(ctx.builder.getInt32Ty(), szPtr, "buf_bytes");
+            unsigned fld = propName == "capacity" ? 1 : 0;
+            llvm::Value* fPtr  = ctx.builder.CreateStructGEP(ctx.getLLVMType("buffer"), rawBuf, fld, "buf_q_ptr");
+            llvm::Value* bytes = ctx.builder.CreateLoad(ctx.builder.getInt32Ty(), fPtr, "buf_bytes");
             if (propName == "byte_len") return ctx.ir_gen->wrap(bytes);
+            if (propName == "empty")
+                return ctx.ir_gen->wrap(ctx.builder.CreateZExt(ctx.builder.CreateICmpEQ(bytes, ctx.builder.getInt32(0)),
+                                                               ctx.builder.getInt32Ty(), "buf_empty"));
             std::string bElem = baseSym->typeName.substr(7, baseSym->typeName.size() - 8);
             llvm::Type* bElemTy = ctx.getLLVMType(bElem);
             if (!bElemTy) {
-                LOG_ERROR(ctx.fmtLoc() + "buffer<T>.count: unknown elem type " + bElem);
+                LOG_ERROR(ctx.fmtLoc() + "buffer<T>." + propName + ": unknown elem type " + bElem);
                 return ctx.ir_gen->getInt32(0);
             }
             llvm::DataLayout bdl(&ctx.module());
             uint64_t bEsz = bdl.getTypeAllocSize(bElemTy);
             if (bEsz <= 1) return ctx.ir_gen->wrap(bytes);
-            return ctx.ir_gen->wrap(ctx.builder.CreateSDiv(bytes, ctx.builder.getInt32((uint32_t)bEsz), "buf_count"));
+            return ctx.ir_gen->wrap(ctx.builder.CreateSDiv(bytes, ctx.builder.getInt32((uint32_t)bEsz), "buf_elems"));
         }
 
         // Builtin property getter: dispatch builtinMethod with same name (zero-arg accessor).

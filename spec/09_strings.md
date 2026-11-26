@@ -21,20 +21,21 @@ immutable by convention; methods that transform them return new allocations.
 
 ## Methods
 
-All string methods require `call:` (except `len`, which is also a property).
+All string methods require `call:`; the queries `.len`, `.empty` and `.byte_len` are properties
+and are never called (spec/71 §2).
 
 ### `string.len` → `i32`
 
-Returns the number of **characters** (Unicode code points). As a property, no `call:` is needed.
+The number of **bytes** of the string's UTF-8 encoding — the unit every string position uses
+(`substr`, `index_of` count bytes).  `"grün"` has `.len` 5.  A null string has `.len` 0.
+`.byte_len` is the same number; `.empty` is `1` for `""` and for a null string.
 
 ```yaml
 - decl: [s, string, "Hello"]
-- decl: [n, i32]
-- set:  [n, s.len]              # property form — no call: needed
-- set:  [n, { call: [s.len] }]  # call form — also valid
+- decl: [n, i32, s.len]         # 5
 ```
 
-> Note: `sys.size(s)` returns the **byte count** (`u64`) instead.
+> `sys.size(s)` is the size of the `string` **type** (a pointer), not of the text (spec/71 §1.1).
 
 ---
 
