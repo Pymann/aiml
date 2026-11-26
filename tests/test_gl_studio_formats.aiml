@@ -144,7 +144,7 @@
             - call: [<.check, "resize_kept", { call: [hdr.height] }, 6, 6]
 
             - decl: [tints, buffer<f32>]
-            - call: [tints.alloc, 3]
+            - call: [tints.alloc, 12]          # alloc counts BYTES: one vec3 (spec/11)
             - call: [tints.write, 1.0, f32]
             - call: [tints.write, 1.0, f32]
             - call: [tints.write, 1.0, f32]
