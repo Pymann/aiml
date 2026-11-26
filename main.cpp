@@ -1,3 +1,4 @@
+#include <cctype>
 #include <iostream>
 #include <fstream>
 #include <string>
@@ -16,6 +17,22 @@ int main(int argc, char** argv) {
     if (argc > 1 && std::string(argv[1]) == "venv") return aiml::venv::command(argc - 2, argv + 2);
     // `aiml build` (spec/68 §7) — builds an aiml project without exodus.
     if (argc > 1 && std::string(argv[1]) == "build") return aiml::build::command(argc - 2, argv + 2);
+    // `aiml --version` (spec/68 F68-117): the version the release was packaged as, read from
+    // lib/aiml.version next to the runtime; a compiler from a build tree has none.
+    if (argc == 2 && std::string(argv[1]) == "--version") {
+        std::error_code ec;
+        std::filesystem::path exe = std::filesystem::read_symlink("/proc/self/exe", ec);
+        std::filesystem::path stamp = exe.parent_path().parent_path() / "lib" / "aiml.version";
+        std::ifstream in(stamp);
+        std::string v;
+        if (!ec && in && std::getline(in, v) && !v.empty()) {
+            while (!v.empty() && std::isspace(static_cast<unsigned char>(v.back()))) v.pop_back();
+            std::cout << "aiml " << v << std::endl;
+        } else {
+            std::cout << "aiml (unreleased: no " << stamp.string() << ")" << std::endl;
+        }
+        return 0;
+    }
 
     std::string inputFile;
     std::string outputFile;
