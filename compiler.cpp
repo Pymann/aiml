@@ -5,6 +5,7 @@
 #include "exec_impl.h"
 #include "src/core/builtin_registry.h"
 #include "src/core/asset_scanner.h"
+#include "src/core/venv.h"
 #include "src/sys/asset_runtime.h"
 #include <chrono>
 #include <iostream>
@@ -1130,7 +1131,14 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
     // Asset Registry: scan roots once at the top of the compile.  Stored in
     // a singleton so builtin_registry can validate string-literal lookups and
     // the JIT-runtime can resolve stems via the same in-memory tables.
-    AIML::AssetScanner::instance().scan(assetRootsStr);
+    // spec/68 F68-121: the venv the compiler belongs to adds its one asset root,
+    // <venv>/assets (the asset packages of `aiml venv <dir> asset install`).
+    {
+        std::string roots = assetRootsStr;
+        std::string venvAssets = aiml::venv::ownAssetRoot();
+        if (!venvAssets.empty()) roots += (roots.empty() ? "" : ",") + venvAssets;
+        AIML::AssetScanner::instance().scan(roots);
+    }
     YAML::Node config;
     const double phaseConfigStart = phaseNowMs();
     try {
@@ -2206,6 +2214,13 @@ void AIMLCompiler::generateEntryPoint() {
             "aiml_asset_runtime_register", regFt);
         std::error_code rec;
         std::filesystem::path cwd = std::filesystem::current_path(rec);
+        // spec/68 F68-128: the venv's asset files do not move with the working
+        // directory — they are registered by their absolute path.
+        const std::string venvAssets = aiml::venv::ownAssetRoot();
+        auto inVenvAssets = [&](const std::string& p) {
+            return !venvAssets.empty() && p.size() > venvAssets.size() &&
+                   p.compare(0, venvAssets.size(), venvAssets) == 0 && p[venvAssets.size()] == '/';
+        };
         auto kindIdx = [](AIML::AssetKind k) -> int {
             switch (k) {
                 case AIML::AssetKind::Texture: return 0;
@@ -2223,7 +2238,7 @@ void AIMLCompiler::generateEntryPoint() {
             for (const auto& [stem, entry] : store) {
                 std::error_code rel_ec;
                 std::filesystem::path rel = std::filesystem::relative(entry.abs_path, cwd, rel_ec);
-                std::string path_str = rel_ec ? entry.abs_path : rel.string();
+                std::string path_str = (rel_ec || inVenvAssets(entry.abs_path)) ? entry.abs_path : rel.string();
                 llvm::Value* stemV = builder.CreateGlobalStringPtr(stem, "__a_stem");
                 llvm::Value* pathV = builder.CreateGlobalStringPtr(path_str, "__a_path");
                 builder.CreateCall(regFn, {builder.getInt32(kidx), stemV, pathV});
