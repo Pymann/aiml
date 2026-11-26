@@ -10,7 +10,7 @@
     args: [[crd, ref<Card>], [color, i32], [amount, i32]]
     body:
       - decl: [colkey, string, "${color}"]
-      - call: [crd.produces.put, colkey, amount]
+      - call: [crd.produces.set, colkey, amount]
 - def:
     name: main
     return: i32
@@ -22,7 +22,7 @@
             - decl: [card, Card]
             - call: [populate, card, 1, 7]
             - call: [populate, card, 9, 3]
-            - if: { condition: { eq: [{ call: [card.produces.contains, "1"] }, 0] }, then: [{ print: ["FAIL key 1 gone (put freed the declared key)"] }, { return: 1 }] }
+            - if: { condition: { eq: [{ call: [card.produces.has, "1"] }, 0] }, then: [{ print: ["FAIL key 1 gone (put freed the declared key)"] }, { return: 1 }] }
             - decl: [got, i32, { call: [card.produces.get, "1"] }]
             - if: { condition: { neq: [got, 7] }, then: [{ print: ["FAIL got=${got} exp 7"] }, { return: 1 }] }
             - if: { condition: { neq: [{ call: [card.produces.get, "9"] }, 3] }, then: [{ print: ["FAIL key 9"] }, { return: 1 }] }

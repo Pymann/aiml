@@ -12,7 +12,7 @@
 - call: [cfg.set, "mode", "global-kv"]
 
 - decl: [var_n, i32]
-- set: [var_n, { call: [cfg.len] }]
+- set: [var_n, cfg.len]
 - print: ["global_kv_len=${var_n}"]
 
 - decl: [got, string]

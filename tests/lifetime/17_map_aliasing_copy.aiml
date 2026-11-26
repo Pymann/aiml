@@ -11,13 +11,13 @@
     static_off: ["str_cmp"]
     body:
       - decl: [ita, "map<string:i32>"]
-      - call: [ita.put, "kdx", 1]
+      - call: [ita.set, "kdx", 1]
       - decl: [itb, "map<string:i32>", ita]           # SHARE (incref) — same map
-      - call: [ita.put, "kdy", 2]
+      - call: [ita.set, "kdy", 2]
       - if: { condition: { neq: [itb.len, 2] }, then: [{ print: ["FAIL alias itb.len=${itb.len}"] }, { return: 1 }] }   # aliasing → 2
       - if: { condition: { neq: [{ call: [itb.get, "kdy"] }, 2] }, then: [{ print: ["FAIL alias get through b"] }, { return: 1 }] }
       - decl: [itc, "map<string:i32>", { copy: ita }]  # shallow copy — independent spine
-      - call: [ita.put, "kdz", 3]
+      - call: [ita.set, "kdz", 3]
       - if: { condition: { neq: [itc.len, 2] }, then: [{ print: ["FAIL copy itc.len=${itc.len}"] }, { return: 1 }] }     # unaffected
       - if: { condition: { neq: [{ call: [itc.get, "kdx"] }, 1] }, then: [{ print: ["FAIL copy lost element"] }, { return: 1 }] }
       # scope exit: a,b drop the shared map once at rc 0; c frees its own block.

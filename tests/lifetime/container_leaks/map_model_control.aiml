@@ -13,7 +13,7 @@
             - decl: [index, "map<string:Item>"]
             - decl: [item, Item]
             - set: [item.text, "payload=${42}"]
-            - call: [index.put, "key", item]
+            - call: [index.set, "key", item]
             - if: {condition: {neq: [index.len, 1]}, then: [{return: 21}]}
             - set: [counter, {+: [counter, 1]}]
       - return: 0

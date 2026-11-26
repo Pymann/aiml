@@ -37,7 +37,7 @@
       - while:
           condition: { lt: [idx_draw, 4] }
           body:
-            - set: [sum_abs, { "+": [sum_abs, { call: [math.abs, { call: [draw_a.get, idx_draw] }] }] }]
+            - set: [sum_abs, { "+": [sum_abs, { call: [math.abs, { at: [draw_a, idx_draw] }] }] }]
             - set: [idx_draw, { "+": [idx_draw, 1] }]
       - decl: [nonzero, i32, 0]
       - if: { condition: { gt: [sum_abs, 0.0] }, then: [{ set: [nonzero, 1] }] }
@@ -45,9 +45,9 @@
 
       # ── keep: a constant tensor built before the loop survives begin_graph ──
       - decl: [ids, tensor, { call: [tensor.zeros, 3] }]
-      - call: [ids.set, 0, 7.0]
-      - call: [ids.set, 1, 8.0]
-      - call: [ids.set, 2, 9.0]
+      - idx: [ids, 0, 7.0]
+      - idx: [ids, 1, 8.0]
+      - idx: [ids, 2, 9.0]
       - call: [ids.keep]
       - decl: [round_no, i32, 0]
       - while:
@@ -57,8 +57,8 @@
             - decl: [work, tensor, { call: [tensor.ones, 3] }]
             - set: [round_no, { +: [round_no, 1] }]
       # after four graph resets the marked tensor must still read back
-      - call: [chk.expect_i, "kept tensor survives begin_graph (elem 0)", { cast: [{ call: [ids.get, 0] }, i64] }, 7]
-      - call: [chk.expect_i, "kept tensor survives begin_graph (elem 2)", { cast: [{ call: [ids.get, 2] }, i64] }, 9]
+      - call: [chk.expect_i, "kept tensor survives begin_graph (elem 0)", { cast: [{ at: [ids, 0] }, i64] }, 7]
+      - call: [chk.expect_i, "kept tensor survives begin_graph (elem 2)", { cast: [{ at: [ids, 2] }, i64] }, 9]
 
       - if: { condition: { gt: [chk.fails, 0] }, then: [{ print: ["FAIL tensor_seed_keep (${chk.fails})"] }, { return: 1 }] }
       - print: ["PASS tensor_seed_keep"]

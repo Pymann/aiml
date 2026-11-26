@@ -35,9 +35,9 @@
       - decl: [fehl, i32, 0]
       - decl: [quelle, WirkTraeger]
       - set:  [quelle.name, "steady_heart"]
-      - call: [quelle.wirkungen.put, "attr.endurance", 1.0]
-      - call: [quelle.wirkungen.put, "action.duration", -0.1]
-      - call: [quelle.wirkungen.put, "find.chance", 0.25]
+      - call: [quelle.wirkungen.set, "attr.endurance", 1.0]
+      - call: [quelle.wirkungen.set, "action.duration", -0.1]
+      - call: [quelle.wirkungen.set, "find.chance", 0.25]
 
       # ── 1. via serialisation ─────────────────────────────────────────────
       - decl: [roh, string, { call: [sys.serialize, quelle] }]
@@ -55,7 +55,7 @@
       # A channel nobody set must be recognisable as missing --
       # otherwise `passiv_summe` cannot tell 0 apart from "not there".
       - if:
-          condition: { neq: [{ call: [zurueck.wirkungen.contains, "travel.duration"] }, 0] }
+          condition: { neq: [{ call: [zurueck.wirkungen.has, "travel.duration"] }, 0] }
           then:
             - call: [log.error, "FAIL unknown channel reports itself as present"]
             - set: [fehl, { "+": [fehl, 1] }]

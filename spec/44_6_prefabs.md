@@ -345,7 +345,7 @@ Populate each spawned row per frame by walking the container's rows:
       - if:
           condition: { '&&': [{ neq: [row, null] }, { lt: [i, <.library.len] }] }
           then:
-            - decl: [cd, MockCard, { call: [<.library.get, i] }]
+            - decl: [cd, MockCard, { at: [<.library, i] }]
             - call: [populate_card_full, row, cd]
       - set: [i, { +: [i, 1] }]
 ```

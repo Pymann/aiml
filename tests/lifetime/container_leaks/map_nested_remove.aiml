@@ -12,8 +12,8 @@
             - decl: [index, "map<string:list<i32>>"]
             - decl: [row, list<i32>]
             - call: [row.push, 42]
-            - call: [index.put, "key", row]
-            - call: [index.remove, "key"]
+            - call: [index.set, "key", row]
+            - call: [index.delete, "key"]
             - if: {condition: {neq: [index.len, 0]}, then: [{return: 21}]}
             - set: [counter, {+: [counter, 1]}]
       - return: 0

@@ -16,7 +16,7 @@
       - while:
           condition: { lt: [dump_i, row.len] }
           body:
-            - decl: [dump_v, i32, { call: [row.get, dump_i] }]
+            - decl: [dump_v, i32, { at: [row, dump_i] }]
             - set: [dump_s, "${dump_s}${dump_v} "]
             - set: [dump_i, { +: [dump_i, 1] }]
       - print: ["  ${label} = [ ${dump_s}]  (len=${row.len})"]
@@ -36,7 +36,7 @@
       - decl: [empty_vals, list<i32>]
       - call: [cascade.persist_row, outer, 0, 48, empty_vals]
 
-      - decl: [readback_0, list<i32>, { call: [outer.get, 0] }]
+      - decl: [readback_0, list<i32>, { at: [outer, 0] }]
       - call: [dump_row, "T1 counter_trap [48]      ", readback_0]
 
       # ── Test 2: tag + 2 payload slots ──────────────────────────────────
@@ -45,7 +45,7 @@
       - call: [vals_2.push, 3]
       - call: [cascade.persist_row, outer, 0, 1, vals_2]
 
-      - decl: [readback_1, list<i32>, { call: [outer.get, 0] }]
+      - decl: [readback_1, list<i32>, { at: [outer, 0] }]
       - call: [dump_row, "T2 draw_card [1, 1, 3]   ", readback_1]
 
       # ── Test 3: tag + 4 slots (modify_stat) ────────────────────────────
@@ -60,7 +60,7 @@
       - call: [mods.push, 1]
       - call: [cascade.persist_row, outer, 1, 12, mods]
 
-      - decl: [readback_2, list<i32>, { call: [outer.get, 1] }]
+      - decl: [readback_2, list<i32>, { at: [outer, 1] }]
       - call: [dump_row, "T3 modify_stat [12,1,2,8,1]", readback_2]
 
       # ── Test 4: smaller payload than previously written — trailing
@@ -69,7 +69,7 @@
       - call: [small.push, 5]
       - call: [cascade.persist_row, outer, 0, 42, small]
 
-      - decl: [readback_3, list<i32>, { call: [outer.get, 0] }]
+      - decl: [readback_3, list<i32>, { at: [outer, 0] }]
       - call: [dump_row, "T4 [42, 5, <old 3>]      ", readback_3]
 
       - print: ["=== done ==="]

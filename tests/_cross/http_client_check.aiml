@@ -16,7 +16,7 @@
           body:
             - decl: [dest, url, { call: [http.parse_url, target] }]
             - decl: [req, http_client_handle, { call: [http.new_request, method, dest] }]
-            - call: [req.headers.put, "Authorization", "Bearer t0k"]
+            - call: [req.headers.set, "Authorization", "Bearer t0k"]
             - set: [req.timeout, 5000]
             - if: { condition: { eq: [method, "POST"] }, then: [{ set: [req.body, "hello"] }] }
             - return: [req]

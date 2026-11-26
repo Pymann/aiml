@@ -110,7 +110,7 @@ and audit logs stay keyed consistently across both stacks.
 - decl: [data, buffer]
 - set: [data, { call: [ws.recv_bytes] }]
 - decl: [sz, i32]
-- set: [sz, { call: [data.size] }]
+- set: [sz, data.len]
 - print: ["Binary size: ${sz}"]
 
 - call: [ws.close]
@@ -190,7 +190,7 @@ Ping frames from the peer are automatically answered with pong.
     body:
       - call: [clients.push, conn]
       - decl: [n, i32]
-      - set: [n, { call: [clients.len] }]
+      - set: [n, clients.len]
       - print: ["Client joined. Total: ${n}"]
 
 - def:

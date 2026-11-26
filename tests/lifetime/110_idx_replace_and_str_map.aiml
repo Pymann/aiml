@@ -26,8 +26,8 @@
             - idx: [names, 0, "n-${counter}"]
             - idx: [items, 0, {call: [make_item, counter]}]
             - decl: [dict, "map<string:string>"]
-            - call: [dict.put, "a", "v-${counter}"]
-            - call: [dict.put, "a", "w-${counter}"]
-            - call: [dict.remove, "a"]
+            - call: [dict.set, "a", "v-${counter}"]
+            - call: [dict.set, "a", "w-${counter}"]
+            - call: [dict.delete, "a"]
             - set: [counter, {+: [counter, 1]}]
       - return: 0

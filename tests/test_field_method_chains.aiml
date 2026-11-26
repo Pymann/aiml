@@ -30,7 +30,7 @@
             - print: ["FAIL nodes_len_prop=${root.nodes.len}"]
             - call: [sys.exit, 1]
 
-      - decl: [nodes_len_m, i32, { call: [root.nodes.len] }]
+      - decl: [nodes_len_m, i32, root.nodes.len]
       - if:
           condition: { neq: [nodes_len_m, 1] }
           then:
@@ -38,7 +38,7 @@
             - call: [sys.exit, 1]
 
       - decl: [node0_cost, map<string:i32>, { at: [root.nodes, 0, .stats, .cost] }]
-      - decl: [cost_len, i32, { call: [node0_cost.len] }]
+      - decl: [cost_len, i32, node0_cost.len]
       - if:
           condition: { neq: [cost_len, 2] }
           then:

@@ -32,7 +32,7 @@ A `chan<T>` has no `.capacity`: its buffer size from `init` (spec/26, spec/28) i
 quantity — `0` there means *rendezvous*, not *unbounded* — and keeps its own name.  For a `list` it is the size of the list header, whatever the list
 holds.
 
-### 1.2 Keyed containers — `map<K:V>`, `hashmap<K:V>`, `Kv<K,V>`, `storage`
+### 1.2 Keyed containers — `map<K:V>`, `hashmap<K:V>`, `Kv<K:V>`, `storage`
 
 | Operation | Name | Result |
 |---|---|---|
@@ -40,12 +40,14 @@ holds.
 | read | `get(k)` / `get(k, d)` | the value; if `k` is missing, `d` or the zero value (§3) |
 | key present | `has(k)` | `i32` 0/1 |
 | remove | `delete(k)` | `i32` 1 if `k` was there, else 0 |
-| all keys | `keys()` | `list<K>` (`map`: insertion order; `hashmap`, `Kv`, `storage`: sorted) |
+| all keys | `keys()` | `list<K>`, sorted (strings in byte order); `map` only with `string` keys; not on `storage` |
 | remove all | `clear()` | — |
 | counter | `incr(k, d)` | `hashmap<K:integer>` only: `v += d`, a missing key counts as 0; returns the new value |
 
 `storage` is a namespace, so its operations are functions: `storage.set(k, v)`,
-`storage.get(k)`, `storage.has(k)`, `storage.delete(k)`, `storage.clear()`, `storage.keys()`.
+`storage.get(k)` / `storage.get(k, d)`, `storage.has(k)`, `storage.delete(k)`, `storage.clear()`;
+the session store has `storage.session_get(k)`, `storage.session_set(k, v)` and
+`storage.session_delete(k)` (spec/23_2).  `storage` keys and values are `string`.
 
 ### 1.3 Sequences — `list<T>`, `buffer<T>`, `array<T:N>`, `dyn_array<T>`
 

@@ -70,8 +70,8 @@ A function pointer is called with `call` — identical to direct function calls:
 
 ```aiml
 - decl: [handlers, map<string:fn<http_request, http_response>>]
-- call: [handlers.put, "home", handle_home]
-- call: [handlers.put, "about", handle_about]
+- call: [handlers.set, "home", handle_home]
+- call: [handlers.set, "about", handle_about]
 
 - decl: [h, fn<http_request, http_response>]
 - set: [h, { call: [handlers.get, "home"] }]

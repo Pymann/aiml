@@ -22,7 +22,7 @@
     name: handle_file
     args: [[req, http_request_handle], [resp, http_response_handle]]
     body:
-      - call: [resp.headers.put, "content-type", "application/wasm"]
+      - call: [resp.headers.set, "content-type", "application/wasm"]
       - set: [resp.body_file, "/tmp/aiml_inm_test/app.wasm"]
       - call: [resp.send]
 
@@ -76,7 +76,7 @@
           then:
             - print: ["FAIL no etag in ${first}"]
             - return: [1]
-      - decl: [etag, string, { call: [found.get, 1] }]
+      - decl: [etag, string, { at: [found, 1] }]
 
       - decl: [same, string, { call: [probe, "GET /app.wasm HTTP/1.1\r\nHost: x\r\nIf-None-Match: ${etag}\r\n\r\n"] }]
       - call: [check.has, "matching etag -> 304", same, "HTTP/1.1 304"]

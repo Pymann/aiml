@@ -53,7 +53,7 @@
                   - decl: [src, Rec]
                   - set: [src.rec_id, "card-${idx}"]
                   - set: [src.label,  "a reasonably long label string number ${idx}"]
-                  - call: [src.mana.put, "fire", idx]
+                  - call: [src.mana.set, "fire", idx]
                   - call: [src.tags.push, idx]
                   - decl: [abx, Ability]
                   - set: [abx.kind, 3]

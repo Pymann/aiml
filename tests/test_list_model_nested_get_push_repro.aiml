@@ -1,24 +1,11 @@
 # SPEC?: 15_models   # derived from the file name, to be confirmed
 # static-check: off
-# Repro: nested list<Model>.get() passed to list<Model>.push().
-# Origin: 9rooms_v2 BoardScreen.cp_tick, crash after "Zwingende Böe".
-# No 9rooms, database, UI, network, or asset dependencies.
-#
-# get() returns ptr<Model>. A value-list push must reject that pointer,
-# just like test_ptr_push_into_value_list_error.aiml. The current compiler's
-# check only catches VariableExpr arguments, missing this nested CallExpr.
-# ListImpl::push then uses pointer size/stride instead of the model layout.
-#
-# Run: ./out/aiml/aiml tests/test_list_model_nested_get_push_repro.aiml -r
-# Expected: compilation fails with the list pointer/value diagnostic.
-# Before the fix compilation succeeded, controls passed, then runtime FAIL
-# with exit 1.
-# This is a diagnostic repro, not a test that treats any exit 1 as success.
-#
-# Read only the first i32 of the corrupt entry, never its invalid string.
-# A valid aligned model pointer cannot have low 32 bits of -1. The initial
-# list allocation has room for four pointers, so this scalar read stays
-# within that allocation even though its element layout is wrong.
+# Origin: 9rooms_v2 BoardScreen.cp_tick, crash after "Zwingende Böe": a nested
+# `list<Model>.get()` (a pointer) pushed into a value list<Model> stored pointer bytes as
+# the model.  spec/71 retired `get(i)` on sequences; `{ at: [l, i] }` reads the element.
+# Pushed into a VALUE list it is a value copy; pushed into a list<ptr<M>> it is the
+# element's address.  Both must hold, and the value copy must not alias the source.
+# Expected exit code: 0
 
 - model:
     name: ReproCard
@@ -38,9 +25,9 @@
 
       # Control 1: materialize a model VALUE, then push it.
       - decl: [copied_cards, list<ReproCard>]
-      - decl: [value_copy, ReproCard, { call: [source_cards.get, 0] }]
+      - decl: [value_copy, ReproCard, { at: [source_cards, 0] }]
       - call: [copied_cards.push, value_copy]
-      - decl: [control, ref<ReproCard>, { call: [copied_cards.get, 0] }]
+      - decl: [control, ref<ReproCard>, { at: [copied_cards, 0] }]
       - if:
           condition: { '||': [{ neq: [control.marker, -1] }, { neq: [control.title, "Probe Card"] }] }
           then:
@@ -48,10 +35,10 @@
             - return: 2
       - print: ["PASS control: explicit model value copy"]
 
-      # Control 2: a nested get IS valid when the destination holds pointers.
-      - decl: [pointer_cards, list<ptr<ReproCard>>]
-      - call: [pointer_cards.push, { call: [source_cards.get, 0] }]
-      - decl: [pointer_card, ref<ReproCard>, { call: [pointer_cards.get, 0] }]
+      # Control 2: pushed into a list of borrows, the element is its address (spec/61 §5.4).
+      - decl: [pointer_cards, list<ref<ReproCard>>]
+      - call: [pointer_cards.push, { at: [source_cards, 0] }]
+      - decl: [pointer_card, ref<ReproCard>, { at: [pointer_cards, 0] }]
       - if:
           condition: { neq: [pointer_card.marker, -1] }
           then:
@@ -59,14 +46,14 @@
             - return: 2
       - print: ["PASS control: nested get into pointer list"]
 
-      # Reproduction: a pointer is silently stored as a model VALUE.
+      # Former reproduction: pushed into a VALUE list, the element is copied.
       - decl: [broken_cards, list<ReproCard>]
-      - call: [broken_cards.push, { call: [source_cards.get, 0] }]
-      - decl: [broken, ref<ReproCard>, { call: [broken_cards.get, 0] }]
+      - call: [broken_cards.push, { at: [source_cards, 0] }]
+      - decl: [broken, ref<ReproCard>, { at: [broken_cards, 0] }]
       - if:
           condition: { neq: [broken.marker, -1] }
           then:
             - print: ["FAIL nested get/push: model marker was replaced by pointer bytes"]
             - return: 1
-      - print: ["Nested get/push produced a value copy; review the intended get/push type contract"]
+      - print: ["PASS nested at/push: a value copy in a value list, an address in a pointer list"]
       - return: 0

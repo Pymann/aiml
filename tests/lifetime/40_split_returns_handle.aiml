@@ -15,11 +15,11 @@
     body:
       - decl: [email, string, "alice@example.com"]
       - decl: [parts, list<string>, { call: [email.split, "@"] }]
-      - decl: [np1, i32, { call: [parts.len] }]
+      - decl: [np1, i32, parts.len]
       - if: { condition: { neq: [np1, 2] }, then: [{ print: ["FAIL split @: len=${np1}, expected 2"] }, { return: 1 }] }
       - decl: [csv, string, "x.y.z.w"]
       - decl: [cells, list<string>, { call: [csv.split, "."] }]
-      - decl: [np2, i32, { call: [cells.len] }]
+      - decl: [np2, i32, cells.len]
       - if: { condition: { neq: [np2, 4] }, then: [{ print: ["FAIL split .: len=${np2}, expected 4"] }, { return: 1 }] }
       - print: ["PASS 40 split_returns_handle"]
       - return: 0

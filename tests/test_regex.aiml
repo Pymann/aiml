@@ -19,7 +19,7 @@
       - while:
           condition: { lt: [idx, parts.len] }
           body:
-            - decl: [part, string, { call: [parts.get, idx] }]
+            - decl: [part, string, { at: [parts, idx] }]
             - if: { condition: { gt: [idx, 0] }, then: [{ set: [text, "${text}|"] }] }
             - set: [text, "${text}${part}"]
             - set: [idx, { +: [idx, 1] }]

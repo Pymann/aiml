@@ -22,7 +22,7 @@
             - print: ["FAIL: sys.env (property form) empty (count=${prop_count})"]
             - call: [sys.exit, 1]
       - if:
-          condition: { neq: [{ call: [prop_env.contains, "PATH"] }, 1] }
+          condition: { neq: [{ call: [prop_env.has, "PATH"] }, 1] }
           then:
             - print: ["FAIL: sys.env (property form) without PATH"]
             - call: [sys.exit, 1]
@@ -45,7 +45,7 @@
       # PATH is present in virtually every process environment; verify a real
       # key resolves (not just that some entries exist).
       - if:
-          condition: { neq: [{ call: [envm.contains, "PATH"] }, 1] }
+          condition: { neq: [{ call: [envm.has, "PATH"] }, 1] }
           then:
             - print: ["FAIL: sys.env has no PATH entry"]
             - call: [sys.exit, 1]

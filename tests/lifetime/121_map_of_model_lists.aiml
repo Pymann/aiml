@@ -30,8 +30,8 @@
           body:
             - decl: [bucket, list<Item>]
             - call: [bucket.push, {call: [make_item, counter]}]
-            - call: [buckets.put, "b${{ '%': [counter, 4] }}", bucket]
+            - call: [buckets.set, "b${{ '%': [counter, 4] }}", bucket]
             - decl: [got, list<Item>, {call: [buckets.get, "b1"]}]
-            - if: {condition: {eq: [{ '%': [counter, 7]}, 0]}, then: [{call: [buckets.remove, "b2"]}]}
+            - if: {condition: {eq: [{ '%': [counter, 7]}, 0]}, then: [{call: [buckets.delete, "b2"]}]}
             - set: [counter, {+: [counter, 1]}]
       - return: 0

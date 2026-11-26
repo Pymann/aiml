@@ -30,7 +30,7 @@
       - call: [blk.push, 10]
       - call: [blk.push, 20]
       - call: [park, mtch, blk]
-      - decl: [cnt, i32, { call: [mtch.pick.eff.len] }]
+      - decl: [cnt, i32, mtch.pick.eff.len]
       - if: { condition: { neq: [cnt, 2] }, then: [{ print: ["FAIL deep-chain: eff.len=${cnt}, expected 2"] }, { return: 1 }] }
       - print: ["PASS 46 deep_chain_member_store"]
       - return: 0

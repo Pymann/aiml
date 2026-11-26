@@ -20,7 +20,7 @@
       - while:
           condition: { lt: [idx, parts.len] }
           body:
-            - decl: [part, string, { call: [parts.get, idx] }]
+            - decl: [part, string, { at: [parts, idx] }]
             - if: { condition: { gt: [idx, 0] }, then: [{ set: [text, "${text}|"] }] }
             - set: [text, "${text}${{ call: [part.substr, prefix.len] }}"]
             - set: [idx, { +: [idx, 1] }]
@@ -40,7 +40,7 @@
       - while:
           condition: { lt: [idx, names.len] }
           body:
-            - decl: [name, string, { call: [names.get, idx] }]
+            - decl: [name, string, { at: [names, idx] }]
             - call: [io.write_file, "${root}/${name}", "x"]
             - set: [idx, { +: [idx, 1] }]
 

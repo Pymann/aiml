@@ -863,6 +863,10 @@ namespace AIML {
     // result is discarded → the pop handler releases the drained element (aiml_list_pop_free) instead
     // of leaking it. Consumed (cleared) by the pop handler; only a top-level discarded pop sets it.
     bool                     popResultDiscarded = false;
+    // spec/71 §1.3: `{ at: [vals, i] }` on a value list<M> where a ref<M>/ptr<M> is wanted (a return,
+    // a set target) yields the element ADDRESS — what the retired `vals.get(i)` handed out.  Set by
+    // the consumer right before it evaluates the at-expression; visitAtExpr consumes it.
+    bool                     atAddressWanted = false;
 
     // Returns an AIML-source location prefix for diagnostic messages.
     // Format: "file:line: " or "file (in func): " or "file: " or "".

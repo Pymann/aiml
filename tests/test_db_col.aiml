@@ -13,12 +13,12 @@
 - set: [var_p.var_x, 10]
 - set: [var_p.var_y, 20]
 - set: [var_p.var_z, 30]
-- call: [parts.insert, var_p]
+- call: [parts.add, var_p]
 
 - set: [var_p.var_x, 40]
 - set: [var_p.var_y, 50]
 - set: [var_p.var_z, 60]
-- call: [parts.insert, var_p]
+- call: [parts.add, var_p]
 
 - decl: [got, ref<Particle>]
 - set: [got, { call: [parts.get, 1] }]
@@ -28,9 +28,9 @@
 - print: ["p2: ${got.var_x}, ${got.var_y}, ${got.var_z}"]
 
 - decl: [var_n, i32]
-- set: [var_n, { call: [parts.len] }]
+- set: [var_n, parts.len]
 - print: ["col len: ${var_n}"]
 
 - call: [parts.delete, 1]
-- set: [var_n, { call: [parts.len] }]
+- set: [var_n, parts.len]
 - print: ["after del: ${var_n}"]

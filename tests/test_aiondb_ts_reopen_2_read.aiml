@@ -21,7 +21,7 @@
       - set: [var_ts, { call: [db.open_timeseries, "reopen_ts_20260319", {persist: true, path: db_path}] }]
 
       - decl: [var_n, i32]
-      - set: [var_n, { call: [var_ts.len] }]
+      - set: [var_n, var_ts.len]
       - if:
           condition: { neq: [var_n, 2] }
           then:
@@ -29,7 +29,7 @@
             - call: [sys.exit, 1]
 
       - decl: [var_r1, ref<ReopenReading>]
-      - set: [var_r1, { call: [var_ts.at, 150] }]
+      - set: [var_r1, { call: [var_ts.at_time, 150] }]
       - if:
           condition: { neq: [var_r1.val, 11] }
           then:
@@ -37,7 +37,7 @@
             - call: [sys.exit, 1]
 
       - decl: [var_r2, ref<ReopenReading>]
-      - set: [var_r2, { call: [var_ts.at, 250] }]
+      - set: [var_r2, { call: [var_ts.at_time, 250] }]
       - if:
           condition: { neq: [var_r2.val, 22] }
           then:

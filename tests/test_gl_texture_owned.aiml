@@ -67,7 +67,7 @@
           access: public
           body:
             - decl: [tex, gl_texture, { call: [<.make, 2] }]
-            - call: [tex.delete]
+            - call: [tex.free]
 
       - def:
           name: view_of_target
@@ -75,14 +75,14 @@
           body:
             - decl: [target, gl_framebuffer, { call: [gl.create_framebuffer_format, 4, 4, gl.RGBA8, false] }]
             - decl: [view, gl_texture, { call: [target.color_texture] }]
-            - call: [view.delete]
+            - call: [view.free]
             - decl: [again, gl_texture, { call: [target.color_texture] }]
             - call: [gl.bind_framebuffer, target]
             - call: [gl.clear_all, 0.0, 1.0, 0.0, 1.0]
             - decl: [pixels, buffer<u8>, { call: [gl.read_rgba8, 0, 0, 1, 1] }]
             - call: [gl.bind_default_framebuffer]
-            - set: [<.total, { +: [<.total, { cast: [{ call: [pixels.get, 1] }, i32] }] }]
-            - call: [target.delete]
+            - set: [<.total, { +: [<.total, { cast: [{ at: [pixels, 1] }, i32] }] }]
+            - call: [target.free]
 
 - def:
     name: main

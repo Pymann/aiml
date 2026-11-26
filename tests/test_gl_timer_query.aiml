@@ -29,7 +29,7 @@
       - if: { condition: { lt: [elapsed, 0] }, then: [{ print: ["FAIL result ${elapsed}"] }, { set: [fails, { +: [fails, 1] }] }] }
       - if: { condition: { neq: [{ call: [first.result_ns] }, elapsed] }, then: [{ print: ["FAIL repeated read"] }, { set: [fails, { +: [fails, 1] }] }] }
       - if: { condition: { eq: [{ call: [second.begin] }, false] }, then: [{ print: ["FAIL begin after the first ended"] }, { set: [fails, { +: [fails, 1] }] }] }
-      - call: [second.delete]
+      - call: [second.free]
       - if: { condition: { neq: [second, null] }, then: [{ print: ["FAIL delete keeps slot"] }, { set: [fails, { +: [fails, 1] }] }] }
       - decl: [third, gl_timer_query, { call: [gl.create_timer_query] }]
       - if: { condition: { eq: [{ call: [third.begin] }, false] }, then: [{ print: ["FAIL delete did not end the active query"] }, { set: [fails, { +: [fails, 1] }] }] }

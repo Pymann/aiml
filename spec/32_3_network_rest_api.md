@@ -144,7 +144,7 @@ Handler signature: always `req: http_request_handle` and `resp: http_response_ha
       - set: [p, req.params]
       - decl: [id, string]
       - set: [id, { call: [p.get, "id"] }]
-      - call: [resp.headers.put, "Content-Type", "application/json"]
+      - call: [resp.headers.set, "Content-Type", "application/json"]
       - set: [resp.status, 200]
       - set: [resp.body, "{\"id\": \"${id}\", \"name\": \"Alice\"}"]
       - call: [resp.send]
@@ -155,7 +155,7 @@ Handler signature: always `req: http_request_handle` and `resp: http_response_ha
     body:
       - decl: [body, string]
       - set: [body, req.body]
-      - call: [resp.headers.put, "Content-Type", "application/json"]
+      - call: [resp.headers.set, "Content-Type", "application/json"]
       - set: [resp.status, 201]
       - set: [resp.body, "{\"created\": true}"]
       - call: [resp.send]
@@ -194,7 +194,7 @@ Handler signature: always `req: http_request_handle` and `resp: http_response_ha
       # a missing header is the EMPTY string, never a null pointer
 
       - print: ["Search: ${q}, limit: ${limit}, auth: ${auth}"]
-      - call: [resp.headers.put, "Content-Type", "application/json"]
+      - call: [resp.headers.set, "Content-Type", "application/json"]
       - set: [resp.status, 200]
       - set: [resp.body, "[]"]
       - call: [resp.send]
@@ -214,7 +214,7 @@ the actual handler is skipped.
       - set: [tok, { call: [req.header, "Authorization"] }]
       - if: [{ call: [tok.is_empty] }, true]
         then:
-          - call: [resp.headers.put, "Content-Type", "application/json"]
+          - call: [resp.headers.set, "Content-Type", "application/json"]
           - set: [resp.status, 401]
           - set: [resp.body, "{\"error\":\"unauthorized\"}"]
           - call: [resp.send]

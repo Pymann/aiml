@@ -30,8 +30,8 @@
       - decl: [obj, ptr<Empty>, { new: Empty }]
       - decl: [got, map<string:i32>, { call: [obj.give] }]
       # mutate: undef data/size/cap → put reallocs over garbage → SIGSEGV.
-      - call: [got.put, "9", 9]
-      - decl: [has, i32, { call: [got.contains, "1"] }]
+      - call: [got.set, "9", 9]
+      - decl: [has, i32, { call: [got.has, "1"] }]
       - if:
           condition: { eq: [has, 0] }
           then: [{ print: ["PASS bodyless_struct_return: empty map, no crash"] }]

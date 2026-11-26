@@ -17,7 +17,7 @@
     body:
       - decl: [crc, ptr<ThingCard>, { new: ThingCard }]
       - decl: [prod, map<string:i32>, { call: [crc.get_produces] }]
-      - decl: [has1, i32, { call: [prod.contains, "1"] }]
+      - decl: [has1, i32, { call: [prod.has, "1"] }]
       - if: { condition: { neq: [has1, 0] }, then: [{ print: ["FAIL bodyless: empty map reports contains=1"] }, { return: 1 }] }
       - print: ["PASS 43 bodyless_container_return"]
       - return: 0

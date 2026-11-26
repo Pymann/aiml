@@ -17,7 +17,7 @@
           body:
             - decl: [row, list<string>]
             - call: [row.push, "v${pos}"]
-            - call: [out.put, pos, row]
+            - call: [out.set, pos, row]
             - set: [pos, {+: [pos, 1]}]
       - return: out
 - def:
@@ -45,9 +45,9 @@
             - if: {condition: {neq: [{at: [kept, 0]}, "v7"]}, then: [{return: 82}]}
             - decl: [nested, map<string:map<string:i32>>]
             - decl: [inner, map<string:i32>]
-            - call: [inner.put, "a", 1]
-            - call: [nested.put, "x", inner]
-            - call: [nested.put, "y", inner]
+            - call: [inner.set, "a", 1]
+            - call: [nested.set, "x", inner]
+            - call: [nested.set, "y", inner]
             - decl: [back, map<string:i32>, {call: [nested.get, "y"]}]
             - if: {condition: {neq: [back.len, 1]}, then: [{return: 83}]}
             - decl: [shallow, map<i32:list<string>>, {copy: grid}]
@@ -60,7 +60,7 @@
             - decl: [hold, Holder]
             - decl: [hrow, list<i32>]
             - call: [hrow.push, 11]
-            - call: [hold.rows.put, "r", hrow]
+            - call: [hold.rows.set, "r", hrow]
             - call: [store.set, "h", hold]
             - decl: [again, Holder, {call: [store.get_copy, "h"]}]
             - decl: [arow, list<i32>, {call: [again.rows.get, "r"]}]

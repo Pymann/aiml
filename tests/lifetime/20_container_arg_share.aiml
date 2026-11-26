@@ -17,7 +17,7 @@
     name: put_one
     args: [[itm, "map<string:i32>"]]
     body:
-      - call: [itm.put, "b", 2]
+      - call: [itm.set, "b", 2]
 
 - def:
     name: main
@@ -29,7 +29,7 @@
       - call: [add_two, nums]                 # callee pushes into the SHARED list
       - if: { condition: { neq: [nums.len, 3] }, then: [{ print: ["FAIL list arg not shared len=${nums.len}"] }, { return: 1 }] }
       - decl: [tab, "map<string:i32>"]
-      - call: [tab.put, "a", 1]
+      - call: [tab.set, "a", 1]
       - call: [put_one, tab]                  # callee puts into the SHARED map
       - if: { condition: { neq: [tab.len, 2] }, then: [{ print: ["FAIL map arg not shared len=${tab.len}"] }, { return: 1 }] }
       - if: { condition: { neq: [{ call: [tab.get, "b"] }, 2] }, then: [{ print: ["FAIL map arg get"] }, { return: 1 }] }

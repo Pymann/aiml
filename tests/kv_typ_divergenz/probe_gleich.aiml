@@ -46,7 +46,7 @@
       - decl: [spei, ptr<Speicher>, { new: Speicher }]
       - call: [spei.oeffne]
       - decl: [zur, Fund, { call: [spei.hole, "schluessel"] }]
-      - decl: [zahl, i32, { call: [zur.marken.len] }]
+      - decl: [zahl, i32, zur.marken.len]
       - if:
           condition: { eq: [zur.name, "Gate Wraith"] }
           then:

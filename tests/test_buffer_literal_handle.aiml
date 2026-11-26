@@ -12,7 +12,7 @@
           return: f32
           body:
             - decl: [cols, buffer<f32>, [0.16, 0.84, 0.5]]
-            - if: { condition: { neq: [cols.len, 12] }, then: [{ print: ["FAIL method len ${cols.len}"] }, { return: -1.0 }] }
+            - if: { condition: { neq: [cols.byte_len, 12] }, then: [{ print: ["FAIL method len ${cols.byte_len}"] }, { return: -1.0 }] }
             - call: [cols.seek, 4]
             - return: { call: [cols.read, f32] }
 - def:
@@ -20,7 +20,7 @@
     return: i32
     body:
       - decl: [top, buffer<f32>, [0.4, 0.6]]
-      - if: { condition: { neq: [top.len, 8] }, then: [{ print: ["FAIL top len ${top.len}"] }, { return: 1 }] }
+      - if: { condition: { neq: [top.byte_len, 8] }, then: [{ print: ["FAIL top len ${top.byte_len}"] }, { return: 1 }] }
       - call: [top.seek, 0]
       - decl: [first, f32, { call: [top.read, f32] }]
       - decl: [want_first, f32, 0.4]

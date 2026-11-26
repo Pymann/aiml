@@ -25,7 +25,7 @@
           name: add
           args: [[key, string], [idx, i32]]
           body:
-            - call: [<.vocab_index.put, key, idx]
+            - call: [<.vocab_index.set, key, idx]
 
 - def:
     name: lookup
@@ -33,7 +33,7 @@
     return: i32
     body:
       - if:
-          condition: { neq: [{ call: [vocab_index.contains, key] }, 0] }
+          condition: { neq: [{ call: [vocab_index.has, key] }, 0] }
           then: [{ return: { call: [vocab_index.get, key] } }]
       - return: -1
 

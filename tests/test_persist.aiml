@@ -16,7 +16,7 @@
       - set: [players, { call: [db.open, "players", {persist: true, path: db_dir}] }]
 
       - decl: [var_n0, i32]
-      - set: [var_n0, { call: [players.len] }]
+      - set: [var_n0, players.len]
       - if:
           condition: { neq: [var_n0, 0] }
           then:
@@ -28,7 +28,7 @@
       - set: [var_p1.level, 42]
 
       - decl: [id1, i32]
-      - set: [id1, { call: [players.insert, var_p1] }]
+      - set: [id1, { call: [players.add, var_p1] }]
       - if:
           condition: { neq: [id1, 1] }
           then:
@@ -36,7 +36,7 @@
             - call: [sys.exit, 1]
 
       - decl: [var_n1, i32]
-      - set: [var_n1, { call: [players.len] }]
+      - set: [var_n1, players.len]
       - if:
           condition: { neq: [var_n1, 1] }
           then:

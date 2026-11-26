@@ -22,7 +22,7 @@
       - decl: [src, Rec]
       - set: [src.label, "survivor-${seed}"]
       - call: [src.tags.push, seed]
-      - call: [src.mana.put, "fire", seed]
+      - call: [src.mana.set, "fire", seed]
       - set: [src.inner.tag, "inner-${seed}"]
       - call: [src.inner.nums.push, 99]
       - call: [rows.push, src]

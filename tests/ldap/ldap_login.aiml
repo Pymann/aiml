@@ -51,7 +51,7 @@
       - decl: [filter, string, "(uid=${login_esc})"]
       - decl: [dns, list<string>, { call: [conn.search_dns, base, filter] }]
       - set: [fails, { +: [fails, { call: [check, "search one user", dns.len, 1] }] }]
-      - decl: [first_dn, string, { call: [dns.get, 0] }]
+      - decl: [first_dn, string, { at: [dns, 0] }]
       - set: [fails, { +: [fails, { call: [check, "search finds alice", { call: [first_dn.index_of, "uid=alice"] }, 0] }] }]
 
       # filter injection: a '*' login must not match everyone
@@ -67,7 +67,7 @@
       - set: [fails, { +: [fails, { call: [check, "group has one member", members.len, 1] }] }]
       - set: [fails, { +: [fails, { call: [check, "alice is in devs", { call: [members.contains, alice] }, 1] }] }]
       - decl: [mails, list<string>, { call: [conn.attr_values, alice, "mail"] }]
-      - decl: [mail, string, { call: [mails.get, 0] }]
+      - decl: [mail, string, { at: [mails, 0] }]
       - decl: [mail_ok, i32, 0]
       - if:
           condition: { eq: [mail, "alice@example.org"] }

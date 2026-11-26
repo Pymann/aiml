@@ -23,7 +23,7 @@
           body:
             - decl: [one, shared<Item>, {share: {new: Item}}]
             - set: [one.label, "s-${counter}"]
-            - call: [shared_idx.put, "k${{ '%': [counter, 3] }}", one]
+            - call: [shared_idx.set, "k${{ '%': [counter, 3] }}", one]
             - decl: [back, shared<Item>, {call: [shared_idx.get, "k1"]}]
             - if: {condition: {pneq: [back, null]}, then: [{set: [back.label, "b-${counter}"]}]}
             - set: [counter, {+: [counter, 1]}]

@@ -3152,7 +3152,7 @@ void Compiler::synthesizeServices(Program* prog) {
                     "    static_off: [\"str_cmp\", \"same_arg\", \"lines\"]\n    body:\n"
                     "      - decl: [plain, JsonStyle]\n"
                     "      - set: [plain.bare, 1]\n"
-                    "      - call: [htresp.headers.put, \"Content-Type\", \"application/json\"]\n"
+                    "      - call: [htresp.headers.set, \"Content-Type\", \"application/json\"]\n"
                     "      - decl: [raw_body, string]\n"
                     "      - set: [raw_body, htreq.body]\n"
                     "      - decl: [model, " + ep.requestType + "]\n"
@@ -7875,6 +7875,32 @@ IRValue* Compiler::resolveProperty(Symbol* baseSym, const std::string& propName)
             uint64_t bEsz = bdl.getTypeAllocSize(bElemTy);
             if (bEsz <= 1) return ctx.ir_gen->wrap(bytes);
             return ctx.ir_gen->wrap(ctx.builder.CreateSDiv(bytes, ctx.builder.getInt32((uint32_t)bEsz), "buf_elems"));
+        }
+
+        // spec/71 §2 on the HTTP parser maps (`req.params.len`, `resp.headers.empty`): the field
+        // accessor hands out the raw AimlHttpMap, whose element count answers the query.
+        {
+            size_t qd = propName.rfind('.');
+            std::string fld = qd == std::string::npos ? "" : propName.substr(0, qd);
+            std::string qn  = qd == std::string::npos ? "" : propName.substr(qd + 1);
+            const bool mapField = fld == "headers" || fld == "params" || fld == "cookies";
+            if (classInfo->isBuiltin && classInfo->preLoadBase && (qn == "len" || qn == "empty") &&
+                mapField && classInfo->builtinMethods.count(fld)) {
+                auto* i8pq = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Value* hb = ctx.builder.CreateLoad(i8pq, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), "h_base_q");
+                auto dummyEval = [](AIML::AST::Expr*) -> AIML::IRValue* { return nullptr; };
+                bool prevRawView = ctx.httpMapRawView;
+                ctx.httpMapRawView = true;
+                IRValue* fv = classInfo->builtinMethods.at(fld)(ctx, hb, nullptr, dummyEval);
+                ctx.httpMapRawView = prevRawView;
+                if (fv) {
+                    llvm::Value* n = ctx.builder.CreateCall(ctx.getFunction("aiml_http_map_len", ctx.builder.getInt32Ty(), {i8pq}),
+                                                            {static_cast<llvm::Value*>(ctx.ir_gen->unwrap(fv))}, "http_map_len");
+                    if (qn == "len") return ctx.ir_gen->wrap(n);
+                    return ctx.ir_gen->wrap(ctx.builder.CreateZExt(ctx.builder.CreateICmpEQ(n, ctx.builder.getInt32(0)),
+                                                                   ctx.builder.getInt32Ty(), "http_map_empty"));
+                }
+            }
         }
 
         // Builtin property getter: dispatch builtinMethod with same name (zero-arg accessor).

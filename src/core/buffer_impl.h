@@ -66,6 +66,20 @@ namespace BufferImpl {
         uint64_t typeSize = dl.getTypeAllocSize(type);
         llvm::Value* typeSizeVal = ctx.builder.getInt32(typeSize);
         
+        // spec/11 §Exception Behaviour: writeIndex + sizeof(value) > capacity raises
+        // BufferOverflowException (nothing is written).  Skipped in compiler-synthesized helpers,
+        // which size their own buffers (a throw there would unwind with the caller's cleanups).
+        {
+            llvm::Function* pf = ctx.builder.GetInsertBlock()->getParent();
+            if (!(pf->hasInternalLinkage() && pf->getName().starts_with("__aiml_"))) {
+                llvm::Value* capV = ctx.builder.CreateLoad(ctx.builder.getInt32Ty(),
+                                        ctx.builder.CreateStructGEP(bufType, bufPtr, 1), "buf_cap");
+                llvm::Value* over = ctx.builder.CreateICmpSGT(ctx.builder.CreateAdd(writeIdx, typeSizeVal), capV, "buf_over");
+                AIML::AST::aimlEmitThrowIf(ctx, over, "BufferOverflowException",
+                    ctx.builder.CreateGlobalStringPtr("buffer write past its capacity (alloc more first)", "buf_over_msg"));
+            }
+        }
+
         // Get Data Pointer
         llvm::Value* dataPtrPtr = ctx.builder.CreateStructGEP(bufType, bufPtr, 4);
         llvm::Value* dataPtr = ctx.builder.CreateLoad(ctx.builder.getInt8Ty()->getPointerTo(), dataPtrPtr);
@@ -115,7 +129,19 @@ namespace BufferImpl {
         // Get Read Index
         llvm::Value* readIdxPtr = ctx.builder.CreateStructGEP(bufType, bufPtr, 2);
         llvm::Value* readIdx = ctx.builder.CreateLoad(ctx.builder.getInt32Ty(), readIdxPtr);
-        // ... (rest of read logic)
+        // spec/11 §Exception Behaviour: reading past the written data raises BufferUnderflowException.
+        {
+            llvm::Function* pf = ctx.builder.GetInsertBlock()->getParent();
+            if (!(pf->hasInternalLinkage() && pf->getName().starts_with("__aiml_"))) {
+                uint64_t rsz = ctx.module().getDataLayout().getTypeAllocSize(type);
+                llvm::Value* sizeV = ctx.builder.CreateLoad(ctx.builder.getInt32Ty(),
+                                         ctx.builder.CreateStructGEP(bufType, bufPtr, 0), "buf_size");
+                llvm::Value* under = ctx.builder.CreateICmpSGT(
+                    ctx.builder.CreateAdd(readIdx, ctx.builder.getInt32((uint32_t)rsz)), sizeV, "buf_under");
+                AIML::AST::aimlEmitThrowIf(ctx, under, "BufferUnderflowException",
+                    ctx.builder.CreateGlobalStringPtr("buffer read past the written data", "buf_under_msg"));
+            }
+        }
         
         // Get Data Pointer
         llvm::Value* dataPtrPtr = ctx.builder.CreateStructGEP(bufType, bufPtr, 4);

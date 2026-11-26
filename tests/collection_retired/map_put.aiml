@@ -1,3 +1,4 @@
+# Requires: driver
 # spec/71 §8: retired name -> compile error naming the replacement.
 - class:
     name: Row

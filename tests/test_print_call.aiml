@@ -43,5 +43,5 @@
           body:
             - print: [{ call: [make_line, round] }]
             - set: [round, { +: [round, 1] }]
-      - print: ["${ { call: [text.len] } } chars"]
+      - print: ["${text.len} chars"]
       - return: 0

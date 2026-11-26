@@ -24,7 +24,7 @@
     name: add_slot
     args: [[itr, Reg]]
     body:
-      - call: [itr.slots.put, "hot", 7]
+      - call: [itr.slots.set, "hot", 7]
 
 - def:
     name: main
@@ -33,7 +33,7 @@
     body:
       - decl: [reg, Reg]
       - set: [reg.seq, 1]
-      - call: [reg.slots.put, "base", 1]
+      - call: [reg.slots.set, "base", 1]
       - call: [bump_seq, reg]
       - if: { condition: { neq: [reg.seq, 1] }, then: [{ print: ["FAIL scalar leaked ${reg.seq}"] }, { return: 1 }] }
       - call: [add_slot, reg]

@@ -23,7 +23,7 @@
             - call: [inner.push, idx]
             - call: [abil.cost.push, inner]
             - decl: [vieww, list<i32>]
-            - set: [vieww, { call: [abil.cost.get, 0] }]   # vieww binds a VIEW of abil's inner buffer
+            - set: [vieww, { at: [abil.cost, 0] }]   # vieww binds a VIEW of abil's inner buffer
             # vieww + abil dropped at loop-body exit → vieww's drop MUST be suppressed (view), abil owns it
             - set: [idx, { +: [idx, 1] }]
 - def:

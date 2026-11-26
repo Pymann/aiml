@@ -10,7 +10,7 @@
     args: [[resp, http_response_handle], [status, i32], [where, string]]
     body:
       - set: [resp.status, status]
-      - call: [resp.headers.put, "location", where]
+      - call: [resp.headers.set, "location", where]
       - call: [resp.send]
 
 - def:
@@ -96,7 +96,7 @@
     name: send_blob
     args: [[req, http_request_handle], [resp, http_response_handle]]
     body:
-      - call: [resp.headers.put, "content-type", "application/octet-stream"]
+      - call: [resp.headers.set, "content-type", "application/octet-stream"]
       - set: [resp.body_file, "/tmp/aiml_http_redirects_src.bin"]
       - call: [resp.send]
 

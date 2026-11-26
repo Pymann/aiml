@@ -30,7 +30,7 @@
           args: [[idx, i32]]
           return: string
           body:
-            - decl: [bag, Bag, { call: [<.bags.get, idx] }]
+            - decl: [bag, Bag, { at: [<.bags, idx] }]
             - return: bag.name
 
 - def:

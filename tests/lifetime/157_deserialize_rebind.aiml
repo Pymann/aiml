@@ -15,7 +15,7 @@
             - decl: [entry, Entry]
             - set: [entry.name, "e-${counter}"]
             - call: [entry.tags.push, "t"]
-            - call: [entry.meta.put, "k", "v-${counter}"]
+            - call: [entry.meta.set, "k", "v-${counter}"]
             - decl: [wire, string, { call: [sys.serialize, entry] }]
             - decl: [back, Entry, { call: [sys.deserialize, wire] }]
             - if: {condition: {neq: [back.name, "e-${counter}"]}, then: [{return: 1}]}

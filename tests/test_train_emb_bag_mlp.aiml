@@ -90,8 +90,8 @@
                 condition: { lt: [var_i, var_n] }
                 body:
                   - decl: [tid, i32, { at: [ids, var_i] }]
-                  - decl: [cur, f32, { call: [bag.get, tid] }]
-                  - call: [bag.set, tid, { "+": [cur, inv_n] }]
+                  - decl: [cur, f32, { at: [bag, tid] }]
+                  - idx: [bag, tid, { "+": [cur, inv_n] }]
                   - set: [var_i, { "+": [var_i, 1] }]
 
             - decl: [mean_e_2d, tensor, { call: [tensor.matmul, bag, emb] }]

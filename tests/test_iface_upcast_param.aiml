@@ -49,7 +49,7 @@
     body:
       - decl: [icon, string, { call: [verhalten.tile_icon_path] }]
       - call: [log.info, "stelle_auf ${tid}: icon=${icon}"]
-      - call: [karte.put, tid, verhalten]
+      - call: [karte.set, tid, verhalten]
 
 - def:
     name: main
@@ -75,7 +75,7 @@
       # (c) read out and call virtually again -- in the client the tooltip.
       - decl: [aus_karte, string, ""]
       - if:
-          condition: { eq: [{ call: [karte.contains, "hammer"] }, 1] }
+          condition: { eq: [{ call: [karte.has, "hammer"] }, 1] }
           then:
             - decl: [zurueck, ref<Tileish>, { call: [karte.get, "hammer"] }]
             - set: [aus_karte, { call: [zurueck.tile_name] }]

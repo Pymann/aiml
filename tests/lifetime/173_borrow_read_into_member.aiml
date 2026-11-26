@@ -38,7 +38,7 @@
     args: [[recs, list<Rec>]]
     body:
       - decl: [names, map<string:string>]
-      - call: [names.put, "key", "map_value"]
+      - call: [names.set, "key", "map_value"]
       - decl: [rec, Rec]
       - set: [rec.name, { call: [names.get, "key"] }]
       - call: [recs.push, rec]
@@ -62,7 +62,7 @@
     args: [[out, list<string>]]
     body:
       - decl: [names, map<string:string>]
-      - call: [names.put, "key", "pushed_value"]
+      - call: [names.set, "key", "pushed_value"]
       - call: [out.push, { call: [names.get, "key"] }]
 
 # 4) map.get -> idx: (overwrite a list element)
@@ -72,7 +72,7 @@
     args: [[out, list<string>]]
     body:
       - decl: [names, map<string:string>]
-      - call: [names.put, "key", "indexed_value"]
+      - call: [names.set, "key", "indexed_value"]
       - call: [out.push, "placeholder"]
       - idx: [out, { -: [out.len, 1] }, { call: [names.get, "key"] }]
 
@@ -82,8 +82,8 @@
     args: [[out, map<string:string>]]
     body:
       - decl: [names, map<string:string>]
-      - call: [names.put, "key", "copied_value"]
-      - call: [out.put, "key", { call: [names.get, "key"] }]
+      - call: [names.set, "key", "copied_value"]
+      - call: [out.set, "key", { call: [names.get, "key"] }]
 
 # 6) counter-probe: OWNED sources (interpolation, literal) into the model field
 - def:

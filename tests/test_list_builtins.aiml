@@ -62,19 +62,19 @@
       - call: [check, "contains_miss",  { call: [nums.contains, 99] }, 0]
       - call: [check, "index_of_first", { call: [nums.index_of, 20] }, 1]
       - call: [check, "index_of_miss",  { call: [nums.index_of, 99] }, -1]
-      - call: [check, "count_dup",      { call: [nums.count, 20] }, 2]
-      - call: [check, "count_zero",     { call: [nums.count, 99] }, 0]
+      - call: [check, "count_dup",      { call: [nums.count_of, 20] }, 2]
+      - call: [check, "count_zero",     { call: [nums.count_of, 99] }, 0]
 
       # ── empty list ──
       - decl: [emp, list<i32>]
       - call: [check, "empty_contains", { call: [emp.contains, 1] }, 0]
       - call: [check, "empty_index_of", { call: [emp.index_of, 1] }, -1]
-      - call: [check, "empty_count",    { call: [emp.count, 1] }, 0]
+      - call: [check, "empty_count",    { call: [emp.count_of, 1] }, 0]
 
       # ── remove_value (only the first hit) ──
       - call: [check, "rmv_hit",  { call: [nums.remove_value, 20] }, 1]
       - call: [check, "rmv_len",  nums.len, 3]
-      - call: [check, "rmv_left", { call: [nums.count, 20] }, 1]     # one 20 stays
+      - call: [check, "rmv_left", { call: [nums.count_of, 20] }, 1]     # one 20 stays
       - call: [check, "rmv_miss", { call: [nums.remove_value, 99] }, 0]
 
       # ── string contains: content equality with a separately built string ──
@@ -195,7 +195,7 @@
           condition: { lt: [shcnt, 6] }
           body:
             - call: [check, "shuf_multiset", { call: [shuf.contains, shcnt] }, 1]
-            - call: [check, "shuf_count1",   { call: [shuf.count, shcnt] }, 1]
+            - call: [check, "shuf_count1",   { call: [shuf.count_of, shcnt] }, 1]
             - set: [shcnt, { +: [shcnt, 1] }]
 
       - print: ["PASS test_list_builtins"]

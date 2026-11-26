@@ -47,7 +47,7 @@
       - if:
           condition: { ">": [words_direct.len, 0] }
           then:
-            - decl: [var_w0, string, { call: [words_direct.get, 0] }]
+            - decl: [var_w0, string, { at: [words_direct, 0] }]
             - if:
                 condition: { eq: [var_w0, "alpha"] }
                 then:

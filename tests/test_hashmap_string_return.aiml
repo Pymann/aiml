@@ -34,13 +34,13 @@
           name: keep
           args: [[name, string], [value, string]]
           body:
-            - call: [<.roles.put, name, value]
+            - call: [<.roles.set, name, value]
       - def:
           name: name_at
           args: [[index, i32]]
           return: string
           body:
-            - return: { call: [<.names.get, index] }
+            - return: { at: [<.names, index] }
       - def:
           name: render_list
           args: []
@@ -68,8 +68,8 @@
       - decl: [slot, i32, 0]
       - while: [{ lt: [slot, 1] }]
         body:
-          - decl: [first, string, { call: [found.get, 0] }]
-          - decl: [second, string, { call: [found.get, 1] }]
+          - decl: [first, string, { at: [found, 0] }]
+          - decl: [second, string, { at: [found, 1] }]
           - call: [table.keep, "programm", first]
           - call: [table.keep, "programm.name", second]
           - set: [slot, { +: [slot, 1] }]

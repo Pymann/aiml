@@ -29,7 +29,7 @@
                 condition: { lt: [round, 50] }
                 body:
                   - decl: [noise, string, "noise ${round} noise ${round} noise"]
-                  - set: [round, { +: [{ call: [noise.len] }, { -: [round, { call: [noise.len] }] }] }]
+                  - set: [round, { +: [noise.len, { -: [round, noise.len] }] }]
                   - set: [round, { +: [round, 1] }]
 - def:
     name: main

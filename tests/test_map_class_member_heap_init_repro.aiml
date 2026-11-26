@@ -9,8 +9,8 @@
 
 - decl: [box, ptr<MapBox>, { new: MapBox }]   # spec/18: `new` -> ptr<T>
 
-- call: [box.scores.put, "alice", 7]
-- call: [box.scores.put, "bob", 9]
+- call: [box.scores.set, "alice", 7]
+- call: [box.scores.set, "bob", 9]
 
 - decl: [var_n, i32, box.scores.len]
 - if:

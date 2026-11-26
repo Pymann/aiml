@@ -35,7 +35,7 @@
 # ── Phase C: Scene-Listen ─────────────────────────────────────────────────
 
 - decl: [nodes, list<gltf_node>, { call: [scene.nodes] }]
-- decl: [var_nc, i32, { call: [nodes.len] }]
+- decl: [var_nc, i32, nodes.len]
 - print: ["Phase C: nodes.len=${var_nc}"]
 - if: [{ <: [var_nc, 1] }, true]
   then:
@@ -43,7 +43,7 @@
     - call: [sys.exit, 1]
 
 - decl: [meshes, list<gltf_mesh>, { call: [scene.meshes] }]
-- decl: [var_mc, i32, { call: [meshes.len] }]
+- decl: [var_mc, i32, meshes.len]
 - print: ["Phase C: meshes.len=${var_mc}"]
 - if: [{ <: [var_mc, 1] }, true]
   then:
@@ -51,7 +51,7 @@
     - call: [sys.exit, 1]
 
 - decl: [mats, list<gltf_material>, { call: [scene.materials] }]
-- decl: [matc, i32, { call: [mats.len] }]
+- decl: [matc, i32, mats.len]
 - print: ["Phase C: materials.len=${matc}"]
 - if: [{ <: [matc, 1] }, true]
   then:
@@ -63,7 +63,7 @@
 # ── Phase D: node properties ────────────────────────────────────────────
 
 - decl: [node, gltf_node]
-- set: [node, { call: [nodes.get, 0] }]
+- set: [node, { at: [nodes, 0] }]
 - decl: [node_name, string, { call: [node.name] }]
 - print: ["Phase D: node.name=${node_name}"]
 
@@ -85,7 +85,7 @@
 # ── Phase E: Mesh + Primitive ──────────────────────────────────────────────
 
 - decl: [mesh, gltf_mesh]
-- set: [mesh, { call: [meshes.get, 0] }]
+- set: [mesh, { at: [meshes, 0] }]
 - decl: [mesh_name, string, { call: [mesh.name] }]
 - print: ["Phase E: mesh.name=${mesh_name}"]
 
@@ -115,27 +115,27 @@
 # ── Phase F: Vertex-Buffer ─────────────────────────────────────────────────
 
 - decl: [positions, buffer<f32>, { call: [prim.positions] }]
-- decl: [pos_bytes, i32, { call: [positions.len] }]
-- print: ["Phase F: positions.len=${pos_bytes}"]
+- decl: [pos_bytes, i32, positions.byte_len]
+- print: ["Phase F: positions.byte_len=${pos_bytes}"]
 - if: [{ <: [pos_bytes, 1] }, true]
   then:
     - print: ["FAIL: expected positions bytes > 0"]
     - call: [sys.exit, 1]
 
 - decl: [indices, buffer<u32>, { call: [prim.indices] }]
-- decl: [idx_bytes, i32, { call: [indices.len] }]
-- print: ["Phase F: indices.len=${idx_bytes}"]
+- decl: [idx_bytes, i32, indices.byte_len]
+- print: ["Phase F: indices.byte_len=${idx_bytes}"]
 - if: [{ <: [idx_bytes, 1] }, true]
   then:
     - print: ["FAIL: expected indices bytes > 0"]
     - call: [sys.exit, 1]
 
 # read the first position value (x of the first position)
-- decl: [var_x0, f32, { call: [positions.get, 0] }]
+- decl: [var_x0, f32, { at: [positions, 0] }]
 - print: ["Phase F: positions[0]=${var_x0}"]
 
 # read the first index
-- decl: [var_i0, u32, { call: [indices.get, 0] }]
+- decl: [var_i0, u32, { at: [indices, 0] }]
 - print: ["Phase F: indices[0]=${var_i0}"]
 
 - print: ["Phase F OK"]

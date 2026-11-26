@@ -26,7 +26,7 @@
       - decl: [ent, Entry]
       - set:  [ent.iid,        "IID_${tag}"]
       - set:  [ent.card_id,    "CARDID_MARKER_${tag}_ABCDEF"]
-      - call: [ent.open_cost.put, "red", 3]
+      - call: [ent.open_cost.set, "red", 3]
       - set:  [ent.equipped_to, "EQ_${tag}"]
       - call: [ent.items.push, "ITEM_${tag}"]
       - call: [plr.entries.push, ent]

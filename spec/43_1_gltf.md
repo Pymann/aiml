@@ -50,10 +50,10 @@
 # All root nodes of the first scene
 - decl: [nodes, list<gltf_node>, { call: [scene.nodes] }]
 - decl: [i, i32, 0]
-- while: [{ <: [i, { call: [nodes.len] }] }]
+- while: [{ <: [i, nodes.len] }]
   body:
     - decl: [node, gltf_node]
-    - set: [node, { call: [nodes.get, i] }]
+    - set: [node, { at: [nodes, i] }]
     - decl: [name, string, { call: [node.name] }]
     - print: ["node: ${name}"]
     - set: [i, { +: [i, 1] }]
@@ -67,7 +67,7 @@
 ## 4. Mesh Access
 
 ```aiml
-- decl: [mesh, gltf_mesh, { call: [meshes.get, 0] }]
+- decl: [mesh, gltf_mesh, { at: [meshes, 0] }]
 - decl: [name, string, { call: [mesh.name] }]
 - decl: [prim_count, i32, { call: [mesh.primitive_count] }]
 - print: ["mesh '${name}' has ${prim_count} primitives"]
@@ -167,7 +167,7 @@ while its scene is loaded.
 ## 7. Node Transform
 
 ```aiml
-- decl: [node, gltf_node, { call: [nodes.get, 0] }]
+- decl: [node, gltf_node, { at: [nodes, 0] }]
 
 # TRS components (local space)
 - decl: [tx, f32, { call: [node.translation_x] }]
@@ -201,7 +201,7 @@ while its scene is loaded.
 ```aiml
 # All animation clips
 - decl: [anims, list<gltf_animation>, { call: [scene.animations] }]
-- decl: [anim, gltf_animation, { call: [anims.get, 0] }]
+- decl: [anim, gltf_animation, { at: [anims, 0] }]
 
 - decl: [anim_name, string, { call: [anim.name] }]
 - decl: [duration,  f32,    { call: [anim.duration] }]   # seconds
@@ -365,7 +365,7 @@ The buffer<f32>/buffer<u32> return values are directly suitable for `glBufferDat
 ```aiml
 # OpenGL (via FFI)
 - call: [glBindBuffer, GL_ARRAY_BUFFER, vbo]
-- call: [glBufferData, GL_ARRAY_BUFFER, { call: [positions.byte_len] }, { call: [positions.ptr] }, GL_STATIC_DRAW]
+- call: [glBufferData, GL_ARRAY_BUFFER, positions.byte_len, { call: [positions.ptr] }, GL_STATIC_DRAW]
 ```
 
 Details on OpenGL/Vulkan integration → Chapter 43.2.

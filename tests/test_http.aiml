@@ -74,7 +74,7 @@
       - print: ["server: ${var_m} ${var_p}"]
       - set: [resp.status, 200]
       - set: [resp.body, "hello from aiml"]
-      - call: [resp.headers.put, "Content-Type", "text/plain"]
+      - call: [resp.headers.set, "Content-Type", "text/plain"]
       - call: [resp.send]
 
 - def:

@@ -14,11 +14,11 @@
 - decl: [var_u, User]
 - set: [var_u.username, "alice"]
 - set: [var_u.score, 100]
-- call: [users.insert, var_u]
+- call: [users.add, var_u]
 
 - set: [var_u.username, "bob"]
 - set: [var_u.score, 200]
-- call: [users.insert, var_u]
+- call: [users.add, var_u]
 
 - decl: [found, ptr<User>]
 - set: [found, { call: [users.get_by_key, "alice"] }]
@@ -39,11 +39,11 @@
 - decl: [var_it, Item]
 - set: [var_it.item_id, 42]
 - set: [var_it.value, 999]
-- call: [items.insert, var_it]
+- call: [items.add, var_it]
 
 - set: [var_it.item_id, 7]
 - set: [var_it.value, 777]
-- call: [items.insert, var_it]
+- call: [items.add, var_it]
 
 - decl: [var_fi, ptr<Item>]
 - set: [var_fi, { call: [items.get_by_key, 7] }]

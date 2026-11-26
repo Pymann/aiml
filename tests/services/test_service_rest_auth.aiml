@@ -34,7 +34,7 @@
       - if:
           condition: { gt: [token.len, 0] }
           then:
-            - call: [client.headers.put, "Authorization", "Bearer ${token}"]
+            - call: [client.headers.set, "Authorization", "Bearer ${token}"]
       - decl: [answer, http_response_handle]
       - set: [answer, { call: [client.send] }]
       - decl: [code, i32]

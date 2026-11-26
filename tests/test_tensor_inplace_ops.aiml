@@ -8,7 +8,7 @@
 
 - call: [var_a.add_inplace, var_b]
 
-- decl: [var_a0, f32, { call: [var_a.get, 0] }]
+- decl: [var_a0, f32, { at: [var_a, 0] }]
 - if:
     condition: { neq: [var_a0, 4.0] }
     then:
@@ -24,7 +24,7 @@
 
 - call: [var_c.scale_inplace, 0.5]
 
-- decl: [var_c0, f32, { call: [var_c.get, 0] }]
+- decl: [var_c0, f32, { at: [var_c, 0] }]
 - if:
     condition: { neq: [var_c0, 3.0] }
     then:
@@ -48,12 +48,12 @@
 - call: [acc.add_inplace, var_g0]
 - call: [acc.add_inplace, var_g1]
 - call: [acc.scale_inplace, 0.5]
-- decl: [acc0, f32, { call: [acc.get, 0] }]
+- decl: [acc0, f32, { at: [acc, 0] }]
 
 # reference path
 - decl: [ref_sum, tensor, { call: [tensor.add, var_g0, var_g1] }]
 - decl: [ref_mean, tensor, { call: [tensor.mul_scalar, ref_sum, 0.5] }]
-- decl: [ref0, f32, { call: [ref_mean.get, 0] }]
+- decl: [ref0, f32, { at: [ref_mean, 0] }]
 
 - if:
     condition: { neq: [acc0, ref0] }
@@ -73,7 +73,7 @@
 - decl: [var_x, tensor, { call: [tensor.ones, 2] }]
 - call: [tensor.fill, var_x, 7.0]
 - call: [buf.add_inplace, var_x]
-- decl: [buf0_a, f32, { call: [buf.get, 0] }]
+- decl: [buf0_a, f32, { at: [buf, 0] }]
 - if:
     condition: { neq: [buf0_a, 7.0] }
     then:
@@ -85,7 +85,7 @@
 - decl: [var_y, tensor, { call: [tensor.ones, 2] }]
 - call: [tensor.fill, var_y, 4.0]
 - call: [buf.add_inplace, var_y]
-- decl: [buf0_b, f32, { call: [buf.get, 0] }]
+- decl: [buf0_b, f32, { at: [buf, 0] }]
 - if:
     condition: { neq: [buf0_b, 4.0] }
     then:

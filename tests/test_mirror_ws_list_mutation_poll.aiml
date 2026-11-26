@@ -99,12 +99,12 @@
             - set: [var_i, { +: [var_i, 1] }]
 
       - decl: [var_p1, ref<ParticipantState>]
-      - set: [var_p1, { call: [root.participants.get, 1] }]
+      - set: [var_p1, { at: [root.participants, 1] }]
       - set: [var_p1.var_hp, 17]
       - set: [var_p1.is_active, 1]
 
       - decl: [var_z0, ref<ZoneState>]
-      - set: [var_z0, { call: [root.zones.get, 0] }]
+      - set: [var_z0, { at: [root.zones, 0] }]
       - call: [var_z0.cards.remove, 0]
       - decl: [new_ref, VisibleCardRef]
       - set: [new_ref.instance_id, "ci-4"]
@@ -112,7 +112,7 @@
       - set: [new_ref.zone_id, "field_0"]
       - set: [new_ref.order_idx, 1]
       - call: [var_z0.cards.push, new_ref]
-      - set: [var_z0.card_count, { call: [var_z0.cards.len] }]
+      - set: [var_z0.card_count, var_z0.cards.len]
 
       - decl: [ci4, CardInstanceState]
       - set: [ci4.instance_id, "ci-4"]

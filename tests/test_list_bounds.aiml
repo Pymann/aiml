@@ -34,7 +34,7 @@
 
       - decl: [failures, i32, 0]
       - try:
-          body: [{ decl: [via_get, i32, { call: [items.get, 7] }] }]
+          body: [{ decl: [via_get, i32, { at: [items, 7] }] }]
           catch: [{ type: IndexOutOfBoundsException, var: err, body: [{ set: [failures, { +: [failures, 1] }] }] }]
       - try:
           body: [{ idx: [items, 9, 1] }]

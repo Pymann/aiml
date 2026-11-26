@@ -611,7 +611,7 @@ in just a few lines. Manual VBO/VAO setup is entirely unnecessary.
 - decl: [scene, gltf_scene,     { call: [gltf.load, "/assets/character.glb"] }]
 - decl: [meshes, list<gltf_mesh>]
 - set:  [meshes, { call: [scene.meshes] }]
-- decl: [prim,  gltf_primitive, { call: [{ call: [meshes.get, 0] }.primitive, 0] }]
+- decl: [prim,  gltf_primitive, { call: [{ at: [meshes, 0] }.primitive, 0] }]
 
 # Upload geometry + texture to GPU — one line each
 - decl: [mesh, gl_mesh,    { call: [prim.to_gl_mesh] }]
@@ -784,13 +784,13 @@ For skeletal animation, `sh.uniform_mat4_array` is used:
 - decl: [bones, buffer<f32>]
 - call: [bones.alloc, 4096]  # 64 Matrizen * 16 floats * 4 Byte
 - decl: [j, i32, 0]
-- while: [{ <: [j, { call: [pose.len] }] }]
+- while: [{ <: [j, pose.len] }]
   body:
-    - decl: [bm, buffer<f32>, { call: [pose.get, j] }]
-    - call: [bones.append, bm]
+    - decl: [bm, buffer<f32>, { at: [pose, j] }]
+    - call: [bones.extend, bm]
     - set: [j, { +: [j, 1] }]
 
-- call: [sh.uniform_mat4_array, "uBones", bones, { call: [pose.len] }]
+- call: [sh.uniform_mat4_array, "uBones", bones, pose.len]
 ```
 
 ---

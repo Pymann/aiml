@@ -18,7 +18,7 @@
     body:
       # `.get` must load the inner handle (len 2), NOT struct-stride garbage. `eff` is an owning
       # alias (incref); it decrefs at THIS function's return — the shared outer must keep it alive.
-      - decl: [eff, list<i32>, { call: [outer.get, 0] }]
+      - decl: [eff, list<i32>, { at: [outer, 0] }]
       - if: { condition: { neq: [{ at: [eff, 1] }, 20] }, then: [{ print: ["FAIL get: eff[1] wrong"] }, { return: -1 }] }
       - return: eff.len
 - def:

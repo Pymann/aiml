@@ -31,7 +31,7 @@
             - set: [src.label, "hello-retain-${itr}"]
             - call: [src.tags.push, 1]
             - call: [src.tags.push, 2]
-            - call: [src.mana.put, "fire", 3]
+            - call: [src.mana.set, "fire", 3]
             - set: [src.inner.tag, "inner-tag-${itr}"]
             - call: [src.inner.nums.push, 9]
             - call: [rows.push, src]

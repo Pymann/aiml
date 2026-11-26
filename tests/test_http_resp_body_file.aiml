@@ -22,7 +22,7 @@
     name: handle_download
     args: [[req, http_request_handle], [resp, http_response_handle]]
     body:
-      - call: [resp.headers.put, "content-type", "application/octet-stream"]
+      - call: [resp.headers.set, "content-type", "application/octet-stream"]
       - set: [resp.body_file, "/tmp/aiml_body_file_test/blob.dat"]
       - call: [resp.send]
 

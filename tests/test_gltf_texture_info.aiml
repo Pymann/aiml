@@ -38,8 +38,8 @@
             - decl: [scene, gltf_scene, { call: [gltf.load, file_path] }]
             - call: [<.expect_i, "valid", { call: [scene.valid] }, 1]
             - decl: [mats, list<gltf_material>, { call: [scene.materials] }]
-            - decl: [probe, gltf_material, { call: [mats.get, 0] }]
-            - decl: [plain, gltf_material, { call: [mats.get, 1] }]
+            - decl: [probe, gltf_material, { at: [mats, 0] }]
+            - decl: [plain, gltf_material, { at: [mats, 1] }]
             - call: [<.expect_i, "index0", { call: [probe.index] }, 0]
             - call: [<.expect_i, "index1", { call: [plain.index] }, 1]
 
@@ -74,9 +74,9 @@
 
             - decl: [used, list<string>, { call: [scene.extensions_used] }]
             - decl: [needed, list<string>, { call: [scene.extensions_required] }]
-            - call: [<.expect_i, "used_len", { call: [used.len] }, 2]
-            - call: [<.expect_i, "required_len", { call: [needed.len] }, 1]
-            - decl: [first_req, string, { call: [needed.get, 0] }]
+            - call: [<.expect_i, "used_len", used.len, 2]
+            - call: [<.expect_i, "required_len", needed.len, 1]
+            - decl: [first_req, string, { at: [needed, 0] }]
             - if: { condition: { eq: [{ eq: [first_req, "KHR_texture_transform"] }, 0] }, then: [{ print: ["FAIL required ${first_req}"] }, { set: [<.fails, { +: [<.fails, 1] }] }] }
             - decl: [extras, string, { call: [scene.extras] }]
             - if: { condition: { lt: [{ call: [extras.index_of, "studio"] }, 0] }, then: [{ print: ["FAIL extras '${extras}'"] }, { set: [<.fails, { +: [<.fails, 1] }] }] }

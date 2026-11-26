@@ -36,7 +36,7 @@
       - set: [best.iid, "iid-${seed}"]
       - set: [best.score, seed]
       - call: [best.tags.push, "tag-${seed}"]
-      - call: [best.stats.put, "hp", seed]
+      - call: [best.stats.set, "hp", seed]
       - decl: [pos, i32, 0]
       - while:
           condition: {lt: [pos, 3]}

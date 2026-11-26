@@ -32,7 +32,7 @@
             - set: [<.name, "desk-${num}"]
             - decl: [bucket, list<string>]
             - call: [bucket.push, "b${num}"]
-            - call: [<.index.put, "k", bucket]
+            - call: [<.index.set, "k", bucket]
       - def:
           name: risky
           args: [[num, i32]]

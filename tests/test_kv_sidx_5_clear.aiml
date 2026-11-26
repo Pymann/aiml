@@ -30,7 +30,7 @@
 
       - call: [dinge.clear]
 
-      - decl: [anz, i32, { call: [dinge.len] }]
+      - decl: [anz, i32, dinge.len]
       - if:
           condition: { neq: [anz, 0] }
           then:

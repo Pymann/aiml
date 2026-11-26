@@ -14,7 +14,7 @@
           body:
             - decl: [total, i32, 0]
             - decl: [matrix, buffer<f32>, { call: [node.world_matrix] }]
-            - set: [total, { +: [total, matrix.len] }]
+            - set: [total, { +: [total, matrix.byte_len] }]
             - decl: [mesh, gltf_mesh, { call: [node.mesh] }]
             - if:
                 condition: { neq: [mesh, null] }
@@ -25,13 +25,13 @@
                   - decl: [indices, buffer<u32>, { call: [prim.indices] }]
                   - call: [positions.seek, 4]
                   - decl: [second, f32, { call: [positions.read, f32] }]
-                  - set: [total, { +: [total, { +: [positions.len, { +: [normals.len, indices.len] }] }] }]
+                  - set: [total, { +: [total, { +: [positions.byte_len, { +: [normals.byte_len, indices.byte_len] }] }] }]
             - decl: [kids, list<gltf_node>, { call: [node.children] }]
             - decl: [cur, i32, 0]
             - while:
                 condition: { lt: [cur, kids.len] }
                 body:
-                  - set: [total, { +: [total, { call: [<.floats_of, { call: [kids.get, cur] }] }] }]
+                  - set: [total, { +: [total, { call: [<.floats_of, { at: [kids, cur] }] }] }]
                   - set: [cur, { +: [cur, 1] }]
             - return: total
 
@@ -52,7 +52,7 @@
             - while:
                 condition: { lt: [cur, roots.len] }
                 body:
-                  - set: [total, { +: [total, { call: [<.floats_of, { call: [roots.get, cur] }] }] }]
+                  - set: [total, { +: [total, { call: [<.floats_of, { at: [roots, cur] }] }] }]
                   - set: [cur, { +: [cur, 1] }]
             - call: [scene.free]
             - set: [<.calls, { +: [<.calls, 1] }]

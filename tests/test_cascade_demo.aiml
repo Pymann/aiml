@@ -140,7 +140,7 @@
     args: [[eff, list<i32>]]
     return: string
     body:
-      - decl: [tag, i32, { call: [eff.get, 0] }]
+      - decl: [tag, i32, { at: [eff, 0] }]
       - if: { condition: { eq: [tag, 1] },  then: [{ return: "Draw Card    (deck=?  value=?)"  }] }
       - if: { condition: { eq: [tag, 10] }, then: [{ return: "Deal Damage  (owner target ValueType)" }] }
       - if: { condition: { eq: [tag, 12] }, then: [{ return: "Modify Stat  (owner attr ValueType)"   }] }
@@ -217,22 +217,22 @@
 
       # Read back each effect's wire and describe it.
       - decl: [idx0, i32, 0]
-      - decl: [row0, list<i32>, { call: [ability.effects.get, idx0] }]
+      - decl: [row0, list<i32>, { at: [ability.effects, idx0] }]
       - decl: [txt0, string, { call: [describe_effect, row0] }]
-      - print: ["  [0] ${txt0}   wire[0]=${call: [row0.get, 0]}"]
+      - print: ["  [0] ${txt0}   wire[0]=${{ at: [row0, 0] }}"]
 
       - decl: [idx1, i32, 1]
-      - decl: [row1, list<i32>, { call: [ability.effects.get, idx1] }]
+      - decl: [row1, list<i32>, { at: [ability.effects, idx1] }]
       - decl: [txt1, string, { call: [describe_effect, row1] }]
-      - print: ["  [1] ${txt1}   wire[0]=${call: [row1.get, 0]}"]
+      - print: ["  [1] ${txt1}   wire[0]=${{ at: [row1, 0] }}"]
 
       - decl: [idx2, i32, 2]
-      - decl: [row2, list<i32>, { call: [ability.effects.get, idx2] }]
+      - decl: [row2, list<i32>, { at: [ability.effects, idx2] }]
       - decl: [txt2, string, { call: [describe_effect, row2] }]
-      - print: ["  [2] ${txt2}   nested-ValueType-tag=${call: [row2.get, 3]}"]
+      - print: ["  [2] ${txt2}   nested-ValueType-tag=${{ at: [row2, 3] }}"]
 
       - decl: [idx3, i32, 3]
-      - decl: [row3, list<i32>, { call: [ability.effects.get, idx3] }]
+      - decl: [row3, list<i32>, { at: [ability.effects, idx3] }]
       - decl: [txt3, string, { call: [describe_effect, row3] }]
       - print: ["  [3] ${txt3}"]
 

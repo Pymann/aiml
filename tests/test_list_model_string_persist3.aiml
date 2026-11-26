@@ -32,7 +32,7 @@
           args: [[idx, i32]]
           return: string
           body:
-            - decl: [fdk, FakeDeck, { call: [<.decks.get, idx] }]
+            - decl: [fdk, FakeDeck, { at: [<.decks, idx] }]
             - return: fdk.name
 
 - def:

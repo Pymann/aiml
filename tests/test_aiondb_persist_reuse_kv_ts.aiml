@@ -47,14 +47,14 @@
       - set: [ts_b, { call: [db.open_timeseries, "persist_reuse_ts", {persist: true, path: db_path}] }]
 
       - decl: [ts_base, i32]
-      - set: [ts_base, { call: [ts_a.len] }]
+      - set: [ts_base, ts_a.len]
 
       - decl: [reading, PersistReading]
       - set: [reading.val, 321]
       - call: [ts_a.append, reading, 987654321]
 
       - decl: [ts_len_b, i32]
-      - set: [ts_len_b, { call: [ts_b.len] }]
+      - set: [ts_len_b, ts_b.len]
       - if:
           condition: { neq: [ts_len_b, { "+": [ts_base, 1] }] }
           then:
@@ -62,7 +62,7 @@
             - call: [sys.exit, 1]
 
       - decl: [sample_b, ref<PersistReading>]
-      - set: [sample_b, { call: [ts_b.at, 987654321] }]
+      - set: [sample_b, { call: [ts_b.at_time, 987654321] }]
       - if:
           condition: { neq: [sample_b.val, 321] }
           then:

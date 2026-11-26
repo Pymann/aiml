@@ -12,7 +12,7 @@
       - decl: [byname, map<string:Thing>]
       - decl: [thing1, Thing, {new: Thing}]
       - set: [thing1.count, 33]
-      - call: [byname.put, "alpha", thing1]
+      - call: [byname.set, "alpha", thing1]
       - decl: [got, Thing, {call: [byname.get, "alpha"]}]
       - if: {condition: {neq: [got.count, 33]}, then: [{print: ["FAIL got.count=${got.count}"]}, {call: [sys.exit, 1]}]}
       - set: [got.count, 44]

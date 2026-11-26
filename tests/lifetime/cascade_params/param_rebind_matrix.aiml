@@ -34,9 +34,9 @@
     args: [[tags, map<string:i32>]]
     body:
       - decl: [fresh, map<string:i32>]
-      - call: [fresh.put, "f", 1]
+      - call: [fresh.set, "f", 1]
       - set: [tags, fresh]
-      - call: [tags.put, "g", 2]
+      - call: [tags.set, "g", 2]
 - def:
     name: rebind_buffer
     args: [[bytes, buffer]]
@@ -80,7 +80,7 @@
             - if: {condition: {neq: [rows.len, 1]}, then: [{return: 12}]}
             - if: {condition: {neq: [{at: [rows, 0]}, "keep"]}, then: [{return: 13}]}
             - decl: [tags, map<string:i32>]
-            - call: [tags.put, "k", 7]
+            - call: [tags.set, "k", 7]
             - call: [rebind_map, tags]
             - if: {condition: {neq: [tags.len, 1]}, then: [{return: 20}]}
             - if: {condition: {neq: [{call: [tags.get, "k"]}, 7]}, then: [{return: 21}]}

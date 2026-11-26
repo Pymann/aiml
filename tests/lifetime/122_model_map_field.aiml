@@ -28,8 +28,8 @@
       - while:
           condition: {lt: [counter, 200]}
           body:
-            - call: [outer.dict.put, "k${{ '%': [counter, 5] }}", "v-${counter}"]
-            - if: {condition: {eq: [{ '%': [counter, 3]}, 0]}, then: [{call: [outer.dict.remove, "k1"]}]}
+            - call: [outer.dict.set, "k${{ '%': [counter, 5] }}", "v-${counter}"]
+            - if: {condition: {eq: [{ '%': [counter, 3]}, 0]}, then: [{call: [outer.dict.delete, "k1"]}]}
             - call: [outer.items.push, {call: [make_item, counter]}]
             - if: {condition: {gt: [outer.items.len, 4]}, then: [{call: [outer.items.remove, 0]}]}
             - set: [counter, {+: [counter, 1]}]

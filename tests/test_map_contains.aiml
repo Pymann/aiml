@@ -8,11 +8,11 @@
 # ── A: Literal-Key inline ─────────────────────────────────────────────────────
 
 - decl: [m_a, map<string:i32>]
-- call: [m_a.put, "alpha", 1]
-- call: [m_a.put, "beta",  2]
+- call: [m_a.set, "alpha", 1]
+- call: [m_a.set, "beta",  2]
 
 - if:
-    condition: { call: [m_a.contains, "alpha"] }
+    condition: { call: [m_a.has, "alpha"] }
     then:
       - print: ["OK A1: inline contains literal 'alpha'"]
     else:
@@ -20,7 +20,7 @@
       - set: [var_ok, 0]
 
 - if:
-    condition: { call: [m_a.contains, "gamma"] }
+    condition: { call: [m_a.has, "gamma"] }
     then:
       - print: ["FAIL A2: inline contains 'gamma' should be false"]
       - set: [var_ok, 0]
@@ -31,10 +31,10 @@
 
 - decl: [m_b, map<string:i32>]
 - decl: [key_b, string, "hello"]
-- call: [m_b.put, key_b, 42]
+- call: [m_b.set, key_b, 42]
 
 - if:
-    condition: { call: [m_b.contains, key_b] }
+    condition: { call: [m_b.has, key_b] }
     then:
       - print: ["OK B1: inline contains variable key"]
     else:
@@ -43,7 +43,7 @@
 
 - decl: [key_b2, string, "world"]
 - if:
-    condition: { call: [m_b.contains, key_b2] }
+    condition: { call: [m_b.has, key_b2] }
     then:
       - print: ["FAIL B2: inline contains absent variable key — expected false"]
       - set: [var_ok, 0]
@@ -56,10 +56,10 @@
 - decl: [prefix, string, "item"]
 - decl: [idx, i32, 7]
 - decl: [interp_key, string, "${prefix}_${idx}"]
-- call: [m_c.put, interp_key, 99]
+- call: [m_c.set, interp_key, 99]
 
 - if:
-    condition: { call: [m_c.contains, interp_key] }
+    condition: { call: [m_c.has, interp_key] }
     then:
       - print: ["OK C1: inline contains interpolated key (same var)"]
     else:
@@ -67,7 +67,7 @@
       - set: [var_ok, 0]
 
 - if:
-    condition: { call: [m_c.contains, "item_7"] }
+    condition: { call: [m_c.has, "item_7"] }
     then:
       - print: ["OK C2: inline contains literal equiv of interpolated key"]
     else:
@@ -80,11 +80,11 @@
 - decl: [var_p1, path, { call: [path.from_string, "/tmp/foo"] }]
 - decl: [var_p2, path, { call: [path.from_string, "/tmp/bar"] }]
 - decl: [var_p3, path, { call: [path.from_string, "/tmp/baz"] }]
-- call: [m_d.put, var_p1, 10]
-- call: [m_d.put, var_p2, 20]
+- call: [m_d.set, var_p1, 10]
+- call: [m_d.set, var_p2, 20]
 
 - if:
-    condition: { call: [m_d.contains, var_p1] }
+    condition: { call: [m_d.has, var_p1] }
     then:
       - print: ["OK D1: inline contains path key var_p1"]
     else:
@@ -92,7 +92,7 @@
       - set: [var_ok, 0]
 
 - if:
-    condition: { call: [m_d.contains, var_p3] }
+    condition: { call: [m_d.has, var_p3] }
     then:
       - print: ["FAIL D3: inline contains absent path key — expected false"]
       - set: [var_ok, 0]
@@ -102,11 +102,11 @@
 # ── E: contains after remove inline ───────────────────────────────────────────
 
 - decl: [m_e, map<string:i32>]
-- call: [m_e.put, "x", 5]
-- call: [m_e.remove, "x"]
+- call: [m_e.set, "x", 5]
+- call: [m_e.delete, "x"]
 
 - if:
-    condition: { call: [m_e.contains, "x"] }
+    condition: { call: [m_e.has, "x"] }
     then:
       - print: ["FAIL E1: inline contains after remove — expected false"]
       - set: [var_ok, 0]
@@ -117,16 +117,16 @@
 # The exact repro case from the report — no intermediate variable, short form
 
 - decl: [m_f, map<string:i32>]
-- call: [m_f.put, "frozen", 1]
+- call: [m_f.set, "frozen", 1]
 
-- if: [{ call: [m_f.contains, "frozen"] }, true]
+- if: [{ call: [m_f.has, "frozen"] }, true]
   then:
     - print: ["OK F1: shortform if contains present key"]
   else:
     - print: ["FAIL F1: shortform if contains present key — expected true"]
     - set: [var_ok, 0]
 
-- if: [{ call: [m_f.contains, "stunned"] }, true]
+- if: [{ call: [m_f.has, "stunned"] }, true]
   then:
     - print: ["FAIL F2: shortform if contains absent key — expected false"]
     - set: [var_ok, 0]
@@ -137,16 +137,16 @@
 # The second repro case from the report
 
 - decl: [m_g, map<string:i32>]
-- call: [m_g.put, "frozen", 1]
+- call: [m_g.set, "frozen", 1]
 
-- if: [{ eq: [{ call: [m_g.contains, "frozen"] }, 1] }, true]
+- if: [{ eq: [{ call: [m_g.has, "frozen"] }, 1] }, true]
   then:
     - print: ["OK G1: shortform eq-wrapping contains present key"]
   else:
     - print: ["FAIL G1: shortform eq-wrapping contains present key — expected true"]
     - set: [var_ok, 0]
 
-- if: [{ eq: [{ call: [m_g.contains, "stunned"] }, 1] }, true]
+- if: [{ eq: [{ call: [m_g.has, "stunned"] }, 1] }, true]
   then:
     - print: ["FAIL G2: shortform eq-wrapping contains absent key — expected false"]
     - set: [var_ok, 0]

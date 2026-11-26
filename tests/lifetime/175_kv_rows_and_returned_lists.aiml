@@ -73,7 +73,7 @@
             - decl: [row, i32, 0]
             - while: [{ lt: [row, keys.len] }]
               body:
-                - decl: [eintrag, NameRow, { call: [<.namen.get_copy, { call: [keys.get, row] }] }]
+                - decl: [eintrag, NameRow, { call: [<.namen.get_copy, { at: [keys, row] }] }]
                 - call: [out.push, eintrag]
                 - set: [row, { +: [row, 1] }]
             - return: out
@@ -89,7 +89,7 @@
             - decl: [row, i32, 0]
             - while: [{ lt: [row, keys.len] }]
               body:
-                - decl: [eintrag, ref<NameRow>, { call: [<.namen.get, { call: [keys.get, row] }] }]
+                - decl: [eintrag, ref<NameRow>, { call: [<.namen.get, { at: [keys, row] }] }]
                 - if: [{ eq: [{ call: [out.contains, eintrag.ding] }, 0] }, true]
                   then:
                     - call: [out.push, eintrag.ding]
@@ -124,7 +124,7 @@
             - set: [gefunden, { call: [<.eintraege, suchtext] }]
             - if: [{ gt: [gefunden.len, 0] }, true]
               then:
-                - decl: [erster, NameRow, { call: [gefunden.get, 0] }]
+                - decl: [erster, NameRow, { at: [gefunden, 0] }]
                 - call: [out.dinge.push, erster.ding]
                 - set: [out.sorte, erster.sorte]
                 - set: [out.weg, "name"]
@@ -134,12 +134,12 @@
             - decl: [col, i32, 0]
             - while: [{ lt: [col, teil.len] }]
               body:
-                - decl: [eintrag, NameRow, { call: [teil.get, col] }]
+                - decl: [eintrag, NameRow, { at: [teil, col] }]
                 - call: [aus_formen.push, eintrag]
                 - set: [col, { +: [col, 1] }]
             - if: [{ gt: [aus_formen.len, 0] }, true]
               then:
-                - decl: [erster2, NameRow, { call: [aus_formen.get, 0] }]
+                - decl: [erster2, NameRow, { at: [aus_formen, 0] }]
                 - call: [out.dinge.push, erster2.ding]
                 - set: [out.sorte, erster2.sorte]
                 - set: [out.weg, "beugung"]
@@ -168,7 +168,7 @@
               then:
                 - print: ["FAIL B len=${dinge.len} k-${nummer}"]
                 - return: 3
-            - if: [{ neq: [{ call: [dinge.get, 0] }, erwartet] }, true]
+            - if: [{ neq: [{ at: [dinge, 0] }, erwartet] }, true]
               then:
                 - print: ["FAIL B content k-${nummer}"]
                 - return: 4
@@ -182,7 +182,7 @@
               then:
                 - print: ["FAIL A len=${tref.dinge.len} k-${nummer}"]
                 - return: 6
-            - if: [{ neq: [{ call: [tref.dinge.get, 0] }, erwartet] }, true]
+            - if: [{ neq: [{ at: [tref.dinge, 0] }, erwartet] }, true]
               then:
                 - print: ["FAIL A content k-${nummer}"]
                 - return: 7
@@ -196,7 +196,7 @@
               then:
                 - print: ["FAIL A2 weg='${tref2.weg}' k-${nummer}"]
                 - return: 9
-            - if: [{ neq: [{ call: [tref2.dinge.get, 0] }, erwartet] }, true]
+            - if: [{ neq: [{ at: [tref2.dinge, 0] }, erwartet] }, true]
               then:
                 - print: ["FAIL A2 content k-${nummer}"]
                 - return: 10

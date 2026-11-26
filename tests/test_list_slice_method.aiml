@@ -28,22 +28,22 @@
 
       # slice(1, 4) → [20, 30, 40]
       - decl: [sl_a, list<i32>, { call: [lst.slice, 1, 4] }]
-      - call: [check, { call: [sl_a.len] }, 3, "sl_a.len"]
-      - call: [check, { call: [sl_a.get, 0] }, 20, "sl_a[0]"]
-      - call: [check, { call: [sl_a.get, 2] }, 40, "sl_a[2]"]
+      - call: [check, sl_a.len, 3, "sl_a.len"]
+      - call: [check, { at: [sl_a, 0] }, 20, "sl_a[0]"]
+      - call: [check, { at: [sl_a, 2] }, 40, "sl_a[2]"]
 
       # slice(2) → to end → [30, 40, 50]
       - decl: [sl_b, list<i32>, { call: [lst.slice, 2] }]
-      - call: [check, { call: [sl_b.len] }, 3, "sl_b.len"]
-      - call: [check, { call: [sl_b.get, 0] }, 30, "sl_b[0]"]
+      - call: [check, sl_b.len, 3, "sl_b.len"]
+      - call: [check, { at: [sl_b, 0] }, 30, "sl_b[0]"]
 
       # slice(0, 3) → first three → [10, 20, 30]
       - decl: [sl_c, list<i32>, { call: [lst.slice, 0, 3] }]
-      - call: [check, { call: [sl_c.len] }, 3, "sl_c.len"]
-      - call: [check, { call: [sl_c.get, 2] }, 30, "sl_c[2]"]
+      - call: [check, sl_c.len, 3, "sl_c.len"]
+      - call: [check, { at: [sl_c, 2] }, 30, "sl_c[2]"]
 
       # source unchanged (slice is a copy)
-      - call: [check, { call: [lst.len] }, 5, "lst.len"]
+      - call: [check, lst.len, 5, "lst.len"]
 
       - print: ["list.slice method PASS"]
       - return: 0

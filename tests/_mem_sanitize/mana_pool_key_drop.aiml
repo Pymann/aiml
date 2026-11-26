@@ -21,14 +21,14 @@
           args: [[key, string]]
           return: i32
           body:
-            - if: { condition: { eq: [{ call: [<.colors.contains, key] }, 1] }, then: [{ return: { call: [<.colors.get, key] } }] }
+            - if: { condition: { eq: [{ call: [<.colors.has, key] }, 1] }, then: [{ return: { call: [<.colors.get, key] } }] }
             - return: 0
 
       - def:
           name: add_color
           args: [[key, string], [delta, i32]]
           body:
-            - call: [<.colors.put, key, { +: [{ call: [<.amount, key] }, delta] }]
+            - call: [<.colors.set, key, { +: [{ call: [<.amount, key] }, delta] }]
 
       # produce: add +1 to every color 1..10 using an INTERPOLATED managed-string key (the ManaPool pattern)
       - def:

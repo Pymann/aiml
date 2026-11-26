@@ -19,17 +19,17 @@
       - set: [players_b, { call: [db.open, "persist_reuse_players", {persist: true, path: db_path}] }]
 
       - decl: [base_count, i32]
-      - set: [base_count, { call: [players_a.len] }]
+      - set: [base_count, players_a.len]
 
       - decl: [ent, PersistEntity]
       - set: [ent.score, 777]
       - set: [ent.level, 12]
 
       - decl: [eid, i32]
-      - set: [eid, { call: [players_a.insert, ent] }]
+      - set: [eid, { call: [players_a.add, ent] }]
 
       - decl: [count_b, i32]
-      - set: [count_b, { call: [players_b.len] }]
+      - set: [count_b, players_b.len]
       - if:
           condition: { neq: [count_b, { "+": [base_count, 1] }] }
           then:

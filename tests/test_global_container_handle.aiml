@@ -10,7 +10,7 @@
 - call: [g_nums.push, 10]
 - call: [g_nums.push, 20]
 - call: [g_nums.push, 30]
-- decl: [num0, i32, { call: [g_nums.get, 0] }]
+- decl: [num0, i32, { at: [g_nums, 0] }]
 - if:
     condition: { neq: [num0, 10] }
     then:
@@ -26,7 +26,7 @@
     then:
       - print: ["FAIL g_parts.len=${g_parts.len} expected 3"]
       - call: [sys.exit, 1]
-- decl: [part1, string, { call: [g_parts.get, 1] }]
+- decl: [part1, string, { at: [g_parts, 1] }]
 - if:
     condition: { neq: [part1, "b"] }
     then:
@@ -44,8 +44,8 @@
 
 # A global map handle.
 - decl: [g_map, map<string:i32>]
-- call: [g_map.put, "a", 1]
-- call: [g_map.put, "b", 2]
+- call: [g_map.set, "a", 1]
+- call: [g_map.set, "b", 2]
 - if:
     condition: { neq: [g_map.len, 2] }
     then:

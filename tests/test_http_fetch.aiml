@@ -28,7 +28,7 @@
     name: handle_conflict
     args: [[req, http_request_handle], [resp, http_response_handle]]
     body:
-      - call: [resp.headers.put, "content-type", "application/json"]
+      - call: [resp.headers.set, "content-type", "application/json"]
       - set: [resp.status, 409]
       - set: [resp.body, "{\"code\":\"conflict\"}"]
       - call: [resp.send]

@@ -108,9 +108,9 @@
 - decl: [req, PaymentReq]
 - set: [req.label, "amorph"]
 - set: [req.total, 5]
-- call: [req.parts.put, "feuer", 2]
-- call: [req.parts.put, "wasser", 1]
-- call: [req.parts.put, "erde", 2]
+- call: [req.parts.set, "feuer", 2]
+- call: [req.parts.set, "wasser", 1]
+- call: [req.parts.set, "erde", 2]
 
 - call: [client.send_rpc, var_ev.net_id, "pay", 0, req]
 - print: ["client-map: sent pay payload"]

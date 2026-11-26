@@ -23,7 +23,7 @@ inline bool isTensor(const std::string& c)   { return c == "tensor"; }
 inline bool isCode(const std::string& c)     { return c == "Code"; }
 inline bool isGpuObject(const std::string& c) {
     return c == "gl_buffer" || c == "gl_texture" || c == "gl_cubemap" || c == "gl_vao" ||
-           c == "gl_timer_query";
+           c == "gl_timer_query" || c == "gl_shader" || c == "gl_framebuffer" || c == "gl_mesh";
 }
 inline bool isArray(const std::string& c)    { return startsWith(c, "array<"); }
 inline bool isDynArray(const std::string& c) { return startsWith(c, "dyn_array<"); }

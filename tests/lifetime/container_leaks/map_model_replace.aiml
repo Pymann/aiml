@@ -13,10 +13,10 @@
             - decl: [index, "map<string:Item>"]
             - decl: [first, Item]
             - set: [first.text, "first=${42}"]
-            - call: [index.put, "key", first]
+            - call: [index.set, "key", first]
             - decl: [second, Item]
             - set: [second.text, "second=${42}"]
-            - call: [index.put, "key", second]
+            - call: [index.set, "key", second]
             - if: {condition: {neq: [index.len, 1]}, then: [{return: 21}]}
             - set: [counter, {+: [counter, 1]}]
       - return: 0

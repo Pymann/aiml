@@ -12,7 +12,7 @@
           args: [[word, string]]
           return: i32
           body:
-            - decl: [now, i32, { call: [<.counts.add, word, 1] }]
+            - decl: [now, i32, { call: [<.counts.incr, word, 1] }]
             - return: now
 
 - def:
@@ -24,7 +24,7 @@
       - decl: [idx, i32, 0]
       - while: [{ lt: [idx, count] }]
         body:
-          - call: [table.put, idx, { "*": [idx, idx] }]
+          - call: [table.set, idx, { "*": [idx, idx] }]
           - set: [idx, { "+": [idx, 1] }]
       - return: table
 
@@ -50,7 +50,7 @@
       - call: [index.note, "golf"]
       - call: [index.note, "ball"]
       - decl: [third, i32, { call: [index.note, "golf"] }]
-      - call: [index.names.put, 1, "eins"]
+      - call: [index.names.set, 1, "eins"]
       - decl: [count_len, i32, index.counts.len]
       - if: [{ or: [{ neq: [third, 2] }, { neq: [count_len, 2] }] }, true]
         then:
@@ -72,8 +72,8 @@
       - while: [{ lt: [round, 2000] }]
         body:
           - decl: [tmp, "hashmap<string:string>"]
-          - call: [tmp.put, "k${round}", "wert ${round}"]
-          - call: [tmp.put, "fix", "x"]
+          - call: [tmp.set, "k${round}", "wert ${round}"]
+          - call: [tmp.set, "fix", "x"]
           - decl: [tmp_len, i32, tmp.len]
           - set: [acc, { "+": [acc, tmp_len] }]
           - set: [round, { "+": [round, 1] }]
@@ -84,7 +84,7 @@
 
       # assignment replaces the table (the old one is freed)
       - decl: [swap, "hashmap<i32:i32>"]
-      - call: [swap.put, 1, 1]
+      - call: [swap.set, 1, 1]
       - set: [swap, squares]
       - decl: [via_swap, i32, { call: [swap.get, 9] }]
       - if: [{ neq: [via_swap, 81] }, true]

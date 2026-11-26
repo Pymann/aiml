@@ -44,7 +44,7 @@
             - set: [resp.body, "not found"]
             - call: [resp.send]
             - return: []
-      - call: [resp.headers.put, "content-type", "application/octet-stream"]
+      - call: [resp.headers.set, "content-type", "application/octet-stream"]
       - set: [resp.body_file, file]
       - call: [resp.send]
 
@@ -57,7 +57,7 @@
       - decl: [token, string, { call: [vars.get, "KONTOR_STUB_TOKEN"] }]
       - decl: [admin_token, string, "-"]
       - if:
-          condition: { call: [vars.contains, "KONTOR_STUB_ADMIN_TOKEN"] }
+          condition: { call: [vars.has, "KONTOR_STUB_ADMIN_TOKEN"] }
           then:
             - set: [admin_token, { call: [vars.get, "KONTOR_STUB_ADMIN_TOKEN"] }]
       - decl: [auth, string, { call: [req.header, "authorization"] }]

@@ -70,10 +70,10 @@
 - def:
     name: init_mov_state_names
     body:
-      - call: [g_mov_state_names.put, "1", "swimming"]
-      - call: [g_mov_state_names.put, "2", "flying"]
-      - call: [g_mov_state_names.put, "3", "diving"]
-      - call: [g_mov_state_names.put, "4", "subterranean"]
+      - call: [g_mov_state_names.set, "1", "swimming"]
+      - call: [g_mov_state_names.set, "2", "flying"]
+      - call: [g_mov_state_names.set, "3", "diving"]
+      - call: [g_mov_state_names.set, "4", "subterranean"]
 
 # ══════════════════════════════════════════════════════════════════════════════
 # ZoneCardView — card in a non-combat zone (mana, trap, spell) or item in a combat zone
@@ -215,7 +215,7 @@
           condition: { "||": [{ "<": [var_n, 1] }, { ">": [var_n, var_v.var_me.hand_count] }] }
           then:
             - return: [null]
-      - return: [{ call: [var_v.var_me.hand_cards.get, { -: [var_n, 1] }] }]
+      - return: [{ at: [var_v.var_me.hand_cards, { -: [var_n, 1] }] }]
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Creature accessor — 0-based index, side=0→p1, side=1→p2
@@ -231,7 +231,7 @@
           condition: { "||": [{ "<": [var_n, 0] }, { ">=": [var_n, var_v.var_me.zone_count] }] }
           then:
             - return: [null]
-      - return: [{ call: [var_v.var_me.zone_cards.get, var_n] }]
+      - return: [{ at: [var_v.var_me.zone_cards, var_n] }]
 
 - def:
     name: view_get_creature
@@ -245,13 +245,13 @@
                 condition: { "||": [{ "<": [var_n, 0] }, { ">=": [var_n, var_v.var_me.creature_count] }] }
                 then:
                   - return: [null]
-            - return: [{ call: [var_v.var_me.creatures.get, var_n] }]
+            - return: [{ at: [var_v.var_me.creatures, var_n] }]
           else:
             - if:
                 condition: { "||": [{ "<": [var_n, 0] }, { ">=": [var_n, var_v.opp.creature_count] }] }
                 then:
                   - return: [null]
-            - return: [{ call: [var_v.opp.creatures.get, var_n] }]
+            - return: [{ at: [var_v.opp.creatures, var_n] }]
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Interaction helpers — host side

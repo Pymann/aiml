@@ -34,7 +34,7 @@
       - call: [chk.expect_i, "member took the box", whole.part.side, 5]
 
       - decl: [shapes, map<string:ptr<Shape>>]
-      - call: [shapes.put, "three", { new: Square, side: 3 }]
+      - call: [shapes.set, "three", { new: Square, side: 3 }]
       - decl: [three, ref<Shape>, { call: [shapes.get, "three"] }]
       - call: [chk.expect_i, "put of an inline new", { call: [three.area] }, 9]
 

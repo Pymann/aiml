@@ -89,7 +89,7 @@ HTTP handler).
 - if:
     condition: { eq: [dns.len, 1] }
     then:
-      - decl: [user_dn, string, { call: [dns.get, 0] }]
+      - decl: [user_dn, string, { at: [dns, 0] }]
       - decl: [ok, i32, { call: [conn.bind, user_dn, password] }]          # 1 = authenticated
       - decl: [groups, list<string>, { call: [conn.attr_values, user_dn, "memberOf"] }]
 - call: [conn.close]

@@ -1,6 +1,6 @@
 # SPEC?: 09_strings   # derived from the file name, to be confirmed
 - decl: [name, string, "OpenAI"]
-- decl: [length, i32, { call: [name.len] }]
+- decl: [length, i32, name.len]
 - print: ["Length: ${length}"]
 - if:
     condition: { eq: [length, 6] }

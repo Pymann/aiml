@@ -74,9 +74,9 @@ Cloning an unsupported type is a compile error.
 
 ```aiml
 - decl: [m, map<string:string>]
-- call: [m.put, "k1", "v1"]
+- call: [m.set, "k1", "v1"]
 - decl: [m2, map<string:string>, { call: [sys.clone, m] }]
-- call: [m2.put, "k2", "v2"]
+- call: [m2.set, "k2", "v2"]
 # m.len  = 1   (only "k1")
 # m2.len = 2   ("k1" + "k2")
 ```

@@ -19,21 +19,34 @@
                 then:
                   - print: ["FAIL ${label}: got '${got}' want '${want}'"]
                   - set: [<.fails, { +: [<.fails, 1] }]
+      # spec/71 §3: a missing key is the null string
+      - def:
+          name: missing
+          args: [[label, string], [got, string]]
+          body:
+            - if:
+                condition: { neq: [got, null] }
+                then:
+                  - print: ["FAIL ${label}: got '${got}', want the null string"]
+                  - set: [<.fails, { +: [<.fails, 1] }]
 
 - def:
     name: main
     return: i32
     body:
       - decl: [check, ptr<SessionCheck>, { new: SessionCheck }]
-      - call: [check.same, "missing key", { call: [storage.session_get, "aiml_test_tok"] }, ""]
+      - call: [check.missing, "missing key", { call: [storage.session_get, "aiml_test_tok"] }]
       - call: [storage.session_set, "aiml_test_tok", "s3cret"]
       - call: [check.same, "set then get", { call: [storage.session_get, "aiml_test_tok"] }, "s3cret"]
       - call: [storage.session_set, "aiml_test_tok", "other"]
       - call: [check.same, "overwrite", { call: [storage.session_get, "aiml_test_tok"] }, "other"]
-      - call: [check.same, "not in the file store", { call: [storage.get, "aiml_test_tok"] }, ""]
-      - call: [storage.session_remove, "aiml_test_tok"]
-      - call: [check.same, "removed", { call: [storage.session_get, "aiml_test_tok"] }, ""]
-      - call: [storage.session_remove, "aiml_test_tok"]
+      - call: [check.missing, "not in the file store", { call: [storage.get, "aiml_test_tok"] }]
+      - call: [check.same, "file store default", { call: [storage.get, "aiml_test_tok", "dflt"] }, "dflt"]
+      - decl: [had_tok, i32, { call: [storage.session_delete, "aiml_test_tok"] }]
+      - if: { condition: { neq: [had_tok, 1] }, then: [{ print: ["FAIL delete reports the key: ${had_tok}"] }, { return: [1] }] }
+      - call: [check.missing, "removed", { call: [storage.session_get, "aiml_test_tok"] }]
+      - set: [had_tok, { call: [storage.session_delete, "aiml_test_tok"] }]
+      - if: { condition: { neq: [had_tok, 0] }, then: [{ print: ["FAIL delete of a missing key: ${had_tok}"] }, { return: [1] }] }
 
       - call: [check.same, "no fragment at start", { call: [storage.hash] }, ""]
       - call: [storage.set_hash, "token=ab12:cd34"]

@@ -27,14 +27,14 @@
           body:
             - decl: [named, map<string:ptr<Shape>>]
             - decl: [one, ptr<Shape>, {new: Square, side: 2, label: "a-${counter}"}]
-            - call: [named.put, "a", one]
+            - call: [named.set, "a", one]
             - decl: [two, ptr<Shape>, {new: Square, side: 3, label: "b"}]
-            - call: [named.put, "a", two]
+            - call: [named.set, "a", two]
             - decl: [three, ptr<Shape>, {new: Square, side: 4}]
-            - call: [named.put, "c", three]
+            - call: [named.set, "c", three]
             - decl: [got, ref<Shape>, {call: [named.get, "a"]}]
             - set: [total, {+: [total, {call: [got.area]}]}]
-            - call: [named.remove, "c"]
+            - call: [named.delete, "c"]
             - set: [counter, {+: [counter, 1]}]
       - if: {condition: {neq: [total, 360]}, then: [{return: 1}]}
       - return: 0

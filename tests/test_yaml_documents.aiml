@@ -23,7 +23,7 @@
           then:
             - print: ["FAIL root kind=${root_kind} exp yaml.mapping"]
             - call: [sys.exit, 1]
-      - decl: [root_size, i32, { call: [yaml.size, root] }]
+      - decl: [root_size, i32, { call: [yaml.len, root] }]
       - if:
           condition: { neq: [root_size, 2] }
           then:
@@ -59,7 +59,7 @@
           then:
             - print: ["FAIL items kind=${items_kind} exp yaml.sequence"]
             - call: [sys.exit, 1]
-      - decl: [items_size, i32, { call: [yaml.size, items_node] }]
+      - decl: [items_size, i32, { call: [yaml.len, items_node] }]
       - if:
           condition: { neq: [items_size, 2] }
           then:

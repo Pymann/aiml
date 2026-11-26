@@ -84,7 +84,7 @@ Object methods (on lists, maps, or custom classes) can also be called.
 - decl: [my_list, list<i32>]
 - call: [my_list.push, 100]
 
-- print: ["List size: ${ { call: [my_list.size] } }"]
+- print: ["List size: ${my_list.len}"]
 # Output: List size: 1
 ```
 

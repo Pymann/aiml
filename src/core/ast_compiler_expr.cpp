@@ -1634,6 +1634,8 @@ IRValue* Compiler::visitSpawn(SpawnExpr* spawn) {
 }
 
 IRValue* Compiler::visitAtExpr(AtExpr* at) {
+    const bool wantAddress = ctx.atAddressWanted;   // spec/71 §1.3 (see context.h)
+    ctx.atAddressWanted = false;
     // Evaluate container — must be a variable (or struct/ptr field path).
     auto* varExpr = dynamic_cast<VariableExpr*>(at->container.get());
     if (!varExpr) {
@@ -1879,6 +1881,7 @@ IRValue* Compiler::visitAtExpr(AtExpr* at) {
             return ctx.ir_gen->wrap(hp);
         }
         llvm::Value* elemPtr = ListImpl::getElementPtr(ctx, listPtr, indexVals[0], elemTy);
+        if (wantAddress && elemTy->isStructTy()) return ctx.ir_gen->wrap(elemPtr);
         llvm::Value* val = ctx.builder.CreateLoad(elemTy, elemPtr, "list_at");
         // Refcount: borrowing a string out of a list adds an alias.  Incref
         // so the caller's local var holds a real ref; when the underlying
@@ -1915,7 +1918,10 @@ IRValue* Compiler::visitAtExpr(AtExpr* at) {
         llvm::Type* f32 = ctx.builder.getFloatTy();
         llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
         llvm::Type* i32 = ctx.builder.getInt32Ty();
-        llvm::Function* getFn = ctx.getFunction("aiml_tensor_get", f32, {i8p, i32});
+        // spec/71 §1.5/§4: a flat index into the elements; out of range throws.
+        ListImpl::checkBounds(ctx, indexVals[0], ctx.builder.CreateCall(
+            ctx.getFunction("aiml_tensor_size", i32, {i8p}), {tensorVal}, "tensor_len"));
+        llvm::Function* getFn = ctx.getFunction("aiml_tensor_get_flat", f32, {i8p, i32});
         llvm::Value* val = ctx.builder.CreateCall(getFn, {tensorVal, indexVals[0]}, "tensor_at");
         return ctx.ir_gen->wrap(val);
     }

@@ -114,14 +114,14 @@
       # `annotations` silently stayed empty — silent data loss.
       - decl: [mapped, ContainerState]
       - set: [mapped.status, "created"]
-      - call: [mapped.tags.put, "ort", "hier"]
+      - call: [mapped.tags.set, "ort", "hier"]
       - call: [log.info, "  map field len=${mapped.tags.len}"]
       - decl: [map_out, string, { call: [sys.serialize, mapped] }]
       - call: [log.info, "  map:    ${map_out}"]
       - set: [fails, { +: [fails, { call: [expect, "map field is written with content", { call: [has_text, map_out, "\"tags\":{\"ort\":\"hier\"}"] }] }] }]
       # And the counter-probe: a map as a value of its OWN (spec/29 line 109).
       - decl: [solo, map<string:string>]
-      - call: [solo.put, "ort", "hier"]
+      - call: [solo.set, "ort", "hier"]
       - decl: [solo_out, string, { call: [sys.serialize, solo, "map<string:string>"] }]
       - call: [log.info, "  solo:   ${solo_out}"]
       - set: [fails, { +: [fails, { call: [expect, "map as a value of its own", { call: [has_text, solo_out, "\"ort\":\"hier\""] }] }] }]

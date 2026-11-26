@@ -80,15 +80,15 @@
       - if: { condition: { eq: [{ call: [scene.valid] }, 0] }, then: [{ print: ["FAIL load"] }, { return: 1 }] }
       - decl: [skins, list<gltf_skin>, { call: [scene.skins] }]
       - if: { condition: { neq: [skins.len, 1] }, then: [{ print: ["FAIL skins ${skins.len}"] }, { return: 1 }] }
-      - decl: [skin, gltf_skin, { call: [skins.get, 0] }]
+      - decl: [skin, gltf_skin, { at: [skins, 0] }]
       - set: [probe.bones, { call: [skin.joint_count] }]
       - if: { condition: { neq: [probe.bones, 6] }, then: [{ print: ["FAIL joints ${probe.bones}"] }, { return: 1 }] }
       - decl: [meshes, list<gltf_mesh>, { call: [scene.meshes] }]
-      - decl: [mesh, gltf_mesh, { call: [meshes.get, 0] }]
+      - decl: [mesh, gltf_mesh, { at: [meshes, 0] }]
       - decl: [prim, gltf_primitive, { call: [mesh.primitive, 0] }]
       - decl: [weights, buffer<f32>, { call: [prim.weights, 0] }]
       - decl: [vtx_count, i32, { call: [prim.vertex_count] }]
-      - if: { condition: { neq: [weights.len, { "*": [vtx_count, 16] }] }, then: [{ print: ["FAIL weights ${weights.len}"] }, { return: 1 }] }
+      - if: { condition: { neq: [weights.byte_len, { "*": [vtx_count, 16] }] }, then: [{ print: ["FAIL weights ${weights.byte_len}"] }, { return: 1 }] }
       - decl: [vtx, i32, 0]
       - while:
           condition: { lt: [vtx, vtx_count] }
@@ -112,8 +112,8 @@
             - call: [gpu_mesh.draw]
             - call: [engine.swap, win]
             - set: [frame, { +: [frame, 1] }]
-      - call: [gpu_mesh.delete]
-      - call: [shader.delete]
+      - call: [gpu_mesh.free]
+      - call: [shader.free]
       - call: [scene.free]
       - call: [engine.destroy_window, win]
       - print: ["PASS gltf_skin_render"]

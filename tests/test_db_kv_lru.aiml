@@ -29,7 +29,7 @@
             - call: [var_kv.set, "k${var_i}", var_c]
             - set: [var_i, { +: [var_i, 1] }]
 
-      - decl: [n_after_fill, i32, { call: [var_kv.len] }]
+      - decl: [n_after_fill, i32, var_kv.len]
       - if:
           condition: { neq: [n_after_fill, 1500] }
           then:

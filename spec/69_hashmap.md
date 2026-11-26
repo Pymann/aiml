@@ -7,12 +7,13 @@ Tests: `tests/test_hashmap.aiml`, `tests/test_hashmap_lifetime.aiml`.
 ## 1. Purpose
 
 `map<K:V>` (spec/01, `src/core/map_impl.cpp`) stores keys and values in two parallel arrays and
-finds a key by **linear search**. Every `get`, `put` and `contains` is O(n), so filling a map
-is O(n²). At 20,000 string keys one put plus one get per key takes about 1.1 s, while 2,000,000
+finds a key by **linear search**. Every `get`, `set` and `has` is O(n), so filling a map
+is O(n²). At 20,000 string keys one set plus one get per key takes about 1.1 s, while 2,000,000
 keys with `hashmap` take about 2.1 s.
 
 `hashmap<K:V>` is a real hash table (`std::unordered_map` in the runtime) with an expected
-O(1) per access. It has the same interface as `map`, plus `add`, `clear` and `keys`. `map`
+O(1) per access. It has the keyed-container interface of spec/71 §1.2 (`set`, `get`, `has`,
+`delete`, `keys`, `clear`, the properties `.len`, `.empty`, `.capacity`) plus the counter `incr`. `map`
 stays as it is: it is a value container with an inline layout that persistence and
 serialisation use.
 
@@ -35,27 +36,31 @@ serialisation use.
 - **K:** `string`, `i8`…`i64`, `u8`…`u64`, or an enum. Integer keys are stored as i64.
 - **V:** integer types, `bool`, enum, `f32`, `f64` or `string`.
 - Other types (models, lists, `any`) are a compile error. To store a model, keep it in a
-  `list<T>` and put its index into the hashmap.
+  `list<T>` and store its index into the hashmap.
 
 Quote the type in YAML (`"hashmap<string:i32>"`), as with `map`.
 
 ## 3. Methods
 
-| Method | Result | Notes |
+| Operation | Result | Notes |
 |---|---|---|
-| `put(k, v)` / `set(k, v)` | — | inserts or overwrites |
-| `get(k)` | `V` | **missing key → `0` / `0.0` / `false` / `""`**, never null or a crash |
-| `add(k, d)` | `V` | integer values only: `v += d`, missing key counts as 0; returns the new value (a counter in one call) |
-| `contains(k)` / `has(k)` | `i32` 0/1 | |
-| `remove(k)` | `i32` 0/1 | 1 if the key was there |
-| `len()` / `size()`, property `.len` | `i32` | |
+| `set(k, v)` | — | inserts or overwrites; a **new** key past `.capacity` raises `CapacityExceededException` |
+| `get(k)` / `get(k, d)` | `V` | **missing key → `d`, else the zero value: `0` / `0.0` / `false` / the null string** (spec/71 §3); never throws |
+| `incr(k, d)` | `V` | integer values only: `v += d`, missing key counts as 0; returns the new value (a counter in one call); a new key is checked against `.capacity` like `set` |
+| `has(k)` | `i32` 0/1 | |
+| `delete(k)` | `i32` 0/1 | 1 if the key was there |
+| property `.len` | `i32` | number of keys |
 | property `.empty` | `i32` 0/1 | |
+| property `.capacity` | `i32` | most keys the table takes, `0` = unbounded; `set: [t.capacity, n]` (spec/71 §5) |
 | `clear()` | — | removes all entries |
 | `keys()` | `list<K>` | sorted, so the result is deterministic whatever the hash order |
 
-String values: `put` stores its own RC copy. `get` returns a **borrow** (like `list.get` and
-`map.get`), and a local bound to it (`decl: [s, string, { call: [t.get, k] }]`) increfs it, so `s`
-stays valid after a later `put` or `remove` (spec/61 §7).  `return: { call: [<.t.get, k] }` from a
+`put`, `contains`, `remove`, `add`, `size` and the call forms `len()` / `empty()` are retired
+(spec/71 §8): each is a compile error that names its replacement.
+
+String values: `set` stores its own RC copy. `get` returns a **borrow** (like `{ at: [l, i] }`
+and `map.get`), and a local bound to it (`decl: [s, string, { call: [t.get, k] }]`) increfs it, so `s`
+stays valid after a later `set` or `delete` (spec/61 §7).  `return: { call: [<.t.get, k] }` from a
 method hands the caller its own copy: a `get` on a container receiver is a borrowing accessor even
 if some user function with the short name `get` returns a string (fixed 29.10.2026,
 tests/test_hashmap_string_return.aiml).
@@ -82,12 +87,12 @@ A `hashmap` slot holds a pointer to a refcounted table.
 ```c
 void*    aiml_hashmap_new(int32 key_kind, int32 val_kind);   // key 0=string 1=int; val 0=int 1=float 2=string
 void     aiml_hashmap_retain(void*); void aiml_hashmap_release(void*); void* aiml_hashmap_clone(void*);
-void     aiml_hashmap_put_bits(void*, const char* sk, int64 ik, uint64 bits);
-void     aiml_hashmap_put_str (void*, const char* sk, int64 ik, const char* v);
-uint64   aiml_hashmap_get_bits(void*, const char* sk, int64 ik);
-const char* aiml_hashmap_get_str(void*, const char* sk, int64 ik);  // borrow; "" if missing
-int64    aiml_hashmap_add(void*, const char* sk, int64 ik, int64 delta);
-int32    aiml_hashmap_contains(void*, ...); int32 aiml_hashmap_remove(void*, ...);
+void     aiml_hashmap_put_bits(void*, const char* sk, int64 ik, uint64 bits);   // set
+void     aiml_hashmap_put_str (void*, const char* sk, int64 ik, const char* v); // set
+uint64   aiml_hashmap_get_bits(void*, const char* sk, int64 ik);            // 0 if missing
+const char* aiml_hashmap_get_str(void*, const char* sk, int64 ik);  // borrow; NULL if missing
+int64    aiml_hashmap_add(void*, const char* sk, int64 ik, int64 delta);      // incr
+int32    aiml_hashmap_contains(void*, ...); int32 aiml_hashmap_remove(void*, ...);  // has / delete
 int32    aiml_hashmap_len(void*); void aiml_hashmap_clear(void*);
 int32    aiml_hashmap_keys_fill(void*, void* list, int32 elem_size);
 ```
@@ -96,7 +101,7 @@ The key is passed in either `sk` (string keys) or `ik` (integer keys), and the o
 ignored. Values are 64-bit patterns: integers are sign- or zero-extended, and floats are
 `double` bits.
 
-## 6. Measured (29.10.2026, AOT, -O1, string keys, one put plus one get per key)
+## 6. Measured (29.10.2026, AOT, -O1, string keys, one set plus one get per key)
 
 | n | `map` | `hashmap` |
 |---|---|---|

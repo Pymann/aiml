@@ -20,7 +20,7 @@
           args: [[raw, string]]
           body:
             - decl: [bag, NoteBag, { call: [sys.deserialize, raw, "NoteBag"] }]
-            - if: { condition: { eq: [{ call: [bag.notes.contains, "key"] }, 1] }, then: [{ set: [<.kept, { call: [bag.notes.get, "key"] }] }] }
+            - if: { condition: { eq: [{ call: [bag.notes.has, "key"] }, 1] }, then: [{ set: [<.kept, { call: [bag.notes.get, "key"] }] }] }
 
 - def:
     name: main

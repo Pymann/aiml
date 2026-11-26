@@ -18,7 +18,7 @@
       - set: [players, { call: [db.open, "ptr_set_borrow_players"] }]
       - decl: [one, Player]
       - set: [one.score, 3]
-      - call: [players.insert, one]
+      - call: [players.add, one]
       - decl: [bad, ptr<Player>]
       # ERROR: store `.get` yields ref<Player>, not ptr<Player>.
       - set: [bad, { call: [players.get, 1] }]

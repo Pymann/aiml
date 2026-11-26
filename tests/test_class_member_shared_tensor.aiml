@@ -41,7 +41,7 @@
             - set: [<.emb, { call: [tensor.load, "tmp_inner_store", "emb"] }]
             - set: [<.dec, { call: [tensor.load, "tmp_inner_store", "dec"] }]
             - call: [<.vocab.push, "tok_a"]
-            - call: [<.vocab_index.put, "tok_a", 0]
+            - call: [<.vocab_index.set, "tok_a", 0]
             - call: [log.info, "Inner.init: n_tokens=${<.n_tokens}"]
 
 - class:
@@ -73,10 +73,10 @@
           body:
             - call: [log.info, "Body.encode_one(${label}): n_tokens=${<.inner.n_tokens}"]
             - decl: [bag, tensor, { call: [tensor.zeros, 1, <.inner.n_tokens] }]
-            - call: [bag.set, 5, 1.0]
+            - idx: [bag, 5, 1.0]
             - decl: [mean_e, tensor, { call: [tensor.matmul, bag, <.inner.emb] }]
             - decl: [h1_tn, tensor, { call: [tensor.matmul, mean_e, <.weight_1] }]
-            - decl: [out_val, f32, { call: [h1_tn.get, 0] }]
+            - decl: [out_val, f32, { at: [h1_tn, 0] }]
             - call: [log.info, "Body.encode_one(${label}): out=${out_val}"]
 
 # Head implementing HeadIface — replicates SoftmaxOutputHead structure

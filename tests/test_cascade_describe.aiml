@@ -44,8 +44,8 @@
       # type_range: enum-Member
       - decl: [trc, list<i32>, { call: [cascade.type_range, "Colr"] }]
       - call: [expect, "${trc.len}", "3"]
-      - call: [expect, "${{ call: [trc.get, 0] }}", "1"]
-      - call: [expect, "${{ call: [trc.get, 2] }}", "3"]
+      - call: [expect, "${{ at: [trc, 0] }}", "1"]
+      - call: [expect, "${{ at: [trc, 2] }}", "3"]
       # type_range: cascade-Node-IDs
       - decl: [trn, list<i32>, { call: [cascade.type_range, "Casc"] }]
       - call: [expect, "${trn.len}", "2"]

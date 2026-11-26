@@ -51,7 +51,7 @@
             - set: [total, {+: [total, {call: [shop.count, {call: [make_row, 1]}]}]}]
             - call: [grid.push, {call: [make_row, 2]}]
             - call: [grid.push, {call: [shop.make]}]
-            - call: [index.put, "k", {call: [make_row, 4]}]
+            - call: [index.set, "k", {call: [make_row, 4]}]
             - idx: [grid, 0, {call: [make_row, 5]}]
             - set: [counter, {+: [counter, 1]}]
       - if: {condition: {neq: [total, 800]}, then: [{return: 40}]}

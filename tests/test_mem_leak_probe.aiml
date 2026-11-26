@@ -233,9 +233,9 @@
       - call: [svc.setup, "/tmp/aiml_mem_probe/"]
       - decl: [envm, map<string:string>, { call: [sys.env] }]
       - decl: [sel, string, "all"]
-      - if: { condition: { gt: [{ call: [envm.contains, "AIML_MEM_PROBE"] }, 0] }, then: [{ set: [sel, { call: [envm.get, "AIML_MEM_PROBE"] }] }] }
+      - if: { condition: { gt: [{ call: [envm.has, "AIML_MEM_PROBE"] }, 0] }, then: [{ set: [sel, { call: [envm.get, "AIML_MEM_PROBE"] }] }] }
       - decl: [reps, i32, 20000]
-      - if: { condition: { gt: [{ call: [envm.contains, "AIML_MEM_ITERS"] }, 0] }, then: [{ decl: [itxt, string, { call: [envm.get, "AIML_MEM_ITERS"] }] }, { set: [reps, { call: [itxt.to_int] }] }] }
+      - if: { condition: { gt: [{ call: [envm.has, "AIML_MEM_ITERS"] }, 0] }, then: [{ decl: [itxt, string, { call: [envm.get, "AIML_MEM_ITERS"] }] }, { set: [reps, { call: [itxt.to_int] }] }] }
       - decl: [reps2, i32, { '*': [reps, 2] }]
       - call: [log.info, "MEMPROBE sel=${sel} N=${reps} 2N=${reps2} (leak ⇔ 2N≈2·N; clean ⇔ both≈0)"]
       # warm-up, so that one-time lazy allocations do not count as a leak.

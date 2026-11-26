@@ -25,10 +25,10 @@
           body:
             - call: [<.items.push, {call: [make_item, num]}]
             - call: [<.names.push, "n-${num}"]
-            - call: [<.index.put, "k${num}", {call: [make_item, num]}]
+            - call: [<.index.set, "k${num}", {call: [make_item, num]}]
             - set: [<.best, {call: [make_item, num]}]
             - if: {condition: {gt: [<.items.len, 3]}, then: [{call: [<.items.remove, 0]}, {call: [<.names.remove, 0]}]}
-            - if: {condition: {gt: [<.index.len, 3]}, then: [{call: [<.index.remove, "k${{ '-': [num, 3] }}"]}]}
+            - if: {condition: {gt: [<.index.len, 3]}, then: [{call: [<.index.delete, "k${{ '-': [num, 3] }}"]}]}
       - def:
           name: top_label
           return: string

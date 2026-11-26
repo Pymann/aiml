@@ -17,7 +17,7 @@
       - decl: [snips, Store<ReopenSnippet>]
       - set: [snips, { call: [db.open, "reopen_heap_snippets_20260410", {persist: true, path: db_path}] }]
 
-      - decl: [var_n, i32, { call: [snips.len] }]
+      - decl: [var_n, i32, snips.len]
       - if:
           condition: { neq: [var_n, 0] }
           then:
@@ -29,7 +29,7 @@
       - call: [var_s.dependencies.push, "stdio"]
       - call: [var_s.dependencies.push, "math"]
 
-      - decl: [var_id, i32, { call: [snips.insert, var_s] }]
+      - decl: [var_id, i32, { call: [snips.add, var_s] }]
       - if:
           condition: { neq: [var_id, 1] }
           then:

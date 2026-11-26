@@ -60,14 +60,14 @@
             - print: ["FAIL segments.len=${sh2.segments.len}"]
             - call: [sys.exit, 1]
 
-      - decl: [gs0, list<Point>, { call: [sh2.segments.get, 0] }]
+      - decl: [gs0, list<Point>, { at: [sh2.segments, 0] }]
       - if:
           condition: { neq: [gs0.len, 2] }
           then:
             - print: ["FAIL gs0.len=${gs0.len}"]
             - call: [sys.exit, 1]
 
-      - decl: [gp0, ref<Point>, { call: [gs0.get, 0] }]
+      - decl: [gp0, ref<Point>, { at: [gs0, 0] }]
       - if:
           condition: { neq: [gp0.var_x, 1] }
           then:
@@ -79,21 +79,21 @@
             - print: ["FAIL gp0.var_y=${gp0.var_y}"]
             - call: [sys.exit, 1]
 
-      - decl: [gp1, ref<Point>, { call: [gs0.get, 1] }]
+      - decl: [gp1, ref<Point>, { at: [gs0, 1] }]
       - if:
           condition: { neq: [gp1.var_x, 3] }
           then:
             - print: ["FAIL gp1.var_x=${gp1.var_x}"]
             - call: [sys.exit, 1]
 
-      - decl: [gs1, list<Point>, { call: [sh2.segments.get, 1] }]
+      - decl: [gs1, list<Point>, { at: [sh2.segments, 1] }]
       - if:
           condition: { neq: [gs1.len, 1] }
           then:
             - print: ["FAIL gs1.len=${gs1.len}"]
             - call: [sys.exit, 1]
 
-      - decl: [gp2, ref<Point>, { call: [gs1.get, 0] }]
+      - decl: [gp2, ref<Point>, { at: [gs1, 0] }]
       - if:
           condition: { neq: [gp2.var_x, 5] }
           then:

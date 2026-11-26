@@ -3184,6 +3184,15 @@ static bool setTargetSharesLocalHandle(SetStmt* setStmt) {
 }
 
 void Compiler::visitSetStmt(SetStmt* setStmt) {
+    // spec/71 §1.3: `set: [p, { at: [vals, i] }]` with p a ref<M>/ptr<M> binds the element address.
+    if (setStmt->value && dynamic_cast<AtExpr*>(setStmt->value.get())) {
+        std::string tg = setStmt->target.rfind("<.", 0) == 0 ? "this." + setStmt->target.substr(2) : setStmt->target;
+        std::string tt;
+        if (tg.find('.') == std::string::npos) { if (Symbol* ts = resolveVariable(tg)) tt = ts->typeName; }
+        else tt = dottedPathType(tg);
+        ctx.atAddressWanted = (tt.rfind("ptr<", 0) == 0 || tt.rfind("ref<", 0) == 0);
+    }
+    struct AtAddressReset { CompilerContext& c; ~AtAddressReset() { c.atAddressWanted = false; } } atAddressReset{ctx};
     // spec/71 §2/§5: the queries are read-only properties — except `.capacity` of a list, map,
     // hashmap or Kv, which `set:` changes (F71-1; refused below len → F71-3).
     {
@@ -5321,7 +5330,13 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
             && (ctx.currentFunctionReturnType.rfind("list<", 0) == 0
                 || ctx.currentFunctionReturnType.rfind("buffer<", 0) == 0))
             ctx.listLiteralArgType = ctx.currentFunctionReturnType;
+        {   // spec/71 §1.3: returning `{ at: [vals, i] }` as ref<M>/ptr<M> returns the element address
+            const std::string& rtw = ctx.currentFunctionReturnType;
+            if ((rtw.rfind("ptr<", 0) == 0 || rtw.rfind("ref<", 0) == 0) && dynamic_cast<AtExpr*>(retStmt->value.get()))
+                ctx.atAddressWanted = true;
+        }
         IRValue* val = visitExpression(retStmt->value.get());
+        ctx.atAddressWanted = false;
         ctx.listLiteralArgType = savedRetLitArg;
         ctx.floatLitTy = savedRetLitTy;
         ctx.floatResultTy = savedRetResTy;
@@ -7035,7 +7050,10 @@ void Compiler::visitIdxStmt(IdxStmt* idx) {
             storeVal = ctx.builder.CreateSIToFP(storeVal, f32);
         else if (storeVal->getType()->isDoubleTy())
             storeVal = ctx.builder.CreateFPTrunc(storeVal, f32);
-        llvm::Function* setFn = ctx.getFunction("aiml_tensor_set", ctx.builder.getVoidTy(), {i8p, i32, f32});
+        // spec/71 §1.5/§4: a flat index into the elements; out of range throws.
+        ListImpl::checkBounds(ctx, indexVals[0], ctx.builder.CreateCall(
+            ctx.getFunction("aiml_tensor_size", i32, {i8p}), {tensorVal}, "tensor_len"));
+        llvm::Function* setFn = ctx.getFunction("aiml_tensor_set_flat", ctx.builder.getVoidTy(), {i8p, i32, f32});
         ctx.builder.CreateCall(setFn, {tensorVal, indexVals[0], storeVal});
         return;
     }

@@ -33,15 +33,15 @@
             - while:
                 condition: {lt: [pos, 9]}
                 body:
-                  - call: [cards.put, "k${pos}", {call: [make_card, "c${pos}"]}]
+                  - call: [cards.set, "k${pos}", {call: [make_card, "c${pos}"]}]
                   - set: [pos, {+: [pos, 1]}]
-            - call: [cards.put, "k3", {call: [make_card, "again"]}]
-            - call: [cards.put, "k3", {call: [make_card, "twice"]}]
-            - call: [cards.put, "k4", {call: [cards.get, "k4"]}]
-            - call: [cards.put, "k5", {call: [cards.get, "k6"]}]
-            - call: [cards.remove, "k0"]
-            - call: [cards.remove, "k8"]
-            - call: [cards.remove, "missing"]
+            - call: [cards.set, "k3", {call: [make_card, "again"]}]
+            - call: [cards.set, "k3", {call: [make_card, "twice"]}]
+            - call: [cards.set, "k4", {call: [cards.get, "k4"]}]
+            - call: [cards.set, "k5", {call: [cards.get, "k6"]}]
+            - call: [cards.delete, "k0"]
+            - call: [cards.delete, "k8"]
+            - call: [cards.delete, "missing"]
             - if: {condition: {neq: [cards.len, 7]}, then: [{return: 100}]}
             - decl: [card_k3, Card, {call: [cards.get, "k3"]}]
             - if: {condition: {neq: [card_k3.title, "twice"]}, then: [{return: 101}]}
@@ -50,19 +50,19 @@
             - decl: [card_k5, Card, {call: [cards.get, "k5"]}]
             - if: {condition: {neq: [card_k5.title, "c6"]}, then: [{return: 103}]}
             - decl: [shared_map, "map<i32:shared<Tag>>"]
-            - call: [shared_map.put, 1, keeper]
+            - call: [shared_map.set, 1, keeper]
             - decl: [other, shared<Tag>, {share: {new: Tag}}]
             - set: [other.label, "other=${2}"]
-            - call: [shared_map.put, 1, other]
-            - call: [shared_map.put, 2, keeper]
-            - call: [shared_map.remove, 2]
+            - call: [shared_map.set, 1, other]
+            - call: [shared_map.set, 2, keeper]
+            - call: [shared_map.delete, 2]
             - decl: [rows, "map<string:list<i32>>"]
             - decl: [row, list<i32>]
             - call: [row.push, 5]
-            - call: [rows.put, "a", row]
-            - call: [rows.put, "b", row]
-            - call: [rows.remove, "a"]
-            - call: [rows.put, "b", {call: [rows.get, "b"]}]
+            - call: [rows.set, "a", row]
+            - call: [rows.set, "b", row]
+            - call: [rows.delete, "a"]
+            - call: [rows.set, "b", {call: [rows.get, "b"]}]
             - if: {condition: {neq: [row.len, 1]}, then: [{return: 104}]}
             - set: [counter, {+: [counter, 1]}]
       - if: {condition: {neq: [keeper.label, "kept=1"]}, then: [{return: 105}]}

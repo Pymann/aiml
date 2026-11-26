@@ -69,7 +69,7 @@ A `url` is built **only** by `http.parse_url`, either at declaration or by assig
 > ```aiml
 > - decl: [api, url, { call: [http.parse_url, "https://de.wikipedia.org/w/api.php"] }]
 > - decl: [req, http_client_handle, { call: [http.new_request, "POST", api] }]
-> - call: [req.headers.put, "Content-Type", "application/x-www-form-urlencoded"]
+> - call: [req.headers.set, "Content-Type", "application/x-www-form-urlencoded"]
 > - set: [req.body, "action=query&format=json&titles=Fu%C3%9Fball"]
 > - decl: [resp, http_response_handle, { call: [req.send] }]   # 200
 > ```
@@ -226,8 +226,8 @@ then gives the status of the last `http.fetch` on this thread.
 - decl: [client, http_client_handle]
 - set: [client, { call: [http.new_request, "POST", chat_url] }]
 
-- call: [client.headers.put, "Content-Type",  "application/json"]
-- call: [client.headers.put, "Authorization", "Bearer sk-abc123"]
+- call: [client.headers.set, "Content-Type",  "application/json"]
+- call: [client.headers.set, "Authorization", "Bearer sk-abc123"]
 - set: [client.body, "{\"prompt\": \"Hello\"}"]
 - set: [client.timeout, 10000]
 
@@ -306,7 +306,7 @@ All client requests (`http.get` … `http.head`, `client.send`) go through one p
 ```aiml
 - decl: [src, url, "https://kontor.example/blobs/sha256:ab12"]
 - decl: [req, http_client_handle, { call: [http.new_request, "GET", src] }]
-- call: [req.headers.put, "Authorization", "Bearer ${token}"]   # dropped if redirected elsewhere
+- call: [req.headers.set, "Authorization", "Bearer ${token}"]   # dropped if redirected elsewhere
 - set: [req.download_to, "/tmp/blob.tar"]
 - decl: [resp, http_response_handle, { call: [req.send] }]
 - call: [req.free]
@@ -373,7 +373,7 @@ TCP connection reuse (keep-alive) across multiple requests.
 - decl: [s, http_session_handle]
 - set: [s, { call: [http.session] }]
 
-- call: [s.headers.put, "Accept", "application/json"]
+- call: [s.headers.set, "Accept", "application/json"]
 - set: [s.timeout, 30000]
 
 # Login — Set-Cookie from server is automatically stored in cookie jar
@@ -421,7 +421,7 @@ TCP connection reuse (keep-alive) across multiple requests.
 - When a response contains a `Set-Cookie` header, the cookie is automatically stored in `cookies`
 - Subsequent requests to the same domain automatically send all matching cookies
 - Domain matching, path matching, and expiry are respected (HTTP cookie spec)
-- `cookies.put(name, val)` allows manually pre-populating the jar (e.g. after token refresh)
+- `cookies.set(name, val)` allows manually pre-populating the jar (e.g. after token refresh)
 
 ### Relationship to `rest_client_handle`
 
@@ -455,7 +455,7 @@ rest_client_handle    ← + base URL + auto JSON headers + relative paths
     body:
       - decl: [body, string]
       - set: [body, req.body]
-      - call: [resp.headers.put, "Content-Type", "text/plain"]
+      - call: [resp.headers.set, "Content-Type", "text/plain"]
       - set: [resp.status, 200]
       - set: [resp.body, body]
       - call: [resp.send]
@@ -610,12 +610,12 @@ No own listener — `start`/`stop`/`start_async` are not present.
 
 ```aiml
 # Set cookie
-- call: [resp.headers.put, "Set-Cookie", "session=abc123; Path=/; HttpOnly; Max-Age=3600"]
+- call: [resp.headers.set, "Set-Cookie", "session=abc123; Path=/; HttpOnly; Max-Age=3600"]
 
 # Redirect
 - decl: [loc, string]
 - set: [loc, { call: [login_url.to_string] }]
-- call: [resp.headers.put, "Location", loc]
+- call: [resp.headers.set, "Location", loc]
 - set: [resp.status, 302]
 - call: [resp.send]
 ```
@@ -655,7 +655,7 @@ In the handler:
       - decl: [page, string]
       - set: [page, { call: [u.get_param.get, "page"] }]
 
-      - call: [resp.headers.put, "Content-Type", "application/json"]
+      - call: [resp.headers.set, "Content-Type", "application/json"]
       - set: [resp.status, 200]
       - set: [resp.body, "{\"user\": \"${uid}\", \"order\": \"${oid}\", \"page\": \"${page}\"}"]
       - call: [resp.send]
@@ -710,7 +710,7 @@ Once middleware calls `resp.send()`, the first `resp.write()`, or `resp.close()`
           - decl: [login, url, { call: [http.parse_url, "/auth/login"] }]
           - decl: [loc, string]
           - set: [loc, { call: [login.to_string] }]
-          - call: [resp.headers.put, "Location", loc]
+          - call: [resp.headers.set, "Location", loc]
           - set: [resp.status, 302]
           - call: [resp.send]
 
@@ -741,7 +741,7 @@ Public routes directly on `srv` (no guard):
       - decl: [auth_url, url, { call: [http.parse_url, "https://accounts.google.com/o/oauth2/auth?client_id=CLIENT_ID&redirect_uri=https://myapp.com/auth/callback&scope=openid%20email&response_type=code"] }]
       - decl: [loc, string]
       - set: [loc, { call: [auth_url.to_string] }]
-      - call: [resp.headers.put, "Location", loc]
+      - call: [resp.headers.set, "Location", loc]
       - set: [resp.status, 302]
       - call: [resp.send]
 
@@ -758,7 +758,7 @@ Public routes directly on `srv` (no guard):
       - decl: [token_url, url, { call: [http.parse_url, "https://oauth2.googleapis.com/token"] }]
       - decl: [client, http_client_handle]
       - set: [client, { call: [http.new_request, "POST", token_url] }]
-      - call: [client.headers.put, "Content-Type", "application/x-www-form-urlencoded"]
+      - call: [client.headers.set, "Content-Type", "application/x-www-form-urlencoded"]
       - set: [client.body, "code=${code}&client_id=CLIENT_ID&client_secret=SECRET&redirect_uri=https://myapp.com/auth/callback&grant_type=authorization_code"]
 
       - decl: [token_resp, http_response_handle]
@@ -767,11 +767,11 @@ Public routes directly on `srv` (no guard):
       - set: [token_json, token_resp.body]
 
       # Set session cookie, redirect back to app
-      - call: [resp.headers.put, "Set-Cookie", "session_token=${token_json}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=3600"]
+      - call: [resp.headers.set, "Set-Cookie", "session_token=${token_json}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=3600"]
       - decl: [home, url, { call: [http.parse_url, "/dashboard"] }]
       - decl: [home_loc, string]
       - set: [home_loc, { call: [home.to_string] }]
-      - call: [resp.headers.put, "Location", home_loc]
+      - call: [resp.headers.set, "Location", home_loc]
       - set: [resp.status, 302]
       - call: [resp.send]
 ```

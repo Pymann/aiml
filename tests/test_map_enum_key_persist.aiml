@@ -23,8 +23,8 @@
 
       - decl: [bag, ManaBag]
       - set: [bag.name, "enum-map"]
-      - call: [bag.mana_cost.put, ManaColor.fire, 2]
-      - call: [bag.mana_cost.put, ManaColor.earth, 7]
+      - call: [bag.mana_cost.set, ManaColor.fire, 2]
+      - call: [bag.mana_cost.set, ManaColor.earth, 7]
 
       - decl: [pre_fire, i32, { call: [bag.mana_cost.get, ManaColor.fire] }]
       - decl: [pre_earth, i32, { call: [bag.mana_cost.get, ManaColor.earth] }]

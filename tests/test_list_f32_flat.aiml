@@ -157,7 +157,7 @@
 
 # ── 8. list.get() for f32 ─────────────────────────────────────────────────
 
-- decl: [var_g1, f32, { call: [flat.get, 1] }]
+- decl: [var_g1, f32, { at: [flat, 1] }]
 - print: ["flat.get(1): ${var_g1}"]
 - if:
     condition: { "&&": [{ ">": [var_g1, 0.19] }, { "<": [var_g1, 0.21] }] }

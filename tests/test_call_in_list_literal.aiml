@@ -34,7 +34,7 @@
       - if: [{ ge: [idx, liste.len] }, true]
         then:
           - return: "<fehlt>"
-      - return: { call: [liste.get, idx] }
+      - return: { at: [liste, idx] }
 
 - def:
     name: zahl_an
@@ -44,7 +44,7 @@
       - if: [{ ge: [idx, liste.len] }, true]
         then:
           - return: -1
-      - return: { call: [liste.get, idx] }
+      - return: { at: [liste, idx] }
 
 - def:
     name: zaehle_leere
@@ -55,7 +55,7 @@
       - decl: [leere, i32, 0]
       - while: [{ lt: [row, liste.len] }]
         body:
-          - decl: [teil, string, { call: [liste.get, row] }]
+          - decl: [teil, string, { at: [liste, row] }]
           - if: [{ eq: [teil.len, 0] }, true]
             then:
               - set: [leere, { +: [leere, 1] }]

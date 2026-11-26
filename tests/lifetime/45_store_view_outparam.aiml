@@ -32,21 +32,21 @@
     body:
       - decl: [mtch, ptr<MatchLike>, { new: MatchLike }]
       - decl: [alice, PlayerLike]
-      - call: [alice.purse.put, "gold", 7]
+      - call: [alice.purse.set, "gold", 7]
       - call: [alice.cards.push, "ace"]
       - call: [mtch.players.push, alice]
       - decl: [grabbed, PlayerLike]
       - decl: [okk, i32, { call: [copy_out, mtch, 0, {'&': [grabbed]} ] }]
       # contents visible through the shared handles
       - decl: [amt, i32, { call: [grabbed.purse.get, "gold"] }]
-      - decl: [nca, i32, { call: [grabbed.cards.len] }]
+      - decl: [nca, i32, grabbed.cards.len]
       - if: { condition: { neq: [amt, 7] }, then: [{ print: ["FAIL store-view: amt=${amt}, expected 7"] }, { return: 1 }] }
       - if: { condition: { neq: [nca, 1] }, then: [{ print: ["FAIL store-view: ncards=${nca}, expected 1"] }, { return: 1 }] }
       # ALIASING: the store SHARED the element's cards handle → a push through `grabbed` is visible
       # in the container element (a deep-copy would NOT show this; that is the point of §7 share).
       - call: [grabbed.cards.push, "king"]
       - decl: [chk, PlayerLike, { at: [mtch.players, 0] }]     # VALUE-COPY of the element (shares its handles) → observes the shared push
-      - decl: [ncb, i32, { call: [chk.cards.len] }]
+      - decl: [ncb, i32, chk.cards.len]
       - if: { condition: { neq: [ncb, 2] }, then: [{ print: ["FAIL alias: element cards.len=${ncb}, expected 2 (store must SHARE, not deep-copy)"] }, { return: 1 }] }
       - print: ["PASS 45 store_view_outparam"]
       - return: 0

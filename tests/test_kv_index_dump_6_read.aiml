@@ -24,7 +24,7 @@
       - decl: [dinge, Kv<string:Werkzeug>]
       - set:  [dinge, { call: [db.open_kv, "idx_indexed", {persist: true, index_dump: true, path: db_path}] }]
 
-      - decl: [anz, i32, { call: [dinge.len] }]
+      - decl: [anz, i32, dinge.len]
       - if:
           condition: { neq: [anz, 3] }
           then:

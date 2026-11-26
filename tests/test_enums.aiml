@@ -31,8 +31,8 @@
 
 # Test Map with Enum (should be map<i32, ...>)
 - decl: [colorMap, map<Color:string>]
-- call: [colorMap.put, Color.Red, "This is Red"]
-- call: [colorMap.put, Color.Blue, "This is Blue"]
+- call: [colorMap.set, Color.Red, "This is Red"]
+- call: [colorMap.set, Color.Blue, "This is Blue"]
 
 - decl: [valRed, string, {call: [colorMap.get, Color.Red]}]
 - decl: [valBlue, string, {call: [colorMap.get, Color.Blue]}]

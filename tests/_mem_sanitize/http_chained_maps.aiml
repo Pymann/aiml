@@ -1,4 +1,4 @@
-# memV3: chained `req.params.get` / `url.get_param.get` / `resp.headers.put` operate on the
+# memV3: chained `req.params.get` / `url.get_param.get` / `resp.headers.set` operate on the
 # parser maps; get results are handed out as managed strings (valgrind-clean).
 # Expected exit code: 0
 - def:
@@ -9,8 +9,8 @@
       - set: [qurl, req.url]
       - decl: [color, string, { call: [qurl.get_param.get, "color"] }]
       - decl: [item, string, { call: [req.params.get, "id"] }]
-      - decl: [nparams, i32, { call: [req.params.len] }]
-      - call: [resp.headers.put, "x-probe", "yes"]
+      - decl: [nparams, i32, req.params.len]
+      - call: [resp.headers.set, "x-probe", "yes"]
       - set: [resp.status, 200]
       - set: [resp.body, "${item}|${color}|${nparams}"]
       - call: [resp.send]

@@ -30,7 +30,7 @@
     body:
       - decl: [mid_item, Item, {call: [make_item, mid_num]}]
       - decl: [mid_map, map<string:i32>]
-      - call: [mid_map.put, "m", mid_num]
+      - call: [mid_map.set, "m", mid_num]
       - return: {call: [deep_throw, mid_num]}
 - def:
     name: throw_box

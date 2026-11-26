@@ -3,16 +3,16 @@
 # Expected exit code: 0
 
 - decl: [var_a, tensor, { call: [tensor.zeros, 2, 2] }]
-- call: [var_a.set, 0, 1.0]
-- call: [var_a.set, 1, 2.0]
-- call: [var_a.set, 2, 3.0]
-- call: [var_a.set, 3, 4.0]
+- idx: [var_a, 0, 1.0]
+- idx: [var_a, 1, 2.0]
+- idx: [var_a, 2, 3.0]
+- idx: [var_a, 3, 4.0]
 
 - decl: [var_b, tensor, { call: [var_a.clone] }]
 
 - decl: [var_h1, string, { call: [tensor.sha256, var_a] }]
 - decl: [var_h2, string, { call: [tensor.sha256, var_b] }]
-- decl: [h1_len, i32, { call: [var_h1.len] }]
+- decl: [h1_len, i32, var_h1.len]
 
 - print: ["tensor sha256: ${var_h1}"]
 
@@ -28,7 +28,7 @@
       - print: ["FAIL: cloned tensors must hash identically"]
       - call: [sys.exit, 1]
 
-- call: [var_b.set, 3, 5.0]
+- idx: [var_b, 3, 5.0]
 - decl: [var_h3, string, { call: [tensor.sha256, var_b] }]
 
 - if:

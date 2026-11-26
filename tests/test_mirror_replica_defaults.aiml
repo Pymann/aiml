@@ -44,7 +44,7 @@
       - set: [mdl.named, "n${val}"]
       - call: [mdl.items.push, "a${val}"]
       - call: [mdl.items.push, "b${val}"]
-      - call: [mdl.table.put, "k${val}", val]
+      - call: [mdl.table.set, "k${val}", val]
       - set: [mdl.inner.tag, "t${val}"]
       - set: [mdl.inner.level, { +: [val, 1] }]
       - decl: [part, RdInner]

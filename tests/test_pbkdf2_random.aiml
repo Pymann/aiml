@@ -14,7 +14,7 @@
       - call: [sys.exit, 1]
 
 # ── 2. Output length is always 64 hex chars ───────────────────────────────
-- decl: [key_len, i32, { call: [vector_key.len] }]
+- decl: [key_len, i32, vector_key.len]
 - if:
     condition: { eq: [key_len, 64] }
     then:
@@ -46,13 +46,13 @@
 - decl: [rand_short, string, { call: [math.random_hex, 16] }]
 - decl: [rand_long,  string, { call: [math.random_hex, 32] }]
 - if:
-    condition: { eq: [{ call: [rand_short.len] }, 32] }
+    condition: { eq: [rand_short.len, 32] }
     then:
       - print: ["  [ok] random_hex(16) → 32 chars"]
     else:
       - call: [sys.exit, 1]
 - if:
-    condition: { eq: [{ call: [rand_long.len] }, 64] }
+    condition: { eq: [rand_long.len, 64] }
     then:
       - print: ["  [ok] random_hex(32) → 64 chars"]
     else:

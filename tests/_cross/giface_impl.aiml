@@ -5,7 +5,7 @@
     name: LoudGreeter
     implements: [Greeter]
     methods:
-      - def: { name: greet, args: [[who, string]], return: i32, body: [{ return: { call: [who.len] } }] }
+      - def: { name: greet, args: [[who, string]], return: i32, body: [{ return: who.len }] }
 
 - classgroup:
     name: LoudKit

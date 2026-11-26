@@ -79,7 +79,7 @@ is not scattered on the heap, but organized in **pages** (contiguous memory bloc
 - set: [e.id, 1]
 - set: [e.pos_x, 100.0]
 - set: [e.hp, 100]
-- call: [entities.insert, e]
+- call: [entities.add, e]
 
 # Read by ID (zero-copy — a ref<Entity> borrow into store memory):
 - decl: [p, ref<Entity>]
@@ -274,7 +274,7 @@ is optimized for very large data sets.
 
 ```aiml
 # Store player configurations:
-- decl: [config_db, Kv<string, PlayerConfig>]
+- decl: [config_db, "Kv<string:PlayerConfig>"]
 - set:  [config_db, { call: [db.open_kv, "player_configs"] }]
 
 - decl: [cfg, PlayerConfig]
@@ -320,7 +320,7 @@ This is particularly valuable for:
 
 # Time-travel: query state at tick 1000:
 - decl: [past, GameState]
-- set:  [past, { call: [history.at, 1000] }]
+- set:  [past, { call: [history.at_time, 1000] }]
 - print: ["Score at tick 1000: ${past.score}"]
 
 # Query range (for ML training):
@@ -359,7 +359,7 @@ Concrete use cases:
 # Insert an embedding (e.g. from an ML model):
 - decl: [embed, list<f32>]   # 128 floats
 # ... fill embedding ...
-- call: [knowledge.insert, "doc_42", embed]
+- call: [knowledge.set, "doc_42", embed]
 
 # k-nearest-neighbor search (k=5 most similar):
 - decl: [query_vec, list<f32>]
@@ -369,13 +369,33 @@ Concrete use cases:
 
 # VecResult contains: id (string), score (f32, similarity 0.0–1.0)
 - decl: [r, VecResult]
-- set:  [r, { call: [results.get, 0] }]
+- set:  [r, { at: [results, 0] }]
 - print: ["Most similar document: ${r.id}, Score: ${r.score}"]
 ```
 
 Internally `VecStore` uses **HNSW** (Hierarchical Navigable Small World) —
 a graph-based algorithm for approximate nearest-neighbor search.
 It is faster than brute-force (O(log N) vs O(N)) and scales to millions of vectors.
+
+### 3.6 Operations — the collection vocabulary (spec/71)
+
+The stores speak the vocabulary of spec/71: one name per operation, and the queries are
+properties.
+
+| | `Store<T>` | `Kv<K:V>` | `VecStore` | `TimeSeries<T>` |
+|---|---|---|---|---|
+| write | `add(r)` → the new row id (`i32`) | `set(k, v)` | `set(k, vec)` — one vector per id, an existing id is overwritten | `append(v, t)` |
+| read | `get(id)` → `ref<T>`, `null` if missing | `get(k)` / `get(k, d)` (§6.2 *Missing key*) | `search(q, k)` → `list<VecResult>` | `at_time(t)`, `range(a, b)` |
+| update | `update(id, r)` | `set(k, v)` | `set(k, vec)` | — |
+| key present | — | `has(k)` → `i32` 0/1 | — | — |
+| remove | `delete(id)` → `i32` 1 if the row was there, else 0 | `delete(k)` → `i32` 0/1 | `delete(k)` → `i32` 0/1 | — |
+| all keys | — | `keys()` → `list<string>`, sorted | — | — |
+| remove all | — | `clear()` | — | — |
+| `.len` / `.empty` | ✓ | ✓ | ✓ | ✓ |
+| `.capacity` | — | ✓ settable, `0` = unbounded; a **new** key past it raises `CapacityExceededException`; held by the open store in this process, not persisted (spec/71 F71-5) | — | — |
+
+`Store.insert`, `VecStore.insert`, `TimeSeries.at` and the call forms `len()` are retired
+(spec/71 §8) and name their replacement.
 
 ---
 
@@ -472,7 +492,7 @@ AionDB offers two transaction modes:
 ```aiml
 - call: [db.begin]
 
-- call: [entities.insert, new_entity]
+- call: [entities.add, new_entity]
 - call: [inventory.delete, old_item_id]
 
 # Commit all changes atomically:
@@ -494,9 +514,9 @@ single timestamp. This is more efficient than many individual commits:
 - call: [db.begin_frame, { call: [time.now] }]   # Starts frame N
 
 # All game-loop operations of this frame:
-- call: [entities.insert, spawned_enemy]
+- call: [entities.add, spawned_enemy]
 - call: [entities.update, 5, {hp: 80}]
-- call: [history.append, current_state]
+- call: [history.append, current_state, { call: [time.now] }]
 
 - call: [db.end_frame]   # All changes get the same timestamp
 ```
@@ -529,11 +549,12 @@ Both `Store<T>` and `Kv<K,V>` are **mmap-backed**:
   `kv.get` returns a pointer into the mmap'd region for blob/string/fixed
   modes — true zero-copy.
 
-**Missing key.**  `kv.get` on a key that does not exist returns the
-zero value of the value type: `0` for `i32`/`i64`, `0.0` for `f32`/`f64`, `""` for `string`, a
-null pointer for a model.  Until 2026-11-01 the number path loaded from the null pointer unchecked and
-crashed (SIGSEGV), while `Kv<string:string>` already returned `""`.  Whoever needs to distinguish
-"missing" from "set to 0" asks `kv.has(key)` first.
+**Missing key.**  `kv.get` on a key that does not exist never throws.  It returns the default
+of `kv.get(key, d)` if one is given (scalar and `string` values), else the zero value of the
+value type: `0` for `i32`/`i64`, `0.0` for `f32`/`f64`, the null string for `string`, a null
+pointer for a model (spec/71 §3).  Until 2026-11-01 the number path loaded from the null pointer
+unchecked and crashed (SIGSEGV); until spec/71 a missing `string` was `""`.  Whoever needs to
+distinguish "missing" from "set to 0" asks `kv.has(key)` first.
 
 The operating system manages which pages are RAM-resident and which are
 on disk. AionDB does not implement paging itself.
@@ -959,7 +980,7 @@ open, and subsequent reads transparently re-fault the pages from disk.
 
 | Operation | Effect |
 |---|---|
-| `kv.get / has / len / iter / get_blob` | Index lookup unchanged; mmap re-faults on touch |
+| `kv.get / has / .len / iter / get_blob` | Index lookup unchanged; mmap re-faults on touch |
 | `kv.set` | Appends to mmap (pages re-fault into RAM) |
 | `kv.delete` | Index entry removed; tombstone written to WAL |
 | `db.reload_kv` | Reopens fd, rebuilds index from WAL |
@@ -1131,7 +1152,7 @@ Ownership / lifetime contract:
             # Only 1 means <.work holds a valid copy; 0 = missing, -1 = undecodable.
             - if: { condition: { neq: [ok, 1] }, then: [{ return }] }
             # <.work is now an independent copy of matches[mid]; mutate + set back.
-            - call: [<.matches.set, mid, <.work]
+            - idx: [<.matches, mid, <.work]
 ```
 
 Runtime: `aiml_db_kv_get_copy_at(kv, key, dst)` — missing key → return `0` (dst
@@ -1401,9 +1422,9 @@ If it detects a higher version with new fields, it applies **in-place migration*
     - set: [pos.x, { call: [math.random, 0.0, 1000.0] }]
     - set: [vel.dx, 1.0]
     - set: [hp.hp, 100]
-    - call: [positions.insert,  pos]
-    - call: [velocities.insert, vel]
-    - call: [health.insert,     hp]
+    - call: [positions.add,  pos]
+    - call: [velocities.add, vel]
+    - call: [health.add,     hp]
     - set: [i, { +: [i, 1] }]
 
 # --- Game loop ---
@@ -1445,7 +1466,7 @@ If it detects a higher version with new fields, it applies **in-place migration*
     args: [[obs, Observation]]
     return: void
     body:
-      - call: [replay_buffer.insert, obs]
+      - call: [replay_buffer.add, obs]
 
 # Mini-batch for training (random 64 samples):
 - def:
@@ -1478,8 +1499,8 @@ If it detects a higher version with new fields, it applies **in-place migration*
     args: [[doc, Document], [embedding, list<f32>]]
     return: void
     body:
-      - call: [docs.insert, doc]
-      - call: [doc_vecs.insert, doc.doc_id, embedding]
+      - call: [docs.add, doc]
+      - call: [doc_vecs.set, doc.doc_id, embedding]
 
 # Find similar documents for a query (k=3):
 - def:
@@ -1510,7 +1531,7 @@ If it detects a higher version with new fields, it applies **in-place migration*
 | Operation | Complexity | Note |
 |-----------|------------|-------|
 | `store.get(id)` | O(1) | Slot index (no primary_key) or HashMap lookup |
-| `store.insert(v)` | O(1) amortized | Append to active page |
+| `store.add(v)` | O(1) amortized | Append to active page |
 | `db.query(store, ...)` | O(N) | Can become O(log N) with index |
 | `db.run_system(fn, s1, s2)` | O(min(|s1|,|s2|)) | Intersection via slot bitmap |
 | `kv.get(key)` | O(1) | Hash table |
@@ -1529,7 +1550,7 @@ The runtime guarantees:
 
 - **Singleton handles:** `db.open_kv("name", {persist: true})` always returns the same
   handle for the same name+path — no duplicate WAL, no memory leak.
-- **Atomic single operations:** `kv.set`, `kv.get`, `kv.has`, `kv.delete`, `store.insert`,
+- **Atomic single operations:** `kv.set`, `kv.get`, `kv.has`, `kv.delete`, `store.add`,
   `store.get` are each atomic. Concurrent calls from different threads
   on the same handle are safe.
 - **Checkpoint safety:** `db.checkpoint` is serialized — no race between

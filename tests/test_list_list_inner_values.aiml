@@ -26,14 +26,14 @@
             - call: [sys.exit, 1]
 
       - decl: [var_cb, list<i32>]
-      - set: [var_cb, { call: [var_ab.activation_cost.get, 0] }]
+      - set: [var_cb, { at: [var_ab.activation_cost, 0] }]
       - if:
           condition: { neq: [var_cb.len, 1] }
           then:
             - print: ["FAIL A2: var_cb.len=${var_cb.len} expected 1"]
             - call: [sys.exit, 1]
 
-      - decl: [var_v0, i32, { call: [var_cb.get, 0] }]
+      - decl: [var_v0, i32, { at: [var_cb, 0] }]
       - if:
           condition: { neq: [var_v0, 6] }
           then:
@@ -47,14 +47,14 @@
             - call: [sys.exit, 1]
 
       - decl: [eff0, list<i32>]
-      - set: [eff0, { call: [var_ab.effects.get, 0] }]
+      - set: [eff0, { at: [var_ab.effects, 0] }]
       - if:
           condition: { neq: [eff0.len, 2] }
           then:
             - print: ["FAIL A5: eff0.len=${eff0.len} expected 2"]
             - call: [sys.exit, 1]
 
-      - decl: [var_e0, i32, { call: [eff0.get, 0] }]
+      - decl: [var_e0, i32, { at: [eff0, 0] }]
       - if:
           condition: { neq: [var_e0, 10] }
           then:
@@ -86,14 +86,14 @@
             - call: [sys.exit, 1]
 
       - decl: [gcb, list<i32>]
-      - set: [gcb, { call: [got.activation_cost.get, 0] }]
+      - set: [gcb, { at: [got.activation_cost, 0] }]
       - if:
           condition: { neq: [gcb.len, 1] }
           then:
             - print: ["FAIL B3: gcb.len=${gcb.len} expected 1 (inner list empty after WAL roundtrip)"]
             - call: [sys.exit, 1]
 
-      - decl: [gv0, i32, { call: [gcb.get, 0] }]
+      - decl: [gv0, i32, { at: [gcb, 0] }]
       - if:
           condition: { neq: [gv0, 6] }
           then:
@@ -107,14 +107,14 @@
             - call: [sys.exit, 1]
 
       - decl: [geff0, list<i32>]
-      - set: [geff0, { call: [got.effects.get, 0] }]
+      - set: [geff0, { at: [got.effects, 0] }]
       - if:
           condition: { neq: [geff0.len, 2] }
           then:
             - print: ["FAIL B6: geff0.len=${geff0.len} expected 2"]
             - call: [sys.exit, 1]
 
-      - decl: [ge0, i32, { call: [geff0.get, 0] }]
+      - decl: [ge0, i32, { at: [geff0, 0] }]
       - if:
           condition: { neq: [ge0, 10] }
           then:

@@ -47,7 +47,7 @@
 
       # env replaces the environment
       - decl: [envm, map<string:string>]
-      - call: [envm.put, "AIML_PROC_T", "xyz"]
+      - call: [envm.set, "AIML_PROC_T", "xyz"]
       - decl: [env_proc_argv, list<string>, ["/bin/sh", "-c", "echo $AIML_PROC_T:$HOME"]]
       - decl: [env_proc, process, { call: [sys.exe, env_proc_argv, {env: envm, capture: true}] }]
       - call: [env_proc.wait]

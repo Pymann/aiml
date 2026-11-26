@@ -46,7 +46,7 @@
 - set: [entries, { call: [io.list_dir, testdir] }]
 
 - decl: [entry_count, i32]
-- set: [entry_count, { call: [entries.len] }]
+- set: [entry_count, entries.len]
 - print: ["entry_count: ${entry_count}"]
 # expected: entry_count: 2
 

@@ -23,10 +23,11 @@
 - decl: [msg, string, "Hello"]
 - call: [packet.write, msg, string]
 
-# Buffer Metadata
-# - packet.size     : Current number of bytes written (property, i32)
-# - packet.capacity : Total allocated size (property, i32)
-- print: [["Bytes written: ", packet.size]]
+# Buffer Metadata (properties, spec/71 §2) — on an untyped buffer an element is a byte:
+# - packet.len      : number of bytes written (i32); packet.byte_len is the same number
+# - packet.empty    : 1 if nothing is written
+# - packet.capacity : total allocated size in bytes, as alloc set it (read-only)
+- print: [["Bytes written: ", packet.len]]
 - print: [["Total capacity: ", packet.capacity]]
 
 # Writing Structs
@@ -64,15 +65,16 @@
 | Method | Signature | Description |
 |--------|-----------|-------------|
 | `alloc` | `buffer.alloc(size: i32)` | Allocates `size` bytes (malloc). Must be called before any read/write. |
-| `write` | `buffer.write(value, type)` | Writes `sizeof(type)` bytes at writeIndex, advances writeIndex. |
+| `write` | `buffer.write(value, type)` | Writes `sizeof(type)` bytes at writeIndex, advances writeIndex. Past the capacity: `BufferOverflowException`, nothing written. |
 | `write_string` | `buffer.write_string(s: string) → i32` | Appends the string's bytes (up to its terminating `0x00`, so **not** usable for embedded NUL bytes) at writeIndex, advances writeIndex and raises `len` if it grew. Returns the byte count, `0` for an empty string, or `-1` if `s` is null or the bytes do not fit in the remaining capacity (no silent truncation — `alloc` enough first). |
 | `read` | `buffer.read(type) → T` | Reads `sizeof(type)` bytes at readIndex, advances readIndex. |
 | `seek` | `buffer.seek(pos: i32)` | Sets both readIndex and writeIndex to `pos` (byte offset). |
 | `zero` | `buffer.zero()` | `memset(data, 0, capacity)` + sets size and writeIndex to capacity. |
-| `len` | `buffer.len → i32` | Returns current size (number of **bytes** written). Property access, no `call:` needed. |
-| `capacity` | `buffer.capacity → i32` | Total allocated size in bytes, as `alloc` set it. Property access. |
+| `len` | `buffer.len → i32` | Number of **bytes** written. Property (spec/71 §2), never called. |
+| `byte_len` | `buffer.byte_len → i32` | The same number as `len` on an untyped buffer. Property. |
+| `empty` | `buffer.empty → i32` | `1` if nothing is written. Property. |
+| `capacity` | `buffer.capacity → i32` | Total allocated size in bytes, as `alloc` set it. Read-only property — `resize` changes it. |
 | `resize` | `buffer.resize(bytes: i32)` | Re-allocates to `bytes`, keeping the content that still fits. |
-| `append` | `buffer.append(other: buffer)` | Copies `other`'s written bytes to this buffer's write position (also §Typed buffers). |
 | `read_versioned` | `buffer.read_versioned(T [, version: i32]) → T` | Reads a `T` written by an older layout version (spec/37). |
 | `ws_recv_append` | `buffer.ws_recv_append(conn: ws_handle) → i32` | Like `ws_recv`, but **appends** the frame instead of replacing the content. |
 | `ws_send_range` | `buffer.ws_send_range(conn: ws_handle, offset: i32, len: i32) → i32` | Sends only `[offset, offset+len)` as one binary frame. |
@@ -129,48 +131,53 @@ Access is done via computed byte offsets:
 
 ## Typed buffers — `buffer<T>`
 
-A `buffer<T>` is the same bytes with an element type attached, and that type unlocks a
-second, element-wise surface beside the byte-wise one above.
+A `buffer<T>` is the same bytes with an element type attached, and that type makes it a
+sequence of `T` (spec/71 §1.3): every query and every position counts **elements**.
 
-| Method | Signature | Description |
+| Operation | Form | Description |
 |--------|-----------|-------------|
-| `push` | `buffer<T>.push(value)` | Appends **one element**, converted to `T` first (a double literal becomes an `f32` in a `buffer<f32>`). Advances the write index like `write`. |
-| `get` | `buffer<T>.get(index: i32) -> T` | Reads the element at **element index** `index` — the byte offset is `index * sizeof(T)`. |
-| `count` | `buffer<T>.count -> i32` | Number of **elements** written: `len / sizeof(T)`. For `buffer<u8>` it equals `len`. |
-| `ptr` | `buffer<T>.ptr` | The raw data pointer, for handing the block to a native call. |
-| `append` | `buffer<T>.append(other: buffer<T>)` | Copies all of `other`'s written bytes to this buffer's write position and advances size and write index. |
-| `byte_len` | `buffer<T>.byte_len -> i32` | **The same value as `len`.** Kept because it says what it returns. |
+| `push` | `call: [b.push, v]` | Appends **one element**, converted to `T` first (a double literal becomes an `f32` in a `buffer<f32>`). Advances the write index like `write`; past the capacity `BufferOverflowException`. |
+| read | `{ at: [b, i] }` | The element at **element index** `i` (byte offset `i * sizeof(T)`); `i` outside `[0, len)` raises `IndexOutOfBoundsException`. |
+| write | `idx: [b, i, v]` | Overwrites element `i` (converted to `T`); same bounds as `at`. |
+| `pop` | `call: [b.pop]` → `T` | Removes and returns the last element; an empty buffer raises `IndexOutOfBoundsException`. |
+| `extend` | `call: [b.extend, other]` | Appends all of `other`'s (a `buffer<T>`) written elements at the write position; if they do not all fit the capacity, `BufferOverflowException` and nothing is copied. |
+| `clear` | `call: [b.clear]` | Removes every element; the allocation (`capacity`) stays. |
+| `ptr` | `call: [b.ptr]` | The raw data pointer, for handing the block to a native call. |
+| `.len` | property → `i32` | Number of **elements** written: bytes / `sizeof(T)`. |
+| `.byte_len` | property → `i32` | Number of **bytes** written. |
+| `.empty` | property → `i32` | `1` if no element is written. |
+| `.capacity` | property → `i32` | Elements the allocation holds: allocated bytes / `sizeof(T)`. Read-only. |
 
-### `len` counts BYTES, `get` counts ELEMENTS (normative)
+### `alloc` counts BYTES, everything else ELEMENTS (normative)
 
-This is the one thing about buffers worth remembering:
+This is the one thing about typed buffers worth remembering:
 
 ```yaml
 - decl: [pts, buffer<f32>]
 - call: [pts.alloc, 16]          # 16 BYTES = room for four f32
 - call: [pts.push, 1.0]
 - call: [pts.push, 2.0]
-# pts.len     == 8   (bytes)
-# pts.count   == 2   (elements)
-# pts.get(1)  == 2.0 (element index, NOT byte 1)
+# pts.len           == 2   (elements)
+# pts.byte_len      == 8   (bytes)
+# pts.capacity      == 4   (elements)
+# { at: [pts, 1] }  == 2.0 (element index, NOT byte 1)
 ```
 
-`alloc` is in bytes for every buffer, typed or not. `len`, `size` and `byte_len` are in
-bytes. `get`, `push` and `count` are in elements. A loop written as
-`idx < buf.len` with `buf.get(idx)` therefore runs four times too far on a
-`buffer<f32>` and reads past the data **without raising anything** — which is why `count`
-exists and why this paragraph is here rather than in a footnote. The same confusion in C
-made `ui.draw_polyline` (spec/44_3 §4.6) draw a quarter of its segments.
-
-`byte_len` is an alias for `len`, not its counterpart: the name suggests an
-element-counting `len`, and there is none. Use `count` for elements.
+`alloc` and `resize` are in bytes for every buffer, typed or not; so is `.byte_len`.  On a
+`buffer<u8>` bytes and elements coincide.  Before spec/71 `len` counted bytes on a typed
+buffer too, so a loop `idx < buf.len` with an element read ran four times too far on a
+`buffer<f32>` without raising anything — the same confusion in C made `ui.draw_polyline`
+(spec/44_3 §4.6) draw a quarter of its segments.  Now `.len` is the bound, and a position
+past it throws.
 
 ## Exception Behaviour
 
 | Condition | Exception |
 |-----------|-----------|
-| `write()` when `size + sizeof(value) > capacity` | `BufferOverflowException` |
+| `write()` / `push()` when `writeIndex + sizeof(value) > capacity` | `BufferOverflowException` |
+| `extend(other)` when the other's bytes do not fit the capacity | `BufferOverflowException` |
 | `read()` when read position > written data size | `BufferUnderflowException` |
+| `{ at: [b, i] }`, `idx: [b, i, v]` with `i` outside `[0, len)`; `pop()` on an empty `buffer<T>` | `IndexOutOfBoundsException` |
 
 ## Proposed Binary View Extensions (Not Implemented Yet)
 

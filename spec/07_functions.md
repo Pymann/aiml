@@ -74,8 +74,8 @@
 # - def: { name: config, args: [[timeout, f64], [debug, bool]] }
 #
 # - decl: [options, map<string:any>]
-# - call: [options.put, "timeout", 10.0]
-# - call: [options.put, "debug", true]
+# - call: [options.set, "timeout", 10.0]
+# - call: [options.set, "debug", true]
 # - call: [config, options]
 #
 # Logic:

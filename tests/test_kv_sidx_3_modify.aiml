@@ -77,7 +77,7 @@
       - decl: [tr_wrk, list<string>, { call: [dinge.findings_by, "tag", "werkzeug"] }]
       - set: [bad, { +: [bad, { call: [pruef_zahl, tr_wrk.len, 2, "ende tag=werkzeug"] }] }]
 
-      - decl: [anzahl, i32, { call: [dinge.len] }]
+      - decl: [anzahl, i32, dinge.len]
       - set: [bad, { +: [bad, { call: [pruef_zahl, anzahl, 3, "len"] }] }]
 
       - if:

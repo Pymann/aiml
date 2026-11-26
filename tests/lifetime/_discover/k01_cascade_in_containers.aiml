@@ -14,11 +14,11 @@
             - decl: [one, cascade<ProbeCode>]
             - call: [one.push, 1]
             - call: [codes.push, one]
-            - call: [named.put, "a", one]
-            - call: [named.put, "a", one]
+            - call: [named.set, "a", one]
+            - call: [named.set, "a", one]
             - decl: [got, cascade<ProbeCode>, {call: [named.get, "a"]}]
             - if: {condition: {neq: [got.len, 1]}, then: [{return: 1}]}
-            - call: [named.remove, "a"]
+            - call: [named.delete, "a"]
             - call: [codes.pop]
             - set: [counter, {+: [counter, 1]}]
       - return: 0

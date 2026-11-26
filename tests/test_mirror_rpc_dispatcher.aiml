@@ -75,13 +75,13 @@
       - def:
           name: register
           args: [[name, string], [var_h, ptr<RpcHandler>]]
-          body: [{ call: [<.handlers.put, name, var_h] }]
+          body: [{ call: [<.handlers.set, name, var_h] }]
       - def:
           name: dispatch
           args: [[rpc, rpc_event], [sess, mirror_session], [player, ref<NetPlayer>]]
           body:
             - if:
-                condition: { eq: [{ call: [<.handlers.contains, rpc.method] }, 0] }
+                condition: { eq: [{ call: [<.handlers.has, rpc.method] }, 0] }
                 then:
                   - print: ["dispatcher: unknown rpc '${rpc.method}'"]
                   - return: []

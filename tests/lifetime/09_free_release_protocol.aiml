@@ -26,7 +26,7 @@
             - decl: [itb, ptr<Big>, { new: Big }]
             - set: [itb.name, "itn${idx}"]
             - call: [itb.rows.push, "itr"]
-            - call: [itb.table.put, "kdx", idx]
+            - call: [itb.table.set, "kdx", idx]
             - set: [itb.child, { new: Inner }]        # owning ptr child
             - call: [itb.child.nums.push, idx]
             - set: [itb.inline.tag, "in${idx}"]

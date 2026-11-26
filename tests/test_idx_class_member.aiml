@@ -22,7 +22,7 @@
             # case A1: value is an inline binary op expression
             - decl: [text_a, list<string>]
             - call: [text_a.push, "ONE_A"]
-            - idx: [<.items, target_idx, { call: [text_a.get, 0] }]
+            - idx: [<.items, target_idx, { at: [text_a, 0] }]
       - def:
           name: mutate2
           body:

@@ -27,7 +27,7 @@
       - call: [buf.free]
       # map<K:V> — { at: [Class, 3] } rc container; get_copy = independent element copy (§5.4)
       - decl: [itm, "map<string:i32>"]
-      - call: [itm.put, "kdx", 7]
+      - call: [itm.set, "kdx", 7]
       - if: { condition: { neq: [{ call: [itm.get, "kdx"] }, 7] }, then: [{ print: ["FAIL map"] }, { return: 1 }] }
       - decl: [kcopy, i32, { call: [itm.get_copy, "kdx"] }]   # get_copy → independent copy of the value
       - if: { condition: { neq: [kcopy, 7] }, then: [{ print: ["FAIL get_copy=${kcopy}"] }, { return: 1 }] }

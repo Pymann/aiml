@@ -27,7 +27,7 @@
     body:
       - decl: [box, Box]
       - decl: [seed, Cell]
-      - call: [seed.choice.put, "1", 5]
+      - call: [seed.choice.set, "1", 5]
       - set: [seed.flag, 1]
       - call: [box.cells.push, seed]
       - decl: [itr, i32, 0]
@@ -37,7 +37,7 @@
             - call: [reset_cells, {'&': [box]}]
             # re-populate so the next reset has a shared map to replace again
             - decl: [cz0, Cell, { at: [box.cells, 0] }]
-            - call: [cz0.choice.put, "1", 5]
+            - call: [cz0.choice.set, "1", 5]
             - idx: [box.cells, 0, cz0]
             - set: [itr, { +: [itr, 1] }]
       - print: ["DONE rf"]

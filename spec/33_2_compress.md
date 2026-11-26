@@ -102,8 +102,8 @@ compress.unzip(src, dst_dir)         → i32          0 = ok
           - decl: [body, string, { call: [resp.body] }]
           - decl: [gz, buffer<u8>, { call: [compress.gzip, body] }]
           - set: [resp.body_bytes, gz]
-          - call: [resp.headers.put, "Content-Encoding", "gzip"]
-          - call: [resp.headers.put, "Vary", "Accept-Encoding"]
+          - call: [resp.headers.set, "Content-Encoding", "gzip"]
+          - call: [resp.headers.set, "Vary", "Accept-Encoding"]
 ```
 
 ### 3.5 LZ4 for IPC / Database Blocks
@@ -464,7 +464,7 @@ from `0` and are stable for a given file; they are what a resumable reader store
     - decl: [row, i32, 0]
     - while: [{ lt: [row, batch.len] }]
       body:
-        - decl: [item, zim_entry, { call: [batch.get, row] }]
+        - decl: [item, zim_entry, { at: [batch, row] }]
         - decl: [kind, string, { call: [zim.mimetype, item] }]
         - if: [{ and: [{ eq: [item.is_redirect, false] }, { call: [kind.starts_with, "text/html"] }] }, true]
           then:

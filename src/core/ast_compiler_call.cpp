@@ -956,6 +956,21 @@ IRValue* Compiler::visitCall(CallExpr* call) {
                  return ctx.ir_gen->getInt32(0);
              }
          }
+         // spec/71 §6: a dyn_array's allocation starts at its length header → aiml_darr_free;
+         // the slot is nulled so the owner drop is a no-op.
+         if (auto* dvE = dynamic_cast<AIML::AST::VariableExpr*>(call->args[0].get())) {
+             Symbol* dvSym = dvE->name.find('.') == std::string::npos ? resolveVariable(dvE->name) : nullptr;
+             if (dvSym && dvSym->typeName.rfind("dyn_array<", 0) == 0) {
+                 llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                 llvm::Value* dp = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
+                 if (dp->getType() != i8p) dp = ctx.builder.CreateBitCast(dp, i8p);
+                 ctx.builder.CreateCall(ctx.getFunction("aiml_darr_free", ctx.builder.getVoidTy(), {i8p}), {dp});
+                 llvm::Value* dSlot = dvSym->ir_alloca_inst
+                     ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(dvSym->ir_alloca_inst)) : dvSym->alloca_inst;
+                 if (dSlot) ctx.builder.CreateStore(llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p)), dSlot);
+                 return ctx.ir_gen->getInt32(0);
+             }
+         }
          llvm::Function* freeFunc = ctx.module().getFunction("free");
          if (!freeFunc) freeFunc = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(), {ctx.builder.getInt8Ty()->getPointerTo()}, false), llvm::Function::ExternalLinkage, "free", ctx.module());
          llvm::Value* ptrVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
@@ -1650,16 +1665,16 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                     LOG_ERROR(ctx.fmtLoc() + "gl_buffer.update_range: expected buffer<u8>");
                     return nullptr;
                 }
-                if ((className == "gl_buffer" || className == "gl_vao") && methodName == "delete"
+                if ((className == "gl_buffer" || className == "gl_vao") && methodName == "free"
                     && (sym->is_param || sym->typeName.rfind("ref<", 0) == 0)) {
-                    LOG_ERROR(ctx.fmtLoc() + "spec/61: cannot delete a borrowed GL resource");
+                    LOG_ERROR(ctx.fmtLoc() + "spec/61: cannot free a borrowed GL resource");
                     return nullptr;
                 }
                 IRValue* res = methodIt->second(ctx, baseForHandler, call, evalExpr);
                 if (uploadBorrow) finishCallArguments(call, uploadArguments);
-                // spec/43_2 §5.5: delete() is the early close of an owned gl_texture — null the
+                // spec/43_2 §5.5: free() is the early close of an owned gl_texture — null the
                 // variable/field so its later owner drop is a no-op.
-                if ((className == "gl_texture" || className == "gl_cubemap" || className == "gl_timer_query" || className == "gl_buffer" || className == "gl_vao") && methodName == "delete" && classIt->second.preLoadBase
+                if ((className == "gl_texture" || className == "gl_cubemap" || className == "gl_timer_query" || className == "gl_buffer" || className == "gl_vao") && methodName == "free" && classIt->second.preLoadBase
                     && (llvm::isa<llvm::AllocaInst>(rawAlloca) || llvm::isa<llvm::GetElementPtrInst>(rawAlloca)
                         || llvm::isa<llvm::GlobalVariable>(rawAlloca)))
                     ctx.builder.CreateStore(llvm::ConstantPointerNull::get(ctx.builder.getPtrTy()), rawAlloca);
@@ -2207,6 +2222,22 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
     if (className.find("list<") == 0) {
          std::string listElemName = className.substr(5, className.length() - 6);
          llvm::Type* llvmListElemType = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(listElemName)));
+         // spec/71 §1.3 + spec/61 §5.4: `{ at: [vals, i] }` on a value list<M> is a borrow of the
+         // element.  Pushed into a list<ref<M>> / list<ptr<M>> it is that element's ADDRESS (what
+         // the retired `vals.get(i)` handed out) — not the loaded struct bytes.
+         if (methodName == "push" && !call->args.empty() &&
+             (listElemName.rfind("ref<", 0) == 0 || listElemName.rfind("ptr<", 0) == 0) && listElemName.back() == '>') {
+             if (auto* ax = dynamic_cast<AtExpr*>(call->args[0].get())) {
+                 std::string pointee = listElemName.substr(4, listElemName.size() - 5);
+                 std::string lvType;
+                 IRValue* addr = emitLValueAddress(ax, lvType);
+                 if (addr && lvType == pointee) {
+                     ListImpl::push(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)),
+                                    static_cast<llvm::Value*>(ctx.ir_gen->unwrap(addr)));
+                     return nullptr;
+                 }
+             }
+         }
          if (methodName == "push" && argVals.size() > 0) {
              // spec/61 §6.2/§10: a pointer expression (ptr<T>/ref<T>/shared<T>, e.g. { call: [make]}
              // or { call: [list.get, i] } or a member) MUST NOT be pushed into a VALUE list<Model> —

@@ -36,7 +36,7 @@
       - set: [dinge, { call: [db.open_kv, "sidx_dinge", {persist: true, index_dump: true, path: pfad}] }]
       - decl: [bad, i32, 0]
 
-      - decl: [anzahl, i32, { call: [dinge.len] }]
+      - decl: [anzahl, i32, dinge.len]
       - set: [bad, { +: [bad, { call: [pruef_zahl, anzahl, 3, "len"] }] }]
 
       # state after phase 3: aaa, ccc, ddd carry Hammer; bbb is gone.

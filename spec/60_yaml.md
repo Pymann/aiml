@@ -72,7 +72,7 @@ non-owning view into its document and is never released on its own.
 ```yaml
 - decl: [root, ref<yaml_node>, { call: [yaml.root, doc] }]
 - decl: [kind, i32, { call: [yaml.kind, root] }]
-- decl: [count, i32, { call: [yaml.size, root] }]
+- decl: [count, i32, { call: [yaml.len, root] }]
 - decl: [text, string, { call: [yaml.scalar, root] }]
 - decl: [line, i32, { call: [yaml.line, root] }]
 - decl: [column, i32, { call: [yaml.column, root] }]
@@ -81,7 +81,7 @@ non-owning view into its document and is never released on its own.
 
 `yaml.root` returns the document root, or null when the document did not parse.
 
-`yaml.size` returns the number of entries for a sequence or mapping; for scalar,
+`yaml.len` returns the number of entries for a sequence or mapping; for scalar,
 null, and invalid nodes it returns `0`.
 
 `yaml.scalar` returns the source scalar representation for a scalar node.  It

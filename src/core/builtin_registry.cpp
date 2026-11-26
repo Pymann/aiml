@@ -9448,7 +9448,7 @@ void registerBuiltins(CompilerContext& ctx) {
             };
             ci.builtinMethods["reserve_bytes"] = gl43Method("aiml_gl_buffer_reserve_bytes", "pi", 'z');
             ci.builtinMethods["update_range"] = gl43Method("aiml_gl_buffer_update_range", "pib", 'z');
-            GL_VOID0(ci, "delete", "aiml_gl_buffer_delete")
+            GL_VOID0(ci, "free", "aiml_gl_buffer_delete")
 
             ctx.classes["gl_buffer"] = std::move(ci);
         }
@@ -9499,7 +9499,7 @@ void registerBuiltins(CompilerContext& ctx) {
 #undef GL_VAO_ATTRIB
 
             ci.builtinMethods["attrib_divisor"] = gl43Method("aiml_gl_vao_attrib_divisor", "pii", 'z');
-            GL_VOID0(ci, "delete", "aiml_gl_vao_delete")
+            GL_VOID0(ci, "free", "aiml_gl_vao_delete")
 
             ctx.classes["gl_vao"] = std::move(ci);
         }
@@ -9639,7 +9639,7 @@ void registerBuiltins(CompilerContext& ctx) {
             ci.builtinMethods["uniform_vec3_array"] = gl43Method("aiml_gl_shader_uniform_vec3_array", "ppbi", 'i');
             ci.builtinMethods["uniform_location"] = gl43Method("aiml_gl_shader_uniform_location", "pp", 'i');
             ci.builtinMethods["attrib_location"]  = gl43Method("aiml_gl_shader_attrib_location",  "pp", 'i');
-            GL_VOID0(ci, "delete", "aiml_gl_shader_delete")
+            GL_VOID0(ci, "free", "aiml_gl_shader_delete")
 
             ctx.classes["gl_shader"] = std::move(ci);
         }
@@ -9684,7 +9684,7 @@ void registerBuiltins(CompilerContext& ctx) {
             ci.builtinMethods["height"] = gl43Method("aiml_gl_texture_height", "p", 'i');
             ci.builtinMethods["format"] = gl43Method("aiml_gl_texture_format", "p", 'i');
             ci.builtinMethods["levels"] = gl43Method("aiml_gl_texture_levels", "p", 'i');
-            GL_VOID0(ci, "delete",      "aiml_gl_texture_release")   // spec/43_2 §5.5 early close
+            GL_VOID0(ci, "free",      "aiml_gl_texture_release")   // spec/43_2 §5.5 early close
 
             ctx.classes["gl_texture"] = std::move(ci);
         }
@@ -9694,7 +9694,7 @@ void registerBuiltins(CompilerContext& ctx) {
             CompilerContext::ClassInfo ci;
             ci.name = "gl_cubemap"; ci.isBuiltin = true; ci.preLoadBase = true;
             ci.builtinMethods["upload_face"] = gl43Method("aiml_gl_cubemap_upload_face", "piib", 'i');
-            GL_VOID0(ci, "delete", "aiml_gl_cubemap_release")
+            GL_VOID0(ci, "free", "aiml_gl_cubemap_release")
             ctx.classes["gl_cubemap"] = std::move(ci);
         }
 
@@ -9706,7 +9706,7 @@ void registerBuiltins(CompilerContext& ctx) {
             ci.builtinMethods["end"]       = gl43Method("aiml_gl_timer_query_end", "p", 'z');
             ci.builtinMethods["ready"]     = gl43Method("aiml_gl_timer_query_ready", "p", 'z');
             ci.builtinMethods["result_ns"] = gl43Method("aiml_gl_timer_query_result_ns", "p", 'l');
-            GL_VOID0(ci, "delete", "aiml_gl_timer_query_release")
+            GL_VOID0(ci, "free", "aiml_gl_timer_query_release")
             ctx.classes["gl_timer_query"] = std::move(ci);
         }
 
@@ -9735,7 +9735,7 @@ void registerBuiltins(CompilerContext& ctx) {
             ci.builtinMethods["width"]  = gl43Method("aiml_gl_framebuffer_width",  "p", 'i');
             ci.builtinMethods["height"] = gl43Method("aiml_gl_framebuffer_height", "p", 'i');
             ci.builtinMethods["format"] = gl43Method("aiml_gl_framebuffer_format", "p", 'i');
-            GL_VOID0(ci, "delete", "aiml_gl_framebuffer_delete")
+            GL_VOID0(ci, "free", "aiml_gl_framebuffer_delete")
 
             ctx.classes["gl_framebuffer"] = std::move(ci);
         }
@@ -10217,8 +10217,8 @@ void registerBuiltins(CompilerContext& ctx) {
                     ctx.getFunction("aiml_gl_mesh_index_count",
                         ctx.builder.getInt32Ty(), {p}), {base}));
             };
-            // mesh.delete() → void
-            ci.builtinMethods["delete"] = [](CompilerContext& ctx, llvm::Value* base,
+            // mesh.free() → void (spec/71 §1.5: early release of a GPU object)
+            ci.builtinMethods["free"] = [](CompilerContext& ctx, llvm::Value* base,
                 AIML::AST::CallExpr*, auto) -> IRValue* {
                 auto* p = llvm::PointerType::get(ctx.context, 0);
                 ctx.builder.CreateCall(ctx.getFunction("aiml_gl_mesh_delete",

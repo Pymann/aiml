@@ -49,7 +49,7 @@
       - call: [chk.expect_i, "absent nested i32 default", two.tool.level, 2]
       - call: [chk.expect_i, "absent nested list is empty", two.tool.tags.len, 0]
       - call: [chk.expect_i, "absent list is empty", two.deps.len, 0]
-      - call: [chk.expect_i, "absent map is empty", { call: [two.env.len] }, 0]
+      - call: [chk.expect_i, "absent map is empty", two.env.len, 0]
       - call: [chk.expect_s, "top-level default", two.name, "unnamed"]
 
       # ── F29-16 in list elements ──
@@ -100,7 +100,7 @@
       - decl: [wrapped, list<i32>, { call: [sys.deserialize, "{\"values\":[4,5]}", "list<i32>"] }]
       - call: [chk.expect_i, "wrapped array still works", wrapped.len, 2]
       - decl: [bare_map, map<string:string>, { call: [sys.deserialize, "{\"CC\":\"gcc\",\"AR\":\"ar\"}", "map<string:string>"] }]
-      - call: [chk.expect_i, "bare object len", { call: [bare_map.len] }, 2]
+      - call: [chk.expect_i, "bare object len", bare_map.len, 2]
       - call: [chk.expect_s, "bare object value", { call: [bare_map.get, "AR"] }, "ar"]
       - decl: [wrapped_map, map<string:string>, { call: [sys.deserialize, "{\"__type\":\"map<string:string>\",\"entries\":{\"k\":\"v\"}}", "map<string:string>"] }]
       - call: [chk.expect_s, "wrapped object still works", { call: [wrapped_map.get, "k"] }, "v"]

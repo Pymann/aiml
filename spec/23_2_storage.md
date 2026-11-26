@@ -10,18 +10,21 @@
 
 | Call | Signature | Description |
 |------|-----------|-------------|
-| `storage.get(key)` | `(string) -> string` | Value for `key`, or `""` if missing (never `null`). |
+| `storage.get(key)` / `storage.get(key, d)` | `(string[, string]) -> string` | Value for `key`; if missing, `d`, else the null string (spec/71 §3). Never throws. |
 | `storage.set(key, value)` | `(string, string) -> void` | Write/overwrite. Value is always a UTF-8 string. |
-| `storage.remove(key)` | `(string) -> void` | Delete; no-op if missing. |
+| `storage.delete(key)` | `(string) -> i32` | Delete; `1` if `key` was there, else `0`. |
 | `storage.has(key)` | `(string) -> i32` | `1` if present, `0` if not. |
 | `storage.clear()` | `() -> void` | Wipe everything for this origin / namespace. |
 | `storage.host()` | `() -> string` | Web: the page hostname (`window.location.hostname`); native: `"localhost"`. |
 | `storage.is_secure()` | `() -> i32` | Web: `1` if the page is served over HTTPS (`location.protocol === "https:"`), else `0`; native: always `0`. |
-| `storage.session_get(key)` | `(string) -> string` | Web: `window.sessionStorage` (this tab only, gone when it closes); native: an in-memory map of this process. `""` if missing. |
+| `storage.session_get(key)` | `(string) -> string` | Web: `window.sessionStorage` (this tab only, gone when it closes); native: an in-memory map of this process. The null string if missing. |
 | `storage.session_set(key, value)` | `(string, string) -> void` | Write/overwrite in the session store. |
-| `storage.session_remove(key)` | `(string) -> void` | Delete from the session store; no-op if missing. |
+| `storage.session_delete(key)` | `(string) -> i32` | Delete from the session store; `1` if `key` was there, else `0`. |
 | `storage.hash()` | `() -> string` | Web: the page's URL fragment without the `#` (`location.hash`), `""` if none; native: what `set_hash` last set (`""` at start). |
 | `storage.set_hash(value)` | `(string) -> void` | Web: replaces the fragment **without** a navigation or a history entry (`history.replaceState`); `""` removes it including the `#`. Native: remembered for `hash()`. |
+
+The names follow the keyed-container vocabulary of spec/71 (`set`, `get`, `has`, `delete`);
+`storage.remove` and `storage.session_remove` are retired and name their replacement.
 
 The session store and the fragment calls (added 2026-11-25, kontor `web_ui.md` FW-93)
 let a web client keep a login for the life of one tab, and take a token that a server
@@ -59,7 +62,7 @@ Tab-separated lines, one per entry. Writes are atomic (tmp file + `rename`).
 ## 3. Lifetime
 
 The pointer returned by `storage.get` is valid until the next `storage.set`
-or `storage.remove` call for the **same key**. Copy the string (e.g. via
+or `storage.delete` call for the **same key**. Copy the string (e.g. via
 `decl: [s, string, { call: [storage.get, "k"] }]`) if you need it longer.
 
 ---
@@ -83,19 +86,15 @@ or `storage.remove` call for the **same key**. Copy the string (e.g. via
       - call: [session.send_rpc, auth_nid, "validate_token", 0, req]
 
 # On logout:
-- call: [storage.remove, "dc_token"]
-- call: [storage.remove, "dc_email"]
+- call: [storage.delete, "dc_token"]
+- call: [storage.delete, "dc_email"]
 ```
 
 ### User preferences (volume, theme, etc.)
 
 ```aiml
-- decl: [vol_str, string, { call: [storage.get, "audio_volume"] }]
-- decl: [vol, f32, 0.8]
-- if:
-    condition: { neq: [vol_str.len, 0] }
-    then:
-      - set: [vol, { call: [string.to_f32, vol_str] }]
+- decl: [vol_str, string, { call: [storage.get, "audio_volume", "0.8"] }]   # default when unset
+- decl: [vol, f32, { call: [vol_str.parse_f32] }]
 ```
 
 ---
@@ -116,9 +115,9 @@ or `storage.remove` call for the **same key**. Copy the string (e.g. via
 ## 6. C API
 
 ```c
-const char* aiml_storage_get   (const char* key);   // "" on missing
+const char* aiml_storage_get   (const char* key);   // NULL on missing
 void        aiml_storage_set   (const char* key, const char* value);
-void        aiml_storage_remove(const char* key);
+int32_t     aiml_storage_delete(const char* key);   // 1 if it was there, else 0
 int32_t     aiml_storage_has   (const char* key);   // 0 / 1
 void        aiml_storage_clear (void);
 ```

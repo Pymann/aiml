@@ -34,7 +34,7 @@
           args: [[idx, i32]]
           return: string
           body:
-            - decl: [thing, Thing, { call: [<.items.get, idx] }]
+            - decl: [thing, Thing, { at: [<.items, idx] }]
             - return: thing.name
 
       - def:
@@ -42,7 +42,7 @@
           args: [[idx, i32]]
           return: i32
           body:
-            - decl: [thing, Thing, { call: [<.items.get, idx] }]
+            - decl: [thing, Thing, { at: [<.items, idx] }]
             - return: thing.amount
 
 - def:

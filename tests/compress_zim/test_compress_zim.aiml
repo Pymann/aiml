@@ -40,7 +40,7 @@
       - call: [chk.expect_s, "metadata Title", { call: [zim.metadata, "Title"] }, "AIML ZIM Testarchiv"]
       - call: [chk.expect_s, "a missing metadata key is empty", { call: [zim.metadata, "KeinSolcherSchluessel"] }, ""]
       - decl: [uuid_text, string, { call: [zim.uuid] }]
-      - call: [chk.expect_i, "uuid is 32 hex digits", { cast: [{ call: [uuid_text.len] }, i64] }, 32]
+      - call: [chk.expect_i, "uuid is 32 hex digits", { cast: [uuid_text.len, i64] }, 32]
 
       # ── §6.2 by_path ──
       - decl: [copper_de, zim_entry, { call: [zim.by_path, "Kupfer"] }]
@@ -125,7 +125,7 @@
                   - while:
                       condition: { lt: [row, batch.len] }
                       body:
-                        - decl: [item, zim_entry, { call: [batch.get, row] }]
+                        - decl: [item, zim_entry, { at: [batch, row] }]
                         # F33-2-25: the position is the cluster-order place the scan read it at
                         - if:
                             condition: { neq: [{ call: [zim.position, item] }, { +: [pos, { cast: [row, i64] }] }] }

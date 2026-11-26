@@ -27,7 +27,7 @@
 - call: [var_kv.set, "k6", "wert_6"]
 - call: [var_kv.delete, "k1"]
 
-- decl: [anz, i32, { call: [var_kv.len] }]
+- decl: [anz, i32, var_kv.len]
 - if:
     condition: { neq: [anz, 6] }
     then:

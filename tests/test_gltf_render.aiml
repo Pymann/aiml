@@ -48,14 +48,14 @@
 # scene.meshes() fills a list<gltf_mesh> via the internal GLTF_LIST macro
 - decl: [meshes, list<gltf_mesh>]
 - set:  [meshes, { call: [scene.meshes] }]
-- decl: [var_mc, i32, { call: [meshes.len] }]
+- decl: [var_mc, i32, meshes.len]
 - if: [{ <: [var_mc, 1] }, true]
   then:
     - print: ["FAIL: no meshes in scene"]
     - call: [sys.exit, 1]
 
 # first mesh → first primitive (cube_textured.glb has exactly one mesh with one primitive)
-- decl: [mesh, gltf_mesh, { call: [meshes.get, 0] }]
+- decl: [mesh, gltf_mesh, { at: [meshes, 0] }]
 - decl: [prim, gltf_primitive, { call: [mesh.primitive, 0] }]
 
 # fetch the geometry buffers from the primitive.
@@ -263,12 +263,12 @@
 # (VAO before VBOs, since the VAO holds references to the buffers).
 # scene.free() frees the cgltf parse tree + all image data.
 
-- call: [gltex.delete]
-- call: [vao.delete]
-- call: [ibo.delete]
-- call: [uv_vbo.delete]
-- call: [pos_vbo.delete]
-- call: [shader.delete]
+- call: [gltex.free]
+- call: [vao.free]
+- call: [ibo.free]
+- call: [uv_vbo.free]
+- call: [pos_vbo.free]
+- call: [shader.free]
 - call: [scene.free]
 - call: [glfwTerminate]
 

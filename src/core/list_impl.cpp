@@ -188,10 +188,20 @@ namespace ListImpl {
         return ctx.builder.CreateLoad(i32, g, "cap_active");
     }
 
+    // A compiler-synthesized helper (__aiml_deser_*, __aiml_ser_*, …) is emitted while a user
+    // function is being compiled: a throw there would unwind with THAT function's cleanups (IR
+    // that does not verify).  Helpers only fill containers they created themselves — never one
+    // with a capacity — so they skip the check.
+    static bool inSynthesizedHelper(CompilerContext& ctx) {
+        llvm::Function* pf = ctx.builder.GetInsertBlock()->getParent();
+        return pf->hasInternalLinkage() && pf->getName().starts_with("__aiml_");
+    }
+
     void checkCapacityLazy(CompilerContext& ctx, llvm::Value* container,
                            const std::function<llvm::Value*()>& newLen) {
         llvm::Type* i32 = ctx.builder.getInt32Ty();
         llvm::Type* p = llvm::PointerType::get(ctx.context, 0);
+        if (inSynthesizedHelper(ctx)) return;
         llvm::Function* pf = ctx.builder.GetInsertBlock()->getParent();
         auto* askBB = llvm::BasicBlock::Create(ctx.context, "cap_ask", pf);
         auto* msgBB = llvm::BasicBlock::Create(ctx.context, "cap_msg", pf);

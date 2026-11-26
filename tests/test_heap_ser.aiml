@@ -44,7 +44,7 @@
 
 # len
 - decl: [klen, i32]
-- set: [klen, { call: [players.len] }]
+- set: [klen, players.len]
 - print: ["Phase A len: ${klen}"]
 
 # delete
@@ -54,7 +54,7 @@
 
 # clear
 - call: [players.clear]
-- set: [klen, { call: [players.len] }]
+- set: [klen, players.len]
 - print: ["Phase A len after clear: ${klen}"]
 
 - print: ["Phase A PASS"]

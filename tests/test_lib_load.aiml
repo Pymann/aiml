@@ -1013,7 +1013,7 @@
 
       # Bundle the library (lib_answer pulls the 60 lib_calc_* along transitively).
       - decl: [lib, Code, { call: [sys.bundle, "lib_answer"] }]
-      - decl: [lib_bytes, i64, { call: [lib.size] }]
+      - decl: [lib_bytes, i64, lib.len]
       - print: ["library: ${lib_bytes} bytes of source text"]
 
       - decl: [dump, string, { call: [lib.toString] }]

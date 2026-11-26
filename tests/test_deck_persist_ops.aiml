@@ -29,7 +29,7 @@
       - call: [var_kv.set, "var_d2", var_d2]
 
       - decl: [klen, i32]
-      - set: [klen, { call: [var_kv.len] }]
+      - set: [klen, var_kv.len]
       - if:
           condition: { neq: [klen, 2] }
           then:
@@ -59,7 +59,7 @@
             - call: [sys.exit, 1]
 
       - call: [var_kv.clear]
-      - set: [klen, { call: [var_kv.len] }]
+      - set: [klen, var_kv.len]
       - if:
           condition: { neq: [klen, 0] }
           then:

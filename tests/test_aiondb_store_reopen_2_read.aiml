@@ -22,7 +22,7 @@
       - set: [players, { call: [db.open, "reopen_players_20260319", {persist: true, path: db_path}] }]
 
       - decl: [var_n, i32]
-      - set: [var_n, { call: [players.len] }]
+      - set: [var_n, players.len]
       - if:
           condition: { neq: [var_n, 1] }
           then:

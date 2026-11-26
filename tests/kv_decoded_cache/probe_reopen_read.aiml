@@ -81,7 +81,7 @@
             - decl: [row, i32, 0]
             - while: [{ lt: [row, keys.len] }]
               body:
-                - decl: [eintrag, NameRow, { call: [<.namen.get_copy, { call: [keys.get, row] }] }]
+                - decl: [eintrag, NameRow, { call: [<.namen.get_copy, { at: [keys, row] }] }]
                 - call: [out.push, eintrag]
                 - set: [row, { +: [row, 1] }]
             - return: out
@@ -108,7 +108,7 @@
               then:
                 - print: ["FAIL k-${nummer}: eintraege.len=${zeilen.len}"]
                 - return: 3
-            - decl: [erste, NameRow, { call: [zeilen.get, 0] }]
+            - decl: [erste, NameRow, { at: [zeilen, 0] }]
             - if: [{ neq: [erste.ding, erwartet] }, true]
               then:
                 - print: ["FAIL k-${nummer}: get_copy.ding does not match"]
@@ -151,7 +151,7 @@
       - decl: [store, Kv<string:NameRow>, { call: [db.open_kv, "namen", { persist: true, path: "/tmp/aiml_test_kvcache/" }] }]
       - decl: [graf, shared<Namensgraf>, { new: Namensgraf }]
       - call: [graf.setup, store]
-      - decl: [vorhanden, i64, { call: [store.len] }]
+      - decl: [vorhanden, i64, store.len]
       - if: [{ eq: [vorhanden, 0] }, true]
         then:
           - return: { call: [graf.saen, 1200] }

@@ -38,7 +38,7 @@
 
       - call: [dinge.clear]
 
-      - decl: [anzahl, i32, { call: [dinge.len] }]
+      - decl: [anzahl, i32, dinge.len]
       - if:
           condition: { neq: [anzahl, 0] }
           then:

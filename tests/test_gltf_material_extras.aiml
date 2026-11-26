@@ -16,7 +16,7 @@
             - decl: [scene, gltf_scene, { call: [gltf.load, file_path] }]
             - if: { condition: { eq: [{ call: [scene.valid] }, 0] }, then: [{ return: "load failed" }] }
             - decl: [meshes, list<gltf_mesh>, { call: [scene.meshes] }]
-            - decl: [mesh, gltf_mesh, { call: [meshes.get, 0] }]
+            - decl: [mesh, gltf_mesh, { at: [meshes, 0] }]
             - decl: [prim, gltf_primitive, { call: [mesh.primitive, 0] }]
             - decl: [mat, gltf_material, { call: [prim.material] }]
             - decl: [mat_name, string, { call: [mat.name] }]
@@ -31,7 +31,7 @@
             - decl: [cull, string, { call: [yaml.scalar, { call: [yaml.get, first, "cull"] }] }]
             - decl: [params, ref<yaml_node>, { call: [yaml.get, first, "params"] }]
             - decl: [width, string, { call: [yaml.scalar, { call: [yaml.get, params, "width"] }] }]
-            - decl: [count, i32, { call: [yaml.size, passes] }]
+            - decl: [count, i32, { call: [yaml.len, passes] }]
             - set: [<.calls, { +: [<.calls, 1] }]
             - return: "${mat_name}/${mesh_name}/${count}/${cull}/${width}"
 - def:

@@ -37,13 +37,13 @@
       - def:
           name: put
           args: [[name, string], [who, ref<Greeter>]]
-          body: [{ call: [<.by_name.put, name, who] }]
+          body: [{ call: [<.by_name.set, name, who] }]
       - def:
           name: invoke
           args: [[name, string]]
           return: i32
           body:
-            - if: { condition: { eq: [{ call: [<.by_name.contains, name] }, 0] }, then: [{ return: -1 }] }
+            - if: { condition: { eq: [{ call: [<.by_name.has, name] }, 0] }, then: [{ return: -1 }] }
             - decl: [who, ref<Greeter>, { call: [<.by_name.get, name] }]
             - return: { call: [who.greet] }
 

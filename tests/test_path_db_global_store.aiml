@@ -18,11 +18,11 @@
 - set: [var_p.level, 7]
 
 - decl: [var_id, i32]
-- set: [var_id, { call: [players.insert, var_p] }]
+- set: [var_id, { call: [players.add, var_p] }]
 - print: ["global_store_id=${var_id}"]
 
 - decl: [var_n, i32]
-- set: [var_n, { call: [players.len] }]
+- set: [var_n, players.len]
 - print: ["global_store_len=${var_n}"]
 
 - decl: [got, ref<GlobalStorePlayer>]

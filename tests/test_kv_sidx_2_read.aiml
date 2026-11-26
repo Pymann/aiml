@@ -35,7 +35,7 @@
       - set: [dinge, { call: [db.open_kv, "sidx_dinge", {persist: true, index_dump: true, path: pfad}] }]
       - decl: [bad, i32, 0]
 
-      - decl: [anzahl, i32, { call: [dinge.len] }]
+      - decl: [anzahl, i32, dinge.len]
       - set: [bad, { +: [bad, { call: [pruef_zahl, anzahl, 3, "len"] }] }]
 
       - decl: [tr_ham, list<string>, { call: [dinge.findings_by, "name", "Hammer"] }]

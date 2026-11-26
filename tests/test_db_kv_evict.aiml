@@ -15,7 +15,7 @@
 - call: [var_kv.set, "key_c", "gamma"]
 
 - decl: [var_n, i32]
-- set: [var_n, { call: [var_kv.len] }]
+- set: [var_n, var_kv.len]
 - print: ["len before evict: ${var_n}"]
 # CHECK: len before evict: 3
 
@@ -27,7 +27,7 @@
 - call: [db.kv_evict, var_kv]
 
 # len triggers lazy-reload → data back
-- set: [var_n, { call: [var_kv.len] }]
+- set: [var_n, var_kv.len]
 - print: ["len after evict (lazy-reload): ${var_n}"]
 # CHECK: len after evict (lazy-reload): 3
 
@@ -50,7 +50,7 @@
 # set triggers lazy-reload → old entries restored, then new entry added
 - call: [var_kv.set, "key_d", "delta"]
 
-- set: [var_n, { call: [var_kv.len] }]
+- set: [var_n, var_kv.len]
 - print: ["len after evict+set: ${var_n}"]
 # CHECK: len after evict+set: 4
 
@@ -67,7 +67,7 @@
 - call: [db.kv_evict, var_kv]
 - call: [db.kv_evict, var_kv]
 
-- set: [var_n, { call: [var_kv.len] }]
+- set: [var_n, var_kv.len]
 - print: ["len after double evict: ${var_n}"]
 # CHECK: len after double evict: 4
 
@@ -76,7 +76,7 @@
 - call: [db.kv_evict, var_kv]
 - call: [db.reload_kv, var_kv]
 
-- set: [var_n, { call: [var_kv.len] }]
+- set: [var_n, var_kv.len]
 - print: ["len after explicit reload: ${var_n}"]
 # CHECK: len after explicit reload: 4
 

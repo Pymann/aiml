@@ -16,11 +16,11 @@
       # Get a stable ptr<ActiveAbility> via list.get(...) to avoid ptr/value ambiguity.
       - decl: [pool, list<ActiveAbility>]
       - call: [pool.push, var_ab]
-      - decl: [abp, ref<ActiveAbility>, { call: [pool.get, 0] }]
+      - decl: [abp, ref<ActiveAbility>, { at: [pool, 0] }]
       - decl: [txt, string, { call: [generate_ability_text, abp] }]
 
       - if:
-          condition: { eq: [{ call: [txt.len] }, 0] }
+          condition: { eq: [txt.len, 0] }
           then:
             - print: ["FAIL ${label}: empty text"]
             - call: [sys.exit, 1]

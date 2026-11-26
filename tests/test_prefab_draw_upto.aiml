@@ -43,7 +43,7 @@
     return: i32
     body:
       - decl: [pixel, buffer<u8>, { call: [gl.read_rgba8, 32, 32, 1, 1] }]
-      - return: { cast: [{ call: [pixel.get, kanal] }, i32] }
+      - return: { cast: [{ at: [pixel, kanal] }, i32] }
 
 # tolerance 6, because the mix rounds in 8 bits.
 - def:

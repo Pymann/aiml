@@ -27,7 +27,7 @@
     body:
       - decl: [envm, map<string:string>, { call: [sys.env] }]
       - decl: [hold_path, string, ""]
-      - if: { condition: { gt: [{ call: [envm.contains, "AIML_MIRROR_TEST_HOLD_DELTA"] }, 0] }, then: [{ set: [hold_path, { call: [envm.get, "AIML_MIRROR_TEST_HOLD_DELTA"] }] }] }
+      - if: { condition: { gt: [{ call: [envm.has, "AIML_MIRROR_TEST_HOLD_DELTA"] }, 0] }, then: [{ set: [hold_path, { call: [envm.get, "AIML_MIRROR_TEST_HOLD_DELTA"] }] }] }
 
       - decl: [sess, mirror_session, { call: [mirror.listen, "ws://127.0.0.1:19897"] }]
       - decl: [var_v, GameViewWs9]

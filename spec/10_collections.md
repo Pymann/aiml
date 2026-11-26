@@ -10,9 +10,11 @@
 
 # 2. Dynamic List (Strongly Typed)
 # Syntax: list<T>
-# Out-of-bounds access raises IndexOutOfBoundsException (F10-23): `at`, `get`, `idx` writes,
-# `remove` (index in [0, len)) and `insert` (index in [0, len]); the message is "index 5 of 2".
-# Until 2026-10-29 `at`/`get` read past the end silently (garbage or 0).
+# Out-of-bounds access raises IndexOutOfBoundsException (F10-23, spec/71 §4): `at` reads, `idx`
+# writes, `remove` (index in [0, len)), `insert` (index in [0, len]) and `pop` on an empty list;
+# the message is "index 5 of 2".  Until 2026-10-29 `at` read past the end silently (garbage or 0).
+# The names of every collection operation are spec/71 (the matrix); this chapter shows them on
+# list and map.
 - decl: [scores, list<i32>]
 
 # List literal init: [v1, v2, ...] as the 3rd element of the decl. The compiler emits one push
@@ -96,24 +98,28 @@
 
 # Standard List Methods
 - call: [scores.push, 100]       # Add to end
-- call: [scores.pop]             # Remove from end (returns value)
+- call: [scores.pop]             # Remove from end (returns value); empty → IndexOutOfBoundsException
 - call: [scores.insert, 0, 50]   # Insert at index — grows the list, shifts the rest
 - call: [scores.remove, 0]       # Remove at index; raises IndexOutOfBoundsException if out of range
 - call: [scores.clear]           # Remove all
 - set: [len, scores.len]         # Element count (property, i32)
-- set: [is_empty, scores.empty]  # Check if empty (property, bool)
+- set: [is_empty, scores.empty]  # 1 if there is no element (property, i32)
+- set: [bytes, scores.byte_len]  # len × element size (property, i32)
+- set: [scores.capacity, 100]    # at most 100 elements; 0 (the default) = unbounded (spec/71 §5);
+                                 # push/insert/extend past it raise CapacityExceededException
 
 # List Builtins (search, bulk, ordering)
 # Equality uses the same semantics as `eq`: strings compare by content
 # (null-safe), floats by `oeq`, ints/enums/pointers bitwise/by identity.
-# Search methods (contains/index_of/count/remove_value) are NOT available for
+# Search methods (contains/index_of/count_of/remove_value) are NOT available for
 # struct/model element types (no canonical model equality yet) — that is a
 # compile error with a source location.
 - set: [has,  { call: [scores.contains, 100] }]     # -> i32 1/0
 - set: [idx,  { call: [scores.index_of, 100] }]      # -> i32 first index, or -1
-- set: [hits, { call: [scores.count, 100] }]         # -> i32 number of matches
+- set: [hits, { call: [scores.count_of, 100] }]      # -> i32 number of matches
 - set: [gone, { call: [scores.remove_value, 100] }]  # remove FIRST match; -> i32 1/0
-- call: [scores.extend, more]    # append value-copies of another list<i32>
+- call: [scores.extend, more]    # append value-copies of another list<i32>, or of a
+                                 # literal: [scores.extend, [1, 2]]
                                  # (self.extend(self) is defined; realloc-safe).
                                  # A different list<U> is a compile error.
                                  # Refcounted elements (string, models, nested
@@ -132,13 +138,11 @@
 # Floats: ascending puts NaN toward the end.  shuffle/reverse/extend work for
 # any element type (whole values are moved, no comparison needed).
 
-# Access
-- set: [val, scores-0]           # Get element at index 0
-- set: [subset, scores-1-3]      # Slice: elements at index 1 and 2
-- set: [scores-0, 99]            # Set element at index 0
+# Slice: a fresh list with the elements at index 1 and 2
+- set: [subset, { call: [scores.slice, 1, 3] }]
 
 # Memory
-- call: [scores.free]            # Explicit free (if no RAII)
+- call: [scores.free]            # Early release; otherwise released at owner drop (spec/61)
 
 # 3. Homogeneous Map
 # Syntax: map<KeyType:ValueType>
@@ -146,7 +150,7 @@
 - decl: [users, map<string:i32>]
 
 # Map literal init: {key: value, ...} as the 3rd element of the decl.  The compiler emits
-# one .put call per entry.  Key types: string, i32, i64, enum.  Values may
+# one .set call per entry.  Key types: string, i32, i64, enum.  Values may
 # be arbitrary expressions (literals, calls, ...).
 - decl: [scores, map<string:i32>, {alice: 1, bob: 2, charlie: 3}]
 
@@ -159,17 +163,21 @@
 - decl: [weight, map<Color:i32>, {red: 100, green: 200, blue: 300}]
 - set: [wg, { call: [weight.get, Color.green] }]   # → 200
 
-- call: [users.put, "alice", 1]
-- set: [val, { call: [users.get, "alice"] }]   # returns i32 or null pointer if missing
-- call: [users.remove, "alice"]                # raises MissingKeyError if key not found
-- call: [users.clear]                          # all entries; capacity stays, immediately reusable
+- call: [users.set, "alice", 1]
+- set: [val, { call: [users.get, "alice"] }]      # the value; a missing key gives 0 (spec/71 §3)
+- set: [val, { call: [users.get, "nobody", -1] }] # get(k, d): d when the key is missing
+- set: [had, { call: [users.has, "alice"] }]      # i32 1/0
+- set: [had, { call: [users.delete, "alice"] }]   # i32 1 if the key was there, else 0
+- call: [users.clear]                             # all entries; storage stays, immediately reusable
 - set: [len, users.len]
+- set: [users.capacity, 1000]                     # at most 1000 keys (spec/71 §5)
 - decl: [names, list<string>, { call: [users.keys] }]   # map<string:V> only: every key, byte order (F10-22)
 
-# Existence check via get() + null comparison:
-- set: [maybe_alice, { call: [users.get, "alice"] }]
+# `get` never throws.  A missing key yields the zero value of V — 0 for numbers, the null
+# pointer for strings and handles — or the default of get(k, d).  To tell a missing key from
+# a stored zero, ask has(k):
 - if:
-    condition: { eq: [maybe_alice, null] }
+    condition: { eq: [{ call: [users.has, "alice"] }, 0] }
     then:
       - print: ["Key not found"]
 
@@ -180,9 +188,9 @@
 # Comparisons work on the returned value because the real type is known at runtime.
 - decl: [meta, map<string:any>]
 
-- call: [meta.put, "count", 42]          # stored as i32 (tagged)
-- call: [meta.put, "label", "hello"]     # stored as string (tagged)
-- call: [meta.put, "ratio", 3.14]        # stored as f64 (tagged)
+- call: [meta.set, "count", 42]          # stored as i32 (tagged)
+- call: [meta.set, "label", "hello"]     # stored as string (tagged)
+- call: [meta.set, "ratio", 3.14]        # stored as f64 (tagged)
 
 # Auto-unboxed retrieval — set: infers real type:
 - set: [count, { call: [meta.get, "count"] }]  # count is i32
@@ -243,7 +251,7 @@ through an intermediate local.  This holds for a method and for a free function 
 
 ```yaml
 # `line(score: Score)`; `scores` is a list<Score>
-- call: [<.line, { call: [<.scores.get, 0] }]      # ok — the element is loaded
+- call: [<.line, { at: [<.scores, 0] }]      # ok — the element is loaded
 ```
 
 Until 2026-11-03 only the free-function path did this.  A method call reached LLVM as
@@ -287,7 +295,7 @@ User-defined generic types or generic functions are not supported in AIML v1.
 When a `list<T>` or `map<K:V>` is declared as a function parameter, the
 compiler passes it **by reference** — analogous to Python and Java
 semantics.  The callee operates on the caller's struct directly; size
-changes, push/pop/put/remove, and any data-buffer growth all propagate
+changes, push/pop/set/delete, and any data-buffer growth all propagate
 back to the caller.
 
 ```yaml
@@ -317,7 +325,7 @@ The same applies to maps:
     name: register
     args: [[users, map<string:i32>]]
     body:
-      - call: [users.put, "bob", 7]
+      - call: [users.set, "bob", 7]
 
 - decl: [m, map<string:i32>]
 - call: [register, m]
@@ -335,7 +343,7 @@ At the LLVM level:
   the *address* of the caller's struct (`alloca`).  Inside the callee
   the parameter symbol carries `is_byref_arg = true` and the auto-deref
   is inserted at every read/write site (`xs.len`, `xs.push`,
-  `xs.get(i)`, `${xs.len}`, …).
+  `{ at: [xs, i] }`, `${xs.len}`, …).
 - Other functions called with the same parameter as argument
   (chained calls) receive the *same* pointer — the by-ref semantics
   flow through the whole call chain without copy.
@@ -378,7 +386,7 @@ implicitly receive `ref<ClassName>` as their `this` argument (see
 ### Migration from Earlier AIML
 
 Earlier compiler versions passed `list<T>`/`map<K:V>` arguments **by
-value** — push/put inside a function silently did not propagate.  Code
+value** — push/set inside a function silently did not propagate.  Code
 written under that model is unaffected if it relied solely on element-
 value mutation via the shared `data` pointer (which already worked).
 Code that pushed onto an arg and **returned the list** (the old

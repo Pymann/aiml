@@ -35,7 +35,7 @@
     return: i32
     body:
       - print: ["local_helper_b parse=${var_s}"]
-      - return: [{ call: [var_s.len] }]
+      - return: [var_s.len]
 
 - def:
     name: local_helper_c

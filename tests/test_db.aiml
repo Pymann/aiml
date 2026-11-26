@@ -17,7 +17,7 @@
 - set: [var_e.var_id, 42]
 - set: [var_e.var_hp, 100]
 - decl: [eid, i32]
-- set: [eid, { call: [entities.insert, var_e] }]
+- set: [eid, { call: [entities.add, var_e] }]
 - print: ["inserted var_id: ${eid}"]
 
 # Get entity back as a ref<Entity> borrow (spec/61 §5.4)
@@ -27,7 +27,7 @@
 
 # len
 - decl: [var_n, i32]
-- set: [var_n, { call: [entities.len] }]
+- set: [var_n, entities.len]
 - print: ["len: ${var_n}"]
 
 # update
@@ -52,7 +52,7 @@
 - print: ["has: ${has}"]
 
 - decl: [klen, i32]
-- set: [klen, { call: [cfg.len] }]
+- set: [klen, cfg.len]
 - print: ["klen: ${klen}"]
 
 - call: [cfg.delete, "theme"]
@@ -61,11 +61,11 @@
 
 - call: [cfg.set, "a", "1"]
 - call: [cfg.set, "b", "2"]
-- set: [klen, { call: [cfg.len] }]
+- set: [klen, cfg.len]
 - print: ["klen before clear: ${klen}"]
 
 - call: [cfg.clear]
-- set: [klen, { call: [cfg.len] }]
+- set: [klen, cfg.len]
 - print: ["klen after clear: ${klen}"]
 
 # ── Phase B2: iterator<string> over Kv keys ──────────────────────────────────
@@ -107,17 +107,17 @@
 - call: [var_v1.push, 1.0]
 - call: [var_v1.push, 0.0]
 - call: [var_v1.push, 0.0]
-- call: [var_vs.insert, "doc1", var_v1]
+- call: [var_vs.set, "doc1", var_v1]
 
 # Insert vector doc2 = [0, 1, 0]
 - decl: [var_v2, list<f32>]
 - call: [var_v2.push, 0.0]
 - call: [var_v2.push, 1.0]
 - call: [var_v2.push, 0.0]
-- call: [var_vs.insert, "doc2", var_v2]
+- call: [var_vs.set, "doc2", var_v2]
 
 - decl: [vlen, i32]
-- set: [vlen, { call: [var_vs.len] }]
+- set: [vlen, var_vs.len]
 - print: ["var_vs len: ${vlen}"]
 
 # Search with query = [1, 0, 0] — should match doc1 first
@@ -130,7 +130,7 @@
 - set: [results, { call: [var_vs.search, var_q, 2] }]
 
 - decl: [var_r, ref<VecResult>]
-- set: [var_r, { call: [results.get, 0] }]
+- set: [var_r, { at: [results, 0] }]
 - print: ["top var_id: ${var_r.id}"]
 
 # ── Phase D: TimeSeries<T> ────────────────────────────────────────────────
@@ -152,11 +152,11 @@
 - call: [history.append, var_gs, 2000]
 
 - decl: [tlen, i32]
-- set: [tlen, { call: [history.len] }]
+- set: [tlen, history.len]
 - print: ["ts len: ${tlen}"]
 
 - decl: [var_tp, ref<GameState>]
-- set: [var_tp, { call: [history.at, 1500] }]
+- set: [var_tp, { call: [history.at_time, 1500] }]
 - print: ["score at 1500: ${var_tp.score}"]
 
 # ── Phase E: db.run_system (ECS loop) + db.query (function predicate) ─────────
@@ -182,16 +182,16 @@
 # Entity 1: has both Health (var_hp=80) and Pos
 - decl: [var_h1, Health]
 - set: [var_h1.var_hp, 80]
-- call: [hp_store.insert, var_h1]
+- call: [hp_store.add, var_h1]
 
 - decl: [var_p1, Pos]
 - set: [var_p1.var_x, 10]
-- call: [pos_store.insert, var_p1]
+- call: [pos_store.add, var_p1]
 
 # Entity 2: only has Health (var_hp=30) — no Pos → excluded from run_system
 - decl: [var_h2, Health]
 - set: [var_h2.var_hp, 30]
-- call: [hp_store.insert, var_h2]
+- call: [hp_store.add, var_h2]
 
 # System function: prints var_hp of entities with BOTH stores active
 - def:
@@ -221,5 +221,5 @@
 - decl: [high_hp, list<ref<Health>>]
 - set: [high_hp, { call: [db.query, hp_store, {where: is_high_hp}] }]
 - decl: [qlen, i32]
-- set: [qlen, { call: [high_hp.len] }]
+- set: [qlen, high_hp.len]
 - print: ["query count: ${qlen}"]

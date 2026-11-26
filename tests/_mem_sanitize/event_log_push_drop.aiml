@@ -23,7 +23,7 @@
           args: [[msg, string]]
           body:
             - call: [<.lines.push, msg]
-            - if: { condition: { gt: [{ call: [<.lines.len] }, 40] }, then: [{ call: [<.lines.remove, 0] }] }
+            - if: { condition: { gt: [<.lines.len, 40] }, then: [{ call: [<.lines.remove, 0] }] }
 
       # build an interpolation temp and hand it to log_line (the caller's temp is freed at stmt end)
       - def:
@@ -40,9 +40,9 @@
           args: [[num, i32]]
           return: i32
           body:
-            - decl: [cnt, i32, { call: [<.lines.len] }]
+            - decl: [cnt, i32, <.lines.len]
             - if: { condition: { lte: [cnt, 0] }, then: [{ return: -1 }] }
-            - decl: [last, string, { call: [<.lines.get, { -: [cnt, 1] }] }]
+            - decl: [last, string, { at: [<.lines, { -: [cnt, 1] }] }]
             - return: last.len
 
 - def:

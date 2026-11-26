@@ -29,17 +29,17 @@
       - decl: [vel, tensor, { call: [tensor.zeros, 4, 3] }]
       - decl: [ziel, tensor, { call: [tensor.zeros, 1, 3] }]
       - call: [ziel.keep]
-      - call: [ziel.set, 0, 1.0]
+      - idx: [ziel, 0, 1.0]
       - decl: [ein, tensor, { call: [tensor.zeros, 1, 4] }]
       - call: [ein.keep]
-      - call: [ein.set, 0, 1.0]
+      - idx: [ein, 0, 1.0]
 
       - call: [tensor.begin_graph]
       - decl: [aus1, tensor, { call: [tensor.matmul, ein, gew] }]
       - decl: [feh1, tensor, { call: [tensor.sub, aus1, ziel] }]
       - decl: [qua1, tensor, { call: [tensor.mul, feh1, feh1] }]
       - call: [tensor.backward, qua1]
-      - decl: [verlust_erst, f32, { call: [qua1.get, 0] }]
+      - decl: [verlust_erst, f32, { at: [qua1, 0] }]
       - call: [tensor.adam_step, gew, mom, vel, 0.05, 0.9, 0.999, 0.00000001, 1]
       - call: [gew.zero_grad]
 
@@ -59,7 +59,7 @@
       - decl: [feh2, tensor, { call: [tensor.sub, aus2, ziel] }]
       - decl: [qua2, tensor, { call: [tensor.mul, feh2, feh2] }]
       - call: [tensor.backward, qua2]
-      - decl: [verlust_zwei, f32, { call: [qua2.get, 0] }]
+      - decl: [verlust_zwei, f32, { at: [qua2, 0] }]
       - call: [tensor.adam_step, gew, mom, vel, 0.05, 0.9, 0.999, 0.00000001, 2]
       - call: [gew.zero_grad]
       - if:
@@ -74,7 +74,7 @@
       - while:
           condition: { lt: [pos_m, 12] }
           body:
-            - decl: [wert_m, f32, { call: [mom.get, pos_m] }]
+            - decl: [wert_m, f32, { at: [mom, pos_m] }]
             - if: { condition: { eq: [wert_m, 0.0] }, then: [{ set: [m_null, { "+": [m_null, 1] }] }] }
             - set: [pos_m, { "+": [pos_m, 1] }]
       - if:
@@ -109,7 +109,7 @@
                   - decl: [feh_s, tensor, { call: [tensor.sub, aus_s, ziel] }]
                   - decl: [qua_s, tensor, { call: [tensor.mul, feh_s, feh_s] }]
                   - call: [tensor.backward, qua_s]
-                  - set: [summe, { "+": [summe, { call: [qua_s.get, 0] }] }]
+                  - set: [summe, { "+": [summe, { at: [qua_s, 0] }] }]
             - set: [schritt, { "+": [schritt, 1] }]
             - call: [tensor.adam_step, gew_b, mom_b, vel_b, 0.05, 0.9, 0.999, 0.00000001, schritt]
             - call: [gew_b.zero_grad]

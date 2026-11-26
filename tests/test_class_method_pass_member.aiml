@@ -24,11 +24,11 @@
           return: i32
           body:
             - if:
-                condition: { eq: [{ call: [v_idx.contains, tok] }, 1] }
+                condition: { eq: [{ call: [v_idx.has, tok] }, 1] }
                 then: [{ return: { call: [v_idx.get, tok] } }]
             - decl: [new_idx, i32, v_list.len]
             - call: [v_list.push, tok]
-            - call: [v_idx.put, tok, new_idx]
+            - call: [v_idx.set, tok, new_idx]
             - return: new_idx
 
       - def:

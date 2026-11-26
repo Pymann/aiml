@@ -18,7 +18,7 @@
     body:
       - decl: [counter, i32, 0]
       - decl: [idx, "map<string:Item>"]
-      - call: [idx.put, "k", {call: [make_item, 0]}]
+      - call: [idx.set, "k", {call: [make_item, 0]}]
       - while:
           condition: {lt: [counter, 200]}
           body:
@@ -26,6 +26,6 @@
             - set: [cur.label, "m-${counter}"]
             - call: [cur.tags.push, "t"]
             - if: {condition: {gt: [cur.tags.len, 3]}, then: [{call: [cur.tags.clear]}]}
-            - call: [idx.put, "k", cur]
+            - call: [idx.set, "k", cur]
             - set: [counter, {+: [counter, 1]}]
       - return: 0

@@ -23,12 +23,12 @@
                 body:
                   - decl: [item, shared<Item>, {share: {new: Item}}]
                   - set: [item.text, "payload=${pos}"]
-                  - call: [by_int.put, pos, item]
+                  - call: [by_int.set, pos, item]
                   - set: [pos, {+: [pos, 1]}]
             - decl: [enum_item, shared<Item>, {share: {new: Item}}]
             - set: [enum_item.text, "enum=${1}"]
-            - call: [by_enum.put, Slot.second, enum_item]
-            - call: [by_str.put, "kept", keeper]
+            - call: [by_enum.set, Slot.second, enum_item]
+            - call: [by_str.set, "kept", keeper]
             - if: {condition: {neq: [by_int.len, 9]}, then: [{return: 90}]}
             - if: {condition: {neq: [by_enum.len, 1]}, then: [{return: 91}]}
             - if: {condition: {neq: [empty_map.len, 0]}, then: [{return: 92}]}

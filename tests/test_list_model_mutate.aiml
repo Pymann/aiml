@@ -38,7 +38,7 @@
           name: first_line
           return: string
           body:
-            - return: { call: [<.line, { call: [<.items.get, 0] }] }
+            - return: { call: [<.line, { at: [<.items, 0] }] }
 
 - def:
     name: main
@@ -61,7 +61,7 @@
       - call: [rows.push, row_c]
 
       # the cai pattern: read a row out, change it, put it back at the same index
-      - decl: [cur, W8Row, { call: [rows.get, 0] }]
+      - decl: [cur, W8Row, { at: [rows, 0] }]
       - set: [cur.part, "changed_zero"]
       - call: [rows.remove, 0]
       - call: [rows.insert, 0, cur]
@@ -69,9 +69,9 @@
       - call: [chk.expect_i, "length after remove+insert", { cast: [rows.len, i64] }, 3]
 
       # every name must still be readable — before the fix rows 0 and 1 held freed memory
-      - decl: [got_a, W8Row, { call: [rows.get, 0] }]
-      - decl: [got_b, W8Row, { call: [rows.get, 1] }]
-      - decl: [got_c, W8Row, { call: [rows.get, 2] }]
+      - decl: [got_a, W8Row, { at: [rows, 0] }]
+      - decl: [got_b, W8Row, { at: [rows, 1] }]
+      - decl: [got_c, W8Row, { at: [rows, 2] }]
       - call: [chk.expect_s, "row 0 name survives", got_a.name, "name_zero"]
       - call: [chk.expect_s, "row 0 part is the change", got_a.part, "changed_zero"]
       - call: [chk.expect_s, "row 1 name survives", got_b.name, "name_one"]
@@ -97,14 +97,14 @@
       - set: [item_c.part, "part_two"]
       - call: [holder.items.push, item_c]
 
-      - decl: [cur_item, W8Item, { call: [holder.items.get, 0] }]
+      - decl: [cur_item, W8Item, { at: [holder.items, 0] }]
       - set: [cur_item.part, "changed_zero"]
       - call: [holder.items.remove, 0]
       - call: [holder.items.insert, 0, cur_item]
 
-      - decl: [item_got_a, W8Item, { call: [holder.items.get, 0] }]
-      - decl: [item_got_b, W8Item, { call: [holder.items.get, 1] }]
-      - decl: [item_got_c, W8Item, { call: [holder.items.get, 2] }]
+      - decl: [item_got_a, W8Item, { at: [holder.items, 0] }]
+      - decl: [item_got_b, W8Item, { at: [holder.items, 1] }]
+      - decl: [item_got_c, W8Item, { at: [holder.items, 2] }]
       - call: [chk.expect_s, "class row 0 name survives", item_got_a.name, "item_zero"]
       - call: [chk.expect_s, "class row 0 part is the change", item_got_a.part, "changed_zero"]
       - call: [chk.expect_s, "class row 1 name survives", item_got_b.name, "item_one"]

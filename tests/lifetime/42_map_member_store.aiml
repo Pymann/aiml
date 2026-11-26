@@ -16,8 +16,8 @@
     body:
       - decl: [orig, ThingLike]
       - decl: [cost, map<string:i32>]
-      - call: [cost.put, "1", 2]
-      - call: [cost.put, "5", 1]
+      - call: [cost.set, "1", 2]
+      - call: [cost.set, "5", 1]
       - set: [orig.mana_cost, cost]
       - decl: [got, i32, { call: [orig.mana_cost.get, "1"] }]
       - if: { condition: { neq: [got, 2] }, then: [{ print: ["FAIL map-member: get=${got}, expected 2"] }, { return: 1 }] }

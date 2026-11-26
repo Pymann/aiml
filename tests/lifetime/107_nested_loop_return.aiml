@@ -28,7 +28,7 @@
                 body:
                   - decl: [cell, string, { at: [row, col_i] }]
                   - decl: [lookup, "map<string:i32>"]
-                  - call: [lookup.put, cell, col_i]
+                  - call: [lookup.set, cell, col_i]
                   - if: { condition: { eq: [cell, want] }, then: [{ return: col_i }] }
                   - set: [col_i, { +: [col_i, 1] }]
             - set: [row_i, { +: [row_i, 1] }]

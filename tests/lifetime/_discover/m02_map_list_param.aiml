@@ -7,7 +7,7 @@
     body:
       - decl: [row, list<string>]
       - call: [row.push, "v-${key}"]
-      - call: [index.put, key, row]
+      - call: [index.set, key, row]
       - return: {call: [index.get, key]}
 - def:
     name: replace_index

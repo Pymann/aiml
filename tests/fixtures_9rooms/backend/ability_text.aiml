@@ -200,22 +200,22 @@
     args: [[data, list<i32>], [var_si, i32]]
     return: string
     body:
-      - decl: [dlen, i32, { call: [data.len] }]
+      - decl: [dlen, i32, data.len]
       - if:
           condition: { ge: [var_si, dlen] }
           then:
             - return: "0"
-      - decl: [var_vt, i32, { call: [data.get, var_si] }]
+      - decl: [var_vt, i32, { at: [data, var_si] }]
       - decl: [var_p1, i32, 0]
       - decl: [var_p2, i32, 0]
       - if:
           condition: { lt: [{ +: [var_si, 1] }, dlen] }
           then:
-            - set: [var_p1, { call: [data.get, { +: [var_si, 1] }] }]
+            - set: [var_p1, { at: [data, { +: [var_si, 1] }] }]
       - if:
           condition: { lt: [{ +: [var_si, 2] }, dlen] }
           then:
-            - set: [var_p2, { call: [data.get, { +: [var_si, 2] }] }]
+            - set: [var_p2, { at: [data, { +: [var_si, 2] }] }]
       # fixed value
       - if: [{ eq: [var_vt, 1] }, true]
         then:
@@ -308,12 +308,12 @@
     args: [[data, list<i32>], [var_si, i32]]
     return: string
     body:
-      - decl: [dlen, i32, { call: [data.len] }]
+      - decl: [dlen, i32, data.len]
       - if:
           condition: { ge: [var_si, dlen] }
           then:
             - return: ""
-      - decl: [var_dt, i32, { call: [data.get, var_si] }]
+      - decl: [var_dt, i32, { at: [data, var_si] }]
       - if: [{ eq: [var_dt, 1] }, true]
         then:
           - return: " permanently"
@@ -331,7 +331,7 @@
           - if:
               condition: { lt: [{ +: [var_si, 1] }, dlen] }
               then:
-                - set: [var_ph, { call: [data.get, { +: [var_si, 1] }] }]
+                - set: [var_ph, { at: [data, { +: [var_si, 1] }] }]
           - decl: [var_pn, string, { call: [phase_name, var_ph] }]
           - return: " until the start of the next ${var_pn}"
       - if: [{ eq: [var_dt, 4] }, true]
@@ -340,7 +340,7 @@
           - if:
               condition: { lt: [{ +: [var_si, 1] }, dlen] }
               then:
-                - set: [ph2, { call: [data.get, { +: [var_si, 1] }] }]
+                - set: [ph2, { at: [data, { +: [var_si, 1] }] }]
           - decl: [pn2, string, { call: [phase_name, ph2] }]
           - return: " until the end of ${pn2}"
       - if: [{ eq: [var_dt, 5] }, true]
@@ -360,22 +360,22 @@
     args: [[var_e, list<i32>]]
     return: string
     body:
-      - decl: [elen, i32, { call: [var_e.len] }]
+      - decl: [elen, i32, var_e.len]
       - if:
           condition: { eq: [elen, 0] }
           then:
             - return: ""
-      - decl: [code, i32, { call: [var_e.get, 0] }]
+      - decl: [code, i32, { at: [var_e, 0] }]
       - decl: [var_p1, i32, 0]
       - decl: [var_p2, i32, 0]
       - if:
           condition: { gt: [elen, 1] }
           then:
-            - set: [var_p1, { call: [var_e.get, 1] }]
+            - set: [var_p1, { at: [var_e, 1] }]
       - if:
           condition: { gt: [elen, 2] }
           then:
-            - set: [var_p2, { call: [var_e.get, 2] }]
+            - set: [var_p2, { at: [var_e, 2] }]
 
       # 1: DRAW_CARD [1, DeckType, ValueType, Value]
       - if: [{ eq: [code, 1] }, true]
@@ -431,7 +431,7 @@
           - if:
               condition: { gt: [elen, 3] }
               then:
-                - set: [vt12, { call: [var_e.get, 3] }]
+                - set: [vt12, { at: [var_e, 3] }]
           - decl: [vlen, i32, { call: [resolve_value_len, vt12] }]
           - decl: [dur_idx, i32, { +: [3, vlen] }]
           - decl: [dur, string, { call: [format_duration, var_e, dur_idx] }]
@@ -454,7 +454,7 @@
                       - if:
                           condition: { gt: [elen, 3] }
                           then:
-                            - set: [zp20, { call: [var_e.get, 3] }]
+                            - set: [zp20, { at: [var_e, 3] }]
                       - decl: [zn20, string, { call: [zone_name, zp20] }]
                       - decl: [pfx20, string, "all"]
                       - if:
@@ -483,7 +483,7 @@
                       - if:
                           condition: { gt: [elen, 3] }
                           then:
-                            - set: [zp21, { call: [var_e.get, 3] }]
+                            - set: [zp21, { at: [var_e, 3] }]
                       - decl: [zn21, string, { call: [zone_name, zp21] }]
                       - decl: [pfx21, string, "all"]
                       - if:
@@ -573,12 +573,12 @@
           - if:
               condition: { gt: [elen, 3] }
               then:
-                - set: [zone47, { call: [zone_name, { call: [var_e.get, 3] }] }]
+                - set: [zone47, { call: [zone_name, { at: [var_e, 3] }] }]
           - decl: [ct47, string, "card"]
           - if:
               condition: { gt: [elen, 4] }
               then:
-                - set: [ct47, { call: [card_type_name_lower, { call: [var_e.get, 4] }] }]
+                - set: [ct47, { call: [card_type_name_lower, { at: [var_e, 4] }] }]
           - decl: [ow47, string, { call: [owner_trigger_name, var_p2] }]
           - return: "Revive ${ow47} ${ct47} from graveyard to ${zone47}."
 
@@ -619,22 +619,22 @@
     args: [[var_t, list<i32>]]
     return: string
     body:
-      - decl: [tlen, i32, { call: [var_t.len] }]
+      - decl: [tlen, i32, var_t.len]
       - if:
           condition: { eq: [tlen, 0] }
           then:
             - return: ""
-      - decl: [var_tt, i32, { call: [var_t.get, 0] }]
+      - decl: [var_tt, i32, { at: [var_t, 0] }]
       - decl: [var_p1, i32, 0]
       - decl: [var_p2, i32, 0]
       - if:
           condition: { gt: [tlen, 1] }
           then:
-            - set: [var_p1, { call: [var_t.get, 1] }]
+            - set: [var_p1, { at: [var_t, 1] }]
       - if:
           condition: { gt: [tlen, 2] }
           then:
-            - set: [var_p2, { call: [var_t.get, 2] }]
+            - set: [var_p2, { at: [var_t, 2] }]
       - decl: [var_ow, string, { call: [owner_name, var_p1] }]
       - decl: [owt, string, { call: [owner_trigger_name, var_p1] }]
 
@@ -777,22 +777,22 @@
     args: [[var_e, list<i32>]]
     return: string
     body:
-      - decl: [elen, i32, { call: [var_e.len] }]
+      - decl: [elen, i32, var_e.len]
       - if:
           condition: { eq: [elen, 0] }
           then:
             - return: ""
-      - decl: [var_ct, i32, { call: [var_e.get, 0] }]
+      - decl: [var_ct, i32, { at: [var_e, 0] }]
       - decl: [var_p1, i32, 0]
       - decl: [var_p2, i32, 0]
       - if:
           condition: { gt: [elen, 1] }
           then:
-            - set: [var_p1, { call: [var_e.get, 1] }]
+            - set: [var_p1, { at: [var_e, 1] }]
       - if:
           condition: { gt: [elen, 2] }
           then:
-            - set: [var_p2, { call: [var_e.get, 2] }]
+            - set: [var_p2, { at: [var_e, 2] }]
       # 1: MANA_COST [1, ManaColor, Count]
       - if:
           condition: { eq: [var_ct, 1] }
@@ -891,8 +891,8 @@
       - decl: [trigger_text, string, ""]
       - decl: [cost_text_generated, string, ""]
       - decl: [effects_text, string, ""]
-      - decl: [clen, i32, { call: [var_ab.activation_cost.len] }]
-      - decl: [tlen, i32, { call: [var_ab.trigger.len] }]
+      - decl: [clen, i32, var_ab.activation_cost.len]
+      - decl: [tlen, i32, var_ab.trigger.len]
       - decl: [manual_text, string, var_ab.cost_text]
 
       # Trigger text
@@ -903,13 +903,13 @@
             - while:
                 condition: { lt: [var_ti, tlen] }
                 body:
-                  - decl: [trig, list<i32>, { call: [var_ab.trigger.get, var_ti] }]
+                  - decl: [trig, list<i32>, { at: [var_ab.trigger, var_ti] }]
                   - decl: [trig_str, string, { call: [format_trigger, trig] }]
                   - if:
-                      condition: { gt: [{ call: [trig_str.len] }, 0] }
+                      condition: { gt: [trig_str.len, 0] }
                       then:
                         - if:
-                            condition: { gt: [{ call: [trigger_text.len] }, 0] }
+                            condition: { gt: [trigger_text.len, 0] }
                             then:
                               - set: [trigger_text, "${trigger_text}, ${trig_str}"]
                             else:
@@ -924,14 +924,14 @@
             - while:
                 condition: { lt: [var_ci, clen] }
                 body:
-                  - decl: [var_cb, list<i32>, { call: [var_ab.activation_cost.get, var_ci] }]
+                  - decl: [var_cb, list<i32>, { at: [var_ab.activation_cost, var_ci] }]
                   - decl: [ct_str_raw, string, { call: [format_cost, var_cb] }]
                   - decl: [ct_str, string, { call: [cost_phrase, ct_str_raw] }]
                   - if:
-                      condition: { gt: [{ call: [ct_str.len] }, 0] }
+                      condition: { gt: [ct_str.len, 0] }
                       then:
                         - if:
-                            condition: { gt: [{ call: [cost_text_generated.len] }, 0] }
+                            condition: { gt: [cost_text_generated.len, 0] }
                             then:
                               - set: [cost_text_generated, "${cost_text_generated}, ${ct_str}"]
                             else:
@@ -939,7 +939,7 @@
                   - set: [var_ci, { +: [var_ci, 1] }]
 
       # Effects (always)
-      - decl: [elen, i32, { call: [var_ab.effects.len] }]
+      - decl: [elen, i32, var_ab.effects.len]
       - if:
           condition: { gt: [elen, 0] }
           then:
@@ -947,13 +947,13 @@
             - while:
                 condition: { lt: [var_ei, elen] }
                 body:
-                  - decl: [eff, list<i32>, { call: [var_ab.effects.get, var_ei] }]
+                  - decl: [eff, list<i32>, { at: [var_ab.effects, var_ei] }]
                   - decl: [eff_str, string, { call: [format_effect, eff] }]
                   - if:
-                      condition: { gt: [{ call: [eff_str.len] }, 0] }
+                      condition: { gt: [eff_str.len, 0] }
                       then:
                         - if:
-                            condition: { gt: [{ call: [effects_text.len] }, 0] }
+                            condition: { gt: [effects_text.len, 0] }
                             then:
                               - set: [effects_text, "${effects_text} ${eff_str}"]
                             else:
@@ -961,34 +961,34 @@
                   - set: [var_ei, { +: [var_ei, 1] }]
 
       - if:
-          condition: { "&&": [{ gt: [{ call: [trigger_text.len] }, 0] }, { gt: [{ call: [cost_text_generated.len] }, 0] }] }
+          condition: { "&&": [{ gt: [trigger_text.len, 0] }, { gt: [cost_text_generated.len, 0] }] }
           then:
             - if:
-                condition: { gt: [{ call: [effects_text.len] }, 0] }
+                condition: { gt: [effects_text.len, 0] }
                 then:
                   - return: "${trigger_text}, its controller can ${cost_text_generated} to ${effects_text}"
                 else:
                   - return: "${trigger_text}, its controller can ${cost_text_generated}"
       - if:
-          condition: { gt: [{ call: [trigger_text.len] }, 0] }
+          condition: { gt: [trigger_text.len, 0] }
           then:
             - if:
-                condition: { gt: [{ call: [effects_text.len] }, 0] }
+                condition: { gt: [effects_text.len, 0] }
                 then:
                   - return: "${trigger_text}: ${effects_text}"
                 else:
                   - return: trigger_text
       - if:
-          condition: { gt: [{ call: [cost_text_generated.len] }, 0] }
+          condition: { gt: [cost_text_generated.len, 0] }
           then:
             - if:
-                condition: { gt: [{ call: [effects_text.len] }, 0] }
+                condition: { gt: [effects_text.len, 0] }
                 then:
                   - return: "${cost_text_generated}: ${effects_text}"
                 else:
                   - return: cost_text_generated
       - if:
-          condition: { gt: [{ call: [effects_text.len] }, 0] }
+          condition: { gt: [effects_text.len, 0] }
           then:
             - return: effects_text
       - return: manual_text
@@ -1006,7 +1006,7 @@
       - decl: [result, string, ""]
 
       # Passive abilities
-      - decl: [palen, i32, { call: [var_cp.passive_abilities.len] }]
+      - decl: [palen, i32, var_cp.passive_abilities.len]
       - if:
           condition: { gt: [palen, 0] }
           then:
@@ -1014,10 +1014,10 @@
             - while:
                 condition: { lt: [var_pi, palen] }
                 body:
-                  - decl: [pa_id, i32, { call: [var_cp.passive_abilities.get, var_pi] }]
+                  - decl: [pa_id, i32, { at: [var_cp.passive_abilities, var_pi] }]
                   - decl: [pa_str, string, { call: [passive_name, pa_id] }]
                   - if:
-                      condition: { gt: [{ call: [result.len] }, 0] }
+                      condition: { gt: [result.len, 0] }
                       then:
                         - set: [result, "${result}, ${pa_str}"]
                       else:
@@ -1025,22 +1025,22 @@
                   - set: [var_pi, { +: [var_pi, 1] }]
 
       # Active abilities
-      - decl: [aalen, i32, { call: [var_cp.active_abilities.len] }]
+      - decl: [aalen, i32, var_cp.active_abilities.len]
       - if:
           condition: { gt: [aalen, 0] }
           then:
             - if:
-                condition: { gt: [{ call: [result.len] }, 0] }
+                condition: { gt: [result.len, 0] }
                 then:
                   - set: [result, "${result} | "]
             - decl: [var_ai, i32, 0]
             - while:
                 condition: { lt: [var_ai, aalen] }
                 body:
-                  - decl: [var_aa, ref<ActiveAbility>, { call: [var_cp.active_abilities.get, var_ai] }]
+                  - decl: [var_aa, ref<ActiveAbility>, { at: [var_cp.active_abilities, var_ai] }]
                   - decl: [aa_str, string, { call: [generate_ability_text, var_aa] }]
                   - if:
-                      condition: { gt: [{ call: [aa_str.len] }, 0] }
+                      condition: { gt: [aa_str.len, 0] }
                       then:
                         - if:
                             condition: { gt: [var_ai, 0] }
@@ -1061,13 +1061,13 @@
     args: [[lst, list<i32>]]
     return: string
     body:
-      - decl: [var_n, i32, { call: [lst.len] }]
+      - decl: [var_n, i32, lst.len]
       - decl: [result, string, "["]
       - decl: [var_i, i32, 0]
       - while:
           condition: { "<": [var_i, var_n] }
           body:
-            - decl: [var_v, i32, { call: [lst.get, var_i] }]
+            - decl: [var_v, i32, { at: [lst, var_i] }]
             - if:
                 condition: { eq: [var_i, 0] }
                 then:
@@ -1083,13 +1083,13 @@
     args: [[lst, list<list<i32>>]]
     return: string
     body:
-      - decl: [var_n, i32, { call: [lst.len] }]
+      - decl: [var_n, i32, lst.len]
       - decl: [result, string, "["]
       - decl: [var_i, i32, 0]
       - while:
           condition: { "<": [var_i, var_n] }
           body:
-            - decl: [inner, list<i32>, { call: [lst.get, var_i] }]
+            - decl: [inner, list<i32>, { at: [lst, var_i] }]
             - decl: [inner_json, string, { call: [ser_int_list_json, inner] }]
             - if:
                 condition: { eq: [var_i, 0] }
@@ -1117,13 +1117,13 @@
     args: [[var_cp, ptr<Card>]]
     return: string
     body:
-      - decl: [var_n, i32, { call: [var_cp.passive_abilities.len] }]
+      - decl: [var_n, i32, var_cp.passive_abilities.len]
       - decl: [result, string, "["]
       - decl: [var_i, i32, 0]
       - while:
           condition: { "<": [var_i, var_n] }
           body:
-            - decl: [var_pa, i32, { call: [var_cp.passive_abilities.get, var_i] }]
+            - decl: [var_pa, i32, { at: [var_cp.passive_abilities, var_i] }]
             - if:
                 condition: { eq: [var_i, 0] }
                 then:
@@ -1139,13 +1139,13 @@
     args: [[var_cp, ptr<Card>]]
     return: string
     body:
-      - decl: [var_n, i32, { call: [var_cp.active_abilities.len] }]
+      - decl: [var_n, i32, var_cp.active_abilities.len]
       - decl: [result, string, "["]
       - decl: [var_i, i32, 0]
       - while:
           condition: { "<": [var_i, var_n] }
           body:
-            - decl: [var_ab, ref<ActiveAbility>, { call: [var_cp.active_abilities.get, var_i] }]
+            - decl: [var_ab, ref<ActiveAbility>, { at: [var_cp.active_abilities, var_i] }]
             - decl: [ab_json, string, { call: [ser_active_ability_json, var_ab] }]
             - if:
                 condition: { eq: [var_i, 0] }

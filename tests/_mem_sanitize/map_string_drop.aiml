@@ -13,7 +13,7 @@
       - while:
           condition: { lt: [jdx, reps] }
           body:
-            - call: [dict.put, "k-${jdx}", "v-${jdx}"]
+            - call: [dict.set, "k-${jdx}", "v-${jdx}"]
             - set: [jdx, { +: [jdx, 1] }]
 - def:
     name: main

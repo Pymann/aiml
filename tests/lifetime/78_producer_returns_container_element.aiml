@@ -12,10 +12,10 @@
     body:
       - decl: [key, string, "k${num}"]
       - if:
-          condition: { eq: [{ call: [g_cache.contains, key] }, 1] }
+          condition: { eq: [{ call: [g_cache.has, key] }, 1] }
           then: [{ return: { call: [g_cache.get, key] } }]
       - decl: [blk, string, "text_${num}_padding_padding"]
-      - call: [g_cache.put, key, blk]
+      - call: [g_cache.set, key, blk]
       - return: blk
 
 - def:

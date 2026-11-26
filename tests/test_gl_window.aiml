@@ -171,13 +171,13 @@
 
 # ── Clean-up ──────────────────────────────────────────────────────────────────
 
-- call: [edge_vao.delete]
-- call: [edge_ibo.delete]
-- call: [vao.delete]
-- call: [vbo.delete]
-- call: [ibo.delete]
-- call: [sh_white.delete]
-- call: [sh_red.delete]
+- call: [edge_vao.free]
+- call: [edge_ibo.free]
+- call: [vao.free]
+- call: [vbo.free]
+- call: [ibo.free]
+- call: [sh_white.free]
+- call: [sh_red.free]
 - call: [glfwTerminate]
 
 - print: ["All gl_window tests passed"]

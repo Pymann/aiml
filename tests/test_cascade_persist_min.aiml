@@ -18,10 +18,10 @@
       - call: [cascade.persist_row, outer, 0, 12, vals]
       - print: ["after persist"]
 
-      - decl: [row, list<i32>, { call: [outer.get, 0] }]
+      - decl: [row, list<i32>, { at: [outer, 0] }]
       - print: ["row.len=${row.len}"]
-      - decl: [slot0, i32, { call: [row.get, 0] }]
-      - decl: [slot1, i32, { call: [row.get, 1] }]
-      - decl: [slot2, i32, { call: [row.get, 2] }]
+      - decl: [slot0, i32, { at: [row, 0] }]
+      - decl: [slot1, i32, { at: [row, 1] }]
+      - decl: [slot2, i32, { at: [row, 2] }]
       - print: ["row=[${slot0},${slot1},${slot2}]"]
       - return: 0

@@ -34,9 +34,9 @@
       - print: ["FAIL: var_w.grad is null after backward — reshape breaks graph"]
       - call: [sys.exit, 1]
 
-- decl: [var_g0, f32, { call: [var_wg.get, 0] }]
-- decl: [var_g3, f32, { call: [var_wg.get, 3] }]
-- decl: [var_g5, f32, { call: [var_wg.get, 5] }]
+- decl: [var_g0, f32, { at: [var_wg, 0] }]
+- decl: [var_g3, f32, { at: [var_wg, 3] }]
+- decl: [var_g5, f32, { at: [var_wg, 5] }]
 
 - if:
     condition: { neq: [var_g0, 2.0] }

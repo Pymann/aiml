@@ -22,7 +22,7 @@
           condition: { lt: [idx, 200] }
           body:
             - decl: [req_mn, Req]
-            - call: [req_mn.produces.put, "1", 2]
+            - call: [req_mn.produces.set, "1", 2]
             - call: [req_mn.tags.push, "fire"]
             - call: [persist, req_mn]
             - set: [idx, { +: [idx, 1] }]

@@ -19,7 +19,7 @@
       - decl: [dinge, "Kv<string:Ding>"]
       - set: [dinge, { call: [db.open_kv, "sidx_dinge", {persist: true, index_dump: true, path: pfad}] }]
 
-      - decl: [anz, i32, { call: [dinge.len] }]
+      - decl: [anz, i32, dinge.len]
       - if:
           condition: { neq: [anz, 0] }
           then:

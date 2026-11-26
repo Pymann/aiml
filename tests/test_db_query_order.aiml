@@ -11,37 +11,37 @@
 
 - decl: [var_s, Score]
 - set: [var_s.pts, 50]
-- call: [scores.insert, var_s]
+- call: [scores.add, var_s]
 
 - set: [var_s.pts, 100]
-- call: [scores.insert, var_s]
+- call: [scores.add, var_s]
 
 - set: [var_s.pts, 30]
-- call: [scores.insert, var_s]
+- call: [scores.add, var_s]
 
 # Ascending by pts → first = 30
 - decl: [asc, list<ref<Score>>]
 - set: [asc, { call: [db.query, scores, {order_by: pts}] }]
 - decl: [first, ref<Score>]
-- set: [first, { call: [asc.get, 0] }]
+- set: [first, { at: [asc, 0] }]
 - print: ["asc first: ${first.pts}"]
 
 # Descending by pts → first = 100
 - decl: [desc, list<ref<Score>>]
 - set: [desc, { call: [db.query, scores, {order_by: pts}, {dir: desc}] }]
-- set: [first, { call: [desc.get, 0] }]
+- set: [first, { at: [desc, 0] }]
 - print: ["desc first: ${first.pts}"]
 
 # Descending + limit 2 → [100, 50]; second = 50
 - decl: [top2, list<ref<Score>>]
 - set: [top2, { call: [db.query, scores, {order_by: pts}, {dir: desc}, {limit: 2}] }]
-- set: [first, { call: [top2.get, 1] }]
+- set: [first, { at: [top2, 1] }]
 - print: ["top2 second: ${first.pts}"]
 
 # Ascending + offset 1 → skip 30, first of rest = 50
 - decl: [skipped, list<ref<Score>>]
 - set: [skipped, { call: [db.query, scores, {order_by: pts}, {offset: 1}] }]
-- set: [first, { call: [skipped.get, 0] }]
+- set: [first, { at: [skipped, 0] }]
 - print: ["offset1 first: ${first.pts}"]
 
 # where predicate + order_by desc
@@ -60,7 +60,7 @@
 - decl: [filtered, list<ref<Score>>]
 - set: [filtered, { call: [db.query, scores, {where: above_40}, {order_by: pts}, {dir: desc}] }]
 - decl: [flen, i32]
-- set: [flen, { call: [filtered.len] }]
+- set: [flen, filtered.len]
 - print: ["filtered len: ${flen}"]
-- set: [first, { call: [filtered.get, 0] }]
+- set: [first, { at: [filtered, 0] }]
 - print: ["filtered first: ${first.pts}"]

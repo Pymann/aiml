@@ -12,9 +12,9 @@
       - call: [bytes.write, 7, u8]
       - call: [bytes.write, 513, u16]
       - if: { condition: { neq: [bytes.len, 4] }, then: [{ print: ["FAIL len ${bytes.len}"] }, { return: 1 }] }
-      - decl: [first, i32, { cast: [{ call: [bytes.get, 0] }, i32] }]
-      - decl: [second, i32, { cast: [{ call: [bytes.get, 1] }, i32] }]
-      - decl: [low, i32, { cast: [{ call: [bytes.get, 2] }, i32] }]
+      - decl: [first, i32, { cast: [{ at: [bytes, 0] }, i32] }]
+      - decl: [second, i32, { cast: [{ at: [bytes, 1] }, i32] }]
+      - decl: [low, i32, { cast: [{ at: [bytes, 2] }, i32] }]
       - if: { condition: { "||": [{ neq: [first, 200] }, { neq: [second, 7] }] }, then: [{ print: ["FAIL bytes ${first} ${second}"] }, { return: 1 }] }
       - if: { condition: { neq: [low, 1] }, then: [{ print: ["FAIL u16 low ${low}"] }, { return: 1 }] }
       - decl: [floats, buffer<f32>]

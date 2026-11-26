@@ -42,7 +42,7 @@
             - decl: [file_path, path, "tests/cube_textured.glb"]
             - decl: [scene, gltf_scene, { call: [gltf.load, file_path] }]
             - decl: [mats, list<gltf_material>, { call: [scene.materials] }]
-            - decl: [mat, gltf_material, { call: [mats.get, 0] }]
+            - decl: [mat, gltf_material, { at: [mats, 0] }]
             - decl: [tex, gltf_texture, { call: [mat.base_color_texture] }]
             - decl: [round, i32, 0]
             - while:

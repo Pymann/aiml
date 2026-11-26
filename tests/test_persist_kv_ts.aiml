@@ -19,7 +19,7 @@
 - print: ["has debug: ${has}"]
 
 - decl: [klen, i32]
-- set: [klen, { call: [cfg.len] }]
+- set: [klen, cfg.len]
 - print: ["kv len: ${klen}"]
 
 # delete + verify
@@ -30,7 +30,7 @@
 # clear + verify
 - call: [cfg.set, "x", "1"]
 - call: [cfg.clear]
-- set: [klen, { call: [cfg.len] }]
+- set: [klen, cfg.len]
 - print: ["kv after clear: ${klen}"]
 
 # ── Phase B: Persistent TimeSeries ───────────────────────────────────────────
@@ -53,14 +53,14 @@
 - call: [var_ts.append, var_r, 3000]
 
 - decl: [tlen, i32]
-- set: [tlen, { call: [var_ts.len] }]
+- set: [tlen, var_ts.len]
 - print: ["var_ts len: ${tlen}"]
 
 - decl: [var_tp, ref<Reading>]
-- set: [var_tp, { call: [var_ts.at, 1500] }]
+- set: [var_tp, { call: [var_ts.at_time, 1500] }]
 - print: ["at 1500: ${var_tp.val}"]
 
-- set: [var_tp, { call: [var_ts.at, 2500] }]
+- set: [var_tp, { call: [var_ts.at_time, 2500] }]
 - print: ["at 2500: ${var_tp.val}"]
 
 # checkpoint flushes both

@@ -298,8 +298,7 @@ for TEST in $TEST_FILES; do
         EXPECTED_CODE=1
     elif [[ "$TEST" == *"test_ptr_push_into_value_list_error.aiml" ||
             "$TEST" == *"test_ptr_member_push_into_value_list_error.aiml" ||
-            "$TEST" == *"test_ptr_call_push_into_value_list_error.aiml" ||
-            "$TEST" == *"test_list_model_nested_get_push_repro.aiml" ]]; then
+            "$TEST" == *"test_ptr_call_push_into_value_list_error.aiml" ]]; then
         # Negative test: push(ptr<T>) into value list<T> — an 8-byte pointer
         # into a value-struct slot corrupts the heap / SIGSEGVs on serialize.
         # Must be a compile error (deref { '?': [x] } or use list<ptr<T>>).
@@ -344,8 +343,7 @@ for TEST in $TEST_FILES; do
     # These negatives must fail at compile time, not via the old runtime corruption.
     if [[ "$TEST" == *"test_ptr_push_into_value_list_error.aiml" ||
           "$TEST" == *"test_ptr_member_push_into_value_list_error.aiml" ||
-          "$TEST" == *"test_ptr_call_push_into_value_list_error.aiml" ||
-          "$TEST" == *"test_list_model_nested_get_push_repro.aiml" ]]; then
+          "$TEST" == *"test_ptr_call_push_into_value_list_error.aiml" ]]; then
         if ! tail -n "+$((TEST_LOG_START + 1))" "$OUTPUT_FILE" | grep -q "pointer instead of a value"; then
             EXIT_CODE=99
         fi

@@ -24,7 +24,7 @@
     name: handle_download
     args: [[req, http_request_handle], [resp, http_response_handle]]
     body:
-      - call: [resp.headers.put, "content-type", "application/octet-stream"]
+      - call: [resp.headers.set, "content-type", "application/octet-stream"]
       - set: [resp.body_file, "/usr/bin/true"]
       - call: [resp.send]
 
@@ -60,7 +60,7 @@
       # 1. upload from a file
       - decl: [up_url, url, { call: [http.parse_url, "http://127.0.0.1:23201/upload"] }]
       - decl: [up_req, http_client_handle, { call: [http.new_request, "POST", up_url] }]
-      - call: [up_req.headers.put, "Content-Type", "application/octet-stream"]
+      - call: [up_req.headers.set, "Content-Type", "application/octet-stream"]
       - set: [up_req.body_file, "/usr/bin/true"]
       - decl: [up_resp, http_response_handle, { call: [up_req.send] }]
       - if:

@@ -67,7 +67,7 @@
             - call: [gl.draw_arrays, <.vao, 3]
             - decl: [pixels, buffer<u8>, { call: [gl.read_rgba8, 1, 1, 1, 1] }]
             - call: [gl.bind_default_framebuffer]
-            - return: { cast: [{ call: [pixels.get, chan] }, i32] }
+            - return: { cast: [{ at: [pixels, chan] }, i32] }
 
       - def:
           name: run
@@ -131,10 +131,10 @@
             - call: [<.shader.uniform_f32, "uScale", 0.25]
             - call: [gl.draw_arrays, <.vao, 3]
             - decl: [pixels, buffer<u8>, { call: [gl.read_rgba8, 1, 1, 1, 1] }]
-            - call: [<.check, "hdr_kept", { cast: [{ call: [pixels.get, 0] }, i32] }, 189, 193]
-            - call: [<.check, "hdr_green", { cast: [{ call: [pixels.get, 1] }, i32] }, 30, 34]
+            - call: [<.check, "hdr_kept", { cast: [{ at: [pixels, 0] }, i32] }, 189, 193]
+            - call: [<.check, "hdr_green", { cast: [{ at: [pixels, 1] }, i32] }, 30, 34]
             - decl: [outside, buffer<u8>, { call: [gl.read_rgba8, 2, 2, 4, 4] }]
-            - call: [<.check, "read_outside", { call: [outside.len] }, 0, 0]
+            - call: [<.check, "read_outside", outside.len, 0, 0]
             - call: [gl.bind_default_framebuffer]
 
             - call: [<.check, "resize_ok", { call: [hdr.resize_checked, 8, 6] }, 1, 1]
@@ -160,14 +160,14 @@
             - decl: [after_reset, f32, { call: [engine.dt] }]
             - if: { condition: { neq: [after_reset, 0.0] }, then: [{ print: ["FAIL dt after reset ${after_reset}"] }, { set: [<.fails, { +: [<.fails, 1] }] }] }
 
-            - call: [srgb.delete]
-            - call: [linear.delete]
-            - call: [mipped.delete]
-            - call: [hot_tex.delete]
-            - call: [hdr.delete]
-            - call: [target.delete]
-            - call: [<.shader.delete]
-            - call: [<.vao.delete]
+            - call: [srgb.free]
+            - call: [linear.free]
+            - call: [mipped.free]
+            - call: [hot_tex.free]
+            - call: [hdr.free]
+            - call: [target.free]
+            - call: [<.shader.free]
+            - call: [<.vao.free]
 - def:
     name: main
     return: i32

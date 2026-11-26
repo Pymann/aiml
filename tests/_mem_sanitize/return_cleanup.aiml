@@ -16,7 +16,7 @@
           body:
             - call: [words.push, "w-${jdx}"]
             - set: [jdx, { +: [jdx, 1] }]
-      - return: { call: [words.len] }
+      - return: words.len
 - def:
     name: main
     return: i32

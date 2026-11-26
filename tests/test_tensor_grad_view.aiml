@@ -14,8 +14,8 @@
 - call: [tensor.backward, loss]
 
 - decl: [gview, tensor, { call: [view.grad] }]
-- decl: [gv0, f32, { call: [gview.get, 0] }]
-- decl: [pv0, f32, { call: [param.get, 0] }]
+- decl: [gv0, f32, { at: [gview, 0] }]
+- decl: [pv0, f32, { at: [param, 0] }]
 
 - if:
     condition: { neq: [pv0, 3.0] }
@@ -45,7 +45,7 @@
 - decl: [loss2, tensor, { call: [tensor.sum, sq2, -1] }]
 - call: [tensor.backward, loss2]
 - decl: [gview2, tensor, { call: [view2.grad] }]
-- decl: [gv2, f32, { call: [gview2.get, 0] }]
+- decl: [gv2, f32, { at: [gview2, 0] }]
 
 - call: [tensor.thread_cleanup]
 
@@ -61,7 +61,7 @@
 - decl: [loss3, tensor, { call: [tensor.sum, sq3, -1] }]
 - call: [tensor.backward, loss3]
 - decl: [gclone3, tensor, { call: [clone3.grad] }]
-- decl: [gc3, f32, { call: [gclone3.get, 0] }]
+- decl: [gc3, f32, { at: [gclone3, 0] }]
 
 - call: [tensor.thread_cleanup]
 
@@ -90,8 +90,8 @@
 
 - decl: [var_ga, tensor, { call: [var_va.grad] }]
 - decl: [var_gb, tensor, { call: [var_vb.grad] }]
-- decl: [ga0, f32, { call: [var_ga.get, 0] }]
-- decl: [gb0, f32, { call: [var_gb.get, 0] }]
+- decl: [ga0, f32, { at: [var_ga, 0] }]
+- decl: [gb0, f32, { at: [var_gb, 0] }]
 
 - if:
     condition: { neq: [ga0, 4.0] }
@@ -120,7 +120,7 @@
 
 - call: [tensor.begin_graph]
 
-- decl: [pv5, f32, { call: [var_p5.get, 0] }]
+- decl: [pv5, f32, { at: [var_p5, 0] }]
 
 - if:
     condition: { neq: [pv5, 7.0] }
@@ -132,7 +132,7 @@
 - decl: [loss5, tensor, { call: [tensor.sum, sq5, -1] }]
 - call: [tensor.backward, loss5]
 - decl: [gv5, tensor, { call: [var_v5.grad] }]
-- decl: [gv5_0, f32, { call: [gv5.get, 0] }]
+- decl: [gv5_0, f32, { at: [gv5, 0] }]
 
 - if:
     condition: { neq: [gv5_0, 14.0] }

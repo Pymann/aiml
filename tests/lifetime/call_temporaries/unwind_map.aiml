@@ -9,7 +9,7 @@
     return: {type: 'map<string:i32>', lifetime: producer}
     body:
     - decl: [value, 'map<string:i32>']
-    - call: [value.put, 'key-${3}', 7]
+    - call: [value.set, 'key-${3}', 7]
     - if:
         condition:
           eq: [fail, 1]

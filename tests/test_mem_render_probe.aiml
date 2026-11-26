@@ -195,9 +195,9 @@
 
       - decl: [envm, map<string:string>, { call: [sys.env] }]
       - decl: [sel, string, "all"]
-      - if: { condition: { gt: [{ call: [envm.contains, "AIML_RENDER_PROBE"] }, 0] }, then: [{ set: [sel, { call: [envm.get, "AIML_RENDER_PROBE"] }] }] }
+      - if: { condition: { gt: [{ call: [envm.has, "AIML_RENDER_PROBE"] }, 0] }, then: [{ set: [sel, { call: [envm.get, "AIML_RENDER_PROBE"] }] }] }
       - decl: [reps, i32, 20000]
-      - if: { condition: { gt: [{ call: [envm.contains, "AIML_MEM_ITERS"] }, 0] }, then: [{ decl: [itxt, string, { call: [envm.get, "AIML_MEM_ITERS"] }] }, { set: [reps, { call: [itxt.to_int] }] }] }
+      - if: { condition: { gt: [{ call: [envm.has, "AIML_MEM_ITERS"] }, 0] }, then: [{ decl: [itxt, string, { call: [envm.get, "AIML_MEM_ITERS"] }] }, { set: [reps, { call: [itxt.to_int] }] }] }
       - decl: [reps2, i32, { '*': [reps, 2] }]
 
       - decl: [held, prefab_instance, { call: [engine.instantiate, "ProbeCard"] }]

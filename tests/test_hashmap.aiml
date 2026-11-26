@@ -11,9 +11,9 @@
 
       # ── A: string -> i32 ─────────────────────────────────────────────────────────
       - decl: [hm_a, "hashmap<string:i32>"]
-      - call: [hm_a.put, "alpha", 1]
-      - call: [hm_a.put, "beta", 2]
-      - call: [hm_a.put, "alpha", 11]
+      - call: [hm_a.set, "alpha", 1]
+      - call: [hm_a.set, "beta", 2]
+      - call: [hm_a.set, "alpha", 11]
       - decl: [got_a, i32, { call: [hm_a.get, "alpha"] }]
       - if: [{ neq: [got_a, 11] }, true]
         then:
@@ -24,19 +24,19 @@
         then:
           - print: ["FAIL A2: missing key = ${miss_a}, expected 0"]
           - set: [var_ok, 0]
-      - decl: [len_a, i32, { call: [hm_a.len] }]
+      - decl: [len_a, i32, hm_a.len]
       - if: [{ neq: [len_a, 2] }, true]
         then:
           - print: ["FAIL A3: len = ${len_a}, expected 2"]
           - set: [var_ok, 0]
-      - if: [{ call: [hm_a.contains, "beta"] }, true]
+      - if: [{ call: [hm_a.has, "beta"] }, true]
         then:
           - print: ["OK A4: contains beta"]
         else:
           - print: ["FAIL A4: contains beta"]
           - set: [var_ok, 0]
-      - call: [hm_a.remove, "beta"]
-      - if: [{ call: [hm_a.contains, "beta"] }, true]
+      - call: [hm_a.delete, "beta"]
+      - if: [{ call: [hm_a.has, "beta"] }, true]
         then:
           - print: ["FAIL A5: beta still there after remove"]
           - set: [var_ok, 0]
@@ -46,11 +46,11 @@
       - decl: [idx, i32, 0]
       - while: [{ lt: [idx, 1000] }]
         body:
-          - call: [hm_b.add, "w${idx}", 1]
-          - call: [hm_b.add, "w${idx}", 2]
+          - call: [hm_b.incr, "w${idx}", 1]
+          - call: [hm_b.incr, "w${idx}", 2]
           - set: [idx, { "+": [idx, 1] }]
       - decl: [got_b, i64, { call: [hm_b.get, "w500"] }]
-      - decl: [len_b, i32, { call: [hm_b.len] }]
+      - decl: [len_b, i32, hm_b.len]
       - if: [{ or: [{ neq: [got_b, 3] }, { neq: [len_b, 1000] }] }, true]
         then:
           - print: ["FAIL B1: w500 = ${got_b} (3), len = ${len_b} (1000)"]
@@ -58,8 +58,8 @@
 
       # ── C: i32 -> string ─────────────────────────────────────────────────────────
       - decl: [hm_c, "hashmap<i32:string>"]
-      - call: [hm_c.put, 7, "sieben"]
-      - call: [hm_c.put, -3, "minus drei"]
+      - call: [hm_c.set, 7, "sieben"]
+      - call: [hm_c.set, -3, "minus drei"]
       - decl: [got_c, string, { call: [hm_c.get, -3] }]
       - if: [{ eq: [got_c, "minus drei"] }, true]
         then:
@@ -67,29 +67,35 @@
         else:
           - print: ["FAIL C1: get -3 = '${got_c}'"]
           - set: [var_ok, 0]
-      - call: [hm_c.put, -3, "neu"]
+      - call: [hm_c.set, -3, "neu"]
       - if: [{ eq: [got_c, "minus drei"] }, true]
         then:
           - print: ["OK C2: bound value stays valid after overwriting"]
         else:
           - print: ["FAIL C2: bound value changed: '${got_c}'"]
           - set: [var_ok, 0]
+      # spec/71 §3: a missing string key is the null string, get(k, d) gives d.
       - decl: [miss_c, string, { call: [hm_c.get, 99] }]
-      - if: [{ neq: [miss_c, ""] }, true]
+      - if: [{ neq: [miss_c, null] }, true]
         then:
-          - print: ["FAIL C3: missing key returns '${miss_c}'"]
+          - print: ["FAIL C3: missing key returns '${miss_c}', not null"]
+          - set: [var_ok, 0]
+      - decl: [dflt_c, string, { call: [hm_c.get, 99, "none"] }]
+      - if: [{ neq: [dflt_c, "none"] }, true]
+        then:
+          - print: ["FAIL C3: get(k, d) on a missing key returns '${dflt_c}'"]
           - set: [var_ok, 0]
 
       # ── D: f64 and bool ──────────────────────────────────────────────────────────
       - decl: [hm_d, "hashmap<string:f64>"]
-      - call: [hm_d.put, "pi", 3.25]
+      - call: [hm_d.set, "pi", 3.25]
       - decl: [got_d, f64, { call: [hm_d.get, "pi"] }]
       - if: [{ neq: [got_d, 3.25] }, true]
         then:
           - print: ["FAIL D1: pi = ${got_d}"]
           - set: [var_ok, 0]
       - decl: [hm_e, "hashmap<i64:bool>"]
-      - call: [hm_e.put, 5, true]
+      - call: [hm_e.set, 5, true]
       - if: [{ call: [hm_e.get, 5] }, true]
         then:
           - print: ["OK D2: bool true"]
@@ -103,12 +109,12 @@
 
       # ── E: keys sorted, clear ──────────────────────────────────────────────────
       - decl: [hm_f, "hashmap<string:i32>"]
-      - call: [hm_f.put, "zeta", 1]
-      - call: [hm_f.put, "alpha", 2]
-      - call: [hm_f.put, "mu", 3]
+      - call: [hm_f.set, "zeta", 1]
+      - call: [hm_f.set, "alpha", 2]
+      - call: [hm_f.set, "mu", 3]
       - decl: [key_list, list<string>, { call: [hm_f.keys] }]
-      - decl: [first_key, string, { call: [key_list.get, 0] }]
-      - decl: [last_key, string, { call: [key_list.get, 2] }]
+      - decl: [first_key, string, { at: [key_list, 0] }]
+      - decl: [last_key, string, { at: [key_list, 2] }]
       - if: [{ and: [{ eq: [first_key, "alpha"] }, { eq: [last_key, "zeta"] }] }, true]
         then:
           - print: ["OK E1: keys sorted"]
@@ -116,7 +122,7 @@
           - print: ["FAIL E1: keys = ${first_key} .. ${last_key}"]
           - set: [var_ok, 0]
       - call: [hm_f.clear]
-      - decl: [len_f, i32, { call: [hm_f.len] }]
+      - decl: [len_f, i32, hm_f.len]
       - if: [{ neq: [len_f, 0] }, true]
         then:
           - print: ["FAIL E2: len after clear = ${len_f}"]
@@ -125,7 +131,7 @@
       # ── F: Literal ───────────────────────────────────────────────────────────────
       - decl: [hm_g, "hashmap<string:i32>", { eins: 1, zwei: 2, drei: 3 }]
       - decl: [got_g, i32, { call: [hm_g.get, "zwei"] }]
-      - decl: [len_g, i32, { call: [hm_g.len] }]
+      - decl: [len_g, i32, hm_g.len]
       - if: [{ or: [{ neq: [got_g, 2] }, { neq: [len_g, 3] }] }, true]
         then:
           - print: ["FAIL F1: literal two = ${got_g}, len = ${len_g}"]
@@ -133,7 +139,7 @@
 
       # ── G: a copy shares the table (handle, like chan) ───────────────────────────
       - decl: [hm_h, "hashmap<string:i32>", hm_a]
-      - call: [hm_h.put, "delta", 4]
+      - call: [hm_h.set, "delta", 4]
       - decl: [got_h, i32, { call: [hm_a.get, "delta"] }]
       - if: [{ neq: [got_h, 4] }, true]
         then:

@@ -36,7 +36,7 @@
           body:
             - decl: [rows, list<string>]
             - decl: [tags, map<string:i32>]
-            - call: [tags.put, "k", 1]
+            - call: [tags.set, "k", 1]
             - try:
                 body:
                   - decl: [res, i32, {call: [outer_pass, rows, tags]}]
