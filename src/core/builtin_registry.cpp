@@ -12030,6 +12030,7 @@ void registerBuiltins(CompilerContext& ctx) {
         };
         INP_POST_STR("post_key_down", "aiml_input_post_key_down")
         INP_POST_STR("post_key_up",   "aiml_input_post_key_up")
+        INP_POST_STR("post_key_repeat", "aiml_input_post_key_repeat")
         INP_POST_STR("post_text",     "aiml_input_post_text")
 #undef INP_POST_STR
 
