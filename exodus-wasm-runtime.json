@@ -284,6 +284,7 @@
         "src/sys/storage_runtime.cpp",
         "src/sys/hash_crc_runtime.cpp",
         "src/sys/sha256.cpp",
+        "src/sys/base64_runtime.cpp",
         "src/sys/hash_wasm_runtime.cpp",
         "src/sys/asset_runtime.cpp",
         "src/sys/audio_runtime.cpp",

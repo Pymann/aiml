@@ -26,3 +26,4 @@ tests/test_wasm_list_clear_stride.aiml
 # spec/10 F10-23 — the bounds check puts the throw site into every function with
 # `at`/`get`; it must stay compilable and linkable on wasm32.
 tests/test_builtin_throw_after_list_alloc.aiml
+tests/test_base64.aiml
