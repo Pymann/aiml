@@ -1411,8 +1411,10 @@ void aiml_ui_draw_line(float x0, float y0, float x1, float y1,
 void aiml_ui_draw_polyline(void* pts_buf, float width, int32_t color) {
     if (!g_ui || width <= 0.0f || !pts_buf) return;
     AimlGLRawBuf* b = (AimlGLRawBuf*)pts_buf;
-    if (!b->data || b->size < 4) return;   /* fewer than two points: nothing */
-    int pt_count = b->size / 2;            /* a trailing odd float is ignored */
+    /* size is BYTES, as compute_sizes reads it -- not a count of floats. */
+    int floats = b->size / (int)sizeof(float);
+    if (!b->data || floats < 4) return;    /* fewer than two points: nothing */
+    int pt_count = floats / 2;             /* a trailing odd float is ignored */
     const float* p = (const float*)b->data;
     uint32_t rgba = style_rgba(color, cur_style().opacity);
     float half = lp(width) * 0.5f;
@@ -1423,6 +1425,57 @@ void aiml_ui_draw_polyline(void* pts_buf, float width, int32_t color) {
     for (int i = 0; i + 1 < pt_count; ++i)
         draw_segment(p[2*i], p[2*i+1], p[2*i+2], p[2*i+3], half, rgba);
     if (clip) { int clear[4] = {0,0,0,0}; push_scissor_cmd(clear); }
+}
+
+/* spec/44_3 §4.6.  ui.rect fills the cell it sits in; this fills the rect it is given.
+ * w/h are window pixels and are NOT dpi-scaled: a line's width describes a stroke and
+ * scales with the screen, a rect's size describes geometry and must not. */
+void aiml_ui_draw_rect(float x, float y, float w, float h, int32_t color) {
+    if (!g_ui || w <= 0.0f || h <= 0.0f) return;
+    uint32_t rgba = style_rgba(color, cur_style().opacity);
+    ensure_cmd(g_ui->white_tex, 1);
+    int sc[4];
+    bool clip = cell_clip_scissor(sc);
+    if (clip) push_scissor_cmd(sc);
+    push_quad(x, y, w, h, 0, 0, 1, 1, rgba, g_ui->white_tex, 1, 0.0f, 0.0f, 0, false);
+    if (clip) { int clear[4] = {0,0,0,0}; push_scissor_cmd(clear); }
+}
+
+/* spec/44_3 §4.6.  The canvas counterpart of ui.image_sized: that one fills the cell
+ * it sits in, this one draws into the rect it is given.  No SDF — a picture is not a
+ * rounded rect, and the rounding fields would cut its corners. */
+void aiml_ui_draw_image(float x, float y, float w, float h, void* tex) {
+    if (!g_ui || !tex || w <= 0.0f || h <= 0.0f) return;
+    AimlGLTexture* t = (AimlGLTexture*)tex;
+    ensure_cmd(t->id, 1);
+    int sc[4];
+    bool clip = cell_clip_scissor(sc);
+    if (clip) push_scissor_cmd(sc);
+    push_quad(x, y, w, h, 0, 0, 1, 1, 0xFFFFFFFF, t->id, 1, 0.0f, 0.0f, 0, false);
+    if (clip) { int clear[4] = {0,0,0,0}; push_scissor_cmd(clear); }
+}
+
+/* spec/44_3 §4.6.  The canvas counterpart of ui.label: a label lays itself out in a
+ * cell, this one draws where it is told.  push_text already takes absolute
+ * coordinates and the top of the line box, so this is the same text pipeline, not a
+ * second one. */
+void aiml_ui_draw_text(float x, float y, const char* text, int32_t color, void* preset) {
+    if (!g_ui || !text) return;
+    AimlUILabelStyle* st = (AimlUILabelStyle*)preset;
+    if (st) g_ui->style_stack.push_back(st->base);
+    AimlUIFont* f = active_font();
+    if (f) {
+        uint32_t rgba = style_rgba(color, cur_style().opacity);
+        ensure_cmd(f->atlas_tex, 0);
+        int sc[4];
+        bool clip = cell_clip_scissor(sc);
+        if (clip) push_scissor_cmd(sc);
+        /* No width limit: clipping is the cell's job (§4.6), and a soft per-glyph
+         * limit here would silently shorten a label that the caller sized itself. */
+        push_text(f, text, x, y, 1.0e9f, rgba);
+        if (clip) { int clear[4] = {0,0,0,0}; push_scissor_cmd(clear); }
+    }
+    if (st) g_ui->style_stack.pop_back();
 }
 
 void aiml_ui_label(const char* text, void* preset) {

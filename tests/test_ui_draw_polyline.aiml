@@ -1,5 +1,5 @@
 # SPEC: 44_3_ui
-# spec/44_3 §4.6: ui.draw_line / ui.draw_polyline — free drawing at caller
+# spec/44_3 §4.6: ui.draw_line / ui.draw_polyline / ui.draw_text — free drawing at caller
 # coordinates, batched with every other UI draw.
 #
 # This is a ROBUSTNESS test, not a pixel test: there is no read_pixels builtin,
@@ -43,6 +43,26 @@
       - call: [ui.draw_polyline, one, 2.0, 0x40FF40FF]
       - call: [ui.draw_polyline, odd, 2.0, 0x40FF40FF]
 
+      # 2a. draw_rect / draw_image: a filled rect at a position, and the degenerate
+      #     sizes that must draw nothing.
+      - call: [ui.draw_rect, 250.0, 40.0, 120.0, 60.0, 0x30506080]
+      - call: [ui.draw_rect, 250.0, 40.0, 0.0, 60.0, 0x30506080]
+      - call: [ui.draw_rect, 250.0, 40.0, 120.0, -3.0, 0x30506080]
+      - call: [ui.draw_image, 250.0, 120.0, 60.0, 60.0, null]
+
+      # 2b. draw_text: placed, empty, and with a preset.  Measured and drawn from the
+      #     same two numbers is the point (spec §4.6), so the box is sized by
+      #     measure_text and the text put at the same corner.
+      - decl: [label, string, "Angriff abgelehnt"]
+      - decl: [label_w, f32, { call: [ui.measure_text, label] }]
+      - decl: [label_h, f32, { call: [ui.text_height] }]
+      - if:
+          condition: { le: [label_w, 0.0] }
+          then: [{ call: [log.error, "FAIL measure_text ${label_w} before draw_text"] }, { return: 1 }]
+      - call: [ui.draw_line, 40.0, { +: [200.0, { /: [label_h, 2.0] }] }, { +: [40.0, label_w] }, { +: [200.0, { /: [label_h, 2.0] }] }, label_h, 0x203040FF]
+      - call: [ui.draw_text, 40.0, 200.0, label, 0xFFFFFFFF]
+      - call: [ui.draw_text, 40.0, 240.0, "", 0xFFFFFFFF]
+
       # 3. Inside a cell the drawing is clipped — and the clip must be cleared
       #    again, so the label after it is not swallowed by a stale scissor.
       - call: [ui.begin_grid, cols, rows]
@@ -55,5 +75,5 @@
       - call: [ui.end]
       - call: [engine.swap, win]
 
-      - call: [log.info, "ui.draw_line / ui.draw_polyline OK"]
+      - call: [log.info, "ui.draw_line / ui.draw_polyline / ui.draw_text OK"]
       - return: 0
