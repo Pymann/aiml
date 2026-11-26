@@ -1,0 +1,11 @@
+# SPEC: 62_pipelines §9.1
+# F62-160: `resolve:` is not inherited from the pipeline — a probe belongs to
+# what it probes, so on the pipeline it is an unknown key (F62-65).
+# Requires: driver
+- pipeline:
+    name: sonde_oben
+    resolve: "git ls-remote https://example.org/app.git"
+    steps:
+      - stage:
+          name: holen
+          run: "git clone https://example.org/app.git /ws/app"

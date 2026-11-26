@@ -1,0 +1,11 @@
+# SPEC: 62_pipelines §9.1
+# F62-160/163: beside `run:` the probe is a shell line, not a body.
+# Requires: driver
+- pipeline:
+    name: sonde_als_rumpf
+    steps:
+      - stage:
+          name: holen
+          cache: resolved
+          resolve: [{ return: "rev" }]
+          run: "git clone https://example.org/app.git /ws/app"

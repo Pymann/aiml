@@ -30,5 +30,9 @@ want old_name_rejected.aiml   "agent:"
 want unknown_key_rejected.aiml "unknown key"
 want stages_key_rejected.aiml "steps:"
 want steplayer_rejected.aiml  "steplayer"
+# spec/62 §9.1: the probe on the stage (F62-160/163).
+want stage_resolve_missing.aiml   "no \`resolve:\`"
+want stage_resolve_form.aiml      "shell line"
+want pipeline_resolve_rejected.aiml "unknown key"
 if [ $fails -ne 0 ]; then echo "pipeline_declared_neg FAIL ($fails)"; exit 1; fi
 echo "pipeline_declared_neg PASS"
