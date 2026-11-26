@@ -1,0 +1,14 @@
+# spec/71 §8: retired name -> compile error naming the replacement.
+- class:
+    name: Row
+    members:
+      - [rid, i32]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [doc_d, ptr<yaml_doc>, { call: [yaml.parse, "[1]"] }]
+      - decl: [row, ref<yaml_node>, { call: [yaml.root, doc_d] }]
+      - decl: [num, i32, { call: [yaml.size, row] }]
+      - return: 0

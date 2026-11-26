@@ -1,0 +1,56 @@
+# SPEC: 71_collection_vocabulary
+# spec/71 §3: get(k) on a missing key returns the zero value of V (0, 0.0, false, null pointer),
+# get(k, d) returns d.  It never throws.
+# Expected exit code: 0
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [fails, i32, 0]
+
+      - decl: [mpi, "map<string:i32>"]
+      - call: [mpi.set, "a", 1]
+      - if: [{ neq: [{ call: [mpi.get, "zz"] }, 0] }, true]
+        then: [{ print: ["FAIL map i32 zero"] }, { set: [fails, { +: [fails, 1] }] }]
+      - if: [{ neq: [{ call: [mpi.get, "zz", -1] }, -1] }, true]
+        then: [{ print: ["FAIL map i32 default"] }, { set: [fails, { +: [fails, 1] }] }]
+      - if: [{ neq: [{ call: [mpi.get, "a", -1] }, 1] }, true]
+        then: [{ print: ["FAIL map i32 present ignores default"] }, { set: [fails, { +: [fails, 1] }] }]
+
+      - decl: [mpf, "map<string:f64>"]
+      - if: [{ neq: [{ call: [mpf.get, "zz", 2.5] }, 2.5] }, true]
+        then: [{ print: ["FAIL map f64 default"] }, { set: [fails, { +: [fails, 1] }] }]
+
+      - decl: [mps, "map<string:string>"]
+      - decl: [miss, string, { call: [mps.get, "zz"] }]
+      - if: [{ neq: [miss, null] }, true]
+        then: [{ print: ["FAIL map string missing is not null"] }, { set: [fails, { +: [fails, 1] }] }]
+      - decl: [dflt, string, { call: [mps.get, "zz", "none"] }]
+      - if: [{ neq: [dflt, "none"] }, true]
+        then: [{ print: ["FAIL map string default = ${dflt}"] }, { set: [fails, { +: [fails, 1] }] }]
+
+      - decl: [hmi, "hashmap<i64:i32>"]
+      - if: [{ neq: [{ call: [hmi.get, 99, 7] }, 7] }, true]
+        then: [{ print: ["FAIL hashmap default"] }, { set: [fails, { +: [fails, 1] }] }]
+      - decl: [hms, "hashmap<string:string>"]
+      - decl: [hmiss, string, { call: [hms.get, "zz"] }]
+      - if: [{ neq: [hmiss, null] }, true]
+        then: [{ print: ["FAIL hashmap string missing is not null"] }, { set: [fails, { +: [fails, 1] }] }]
+
+      - decl: [kvs, "Kv<string:i32>", { call: [db.open_kv, "coll_get_default_kv"] }]
+      - if: [{ neq: [{ call: [kvs.get, "zz", 5] }, 5] }, true]
+        then: [{ print: ["FAIL kvs default"] }, { set: [fails, { +: [fails, 1] }] }]
+      - if: [{ neq: [{ call: [kvs.get, "zz"] }, 0] }, true]
+        then: [{ print: ["FAIL kvs zero"] }, { set: [fails, { +: [fails, 1] }] }]
+
+      - decl: [sto, string, { call: [storage.get, "coll_get_default_missing"] }]
+      - if: [{ neq: [sto, null] }, true]
+        then: [{ print: ["FAIL storage missing is not null"] }, { set: [fails, { +: [fails, 1] }] }]
+      - decl: [sto2, string, { call: [storage.get, "coll_get_default_missing", "d"] }]
+      - if: [{ neq: [sto2, "d"] }, true]
+        then: [{ print: ["FAIL storage default"] }, { set: [fails, { +: [fails, 1] }] }]
+
+      - if: [{ eq: [fails, 0] }, true]
+        then: [{ print: ["get default: all ok"] }]
+      - return: [fails]

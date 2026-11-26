@@ -1,0 +1,12 @@
+# spec/71 §8: retired name -> compile error naming the replacement.
+- class:
+    name: Row
+    members:
+      - [rid, i32]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - call: [storage.remove, "a"]
+      - return: 0

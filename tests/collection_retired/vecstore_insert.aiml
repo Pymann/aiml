@@ -1,0 +1,13 @@
+# spec/71 §8: retired name -> compile error naming the replacement.
+- class:
+    name: Row
+    members:
+      - [rid, i32]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [val, VecStore, { call: [db.open_vec, "v", 2] }]
+      - call: [val.insert, "k", [1.0, 2.0]]
+      - return: 0

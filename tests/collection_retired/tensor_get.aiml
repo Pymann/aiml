@@ -1,0 +1,13 @@
+# spec/71 §8: retired name -> compile error naming the replacement.
+- class:
+    name: Row
+    members:
+      - [rid, i32]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [tns, tensor, { call: [tensor.zeros, 2] }]
+      - decl: [num, f32, { call: [tns.get, 0] }]
+      - return: 0

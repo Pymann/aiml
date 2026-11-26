@@ -1,0 +1,13 @@
+# spec/71 §8: retired name -> compile error naming the replacement.
+- class:
+    name: Row
+    members:
+      - [rid, i32]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [hmp, "hashmap<string:i32>"]
+      - decl: [num, i32, { call: [hmp.size] }]
+      - return: 0

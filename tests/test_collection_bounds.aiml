@@ -1,0 +1,87 @@
+# SPEC: 71_collection_vocabulary
+# spec/71 §4 + §6: at/idx on every sequence raise IndexOutOfBoundsException outside [0, len),
+# with the message "index <i> of <len>"; pop on an empty sequence too.  dyn_array knows its len.
+# The indices stay dynamic so that no check folds away.
+# Expected exit code: 0
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [fails, i32, 0]
+      - decl: [caught, i32, 0]
+      - decl: [msg, string, ""]
+      - decl: [num, i32, 3]
+      - decl: [far, i32, { +: [num, 2] }]
+
+      - decl: [arr, "array<i32:3>"]
+      - set: [caught, 0]
+      - try:
+          body: [{ decl: [xval, i32, { at: [arr, far] }] }]
+          catch:
+            - type: IndexOutOfBoundsException
+              var: err
+              body: [{ set: [caught, 1] }, { set: [msg, err.message] }]
+      - if: [{ neq: [caught, 1] }, true]
+        then: [{ print: ["FAIL array at: no throw"] }, { set: [fails, { +: [fails, 1] }] }]
+      - if: [{ eq: [{ call: [msg.contains, "index 5 of 3"] }, 0] }, true]
+        then: [{ print: ["FAIL array message: ${msg}"] }, { set: [fails, { +: [fails, 1] }] }]
+      - set: [caught, 0]
+      - try:
+          body: [{ idx: [arr, far, 1] }]
+          catch:
+            - type: IndexOutOfBoundsException
+              var: err
+              body: [{ set: [caught, 1] }]
+      - if: [{ neq: [caught, 1] }, true]
+        then: [{ print: ["FAIL array idx: no throw"] }, { set: [fails, { +: [fails, 1] }] }]
+
+      - decl: [dar, "dyn_array<i32>", { new_array: [i32, num] }]
+      - set: [caught, 0]
+      - try:
+          body: [{ decl: [yval, i32, { at: [dar, far] }] }]
+          catch:
+            - type: IndexOutOfBoundsException
+              var: err
+              body: [{ set: [caught, 1] }, { set: [msg, err.message] }]
+      - if: [{ neq: [caught, 1] }, true]
+        then: [{ print: ["FAIL dyn_array at: no throw"] }, { set: [fails, { +: [fails, 1] }] }]
+      - if: [{ eq: [{ call: [msg.contains, "index 5 of 3"] }, 0] }, true]
+        then: [{ print: ["FAIL dyn_array message: ${msg}"] }, { set: [fails, { +: [fails, 1] }] }]
+      - set: [caught, 0]
+      - try:
+          body: [{ idx: [dar, -1, 1] }]
+          catch:
+            - type: IndexOutOfBoundsException
+              var: err
+              body: [{ set: [caught, 1] }]
+      - if: [{ neq: [caught, 1] }, true]
+        then: [{ print: ["FAIL dyn_array idx -1: no throw"] }, { set: [fails, { +: [fails, 1] }] }]
+
+      - decl: [buf, buffer<i32>]
+      - call: [buf.alloc, 12]
+      - call: [buf.push, 1]
+      - set: [caught, 0]
+      - try:
+          body: [{ decl: [zval, i32, { at: [buf, num] }] }]
+          catch:
+            - type: IndexOutOfBoundsException
+              var: err
+              body: [{ set: [caught, 1] }]
+      - if: [{ neq: [caught, 1] }, true]
+        then: [{ print: ["FAIL buffer<T> at past len: no throw"] }, { set: [fails, { +: [fails, 1] }] }]
+
+      - decl: [lst, list<i32>]
+      - set: [caught, 0]
+      - try:
+          body: [{ decl: [pval, i32, { call: [lst.pop] }] }]
+          catch:
+            - type: IndexOutOfBoundsException
+              var: err
+              body: [{ set: [caught, 1] }]
+      - if: [{ neq: [caught, 1] }, true]
+        then: [{ print: ["FAIL list.pop on empty: no throw"] }, { set: [fails, { +: [fails, 1] }] }]
+
+      - if: [{ eq: [fails, 0] }, true]
+        then: [{ print: ["bounds: all ok"] }]
+      - return: [fails]

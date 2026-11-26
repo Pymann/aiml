@@ -1,0 +1,139 @@
+# SPEC: 71_collection_vocabulary
+# spec/71 §5: .capacity is the most elements a collection takes, 0 = unbounded.  push/insert/
+# extend and set of a NEW key past it raise CapacityExceededException and change nothing;
+# overwriting a key is always allowed; a capacity below len is refused.
+# Expected exit code: 0
+
+- def:
+    name: over
+    args: [[what, string]]
+    return: i32
+    body:
+      - print: ["FAIL ${what}: no CapacityExceededException"]
+      - return: 1
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [fails, i32, 0]
+      - decl: [caught, i32, 0]
+
+      # list
+      - decl: [lst, list<i32>]
+      - if: [{ neq: [lst.capacity, 0] }, true]
+        then: [{ print: ["FAIL list starts unbounded"] }, { set: [fails, { +: [fails, 1] }] }]
+      - set: [lst.capacity, 2]
+      - call: [lst.push, 1]
+      - call: [lst.push, 2]
+      - set: [caught, 0]
+      - try:
+          body: [{ call: [lst.push, 3] }]
+          catch:
+            - type: CapacityExceededException
+              var: err
+              body: [{ set: [caught, 1] }]
+      - if: [{ neq: [caught, 1] }, true]
+        then: [{ set: [fails, { +: [fails, { call: [over, "list.push"] }] }] }]
+      - if: [{ neq: [lst.len, 2] }, true]
+        then: [{ print: ["FAIL list changed by refused push"] }, { set: [fails, { +: [fails, 1] }] }]
+      - set: [caught, 0]
+      - try:
+          body: [{ call: [lst.insert, 0, 9] }]
+          catch:
+            - type: CapacityExceededException
+              var: err
+              body: [{ set: [caught, 1] }]
+      - if: [{ neq: [caught, 1] }, true]
+        then: [{ set: [fails, { +: [fails, { call: [over, "list.insert"] }] }] }]
+      - set: [caught, 0]
+      - try:
+          body: [{ set: [lst.capacity, 1] }]
+          catch:
+            - type: CapacityExceededException
+              var: err
+              body: [{ set: [caught, 1] }]
+      - if: [{ neq: [caught, 1] }, true]
+        then: [{ set: [fails, { +: [fails, { call: [over, "capacity below len"] }] }] }]
+      - if: [{ neq: [lst.capacity, 2] }, true]
+        then: [{ print: ["FAIL refused capacity changed it"] }, { set: [fails, { +: [fails, 1] }] }]
+      - set: [lst.capacity, 0]
+      - call: [lst.push, 3]
+      - if: [{ neq: [lst.len, 3] }, true]
+        then: [{ print: ["FAIL capacity 0 is unbounded"] }, { set: [fails, { +: [fails, 1] }] }]
+
+      # extend is checked for the whole sequence before the first element
+      - decl: [err, list<i32>]
+      - set: [err.capacity, 3]
+      - call: [err.push, 1]
+      - set: [caught, 0]
+      - try:
+          body: [{ call: [err.extend, [2, 3, 4]] }]
+          catch:
+            - type: CapacityExceededException
+              var: xval
+              body: [{ set: [caught, 1] }]
+      - if: [{ neq: [caught, 1] }, true]
+        then: [{ set: [fails, { +: [fails, { call: [over, "list.extend"] }] }] }]
+      - if: [{ neq: [err.len, 1] }, true]
+        then: [{ print: ["FAIL extend partly applied: len ${err.len}"] }, { set: [fails, { +: [fails, 1] }] }]
+
+      # map: a new key past the capacity is refused, an overwrite is not
+      - decl: [mpp, "map<string:i32>"]
+      - set: [mpp.capacity, 1]
+      - call: [mpp.set, "a", 1]
+      - call: [mpp.set, "a", 2]
+      - set: [caught, 0]
+      - try:
+          body: [{ call: [mpp.set, "b", 1] }]
+          catch:
+            - type: CapacityExceededException
+              var: xval
+              body: [{ set: [caught, 1] }]
+      - if: [{ neq: [caught, 1] }, true]
+        then: [{ set: [fails, { +: [fails, { call: [over, "map.set new key"] }] }] }]
+      - if: [{ neq: [{ call: [mpp.get, "a"] }, 2] }, true]
+        then: [{ print: ["FAIL map overwrite at capacity"] }, { set: [fails, { +: [fails, 1] }] }]
+
+      # hashmap
+      - decl: [hmp, "hashmap<string:i32>"]
+      - set: [hmp.capacity, 1]
+      - call: [hmp.set, "a", 1]
+      - set: [caught, 0]
+      - try:
+          body: [{ call: [hmp.set, "b", 1] }]
+          catch:
+            - type: CapacityExceededException
+              var: xval
+              body: [{ set: [caught, 1] }]
+      - if: [{ neq: [caught, 1] }, true]
+        then: [{ set: [fails, { +: [fails, { call: [over, "hashmap.set new key"] }] }] }]
+      - set: [caught, 0]
+      - try:
+          body: [{ call: [hmp.incr, "c", 1] }]
+          catch:
+            - type: CapacityExceededException
+              var: xval
+              body: [{ set: [caught, 1] }]
+      - if: [{ neq: [caught, 1] }, true]
+        then: [{ set: [fails, { +: [fails, { call: [over, "hashmap.incr new key"] }] }] }]
+
+      # Kv
+      - decl: [kvs, "Kv<string:i32>", { call: [db.open_kv, "coll_capacity_kv"] }]
+      - set: [kvs.capacity, 1]
+      - call: [kvs.set, "a", 1]
+      - set: [caught, 0]
+      - try:
+          body: [{ call: [kvs.set, "b", 1] }]
+          catch:
+            - type: CapacityExceededException
+              var: xval
+              body: [{ set: [caught, 1] }]
+      - if: [{ neq: [caught, 1] }, true]
+        then: [{ set: [fails, { +: [fails, { call: [over, "kv.set new key"] }] }] }]
+      - if: [{ neq: [kvs.capacity, 1] }, true]
+        then: [{ print: ["FAIL kvs.capacity read"] }, { set: [fails, { +: [fails, 1] }] }]
+
+      - if: [{ eq: [fails, 0] }, true]
+        then: [{ print: ["capacity: all ok"] }]
+      - return: [fails]
