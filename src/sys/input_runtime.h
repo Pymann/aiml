@@ -46,6 +46,9 @@ void aiml_input_init       (void* win_handle);
 void aiml_input_update     (void);
 /* Cursor lock: true = hidden + confined to window (FPS-Look); false = visible. */
 void aiml_input_set_capture(int32_t on);
+/* spec/44_0 §2.5: the pointer's SHAPE.  One of "arrow", "text", "crosshair",
+ * "hand", "resize_ew", "resize_ns" -- the six the pinned GLFW provides. */
+void aiml_input_set_cursor(const char* shape);
 
 /* ── Raw polling: keyboard ────────────────────────────────────────────────── */
 
