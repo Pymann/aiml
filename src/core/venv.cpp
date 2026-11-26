@@ -1248,6 +1248,10 @@ int createVenv(const fs::path& root, const std::string& runtimeArg) {
             if (!installFile(ent.path(), wasmDst / ent.path().filename(), data, err)) return fail(err);
         }
     }
+    // F68-117: the version of a release comes along, next to the runtime it describes.
+    fs::path stamp = runtime.parent_path() / "aiml.version";
+    if (fs::is_regular_file(stamp, ec) && !installFile(stamp, root / "lib" / "aiml.version", data, err))
+        return fail(err);
     fs::path table = tableFile(root);
     if (!fs::exists(table, ec) && !writeText(table, "{\"packages\": {}}\n", err)) return fail(err);
     if (!writeText(root / "env", envText(root.string()), err)) return fail(err);

@@ -398,8 +398,9 @@ aiml build [-c <config.json>]… [--all]
   sources also `compiler.flags`, `compiler.lang_standard`, `optimization`, `debug`, `warnings` and
   `werror` (F68-111).  For an `.aiml` source exodus passed none of these on, so they do not reach
   the aiml compiler.  `jobs` and `-j <n>` set how many compiles run at once (F68-112).  Every other
-  field (`misra_*`, `clang_*`, `architecture`, `src_pattern_for_headers`, `dependencies`, …) is
-  read by no build step and ignored.
+  field (`misra_*`, `clang_*`, `architecture`, `src_pattern_for_headers`, …) is read by no build
+  step and ignored.  `compiler.version` and the `version` of each `dependencies` entry are read as
+  pins (§7.5, F68-114); the rest of `dependencies` is not used by the build.
 - **F68-82** **What is refused, by name** (revised 2026-11-26): `conan_packages` that are not
   empty, a hook that is no `.aiml` file (F68-87), and a source that is neither `.aiml`, `.o`, nor
   C/C++ (`.c`, `.cc`, `.cpp`, `.cxx`).  A build that silently skipped them would build something
@@ -583,6 +584,72 @@ commit with its setup command run once, `current`, and its file used through `__
 directory of tools (one without `aiml.tool.json` skipped), and a tool whose library comes from an
 apt package: the library lands in `<venv>/lib/`, the program runs with the cache deleted, and
 `remove` takes the library out again.
+
+### 7.5 Version pins — `compiler.version` and `dependencies[].version` (decided 2026-11-26)
+
+A tool is built against one aiml and works next to certain versions of its neighbours (ufo,
+kontor).  Until now that knowledge lived outside the repository: in a CI variable that falls back
+to the newest release, or nowhere.  A green build then proves nothing about the aiml it will meet
+in a venv, and an incompatibility is found by whoever runs it next.  The pin belongs into the
+build configuration, versioned with the code it describes, and a mismatch must be said at once,
+not after an hour of compiling.
+
+```json
+"compiler": {
+  "name": "$AIML",
+  "version": { "ge": "1.0.2.7", "lt": "1.1" }
+},
+"dependencies": [
+  { "name": "ufo",    "version": { "eq": "0.1.0" } },
+  { "name": "kontor", "version": { "ge": "0.1.0", "lt": "0.2" } }
+]
+```
+
+- **F68-114** **No new file, no new format.**  The pin lives in the exodus project file the tool
+  already has (F68-80): `compiler.version` for the compiler, `version` of a `dependencies` entry
+  for a neighbour.  The format keeps its `$schema` (`exodus.project.config-1.0`): both keys are
+  optional, a file without them builds exactly as before.  Only the configuration that builds the
+  tool's main program needs a pin; a repository with many configurations (cosmos) pins in that
+  one, and the others build unchecked.
+- **F68-115** **A range is an object of comparisons**, the keywords of aiml's own comparisons:
+  `eq`, `gt`, `ge`, `lt`, `le`.  Several keys hold together (and): `{ "ge": "1.0.2.7", "lt":
+  "1.1" }` is a range.  `eq` stands alone — `eq` next to another key is an error, and so is a
+  range that admits nothing (`{ "gt": "2", "lt": "1" }`).  A bare string is **not** shorthand for
+  `eq`: a pin is always written as what it is.  An unknown key is an error naming it (`"gte"` must
+  not become a pin that never applies).
+- **F68-116** **Comparison is numeric, segment by segment.**  A version is dot-separated
+  non-negative integers; a leading `v` is dropped, so the tag `v1.0.2.7` and `1.0.2.7` are the same
+  version.  A missing segment counts as 0: `lt: "1.1"` means below `1.1.0.0`, and `1.0.10` is
+  greater than `1.0.9`.  Anything else in a pin (`1.0-rc1`, `latest`, a sha) is an error in the
+  configuration; it is not compared as text.
+- **F68-117** **The compiler knows its version.**  The release carries it — `aiml --version` prints
+  the version the package step was given (`v1.0.2.7`), and the venv's runtime directory carries
+  the same line as `lib/aiml.version`, copied by `aiml venv` like `wasm32/` (F68-94).  A build
+  from a commit (`git-<sha>`, F68-90's packaging of untagged runs) has **no comparable version**:
+  every pin on it counts as a mismatch, with that reason, so a pin is never silently satisfied by
+  a build nobody released.
+- **F68-118** **A mismatch warns at once and does not stop the build.**  `aiml build` checks the
+  pins of a configuration **before compiling anything** (as F68-89 does for emsdk) and writes one
+  line per mismatch to stderr, in a fixed form that a host can recognise:
+
+  ```
+  aiml: version-mismatch compiler aiml 1.0.3.0 not in {ge 1.0.2.7, lt 1.1} (exodus-cosmosd.json)
+  aiml: version-mismatch dependency ufo 0.2.0 not in {eq 0.1.0} (exodus-cosmosd.json)
+  ```
+
+  The build goes on and its exit code is unaffected: an incompatibility is a **signal**, not a
+  failure — the pin may be stale, and a tool that builds and passes its tests against a newer aiml
+  is information, not breakage.  What a host does with the line is the host's: cosmos marks the
+  step magenta (spec/62 F62-47).  A dependency is checked against the version installed in the
+  active venv (`aiml venv <dir> list`); one that is not installed is a mismatch with that reason.
+- **F68-119** **exodus reads the same keys.**  exodus' model accepts `compiler.version` and a range
+  as `Dependency.version`, with the rules of F68-115 and F68-116, and warns the same way.  Two readers
+  of one format must not disagree on what a pin means.
+
+Tests: `tests/build/run.sh` — a configuration whose pin admits the running compiler builds without
+a line; one whose pin excludes it builds and prints exactly one `version-mismatch` line; `eq`
+with `lt`, an unknown key, an empty range and `1.0-rc1` are each refused naming the key; `v1.0.2.7`
+equals `1.0.2.7`; `1.0.10` is greater than `1.0.9`; a `git-<sha>` compiler mismatches every pin.
 
 ## 8. The wasm32 runtime in the release (decided 2026-11-25)
 

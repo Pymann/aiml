@@ -59,6 +59,7 @@ cat > "$P/offer.aiml" <<'EOT'
 EOT
 cfg() {  # cfg <file> <name> <output_type> <source> [extra json, with leading comma]
 local envj="${ENVJ:-}" aic="${AIC:-true}"
+local cvj=""; [ -z "${CV:-}" ] || cvj=", \"version\": $CV"
 [ -n "$envj" ] || envj='{ "AIML_MEM_V3": "1" }'
 cat > "$1" <<EOT
 {
@@ -66,7 +67,7 @@ cat > "$1" <<EOT
     "name": "$2", "version": "0.1.0",
     "output_type": "$3",
     "sources": ["$4"],
-    "compiler": { "name": "\$AIML", "lang_standard": "17", "flags": [] },
+    "compiler": { "name": "\$AIML", "lang_standard": "17", "flags": []$cvj },
     "linker": { "name": "g++", "flags": ["-Wl,-rpath,\$ORIGIN/../lib"],
                 "libraries": ["aiml", "pthread", "dl"],
                 "library_paths": ["\$AIML_VENV/lib"] },
@@ -487,6 +488,55 @@ out=$(inv "$F"); rc=$?
 check "a missing linker is named (F68-84)" '[ $rc -ne 0 ] && echo "$out" | grep -q "kein-linker-da"'
 out=$(inv "$WORK"); rc=$?
 check "no exodus.json: refused, named" '[ $rc -ne 0 ] && echo "$out" | grep -q "exodus.json"'
+
+# ── §7.5 version pins (F68-114…F68-118) ──────────────────────────────────────────
+echo "── version pins (spec/68 §7.2) ──"
+REL="$WORK/rel"; mkdir -p "$REL/bin" "$REL/lib"
+cp "$VENV/bin/aiml" "$REL/bin/aiml"; cp "$VENV/lib/libaiml.so" "$REL/lib/libaiml.so"
+printf 'v1.0.2.7\n' > "$REL/lib/aiml.version"
+VR="$WORK/vr"; "$REL/bin/aiml" venv "$VR" > /dev/null 2>&1
+check "aiml.version next to the runtime comes along into the venv (F68-117)" \
+  'cmp -s "$REL/lib/aiml.version" "$VR/lib/aiml.version"'
+check "aiml --version names the release (F68-117)" '[ "$("$VR/bin/aiml" --version)" = "aiml v1.0.2.7" ]'
+check "a build-tree compiler says it is unreleased (F68-117)" '"$AIML" --version | grep -q "unreleased"'
+invr() { (cd "$1" && shift && env -i HOME="$WORK" AIML_CACHE="$AIML_CACHE" AIML_MEM_V3=1 \
+          PATH="$NOPY:$VR/bin:${CLEANPATH#*:}" AIML_VENV="$VR" AIML="$VR/bin/aiml" "$VR/bin/aiml" build "$@" 2>&1); }
+V="$WORK/pins"; mkdir -p "$V"; cp "$P/main.aiml" "$V/"; cp -r "$P/lib" "$V/"
+pin() {  # pin <compiler.version json> [dependencies json]
+    CV="$1" cfg "$V/exodus.json" pinned executable main.aiml ", \"dependencies\": ${2:-[]}"
+}
+pin '{ "ge": "1.0.2.7", "lt": "1.1" }'
+out=$(invr "$V"); rc=$?
+check "a pin that admits the compiler builds without a line (F68-118)" \
+  '[ $rc -eq 0 ] && [ -x "$V/pinned" ] && ! echo "$out" | grep -q "version-mismatch"'
+pin '{ "eq": "1.0.2.7" }'
+out=$(invr "$V"); rc=$?
+check "eq: v1.0.2.7 equals 1.0.2.7 (F68-116)" '[ $rc -eq 0 ] && ! echo "$out" | grep -q "version-mismatch"'
+pin '{ "gt": "1.0.2.7" }'
+out=$(invr "$V"); rc=$?
+check "a pin that excludes it: one mismatch line, the build goes on, rc 0 (F68-118)" \
+  '[ $rc -eq 0 ] && [ -x "$V/pinned" ] && [ "$(echo "$out" | grep -c "^aiml: version-mismatch compiler aiml v1.0.2.7 not in {gt 1.0.2.7} (exodus.json)")" -eq 1 ]'
+pin '{ "lt": "1.0.10" }'
+out=$(invr "$V"); rc=$?
+check "numeric, not text: 1.0.2.7 is below 1.0.10 (F68-116)" '[ $rc -eq 0 ] && ! echo "$out" | grep -q "version-mismatch"'
+pin '{ "ge": "1.0.2.7" }'
+out=$(inv "$V"); rc=$?
+check "a compiler without aiml.version mismatches every pin (F68-117)" \
+  '[ $rc -eq 0 ] && echo "$out" | grep -q "version-mismatch compiler aiml none not in {ge 1.0.2.7}.*not a released compiler"'
+pin '{ "ge": "1.0" }' '[ { "name": "ufo", "version": { "eq": "0.1.0" } } ]'
+out=$(invr "$V"); rc=$?
+check "a dependency that is not installed is a mismatch with that reason (F68-118)" \
+  '[ $rc -eq 0 ] && echo "$out" | grep -q "version-mismatch dependency ufo none not in {eq 0.1.0}.*not installed"'
+printf '{"tools": {\n  "ufo": {"source": "x", "commit": "", "version": "0.1.0", "files": []}\n}}\n' > "$VR/lib/aiml/aiml.installed.json"
+out=$(invr "$V"); rc=$?
+check "an installed dependency inside the pin: no line (F68-118)" '[ $rc -eq 0 ] && ! echo "$out" | grep -q "version-mismatch"'
+rm -f "$VR/lib/aiml/aiml.installed.json"
+for bad in '"1.0.2.7"' '{ "eq": "1.0", "lt": "2" }' '{ "gte": "1.0" }' '{ "gt": "2", "lt": "1" }' '{ "ge": "1.0", "lt": "1.0" }' '{ "eq": "1.0-rc1" }' '{}'; do
+    pin "$bad"
+    out=$(invr "$V"); rc=$?
+    check "refused, naming the pin: $bad (F68-115/F68-116)" \
+      '[ $rc -ne 0 ] && echo "$out" | grep -q "version pin of compiler aiml"'
+done
 
 [ $fail -eq 0 ] && echo "build: PASS" || echo "build: FAIL"
 exit $fail

@@ -319,6 +319,13 @@ std::vector<std::string> resolveSources(const std::vector<std::string>& patterns
     return out;
 }
 
+// F68-114…F68-116: a version pin — an object of comparisons, all of which must hold.
+struct Pin {
+    std::string kind;    // "compiler" | "dependency"
+    std::string name;    // "aiml" for the compiler, else the dependency's name
+    std::vector<std::pair<std::string, std::string>> ops;   // (eq|gt|ge|lt|le, version as written)
+};
+
 bool isCSource(const std::string& ext) { return ext == ".c" || ext == ".cc" || ext == ".cpp" || ext == ".cxx"; }
 
 struct AptPkg {
@@ -334,6 +341,7 @@ struct GitPkg {
 
 struct Config {
     std::string file, name, outputType;
+    std::vector<Pin> pins;
     std::vector<std::string> sources, linkerFlags, libraries, libraryPaths, assets;
     std::vector<std::string> includes, defines;
     std::string compiler, linker, script, mapFile;
@@ -347,6 +355,116 @@ struct Config {
     std::vector<AptPkg> apt;
     std::vector<GitPkg> git;
 };
+
+// F68-116: dot-separated non-negative integers, a leading `v` dropped.  false for
+// anything else (`1.0-rc1`, `latest`, a sha, `git-<sha>`).
+bool parseVersion(std::string text, std::vector<unsigned long>& out) {
+    out.clear();
+    if (!text.empty() && (text[0] == 'v' || text[0] == 'V')) text.erase(0, 1);
+    if (text.empty()) return false;
+    std::string seg;
+    for (size_t i = 0; i <= text.size(); ++i) {
+        if (i == text.size() || text[i] == '.') {
+            if (seg.empty() || seg.size() > 9) return false;
+            out.push_back(std::stoul(seg));
+            seg.clear();
+        } else if (std::isdigit(static_cast<unsigned char>(text[i]))) {
+            seg += text[i];
+        } else {
+            return false;
+        }
+    }
+    return true;
+}
+
+// Segment by segment, a missing segment counts as 0 (F68-116).
+int compareVersions(const std::vector<unsigned long>& a, const std::vector<unsigned long>& b) {
+    size_t n = std::max(a.size(), b.size());
+    for (size_t i = 0; i < n; ++i) {
+        unsigned long x = i < a.size() ? a[i] : 0, y = i < b.size() ? b[i] : 0;
+        if (x != y) return x < y ? -1 : 1;
+    }
+    return 0;
+}
+
+bool admits(const Pin& pin, const std::vector<unsigned long>& v) {
+    for (const auto& op : pin.ops) {
+        std::vector<unsigned long> w;
+        parseVersion(op.second, w);
+        int c = compareVersions(v, w);
+        if (op.first == "eq" && c != 0) return false;
+        if (op.first == "gt" && c <= 0) return false;
+        if (op.first == "ge" && c < 0) return false;
+        if (op.first == "lt" && c >= 0) return false;
+        if (op.first == "le" && c > 0) return false;
+    }
+    return true;
+}
+
+std::string showPin(const Pin& pin) {
+    std::string out = "{";
+    for (size_t i = 0; i < pin.ops.size(); ++i)
+        out += (i ? ", " : "") + pin.ops[i].first + " " + pin.ops[i].second;
+    return out + "}";
+}
+
+// F68-115: a range is an object of eq/gt/ge/lt/le; `eq` stands alone; a bare string,
+// an unknown key, a version F68-116 cannot read and a range that admits nothing are
+// errors in the configuration.
+Pin readPin(const YAML::Node& n, const std::string& file, const std::string& kind,
+            const std::string& name) {
+    const std::string where = file + ": the version pin of " + kind + " " + name;
+    if (!n.IsMap())
+        refuse(where + " must be an object of eq/gt/ge/lt/le, e.g. { \"ge\": \"1.0.2.7\" } "
+               "(a bare string is no shorthand, spec/68 F68-115)");
+    Pin pin{kind, name, {}};
+    static const char* const order[] = {"eq", "gt", "ge", "lt", "le"};
+    for (const auto& kv : n) {
+        std::string key = kv.first.as<std::string>();
+        if (std::find(std::begin(order), std::end(order), key) == std::end(order))
+            refuse(where + ": unknown key '" + key + "' — allowed are eq, gt, ge, lt, le (spec/68 F68-115)");
+    }
+    for (const char* key : order) {
+        if (!n[key]) continue;
+        std::string v = scalar(n[key]);
+        std::vector<unsigned long> parsed;
+        if (!parseVersion(v, parsed))
+            refuse(where + ": '" + v + "' is no version — dot-separated numbers, e.g. 1.0.2.7 (spec/68 F68-116)");
+        pin.ops.emplace_back(key, v);
+    }
+    if (pin.ops.empty()) refuse(where + " is empty (spec/68 F68-115)");
+    if (n["eq"] && pin.ops.size() > 1) refuse(where + ": eq stands alone (spec/68 F68-115)");
+    // Empty range: the highest lower bound against the lowest upper bound.
+    std::vector<unsigned long> lo, hi, w;
+    bool haveLo = false, haveHi = false, loStrict = false, hiStrict = false;
+    for (const auto& op : pin.ops) {
+        parseVersion(op.second, w);
+        if (op.first == "gt" || op.first == "ge") {
+            int c = haveLo ? compareVersions(w, lo) : 1;
+            if (c > 0 || (c == 0 && op.first == "gt")) { lo = w; loStrict = op.first == "gt"; haveLo = true; }
+        } else if (op.first == "lt" || op.first == "le") {
+            int c = haveHi ? compareVersions(w, hi) : -1;
+            if (c < 0 || (c == 0 && op.first == "lt")) { hi = w; hiStrict = op.first == "lt"; haveHi = true; }
+        }
+    }
+    if (haveLo && haveHi) {
+        int c = compareVersions(lo, hi);
+        if (c > 0 || (c == 0 && (loStrict || hiStrict)))
+            refuse(where + " admits no version: " + showPin(pin) + " (spec/68 F68-115)");
+    }
+    return pin;
+}
+
+// The first line of a file, trimmed; "" when it is not there.
+std::string firstLine(const fs::path& file) {
+    std::ifstream in(file);
+    std::string line;
+    if (!in || !std::getline(in, line)) return "";
+    while (!line.empty() && std::isspace(static_cast<unsigned char>(line.back()))) line.pop_back();
+    size_t at = 0;
+    while (at < line.size() && std::isspace(static_cast<unsigned char>(line[at]))) ++at;
+    return line.substr(at);
+}
 
 Config load(const std::string& file) {
     YAML::Node d;
@@ -442,6 +560,16 @@ Config load(const std::string& file) {
     if (d["jobs"] && d["jobs"].IsScalar()) {
         try { c.jobs = d["jobs"].as<int>(); } catch (const std::exception&) {}
     }
+    // F68-114: the pins.  compiler.version for the compiler, version of a dependency for
+    // a neighbour; the rest of `dependencies` is not the build's.
+    if (comp && comp["version"]) c.pins.push_back(readPin(comp["version"], file, "compiler", "aiml"));
+    if (d["dependencies"] && d["dependencies"].IsSequence())
+        for (const auto& dep : d["dependencies"]) {
+            if (!dep.IsMap() || !dep["version"]) continue;
+            std::string dn = scalar(dep["name"]);
+            if (dn.empty()) refuse(file + ": a dependency with a version pin has no \"name\"");
+            c.pins.push_back(readPin(dep["version"], file, "dependency", dn));
+        }
 
     // F68-88: emscripten links a wasm build — $EMCC, else emcc from PATH.
     std::string defaultLinker = "cc";
@@ -786,6 +914,54 @@ void checkEmsdk(const Config& c, const std::string& file) {
     }
 }
 
+// F68-117/F68-118: every pin is checked before anything is compiled; a mismatch is one
+// line on stderr in a fixed form and does not stop the build.
+void checkPins(const Config& c) {
+    if (c.pins.empty()) return;
+    std::map<std::string, std::string> installed;   // tool → version, from the active venv
+    std::string root = venvRoot();
+    bool haveRecord = false;
+    if (!root.empty()) {
+        fs::path rec = fs::path(root) / "lib" / "aiml" / "aiml.installed.json";
+        std::error_code ec;
+        if (fs::is_regular_file(rec, ec)) {
+            try {
+                YAML::Node tools = YAML::LoadFile(rec.string())["tools"];
+                if (tools && tools.IsMap())
+                    for (const auto& kv : tools) installed[kv.first.as<std::string>()] = scalar(kv.second["version"]);
+            } catch (const std::exception&) {}
+        }
+        haveRecord = true;
+    }
+    for (const Pin& pin : c.pins) {
+        std::string found, reason;
+        if (pin.kind == "compiler") {
+            // The aiml compiler: c.compiler, unless C/C++ sources made that the C compiler.
+            bool hasC = false;
+            for (const std::string& s : c.sources) hasC = hasC || isCSource(fs::path(s).extension().string());
+            std::string comp = hasC ? compilerFromEnv() : c.compiler;
+            if (!comp.empty() && comp.find('/') == std::string::npos) comp = which(comp);
+            std::error_code ec;
+            fs::path real = comp.empty() ? fs::path() : fs::weakly_canonical(fs::path(comp), ec);
+            fs::path stamp = real.parent_path().parent_path() / "lib" / "aiml.version";
+            found = comp.empty() ? "" : firstLine(stamp);
+            if (found.empty()) reason = "no " + stamp.string() + " — not a released compiler";
+        } else {
+            auto it = installed.find(pin.name);
+            if (!haveRecord) reason = "no venv to look in";
+            else if (it == installed.end()) reason = "not installed in " + root;
+            else found = it->second;
+            if (reason.empty() && found.empty()) reason = "installed without a version";
+        }
+        std::vector<unsigned long> v;
+        if (reason.empty() && !parseVersion(found, v)) reason = "not a released version";
+        if (reason.empty() && admits(pin, v)) continue;
+        std::cerr << "aiml: version-mismatch " << pin.kind << " " << pin.name << " "
+                  << (found.empty() ? "none" : found) << " not in " << showPin(pin) << " ("
+                  << c.file << ")" << (reason.empty() ? "" : " — " + reason) << std::endl;
+    }
+}
+
 // ── §7.4: C and C++ ───────────────────────────────────────────────────────
 
 fs::file_time_type mtime(const fs::path& p, bool& exists) {
@@ -903,6 +1079,7 @@ std::vector<std::string> compileC(const Config& c, const std::vector<std::string
 void buildOne(const std::string& file, int jobsArg) {
     say("building " + file);
     Config c = load(file);
+    checkPins(c);                                               // §7.5: warn at once, build on
     fetchPackages(c);                                           // §7.2, §7.3: before anything
     std::error_code ec;
     fs::path cwd = fs::current_path();
