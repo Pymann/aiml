@@ -68,6 +68,22 @@ jobs:
           # is real before it runs a display test.  libgl1-mesa-dri gives that
           # display a software GL, without which the GL tests cannot run at all.
 
+      # The LLVM toolchain comes from the Ubuntu archive while aiml is on the
+      # LLVM noble ships; a configuration moved to a newer LLVM by the
+      # llvm-update workflow (TEST_SUITES.md §4.2) pins apt.llvm.org builds, so
+      # that source is added when the pinned llvm-<N>-dev is not in the mirror.
+      # Harmless when it is not needed: fetch_pinned_debs.py still falls back
+      # to Launchpad for Ubuntu versions the mirror dropped.
+      - name: apt.llvm.org when the LLVM pins need it
+        run: |
+          m=$(python3 tools/ci/llvm_bump.py current exodus.json) || { echo "no LLVM toolchain pinned"; exit 0; }
+          v=$(python3 -c "import json,sys; print(next(p['version'] for p in json.load(open('exodus.json'))['apt_packages'] if p['name'] == 'llvm-$m-dev'))")
+          if apt-cache madison "llvm-$m-dev" | grep -qF "| $v |"; then echo "llvm-$m-dev $v is in the Ubuntu mirror"; exit 0; fi
+          curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc > /dev/null
+          echo "deb http://apt.llvm.org/noble/ llvm-toolchain-noble-$m main" | sudo tee /etc/apt/sources.list.d/llvm-$m.list
+          sudo apt-get update -qq
+          apt-cache madison "llvm-$m-dev" | grep -F "| $v |" || echo "llvm-$m-dev $v is not in apt.llvm.org either -- fetch_pinned_debs.py tries Launchpad"
+
       - name: Restore pinned .deb cache
         id: debcache
         uses: actions/cache/restore@v4

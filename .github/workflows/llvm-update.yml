@@ -1,0 +1,268 @@
+name: LLVM update (masterv2)
+
+# Tries to move aiml 2 (masterv2) to the newest LLVM release (TEST_SUITES.md §4.2):
+# the exodus configurations are rewritten by tools/ci/llvm_bump.py to the
+# toolchain packages of apt.llvm.org, then aiml is built and put through the
+# gates of ci.yml.  Green → the branch llvm/<major> with the rewritten
+# configurations and a pull request against masterv2 (pushed with the GH_TOKEN
+# secret, so ci.yml runs on it as on any PR).  Red → the job summary names the
+# first errors, and the rewrite and the build logs are an artifact; masterv2 is
+# not touched either way.
+#
+# This file lives on masterv2 only.  GitHub offers the "Run workflow" button
+# only for workflows on the default branch, so it is started with
+#   gh workflow run llvm-update.yml --ref masterv2 [-f major=23]
+# and it runs by itself whenever this file or llvm_bump.py changes on masterv2.
+# A schedule would need the file on the default branch.
+
+on:
+  workflow_dispatch:
+    inputs:
+      major:
+        description: "LLVM major to move to (empty = the newest LLVM release)"
+        required: false
+        default: ""
+      gates:
+        description: "Also run the two valgrind gates (about 55 min)"
+        required: false
+        default: "true"
+  push:
+    branches: [masterv2]
+    paths:
+      - .github/workflows/llvm-update.yml
+      - tools/ci/llvm_bump.py
+
+concurrency:
+  group: llvm-update
+  cancel-in-progress: true
+
+jobs:
+  try:
+    name: Try the newest LLVM on masterv2
+    if: github.ref == 'refs/heads/masterv2'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    permissions:
+      contents: read
+    env:
+      EXODUS_CACHE: ${{ github.workspace }}/__exodus_cache
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false   # the push at the end uses GH_TOKEN, nothing else
+
+      - name: Which LLVM
+        id: which
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WANT: ${{ github.event.inputs.major }}
+        run: |
+          cur=$(python3 tools/ci/llvm_bump.py current exodus.json)
+          if [ -n "${WANT:-}" ]; then
+            new="$WANT"
+          else
+            # The newest release that is no pre-release: llvmorg-23.1.8 → 23.
+            new=$(gh api "repos/llvm/llvm-project/releases?per_page=40" \
+                    --jq '[.[] | select(.prerelease | not) | .tag_name | select(test("^llvmorg-[0-9]+\\.")) | capture("^llvmorg-(?<m>[0-9]+)\\.").m | tonumber] | max')
+          fi
+          case "$new" in ''|*[!0-9]*) echo "::error::cannot tell which LLVM to move to ('$new')"; exit 1 ;; esac
+          echo "current=$cur" >> "$GITHUB_OUTPUT"
+          echo "new=$new" >> "$GITHUB_OUTPUT"
+          if [ "$new" -le "$cur" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            printf '## LLVM update\nmasterv2 is on LLVM %s; asked for %s — nothing to do.\n' "$cur" "$new" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "LLVM $cur → $new"
+          fi
+
+      - name: System packages, and apt.llvm.org for LLVM ${{ steps.which.outputs.new }}
+        if: steps.which.outputs.skip == 'false'
+        env:
+          NEW: ${{ steps.which.outputs.new }}
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            g++ python3-venv dpkg-dev valgrind patchelf \
+            xvfb x11-utils libgl1-mesa-dri
+          curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc > /dev/null
+          echo "deb http://apt.llvm.org/noble/ llvm-toolchain-noble-$NEW main" | sudo tee /etc/apt/sources.list.d/llvm-$NEW.list
+          sudo apt-get update -qq
+          lists=(/var/lib/apt/lists/apt.llvm.org_noble_dists_llvm-toolchain-noble-${NEW}_main_binary-amd64_Packages*)
+          [ -e "${lists[0]}" ] || { echo "::error::apt.llvm.org has no llvm-toolchain-noble-$NEW"; exit 1; }
+          # apt may keep the index compressed; apt-helper reads it either way.
+          /usr/lib/apt/apt-helper cat-file "${lists[0]}" > "$RUNNER_TEMP/Packages"
+          grep -c '^Package:' "$RUNNER_TEMP/Packages"
+
+      - name: Rewrite the exodus configurations
+        if: steps.which.outputs.skip == 'false'
+        env:
+          NEW: ${{ steps.which.outputs.new }}
+        run: |
+          python3 tools/ci/llvm_bump.py rewrite --major "$NEW" --packages "$RUNNER_TEMP/Packages" $(git ls-files 'exodus*.json')
+          git diff --stat
+          mkdir -p "$RUNNER_TEMP/report"
+          git diff > "$RUNNER_TEMP/report/llvm-$NEW.patch"
+
+      # exodus is private: installed with the GH_TOKEN secret as in ci.yml.
+      - name: Install Exodus
+        if: steps.which.outputs.skip == 'false'
+        env:
+          EXODUS_READ_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          if [ -z "${EXODUS_READ_TOKEN:-}" ]; then
+            echo "::error::The GH_TOKEN secret is missing -- exodus is private and cannot be installed without it."
+            exit 1
+          fi
+          export GIT_TERMINAL_PROMPT=0
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0="url.https://x-access-token:${EXODUS_READ_TOKEN}@github.com/Pymann/exodus.insteadOf"
+          export GIT_CONFIG_VALUE_0="https://github.com/Pymann/exodus"
+          python3 -m venv "$RUNNER_TEMP/exvenv"
+          "$RUNNER_TEMP/exvenv/bin/pip" install -q "git+https://github.com/Pymann/exodus.git"
+          echo "$RUNNER_TEMP/exvenv/bin" >> "$GITHUB_PATH"
+
+      - name: Fetch the pinned packages
+        if: steps.which.outputs.skip == 'false'
+        env:
+          NEW: ${{ steps.which.outputs.new }}
+        run: |
+          python3 tools/ci/fetch_pinned_debs.py exodus.json exodus2.json exodus-test.json exodus-zim.json exodus-wasm-runtime.json
+          exodus pkg install
+          python3 tools/ci/llvm_bump.py libname --major "$NEW" --cache "$EXODUS_CACHE" $(git ls-files 'exodus*.json')
+          git diff > "$RUNNER_TEMP/report/llvm-$NEW.patch"
+
+      - name: Build compiler
+        if: steps.which.outputs.skip == 'false'
+        run: |
+          set -o pipefail
+          exodus build -c exodus.json -j "$(nproc)" 2>&1 | tee "$RUNNER_TEMP/report/build-compiler.log"
+
+      - name: Build runtime
+        if: steps.which.outputs.skip == 'false'
+        run: |
+          set -o pipefail
+          exodus build -c exodus2.json -j "$(nproc)" 2>&1 | tee "$RUNNER_TEMP/report/build-runtime.log"
+
+      - name: Build ZIM support (libaiml_zim.so)
+        if: steps.which.outputs.skip == 'false'
+        run: |
+          set -o pipefail
+          exodus build -c exodus-zim.json -j "$(nproc)" 2>&1 | tee "$RUNNER_TEMP/report/build-zim.log"
+
+      - name: wasm32 packages (emsdk, yaml-cpp)
+        if: steps.which.outputs.skip == 'false'
+        run: |
+          d="$RUNNER_TEMP/wasmpkg"; mkdir -p "$d"
+          cp exodus-wasm-runtime.json "$d/exodus.json"
+          (cd "$d" && exodus pkg install)
+
+      - name: Build wasm32 runtime (libaiml_wasm.a)
+        if: steps.which.outputs.skip == 'false'
+        run: |
+          set -o pipefail
+          exodus build -c exodus-wasm-runtime.json -j "$(nproc)" 2>&1 | tee "$RUNNER_TEMP/report/build-wasm.log"
+
+      - name: Smoke test
+        if: steps.which.outputs.skip == 'false'
+        run: |
+          set +e
+          out/aiml/aiml tests/test.aiml
+          rc=$?
+          echo "exit code $rc"
+          test "$rc" -eq 42
+
+      - name: Test corpus
+        if: steps.which.outputs.skip == 'false'
+        run: |
+          set +e
+          xvfb-run -a script -qec "TEST_TIMEOUT=300 bash run_all_tests.sh --no-build" /dev/null > corpus.log 2>&1
+          rc=$?
+          cp test_results.txt corpus.log "$RUNNER_TEMP/report/" 2>/dev/null
+          tail -n 30 test_results.txt
+          exit $rc
+
+      - name: AOT smoke tests
+        if: steps.which.outputs.skip == 'false'
+        run: bash run_aot_tests.sh
+
+      - name: Memory safety (valgrind)
+        if: steps.which.outputs.skip == 'false' && github.event.inputs.gates != 'false'
+        run: bash tests/run_memory_sanitizers.sh
+
+      - name: Leak gate (spec/61 §7, valgrind)
+        if: steps.which.outputs.skip == 'false' && github.event.inputs.gates != 'false'
+        run: bash tests/run_lifetime_leak_gates.sh
+
+      - name: Packaging (the wasm32 proof of F68-93 included)
+        if: steps.which.outputs.skip == 'false'
+        run: REQUIRE_WASM=1 bash tools/ci/package_release.sh "llvm-${{ steps.which.outputs.new }}-try" "$RUNNER_TEMP/dist"
+
+      # Green: the branch and the pull request.  GH_TOKEN, not github.token:
+      # what github.token pushes starts no workflow, and the PR must get ci.yml.
+      - name: Open the pull request
+        if: steps.which.outputs.skip == 'false'
+        env:
+          PUSH_TOKEN: ${{ secrets.GH_TOKEN }}
+          CUR: ${{ steps.which.outputs.current }}
+          NEW: ${{ steps.which.outputs.new }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          branch="llvm/$NEW"
+          git config user.name "aiml llvm-update"
+          git config user.email "llvm-update@users.noreply.github.com"
+          git checkout -b "$branch"
+          git add $(git ls-files 'exodus*.json')
+          git commit -q -m "LLVM $CUR → $NEW: the exodus configurations (llvm-update workflow)" \
+                     -m "Rewritten by tools/ci/llvm_bump.py from apt.llvm.org llvm-toolchain-noble-$NEW; built and tested in $RUN_URL."
+          export GIT_TERMINAL_PROMPT=0
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0="url.https://x-access-token:${PUSH_TOKEN}@github.com/.insteadOf"
+          export GIT_CONFIG_VALUE_0="https://github.com/"
+          git push -f origin "HEAD:refs/heads/$branch"
+          export GH_TOKEN="$PUSH_TOKEN"
+          open=$(gh api "repos/$GITHUB_REPOSITORY/pulls?head=${GITHUB_REPOSITORY_OWNER}:$branch&state=open" --jq '.[0].number // empty')
+          if [ -n "$open" ]; then
+            echo "pull request #$open is open already and has the new commit"
+          else
+            gh api "repos/$GITHUB_REPOSITORY/pulls" -f title="LLVM $CUR → $NEW (masterv2)" -f head="$branch" -f base=masterv2 \
+              -f body="The llvm-update workflow moved the exodus configurations from LLVM $CUR to $NEW (apt.llvm.org, llvm-toolchain-noble-$NEW) and the build, the corpus, AOT, the valgrind gates and packaging passed: $RUN_URL" \
+              --jq '"opened pull request #\(.number): \(.html_url)"'
+          fi
+          printf '## LLVM update\nLLVM %s → %s is green; branch `%s`, pull request against masterv2.\n' "$CUR" "$NEW" "$branch" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Report what broke
+        if: failure() && steps.which.outputs.skip == 'false'
+        env:
+          CUR: ${{ steps.which.outputs.current }}
+          NEW: ${{ steps.which.outputs.new }}
+        run: |
+          {
+            echo "## LLVM update: $CUR → $NEW is not green"
+            echo "masterv2 is unchanged. The rewrite (llvm-$NEW.patch) and the logs are in the artifact \`llvm-$NEW-report\`."
+            for log in "$RUNNER_TEMP"/report/build-*.log; do
+              [ -f "$log" ] || continue
+              n=$(grep -c -E '(error|Error):' "$log")
+              [ "$n" -gt 0 ] || continue
+              echo ""
+              echo "### $(basename "$log"): $n error line(s), the first 60"
+              echo '```'
+              grep -E '(error|Error):' "$log" | head -n 60
+              echo '```'
+            done
+            if [ -f "$RUNNER_TEMP/report/test_results.txt" ]; then
+              echo ""
+              echo "### corpus"
+              echo '```'
+              tail -n 30 "$RUNNER_TEMP/report/test_results.txt"
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the report
+        if: always() && steps.which.outputs.skip == 'false'
+        uses: actions/upload-artifact@v4
+        with:
+          name: llvm-${{ steps.which.outputs.new }}-report
+          path: ${{ runner.temp }}/report/
+          if-no-files-found: ignore

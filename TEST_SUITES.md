@@ -191,6 +191,22 @@ request, and via `workflow_dispatch` (input `only` →
   gates, not before them. They used to run first, so a tag published a release
   while the tests had not been asked yet.
 
+**Advisory** (`continue-on-error: true`, reported but never blocking):
+
+* the **lifetime lab** (`tests/lifetime/run_lifetime.sh`), red by design (§3);
+* a step that prints the last 150 lines of every failed test in a collapsed
+  group, so a red corpus is readable from the job log alone.
+
+What the CI still does **not** run: `run_wasm_tests.sh`. It needs an `emsdk`
+installation, and an untested CI step is a guess, so the wasm32 target remains
+local-only (§5).
+
+exodus has a CI of its own (`Pymann/exodus`, `.github/workflows/ci.yml`): wheel
+install, an import check from outside the repository, `pytest`,
+`flake8 --select=F`, `black --check` and `mypy`. aiml's CI installs exodus
+straight from that repository's `main`, so a broken exodus fails aiml's build
+too — the pair is verified from both ends.
+
 ### 4.1 Which tests a run selects — from the git diff (2026-11-26)
 
 aiml is **always built** (compiler, runtime, ZIM, wasm32), the smoke test always
@@ -238,21 +254,55 @@ markers, and the base: in a scratch repository with a stand-in `gh`, the newest
 successful ancestor is taken, a successful run that is no ancestor (a force
 push) is skipped, and no such run means everything.
 
-**Advisory** (`continue-on-error: true`, reported but never blocking):
+### 4.2 The LLVM update workflow — masterv2 only (2026-11-26)
 
-* the **lifetime lab** (`tests/lifetime/run_lifetime.sh`), red by design (§3);
-* a step that prints the last 150 lines of every failed test in a collapsed
-  group, so a red corpus is readable from the job log alone.
+`.github/workflows/llvm-update.yml` tries to move aiml 2 to the newest LLVM
+release. It lives on masterv2 alone; GitHub shows the "Run workflow" button only
+for workflows on the default branch, so it is started with
+`gh workflow run llvm-update.yml --ref masterv2 [-f major=<N>] [-f gates=false]`,
+and it runs by itself when the workflow or `tools/ci/llvm_bump.py` changes on
+masterv2 (a schedule would need the default branch).
 
-What the CI still does **not** run: `run_wasm_tests.sh`. It needs an `emsdk`
-installation, and an untested CI step is a guess, so the wasm32 target remains
-local-only (§5).
+1. **Which LLVM**: `-f major`, else the newest LLVM release on GitHub that is no
+   pre-release (`llvmorg-23.1.8` → 23). Not newer than the configurations' LLVM
+   (`llvm_bump.py current`) → nothing to do.
+2. **The packages**: apt.llvm.org's `llvm-toolchain-noble-<N>` is added; its
+   Packages index is what the configurations are rewritten from.
+3. **The rewrite**, `tools/ci/llvm_bump.py rewrite` over every `exodus*.json`:
+   each apt package of the LLVM family at the old major (`llvm-18`,
+   `llvm-18-dev`, `llvm-18-runtime`, `llvm-18-tools`, `llvm-18-linker-tools`,
+   `libllvm18`, `libclang-cpp18`) becomes the same package at the new one, with
+   the version and sha256 the index names (the newest build when it lists
+   several); every cache path into one of them follows — one map over all
+   configurations, because `exodus2.json` uses the headers `exodus.json` pins —
+   and inside it `llvm-18` → `llvm-<N>`, `llvm-c-18` → `llvm-c-<N>`; the library
+   `LLVM-18` becomes `LLVM-<N>`. Packages of another major are not touched
+   (`libllvm20` is Mesa's). A toolchain package the index lacks, or a path left
+   pointing into an old package no configuration pins, stops it with the name;
+   nothing is written then. After the fetch, `llvm_bump.py libname` keeps
+   `-lLLVM-<N>` when the dev package has `libLLVM-<N>.so`, else `-lLLVM`.
+4. **The gates of ci.yml**: the four builds, the smoke test, the whole corpus,
+   AOT, the two valgrind gates (`-f gates=false` skips them) and packaging with
+   its wasm32 proof.
+5. **Green**: the branch `llvm/<N>` with the rewritten configurations and a pull
+   request against masterv2, pushed with the `GH_TOKEN` secret so that ci.yml
+   runs on it (what `github.token` pushes starts no workflow). **Red**: masterv2
+   and the branches stay as they are; the job summary lists the first 60 error
+   lines of each failed build and the corpus verdict, the artifact
+   `llvm-<N>-report` holds the rewrite as a patch and the logs — the C++ the new
+   LLVM no longer accepts is a developer's work, not the workflow's.
 
-exodus has a CI of its own (`Pymann/exodus`, `.github/workflows/ci.yml`): wheel
-install, an import check from outside the repository, `pytest`,
-`flake8 --select=F`, `black --check` and `mypy`. aiml's CI installs exodus
-straight from that repository's `main`, so a broken exodus fails aiml's build
-too — the pair is verified from both ends.
+ci.yml adds apt.llvm.org for the pinned major when the pinned `llvm-<N>-dev`
+is not in the Ubuntu mirror, so the PR of step 5 — and masterv2 after it is
+merged — fetch the same packages.
+
+Tests: `tests/llvm_bump/run.sh` — on copies of the real configurations and an
+index written there: every configuration moved, nothing of LLVM 18 left, the
+newest build and its sha256, include and library paths and the library
+following, `libllvm20` untouched, no package lost or gained, everything else as
+it was, a second run a no-op, a missing package named, a configuration alone
+that points into a package only another pins named, and `libname` for
+`libLLVM.so`, `libLLVM-<N>.so` and neither.
 
 ## 5. Gaps, stated plainly
 
