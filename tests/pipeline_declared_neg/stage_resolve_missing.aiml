@@ -1,0 +1,11 @@
+# SPEC: 62_pipelines §9.1
+# F62-163: a `resolved` run: stage without a probe — the key would hold
+# nothing that moves with the name.  Inherited from the pipeline counts too.
+# Requires: driver
+- pipeline:
+    name: ohne_sonde
+    cache: resolved
+    steps:
+      - stage:
+          name: holen
+          run: "git clone https://example.org/app.git /ws/app"
