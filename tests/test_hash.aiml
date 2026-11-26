@@ -62,6 +62,21 @@
 - print: ["CRC32: ${crc}"]
 # expected: 222957957  (0x0D4A1185 unsigned = 222957957 signed)
 
+# The same bytes as a buffer must give the same checksum (spec/33_1 §10 names
+# `string|buffer<u8>`).  The buffer form used to hand the buffer VALUE to a C
+# function declared with one pointer parameter: invalid IR, caught only by the
+# module verifier, and the message named no call site.
+- decl: [crc_bytes, buffer<u8>]
+- call: [crc_bytes.alloc, 32]
+- call: [crc_bytes.write_string, "hello world"]
+- decl: [crc_buf, i32, { call: [hash.crc32, crc_bytes] }]
+- print: ["CRC32 buffer: ${crc_buf}"]
+- if:
+    condition: { neq: [crc_buf, crc] }
+    then:
+      - call: [log.error, "FAIL crc32: buffer ${crc_buf} != string ${crc}"]
+      - call: [sys.exit, 1]
+
 # ── Phase H: HMAC-SHA256 / HMAC-SHA512 ───────────────────────────────────
 
 - decl: [secret, string, "mysecret"]
