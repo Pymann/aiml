@@ -700,6 +700,27 @@ void aiml_input_update(void) {
     }
 }
 
+/* spec/44_0 §2.5.  The shapes are the six GLFW 3.3 guarantees; the diagonal and
+ * "not allowed" shapes arrived in 3.4 and are deliberately not offered rather than
+ * silently mapped to something else -- a cursor that means the wrong thing is worse
+ * than one that did not change. */
+void aiml_input_set_cursor(const char* shape) {
+    if (!g_input || !g_input->window || !shape) return;
+    static GLFWcursor* cache[6] = {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr};
+    static const char* names[6] = {"arrow", "text", "crosshair", "hand", "resize_ew", "resize_ns"};
+    static const int   codes[6] = {GLFW_ARROW_CURSOR, GLFW_IBEAM_CURSOR, GLFW_CROSSHAIR_CURSOR,
+                                   GLFW_HAND_CURSOR, GLFW_HRESIZE_CURSOR, GLFW_VRESIZE_CURSOR};
+    static int current = -1;
+    int want = -1;
+    for (int i = 0; i < 6; ++i) if (std::strcmp(shape, names[i]) == 0) { want = i; break; }
+    if (want < 0) return;            /* an unknown name leaves the pointer alone */
+    if (want == current) return;     /* setting the same shape every frame is a no-op */
+    if (!cache[want]) cache[want] = glfwCreateStandardCursor(codes[want]);
+    if (!cache[want]) return;
+    glfwSetCursor(g_input->window, cache[want]);
+    current = want;
+}
+
 void aiml_input_set_capture(int32_t on) {
     if (!g_input) return;
     g_input->captured = (on != 0);
