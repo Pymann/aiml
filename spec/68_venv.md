@@ -231,7 +231,9 @@ toolbox: the venv, and a URL.
   unpack to **exactly one directory**; that directory is the tree that gets built.  An archive
   that unpacks into several top-level entries is refused rather than guessed at.
 - **F68-63** **A token when the instance wants one.**  kontor's `anonymous` role is `reader` by
-  default, so reading usually needs nothing.  Where it does, `$KONTOR_TOKEN` becomes an
+  default, so reading usually needs nothing; an instance that must not be read without a token
+  sets `auth.anonymous: none` (decided 2026-11-26: this stays the instance's configuration, not a
+  default of kontor or of `install`).  Where a token is needed, `$KONTOR_TOKEN` becomes an
   `Authorization: Bearer …` header — set in the request, never as an argument, because arguments
   are readable in `/proc` for anyone on the machine.
 - **F68-64** **From there it is §6.**  The unpacked tree needs its `aiml.tool.json` like any other
