@@ -51,9 +51,16 @@ jobs:
           restore-keys: apt-
 
       - name: Install Exodus
+        env:
+          # Fine-grained PAT, contents:read auf Pymann/exodus (Settings ->
+          # Secrets -> Actions).  Nicht inline in die Zeile: so steht der Wert
+          # nicht im gerenderten Skript, nur in der Umgebung des Schritts.
+          EXODUS_TOKEN: ${{ secrets.EXODUS_TOKEN }}
         run: |
+          : "${EXODUS_TOKEN:?secret EXODUS_TOKEN ist nicht gesetzt (Settings -> Secrets -> Actions)}"
           python3 -m venv "$RUNNER_TEMP/exvenv"
-          "$RUNNER_TEMP/exvenv/bin/pip" install -q "git+https://github.com/Pymann/exodus.git"
+          "$RUNNER_TEMP/exvenv/bin/pip" install -q \
+              "git+https://x-access-token:$EXODUS_TOKEN@github.com/Pymann/exodus.git"
           echo "$RUNNER_TEMP/exvenv/bin" >> "$GITHUB_PATH"
 
       - name: Fetch pinned dependencies
