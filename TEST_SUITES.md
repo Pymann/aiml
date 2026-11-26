@@ -157,7 +157,9 @@ green run cannot be green for the wrong reason.
 ## 4. What the CI covers
 
 `.github/workflows/ci.yml`, on push to `master`, on tags `v*`, on every pull
-request, and via `workflow_dispatch` (input `only` → `run_all_tests.sh --only`).
+request, and via `workflow_dispatch` (input `only` →
+`run_all_tests.sh --only`). Which gates a run executes follows from its git diff
+(§4.1); a tag and `workflow_dispatch` run all of them.
 
 **Hard gates** — a failure fails the job:
 
@@ -175,6 +177,53 @@ request, and via `workflow_dispatch` (input `only` → `run_all_tests.sh --only`
 * packaging, artifact upload, and on a `v*` tag a draft release — **after** the
   gates, not before them. They used to run first, so a tag published a release
   while the tests had not been asked yet.
+
+### 4.1 Which tests a run selects — from the git diff (2026-11-26)
+
+aiml is **always built** (compiler, runtime, ZIM, wasm32), the smoke test always
+runs, and packaging always runs. What else runs follows from the files the run
+changes, `tools/ci/changed_files.sh` (which files) and `tools/ci/select_tests.py`
+(what they need):
+
+* **The base.** A pull request: its merge commit against the base branch's tip
+  (`HEAD^1`), i.e. exactly what the PR changes. A push to a branch: the newest
+  commit of this branch whose CI run **succeeded** and that is an ancestor of
+  `HEAD`. Not `github.event.before`: a run that was cancelled by the next push
+  (`cancel-in-progress`) or that failed has verified nothing, so its changes stay
+  in the diff until a run passes with them. Every successful run verified its
+  own diff on top of a verified base, so the chain holds. No such commit, a
+  `v*` tag, `workflow_dispatch`, any other event, or any error on the way →
+  **everything** runs. A release is never made from a partial run.
+* **What a file needs** (`--no-renames`, so a move counts with both names):
+
+  | changed | runs |
+  |---|---|
+  | `.github/`, `tools/ci/`, `run_all_tests.sh`, `tools/check_expected_failures.sh`, `exodus*.json`, every source of the compiler or runtime, and **any path no rule names** | everything |
+  | `src/core/venv.*`, `src/core/build.*` (aiml venv, aiml build) | the drivers `tests/venv/` and `tests/build/` |
+  | `tests/<name>.aiml` | that test |
+  | `tests/<dir>/…` | that directory's tests and its `run.sh` |
+  | `tests/_<helper>/…`, other files directly in `tests/` (fixtures) | the whole corpus |
+  | `TEST_SUITES.md` (the register) | the whole corpus |
+  | a test file named in `tests/run_memory_sanitizers.sh` or `tests/run_lifetime_leak_gates.sh`, `tests/lifetime/`, those two scripts | in addition the two valgrind gates and the lifetime lab |
+  | a test file named in `run_aot_tests.sh`, that script | in addition the AOT smoke tests |
+  | any other `*.md` (spec, doc, README), `LICENSE`, `.gitignore` | nothing beyond build, smoke test and packaging |
+
+  The needs of all changed files add up; one file that needs everything makes
+  the run a full one.
+* **The corpus filter** is `run_all_tests.sh --only <ERE>`, and `--only` now
+  filters the drivers (`tests/*/run.sh`) as well as the `.aiml` files — before,
+  every driver ran regardless of the filter.
+* The job summary says which scope was taken, from which base, and why.
+
+Measured on a full run (b83a55d, 2026-11-26): 68 min, of which the two valgrind
+gates take 53, the corpus 8, the four builds 4. A change to `aiml venv` alone
+now costs the builds, the smoke test, two drivers and packaging.
+
+Tests: `tests/ci_select/run.sh` — the selection for each row of the table, the
+ERE matching the real paths and nothing else, a sum of needs, the full scope
+markers, and the base: in a scratch repository with a stand-in `gh`, the newest
+successful ancestor is taken, a successful run that is no ancestor (a force
+push) is skipped, and no such run means everything.
 
 **Advisory** (`continue-on-error: true`, reported but never blocking):
 

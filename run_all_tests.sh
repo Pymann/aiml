@@ -402,6 +402,9 @@ done
 # suite — otherwise they never run along and rot.
 for DRIVER in tests/*/run.sh; do
     [ -x "$DRIVER" ] || continue
+    # --only filters the drivers too (TEST_SUITES.md §4.1): a run for one
+    # directory must not pay for all the others.
+    if [ -n "$ONLY" ] && ! echo "$DRIVER" | grep -qE -- "$ONLY"; then continue; fi
     echo "--------------------------------------------------------" | tee -a "$OUTPUT_FILE"
     echo "Running driver: $DRIVER" | tee -a "$OUTPUT_FILE"
     echo "--------------------------------------------------------" | tee -a "$OUTPUT_FILE"

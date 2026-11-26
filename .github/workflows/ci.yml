@@ -27,10 +27,36 @@ jobs:
     timeout-minutes: 240
     permissions:
       contents: write   # tag + release
+      actions: read     # the run history: the base of the diff (TEST_SUITES.md §4.1)
     env:
       EXODUS_CACHE: ${{ github.workspace }}/__exodus_cache
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # the diff against the last verified commit needs the history
+
+      # TEST_SUITES.md §4.1: aiml is always built and smoke-tested; which gates run
+      # beyond that follows from the files this run changes against the newest
+      # commit whose run succeeded.  A tag and workflow_dispatch run everything.
+      - name: Select tests
+        id: select
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          bash tools/ci/changed_files.sh > "$RUNNER_TEMP/changed.txt"
+          python3 tools/ci/select_tests.py < "$RUNNER_TEMP/changed.txt" > "$RUNNER_TEMP/select.txt" 2> "$RUNNER_TEMP/why.txt"
+          cat "$RUNNER_TEMP/select.txt" >> "$GITHUB_OUTPUT"
+          cat "$RUNNER_TEMP/select.txt" "$RUNNER_TEMP/why.txt"
+          {
+            echo "## Test selection"
+            echo "$(sed -n 's/^why=//p' "$RUNNER_TEMP/select.txt")"
+            base=$(sed -n 's/^base=//p' "$RUNNER_TEMP/select.txt")
+            [ -n "$base" ] && echo "" && echo "Base: \`$base\`"
+            echo '```'
+            grep -v '^#' "$RUNNER_TEMP/changed.txt" | head -n 200
+            cat "$RUNNER_TEMP/why.txt" | head -n 200
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: System packages
         run: |
@@ -150,10 +176,12 @@ jobs:
 
       - name: Test corpus
         id: corpus
+        if: steps.select.outputs.corpus != 'none'
         env:
           # Not ONLY: drivers such as tests/closures/run.sh read ONLY as their own
           # filter, would match nothing and report a pass.
           CORPUS_ONLY: ${{ github.event.inputs.only }}
+          SELECTED: ${{ steps.select.outputs.corpus }}
         run: |
           # Display tests need an X display AND an interactive terminal:
           # xvfb-run provides the first, `script` the second.  Without the TTY
@@ -162,6 +190,8 @@ jobs:
           # that asserted behaviour it never exercised) stayed broken unnoticed.
           cmd="TEST_TIMEOUT=300 bash run_all_tests.sh --no-build"
           # Quoted: the pattern is an ERE, and `a|b` unquoted is a shell pipe inside `script -c`.
+          # workflow_dispatch's `only` wins; otherwise the selection of §4.1.
+          if [ -z "${CORPUS_ONLY:-}" ] && [ "${SELECTED:-all}" != all ]; then CORPUS_ONLY="$SELECTED"; fi
           if [ -n "${CORPUS_ONLY:-}" ]; then cmd="$cmd --only $(printf '%q' "$CORPUS_ONLY")"; fi
           set +e
           xvfb-run -a script -qec "$cmd" /dev/null > corpus.log 2>&1
@@ -196,20 +226,24 @@ jobs:
           PY
 
       - name: AOT smoke tests
+        if: steps.select.outputs.aot == 'true'
         run: bash run_aot_tests.sh
 
       # The two valgrind runners answer different questions and are both gates.
       # Neither ran in CI before, so memory safety and leak counts were checked
       # on one developer machine or not at all.
       - name: Memory safety (valgrind)
+        if: steps.select.outputs.valgrind == 'true'
         run: bash tests/run_memory_sanitizers.sh
 
       - name: Leak gate (spec/61 §7, valgrind)
+        if: steps.select.outputs.valgrind == 'true'
         run: bash tests/run_lifetime_leak_gates.sh
 
       # The lab, not a gate: its own header says it stays red until the spec/61
       # rewrite lands (TEST_SUITES.md §3).  Reported so the distance is visible.
       - name: Lifetime lab (spec/61, red by design)
+        if: steps.select.outputs.valgrind == 'true'
         continue-on-error: true
         run: bash tests/lifetime/run_lifetime.sh 2>&1 | tail -n 40
 
@@ -285,7 +319,8 @@ jobs:
           rm -rf "$work"
 
       - name: Release
-        if: startsWith(github.ref, 'refs/tags/v')
+        # A tag is always a full run (§4.1); the scope check says so out loud.
+        if: startsWith(github.ref, 'refs/tags/v') && steps.select.outputs.scope == 'full'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
