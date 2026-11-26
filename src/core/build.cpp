@@ -183,8 +183,9 @@ Config load(const std::string& file) {
     // F68-82: what is not a tool's build, refused by name.
     const std::string needs = " — that needs exodus, `aiml build` builds aiml tools (spec/68 F68-82)";
     c.outputType = scalar(d["output_type"], "executable");
-    if (c.outputType != "executable" && c.outputType != "shared_lib")
+    if (c.outputType != "executable" && c.outputType != "shared_lib" && c.outputType != "wasm")
         refuse(file + ": output_type '" + c.outputType + "'" + needs);
+    const bool wasm = c.outputType == "wasm";
     if (nonEmpty(d["apt_packages"])) refuse(file + ": apt_packages" + needs);
     if (nonEmpty(d["git_packages"])) refuse(file + ": git_packages" + needs);
     if (mentionsExodusCache(d)) refuse(file + ": a path into __exodus_cache" + needs);
@@ -193,6 +194,10 @@ Config load(const std::string& file) {
     for (const std::string& src : resolveSources(strings(d["sources"]))) {
         std::string ext = fs::path(src).extension().string();
         if (ext != ".aiml" && ext != ".o") refuse(file + ": the source '" + src + "'" + needs);
+        // F68-88: a native object does not link into a wasm module.
+        if (wasm && ext == ".o")
+            refuse(file + ": the source '" + src + "' is a native object — a wasm build links "
+                   "only what the compiler emits for wasm32 (spec/68 F68-88)");
         c.sources.push_back(src);
     }
     if (c.sources.empty()) refuse(file + " names no sources");
@@ -212,7 +217,13 @@ Config load(const std::string& file) {
 
     YAML::Node comp = d["compiler"], link = d["linker"];
     c.compiler = expand(scalar(comp ? comp["name"] : YAML::Node(), "$AIML"));
-    c.linker = expand(scalar(link ? link["name"] : YAML::Node(), "cc"));
+    // F68-88: emscripten links a wasm build — $EMCC, else emcc from PATH.
+    std::string defaultLinker = "cc";
+    if (wasm) {
+        const char* em = std::getenv("EMCC");
+        defaultLinker = em && *em ? em : "emcc";
+    }
+    c.linker = expand(scalar(link ? link["name"] : YAML::Node(), defaultLinker));
     if (link) {
         for (const std::string& f : strings(link["flags"])) c.linkerFlags.push_back(expand(f));
         c.libraries = strings(link["libraries"]);
@@ -247,6 +258,52 @@ void run(const std::vector<std::string>& cmd, const std::vector<std::string>& en
     if (rc != 0) refuse(what + " failed (exit " + std::to_string(rc) + ")");
 }
 
+// The first x.y.z in a text, "" when there is none.
+std::string firstVersion(const std::string& text) {
+    for (size_t i = 0; i < text.size(); ++i) {
+        if (!std::isdigit(static_cast<unsigned char>(text[i]))) continue;
+        if (i > 0 && (std::isalnum(static_cast<unsigned char>(text[i - 1])) || text[i - 1] == '.')) continue;
+        size_t j = i;
+        int dots = 0;
+        while (j < text.size() && (std::isdigit(static_cast<unsigned char>(text[j])) || text[j] == '.')) {
+            if (text[j] == '.') ++dots;
+            ++j;
+        }
+        std::string cand = text.substr(i, j - i);
+        while (!cand.empty() && cand.back() == '.') { cand.pop_back(); --dots; }
+        if (dots == 2) return cand;
+        i = j;
+    }
+    return "";
+}
+
+// F68-89: the wasm32 runtime and the emcc that links against it come from the same
+// emsdk.  A library path that holds libaiml_wasm.a and its emsdk.version (F68-90)
+// names the version; an emcc of another version is refused before anything is built.
+void checkEmsdk(const Config& c, const std::string& file) {
+    for (const std::string& p : c.libraryPaths) {
+        std::error_code ec;
+        fs::path stamp = fs::path(p) / "emsdk.version";
+        if (!fs::is_regular_file(fs::path(p) / "libaiml_wasm.a", ec) || !fs::is_regular_file(stamp, ec))
+            continue;
+        std::ifstream in(stamp);
+        std::string want;
+        std::getline(in, want);
+        want = firstVersion(want);
+        if (want.empty()) continue;
+        std::string out;
+        int rc = venv::runProgram({c.linker, "--version"}, "", c.env, &out);
+        if (rc == 127) refuse(file + ": the linker '" + c.linker + "' could not be run (not on PATH? "
+                              "activate emsdk " + want + ", or set $EMCC)");
+        std::string have = firstVersion(out);
+        if (have != want)
+            refuse(file + ": " + p + "/libaiml_wasm.a was built with emsdk " + want + ", but '" +
+                   c.linker + "' is " + (have.empty() ? std::string("of no version it names") : have) +
+                   " — activate emsdk " + want + " (spec/68 F68-89)");
+        return;
+    }
+}
+
 void buildOne(const std::string& file) {
     std::cout << "building " << file << std::endl;
     Config c = load(file);
@@ -257,8 +314,11 @@ void buildOne(const std::string& file) {
     fs::create_directories(dir, ec);
     if (ec) refuse("cannot make " + dir.string() + ": " + ec.message());
 
+    const bool wasm = c.outputType == "wasm";
     std::string outName = c.name;                              // F68-84
     if (c.outputType == "shared_lib") outName = (c.name.rfind("lib", 0) == 0 ? "" : "lib") + c.name + ".so";
+    if (wasm) outName = c.name + ".html";                      // F68-88: emcc writes .html, .js, .wasm
+    if (wasm) checkEmsdk(c, file);
     fs::path output = (c.inCwd ? cwd : dir) / outName;
 
     auto hook = [&](const char* stage) {
@@ -277,9 +337,14 @@ void buildOne(const std::string& file) {
     std::vector<std::string> objects;
     for (const std::string& src : c.sources) {
         if (fs::path(src).extension() == ".o") { objects.push_back(fs::absolute(src).string()); continue; }
-        fs::path obj = dir / fs::path(src).lexically_normal().replace_extension(".o");
+        fs::path obj = dir / fs::path(src).lexically_normal().replace_extension(wasm ? ".ll" : ".o");
         fs::create_directories(obj.parent_path(), ec);
         std::vector<std::string> cmd = {c.compiler, fs::absolute(src).string(), "-o", obj.string()};
+        if (wasm) {                                            // F68-88, as tools/run_wasm_test.sh
+            cmd.push_back("--target");
+            cmd.push_back("wasm32");
+            cmd.push_back("--emit-main");
+        }
         if (!c.assets.empty()) {
             std::string roots = "--asset-roots=";
             for (size_t i = 0; i < c.assets.size(); ++i) roots += (i ? "," : "") + c.assets[i];
@@ -290,9 +355,11 @@ void buildOne(const std::string& file) {
         run(cmd, c.env, file + ": compiling " + src);
     }
     // F68-83: the build directory was emptied, so every object in it is ours.
+    // For wasm the compiler writes LLVM IR (.ll) — the module and its imports.
+    const std::string objExt = wasm ? ".ll" : ".o";
     std::vector<std::string> built;
     for (const auto& ent : fs::recursive_directory_iterator(dir, ec))
-        if (ent.is_regular_file() && ent.path().extension() == ".o") built.push_back(ent.path().string());
+        if (ent.is_regular_file() && ent.path().extension() == objExt) built.push_back(ent.path().string());
     std::sort(built.begin(), built.end());
     objects.insert(objects.end(), built.begin(), built.end());
 
@@ -302,10 +369,13 @@ void buildOne(const std::string& file) {
     cmd.push_back("-o");
     cmd.push_back(output.string());
     if (c.outputType == "shared_lib") cmd.push_back("-shared");
+    if (wasm)                                                  // F68-88: assets go into the bundle
+        for (const std::string& a : c.assets) cmd.push_back("--preload-file=" + a);
     cmd.insert(cmd.end(), c.linkerFlags.begin(), c.linkerFlags.end());
     for (const std::string& p : c.libraryPaths) {
         cmd.push_back("-L" + p);
-        if (c.rpath && p.find(':') == std::string::npos) cmd.push_back("-Wl,-rpath," + p);
+        // A wasm module has no RUNPATH: it loads nothing at run time.
+        if (c.rpath && !wasm && p.find(':') == std::string::npos) cmd.push_back("-Wl,-rpath," + p);
     }
     for (const std::string& l : c.libraries) cmd.push_back("-l" + l);
     run(cmd, c.env, file + ": linking " + outName);

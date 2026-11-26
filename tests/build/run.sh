@@ -198,6 +198,77 @@ cfg "$H/exodus-py.json" hookpy executable main.aiml ', "pre_compilation": "hooks
 out=$(inv "$H" -c exodus-py.json); rc=$?
 check "a .py hook is refused: port it to an .aiml hook" '[ $rc -ne 0 ] && echo "$out" | grep -q "\.aiml hook"'
 
+echo "── wasm (F68-88, F68-89) ──"
+W="$WORK/wasm"; mkdir -p "$W/assets" "$W/fakeem" "$W/rt"; cp "$P/main.aiml" "$W/"; cp -r "$P/lib" "$W/"
+echo "shader" > "$W/assets/a.txt"
+# A stand-in emcc: names a version, writes down its arguments, leaves the three outputs.
+cat > "$W/fakeem/emcc" <<'EOT'
+#!/bin/sh
+if [ "$1" = "--version" ]; then echo "emcc (Emscripten gcc/clang-like replacement) ${FAKE_EM_VERSION:-3.1.74} (abc)"; exit 0; fi
+printf '%s\n' "$@" > "$FAKE_EM_LOG"
+out=""; prev=""
+for a in "$@"; do [ "$prev" = "-o" ] && out="$a"; prev="$a"; done
+b="${out%.html}"; : > "$out"; : > "$b.js"; : > "$b.wasm"
+EOT
+chmod +x "$W/fakeem/emcc"
+: > "$W/rt/libaiml_wasm.a"; echo "3.1.74" > "$W/rt/emsdk.version"
+wcfg() {  # wcfg <file> <name> <source> [extra json, with leading comma]
+cat > "$1" <<EOT
+{
+    "\$schema": "exodus.project.config-1.0",
+    "name": "$2", "version": "0.1.0", "output_type": "wasm",
+    "sources": ["$3"],
+    "asset_directories": ["assets"],
+    "compiler": { "name": "\$AIML" },
+    "linker": { "flags": ["-fexceptions", "-sASYNCIFY=1", "-sALLOW_MEMORY_GROWTH=1", "-sENVIRONMENT=web,node"],
+                "libraries": ["aiml_wasm"], "library_paths": ["$W/rt"] },
+    "artifact_in_cwd": true,
+    "env": { "AIML_MEM_V3": "1", "FAKE_EM_LOG": "$W/emcc.args" }${4:-}
+}
+EOT
+}
+wcfg "$W/exodus.json" probe main.aiml
+winv() { (cd "$W" && env -i HOME="$WORK" AIML_CACHE="$AIML_CACHE" AIML_MEM_V3=1 FAKE_EM_VERSION="${FAKE_EM_VERSION:-3.1.74}" \
+          PATH="$NOPY:$W/fakeem:$CLEANPATH" AIML_VENV="$VENV" AIML="$VENV/bin/aiml" "$VENV/bin/aiml" build "$@" 2>&1); }
+out=$(winv); rc=$?
+check "output_type wasm builds with emcc from PATH (F68-88)" '[ $rc -eq 0 ] && [ -f "$W/probe.html" ]'
+[ $rc -eq 0 ] || echo "$out" | tail -5
+check "the compile targets wasm32 with a main (F68-88)" 'echo "$out" | grep -q "main.aiml -o $W/out/probe/main.ll .*--target wasm32 --emit-main"'
+check "the module and its import are linked as .ll (F68-88)" \
+  'grep -qx "$W/out/probe/main.ll" "$W/emcc.args" && grep -q "_aiml\.ll$" "$W/emcc.args" && ! grep -q "\.o$" "$W/emcc.args"'
+check "assets become --preload-file (F68-88)" 'grep -qx -- "--preload-file=assets" "$W/emcc.args"'
+check "flags, -L and -l as given, no rpath (F68-88)" \
+  'grep -qx -- "-sASYNCIFY=1" "$W/emcc.args" && grep -qx -- "-L$W/rt" "$W/emcc.args" && grep -qx -- "-laiml_wasm" "$W/emcc.args" && ! grep -q rpath "$W/emcc.args"'
+out=$(FAKE_EM_VERSION=4.0.1 winv); rc=$?
+check "an emcc of another emsdk than the runtime's is refused, both named (F68-89)" \
+  '[ $rc -ne 0 ] && echo "$out" | grep -q "3.1.74" && echo "$out" | grep -q "4.0.1"'
+printf 'int x;\n' > "$W/x.c"; cc -c "$W/x.c" -o "$W/x.o" 2>/dev/null
+wcfg "$W/exodus-o.json" probe_o x.o
+out=$(winv -c exodus-o.json); rc=$?
+check "a native object in a wasm build is refused (F68-88)" '[ $rc -ne 0 ] && echo "$out" | grep -q "native object"'
+wcfg "$W/exodus-g.json" probe_g main.aiml ', "git_packages": [{ "name": "emsdk", "url": "x" }]'
+out=$(winv -c exodus-g.json); rc=$?
+check "git_packages stay refused in a wasm build: emsdk is the environment's (F68-82)" '[ $rc -ne 0 ] && echo "$out" | grep -q "needs exodus"'
+# The real thing where the CI has an emsdk and the wasm32 runtime (tools/run_wasm_test.sh's places).
+EMDIR=$(ls -d "$ROOT"/__exodus_cache/git/emsdk/*/upstream/emscripten 2>/dev/null | head -1)
+NODE=$(ls "$ROOT"/__exodus_cache/git/emsdk/*/node/*/bin/node 2>/dev/null | head -1)
+RTW="$ROOT/out/aiml_wasm/aiml_wasm"
+if [ -n "$EMDIR" ] && [ -n "$NODE" ] && [ -f "$RTW/libaiml_wasm.a" ]; then
+    R2="$WORK/wasmreal"; mkdir -p "$R2/assets" "$R2/rt"; cp "$P/main.aiml" "$R2/"; cp -r "$P/lib" "$R2/"; : > "$R2/assets/a.txt"
+    cp "$RTW/libaiml_wasm.a" "$R2/rt/"
+    W="$R2" wcfg "$R2/exodus.json" real main.aiml
+    # No $NOPY here: emcc itself is a Python program.  That aiml build runs no
+    # Python is what the fake-emcc checks above already show.
+    out=$(cd "$R2" && env -i HOME="$WORK" AIML_CACHE="$AIML_CACHE" AIML_MEM_V3=1 EM_CONFIG="${EMDIR%/upstream/emscripten}/.emscripten" \
+          PATH="$EMDIR:$(dirname "$NODE"):$CLEANPATH" AIML_VENV="$VENV" AIML="$VENV/bin/aiml" "$VENV/bin/aiml" build 2>&1); rc=$?
+    check "with a real emsdk: real.html, real.js, real.wasm (F68-88)" '[ $rc -eq 0 ] && [ -f "$R2/real.js" ] && [ -f "$R2/real.wasm" ]'
+    [ $rc -eq 0 ] || echo "$out" | tail -8
+    o=$(cd "$R2" && "$NODE" real.js 2>&1); r=$?
+    check "and node runs it: the module's line and its exit code" '[ $r -eq 7 ] && echo "$o" | grep -q "hallo build" && echo "$o" | grep -q "aus dem modul"'
+else
+    echo "  skip a real wasm build (no emsdk in __exodus_cache or no out/aiml_wasm)"
+fi
+
 echo "── refused: needs exodus (F68-82) ──"
 R="$WORK/refuse"; mkdir -p "$R"; cp "$P/main.aiml" "$R/"; cp -r "$P/lib" "$R/"
 refused() {  # refused <label> <extra json> [output_type] [source]
@@ -205,7 +276,6 @@ refused() {  # refused <label> <extra json> [output_type] [source]
     out=$(inv "$R" -c exodus-x.json); rc=$?
     check "$1 is refused: needs exodus" '[ $rc -ne 0 ] && echo "$out" | grep -q "needs exodus"'
 }
-refused "output_type wasm" '' wasm
 refused "output_type static_lib" '' static_lib
 echo 'int x;' > "$R/c.cpp"
 refused "a C++ source" '' executable c.cpp

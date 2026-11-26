@@ -309,7 +309,7 @@ cat > "$SRV/api/v1/graph" <<'EOT'
 EOT
 
 PORT=$((18600 + RANDOM % 300))
-KONTOR_STUB_DIR="$SRV" KONTOR_STUB_TOKEN=stub-writer AIML_MEM_V3=1 "$AIML" tests/venv/kontor_stub.aiml -- "$PORT" \
+KONTOR_STUB_DIR="$SRV" KONTOR_STUB_TOKEN=stub-writer KONTOR_STUB_ADMIN_TOKEN=stub-admin AIML_MEM_V3=1 "$AIML" tests/venv/kontor_stub.aiml -- "$PORT" \
   > "$WORK/stub.log" 2>&1 &
 STUB=$!
 trap 'kill $STUB 2>/dev/null; rm -rf "$WORK"' EXIT
@@ -410,6 +410,32 @@ else
         out=$(pub stub-writer); rc=$?
         check "a published version is not replaced (F68-73)" \
           '[ $rc -ne 0 ] && echo "$out" | grep -q "already" && cmp -s "$WORK/first.pkg" "$SRV/exodus/pubtool/1.0.0/package"'
+
+        # F68-76: --overwrite leaves the verdict to kontor — a writer still gets 409,
+        # the admin replaces.  A new commit, so the bytes differ.
+        echo "# 1.0.0, second take" >> "$PUB/hallo.aiml"
+        git -C "$PUB" -c user.name=t -c user.email=t@t commit -qam "v1 again"
+        pubo() { env KONTOR_TOKEN="${1}" "$AIML" venv "$V6" publish --path "$PUB" --kontor "$URL" --overwrite 2>&1; }
+        out=$(pubo stub-writer); rc=$?
+        check "--overwrite with a writer token: kontor's 409, the admin right named (F68-76)" \
+          '[ $rc -ne 0 ] && echo "$out" | grep -q "409" && echo "$out" | grep -q "admin" && cmp -s "$WORK/first.pkg" "$SRV/exodus/pubtool/1.0.0/package"'
+        out=$(pubo stub-admin); rc=$?
+        check "--overwrite with an admin token replaces, and says so (F68-76)" \
+          '[ $rc -eq 0 ] && echo "$out" | grep -q "^replaced pubtool 1.0.0" && ! cmp -s "$WORK/first.pkg" "$SRV/exodus/pubtool/1.0.0/package"'
+        [ $rc -eq 0 ] || echo "$out" | tail -3
+        out=$("$AIML" venv "$V6" install pubtool --kontor "$URL" --version 1.0.0 --overwrite 2>&1); rc=$?
+        check "--overwrite belongs to publish only" '[ $rc -ne 0 ]'
+        mkdir -p "$SRV/exodus/pubtool/0.9.0"; echo '{"deleted_ms":1}' > "$SRV/exodus/pubtool/0.9.0/tombstone.json"
+        sed -i 's/1\.0\.0/0.9.0/' "$PUB/exodus.json" "$PUB/aiml.tool.json"
+        git -C "$PUB" -c user.name=t -c user.email=t@t commit -qam v0.9.0
+        out=$(pub stub-writer); rc=$?
+        check "a deleted version is refused with its own reason (F68-73, kontor 410)" \
+          '[ $rc -ne 0 ] && echo "$out" | grep -q "deleted"'
+        out=$(pubo stub-admin); rc=$?
+        check "and the admin may write it again (F68-76)" \
+          '[ $rc -eq 0 ] && [ -f "$SRV/exodus/pubtool/0.9.0/package" ] && [ ! -f "$SRV/exodus/pubtool/0.9.0/tombstone.json" ]'
+        sed -i 's/0\.9\.0/1.0.0/' "$PUB/exodus.json" "$PUB/aiml.tool.json"
+        git -C "$PUB" -c user.name=t -c user.email=t@t commit -qam "back to 1.0.0"
 
         sed -i 's/1\.0\.0/1.0.1/' "$PUB/exodus.json" "$PUB/aiml.tool.json"
         git -C "$PUB" -c user.name=t -c user.email=t@t commit -qam v1.0.1
