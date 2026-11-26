@@ -122,6 +122,7 @@ aiml venv <dir> install <name> --git <url> [--ref <tag|branch|commit>]
 aiml venv <dir> install <name> --path <dir>
 aiml venv <dir> install <name> --kontor <url> [--version <v>]      (§6.1)
 aiml venv <dir> install --all --kontor <url>                       (§6.1, F68-66)
+aiml venv <dir> install --all --path <dir>                         (F68-68)
 aiml venv <dir> publish [<name>] [--path <dir>] --kontor <url> [--overwrite]   (§6.3)
 aiml venv <dir> list
 aiml venv <dir> remove <name>
@@ -197,9 +198,24 @@ aiml venv <dir> remove <name>
 - **F68-57** **Installing again is the update.**  The same name at the same commit with the same
   file list is a no-op (it says so and exits 0).  A different commit replaces: the old files are
   removed first, so a renamed program leaves nothing behind.
-- **F68-58** `install` **does not touch the system.**  No apt, no `/etc`, no `sudo`.  A tool that
-  needs system libraries (cosmos needs libldap and xmlsec1) says so in its own project; the venv
-  layer sits on a base image that has them (cosmos doc/spec/111 §111.10).
+- **F68-58** `install` **does not touch the system, and brings the libraries itself**
+  (revised 2026-11-26).  No apt run as root, no `/etc`, no `sudo` — but a tool that needs system
+  libraries no longer needs a base image that has them.  It pins them as `apt_packages` in its
+  project (cosmos: libldap, xmlsec1); its build fetches them into the build cache (F68-100, the
+  user's own cache, no root), and the install places every shared library a built program or
+  library **loads from that cache** into `<venv>/lib/` (F68-58a).
+- **F68-58a** **Which libraries.**  After the build, the install asks the loader which libraries
+  each placed program and library resolves (`ldd`), and copies those whose path lies inside the
+  build cache (`$EXODUS_CACHE`, else the tree's `__exodus_cache`) into `<venv>/lib/` under the name
+  the program asks for (its SONAME), the real file, not the link.  A library the loader finds
+  in the system stays the system's.  The loader and libc (`ld-linux*`, `libc.so.6`, `libm`,
+  `libpthread`, `libdl`, `librt`) are never copied: they belong to the system's loader, and a libc
+  that does not match it does not start.  The copies are files of the install: the record
+  (F68-56) lists them, `remove` deletes them, and an update replaces them.  A file of that name
+  that another install placed already stays and is shared; one that a different install placed
+  with **different bytes** ends the install naming both tools.  With F68-55's
+  `RUNPATH $ORIGIN/../lib` the program finds them in the venv, also on a machine without the
+  cache.  No `ldd` (a libc without it) → nothing is copied, and the install says so in one line.
 - **F68-59** The installed tools travel **with the venv**: `push:` of the venv stage (F68-40) and
   `ufo layer apply` (F68-41) carry `bin/`, `lib/` and the two tables, so a venv layer is a
   toolbox, not just a compiler.
@@ -250,6 +266,13 @@ toolbox: the venv, and a URL.
   and a 9rooms in there must not stop the install of cosmos.  A build that fails is a failure, and
   the command ends non-zero after reporting; the closing line counts installed, skipped and
   failed.
+- **F68-68** **`install --all --path <dir>` installs every tool in a directory.**  `<dir>` itself,
+  if it carries an `aiml.tool.json`; otherwise each directory directly inside it, sorted by name,
+  that carries one — the local counterpart of F68-66, for a checkout of several tool repositories
+  next to each other.  A directory inside it without `aiml.tool.json` is skipped with a line.  Each
+  tool is installed as `install <name> --path <its directory>` (F68-50) under the `name` of its
+  `aiml.tool.json`; a failure is reported and the next tool is installed, and the closing line
+  counts installed, skipped and failed (exit 1 when one failed).
 - **F68-67** **What this is not.**  No signature is checked: whoever may write to that kontor
   decides what its name serves, and TLS is what protects the way there.  No mirror list, no
   downgrade protection, no "latest" that moves — `list` records the digest that was installed, and
@@ -344,10 +367,12 @@ written again by the admin, the next version beside it, and an install of what w
 ## 7. Building — `aiml build` (decided 2026-11-25)
 
 A tool used to be built by exodus, a Python build tool, so a venv that could install had to have
-Python and exodus next to it.  exodus is the build system of **aiml itself** (171 pinned apt
-packages, C++ sources, wasm); what an aiml **tool** needs from it is two steps — compile the entry
-file, link the objects — and those the compiler does itself now.  exodus stays for the build of
-aiml; nothing in a venv needs it.
+Python and exodus next to it.  What an aiml **tool** needs from it is two steps — compile the entry
+file, link the objects — and those the compiler does itself.  Since 2026-11-26 `aiml build` also
+does what exodus did for **aiml itself**: it fetches the pinned apt packages (§7.2) and git
+packages (§7.3), compiles C and C++ sources and archives static libraries (§7.4), so the
+compiler, its runtime and its wasm32 runtime build from their own project files without exodus
+and without Python.
 
 ```
 aiml build [-c <config.json>]… [--all]
@@ -360,39 +385,48 @@ aiml build [-c <config.json>]… [--all]
   carries that `$schema`, sorted by file name.  Every path in it is relative to the **working
   directory** (exodus' `source_root: "."`), also for a file in a subdirectory
   (cosmos `runtime/exodus-rt.json`).
-- **F68-81** **What is read**: `name`, `output_type` (`executable` or `shared_lib`), `sources`
-  (`.aiml` files and glob patterns of them, and `.o` files taken as they are), `compiler.name`,
-  `search_paths` (`-I`) and `defines` (`-D`) as exodus passed them, `linker.name` (default `cc`), `linker.flags`, `linker.libraries`, `linker.library_paths`, `linker.rpath`
-  (default `true`), `artifact_in_cwd`, `asset_directories` and `env`.  `version`, `license`,
-  `pre_compilation`, `pre_linkage` and `post_linkage` (F68-87).  `compiler.version` and the `version` of each `dependencies`
-  entry are read as pins (§7.2, F68-95); the rest of `dependencies` is not used by the build.
-  `optimization`, `debug`, `warnings`, `jobs`, `compiler.flags` and `compiler.lang_standard` are
-  accepted and
-  ignored: for an `.aiml` source exodus passed none of them on either, so ignoring them builds the
-  same binary.
-- **F68-82** **What is refused, by name**: `output_type` `static_lib`, C/C++ sources,
-  `apt_packages`, `git_packages`, a hook that is no `.aiml` file (F68-87) and any path containing
-  `__exodus_cache` — those are the build system of aiml and of the wasm client, not of a tool, and
-  a build that silently skipped them would build something else.  The message says „needs
-  exodus".  `output_type: wasm` is no longer among them (F68-88, 2026-11-25); its emsdk comes from
-  the environment like the native linker does, so `git_packages` stays refused there too.  A tool whose `configs` (F68-53) avoid them installs; `--all` over a directory that has
-  one of them fails, as `exodus build --all` would without emsdk.
+- **F68-81** **What is read**: `name`, `output_type` (`executable`, `shared_lib`, `static_lib`,
+  `wasm`), `sources` (`.aiml` and C/C++ files and glob patterns of them — `**` matches any number
+  of directories, as in exodus; a pattern that matches nothing adds nothing, as in exodus, only a
+  path that is not there and a configuration left with no source at all are errors — and `.o`
+  files taken as they are), `compiler.name`,
+  `search_paths` (`-I`) and `defines` (`-D`) as exodus passed them, `linker.name` (default `cc`,
+  `ar` for `static_lib`), `linker.flags`, `linker.libraries`, `linker.library_paths`,
+  `linker.rpath` (default `true`), `linker.script` (`-T`), `linker.map_file` (`-Wl,-Map=`),
+  `artifact_in_cwd`, `asset_directories`, `env`, `apt_packages` (§7.2), `git_packages` (§7.3),
+  `version`, `license`, `pre_compilation`, `pre_linkage` and `post_linkage` (F68-87).  For C/C++
+  sources also `compiler.flags`, `compiler.lang_standard`, `optimization`, `debug`, `warnings` and
+  `werror` (F68-111).  For an `.aiml` source exodus passed none of these on, so they do not reach
+  the aiml compiler.  `jobs` and `-j <n>` set how many compiles run at once (F68-112).  Every other
+  field (`misra_*`, `clang_*`, `architecture`, `src_pattern_for_headers`, …) is read by no build
+  step and ignored.  `compiler.version` and the `version` of each `dependencies` entry are read as
+  pins (§7.5, F68-114); the rest of `dependencies` is not used by the build.
+- **F68-82** **What is refused, by name** (revised 2026-11-26): `conan_packages` that are not
+  empty, a hook that is no `.aiml` file (F68-87), and a source that is neither `.aiml`, `.o`, nor
+  C/C++ (`.c`, `.cc`, `.cpp`, `.cxx`).  A build that silently skipped them would build something
+  else; the message names the field.  `apt_packages` (§7.2), `git_packages` (§7.3), C/C++ sources
+  and `output_type: static_lib` (§7.4) and paths into `__exodus_cache` (F68-101) were refused
+  until 2026-11-26 with „needs exodus" and are built now.
 - **F68-83** **Compile**: for each `.aiml` source,
   `<compiler> <source> -o <build>/<source without .aiml>.o [--asset-roots=<dirs>]` with
   `<build> = out/<name>/` (exodus' `build_root`).  The compiler writes the objects of the modules
   the source imports next to that object (`<dir>_<file>_aiml.o`); the build directory is emptied
   first, so every `.o` in it belongs to this build and **all of them are linked**.  Incremental
   work is the compiler's object cache (`$AIML_CACHE`, spec/29_2 §12), not a second one here.
+  A configuration with C/C++ sources keeps its build directory instead (F68-112); its `.aiml`
+  sources then compile into `<build>/aiml/`, which is emptied the same way and all of whose
+  objects are linked.
 - **F68-84** **Link**: `<linker> <objects> -o <output> [-shared] <linker.flags>
   -L<path>… [-Wl,-rpath,<path>]… -l<lib>…`, in that order, as exodus did — so a RUNPATH that
   starts with `$ORIGIN` from `linker.flags` stays first (F68-55).  An rpath entry containing `:`
-  is left out (it would split the RUNPATH).  The output is `<name>` (`lib<name>.so` for
-  `shared_lib`, a `lib` prefix not doubled) in the working directory with `artifact_in_cwd`, else
-  in `<build>`.  The linker stays an external program — `g++`/`cc`, whatever `linker.name`
+  goes through a colon-free alias (F68-102).  The output is `<name>` (`lib<name>.so` for
+  `shared_lib`, `lib<name>.a` for `static_lib` (F68-113), a `lib` prefix not doubled) in the
+  working directory with `artifact_in_cwd`, else in `<build>`.  `linker.script` adds
+  `-T<script>` and `linker.map_file` `-Wl,-Map=<file>` after the flags.  The linker stays an external program — `g++`/`cc`, whatever `linker.name`
   says — and missing → exit 1, named.
-- **F68-85** **Placeholders** are those of F68-23 and nothing else: `$AIML_VENV`, then `$AIML`,
-  in every compiler/linker name, flag, path and `env` value; `$ORIGIN` reaches the linker as those
-  seven characters.  An unresolvable placeholder ends the build naming `. <venv>/env`.  `env`
+- **F68-85** **Placeholders** are those of F68-23 and `__exodus_cache` (F68-101), nothing else:
+  `$AIML_VENV`, then `$AIML`, in every compiler/linker name, flag, path and `env` value; `$ORIGIN`
+  reaches the linker as those seven characters.  An unresolvable placeholder ends the build naming `. <venv>/env`.  `env`
   is set for the compile and the link.
 - **F68-86** **No shell.**  Every command is run with its arguments as given (the `runProg` of
   §6), so nothing in a configuration is interpreted.  Each command is printed before it runs.
@@ -436,9 +470,98 @@ its wasm tests) build without exodus too.
   another version ends the build naming both („built with emsdk 3.1.74, but emcc is 4.0.1 —
   activate emsdk 3.1.74").  An archive and an emcc of different versions do not link reliably
   (§8), and a mismatch found by the linker an hour later names neither.  A linker that cannot be
-  run ends the build the same way, naming `$EMCC`.  The emsdk itself is the environment's
-  (`. <emsdk>/emsdk_env.sh`, or `$EMCC`): a build that cloned one, as exodus' `git_packages` did,
-  would put a compiler into every project's tree.
+  run ends the build the same way, naming `$EMCC`.  The emsdk is the environment's
+  (`. <emsdk>/emsdk_env.sh`, or `$EMCC`) or a `git_packages` entry of the configuration (§7.3,
+  since 2026-11-26) whose path `linker.name` names — aiml's own `exodus-wasm-runtime.json` pins
+  emsdk that way.
+
+### 7.2 apt packages — `apt_packages` (decided 2026-11-26)
+
+What `exodus pkg install` and `tools/ci/fetch_pinned_debs.py` did for the pinned Ubuntu packages,
+the build does itself, before anything is compiled — in the user's own cache, without root.
+
+- **F68-100** **The cache is exodus'.**  An entry `{ "name", "version", "arch", "digest",
+  "required" }` is a `.deb` at `<cache>/apt/<name>/<arch>/<version>/_download/` and its unpacked
+  content at `…/payload/`.  `<cache>` is `$EXODUS_CACHE`, else `<working directory>/__exodus_cache`
+  — the directory exodus fills, so either tool uses what the other fetched.  A package whose
+  `payload/` exists next to a `.deb` with the pinned digest is used as it is, nothing is fetched.
+- **F68-100a** **Fetching** (every package not present, before the `pre_compilation` hook):
+  `apt-get download <name>:<arch>=<version>` in `_download/` where `apt-get` is on `PATH` — it reads
+  the mirror index and needs no root; when it finds nothing (Ubuntu drops superseded point
+  releases from the index), the permanent copy `<base>/<name>_<version>_<arch>.deb`, then
+  `…_all.deb`, with the runtime's own HTTP client (proxy from the environment, redirects).  The
+  version in the file name is without its epoch (`1:18.1.3-1ubuntu1` → `18.1.3-1ubuntu1`).
+  `<base>` is `$AIML_DEB_URL`, else `https://launchpad.net/ubuntu/+archive/primary/+files`.  The
+  `.deb` is unpacked with `dpkg-deb -x`, else (no dpkg) with `ar x` and `tar -xf data.tar.*`.
+- **F68-100b** **The digest decides.**  The sha256 of the `.deb` must be the pinned `digest`; a
+  different one ends the build naming both sums — nothing unverified is unpacked.  A fetch goes
+  to a directory of its own and replaces the cached entry only once it is verified and unpacked:
+  a cached entry whose `.deb` is not the pinned one is fetched again, and if that fails the build
+  ends and the cache is **left as it was** (exodus' cache holds such entries; they are not this
+  build's to delete).  An entry without `digest` is used, and one line names the sum to pin.
+  The build **does not write its configuration** (`exodus pkg install` wrote `digest` back): a
+  build whose file changes under it could not be read from that file.
+- **F68-100c** **`required: false`**: a package that cannot be fetched is skipped with a line.
+  A required one ends the build, naming the package and both places it looked.
+- **F68-100d** **Links across packages.**  A `-dev` package's `libfoo.so → libfoo.so.1` points into
+  its runtime package, which is unpacked into another payload, so the link is broken.  Once every
+  package is present, a broken link in a payload of the configuration whose target's file name is
+  a file in another of its payloads is made to point there (absolute); one whose target is in
+  none of them is removed, with a line naming it — the runtime package is missing from the
+  configuration (exodus' rule).
+- **F68-100e** **Paths are the configuration's.**  The `search_paths` and `library_paths` that
+  name payload directories are written in the configuration (`exodus pkg install` put them
+  there); the build adds no path of its own, and it resolves no `Depends:` — the configuration
+  pins every package it needs, so two builds of one file fetch the same packages.
+- **F68-101** **`__exodus_cache`** in a compiler or linker name, a flag, a path or an `env` value
+  becomes the absolute `<cache>`, as exodus' `_expand_cache` did.  It may also name a file of a
+  git package (F68-107).
+- **F68-102** **A colon in an rpath.**  Debian versions with an epoch put a `:` into a cache path
+  (`…/libllvm18/amd64/1:18.1.3-1ubuntu1/…`), and `:` separates RUNPATH entries.  Such a
+  `library_paths` entry gets the alias `<cache>/rpath/<its path below the cache, ':' written as
+  %3a>`, a symlink to the real directory, and the rpath takes the alias.  A colon path outside the
+  cache cannot be aliased and is left out of the rpath with a line.
+
+### 7.3 git packages — `git_packages` (decided 2026-11-26)
+
+- **F68-105** **Where.**  An entry `{ "name", "repo", "ref", "digest", "setup_commands",
+  "required" }` is a clone at `<cache>/git/<name>/<commit>/`.  With a `digest` (a commit) whose
+  directory exists, nothing is fetched.  Otherwise `git clone --depth 1 [--branch <ref>] <repo>`
+  (`ref` `HEAD` or empty: the default branch); when a `digest` is pinned and the clone is at
+  another commit, `git fetch --depth 1 origin <digest>` and `git checkout --detach <digest>`
+  follow, and a commit that cannot be fetched ends the build naming both.  Without `digest` one
+  line names the commit to pin.  `git` comes from `PATH`; missing → named.
+- **F68-106** **`setup_commands`** run in the clone, in order, each an argv without a shell
+  (F68-86) — after the clone, and again in a later build only while they have not all succeeded
+  once (a marker `.aiml_setup_done` in the clone says they have).  A failing command ends the build
+  naming it (`required: false`: the package is skipped with a line).
+- **F68-107** **`current`.**  `<cache>/git/<name>/current` is a link to the commit directory, so a
+  configuration says `__exodus_cache/git/emsdk/current/upstream/emscripten/em++` without the
+  commit (exodus' link).
+- **F68-108** Git packages are fetched after the apt packages and before the `pre_compilation`
+  hook, in the order given.
+
+### 7.4 C and C++ sources, static libraries (decided 2026-11-26)
+
+- **F68-110** **Sources** with the extension `.c`, `.cc`, `.cpp` or `.cxx` are compiled with
+  `compiler.name` (default `cc`) to `<build>/<source path, extension replaced by .o>`.
+- **F68-111** **The compile line is exodus':**  `<compiler> <compiler.flags> -c <source> -o <object>
+  -MMD -MP [-std=c++<lang_standard> | -std=c<lang_standard>] -O<optimization> [-g] -W<w>…
+  [-Werror] -I<search_path>… -D<define>…`, with exodus' defaults (`optimization` `"0"`, `debug`
+  true, `warnings` `["all", "extra"]`, `werror` false).  `-std` is `c++…` for `.cc`, `.cpp`,
+  `.cxx` and `c…` for `.c`.
+- **F68-112** **Incremental and parallel.**  A configuration with C/C++ sources keeps its build
+  directory.  An object is compiled again when it is missing, or older than its source, than the
+  configuration file, than the compiler (when `compiler.name` is a path), or than a file its
+  `.d` names, or when a file the `.d` names is gone; otherwise one line says it is up to date.
+  `-j <n>` (or `jobs`; default: the number of processors) compiles run at once.  The first
+  failure lets the running compiles finish, links nothing and ends the build naming the source.
+  The link takes the sources' objects in source order, then the objects of `.aiml` sources
+  (F68-83).
+- **F68-113** **`output_type: static_lib`** is `<linker> rcs <output> <objects>` with `linker.name`
+  (default `ar`; `emar` for wasm32 objects).  The archive is removed first, so a source that left
+  the configuration leaves no member behind.  No flags, libraries or rpath — an archive links
+  nothing.
 
 Tests: `tests/build/run.sh` — an executable and a shared library from one `.aiml` file that
 imports a module (the side object is linked), `-c` several times and `--all` by `$schema`, a
@@ -449,10 +572,20 @@ order with their variables, a hook's file seen by the compile, a failing hook en
 missing hook and a `.py` hook refused; for wasm (F68-88/89) against a stand-in emcc the compile
 line, the `.ll` of module and import on the link line, `--preload-file`, no rpath, an emcc of
 another emsdk refused, a native object and `git_packages` refused — and, where the CI has emsdk
-and the wasm32 runtime, a real build that node runs with the module's output and exit code.  `tests/venv/run.sh`
-installs with `PATH` free of exodus and Python.
+and the wasm32 runtime, a real build that node runs with the module's output and exit code.
+§7.2–§7.4: C and C++ sources with `lang_standard`, defines and include paths, a second build that
+compiles nothing, a touched header that compiles its source again, a `static_lib` linked into a
+program, `-j`; apt packages from a local archive over HTTP (`$AIML_DEB_URL`): fetched and unpacked
+into exodus' layout, the digest checked (a wrong one refused, nothing unpacked), a cached package
+not fetched again, a `-dev` link repaired across payloads, an optional package that is not there
+skipped, a colon path aliased in the RUNPATH; a git package from a local repository at a pinned
+commit with its setup command run once, `current`, and its file used through `__exodus_cache`.
+`tests/venv/run.sh` installs with `PATH` free of exodus and Python, `install --all --path` over a
+directory of tools (one without `aiml.tool.json` skipped), and a tool whose library comes from an
+apt package: the library lands in `<venv>/lib/`, the program runs with the cache deleted, and
+`remove` takes the library out again.
 
-### 7.2 Version pins — `compiler.version` and `dependencies[].version` (decided 2026-11-26)
+### 7.5 Version pins — `compiler.version` and `dependencies[].version` (decided 2026-11-26)
 
 A tool is built against one aiml and works next to certain versions of its neighbours (ufo,
 kontor).  Until now that knowledge lived outside the repository: in a CI variable that falls back
@@ -472,30 +605,30 @@ not after an hour of compiling.
 ]
 ```
 
-- **F68-95** **No new file, no new format.**  The pin lives in the exodus project file the tool
+- **F68-114** **No new file, no new format.**  The pin lives in the exodus project file the tool
   already has (F68-80): `compiler.version` for the compiler, `version` of a `dependencies` entry
   for a neighbour.  The format keeps its `$schema` (`exodus.project.config-1.0`): both keys are
   optional, a file without them builds exactly as before.  Only the configuration that builds the
   tool's main program needs a pin; a repository with many configurations (cosmos) pins in that
   one, and the others build unchecked.
-- **F68-96** **A range is an object of comparisons**, the keywords of aiml's own comparisons:
+- **F68-115** **A range is an object of comparisons**, the keywords of aiml's own comparisons:
   `eq`, `gt`, `ge`, `lt`, `le`.  Several keys hold together (and): `{ "ge": "1.0.2.7", "lt":
   "1.1" }` is a range.  `eq` stands alone — `eq` next to another key is an error, and so is a
   range that admits nothing (`{ "gt": "2", "lt": "1" }`).  A bare string is **not** shorthand for
   `eq`: a pin is always written as what it is.  An unknown key is an error naming it (`"gte"` must
   not become a pin that never applies).
-- **F68-97** **Comparison is numeric, segment by segment.**  A version is dot-separated
+- **F68-116** **Comparison is numeric, segment by segment.**  A version is dot-separated
   non-negative integers; a leading `v` is dropped, so the tag `v1.0.2.7` and `1.0.2.7` are the same
   version.  A missing segment counts as 0: `lt: "1.1"` means below `1.1.0.0`, and `1.0.10` is
   greater than `1.0.9`.  Anything else in a pin (`1.0-rc1`, `latest`, a sha) is an error in the
   configuration; it is not compared as text.
-- **F68-98** **The compiler knows its version.**  The release carries it — `aiml --version` prints
+- **F68-117** **The compiler knows its version.**  The release carries it — `aiml --version` prints
   the version the package step was given (`v1.0.2.7`), and the venv's runtime directory carries
   the same line as `lib/aiml.version`, copied by `aiml venv` like `wasm32/` (F68-94).  A build
   from a commit (`git-<sha>`, F68-90's packaging of untagged runs) has **no comparable version**:
   every pin on it counts as a mismatch, with that reason, so a pin is never silently satisfied by
   a build nobody released.
-- **F68-99** **A mismatch warns at once and does not stop the build.**  `aiml build` checks the
+- **F68-118** **A mismatch warns at once and does not stop the build.**  `aiml build` checks the
   pins of a configuration **before compiling anything** (as F68-89 does for emsdk) and writes one
   line per mismatch to stderr, in a fixed form that a host can recognise:
 
@@ -509,11 +642,11 @@ not after an hour of compiling.
   is information, not breakage.  What a host does with the line is the host's: cosmos marks the
   step magenta (spec/62 F62-47).  A dependency is checked against the version installed in the
   active venv (`aiml venv <dir> list`); one that is not installed is a mismatch with that reason.
-- **F68-100** **exodus reads the same keys.**  exodus' model accepts `compiler.version` and a range
-  as `Dependency.version`, with the rules of F68-96 and F68-97, and warns the same way.  Two readers
+- **F68-119** **exodus reads the same keys.**  exodus' model accepts `compiler.version` and a range
+  as `Dependency.version`, with the rules of F68-115 and F68-116, and warns the same way.  Two readers
   of one format must not disagree on what a pin means.
 
-Tests: `tests/venv/run.sh` — a configuration whose pin admits the running compiler builds without
+Tests: `tests/build/run.sh` — a configuration whose pin admits the running compiler builds without
 a line; one whose pin excludes it builds and prints exactly one `version-mismatch` line; `eq`
 with `lt`, an unknown key, an empty range and `1.0-rc1` are each refused naming the key; `v1.0.2.7`
 equals `1.0.2.7`; `1.0.10` is greater than `1.0.9`; a `git-<sha>` compiler mismatches every pin.

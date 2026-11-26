@@ -4,7 +4,7 @@
 #   aiml-<version>-linux-x86_64/
 #     bin/aiml
 #     lib/libaiml.so
-#     lib/aiml.version          the version this was packaged as (spec/68 F68-98)
+#     lib/aiml.version          the version this was packaged as (spec/68 F68-117)
 #     lib/<shared libraries the two resolve from __exodus_cache/>
 #     lib/wasm32/libaiml_wasm.a, lib/wasm32/emsdk.version   (spec/68 §8)
 #
@@ -23,7 +23,7 @@ mkdir -p "$STAGE/bin" "$STAGE/lib" "$OUT"
 
 cp out/aiml/aiml "$STAGE/bin/aiml"
 cp out/libaiml/libaiml.so "$STAGE/lib/libaiml.so"
-echo "$VERSION" > "$STAGE/lib/aiml.version"    # spec/68 F68-98: `aiml --version`, the pins of `aiml build`
+echo "$VERSION" > "$STAGE/lib/aiml.version"    # spec/68 F68-117: `aiml --version`, the pins of `aiml build`
 cp LICENSE THIRD_PARTY.md "$STAGE/"
 
 # Belongs to the target system, for one of two reasons.

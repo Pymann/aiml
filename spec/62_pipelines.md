@@ -555,7 +555,7 @@ supplies `workspace` and `host_env` as arguments (§5.2).
 - **F62-47** **Magenta means a version incompatibility** (decided 2026-11-26).  It is the first of
   the six values whose meaning is fixed (§16 item 6): a step is magenta when something it built or
   ran was made against a version outside its pin — `aiml build` says so with a
-  `version-mismatch` line (aiml spec/68 F68-99), and a host that sees the line in a step's output
+  `version-mismatch` line (aiml spec/68 F68-118), and a host that sees the line in a step's output
   marks the step magenta.  A body can set it itself with `set_status(StepStatus.magenta)`.
   Magenta is not a failure: the step ran and its result stands; what it says is "this worked
   against something it was not pinned to" — the signal the person who maintains the pin needs,

@@ -5,6 +5,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <cerrno>
 #include <cstdlib>
 #include <filesystem>
@@ -496,10 +497,18 @@ fs::path tableFile(const fs::path& root) { return root / "lib" / "aiml" / "aiml.
 fs::path recordFile(const fs::path& root) { return root / "lib" / "aiml" / "aiml.installed.json"; }
 
 // F68-56: remove exactly what was placed — a directory as a whole, a file as
-// a file, and nothing that is not in the record.
-void dropFiles(const fs::path& root, const Record& rec) {
+// a file, and nothing that is not in the record.  A file another install lists
+// too (a library both load, F68-58a) stays for that one.
+void dropFiles(const fs::path& root, const Record& rec, const std::map<std::string, Record>& all,
+               const std::string& self) {
     std::error_code ec;
     for (const std::string& rel : rec.files) {
+        bool shared = false;
+        for (const auto& other : all)
+            if (other.first != self &&
+                std::find(other.second.files.begin(), other.second.files.end(), rel) != other.second.files.end())
+                shared = true;
+        if (shared) continue;
         fs::path at = root / rel;
         if (fs::is_directory(at, ec)) fs::remove_all(at, ec);
         else fs::remove(at, ec);
@@ -530,7 +539,7 @@ int cmdRemove(const fs::path& root, const std::string& name) {
     auto it = recs.find(name);
     if (it == recs.end())
         return fail("'" + name + "' is not installed in " + root.string());
-    dropFiles(root, it->second);
+    dropFiles(root, it->second, recs, name);
     recs.erase(it);
     Table table = readTable(tableFile(root));
     table.erase(name);
@@ -677,7 +686,8 @@ int cmdInstall(const fs::path& root, const std::string& name, const std::string&
 // tool is skipped, not failed — kontor is a repository for exodus projects.
 int cmdInstallAll(const fs::path& root, const std::string& kontorUrl) {
     if (kontorUrl.empty())
-        return fail("install --all needs a source: --kontor <url> (spec/68 F68-66)");
+        return fail("install --all needs a source: --kontor <url> (spec/68 F68-66) or --path <dir> "
+                    "(F68-68)");
     std::string base = kontorBase(kontorUrl), err;
     std::vector<std::pair<std::string, std::string>> projects;
     if (!kontorGraph(base, "", projects, err)) return fail(err);
@@ -705,6 +715,46 @@ int cmdInstallAll(const fs::path& root, const std::string& kontorUrl) {
             continue;
         }
         if (cmdInstall(root, p.first, "", "", "", base, p.second) == 0) ++installed;
+        else ++failed;
+    }
+    std::cout << installed << " installed, " << skipped << " skipped, " << failed << " failed"
+              << std::endl;
+    return failed == 0 ? 0 : 1;
+}
+
+int cmdInstall(const fs::path& root, const std::string& name, const std::string& gitUrl,
+               const std::string& ref, const std::string& localPath, const std::string& kontorUrl,
+               const std::string& wantVersion);
+
+// F68-68: every tool in a local directory — the directory itself, or each one in it.
+int cmdInstallAllPath(const fs::path& root, const std::string& pathArg) {
+    std::error_code ec;
+    fs::path dir = fs::weakly_canonical(fs::absolute(pathArg), ec);
+    if (ec || !fs::is_directory(dir, ec)) return fail("--path " + pathArg + ": not a directory");
+    std::vector<fs::path> tools;
+    if (fs::is_regular_file(dir / "aiml.tool.json", ec)) {
+        tools.push_back(dir);
+    } else {
+        for (const auto& ent : fs::directory_iterator(dir, ec))
+            if (ent.is_directory(ec)) tools.push_back(ent.path());
+        std::sort(tools.begin(), tools.end());
+    }
+    int installed = 0, skipped = 0, failed = 0;
+    for (const fs::path& t : tools) {
+        if (!fs::is_regular_file(t / "aiml.tool.json", ec)) {
+            std::cout << "  - " << t.filename().string() << ": no aiml.tool.json — not an aiml tool"
+                      << std::endl;
+            ++skipped;
+            continue;
+        }
+        Manifest man;
+        std::string err;
+        if (!readManifest(t, man, err)) {
+            std::cout << "  ! " << t.filename().string() << ": " << err << std::endl;
+            ++failed;
+            continue;
+        }
+        if (cmdInstall(root, man.name, "", "", t.string(), "", "") == 0) ++installed;
         else ++failed;
     }
     std::cout << installed << " installed, " << skipped << " skipped, " << failed << " failed"
@@ -855,9 +905,84 @@ int cmdInstall(const fs::path& root, const std::string& name, const std::string&
         placed.push_back("lib/aiml/" + name);
     }
 
+    // F68-58a: what a placed program or library loads from the build cache comes
+    // along into lib/, under the name the loader asks for.
+    {
+        fs::path cache;
+        const char* ec_env = std::getenv("EXODUS_CACHE");
+        cache = ec_env && *ec_env ? fs::weakly_canonical(fs::absolute(ec_env), ec)
+                                  : fs::weakly_canonical(srcDir / "__exodus_cache", ec);
+        std::map<std::string, fs::path> wanted;   // SONAME → real file
+        bool askedLdd = false, haveLdd = true;
+        auto never = [](const std::string& so) {
+            static const char* const kSystem[] = {"libc.so", "libm.so", "libpthread.so", "libdl.so",
+                                                  "librt.so", "ld-linux", "linux-vdso", "libresolv.so",
+                                                  "libutil.so"};
+            for (const char* s : kSystem)
+                if (so.rfind(s, 0) == 0) return true;
+            return false;
+        };
+        if (fs::is_directory(cache, ec)) {
+            for (const auto& cp : copies) {
+                std::string out;
+                askedLdd = true;
+                int rc = runProg({"ldd", cp.first.string()}, {}, {}, &out);
+                if (rc == 127) { haveLdd = false; break; }
+                std::istringstream lines(out);
+                std::string line;
+                while (std::getline(lines, line)) {
+                    size_t arrow = line.find(" => ");
+                    if (arrow == std::string::npos) continue;
+                    std::string so = line.substr(0, arrow);
+                    so.erase(0, so.find_first_not_of(" \t"));
+                    std::string rest = line.substr(arrow + 4);
+                    size_t paren = rest.find(" (");
+                    std::string path = paren == std::string::npos ? rest : rest.substr(0, paren);
+                    if (path.empty() || path[0] != '/' || never(so)) continue;
+                    fs::path real = fs::weakly_canonical(path, ec);
+                    if (ec) continue;
+                    fs::path rel = real.lexically_relative(cache);
+                    if (rel.empty() || *rel.begin() == "..") continue;
+                    wanted.emplace(so, real);
+                }
+            }
+        }
+        if (askedLdd && !haveLdd)
+            std::cout << "  no ldd: libraries from the build cache are not placed into the venv "
+                         "(spec/68 F68-58a)" << std::endl;
+        for (const auto& w : wanted) {
+            fs::path to = root / "lib" / w.first;
+            std::string rel = "lib/" + w.first;
+            if (fs::exists(to, ec)) {
+                std::string owner;
+                for (const auto& r : recs)
+                    if (r.first != name &&
+                        std::find(r.second.files.begin(), r.second.files.end(), rel) != r.second.files.end())
+                        owner = r.first;
+                bool mine = false;
+                auto me = recs.find(name);
+                if (me != recs.end())
+                    mine = std::find(me->second.files.begin(), me->second.files.end(), rel) != me->second.files.end();
+                if (!mine && sha256File(to.string()) != sha256File(w.second.string())) {
+                    if (!owner.empty())
+                        return fail(rel + " was placed by '" + owner + "' with other bytes than " + name +
+                                    " needs from " + w.second.string() + " (spec/68 F68-58a)");
+                    return fail(rel + " is in the venv already, with other bytes than " + name +
+                                " needs from " + w.second.string() + " (spec/68 F68-58a)");
+                }
+                if (!mine && owner.empty()) continue;   // the venv's own file: left alone, not ours
+            }
+            copies.emplace_back(w.second, to);
+            placed.push_back(rel);
+        }
+        if (!wanted.empty())
+            std::cout << "  " << wanted.size() << " librar" << (wanted.size() == 1 ? "y" : "ies")
+                      << " from the build cache into lib/ (spec/68 F68-58a)" << std::endl;
+    }
+
     // The old copy goes only now, after the build worked (F68-57).
     auto old = recs.find(name);
-    if (old != recs.end()) dropFiles(root, old->second);
+    if (old != recs.end()) dropFiles(root, old->second, recs, name);
 
     using fs::perms;
     const perms exec = perms::owner_all | perms::group_read | perms::group_exec
@@ -1123,7 +1248,7 @@ int createVenv(const fs::path& root, const std::string& runtimeArg) {
             if (!installFile(ent.path(), wasmDst / ent.path().filename(), data, err)) return fail(err);
         }
     }
-    // F68-98: the version of a release comes along, next to the runtime it describes.
+    // F68-117: the version of a release comes along, next to the runtime it describes.
     fs::path stamp = runtime.parent_path() / "aiml.version";
     if (fs::is_regular_file(stamp, ec) && !installFile(stamp, root / "lib" / "aiml.version", data, err))
         return fail(err);
@@ -1141,6 +1266,16 @@ int createVenv(const fs::path& root, const std::string& runtimeArg) {
 int runProgram(const std::vector<std::string>& args, const std::string& cwd,
                const std::vector<std::string>& env, std::string* out) {
     return runProg(args, cwd.empty() ? fs::path() : fs::path(cwd), env, out);
+}
+
+bool download(const std::string& url, const std::string& toFile, std::string& err) {
+    std::string body;
+    return httpGet(url, fs::path(toFile), body, err);
+}
+
+std::string sha256File(const std::string& path) {
+    char* hex = aiml_sha256_file(path.c_str());
+    return hex ? std::string(hex) : std::string();
 }
 
 int command(int argc, char** argv) {
@@ -1180,7 +1315,10 @@ int command(int argc, char** argv) {
         return fail(root.string() + " is not a venv — create it with `aiml venv " + dirArg + "`");
     if (overwrite && verb != "publish") return usage();   // F68-76: publish only
     if (verb == "install") {
-        if (all) return name.empty() ? cmdInstallAll(root, kontorUrl) : usage();
+        if (all) {
+            if (!name.empty() || (!pathArg.empty() && !kontorUrl.empty())) return usage();
+            return pathArg.empty() ? cmdInstallAll(root, kontorUrl) : cmdInstallAllPath(root, pathArg);
+        }
         return cmdInstall(root, name, gitUrl, ref, pathArg, kontorUrl, versionArg);
     }
     if (verb == "publish") return all ? usage() : cmdPublish(name, pathArg, kontorUrl, overwrite);
