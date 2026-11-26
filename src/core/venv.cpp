@@ -140,7 +140,9 @@ int usage() {
                  "       aiml venv <dir> list | remove <name>\n"
                  "       aiml venv <dir> asset install <name> (--kontor <url> --version <v> | --path <archive.tar.gz>)\n"
                  "       aiml venv <dir> asset publish <name> --version <v> --path <dir> --kontor <url> [--overwrite]\n"
-                 "       aiml venv <dir> asset list | asset remove <name>" << std::endl;
+                 "       aiml venv <dir> asset list | asset remove <name>\n"
+                 "       aiml venv <dir> update [--check] [--version <v>] [--github <owner>/<repo>]\n"
+                 "       aiml venv <dir> update --kontor <url> --version <v>" << std::endl;
     return 1;
 }
 
@@ -566,13 +568,14 @@ int cmdRemove(const fs::path& root, const std::string& name) {
 // F68-63: a token goes into the request, never onto a command line.
 bool httpCall(const std::string& method, const std::string& url, const fs::path& bodyFile,
               const fs::path& toFile, int32_t& status, std::string& body, std::string& err,
-              const std::vector<std::pair<std::string, std::string>>& headers = {}) {
+              const std::vector<std::pair<std::string, std::string>>& headers = {},
+              bool kontorAuth = true) {
     status = 0;
     void* u = aiml_url_parse(url.c_str());
     if (!u) { err = "not a URL: " + url; return false; }
     void* req = aiml_http_new_request(method.c_str(), u);
     if (!req) { err = "cannot build a request for " + url; return false; }
-    const char* token = std::getenv("KONTOR_TOKEN");
+    const char* token = kontorAuth ? std::getenv("KONTOR_TOKEN") : nullptr;   // never to another host
     if (token && *token)
         aiml_http_map_put(aiml_http_client_get_headers(req), "Authorization",
                           (std::string("Bearer ") + token).c_str());
@@ -1581,6 +1584,278 @@ int cmdAssetRemove(const fs::path& root, const std::string& name) {
     return 0;
 }
 
+
+// ── §10: updating the venv's aiml ─────────────────────────────────────────
+
+// F68-116: dot-separated non-negative integers, a leading v dropped; anything
+// else is no version (a git-<sha> build, a tag of another kind).
+bool parseVersion(const std::string& raw, std::vector<long>& out) {
+    out.clear();
+    std::string s = !raw.empty() && (raw[0] == 'v' || raw[0] == 'V') ? raw.substr(1) : raw;
+    if (s.empty()) return false;
+    size_t at = 0;
+    while (at <= s.size()) {
+        size_t end = s.find('.', at);
+        if (end == std::string::npos) end = s.size();
+        std::string seg = s.substr(at, end - at);
+        if (seg.empty() || seg.size() > 9 || !std::all_of(seg.begin(), seg.end(), [](char c) { return c >= '0' && c <= '9'; }))
+            return false;
+        out.push_back(std::stol(seg));
+        at = end + 1;
+    }
+    return true;
+}
+
+int cmpVersion(std::vector<long> a, std::vector<long> b) {   // a missing segment counts as 0
+    size_t n = std::max(a.size(), b.size());
+    a.resize(n, 0);
+    b.resize(n, 0);
+    return a < b ? -1 : (a > b ? 1 : 0);
+}
+
+std::string firstLine(const fs::path& file) {
+    std::ifstream in(file);
+    std::string line;
+    if (!in || !std::getline(in, line)) return "";
+    while (!line.empty() && std::isspace(static_cast<unsigned char>(line.back()))) line.pop_back();
+    return line;
+}
+
+fs::path releaseRecordFile(const fs::path& root) { return root / "lib" / "aiml" / "aiml.release.json"; }
+
+struct GithubRelease {
+    std::string tag, archiveUrl, sumUrl;
+    std::vector<long> version;
+};
+
+// F68-130: the release listing, the only request that carries a GitHub token.
+bool githubReleases(const std::string& repo, std::vector<GithubRelease>& out, std::string& err) {
+    const char* apiEnv = std::getenv("AIML_GITHUB_API");
+    std::string api = apiEnv && *apiEnv ? apiEnv : "https://api.github.com";
+    while (!api.empty() && api.back() == '/') api.pop_back();
+    std::string url = api + "/repos/" + repo + "/releases";
+    std::vector<std::pair<std::string, std::string>> headers = {
+        {"Accept", "application/vnd.github+json"}, {"User-Agent", "aiml-venv-update"}};
+    const char* tok = std::getenv("GITHUB_TOKEN");
+    if (!tok || !*tok) tok = std::getenv("GH_TOKEN");
+    if (tok && *tok) headers.push_back({"Authorization", std::string("Bearer ") + tok});
+    int32_t status = 0;
+    std::string body;
+    if (!httpCall("GET", url, {}, {}, status, body, err, headers, false)) return false;
+    if (status != 200) {
+        err = url + ": HTTP " + std::to_string(status) + " — " + kontorMessage(body);
+        return false;
+    }
+    try {
+        YAML::Node doc = YAML::Load(body);   // JSON is YAML
+        if (!doc.IsSequence()) { err = url + ": no list of releases"; return false; }
+        for (const auto& r : doc) {
+            if (!r.IsMap() || !r["tag_name"]) continue;
+            if (r["draft"] && r["draft"].IsScalar() && r["draft"].as<std::string>() == "true") continue;
+            GithubRelease rel;
+            rel.tag = r["tag_name"].as<std::string>();
+            if (!parseVersion(rel.tag, rel.version)) continue;
+            std::string want = "aiml-" + rel.tag + "-linux-x86_64.tar.gz";
+            if (r["assets"] && r["assets"].IsSequence())
+                for (const auto& a : r["assets"]) {
+                    if (!a["name"] || !a["browser_download_url"]) continue;
+                    std::string n = a["name"].as<std::string>();
+                    if (n == want) rel.archiveUrl = a["browser_download_url"].as<std::string>();
+                    if (n == want + ".sha256") rel.sumUrl = a["browser_download_url"].as<std::string>();
+                }
+            out.push_back(rel);
+        }
+    } catch (const std::exception& e) {
+        err = url + ": " + e.what();
+        return false;
+    }
+    return true;
+}
+
+bool fetchTo(const std::string& url, const fs::path& file, std::string& err) {
+    int32_t status = 0;
+    std::string body;
+    if (!httpCall("GET", url, {}, file, status, body, err, {{"User-Agent", "aiml-venv-update"}}, false)) return false;
+    if (status != 200) {
+        err = url + ": HTTP " + std::to_string(status);
+        return false;
+    }
+    return true;
+}
+
+int cmdUpdate(const fs::path& root, const std::string& wantVersion, const std::string& githubRepo,
+              const std::string& kontorUrl, bool checkOnly) {
+    std::error_code ec;
+    std::string err;
+    if (!kontorUrl.empty() && wantVersion.empty())
+        return fail("update --kontor needs --version <v> — kontor's generic store has no listing (F68-130)");
+    if (!kontorUrl.empty() && !githubRepo.empty()) return usage();
+
+    // F68-131: the venv's version and its major.
+    std::string current = firstLine(root / "lib" / "aiml.version");
+    std::vector<long> curV;
+    bool released = parseVersion(current, curV);
+    std::vector<long> wantV;
+    if (!wantVersion.empty() && !parseVersion(wantVersion, wantV))
+        return fail("'" + wantVersion + "' is no version (F68-116)");
+    if (!released && wantVersion.empty())
+        return fail(root.string() + " has no released version (" +
+                    (current.empty() ? std::string("no lib/aiml.version") : current) +
+                    ") — name the release to take with --version <v> (F68-131)");
+    if (released && !wantVersion.empty() && wantV[0] != curV[0])
+        return fail(wantVersion + " is of major " + std::to_string(wantV[0]) + ", the venv of major " +
+                    std::to_string(curV[0]) + " — another major is a new venv, not an update (F68-131)");
+
+    std::string tag, archiveUrl, sumUrl, source;
+    if (kontorUrl.empty()) {
+        std::string repo = githubRepo.empty() ? "Pymann/aiml" : githubRepo;
+        std::vector<GithubRelease> rels;
+        if (!githubReleases(repo, rels, err)) return fail(err);
+        const GithubRelease* pick = nullptr;
+        for (const GithubRelease& r : rels) {
+            if (!wantVersion.empty()) {
+                if (cmpVersion(r.version, wantV) == 0) pick = &r;
+                continue;
+            }
+            if (r.version[0] != curV[0]) continue;
+            if (!pick || cmpVersion(r.version, pick->version) > 0) pick = &r;
+        }
+        if (!pick)
+            return fail(wantVersion.empty()
+                ? "no release of major " + std::to_string(curV[0]) + " in " + repo + " (F68-131)"
+                : "no release " + wantVersion + " in " + repo + " (F68-131)");
+        if (wantVersion.empty() && cmpVersion(pick->version, curV) <= 0) {
+            std::cout << root.string() << " is up to date: " << current << " (newest of major " << curV[0]
+                      << " in " << repo << ": " << pick->tag << ")" << std::endl;
+            return 0;
+        }
+        if (pick->archiveUrl.empty() || pick->sumUrl.empty())
+            return fail(pick->tag + " in " + repo + " has no aiml-" + pick->tag +
+                        "-linux-x86_64.tar.gz with its .sha256 (F68-132)");
+        tag = pick->tag;
+        archiveUrl = pick->archiveUrl;
+        sumUrl = pick->sumUrl;
+        source = "github:" + repo;
+    } else {
+        tag = wantVersion;
+        archiveUrl = kontorBase(kontorUrl) + "/generic/aiml/" + tag + "/aiml-x86_64-linux.tar.gz";
+        source = "kontor:" + kontorBase(kontorUrl);
+    }
+    std::string from = current.empty() ? std::string("(no version)") : current;
+    if (checkOnly) {
+        std::cout << from << " → " << tag << " (" << source << ")" << std::endl;
+        return 0;
+    }
+
+    // F68-132: into the cache, checked, unpacked.
+    fs::path at = cacheRoot() / "venv_update" / tag;
+    fs::create_directories(at, ec);
+    if (ec) return fail("cannot make " + at.string() + ": " + ec.message());
+    fs::path archive = at / (kontorUrl.empty() ? "aiml-" + tag + "-linux-x86_64.tar.gz" : "aiml-x86_64-linux.tar.gz");
+    if (!fetchTo(archiveUrl, archive, err)) return fail(err);
+    std::string hex = sha256File(archive.string());
+    if (hex.empty()) return fail("cannot read back " + archive.string());
+    if (!sumUrl.empty()) {
+        fs::path sumFile = at / (archive.filename().string() + ".sha256");
+        if (!fetchTo(sumUrl, sumFile, err)) return fail(err);
+        std::string want = firstLine(sumFile);
+        want = want.substr(0, want.find_first_of(" \t"));
+        if (want != hex)
+            return fail(archive.filename().string() + " has sha256 " + hex + ", its .sha256 says " + want +
+                        " — nothing changed (F68-132)");
+    }
+    fs::path tree = at / "tree";
+    fs::remove_all(tree, ec);
+    fs::create_directories(tree, ec);
+    if (aiml_compress_untar(archive.string().c_str(), tree.string().c_str()) != 0)
+        return fail(archive.string() + ": not a readable tar.gz (F68-132)");
+    fs::path rel = tree;
+    if (kontorUrl.empty()) {
+        std::vector<fs::path> top;
+        for (const auto& ent : fs::directory_iterator(tree, ec)) top.push_back(ent.path());
+        if (top.size() != 1 || !fs::is_directory(top[0], ec))
+            return fail(archive.string() + " unpacks to " + std::to_string(top.size()) +
+                        " entries — one directory is expected (F68-132)");
+        rel = top[0];
+    }
+    if (!fs::is_regular_file(rel / "bin" / "aiml", ec) || !fs::is_regular_file(rel / "lib" / "libaiml.so", ec))
+        return fail(archive.string() + " has no bin/aiml and lib/libaiml.so (F68-132)");
+    std::string says = firstLine(rel / "lib" / "aiml.version");
+    if (says != tag)
+        return fail(archive.string() + ": lib/aiml.version says '" + says + "', not " + tag + " (F68-132)");
+
+    // F68-133: what is replaced — bin/aiml and the files directly in lib/ and lib/wasm32/.
+    std::vector<std::string> files = {"bin/aiml"};
+    for (const char* sub : {"lib", "lib/wasm32"}) {
+        fs::path d = rel / sub;
+        if (!fs::is_directory(d, ec)) continue;
+        std::vector<std::string> here;
+        for (const auto& ent : fs::directory_iterator(d, ec)) {
+            fs::file_status st = fs::symlink_status(ent.path(), ec);
+            if (fs::is_regular_file(st) || fs::is_symlink(st))
+                here.push_back(std::string(sub) + "/" + ent.path().filename().string());
+        }
+        std::sort(here.begin(), here.end());
+        files.insert(files.end(), here.begin(), here.end());
+    }
+    Records tools = readRecords(recordFile(root));
+    auto toolOwning = [&](const std::string& f) -> std::string {
+        for (const auto& kv : tools)
+            if (std::find(kv.second.files.begin(), kv.second.files.end(), f) != kv.second.files.end()) return kv.first;
+        return "";
+    };
+    for (const std::string& f : files) {
+        std::string owner = toolOwning(f);
+        if (owner.empty() || !fs::exists(root / f, ec)) continue;
+        if (sha256File((root / f).string()) != sha256File((rel / f).string()))
+            return fail(f + " is the tool '" + owner + "''s, with other bytes than " + tag +
+                        " brings — nothing changed (F68-133)");
+    }
+
+    using fs::perms;
+    const perms exec = perms::owner_all | perms::group_read | perms::group_exec | perms::others_read | perms::others_exec;
+    const perms data = perms::owner_read | perms::owner_write | perms::group_read | perms::others_read;
+    fs::create_directories(root / "lib" / "wasm32", ec);
+    for (const std::string& f : files) {
+        fs::path src = rel / f, dst = root / f;
+        fs::create_directories(dst.parent_path(), ec);
+        if (fs::is_symlink(fs::symlink_status(src, ec))) {
+            fs::path tmp = dst;
+            tmp += ".tmp." + std::to_string(getpid());
+            fs::remove(tmp, ec);
+            fs::create_symlink(fs::read_symlink(src, ec), tmp, ec);
+            if (!ec) fs::rename(tmp, dst, ec);
+            if (ec) return fail("cannot place " + dst.string() + ": " + ec.message());
+            continue;
+        }
+        bool isExec = (fs::status(src, ec).permissions() & perms::owner_exec) != perms::none;
+        if (!installFile(src, dst, (f == "bin/aiml" || isExec) ? exec : data, err)) return fail(err);
+    }
+    if (fs::is_empty(root / "lib" / "wasm32", ec)) fs::remove(root / "lib" / "wasm32", ec);
+
+    // The previous update's files that this release no longer has.
+    size_t dropped = 0;
+    try {
+        YAML::Node prev = YAML::LoadFile(releaseRecordFile(root).string());
+        for (const std::string& f : strList(prev["files"])) {
+            if (std::find(files.begin(), files.end(), f) != files.end() || !toolOwning(f).empty()) continue;
+            if (fs::remove(root / f, ec)) ++dropped;
+        }
+    } catch (const std::exception&) {}
+
+    std::ostringstream ss;
+    ss << "{\"version\": \"" << jsonEscape(tag) << "\", \"source\": \"" << jsonEscape(source)
+       << "\", \"digest\": \"sha256:" << hex << "\", \"files\": [";
+    for (size_t i = 0; i < files.size(); ++i) ss << (i ? ", \"" : "\"") << jsonEscape(files[i]) << "\"";
+    ss << "]}\n";
+    if (!writeText(releaseRecordFile(root), ss.str(), err)) return fail(err);
+    std::cout << "updated " << root.string() << ": " << from << " → " << tag << " (" << files.size()
+              << " files, sha256:" << hex << (dropped ? ", " + std::to_string(dropped) + " old file(s) removed" : "")
+              << ") from " << source << "\n  installed tools are not rebuilt; `install <name>` again rebuilds "
+                 "one with the new compiler (F68-134)" << std::endl;
+    return 0;
+}
+
 }  // namespace
 
 std::string ownRoot() {
@@ -1676,7 +1951,8 @@ std::string sha256File(const std::string& path) {
 int command(int argc, char** argv) {
     std::string dirArg, runtimeArg, verb, name, sub;
     std::string gitUrl, ref, pathArg, kontorUrl, versionArg;
-    bool all = false, overwrite = false;
+    bool all = false, overwrite = false, checkOnly = false;
+    std::string githubRepo;
     for (int i = 0; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "--runtime" && i + 1 < argc) runtimeArg = argv[++i];
@@ -1687,6 +1963,8 @@ int command(int argc, char** argv) {
         else if (arg == "--version" && i + 1 < argc) versionArg = argv[++i];
         else if (arg == "--all") all = true;
         else if (arg == "--overwrite") overwrite = true;
+        else if (arg == "--check") checkOnly = true;                       // §10
+        else if (arg == "--github" && i + 1 < argc) githubRepo = argv[++i];
         else if (!arg.empty() && arg[0] != '-') {
             if (dirArg.empty()) dirArg = arg;
             else if (verb.empty()) verb = arg;
@@ -1726,6 +2004,9 @@ int command(int argc, char** argv) {
         }
         return cmdInstall(root, name, gitUrl, ref, pathArg, kontorUrl, versionArg);
     }
+    if (verb == "update")                                  // §10
+        return name.empty() && !all ? cmdUpdate(root, versionArg, githubRepo, kontorUrl, checkOnly) : usage();
+    if ((checkOnly || !githubRepo.empty())) return usage();
     if (verb == "publish") return all ? usage() : cmdPublish(name, pathArg, kontorUrl, overwrite);
     if (verb == "list")    return name.empty() ? cmdList(root) : usage();
     if (verb == "remove")  return name.empty() ? usage() : cmdRemove(root, name);

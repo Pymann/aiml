@@ -18,6 +18,7 @@ out again (`ufo layer apply`), so a venv is built once and then only moved aroun
                                  once something is installed)
   lib/aiml/<package>/…           installed packages, one directory each
   lib/aiml/aiml.assets.json      the asset packages `asset install` placed (§9)
+  lib/aiml/aiml.release.json     the release `update` placed (§10; only once updated)
   assets/<name>/…                asset packages, one directory each, the venv's asset root (§9)
   env                            the environment, for `. <venv>/env`
 ```
@@ -784,3 +785,58 @@ digest a no-op, an update without a file of the old version left, a refused arch
 old version in place, `list` and `remove`; and a program that finds a texture and a data asset
 of a package by stem, through the JIT and as an AOT program run from another directory, without
 `--asset-roots`.
+
+## 10. Updating the venv's aiml — `aiml venv <dir> update` (decided 2026-11-26)
+
+A venv made from a release (F68-117: it carries `lib/aiml.version`) is brought to the newest
+release **of the same major** without being made again: the tools, the tables and the asset
+packages stay, the compiler and the runtime change.
+
+```
+aiml venv <dir> update [--check] [--version <v>] [--github <owner>/<repo>]
+aiml venv <dir> update --kontor <url> --version <v>
+```
+
+- **F68-130** **Where releases come from.**  By default the GitHub releases of `Pymann/aiml` —
+  where the CI publishes them (F68-90) — read through the API at `$AIML_GITHUB_API` (default
+  `https://api.github.com`, so a host or a test can point elsewhere); `--github` names another
+  repository.  The listing carries `$GITHUB_TOKEN` or else `$GH_TOKEN` as a Bearer token when one
+  is set (rate limits, a private fork) — only the listing, never a download that may be redirected
+  to another host.  `--kontor <url> --version <v>` takes kontor's generic store instead:
+  `generic/aiml/<v>/aiml-x86_64-linux.tar.gz`, the venv layout the CI files there; kontor has no
+  listing of it, so the version is always named.
+- **F68-131** **The major stays.**  The venv's version is the line in `lib/aiml.version`
+  (F68-117), its major the first segment.  The candidates are the releases that are no draft
+  (pre-releases count: the v2 line is published as pre-releases) whose tag is a version in the
+  sense of F68-116 with the same major; the newest wins, compared as F68-116 compares.  Not newer
+  than the venv → `up to date`, nothing done.  `--version <v>` names one release — also an older
+  one, which is how an update is taken back — and it must have the venv's major: another major is
+  a new venv, not an update.  A venv without a released version (made from a build tree, or a
+  `git-<sha>` build) is refused without `--version`, which then says which major it gets.
+- **F68-132** **Fetched and checked in the cache.**  The asset `aiml-<tag>-linux-x86_64.tar.gz`
+  and its `.sha256` are streamed into `$AIML_CACHE/venv_update/<tag>/` (F68-52); the archive's
+  sha256 must be the one the `.sha256` names, else nothing is changed and both are named.  It
+  must unpack to one directory with `bin/aiml`, `lib/libaiml.so` and a `lib/aiml.version` that says
+  the tag; from kontor the venv layout (`bin/`, `lib/`) without a wrapper.  `--check` stops before
+  the download and says which release the update would take.
+- **F68-133** **What is replaced.**  `bin/aiml` and every file directly in the release's `lib/` and
+  `lib/wasm32/` (the runtime, the bundled libraries, `aiml.version`, the wasm32 runtime) are written
+  as in F68-12, next to their target and renamed into place — the compiler that runs the update
+  is replaced under it without harm.  `lib/aiml/` (the package table and the records), the installed
+  tools in `bin/` and their libraries, `assets/` and `env` stay as they are.  The record
+  `lib/aiml/aiml.release.json` names the version, the source, the digest and the files; a file the
+  previous update placed that the new release no longer has is removed, unless a tool's record
+  (F68-56) lists it.  A release file that a tool's record lists **with other bytes** is refused before
+  anything is written, naming both (F68-58a's rule).
+- **F68-134** **Tools are not rebuilt.**  Within a major the runtime keeps its interface, so a tool
+  built against the old one runs against the new one; `install <name>` again rebuilds it with the
+  new compiler when that is wanted.  The closing line names the old and the new version.
+
+Tests: `tests/venv/run.sh` §10 against `tests/venv/kontor_stub.aiml` as a stand-in for the GitHub
+API and kontor: releases of two majors, a draft, a tag that is no version and a newer patch with
+two-digit segments; `--check`; the update to the newest of the venv's major with `bin/aiml`,
+`lib/aiml.version`, a bundled library and the record in place and the tables, a tool and an asset
+package untouched, `aiml --version` saying the new version; a second update a no-op; `--version`
+back to an older release removing the library only the newer one had; another major refused; a
+wrong `.sha256` refused with nothing changed; a venv without a released version refused, and taken
+to a release with `--version`; and an update from kontor's generic store.

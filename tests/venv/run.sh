@@ -644,6 +644,86 @@ EOT
     out=$("$AIML" venv "$AV" asset install ui_more --path "$WORK/ui_more.tar.gz" 2>&1); rc=$?
     check "with ui_icons gone, ui_more installs from a local archive (F68-126)" \
       '[ $rc -eq 0 ] && [ -f "$AV/assets/ui_more/x/hammer.png" ] && grep -q "\"source\": \"path:$WORK/ui_more.tar.gz\"" "$AV/lib/aiml/aiml.assets.json"'
+
+    echo "── §10: aiml venv update ──"
+    # GitHub's release API, as files the stub serves (F68-130)
+    RELD="$WORK/rel"; mkdir -p "$RELD" "$SRV/repos/Pymann/aiml" "$SRV/dl"
+    mkrel() {  # mkrel <tag> [extra lib] — a release tarball as package_release.sh makes one
+        local tag="$1" n="aiml-$1-linux-x86_64"
+        rm -rf "$RELD/$n"; mkdir -p "$RELD/$n/bin" "$RELD/$n/lib/wasm32"
+        cp "$AIML" "$RELD/$n/bin/aiml"
+        cp "$(dirname "$AIML")/../libaiml/libaiml.so" "$RELD/$n/lib/libaiml.so"
+        echo "$tag" > "$RELD/$n/lib/aiml.version"
+        echo "bundled $tag" > "$RELD/$n/lib/libbundled.so.1"
+        echo "wasm $tag" > "$RELD/$n/lib/wasm32/libaiml_wasm.a"
+        [ -n "${2:-}" ] && echo "only $tag" > "$RELD/$n/lib/$2"
+        mkdir -p "$SRV/dl/$tag"
+        tar -C "$RELD" -czf "$SRV/dl/$tag/$n.tar.gz" "$n"
+        (cd "$SRV/dl/$tag" && sha256sum "$n.tar.gz" > "$n.tar.gz.sha256")
+    }
+    mkrel v1.0.3.0; mkrel v1.0.10.0 libnew_only.so.1; mkrel v1.0.9.9; mkrel v2.0.0.2; mkrel v1.0.2.4
+    echo "0000000000000000000000000000000000000000000000000000000000000000  aiml-v1.0.9.9-linux-x86_64.tar.gz" \
+      > "$SRV/dl/v1.0.9.9/aiml-v1.0.9.9-linux-x86_64.tar.gz.sha256"
+    asset() { printf '{"name":"%s","browser_download_url":"%s/dl/%s/%s"}' "$2" "$URL" "$1" "$2"; }
+    rel() {  # rel <tag> <draft> <prerelease>
+        local n="aiml-$1-linux-x86_64.tar.gz"
+        printf '{"tag_name":"%s","draft":%s,"prerelease":%s,"assets":[%s,%s]}' "$1" "$2" "$3" \
+          "$(asset "$1" "$n")" "$(asset "$1" "$n.sha256")"
+    }
+    printf '[%s,%s,%s,%s,%s,%s,{"tag_name":"git-abc1234","draft":false,"prerelease":false,"assets":[]}]\n' \
+      "$(rel v2.0.0.2 false true)" "$(rel v1.0.11.0 true false)" "$(rel v1.0.10.0 false false)" \
+      "$(rel v1.0.9.9 false false)" "$(rel v1.0.3.0 false false)" "$(rel v1.0.2.8 false false)" \
+      > "$SRV/repos/Pymann/aiml/releases"
+    export AIML_GITHUB_API="$URL"
+    VU="$WORK/vu"; "$AIML" venv "$VU" > /dev/null 2>&1
+    echo "v1.0.2.8" > "$VU/lib/aiml.version"
+    "$AIML" venv "$VU" asset install ui_more --path "$WORK/ui_more.tar.gz" > /dev/null 2>&1
+    cp "$VU/lib/aiml/aiml.packages.json" "$WORK/packages.before"
+    out=$("$AIML" venv "$VU" update --check 2>&1); rc=$?
+    check "--check names the newest release of the venv's major (F68-131/132)" \
+      '[ $rc -eq 0 ] && echo "$out" | grep -q "v1.0.2.8 → v1.0.10.0" && [ ! -d "$WORK/cache/venv_update/v1.0.10.0" ]'
+    [ $rc -eq 0 ] || echo "$out" | tail -3
+    out=$("$AIML" venv "$VU" update 2>&1); rc=$?
+    check "update takes v1.0.10.0: no draft, no other major, 10 > 9 (F68-131)" \
+      '[ $rc -eq 0 ] && [ "$(cat "$VU/lib/aiml.version")" = v1.0.10.0 ] && echo "$out" | grep -q "v1.0.2.8 → v1.0.10.0"'
+    [ $rc -eq 0 ] || echo "$out" | tail -3
+    check "bin/aiml, the runtime, the bundled and the wasm32 files are the release's (F68-133)" \
+      'cmp -s "$RELD/aiml-v1.0.10.0-linux-x86_64/bin/aiml" "$VU/bin/aiml" && [ "$(cat "$VU/lib/libbundled.so.1")" = "bundled v1.0.10.0" ] && [ -f "$VU/lib/libnew_only.so.1" ] && [ "$(cat "$VU/lib/wasm32/libaiml_wasm.a")" = "wasm v1.0.10.0" ]'
+    check "aiml --version says it (F68-117)" '"$VU/bin/aiml" --version | grep -q "v1.0.10.0"'
+    check "the record names version, source, digest and files (F68-133)" \
+      'grep -q "\"version\": \"v1.0.10.0\"" "$VU/lib/aiml/aiml.release.json" && grep -q "github:Pymann/aiml" "$VU/lib/aiml/aiml.release.json" && grep -q "sha256:" "$VU/lib/aiml/aiml.release.json" && grep -q "lib/libnew_only.so.1" "$VU/lib/aiml/aiml.release.json"'
+    check "the tables and the asset packages stay (F68-133)" \
+      'cmp -s "$WORK/packages.before" "$VU/lib/aiml/aiml.packages.json" && [ -f "$VU/assets/ui_more/x/hammer.png" ] && grep -q ui_more "$VU/lib/aiml/aiml.assets.json"'
+    check "the download stayed in the cache (F68-132)" \
+      '[ -f "$WORK/cache/venv_update/v1.0.10.0/aiml-v1.0.10.0-linux-x86_64.tar.gz" ] && [ -z "$(find "$VU" -name "*.tar.gz")" ]'
+    out=$("$AIML" venv "$VU" update 2>&1); rc=$?
+    check "again: up to date, nothing done (F68-131)" '[ $rc -eq 0 ] && echo "$out" | grep -q "up to date"'
+    out=$("$AIML" venv "$VU" update --version v1.0.3.0 2>&1); rc=$?
+    check "--version takes an older release back, the newer one's library goes (F68-131/133)" \
+      '[ $rc -eq 0 ] && [ "$(cat "$VU/lib/aiml.version")" = v1.0.3.0 ] && [ ! -e "$VU/lib/libnew_only.so.1" ] && [ "$(cat "$VU/lib/libbundled.so.1")" = "bundled v1.0.3.0" ]'
+    [ $rc -eq 0 ] || echo "$out" | tail -3
+    out=$("$AIML" venv "$VU" update --version v2.0.0.2 2>&1); rc=$?
+    check "another major is refused: a new venv, not an update (F68-131)" \
+      '[ $rc -ne 0 ] && echo "$out" | grep -q "major" && [ "$(cat "$VU/lib/aiml.version")" = v1.0.3.0 ]'
+    out=$("$AIML" venv "$VU" update --version v1.0.9.9 2>&1); rc=$?
+    check "a wrong .sha256 is refused, both sums named, nothing changed (F68-132)" \
+      '[ $rc -ne 0 ] && echo "$out" | grep -q "0000000000000000" && [ "$(cat "$VU/lib/aiml.version")" = v1.0.3.0 ]'
+    VB="$WORK/vb"; "$AIML" venv "$VB" > /dev/null 2>&1; rm -f "$VB/lib/aiml.version"
+    out=$("$AIML" venv "$VB" update 2>&1); rc=$?
+    check "a venv without a released version is refused without --version (F68-131)" \
+      '[ $rc -ne 0 ] && echo "$out" | grep -q -- "--version"'
+    out=$("$AIML" venv "$VB" update --version v1.0.10.0 2>&1); rc=$?
+    check "and --version takes it to a release (F68-131)" '[ $rc -eq 0 ] && [ "$(cat "$VB/lib/aiml.version")" = v1.0.10.0 ]'
+    # kontor's generic store: the venv layout, no wrapper (F68-130/132)
+    mkdir -p "$SRV/generic/aiml/v1.0.10.0" "$RELD/kv"
+    cp -r "$RELD/aiml-v1.0.10.0-linux-x86_64/bin" "$RELD/aiml-v1.0.10.0-linux-x86_64/lib" "$RELD/kv/"
+    echo "# aiml venv" > "$RELD/kv/env"
+    tar -C "$RELD/kv" -czf "$SRV/generic/aiml/v1.0.10.0/aiml-x86_64-linux.tar.gz" bin lib env
+    out=$("$AIML" venv "$VU" update --kontor "$URL" --version v1.0.10.0 2>&1); rc=$?
+    check "an update from kontor's generic store (F68-130)" \
+      '[ $rc -eq 0 ] && [ "$(cat "$VU/lib/aiml.version")" = v1.0.10.0 ] && grep -q "kontor:$URL" "$VU/lib/aiml/aiml.release.json" && [ -f "$VU/env" ] && head -1 "$VU/env" | grep -q "^# aiml venv —"'
+    [ $rc -eq 0 ] || echo "$out" | tail -3
+    unset AIML_GITHUB_API
     kill $STUB 2>/dev/null
 fi
 
