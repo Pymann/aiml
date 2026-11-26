@@ -69,7 +69,14 @@
 | `read` | `buffer.read(type) → T` | Reads `sizeof(type)` bytes at readIndex, advances readIndex. |
 | `seek` | `buffer.seek(pos: i32)` | Sets both readIndex and writeIndex to `pos` (byte offset). |
 | `zero` | `buffer.zero()` | `memset(data, 0, capacity)` + sets size and writeIndex to capacity. |
-| `len` | `buffer.len → i32` | Returns current size (number of bytes written). Property access, no `call:` needed. |
+| `len` | `buffer.len → i32` | Returns current size (number of **bytes** written). Property access, no `call:` needed. |
+| `capacity` | `buffer.capacity → i32` | Total allocated size in bytes, as `alloc` set it. Property access. |
+| `resize` | `buffer.resize(bytes: i32)` | Re-allocates to `bytes`, keeping the content that still fits. |
+| `append` | `buffer.append(other: buffer)` | Copies `other`'s written bytes to this buffer's write position (also §Typed buffers). |
+| `read_versioned` | `buffer.read_versioned(T [, version: i32]) → T` | Reads a `T` written by an older layout version (spec/37). |
+| `ws_recv_append` | `buffer.ws_recv_append(conn: ws_handle) → i32` | Like `ws_recv`, but **appends** the frame instead of replacing the content. |
+| `ws_send_range` | `buffer.ws_send_range(conn: ws_handle, offset: i32, len: i32) → i32` | Sends only `[offset, offset+len)` as one binary frame. |
+| `encode_source` | `buffer.encode_source(dw, dh, mode: i32, px, py: f32) → i32` | Encodes the picked source image at `dw×dh` (see `pick_webp`) with an explicit focus point. |
 | `write_to` | `buffer.write_to(f: file_handle) → i32` | Writes bytes `[0, len)` unchanged (binary-safe, `0x00` included) to `f` at its current position and flushes. Returns `len` on success, `-1` if `f` is null, the write is short, or the flush fails. Does not close `f`; the buffer is unchanged. |
 | `ws_send` | `buffer.ws_send(conn: ws_handle) → i32` | Send the written bytes (`wIdx`) as one WebSocket binary frame. See chapter 32_4 §5.1. |
 | `ws_recv` | `buffer.ws_recv(conn: ws_handle) → i32` | Receive the next WebSocket frame into this buffer (updates size/wIdx, resets rIdx). See chapter 32_4 §5.1. |
@@ -119,6 +126,44 @@ Access is done via computed byte offsets:
 - call: [emb.seek, off]
 - decl: [val, f32, { call: [emb.read, f32] }]
 ```
+
+## Typed buffers — `buffer<T>`
+
+A `buffer<T>` is the same bytes with an element type attached, and that type unlocks a
+second, element-wise surface beside the byte-wise one above.
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `push` | `buffer<T>.push(value)` | Appends **one element**, converted to `T` first (a double literal becomes an `f32` in a `buffer<f32>`). Advances the write index like `write`. |
+| `get` | `buffer<T>.get(index: i32) -> T` | Reads the element at **element index** `index` — the byte offset is `index * sizeof(T)`. |
+| `count` | `buffer<T>.count -> i32` | Number of **elements** written: `len / sizeof(T)`. For `buffer<u8>` it equals `len`. |
+| `ptr` | `buffer<T>.ptr` | The raw data pointer, for handing the block to a native call. |
+| `append` | `buffer<T>.append(other: buffer<T>)` | Copies all of `other`'s written bytes to this buffer's write position and advances size and write index. |
+| `byte_len` | `buffer<T>.byte_len -> i32` | **The same value as `len`.** Kept because it says what it returns. |
+
+### `len` counts BYTES, `get` counts ELEMENTS (normative)
+
+This is the one thing about buffers worth remembering:
+
+```yaml
+- decl: [pts, buffer<f32>]
+- call: [pts.alloc, 16]          # 16 BYTES = room for four f32
+- call: [pts.push, 1.0]
+- call: [pts.push, 2.0]
+# pts.len     == 8   (bytes)
+# pts.count   == 2   (elements)
+# pts.get(1)  == 2.0 (element index, NOT byte 1)
+```
+
+`alloc` is in bytes for every buffer, typed or not. `len`, `size` and `byte_len` are in
+bytes. `get`, `push` and `count` are in elements. A loop written as
+`idx < buf.len` with `buf.get(idx)` therefore runs four times too far on a
+`buffer<f32>` and reads past the data **without raising anything** — which is why `count`
+exists and why this paragraph is here rather than in a footnote. The same confusion in C
+made `ui.draw_polyline` (spec/44_3 §4.6) draw a quarter of its segments.
+
+`byte_len` is an alias for `len`, not its counterpart: the name suggests an
+element-counting `len`, and there is none. Use `count` for elements.
 
 ## Exception Behaviour
 

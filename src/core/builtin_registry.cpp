@@ -1981,6 +1981,15 @@ void registerBuiltins(CompilerContext& ctx) {
         return ctx.ir_gen->wrap(ctx.builder.CreateLoad(ctx.builder.getInt32Ty(), sizePtr, "buf_len"));
     };
 
+    // buffer.capacity — spec/11 §Methods: total allocated bytes, as alloc set them.
+    // The spec documented this property from the start; nothing implemented it, so every
+    // example that printed it was a promise the compiler could not keep.
+    bufInfo.builtinMethods["capacity"] = [](CompilerContext& ctx, llvm::Value* baseAlloca,
+        AIML::AST::CallExpr*, std::function<IRValue*(AIML::AST::Expr*)>) -> IRValue* {
+        auto* capPtr = ctx.builder.CreateStructGEP(ctx.getLLVMType("buffer"), baseAlloca, 1, "buf_cap_ptr");
+        return ctx.ir_gen->wrap(ctx.builder.CreateLoad(ctx.builder.getInt32Ty(), capPtr, "buf_capacity"));
+    };
+
     // buffer.write_to(f) — spec/11: bytes [0, len) to a file handle; len, or -1 on null/short write.
     bufInfo.builtinMethods["write_to"] = [](CompilerContext& ctx, llvm::Value* baseAlloca,
         AIML::AST::CallExpr* call, std::function<IRValue*(AIML::AST::Expr*)> evalExpr) -> IRValue* {

@@ -1,0 +1,79 @@
+# SPEC: 11_buffer
+# spec/11 §Typed buffers: a buffer<T> carries an element type, and that splits the
+# surface in two -- alloc/len/byte_len count BYTES, push/get/count count ELEMENTS.
+#
+# The split is the whole point of this test. A loop written as `idx < buf.len` with
+# `buf.get(idx)` runs four times too far on a buffer<f32> and reads past the data
+# WITHOUT raising anything; the same confusion in C made ui.draw_polyline draw a
+# quarter of its segments (spec/44_3 §4.6). Only an assertion pins it.
+# Expected exit code: 0
+- def:
+    name: main
+    return: i32
+    body:
+      # ── buffer<f32>: elements are four bytes wide ────────────────────────
+      - decl: [pts, buffer<f32>]
+      - call: [pts.alloc, 16]
+      - if:
+          condition: { neq: [pts.capacity, 16] }
+          then: [{ print: ["FAIL capacity ${pts.capacity}, erwartet 16"] }, { return: 1 }]
+      - call: [pts.push, 1.0]
+      - call: [pts.push, 2.5]
+      - if:
+          condition: { neq: [pts.len, 8] }
+          then: [{ print: ["FAIL len ${pts.len}, erwartet 8 Bytes"] }, { return: 1 }]
+      - if:
+          condition: { neq: [pts.byte_len, 8] }
+          then: [{ print: ["FAIL byte_len ${pts.byte_len} weicht von len ab"] }, { return: 1 }]
+      - if:
+          condition: { neq: [pts.count, 2] }
+          then: [{ print: ["FAIL count ${pts.count}, erwartet 2 Elemente"] }, { return: 1 }]
+
+      # get indiziert ELEMENTE, nicht Bytes: get(1) ist der zweite f32.
+      - decl: [first, f32, { call: [pts.get, 0] }]
+      - decl: [second, f32, { call: [pts.get, 1] }]
+      - if:
+          condition: { neq: [first, 1.0] }
+          then: [{ print: ["FAIL get(0) ${first}"] }, { return: 1 }]
+      - if:
+          condition: { neq: [second, 2.5] }
+          then: [{ print: ["FAIL get(1) ${second} -- byte-indiziert statt element-indiziert?"] }, { return: 1 }]
+
+      # ── buffer<u8>: dort fallen Bytes und Elemente zusammen ──────────────
+      - decl: [bytes, buffer<u8>]
+      - call: [bytes.alloc, 4]
+      - call: [bytes.push, 7]
+      - call: [bytes.push, 200]
+      - if:
+          condition: { neq: [bytes.len, 2] }
+          then: [{ print: ["FAIL u8 len ${bytes.len}"] }, { return: 1 }]
+      - if:
+          condition: { neq: [bytes.count, 2] }
+          then: [{ print: ["FAIL u8 count ${bytes.count} -- muss bei u8 gleich len sein"] }, { return: 1 }]
+      - decl: [big, i32, { cast: [{ call: [bytes.get, 1] }, i32] }]
+      - if:
+          condition: { neq: [big, 200] }
+          then: [{ print: ["FAIL u8 get(1) ${big}"] }, { return: 1 }]
+
+      # ── append haengt die geschriebenen Bytes des anderen an ─────────────
+      - decl: [more, buffer<f32>]
+      - call: [more.alloc, 8]
+      - call: [more.push, 3.5]
+      - call: [pts.append, more]
+      - if:
+          condition: { neq: [pts.count, 3] }
+          then: [{ print: ["FAIL count nach append ${pts.count}, erwartet 3"] }, { return: 1 }]
+      - decl: [third, f32, { call: [pts.get, 2] }]
+      - if:
+          condition: { neq: [third, 3.5] }
+          then: [{ print: ["FAIL get(2) nach append ${third}"] }, { return: 1 }]
+
+      # ── ein leerer Buffer hat kein Element ───────────────────────────────
+      - decl: [empty, buffer<f32>]
+      - call: [empty.alloc, 16]
+      - if:
+          condition: { neq: [empty.count, 0] }
+          then: [{ print: ["FAIL leerer count ${empty.count}"] }, { return: 1 }]
+
+      - print: ["PASS buffer_typed_surface"]
+      - return: 0

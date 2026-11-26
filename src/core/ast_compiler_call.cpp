@@ -1759,6 +1759,20 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
             llvm::Value* szPtr = ctx.builder.CreateStructGEP(bufTy, buf, 0, "sz_ptr");
             return ctx.ir_gen->wrap(ctx.builder.CreateLoad(ctx.builder.getInt32Ty(), szPtr, "buf_len"));
 
+        } else if (methodName == "count") {
+            // spec/11 §Typed buffers: ELEMENTS written, where len/byte_len are BYTES.
+            // get/push index elements, so without this a caller has to carry
+            // sizeof(T) by hand -- and a loop over `len` with `get(idx)` then runs
+            // past the data without raising anything.
+            if (!elemTy) { LOG_ERROR(ctx.fmtLoc() + "buffer<T>.count: unknown elem type " + elemName); return ctx.ir_gen->getInt32(0); }
+            llvm::DataLayout dlc(&ctx.module());
+            uint64_t esz = dlc.getTypeAllocSize(elemTy);
+            if (esz == 0) esz = 1;
+            llvm::Value* szPtr  = ctx.builder.CreateStructGEP(bufTy, buf, 0, "sz_ptr");
+            llvm::Value* bytes  = ctx.builder.CreateLoad(ctx.builder.getInt32Ty(), szPtr, "buf_len");
+            if (esz == 1) return ctx.ir_gen->wrap(bytes);
+            return ctx.ir_gen->wrap(ctx.builder.CreateSDiv(bytes, ctx.builder.getInt32((uint32_t)esz), "buf_count"));
+
         } else if (methodName == "ptr") {
             llvm::Value* dataFld = ctx.builder.CreateStructGEP(bufTy, buf, 4, "data_fld");
             return ctx.ir_gen->wrap(ctx.builder.CreateLoad(ptrTy, dataFld, "data_ptr"));
@@ -1766,7 +1780,14 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
         } else if (methodName == "append" && !bArgVals.empty()) {
             // append(other: buffer<T>) — memcpy other's data into this buffer
             llvm::Value* src = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(bArgVals[0]));
-            // src is alloca of the other buffer; get its size and data
+            // The argument arrives as the loaded buffer struct, not as its alloca: a GEP
+            // on that is invalid IR (seen with tests/test_buffer_typed_surface.aiml).
+            // Spill it to a temporary so size and data are read through a pointer.
+            if (src && !src->getType()->isPointerTy()) {
+                llvm::Value* tmp = ctx.builder.CreateAlloca(src->getType(), nullptr, "append_src");
+                ctx.builder.CreateStore(src, tmp);
+                src = tmp;
+            }
             llvm::Value* srcSzPtr  = ctx.builder.CreateStructGEP(bufTy, src, 0, "src_sz_ptr");
             llvm::Value* srcSz     = ctx.builder.CreateLoad(ctx.builder.getInt32Ty(), srcSzPtr, "src_sz");
             llvm::Value* srcDataFl = ctx.builder.CreateStructGEP(bufTy, src, 4, "src_data_fld");

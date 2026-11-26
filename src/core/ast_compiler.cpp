@@ -7772,6 +7772,28 @@ IRValue* Compiler::resolveProperty(Symbol* baseSym, const std::string& propName)
             return ctx.ir_gen->createLoad(propTy, gep, propName + "_val");
         }
 
+        // spec/11 §Typed buffers: `count` counts ELEMENTS and needs the element type,
+        // which the buffer<T> → buffer normalization above has just discarded -- so it
+        // is answered here, from the symbol's own type, before the shared `buffer`
+        // class is asked. `byte_len` lands here for the same reason; it is `len`.
+        if ((propName == "count" || propName == "byte_len")
+            && baseSym->typeName.rfind("buffer<", 0) == 0 && baseSym->typeName.back() == '>') {
+            llvm::Value* rawBuf = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca));
+            llvm::Value* szPtr  = ctx.builder.CreateStructGEP(ctx.getLLVMType("buffer"), rawBuf, 0, "buf_sz_ptr");
+            llvm::Value* bytes  = ctx.builder.CreateLoad(ctx.builder.getInt32Ty(), szPtr, "buf_bytes");
+            if (propName == "byte_len") return ctx.ir_gen->wrap(bytes);
+            std::string bElem = baseSym->typeName.substr(7, baseSym->typeName.size() - 8);
+            llvm::Type* bElemTy = ctx.getLLVMType(bElem);
+            if (!bElemTy) {
+                LOG_ERROR(ctx.fmtLoc() + "buffer<T>.count: unknown elem type " + bElem);
+                return ctx.ir_gen->getInt32(0);
+            }
+            llvm::DataLayout bdl(&ctx.module());
+            uint64_t bEsz = bdl.getTypeAllocSize(bElemTy);
+            if (bEsz <= 1) return ctx.ir_gen->wrap(bytes);
+            return ctx.ir_gen->wrap(ctx.builder.CreateSDiv(bytes, ctx.builder.getInt32((uint32_t)bEsz), "buf_count"));
+        }
+
         // Builtin property getter: dispatch builtinMethod with same name (zero-arg accessor).
         // If preLoadBase, load the handle ptr from alloca first (HTTP handles).
         if (classInfo->isBuiltin && classInfo->builtinMethods.count(propName)) {
