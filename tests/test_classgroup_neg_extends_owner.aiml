@@ -1,0 +1,45 @@
+# SPEC: 58_classgroups
+# Negative counterpart to test_classgroup_extends_sees: the wired member sits in
+# the GRANDPARENT and is declared as an OWNING `ptr<Palette>`.  A sees edge is a
+# borrow (spec/58 §5.1, spec/61 §5.2) -- the group releases the instance itself,
+# so an owning member would free it twice.  The guard must reach through the
+# inheritance chain, not only look at the leaf's own declarations.
+#
+# Runner expects exit code 1 (test_classgroup_neg_ pattern in run_all_tests.sh).
+
+- class:
+    name: Palette
+    members: [[tone, i32]]
+    methods:
+      - def: { name: tint, return: i32, body: [{ return: 7 }] }
+
+- class:
+    name: ArtBase
+    members:
+      - [pal, ptr<Palette>]        # MUST be rejected: owner, not borrow
+    methods:
+      - def: { name: shade, return: i32, body: [{ return: { call: [<.pal.tint] } }] }
+
+- class:
+    name: ArtLeaf
+    extends: ArtBase
+    methods:
+      - def: { name: twice, return: i32, body: [{ return: { call: [<.shade] } }] }
+
+- classgroup:
+    name: ArtRuntime
+    instances:
+      - class: Palette
+        instance: pal
+      - class: ArtLeaf
+        instance: art
+        sees: [pal]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [grp, ptr<ArtRuntime>, { new: ArtRuntime }]
+      - decl: [one, i32, { call: [grp.art.shade] }]
+      - print: ["FAIL: an owning ptr<> member on an inherited layer was accepted (${one})"]
+      - return: 1

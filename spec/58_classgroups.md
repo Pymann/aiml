@@ -308,13 +308,30 @@ the `ref<T>` form in the diagnostic.  (Synthesized edges — the `sees` targets 
 matching base member — are generated as collaborators and are exempt: they are never
 released and never serialized, §9.)
 
-**sees onto a base member.**  If a sees target's name matches a member the base
-class **already declares** (e.g. `Consumer` has `dep: ref<Dep>` and `sees: [dep]`),
-the classgroup **wires that existing member** in phase 1 instead of synthesizing a
-new one.  This lets ordinary **base methods** use the collaborator via `<.dep` —
-the shape the real 9rooms `MatchService` needs (base methods use `<.cards_ref`
-etc.) — while the classgroup supplies the wiring declaratively instead of a
-constructor-injected pointer.
+### 5.1a Inherited layers — the base class may itself be a child
+
+The `class:` of an instance may be the leaf of an **inheritance chain**
+(`ArtLeaf extends ArtMid extends ArtBase`).  Parent members are flattened into the
+child's member map when the class is registered, **before** the group is
+synthesized, so the "sees onto a base member" rule above reads the whole chain:
+
+- A `ref<T>` member declared in a **grandparent** is found and **wired** — the group
+  does *not* synthesize a second member of the same name on the subclass.  There is
+  exactly one member, so a method of the grandparent, a method of the leaf and a
+  group `methods:` method all see the **same** wired collaborator.
+- The borrow guard reads the same flattened map, so an owning `ptr<T>` declared on
+  any layer is rejected with the same diagnostic — the chain is no way around it.
+
+This is the sanctioned way to **split one large class across files**: the layers are
+real classes, each in its own file, each owning a responsibility, with the wired
+collaborators declared once on the layer that uses them.  It composes with
+`groupmethods:` (§1.1): layers carry the base methods, `groupmethods:` files carry
+the instance's coordination methods.  The group body is unchanged — it names only the
+leaf.
+
+Tests: `tests/test_classgroup_extends_sees.aiml` (a member declared two levels up is
+wired once and counted on one object), `tests/test_classgroup_neg_extends_owner.aiml`
+(an owning `ptr<T>` on the grandparent is still a hard error).
 
 ### 5.2 Interface-typed — `sees: [log:Logger]`
 
