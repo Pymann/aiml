@@ -16,5 +16,6 @@ to learn the language or the toolchain:
 
 Notable subdirectories: `analysis/` (audits), `plans/` and `backlog/` (open work),
 `issues/` and `issue/` (investigations), `reports/`, `ideas/`, `embedded/`,
-`review/`. Completed plans, superseded memory-model drafts and raw probe logs were
+`review/`, `tech_sheet/` (can aiml do X today? — a question, a measured answer, what to
+mind). Completed plans, superseded memory-model drafts and raw probe logs were
 removed on 2026-11-24; they remain in the git history (before that, HEAD `6e7c9e8`).
