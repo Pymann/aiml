@@ -27,6 +27,9 @@
 #include <sstream>
 #include <unistd.h>
 #include <chrono>
+#include <condition_variable>
+#include <csignal>
+#include <memory>
 #include <mutex>
 #include <thread>
 #include <map>
@@ -74,6 +77,51 @@ struct CurStep {
     std::string fail_msg;
 };
 thread_local CurStep g_cur;
+
+// ── F62-40: the step's time limit, enforced on its processes ─────────────
+//
+// Every process the body starts (sys.exe → aiml_process_spawn) is noted here
+// while a watched step runs on this thread.  The watchdog kills them, with all
+// their descendants, when the limit is reached; a process noted after that is
+// killed at once.  The body's own code is not interrupted (F62-40a).
+struct StepWatch {
+    std::mutex              mu;
+    std::condition_variable cv;
+    bool                    done    = false;
+    bool                    expired = false;
+    std::vector<pid_t>      pids;
+    int                     killed  = 0;
+};
+thread_local std::shared_ptr<StepWatch> g_watch;
+
+void collect_tree(pid_t root, std::vector<pid_t>& out, int depth = 0) {
+    if (root <= 0 || depth > 64) return;
+    out.push_back(root);
+    std::error_code ec;
+    const std::string taskDir = "/proc/" + std::to_string(root) + "/task";
+    for (auto it = std::filesystem::directory_iterator(taskDir, ec);
+         !ec && it != std::filesystem::directory_iterator(); it.increment(ec)) {
+        std::ifstream in(it->path() / "children");
+        long kid;
+        while (in >> kid) collect_tree(static_cast<pid_t>(kid), out, depth + 1);
+    }
+}
+
+// SIGKILL a process and everything below it.  The tree is read first and the
+// processes are stopped (SIGSTOP) before they are killed, so a parent cannot
+// start a new child between the walk and the kill.
+int kill_tree(pid_t root) {
+    std::vector<pid_t> all;
+    collect_tree(root, all);
+    for (pid_t p : all) ::kill(p, SIGSTOP);
+    std::vector<pid_t> again;               // what appeared meanwhile
+    collect_tree(root, again);
+    for (pid_t p : again)
+        if (std::find(all.begin(), all.end(), p) == all.end()) { ::kill(p, SIGSTOP); all.push_back(p); }
+    int n = 0;
+    for (pid_t p : all) if (::kill(p, SIGKILL) == 0) ++n;
+    return n;
+}
 
 // spec/62 F62-93: the precedence order of F62-43 — PROVISIONAL until §16
 // item 6 fixes the meanings.  It is in ONE place here, so that
@@ -542,6 +590,28 @@ int32_t aiml_step_need_results_fill(const char* name, void* list_ptr) {
     return n;
 }
 
+// F62-40: called by aiml_process_spawn for every process it starts.
+void aiml_step_note_child(int64_t pid, int64_t monitor) {
+    std::shared_ptr<StepWatch> w = g_watch;
+    if (!w) return;
+    std::lock_guard<std::mutex> lk(w->mu);
+    for (int64_t p : {pid, monitor}) {
+        if (p <= 0 || std::find(w->pids.begin(), w->pids.end(), static_cast<pid_t>(p)) != w->pids.end())
+            continue;
+        w->pids.push_back(static_cast<pid_t>(p));
+        if (w->expired) w->killed += kill_tree(static_cast<pid_t>(p));   // after the limit: at once
+    }
+}
+
+// F62-40: a reaped child's pid can be given to another process — the watchdog
+// must not kill that one.
+void aiml_step_forget_child(int64_t pid) {
+    std::shared_ptr<StepWatch> w = g_watch;
+    if (!w || pid <= 0) return;
+    std::lock_guard<std::mutex> lk(w->mu);
+    w->pids.erase(std::remove(w->pids.begin(), w->pids.end(), static_cast<pid_t>(pid)), w->pids.end());
+}
+
 char* aiml_step_workspace(void) {
     if (!g_cur.active) { LOG_ERROR("step.workspace: no running step"); return aiml_str_alloc(0); }
     char* out = aiml_str_alloc(g_cur.workspace.size());
@@ -909,9 +979,38 @@ int32_t aiml_pipeline_run_observed(void* p, void* observer_raw) {
                             }
                         }
                         auto t0 = std::chrono::steady_clock::now();
+                        // F62-40: the watchdog of this attempt.
+                        std::shared_ptr<StepWatch> watch;
+                        std::thread watchdog;
+                        if (st.timeout_ms > 0) {
+                            watch = std::make_shared<StepWatch>();
+                            g_watch = watch;
+                            const int32_t limit_ms = st.timeout_ms;
+                            watchdog = std::thread([watch, limit_ms]() {
+                                std::unique_lock<std::mutex> lk(watch->mu);
+                                if (watch->cv.wait_for(lk, std::chrono::milliseconds(limit_ms),
+                                                       [&]() { return watch->done; }))
+                                    return;
+                                watch->expired = true;
+                                for (pid_t p : watch->pids) watch->killed += kill_tree(p);
+                            });
+                        }
                         {
                             std::lock_guard<std::mutex> g(state.compile_mu);
                             rc = aiml_exec_code(st.body);
+                        }
+                        bool expired = false;
+                        int  killedN = 0;
+                        if (watch) {
+                            {
+                                std::lock_guard<std::mutex> lk(watch->mu);
+                                watch->done = true;
+                                expired = watch->expired;
+                                killedN = watch->killed;
+                            }
+                            watch->cv.notify_all();
+                            watchdog.join();
+                            g_watch.reset();
                         }
                         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
                                            std::chrono::steady_clock::now() - t0).count();
@@ -928,12 +1027,16 @@ int32_t aiml_pipeline_run_observed(void* p, void* observer_raw) {
                         // a finding and not an interruption — a
                         // difference that must be in the log, so that nobody
                         // relies on an interruption.
-                        if (st.timeout_ms > 0 && elapsed > st.timeout_ms) {
+                        if (expired || (st.timeout_ms > 0 && elapsed > st.timeout_ms)) {
                             LOG_ERROR("pipeline '" + pp->name + "': step '" + st.name +
-                                      "' exceeded the time limit (" + std::to_string(elapsed) +
-                                      " ms > " + std::to_string(st.timeout_ms) +
-                                      " ms) — the run was NOT interrupted (§5.6, F62-40)");
-                            if (rc == 0) rc = -4;
+                                      "' exceeded the time limit of " + std::to_string(st.timeout_ms) +
+                                      " ms (ran " + std::to_string(elapsed) + " ms) — " +
+                                      (killedN > 0
+                                           ? std::to_string(killedN) + " process(es) of the step killed"
+                                           : std::string("it started no process that could be killed; "
+                                                         "its own code ran to its end")) +
+                                      " (spec/62 F62-40/40a)");
+                            rc = -4;
                         }
                         // What the body itself said (F62-90).  g_cur is
                         // thread-local, so every lane only sees its own.
