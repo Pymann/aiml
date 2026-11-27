@@ -261,7 +261,9 @@ release. It lives on masterv2 alone; GitHub shows the "Run workflow" button only
 for workflows on the default branch, so it is started with
 `gh workflow run llvm-update.yml --ref masterv2 [-f major=<N>] [-f gates=false]`,
 and it runs by itself when the workflow or `tools/ci/llvm_bump.py` changes on
-masterv2 (a schedule would need the default branch).
+masterv2 (a schedule would need the default branch). Started on a `feature/*`
+branch (`--ref feature/<x>`) it does the same against that branch — the way a
+port of the C++ to the new LLVM is tried before anything reaches masterv2.
 
 1. **Which LLVM**: `-f major`, else the newest LLVM release on GitHub that is no
    pre-release (`llvmorg-23.1.8` → 23). Not newer than the configurations' LLVM
@@ -284,7 +286,7 @@ masterv2 (a schedule would need the default branch).
 4. **The gates of ci.yml**: the four builds, the smoke test, the whole corpus,
    AOT, the two valgrind gates (`-f gates=false` skips them) and packaging with
    its wasm32 proof.
-5. **Green**: the branch `llvm/<N>` with the rewritten configurations and a pull
+5. **Green**: the branch `llvm/<N>` (on a `feature/*` branch: that branch, a commit on top, no force) with the rewritten configurations and a pull
    request against masterv2, pushed with the `GH_TOKEN` secret so that ci.yml
    runs on it (what `github.token` pushes starts no workflow). **Red**: masterv2
    and the branches stay as they are; the job summary lists the first 60 error

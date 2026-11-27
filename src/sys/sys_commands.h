@@ -22,7 +22,7 @@ public:
              // Fallback or error?
              // If JIT/Compiler didn't create them, return empty string or null?
              LOG_ERROR("[SysGetArg] argv or argc not found!");
-             return ctx.builder.CreateGlobalStringPtr("");
+             return ctx.builder.CreateGlobalString("");
         }
         
         // Check argc/argv
@@ -50,7 +50,7 @@ public:
         
         // Error Block
         ctx.builder.SetInsertPoint(errorBB);
-        llvm::Value* emptyStr = ctx.builder.CreateGlobalStringPtr("");
+        llvm::Value* emptyStr = ctx.builder.CreateGlobalString("");
         ctx.builder.CreateBr(mergeBB);
         
         // Merge
@@ -87,7 +87,7 @@ public:
             std::string typeName = args[1].as<std::string>();
             llvm::Type* targetType = ctx.getLLVMType(typeName);
             if (targetType) {
-                llvm::DataLayout dl(&ctx.module());
+                llvm::DataLayout dl(ctx.module().getDataLayout());
                 uint64_t size = dl.getTypeAllocSize(targetType);
                 return ctx.builder.getInt64(size);
             }
@@ -100,7 +100,7 @@ public:
                  std::string varName = callNode[1].as<std::string>();
                  if (ctx.symbol_table.count(varName)) {
                       llvm::Type* symType = ctx.symbol_table[varName].type;
-                      llvm::DataLayout dl(&ctx.module());
+                      llvm::DataLayout dl(ctx.module().getDataLayout());
                       uint64_t size = dl.getTypeAllocSize(symType);
                       return ctx.builder.getInt64(size);
                  }
@@ -112,7 +112,7 @@ public:
         if (!val) return ctx.builder.getInt64(0);
         
         llvm::Type* type = val->getType();
-        llvm::DataLayout dl(&ctx.module());
+        llvm::DataLayout dl(ctx.module().getDataLayout());
         
         // Note: For pointers, this returns pointer size (8).
         uint64_t size = dl.getTypeAllocSize(type);
@@ -125,13 +125,13 @@ public:
     llvm::Value* compile(CompilerContext& ctx, const std::vector<YAML::Node>& args) override {
          // sys.type(obj) -> string name? or ID?
          // Stub for now.
-         return ctx.builder.CreateGlobalStringPtr("unknown");
+         return ctx.builder.CreateGlobalString("unknown");
     }
 };
 
 class SysConfigVersion : public SystemCall {
 public:
     llvm::Value* compile(CompilerContext& ctx, const std::vector<YAML::Node>& args) override {
-        return ctx.builder.CreateGlobalStringPtr(ctx.config.version);
+        return ctx.builder.CreateGlobalString(ctx.config.version);
     }
 };

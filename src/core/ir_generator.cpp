@@ -60,7 +60,7 @@ namespace AIML {
 
         IRValue* getInt32(int value) override { return wrapLocal(ctx.builder.getInt32(value)); }
         IRValue* getInt64(uint64_t value) override { return wrapLocal(ctx.builder.getInt64(value)); }
-        IRValue* createGlobalStringPtr(const std::string& str) override { return wrapLocal(ctx.builder.CreateGlobalStringPtr(str)); }
+        IRValue* createGlobalStringPtr(const std::string& str) override { return wrapLocal(ctx.builder.CreateGlobalString(str)); }
 
         IRValue* createAdd(IRValue* lhs, IRValue* rhs, const std::string& name) override { return wrapLocal(ctx.builder.CreateAdd(unwrapLocal(lhs), unwrapLocal(rhs), name)); }
         IRValue* createSub(IRValue* lhs, IRValue* rhs, const std::string& name) override { return wrapLocal(ctx.builder.CreateSub(unwrapLocal(lhs), unwrapLocal(rhs), name)); }

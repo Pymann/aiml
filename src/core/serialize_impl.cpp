@@ -350,7 +350,7 @@ static void emitWriteField(CompilerContext& ctx, llvm::Value* writer,
                            const CompilerContext::StructMember& fm){
     // spec/15: to the outside the alias counts, inside the field name.
     const std::string& fkeyName = fm.alias.empty() ? fname : fm.alias;
-    llvm::Value* fkey = ctx.builder.CreateGlobalStringPtr(fkeyName, "fk_"+fname);
+    llvm::Value* fkey = ctx.builder.CreateGlobalString(fkeyName, "fk_"+fname);
     std::string tn = fm.typeName;
 
     // ── list field ────────────────────────────────────────────────────────────
@@ -508,7 +508,7 @@ static llvm::Function* emitSerializeStruct(CompilerContext& ctx,
     ctx.builder.SetInsertPoint(entry);
 
     llvm::Value* writer = ctx.builder.CreateCall(gJwNew(ctx),{},"w");
-    ctx.builder.CreateCall(gJwSetTyp(ctx),{writer,ctx.builder.CreateGlobalStringPtr(typeName,"tn")});
+    ctx.builder.CreateCall(gJwSetTyp(ctx),{writer,ctx.builder.CreateGlobalString(typeName,"tn")});
     emitWriteStructFields(ctx,writer,fn->getArg(0),typeName);
     llvm::Value* result = ctx.builder.CreateCall(gJwDone(ctx),{writer},"json");
     ctx.builder.CreateRet(result);
@@ -535,13 +535,13 @@ static llvm::Function* emitSerializeList(CompilerContext& ctx,
     ctx.builder.SetInsertPoint(entry);
 
     llvm::Value* writer = ctx.builder.CreateCall(gJwNew(ctx),{},"w");
-    ctx.builder.CreateCall(gJwSetTyp(ctx),{writer,ctx.builder.CreateGlobalStringPtr(listTn,"tn")});
+    ctx.builder.CreateCall(gJwSetTyp(ctx),{writer,ctx.builder.CreateGlobalString(listTn,"tn")});
 
     llvm::Value* sg  = ctx.builder.CreateStructGEP(listTy,fn->getArg(0),0,"sg");
     llvm::Value* sz  = ctx.builder.CreateLoad(i32T(ctx),sg,"sz");
     llvm::Value* dg  = ctx.builder.CreateStructGEP(listTy,fn->getArg(0),2,"dg");
     llvm::Value* dp  = ctx.builder.CreateLoad(ptrT(ctx),dg,"dp");
-    llvm::Value* vk  = ctx.builder.CreateGlobalStringPtr("values","vk");
+    llvm::Value* vk  = ctx.builder.CreateGlobalString("values","vk");
     ctx.builder.CreateCall(gJwArrBgn(ctx),{writer,vk});
     emitWriteListElementsIntoWriter(ctx, writer, dp, sz, elemTn, fn, "sl_el");
     ctx.builder.CreateCall(gJwArrEnd(ctx),{writer});
@@ -579,7 +579,7 @@ static llvm::Function* emitSerializeMap(CompilerContext& ctx,
     ctx.builder.SetInsertPoint(entry);
 
     llvm::Value* writer = ctx.builder.CreateCall(gJwNew(ctx),{},"w");
-    ctx.builder.CreateCall(gJwSetTyp(ctx),{writer,ctx.builder.CreateGlobalStringPtr(mapTn,"tn")});
+    ctx.builder.CreateCall(gJwSetTyp(ctx),{writer,ctx.builder.CreateGlobalString(mapTn,"tn")});
 
     llvm::Value* cg  = ctx.builder.CreateStructGEP(mapTy,fn->getArg(0),0,"sg");
     llvm::Value* cap = ctx.builder.CreateLoad(i32T(ctx),cg,"size");
@@ -587,7 +587,7 @@ static llvm::Function* emitSerializeMap(CompilerContext& ctx,
     llvm::Value* kp  = ctx.builder.CreateLoad(ptrT(ctx),kg,"kp");
     llvm::Value* vg  = ctx.builder.CreateStructGEP(mapTy,fn->getArg(0),4,"vg");
     llvm::Value* vp  = ctx.builder.CreateLoad(ptrT(ctx),vg,"vp");
-    llvm::Value* ek  = ctx.builder.CreateGlobalStringPtr("entries","ek");
+    llvm::Value* ek  = ctx.builder.CreateGlobalString("entries","ek");
     ctx.builder.CreateCall(gJwObjBgn(ctx),{writer,ek});
 
     llvm::BasicBlock* ph = ctx.builder.GetInsertBlock();
@@ -679,11 +679,11 @@ static void emitReadScalar(CompilerContext& ctx, llvm::Value* reader, llvm::Valu
     const std::string strDef = (dflt && dflt->type=="string") ? dflt->value : std::string();
     llvm::Value* v;
     if(tn=="string"){
-        llvm::Value* def = ctx.builder.CreateGlobalStringPtr(strDef, "sdef");
+        llvm::Value* def = ctx.builder.CreateGlobalString(strDef, "sdef");
         v=ctx.builder.CreateCall(gJrStrd(ctx),{reader,fkey,def},"sv");
     }
     else if(tn=="path"){    // spec/42: read the text, store the interned path, drop the reader's dup
-        llvm::Value* def = ctx.builder.CreateGlobalStringPtr(strDef, "pdef");
+        llvm::Value* def = ctx.builder.CreateGlobalString(strDef, "pdef");
         llvm::Value* text=ctx.builder.CreateCall(gJrStrd(ctx),{reader,fkey,def},"ptext");
         v=ctx.builder.CreateCall(ctx.getFunction("aiml_path_intern",i8pT(ctx),{i8pT(ctx)}),{text},"pv");
         ctx.builder.CreateCall(ctx.getFunction("aiml_str_decref",ctx.builder.getVoidTy(),{i8pT(ctx)}),{text});
@@ -866,7 +866,7 @@ static void emitDeserStructFields(CompilerContext& ctx, llvm::Value* reader,
     if(!st) return;
     for(auto& [fname,fm]: sortedMembers(ctx,typeName)){
         const std::string& fkeyName = fm.alias.empty() ? fname : fm.alias;   // spec/15
-        llvm::Value* fkey = ctx.builder.CreateGlobalStringPtr(fkeyName,"fk_"+fname);
+        llvm::Value* fkey = ctx.builder.CreateGlobalString(fkeyName,"fk_"+fname);
         llvm::Value* fieldPtr = ctx.builder.CreateStructGEP(st,structPtr,fm.index,"fp_"+fname);
         std::string tn = fm.typeName;
 
@@ -1161,7 +1161,7 @@ static llvm::Function* emitDeserializeList(CompilerContext& ctx,
     }
     ListImpl::initList(ctx,heap,elemTy,4);
 
-    llvm::Value* vk  = ctx.builder.CreateGlobalStringPtr("values","vk");
+    llvm::Value* vk  = ctx.builder.CreateGlobalString("values","vk");
     llvm::Value* cnt = ctx.builder.CreateCall(gJrArrLen(ctx),{reader,vk},"cnt");
 
     llvm::BasicBlock* ph = ctx.builder.GetInsertBlock();
@@ -1276,7 +1276,7 @@ static llvm::Function* emitDeserializeMap(CompilerContext& ctx,
     }
     MapImpl::initMap(ctx,heap,keyTy,valTy,8);
 
-    llvm::Value* ek  = ctx.builder.CreateGlobalStringPtr("entries","ek");
+    llvm::Value* ek  = ctx.builder.CreateGlobalString("entries","ek");
     llvm::Value* cnt = ctx.builder.CreateCall(gJrMapCount(ctx),{reader,ek},"cnt");
 
     llvm::BasicBlock* ph = ctx.builder.GetInsertBlock();
@@ -1400,20 +1400,20 @@ llvm::Value* serialize(CompilerContext& ctx, llvm::Value* val,
     else if(ctx.classes.count(typeName)){
         llvm::Function* fn=emitSerializeStruct(ctx,typeName);
         if (fn) { json = ctx.builder.CreateCall(fn,{val},"ser_r"); jsonOwned = true; }
-        else json = ctx.builder.CreateGlobalStringPtr("{}");
+        else json = ctx.builder.CreateGlobalString("{}");
     }
     else if(isListType(typeName)){
         llvm::Function* fn=emitSerializeList(ctx,typeName);
         if (fn) { json = ctx.builder.CreateCall(fn,{val},"ser_r"); jsonOwned = true; }
-        else json = ctx.builder.CreateGlobalStringPtr("{}");
+        else json = ctx.builder.CreateGlobalString("{}");
     }
     else if(isMapType(typeName)){
         llvm::Function* fn=emitSerializeMap(ctx,typeName);
         if (fn) { json = ctx.builder.CreateCall(fn,{val},"ser_r"); jsonOwned = true; }
-        else json = ctx.builder.CreateGlobalStringPtr("{}");
+        else json = ctx.builder.CreateGlobalString("{}");
     }
 
-    if(!json) json = ctx.builder.CreateGlobalStringPtr("(unsupported)");
+    if(!json) json = ctx.builder.CreateGlobalString("(unsupported)");
 
     if (stylePtr) {
         auto* prettyPtr = ctx.builder.CreateStructGEP(ctx.getLLVMType("JsonStyle"), stylePtr, 0, "jsonstyle_pretty_ptr");
@@ -1456,7 +1456,7 @@ llvm::Value* deserialize(CompilerContext& ctx, llvm::Value* jsonStr,
     if(typeName=="string") return jsonStr;
     if(typeName=="bool"){
         llvm::Function* strcmpFn=ctx.getFunction("strcmp",i32,{i8p,i8p});
-        llvm::Value* ts=ctx.builder.CreateGlobalStringPtr("true","ts");
+        llvm::Value* ts=ctx.builder.CreateGlobalString("true","ts");
         llvm::Value* cmp=ctx.builder.CreateCall(strcmpFn,{jsonStr,ts},"cmp");
         return ctx.builder.CreateICmpEQ(cmp,ctx.builder.getInt32(0),"bv");
     }

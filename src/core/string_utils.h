@@ -32,7 +32,7 @@ namespace StringUtils {
             llvm::Value* a1 = impl->getArg(0);
             llvm::Value* a2 = impl->getArg(1);
             llvm::Value* nullPtr  = llvm::ConstantPointerNull::get(i8Ptr);
-            llvm::Value* emptyStr = ctx.builder.CreateGlobalStringPtr("", "empty");
+            llvm::Value* emptyStr = ctx.builder.CreateGlobalString("", "empty");
             llvm::Value* safeS1 = ctx.builder.CreateSelect(ctx.builder.CreateICmpEQ(a1, nullPtr), emptyStr, a1);
             llvm::Value* safeS2 = ctx.builder.CreateSelect(ctx.builder.CreateICmpEQ(a2, nullPtr), emptyStr, a2);
             llvm::Value* len1 = ctx.builder.CreateCall(strlenFunc, {safeS1});
@@ -67,7 +67,7 @@ namespace StringUtils {
             ctx.builder.SetInsertPoint(entry);
             // Worst case for i32 decimal: 11 chars + \0.  aiml_str_alloc(11) → 11 payload + \0.
             llvm::Value* buf = ctx.builder.CreateCall(strAllocFunc, {ctx.getSizeConst(11)});
-            llvm::Value* fmt = ctx.builder.CreateGlobalStringPtr("%d", "fmt_d");
+            llvm::Value* fmt = ctx.builder.CreateGlobalString("%d", "fmt_d");
             ctx.builder.CreateCall(sprintfFunc, {buf, fmt, impl->getArg(0)});
             ctx.builder.CreateRet(buf);
             ctx.builder.restoreIP(savedIP);
@@ -95,7 +95,7 @@ namespace StringUtils {
             ctx.builder.SetInsertPoint(entry);
             // Worst case for i64 decimal: 20 chars + sign + \0.
             llvm::Value* buf = ctx.builder.CreateCall(strAllocFunc, {ctx.getSizeConst(23)});
-            llvm::Value* fmt = ctx.builder.CreateGlobalStringPtr("%ld", "fmt_ld");
+            llvm::Value* fmt = ctx.builder.CreateGlobalString("%ld", "fmt_ld");
             ctx.builder.CreateCall(sprintfFunc, {buf, fmt, impl->getArg(0)});
             ctx.builder.CreateRet(buf);
             ctx.builder.restoreIP(savedIP);
@@ -121,7 +121,7 @@ namespace StringUtils {
             llvm::BasicBlock* entry = llvm::BasicBlock::Create(ctx.context, "entry", impl);
             ctx.builder.SetInsertPoint(entry);
             llvm::Value* buf = ctx.builder.CreateCall(strAllocFn, {ctx.getSizeConst(31)});
-            llvm::Value* fmt = ctx.builder.CreateGlobalStringPtr("%.6g", "fmt_f32");
+            llvm::Value* fmt = ctx.builder.CreateGlobalString("%.6g", "fmt_f32");
             // widen f32 to f64 for vararg sprintf
             llvm::Value* ext = ctx.builder.CreateFPExt(impl->getArg(0), ctx.builder.getDoubleTy());
             ctx.builder.CreateCall(sprintfFn, {buf, fmt, ext});
@@ -149,7 +149,7 @@ namespace StringUtils {
             llvm::BasicBlock* entry = llvm::BasicBlock::Create(ctx.context, "entry", impl);
             ctx.builder.SetInsertPoint(entry);
             llvm::Value* buf = ctx.builder.CreateCall(strAllocFn, {ctx.getSizeConst(31)});
-            llvm::Value* fmt = ctx.builder.CreateGlobalStringPtr("%.15g", "fmt_f64");
+            llvm::Value* fmt = ctx.builder.CreateGlobalString("%.15g", "fmt_f64");
             ctx.builder.CreateCall(sprintfFn, {buf, fmt, impl->getArg(0)});
             ctx.builder.CreateRet(buf);
             ctx.builder.restoreIP(savedIP);
@@ -159,14 +159,14 @@ namespace StringUtils {
 
     // bool (i8) -> "true" or "false" via select on a constant
     inline llvm::Value* boolToString(CompilerContext& ctx, llvm::Value* boolVal) {
-        llvm::Value* trueStr  = ctx.builder.CreateGlobalStringPtr("true",  "str_true");
-        llvm::Value* falseStr = ctx.builder.CreateGlobalStringPtr("false", "str_false");
+        llvm::Value* trueStr  = ctx.builder.CreateGlobalString("true",  "str_true");
+        llvm::Value* falseStr = ctx.builder.CreateGlobalString("false", "str_false");
         llvm::Value* cond = ctx.builder.CreateICmpNE(boolVal, ctx.builder.getInt8(0), "bool_cond");
         return ctx.builder.CreateSelect(cond, trueStr, falseStr, "bool_str");
     }
 
     inline llvm::Value* expandExpression(CompilerContext& ctx, const std::string& input, std::function<llvm::Value*(CompilerContext&, const YAML::Node&)> evaluator) {
-        llvm::Value* currentStr = ctx.builder.CreateGlobalStringPtr("");
+        llvm::Value* currentStr = ctx.builder.CreateGlobalString("");
         
         size_t pos = 0;
         LOG_DEBUG("Expanding Expression: " + input);
@@ -177,7 +177,7 @@ namespace StringUtils {
                 // No more expressions
                 std::string suffix = input.substr(pos);
                 if (!suffix.empty()) {
-                    currentStr = concat(ctx, currentStr, ctx.builder.CreateGlobalStringPtr(suffix));
+                    currentStr = concat(ctx, currentStr, ctx.builder.CreateGlobalString(suffix));
                 }
                 break;
             }
@@ -185,7 +185,7 @@ namespace StringUtils {
             // Append prefix
             if (start > pos) {
                 std::string prefix = input.substr(pos, start - pos);
-                currentStr = concat(ctx, currentStr, ctx.builder.CreateGlobalStringPtr(prefix));
+                currentStr = concat(ctx, currentStr, ctx.builder.CreateGlobalString(prefix));
             }
             
             // Find closing brace matching ${
@@ -243,7 +243,7 @@ namespace StringUtils {
                         val = evaluator(ctx, node);
                     } catch (const std::exception& e) {
                         LOG_ERROR(ctx.fmtLoc() + "YAML Parse Error in String Expansion: " + content + " -> " + e.what());
-                        val = ctx.builder.CreateGlobalStringPtr("ERROR"); 
+                        val = ctx.builder.CreateGlobalString("ERROR"); 
                     }
                 } else {
                      // No evaluator provided (e.g. from resolveValue fallback)
@@ -251,7 +251,7 @@ namespace StringUtils {
                      // Just return the raw string or empty?
                      // Let's return the content as is, wrapped in braces? or just "<???>"
                      LOG_ERROR(ctx.fmtLoc() + "String Expansion requires evaluator: " + content);
-                     val = ctx.builder.CreateGlobalStringPtr("<???>");
+                     val = ctx.builder.CreateGlobalString("<???>");
                 }
                 
                 // Convert to String
@@ -274,10 +274,10 @@ namespace StringUtils {
                      } else if (val->getType()->isPointerTy()) {
                          varStr = val; // assume i8* string
                      } else {
-                         varStr = ctx.builder.CreateGlobalStringPtr("?");
+                         varStr = ctx.builder.CreateGlobalString("?");
                      }
                 } else {
-                     varStr = ctx.builder.CreateGlobalStringPtr("null");
+                     varStr = ctx.builder.CreateGlobalString("null");
                 }
                 
                 currentStr = concat(ctx, currentStr, varStr);
@@ -286,7 +286,7 @@ namespace StringUtils {
                 // No closing brace found, treat as literal
                 LOG_ERROR(ctx.fmtLoc() + "Unmatched brace in expression: " + input);
                 std::string literal = input.substr(start);
-                currentStr = concat(ctx, currentStr, ctx.builder.CreateGlobalStringPtr(literal));
+                currentStr = concat(ctx, currentStr, ctx.builder.CreateGlobalString(literal));
                 break;
             }
         }

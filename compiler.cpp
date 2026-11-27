@@ -1,5 +1,6 @@
 #include "compiler.h"
 #include "src/core/clearance_flow.h"
+#include "src/core/llvm_compat.h"
 #include "src/core/clearance_writedown.h"
 #include "src/core/pipeline_expand.h"
 #include "exec_impl.h"
@@ -459,7 +460,7 @@ AIMLCompiler::AIMLCompiler() {
     
     std::string error;
     auto targetTriple = llvm::sys::getDefaultTargetTriple();
-    auto target = llvm::TargetRegistry::lookupTarget(targetTriple, error);
+    auto target = llvm::TargetRegistry::lookupTarget(aiml_llvm::triple(targetTriple), error);
     
     if (!target) {
         LOG_ERROR("Failed to lookup target: " + error);
@@ -468,10 +469,10 @@ AIMLCompiler::AIMLCompiler() {
     
     llvm::TargetOptions opt;
     auto rm = std::optional<llvm::Reloc::Model>(llvm::Reloc::PIC_);
-    auto targetMachine = target->createTargetMachine(targetTriple, "generic", "", opt, rm);
+    auto targetMachine = target->createTargetMachine(aiml_llvm::triple(targetTriple), "generic", "", opt, rm);
     
     module_->setDataLayout(targetMachine->createDataLayout());
-    module_->setTargetTriple(targetTriple);
+    module_->setTargetTriple(aiml_llvm::triple(targetTriple));
 }
 
 AIMLCompiler::~AIMLCompiler() {
@@ -1839,7 +1840,7 @@ int AIMLCompiler::compileLibraryAndRegister(const std::string& yaml_source) {
 
     llvm::sys::DynamicLibrary::LoadLibraryPermanently(nullptr);
     std::string errStr;
-    module_->setTargetTriple(llvm::sys::getDefaultTargetTriple());
+    module_->setTargetTriple(aiml_llvm::triple(llvm::sys::getDefaultTargetTriple()));
 
     llvm::EngineBuilder eb(std::move(module_));
     eb.setErrorStr(&errStr);
@@ -1948,7 +1949,7 @@ int AIMLCompiler::compileInContext(const std::string& yaml_source, bool run_entr
     // must be in the new module, their bodies are in the old engines.
     if (!module_) {
         module_ = std::make_unique<llvm::Module>("aiml_ctx", *context_);
-        module_->setTargetTriple(llvm::sys::getDefaultTargetTriple());
+        module_->setTargetTriple(aiml_llvm::triple(llvm::sys::getDefaultTargetTriple()));
         for (const auto& earlier : ctx_sources_) compileDeclarationsOnly(earlier);
     }
 
@@ -1984,7 +1985,7 @@ int AIMLCompiler::compileInContext(const std::string& yaml_source, bool run_entr
     }
 
     llvm::sys::DynamicLibrary::LoadLibraryPermanently(nullptr);
-    module_->setTargetTriple(llvm::sys::getDefaultTargetTriple());
+    module_->setTargetTriple(aiml_llvm::triple(llvm::sys::getDefaultTargetTriple()));
 
     std::string errStr;
     llvm::EngineBuilder eb(std::move(module_));
@@ -2045,7 +2046,7 @@ uint64_t AIMLCompiler::compileChunkAndGetAddress(const std::string& yaml_source,
     llvm::sys::DynamicLibrary::LoadLibraryPermanently(nullptr);
 
     std::string errStr;
-    module_->setTargetTriple(llvm::sys::getDefaultTargetTriple());
+    module_->setTargetTriple(aiml_llvm::triple(llvm::sys::getDefaultTargetTriple()));
 
     llvm::EngineBuilder eb(std::move(module_));
     eb.setErrorStr(&errStr);
@@ -2157,7 +2158,7 @@ void AIMLCompiler::generateEntryPoint() {
         const char* baked_trace = getenv("AIML_TRACE");
         if (baked_trace && *baked_trace) {
             // Bake the compile-time AIML_TRACE value as a string literal into the binary.
-            llvm::Value* bakedStr = builder.CreateGlobalStringPtr(baked_trace, "__aiml_trace_baked");
+            llvm::Value* bakedStr = builder.CreateGlobalString(baked_trace, "__aiml_trace_baked");
             std::vector<llvm::Type*> traceInitBakedArgs = {builder.getPtrTy()};
             llvm::FunctionType* ft = llvm::FunctionType::get(builder.getVoidTy(), traceInitBakedArgs, false);
             llvm::FunctionCallee traceInitFn = module_->getOrInsertFunction("aiml_trace_init_baked", ft);
@@ -2186,10 +2187,10 @@ void AIMLCompiler::generateEntryPoint() {
             // int32 interval (fixed width): matches the C int32_t param on native AND wasm32 — `long`
             // is 32-bit on wasm32, so an i64 arg would mismatch the callee there (wasm-ld error).
             llvm::Value* fileArg = (mdFile && *mdFile)
-                ? builder.CreateGlobalStringPtr(mdFile, "__aiml_memdiff_file")
+                ? static_cast<llvm::Value*>(builder.CreateGlobalString(mdFile, "__aiml_memdiff_file"))
                 : llvm::ConstantPointerNull::get(builder.getPtrTy());
             llvm::Value* endArg = (mdEnd && *mdEnd)
-                ? builder.CreateGlobalStringPtr(mdEnd, "__aiml_memdiff_endpoint")
+                ? static_cast<llvm::Value*>(builder.CreateGlobalString(mdEnd, "__aiml_memdiff_endpoint"))
                 : llvm::ConstantPointerNull::get(builder.getPtrTy());
             llvm::FunctionType* ft = llvm::FunctionType::get(
                 builder.getVoidTy(), {builder.getPtrTy(), builder.getInt32Ty(), builder.getPtrTy()}, false);
@@ -2239,8 +2240,8 @@ void AIMLCompiler::generateEntryPoint() {
                 std::error_code rel_ec;
                 std::filesystem::path rel = std::filesystem::relative(entry.abs_path, cwd, rel_ec);
                 std::string path_str = (rel_ec || inVenvAssets(entry.abs_path)) ? entry.abs_path : rel.string();
-                llvm::Value* stemV = builder.CreateGlobalStringPtr(stem, "__a_stem");
-                llvm::Value* pathV = builder.CreateGlobalStringPtr(path_str, "__a_path");
+                llvm::Value* stemV = builder.CreateGlobalString(stem, "__a_stem");
+                llvm::Value* pathV = builder.CreateGlobalString(path_str, "__a_path");
                 builder.CreateCall(regFn, {builder.getInt32(kidx), stemV, pathV});
             }
         }
@@ -2300,16 +2301,16 @@ void AIMLCompiler::setTargetTriple(const std::string& triple) {
     llvm::InitializeAllAsmPrinters();
 
     std::string err;
-    auto* target = llvm::TargetRegistry::lookupTarget(triple, err);
+    auto* target = llvm::TargetRegistry::lookupTarget(aiml_llvm::triple(triple), err);
     if (!target) {
         LOG_ERROR("setTargetTriple: " + err);
         return;
     }
     llvm::TargetOptions opt;
     auto rm = std::optional<llvm::Reloc::Model>(llvm::Reloc::PIC_);
-    auto* tm = target->createTargetMachine(triple, "generic", "", opt, rm);
+    auto* tm = target->createTargetMachine(aiml_llvm::triple(triple), "generic", "", opt, rm);
     module_->setDataLayout(tm->createDataLayout());
-    module_->setTargetTriple(triple);
+    module_->setTargetTriple(aiml_llvm::triple(triple));
     targetTripleStr = triple;
     LOG_DEBUG("compiler target set to " + triple);
 }
@@ -2387,10 +2388,10 @@ void AIMLCompiler::compileToObject(const std::string& /*filename*/, const std::s
     llvm::InitializeAllAsmPrinters();
 
     auto targetTriple = llvm::sys::getDefaultTargetTriple();
-    module_->setTargetTriple(targetTriple);
+    module_->setTargetTriple(aiml_llvm::triple(targetTriple));
 
     std::string error;
-    auto target = llvm::TargetRegistry::lookupTarget(targetTriple, error);
+    auto target = llvm::TargetRegistry::lookupTarget(aiml_llvm::triple(targetTriple), error);
 
     if (!target) {
         LOG_ERROR("Target not found: " + error);
@@ -2403,7 +2404,7 @@ void AIMLCompiler::compileToObject(const std::string& /*filename*/, const std::s
     llvm::TargetOptions opt;
     // Set Relocation Model to PIC (Position Independent Code)
     auto rm = std::optional<llvm::Reloc::Model>(llvm::Reloc::PIC_);
-    auto targetMachine = target->createTargetMachine(targetTriple, cpu, features, opt, rm);
+    auto targetMachine = target->createTargetMachine(aiml_llvm::triple(targetTriple), cpu, features, opt, rm);
 
     module_->setDataLayout(targetMachine->createDataLayout());
 
@@ -3692,7 +3693,7 @@ int AIMLCompiler::jitRun(int argc, char** argv) {
     }
 
     // Set Target Triple
-    module_->setTargetTriple(llvm::sys::getDefaultTargetTriple());
+    module_->setTargetTriple(aiml_llvm::triple(llvm::sys::getDefaultTargetTriple()));
 
     LOG_DEBUG("Creating EngineBuilder...");
     llvm::EngineBuilder builder(std::move(module_));

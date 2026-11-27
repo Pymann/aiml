@@ -14,6 +14,11 @@ name: LLVM update (masterv2)
 #   gh workflow run llvm-update.yml --ref masterv2 [-f major=23]
 # and it runs by itself whenever this file or llvm_bump.py changes on masterv2.
 # A schedule would need the file on the default branch.
+#
+# On a feature branch (`--ref feature/<x>`, where the C++ is being ported to the
+# new LLVM) it does the same against that branch; green, it commits the
+# rewritten configurations onto that branch (no force) and opens the pull
+# request from it, instead of llvm/<major>.
 
 on:
   workflow_dispatch:
@@ -39,7 +44,7 @@ concurrency:
 jobs:
   try:
     name: Try the newest LLVM on masterv2
-    if: github.ref == 'refs/heads/masterv2'
+    if: github.ref == 'refs/heads/masterv2' || startsWith(github.ref, 'refs/heads/feature/')
     runs-on: ubuntu-24.04
     timeout-minutes: 300
     permissions:
@@ -208,10 +213,12 @@ jobs:
           NEW: ${{ steps.which.outputs.new }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          branch="llvm/$NEW"
+          # masterv2: a branch of its own, rewritten each time (force).  A
+          # feature branch: the configurations go onto it, on top of the port.
+          if [ "$GITHUB_REF_NAME" = masterv2 ]; then branch="llvm/$NEW"; force=-f; else branch="$GITHUB_REF_NAME"; force=; fi
           git config user.name "aiml llvm-update"
           git config user.email "llvm-update@users.noreply.github.com"
-          git checkout -b "$branch"
+          [ "$GITHUB_REF_NAME" = masterv2 ] && git checkout -b "$branch"
           git add $(git ls-files 'exodus*.json')
           git commit -q -m "LLVM $CUR → $NEW: the exodus configurations (llvm-update workflow)" \
                      -m "Rewritten by tools/ci/llvm_bump.py from apt.llvm.org llvm-toolchain-noble-$NEW; built and tested in $RUN_URL."
@@ -219,7 +226,7 @@ jobs:
           export GIT_CONFIG_COUNT=1
           export GIT_CONFIG_KEY_0="url.https://x-access-token:${PUSH_TOKEN}@github.com/.insteadOf"
           export GIT_CONFIG_VALUE_0="https://github.com/"
-          git push -f origin "HEAD:refs/heads/$branch"
+          git push $force origin "HEAD:refs/heads/$branch"
           export GH_TOKEN="$PUSH_TOKEN"
           open=$(gh api "repos/$GITHUB_REPOSITORY/pulls?head=${GITHUB_REPOSITORY_OWNER}:$branch&state=open" --jq '.[0].number // empty')
           if [ -n "$open" ]; then

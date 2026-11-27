@@ -525,7 +525,7 @@ namespace ListImpl {
         llvm::Value* emitElemLt(CompilerContext& ctx, llvm::Value* a, llvm::Value* b,
                                 llvm::Type* elemType, const std::string& elemTypeName) {
             if (elemTypeName == "string") {
-                llvm::Value* empty = ctx.builder.CreateGlobalStringPtr("", "lstr_empty");
+                llvm::Value* empty = ctx.builder.CreateGlobalString("", "lstr_empty");
                 llvm::Value* aa = ctx.builder.CreateSelect(ctx.builder.CreateIsNull(a), empty, a);
                 llvm::Value* bb = ctx.builder.CreateSelect(ctx.builder.CreateIsNull(b), empty, b);
                 llvm::Function* strcmpFn = ctx.getFunction("strcmp", ctx.builder.getInt32Ty(),

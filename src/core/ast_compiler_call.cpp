@@ -534,7 +534,7 @@ IRValue* Compiler::visitCall(CallExpr* call) {
                                 IRValue* pv = visitExpression(&tmp);
                                 if (pv) ctx.dbOpenBasePathVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(pv));
                             } else {
-                                ctx.dbOpenBasePathVal = ctx.builder.CreateGlobalStringPtr(v);
+                                ctx.dbOpenBasePathVal = ctx.builder.CreateGlobalString(v);
                             }
                         } else {
                             applyDbOpt(k, v);
@@ -600,7 +600,7 @@ IRValue* Compiler::visitCall(CallExpr* call) {
                 } else if (key == "timeout") {
                     try { v = ctx.builder.getInt32(std::stoi(raw)); } catch (...) {}
                 } else if (key != "env") {
-                    v = ctx.builder.CreateGlobalStringPtr(raw);
+                    v = ctx.builder.CreateGlobalString(raw);
                 }
                 if (!v) {
                     LOG_ERROR(ctx.fmtLoc(call->sourceNode) + "sys.exe: cannot evaluate option '" + key + "'");
@@ -668,7 +668,7 @@ IRValue* Compiler::visitCall(CallExpr* call) {
                 loc += ":" + std::to_string(call->sourceNode.Mark().line + 1);
             else
                 loc += ":?";
-            llvm::Value* locStr = ctx.builder.CreateGlobalStringPtr(loc, "log_loc");
+            llvm::Value* locStr = ctx.builder.CreateGlobalString(loc, "log_loc");
             argVals.push_back(ctx.ir_gen->wrap(locStr));
         }
 
@@ -888,7 +888,7 @@ IRValue* Compiler::visitCall(CallExpr* call) {
                  // Null pointer guard
                  llvm::Value* rawVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVal));
                  llvm::Value* isNull = ctx.builder.CreateIsNull(rawVal, "print_null_check");
-                 llvm::Value* emptyStr = ctx.builder.CreateGlobalStringPtr("(null)", "print_null_str");
+                 llvm::Value* emptyStr = ctx.builder.CreateGlobalString("(null)", "print_null_str");
                  llvm::Value* safeStr = ctx.builder.CreateSelect(isNull, emptyStr, rawVal, "print_safe_str");
                  printArgs.push_back(ctx.ir_gen->wrap(safeStr));
              } else {
@@ -1147,7 +1147,7 @@ IRValue* Compiler::visitCall(CallExpr* call) {
             // every self-declared `- interface:` crashed.
             if (auto* fatTy = llvm::dyn_cast<llvm::StructType>(expectedTy)) {
                 if (actualTy->isPointerTy() && fatTy->hasName() &&
-                    fatTy->getName().startswith("AimlFatPtr_")) {
+                    fatTy->getName().starts_with("AimlFatPtr_")) {
                     const std::string srcTy = declaredTypeOfExpr(call->args[i].get());
                     llvm::Value* fat = srcTy.empty()
                         ? nullptr : buildInterfaceUpcast(actualVal, srcTy, fatTy);
@@ -1783,7 +1783,7 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
         } else if (methodName == "pop") {
             // spec/71 §1.3: take the last element; an empty buffer raises IndexOutOfBoundsException.
             if (!elemTy) { LOG_ERROR(ctx.fmtLoc() + "buffer<T>.pop: unknown elem type " + elemName); return ctx.ir_gen->getInt32(0); }
-            llvm::DataLayout dl(&ctx.module());
+            llvm::DataLayout dl(ctx.module().getDataLayout());
             uint32_t esz = (uint32_t)dl.getTypeAllocSize(elemTy);
             llvm::Value* szPtr = ctx.builder.CreateStructGEP(bufTy, buf, 0, "sz_ptr");
             llvm::Value* bytes = ctx.builder.CreateLoad(ctx.builder.getInt32Ty(), szPtr, "buf_bytes");
@@ -1838,7 +1838,7 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                 llvm::Value* cap    = ctx.builder.CreateLoad(ctx.builder.getInt32Ty(), capPtr, "buf_cap");
                 llvm::Value* over   = ctx.builder.CreateICmpSGT(ctx.builder.CreateAdd(wIdx, srcSz), cap, "ext_over");
                 AIML::AST::aimlEmitThrowIf(ctx, over, "BufferOverflowException",
-                    ctx.builder.CreateGlobalStringPtr("buffer.extend: the source does not fit the capacity", "ext_over_msg"));
+                    ctx.builder.CreateGlobalString("buffer.extend: the source does not fit the capacity", "ext_over_msg"));
             }
             llvm::Value* dstPtr    = ctx.builder.CreateInBoundsGEP(ctx.builder.getInt8Ty(), dataPtr, ctx.builder.CreateZExtOrTrunc(wIdx, ctx.getSizeType()), "dst_ptr");
             llvm::Function* mcf    = ctx.getFunction("memcpy", ptrTy, {ptrTy, ptrTy, ctx.getSizeType()});
@@ -2383,7 +2383,7 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                  bool modelElem = eci != ctx.classes.end() && !eci->second.isBuiltin
                      && eci->second.hasHeapFields && eci->second.serNodesVar && eci->second.type
                      && !(llvm::cast<llvm::StructType>(llvmListElemType)->hasName()
-                          && llvm::cast<llvm::StructType>(llvmListElemType)->getName().startswith("AimlFatPtr_"));
+                          && llvm::cast<llvm::StructType>(llvmListElemType)->getName().starts_with("AimlFatPtr_"));
                  if (modelElem) {
                      // MOVABLE owned local: a plain-local model whose kind-0 scope-drop is still live
                      // (a fresh get_copy/no-init not yet moved). Those MOVE (cheap shallow store +
@@ -2462,7 +2462,7 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
              const bool aggregateValue = llvmListElemType && llvmListElemType->isStructTy();
              const bool interfaceValue = aggregateValue &&
                  llvm::cast<llvm::StructType>(llvmListElemType)->hasName() &&
-                 llvm::cast<llvm::StructType>(llvmListElemType)->getName().startswith("AimlFatPtr_");
+                 llvm::cast<llvm::StructType>(llvmListElemType)->getName().starts_with("AimlFatPtr_");
              if (aggregateValue && !interfaceValue && valueCallResult && pushVal
                  && pushVal->getType()->isPointerTy())
                  pushVal = ctx.builder.CreateLoad(llvmListElemType, pushVal, "push_callval");
@@ -2481,7 +2481,7 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
              // Mirrors the identical pattern in map.put below.
              if (llvmListElemType && llvmListElemType->isStructTy() &&
                  llvm::cast<llvm::StructType>(llvmListElemType)->hasName() &&
-                 llvm::cast<llvm::StructType>(llvmListElemType)->getName().startswith("AimlFatPtr_")) {
+                 llvm::cast<llvm::StructType>(llvmListElemType)->getName().starts_with("AimlFatPtr_")) {
                  if (dynamic_cast<NewExpr*>(call->args[0].get())) {
                      // a fresh `{ new: Concrete }` box: upcast it directly (the list owns it)
                      llvm::Value* fat = buildInterfaceUpcast(pushVal, declaredTypeOfExpr(call->args[0].get()),
@@ -2508,7 +2508,7 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                              int64_t boxSz = 8;
                              auto sci = ctx.classes.find(srcSym->typeName);
                              if (sci != ctx.classes.end() && sci->second.type) {
-                                 llvm::DataLayout dl(&ctx.module());
+                                 llvm::DataLayout dl(ctx.module().getDataLayout());
                                  boxSz = (int64_t)dl.getTypeAllocSize(sci->second.type);
                              }
                              llvm::Function* mallocF = ctx.getFunction("malloc", i8pT, {ctx.getSizeType()});
@@ -3193,7 +3193,7 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
              // Interface upcast for put(key, ptr<Concrete>) when V = ptr<Interface>.
              // Centralised in Compiler::buildInterfaceUpcast.
              if (vTy->isStructTy() && llvm::cast<llvm::StructType>(vTy)->hasName() &&
-                 llvm::cast<llvm::StructType>(vTy)->getName().startswith("AimlFatPtr_")) {
+                 llvm::cast<llvm::StructType>(vTy)->getName().starts_with("AimlFatPtr_")) {
                  // a variable, a member or a fresh `{ new: Concrete }` (declaredTypeOfExpr)
                  const std::string srcTy = declaredTypeOfExpr(call->args[1].get());
                  if (!srcTy.empty()) {
@@ -3390,7 +3390,7 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
 
             int64_t elemSize = ctx.ptrStride();   // spec/61 §5.7
             if (ctx.classes.count(elemName) && ctx.classes[elemName].type) {
-                llvm::DataLayout dl(&ctx.module());
+                llvm::DataLayout dl(ctx.module().getDataLayout());
                 elemSize = static_cast<int64_t>(dl.getTypeAllocSize(ctx.classes[elemName].type));
             } else if (ctx.classes.count(elemName) && ctx.classes[elemName].packed_size > 0) {
                 elemSize = static_cast<int64_t>(ctx.classes[elemName].packed_size);
@@ -3426,7 +3426,7 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
 
             int64_t elemSize = ctx.ptrStride();   // spec/61 §5.7
             if (ctx.classes.count(elemName) && ctx.classes[elemName].type) {
-                llvm::DataLayout dl(&ctx.module());
+                llvm::DataLayout dl(ctx.module().getDataLayout());
                 elemSize = static_cast<int64_t>(dl.getTypeAllocSize(ctx.classes[elemName].type));
             } else if (ctx.classes.count(elemName) && ctx.classes[elemName].packed_size > 0) {
                 elemSize = static_cast<int64_t>(ctx.classes[elemName].packed_size);
@@ -3450,7 +3450,7 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
             auto& pkMember = ci.members[ci.primaryKey];
             int32_t keyOffset = 0, keySize = 0;
             if (ci.type) {
-                llvm::DataLayout dl(&ctx.module());
+                llvm::DataLayout dl(ctx.module().getDataLayout());
                 auto* sl  = dl.getStructLayout(llvm::cast<llvm::StructType>(ci.type));
                 keyOffset = (int32_t)sl->getElementOffset((unsigned)pkMember.index);
                 keySize   = (int32_t)dl.getTypeAllocSize(pkMember.type);
@@ -3502,7 +3502,7 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
         else if (vName == "f32")    valSize = 4;
         else if (vName == "f64")    valSize = 8;
         else if (ctx.classes.count(vName) && ctx.classes[vName].type) {
-            llvm::DataLayout dl(&ctx.module());
+            llvm::DataLayout dl(ctx.module().getDataLayout());
             valSize = static_cast<int64_t>(dl.getTypeAllocSize(ctx.classes[vName].type));
         }
 
@@ -3567,7 +3567,7 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                 llvm::Value* fldGep = ctx.builder.CreateStructGEP(
                     valStructTy, typedBase, mem.index);
 
-                llvm::Value* fNameVal = ctx.builder.CreateGlobalStringPtr(fname);
+                llvm::Value* fNameVal = ctx.builder.CreateGlobalString(fname);
                 llvm::Function* idxLookup = ctx.getFunction(
                     "aiml_db_index_lookup", i8p, {i8p, i8p});
                 llvm::Value* idxHandle = ctx.builder.CreateCall(
@@ -3819,7 +3819,7 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                             oldPtr, llvm::PointerType::get(ctx.context, 0));
                         llvm::Value* fldGep = ctx.builder.CreateStructGEP(
                             valStructTy, typedBase, mem.index);
-                        llvm::Value* fNameVal = ctx.builder.CreateGlobalStringPtr(fname);
+                        llvm::Value* fNameVal = ctx.builder.CreateGlobalString(fname);
                         llvm::Function* idxLookup = ctx.getFunction(
                             "aiml_db_index_lookup", i8p, {i8p, i8p});
                         llvm::Value* idxHandle = ctx.builder.CreateCall(
@@ -4066,7 +4066,7 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
             }
 
             // Resolve index handle at runtime: aiml_db_index_lookup(kv, field_name).
-            llvm::Value* fNameVal = ctx.builder.CreateGlobalStringPtr(fieldName);
+            llvm::Value* fNameVal = ctx.builder.CreateGlobalString(fieldName);
             llvm::Function* idxLookup = ctx.getFunction(
                 "aiml_db_index_lookup", i8p, {i8p, i8p});
             llvm::Value* idxHandle = ctx.builder.CreateCall(idxLookup, {kvPtr, fNameVal});
@@ -4293,7 +4293,7 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
         // Compute elem size from class info
         int64_t elemSize = ctx.ptrStride();   // spec/61 §5.7
         if (ctx.classes.count(elemName) && ctx.classes[elemName].type) {
-            llvm::DataLayout dl(&ctx.module());
+            llvm::DataLayout dl(ctx.module().getDataLayout());
             elemSize = (int64_t)dl.getTypeAllocSize(ctx.classes[elemName].type);
         }
 
@@ -4488,7 +4488,7 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
              if (expected && expected->isStructTy()) {
                  auto* expectedSt = llvm::cast<llvm::StructType>(expected);
                  if (expectedSt->hasName() &&
-                     expectedSt->getName().startswith("AimlFatPtr_") &&
+                     expectedSt->getName().starts_with("AimlFatPtr_") &&
                      i < call->args.size()) {
                      // declaredTypeOfExpr instead of resolveVariable: that way the
                      // upcast also applies to DOTTED access — in particular to
@@ -4674,7 +4674,7 @@ IRValue* Compiler::visitSysSerializeCall(const std::string& method, CallExpr* ca
 
     if (method == "serialize") {
         if (call->args.empty())
-            return ctx.ir_gen->wrap(ctx.builder.CreateGlobalStringPtr(""));
+            return ctx.ir_gen->wrap(ctx.builder.CreateGlobalString(""));
 
         // Resolve argument type and symbol from the symbol table
         std::string argType;
@@ -4687,7 +4687,7 @@ IRValue* Compiler::visitSysSerializeCall(const std::string& method, CallExpr* ca
         // any → compiler error
         if (argType == "any") {
             LOG_ERROR(ctx.fmtLoc() + "sys.serialize: 'any' type is not serialisable");
-            return ctx.ir_gen->wrap(ctx.builder.CreateGlobalStringPtr("(error)"));
+            return ctx.ir_gen->wrap(ctx.builder.CreateGlobalString("(error)"));
         }
 
         llvm::Value* stylePtr = nullptr;
@@ -4713,11 +4713,11 @@ IRValue* Compiler::visitSysSerializeCall(const std::string& method, CallExpr* ca
                     stylePtr = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca));
                 } else {
                     LOG_ERROR(ctx.fmtLoc() + "sys.serialize: optional style argument must be a JsonStyle variable");
-                    return ctx.ir_gen->wrap(ctx.builder.CreateGlobalStringPtr("(error)"));
+                    return ctx.ir_gen->wrap(ctx.builder.CreateGlobalString("(error)"));
                 }
             } else {
                 LOG_ERROR(ctx.fmtLoc() + "sys.serialize: optional style argument must be a JsonStyle variable");
-                return ctx.ir_gen->wrap(ctx.builder.CreateGlobalStringPtr("(error)"));
+                return ctx.ir_gen->wrap(ctx.builder.CreateGlobalString("(error)"));
             }
         }
 
@@ -4726,7 +4726,7 @@ IRValue* Compiler::visitSysSerializeCall(const std::string& method, CallExpr* ca
             std::string innerType = argType.substr(4, argType.size() - 5);
             if (!SerializeImpl::isSerializable(ctx, innerType)) {
                 LOG_ERROR(ctx.fmtLoc() + "sys.serialize: ptr<" + innerType + "> inner type is not serialisable");
-                return ctx.ir_gen->wrap(ctx.builder.CreateGlobalStringPtr("(error)"));
+                return ctx.ir_gen->wrap(ctx.builder.CreateGlobalString("(error)"));
             }
             if (argSym) {
                 IRValue* baseAlloca = argSym->ir_alloca_inst
@@ -4746,7 +4746,7 @@ IRValue* Compiler::visitSysSerializeCall(const std::string& method, CallExpr* ca
         if (argSym && ctx.isRefcountModel(argType)) {
             if (!SerializeImpl::isSerializable(ctx, argType)) {
                 LOG_ERROR(ctx.fmtLoc() + "sys.serialize: type '" + argType + "' is not serialisable");
-                return ctx.ir_gen->wrap(ctx.builder.CreateGlobalStringPtr("(error)"));
+                return ctx.ir_gen->wrap(ctx.builder.CreateGlobalString("(error)"));
             }
             IRValue* baseAlloca = argSym->ir_alloca_inst
                 ? argSym->ir_alloca_inst : ctx.ir_gen->wrap(argSym->alloca_inst);
@@ -4759,7 +4759,7 @@ IRValue* Compiler::visitSysSerializeCall(const std::string& method, CallExpr* ca
         // Validate serializability
         if (!argType.empty() && !SerializeImpl::isSerializable(ctx, argType)) {
             LOG_ERROR(ctx.fmtLoc() + "sys.serialize: type '" + argType + "' is not serialisable");
-            return ctx.ir_gen->wrap(ctx.builder.CreateGlobalStringPtr("(error)"));
+            return ctx.ir_gen->wrap(ctx.builder.CreateGlobalString("(error)"));
         }
 
         // Structs, lists, maps: pass alloca pointer directly (not loaded value)
@@ -4787,7 +4787,7 @@ IRValue* Compiler::visitSysSerializeCall(const std::string& method, CallExpr* ca
 
         // Scalars and enums: evaluate expression to get the loaded value
         IRValue* argVal = visitExpression(call->args[0].get());
-        if (!argVal) return ctx.ir_gen->wrap(ctx.builder.CreateGlobalStringPtr(""));
+        if (!argVal) return ctx.ir_gen->wrap(ctx.builder.CreateGlobalString(""));
         llvm::Value* val = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVal));
 
         return ctx.ir_gen->wrap(SerializeImpl::serialize(ctx, val, argType, stylePtr));
@@ -5052,7 +5052,7 @@ IRValue* Compiler::visitSysBundleCall(CallExpr* call) {
 
     // Helper: malloc a new empty GenericList, init it, return raw i8*
     llvm::StructType* listTy  = ListImpl::getListStructType(ctx);
-    llvm::DataLayout  dl(&ctx.module());
+    llvm::DataLayout  dl(ctx.module().getDataLayout());
     uint64_t          listBytes = dl.getTypeAllocSize(listTy);
     llvm::Function*   mallocFn  = ctx.getFunction("malloc", i8p, {sz});
 
@@ -5089,7 +5089,7 @@ IRValue* Compiler::visitSysBundleCall(CallExpr* call) {
                 checkBundlePurity(ctx, call, selector, bundledFuncs, assertPure);
                 // F62-103: note THAT it was checked — otherwise the runtime warns
                 // about an unproven claim with `cache: pure`.
-                llvm::Value* pureId = ctx.builder.CreateGlobalStringPtr(fnv1a_hex(
+                llvm::Value* pureId = ctx.builder.CreateGlobalString(fnv1a_hex(
                     [&]{ std::string all; for (auto& c : chunks) all += c; return all; }()), "b_pid");
                 ctx.builder.CreateCall(ctx.getFunction("aiml_code_mark_pure",
                     llvm::Type::getVoidTy(ctx.context),
@@ -5105,20 +5105,20 @@ IRValue* Compiler::visitSysBundleCall(CallExpr* call) {
         // id = FNV-1a of all chunks joined
         std::string allChunks;
         for (auto& c : chunks) allChunks += c;
-        llvm::Value* idVal = ctx.builder.CreateGlobalStringPtr(fnv1a_hex(allChunks), "b_id");
+        llvm::Value* idVal = ctx.builder.CreateGlobalString(fnv1a_hex(allChunks), "b_id");
 
         // code_chunks list: push each YAML chunk
         llvm::Value* ccMem  = makeEmptyList();
         llvm::Value* ccList = ctx.builder.CreateBitCast(ccMem, listTy->getPointerTo(), "b_ccl");
         for (auto& chunk : chunks) {
-            llvm::Value* s = ctx.builder.CreateGlobalStringPtr(chunk, "b_chunk");
+            llvm::Value* s = ctx.builder.CreateGlobalString(chunk, "b_chunk");
             ListImpl::push(ctx, ccList, s);
         }
 
         // data_chunks: empty
         llvm::Value* dcMem = makeEmptyList();
 
-        llvm::Value* startCall = ctx.builder.CreateGlobalStringPtr(
+        llvm::Value* startCall = ctx.builder.CreateGlobalString(
             "{\"call\":[\"" + selector + "\"]}", "b_sc");
 
         // Check for options argument: sys.bundle("fn", {context: true})
@@ -5155,14 +5155,14 @@ IRValue* Compiler::visitSysBundleCall(CallExpr* call) {
         llvm::Value* ccMem  = makeEmptyList();
         llvm::Value* ccList = ctx.builder.CreateBitCast(ccMem, listTy->getPointerTo(), "bi_ccl");
         for (auto& chunk : chunks) {
-            llvm::Value* s = ctx.builder.CreateGlobalStringPtr(chunk, "bi_chunk");
+            llvm::Value* s = ctx.builder.CreateGlobalString(chunk, "bi_chunk");
             ListImpl::push(ctx, ccList, s);
         }
 
         // id
         std::string allChunks;
         for (auto& c : chunks) allChunks += c;
-        llvm::Value* idVal = ctx.builder.CreateGlobalStringPtr(fnv1a_hex(allChunks), "bi_id");
+        llvm::Value* idVal = ctx.builder.CreateGlobalString(fnv1a_hex(allChunks), "bi_id");
 
         // Serialize the instance to JSON at runtime
         IRValue* baseAlloca = sym->ir_alloca_inst
@@ -5176,8 +5176,8 @@ IRValue* Compiler::visitSysBundleCall(CallExpr* call) {
                              "- set: [_v, {call:[sys.deserialize,'";
         std::string suffix = "','" + typeName + "']}]\n";
 
-        llvm::Value* prefixVal = ctx.builder.CreateGlobalStringPtr(prefix, "bi_pfx");
-        llvm::Value* suffixVal = ctx.builder.CreateGlobalStringPtr(suffix, "bi_sfx");
+        llvm::Value* prefixVal = ctx.builder.CreateGlobalString(prefix, "bi_pfx");
+        llvm::Value* suffixVal = ctx.builder.CreateGlobalString(suffix, "bi_sfx");
         llvm::Value* part1     = StringUtils::concat(ctx, prefixVal, jsonStr);
         llvm::Value* dataChunk = StringUtils::concat(ctx, part1, suffixVal);
 
@@ -5186,7 +5186,7 @@ IRValue* Compiler::visitSysBundleCall(CallExpr* call) {
         llvm::Value* dcList = ctx.builder.CreateBitCast(dcMem, listTy->getPointerTo(), "bi_dcl");
         ListImpl::push(ctx, dcList, dataChunk);
 
-        llvm::Value* startCall = ctx.builder.CreateGlobalStringPtr("", "bi_sc");
+        llvm::Value* startCall = ctx.builder.CreateGlobalString("", "bi_sc");
 
         llvm::Value* newCtxI = ctx.builder.getInt8(0); // default: shared context
         return ctx.ir_gen->wrap(CodeImpl::create(ctx, idVal, startCall, ccMem, dcMem, newCtxI));
@@ -5406,8 +5406,8 @@ IRValue* Compiler::visitSysArgDumpCall(CallExpr* call) {
             }
             if (tc != ARG_SKIP) flagNames.emplace(flagName, fname);
         }
-        ctx.builder.CreateStore(ctx.builder.CreateGlobalStringPtr(flagName), namePtr);
-        ctx.builder.CreateStore(ctx.builder.CreateGlobalStringPtr(fname), realPtr);
+        ctx.builder.CreateStore(ctx.builder.CreateGlobalString(flagName), namePtr);
+        ctx.builder.CreateStore(ctx.builder.CreateGlobalString(fname), realPtr);
         ctx.builder.CreateStore(ctx.builder.getInt32(tc), typePtr);
         ctx.builder.CreateStore(ctx.builder.getInt32((int)byteOffset), offsetPtr);
     }
@@ -5430,7 +5430,7 @@ IRValue* Compiler::visitSysArgDumpCall(CallExpr* call) {
     Value* realPtr0   = ctx.builder.CreateConstGEP2_32(ptrArrTy, realArr,    0, 0);
     Value* typesPtr   = ctx.builder.CreateConstGEP2_32(i32ArrTy, typesArr,   0, 0);
     Value* offsetsPtr = ctx.builder.CreateConstGEP2_32(i32ArrTy, offsetsArr, 0, 0);
-    Value* structName = ctx.builder.CreateGlobalStringPtr(typeName);
+    Value* structName = ctx.builder.CreateGlobalString(typeName);
 
     // Declare aiml_arg_dump_impl2 (with the real field names, F23-64) if not yet in module
     Function* implFn = ctx.module().getFunction("aiml_arg_dump_impl2");

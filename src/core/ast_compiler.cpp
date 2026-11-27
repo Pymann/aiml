@@ -2174,7 +2174,7 @@ void Compiler::compile(Program* prog) {
             if (bbInit && !bbInit->getTerminator()) {
                 auto* i32 = ctx.builder.getInt32Ty();
                 auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
-                llvm::DataLayout dl(&ctx.module());
+                llvm::DataLayout dl(ctx.module().getDataLayout());
                 llvm::Function* regF = ctx.getFunction("aiml_ser_register_type",
                     ctx.builder.getVoidTy(), {i32, i8p, i32, i32});
                 for (auto& [tname, tid] : ctx.modelTypeIds) {
@@ -4967,7 +4967,7 @@ static void rebuildSerNodesFor(CompilerContext& ctx, const std::string& typeName
     if (it == ctx.classes.end()) return;
     CompilerContext::ClassInfo& ci = it->second;
     if (ci.isBuiltin || !ci.type) return;
-    llvm::DataLayout dl(&ctx.module());
+    llvm::DataLayout dl(ctx.module().getDataLayout());
     const llvm::StructLayout* sl = dl.getStructLayout(ci.type);
     int32_t sz = (int32_t)dl.getTypeAllocSize(ci.type);
     bool anyHeap = false;
@@ -5029,7 +5029,7 @@ void Compiler::emitContainerCloneDeep(llvm::Value* dstSlot, llvm::Value* srcSlot
     if (!dstSlot || !srcSlot) return;
     auto* i8p  = ctx.builder.getInt8Ty()->getPointerTo();
     auto* i32  = ctx.builder.getInt32Ty();
-    llvm::DataLayout dl(&ctx.module());
+    llvm::DataLayout dl(ctx.module().getDataLayout());
     std::vector<AimlTypeNode> nodes = serFieldSubtree(containerType, 0, ctx, dl, DescriptorPurpose::Clone);
     if (nodes.empty()) return;
     // Emit a LinkOnceODR descriptor global (mirrors visitSysCloneCall).
@@ -5061,7 +5061,7 @@ void Compiler::emitContainerCloneDeep(llvm::Value* dstSlot, llvm::Value* srcSlot
 // when the type has no descriptor.
 static llvm::GlobalVariable* getFieldSerNodesGlobal(CompilerContext& ctx, const std::string& typeName,
                                                     int& nodeCount) {
-    llvm::DataLayout dl(&ctx.module());
+    llvm::DataLayout dl(ctx.module().getDataLayout());
     std::vector<AimlTypeNode> nodes = serBuildSubtree(typeName, 0, ctx, dl);
     nodeCount = (int)nodes.size();
     if (nodes.empty()) return nullptr;
@@ -5100,7 +5100,7 @@ static llvm::GlobalVariable* getFieldSerNodesGlobal(CompilerContext& ctx, const 
 // recursively releasing at its rc 0). Distinct symbol from the inline getFieldSerNodesGlobal.
 static llvm::GlobalVariable* getElemHandleSerNodesGlobal(CompilerContext& ctx, const std::string& typeName,
                                                          int& nodeCount) {
-    llvm::DataLayout dl(&ctx.module());
+    llvm::DataLayout dl(ctx.module().getDataLayout());
     std::vector<AimlTypeNode> nodes = serFieldSubtree(typeName, 0, ctx, dl);
     nodeCount = (int)nodes.size();
     if (nodes.empty()) return nullptr;
@@ -5225,7 +5225,7 @@ bool Compiler::emitContainerFieldFree(llvm::Value* dstPtr, llvm::Value* srcPtr,
 bool Compiler::emitContainerFieldDeepCopy(llvm::Value* dstPtr, llvm::Value* srcPtr,
                                           const std::string& typeName) {
     if (!dstPtr || !srcPtr) return false;
-    llvm::DataLayout dl(&ctx.module());
+    llvm::DataLayout dl(ctx.module().getDataLayout());
     llvm::LLVMContext& lctx = ctx.context;
     llvm::Type* i32Ty = llvm::Type::getInt32Ty(lctx);
     llvm::Type* ptrTy = llvm::PointerType::get(lctx, 0);
@@ -6475,9 +6475,9 @@ void Compiler::visitTopLevel(Node* node) {
         }
         childrenJson += "]";
 
-        llvm::Value* nameStr = ctx.builder.CreateGlobalStringPtr(prefab->name, "prefab_name");
-        llvm::Value* texStr  = ctx.builder.CreateGlobalStringPtr(prefab->texture, "prefab_tex");
-        llvm::Value* childStr = ctx.builder.CreateGlobalStringPtr(childrenJson, "prefab_children");
+        llvm::Value* nameStr = ctx.builder.CreateGlobalString(prefab->name, "prefab_name");
+        llvm::Value* texStr  = ctx.builder.CreateGlobalString(prefab->texture, "prefab_tex");
+        llvm::Value* childStr = ctx.builder.CreateGlobalString(childrenJson, "prefab_children");
         llvm::Value* w = llvm::ConstantFP::get(f32, prefab->width);
         llvm::Value* h = llvm::ConstantFP::get(f32, prefab->height);
         llvm::Value* drag = ctx.builder.getInt32(prefab->draggable ? 1 : 0);
@@ -6560,7 +6560,7 @@ void Compiler::visitTopLevel(Node* node) {
                                                    cb, &ctx.module());
                 }
             }
-            llvm::Value* cb_name_str = ctx.builder.CreateGlobalStringPtr(cb, "prefab_cb_name");
+            llvm::Value* cb_name_str = ctx.builder.CreateGlobalString(cb, "prefab_cb_name");
             llvm::Value* cb_ptr = ctx.builder.CreateBitCast(cb_fn, i8p);
             ctx.builder.CreateCall(
                 ctx.getFunction("aiml_prefab_register_callback", vd, {i8p, i8p}),
@@ -6598,9 +6598,9 @@ void Compiler::visitTopLevel(Node* node) {
         }
         auto* vd  = ctx.builder.getVoidTy();
         auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
-        llvm::Value* nameStr   = ctx.builder.CreateGlobalStringPtr(enmName, "enum_name");
-        llvm::Value* labelsStr = ctx.builder.CreateGlobalStringPtr(labels,  "enum_labels");
-        llvm::Value* valuesStr = ctx.builder.CreateGlobalStringPtr(values,  "enum_values");
+        llvm::Value* nameStr   = ctx.builder.CreateGlobalString(enmName, "enum_name");
+        llvm::Value* labelsStr = ctx.builder.CreateGlobalString(labels,  "enum_labels");
+        llvm::Value* valuesStr = ctx.builder.CreateGlobalString(values,  "enum_values");
         ctx.builder.CreateCall(
             ctx.getFunction("aiml_prefab_register_enum", vd, {i8p, i8p, i8p}),
             {nameStr, labelsStr, valuesStr});
@@ -6645,9 +6645,9 @@ void Compiler::visitTopLevel(Node* node) {
             j += "]}";
         }
         j += "]";
-        llvm::Value* nameStr  = ctx.builder.CreateGlobalStringPtr(casName, "cascade_name");
-        llvm::Value* nodesStr = ctx.builder.CreateGlobalStringPtr(j,       "cascade_nodes");
-        llvm::Value* opcStr   = ctx.builder.CreateGlobalStringPtr(info.opcode, "cascade_opcode");
+        llvm::Value* nameStr  = ctx.builder.CreateGlobalString(casName, "cascade_name");
+        llvm::Value* nodesStr = ctx.builder.CreateGlobalString(j,       "cascade_nodes");
+        llvm::Value* opcStr   = ctx.builder.CreateGlobalString(info.opcode, "cascade_opcode");
         ctx.builder.CreateCall(
             ctx.getFunction("aiml_prefab_register_cascade", vd, {i8p, i8p, i8p}),
             {nameStr, nodesStr, opcStr});
@@ -6733,9 +6733,9 @@ void Compiler::visitTopLevel(Node* node) {
         }
         uniformsJson += "}";
 
-        llvm::Value* nameStr   = ctx.builder.CreateGlobalStringPtr(mat->name,    "mat_name");
-        llvm::Value* shaderStr = ctx.builder.CreateGlobalStringPtr(mat->shader,  "mat_shader");
-        llvm::Value* uJsonStr  = ctx.builder.CreateGlobalStringPtr(uniformsJson, "mat_uniforms");
+        llvm::Value* nameStr   = ctx.builder.CreateGlobalString(mat->name,    "mat_name");
+        llvm::Value* shaderStr = ctx.builder.CreateGlobalString(mat->shader,  "mat_shader");
+        llvm::Value* uJsonStr  = ctx.builder.CreateGlobalString(uniformsJson, "mat_uniforms");
 
         ctx.builder.CreateCall(
             ctx.getFunction("aiml_material_register", vd, {i8p, i8p, i8p}),
@@ -7296,7 +7296,7 @@ void Compiler::visitFunction(FunctionDecl* func) {
             "aiml_trace_format",
             llvm::FunctionType::get(ctx.builder.getVoidTy(), {i8p, i8p}, true));
 
-        llvm::Value* fnameStr = ctx.builder.CreateGlobalStringPtr(func->name, "tr_fname");
+        llvm::Value* fnameStr = ctx.builder.CreateGlobalString(func->name, "tr_fname");
         llvm::Value* trActive = ctx.builder.CreateCall(traceActiveFn, {fnameStr}, "tr_active");
         llvm::Value* trCond   = ctx.builder.CreateICmpNE(
             trActive, llvm::ConstantInt::get(i32t, 0), "tr_cond");
@@ -7325,7 +7325,7 @@ void Compiler::visitFunction(FunctionDecl* func) {
                 format += "%s";
                 auto* nullp = llvm::ConstantPointerNull::get(i8p);
                 values.push_back(ctx.builder.CreateSelect(ctx.builder.CreateICmpEQ(value, nullp),
-                    ctx.builder.CreateGlobalStringPtr("<null>"), value));
+                    ctx.builder.CreateGlobalString("<null>"), value));
             } else if (ty->isPointerTy()) {
                 format += "%p";
                 values.push_back(value);
@@ -7352,7 +7352,7 @@ void Compiler::visitFunction(FunctionDecl* func) {
                 format += "<?>";
             }
         }
-        std::vector<llvm::Value*> printArgs = {fnameStr, ctx.builder.CreateGlobalStringPtr(format)};
+        std::vector<llvm::Value*> printArgs = {fnameStr, ctx.builder.CreateGlobalString(format)};
         printArgs.insert(printArgs.end(), values.begin(), values.end());
         ctx.builder.CreateCall(traceFn, printArgs);
         ctx.builder.CreateBr(bodyBB);
@@ -7566,7 +7566,7 @@ IRValue* Compiler::resolveProperty(Symbol* baseSym, const std::string& propName)
         if (propName == "byte_len" && aiml::vocab::isList(vc)) {
             std::string en = vc.substr(5, vc.size() - 6);
             llvm::Type* et = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(en)));
-            uint64_t esz = et ? llvm::DataLayout(&ctx.module()).getTypeAllocSize(et) : 0;
+            uint64_t esz = et ? llvm::DataLayout(ctx.module().getDataLayout()).getTypeAllocSize(et) : 0;
             if (!esz) esz = ctx.ptrStride();
             return ctx.ir_gen->wrap(ctx.builder.CreateMul(ListImpl::getSize(ctx, slot),
                                                           ctx.builder.getInt32((uint32_t)esz), "list_bytes"));
@@ -7595,7 +7595,7 @@ IRValue* Compiler::resolveProperty(Symbol* baseSym, const std::string& propName)
             for (size_t i = 1; i < parts.size(); ++i) total *= std::stoull(parts[i]);
             if (propName == "empty") return ctx.ir_gen->getInt32(total == 0 ? 1 : 0);
             llvm::Type* et = ctx.getLLVMType(parts[0]);
-            uint64_t esz = et ? llvm::DataLayout(&ctx.module()).getTypeAllocSize(et) : 0;
+            uint64_t esz = et ? llvm::DataLayout(ctx.module().getDataLayout()).getTypeAllocSize(et) : 0;
             return ctx.ir_gen->getInt32((int32_t)(total * esz));
         }
         // dyn_array<T>: the count from its header (spec/71 §6).
@@ -7605,7 +7605,7 @@ IRValue* Compiler::resolveProperty(Symbol* baseSym, const std::string& propName)
             if (propName == "empty") return emptyOf(n);
             if (propName == "len") return ctx.ir_gen->wrap(n);
             llvm::Type* et = ctx.getLLVMType(vc.substr(10, vc.size() - 11));
-            uint64_t esz = et ? llvm::DataLayout(&ctx.module()).getTypeAllocSize(et) : 0;
+            uint64_t esz = et ? llvm::DataLayout(ctx.module().getDataLayout()).getTypeAllocSize(et) : 0;
             return ctx.ir_gen->wrap(ctx.builder.CreateMul(n, ctx.builder.getInt32((uint32_t)esz), "darr_bytes"));
         }
         // string: .len = .byte_len (bytes of the UTF-8 text), .empty; null-safe.
@@ -7871,7 +7871,7 @@ IRValue* Compiler::resolveProperty(Symbol* baseSym, const std::string& propName)
                 LOG_ERROR(ctx.fmtLoc() + "buffer<T>." + propName + ": unknown elem type " + bElem);
                 return ctx.ir_gen->getInt32(0);
             }
-            llvm::DataLayout bdl(&ctx.module());
+            llvm::DataLayout bdl(ctx.module().getDataLayout());
             uint64_t bEsz = bdl.getTypeAllocSize(bElemTy);
             if (bEsz <= 1) return ctx.ir_gen->wrap(bytes);
             return ctx.ir_gen->wrap(ctx.builder.CreateSDiv(bytes, ctx.builder.getInt32((uint32_t)bEsz), "buf_elems"));
@@ -8373,7 +8373,7 @@ IRValue* Compiler::visitSysCloneCall(CallExpr* call) {
     // Build TypeNodes for the argument type and emit them as a global constant. round4 §1: this is a
     // CLONE descriptor (ref<T>→WEAK_REF, tensor→TENSOR under memV3). The Clone leaf branch is itself
     // memV3-gated, so under OFF this yields the identical Existing descriptor (byte-identical deploy).
-    llvm::DataLayout dl(&ctx.module());
+    llvm::DataLayout dl(ctx.module().getDataLayout());
     std::vector<AimlTypeNode> nodes = serBuildSubtree(argType, 0, ctx, dl, DescriptorPurpose::Clone);
     if (nodes.empty()) {
         LOG_ERROR(ctx.fmtLoc(call->sourceNode, call->sourceLine) + "sys.clone: failed to build TypeNodes for '" + argType + "'");

@@ -62,7 +62,7 @@ static void emitThrow(CompilerContext& ctx, const std::string& excClass) {
         ctx.excRecordField(excAlloc, 0, "exc_obj_slot"));
     ctx.builder.CreateStore(llvm::ConstantPointerNull::get(ptrTy),
         ctx.excRecordField(excAlloc, 1, "exc_thunk_slot"));
-    ctx.builder.CreateStore(ctx.builder.CreateGlobalStringPtr(excClass, "builtin_exc_tag"),
+    ctx.builder.CreateStore(ctx.builder.CreateGlobalString(excClass, "builtin_exc_tag"),
         ctx.excRecordField(excAlloc, 2, "exc_tag_slot"));
     llvm::Value* null = llvm::ConstantPointerNull::get(ptrTy);
     llvm::Constant* tinfo = ctx.getExcTypeInfo(excClass);
@@ -136,7 +136,7 @@ static void emitThrowMsg(CompilerContext& ctx, const std::string& excClass,
     ctx.builder.CreateStore(obj, ctx.excRecordField(excAlloc, 0, "exc_obj_slot"));
     ctx.builder.CreateStore(llvm::ConstantPointerNull::get(ptrTy),
         ctx.excRecordField(excAlloc, 1, "exc_thunk_slot"));
-    ctx.builder.CreateStore(ctx.builder.CreateGlobalStringPtr(excClass, "builtin_exc_tag"),
+    ctx.builder.CreateStore(ctx.builder.CreateGlobalString(excClass, "builtin_exc_tag"),
         ctx.excRecordField(excAlloc, 2, "exc_tag_slot"));
     llvm::Value* null = llvm::ConstantPointerNull::get(ptrTy);
     llvm::Constant* tinfo = ctx.getExcTypeInfo(excClass);
@@ -307,7 +307,7 @@ static void emitRpcTableRegistration(CompilerContext& ctx, llvm::Value* sess, ll
                                         llvm::Function::ExternalLinkage, e->thunk, ctx.module());
         uint64_t sz = ctx.module().getDataLayout().getTypeAllocSize(ai->second.type);
         rows.push_back(llvm::ConstantStruct::get(entTy, {
-            ctx.builder.CreateGlobalStringPtr(e->method, "rpc_m"),
+            ctx.builder.CreateGlobalString(e->method, "rpc_m"),
             llvm::cast<llvm::Constant>(ai->second.serNodesVar),
             llvm::ConstantInt::get(i32, (uint64_t)ai->second.serNodesCount),
             llvm::ConstantInt::get(i64, sz),
@@ -378,7 +378,7 @@ static llvm::Value* freshStringList(CompilerContext& ctx, const char* name) {
 // Argument `i` as a value, or "" when the call has fewer arguments.
 static llvm::Value* argOrEmpty(CompilerContext& ctx, const std::vector<IRValue*>& args, size_t i) {
     return args.size() > i ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[i]))
-                           : static_cast<llvm::Value*>(ctx.builder.CreateGlobalStringPtr(""));
+                           : static_cast<llvm::Value*>(ctx.builder.CreateGlobalString(""));
 }
 
 // The address of a buffer argument, for runtime calls that read or fill the
@@ -787,7 +787,7 @@ void registerBuiltins(CompilerContext& ctx) {
         cas.builtinFuncs["explain"] = [cascadeCheck](CompilerContext& ctx,
                                        const std::vector<IRValue*>& args) -> IRValue* {
             auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
-            if (args.size() < 2) return ctx.ir_gen->wrap(ctx.builder.CreateGlobalStringPtr(""));
+            if (args.size() < 2) return ctx.ir_gen->wrap(ctx.builder.CreateGlobalString(""));
             return ctx.ir_gen->wrap(cascadeCheck(ctx, args, "aiml_cascade_explain", i8p));
         };
 
@@ -1017,18 +1017,18 @@ void registerBuiltins(CompilerContext& ctx) {
                                     const std::vector<IRValue*>& args) -> IRValue* {
             if (args.size() < 2) {
                 LOG_ERROR(ctx.fmtLoc() + "enums.name: expected (type, value)");
-                return ctx.ir_gen->wrap(ctx.builder.CreateGlobalStringPtr(""));
+                return ctx.ir_gen->wrap(ctx.builder.CreateGlobalString(""));
             }
             std::string typeName = litStr(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])));
             if (typeName.empty()) {
                 LOG_ERROR(ctx.fmtLoc() + "enums.name: 'type' argument must be a string literal");
-                return ctx.ir_gen->wrap(ctx.builder.CreateGlobalStringPtr(""));
+                return ctx.ir_gen->wrap(ctx.builder.CreateGlobalString(""));
             }
             std::string key;
             auto* em = findEnum(ctx, typeName, key);
             if (!em) {
                 LOG_ERROR(ctx.fmtLoc() + "enums.name: unknown enum type '" + typeName + "'");
-                return ctx.ir_gen->wrap(ctx.builder.CreateGlobalStringPtr(""));
+                return ctx.ir_gen->wrap(ctx.builder.CreateGlobalString(""));
             }
             // Reflective whole-enum use (spec/49 §18): mark every member referenced.
             for (const auto& kv : *em) ctx.enumUsedMembers[key].insert(kv.first);
@@ -1036,10 +1036,10 @@ void registerBuiltins(CompilerContext& ctx) {
             if (val->getType() != ctx.builder.getInt32Ty())
                 val = ctx.builder.CreateZExtOrTrunc(val, ctx.builder.getInt32Ty());
             // Select-chain: value → member name, default "".
-            llvm::Value* result = ctx.builder.CreateGlobalStringPtr("");
+            llvm::Value* result = ctx.builder.CreateGlobalString("");
             for (const auto& kv : *em) {
                 llvm::Value* cond = ctx.builder.CreateICmpEQ(val, ctx.builder.getInt32(kv.second));
-                llvm::Value* nm   = ctx.builder.CreateGlobalStringPtr(kv.first);
+                llvm::Value* nm   = ctx.builder.CreateGlobalString(kv.first);
                 result = ctx.builder.CreateSelect(cond, nm, result);
             }
             return ctx.ir_gen->wrap(result);
@@ -1165,7 +1165,7 @@ void registerBuiltins(CompilerContext& ctx) {
     sys.builtinFuncs["size"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
         if (args.empty()) return ctx.ir_gen->getInt32(0);
         llvm::Type* ty = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(args[0]->getType()));
-        llvm::DataLayout dl(&ctx.module());
+        llvm::DataLayout dl(ctx.module().getDataLayout());
         return ctx.ir_gen->wrap(ctx.builder.getInt64(dl.getTypeAllocSize(ty)));
     };
 
@@ -1215,7 +1215,7 @@ void registerBuiltins(CompilerContext& ctx) {
     // spec/23 §5.7: sys.catch_signals("INT,TERM") → 0 / -1;  sys.caught_signal() → last caught, cleared
     sys.builtinFuncs["catch_signals"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
         llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
-        llvm::Value* names = args.empty() ? static_cast<llvm::Value*>(ctx.builder.CreateGlobalStringPtr(""))
+        llvm::Value* names = args.empty() ? static_cast<llvm::Value*>(ctx.builder.CreateGlobalString(""))
                                           : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
         return ctx.ir_gen->wrap(ctx.builder.CreateCall(ctx.getFunction("aiml_sys_catch_signals", ctx.builder.getInt32Ty(), {i8p}), {names}));
     };
@@ -1301,7 +1301,7 @@ void registerBuiltins(CompilerContext& ctx) {
         llvm::Type* i32Ty = ctx.builder.getInt32Ty();
         if (args.empty()) {
             LOG_ERROR(ctx.fmtLoc() + "sys.format_fixed expects (value, decimals) (spec/23 F23-78)");
-            return ctx.ir_gen->wrap(ctx.builder.CreateGlobalStringPtr(""));
+            return ctx.ir_gen->wrap(ctx.builder.CreateGlobalString(""));
         }
         llvm::Value* raw = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
         llvm::Value* val = raw->getType()->isDoubleTy() ? raw
@@ -1322,7 +1322,7 @@ void registerBuiltins(CompilerContext& ctx) {
     sys.builtinFuncs["require_tools"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
         auto* p = llvm::PointerType::get(ctx.context, 0);
         llvm::Value* spec = args.empty()
-            ? static_cast<llvm::Value*>(ctx.builder.CreateGlobalStringPtr("", "req_empty"))
+            ? static_cast<llvm::Value*>(ctx.builder.CreateGlobalString("", "req_empty"))
             : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
         llvm::Value* out = ctx.builder.CreateCall(
             ctx.getFunction("aiml_sys_require_tools", p, {p}), {spec}, "req_tools");
@@ -1369,7 +1369,7 @@ void registerBuiltins(CompilerContext& ctx) {
             llvm::Value* argStr    = ctx.builder.CreateLoad(i8p, argStrPtr);
             ctx.builder.CreateBr(mergeBB);
             ctx.builder.SetInsertPoint(errorBB);
-            llvm::Value* emptyStr = ctx.builder.CreateGlobalStringPtr("");
+            llvm::Value* emptyStr = ctx.builder.CreateGlobalString("");
             ctx.builder.CreateBr(mergeBB);
             ctx.builder.SetInsertPoint(mergeBB);
             llvm::PHINode* result = ctx.builder.CreatePHI(i8p, 2);
@@ -1413,7 +1413,7 @@ void registerBuiltins(CompilerContext& ctx) {
             : llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p));
         llvm::Value* name = args.size() > 1
             ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]))
-            : ctx.builder.CreateGlobalStringPtr("");
+            : ctx.builder.CreateGlobalString("");
         llvm::Value* sym = ctx.builder.CreateCall(dlsym_fn, {handle, name});
         return ctx.ir_gen->wrap(sym);
     };
@@ -1469,7 +1469,7 @@ void registerBuiltins(CompilerContext& ctx) {
 
     io.builtinFuncs["read"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
         llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
-        if (args.size() < 2) return ctx.ir_gen->wrap(ctx.builder.CreateGlobalStringPtr(""));
+        if (args.size() < 2) return ctx.ir_gen->wrap(ctx.builder.CreateGlobalString(""));
         llvm::Value* handle = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
         llvm::Function* parentFunc  = ctx.builder.GetInsertBlock()->getParent();
         llvm::BasicBlock* validBB   = llvm::BasicBlock::Create(ctx.context, "valid_handle",   parentFunc);
@@ -1478,7 +1478,7 @@ void registerBuiltins(CompilerContext& ctx) {
         llvm::Value* isNull = ctx.builder.CreateICmpEQ(handle, llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p)));
         ctx.builder.CreateCondBr(isNull, invalidBB, validBB);
         ctx.builder.SetInsertPoint(invalidBB);
-        llvm::Value* emptyStr = ctx.builder.CreateGlobalStringPtr("");
+        llvm::Value* emptyStr = ctx.builder.CreateGlobalString("");
         ctx.builder.CreateBr(mergeBB);
         ctx.builder.SetInsertPoint(validBB);
         llvm::Value* size = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]));
@@ -1503,7 +1503,7 @@ void registerBuiltins(CompilerContext& ctx) {
 
     io.builtinFuncs["read_all"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
         llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
-        if (args.empty()) return ctx.ir_gen->wrap(ctx.builder.CreateGlobalStringPtr(""));
+        if (args.empty()) return ctx.ir_gen->wrap(ctx.builder.CreateGlobalString(""));
         llvm::Value* handle = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
         llvm::Function* parentFunc  = ctx.builder.GetInsertBlock()->getParent();
         llvm::BasicBlock* validBB   = llvm::BasicBlock::Create(ctx.context, "valid_handle",   parentFunc);
@@ -1512,7 +1512,7 @@ void registerBuiltins(CompilerContext& ctx) {
         llvm::Value* isNull = ctx.builder.CreateICmpEQ(handle, llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p)));
         ctx.builder.CreateCondBr(isNull, invalidBB, validBB);
         ctx.builder.SetInsertPoint(invalidBB);
-        llvm::Value* emptyStr = ctx.builder.CreateGlobalStringPtr("");
+        llvm::Value* emptyStr = ctx.builder.CreateGlobalString("");
         ctx.builder.CreateBr(mergeBB);
         ctx.builder.SetInsertPoint(validBB);
         llvm::Function* fseekF = ctx.getFunction("fseek", ctx.builder.getInt32Ty(),
@@ -1674,7 +1674,7 @@ void registerBuiltins(CompilerContext& ctx) {
     // consuming decl/set takes it over and an unused one is freed at the end of the statement.
     io.builtinFuncs["read_line"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
         llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
-        if (args.empty()) return ctx.ir_gen->wrap(ctx.builder.CreateGlobalStringPtr(""));
+        if (args.empty()) return ctx.ir_gen->wrap(ctx.builder.CreateGlobalString(""));
         llvm::Function* fn = ctx.getFunction("aiml_io_read_line", i8p, {i8p});
         llvm::Value* f = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
         llvm::Value* line = ctx.builder.CreateCall(fn, {f}, "io_line");
@@ -1685,7 +1685,7 @@ void registerBuiltins(CompilerContext& ctx) {
 
     io.builtinFuncs["read_cstring"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
         llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
-        if (args.empty()) return ctx.ir_gen->wrap(ctx.builder.CreateGlobalStringPtr(""));
+        if (args.empty()) return ctx.ir_gen->wrap(ctx.builder.CreateGlobalString(""));
         llvm::Function* fn = ctx.getFunction("aiml_io_read_cstring", i8p, {i8p});
         llvm::Value* f = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
         return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {f}));
@@ -2884,7 +2884,7 @@ void registerBuiltins(CompilerContext& ctx) {
                               AIML::AST::CallExpr*, auto) -> IRValue* {
                 auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
                 llvm::Value* self = ctx.builder.CreateLoad(i8p, base, "self");
-                llvm::Value* kv = ctx.builder.CreateGlobalStringPtr(key, "attr_key");
+                llvm::Value* kv = ctx.builder.CreateGlobalString(key, "attr_key");
                 return ctx.ir_gen->wrap(ctx.builder.CreateCall(
                     ctx.getFunction(cfn, i8p, {i8p, i8p}), {self, kv}));
             };
@@ -2895,7 +2895,7 @@ void registerBuiltins(CompilerContext& ctx) {
                 auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
                 auto* i32 = ctx.builder.getInt32Ty();
                 llvm::Value* self = ctx.builder.CreateLoad(i8p, base, "self");
-                llvm::Value* kv = ctx.builder.CreateGlobalStringPtr(key, "limit_key");
+                llvm::Value* kv = ctx.builder.CreateGlobalString(key, "limit_key");
                 return ctx.ir_gen->wrap(ctx.builder.CreateCall(
                     ctx.getFunction(cfn, i32, {i8p, i8p}), {self, kv}));
             };
@@ -2953,7 +2953,7 @@ void registerBuiltins(CompilerContext& ctx) {
                 llvm::Value* self = ctx.builder.CreateLoad(i8p, base, "self");
                 llvm::Value* idx = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
                 if (idx->getType() != i32) idx = ctx.builder.CreateZExtOrTrunc(idx, i32);
-                llvm::Value* kv = ctx.builder.CreateGlobalStringPtr(key, "push_key");
+                llvm::Value* kv = ctx.builder.CreateGlobalString(key, "push_key");
                 return ctx.ir_gen->wrap(ctx.builder.CreateCall(
                     ctx.getFunction(cfn, i8p, {i8p, i32, i8p}), {self, idx, kv}));
             };
@@ -2974,7 +2974,7 @@ void registerBuiltins(CompilerContext& ctx) {
                 llvm::Value* isNull = ctx.builder.CreateICmpEQ(
                     got, llvm::ConstantPointerNull::get(llvm::PointerType::getUnqual(ctx.context)));
                 llvm::Value* flag = ctx.builder.CreateZExt(isNull, ctx.builder.getInt8Ty());
-                llvm::Value* msg = ctx.builder.CreateGlobalStringPtr(
+                llvm::Value* msg = ctx.builder.CreateGlobalString(
                     std::string(what) + ": index out of range (spec/62 F62-154)", "idx_msg");
                 emitGuardMsg(ctx, flag, "idx_bad", "idx_ok", "IndexOutOfBoundsException", msg);
                 return ctx.ir_gen->wrap(got);
@@ -3179,7 +3179,7 @@ void registerBuiltins(CompilerContext& ctx) {
             llvm::Value* axis = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
             llvm::Value* type = typed
                 ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[1].get())))
-                : ctx.builder.CreateGlobalStringPtr("string", "axis_type");
+                : ctx.builder.CreateGlobalString("string", "axis_type");
             llvm::Value* lst  = static_cast<llvm::Value*>(
                 ctx.ir_gen->unwrap(evalExpr(call->args[typed ? 2 : 1].get())));
             if (!lst->getType()->isPointerTy()) {
@@ -3361,7 +3361,7 @@ void registerBuiltins(CompilerContext& ctx) {
             if (call->args.empty()) return ctx.ir_gen->wrap(base);
             IRValue* rv = eval(call->args[0].get());
             llvm::Value* rhs = rv ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(rv))
-                                  : ctx.builder.CreateGlobalStringPtr("");
+                                  : ctx.builder.CreateGlobalString("");
             return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {base, rhs}));
         };
 
@@ -3404,7 +3404,7 @@ void registerBuiltins(CompilerContext& ctx) {
             if (call->args.empty()) return ctx.ir_gen->wrap(pv);
             IRValue* bv = eval(call->args[0].get());
             llvm::Value* base = bv ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(bv))
-                                   : ctx.builder.CreateGlobalStringPtr("");
+                                   : ctx.builder.CreateGlobalString("");
             return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {pv, base}));
         };
 
@@ -3449,7 +3449,7 @@ void registerBuiltins(CompilerContext& ctx) {
         auto internLit = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
             llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
             llvm::Function* f = ctx.getFunction("aiml_path_intern", i8p, {i8p});
-            if (args.empty()) return ctx.ir_gen->wrap(ctx.builder.CreateGlobalStringPtr(""));
+            if (args.empty()) return ctx.ir_gen->wrap(ctx.builder.CreateGlobalString(""));
             llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
             return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {v}));
         };
@@ -3473,7 +3473,7 @@ void registerBuiltins(CompilerContext& ctx) {
             llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
             llvm::Function* f = ctx.getFunction("aiml_path_config_dir", i8p, {i8p});
             llvm::Value* app = args.empty()
-                ? ctx.builder.CreateGlobalStringPtr("")
+                ? ctx.builder.CreateGlobalString("")
                 : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
             return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {app}));
         };
@@ -3579,7 +3579,7 @@ void registerBuiltins(CompilerContext& ctx) {
         yaml.builtinFuncs["key"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
             auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
             auto* i32 = ctx.builder.getInt32Ty();
-            if (args.size() < 2) return ctx.ir_gen->wrap(ctx.builder.CreateGlobalStringPtr(""));
+            if (args.size() < 2) return ctx.ir_gen->wrap(ctx.builder.CreateGlobalString(""));
             auto* function = ctx.getFunction("aiml_yaml_key", i8p, {i8p, i32});
             // yaml.key returns a FRESH owned aiml string (copyString) → own it as a stmt-temp (see
             // unaryStrOwned) so the binding local moves it / an unbound transient is decref'd.
@@ -3694,7 +3694,7 @@ void registerBuiltins(CompilerContext& ctx) {
             llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
             llvm::Function* f = ctx.getFunction("aiml_io_read_link", i8p, {i8p});
             llvm::Value* v = args.empty()
-                ? static_cast<llvm::Value*>(ctx.builder.CreateGlobalStringPtr(""))
+                ? static_cast<llvm::Value*>(ctx.builder.CreateGlobalString(""))
                 : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
             llvm::Value* owned = ctx.builder.CreateCall(f, {v}, "link_target");
             if (ctx.lifetimeDropsEnabled && !ctx.stmtTempStack.empty())
@@ -3717,7 +3717,7 @@ void registerBuiltins(CompilerContext& ctx) {
             llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
             llvm::Function* f = ctx.getFunction("aiml_io_read_file", i8p, {i8p});
             llvm::Value* v = args.empty()
-                ? static_cast<llvm::Value*>(ctx.builder.CreateGlobalStringPtr(""))
+                ? static_cast<llvm::Value*>(ctx.builder.CreateGlobalString(""))
                 : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
             llvm::Value* owned = ctx.builder.CreateCall(f, {v}, "file_text");   // owned rc string
             if (ctx.lifetimeDropsEnabled && !ctx.stmtTempStack.empty())
@@ -3741,7 +3741,7 @@ void registerBuiltins(CompilerContext& ctx) {
                 }
             }
             llvm::Function* f = ctx.getFunction("aiml_asset_read_data", i8p, {i8p});
-            if (args.empty()) return ctx.ir_gen->wrap(ctx.builder.CreateGlobalStringPtr(""));
+            if (args.empty()) return ctx.ir_gen->wrap(ctx.builder.CreateGlobalString(""));
             llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
             return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {v}));
         };
@@ -3796,7 +3796,7 @@ void registerBuiltins(CompilerContext& ctx) {
 
             llvm::Function* fillFn = ctx.getFunction("aiml_io_list_dir_fill", i32ty, {i8p, ptrTy});
             llvm::Value* pathVal = args.empty()
-                ? ctx.builder.CreateGlobalStringPtr("")
+                ? ctx.builder.CreateGlobalString("")
                 : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
             ctx.builder.CreateCall(fillFn, {pathVal, listAlloca});
 
@@ -3903,7 +3903,7 @@ void registerBuiltins(CompilerContext& ctx) {
             llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
             llvm::Function* f = ctx.getFunction("aiml_net_socket", i8p, {i8p});
             llvm::Value* proto = args.empty()
-                ? ctx.builder.CreateGlobalStringPtr("tcp")
+                ? ctx.builder.CreateGlobalString("tcp")
                 : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
             return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {proto}));
         };
@@ -4002,7 +4002,7 @@ void registerBuiltins(CompilerContext& ctx) {
             llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
             llvm::Type* i32 = ctx.builder.getInt32Ty();
             llvm::Function* f = ctx.getFunction("aiml_net_recv_string", i8p, {i8p, i32});
-            if (args.empty()) return ctx.ir_gen->wrap(ctx.builder.CreateGlobalStringPtr(""));
+            if (args.empty()) return ctx.ir_gen->wrap(ctx.builder.CreateGlobalString(""));
             llvm::Value* maxBytes = args.size() >= 2
                 ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]))
                 : ctx.builder.getInt32(4096);
@@ -4254,7 +4254,7 @@ void registerBuiltins(CompilerContext& ctx) {
             llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
             llvm::Type* i32 = ctx.builder.getInt32Ty();
             llvm::Function* f = ctx.getFunction("aiml_tls_recv_string", i8p, {i8p, i32});
-            if (args.empty()) return ctx.ir_gen->wrap(ctx.builder.CreateGlobalStringPtr(""));
+            if (args.empty()) return ctx.ir_gen->wrap(ctx.builder.CreateGlobalString(""));
             llvm::Value* maxBytes = args.size() >= 2
                 ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]))
                 : ctx.builder.getInt32(4096);
@@ -4447,7 +4447,7 @@ void registerBuiltins(CompilerContext& ctx) {
             llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo(); \
             llvm::Value* p = ctx.builder.CreateLoad(i8p, baseAlloca); \
             llvm::Value* a = call->args.empty() \
-                ? static_cast<llvm::Value*>(ctx.builder.CreateGlobalStringPtr("")) \
+                ? static_cast<llvm::Value*>(ctx.builder.CreateGlobalString("")) \
                 : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get()))); \
             return ctx.ir_gen->wrap(ctx.builder.CreateCall( \
                 ctx.getFunction(cName, ctx.builder.getInt32Ty(), {i8p, i8p}), {p, a})); \
@@ -4481,7 +4481,7 @@ void registerBuiltins(CompilerContext& ctx) {
             llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
             llvm::Value* p = ctx.builder.CreateLoad(i8p, baseAlloca);
             llvm::Value* cmd = call->args.empty()
-                ? static_cast<llvm::Value*>(ctx.builder.CreateGlobalStringPtr(""))
+                ? static_cast<llvm::Value*>(ctx.builder.CreateGlobalString(""))
                 : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
             return ctx.ir_gen->wrap(ctx.builder.CreateCall(
                 ctx.getFunction("aiml_ssh_exec", i8p, {i8p, i8p}), {p, cmd}));
@@ -4605,7 +4605,7 @@ void registerBuiltins(CompilerContext& ctx) {
                 llvm::Type* i64t = ctx.builder.getInt64Ty();
                 llvm::Value* self = ctx.builder.CreateLoad(i8p, baseAlloca, "cx");
                 auto strArg = [&](size_t i) -> llvm::Value* {
-                    if (call->args.size() <= i) return ctx.builder.CreateGlobalStringPtr("");
+                    if (call->args.size() <= i) return ctx.builder.CreateGlobalString("");
                     return static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[i].get())));
                 };
                 llvm::Value* nameV = strArg(0);
@@ -4639,7 +4639,7 @@ void registerBuiltins(CompilerContext& ctx) {
                 llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
                 llvm::Value* self = ctx.builder.CreateLoad(i8p, baseAlloca, "cx");
                 llvm::Value* want = call->args.empty()
-                    ? ctx.builder.CreateGlobalStringPtr("")
+                    ? ctx.builder.CreateGlobalString("")
                     : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
                 // spec/61 §5: a list HANDLE of its own, not a stack alloca —
                 // the scope drop would otherwise free stack memory.
@@ -4734,7 +4734,7 @@ void registerBuiltins(CompilerContext& ctx) {
                 llvm::Value* self = ctx.builder.CreateLoad(i8p, baseAlloca, "cx");
                 llvm::Value* nameV = static_cast<llvm::Value*>(
                     ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
-                llvm::Value* sigV = ctx.builder.CreateGlobalStringPtr(sigLit->value, "ctx_sig");
+                llvm::Value* sigV = ctx.builder.CreateGlobalString(sigLit->value, "ctx_sig");
                 // Check first, then call — the same check as cx.symbol.
                 llvm::Value* addrSlot = ctx.builder.CreateAlloca(i64t, nullptr, "call_addr");
                 llvm::Value* msgSlot  = ctx.builder.CreateAlloca(i8p,  nullptr, "call_msg");
@@ -4776,7 +4776,7 @@ void registerBuiltins(CompilerContext& ctx) {
                 llvm::Type* i32t = ctx.builder.getInt32Ty();
                 llvm::Value* self = ctx.builder.CreateLoad(i8p, baseAlloca, "cx");
                 llvm::Value* path = call->args.empty()
-                    ? ctx.builder.CreateGlobalStringPtr("")
+                    ? ctx.builder.CreateGlobalString("")
                     : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
                 return ctx.ir_gen->wrap(ctx.builder.CreateCall(
                     ctx.getFunction("aiml_ctx_use_packages", i32t, {i8p, i8p}), {self, path}));
@@ -4810,7 +4810,7 @@ void registerBuiltins(CompilerContext& ctx) {
             llvm::Type* i32 = ctx.builder.getInt32Ty();
             auto str = [&](size_t i) -> llvm::Value* {
                 return args.size() > i ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[i]))
-                                       : static_cast<llvm::Value*>(ctx.builder.CreateGlobalStringPtr(""));
+                                       : static_cast<llvm::Value*>(ctx.builder.CreateGlobalString(""));
             };
             auto num = [&](size_t i, int dflt) -> llvm::Value* {
                 if (args.size() <= i) return ctx.builder.getInt32(dflt);
@@ -4830,7 +4830,7 @@ void registerBuiltins(CompilerContext& ctx) {
                     static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])), i32);
             auto str = [&](size_t i) -> llvm::Value* {
                 return args.size() > i ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[i]))
-                                       : static_cast<llvm::Value*>(ctx.builder.CreateGlobalStringPtr(""));
+                                       : static_cast<llvm::Value*>(ctx.builder.CreateGlobalString(""));
             };
             return ctx.ir_gen->wrap(ctx.builder.CreateCall(
                 ctx.getFunction("aiml_ssh_test_listen", i8p, {i32, i8p, i8p}),
@@ -4853,7 +4853,7 @@ void registerBuiltins(CompilerContext& ctx) {
             b64.builtinFuncs[aimlName] = [url, trackStr](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
                 llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
                 llvm::Type* i32 = ctx.builder.getInt32Ty();
-                if (args.empty()) return trackStr(ctx, ctx.builder.CreateCall(ctx.getFunction("aiml_str_dup", i8p, {i8p}), {ctx.builder.CreateGlobalStringPtr("")}));
+                if (args.empty()) return trackStr(ctx, ctx.builder.CreateCall(ctx.getFunction("aiml_str_dup", i8p, {i8p}), {ctx.builder.CreateGlobalString("")}));
                 llvm::Value* a = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
                 if (a && a->getType() == ctx.getLLVMType("buffer")) {
                     // generic entry (style guideline §1): buffer<u8> → pointer + length
@@ -4874,7 +4874,7 @@ void registerBuiltins(CompilerContext& ctx) {
                 llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
                 llvm::Type* i32 = ctx.builder.getInt32Ty();
                 llvm::Type* bt  = ctx.getLLVMType("buffer");
-                llvm::Value* s = args.empty() ? static_cast<llvm::Value*>(ctx.builder.CreateGlobalStringPtr(""))
+                llvm::Value* s = args.empty() ? static_cast<llvm::Value*>(ctx.builder.CreateGlobalString(""))
                                               : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
                 llvm::Value* hdr = ctx.builder.CreateCall(
                     ctx.getFunction("aiml_b64_decode_buf", i8p, {i8p, i32}), {s, ctx.builder.getInt32(url)});
@@ -4898,7 +4898,7 @@ void registerBuiltins(CompilerContext& ctx) {
         b64.builtinFuncs["decode_str"] = [trackStr](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
             llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
             llvm::Type* i32 = ctx.builder.getInt32Ty();
-            llvm::Value* s = args.empty() ? static_cast<llvm::Value*>(ctx.builder.CreateGlobalStringPtr(""))
+            llvm::Value* s = args.empty() ? static_cast<llvm::Value*>(ctx.builder.CreateGlobalString(""))
                                           : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
             llvm::Value* url = ctx.builder.getInt32(0);
             if (args.size() > 1) url = ctx.builder.CreateZExtOrTrunc(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1])), i32);
@@ -4911,7 +4911,7 @@ void registerBuiltins(CompilerContext& ctx) {
         lh.isBuiltin = true;
         auto argStr = [](CompilerContext& ctx, AIML::AST::CallExpr* call, size_t i,
                          const std::function<IRValue*(AIML::AST::Expr*)>& evalExpr) -> llvm::Value* {
-            if (!call || call->args.size() <= i) return ctx.builder.CreateGlobalStringPtr("");
+            if (!call || call->args.size() <= i) return ctx.builder.CreateGlobalString("");
             return static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[i].get())));
         };
         lh.builtinMethods["start_tls"] = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr*, std::function<IRValue*(AIML::AST::Expr*)>) -> IRValue* {
@@ -4969,14 +4969,14 @@ void registerBuiltins(CompilerContext& ctx) {
         auto& ldapns = ctx.namespaces["ldap"];
         ldapns.builtinFuncs["open"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
             llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
-            llvm::Value* u = args.empty() ? static_cast<llvm::Value*>(ctx.builder.CreateGlobalStringPtr(""))
+            llvm::Value* u = args.empty() ? static_cast<llvm::Value*>(ctx.builder.CreateGlobalString(""))
                                           : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
             return ctx.ir_gen->wrap(ctx.builder.CreateCall(ctx.getFunction("aiml_ldap_open", i8p, {i8p}), {u}));
         };
         auto regStr1 = [&](CompilerContext::Namespace& ns, const char* aimlName, const char* cName) {
             ns.builtinFuncs[aimlName] = [cName, trackStr](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
                 llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
-                llvm::Value* a = args.empty() ? static_cast<llvm::Value*>(ctx.builder.CreateGlobalStringPtr(""))
+                llvm::Value* a = args.empty() ? static_cast<llvm::Value*>(ctx.builder.CreateGlobalString(""))
                                               : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
                 return trackStr(ctx, ctx.builder.CreateCall(ctx.getFunction(cName, i8p, {i8p}), {a}));
             };
@@ -4990,7 +4990,7 @@ void registerBuiltins(CompilerContext& ctx) {
             llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
             auto s = [&](size_t i) -> llvm::Value* {
                 return args.size() > i ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[i]))
-                                       : static_cast<llvm::Value*>(ctx.builder.CreateGlobalStringPtr(""));
+                                       : static_cast<llvm::Value*>(ctx.builder.CreateGlobalString(""));
             };
             return trackStr(ctx, ctx.builder.CreateCall(
                 ctx.getFunction("aiml_saml_authn_request_url", i8p, {i8p, i8p, i8p, i8p, i8p}),
@@ -5012,7 +5012,7 @@ void registerBuiltins(CompilerContext& ctx) {
             llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
             auto s = [&](size_t i) -> llvm::Value* {
                 return args.size() > i ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[i]))
-                                       : static_cast<llvm::Value*>(ctx.builder.CreateGlobalStringPtr(""));
+                                       : static_cast<llvm::Value*>(ctx.builder.CreateGlobalString(""));
             };
             llvm::StructType* mapTy = llvm::StructType::get(ctx.context, {
                 ctx.builder.getInt32Ty(), ctx.builder.getInt32Ty(), i8p, i8p->getPointerTo(), i8p->getPointerTo() });
@@ -5505,7 +5505,7 @@ void registerBuiltins(CompilerContext& ctx) {
             if (!elemName.empty() && ctx.classes.count(elemName)) {
                 auto& ci = ctx.classes[elemName];
                 if (ci.type) {
-                    llvm::DataLayout dl(&ctx.module());
+                    llvm::DataLayout dl(ctx.module().getDataLayout());
                     elemSize = static_cast<int64_t>(dl.getTypeAllocSize(ci.type));
                 } else if (ci.packed_size > 0) {
                     elemSize = static_cast<int64_t>(ci.packed_size);
@@ -5513,16 +5513,16 @@ void registerBuiltins(CompilerContext& ctx) {
             }
 
             llvm::Value* nameVal = args.empty()
-                ? ctx.builder.CreateGlobalStringPtr("")
+                ? ctx.builder.CreateGlobalString("")
                 : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
-            llvm::Value* tnVal = ctx.builder.CreateGlobalStringPtr(
+            llvm::Value* tnVal = ctx.builder.CreateGlobalString(
                 elemName.empty() ? "?" : elemName);
 
             // ── Column Layout ─────────────────────────────────────────────────
             if (ctx.dbOpenColumnLayout && !elemName.empty() &&
                 ctx.classes.count(elemName) && ctx.classes[elemName].type) {
                 auto& ci = ctx.classes[elemName];
-                llvm::DataLayout dl(&ctx.module());
+                llvm::DataLayout dl(ctx.module().getDataLayout());
                 int n = (int)ci.members.size();
                 std::vector<std::pair<int,int>> flds;
                 for (auto& [fname, fm] : ci.members)
@@ -5610,12 +5610,12 @@ void registerBuiltins(CompilerContext& ctx) {
             else if (vName == "f32")    valSize = 4;
             else if (vName == "f64")    valSize = 8;
             else if (ctx.classes.count(vName) && ctx.classes[vName].type) {
-                llvm::DataLayout dl(&ctx.module());
+                llvm::DataLayout dl(ctx.module().getDataLayout());
                 valSize = static_cast<int64_t>(dl.getTypeAllocSize(ctx.classes[vName].type));
             }
 
             llvm::Value* nameVal = args.empty()
-                ? ctx.builder.CreateGlobalStringPtr("")
+                ? ctx.builder.CreateGlobalString("")
                 : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
 
             // Spec 45: typed Kv — use WAL-safe open when value type has heap fields.
@@ -5684,13 +5684,13 @@ void registerBuiltins(CompilerContext& ctx) {
             if (ctx.classes.count(vName) && ctx.classes[vName].type) {
                 auto& vci = ctx.classes[vName];
                 llvm::StructType* vStructTy = vci.type;
-                llvm::DataLayout dl(&ctx.module());
+                llvm::DataLayout dl(ctx.module().getDataLayout());
                 const llvm::StructLayout* sl = dl.getStructLayout(vStructTy);
                 for (auto& [fname, mem] : vci.members) {
                     if (!mem.db_indexed) continue;
 
-                    llvm::Value* fNameVal = ctx.builder.CreateGlobalStringPtr(fname);
-                    llvm::Value* modeVal  = ctx.builder.CreateGlobalStringPtr(mem.db_indexed_mode);
+                    llvm::Value* fNameVal = ctx.builder.CreateGlobalString(fname);
+                    llvm::Value* modeVal  = ctx.builder.CreateGlobalString(mem.db_indexed_mode);
                     llvm::Value* uniqVal  = ctx.builder.getInt32(mem.db_indexed_unique ? 1 : 0);
                     llvm::Function* idxOpen = ctx.getFunction(
                         "aiml_db_index_open_for_kv", i8p, {i8p, i8p, i32, i8p});
@@ -5724,7 +5724,7 @@ void registerBuiltins(CompilerContext& ctx) {
             llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
             llvm::Type* i32 = ctx.builder.getInt32Ty();
             llvm::Value* nameVal = args.empty()
-                ? ctx.builder.CreateGlobalStringPtr("")
+                ? ctx.builder.CreateGlobalString("")
                 : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
             llvm::Value* dimsVal = args.size() >= 2
                 ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]))
@@ -5759,7 +5759,7 @@ void registerBuiltins(CompilerContext& ctx) {
             if (!elemName.empty() && ctx.classes.count(elemName)) {
                 auto& ci = ctx.classes[elemName];
                 if (ci.type) {
-                    llvm::DataLayout dl(&ctx.module());
+                    llvm::DataLayout dl(ctx.module().getDataLayout());
                     elemSize = static_cast<int64_t>(dl.getTypeAllocSize(ci.type));
                 } else if (ci.packed_size > 0) {
                     elemSize = static_cast<int64_t>(ci.packed_size);
@@ -5767,7 +5767,7 @@ void registerBuiltins(CompilerContext& ctx) {
             }
 
             llvm::Value* nameVal = args.empty()
-                ? ctx.builder.CreateGlobalStringPtr("")
+                ? ctx.builder.CreateGlobalString("")
                 : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
             if (ctx.dbOpenPersist) {
                 // path:nullptr → C-Resolver (resolve_aiondb_dir) nutzt
@@ -5902,7 +5902,7 @@ void registerBuiltins(CompilerContext& ctx) {
                     std::string elemN = tgt.substr(6, tgt.size() - 7);
                     if (ctx.classes.count(elemN) && ctx.classes[elemN].type) {
                         auto& ci = ctx.classes[elemN];
-                        llvm::DataLayout dl(&ctx.module());
+                        llvm::DataLayout dl(ctx.module().getDataLayout());
                         const llvm::StructLayout* sl = dl.getStructLayout(ci.type);
                         auto mit = ci.members.find(ctx.dbQueryOrderBy);
                         if (mit != ci.members.end()) {
@@ -6048,7 +6048,7 @@ void registerBuiltins(CompilerContext& ctx) {
                 std::vector<llvm::Value*> call_args;
                 for (size_t i = 0; i < 4; ++i) {
                     if (i < args.size()) call_args.push_back(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[i])));
-                    else call_args.push_back(ctx.builder.CreateGlobalStringPtr(""));
+                    else call_args.push_back(ctx.builder.CreateGlobalString(""));
                 }
                 return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, call_args));
             };
@@ -7965,7 +7965,7 @@ void registerBuiltins(CompilerContext& ctx) {
                 if (!bf) bf = llvm::Function::Create( \
                     llvm::FunctionType::get(p, {p, p, i32}, false), \
                     llvm::Function::ExternalLinkage, "aiml_hash_hex_buf", ctx.module()); \
-                llvm::Value* algo = ctx.builder.CreateGlobalStringPtr(aimlName); \
+                llvm::Value* algo = ctx.builder.CreateGlobalString(aimlName); \
                 llvm::Value* hbres = ctx.builder.CreateCall(bf, {algo, dataP, lenV}); \
                 if (ctx.lifetimeDropsEnabled && !ctx.stmtTempStack.empty()) AIML::AST::aimlTrackStringTemp(ctx, hbres); \
                 return ctx.ir_gen->wrap(hbres); \
@@ -8182,9 +8182,9 @@ void registerBuiltins(CompilerContext& ctx) {
         auto regStrToBuf = [](const char* aimlName, const char* cName) {
             return [cName](CompilerContext& ctx, const BF& args) -> IRValue* {
                 llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
-                llvm::Value* s = args.empty() ? static_cast<llvm::Value*>(ctx.builder.CreateGlobalStringPtr(""))
+                llvm::Value* s = args.empty() ? static_cast<llvm::Value*>(ctx.builder.CreateGlobalString(""))
                                               : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
-                if (!s->getType()->isPointerTy()) s = ctx.builder.CreateGlobalStringPtr("");
+                if (!s->getType()->isPointerTy()) s = ctx.builder.CreateGlobalString("");
                 return BytesHelp::buf(ctx, ctx.builder.CreateCall(ctx.getFunction(cName, i8p, {i8p}), {s}));
             };
             (void)aimlName;
@@ -8213,7 +8213,7 @@ void registerBuiltins(CompilerContext& ctx) {
                 llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[i]));
                 if (v->getType()->isPointerTy()) return v;
             }
-            return ctx.builder.CreateGlobalStringPtr("");
+            return ctx.builder.CreateGlobalString("");
         };
         // bytes.append_file(path, buf) → i64
         bns.builtinFuncs["append_file"] = [cstrArg](CompilerContext& ctx, const BF& args) -> IRValue* {
@@ -8280,7 +8280,7 @@ void registerBuiltins(CompilerContext& ctx) {
                     llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[i]));
                     if (v->getType()->isPointerTy()) return v;
                 }
-                return ctx.builder.CreateGlobalStringPtr("");
+                return ctx.builder.CreateGlobalString("");
             }
         };
         // fsmeta.stat(path, field) → i64
@@ -10871,7 +10871,7 @@ void registerBuiltins(CompilerContext& ctx) {
             auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
             auto* f32 = ctx.builder.getFloatTy();
             llvm::Value* txt = args.empty()
-                ? static_cast<llvm::Value*>(ctx.builder.CreateGlobalStringPtr(""))
+                ? static_cast<llvm::Value*>(ctx.builder.CreateGlobalString(""))
                 : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
             llvm::Value* sz = args.size() < 2 ? (llvm::Value*)llvm::ConstantFP::get(f32, 0.0)
                 : ctx.builder.CreateFPCast(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1])), f32);
@@ -11907,7 +11907,7 @@ void registerBuiltins(CompilerContext& ctx) {
             const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
             auto* p = llvm::PointerType::get(ctx.context, 0);
             llvm::Value* name = args.empty()
-                ? static_cast<llvm::Value*>(ctx.builder.CreateGlobalStringPtr("arrow"))
+                ? static_cast<llvm::Value*>(ctx.builder.CreateGlobalString("arrow"))
                 : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
             ctx.builder.CreateCall(ctx.getFunction("aiml_input_set_cursor",
                 ctx.builder.getVoidTy(), {p}), {name});
@@ -11930,7 +11930,7 @@ void registerBuiltins(CompilerContext& ctx) {
             const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
             auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
             llvm::Value* s = args.empty()
-                ? static_cast<llvm::Value*>(ctx.builder.CreateGlobalStringPtr(""))
+                ? static_cast<llvm::Value*>(ctx.builder.CreateGlobalString(""))
                 : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
             ctx.builder.CreateCall(ctx.getFunction("aiml_input_clipboard_set",
                 ctx.builder.getVoidTy(), {i8p}), {s});
@@ -12029,7 +12029,7 @@ void registerBuiltins(CompilerContext& ctx) {
             const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* { \
             auto* i8p = ctx.builder.getInt8Ty()->getPointerTo(); \
             llvm::Value* s = args.empty() \
-                ? static_cast<llvm::Value*>(ctx.builder.CreateGlobalStringPtr("")) \
+                ? static_cast<llvm::Value*>(ctx.builder.CreateGlobalString("")) \
                 : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])); \
             ctx.builder.CreateCall(ctx.getFunction(cName, \
                 ctx.builder.getVoidTy(), {i8p}), {s}); \
@@ -12079,7 +12079,7 @@ void registerBuiltins(CompilerContext& ctx) {
             const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* { \
             auto* i8p = ctx.builder.getInt8Ty()->getPointerTo(); \
             llvm::Value* str = args.empty() \
-                ? static_cast<llvm::Value*>(ctx.builder.CreateGlobalStringPtr("")) \
+                ? static_cast<llvm::Value*>(ctx.builder.CreateGlobalString("")) \
                 : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])); \
             ctx.builder.CreateCall(ctx.getFunction(cName, \
                 ctx.builder.getVoidTy(), {i8p}), {str}); \
@@ -13820,7 +13820,7 @@ void registerBuiltins(CompilerContext& ctx) {
                 auto& ci2 = ctx.classes[outTn];
                 // Zero-initialise the target so heap-field pointers start null
                 // (aiml_ser_decode docs: caller must zero-init `out`).
-                llvm::DataLayout dl(&ctx.module());
+                llvm::DataLayout dl(ctx.module().getDataLayout());
                 uint64_t outSz = dl.getTypeAllocSize(ci2.type);
                 ctx.builder.CreateMemSet(
                     outPtr, ctx.builder.getInt8(0),
@@ -13953,7 +13953,7 @@ void registerBuiltins(CompilerContext& ctx) {
                 int64_t objSize = 8;
                 const std::string tn = mirrorInnerType(ctx.deserializeTargetType);
                 if (!tn.empty() && ctx.classes.count(tn) && ctx.classes[tn].type) {
-                    llvm::DataLayout dl(&ctx.module());
+                    llvm::DataLayout dl(ctx.module().getDataLayout());
                     objSize = (int64_t)dl.getTypeAllocSize(ctx.classes[tn].type);
                 }
                 // (v2 %M* deref handled in MIRROR_FIND_OBJ_PTR — objPtr is the object.)
@@ -13992,7 +13992,7 @@ void registerBuiltins(CompilerContext& ctx) {
                 int64_t objSize = 8;
                 const std::string tn = mirrorInnerType(ctx.deserializeTargetType);
                 if (!tn.empty() && ctx.classes.count(tn) && ctx.classes[tn].type) {
-                    llvm::DataLayout dl(&ctx.module());
+                    llvm::DataLayout dl(ctx.module().getDataLayout());
                     objSize = (int64_t)dl.getTypeAllocSize(ctx.classes[tn].type);
                 }
                 // (v2 %M* deref handled in MIRROR_FIND_OBJ_PTR — objPtr is the object.)
@@ -14039,7 +14039,7 @@ void registerBuiltins(CompilerContext& ctx) {
                     ctx.getFunction("aiml_mirror_session_next_rpc", i8p, {i8p}), {s}, "rpc_ptr");
                 llvm::StructType* evTy = static_cast<llvm::StructType*>(ctx.getLLVMType("rpc_event"));
                 llvm::AllocaInst* evAlloca = ctx.createEntryAlloca(evTy, "rpc_tmp");
-                llvm::DataLayout dl(&ctx.module());
+                llvm::DataLayout dl(ctx.module().getDataLayout());
                 uint64_t szBytes = dl.getTypeAllocSize(evTy);
                 llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
                 ctx.builder.CreateCall(
@@ -14225,7 +14225,7 @@ void registerBuiltins(CompilerContext& ctx) {
                 }
                 llvm::Value* r = ctx.builder.CreateCall(
                     ctx.getFunction("aiml_mirror_session_take_response", i32, {i8p, i64, i8p, i8p, i64, i8p, i32}),
-                    {s, id, ctx.builder.CreateGlobalStringPtr("set_result"), m.ptr, ctx.builder.getInt64(m.size), m.nodes, m.n});
+                    {s, id, ctx.builder.CreateGlobalString("set_result"), m.ptr, ctx.builder.getInt64(m.size), m.nodes, m.n});
                 return ctx.ir_gen->wrap(r);
             };
 
@@ -14279,7 +14279,7 @@ void registerBuiltins(CompilerContext& ctx) {
                     return ctx.ir_gen->getInt32(0);
                 }
                 llvm::Value* timeoutMs = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[4].get())));
-                llvm::Value* expectMethod = ctx.builder.CreateGlobalStringPtr("set_result");
+                llvm::Value* expectMethod = ctx.builder.CreateGlobalString("set_result");
                 llvm::Type* i64 = ctx.builder.getInt64Ty();
                 llvm::Value* r = ctx.builder.CreateCall(
                     ctx.getFunction("aiml_mirror_session_send_and_await",
@@ -14302,7 +14302,7 @@ void registerBuiltins(CompilerContext& ctx) {
                 // visitSetStmt (isBuiltin=false, ptr val) will memcpy into target alloca.
                 llvm::StructType* evTy = static_cast<llvm::StructType*>(ctx.getLLVMType("mirror_event"));
                 llvm::AllocaInst* evAlloca = ctx.createEntryAlloca(evTy, "ev_tmp");
-                llvm::DataLayout dl(&ctx.module());
+                llvm::DataLayout dl(ctx.module().getDataLayout());
                 uint64_t szBytes = dl.getTypeAllocSize(evTy);
                 llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
                 ctx.builder.CreateCall(
@@ -14319,7 +14319,7 @@ void registerBuiltins(CompilerContext& ctx) {
                     ctx.getFunction("aiml_mirror_session_poll_event", i8p, {i8p}), {s}, "poll_ev_ptr");
                 llvm::StructType* evTy = static_cast<llvm::StructType*>(ctx.getLLVMType("mirror_event"));
                 llvm::AllocaInst* evAlloca = ctx.createEntryAlloca(evTy, "poll_ev_tmp");
-                llvm::DataLayout dl(&ctx.module());
+                llvm::DataLayout dl(ctx.module().getDataLayout());
                 uint64_t szBytes = dl.getTypeAllocSize(evTy);
                 llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
                 ctx.builder.CreateCall(
@@ -14336,7 +14336,7 @@ void registerBuiltins(CompilerContext& ctx) {
                     ctx.getFunction("aiml_mirror_session_poll_rpc", i8p, {i8p}), {s}, "poll_rpc_ptr");
                 llvm::StructType* evTy = static_cast<llvm::StructType*>(ctx.getLLVMType("rpc_event"));
                 llvm::AllocaInst* evAlloca = ctx.createEntryAlloca(evTy, "poll_rpc_tmp");
-                llvm::DataLayout dl(&ctx.module());
+                llvm::DataLayout dl(ctx.module().getDataLayout());
                 uint64_t szBytes = dl.getTypeAllocSize(evTy);
                 llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
                 ctx.builder.CreateCall(
@@ -14380,7 +14380,7 @@ void registerBuiltins(CompilerContext& ctx) {
                 llvm::Value* objPtr = MIRROR_FIND_OBJ_PTR(0);
                 llvm::Value* modeStr = call->args.size() >= 2
                     ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[1].get())))
-                    : ctx.builder.CreateGlobalStringPtr("auto");
+                    : ctx.builder.CreateGlobalString("auto");
                 if (!objPtr) return ctx.ir_gen->wrap(ctx.builder.getInt32(0));
                 ctx.builder.CreateCall(
                     ctx.getFunction("aiml_mirror_session_set_sync_mode", vd, {i8p, i8p, i8p}),
@@ -14395,10 +14395,10 @@ void registerBuiltins(CompilerContext& ctx) {
                 llvm::Value* objPtr = MIRROR_FIND_OBJ_PTR(0);
                 llvm::Value* mStr = call->args.size() >= 2
                     ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[1].get())))
-                    : ctx.builder.CreateGlobalStringPtr("");
+                    : ctx.builder.CreateGlobalString("");
                 llvm::Value* tStr = call->args.size() >= 3
                     ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[2].get())))
-                    : ctx.builder.CreateGlobalStringPtr("");
+                    : ctx.builder.CreateGlobalString("");
                 if (!objPtr) return ctx.ir_gen->wrap(ctx.builder.getInt32(0));
                 ctx.builder.CreateCall(
                     ctx.getFunction("aiml_mirror_session_set_rpc_target", vd, {i8p, i8p, i8p, i8p}),
@@ -14432,7 +14432,7 @@ void registerBuiltins(CompilerContext& ctx) {
             mir.builtinFuncs["listen"] = [i8p](CompilerContext& ctx,
                 const std::vector<IRValue*>& args) -> IRValue* {
                 llvm::Value* url = args.empty()
-                    ? ctx.builder.CreateGlobalStringPtr("tcp://0.0.0.0:9000")
+                    ? ctx.builder.CreateGlobalString("tcp://0.0.0.0:9000")
                     : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
                 return ctx.ir_gen->wrap(ctx.builder.CreateCall(
                     ctx.getFunction("aiml_mirror_listen", i8p, {i8p}), {url}));
@@ -14441,7 +14441,7 @@ void registerBuiltins(CompilerContext& ctx) {
                 const std::vector<IRValue*>& args) -> IRValue* {
                 llvm::Type* i32 = ctx.builder.getInt32Ty();
                 llvm::Value* url = args.empty()
-                    ? ctx.builder.CreateGlobalStringPtr("tcp://0.0.0.0:9000")
+                    ? ctx.builder.CreateGlobalString("tcp://0.0.0.0:9000")
                     : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
                 llvm::Value* mx = args.size() >= 2
                     ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]))
@@ -14453,7 +14453,7 @@ void registerBuiltins(CompilerContext& ctx) {
             mir.builtinFuncs["listen_tls"] = [i8p](CompilerContext& ctx,
                 const std::vector<IRValue*>& args) -> IRValue* {
                 llvm::Value* url = args.empty()
-                    ? ctx.builder.CreateGlobalStringPtr("wss://0.0.0.0:9443")
+                    ? ctx.builder.CreateGlobalString("wss://0.0.0.0:9443")
                     : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
                 llvm::Value* cert = args.size() >= 2
                     ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]))
@@ -14477,7 +14477,7 @@ void registerBuiltins(CompilerContext& ctx) {
             mir.builtinFuncs["connect"] = [i8p](CompilerContext& ctx,
                 const std::vector<IRValue*>& args) -> IRValue* {
                 llvm::Value* url = args.empty()
-                    ? ctx.builder.CreateGlobalStringPtr("tcp://127.0.0.1:9000")
+                    ? ctx.builder.CreateGlobalString("tcp://127.0.0.1:9000")
                     : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
                 return ctx.ir_gen->wrap(ctx.builder.CreateCall(
                     ctx.getFunction("aiml_mirror_connect", i8p, {i8p}), {url}));
@@ -14486,7 +14486,7 @@ void registerBuiltins(CompilerContext& ctx) {
                 const std::vector<IRValue*>& args) -> IRValue* {
                 llvm::Type* i32 = ctx.builder.getInt32Ty();
                 llvm::Value* url = args.empty()
-                    ? ctx.builder.CreateGlobalStringPtr("tcp://127.0.0.1:9000")
+                    ? ctx.builder.CreateGlobalString("tcp://127.0.0.1:9000")
                     : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
                 llvm::Value* ms = args.size() >= 2
                     ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]))
@@ -14525,9 +14525,9 @@ void registerBuiltins(CompilerContext& ctx) {
                     llvm::FunctionType::get(vd, {p, p}, false), \
                     llvm::Function::ExternalLinkage, cName, ctx.module()); \
             llvm::Value* msg = args.size() > 0 ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])) \
-                                                : ctx.builder.CreateGlobalStringPtr(""); \
+                                                : ctx.builder.CreateGlobalString(""); \
             llvm::Value* loc = args.size() > 1 ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1])) \
-                                                : ctx.builder.CreateGlobalStringPtr("?"); \
+                                                : ctx.builder.CreateGlobalString("?"); \
             ctx.builder.CreateCall(fn, {msg, loc}); \
             return nullptr; \
         };
@@ -14551,7 +14551,7 @@ void registerBuiltins(CompilerContext& ctx) {
                 llvm::FunctionType::get(ctx.builder.getVoidTy(), {p}, false),
                 llvm::Function::ExternalLinkage, "aiml_log_set_level", ctx.module());
             llvm::Value* lvl = args.size() > 0 ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]))
-                                                : ctx.builder.CreateGlobalStringPtr("info");
+                                                : ctx.builder.CreateGlobalString("info");
             ctx.builder.CreateCall(fn, {lvl});
             return nullptr;
         };
@@ -14598,10 +14598,10 @@ void registerBuiltins(CompilerContext& ctx) {
                 llvm::Function::ExternalLinkage, "aiml_vocab_load", ctx.module());
             llvm::Value* langs = args.size() > 0
                 ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]))
-                : ctx.builder.CreateGlobalStringPtr("{}");
+                : ctx.builder.CreateGlobalString("{}");
             llvm::Value* voc = args.size() > 1
                 ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]))
-                : ctx.builder.CreateGlobalStringPtr("{}");
+                : ctx.builder.CreateGlobalString("{}");
             return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {langs, voc}));
         };
 
@@ -14670,7 +14670,7 @@ void registerBuiltins(CompilerContext& ctx) {
                 llvm::Function::ExternalLinkage, "aiml_vocab_lookup", ctx.module());
             llvm::Value* src = args.size() > 0
                 ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]))
-                : ctx.builder.CreateGlobalStringPtr("");
+                : ctx.builder.CreateGlobalString("");
             return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {src}));
         };
 
@@ -14833,7 +14833,7 @@ void registerBuiltins(CompilerContext& ctx) {
             auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
             llvm::Function* f = ctx.getFunction("aiml_tensor_print", ctx.builder.getVoidTy(), {i8p, i8p});
             llvm::Value* label = call->args.empty()
-                ? ctx.builder.CreateGlobalStringPtr("")
+                ? ctx.builder.CreateGlobalString("")
                 : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
             ctx.builder.CreateCall(f, {tPtr, label});
             return nullptr;
@@ -15350,7 +15350,7 @@ void registerBuiltins(CompilerContext& ctx) {
             llvm::Function* f = ctx.getFunction("aiml_tensor_print", ctx.builder.getVoidTy(), {i8p, i8p});
             llvm::Value* label = args.size() >= 2
                 ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]))
-                : ctx.builder.CreateGlobalStringPtr("");
+                : ctx.builder.CreateGlobalString("");
             ctx.builder.CreateCall(f, {
                 static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])), label});
             return nullptr;
