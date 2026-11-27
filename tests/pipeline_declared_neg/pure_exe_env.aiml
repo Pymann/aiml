@@ -1,0 +1,19 @@
+# SPEC: 62_pipelines
+# spec/62 F62-31: a pure step passes env — a sys.exe that inherits the environment
+# Requires: driver
+# makes every variable of the calling shell an undeclared input.
+- pipeline:
+    name: pure_inherits
+    steps:
+      - stage:
+          name: one
+          steps:
+            - step:
+                name: first
+                cache: pure
+                assert_pure: true
+                return: i32
+                body:
+                  - decl: [argv, list<string>, ["true"]]
+                  - decl: [proc, process, { call: [sys.exe, argv, { capture: true }] }]
+                  - return: { call: [proc.wait] }

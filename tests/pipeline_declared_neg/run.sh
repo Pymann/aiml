@@ -44,5 +44,8 @@ want stage_outputs_rejected.aiml  "outputs"
 want output_outside_ws.aiml       "must lie in the workspace"
 want step_stage_attr.aiml         "attribute of the stage"
 want step_unknown_key.aiml        "unknown key \`cahce:\`"
+# spec/62 F62-31 / F62-61: env of a pure step, the fields of exec_defaults.
+want pure_exe_env.aiml            "inherits the environment"
+want exec_defaults_field.aiml     "no field of ExeOptions"
 if [ $fails -ne 0 ]; then echo "pipeline_declared_neg FAIL ($fails)"; exit 1; fi
 echo "pipeline_declared_neg PASS"

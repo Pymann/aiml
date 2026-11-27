@@ -1,0 +1,11 @@
+# SPEC: 62_pipelines
+# spec/62 F62-27/F62-61: exec_defaults names fields of ExeOptions, nothing else.
+# Requires: driver
+- pipeline:
+    name: bad_defaults
+    steps:
+      - stage:
+          name: one
+          exec_defaults: { cwd: workspace, allow_fail: true }
+          steps:
+            - step: { name: first, return: i32, body: [{ return: 0 }] }

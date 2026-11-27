@@ -1,0 +1,91 @@
+# SPEC: 62_pipelines
+# spec/62 F62-61..63 + §5.2: `exec_defaults` and `host_env`.  The pipeline, the stage
+# and the step say what every sys.exe below starts from, field by field, innermost
+# wins (F62-58); `decl: [o, ExeOptions]` in the body holds the effective defaults;
+# `host_env` is exactly the names declared in `host:` (stage `host:` is inherited).
+# Expected exit code: 0
+
+- pipeline:
+    name: exec_demo
+    params:
+      - [arch, string, [x86_64]]
+    workspace_root: logs/exec_defaults_ws
+    exec_defaults: { capture: true, timeout: 60000 }
+    steps:
+      - stage:
+          name: run
+          host: [EXEC_DEMO_VALUE, PATH]
+          exec_defaults: { cwd: workspace, env: host_env }
+          steps:
+            - step:
+                name: plain
+                cache: pure
+                assert_pure: true
+                args: [arch]
+                return: string
+                body:
+                  # no options at all: cwd, env and capture come from the defaults
+                  - decl: [argv, list<string>, ["sh", "-c", "pwd; printf '%s' \"$EXEC_DEMO_VALUE\"; printf '[%s]' \"$HOME\""]]
+                  - decl: [proc, process, { call: [sys.exe, argv] }]
+                  - call: [proc.wait]
+                  - decl: [said, string, { call: [proc.stdout_buffer] }]
+                  - call: [io.write_file, "${workspace}/plain.txt", said]
+                  - return: said
+            - step:
+                name: declared
+                cache: pure
+                assert_pure: true
+                args: [arch]
+                return: string
+                exec_defaults: { timeout: 30000 }
+                body:
+                  - decl: [opts, ExeOptions]
+                  - decl: [seen, string, "cap=${opts.capture} t=${opts.timeout} n=${opts.env.len}"]
+                  # a literal on the call overrides one field: stdout to a file, capture off
+                  - decl: [argv, list<string>, ["echo", "into-the-file"]]
+                  - decl: [proc, process, { call: [sys.exe, argv, { capture: false, stdout: "${workspace}/out.txt" }] }]
+                  - call: [proc.wait]
+                  - call: [io.write_file, "${workspace}/declared.txt", seen]
+                  - return: seen
+
+- def:
+    name: expect
+    args: [[what, string], [cond, i32]]
+    return: i32
+    body:
+      - if:
+          condition: { eq: [cond, 1] }
+          then: [{ print: ["  ok   ${what}"] }, { return: 0 }]
+      - print: ["  FAIL ${what}"]
+      - return: 1
+
+- def:
+    name: main
+    static_off: ["str_cmp"]
+    return: i32
+    body:
+      - call: [io.remove_all, "logs/exec_defaults_ws"]
+      - call: [sys.setenv, "EXEC_DEMO_VALUE", "from-host"]
+      - decl: [fails, i32, 0]
+      - decl: [pipe, pipeline, { call: [exec_demo] }]
+      - call: [pipe.set_store, "logs/exec_defaults_ws/store"]
+      - decl: [rc_run, i32, { call: [pipe.run] }]
+      - set: [fails, { +: [fails, { call: [expect, "the run succeeds", { eq: [rc_run, 0] }] }] }]
+      - decl: [plain_out, string, { call: [io.read_file, "logs/exec_defaults_ws/exec_demo/arch=x86_64/run/plain.txt"] }]
+      - set: [fails, { +: [fails, { call: [expect, "cwd: workspace from the stage (${plain_out})", { call: [plain_out.contains, "exec_defaults_ws/exec_demo/arch=x86_64/run"] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "env: host_env carries the declared name", { call: [plain_out.contains, "from-host"] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "and nothing else — HOME is not in it", { call: [plain_out.contains, "[]"] }] }] }]
+      - decl: [declared_out, string, { call: [io.read_file, "logs/exec_defaults_ws/exec_demo/arch=x86_64/run/declared.txt"] }]
+      - set: [fails, { +: [fails, { call: [expect, "decl ExeOptions holds the merged defaults (${declared_out})", { eq: [declared_out, "cap=true t=30000 n=2"] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "a literal option overrides a default", { call: [io.exists, "logs/exec_defaults_ws/exec_demo/arch=x86_64/run/out.txt"] }] }] }]
+      # §8 host_values: the same values hit, a changed one is another key.
+      - decl: [rc_two, i32, { call: [pipe.run] }]
+      - set: [fails, { +: [fails, { call: [expect, "unchanged host values: both steps hit", { eq: [{ call: [pipe.reused_count] }, 2] }] }] }]
+      - call: [sys.setenv, "EXEC_DEMO_VALUE", "changed"]
+      - decl: [rc_three, i32, { call: [pipe.run] }]
+      - set: [fails, { +: [fails, { call: [expect, "a changed host value: both run again", { eq: [{ call: [pipe.ran_count] }, 2] }] }] }]
+      - if:
+          condition: { neq: [fails, 0] }
+          then: [{ print: ["test_pipeline_exec_defaults FAIL (${fails})"] }, { return: 1 }]
+      - print: ["test_pipeline_exec_defaults PASS"]
+      - return: 0

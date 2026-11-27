@@ -1187,6 +1187,50 @@ void registerBuiltins(CompilerContext& ctx) {
         }
         const auto& o = ctx.exeOpts;
         auto ptrOr = [&](llvm::Value* v) { return v ? ctx.builder.CreateBitCast(v, i8p) : nul; };
+        if (o.model && ctx.classes.count("ExeOptions")) {
+            // spec/62 F62-27/F62-29: the options as a value — every field a runtime
+            // value, the literal options of the call on top (F62-61).
+            const auto& ci = ctx.classes.at("ExeOptions");
+            llvm::StructType* sty = llvm::cast<llvm::StructType>(ci.type);
+            auto field = [&](const char* name) -> llvm::Value* {
+                auto it = ci.members.find(name);
+                if (it == ci.members.end()) return nullptr;
+                return ctx.builder.CreateStructGEP(sty, o.model, it->second.index);
+            };
+            auto loadStr = [&](const char* name) -> llvm::Value* {
+                llvm::Value* p = field(name);
+                if (!p) return nul;
+                return ctx.builder.CreateBitCast(ctx.builder.CreateLoad(ci.members.at(name).type, p), i8p);
+            };
+            auto loadI32 = [&](const char* name, int32_t dflt) -> llvm::Value* {
+                llvm::Value* p = field(name);
+                if (!p) return ctx.builder.getInt32(dflt);
+                llvm::Value* v = ctx.builder.CreateLoad(ci.members.at(name).type, p);
+                return v->getType()->isIntegerTy(32) ? v : ctx.builder.CreateIntCast(v, i32, false);
+            };
+            llvm::Value* envPtr = nul;
+            if (llvm::Value* p = field("env")) {
+                llvm::Type* et = ci.members.at("env").type;
+                envPtr = et->isStructTy() ? ctx.builder.CreateBitCast(p, i8p)
+                                          : ctx.builder.CreateBitCast(ctx.builder.CreateLoad(et, p), i8p);
+            }
+            llvm::Value* cwd    = o.cwd        ? ptrOr(o.cwd)        : loadStr("cwd");
+            llvm::Value* env    = o.env        ? ptrOr(o.env)        : envPtr;
+            llvm::Value* shell  = o.shellSet   ? ctx.builder.getInt32(o.shell ? 1 : 0)   : loadI32("shell", 0);
+            llvm::Value* tmo    = o.timeout    ? o.timeout           : loadI32("timeout", -1);
+            llvm::Value* cap    = o.captureSet ? ctx.builder.getInt32(o.capture ? 1 : 0) : loadI32("capture", 0);
+            llvm::Value* sin    = o.stdinPath  ? ptrOr(o.stdinPath)  : loadStr("stdin");
+            llvm::Value* sout   = o.stdoutPath ? ptrOr(o.stdoutPath) : loadStr("stdout");
+            llvm::Value* serr   = o.stderrPath ? ptrOr(o.stderrPath) : loadStr("stderr");
+            llvm::Value* det    = o.detachSet  ? ctx.builder.getInt32(o.detach ? 1 : 0)  : loadI32("detach", 0);
+            llvm::Value* stf    = o.statusFile ? ptrOr(o.statusFile) : loadStr("status_file");
+            // An env from the model that is empty means "inherit" (a model has no unset).
+            llvm::Value* envFromModel = ctx.builder.getInt32(o.env ? 0 : 1);
+            llvm::Function* fm = ctx.getFunction("aiml_process_spawn_opts", i8p,
+                {i8p, i8p, i8p, i32, i32, i32, i8p, i8p, i8p, i32, i8p, i32});
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(fm, {
+                argvList, cwd, env, shell, tmo, cap, sin, sout, serr, det, stf, envFromModel}));
+        }
         llvm::Function* f = ctx.getFunction("aiml_process_spawn", i8p,
             {i8p, i8p, i8p, i32, i32, i32, i8p, i8p, i8p, i32, i8p});
         return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {
@@ -2997,6 +3041,7 @@ void registerBuiltins(CompilerContext& ctx) {
         stepInfo.builtinMethods["set_per"]   = mkI32("aiml_step_set_per");
         stepInfo.builtinMethods["add_need"]  = mkStr("aiml_step_add_need");
         stepInfo.builtinMethods["add_output"] = mkStr("aiml_step_add_output");   // spec/62 F62-168
+        stepInfo.builtinMethods["use_host"] = mkStr("aiml_step_use_host");       // spec/62 F62-7, §8
         // spec/62 §9: set_resolve(fn) — fn is a function name, we need
         // its address (as with pipeline.run(observer)).
         stepInfo.builtinMethods["set_resolve"] = [](CompilerContext& ctx, llvm::Value* base,

@@ -220,6 +220,12 @@ steps would otherwise repeat, and it is the unit of **locality**.
 - **F62-58** Attributes resolve **pipeline → stage → step, innermost wins**: `per`, `args`, `host`,
   `cache`, `on_fail`, `timeout`, `retry`, `exec_defaults`.  `params` exists only on the pipeline
   (it defines the matrix) and `runs_on` only on a stage (F62-60).
+- **F62-58a** *(implemented 2026-11-27)*  What a step does not say it takes from its stage, and the
+  stage from the pipeline: `per` (stage), `args` (stage; a `per: once` step takes none, F62-115),
+  `host` (stage, pipeline), `cache` (stage, pipeline), `on_fail` and `retry` (stage), `timeout`
+  (stage, pipeline — on the stage it stays the stage's limit as well, §18.1a) and `exec_defaults`
+  (merged field by field over all three, F62-61).  `needs` on a stage is added to every step of
+  it (F62-111).
 - **F62-59** `args` on a stage is the set **in scope**.  A step that declares its own `args` selects
   a subset, which is the precise option and the one that pays (§5.2); a step that declares none
   inherits the stage's whole set, which is the convenient option and costs reuse.  The spec states
@@ -245,6 +251,10 @@ reading the pipeline instead of by comparing resolved labels.
   every `sys.exe` in scope: `decl: [o, ExeOptions]` yields the effective defaults rather than an
   empty model, and a call overrides field by field.  Resolution follows F62-58, so a pipeline sets
   what holds everywhere and a stage or step narrows it.
+- **F62-61a** *In scope* is the step's body as written, nested blocks included — not a helper it
+  calls, which is ordinary code with ordinary defaults.  Each field's value is source text: a name
+  (`workspace`, `host_env`, an axis) or a literal; a path literal is quoted.  A field that is not
+  one of `ExeOptions` is an error (F62-65).
 - **F62-62** `exec_defaults` is how F62-30 and F62-31 are met in practice.  Requiring every call to
   pass `cwd: workspace` and `env: host_env` was boilerplate in every step of every pipeline — and
   boilerplate whose omission silently broke a `pure` claim rather than failing.  Declared once per
@@ -319,6 +329,9 @@ Two arguments are appended by the compiler after the declared ones:
 | `workspace` | `string` | absolute path of the lane's workspace directory (§4.3) |
 | `host_env` | `map<string:string>` | exactly the names declared in `host:`, nothing else |
 
+A host value is read from the environment of the process that runs the step — locally the `aiml`
+process, under cosmos the executor — when the step is about to run, and it enters the key (§8).
+
 - **F62-32** The five-argument limit (`spec/49` §15) applies to the **declared** `args`; the two
   appended ones do not count.  The limit keeps its meaning — a step depending on more than five
   axes is a design problem — while the lane context is not an axis.
@@ -332,7 +345,9 @@ Two arguments are appended by the compiler after the declared ones:
   the parent environment by default, which would make every variable of the calling shell an
   undeclared input and a `pure` claim void.  Checked where the call's options are statically
   visible; a warning otherwise, because with `ExeOptions` as a value (F62-27) the field can be set
-  anywhere.
+  anywhere.  In the declared form a `sys.exe` in a pure step's body is an error when neither its
+  bag nor the effective `exec_defaults` (F62-61) sets `env`, and a warning when it takes its
+  options from a value.
 - **F62-26** *Superseded by F62-31*, which says the same thing but places the duty where it can be
   checked.
 
@@ -368,6 +383,13 @@ cannot be built per lane, passed to a helper, stored beside its step or hashed a
   `context.h`), so the name is not a new one.  It can be declared,
   built, passed and reused like any other model; a map literal at the call site stays valid as
   shorthand for constructing one.
+- **F62-27a** *(implemented 2026-11-27)*  `ExeOptions` is declared by the compiler, as an ordinary
+  `model` appended to any source that names it and does not declare it — so a bundle carries it
+  like every other model (`spec/29` §3.3).  `sys.exe(argv, opts)` takes such a value; a literal
+  bag on the same call overrides its fields one by one (`sys.exe(argv, opts, {capture: false})`).
+  A model has no "unset", so the one reading of a default that a bag does not need: an **empty**
+  `env` from a value means *inherit* (`spec/23`'s default), exactly as an `env` that is not
+  given.  An empty environment on purpose is written as a literal bag.
 
 | Field | Type | Meaning (`spec/23` §5.1) |
 |---|---|---|
@@ -760,8 +782,13 @@ One key per (step, lane).  `sha256` over canonical material, each component leng
 `<byte-length>:<value>`, concatenated without a separator:
 
 ```
-<step_source_hash> <lane_bindings> <input_keys> <host_values> <resolve_output>
+<step_source_hash> <class> <lane_bindings> <input_keys> <host_values> <resolve_output>
 ```
+
+The **step key** is the lowercase hex sha256 of that material; `input_keys` are the step keys of
+the needs, and the local store names an entry by it (F62-24).  A list component is its count
+followed by its entries, each length-prefixed; `<class>` is the reuse class as its number
+(`opaque` 0, `resolved` 1, `pure` 2 — F62-15).
 
 - `step_source_hash` — hash of the step's body **as written**, before parameter substitution.
 - `lane_bindings` — the bindings of the parameters the step **declared** in `args` (§5.2), sorted
@@ -769,7 +796,7 @@ One key per (step, lane).  `sha256` over canonical material, each component leng
   axis is reused across it.
 - `input_keys` — the keys of the steps named in `needs`, sorted.  A changed input changes the key
   transitively, which is what makes a chain of steps behave like a stack of layers.
-- `host_values` — the values of the names in `host:`, sorted, count included.
+- `host_values` — the names in `host:` with their values, sorted, as `name=value`, count included.
 - `resolve_output` — the probe's output (§9), empty for `pure` and `opaque`.
 
 Length prefixing rather than a separator character, because any separator can occur inside a value:

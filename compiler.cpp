@@ -1228,6 +1228,12 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
                     return;
                 }
             }
+            // spec/62 F62-27: ExeOptions, where the text names it.
+            std::string withModels;
+            if (aiml::injectBuiltinModels(usedExpansion ? expandedSource : rawText, withModels)) {
+                expandedSource = std::move(withModels);
+                usedExpansion  = true;
+            }
         }
     } catch (const std::exception& e) {
         LOG_ERROR(filename + std::string(": pipeline rewrite: ") + e.what());
@@ -1271,6 +1277,19 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
                 }
             } catch (...) {}
             phaseReparseMs += phaseNowMs() - phaseZipStart;
+
+            // spec/62 F62-27: the built-in ExeOptions is appended to the text (so its
+            // lines do not shift the user's) but registered first, before any
+            // signature names it.
+            for (size_t hi = 0; hi < programAST->declarations.size(); ++hi) {
+                auto* md = dynamic_cast<AIML::AST::ModelDecl*>(programAST->declarations[hi].get());
+                if (md && md->name == "ExeOptions" && hi > 0) {
+                    auto node = std::move(programAST->declarations[hi]);
+                    programAST->declarations.erase(programAST->declarations.begin() + hi);
+                    programAST->declarations.insert(programAST->declarations.begin(), std::move(node));
+                    break;
+                }
+            }
 
             // Track current source file for log.* location injection (Spec 46)
             ctx.currentSourceFile = filename;
@@ -1724,6 +1743,9 @@ void AIMLCompiler::compileFromString(const std::string& yaml_source_in) {
         else
             return;   // the rewrite has already said what was wrong
     }
+    std::string yaml_with_models;
+    if (aiml::injectBuiltinModels(*use_source, yaml_with_models))   // spec/62 F62-27
+        use_source = &yaml_with_models;
     const std::string& yaml_source = *use_source;
 
     delete static_cast<CompilerContext*>(compiler_ctx_);
@@ -1768,6 +1790,19 @@ void AIMLCompiler::compileFromString(const std::string& yaml_source_in) {
                 size_t n = std::min(rawSeq.size(), programAST->declarations.size());
                 for (size_t i = 0; i < n; ++i)
                     programAST->declarations[i]->sourceNode = rawSeq[i];
+            }
+
+            // spec/62 F62-27: the built-in ExeOptions is appended to the text (so its
+            // lines do not shift the user's) but registered first, before any
+            // signature names it.
+            for (size_t hi = 0; hi < programAST->declarations.size(); ++hi) {
+                auto* md = dynamic_cast<AIML::AST::ModelDecl*>(programAST->declarations[hi].get());
+                if (md && md->name == "ExeOptions" && hi > 0) {
+                    auto node = std::move(programAST->declarations[hi]);
+                    programAST->declarations.erase(programAST->declarations.begin() + hi);
+                    programAST->declarations.insert(programAST->declarations.begin(), std::move(node));
+                    break;
+                }
             }
 
             AIML::AST::Compiler astCompiler(ctx);

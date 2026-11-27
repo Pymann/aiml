@@ -1006,7 +1006,12 @@ namespace AIML {
         llvm::Value* stderrPath = nullptr;
         llvm::Value* statusFile = nullptr;
         bool shell = false, capture = false, detach = false;
+        bool shellSet = false, captureSet = false, detachSet = false;   // a literal said so
+        // spec/62 F62-27: an ExeOptions value — the call's own, or the step's
+        // exec_defaults (F62-61).  A pointer to the model; literal options override it.
+        llvm::Value* model = nullptr;
     } exeOpts;
+    const void* exeOptsModelArg = nullptr;   // the argument exeOpts.model came from
 
     // Tracking for Kv.get / Kv.get_copy dispatch so visitDeclStmt can enforce
     // the correct decl-type ↔ method pairing:
