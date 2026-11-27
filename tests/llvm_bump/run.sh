@@ -37,8 +37,9 @@ idx Packages
 echo "── llvm_bump.py (TEST_SUITES.md §4.2) ──"
 check "current: the configurations name their LLVM ($OLD)" '[ -n "$OLD" ] && [ "$OLD" -ge 18 ]'
 cp exodus.json exodus.before
+WITH=$(grep -lF -e "llvm-$OLD" -e "\"LLVM-$OLD\"" -e "libllvm$OLD" -e "libclang-cpp$OLD" $CFGS | wc -l)
 out=$($B rewrite --major $N --packages Packages $CFGS 2>&1); rc=$?
-check "rewrite moves every configuration ($OLD → $N)" '[ $rc -eq 0 ] && [ "$(echo "$out" | grep -c "LLVM $OLD → $N")" -eq 5 ]'
+check "rewrite moves every configuration with LLVM $OLD in it ($WITH, → $N)" '[ $rc -eq 0 ] && [ "$(echo "$out" | grep -c "LLVM $OLD → $N")" -eq "$WITH" ] && [ "$WITH" -ge 3 ]'
 [ $rc -eq 0 ] || echo "$out" | tail -5
 check "nothing of LLVM $OLD is left" '! grep -lF -e "llvm-$OLD/" -e "llvm-$OLD\"" -e "llvm-$OLD-" -e "llvm-c-$OLD" -e "\"libllvm$OLD\"" -e "libclang-cpp$OLD" -e "\"LLVM-$OLD\"" -e "$OLDV" $CFGS'
 check "the newest build in the index is taken, with its sha256" \
@@ -55,6 +56,9 @@ check "no package is lost or gained" \
   '[ "$(python3 -c "import json;print(len(json.load(open(\"exodus.json\"))[\"apt_packages\"]))")" = "$(python3 -c "import json;print(len(json.load(open(\"exodus.before\"))[\"apt_packages\"]))")" ]'
 check "everything else is as it was (the diff is the bump)" \
   '[ -z "$(diff <(grep -v -i "llvm\|clang-cpp\|\"digest\"\|\"version\": \"1:" exodus.before) <(grep -v -i "llvm\|clang-cpp\|\"digest\"\|\"version\": \"1:" exodus.json))" ]'
+cp "$ROOT/exodus-aot-repro.json" aot.json; cp aot.json aot.before; cp "$ROOT/exodus.json" fresh.json
+out=$($B rewrite --major $N --packages Packages fresh.json aot.json 2>&1)
+check "a configuration without LLVM is not written at all" 'cmp -s aot.json aot.before && echo "$out" | grep -q "aot.json: no LLVM $OLD in it"'
 check "the clang macros of the wasm runtime stay" 'grep -q "__clang_major__" exodus-wasm-runtime.json'
 out=$($B rewrite --major $N --packages Packages exodus.json 2>&1); rc=$?
 check "again: on LLVM $N already, nothing done" '[ $rc -eq 0 ] && echo "$out" | grep -q "already"'

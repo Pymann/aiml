@@ -4,12 +4,8 @@
     "version": "0.1.0",
     "license": [],
     "dependencies": [
-        {
-            "name": "aiml"
-        },
-        {
-            "name": "libaiml"
-        }
+        { "name": "aiml" },
+        { "name": "libaiml" }
     ],
     "output_type": "executable",
     "optimization": "0",
@@ -59,6 +55,5 @@
             "out/libaiml"
         ]
     },
-    "artifact_in_cwd": true,
-    "apt_packages": []
+    "artifact_in_cwd": true
 }

@@ -302,7 +302,7 @@ Tests: `tests/llvm_bump/run.sh` — on copies of the real configurations and an
 index written there: every configuration moved, nothing of LLVM 18 left, the
 newest build and its sha256, include and library paths and the library
 following, `libllvm20` untouched, no package lost or gained, everything else as
-it was, a second run a no-op, a missing package named, a configuration alone
+it was, a configuration without LLVM not written at all, a second run a no-op, a missing package named, a configuration alone
 that points into a package only another pins named, and `libname` for
 `libLLVM.so`, `libLLVM-<N>.so` and neither.
 
