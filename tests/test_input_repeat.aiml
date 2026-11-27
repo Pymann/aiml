@@ -1,0 +1,58 @@
+# SPEC: 44_0_input
+# spec/44_0 §3.1: one press is one `key_down`, and a HELD key reports `key_repeat`
+# instead of a second press.  Both halves matter: without the repeat a text field
+# cannot auto-repeat, with a repeat spelled as `key_down` every consumer double-fires.
+# Requires: display
+# Expected exit code: 0
+- def:
+    name: main
+    static_off: ["str_cmp"]
+    return: i32
+    body:
+      - decl: [win, window_handle, { call: [engine.create_window, 320, 240, "repeat"] }]
+      - if: { condition: { eq: [win, null] }, then: [{ call: [log.error, "FAIL create_window"] }, { return: 1 }] }
+      - call: [gl.init]
+      - call: [ui.init]
+      - call: [input.init, win]
+
+      - call: [input.post_key_down, "Left"]
+      - call: [input.post_key_repeat, "Left"]
+      - call: [input.post_key_repeat, "Left"]
+      - call: [input.post_key_up, "Left"]
+
+      - decl: [downs, i32, 0]
+      - decl: [repeats, i32, 0]
+      - decl: [ups, i32, 0]
+      - decl: [other, i32, 0]
+      - while:
+          condition: { call: [input.has_event] }
+          body:
+            - decl: [evt, input_event, { call: [input.next_event] }]
+            - decl: [known, i32, 0]
+            - if: { condition: { eq: [evt.type, "key_down"] }, then: [{ set: [downs, { +: [downs, 1] }] }, { set: [known, 1] }] }
+            - if: { condition: { eq: [evt.type, "key_repeat"] }, then: [{ set: [repeats, { +: [repeats, 1] }] }, { set: [known, 1] }] }
+            - if: { condition: { eq: [evt.type, "key_up"] }, then: [{ set: [ups, { +: [ups, 1] }] }, { set: [known, 1] }] }
+            - if: { condition: { eq: [known, 0] }, then: [{ set: [other, { +: [other, 1] }] }] }
+            - if:
+                condition: { "&&": [{ neq: [evt.type, "key_up"] }, { neq: [evt.key, "Left"] }] }
+                then:
+                  - call: [log.error, "FAIL wrong key name: '${evt.key}'"]
+                  - return: 1
+
+      - if:
+          condition: { neq: [downs, 1] }
+          then:
+            - call: [log.error, "FAIL key_down count ${downs}, expected 1 (spec §3.1)"]
+            - return: 1
+      - if:
+          condition: { neq: [repeats, 2] }
+          then:
+            - call: [log.error, "FAIL key_repeat count ${repeats}, expected 2"]
+            - return: 1
+      - if:
+          condition: { neq: [ups, 1] }
+          then:
+            - call: [log.error, "FAIL key_up count ${ups}, expected 1"]
+            - return: 1
+      - call: [log.info, "key_repeat OK: ${downs} down, ${repeats} repeat, ${ups} up"]
+      - return: 0

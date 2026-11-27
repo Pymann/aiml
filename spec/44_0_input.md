@@ -432,6 +432,7 @@ Event types (`type` field):
 | Type | Description |
 |------|-------------|
 | `"key_down"` | Key pressed (`key` set) |
+| `"key_repeat"` | The key is **held** and the platform repeats it (`key` set) |
 | `"key_up"` | Key released (`key` set) |
 | `"mouse_move"` | Cursor moved (`pos` set) |
 | `"mouse_button_down"` | Mouse button pressed (`btn`, `pos` set) |
@@ -468,13 +469,23 @@ single typed character **exactly one** `text` event. A consumer may therefore tr
 This is an invariant about the *producers*, and every platform backend has to honour
 it:
 
-- **Native (GLFW):** the key callback queues on `GLFW_PRESS` only; `GLFW_REPEAT`
-  updates the polling state but queues nothing.
+- **Native (GLFW):** the key callback queues a `key_down` on `GLFW_PRESS` only.
+  `GLFW_REPEAT` updates the polling state and queues a **`key_repeat`**, never a
+  second `key_down`.
 - **Web (browser):** the window-level `keydown`/`keypress` handlers are the single
-  source for a hardware keyboard. The hidden DOM `<input>` that raises the mobile
+  source for a hardware keyboard, and a `keydown` with `event.repeat` set is queued as
+  `key_repeat`. Until that was written down this backend queued repeats as `key_down`
+  and so broke the invariant on one target only -- the kind of difference that is
+  invisible until a held key does something twice in a browser and once natively. The hidden DOM `<input>` that raises the mobile
   soft keyboard is a *fallback* for input that never produces a usable `keydown`
   (soft keyboards, IMEs, autocorrect, composition). It must stay silent while a
   named hardware key is in flight — otherwise one press is queued twice.
+
+**Auto-repeat is its own event, not a press.** A consumer that wants held keys to keep
+acting -- a text field, a value stepper -- handles `key_repeat` alongside `key_down`;
+everything else ignores it and keeps the one-press-one-event guarantee exactly. Holding
+an arrow in a field that only reads `key_down` moves the caret once, which is the bug
+this type exists to make fixable without weakening the invariant above.
 
 A doubled event is invisible in a screenshot and in any structural test: the widget
 is correct, the queue is not. It shows up only as behaviour — a Backspace that eats
@@ -693,6 +704,7 @@ the person running it, and several tests can run in parallel.
 | `input.post_touch_cancel()` | Abort the active press on button 0: clears the current state and sets the **cancel** latch (§2.2) — never the release latch. Models `touchcancel`, the two-finger takeover and focus loss, so a scenario can prove that an aborted gesture produces no drop. |
 | `input.post_focus_lost()` | The window lost focus: cancels every active press (as `post_touch_cancel` does, for all buttons) **and** releases every held key with its release latch (§2.1). Models alt-tab and the hidden browser tab, so a scenario can prove that no key stays stuck down. |
 | `input.post_scroll(dx: f32, dy: f32)` | Add to the scroll accumulator; drained by the next `update()` exactly like a real wheel event. |
+| `input.post_key_repeat(name: string)` | Repeat a held key: queues `key_repeat`, sets the state, leaves the press latch alone. |
 | `input.post_key_down(name: string)` | Press a key.  `name` uses the canonical names of §5 (`"lctrl"`, `"Left"`, `"a"`).  Sets the current state **and** the press latch. |
 | `input.post_key_up(name: string)` | Release a key: clears the current state **and** sets the release latch. |
 | `input.post_text(s: string)` | Queue `s` as character input for the focused `text_input` — one `char` event per code point, as typing would. |

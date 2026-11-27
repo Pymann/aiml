@@ -8024,16 +8024,32 @@ void registerBuiltins(CompilerContext& ctx) {
 #undef REG_HASH1
 #undef REG_HASH2
 
-        /* crc32: returns i32 */
+        /* crc32: returns i32.  spec/33_1 §10 promises string OR buffer<u8>; a
+           buffer used to be handed to the (ptr) C function BY VALUE, which is
+           invalid IR -- the module verifier refused it and the caller saw
+           "Call parameter type does not match function signature" with no hint
+           of which call it was.  The bytes runtime already checksums a byte
+           range, so the buffer branch goes there. */
         hash.builtinFuncs["crc32"] = [i32t](CompilerContext& ctx, const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
             auto* p = llvm::PointerType::get(ctx.context, 0);
+            llvm::Value* a = args.size() > 0 ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]))
+                                             : llvm::Constant::getNullValue(p);
+            if (a && a->getType() == ctx.getLLVMType("buffer")) {
+                auto* i64t = ctx.builder.getInt64Ty();
+                auto* i8p  = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Value* dataP = ctx.builder.CreateExtractValue(a, {4}, "crc_buf_data");
+                llvm::Value* lenV  = ctx.builder.CreateExtractValue(a, {0}, "crc_buf_len");
+                llvm::Function* bf = ctx.getFunction("aiml_bytes_crc32", i64t, {i8p, i32t, i64t, i64t});
+                llvm::Value* wide = ctx.builder.CreateCall(bf, {dataP, lenV,
+                                                                llvm::ConstantInt::get(i64t, 0),
+                                                                llvm::ConstantInt::get(i64t, -1)});
+                return ctx.ir_gen->wrap(ctx.builder.CreateTrunc(wide, i32t, "crc_i32"));
+            }
             llvm::Function* fn = ctx.module().getFunction("aiml_hash_crc32");
             if (!fn)
                 fn = llvm::Function::Create(
                     llvm::FunctionType::get(i32t, {p}, false),
                     llvm::Function::ExternalLinkage, "aiml_hash_crc32", ctx.module());
-            llvm::Value* a = args.size() > 0 ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]))
-                                             : llvm::Constant::getNullValue(p);
             return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {a}));
         };
     } // end hash namespace
@@ -12015,6 +12031,7 @@ void registerBuiltins(CompilerContext& ctx) {
         };
         INP_POST_STR("post_key_down", "aiml_input_post_key_down")
         INP_POST_STR("post_key_up",   "aiml_input_post_key_up")
+        INP_POST_STR("post_key_repeat", "aiml_input_post_key_repeat")
         INP_POST_STR("post_text",     "aiml_input_post_text")
 #undef INP_POST_STR
 

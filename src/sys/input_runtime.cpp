@@ -348,10 +348,13 @@ static void glfw_key_cb(GLFWwindow*, int key, int /*scan*/, int action, int /*mo
         g_input->curr_keys[key] = 0;
         g_input->key_release_latch[key] = 1;
     }
-    if (action == GLFW_REPEAT) return;  /* only push events for press/release */
-
+    /* A repeat is NOT a press (spec/44_0 §3.1: one press, one key_down).  It gets
+     * its own type instead of being dropped: a text field needs auto-repeat, and
+     * without it holding an arrow moves the caret exactly once. */
     AimlInputEvent ev = {};
-    ev.type = (action == GLFW_RELEASE) ? "key_up" : "key_down";
+    if (action == GLFW_REPEAT)       ev.type = "key_repeat";
+    else if (action == GLFW_RELEASE) ev.type = "key_up";
+    else                             ev.type = "key_down";
     ev.key  = glfw_key_to_name(key);
     g_input->events.push_back(ev);
 }
@@ -564,6 +567,15 @@ extern "C" void aiml_input_post_key_down(const char* name) {
         return;
     }
     glfw_key_cb(nullptr, k, 0, GLFW_PRESS, 0);
+}
+extern "C" void aiml_input_post_key_repeat(const char* name) {
+    if (!g_input || !name) return;
+    int k = key_name_to_glfw(name);
+    if (k < 0 || k >= AIML_MAX_KEYS) {
+        fprintf(stderr, "[input] post_key_repeat: unknown key name '%s'\n", name);
+        return;
+    }
+    glfw_key_cb(nullptr, k, 0, GLFW_REPEAT, 0);
 }
 extern "C" void aiml_input_post_key_up(const char* name) {
     if (!g_input || !name) return;
@@ -1494,9 +1506,12 @@ static EM_BOOL bin_keydown(int /*type*/, const EmscriptenKeyboardEvent* e, void*
         if (vslot >= 0) { if (!g_b->raw_keys[vslot]) g_b->pend_kpress[vslot] = 1; g_b->raw_keys[vslot] = 1; }
         return EM_FALSE;
     }
-    /* Push a "key_down" event with the key name (canonical — e.g. "C", "Backspace") */
+    /* Push the event with the key name (canonical — e.g. "C", "Backspace").  The
+     * browser repeats `keydown` while a key is held; that is a repeat, not a second
+     * press, and queueing it as "key_down" broke spec/44_0 §3.1 on this target only
+     * — the native backend never did it. */
     AimlInputEvent ev = {};
-    ev.type = "key_down";
+    ev.type = e->repeat ? "key_repeat" : "key_down";
     ev.key  = bin_keep_string(canon);
     g_b->events.push_back(ev);
     /* Update curr_keys using name_to_slot so that polling
@@ -1991,6 +2006,18 @@ extern "C" void aiml_input_post_key_down(const char* name) {
     ev.key = g_b->key_strings.back().c_str();
     g_b->events.push_back(ev);
 }
+extern "C" void aiml_input_post_key_repeat(const char* name) {
+    if (!g_b || !name) return;
+    int slot = name_to_slot(name);
+    if (slot < 0) return;
+    g_b->raw_keys[slot]  = 1;
+    g_b->curr_keys[slot] = 1;
+    AimlInputEvent ev = {};
+    ev.type = "key_repeat";
+    g_b->key_strings.push_back(name);
+    ev.key = g_b->key_strings.back().c_str();
+    g_b->events.push_back(ev);
+}
 extern "C" void aiml_input_post_key_up(const char* name) {
     if (!g_b || !name) return;
     int slot = name_to_slot(name);
@@ -2213,6 +2240,7 @@ void aiml_input_post_focus_lost(void)     {}
 void aiml_input_post_scroll    (float, float) {}
 void aiml_input_post_key_down  (const char*) {}
 void aiml_input_post_key_up    (const char*) {}
+void aiml_input_post_key_repeat(const char*) {}
 void aiml_input_post_text      (const char*) {}
 
 void    aiml_input_init       (void* /*win*/)   { /* TODO: platform */ }
