@@ -46,8 +46,8 @@
       - set: [fails, { +: [fails, { call: [expect, "capture and cwd came from the value (${said})", { call: [said.contains, "exe_options_ws"] }] }] }]
       - set: [fails, { +: [fails, { call: [expect, "the helper did not change the original", { eq: [opts.capture, false] }] }] }]
       # env: a complete environment from the value; empty = inherit
-      - call: [cap.env.put, "EXE_OPT_PROBE", "from-the-model"]
-      - call: [cap.env.put, "PATH", "/usr/bin:/bin"]
+      - call: [cap.env.set, "EXE_OPT_PROBE", "from-the-model"]
+      - call: [cap.env.set, "PATH", "/usr/bin:/bin"]
       - decl: [envv, list<string>]
       - call: [envv.push, "printenv"]
       - call: [envv.push, "EXE_OPT_PROBE"]

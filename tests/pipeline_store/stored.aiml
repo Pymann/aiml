@@ -39,7 +39,7 @@
       - decl: [pipe, pipeline, { call: [stored] }]
       - decl: [envm, map<string:string>, { call: [sys.env] }]
       - if:
-          condition: { call: [envm.contains, "STORE_FOR_VALUE"] }
+          condition: { call: [envm.has, "STORE_FOR_VALUE"] }
           then:
             - call: [pipe.set_store, { call: [envm.get, "STORE_FOR_VALUE"] }]
       - decl: [rc_run, i32, { call: [pipe.run] }]

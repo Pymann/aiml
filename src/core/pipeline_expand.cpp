@@ -1215,7 +1215,7 @@ bool expandPipelineDeclarations(const std::string& text, const std::string& wher
                         // nothing else, as the environment a pure step passes (F62-31).
                         prelude += "      - decl: [host_env, map<string:string>]\n";
                         for (const auto& hn : hostNames)
-                            prelude += "      - call: [host_env.put, \"" + hn + "\", " + hn + "]\n";
+                            prelude += "      - call: [host_env.set, \"" + hn + "\", " + hn + "]\n";
                         // F62-61: the effective exec_defaults, as a value in the body.
                         std::vector<std::pair<std::string, std::string>> stepExec = stageExec;
                         mergeExecDefaults(sp["exec_defaults"], stepExec, where, pname,
