@@ -73,10 +73,14 @@
     static_off: ["str_cmp"]
     return: i32
     body:
+      # spec/62 F62-24a: results outlive a pipeline value and the process; every
+      # value here has a store of its own, so that it counts its OWN runs.
+      - call: [io.remove_all, "logs/test_pipeline_pause_stores"]
       - decl: [fails, i32, 0]
 
       # ── declared gate: the run stops BEFORE the second step ────────────
       - decl: [gated, pipeline, { call: [two_steps, 1] }]
+      - call: [gated.set_store, "logs/test_pipeline_pause_stores/gated"]
       - decl: [rc_g1, i32, { call: [gated.run] }]
       - set: [fails, { +: [fails, { call: [expect, "gate: the run reports 'paused'", { eq: [rc_g1, -6] }] }] }]
       - set: [fails, { +: [fails, { call: [expect, "gate: the life cycle is paused", { eq: [{ call: [gated.lifecycle] }, Lifecycle.paused] }] }] }]
@@ -93,6 +97,7 @@
 
       # ── without a gate the same pipeline runs through ───────────────────
       - decl: [plain, pipeline, { call: [two_steps, 0] }]
+      - call: [plain.set_store, "logs/test_pipeline_pause_stores/plain"]
       - decl: [rc_p, i32, { call: [plain.run] }]
       - set: [fails, { +: [fails, { call: [expect, "without a gate: the run gets through", { eq: [rc_p, 0] }] }] }]
       - set: [fails, { +: [fails, { call: [expect, "without a gate: both steps ran", { eq: [{ call: [plain.ran_count] }, 2] }] }] }]
@@ -100,6 +105,7 @@
       # ── from outside: the observer pauses AFTER the first step ─────────
       - set: [g_seen, 0]
       - decl: [outer, pipeline, { call: [two_steps, 0] }]
+      - call: [outer.set_store, "logs/test_pipeline_pause_stores/outer"]
       - set: [g_pipe_handle, outer]
       - decl: [rc_o1, i32, { call: [outer.run, pause_after_first] }]
       - set: [fails, { +: [fails, { call: [expect, "from outside: the run reports 'paused'", { eq: [rc_o1, -6] }] }] }]

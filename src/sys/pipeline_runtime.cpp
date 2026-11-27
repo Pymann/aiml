@@ -16,9 +16,15 @@
 #include "../../logger.h"
 #include "../../exec_impl.h"
 #include "../core/path_runtime.h"
+#include "sha256.h"
 
 #include <algorithm>
 #include <atomic>
+#include <cstdio>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
 #include <unistd.h>
 #include <chrono>
 #include <mutex>
@@ -153,7 +159,75 @@ struct PPipeline {
     // the real layer cache is with the host (cosmos spec/96).
     struct CacheEntry { int32_t rc = 0; std::string result; };
     std::map<std::string, CacheEntry> cache;
+    // F62-24: the persistent store behind `cache` — "" = <workspace_root>/store,
+    // unless AIML_PIPELINE_STORE names another one.
+    std::string store_dir;
 };
+
+// ── F62-24/24a: the step store on disk ────────────────────────────────────
+//
+// kv/<sha256 of the key material>: "aiml-step-entry-1\n<rc>\n<length>\n<result bytes>".
+// Written beside its name and renamed into place, so a run that dies halfway
+// leaves no torn entry; read back only when every part is as written.
+
+std::string store_root(const PPipeline& p) {
+    if (!p.store_dir.empty()) return p.store_dir;
+    const char* env = std::getenv("AIML_PIPELINE_STORE");
+    if (env && *env) return env;
+    return p.workspace_root + "/store";
+}
+
+std::string store_name(const std::string& key) {
+    char* hex = aiml_sha256_hex(key.data(), static_cast<int32_t>(key.size()));
+    std::string out = hex ? hex : "";
+    if (hex) aiml_str_decref(hex);
+    return out;
+}
+
+// 1 = found, 0 = not there, -1 = there but unreadable (a miss, said once).
+int store_load(const std::string& root, const std::string& key, PPipeline::CacheEntry& out) {
+    std::string file = root + "/kv/" + store_name(key);
+    std::ifstream in(file, std::ios::binary);
+    if (!in) return 0;
+    std::string magic, rcLine, lenLine;
+    if (!std::getline(in, magic) || magic != "aiml-step-entry-1" || !std::getline(in, rcLine) ||
+        !std::getline(in, lenLine))
+        return -1;
+    try {
+        out.rc = std::stoi(rcLine);
+        size_t len = static_cast<size_t>(std::stoull(lenLine));
+        std::string body(len, '\0');
+        in.read(&body[0], static_cast<std::streamsize>(len));
+        if (static_cast<size_t>(in.gcount()) != len) return -1;
+        out.result = body;
+    } catch (const std::exception&) {
+        return -1;
+    }
+    return 1;
+}
+
+void store_save(const std::string& root, const std::string& key, const PPipeline::CacheEntry& e) {
+    std::error_code ec;
+    std::filesystem::create_directories(root + "/kv", ec);
+    std::string file = root + "/kv/" + store_name(key);
+    std::string tmp = file + ".tmp." + std::to_string(::getpid()) + "." +
+                      std::to_string(std::hash<std::thread::id>()(std::this_thread::get_id()));
+    {
+        std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+        if (!out) {
+            LOG_WARNING("pipeline store: cannot write " + tmp + " — the result stays in memory only (F62-24a)");
+            return;
+        }
+        out << "aiml-step-entry-1\n" << e.rc << "\n" << e.result.size() << "\n";
+        out.write(e.result.data(), static_cast<std::streamsize>(e.result.size()));
+        if (!out) {
+            std::filesystem::remove(tmp, ec);
+            return;
+        }
+    }
+    std::filesystem::rename(tmp, file, ec);
+    if (ec) std::filesystem::remove(tmp, ec);
+}
 
 // Lane = a complete binding of all axes.
 using Bindings = std::map<std::string, std::string>;
@@ -361,6 +435,10 @@ int32_t aiml_pipeline_lifecycle(void* p) { return p ? static_cast<PPipeline*>(p)
 // keys.
 void aiml_pipeline_set_parallel(void* p, int32_t n) {
     if (p && n >= 0) static_cast<PPipeline*>(p)->parallel = n;
+}
+
+void aiml_pipeline_set_store(void* p, const char* dir) {   // F62-24
+    if (p && dir) static_cast<PPipeline*>(p)->store_dir = dir;
 }
 
 void aiml_pipeline_set_workspace_root(void* p, const char* root) {
@@ -695,6 +773,16 @@ int32_t aiml_pipeline_run_observed(void* p, void* observer_raw) {
                 if (st.cache != 0) {
                     std::lock_guard<std::mutex> g(state.mu);
                     auto it = pp->cache.find(key);
+                    if (it == pp->cache.end()) {
+                        // F62-24a: what an earlier process recorded.
+                        PPipeline::CacheEntry onDisk;
+                        int found = store_load(store_root(*pp), key, onDisk);
+                        if (found == 1) it = pp->cache.emplace(key, onDisk).first;
+                        else if (found < 0)
+                            LOG_WARNING("pipeline '" + pp->name + "': step '" + st.name +
+                                        "': the stored entry is unreadable — a miss, the step runs "
+                                        "(spec/62 F62-24a)");
+                    }
                     if (it != pp->cache.end()) {
                         hit       = true;
                         rc        = it->second.rc;
@@ -807,6 +895,7 @@ int32_t aiml_pipeline_run_observed(void* p, void* observer_raw) {
                         auto rit = state.resultOf.find({st.name, lane_idx});
                         if (rit != state.resultOf.end()) entry.result = rit->second;
                         pp->cache[key] = entry;
+                        store_save(store_root(*pp), key, entry);   // F62-24a
                     }
                 }
 

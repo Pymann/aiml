@@ -1177,10 +1177,22 @@ a remote run execute the same code rather than two implementations kept in agree
 
 ### 12.2 Where the local store lives
 
-- **F62-24** The local store sits in `.aiml_pipeline/` beside the pipeline file: `blobs/` for
-  content plus a persistent KV for `step_key → result`.  Overridable with `AIML_PIPELINE_STORE`.
-  Project-local rather than in the user's cache directory, because a pipeline belongs to a project
-  and a cache one cannot find is a cache one cannot delete.
+- **F62-24** The local store sits in `store/` of the workspace root — `.aiml_pipeline/store/` of the
+  **working directory** unless `workspace_root` says otherwise — beside the workspaces (§4.3), with
+  `blobs/` for content (the output trees, F62-168) and `kv/` for `step_key → (status, result)`, one file per key named by the sha256 of the
+  key material.  `AIML_PIPELINE_STORE` names another directory; `pipe.set_store(dir)` does so for one
+  pipeline value (a test that counts hits isolates itself with it).  Project-local rather than in
+  the user's cache directory, because a pipeline belongs to a project and a cache one cannot find is
+  a cache one cannot delete.  *"Beside the pipeline file"*, as this said until 2026-11-27, is not
+  what a run can know: the compiled code does not carry its source's path, and an AOT binary runs
+  far from it.
+- **F62-24a** **What a later process finds.**  A cacheable step's successful result (F62-92) is
+  written to the store when the step ends, and looked up there when the step's key is not in the
+  pipeline value's memory — so a second `aiml build_matrix.aiml` reuses what the first one built,
+  which is the point of §1 locally.  An entry is written next to its name and renamed into place,
+  so a run that dies halfway leaves no torn entry; an entry that cannot be read (truncated, another
+  format) is a **miss** with a warning, never an error and never a hit.  `opaque` steps are never
+  written (§7).  The store is never pruned by a run; deleting the directory is the reset.
 
 ### 12.3 The same key locally and remotely
 
