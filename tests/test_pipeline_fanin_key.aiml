@@ -1,0 +1,117 @@
+# SPEC: 62_pipelines
+# spec/62 F62-8 / §8: a `per: once` step that needs a `per: lane` step depends on EVERY lane
+# of it.  Its key carries all their keys, in lane order, and step.need_results gives one
+# result per lane.  Until 2026-11-27 such a step looked for the producer under "no lane",
+# found nothing, and got an empty input key — so a matrix that grew a lane let it hit with
+# a result built from fewer lanes.  The composed form, because only there can the same
+# steps run over another matrix.
+# Expected exit code: 0
+- def:
+    name: lane_value
+    return: i32
+    body:
+      - decl: [arch, string, { call: [step.arg, "arch"] }]
+      - call: [step.set_result, "built-${arch}"]
+      - return: 0
+
+- def:
+    name: join_lanes
+    return: i32
+    body:
+      - decl: [all, list<string>, { call: [step.need_results, "per_lane"] }]
+      - decl: [joined, string, ""]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, all.len] }
+          body:
+            - decl: [one, string, { at: [all, idx] }]
+            - set: [joined, "${joined}${one};"]
+            - set: [idx, { +: [idx, 1] }]
+      - decl: [work_dir, string, { call: [step.workspace] }]
+      - call: [io.write_file, "${work_dir}/joined.txt", joined]
+      - call: [step.set_result, joined]
+      - return: 0
+
+# need_result on a per-lane need inside a per-once step: there is no single value.
+- def:
+    name: join_wrongly
+    return: i32
+    body:
+      - decl: [one, string, { call: [step.need_result, "per_lane"] }]
+      - return: 0
+
+- def:
+    name: fanin_pipe
+    args: [[lanes, i32], [wrong, i32], [store, string]]
+    return: pipeline
+    body:
+      - decl: [prod, step, { call: [step.new] }]
+      - call: [prod.set_name, "per_lane"]
+      - call: [prod.set_body, { call: [sys.bundle, "lane_value", { context: true }] }]
+      - call: [prod.set_cache, CacheClass.pure]
+      - call: [prod.use_arg, "arch"]
+      - decl: [join, step, { call: [step.new] }]
+      - call: [join.set_name, "join"]
+      - if:
+          condition: { eq: [wrong, 1] }
+          then: [{ call: [join.set_body, { call: [sys.bundle, "join_wrongly", { context: true }] }] }]
+          else: [{ call: [join.set_body, { call: [sys.bundle, "join_lanes", { context: true }] }] }]
+      - call: [join.set_cache, CacheClass.pure]
+      - call: [join.set_per, Per.once]
+      - call: [join.add_need, "per_lane"]
+      - decl: [stg, stage, { call: [stage.new] }]
+      - call: [stg.set_name, "fan"]
+      - call: [stg.add_step, prod]
+      - call: [stg.add_step, join]
+      - decl: [arch, list<string>]
+      - call: [arch.push, "x86_64"]
+      - call: [arch.push, "arm64"]
+      - if: { condition: { gt: [lanes, 2] }, then: [{ call: [arch.push, "riscv64"] }] }
+      - decl: [pipe, pipeline, { call: [pipeline.new] }]
+      - call: [pipe.set_name, "fanin"]
+      - call: [pipe.add_param, "arch", arch]
+      - call: [pipe.set_workspace_root, "logs/fanin_ws"]
+      - call: [pipe.set_store, store]
+      - call: [pipe.add_stage, stg]
+      - return: pipe
+
+- def:
+    name: expect
+    args: [[what, string], [cond, i32]]
+    return: i32
+    body:
+      - if:
+          condition: { eq: [cond, 1] }
+          then: [{ print: ["  ok   ${what}"] }, { return: 0 }]
+      - print: ["  FAIL ${what}"]
+      - return: 1
+
+- def:
+    name: main
+    static_off: ["str_cmp"]
+    return: i32
+    body:
+      - call: [io.remove_all, "logs/fanin_ws"]
+      - decl: [fails, i32, 0]
+      - decl: [joined_at, string, "logs/fanin_ws/fanin/_/fan/joined.txt"]
+      - decl: [two, pipeline, { call: [fanin_pipe, 2, 0, "logs/fanin_ws/store"] }]
+      - decl: [rc_two, i32, { call: [two.run] }]
+      - set: [fails, { +: [fails, { call: [expect, "two lanes: the run succeeds", { eq: [rc_two, 0] }] }] }]
+      - decl: [got_two, string, { call: [io.read_file, joined_at] }]
+      - set: [fails, { +: [fails, { call: [expect, "need_results: one result per lane, in lane order (${got_two})", { eq: [got_two, "built-x86_64;built-arm64;"] }] }] }]
+      - decl: [three, pipeline, { call: [fanin_pipe, 3, 0, "logs/fanin_ws/store"] }]
+      - decl: [rc_three, i32, { call: [three.run] }]
+      - set: [fails, { +: [fails, { call: [expect, "three lanes, same store: two lanes hit, the new one runs, and join runs again", { eq: [{ call: [three.ran_count] }, 2] }] }] }]
+      - decl: [got_three, string, { call: [io.read_file, joined_at] }]
+      - set: [fails, { +: [fails, { call: [expect, "and join sees all three (${got_three})", { eq: [got_three, "built-x86_64;built-arm64;built-riscv64;"] }] }] }]
+      - decl: [again, pipeline, { call: [fanin_pipe, 3, 0, "logs/fanin_ws/store"] }]
+      - decl: [rc_again, i32, { call: [again.run] }]
+      - set: [fails, { +: [fails, { call: [expect, "the same three lanes again: everything hits", { eq: [{ call: [again.reused_count] }, 4] }] }] }]
+      - decl: [wrong, pipeline, { call: [fanin_pipe, 2, 1, "logs/fanin_ws/store_wrong"] }]
+      - decl: [rc_wrong, i32, { call: [wrong.run] }]
+      - set: [fails, { +: [fails, { call: [expect, "need_result on a per-lane need in a per-once step fails the step", { neq: [rc_wrong, 0] }] }] }]
+      - if:
+          condition: { neq: [fails, 0] }
+          then: [{ print: ["test_pipeline_fanin_key FAIL (${fails})"] }, { return: 1 }]
+      - print: ["test_pipeline_fanin_key PASS"]
+      - return: 0

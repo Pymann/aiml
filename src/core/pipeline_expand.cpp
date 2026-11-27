@@ -46,6 +46,45 @@ const RuntimeField kRuntimeFields[] = {
     { "push",  "a place to which an image is written" },
 };
 
+// F62-33/F62-8: how the result of `need` appears in the body — a local name equal
+// to the step name, with the producer's type.  Text and i32 as written; every other
+// type in its serialised form (spec/29), read back with sys.deserialize.  `fanIn`:
+// a `per: once` step needs a `per: lane` one and gets a list over the lanes.
+std::string needBinding(const std::string& need, const std::string& type, bool fanIn) {
+    auto convert = [&](const std::string& target, const std::string& text,
+                       const std::string& indent) -> std::string {
+        if (type == "string") return indent + "- decl: [" + target + ", string, " + text + "]\n";
+        if (type == "i32")
+            return indent + "- decl: [" + target + ", i32, { call: [" + text + ".parse_i32] }]\n";
+        return indent + "- decl: [" + target + ", " + type + ", { call: [sys.deserialize, " + text +
+               ", \"" + type + "\"] }]\n";
+    };
+    if (!fanIn) {
+        if (type == "string")
+            return "      - decl: [" + need + ", string, { call: [step.need_result, \"" + need + "\"] }]\n";
+        std::string raw = "__nd_" + need;
+        return "      - decl: [" + raw + ", string, { call: [step.need_result, \"" + need + "\"] }]\n" +
+               convert(need, raw, "      ");
+    }
+    std::string texts = "__nl_" + need, idx = "__ni_" + need, one = "__ne_" + need;
+    std::string out = "      - decl: [" + texts + ", list<string>, { call: [step.need_results, \"" + need + "\"] }]\n";
+    if (type == "string") return out + "      - decl: [" + need + ", list<string>, " + texts + "]\n";
+    out += "      - decl: [" + need + ", list<" + type + ">]\n";
+    out += "      - decl: [" + idx + ", i32, 0]\n";
+    out += "      - while:\n";
+    out += "          condition: { lt: [" + idx + ", " + texts + ".len] }\n";
+    out += "          body:\n";
+    out += "            - decl: [" + one + "_txt, string, { at: [" + texts + ", " + idx + "] }]\n";
+    if (type == "i32")
+        out += "            - decl: [" + one + ", i32, { call: [" + one + "_txt.parse_i32] }]\n";
+    else
+        out += "            - decl: [" + one + ", " + type + ", { call: [sys.deserialize, " + one +
+               "_txt, \"" + type + "\"] }]\n";
+    out += "            - call: [" + need + ".push, " + one + "]\n";
+    out += "            - set: [" + idx + ", { +: [" + idx + ", 1] }]\n";
+    return out;
+}
+
 // How a field that needs a runtime is reported.
 std::string runtimeFieldMessage(const std::string& where, const std::string& pname,
                                 const char* field, const char* what, const char* level) {
@@ -584,6 +623,11 @@ bool expandPipelineDeclarations(const std::string& text, const std::string& wher
         // steps.  Here at compile time, so that the author finds out
         // before a run notices (the runtime checks it as well).
         std::set<std::string> declaredSteps;
+        // F62-33/F62-8: what each earlier step returns and how often it runs —
+        // a successor binds the value with the producer's type, and a `per: once`
+        // successor of a `per: lane` step gets a list over the lanes.
+        struct Produced { std::string type; std::string per; };
+        std::map<std::string, Produced> producedBy;
 
         ctor += "      - decl: [pipe_obj, pipeline, { call: [pipeline.new] }]\n";
         ctor += "      - call: [pipe_obj.set_name, \"" + pname + "\"]\n";
@@ -979,12 +1023,15 @@ bool expandPipelineDeclarations(const std::string& text, const std::string& wher
                                 ok = false;
                                 continue;
                             }
-                            prelude += "      - decl: [" + need +
-                                       ", string, { call: [step.need_result, \"" + need + "\"] }]\n";
+                            const Produced prod = producedBy.count(need) ? producedBy[need]
+                                                                         : Produced{"string", "lane"};
+                            const bool fanIn = (perMode == "once" && prod.per == "lane");
+                            prelude += needBinding(need, prod.type, fanIn);
                         }
                         prelude += "      - decl: [workspace, string, { call: [step.workspace] }]\n";
 
                         const std::string retType = scalarOr(sp["return"], "i32");
+                        producedBy[stepName] = Produced{retType, perMode};
                         helpers += "- def:\n";
                         helpers += "    name: " + fnBase + "_body\n";
                         helpers += "    return: " + retType + "\n";
@@ -1014,18 +1061,27 @@ bool expandPipelineDeclarations(const std::string& text, const std::string& wher
                         // (§13.5h).  The author keeps writing `- return: rep`
                         // and needs to know nothing about set_result.  Only for types
                         // the channel carries: string or number (F62-118).
-                        const bool publishable =
+                        // F62-33/34: any other type goes through the channel in its
+                        // serialised form (spec/29) — the author writes `return: rep`
+                        // for a model as for a string, and the successor gets the model.
+                        const bool asText =
                             (retType == "string" || retType == "i32" || retType == "i64" ||
                              retType == "u32" || retType == "u64");
                         std::string bundledFn = fnBase + "_body";
-                        if (publishable) {
+                        if (retType != "void") {
                             helpers += "- def:\n";
                             helpers += "    name: " + fnBase + "_pub\n";
                             helpers += "    return: i32\n";
                             helpers += "    body:\n";
                             helpers += "      - decl: [pub_val, " + retType + ", { call: [" +
                                        fnBase + "_body] }]\n";
-                            helpers += "      - call: [step.set_result, pub_val]\n";
+                            if (asText) {
+                                helpers += "      - call: [step.set_result, pub_val]\n";
+                            } else {
+                                helpers += "      - decl: [pub_txt, string, { call: [sys.serialize, pub_val, \"" +
+                                           retType + "\"] }]\n";
+                                helpers += "      - call: [step.set_result, pub_txt]\n";
+                            }
                             helpers += "      - return: 0\n";
                             helpers += "\n";
                             bundledFn = fnBase + "_pub";
