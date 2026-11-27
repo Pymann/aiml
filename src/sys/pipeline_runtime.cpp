@@ -64,6 +64,10 @@ struct CurStep {
     std::string                        result;
     bool                               result_set = false;
     std::map<std::string, std::string> need_results;
+    // F62-8: a `per: once` step's view of a `per: lane` need — one result per
+    // lane, in lane order.  Read with step.need_results; need_result on it is an
+    // error (there is no single value).
+    std::map<std::string, std::vector<std::string>> need_lists;
     bool        status_set    = false;
     int32_t     status        = -1;
     int         fail_reach    = -1;   // -1 none, 0 lane, 1 pipeline
@@ -482,6 +486,13 @@ char* aiml_step_need_result(const char* name) {
     if (!g_cur.active) { LOG_ERROR("step.need_result: no running step"); return aiml_str_alloc(0); }
     std::string key = name ? name : "";
     auto it = g_cur.need_results.find(key);
+    if (it == g_cur.need_results.end() && g_cur.need_lists.count(key)) {
+        LOG_ERROR("step.need_result('" + key + "'): '" + key + "' runs per lane and this step "
+                  "once — it has one result per lane; read them with step.need_results (spec/62 F62-8)");
+        g_cur.fail_reach = 0;
+        g_cur.fail_msg   = "step.need_result('" + key + "') of a per-lane step in a per-once step";
+        return aiml_str_alloc(0);
+    }
     if (it == g_cur.need_results.end()) {
         LOG_ERROR("step.need_result('" + key + "'): this step is not in the needs — "
                   "its result would take effect without being in the key "
@@ -493,6 +504,42 @@ char* aiml_step_need_result(const char* name) {
     char* out = aiml_str_alloc(it->second.size());
     if (!it->second.empty()) memcpy(out, it->second.data(), it->second.size());
     return out;
+}
+
+// F62-8: the results of a `per: lane` need, one per lane in lane order, for a
+// `per: once` step.  A lane that produced none (it failed) contributes nothing.
+int32_t aiml_step_need_results_fill(const char* name, void* list_ptr) {
+    struct ListRaw { int32_t size; int32_t capacity; void** data; };
+    std::string key = name ? name : "";
+    if (!g_cur.active) { LOG_ERROR("step.need_results: no running step"); return 0; }
+    auto it = g_cur.need_lists.find(key);
+    if (it == g_cur.need_lists.end()) {
+        LOG_ERROR("step.need_results('" + key + "'): " +
+                  (g_cur.need_results.count(key)
+                       ? std::string("there is one result, not one per lane — read it with step.need_result")
+                       : std::string("this step is not in the needs (spec/62 F62-119)")) +
+                  " (spec/62 F62-8)");
+        g_cur.fail_reach = 0;
+        g_cur.fail_msg   = "step.need_results('" + key + "')";
+        return 0;
+    }
+    auto* list = static_cast<ListRaw*>(list_ptr);
+    if (!list) return 0;
+    int32_t n = 0;
+    for (const auto& one : it->second) {
+        if (list->size >= list->capacity) {
+            int32_t cap = list->capacity > 0 ? list->capacity * 2 : 8;
+            void** nd = static_cast<void**>(std::realloc(list->data, static_cast<size_t>(cap) * sizeof(void*)));
+            if (!nd) break;
+            list->data = nd;
+            list->capacity = cap;
+        }
+        char* s = aiml_str_alloc(one.size());
+        if (!one.empty()) memcpy(s, one.data(), one.size());
+        list->data[list->size++] = s;
+        ++n;
+    }
+    return n;
 }
 
 char* aiml_step_workspace(void) {
@@ -683,6 +730,11 @@ int32_t aiml_pipeline_run_observed(void* p, void* observer_raw) {
         std::map<std::pair<std::string, int32_t>, std::string> resultOf;
     };
     RunState state;
+    // F62-8: how often each step runs — a `per: once` successor of a `per: lane`
+    // step depends on all its lanes.
+    std::map<std::string, int32_t> perOf;
+    for (const auto& stg : pp->stages)
+        for (const auto& st : stg.steps) perOf[st.name] = st.per;
 
     // One pass over a SELECTION of steps.  `lane_idx == -1` means
     // `per: once`: a pass without lane bindings (§5.5).
@@ -749,6 +801,20 @@ int32_t aiml_pipeline_run_observed(void* p, void* observer_raw) {
                     {
                         std::lock_guard<std::mutex> g(state.mu);
                         for (const auto& need : st.needs) {
+                            // F62-8: a `per: once` step that needs a `per: lane`
+                            // one depends on EVERY lane of it — all their keys, in
+                            // lane order, as one component.  A lane without a key
+                            // (it did not get there) is an empty part of it.
+                            if (lane_idx == -1 && perOf.count(need) && perOf[need] == 0) {
+                                std::string all;
+                                for (size_t li = 0; li < lanes.size(); ++li) {
+                                    auto it = state.keyOf.find({need, static_cast<int32_t>(li)});
+                                    const std::string k = it != state.keyOf.end() ? it->second : std::string();
+                                    all += std::to_string(k.size()) + ":" + k;
+                                }
+                                ks.push_back(all);
+                                continue;
+                            }
                             auto it = state.keyOf.find({need, lane_idx});
                             if (it == state.keyOf.end())
                                 it = state.keyOf.find({need, -1});
@@ -827,6 +893,14 @@ int32_t aiml_pipeline_run_observed(void* p, void* observer_raw) {
                         {
                             std::lock_guard<std::mutex> g(state.mu);
                             for (const auto& need : st.needs) {
+                                if (lane_idx == -1 && perOf.count(need) && perOf[need] == 0) {
+                                    auto& lst = g_cur.need_lists[need];      // F62-8
+                                    for (size_t li = 0; li < lanes.size(); ++li) {
+                                        auto rit = state.resultOf.find({need, static_cast<int32_t>(li)});
+                                        if (rit != state.resultOf.end()) lst.push_back(rit->second);
+                                    }
+                                    continue;
+                                }
                                 auto rit = state.resultOf.find({need, lane_idx});
                                 if (rit == state.resultOf.end())
                                     rit = state.resultOf.find({need, -1});

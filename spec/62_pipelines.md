@@ -446,8 +446,10 @@ whole pipeline, which is what fan-in and fan-out need:
 ```
 
 - **F62-8** A `per: once` step that `needs` a `per: lane` step receives the results of **all**
-  lanes of that step.  A `per: lane` step that `needs` a `per: once` step receives its single
-  result.  Both directions are ordinary dependencies; no separate join syntax exists.
+  lanes of that step — and depends on all of them: its key carries the keys of every lane of the
+  need, in lane order, as one component (§8), so a matrix that gains or changes a lane makes it run
+  again.  A `per: lane` step that `needs` a `per: once` step receives its single result.  Both
+  directions are ordinary dependencies; no separate join syntax exists.
 - **F62-9** `needs` may only name steps declared earlier, and step names are unique within the
   pipeline.  Together with F62-8 this makes the graph a DAG by construction, so no cycle check at
   run time is needed.
@@ -1431,10 +1433,15 @@ it can **publish** its result, just as it already sets its status (F62-90).
 ```
 
 - **F62-118** Results are **strings** — the serialised form (F62-34).  `step.set_result`
-  also takes a number and writes it in decimal; what is read is always a string.  Reason: the
-  value must be **recordable** next to the key, and what is recorded is
-  serialised.  A model goes through the same channel via `sys.serialize`/`sys.deserialize` (`spec/29`);
-  that the author writes this today and not the compiler is what remains of the gap.
+  also takes a number and writes it in decimal (64-bit values as 64-bit); what is read is always
+  a string.  Reason: the value must be **recordable** next to the key, and what is recorded is
+  serialised.  In the composed form a model goes through the channel via
+  `sys.serialize`/`sys.deserialize` (`spec/29`) written by the author; the declared form does
+  that itself (F62-121).
+- **F62-118a** `step.need_results(name)` → `list<string>`: in a `per: once` step, the results of a
+  `per: lane` need, **one per lane in lane order** (F62-8).  A lane that produced none — it failed
+  or was skipped — contributes no element.  `step.need_result` on such a need is an error (there
+  is no single value), and so is `step.need_results` on a need that has one.
 - **F62-119** `step.need_result(name)` is an **error** if `name` is not in the `needs` of the
   calling step — not an empty string.  The same reasoning as for F62-106:
   a result that affects the body without being in the key via `needs` (`input_keys`,
@@ -1447,12 +1454,20 @@ it can **publish** its result, just as it already sets its status (F62-90).
   the most.
 - **F62-121** In the **declared** form the compiler publishes: from
   `return: <type>` a wrapper body is made that calls the written body and puts its result into the
-  channel.  The author therefore still writes `- return: rep` (§5.3) and does not need to know anything
-  about `set_result`; F62-33 is thus **fulfilled** in the declared form, as far as the type is a
-  string or a number.  Conversely, the results of the `needs` appear as **local
-  names equal to the step name** (like the axes, F62-109) — that is why one writes `${clone}` and
-  means what `clone` published.  A name that is both an axis and a `needs` would be
-  bound twice in the body and is an **error**, not a precedence rule.
+  channel — a string or an integer as it is, **any other type serialised** (`sys.serialize`,
+  `spec/29`).  The author therefore still writes `- return: rep` (§5.3) and does not need to know
+  anything about `set_result`.  Conversely, the results of the `needs` appear as **local names
+  equal to the step name** (like the axes, F62-109), **with the type the needed step declares**:
+  `${clone}` is the string `clone` returned, `build.warnings` a field of the `BuildReport` `build`
+  returned (read back with `sys.deserialize`).  A `per: once` step that needs a `per: lane` step
+  gets a `list<T>` under that name, one element per lane in lane order (F62-8, F62-118a).  F62-33 is
+  thus **fulfilled** in the declared form, for every type `spec/29` serialises.  A name that is
+  both an axis and a `needs` would be bound twice in the body and is an **error**, not a
+  precedence rule.
+- **F62-121a** The body travels as a bundle (`sys.bundle`, §5.8), so the types it uses must travel
+  with it.  A **model** the body declares or returns is part of the bundle like a class
+  (`spec/29` §3.3) — until 2026-11-27 it was not, and a step returning a model failed at run time
+  with "Unknown Type".
 
 - **F62-117** If a `per: once` step fails with `on_fail: lane`, exactly the steps that
   (transitively) need it are **skipped** — they do not start.  Steps that do not

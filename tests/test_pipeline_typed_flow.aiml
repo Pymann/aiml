@@ -1,0 +1,120 @@
+# SPEC: 62_pipelines
+# spec/62 §5.3 / §5.5: data flow with the types the steps declare (F62-33/34) and fan-in
+# (F62-8).  A step returns a model, a bool or an i64 like a string; its successors get that
+# type under the step's name.  A `per: once` step that needs a `per: lane` one gets a
+# list<T> over the lanes, in lane order — and a second run, in which the lane steps hit,
+# gives it the same list, restored from the store (F62-120/24a).
+# Expected exit code: 0
+- model:
+    name: BuildReport
+    fields:
+      - [arch, string]
+      - [warnings, i32]
+
+- pipeline:
+    name: typed_flow
+    params:
+      - [arch, string, [x86_64, arm64, riscv64]]
+    workspace_root: logs/typed_flow_ws
+    steps:
+      - stage:
+          name: build
+          steps:
+            - step:
+                name: fetch
+                per: once
+                cache: pure
+                args: []
+                return: i64
+                body:
+                  - return: 5000000001
+            - step:
+                name: compile
+                needs: [fetch]
+                cache: pure
+                args: [arch]
+                return: BuildReport
+                body:
+                  - decl: [rep, BuildReport]
+                  - set: [rep.arch, arch]
+                  - set: [rep.warnings, arch.len]
+                  - return: rep
+            - step:
+                name: clean
+                needs: [compile]
+                cache: pure
+                args: [arch]
+                return: bool
+                body:
+                  # the successor reads the model's fields, typed (F62-33)
+                  - return: { lt: [compile.warnings, 7] }
+      - stage:
+          name: report
+          steps:
+            - step:
+                name: collect
+                per: once
+                needs: [fetch, compile, clean]
+                cache: opaque
+                args: []
+                return: string
+                body:
+                  - decl: [total, i32, 0]
+                  - decl: [archs, string, ""]
+                  - decl: [lane_at, i32, 0]
+                  - while:
+                      condition: { lt: [lane_at, compile.len] }
+                      body:
+                        - decl: [one, BuildReport, { at: [compile, lane_at] }]
+                        - set: [total, { +: [total, one.warnings] }]
+                        - set: [archs, "${archs}${one.arch};"]
+                        - set: [lane_at, { +: [lane_at, 1] }]
+                  - decl: [clean_n, i32, 0]
+                  - decl: [flag_at, i32, 0]
+                  - while:
+                      condition: { lt: [flag_at, clean.len] }
+                      body:
+                        - if: { condition: { at: [clean, flag_at] }, then: [{ set: [clean_n, { +: [clean_n, 1] }] }] }
+                        - set: [flag_at, { +: [flag_at, 1] }]
+                  - decl: [summary, string, "lanes=${compile.len} total=${total} clean=${clean_n} archs=${archs} fetch=${fetch}"]
+                  - call: [io.write_file, "${workspace}/summary.txt", summary]
+                  - return: summary
+
+- def:
+    name: expect
+    args: [[what, string], [cond, i32]]
+    return: i32
+    body:
+      - if:
+          condition: { eq: [cond, 1] }
+          then: [{ print: ["  ok   ${what}"] }, { return: 0 }]
+      - print: ["  FAIL ${what}"]
+      - return: 1
+
+- def:
+    name: main
+    static_off: ["str_cmp"]
+    return: i32
+    body:
+      - call: [io.remove_all, "logs/typed_flow_ws"]
+      - decl: [fails, i32, 0]
+      - decl: [want, string, "lanes=3 total=18 clean=2 archs=x86_64;arm64;riscv64; fetch=5000000001"]
+      - decl: [summary_at, string, "logs/typed_flow_ws/typed_flow/_/report/summary.txt"]
+      - decl: [pipe, pipeline, { call: [typed_flow] }]
+      - decl: [rc_one, i32, { call: [pipe.run] }]
+      - set: [fails, { +: [fails, { call: [expect, "the run succeeds", { eq: [rc_one, 0] }] }] }]
+      - decl: [first, string, { call: [io.read_file, summary_at] }]
+      - print: ["  first:  ${first}"]
+      - set: [fails, { +: [fails, { call: [expect, "a model, a bool and an i64 arrive typed; fan-in is a list over the lanes in lane order", { eq: [first, want] }] }] }]
+      - call: [io.remove, summary_at]
+      - decl: [again, pipeline, { call: [typed_flow] }]
+      - decl: [rc_two, i32, { call: [again.run] }]
+      - decl: [second, string, { call: [io.read_file, summary_at] }]
+      - print: ["  second: ${second}"]
+      - set: [fails, { +: [fails, { call: [expect, "second value: the lane steps hit (1 + 3 + 3)", { eq: [{ call: [again.reused_count] }, 7] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "and the collector gets the same typed list from the store", { eq: [second, want] }] }] }]
+      - if:
+          condition: { neq: [fails, 0] }
+          then: [{ print: ["test_pipeline_typed_flow FAIL (${fails})"] }, { return: 1 }]
+      - print: ["test_pipeline_typed_flow PASS"]
+      - return: 0

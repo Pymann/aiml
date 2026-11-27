@@ -5746,6 +5746,19 @@ void Compiler::registerTypeDecl(Node* node) {
         classInfo.syncFields = mod->syncFields;
         classInfo.rpcMethods = mod->rpcMethods;
 
+        // spec/29 §3.3: a bundle that uses this model carries its definition, and
+        // the types of its fields (and its parent) with it — as for a class.  Until
+        // 2026-11-27 a model had no stored source, so a bundled function that made
+        // one failed at the receiver with "Unknown Type" (spec/62 F62-33).
+        classInfo.sourceYaml = aiml::dumpPreservingQuotes(mod->sourceNode);
+        {
+            std::set<std::string> found;
+            for (const auto& f : mod->fields) ctx.collectUserTypes(f.type, found);
+            if (!mod->parentName.empty()) ctx.collectUserTypes(mod->parentName, found);
+            found.erase(modelName);
+            classInfo.referencedTypes.insert(found.begin(), found.end());
+        }
+
         ctx.classes[modelName] = classInfo;
         LOG_DEBUG("AST Registered Model: " + modelName);
     } else if (auto enm = dynamic_cast<EnumDecl*>(node)) {

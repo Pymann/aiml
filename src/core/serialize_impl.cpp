@@ -1387,7 +1387,8 @@ llvm::Value* serialize(CompilerContext& ctx, llvm::Value* val,
     // Primitives → plain string
     else if(typeName=="string") json = val;
     else if(typeName=="i64"||typeName=="u64") json = StringUtils::int64ToString(ctx,val);
-    else if(typeName=="f32"||typeName=="f64") json = StringUtils::floatToString(ctx,val);
+    else if(typeName=="f32") json = StringUtils::floatToString(ctx,val);
+    else if(typeName=="f64") json = StringUtils::doubleToString(ctx,val);
     else if(typeName=="bool") json = StringUtils::boolToString(ctx,val);
     else if(typeName=="i8"||typeName=="u8"||typeName=="i16"||typeName=="u16"||
        typeName=="i32"||typeName=="u32"){

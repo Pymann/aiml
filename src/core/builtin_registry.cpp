@@ -3272,6 +3272,20 @@ void registerBuiltins(CompilerContext& ctx) {
         ctx.namespaces["step"].builtinFuncs["host"]      = mkStrRet("aiml_step_host", true);
         ctx.namespaces["step"].builtinFuncs["workspace"] = mkStrRet("aiml_step_workspace", false);
         ctx.namespaces["step"].builtinFuncs["need_result"] = mkStrRet("aiml_step_need_result", true);
+        // spec/62 F62-8: the results of a `per: lane` need in a `per: once` step,
+        // one per lane in lane order — a list<string>, filled by the runtime.
+        ctx.namespaces["step"].builtinFuncs["need_results"] =
+            [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+                llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
+                llvm::Value* name = args.empty()
+                    ? static_cast<llvm::Value*>(ctx.builder.CreateGlobalStringPtr(""))
+                    : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+                llvm::Value* lst = freshStringList(ctx, "need_results");
+                ctx.builder.CreateCall(ctx.getFunction("aiml_step_need_results_fill", ctx.builder.getInt32Ty(),
+                                                       {i8p, ptrTy}), {name, lst});
+                return ctx.ir_gen->wrap(lst);
+            };
         // spec/62 F62-118: a number is published in decimal — what is recorded
         // is the serialised form, and that is text.
         ctx.namespaces["step"].builtinFuncs["set_result"] =
@@ -3280,8 +3294,14 @@ void registerBuiltins(CompilerContext& ctx) {
                 if (args.empty()) return nullptr;
                 llvm::Value* raw = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
                 if (raw && raw->getType()->isIntegerTy()) {
-                    llvm::Value* narrow = ctx.builder.CreateSExtOrTrunc(raw, ctx.builder.getInt32Ty());
-                    raw = StringUtils::intToString(ctx, narrow);
+                    // 64-bit values stay 64-bit: an i64 result of 5000000001 was
+                    // published as 705032705 until 2026-11-27 (spec/62 F62-33).
+                    if (raw->getType()->getIntegerBitWidth() > 32) {
+                        raw = StringUtils::int64ToString(ctx, raw);
+                    } else {
+                        llvm::Value* narrow = ctx.builder.CreateSExtOrTrunc(raw, ctx.builder.getInt32Ty());
+                        raw = StringUtils::intToString(ctx, narrow);
+                    }
                 }
                 ctx.builder.CreateCall(ctx.getFunction("aiml_step_set_result",
                     llvm::Type::getVoidTy(ctx.context), {i8p}), {raw});

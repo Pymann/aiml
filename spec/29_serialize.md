@@ -73,6 +73,11 @@ When `sys.bundle` is called on `"worker_task"`, the compiler analysis (as define
 3.  Automatically includes `Payload` class definition in the package.
 4.  Resulting `pkg` contains BOTH the function and the class.
 
+The same holds for a **model** (since 2026-11-27): its definition and the user types of its
+fields travel with the function that uses it.  Before, a model carried no stored source, and a
+bundled function that declared or returned one failed at the receiver with "Unknown Type"
+(found with spec/62 F62-33; `tests/test_bundle_model.aiml`).
+
 ## 4. Object Serialization with Context
 We can also bundle an *Instance* along with its *Type Definition*.
 

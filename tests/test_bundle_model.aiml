@@ -1,0 +1,52 @@
+# SPEC: 29_serialize
+# spec/29 §3.3: a bundled function that uses a MODEL carries the model's definition — and the
+# models its fields name — as it does for a class.  Before 2026-11-27 the receiver failed with
+# "Unknown Type".  Also an f64 serialises (it was invalid IR before: the double went to the f32
+# formatter).
+# Expected exit code: 0
+- model:
+    name: Inner
+    fields:
+      - [label, string]
+- model:
+    name: BuildReport
+    fields:
+      - [arch, string]
+      - [warnings, i32]
+      - [inner, Inner]
+- def:
+    name: make_report
+    return: BuildReport
+    body:
+      - decl: [rep, BuildReport]
+      - set: [rep.arch, "arm64"]
+      - set: [rep.warnings, 3]
+      - set: [rep.inner.label, "deep"]
+      - return: rep
+- def:
+    name: bundled
+    static_off: ["str_cmp"]
+    return: i32
+    body:
+      - decl: [got, BuildReport, { call: [make_report] }]
+      - if:
+          condition: { and: [{ eq: [got.warnings, 3] }, { eq: [got.inner.label, "deep"] }] }
+          then: [{ return: 0 }]
+      - return: 1
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [code, Code, { call: [sys.bundle, "bundled", { context: true }] }]
+      - decl: [txt, string, { call: [code.toString] }]
+      - if:
+          condition: { or: [{ eq: [{ call: [txt.contains, "name: BuildReport"] }, false] }, { eq: [{ call: [txt.contains, "name: Inner"] }, false] }] }
+          then: [{ print: ["FAIL the bundle lacks a model definition"] }, { return: 1 }]
+      - decl: [rc_exec, i32, { call: [sys.exec, code] }]
+      - if: { condition: { neq: [rc_exec, 0] }, then: [{ print: ["FAIL the bundle did not run (${rc_exec})"] }, { return: 1 }] }
+      - decl: [ratio, f64, 2.5]
+      - decl: [ratio_txt, string, { call: [sys.serialize, ratio, "f64"] }]
+      - decl: [ratio_back, f64, { call: [sys.deserialize, ratio_txt, "f64"] }]
+      - if: { condition: { neq: [ratio_back, 2.5] }, then: [{ print: ["FAIL f64 round trip '${ratio_txt}'"] }, { return: 1 }] }
+      - print: ["PASS bundle_model"]
+      - return: 0
