@@ -68,8 +68,7 @@ collection, and this chapter stays the single source for loop syntax.
 **Corpus note (2026-11-16).** Three documents described or used `for:` although
 it never existed: `spec/aiml_reference_guide.md` §5.2, `spec/31_db_integration.md`
 §8 and `spec/32_4_network_websockets.md` §3. All three were rewritten to the
-index form on 2026-11-16. `spec/62_pipelines.md` [PROPOSAL] keeps its two uses
-(§11, §13) but is annotated at the chapter head and at both places that they are
-not valid aiml and that this chapter is the valid form; they will be rewritten
-when pipelines are implemented (the §11 one iterates a variable the example never
-declares). No production code and no test ever used `for:`.
+index form on 2026-11-16. `spec/62_pipelines.md` kept its two uses (§11, §13)
+until pipelines were implemented; on 2026-11-27 both were rewritten to `while:`
+over an index, and `tests/pipeline_spec_examples/run.sh` compiles them straight
+from the chapter. No production code and no test ever used `for:`.
