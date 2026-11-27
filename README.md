@@ -88,7 +88,8 @@ skipped.**
 
 * **7 of the 8 failures are intentional.** Spec and tests are written before the
   implementation, so the acceptance tests for unimplemented chapters are red on
-  purpose: `spec/62` pipelines and `spec/64` closures are `[PROPOSAL]`, and
+  purpose: `spec/64` closures is `[PROPOSAL]` (`spec/62` pipelines was one
+  then and is implemented since 2026-11-27), and
   `sys.bundle` (`spec/29_1`) has no handler yet.
 * The 8th (`tests/venv/kontor_stub.aiml`, 600 s timeout) is a real open failure.
 * Of the 178 skips, 103 are files run by their own `run.sh` driver (the driver

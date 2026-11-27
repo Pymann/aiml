@@ -1,4 +1,4 @@
-# 62 - Pipelines: Matrix, Reuse, Parallelism [PROPOSAL]
+# 62 - Pipelines: Matrix, Reuse, Parallelism
 
 ## 1. Goal
 
