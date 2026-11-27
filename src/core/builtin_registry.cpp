@@ -3066,6 +3066,7 @@ void registerBuiltins(CompilerContext& ctx) {
         stageInfo.builtinMethods["base"]       = mkAttrStr("aiml_stage_attr", "base");
         stageInfo.builtinMethods["requires"]   = mkAttrStr("aiml_stage_attr", "requires");
         stageInfo.builtinMethods["shares"]     = mkAttrStr("aiml_stage_attr", "shares");
+        stageInfo.builtinMethods["secrets"]    = mkAttrStr("aiml_stage_attr", "secrets");
         stageInfo.builtinMethods["command"]    = mkAttrStr("aiml_stage_attr", "command");
         stageInfo.builtinMethods["cache"]      = mkAttrStr("aiml_stage_attr", "cache");
         stageInfo.builtinMethods["resolve"]    = mkAttrStr("aiml_stage_attr", "resolve");

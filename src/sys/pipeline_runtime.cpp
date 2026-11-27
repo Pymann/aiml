@@ -106,6 +106,7 @@ struct PStage {
     std::string        base;         // WORAUF: run:<lauf> | job:<kennung> (F62-144)
     std::string        requires_on;  // "git,gcc>=13" (§18.2, F62-126)
     std::string        shares;       // "name:/target:mode,…" (§18.1b, F62-136)
+    std::string        secrets;      // "name:ENV,…" (§18.6, F62-165)
     std::string        command;      // `run:` — the command of slice 1
     // spec/62 §9.1: the stage's class after F62-159/161 and the probe line
     // of a run: stage (F62-160).  Resolved by the rewrite, as above.
@@ -977,6 +978,7 @@ static std::string* stage_text(PStage* g, const std::string& key) {
     if (key == "base")       return &g->base;
     if (key == "requires")   return &g->requires_on;
     if (key == "shares")     return &g->shares;
+    if (key == "secrets")    return &g->secrets;
     if (key == "command")    return &g->command;
     if (key == "cache")      return &g->cache;
     if (key == "resolve")    return &g->resolve;
@@ -1024,6 +1026,8 @@ char* aiml_stage_attr(void* g, const char* key) {
     // Computed from the steps, so the composed form (§13.3) reads the same
     // as the declared one — there is no rewrite there to resolve it.
     auto* stg = static_cast<PStage*>(g);
+    // F62-167: a stage with secrets is opaque, in the composed form too.
+    if (std::string(key) == "cache" && !stg->secrets.empty()) return str_out("opaque");
     if (std::string(key) == "cache" && !stg->steps.empty()) {
         int32_t weakest = 2;
         for (const auto& one : stg->steps) weakest = std::min(weakest, one.cache);

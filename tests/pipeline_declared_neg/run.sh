@@ -34,5 +34,9 @@ want steplayer_rejected.aiml  "steplayer"
 want stage_resolve_missing.aiml   "no \`resolve:\`"
 want stage_resolve_form.aiml      "shell line"
 want pipeline_resolve_rejected.aiml "unknown key"
+# spec/62 §18.6: secrets on the stage (F62-165/167).
+want secret_value_rejected.aiml   "an entry is { name, env }"
+want secret_env_reserved.aiml     "belongs to the executor"
+want secret_cache_pure.aiml       "a stage with secrets is opaque"
 if [ $fails -ne 0 ]; then echo "pipeline_declared_neg FAIL ($fails)"; exit 1; fi
 echo "pipeline_declared_neg PASS"
