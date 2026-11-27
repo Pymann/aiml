@@ -1,8 +1,8 @@
-# SPEC?: 62_pipelines   # derived from the file name, to be confirmed
-# F62-111: `needs:` is not covered yet and is REJECTED, not
+# SPEC: 62_pipelines
+# F62-9: a step's `needs:` names an EARLIER step.  One that names no step is
 # Requires: driver
-# ignored — a discarded needs would be a pipeline that runs in the wrong
-# order and reports green while doing so.
+# rejected, not ignored — a discarded need would be a pipeline that runs in the
+# wrong order and reports green while doing so.
 - pipeline:
     name: with_needs
     params:

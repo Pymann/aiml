@@ -31,8 +31,9 @@ namespace {
 // Fields that the rewrite does NOT YET cover.  They are rejected and
 // not ignored (F62-111): a silently discarded `needs:` would be
 // a pipeline that runs in the wrong order and reports green while doing so.
-const char* kUnsupportedStepFields[] = { "outputs" };
-const char* kUnsupportedStageFields[] = { "needs", "per", "outputs" };
+// F62-111: what the rewrite rejects by name.  `outputs` belongs to the step that
+// writes it (F62-168); on a stage it would not say which step that is.
+const char* kUnsupportedStageFields[] = { "outputs" };
 
 // Fields that require a RUNTIME (spec/62 §18.1 F62-124).  They are
 // not called "not covered yet", because that would be the wrong information:
@@ -158,7 +159,18 @@ const char* kPipelineKeys[] = {
 const char* kStageKeys[] = {
     "name", "steps", "run", "args", "host", "cache", "on_fail", "timeout",
     "retry", "exec_defaults", "agent", "steplayer", "image", "base",
-    "requires", "shares", "resources", "resolve", "secrets",
+    "requires", "shares", "resources", "resolve", "secrets", "per", "needs",
+};
+
+// F62-65: what a step may say.  Anything else is an error — a typo must not
+// fall back to a default quietly.  The stage-only attributes (where a stage
+// runs, what it is built from) are named as such (F62-60).
+const char* kStepKeys[] = {
+    "name", "per", "cache", "args", "return", "body", "needs", "host", "on_fail",
+    "timeout", "retry", "pause_before", "resolve", "assert_pure", "outputs", "exec_defaults",
+};
+const char* kStageOnlyKeys[] = {
+    "agent", "steplayer", "image", "base", "requires", "shares", "resources", "secrets", "push",
 };
 
 bool knownKey(const std::string& key, const char* const* list, size_t n) {
@@ -686,9 +698,9 @@ bool expandPipelineDeclarations(const std::string& text, const std::string& wher
                 const YAML::Node stg = stWrap["stage"] ? stWrap["stage"] : stWrap;
                 for (const char* bad : kUnsupportedStageFields) {
                     if (stg[bad]) {
-                        LOG_ERROR(where + ": pipeline '" + pname + "': stage field '" + bad +
-                                  "' is not covered yet and is therefore rejected "
-                                  "(spec/62 F62-111)");
+                        LOG_ERROR(where + ": pipeline '" + pname + "': `" + bad +
+                                  ":` on a stage does not say which step writes it — it belongs "
+                                  "on the step (spec/62 F62-111, F62-168)");
                         ok = false;
                     }
                 }
@@ -733,6 +745,35 @@ bool expandPipelineDeclarations(const std::string& text, const std::string& wher
                 const std::string sname = scalarOr(stg["name"], "stage" + std::to_string(stageNo));
                 const std::string svar  = "stage_" + std::to_string(stageNo);
                 declaredStages.insert(sname);
+                // F62-58/F62-111: `per` on the stage is inherited by its steps
+                // (innermost wins); `needs` is added to every step of it — only
+                // steps of EARLIER stages, which F62-9 checks as for a step.
+                const std::string stagePer = scalarOr(stg["per"], "lane");
+                if (stagePer != "lane" && stagePer != "once") {
+                    LOG_ERROR(where + ": pipeline '" + pname + "': stage '" + sname +
+                              "': per is 'lane' or 'once', not '" + stagePer + "' (spec/62 §5.5)");
+                    ok = false;
+                }
+                std::vector<std::string> stageNeeds;
+                if (stg["needs"]) {
+                    if (!stg["needs"].IsSequence()) {
+                        LOG_ERROR(where + ": pipeline '" + pname + "': stage '" + sname +
+                                  "': `needs:` is a list of step names (spec/62 F62-111)");
+                        ok = false;
+                    } else {
+                        for (const auto& nd : stg["needs"]) {
+                            const std::string need = nd.Scalar();
+                            if (!declaredSteps.count(need)) {
+                                LOG_ERROR(where + ": pipeline '" + pname + "': stage '" + sname +
+                                          "' needs '" + need + "' — that is no step of an earlier "
+                                          "stage (spec/62 F62-9, F62-111)");
+                                ok = false;
+                                continue;
+                            }
+                            stageNeeds.push_back(need);
+                        }
+                    }
+                }
                 // A stage carries ONE command or STEPS, never both
                 // (cosmos F106-11): otherwise it cannot be decided what runs first
                 // and what determines the outcome.
@@ -870,11 +911,22 @@ bool expandPipelineDeclarations(const std::string& text, const std::string& wher
                 if (stg["steps"] && stg["steps"].IsSequence()) {
                     for (const auto& spWrap : stg["steps"]) {
                         const YAML::Node sp = spWrap["step"] ? spWrap["step"] : spWrap;
-                        for (const char* bad : kUnsupportedStepFields) {
-                            if (sp[bad]) {
-                                LOG_ERROR(where + ": pipeline '" + pname + "': step field '" + bad +
-                                          "' is not covered yet and is therefore rejected "
-                                          "(spec/62 F62-111)");
+                        // F62-65: every key of a step is one it may have.
+                        if (sp.IsMap()) {
+                            for (auto kit = sp.begin(); kit != sp.end(); ++kit) {
+                                const std::string key = kit->first.Scalar();
+                                if (knownKey(key, kStepKeys, sizeof(kStepKeys) / sizeof(kStepKeys[0])))
+                                    continue;
+                                bool oldName = false;
+                                for (const OldName& on : kOldNames) if (key == on.old_key) oldName = true;
+                                if (oldName) continue;                      // reported with its new name below
+                                if (knownKey(key, kStageOnlyKeys, sizeof(kStageOnlyKeys) / sizeof(kStageOnlyKeys[0])))
+                                    LOG_ERROR(where + ": pipeline '" + pname + "': `" + key +
+                                              ":` is an attribute of the stage, not of a step — the "
+                                              "steps of a stage share where it runs (spec/62 F62-60)");
+                                else
+                                    LOG_ERROR(where + ": pipeline '" + pname + "': unknown key `" + key +
+                                              ":` on a step (spec/62 F62-65)");
                                 ok = false;
                             }
                         }
@@ -906,7 +958,7 @@ bool expandPipelineDeclarations(const std::string& text, const std::string& wher
                                                   stResolve && stResolve.IsSequence();
                         const bool hasProbe = sp["resolve"] || inheritProbe;
                         const YAML::Node spResolve = inheritProbe ? stResolve : sp["resolve"];
-                        const std::string perMode = scalarOr(sp["per"], "lane");
+                        const std::string perMode = scalarOr(sp["per"], stagePer);
                         if (perMode != "lane" && perMode != "once") {
                             LOG_ERROR(where + ": pipeline '" + pname + "': step '" + stepName +
                                       "': per is 'lane' or 'once', not '" + perMode +
@@ -932,7 +984,7 @@ bool expandPipelineDeclarations(const std::string& text, const std::string& wher
                                       "(spec/62 F62-9)");
                             ok = false;
                         }
-                        std::vector<std::string> needNames;
+                        std::vector<std::string> needNames = stageNeeds;   // F62-111
                         if (sp["needs"] && sp["needs"].IsSequence()) {
                             for (const auto& nd : sp["needs"]) {
                                 const std::string need = nd.Scalar();
@@ -943,7 +995,8 @@ bool expandPipelineDeclarations(const std::string& text, const std::string& wher
                                     ok = false;
                                     continue;
                                 }
-                                needNames.push_back(need);
+                                if (std::find(needNames.begin(), needNames.end(), need) == needNames.end())
+                                    needNames.push_back(need);
                             }
                         }
                         const std::string fnBase = "__pl_" + pname + "_" +
@@ -1135,6 +1188,26 @@ bool expandPipelineDeclarations(const std::string& text, const std::string& wher
                             ctor += "      - call: [" + pvar + ".set_per, Per.once]\n";
                         for (const auto& need : needNames)
                             ctor += "      - call: [" + pvar + ".add_need, \"" + need + "\"]\n";
+                        // F62-168: the output tree.
+                        if (sp["outputs"]) {
+                            if (!sp["outputs"].IsSequence()) {
+                                LOG_ERROR(where + ": pipeline '" + pname + "': step '" + stepName +
+                                          "': `outputs:` is a list of paths and globs (spec/62 F62-168)");
+                                ok = false;
+                            } else {
+                                for (const auto& o : sp["outputs"]) {
+                                    const std::string pat = o.Scalar();
+                                    if (pat.empty() || pat[0] == '/' || pat.find("..") != std::string::npos) {
+                                        LOG_ERROR(where + ": pipeline '" + pname + "': step '" + stepName +
+                                                  "': the output '" + pat + "' must lie in the workspace — "
+                                                  "relative, without '..' (spec/62 F62-168)");
+                                        ok = false;
+                                        continue;
+                                    }
+                                    ctor += "      - call: [" + pvar + ".add_output, \"" + yamlQuoted(pat) + "\"]\n";
+                                }
+                            }
+                        }
                         ctor += "      - call: [" + svar + ".add_step, " + pvar + "]\n";
                         ++stepNo;
                     }

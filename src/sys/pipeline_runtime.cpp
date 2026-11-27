@@ -22,6 +22,8 @@
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
+#include <fnmatch.h>
+#include <sys/stat.h>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -32,6 +34,7 @@
 #include <memory>
 #include <mutex>
 #include <thread>
+#include <tuple>
 #include <map>
 #include <set>
 #include <string>
@@ -151,6 +154,7 @@ struct PStep {
     int32_t               pause_before = 0;   // deklariertes Tor (F62-54)
     int32_t               per = 0;            // 0 = lane, 1 = once (§5.5)
     std::vector<std::string> needs;            // only earlier steps (F62-9)
+    std::vector<std::string> outputs;          // F62-168: paths and globs in the workspace
 };
 
 struct PStage {
@@ -209,7 +213,9 @@ struct PPipeline {
     // be in it (F62-120/F62-37): otherwise a reused
     // step would be invisible to its own successors.  Deliberately plain;
     // the real layer cache is with the host (cosmos spec/96).
-    struct CacheEntry { int32_t rc = 0; std::string result; };
+    // F62-168: `outputs` is the manifest of the output tree, one
+    // "<sha256>\t<mode octal>\t<path>\n" per file; "" = the step declares none.
+    struct CacheEntry { int32_t rc = 0; std::string result; std::string outputs; };
     std::map<std::string, CacheEntry> cache;
     // F62-24: the persistent store behind `cache` — "" = <workspace_root>/store,
     // unless AIML_PIPELINE_STORE names another one.
@@ -242,16 +248,26 @@ int store_load(const std::string& root, const std::string& key, PPipeline::Cache
     std::ifstream in(file, std::ios::binary);
     if (!in) return 0;
     std::string magic, rcLine, lenLine;
-    if (!std::getline(in, magic) || magic != "aiml-step-entry-1" || !std::getline(in, rcLine) ||
-        !std::getline(in, lenLine))
+    if (!std::getline(in, magic) || (magic != "aiml-step-entry-1" && magic != "aiml-step-entry-2") ||
+        !std::getline(in, rcLine) || !std::getline(in, lenLine))
         return -1;
     try {
         out.rc = std::stoi(rcLine);
         size_t len = static_cast<size_t>(std::stoull(lenLine));
         std::string body(len, '\0');
-        in.read(&body[0], static_cast<std::streamsize>(len));
-        if (static_cast<size_t>(in.gcount()) != len) return -1;
+        if (len) in.read(&body[0], static_cast<std::streamsize>(len));
+        if (static_cast<size_t>(in.gcount()) != len && len) return -1;
         out.result = body;
+        out.outputs.clear();
+        if (magic == "aiml-step-entry-2") {          // F62-168: the manifest follows
+            std::string nl, olen;
+            if (!std::getline(in, nl) || !std::getline(in, olen)) return -1;
+            size_t on = static_cast<size_t>(std::stoull(olen));
+            std::string man(on, '\0');
+            if (on) in.read(&man[0], static_cast<std::streamsize>(on));
+            if (on && static_cast<size_t>(in.gcount()) != on) return -1;
+            out.outputs = man;
+        }
     } catch (const std::exception&) {
         return -1;
     }
@@ -270,8 +286,10 @@ void store_save(const std::string& root, const std::string& key, const PPipeline
             LOG_WARNING("pipeline store: cannot write " + tmp + " — the result stays in memory only (F62-24a)");
             return;
         }
-        out << "aiml-step-entry-1\n" << e.rc << "\n" << e.result.size() << "\n";
+        out << "aiml-step-entry-2\n" << e.rc << "\n" << e.result.size() << "\n";
         out.write(e.result.data(), static_cast<std::streamsize>(e.result.size()));
+        out << "\n" << e.outputs.size() << "\n";
+        out.write(e.outputs.data(), static_cast<std::streamsize>(e.outputs.size()));
         if (!out) {
             std::filesystem::remove(tmp, ec);
             return;
@@ -279,6 +297,104 @@ void store_save(const std::string& root, const std::string& key, const PPipeline
     }
     std::filesystem::rename(tmp, file, ec);
     if (ec) std::filesystem::remove(tmp, ec);
+}
+
+// ── F62-168: the output tree ──────────────────────────────────────────────
+
+void glob_into(const std::filesystem::path& base, const std::filesystem::path& rel,
+               const std::vector<std::string>& segs, size_t i, std::set<std::string>& out) {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    fs::path here = base / rel;
+    if (i == segs.size()) {
+        if (fs::is_regular_file(here, ec)) { out.insert(rel.lexically_normal().generic_string()); return; }
+        if (fs::is_directory(here, ec))                  // a directory: every file below it
+            for (auto it = fs::recursive_directory_iterator(here, ec); !ec && it != fs::recursive_directory_iterator(); it.increment(ec))
+                if (fs::is_regular_file(it->path(), ec))
+                    out.insert(fs::relative(it->path(), base, ec).lexically_normal().generic_string());
+        return;
+    }
+    const std::string& seg = segs[i];
+    if (seg == "**") {
+        glob_into(base, rel, segs, i + 1, out);
+        if (!fs::is_directory(here, ec)) return;
+        for (auto& ent : fs::directory_iterator(here, ec))
+            if (ent.is_directory(ec)) glob_into(base, rel / ent.path().filename(), segs, i, out);
+        return;
+    }
+    if (seg.find_first_of("*?[") == std::string::npos) { glob_into(base, rel / seg, segs, i + 1, out); return; }
+    if (!fs::is_directory(here, ec)) return;
+    for (auto& ent : fs::directory_iterator(here, ec)) {
+        const std::string name = ent.path().filename().string();
+        if (fnmatch(seg.c_str(), name.c_str(), FNM_PERIOD) == 0) glob_into(base, rel / name, segs, i + 1, out);
+    }
+}
+
+// After a successful run: the files the patterns name, into the blobs, and
+// their manifest.  false = a pattern matched nothing (`bad` names it).
+bool capture_outputs(const std::vector<std::string>& patterns, const std::string& ws,
+                     const std::string& store, bool keep, std::string& manifest, std::string& bad) {
+    namespace fs = std::filesystem;
+    std::set<std::string> files;
+    for (const auto& pat : patterns) {
+        std::vector<std::string> segs;
+        std::stringstream ss(pat);
+        std::string seg;
+        while (std::getline(ss, seg, '/')) if (!seg.empty() && seg != ".") segs.push_back(seg);
+        std::set<std::string> hit;
+        glob_into(ws, fs::path(), segs, 0, hit);
+        if (hit.empty()) { bad = pat; return false; }
+        files.insert(hit.begin(), hit.end());
+    }
+    if (!keep) return true;                       // checked, nothing to store (opaque)
+    std::error_code ec;
+    fs::create_directories(store + "/blobs", ec);
+    for (const auto& rel : files) {
+        const std::string src = ws + "/" + rel;
+        std::ifstream in(src, std::ios::binary);
+        std::string data((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        char* hex = aiml_sha256_hex(data.data(), static_cast<int32_t>(data.size()));
+        std::string sum = hex ? hex : "";
+        if (hex) aiml_str_decref(hex);
+        const std::string blob = store + "/blobs/" + sum;
+        if (!fs::exists(blob, ec)) {
+            const std::string tmp = blob + ".tmp." + std::to_string(::getpid());
+            { std::ofstream out(tmp, std::ios::binary); out.write(data.data(), static_cast<std::streamsize>(data.size())); }
+            fs::rename(tmp, blob, ec);
+            if (ec) fs::remove(tmp, ec);
+        }
+        struct stat sb {};
+        unsigned mode = ::stat(src.c_str(), &sb) == 0 ? (sb.st_mode & 07777) : 0644;
+        char modeTxt[8];
+        std::snprintf(modeTxt, sizeof modeTxt, "%o", mode);
+        manifest += sum + "\t" + modeTxt + "\t" + rel + "\n";
+    }
+    return true;
+}
+
+// On a hit: the files back into the workspace.  false = a blob is gone.
+bool restore_outputs(const std::string& manifest, const std::string& ws, const std::string& store) {
+    namespace fs = std::filesystem;
+    std::istringstream lines(manifest);
+    std::string line;
+    std::error_code ec;
+    std::vector<std::tuple<std::string, unsigned, std::string>> todo;
+    while (std::getline(lines, line)) {
+        size_t a = line.find('\t'), b = line.find('\t', a == std::string::npos ? a : a + 1);
+        if (a == std::string::npos || b == std::string::npos) return false;
+        const std::string sum = line.substr(0, a), rel = line.substr(b + 1);
+        unsigned mode = static_cast<unsigned>(std::strtoul(line.substr(a + 1, b - a - 1).c_str(), nullptr, 8));
+        if (!fs::is_regular_file(store + "/blobs/" + sum, ec)) return false;
+        todo.emplace_back(sum, mode, rel);
+    }
+    for (const auto& [sum, mode, rel] : todo) {
+        const fs::path dst = fs::path(ws) / rel;
+        fs::create_directories(dst.parent_path(), ec);
+        fs::copy_file(store + "/blobs/" + sum, dst, fs::copy_options::overwrite_existing, ec);
+        if (ec) return false;
+        ::chmod(dst.c_str(), mode);
+    }
+    return true;
 }
 
 // Lane = a complete binding of all axes.
@@ -397,6 +513,10 @@ void aiml_step_set_pause_before(void* st, int32_t on) {
 void aiml_step_set_per(void* st, int32_t per) {
     if (st && per >= 0 && per <= 1) static_cast<PStep*>(st)->per = per;
 }
+void aiml_step_add_output(void* st, const char* pattern) {   // F62-168
+    if (st && pattern && *pattern) static_cast<PStep*>(st)->outputs.push_back(pattern);
+}
+
 void aiml_step_add_need(void* st, const char* name) {
     if (st && name && *name) static_cast<PStep*>(st)->needs.push_back(name);
 }
@@ -905,7 +1025,14 @@ int32_t aiml_pipeline_run_observed(void* p, void* observer_raw) {
                 int     reach  = st.on_fail;
 
                 bool hit = false;
-                std::string hitResult;
+                std::string hitResult, hitOutputs;
+                // F62-168: the (lane, stage) workspace, where a hit writes its tree back.
+                std::string ws_here = pp->workspace_root;
+                if (!ws_here.empty() && ws_here[0] != '/') {
+                    char cwdbuf[4096];
+                    if (getcwd(cwdbuf, sizeof(cwdbuf))) ws_here = std::string(cwdbuf) + "/" + ws_here;
+                }
+                ws_here += "/" + pp->name + "/" + (btxt.empty() ? std::string("_") : btxt) + "/" + stg.name;
                 if (st.cache != 0) {
                     std::lock_guard<std::mutex> g(state.mu);
                     auto it = pp->cache.find(key);
@@ -923,6 +1050,19 @@ int32_t aiml_pipeline_run_observed(void* p, void* observer_raw) {
                         hit       = true;
                         rc        = it->second.rc;
                         hitResult = it->second.result;
+                        hitOutputs = it->second.outputs;
+                    }
+                }
+                // F62-168: the tree goes back before any successor runs — outside
+                // the lock, so that other lanes are not held up by the copying.
+                if (hit && !hitOutputs.empty()) {
+                    aiml_io_mkdir_all(ws_here.c_str());
+                    if (!restore_outputs(hitOutputs, ws_here, store_root(*pp))) {
+                        LOG_WARNING("pipeline '" + pp->name + "': step '" + st.name +
+                                    "': a file of its output tree is gone from the store — a miss, "
+                                    "the step runs (spec/62 F62-168)");
+                        hit = false;
+                        rc  = 0;
                     }
                 }
                 if (hit) {   // opaque never hits (§7)
@@ -1061,6 +1201,17 @@ int32_t aiml_pipeline_run_observed(void* p, void* observer_raw) {
                                         "' attempt " + std::to_string(attempt) + " of " +
                                         std::to_string(st.retry) + " ended with " + std::to_string(rc));
                     }
+                    // F62-168: the output tree of a successful run — every pattern
+                    // must match, and what it matches goes into the store.
+                    std::string manifest;
+                    if (rc == 0 && !st.outputs.empty()) {
+                        std::string bad;
+                        if (!capture_outputs(st.outputs, ws, store_root(*pp), st.cache != 0, manifest, bad)) {
+                            LOG_ERROR("pipeline '" + pp->name + "': step '" + st.name + "': the output '" +
+                                      bad + "' matches no file in " + ws + " (spec/62 F62-168)");
+                            rc = -7;
+                        }
+                    }
                     std::lock_guard<std::mutex> g(state.mu);
                     if (rc == 0) ++pp->ran;
                     // §7 / F62-92: ONLY a successful attempt is recorded.
@@ -1071,6 +1222,7 @@ int32_t aiml_pipeline_run_observed(void* p, void* observer_raw) {
                         entry.rc = rc;
                         auto rit = state.resultOf.find({st.name, lane_idx});
                         if (rit != state.resultOf.end()) entry.result = rit->second;
+                        entry.outputs = manifest;
                         pp->cache[key] = entry;
                         store_save(store_root(*pp), key, entry);   // F62-24a
                     }

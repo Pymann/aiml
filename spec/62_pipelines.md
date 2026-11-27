@@ -783,6 +783,17 @@ well.
   the body is hashed **as written**, it contains the identifier `workspace`, never a machine path.
 - **F62-37** A cache entry holds the step's **return value** beside its output tree (F62-34), so a
   hit reproduces both.  Without the value a reused step would be invisible to its own successors.
+- **F62-168** **`outputs:` — the output tree.**  A step lists what it leaves for its successors:
+  `outputs: [build/app, "build/**/*.so", reports/]` — paths and globs (`*`, `?`, `[..]`, `**` for any
+  number of directories) relative to its (lane, stage) workspace; a directory stands for every
+  file below it.  After a successful run each pattern must match at least one file, else the step
+  **fails** naming the pattern (a missing output is a broken step, not an empty tree).  Each file
+  goes into the store's `blobs/` under the sha256 of its content, once, and the entry records
+  `(sha256, mode, path)` per file beside the result (F62-37).  A **hit** writes the files back into
+  the workspace before the successors run, so a reused step leaves the same tree a run would; a
+  blob that is gone makes the hit a miss, and the step runs.  The output tree is a result, **not
+  key material**: it is what the key's inputs produced (§8).  A symbolic link is stored as the file
+  it points to.  Without `outputs:` a step's files stay where they are and nothing is stored.
 - **F62-15** The reuse class is part of the key material.  `pure` and `resolved` with identical
   bodies are not the same step: the class is part of the claim, not a switch on the side.
 
@@ -1191,8 +1202,9 @@ a remote run execute the same code rather than two implementations kept in agree
 
 - **F62-24** The local store sits in `store/` of the workspace root — `.aiml_pipeline/store/` of the
   **working directory** unless `workspace_root` says otherwise — beside the workspaces (§4.3), with
-  `blobs/` for content (the output trees, F62-168) and `kv/` for `step_key → (status, result)`, one file per key named by the sha256 of the
-  key material.  `AIML_PIPELINE_STORE` names another directory; `pipe.set_store(dir)` does so for one
+  `blobs/` for content (the output trees, F62-168) and `kv/` for `step_key → (status, result, output manifest)`, one file per key named by the sha256 of the
+  key material.  An entry written since 2026-11-27 is `aiml-step-entry-2` (with the manifest of
+  F62-168); `aiml-step-entry-1` entries, which have none, are still read.  `AIML_PIPELINE_STORE` names another directory; `pipe.set_store(dir)` does so for one
   pipeline value (a test that counts hits isolates itself with it).  Project-local rather than in
   the user's cache directory, because a pipeline belongs to a project and a cache one cannot find is
   a cache one cannot delete.  *"Beside the pipeline file"*, as this said until 2026-11-27, is not
@@ -1682,12 +1694,14 @@ probe, and a function `demo()` that composes `pipeline`/`stage`/`step` and retur
   name resolution falls into type resolution in this situation.  That is a separate defect
   (it confuses name and type) and not a property of F62-7; it should be fixed without the
   statement here depending on it.
-- **F62-111** What the rewrite does **not yet** cover and therefore does not pretend to handle:
-  `outputs:` (§16 item 5), `runs_on` (§5.8) and `per`/`needs` **on a stage** (they apply only
-  on the step).  These fields are **rejected** during rewriting, not ignored — a
-  silently discarded `needs:` would be a pipeline that runs in the wrong order and
-  reports green while doing so.  `per:` and `needs:` on the **step** are carried (§13.5g); the
-  **data flow** of the `needs` values (F62-33), on the other hand, is not — see F62-113.
+- **F62-111** What the rewrite does **not** cover is **rejected** during rewriting, never ignored —
+  a silently discarded field would be a pipeline that runs differently from what it says and
+  reports green while doing so.  That is `runs_on` (renamed `agent:`, §18.5) and `outputs:` **on
+  a stage** (an output belongs to the step that writes it; on a stage it would not say which step
+  that is).  Carried since 2026-11-27: `per:` and `needs:` **on a stage** — `per` is inherited by
+  the stage's steps, innermost wins (F62-58); `needs` is added to every step of the stage, so a
+  stage names once what all its steps depend on (only steps of **earlier** stages, F62-9) — and
+  `outputs:` on a step (F62-168).  The data flow of the `needs` values is carried too (F62-121).
 
 ### 13.6 Generating pipelines as source text — the third way
 
@@ -1788,8 +1802,10 @@ The language defines the form, the parameter space, the classification, the key 
    generated code is the only executor and the host's classes shrink to storage and coordination,
    or the generated code stays thin and calls a host-provided interface.  Decide before implementing
    F62-23; building both and reconciling later is how the two drift apart.
-5. **`outputs:` per step.**  Capturing the whole lane workspace is always correct but transfers
-   more than needed; globs are cheaper and can miss a file a later step needs.  Not in this draft.
+5. **`outputs:` per step.**  *Decided 2026-11-27*, F62-168: paths and globs, relative to the
+   workspace.  Capturing the whole workspace would always be correct but stores and transfers
+   more than needed; a declared list can miss a file a later step needs — and says so, because a
+   pattern that matches nothing fails the step.
 6. **What the six statuses mean, and their precedence order.**  F62-42 fixes that there are six
    and what they are called; the meanings are open, and the aggregation order of F62-43 follows
    from them.  Decided so far: magenta = version incompatibility (F62-47), and lanes and

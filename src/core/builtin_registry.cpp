@@ -2996,6 +2996,7 @@ void registerBuiltins(CompilerContext& ctx) {
         // spec/62 §5.5 / §13.5g
         stepInfo.builtinMethods["set_per"]   = mkI32("aiml_step_set_per");
         stepInfo.builtinMethods["add_need"]  = mkStr("aiml_step_add_need");
+        stepInfo.builtinMethods["add_output"] = mkStr("aiml_step_add_output");   // spec/62 F62-168
         // spec/62 §9: set_resolve(fn) — fn is a function name, we need
         // its address (as with pipeline.run(observer)).
         stepInfo.builtinMethods["set_resolve"] = [](CompilerContext& ctx, llvm::Value* base,

@@ -1,0 +1,117 @@
+# SPEC: 62_pipelines
+# spec/62 F62-168: `outputs:` — the files a step leaves behind are part of what it built.
+# A hit writes them back into the workspace before its successors run; a pattern that
+# matches nothing fails the step; a blob that is gone from the store turns the hit into
+# a miss.  What a step writes but does not declare is NOT restored.
+# Expected exit code: 0
+
+- pipeline:
+    name: outputs_demo
+    params:
+      - [arch, string, [x86_64]]
+    workspace_root: logs/outputs_ws
+    steps:
+      - stage:
+          name: build
+          steps:
+            - step:
+                name: make
+                cache: pure
+                args: [arch]
+                return: i32
+                outputs: [out/*.txt, bin]
+                body:
+                  - call: [io.mkdir_all, "${workspace}/out"]
+                  - call: [io.mkdir_all, "${workspace}/bin/sub"]
+                  - call: [io.write_file, "${workspace}/out/a.txt", "alpha-${arch}"]
+                  - call: [io.write_file, "${workspace}/out/b.txt", "beta"]
+                  - call: [io.write_file, "${workspace}/bin/sub/tool", "tool"]
+                  - call: [io.write_file, "${workspace}/scratch.tmp", "not declared"]
+                  - return: 0
+      - stage:
+          name: use
+          steps:
+            - step:
+                name: reader
+                needs: [make]
+                cache: opaque
+                args: []
+                return: i32
+                body:
+                  - decl: [got, string, { call: [io.read_file, "${workspace}/../build/out/a.txt"] }]
+                  - call: [io.write_file, "${workspace}/seen.txt", got]
+                  - return: 0
+
+- pipeline:
+    name: outputs_missing
+    workspace_root: logs/outputs_ws
+    steps:
+      - stage:
+          name: build
+          steps:
+            - step:
+                name: forgets
+                cache: pure
+                return: i32
+                outputs: [out/never.bin]
+                body:
+                  - call: [io.write_file, "${workspace}/other.bin", "x"]
+                  - return: 0
+
+- def:
+    name: expect
+    args: [[what, string], [cond, i32]]
+    return: i32
+    body:
+      - if:
+          condition: { eq: [cond, 1] }
+          then: [{ print: ["  ok   ${what}"] }, { return: 0 }]
+      - print: ["  FAIL ${what}"]
+      - return: 1
+
+- def:
+    name: main
+    static_off: ["str_cmp"]
+    return: i32
+    body:
+      - call: [io.remove_all, "logs/outputs_ws"]
+      - decl: [fails, i32, 0]
+      - decl: [lane_dir, string, "logs/outputs_ws/outputs_demo/arch=x86_64"]
+      - decl: [pipe, pipeline, { call: [outputs_demo] }]
+      - call: [pipe.set_store, "logs/outputs_ws/store"]
+      - decl: [rc_one, i32, { call: [pipe.run] }]
+      - set: [fails, { +: [fails, { call: [expect, "first run succeeds and runs both steps", { and: [{ eq: [rc_one, 0] }, { eq: [{ call: [pipe.ran_count] }, 2] }] }] }] }]
+      - decl: [seen_one, string, { call: [io.read_file, "${lane_dir}/use/seen.txt"] }]
+      - set: [fails, { +: [fails, { call: [expect, "the successor read the output (${seen_one})", { eq: [seen_one, "alpha-x86_64"] }] }] }]
+
+      # The workspace is gone; the store is not.  `make` hits and writes its tree back.
+      - call: [io.remove_all, "logs/outputs_ws/outputs_demo"]
+      - decl: [rc_two, i32, { call: [pipe.run] }]
+      - set: [fails, { +: [fails, { call: [expect, "second run: make hits", { and: [{ eq: [rc_two, 0] }, { eq: [{ call: [pipe.reused_count] }, 1] }] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "the hit restored out/a.txt", { call: [io.exists, "${lane_dir}/build/out/a.txt"] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "and out/b.txt", { call: [io.exists, "${lane_dir}/build/out/b.txt"] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "a directory output brings every file below it", { call: [io.exists, "${lane_dir}/build/bin/sub/tool"] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "an undeclared file is not restored", { eq: [{ call: [io.exists, "${lane_dir}/build/scratch.tmp"] }, false] }] }] }]
+      - decl: [seen_two, string, { call: [io.read_file, "${lane_dir}/use/seen.txt"] }]
+      - set: [fails, { +: [fails, { call: [expect, "the successor ran after the restore (${seen_two})", { eq: [seen_two, "alpha-x86_64"] }] }] }]
+
+      # The blobs are gone: the entry alone is not enough, make runs again.
+      - call: [io.remove_all, "logs/outputs_ws/store/blobs"]
+      - call: [io.remove_all, "logs/outputs_ws/outputs_demo"]
+      - decl: [rc_three, i32, { call: [pipe.run] }]
+      - set: [fails, { +: [fails, { call: [expect, "a missing blob is a miss: make runs again", { and: [{ eq: [rc_three, 0] }, { eq: [{ call: [pipe.reused_count] }, 0] }] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "and wrote the tree anew", { call: [io.exists, "${lane_dir}/build/out/a.txt"] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "the blobs are back in the store", { call: [io.exists, "logs/outputs_ws/store/blobs"] }] }] }]
+
+      - decl: [miss, pipeline, { call: [outputs_missing] }]
+      - call: [miss.set_store, "logs/outputs_ws/store_missing"]
+      - decl: [rc_miss, i32, { call: [miss.run] }]
+      - set: [fails, { +: [fails, { call: [expect, "an output that matches nothing fails the step", { neq: [rc_miss, 0] }] }] }]
+      - decl: [rc_miss_two, i32, { call: [miss.run] }]
+      - set: [fails, { +: [fails, { call: [expect, "and is not cached: it fails again", { and: [{ neq: [rc_miss_two, 0] }, { eq: [{ call: [miss.reused_count] }, 0] }] }] }] }]
+
+      - if:
+          condition: { neq: [fails, 0] }
+          then: [{ print: ["test_pipeline_outputs FAIL (${fails})"] }, { return: 1 }]
+      - print: ["test_pipeline_outputs PASS"]
+      - return: 0

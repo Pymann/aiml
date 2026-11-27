@@ -1,0 +1,10 @@
+# SPEC: 62_pipelines
+# spec/62 F62-60/F62-65: where a stage runs is said on the stage, not on a step.
+# Requires: driver
+- pipeline:
+    name: step_image
+    steps:
+      - stage:
+          name: one
+          steps:
+            - step: { name: first, image: ubuntu-base, return: i32, body: [{ return: 0 }] }

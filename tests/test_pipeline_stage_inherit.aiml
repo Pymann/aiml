@@ -1,0 +1,103 @@
+# SPEC: 62_pipelines
+# spec/62 F62-111: what a stage says for all its steps.  `per:` on the stage is
+# inherited (the step's own `per:` wins); `needs:` on the stage is added to every
+# step of it and binds the value as for a step's own `needs:` (F62-121).
+# Expected exit code: 0
+
+- pipeline:
+    name: inherit_demo
+    params:
+      - [arch, string, [x86_64, arm64]]
+    workspace_root: logs/inherit_ws
+    steps:
+      - stage:
+          name: one
+          steps:
+            - step:
+                name: first
+                cache: pure
+                args: [arch]
+                return: string
+                body:
+                  - return: "v-${arch}"
+      - stage:
+          name: two
+          needs: [first]
+          steps:
+            - step:
+                name: alpha
+                cache: pure
+                args: []
+                return: i32
+                body:
+                  - call: [io.write_file, "${workspace}/alpha.txt", first]
+                  - return: 0
+            - step:
+                name: beta
+                needs: [first]
+                cache: pure
+                args: []
+                return: i32
+                body:
+                  - call: [io.write_file, "${workspace}/beta.txt", "b-${first}"]
+                  - return: 0
+      - stage:
+          name: three
+          per: once
+          steps:
+            - step:
+                name: once_mark
+                cache: pure
+                args: []
+                return: i32
+                body:
+                  - call: [io.write_file, "${workspace}/once.txt", "once"]
+                  - return: 0
+            - step:
+                name: lane_mark
+                per: lane
+                cache: pure
+                args: [arch]
+                return: i32
+                body:
+                  - call: [io.write_file, "${workspace}/lane.txt", arch]
+                  - return: 0
+
+- def:
+    name: expect
+    args: [[what, string], [cond, i32]]
+    return: i32
+    body:
+      - if:
+          condition: { eq: [cond, 1] }
+          then: [{ print: ["  ok   ${what}"] }, { return: 0 }]
+      - print: ["  FAIL ${what}"]
+      - return: 1
+
+- def:
+    name: main
+    static_off: ["str_cmp"]
+    return: i32
+    body:
+      - call: [io.remove_all, "logs/inherit_ws"]
+      - decl: [fails, i32, 0]
+      - decl: [root, string, "logs/inherit_ws/inherit_demo"]
+      - decl: [pipe, pipeline, { call: [inherit_demo] }]
+      - call: [pipe.set_store, "logs/inherit_ws/store"]
+      - decl: [rc_run, i32, { call: [pipe.run] }]
+      - set: [fails, { +: [fails, { call: [expect, "the run succeeds", { eq: [rc_run, 0] }] }] }]
+      # first 2 + alpha 2 + beta 2 + once_mark 1 + lane_mark 2
+      - decl: [ran, i32, { call: [pipe.ran_count] }]
+      - set: [fails, { +: [fails, { call: [expect, "nine steps ran (${ran})", { eq: [ran, 9] }] }] }]
+      - decl: [got_alpha, string, { call: [io.read_file, "${root}/arch=arm64/two/alpha.txt"] }]
+      - set: [fails, { +: [fails, { call: [expect, "stage needs binds the value in a step without its own needs (${got_alpha})", { eq: [got_alpha, "v-arm64"] }] }] }]
+      - decl: [got_beta, string, { call: [io.read_file, "${root}/arch=x86_64/two/beta.txt"] }]
+      - set: [fails, { +: [fails, { call: [expect, "a need named twice is one need (${got_beta})", { eq: [got_beta, "b-v-x86_64"] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "stage per: once — the step ran once, in the shared workspace", { call: [io.exists, "${root}/_/three/once.txt"] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "and not per lane", { eq: [{ call: [io.exists, "${root}/arch=x86_64/three/once.txt"] }, false] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "the step's own per: lane wins", { call: [io.exists, "${root}/arch=arm64/three/lane.txt"] }] }] }]
+      - if:
+          condition: { neq: [fails, 0] }
+          then: [{ print: ["test_pipeline_stage_inherit FAIL (${fails})"] }, { return: 1 }]
+      - print: ["test_pipeline_stage_inherit PASS"]
+      - return: 0
