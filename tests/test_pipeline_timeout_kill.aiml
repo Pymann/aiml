@@ -1,0 +1,73 @@
+# SPEC: 62_pipelines
+# spec/62 F62-40/40a: a step's `timeout` kills the processes the step started — their
+# descendants included — and a process started after the expiry is killed at once.  Until
+# 2026-11-27 the limit was only noticed after the body had run to its end.
+# Expected exit code: 0
+- pipeline:
+    name: slow_steps
+    workspace_root: logs/timeout_kill_ws
+    steps:
+      - stage:
+          name: work
+          steps:
+            - step:
+                name: quick
+                cache: opaque
+                args: []
+                timeout: 20000
+                body:
+                  - decl: [argv, list<string>, ["sh", "-c", "exit 0"]]
+                  - decl: [proc, process, { call: [sys.exe, argv] }]
+                  - return: { call: [proc.wait] }
+            - step:
+                name: hangs
+                cache: opaque
+                args: []
+                timeout: 400
+                body:
+                  # a child and a grandchild that would sleep for 37.25 s
+                  - decl: [argv, list<string>, ["sh", "-c", "sleep 37.25 & sleep 37.25; wait"]]
+                  - decl: [first, process, { call: [sys.exe, argv] }]
+                  - decl: [rc_first, i32, { call: [first.wait] }]
+                  # started after the expiry: killed as soon as it is there
+                  - decl: [again, list<string>, ["sleep", "37.25"]]
+                  - decl: [second, process, { call: [sys.exe, again] }]
+                  - decl: [rc_second, i32, { call: [second.wait] }]
+                  - return: 0
+
+- def:
+    name: expect
+    args: [[what, string], [cond, i32]]
+    return: i32
+    body:
+      - if:
+          condition: { eq: [cond, 1] }
+          then: [{ print: ["  ok   ${what}"] }, { return: 0 }]
+      - print: ["  FAIL ${what}"]
+      - return: 1
+
+- def:
+    name: main
+    static_off: ["str_cmp"]
+    return: i32
+    body:
+      - decl: [fails, i32, 0]
+      - decl: [pipe, pipeline, { call: [slow_steps] }]
+      - decl: [start, i64, { call: [time.mono_ms] }]
+      - decl: [rc_run, i32, { call: [pipe.run] }]
+      - decl: [took, i64, { -: [{ call: [time.mono_ms] }, start] }]
+      - print: ["  the run took ${took} ms"]
+      - set: [fails, { +: [fails, { call: [expect, "the step that hangs fails", { neq: [rc_run, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "and ends near its limit, not after 2 × 37 s", { lt: [took, 10000] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "the step within its limit still ran", { eq: [{ call: [pipe.ran_count] }, 1] }] }] }]
+      - decl: [ps_argv, list<string>, ["sh", "-c", "ps -eo args | grep -c '^sleep 37.25$' || true"]]
+      - decl: [lister, process, { call: [sys.exe, ps_argv, {capture: true}] }]
+      - call: [lister.wait]
+      - decl: [left_raw, string, lister.stdout_buffer]
+      - decl: [left, string, { call: [left_raw.trim] }]
+      - set: [fails, { +: [fails, { call: [expect, "no sleep of the step is left — the grandchild neither (${left})", { eq: [left, "0"] }] }] }]
+      - if:
+          condition: { neq: [fails, 0] }
+          then: [{ print: ["test_pipeline_timeout_kill FAIL (${fails})"] }, { return: 1 }]
+      - print: ["test_pipeline_timeout_kill PASS"]
+      - return: 0

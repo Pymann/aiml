@@ -478,10 +478,20 @@ other five.  One pipeline-wide switch cannot express both, so the decision sits 
     from both "clean" and "failed" (§5.7).  This is the explicit form of "tolerate", visible in the
     status rather than hidden in the body.
 - **F62-40** `timeout` bounds the **whole step**, including every process it starts and the time
-  between them.  On expiry the step's children are killed (`process.kill()` kills a detached job's
-  whole group, `spec/23` §5.2) and the step counts as failed.  This is not the same as
-  `ExeOptions.timeout`, which bounds one child: a step that starts forty compilers needs a bound
-  on the step.
+  between them.  On expiry the step's children are killed — every process the body started with
+  `sys.exe` and all their descendants (found through `/proc/<pid>/task/*/children`), a detached
+  job with its monitor — and the step counts as failed.  A process the body starts **after** the
+  expiry is killed as soon as it is started, so a body that loops over `sys.exe` comes to an end.
+  A child the body has already waited for is no longer killed — its pid may belong to another
+  process by then — and a descendant that outlived its parent (reparented to init) is out of
+  reach: the tree is followed from the children the body still holds.
+  This is not the same as `ExeOptions.timeout`, which bounds one child: a step that starts forty
+  compilers needs a bound on the step.
+- **F62-40a** What cannot be killed is the body's own code: it is JIT code in the lane's thread, and
+  no thread of a process can be stopped from outside without leaving its locks and its memory in
+  an unknown state.  A body that waits for its children returns once they are killed; a body that
+  computes without a child runs until it returns and then fails as expired.  Both are logged with
+  what happened — how many processes were killed, or that there were none to kill.
 - **F62-41** `retry: n` runs the body up to `n` times, stopping at the first attempt that does not
   throw.  `retry > 1` together with `cache: pure` is an **error**: a pure step depends only on
   hashed inputs, so a second attempt must fail identically, and asking for one states a

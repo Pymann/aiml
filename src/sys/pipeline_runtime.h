@@ -54,6 +54,8 @@ char*   aiml_step_host(const char* name);
 void    aiml_step_set_result(const char* value);
 char*   aiml_step_need_result(const char* name);
 int32_t aiml_step_need_results_fill(const char* name, void* list);   // F62-8: one per lane
+void    aiml_step_note_child(int64_t pid, int64_t monitor);          // F62-40: sys.exe reports its children
+void    aiml_step_forget_child(int64_t pid);                         // F62-40: reaped, pid may be reused
 
 void*   aiml_stage_new(void);
 void    aiml_stage_set_name(void* stage, const char* name);

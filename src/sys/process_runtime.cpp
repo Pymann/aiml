@@ -1,6 +1,7 @@
 // spec/23 §5: sys.exe / process — spawn options, capture, timeout, detach (durable monitor),
 // sys.process_attach. process is a Class-4 resource (spec/61): aiml_process_release at drop.
 #include "process_runtime.h"
+#include "pipeline_runtime.h"
 #include "../../logger.h"
 #include <spawn.h>
 #include <unistd.h>
@@ -212,6 +213,7 @@ bool step(ProcessHandle* h) {
     if (r == h->child) {
         h->finished = true;
         h->returncode = h->timed_out ? 124 : decode_status(st);
+        aiml_step_forget_child(static_cast<int64_t>(h->child));   // F62-40: its pid may be reused now
         h->child = -1;
         return false;
     }
@@ -386,6 +388,8 @@ extern "C" void* aiml_process_spawn(void* argvList, const char* cwd, void* env, 
         ? spawn_detached(argv, cwd_s, envv, has_env, timeout, out_s, err_s, st_s)
         : spawn_attached(argv, cwd_s, envv, has_env, timeout, capture != 0, in_s, out_s, err_s);
     if (!h) LOG_DEBUG("[Runtime] sys.exe: spawn failed for " + argv[0]);
+    // spec/62 F62-40: a pipeline step with a time limit kills what it started.
+    else aiml_step_note_child(static_cast<int64_t>(h->pid), h->child != h->pid ? static_cast<int64_t>(h->child) : 0);
     return h;
 }
 
@@ -419,6 +423,7 @@ extern "C" int32_t process_wait(void* handle) {
             do { r = waitpid(h->child, &st, 0); } while (r < 0 && errno == EINTR);
             h->finished = true;
             h->returncode = r == h->child ? decode_status(st) : -1;
+            aiml_step_forget_child(static_cast<int64_t>(h->child));   // F62-40
             h->child = -1;
             break;
         }
