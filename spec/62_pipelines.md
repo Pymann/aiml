@@ -2040,6 +2040,41 @@ Two questions that previously were packed into one word (`runs_on:`) or not aske
   wants fallback writes two stages and says which applies when — then the intent is in
   the pipeline and not in the server's mood (cosmos `doc/spec/110` F110-124).
 
+### 18.6 `secrets:` — a credential for a stage
+
+A stage that checks out a private repository, publishes a package or signs an artefact needs a
+credential.  The pipeline names it; the host knows what the name stands for.
+
+```yaml
+- pipeline:
+    name: publish
+    secrets:
+      - { name: gh_token, env: GH_TOKEN }
+    steps:
+      - stage:
+          name: upload
+          secrets:
+            - { name: deploy, env: DEPLOY }
+          run: 'curl -u "$DEPLOY_USER:$DEPLOY_PASSWORD" -T out.tgz https://repo.example/'
+```
+
+- **F62-165** A secret is a **NAME** bound to an **environment name**, never a value.  The same
+  reason as F62-136: a pipeline is user input and lives in a repository, and what is in a
+  versioned file is published.  An entry is `{ name, env }` and nothing else — a `value:` is an
+  error, not an ignored key (F62-65).  `env` is `[A-Z_][A-Z0-9_]*`, because the host may derive
+  further names from it (`DEPLOY_USER`, `DEPLOY_PASSWORD` for a username/password secret); names
+  that belong to the executor (`PATH`, `HOME`, `TMPDIR`, `COSMOS_*`, `LD_*`, …) are refused.
+  What a kind of secret is and how it reaches the step is the host's (cosmos `doc/spec/115`).
+- **F62-166** `secrets:` of the pipeline and of the stage **add up**; the same `env:` in both
+  places means the stage wins.  The same rule as F62-138.  The reader `stg.secrets` gives the
+  resolved list as `name:ENV,…`.
+- **F62-167** A stage with secrets is **opaque** (F62-64, case 3: deliberately not key material).
+  The value cannot be key material — the key would carry it into every store it travels to — and
+  without it a layer built with one credential would be handed to a run that has another.  An
+  inherited `cache:` falls to `opaque`, for the stage and its steps; a `cache: pure` or
+  `resolved` said on such a stage or one of its steps is an error, because it claims a reuse that
+  cannot be true.  The composed form reads `opaque` as well.
+
 ### 18.2 `requires:` — what the environment must bring along
 
 The same pipeline runs locally and in a container.  Locally the machine decides whether `git`, `gcc`
@@ -2238,10 +2273,11 @@ All **read-only**; a value that has been read does not change the pipeline.
 | `stg.base` | string | **ON WHAT** — `run:<run>` \| `job:<id>` |
 | `stg.requires` | string | `git,gcc>=13,lib:yaml-cpp` (§18.2, F62-126) |
 | `stg.shares` | string | `name:/target:mode,…` (§18.1b, F62-136) |
+| `stg.secrets` | string | `name:ENV,…` (§18.6, F62-165/166) — names, never values |
 | `stg.cpu_cores` / `stg.mem_mb` / `stg.pids_max` | i32 | limits, 0 = host default (§18.1a) |
 | `stg.timeout_ms` | i32 | 0 = executor default (F62-40) |
 | `stg.command` | string | `run:` — the command of slice 1 (cosmos F103-1) |
-| `stg.cache` | string | reuse class after F62-159/161: `pure` \| `resolved` \| `opaque` |
+| `stg.cache` | string | reuse class after F62-159/161/167: `pure` \| `resolved` \| `opaque` |
 | `stg.resolve` | string | the probe line of a `run:` stage (F62-160), otherwise empty |
 | `stg.step_count` / `stg.step_at(i)` | i32 / step | the steps of the stage (§5) |
 

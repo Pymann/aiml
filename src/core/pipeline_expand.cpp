@@ -15,6 +15,7 @@
 #include "../../logger.h"
 
 #include <algorithm>
+#include <cctype>
 #include <array>
 #include <map>
 #include <set>
@@ -113,12 +114,12 @@ const OldName kOldNames[] = {
 const char* kPipelineKeys[] = {
     "name", "params", "exclude", "parallel", "workspace_root", "steps", "host",
     "agent", "steplayer", "image", "base", "requires", "shares", "resources",
-    "timeout", "push", "runtime", "cache",
+    "timeout", "push", "runtime", "cache", "secrets",
 };
 const char* kStageKeys[] = {
     "name", "steps", "run", "args", "host", "cache", "on_fail", "timeout",
     "retry", "exec_defaults", "agent", "steplayer", "image", "base",
-    "requires", "shares", "resources", "resolve",
+    "requires", "shares", "resources", "resolve", "secrets",
 };
 
 bool knownKey(const std::string& key, const char* const* list, size_t n) {
@@ -178,6 +179,114 @@ std::string sharesOf(const YAML::Node& node, const std::string& where,
         }
         if (!out.empty()) out += ",";
         out += name + ":" + dest + ":" + mode;
+    }
+    return out;
+}
+
+// `secrets:` → "name:ENV,…" (spec/62 §18.6, F62-165).  The NAME is a name,
+// never a value: what it stands for is known to the host, as for `shares:`.
+// ENV is the environment name the step sees; the host may derive more names
+// from it (ENV_USER, ENV_PASSWORD, …), so it is a plain identifier.
+bool envNameOk(const std::string& env) {
+    if (env.empty()) return false;
+    if (!(std::isupper((unsigned char)env[0]) || env[0] == '_')) return false;
+    for (char ch : env)
+        if (!(std::isupper((unsigned char)ch) || std::isdigit((unsigned char)ch) || ch == '_'))
+            return false;
+    return true;
+}
+
+bool envNameReserved(const std::string& env) {
+    static const char* kTaken[] = {"PATH", "HOME", "TMPDIR", "LANG", "TZ", "SHELL", "USER",
+                                   "PWD", "IFS", "ENV", "BASH_ENV"};
+    for (const char* one : kTaken) if (env == one) return true;
+    return env.rfind("COSMOS_", 0) == 0 || env.rfind("LD_", 0) == 0;
+}
+
+std::string secretsOf(const YAML::Node& node, const std::string& where,
+                      const std::string& pname, const std::string& level, bool& ok) {
+    if (!node) return std::string();
+    if (!node.IsSequence()) {
+        LOG_ERROR(where + ": pipeline '" + pname + "': " + level + " field 'secrets' is a "
+                  "list of { name, env } (spec/62 §18.6)");
+        ok = false;
+        return std::string();
+    }
+    std::string out;
+    for (const auto& row : node) {
+        if (!row.IsMap()) {
+            LOG_ERROR(where + ": pipeline '" + pname + "': " + level + " field 'secrets' is a "
+                      "list of { name, env } (spec/62 §18.6)");
+            ok = false;
+            continue;
+        }
+        for (const auto& kv : row) {
+            const std::string key = kv.first.Scalar();
+            if (key != "name" && key != "env") {
+                LOG_ERROR(where + ": pipeline '" + pname + "': secret entry has '" + key +
+                          "' — an entry is { name, env } (spec/62 §18.6, F62-65)");
+                ok = false;
+            }
+        }
+        const std::string name = (row["name"] && row["name"].IsScalar()) ? row["name"].Scalar() : "";
+        const std::string env  = (row["env"]  && row["env"].IsScalar())  ? row["env"].Scalar()  : "";
+        if (name.empty() || env.empty()) {
+            LOG_ERROR(where + ": pipeline '" + pname + "': " + level + " field 'secrets' needs "
+                      "'name' and 'env' per entry (spec/62 §18.6 F62-165)");
+            ok = false;
+            continue;
+        }
+        if (name.find_first_of("/:,= \t") != std::string::npos) {
+            LOG_ERROR(where + ": pipeline '" + pname + "': secret 'name: " + name + "' is not a "
+                      "name — a secret is named, the host knows its value (spec/62 F62-165)");
+            ok = false;
+            continue;
+        }
+        if (!envNameOk(env)) {
+            LOG_ERROR(where + ": pipeline '" + pname + "': secret '" + name + "' has 'env: " +
+                      env + "' — an environment name is [A-Z_][A-Z0-9_]* (spec/62 F62-165)");
+            ok = false;
+            continue;
+        }
+        if (envNameReserved(env)) {
+            LOG_ERROR(where + ": pipeline '" + pname + "': secret '" + name + "' has 'env: " +
+                      env + "' — that name belongs to the executor (spec/62 F62-165)");
+            ok = false;
+            continue;
+        }
+        if (!out.empty()) out += ",";
+        out += name + ":" + env;
+    }
+    return out;
+}
+
+// The ENV of a secret line ("name:ENV" → "ENV").
+std::string secretEnv(const std::string& row) {
+    size_t cut = row.find(':');
+    return cut == std::string::npos ? row : row.substr(cut + 1);
+}
+
+// Secrets add up; with the same ENV the stage wins (F62-166).
+std::string mergeSecrets(const std::string& at_pipe, const std::string& at_stage) {
+    if (at_stage.empty()) return at_pipe;
+    if (at_pipe.empty())  return at_stage;
+    std::vector<std::string> mine;
+    std::stringstream in(at_stage);
+    std::string row;
+    while (std::getline(in, row, ',')) if (!row.empty()) mine.push_back(row);
+    std::string out;
+    std::stringstream pin(at_pipe);
+    while (std::getline(pin, row, ',')) {
+        if (row.empty()) continue;
+        bool taken = false;
+        for (const auto& own : mine) if (secretEnv(own) == secretEnv(row)) taken = true;
+        if (taken) continue;
+        if (!out.empty()) out += ",";
+        out += row;
+    }
+    for (const auto& own : mine) {
+        if (!out.empty()) out += ",";
+        out += own;
     }
     return out;
 }
@@ -399,6 +508,7 @@ bool expandPipelineDeclarations(const std::string& text, const std::string& wher
         const std::string headLayer     = textAt(pl, "steplayer");
         const std::string headRequires  = csvOf(pl["requires"]);
         const std::string headShares    = sharesOf(pl["shares"], where, pname, "pipeline", ok);
+        const std::string headSecrets   = secretsOf(pl["secrets"], where, pname, "pipeline", ok);
         const int32_t     headTimeout   = numAt(pl, "timeout");
         // F62-159: the pipeline's `cache:` is the default of every stage.
         const std::string headCache     = scalarOr(pl["cache"], "opaque");
@@ -602,6 +712,8 @@ bool expandPipelineDeclarations(const std::string& text, const std::string& wher
                 if (stReq.empty()) stReq = headRequires;
                 const std::string stShares =
                     mergeShares(headShares, sharesOf(stg["shares"], where, pname, "stage", ok));
+                const std::string stSecrets =
+                    mergeSecrets(headSecrets, secretsOf(stg["secrets"], where, pname, "stage", ok));
                 int32_t stTimeout = numAt(stg, "timeout");
                 if (stTimeout == 0) stTimeout = headTimeout;
 
@@ -610,7 +722,17 @@ bool expandPipelineDeclarations(const std::string& text, const std::string& wher
                 // form of the stage — a line beside `run:`, a body beside
                 // `steps:`.  The stage's class is fixed after its steps
                 // (F62-161), so `stCacheEff` starts at the declared one.
-                const std::string stCache = scalarOr(stg["cache"], headCache);
+                // F62-167: a stage with secrets is opaque.  Inherited, the
+                // class falls to opaque; said on the stage, it is an error —
+                // the author claims a reuse that cannot be true.
+                const std::string stCache =
+                    scalarOr(stg["cache"], stSecrets.empty() ? headCache : std::string("opaque"));
+                if (!stSecrets.empty() && stCache != "opaque") {
+                    LOG_ERROR(where + ": pipeline '" + pname + "': stage '" + sname +
+                              "' binds secrets and says `cache: " + stCache + "` — a stage "
+                              "with secrets is opaque (spec/62 F62-167)");
+                    ok = false;
+                }
                 if (!cacheKnown(stCache)) {
                     LOG_ERROR(where + ": pipeline '" + pname + "': stage '" + sname +
                               "': `cache: " + stCache + "` — there are `pure`, `resolved` "
@@ -692,6 +814,7 @@ bool expandPipelineDeclarations(const std::string& text, const std::string& wher
                 ctor += attrLine(svar, "base",      stBase);
                 ctor += attrLine(svar, "requires",  stReq);
                 ctor += attrLine(svar, "shares",    stShares);
+                ctor += attrLine(svar, "secrets",   stSecrets);
                 ctor += attrLine(svar, "command",   textAt(stg, "run"));
                 ctor += attrLine(svar, "resolve",   stProbe);
                 ctor += limitLine(svar, "cpu",     stCpu);
@@ -721,6 +844,12 @@ bool expandPipelineDeclarations(const std::string& text, const std::string& wher
                                       "and `opaque` (spec/62 §7)");
                             ok = false;
                             continue;
+                        }
+                        if (!stSecrets.empty() && cache != "opaque") {
+                            LOG_ERROR(where + ": pipeline '" + pname + "': step '" + stepName +
+                                      "' says `cache: " + cache + "` in a stage that binds "
+                                      "secrets — such a stage is opaque (spec/62 F62-167)");
+                            ok = false;
                         }
                         // F62-161: the weakest step decides the stage.
                         if (!sawStep || cacheRank(cache) < cacheRank(stCacheEff)) stCacheEff = cache;
