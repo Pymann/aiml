@@ -1,0 +1,81 @@
+# SPEC: 58_classgroups
+# A group instance whose base class is itself INHERITED: the wired `sees` member
+# is declared in the GRANDPARENT (ArtBase), the group names the leaf (ArtLeaf).
+# Parent members are flattened into the child's member map at registration
+# (ast_compiler.cpp "1. Parent"), so the group must find the existing member and
+# WIRE it (spec/58 §5.1) instead of synthesizing a second, never-wired member on
+# the subclass -- which would leave the grandparent's own method reading null.
+#
+# This is what lets one large class be split into layers across files, each layer
+# in its own file, with the collaborators declared once at the bottom.
+
+- class:
+    name: Palette
+    members:
+      - [tone, i32]
+    methods:
+      - def:
+          name: tint
+          return: i32
+          body:
+            - return: 7
+
+- class:
+    name: ArtBase
+    members:
+      - [pal, ref<Palette>]        # wired by the group, read from THIS layer
+      - [calls, i32]
+    methods:
+      - def:
+          name: shade
+          return: i32
+          body:
+            - set: [<.calls, { +: [<.calls, 1] }]
+            - return: { call: [<.pal.tint] }
+
+- class:
+    name: ArtLeaf
+    extends: ArtBase
+    methods:
+      - def:
+          name: twice
+          return: i32
+          body:
+            - return: { +: [{ call: [<.shade] }, { call: [<.shade] }] }
+
+- classgroup:
+    name: ArtRuntime
+    instances:
+      - class: Palette
+        instance: pal
+      - class: ArtLeaf
+        instance: art
+        sees: [pal]
+        methods:
+          - def:
+              name: thrice
+              return: i32
+              body:
+                # a group method on the leaf's subclass, reaching the grandparent's
+                # member through two levels of inheritance
+                - return: { +: [{ call: [<.twice] }, { call: [<.pal.tint] }] }
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [grp, ptr<ArtRuntime>, { new: ArtRuntime }]
+      # grandparent method using the wired member
+      - decl: [one, i32, { call: [grp.art.shade] }]
+      - if: { condition: { neq: [one, 7] }, then: [{ print: ["FAIL shade=${one} exp 7 -- grandparent member not wired"] }, { call: [sys.exit, 1] }] }
+      # leaf method calling down into the grandparent
+      - decl: [two, i32, { call: [grp.art.twice] }]
+      - if: { condition: { neq: [two, 14] }, then: [{ print: ["FAIL twice=${two} exp 14"] }, { call: [sys.exit, 1] }] }
+      # group method on the subclass, three levels up from the member
+      - decl: [tri, i32, { call: [grp.art.thrice] }]
+      - if: { condition: { neq: [tri, 21] }, then: [{ print: ["FAIL thrice=${tri} exp 21"] }, { call: [sys.exit, 1] }] }
+      # exactly ONE member: all five shade() calls counted on the same object
+      - decl: [cnt, i32, grp.art.calls]
+      - if: { condition: { neq: [cnt, 5] }, then: [{ print: ["FAIL calls=${cnt} exp 5"] }, { call: [sys.exit, 1] }] }
+      - print: ["PASS classgroup_extends_sees: sees wires a member declared in the grandparent"]
+      - return: 0
