@@ -3325,7 +3325,7 @@ void registerBuiltins(CompilerContext& ctx) {
                 llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
                 llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
                 llvm::Value* name = args.empty()
-                    ? static_cast<llvm::Value*>(ctx.builder.CreateGlobalStringPtr(""))
+                    ? static_cast<llvm::Value*>(ctx.builder.CreateGlobalString(""))
                     : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
                 llvm::Value* lst = freshStringList(ctx, "need_results");
                 ctx.builder.CreateCall(ctx.getFunction("aiml_step_need_results_fill", ctx.builder.getInt32Ty(),
