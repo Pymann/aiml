@@ -93,6 +93,20 @@ def needs(path):
                 return False, "all", valgrind, aot, "a helper or fixture under tests/_*: the whole corpus" + extra
             return False, ["^" + ere("tests/" + top + "/")], valgrind, aot, "tests/" + top + "/ and its driver" + extra
         if rest.endswith(".aiml"):
+            # A numbered series (test_kv_sidx_1_write … _7_clear_plain) shares
+            # state on disk and runs in name order: one member alone fails.
+            m = re.match(r"^(.*_)\d+_[^/]*\.aiml$", rest)
+            if m:
+                prefix = m.group(1)
+                try:
+                    names = os.listdir(os.path.join(ROOT, "tests"))
+                except OSError:
+                    names = []
+                members = [n for n in names if n.startswith(prefix) and n.endswith(".aiml")
+                           and re.match(r"\d+_", n[len(prefix):])]
+                if len(members) > 1:
+                    return False, ["^" + ere("tests/" + prefix) + "[0-9]+_"], valgrind, aot, \
+                        f"one of a numbered series of {len(members)} tests: the series" + extra
             return False, ["^" + ere(path) + "$"], valgrind, aot, "this test" + extra
         return False, "all", valgrind, aot, "a fixture in tests/: the whole corpus" + extra
     for rx in NOTHING:

@@ -216,7 +216,7 @@ changes, `tools/ci/changed_files.sh` (which files) and `tools/ci/select_tests.py
   |---|---|
   | `.github/`, `tools/ci/`, `run_all_tests.sh`, `tools/check_expected_failures.sh`, `exodus*.json`, every source of the compiler or runtime, and **any path no rule names** | everything |
   | `src/core/venv.*`, `src/core/build.*` (aiml venv, aiml build) | the drivers `tests/venv/` and `tests/build/` |
-  | `tests/<name>.aiml` | that test |
+  | `tests/<name>.aiml` | that test — one of a numbered series (`test_kv_sidx_1_write` … `_7_clear_plain`, which share state on disk and run in name order): the whole series |
   | `tests/<dir>/…` | that directory's tests and its `run.sh` |
   | `tests/_<helper>/…`, other files directly in `tests/` (fixtures) | the whole corpus |
   | `TEST_SUITES.md` (the register) | the whole corpus |

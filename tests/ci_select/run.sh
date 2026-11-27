@@ -48,6 +48,10 @@ check "no changed file: nothing beyond build, smoke and packaging" '[ "$(val "$o
 out=$(sel tests/test_input_cursor.aiml)
 re=$(val "$out" corpus)
 check "one test: that test" '[ "$(corpus_paths "$re")" = tests/test_input_cursor.aiml ] && [ "$(val "$out" valgrind)" = false ]'
+out=$(sel tests/test_kv_sidx_3_modify.aiml)
+re=$(val "$out" corpus)
+check "one test of a numbered series: the whole series, in its order" \
+  '[ "$(corpus_paths "$re" | wc -l)" -eq "$(ls tests/test_kv_sidx_[0-9]*_*.aiml | wc -l)" ] && [ "$(corpus_paths "$re" | sed -n 1p)" = tests/test_kv_sidx_1_write.aiml ] && ! corpus_paths "$re" | grep -v "^tests/test_kv_sidx_" > /dev/null'
 out=$(sel tests/closures/run.sh)
 re=$(val "$out" corpus)
 check "a driver directory: its run.sh and its tests" \
