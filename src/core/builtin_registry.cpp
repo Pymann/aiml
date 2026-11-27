@@ -3145,6 +3145,7 @@ void registerBuiltins(CompilerContext& ctx) {
         pipeInfo.builtinMethods["lifecycle"]     = mkGetI32("aiml_pipeline_lifecycle");
         pipeInfo.builtinMethods["set_parallel"]  = mkI32("aiml_pipeline_set_parallel");
         pipeInfo.builtinMethods["set_workspace_root"] = mkStr("aiml_pipeline_set_workspace_root");
+        pipeInfo.builtinMethods["set_store"] = mkStr("aiml_pipeline_set_store");   // spec/62 F62-24
         pipeInfo.builtinMethods["release"]       = mkStr("aiml_pipeline_release");
         pipeInfo.builtinMethods["request_pause"] = [](CompilerContext& ctx, llvm::Value* base,
             AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {

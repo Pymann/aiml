@@ -89,11 +89,15 @@
     static_off: ["str_cmp"]
     return: i32
     body:
+      # spec/62 F62-24a: results outlive a pipeline value and the process; every
+      # value here has a store of its own, so that it counts its OWN runs.
+      - call: [io.remove_all, "logs/test_pipeline_parallel_stores"]
       - decl: [fails, i32, 0]
 
       # ── serial: the reference value ─────────────────────────────────────
       - set: [g_events, 0]
       - decl: [serial, pipeline, { call: [eight_lanes, 1, 0] }]
+      - call: [serial.set_store, "logs/test_pipeline_parallel_stores/serial"]
       - decl: [rc_s, i32, { call: [serial.run, count_events] }]
       - decl: [ran_s, i32, { call: [serial.ran_count] }]
       - decl: [ev_s, i32, g_events]
@@ -103,6 +107,7 @@
       # ── parallel: the same result, the same counters ────────────────────
       - set: [g_events, 0]
       - decl: [par4, pipeline, { call: [eight_lanes, 4, 0] }]
+      - call: [par4.set_store, "logs/test_pipeline_parallel_stores/par4"]
       - decl: [rc_p, i32, { call: [par4.run, count_events] }]
       - set: [fails, { +: [fails, { call: [expect, "parallel: the same outcome", { eq: [rc_p, rc_s] }] }] }]
       - set: [fails, { +: [fails, { call: [expect, "parallel: the same number of executions", { eq: [{ call: [par4.ran_count] }, ran_s] }] }] }]
@@ -116,12 +121,14 @@
 
       # ── auto (parallel = 0): one core per lane, the same result ─────────
       - decl: [auto_p, pipeline, { call: [eight_lanes, 0, 0] }]
+      - call: [auto_p.set_store, "logs/test_pipeline_parallel_stores/auto_p"]
       - decl: [rc_a, i32, { call: [auto_p.run] }]
       - set: [fails, { +: [fails, { call: [expect, "auto: the same outcome", { eq: [rc_a, 0] }] }] }]
       - set: [fails, { +: [fails, { call: [expect, "auto: the same number of executions", { eq: [{ call: [auto_p.ran_count] }, 8] }] }] }]
 
       # ── on_fail=pipeline also brakes in parallel: not all eight run ───────
       - decl: [broke, pipeline, { call: [eight_lanes, 4, 1] }]
+      - call: [broke.set_store, "logs/test_pipeline_parallel_stores/broke"]
       - decl: [rc_b, i32, { call: [broke.run] }]
       - set: [fails, { +: [fails, { call: [expect, "parallel: the failure arrives", { neq: [rc_b, 0] }] }] }]
       - set: [fails, { +: [fails, { call: [expect, "parallel: on_fail=pipeline stops the dispatch", { lt: [{ call: [broke.attempt_count] }, 8] }] }] }]

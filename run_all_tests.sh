@@ -124,7 +124,16 @@ FAILED=0
 
 SKIPPED=0
 
+# spec/62 F62-24a: pipeline step results outlive the process.  Every test gets a
+# store of its own, so that a test that counts runs and hits finds what IT built,
+# not what an earlier run of the corpus left behind.
+STORE_ROOT="$(mktemp -d)"
+trap 'rm -rf "$STORE_ROOT"' EXIT
+STORE_N=0
+fresh_store() { STORE_N=$((STORE_N + 1)); export AIML_PIPELINE_STORE="$STORE_ROOT/$STORE_N"; }
+
 for TEST in $TEST_FILES; do
+    fresh_store
     # Check for resource requirements declared in test file comments.
     # A line "# Requires: display" means the test needs a graphical display.
     if grep -q "# Requires: display" "$TEST"; then
@@ -399,6 +408,7 @@ done
 # (pipeline_purity, pipeline_declared_neg).  They still belong in the
 # suite — otherwise they never run along and rot.
 for DRIVER in tests/*/run.sh; do
+    fresh_store
     [ -x "$DRIVER" ] || continue
     # --only filters the drivers too (TEST_SUITES.md §4.1): a run for one
     # directory must not pay for all the others.

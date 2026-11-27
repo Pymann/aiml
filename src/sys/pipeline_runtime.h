@@ -101,6 +101,7 @@ void    aiml_pipeline_set_parallel(void* pipe, int32_t n);
 // spec/62 §4.3: one workspace per (lane, stage).  Not key material
 // (F62-107) — otherwise no hit would survive moving the project.
 void    aiml_pipeline_set_workspace_root(void* pipe, const char* root);
+void    aiml_pipeline_set_store(void* pipe, const char* dir);    // spec/62 F62-24
 
 // ── spec/62 §20: reading what was compiled ──────────────────────────────────
 //
