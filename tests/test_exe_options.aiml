@@ -1,0 +1,71 @@
+# SPEC: 62_pipelines,23_sys_process
+# spec/62 §5.4 (F62-27/F62-29): ExeOptions — the options of sys.exe as a built-in model.
+# It can be declared, set, passed and reused; every field has spec/23's default; a
+# literal option bag on the same call overrides the value field by field; shell,
+# capture and detach are runtime values, so capture+detach is refused at run time.
+# Expected exit code: 0
+
+- def:
+    name: with_capture
+    args: [[base, ExeOptions]]
+    return: ExeOptions
+    body:
+      - decl: [out, ExeOptions, base]
+      - set: [out.capture, true]
+      - return: out
+
+- def:
+    name: expect
+    args: [[what, string], [cond, i32]]
+    return: i32
+    body:
+      - if:
+          condition: { eq: [cond, 1] }
+          then: [{ print: ["  ok   ${what}"] }, { return: 0 }]
+      - print: ["  FAIL ${what}"]
+      - return: 1
+
+- def:
+    name: main
+    static_off: ["str_cmp"]
+    return: i32
+    body:
+      - decl: [fails, i32, 0]
+      - call: [io.remove_all, "logs/exe_options_ws"]
+      - call: [io.mkdir_all, "logs/exe_options_ws"]
+      - decl: [opts, ExeOptions]
+      - set: [fails, { +: [fails, { call: [expect, "defaults are spec/23's: timeout -1, nothing captured", { and: [{ eq: [opts.timeout, -1] }, { eq: [opts.capture, false] }] }] }] }]
+      # passed to a helper and back — a value like any model
+      - decl: [cap, ExeOptions, { call: [with_capture, opts] }]
+      - set: [cap.cwd, "logs/exe_options_ws"]
+      - decl: [argv, list<string>]
+      - call: [argv.push, "pwd"]
+      - decl: [proc, process, { call: [sys.exe, argv, cap] }]
+      - call: [proc.wait]
+      - decl: [said, string, { call: [proc.stdout_buffer] }]
+      - set: [fails, { +: [fails, { call: [expect, "capture and cwd came from the value (${said})", { call: [said.contains, "exe_options_ws"] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "the helper did not change the original", { eq: [opts.capture, false] }] }] }]
+      # env: a complete environment from the value; empty = inherit
+      - call: [cap.env.put, "EXE_OPT_PROBE", "from-the-model"]
+      - call: [cap.env.put, "PATH", "/usr/bin:/bin"]
+      - decl: [envv, list<string>]
+      - call: [envv.push, "printenv"]
+      - call: [envv.push, "EXE_OPT_PROBE"]
+      - decl: [penv, process, { call: [sys.exe, envv, cap] }]
+      - call: [penv.wait]
+      - decl: [got_env, string, { call: [penv.stdout_buffer] }]
+      - set: [fails, { +: [fails, { call: [expect, "env from the value replaces the environment (${got_env})", { call: [got_env.contains, "from-the-model"] }] }] }]
+      # a literal bag on top of the value: stdout to a file, capture off
+      - decl: [pfile, process, { call: [sys.exe, argv, cap, { capture: false, stdout: "logs/exe_options_ws/pwd.txt" }] }]
+      - call: [pfile.wait]
+      - set: [fails, { +: [fails, { call: [expect, "a literal option overrides the value's field", { call: [io.exists, "logs/exe_options_ws/pwd.txt"] }] }] }]
+      # F62-29: capture + detach is a runtime refusal now
+      - decl: [bad, ExeOptions, cap]
+      - set: [bad.detach, true]
+      - decl: [pbad, process, { call: [sys.exe, argv, bad] }]
+      - set: [fails, { +: [fails, { call: [expect, "capture + detach from a value: a null process", { eq: [pbad, null] }] }] }]
+      - if:
+          condition: { neq: [fails, 0] }
+          then: [{ print: ["test_exe_options FAIL (${fails})"] }, { return: 1 }]
+      - print: ["test_exe_options PASS"]
+      - return: 0

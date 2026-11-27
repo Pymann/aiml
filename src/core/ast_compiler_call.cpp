@@ -567,6 +567,7 @@ IRValue* Compiler::visitCall(CallExpr* call) {
         static const std::set<std::string> kExeOpts = {
             "cwd","env","shell","timeout","capture","stdin","stdout","stderr","detach","status_file"};
         ctx.exeOpts = CompilerContext::ExeOptions();
+        ctx.exeOptsModelArg = nullptr;
         if (baseName == "sys" && methodName == "exe") {
             auto applyExeOpt = [&](const std::string& key, Expr* valExpr, const std::string& raw) {
                 if (!kExeOpts.count(key)) {
@@ -585,9 +586,9 @@ IRValue* Compiler::visitCall(CallExpr* call) {
                         return;
                     }
                     bool on = lit == "true";
-                    if (key == "shell") ctx.exeOpts.shell = on;
-                    else if (key == "capture") ctx.exeOpts.capture = on;
-                    else ctx.exeOpts.detach = on;
+                    if (key == "shell") { ctx.exeOpts.shell = on; ctx.exeOpts.shellSet = true; }
+                    else if (key == "capture") { ctx.exeOpts.capture = on; ctx.exeOpts.captureSet = true; }
+                    else { ctx.exeOpts.detach = on; ctx.exeOpts.detachSet = true; }
                     return;
                 }
                 llvm::Value* v = nullptr;
@@ -620,6 +621,33 @@ IRValue* Compiler::visitCall(CallExpr* call) {
                 else if (key == "stderr") ctx.exeOpts.stderrPath = v;
                 else ctx.exeOpts.statusFile = v;
             };
+            // spec/62 F62-27: an ExeOptions value among the arguments — or, when the call
+            // has none, the step's exec_defaults in scope (F62-61).  The literal options
+            // below override it field by field.
+            Expr* modelArg = nullptr;
+            for (size_t i = 1; i < call->args.size(); i++) {
+                Expr* a = call->args[i].get();
+                if (dynamic_cast<AIML::AST::DictLiteralExpr*>(a) || dynamic_cast<AIML::AST::UnaryExpr*>(a)) continue;
+                const std::string at = declaredTypeOfExpr(a);
+                if (at == "ExeOptions" || at == "ptr<ExeOptions>" || at == "ref<ExeOptions>") modelArg = a;
+            }
+            std::unique_ptr<VariableExpr> defaultsVar;
+            if (!modelArg && ctx.classes.count("ExeOptions") && resolveVariable("__exec_defaults")) {
+                defaultsVar = std::make_unique<VariableExpr>("__exec_defaults");
+                modelArg = defaultsVar.get();
+            }
+            if (modelArg) {
+                if (IRValue* mv = visitExpression(modelArg)) {
+                    llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(mv));
+                    if (v->getType()->isStructTy()) {
+                        llvm::AllocaInst* tmp = ctx.createEntryAlloca(v->getType());
+                        ctx.builder.CreateStore(v, tmp);
+                        v = tmp;
+                    }
+                    if (v->getType()->isPointerTy()) ctx.exeOpts.model = v;
+                }
+            }
+            ctx.exeOptsModelArg = modelArg;
             for (size_t i = 1; i < call->args.size(); i++) {
                 if (auto* d = dynamic_cast<AIML::AST::DictLiteralExpr*>(call->args[i].get())) {
                     if (!d->entriesExpr.empty())
@@ -630,10 +658,10 @@ IRValue* Compiler::visitCall(CallExpr* call) {
                     if (kExeOpts.count(u->op)) applyExeOpt(u->op, u->operand.get(), "");
                 }
             }
-            if (ctx.exeOpts.capture && ctx.exeOpts.detach)
+            if (!ctx.exeOpts.model && ctx.exeOpts.capture && ctx.exeOpts.detach)
                 LOG_ERROR(ctx.fmtLoc(call->sourceNode) + "sys.exe: capture: true cannot be combined with detach: true "
                     "(a detached process outlives its pipes — redirect with stdout/stderr, spec/23 §5.4)");
-            if (ctx.exeOpts.statusFile && !ctx.exeOpts.detach)
+            if (!ctx.exeOpts.model && ctx.exeOpts.statusFile && !ctx.exeOpts.detach)
                 LOG_ERROR(ctx.fmtLoc(call->sourceNode) + "sys.exe: status_file requires detach: true (spec/23 §5.4)");
         }
 
@@ -650,6 +678,7 @@ IRValue* Compiler::visitCall(CallExpr* call) {
             if (baseName == "sys" && methodName == "exe") {
                 if (auto* u = dynamic_cast<AIML::AST::UnaryExpr*>(arg.get()))
                     if (kExeOpts.count(u->op)) continue;
+                if (arg.get() == ctx.exeOptsModelArg) continue;   // already in exeOpts.model
             }
             IRValue* val = visitExpression(arg.get());
             if (val) {

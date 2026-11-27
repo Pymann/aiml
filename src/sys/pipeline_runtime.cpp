@@ -155,6 +155,7 @@ struct PStep {
     int32_t               per = 0;            // 0 = lane, 1 = once (§5.5)
     std::vector<std::string> needs;            // only earlier steps (F62-9)
     std::vector<std::string> outputs;          // F62-168: paths and globs in the workspace
+    std::vector<std::string> hosts;            // F62-7: the names of `host:`, sorted
 };
 
 struct PStage {
@@ -224,7 +225,8 @@ struct PPipeline {
 
 // ── F62-24/24a: the step store on disk ────────────────────────────────────
 //
-// kv/<sha256 of the key material>: "aiml-step-entry-1\n<rc>\n<length>\n<result bytes>".
+// kv/<step key = sha256 of the key material>:
+//   "aiml-step-entry-2\n<rc>\n<length>\n<result bytes>\n<length>\n<output manifest>".
 // Written beside its name and renamed into place, so a run that dies halfway
 // leaves no torn entry; read back only when every part is as written.
 
@@ -235,12 +237,8 @@ std::string store_root(const PPipeline& p) {
     return p.workspace_root + "/store";
 }
 
-std::string store_name(const std::string& key) {
-    char* hex = aiml_sha256_hex(key.data(), static_cast<int32_t>(key.size()));
-    std::string out = hex ? hex : "";
-    if (hex) aiml_str_decref(hex);
-    return out;
-}
+// The key IS the sha256 of the key material (§8), so it names its file as it is.
+std::string store_name(const std::string& key) { return key; }
 
 // 1 = found, 0 = not there, -1 = there but unreadable (a miss, said once).
 int store_load(const std::string& root, const std::string& key, PPipeline::CacheEntry& out) {
@@ -424,20 +422,31 @@ std::string bind_text(const Bindings& b) {
 
 // Key of a (step, lane): bundle address + DECLARED bindings,
 // length-prefixed as in spec/62 §8 — a separator can occur in the value.
-std::string step_key(const PStep& st, const Bindings& bind, const std::string& resolved) {
+// §8: sha256 over the canonical material, every component length-prefixed,
+//   <step_source_hash> <class> <lane_bindings> <input_keys> <host_values> <resolve_output>
+// — a list with its count first, each entry sorted.  The class sits beside the source
+// hash, because it is part of the claim about that source (F62-15).
+std::string step_key(const PStep& st, const Bindings& bind, const std::vector<std::string>& inputKeys,
+                     const std::map<std::string, std::string>& hostValues, const std::string& resolved) {
     std::string mat;
+    auto part = [&mat](const std::string& v) { mat += std::to_string(v.size()) + ":" + v; };
     const char* bundle_id = aiml_code_id(st.body);
-    std::string bid = bundle_id ? bundle_id : "";
-    mat += std::to_string(bid.size()) + ":" + bid;
-    mat += std::to_string(st.cache) + ":c";
-    for (const auto& axis : st.args) {               // already sorted (std::set-like)
+    part(bundle_id ? bundle_id : "");
+    part(std::to_string(st.cache));
+    part(std::to_string(st.args.size()));
+    for (const auto& axis : st.args) {               // already sorted (use_arg)
         auto it = bind.find(axis);
-        std::string pair = axis + "=" + (it == bind.end() ? "" : it->second);
-        mat += std::to_string(pair.size()) + ":" + pair;
+        part(axis + "=" + (it == bind.end() ? "" : it->second));
     }
-    // Probe result: empty for pure/opaque, otherwise the resolved address (§9).
-    mat += std::to_string(resolved.size()) + ":" + resolved;
-    return mat;
+    part(std::to_string(inputKeys.size()));
+    for (const auto& k : inputKeys) part(k);         // sorted by the caller
+    part(std::to_string(hostValues.size()));
+    for (const auto& [name, val] : hostValues) part(name + "=" + val);   // std::map: sorted
+    part(resolved);                                  // empty for pure/opaque (§9)
+    char* hex = aiml_sha256_hex(mat.data(), static_cast<int32_t>(mat.size()));
+    std::string key = hex ? hex : "";
+    if (hex) aiml_str_decref(hex);
+    return key;
 }
 
 } // namespace
@@ -513,6 +522,14 @@ void aiml_step_set_pause_before(void* st, int32_t on) {
 void aiml_step_set_per(void* st, int32_t per) {
     if (st && per >= 0 && per <= 1) static_cast<PStep*>(st)->per = per;
 }
+void aiml_step_use_host(void* s, const char* name) {   // F62-7, §8 host_values
+    if (!s || !name || !*name) return;
+    auto* st = static_cast<PStep*>(s);
+    for (const auto& have : st->hosts) if (have == name) return;
+    st->hosts.push_back(name);
+    std::sort(st->hosts.begin(), st->hosts.end());
+}
+
 void aiml_step_add_output(void* st, const char* pattern) {   // F62-168
     if (st && pattern && *pattern) static_cast<PStep*>(st)->outputs.push_back(pattern);
 }
@@ -985,9 +1002,8 @@ int32_t aiml_pipeline_run_observed(void* p, void* observer_raw) {
                 // into the own key (§8) — that way a change further up
                 // propagates transitively downwards, and a chain of
                 // steps behaves like a stack of layers.
-                std::string inputKeys;
+                std::vector<std::string> ks;
                 if (!st.needs.empty()) {
-                    std::vector<std::string> ks;
                     {
                         std::lock_guard<std::mutex> g(state.mu);
                         for (const auto& need : st.needs) {
@@ -1011,11 +1027,16 @@ int32_t aiml_pipeline_run_observed(void* p, void* observer_raw) {
                             ks.push_back(it != state.keyOf.end() ? it->second : std::string());
                         }
                     }
-                    std::sort(ks.begin(), ks.end());   // §8: sortiert
-                    for (const auto& k : ks)
-                        inputKeys += std::to_string(k.size()) + ":" + k;
+                    std::sort(ks.begin(), ks.end());   // §8: sorted
                 }
-                std::string key = step_key(st, bind, resolved) + inputKeys;
+                // §8 / F62-7: the values of the names in `host:` — from the environment of
+                // the process that runs the step, the host.
+                std::map<std::string, std::string> hostValues;
+                for (const auto& hn : st.hosts) {
+                    const char* hv = std::getenv(hn.c_str());
+                    hostValues[hn] = hv ? hv : "";
+                }
+                std::string key = step_key(st, bind, ks, hostValues, resolved);
                 {
                     std::lock_guard<std::mutex> g(state.mu);
                     state.keyOf[{st.name, lane_idx}] = key;
@@ -1096,6 +1117,7 @@ int32_t aiml_pipeline_run_observed(void* p, void* observer_raw) {
                         g_cur = CurStep{};
                         g_cur.active    = true;
                         g_cur.bindings  = bind;
+                        g_cur.host      = hostValues;
                         g_cur.workspace = ws;
                         for (const auto& axis : st.args) g_cur.declared.insert(axis);
                         // §13.5h: only the DECLARED needs are readable —

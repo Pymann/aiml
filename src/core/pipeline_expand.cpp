@@ -15,6 +15,7 @@
 #include "../../logger.h"
 
 #include <algorithm>
+#include <regex>
 #include <cctype>
 #include <array>
 #include <map>
@@ -123,6 +124,89 @@ std::string bodyBlock(const YAML::Node& seq, const std::string& pad) {
     return out;
 }
 
+// spec/62 §5.4 (F62-27): the fields of ExeOptions — spec/23 §5.1's options, no more.
+const char* kExeFields[] = {
+    "cwd", "env", "shell", "timeout", "capture", "stdin", "stdout", "stderr", "detach", "status_file",
+};
+
+// F62-61/F62-58: `exec_defaults` field by field, pipeline → stage → step, innermost
+// wins.  The values stay source text (a name like `workspace`, or a literal).
+void mergeExecDefaults(const YAML::Node& node, std::vector<std::pair<std::string, std::string>>& into,
+                       const std::string& where, const std::string& pname, const std::string& level,
+                       bool& ok) {
+    if (!node) return;
+    if (!node.IsMap()) {
+        LOG_ERROR(where + ": pipeline '" + pname + "': `exec_defaults:` on the " + level +
+                  " is a map of ExeOptions fields (spec/62 F62-61)");
+        ok = false;
+        return;
+    }
+    for (auto it = node.begin(); it != node.end(); ++it) {
+        const std::string key = it->first.Scalar();
+        bool known = false;
+        for (const char* f : kExeFields) if (key == f) known = true;
+        if (!known) {
+            LOG_ERROR(where + ": pipeline '" + pname + "': `exec_defaults:` on the " + level +
+                      " names '" + key + "', which is no field of ExeOptions (spec/62 F62-27)");
+            ok = false;
+            continue;
+        }
+        std::string val = it->second.IsScalar() ? it->second.Scalar() : flowOf(it->second);
+        if (it->second.IsScalar() && (key == "cwd" || key == "stdin" || key == "stdout" ||
+                                      key == "stderr" || key == "status_file") &&
+            it->second.Tag() == "!")             // a quoted literal stays a literal
+            val = "\"" + val + "\"";
+        bool replaced = false;
+        for (auto& kv : into) if (kv.first == key) { kv.second = val; replaced = true; }
+        if (!replaced) into.emplace_back(key, val);
+    }
+}
+
+// F62-61: inside a step that has exec_defaults, `decl: [o, ExeOptions]` starts from
+// them — the declaration gets the defaults as its initial value.  Nested blocks too:
+// they are the same scope for this purpose.
+void seedExeOptionDecls(YAML::Node node) {
+    if (node.IsSequence()) {
+        for (auto child : node) seedExeOptionDecls(child);
+        return;
+    }
+    if (!node.IsMap()) return;
+    for (auto it = node.begin(); it != node.end(); ++it) {
+        YAML::Node val = it->second;
+        if (it->first.Scalar() == "decl" && val.IsSequence() && val.size() == 2 &&
+            val[1].IsScalar() && val[1].Scalar() == "ExeOptions") {
+            val.push_back("__exec_defaults");
+            continue;
+        }
+        seedExeOptionDecls(val);
+    }
+}
+
+// F62-31: how a `sys.exe` in a body passes `env`.  0 = it does, 1 = it does not,
+// 2 = through a value whose fields the source does not show.  The worst over the body.
+int exeEnvVerdict(const YAML::Node& node, bool defaultsHaveEnv) {
+    int worst = 0;
+    if (node.IsSequence()) {
+        for (const auto& c : node) worst = std::max(worst, exeEnvVerdict(c, defaultsHaveEnv));
+        return worst;
+    }
+    if (!node.IsMap()) return 0;
+    for (auto it = node.begin(); it != node.end(); ++it) {
+        const YAML::Node& val = it->second;
+        if (it->first.Scalar() == "call" && val.IsSequence() && val.size() >= 2 &&
+            val[0].IsScalar() && val[0].Scalar() == "sys.exe") {
+            int here = defaultsHaveEnv ? 0 : 1;
+            for (size_t i = 2; i < val.size(); ++i) {
+                if (val[i].IsMap()) { if (val[i]["env"]) here = 0; }
+                else if (val[i].IsScalar() && here == 1) here = 2;   // a model value
+            }
+            worst = std::max(worst, here);
+        }
+        worst = std::max(worst, exeEnvVerdict(val, defaultsHaveEnv));
+    }
+    return worst;
+}
+
 std::string scalarOr(const YAML::Node& node, const std::string& fallback) {
     return (node && node.IsScalar()) ? node.Scalar() : fallback;
 }
@@ -154,7 +238,7 @@ const OldName kOldNames[] = {
 const char* kPipelineKeys[] = {
     "name", "params", "exclude", "parallel", "workspace_root", "steps", "host",
     "agent", "steplayer", "image", "base", "requires", "shares", "resources",
-    "timeout", "push", "runtime", "cache", "secrets",
+    "timeout", "push", "runtime", "cache", "secrets", "exec_defaults",
 };
 const char* kStageKeys[] = {
     "name", "steps", "run", "args", "host", "cache", "on_fail", "timeout",
@@ -456,6 +540,31 @@ bool isIdent(const std::string& name) {
 
 } // namespace
 
+bool injectBuiltinModels(const std::string& text, std::string& out) {
+    if (text.find("ExeOptions") == std::string::npos) return false;
+    static const std::regex declared(R"((^|\n)\s*-?\s*model:\s*\n\s*name:\s*["']?ExeOptions["']?\s*(\n|$))");
+    static const std::regex inlineDecl(R"(model:\s*\{[^}]*name:\s*["']?ExeOptions\b)");
+    if (std::regex_search(text, declared) || std::regex_search(text, inlineDecl)) return false;
+    out = text;
+    if (!out.empty() && out.back() != '\n') out += "\n";
+    // Every field is spec/23 §5.1's, with its default (F62-27).  `env` empty = inherit,
+    // as an unset option does — a model has no "unset".
+    out += "- model:\n"
+           "    name: ExeOptions\n"
+           "    fields:\n"
+           "      - [cwd, string, \"\"]\n"
+           "      - [env, map<string:string>]\n"
+           "      - [shell, bool, false]\n"
+           "      - [timeout, i32, -1]\n"
+           "      - [capture, bool, false]\n"
+           "      - [stdin, string, \"\"]\n"
+           "      - [stdout, string, \"\"]\n"
+           "      - [stderr, string, \"\"]\n"
+           "      - [detach, bool, false]\n"
+           "      - [status_file, string, \"\"]\n";
+    return true;
+}
+
 bool sourceHasPipelineDecl(const std::string& text) {
     // Cheap and before parsing: only a top-level declaration
     // starts a line with "- pipeline:".
@@ -754,6 +863,12 @@ bool expandPipelineDeclarations(const std::string& text, const std::string& wher
                               "': per is 'lane' or 'once', not '" + stagePer + "' (spec/62 §5.5)");
                     ok = false;
                 }
+                // F62-58: what the stage says for its steps, the pipeline's where
+                // the stage says nothing.
+                std::vector<std::pair<std::string, std::string>> stageExec;
+                mergeExecDefaults(pl["exec_defaults"], stageExec, where, pname, "pipeline", ok);
+                mergeExecDefaults(stg["exec_defaults"], stageExec, where, pname, "stage '" + sname + "'", ok);
+                const YAML::Node stageHost = stg["host"] ? stg["host"] : pl["host"];
                 std::vector<std::string> stageNeeds;
                 if (stg["needs"]) {
                     if (!stg["needs"].IsSequence()) {
@@ -1007,9 +1122,15 @@ bool expandPipelineDeclarations(const std::string& text, const std::string& wher
                         // variables in the body (F62-109).
                         std::string prelude;
                         std::vector<std::string> declaredArgs;
-                        if (sp["args"] && sp["args"].IsSequence()) {
-                            for (const auto& a : sp["args"]) {
-                                const std::string axis = a.Scalar();
+                        // F62-59: a step without `args:` has the stage's whole set — a
+                        // `per: once` step has no lane and so no axes (F62-115).
+                        const YAML::Node argsNode =
+                            sp["args"] ? sp["args"] : (perMode == "lane" ? stg["args"] : YAML::Node());
+                        if (argsNode && argsNode.IsSequence()) {
+                            for (const auto& a : argsNode) {
+                                // `[name, type]` as on a stage (§5.0) or just the name.
+                                const std::string axis =
+                                    a.IsSequence() && a.size() > 0 ? a[0].Scalar() : a.Scalar();
                                 if (!axisNames.count(axis)) {
                                     LOG_ERROR(where + ": pipeline '" + pname + "': step '" +
                                               stepName + "' uses the axis '" + axis +
@@ -1044,8 +1165,9 @@ bool expandPipelineDeclarations(const std::string& text, const std::string& wher
                             }
                         }
                         std::vector<std::string> hostNames;
-                        if (sp["host"] && sp["host"].IsSequence()) {
-                            for (const auto& h : sp["host"]) {
+                        const YAML::Node hostNode = sp["host"] ? sp["host"] : stageHost;   // F62-58
+                        if (hostNode && hostNode.IsSequence()) {
+                            for (const auto& h : hostNode) {
                                 const std::string hname = h.Scalar();
                                 // F62-17: host carries NAMES, never name=value — a
                                 // value in the source text would be a secret in the source text.
@@ -1082,6 +1204,38 @@ bool expandPipelineDeclarations(const std::string& text, const std::string& wher
                             prelude += needBinding(need, prod.type, fanIn);
                         }
                         prelude += "      - decl: [workspace, string, { call: [step.workspace] }]\n";
+                        // §5.2: host_env — exactly the names declared in `host:`,
+                        // nothing else, as the environment a pure step passes (F62-31).
+                        prelude += "      - decl: [host_env, map<string:string>]\n";
+                        for (const auto& hn : hostNames)
+                            prelude += "      - call: [host_env.put, \"" + hn + "\", " + hn + "]\n";
+                        // F62-61: the effective exec_defaults, as a value in the body.
+                        std::vector<std::pair<std::string, std::string>> stepExec = stageExec;
+                        mergeExecDefaults(sp["exec_defaults"], stepExec, where, pname,
+                                          "step '" + stepName + "'", ok);
+                        bool execEnv = false;
+                        if (!stepExec.empty()) {
+                            prelude += "      - decl: [__exec_defaults, ExeOptions]\n";
+                            for (const auto& [field, val] : stepExec) {
+                                prelude += "      - set: [__exec_defaults." + field + ", " + val + "]\n";
+                                if (field == "env") execEnv = true;
+                            }
+                        }
+                        // F62-31: a pure step passes env; where the call shows its options,
+                        // that is checked here, otherwise it is said.
+                        if (cache == "pure" && sp["body"]) {
+                            const int verdict = exeEnvVerdict(sp["body"], execEnv);
+                            if (verdict == 1) {
+                                LOG_ERROR(where + ": pipeline '" + pname + "': step '" + stepName +
+                                          "' is pure, and a sys.exe in it inherits the environment — "
+                                          "pass `env: host_env`, or set it in exec_defaults (spec/62 F62-31)");
+                                ok = false;
+                            } else if (verdict == 2) {
+                                LOG_WARNING(where + ": pipeline '" + pname + "': step '" + stepName +
+                                            "' is pure, and a sys.exe in it takes its options from a "
+                                            "value — whether it sets env is not visible here (spec/62 F62-31)");
+                            }
+                        }
 
                         const std::string retType = scalarOr(sp["return"], "i32");
                         producedBy[stepName] = Produced{retType, perMode};
@@ -1103,8 +1257,11 @@ bool expandPipelineDeclarations(const std::string& text, const std::string& wher
                                        "': environment incomplete —${__missing_env} (requires:, spec/62 §18.2)\"]\n";
                             helpers += "            - throw: \"requires: environment incomplete —${__missing_env}\"\n";
                         }
-                        if (sp["body"] && sp["body"].IsSequence())
-                            helpers += bodyBlock(sp["body"], "      ");
+                        if (sp["body"] && sp["body"].IsSequence()) {
+                            YAML::Node body = YAML::Clone(sp["body"]);
+                            if (!stepExec.empty()) seedExeOptionDecls(body);
+                            helpers += bodyBlock(body, "      ");
+                        }
                         else
                             helpers += "      - return: 0\n";
                         helpers += "\n";
@@ -1165,23 +1322,31 @@ bool expandPipelineDeclarations(const std::string& text, const std::string& wher
                         ctor += "      - call: [" + pvar + ".set_cache, CacheClass." + cache + "]\n";
                         for (const auto& axis : declaredArgs)
                             ctor += "      - call: [" + pvar + ".use_arg, \"" + axis + "\"]\n";
+                        for (const auto& hn : hostNames)
+                            ctor += "      - call: [" + pvar + ".use_host, \"" + hn + "\"]\n";
                         if (hasProbe)
                             ctor += "      - call: [" + pvar + ".set_resolve, " + fnBase +
                                     "_resolve]\n";
-                        if (sp["on_fail"]) {
-                            std::string reach = sp["on_fail"].Scalar();
+                        const YAML::Node onFail = sp["on_fail"] ? sp["on_fail"] : stg["on_fail"];   // F62-58
+                        if (onFail) {
+                            std::string reach = onFail.Scalar();
                             // F62-94: `continue` is a keyword in aiml, the
                             // enum value is called `proceed`.  The same concept, two
                             // spellings — this is where the rewrite happens.
                             if (reach == "continue") reach = "proceed";
                             ctor += "      - call: [" + pvar + ".set_on_fail, OnFail." + reach + "]\n";
                         }
-                        if (sp["timeout"])
+                        // F62-58: a step without its own `timeout:` has the stage's, the
+                        // stage the pipeline's (the stage's also stays its limit, §18.3).
+                        const YAML::Node tmoNode =
+                            sp["timeout"] ? sp["timeout"] : (stg["timeout"] ? stg["timeout"] : pl["timeout"]);
+                        if (tmoNode && tmoNode.IsScalar())
                             ctor += "      - call: [" + pvar + ".set_timeout, " +
-                                    sp["timeout"].Scalar() + "]\n";
-                        if (sp["retry"])
+                                    tmoNode.Scalar() + "]\n";
+                        const YAML::Node retryNode = sp["retry"] ? sp["retry"] : stg["retry"];   // F62-58
+                        if (retryNode)
                             ctor += "      - call: [" + pvar + ".set_retry, " +
-                                    sp["retry"].Scalar() + "]\n";
+                                    retryNode.Scalar() + "]\n";
                         if (sp["pause_before"] && sp["pause_before"].Scalar() == "true")
                             ctor += "      - call: [" + pvar + ".set_pause_before, 1]\n";
                         if (perMode == "once")

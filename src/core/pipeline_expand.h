@@ -19,5 +19,10 @@ bool sourceHasPipelineDecl(const std::string& text);
 bool expandPipelineDeclarations(const std::string& text, const std::string& where,
                                 std::string& out);
 
+// spec/62 §5.4 (F62-27): ExeOptions is a built-in model.  It is appended as source
+// (the ordinary model path — so a bundle carries it like any other model) to a text
+// that names it and does not declare it.  `out` = text + the declaration; false = not needed.
+bool injectBuiltinModels(const std::string& text, std::string& out);
+
 } // namespace aiml
 #endif

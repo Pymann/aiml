@@ -38,6 +38,7 @@ void    aiml_step_set_per(void* step, int32_t per);
 // (F62-113).
 void    aiml_step_add_need(void* step, const char* name);
 void    aiml_step_add_output(void* step, const char* pattern);   // spec/62 F62-168
+void    aiml_step_use_host(void* step, const char* name);        // spec/62 F62-7, §8
 
 // spec/62 §5.7 / F62-90: the body sets its own outcome.  Effect only
 // while a step is running (thread-local, lanes may run in threads).

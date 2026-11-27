@@ -370,6 +370,23 @@ ProcessHandle* spawn_attached(std::vector<std::string>& argv, const std::string&
 extern "C" void* aiml_process_spawn(void* argvList, const char* cwd, void* env, int32_t shell,
                                     int32_t timeout, int32_t capture, const char* stdin_path,
                                     const char* stdout_path, const char* stderr_path, int32_t detach,
+                                    const char* status_file);
+
+// spec/62 F62-27: sys.exe with an ExeOptions value.  The one difference to the option
+// bag: a model has no "unset", so an empty `env` from it means inherit (spec/23's default).
+extern "C" void* aiml_process_spawn_opts(void* argvList, const char* cwd, void* env, int32_t shell,
+                                         int32_t timeout, int32_t capture, const char* stdin_path,
+                                         const char* stdout_path, const char* stderr_path,
+                                         int32_t detach, const char* status_file,
+                                         int32_t env_empty_inherits) {
+    if (env && env_empty_inherits && static_cast<AimlMapRaw*>(env)->size == 0) env = nullptr;
+    return aiml_process_spawn(argvList, cwd, env, shell, timeout, capture, stdin_path, stdout_path,
+                              stderr_path, detach, status_file);
+}
+
+extern "C" void* aiml_process_spawn(void* argvList, const char* cwd, void* env, int32_t shell,
+                                    int32_t timeout, int32_t capture, const char* stdin_path,
+                                    const char* stdout_path, const char* stderr_path, int32_t detach,
                                     const char* status_file) {
     reap_orphans();
     std::vector<std::string> argv = list_strings(argvList);
@@ -378,6 +395,17 @@ extern "C" void* aiml_process_spawn(void* argvList, const char* cwd, void* env, 
         std::vector<std::string> sh = {"/bin/sh", "-c", argv[0]};
         sh.insert(sh.end(), argv.begin() + 1, argv.end());
         argv.swap(sh);
+    }
+    // spec/62 F62-29: with ExeOptions as a value these are runtime values, so what
+    // spec/23 §5.4 rejects at compile time for literals is rejected here.
+    if (capture && detach) {
+        LOG_ERROR("sys.exe: capture: true cannot be combined with detach: true (a detached process "
+                  "outlives its pipes — redirect with stdout/stderr, spec/23 §5.4, spec/62 F62-29)");
+        return nullptr;
+    }
+    if (status_file && *status_file && !detach) {
+        LOG_ERROR("sys.exe: status_file requires detach: true (spec/23 §5.4, spec/62 F62-29)");
+        return nullptr;
     }
     bool has_env = false;
     std::vector<std::string> envv = env_strings(env, has_env);
