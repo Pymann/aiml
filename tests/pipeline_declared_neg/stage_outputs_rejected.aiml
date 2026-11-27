@@ -1,0 +1,11 @@
+# SPEC: 62_pipelines
+# spec/62 F62-111/F62-168: outputs belong to the step that writes them.
+# Requires: driver
+- pipeline:
+    name: stage_outputs_bad
+    steps:
+      - stage:
+          name: one
+          outputs: [out]
+          steps:
+            - step: { name: first, return: i32, body: [{ return: 0 }] }

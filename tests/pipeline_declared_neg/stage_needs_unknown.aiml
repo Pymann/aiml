@@ -1,0 +1,15 @@
+# SPEC: 62_pipelines
+# spec/62 F62-111: a stage's needs name steps of EARLIER stages.
+# Requires: driver
+- pipeline:
+    name: stage_needs_bad
+    steps:
+      - stage:
+          name: one
+          needs: [later]
+          steps:
+            - step: { name: first, return: i32, body: [{ return: 0 }] }
+      - stage:
+          name: two
+          steps:
+            - step: { name: later, return: i32, body: [{ return: 0 }] }

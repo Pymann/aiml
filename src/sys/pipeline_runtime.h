@@ -37,6 +37,7 @@ void    aiml_step_set_per(void* step, int32_t per);
 // input_keys (F62-114) — order and failure reach, no data flow
 // (F62-113).
 void    aiml_step_add_need(void* step, const char* name);
+void    aiml_step_add_output(void* step, const char* pattern);   // spec/62 F62-168
 
 // spec/62 §5.7 / F62-90: the body sets its own outcome.  Effect only
 // while a step is running (thread-local, lanes may run in threads).

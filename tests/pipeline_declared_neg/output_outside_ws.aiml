@@ -1,0 +1,10 @@
+# SPEC: 62_pipelines
+# spec/62 F62-168: an output lies in the workspace.
+# Requires: driver
+- pipeline:
+    name: output_outside
+    steps:
+      - stage:
+          name: one
+          steps:
+            - step: { name: first, return: i32, outputs: [../elsewhere], body: [{ return: 0 }] }

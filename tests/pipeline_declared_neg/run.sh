@@ -38,5 +38,11 @@ want pipeline_resolve_rejected.aiml "unknown key"
 want secret_value_rejected.aiml   "an entry is { name, env }"
 want secret_env_reserved.aiml     "belongs to the executor"
 want secret_cache_pure.aiml       "a stage with secrets is opaque"
+# spec/62 F62-111/F62-168/F62-65: stage needs, outputs, the keys of a step.
+want stage_needs_unknown.aiml     "no step of an earlier"
+want stage_outputs_rejected.aiml  "outputs"
+want output_outside_ws.aiml       "must lie in the workspace"
+want step_stage_attr.aiml         "attribute of the stage"
+want step_unknown_key.aiml        "unknown key \`cahce:\`"
 if [ $fails -ne 0 ]; then echo "pipeline_declared_neg FAIL ($fails)"; exit 1; fi
 echo "pipeline_declared_neg PASS"

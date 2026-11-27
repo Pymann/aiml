@@ -1,0 +1,10 @@
+# SPEC: 62_pipelines
+# spec/62 F62-65: a typo on a step is an error, never a silent default.
+# Requires: driver
+- pipeline:
+    name: step_typo
+    steps:
+      - stage:
+          name: one
+          steps:
+            - step: { name: first, cahce: pure, return: i32, body: [{ return: 0 }] }
