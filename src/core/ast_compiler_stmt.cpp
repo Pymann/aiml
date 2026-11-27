@@ -448,7 +448,7 @@ static bool inStringTempStack(CompilerContext& ctx, llvm::Value* v) {
 static void decrefCurrentStmtTemps(CompilerContext& ctx) {
     if (!ctx.lifetimeDropsEnabled || ctx.stmtTempStack.empty()) return;
     auto* bb = static_cast<llvm::BasicBlock*>(ctx.ir_gen->unwrapBlock(ctx.ir_gen->getInsertBlock()));
-    if (!bb || bb->getTerminator()) return;
+    if (!bb || aiml_llvm::terminator(bb)) return;
     if (!ctx.statementTemps.empty())
         for (auto it = ctx.statementTemps.back().temps.rbegin(); it != ctx.statementTemps.back().temps.rend(); ++it) {
             emitScopeDrop(ctx, it->drop);
@@ -5224,7 +5224,7 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
     auto emitReturnCleanup = [&]() {
         if (!ctx.lifetimeDropsEnabled) return;
         auto* bb = static_cast<llvm::BasicBlock*>(ctx.ir_gen->unwrapBlock(ctx.ir_gen->getInsertBlock()));
-        if (!bb || bb->getTerminator()) return;
+        if (!bb || aiml_llvm::terminator(bb)) return;
         for (auto fit = ctx.cleanupStack.rbegin(); fit != ctx.cleanupStack.rend(); ++fit)
             for (auto it = fit->rbegin(); it != fit->rend(); ++it) {
                 if (returnMayAliasHeap && it->ownershipId != NoOwnership && it->ownershipId == retBaseId
@@ -6133,7 +6133,7 @@ void Compiler::visitBlockStmt(BlockStmt* block) {
     // step, so skipping here is a residual leak on that path, never a double-free).
     {
         auto* bb = static_cast<llvm::BasicBlock*>(ctx.ir_gen->unwrapBlock(ctx.ir_gen->getInsertBlock()));
-        if (bb && !bb->getTerminator() && ctx.lifetimeDropsEnabled) {
+        if (bb && !aiml_llvm::terminator(bb) && ctx.lifetimeDropsEnabled) {
             auto& frame = ctx.cleanupStack.back();
             // spec/61 §4/§9.2: gate each registered drop through the ownership plan's exit facts.
             // A drop fires only for a provably-owned, un-rebound slot (mayDrop). If there is no
@@ -6201,7 +6201,7 @@ void Compiler::visitIfStmt(IfStmt* ifStmt) {
     }
     {
         auto* bb = static_cast<llvm::BasicBlock*>(ctx.ir_gen->unwrapBlock(ctx.ir_gen->getInsertBlock()));
-        if (!bb->getTerminator()) ctx.ir_gen->createBr(mergeBB);
+        if (!aiml_llvm::terminator(bb)) ctx.ir_gen->createBr(mergeBB);
     }
 
     // ELSE branch
@@ -6209,7 +6209,7 @@ void Compiler::visitIfStmt(IfStmt* ifStmt) {
         ctx.ir_gen->setInsertPoint(elseBB);
         visitBlockStmt(ifStmt->elseBranch.get());
         auto* bb = static_cast<llvm::BasicBlock*>(ctx.ir_gen->unwrapBlock(ctx.ir_gen->getInsertBlock()));
-        if (!bb->getTerminator()) ctx.ir_gen->createBr(mergeBB);
+        if (!aiml_llvm::terminator(bb)) ctx.ir_gen->createBr(mergeBB);
     }
 
     // MERGE block
@@ -6246,7 +6246,7 @@ void Compiler::visitWhileStmt(WhileStmt* whileStmt) {
     }
     {
         auto* bb = static_cast<llvm::BasicBlock*>(ctx.ir_gen->unwrapBlock(ctx.ir_gen->getInsertBlock()));
-        if (!bb->getTerminator()) ctx.ir_gen->createBr(loopBB);
+        if (!aiml_llvm::terminator(bb)) ctx.ir_gen->createBr(loopBB);
     }
     
     // End Block
@@ -6274,7 +6274,7 @@ void Compiler::visitTry(TryStmt* tryStmt) {
     ctx.catchBlock = catchBlock;
     ctx.tryStack.push_back({catchBlock, excSlot, ctx.cleanupStack.size(), ctx.statementTemps.size()});
     visitBlockStmt(tryStmt->tryBlock.get());
-    if (!ctx.builder.GetInsertBlock()->getTerminator())
+    if (!aiml_llvm::terminator(ctx.builder.GetInsertBlock()))
         ctx.builder.CreateBr(contBlock);
     ctx.tryStack.pop_back();
     ctx.catchBlock = oldCatch;
@@ -6360,7 +6360,7 @@ void Compiler::visitTry(TryStmt* tryStmt) {
             }
             visitBlockStmt(clause.body.get());
         }
-        if (!ctx.builder.GetInsertBlock()->getTerminator()) {
+        if (!aiml_llvm::terminator(ctx.builder.GetInsertBlock())) {
             emitScopeDrop(ctx, ctx.cleanupStack.back().front());
             ctx.builder.CreateBr(contBlock);
         }

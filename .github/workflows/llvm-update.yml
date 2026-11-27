@@ -100,6 +100,7 @@ jobs:
           grep -c '^Package:' "$RUNNER_TEMP/Packages"
 
       - name: Rewrite the exodus configurations
+        id: rewrite
         if: steps.which.outputs.skip == 'false'
         env:
           NEW: ${{ steps.which.outputs.new }}
@@ -108,6 +109,23 @@ jobs:
           git diff --stat
           mkdir -p "$RUNNER_TEMP/report"
           git diff > "$RUNNER_TEMP/report/llvm-$NEW.patch"
+          # The cache key of the packages, taken now: `libname` below edits the
+          # configurations again, and restore and save must use one key.
+          echo "debkey=apt-llvm-$NEW-$(cat $(git ls-files 'exodus*.json') | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
+
+      # Without it every try fetches some 200 packages, many from Launchpad
+      # (29 min).  A feature branch restores what its own runs and the default
+      # branch saved; `apt-` falls back to ci.yml's cache of the Ubuntu pins.
+      - name: Restore pinned .deb cache
+        id: debcache
+        if: steps.which.outputs.skip == 'false'
+        uses: actions/cache/restore@v4
+        with:
+          path: __exodus_cache/apt
+          key: ${{ steps.rewrite.outputs.debkey }}
+          restore-keys: |
+            apt-llvm-${{ steps.which.outputs.new }}-
+            apt-
 
       # exodus is private: installed with the GH_TOKEN secret as in ci.yml.
       - name: Install Exodus
@@ -136,6 +154,13 @@ jobs:
           exodus pkg install
           python3 tools/ci/llvm_bump.py libname --major "$NEW" --cache "$EXODUS_CACHE" $(git ls-files 'exodus*.json')
           git diff > "$RUNNER_TEMP/report/llvm-$NEW.patch"
+
+      - name: Save pinned .deb cache
+        if: steps.which.outputs.skip == 'false' && steps.debcache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: __exodus_cache/apt
+          key: ${{ steps.rewrite.outputs.debkey }}
 
       - name: Build compiler
         if: steps.which.outputs.skip == 'false'
@@ -249,7 +274,7 @@ jobs:
             echo "masterv2 is unchanged. The rewrite (llvm-$NEW.patch) and the logs are in the artifact \`llvm-$NEW-report\`."
             for log in "$RUNNER_TEMP"/report/build-*.log; do
               [ -f "$log" ] || continue
-              n=$(grep -c -E '(error|Error):' "$log")
+              n=$(grep -c -E '(error|Error):' "$log" || true)   # 0 matches: grep exits 1
               [ "$n" -gt 0 ] || continue
               echo ""
               echo "### $(basename "$log"): $n error line(s), the first 60"

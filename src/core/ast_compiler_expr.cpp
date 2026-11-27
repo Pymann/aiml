@@ -1,4 +1,5 @@
 #define DEBUG_MODE
+#include "llvm_compat.h"
 #include "clearance.h"
 #include "ast_compiler.h"
 #include "list_impl.h"
@@ -872,7 +873,7 @@ IRValue* Compiler::visitBinary(BinaryExpr* bin) {
         // The right operand may itself have created blocks — the branch
         // comes from the CURRENT block, not from rhsBB.
         llvm::BasicBlock* rhsEndBB = ctx.builder.GetInsertBlock();
-        if (!rhsEndBB->getTerminator()) ctx.builder.CreateBr(endBB);
+        if (!aiml_llvm::terminator(rhsEndBB)) ctx.builder.CreateBr(endBB);
         ctx.builder.SetInsertPoint(endBB);
         llvm::PHINode* phi = ctx.builder.CreatePHI(ctx.builder.getInt1Ty(), 2, isAnd ? "and" : "or");
         phi->addIncoming(ctx.builder.getInt1(!isAnd), decideBB);   // AND→false, OR→true

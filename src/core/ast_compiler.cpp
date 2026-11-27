@@ -1,4 +1,5 @@
 #define DEBUG_MODE
+#include "llvm_compat.h"
 #include "serialize_impl.h"
 #include <cctype>   // std::isdigit (classgroup constructor literals)
 #include "ast_compiler.h"
@@ -1919,7 +1920,7 @@ void Compiler::compile(Program* prog) {
         {
             auto* curBB = static_cast<llvm::BasicBlock*>(
                 ctx.ir_gen->unwrapBlock(ctx.ir_gen->getInsertBlock()));
-            if (curBB && !curBB->getTerminator())
+            if (curBB && !aiml_llvm::terminator(curBB))
                 ctx.builder.CreateRetVoid();
             ctx.libInitFuncName = initName;
         }
@@ -2171,7 +2172,7 @@ void Compiler::compile(Program* prog) {
         // standalone descriptor for any referenced type that lacks one.
         if (ctx.memV3 && !ctx.modelTypeIds.empty()) {
             auto* bbInit = static_cast<llvm::BasicBlock*>(ctx.ir_gen->unwrapBlock(ctx.ir_gen->getInsertBlock()));
-            if (bbInit && !bbInit->getTerminator()) {
+            if (bbInit && !aiml_llvm::terminator(bbInit)) {
                 auto* i32 = ctx.builder.getInt32Ty();
                 auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
                 llvm::DataLayout dl(ctx.module().getDataLayout());
@@ -2197,7 +2198,7 @@ void Compiler::compile(Program* prog) {
 
         // Finish __aiml_init
         IRBlock* currentBlock = ctx.ir_gen->getInsertBlock();
-        if (!static_cast<llvm::BasicBlock*>(ctx.ir_gen->unwrapBlock(currentBlock))->getTerminator()) {
+        if (!aiml_llvm::terminator(static_cast<llvm::BasicBlock*>(ctx.ir_gen->unwrapBlock(currentBlock)))) {
             ctx.ir_gen->createRet(nullptr);
         }
 
@@ -7383,7 +7384,7 @@ void Compiler::visitFunction(FunctionDecl* func) {
 
     // Check if the last block has a terminator (like ret)
     llvm::BasicBlock* currentBB = static_cast<llvm::BasicBlock*>(ctx.ir_gen->unwrapBlock(ctx.ir_gen->getInsertBlock()));
-    if (!currentBB->getTerminator()) {
+    if (!aiml_llvm::terminator(currentBB)) {
         llvm::Type* unwrappedRetTy = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(retTy));
         if (unwrappedRetTy->isVoidTy()) {
             ctx.ir_gen->createRet(nullptr);
