@@ -520,8 +520,15 @@ std::string yamlQuoted(const std::string& value) {
 // A line `stage_N.set_attr "key" "value"`, only if there is something.
 std::string attrLine(const std::string& var, const char* key, const std::string& value) {
     if (value.empty()) return std::string();
-    return "      - call: [" + var + ".set_attr, \"" + std::string(key) + "\", \"" +
-           yamlQuoted(value) + "\"]\n";
+    // An attribute is a template the host fills per lane (`agent: "${arch}"`, F62-49): it
+    // is stored as written, not interpolated in the generated constructor.  aiml has no
+    // escape for `${`, so the `$` comes from a variable (`__dollar`, declared there).
+    std::string text = yamlQuoted(value), kept;
+    for (size_t i = 0; i < text.size(); ++i) {
+        if (text[i] == '$' && i + 1 < text.size() && text[i + 1] == '{') { kept += "${__dollar}"; continue; }
+        kept += text[i];
+    }
+    return "      - call: [" + var + ".set_attr, \"" + std::string(key) + "\", \"" + kept + "\"]\n";
 }
 
 std::string limitLine(const std::string& var, const char* key, int32_t value) {
@@ -1403,6 +1410,8 @@ bool expandPipelineDeclarations(const std::string& text, const std::string& wher
         result += "    name: " + fname + "\n";
         result += "    return: pipeline\n";
         result += "    body:\n";
+        if (ctor.find("${__dollar}") != std::string::npos)
+            result += "      - decl: [__dollar, string, \"$\"]\n";
         result += ctor;
         result += "\n";
     }

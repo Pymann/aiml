@@ -1,14 +1,5 @@
 # 62 - Pipelines: Matrix, Reuse, Parallelism [PROPOSAL]
 
-> **Note — `for:` does not exist in aiml.** Two examples below (§11, §13) walk a
-> list with `- for: [x, xs]`. There is no such statement: the compiler rejects
-> the key by name (`unknown statement 'for'`). A collection is walked with
-> `while` over an index, or with an `iterator<T>` — see
-> [06_loops.md](06_loops.md) and [54_iterators.md](54_iterators.md). Those two
-> examples are left as written until this chapter is implemented; as they stand
-> they are not valid aiml, and the §11 one iterates a `reports` it never
-> declares.
-
 ## 1. Goal
 
 A pipeline builds something, usually not once but across a set of configurations: architecture ×
@@ -1074,7 +1065,7 @@ and verify mode reports divergence over time (cosmos `doc/spec/96` §96.5).
       - [jobs,     i32,    [8]]
     exclude:
       - { arch: arm64, compiler: gcc }
-    parallel: auto
+    parallel: 4
     steps:
       - stage:
           name: sources
@@ -1085,104 +1076,107 @@ and verify mode reports divergence over time (cosmos `doc/spec/96` §96.5).
           steps:
             - step:
                 name: clone
-                args: []
                 return: string           # the commit that was checked out
                 resolve:
-                  - decl: [argv, list<string>,
-                           ["git", "ls-remote", "${REPO_URL}", "refs/heads/main"]]
-                  - decl: [p, process, { call: [sys.exe, argv] }]
+                  - decl: [argv, list<string>, ["git", "ls-remote", "${REPO_URL}", "refs/heads/main"]]
+                  - decl: [proc, process, { call: [sys.exe, argv, { capture: true }] }]
                   - if:
-                      condition: { neq: [{ call: [p.wait] }, 0] }
-                      then: [{ call: [fail_pipeline, "ls-remote fehlgeschlagen"] }]
-                  - return: p.stdout_buffer
+                      condition: { neq: [{ call: [proc.wait] }, 0] }
+                      then: [{ call: [step.fail_pipeline, "ls-remote failed"] }]
+                  - return: { call: [proc.stdout_buffer] }
                 body:
-                  - decl: [argv, list<string>,
-                           ["git", "clone", "--depth", "1", "${REPO_URL}", "src"]]
-                  - decl: [p, process, { call: [sys.exe, argv] }]
+                  - decl: [argv, list<string>, ["git", "clone", "--depth", "1", "${REPO_URL}", "src"]]
+                  - decl: [proc, process, { call: [sys.exe, argv] }]
                   - if:
-                      condition: { neq: [{ call: [p.wait] }, 0] }
-                      then: [{ call: [fail_pipeline, p.stderr_buffer] }]
+                      condition: { neq: [{ call: [proc.wait] }, 0] }
+                      then: [{ call: [step.fail_pipeline, { call: [proc.stderr_buffer] }] }]
                   - return: { call: [read_head, workspace] }
 
       - stage:
           name: compile
-          needs: [sources]
-          runs_on: "${arch}"             # the matrix axis picks the node
-          args: [[arch, string], [compiler, string], [mode, string]]
+          needs: [clone]                 # every step of the stage gets ${clone}
+          agent: "${arch}"               # the matrix axis picks the node (§18.5)
+          args: [arch, compiler, mode]
           cache: pure
           on_fail: lane                  # one broken column must not stop the rest
           timeout: 3600000
+          host: [CC_WRAPPER, PATH]
           exec_defaults: { cwd: workspace, env: host_env, capture: true }
-          host: [CC_WRAPPER]
           steps:
             - step:
                 name: configure
+                assert_pure: true        # a program runs; someone vouches (F62-22)
                 return: string           # the build directory
                 body:
                   - decl: [bdir, string, "build-${arch}-${compiler}-${mode}"]
-                  - decl: [argv, list<string>,
-                           ["cmake", "-S", "src", "-B", bdir,
-                            "-DCMAKE_C_COMPILER=${compiler}", "-DARCH=${arch}",
-                            "-DCMAKE_BUILD_TYPE=${mode}"]]
-                  - decl: [p, process, { call: [sys.exe, argv] }]
+                  - decl: [argv, list<string>, ["cmake", "-S", "../sources/src", "-B", bdir,
+                                                "-DCMAKE_C_COMPILER=${compiler}", "-DARCH=${arch}",
+                                                "-DCMAKE_BUILD_TYPE=${mode}"]]
+                  - decl: [proc, process, { call: [sys.exe, argv] }]
                   - if:
-                      condition: { neq: [{ call: [p.wait] }, 0] }
-                      then: [{ call: [fail_lane, p.stderr_buffer] }]
+                      condition: { neq: [{ call: [proc.wait] }, 0] }
+                      then: [{ call: [step.fail_lane, { call: [proc.stderr_buffer] }] }]
                   - return: bdir
 
             - step:
                 name: build
-                args: [[mode, string], [jobs, i32]]    # narrower than the stage
+                needs: [configure]       # ${configure} is the build directory
+                args: [mode, jobs]       # narrower than the stage
+                assert_pure: true
                 return: BuildReport
+                outputs: ["build-*/service"]
                 body:
-                  - decl: [argv, list<string>, ["cmake", "--build", bdir, "-j", "${jobs}"]]
-                  - decl: [o, ExeOptions]              # = the stage's exec_defaults
-                  - set: [o.timeout, 1800000]
-                  - decl: [p, process, { call: [sys.exe, argv, o] }]
-                  - decl: [rc, i32, { call: [p.wait] }]
+                  - decl: [argv, list<string>, ["cmake", "--build", configure, "-j", "${jobs}"]]
+                  - decl: [opts, ExeOptions]           # = the stage's exec_defaults
+                  - set: [opts.timeout, 1800000]
+                  - decl: [proc, process, { call: [sys.exe, argv, opts] }]
+                  - decl: [code, i32, { call: [proc.wait] }]
                   - if:
-                      condition: { eq: [rc, 2] }
-                      then: [{ call: [set_status, StepStatus.yellow] }]
+                      condition: { eq: [code, 2] }
+                      then: [{ call: [step.set_status, StepStatus.yellow] }]
                   - if:
-                      condition: { gt: [rc, 2] }
-                      then: [{ call: [fail_lane, "rc=${rc}: ${p.stderr_buffer}"] }]
+                      condition: { gt: [code, 2] }
+                      then: [{ call: [step.fail_lane, "rc=${code}"] }]
                   - decl: [rep, BuildReport]
-                  - set: [rep.artifact, "${bdir}/service"]
-                  - set: [rep.warnings, { call: [count_warnings, p.stdout_buffer] }]
+                  - set: [rep.artifact, "${configure}/service"]
+                  - set: [rep.warnings, { call: [count_warnings, { call: [proc.stdout_buffer] }] }]
                   - return: rep
 
       - stage:
           name: publish
           per: once
-          needs: [compile]               # receives list<BuildReport>, one per lane
-          pause_before: true             # someone looks before this goes out
+          needs: [build]                 # per: once over a per-lane step: list<BuildReport>
           host: [STATUS_URL]
           steps:
             - step:
                 name: report
-                args: []
+                pause_before: true       # someone looks before this goes out (§5.9)
                 return: i32
                 body:
                   - decl: [total, i32, 0]
-                  # `for:` does not exist — see spec/06; not valid aiml as written
-                  - for: [rep, reports]
-                    body: [{ set: [total, { +: [total, rep.warnings] }] }]
-                  - call: [log.info, "Matrix fertig, ${total} Warnungen"]
+                  - decl: [idx, i32, 0]
+                  - while:
+                      condition: { lt: [idx, build.len] }
+                      body:
+                        - decl: [rep, BuildReport, { at: [build, idx] }]
+                        - set: [total, { +: [total, rep.warnings] }]
+                        - set: [idx, { +: [idx, 1] }]
+                  - call: [log.info, "matrix done, ${total} warnings"]
                   - decl: [argv, list<string>, ["curl", "-fsS", "-X", "POST", "${STATUS_URL}"]]
-                  - decl: [p, process, { call: [sys.exe, argv] }]
-                  - return: { call: [p.wait] }
+                  - decl: [proc, process, { call: [sys.exe, argv] }]
+                  - return: { call: [proc.wait] }
 ```
-
 Six lanes (8 minus the two excluded).  Four things are worth reading off this example:
 
 **The stage carries what the steps would repeat.**  `exec_defaults` gives every `sys.exe` below it
-`cwd: workspace` and `env: host_env`, so `decl: [o, ExeOptions]` in `build` already holds them and
+`cwd: workspace` and `env: host_env`, so `decl: [opts, ExeOptions]` in `build` already holds them and
 only `timeout` has to be set.  `configure` passes no options at all and still runs in the right
 directory with the right environment — the correct thing is the default thing (F62-62).
 
 **Reuse is finer than the matrix.**  The `compile` stage has `[arch, compiler, mode]` in scope;
 `build` narrows to `[mode, jobs]`, because what it needs of `arch` and `compiler` is already inside
-the `bdir` it receives, and that value reaches the key through `input_keys` (§8).  Raising `jobs`
+the build directory it receives from `configure`, and that value reaches the key through
+`input_keys` (§8).  Raising `jobs`
 therefore re-runs `build` and leaves every `configure` result in place.
 
 **The expensive boundary is visible.**  `sources` and `publish` run wherever the run started;
@@ -1191,7 +1185,7 @@ are exactly the two places where an output tree may have to travel (F62-48) — 
 source rather than inferred from resolved labels.
 
 **Failure reach and status are explicit.**  `compile` declares `on_fail: lane`, so a broken column
-leaves the other five running; `build` treats `rc == 2` as a tolerable outcome with its own status
+leaves the other five running; `build` treats a return code of 2 as a tolerable outcome with its own status
 and anything worse as a lane failure; `clone` calls `fail_pipeline`, because a matrix without
 sources is pointless.  `publish` waits for a release before it runs (§5.9).
 
@@ -1744,13 +1738,15 @@ to the start of the run (§13.3), this one does not.
     return: { type: string, lifetime: producer }
     body:
       - decl: [src, string, "- pipeline:\n    name: generated\n    steps:\n"]
-      # `for:` does not exist — see spec/06; not valid aiml as written
-      - for: [row, rows]
-        body:
-          - set: [src, "${src}      - stage:\n          name: ${row.name}\n"]
-          - set: [src, "${src}          runs_on: \"${row.label}\"\n          steps:\n"]
-          - set: [src, "${src}            - step:\n                name: run\n"]
-          - set: [src, "${src}                body: [...]\n"]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, rows.len] }
+          body:
+            - decl: [row, StageRow, { at: [rows, idx] }]
+            - set: [src, "${src}      - stage:\n          name: ${row.name}\n"]
+            - set: [src, "${src}          agent: \"${row.label}\"\n          steps:\n"]
+            - set: [src, "${src}            - step: { name: run_${row.name}, return: i32, body: [{ return: 0 }] }\n"]
+            - set: [idx, { +: [idx, 1] }]
       - return: src
 
 - def:
@@ -2210,7 +2206,7 @@ Exactly then an order arises that nobody wrote down:
   The run that works for ten minutes and then fails at the last stage because its image
   never existed is the most expensive way to find out.
 
-## 19. Implementation status (2026-10-11)
+## 19. Implementation status (2026-11-27)
 
 This spec describes more than runs today.  So that it makes no promises the code does not
 keep, this section states what **measurably** works and what is open.  Every line names the test
@@ -2239,30 +2235,32 @@ looks.
 | `image:`/`push:` rejected locally, with the way (§18.1 F62-124/132) | **at RUN time** (F62-124a), not at compile time | `tests/test_pipeline_local_refuses.aiml` |
 | `image:` as a dispatch criterion (§18, F62-66/67) | cosmos `step_scheduler`, `rt_launcher` | cosmos `test/test_step_dispatch.aiml` |
 | `push: oci:<path>` + derived order (F62-122/129) | cosmos `push_worker`, `cluster_bootstrap` | cosmos `test/test_step_dispatch.aiml` + `doc/spec/110` §110.30 (measurement) |
+| Persistent step store, across processes (§12.2, F62-24/24a) | `store_load`/`store_save` | `tests/pipeline_store/run.sh` |
+| Typed data flow: models through the result channel (F62-33/34, F62-118a) | `pipeline_expand` + `sys.serialize` | `tests/test_pipeline_typed_flow.aiml`, `tests/test_bundle_model.aiml` |
+| Fan-in: `per: once` over a `per: lane` step, `list<T>` (F62-8, F62-121a) | `need_results`, lane-ordered `input_keys` | `tests/test_pipeline_fanin_key.aiml` |
+| `timeout` enforced: the step's process tree is killed (F62-40/40a) | `StepWatch`, `aiml_step_note_child` | `tests/test_pipeline_timeout_kill.aiml` |
+| `outputs:`, the output tree in `blobs/`, restored on a hit (F62-168) | `capture_outputs`/`restore_outputs` | `tests/test_pipeline_outputs.aiml` |
+| Stage `per`/`needs`, inheritance pipeline → stage → step (F62-58a, F62-111) | `pipeline_expand` | `tests/test_pipeline_stage_inherit.aiml`, `tests/pipeline_declared_neg/run.sh` |
+| `ExeOptions` as a built-in model, runtime `shell`/`capture`/`detach` (F62-27/27a/29) | `injectBuiltinModels`, `aiml_process_spawn_opts` | `tests/test_exe_options.aiml` |
+| `exec_defaults`, `host_env`, host values in the key (F62-61, §5.2, §8) | `pipeline_expand`, `step_key` | `tests/test_pipeline_exec_defaults.aiml` |
+| The examples of §11 and §13.6 compile | — | `tests/pipeline_spec_examples/run.sh` |
+
 
 ### Open, with reasons
 
-- **Data flow for user-defined TYPES (rest of F62-33/F62-34).**  Strings and numbers flow
-  (§13.5h, F62-121): the result channel goes through the runtime instead of through the return value of the
-  JIT function, because the latter cannot be retrieved (measured,
-  `tests/test_bundle_exec_semantics.aiml`).  Today the author has to send a **model** through the same
-  channel themselves with `sys.serialize`/`sys.deserialize`; that the compiler does not take this
-  over is the remaining part.  `list<T>` across the lanes (F62-8, fan-in) is therefore also still
-  missing.
-- **`runs_on` and real transport to a node (§5.8).**  The bundle demonstrably travels
-  over a connection (`tests/bundle_socket`), but the pipeline itself selects no node;
-  `runs_on` is rejected.
-- **`outputs:` and the output tree (§16 item 5).**  The workspace exists but is
-  neither hashed nor transferred — today the cache holds only the exit code, not the tree.
-  That is the biggest gap between this spec and cosmos `doc/spec/96`.
-- **Enforcing the time limit (F62-40).**  `timeout` is **detected**, not enforced: the body
-  runs to completion, after which the step counts as failed, and the log says so explicitly.  Killing
-  children needs the handle on the body's child processes, which the isolated context does not
-  hand out today.
+What remains open is the **host's** part, not the language's: this chapter fixes the form, the key,
+the classes, the store format and the local executor, and all of it runs.
+
+- **`agent:` and real transport to a node (§5.8, §18.5).**  The bundle demonstrably travels
+  over a connection (`tests/bundle_socket`), and `agent:` is carried as a stage attribute that a
+  reader sees (§20), but a local run selects no node — that is the host's scheduler (cosmos).
+- **Moving an output tree between nodes (F62-48).**  Locally the tree lies in the store and is
+  restored from there (F62-168); shipping blobs to another node is the host's transport.
 - ~~Concurrent compilation (F62-99)~~ — **measured and decided** (F62-99): threads
   bring nothing for isolated compilation (8 threads ~1030 ms versus single-threaded ~960 ms for
   the same 24 compilations); the lock stays.
-- **Container URL and push (§17), 3D display.**  Target picture, none of it implemented.
+- **Container URL and push (§17), 3D display.**  Target picture for the host; locally `image:` and
+  `push:` are refused with the way (F62-124a).
 - **The meaning of the six colours (§16 item 6).**  Deliberately open; the precedence order exists
   as a provisional table in one place (F62-93).
 
