@@ -132,6 +132,7 @@ def cmd_rewrite(args):
     plans = {}
     for path in args.configs:
         cfg = load(path)
+        had_apt = "apt_packages" in cfg
         kept, changed = [], 0
         for p in cfg.get("apt_packages", []):
             name, arch = p.get("name", ""), p.get("arch", "amd64")
@@ -157,7 +158,8 @@ def cmd_rewrite(args):
                 q.pop("digest", None)
             kept.append(q)
             changed += 1
-        cfg["apt_packages"] = kept
+        if had_apt:
+            cfg["apt_packages"] = kept
         plans[path] = (cfg, changed)
     if problems:
         for p in problems:
@@ -182,6 +184,9 @@ def cmd_rewrite(args):
     left = []
     for path, (cfg, changed) in plans.items():
         cfg = rewrite_strings(cfg, fix)
+        if cfg == load(path):
+            print(f"  {path}: no LLVM {old} in it, left as it is")
+            continue
         save(path, cfg)
         text = json.dumps(cfg)
         if re.search(r"apt/(llvm-|libllvm|libclang-cpp)" + str(old) + r"(?![0-9])", text):

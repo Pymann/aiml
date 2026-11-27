@@ -75,7 +75,7 @@ public:
                  llvm::FunctionType* fdType = llvm::FunctionType::get(getFilePtrTy(ctx), fdArgs, false);
                  fdopenFunc = llvm::Function::Create(fdType, llvm::Function::ExternalLinkage, "fdopen", ctx.module());
              }
-             llvm::Value* mode = ctx.builder.CreateGlobalStringPtr("w");
+             llvm::Value* mode = ctx.builder.CreateGlobalString("w");
              handle = ctx.builder.CreateCall(fdopenFunc, {ctx.builder.getInt32(fd), mode});
         } else {
              handle = resolveValue(ctx, args[1]);
@@ -131,7 +131,7 @@ public:
                  llvm::FunctionType* fdType = llvm::FunctionType::get(getFilePtrTy(ctx), fdArgs, false);
                  fdopenFunc = llvm::Function::Create(fdType, llvm::Function::ExternalLinkage, "fdopen", ctx.module());
              }
-             llvm::Value* mode = ctx.builder.CreateGlobalStringPtr("r");
+             llvm::Value* mode = ctx.builder.CreateGlobalString("r");
              handle = ctx.builder.CreateCall(fdopenFunc, {ctx.builder.getInt32(fd), mode});
         } else {
              handle = resolveValue(ctx, args[1]);

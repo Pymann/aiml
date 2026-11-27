@@ -48,7 +48,7 @@ static llvm::Function* emitNewFn(CompilerContext& ctx) {
     auto* entry = llvm::BasicBlock::Create(ctx.context, "entry", fn);
     ctx.builder.SetInsertPoint(entry);
 
-    llvm::DataLayout dl(&ctx.module());
+    llvm::DataLayout dl(ctx.module().getDataLayout());
     uint64_t structBytes = dl.getTypeAllocSize(codeTy);
     llvm::Function* mallocFn = ctx.getFunction("malloc", i8p, {sz});
     llvm::Value* raw     = ctx.builder.CreateCall(mallocFn,

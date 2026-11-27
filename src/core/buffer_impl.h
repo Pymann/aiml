@@ -76,7 +76,7 @@ namespace BufferImpl {
                                         ctx.builder.CreateStructGEP(bufType, bufPtr, 1), "buf_cap");
                 llvm::Value* over = ctx.builder.CreateICmpSGT(ctx.builder.CreateAdd(writeIdx, typeSizeVal), capV, "buf_over");
                 AIML::AST::aimlEmitThrowIf(ctx, over, "BufferOverflowException",
-                    ctx.builder.CreateGlobalStringPtr("buffer write past its capacity (alloc more first)", "buf_over_msg"));
+                    ctx.builder.CreateGlobalString("buffer write past its capacity (alloc more first)", "buf_over_msg"));
             }
         }
 
@@ -139,7 +139,7 @@ namespace BufferImpl {
                 llvm::Value* under = ctx.builder.CreateICmpSGT(
                     ctx.builder.CreateAdd(readIdx, ctx.builder.getInt32((uint32_t)rsz)), sizeV, "buf_under");
                 AIML::AST::aimlEmitThrowIf(ctx, under, "BufferUnderflowException",
-                    ctx.builder.CreateGlobalStringPtr("buffer read past the written data", "buf_under_msg"));
+                    ctx.builder.CreateGlobalString("buffer read past the written data", "buf_under_msg"));
             }
         }
         

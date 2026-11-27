@@ -1,4 +1,5 @@
 #define DEBUG_MODE
+#include "llvm_compat.h"
 #include "clearance.h"
 #include "ast_compiler.h"
 #include "list_impl.h"
@@ -111,12 +112,12 @@ IRValue* Compiler::visitStringInterpolation(StringInterpolationExpr* expr) {
         } else if (ty->isIntegerTy(8)) {
             // bool (u8) — show as "true" / "false"
             llvm::Value* cond     = ctx.builder.CreateICmpNE(val, ctx.builder.getInt8(0));
-            llvm::Value* trueStr  = ctx.builder.CreateGlobalStringPtr("true");
-            llvm::Value* falseStr = ctx.builder.CreateGlobalStringPtr("false");
+            llvm::Value* trueStr  = ctx.builder.CreateGlobalString("true");
+            llvm::Value* falseStr = ctx.builder.CreateGlobalString("false");
             strVal = ctx.builder.CreateSelect(cond, trueStr, falseStr);
         } else if (ty->isIntegerTy(1)) {
-            llvm::Value* trueStr  = ctx.builder.CreateGlobalStringPtr("true");
-            llvm::Value* falseStr = ctx.builder.CreateGlobalStringPtr("false");
+            llvm::Value* trueStr  = ctx.builder.CreateGlobalString("true");
+            llvm::Value* falseStr = ctx.builder.CreateGlobalString("false");
             strVal = ctx.builder.CreateSelect(val, trueStr, falseStr);
         } else if (ty->isFloatTy()) {
             strVal = StringUtils::floatToString(ctx, val);
@@ -872,7 +873,7 @@ IRValue* Compiler::visitBinary(BinaryExpr* bin) {
         // The right operand may itself have created blocks — the branch
         // comes from the CURRENT block, not from rhsBB.
         llvm::BasicBlock* rhsEndBB = ctx.builder.GetInsertBlock();
-        if (!rhsEndBB->getTerminator()) ctx.builder.CreateBr(endBB);
+        if (!aiml_llvm::terminator(rhsEndBB)) ctx.builder.CreateBr(endBB);
         ctx.builder.SetInsertPoint(endBB);
         llvm::PHINode* phi = ctx.builder.CreatePHI(ctx.builder.getInt1Ty(), 2, isAnd ? "and" : "or");
         phi->addIncoming(ctx.builder.getInt1(!isAnd), decideBB);   // AND→false, OR→true
@@ -1117,7 +1118,7 @@ IRValue* Compiler::visitBinary(BinaryExpr* bin) {
         auto extractFatObj = [&](llvm::Value* v) -> llvm::Value* {
             if (v && v->getType()->isStructTy()) {
                 auto* st = llvm::cast<llvm::StructType>(v->getType());
-                if (st->hasName() && st->getName().startswith("AimlFatPtr_"))
+                if (st->hasName() && st->getName().starts_with("AimlFatPtr_"))
                     return ctx.builder.CreateExtractValue(v, 0, "fatptr_obj");
             }
             return v;
@@ -1576,7 +1577,7 @@ IRValue* Compiler::visitSpawn(SpawnExpr* spawn) {
         std::vector<llvm::Type*> argTypes;
         for (auto* v : argVals) argTypes.push_back(v->getType());
         llvm::StructType* argStructTy = llvm::StructType::get(ctx.context, argTypes);
-        llvm::DataLayout dl(&ctx.module());
+        llvm::DataLayout dl(ctx.module().getDataLayout());
         uint64_t argStructSize = dl.getTypeAllocSize(argStructTy);
 
         llvm::Function* mallocFn = ctx.getFunction("malloc", i8p, {ctx.getSizeType()});
@@ -1597,7 +1598,7 @@ IRValue* Compiler::visitSpawn(SpawnExpr* spawn) {
         LOG_ERROR(ctx.fmtLoc(spawn->sourceNode) + "spawn: thread_handle type not found");
         return nullptr;
     }
-    llvm::DataLayout dl(&ctx.module());
+    llvm::DataLayout dl(ctx.module().getDataLayout());
     llvm::Function* mallocFn = ctx.getFunction("malloc", i8p, {ctx.getSizeType()});
     llvm::Value* rawHandle = ctx.builder.CreateCall(mallocFn,
         {ctx.getSizeConst(dl.getTypeAllocSize(handleTy))}, "handle_raw");

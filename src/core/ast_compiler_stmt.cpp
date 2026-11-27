@@ -1,5 +1,6 @@
 #define DEBUG_MODE
 #include "ast_compiler.h"
+#include "llvm_compat.h"
 #include "list_impl.h"
 #include "collection_vocab.h"
 #include "map_impl.h"
@@ -76,9 +77,9 @@ static void emitSizeTrace(CompilerContext& ctx, const std::string& symName) {
     llvm::FunctionCallee fn = ctx.module().getOrInsertFunction(
         "aiml_sizetrace",
         llvm::FunctionType::get(ctx.builder.getVoidTy(), {i8p, i8p, i8p, i64t, i8p}, false));
-    llvm::Value* fnameV = ctx.builder.CreateGlobalStringPtr(ctx.currentFunctionName, "sz_fn");
-    llvm::Value* symV   = ctx.builder.CreateGlobalStringPtr(symName, "sz_sym");
-    llvm::Value* typeV  = ctx.builder.CreateGlobalStringPtr(typeStr, "sz_ty");
+    llvm::Value* fnameV = ctx.builder.CreateGlobalString(ctx.currentFunctionName, "sz_fn");
+    llvm::Value* symV   = ctx.builder.CreateGlobalString(symName, "sz_sym");
+    llvm::Value* typeV  = ctx.builder.CreateGlobalString(typeStr, "sz_ty");
     llvm::Value* sizeV  = llvm::ConstantInt::get(i64t, size);
     llvm::Value* addrV  = ctx.builder.CreatePointerCast(allocaV, i8p, "sz_addr");
     ctx.builder.CreateCall(fn, {fnameV, symV, typeV, sizeV, addrV});
@@ -289,7 +290,7 @@ static void resetTemp(CompilerContext& ctx, const CompilerContext::StatementTemp
 static void addTempResetPoint(CompilerContext& ctx) {
     if (!ctx.lifetimeDropsEnabled || ctx.statementTemps.empty() || !ctx.builder.GetInsertBlock()) return;
     auto& frame = ctx.statementTemps.back();
-    auto* marker = ctx.builder.CreateCall(llvm::Intrinsic::getDeclaration(&ctx.module(), llvm::Intrinsic::donothing));
+    auto* marker = ctx.builder.CreateCall(aiml_llvm::intrinsic(&ctx.module(), llvm::Intrinsic::donothing));
     frame.resetPoints.push_back(marker);
     llvm::IRBuilderBase::InsertPointGuard guard(ctx.builder);
     ctx.builder.SetInsertPoint(marker);
@@ -447,7 +448,7 @@ static bool inStringTempStack(CompilerContext& ctx, llvm::Value* v) {
 static void decrefCurrentStmtTemps(CompilerContext& ctx) {
     if (!ctx.lifetimeDropsEnabled || ctx.stmtTempStack.empty()) return;
     auto* bb = static_cast<llvm::BasicBlock*>(ctx.ir_gen->unwrapBlock(ctx.ir_gen->getInsertBlock()));
-    if (!bb || bb->getTerminator()) return;
+    if (!bb || aiml_llvm::terminator(bb)) return;
     if (!ctx.statementTemps.empty())
         for (auto it = ctx.statementTemps.back().temps.rbegin(); it != ctx.statementTemps.back().temps.rend(); ++it) {
             emitScopeDrop(ctx, it->drop);
@@ -1146,7 +1147,7 @@ void Compiler::emitListHandleDecl(DeclStmt* decl, bool isCascade) {
 void Compiler::classifyMapKV(const std::string& kName, const std::string& vName, llvm::Type* kTy, llvm::Type* vTyRaw,
                              int& keyKind, int64_t& keyStride, int& valKind, int64_t& valStride,
                              llvm::GlobalVariable*& valNodes, int32_t& valNodesCount) {
-    llvm::DataLayout dl(&ctx.module());
+    llvm::DataLayout dl(ctx.module().getDataLayout());
     keyKind = (kName == "string") ? 1 : 0;
     keyStride = (kName == "string") ? 8 : (int64_t)dl.getTypeAllocSize(kTy);
     valNodes = nullptr; valNodesCount = 0;
@@ -1233,7 +1234,7 @@ void Compiler::emitMapHandleDecl(DeclStmt* decl) {
         : static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(vName)));
     if (!kTy) kTy = i32Ty;
     if (!vTyRaw) vTyRaw = i32Ty;
-    llvm::DataLayout dl(&ctx.module());
+    llvm::DataLayout dl(ctx.module().getDataLayout());
 
     int keyKind; int64_t keyStride; int valKind; int64_t valStride;
     llvm::GlobalVariable* valNodes = nullptr; int32_t valNodesCount = 0;
@@ -1343,7 +1344,7 @@ void Compiler::emitMapHandleDecl(DeclStmt* decl) {
             for (auto& [keyStr, valExpr] : dictLit->entriesExpr) {
                 llvm::Value* kVal = nullptr;
                 if (kName == "string") {
-                    kVal = ctx.builder.CreateGlobalStringPtr(keyStr, "mlit_k");
+                    kVal = ctx.builder.CreateGlobalString(keyStr, "mlit_k");
                 } else if (kName == "i32") {
                     kVal = ctx.builder.getInt32((int32_t)std::stoll(keyStr));
                 } else if (kName == "i64") {
@@ -2485,7 +2486,7 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
                             for (auto& [keyStr, valExpr] : dictLit->entriesExpr) {
                                 llvm::Value* kVal = nullptr;
                                 if (kName == "string") {
-                                    kVal = ctx.builder.CreateGlobalStringPtr(keyStr, "mlit_k");
+                                    kVal = ctx.builder.CreateGlobalString(keyStr, "mlit_k");
                                 } else if (kName == "i32") {
                                     kVal = ctx.builder.getInt32((int32_t)std::stoll(keyStr));
                                 } else if (kName == "i64") {
@@ -2532,7 +2533,7 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
                 for (auto& [keyStr, valExpr] : dictLit->entriesExpr) {
                     llvm::Value* kVal = nullptr;
                     if (hk.key == 0) {
-                        kVal = ctx.builder.CreateGlobalStringPtr(keyStr, "hlit_k");
+                        kVal = ctx.builder.CreateGlobalString(keyStr, "hlit_k");
                     } else if (ctx.enums.count(hk.keyName) || ctx.enums.count(ctx.qualify(hk.keyName))) {
                         const auto& enumVals = ctx.enums.count(hk.keyName) ? ctx.enums[hk.keyName]
                                                                             : ctx.enums[ctx.qualify(hk.keyName)];
@@ -2962,7 +2963,7 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
                         // shell here, else it leaks sizeof(T) per call (spec/61 §3/§6.1).
                         if (auto* dc = llvm::dyn_cast<llvm::CallInst>(initRaw))
                             if (auto* cf = dc->getCalledFunction())
-                                if (cf->getName().startswith("__aiml_deser_"))
+                                if (cf->getName().starts_with("__aiml_deser_"))
                                     ctx.builder.CreateCall(
                                         ctx.getFunction("free", ctx.builder.getVoidTy(), {ptrTy}), {initRaw});
                         // spec/61 §5.4/§7 CopyRetain (endphase-crash fix): value-model materialised from
@@ -4033,7 +4034,7 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                 // Free the abandoned sys.deserialize carrier shell (see visitDeclStmt, spec/61 §3/§6.1).
                 if (auto* dc = llvm::dyn_cast<llvm::CallInst>(rawVal))
                     if (auto* cf = dc->getCalledFunction())
-                        if (cf->getName().startswith("__aiml_deser_"))
+                        if (cf->getName().starts_with("__aiml_deser_"))
                             ctx.builder.CreateCall(
                                 ctx.getFunction("free", ctx.builder.getVoidTy(), {ptrTy}), {rawVal});
                 return;
@@ -5223,7 +5224,7 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
     auto emitReturnCleanup = [&]() {
         if (!ctx.lifetimeDropsEnabled) return;
         auto* bb = static_cast<llvm::BasicBlock*>(ctx.ir_gen->unwrapBlock(ctx.ir_gen->getInsertBlock()));
-        if (!bb || bb->getTerminator()) return;
+        if (!bb || aiml_llvm::terminator(bb)) return;
         for (auto fit = ctx.cleanupStack.rbegin(); fit != ctx.cleanupStack.rend(); ++fit)
             for (auto it = fit->rbegin(); it != fit->rend(); ++it) {
                 if (returnMayAliasHeap && it->ownershipId != NoOwnership && it->ownershipId == retBaseId
@@ -5461,7 +5462,7 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
                     // {obj, vtable} instead (same as the decl-site upcast).
                     llvm::Value* fat = nullptr;
                     auto* st = llvm::cast<llvm::StructType>(retTy);
-                    if (st->hasName() && st->getName().startswith("AimlFatPtr_")) {
+                    if (st->hasName() && st->getName().starts_with("AimlFatPtr_")) {
                         // a variable or a fresh `{ new: Concrete }` (declaredTypeOfExpr)
                         std::string srcType = declaredTypeOfExpr(retStmt->value.get());
                         // Upcast only from a concrete-class ptr; a source that is
@@ -5738,28 +5739,28 @@ static void emitSymbolValueTrace(CompilerContext& ctx, const char* phase, const 
     }
     // Keep the original phase/name prefix parseable; append context to the type label.
     std::string tracedType = (typeName.empty() ? "?" : typeName) + " | " + site;
-    llvm::Value* phaseS = ctx.builder.CreateGlobalStringPtr(phase);
-    llvm::Value* nameS  = ctx.builder.CreateGlobalStringPtr(name);
+    llvm::Value* phaseS = ctx.builder.CreateGlobalString(phase);
+    llvm::Value* nameS  = ctx.builder.CreateGlobalString(name);
     if (kind == 1) {  // string local: print the char* content (shows poison/garbage directly)
         llvm::Value* sptr = ctx.builder.CreateLoad(i8p, addr, "trace_str");
         llvm::Value* safe = ctx.builder.CreateSelect(ctx.builder.CreateICmpEQ(sptr,
             llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p))),
-            ctx.builder.CreateGlobalStringPtr("<null>"), sptr);
-        llvm::Value* fmt = ctx.builder.CreateGlobalStringPtr("[aiml-trace] %s %s (%s) slot@%p data@%p = \"%.256s\"\n");
+            ctx.builder.CreateGlobalString("<null>"), sptr);
+        llvm::Value* fmt = ctx.builder.CreateGlobalString("[aiml-trace] %s %s (%s) slot@%p data@%p = \"%.256s\"\n");
         ctx.builder.CreateCall(pf, { fmt, phaseS, nameS,
-            ctx.builder.CreateGlobalStringPtr(tracedType), addr, sptr, safe });
+            ctx.builder.CreateGlobalString(tracedType), addr, sptr, safe });
     } else if (kind == 2) {  // list: element count (struct field 0) + address
         llvm::Value* sz = ctx.builder.CreateLoad(ctx.builder.getInt32Ty(), addr, "trace_len");
-        llvm::Value* tyS = ctx.builder.CreateGlobalStringPtr(tracedType);
+        llvm::Value* tyS = ctx.builder.CreateGlobalString(tracedType);
         auto* listTy = ListImpl::getListStructType(ctx);
         llvm::Value* dataSlot = ctx.builder.CreateStructGEP(listTy, addr, 2);
         llvm::Value* data = ctx.builder.CreateLoad(i8p, dataSlot);
-        llvm::Value* fmt = ctx.builder.CreateGlobalStringPtr("[aiml-trace] %s %s (%s) len=%d slot@%p data@%p\n");
+        llvm::Value* fmt = ctx.builder.CreateGlobalString("[aiml-trace] %s %s (%s) len=%d slot@%p data@%p\n");
         ctx.builder.CreateCall(pf, { fmt, phaseS, nameS, tyS, sz, addr, data });
     } else if (kind == 4) {  // owned new-box: the alloca holds a heap pointer → load + print it
         llvm::Value* bptr = ctx.builder.CreateLoad(i8p, addr, "trace_box");
-        llvm::Value* tyS = ctx.builder.CreateGlobalStringPtr(tracedType);
-        llvm::Value* fmt = ctx.builder.CreateGlobalStringPtr("[aiml-trace] %s %s (%s) box@%p\n");
+        llvm::Value* tyS = ctx.builder.CreateGlobalString(tracedType);
+        llvm::Value* fmt = ctx.builder.CreateGlobalString("[aiml-trace] %s %s (%s) box@%p\n");
         ctx.builder.CreateCall(pf, { fmt, phaseS, nameS, tyS, bptr });
     } else if (kind == 5 || kind == 6) {  // interface fat-pointer: load obj slot (field 0) + print
         // kind 6 = DECL (from aimlTraceKind), kind 5 = DROP (from ScopeDrop.kind). Extract the
@@ -5773,12 +5774,12 @@ static void emitSymbolValueTrace(CompilerContext& ctx, const char* phase, const 
             llvm::Value* objField = ctx.builder.CreateStructGEP(fpTy, addr, 0, "trace_fp_obj");
             objp = ctx.builder.CreateLoad(i8p, objField, "trace_iface_obj");
         }
-        llvm::Value* tyS = ctx.builder.CreateGlobalStringPtr(tracedType);
-        llvm::Value* fmt = ctx.builder.CreateGlobalStringPtr("[aiml-trace] %s %s (%s) iface_obj@%p\n");
+        llvm::Value* tyS = ctx.builder.CreateGlobalString(tracedType);
+        llvm::Value* fmt = ctx.builder.CreateGlobalString("[aiml-trace] %s %s (%s) iface_obj@%p\n");
         ctx.builder.CreateCall(pf, { fmt, phaseS, nameS, tyS, objp });
     } else {  // model / map / other: address (+ type)
-        llvm::Value* tyS = ctx.builder.CreateGlobalStringPtr(tracedType);
-        llvm::Value* fmt = ctx.builder.CreateGlobalStringPtr("[aiml-trace] %s %s (%s) @%p\n");
+        llvm::Value* tyS = ctx.builder.CreateGlobalString(tracedType);
+        llvm::Value* fmt = ctx.builder.CreateGlobalString("[aiml-trace] %s %s (%s) @%p\n");
         ctx.builder.CreateCall(pf, { fmt, phaseS, nameS, tyS, addr });
     }
 }
@@ -6132,7 +6133,7 @@ void Compiler::visitBlockStmt(BlockStmt* block) {
     // step, so skipping here is a residual leak on that path, never a double-free).
     {
         auto* bb = static_cast<llvm::BasicBlock*>(ctx.ir_gen->unwrapBlock(ctx.ir_gen->getInsertBlock()));
-        if (bb && !bb->getTerminator() && ctx.lifetimeDropsEnabled) {
+        if (bb && !aiml_llvm::terminator(bb) && ctx.lifetimeDropsEnabled) {
             auto& frame = ctx.cleanupStack.back();
             // spec/61 §4/§9.2: gate each registered drop through the ownership plan's exit facts.
             // A drop fires only for a provably-owned, un-rebound slot (mayDrop). If there is no
@@ -6200,7 +6201,7 @@ void Compiler::visitIfStmt(IfStmt* ifStmt) {
     }
     {
         auto* bb = static_cast<llvm::BasicBlock*>(ctx.ir_gen->unwrapBlock(ctx.ir_gen->getInsertBlock()));
-        if (!bb->getTerminator()) ctx.ir_gen->createBr(mergeBB);
+        if (!aiml_llvm::terminator(bb)) ctx.ir_gen->createBr(mergeBB);
     }
 
     // ELSE branch
@@ -6208,7 +6209,7 @@ void Compiler::visitIfStmt(IfStmt* ifStmt) {
         ctx.ir_gen->setInsertPoint(elseBB);
         visitBlockStmt(ifStmt->elseBranch.get());
         auto* bb = static_cast<llvm::BasicBlock*>(ctx.ir_gen->unwrapBlock(ctx.ir_gen->getInsertBlock()));
-        if (!bb->getTerminator()) ctx.ir_gen->createBr(mergeBB);
+        if (!aiml_llvm::terminator(bb)) ctx.ir_gen->createBr(mergeBB);
     }
 
     // MERGE block
@@ -6245,7 +6246,7 @@ void Compiler::visitWhileStmt(WhileStmt* whileStmt) {
     }
     {
         auto* bb = static_cast<llvm::BasicBlock*>(ctx.ir_gen->unwrapBlock(ctx.ir_gen->getInsertBlock()));
-        if (!bb->getTerminator()) ctx.ir_gen->createBr(loopBB);
+        if (!aiml_llvm::terminator(bb)) ctx.ir_gen->createBr(loopBB);
     }
     
     // End Block
@@ -6273,7 +6274,7 @@ void Compiler::visitTry(TryStmt* tryStmt) {
     ctx.catchBlock = catchBlock;
     ctx.tryStack.push_back({catchBlock, excSlot, ctx.cleanupStack.size(), ctx.statementTemps.size()});
     visitBlockStmt(tryStmt->tryBlock.get());
-    if (!ctx.builder.GetInsertBlock()->getTerminator())
+    if (!aiml_llvm::terminator(ctx.builder.GetInsertBlock()))
         ctx.builder.CreateBr(contBlock);
     ctx.tryStack.pop_back();
     ctx.catchBlock = oldCatch;
@@ -6331,7 +6332,7 @@ void Compiler::visitTry(TryStmt* tryStmt) {
             std::vector<std::string> names;
             for (const auto& n : matchingNames(clause.type)) names.push_back(n);
             for (size_t k = 0; k < names.size(); ++k) {
-                llvm::Value* lit = ctx.builder.CreateGlobalStringPtr(names[k], "catch_type_name");
+                llvm::Value* lit = ctx.builder.CreateGlobalString(names[k], "catch_type_name");
                 llvm::Value* same = ctx.builder.CreateICmpEQ(
                     ctx.builder.CreateCall(strcmpFn, {typeTag, lit}, "exc_tag_cmp"),
                     ctx.builder.getInt32(0), "exc_tag_same");
@@ -6359,7 +6360,7 @@ void Compiler::visitTry(TryStmt* tryStmt) {
             }
             visitBlockStmt(clause.body.get());
         }
-        if (!ctx.builder.GetInsertBlock()->getTerminator()) {
+        if (!aiml_llvm::terminator(ctx.builder.GetInsertBlock())) {
             emitScopeDrop(ctx, ctx.cleanupStack.back().front());
             ctx.builder.CreateBr(contBlock);
         }
@@ -6472,7 +6473,7 @@ void Compiler::visitThrow(ThrowStmt* throwStmt) {
         typeTag = ctx.builder.CreateLoad(ptrTy, ctx.excRecordField(rec, 2, "exc_tag_slot"),
                                          "rethrow_tag");
     } else if (!excClass.empty()) {
-        typeTag = ctx.builder.CreateGlobalStringPtr(excClass, "exc_type_tag");
+        typeTag = ctx.builder.CreateGlobalString(excClass, "exc_type_tag");
     } else {
         typeTag = llvm::ConstantPointerNull::get(ptrTy);
     }
@@ -6957,7 +6958,7 @@ void Compiler::visitIdxStmt(IdxStmt* idx) {
             bool modelElem = ctx.lifetimeDropsEnabled && ciElem != ctx.classes.end()
                 && ciElem->second.hasHeapFields && ciElem->second.serNodesVar && ciElem->second.type
                 && !(llvm::cast<llvm::StructType>(elemTy)->hasName()
-                     && llvm::cast<llvm::StructType>(elemTy)->getName().startswith("AimlFatPtr_"));
+                     && llvm::cast<llvm::StructType>(elemTy)->getName().starts_with("AimlFatPtr_"));
             llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
             // spec/61 §5.5: a FRESH owned source (producer / copy / clone / deserialize call) cannot alias
             // the slot → free the old element and MOVE the temp in (deep-copying it would orphan it).

@@ -89,7 +89,7 @@ static llvm::Value* resolveLValueArrayAccess(CompilerContext& ctx, const std::st
         
         if (endStr.empty()) {
             if (sym.type->isArrayTy()) endVal = ctx.builder.getInt32(sym.type->getArrayNumElements());
-            else if (sym.type->isStructTy() && sym.type->getStructName().startswith("list_")) endVal = ListImpl::getSize(ctx, sym.alloca_inst);
+            else if (sym.type->isStructTy() && sym.type->getStructName().starts_with("list_")) endVal = ListImpl::getSize(ctx, sym.alloca_inst);
         } else {
             endVal = resolveValue(ctx, YAML::Node(endStr), evaluator);
         }
@@ -97,7 +97,7 @@ static llvm::Value* resolveLValueArrayAccess(CompilerContext& ctx, const std::st
         if (sym.type->isArrayTy()) {
              LOG_ERROR(ctx.fmtLoc() + "Slicing not supported for fixed arrays yet.");
              return nullptr;
-        } else if (sym.type->isStructTy() && sym.type->getStructName().startswith("list_")) {
+        } else if (sym.type->isStructTy() && sym.type->getStructName().starts_with("list_")) {
              return ListImpl::slice(ctx, sym.alloca_inst, startVal, endVal, sym.element_type);
         }
     }
@@ -106,7 +106,7 @@ static llvm::Value* resolveLValueArrayAccess(CompilerContext& ctx, const std::st
         llvm::Value* indexVal = resolveValue(ctx, YAML::Node(indexStr), evaluator); 
         std::vector<llvm::Value*> indices = {ctx.builder.getInt32(0), indexVal};
         return ctx.builder.CreateInBoundsGEP(sym.type, sym.alloca_inst, indices, varName + "_idx_" + indexStr);
-    } else if (sym.type->isStructTy() && sym.type->getStructName().startswith("list_")) {
+    } else if (sym.type->isStructTy() && sym.type->getStructName().starts_with("list_")) {
          llvm::Value* indexVal = resolveValue(ctx, YAML::Node(indexStr), evaluator);
          return ListImpl::getElementPtr(ctx, sym.alloca_inst, indexVal, sym.element_type);
     }
@@ -154,11 +154,11 @@ static llvm::Value* resolvePropertyOrEnum(CompilerContext& ctx, const std::strin
 
      if (ctx.symbol_table.count(objName)) {
          Symbol& sym = ctx.symbol_table[objName];
-         if (sym.type->isStructTy() && sym.type->getStructName().startswith("list_")) {
+         if (sym.type->isStructTy() && sym.type->getStructName().starts_with("list_")) {
              if (propName == "len") return ListImpl::getSize(ctx, sym.alloca_inst);
              else if (propName == "empty") return ctx.builder.CreateZExt(ListImpl::isEmpty(ctx, sym.alloca_inst), ctx.builder.getInt32Ty());
          }
-         else if (sym.type->isStructTy() && sym.type->getStructName().startswith("map_")) {
+         else if (sym.type->isStructTy() && sym.type->getStructName().starts_with("map_")) {
               if (propName == "len") return MapImpl::getSize(ctx, sym.alloca_inst, llvm::cast<llvm::StructType>(sym.type));
          }
      }
@@ -185,7 +185,7 @@ static llvm::Value* resolveLValueLoad(CompilerContext& ctx, const std::string& a
                  llvm::LoadInst* load = ctx.builder.CreateLoad(type->getArrayElementType(), lvalue, "arr_elem_load");
                  if (ctx.symbol_table[varName].is_volatile) load->setVolatile(true);
                  return load;
-             } else if (type->isStructTy() && type->getStructName().startswith("list_")) {
+             } else if (type->isStructTy() && type->getStructName().starts_with("list_")) {
                   llvm::LoadInst* load = ctx.builder.CreateLoad(ctx.symbol_table[varName].element_type, lvalue, "list_elem_load");
                   if (ctx.symbol_table[varName].is_volatile) load->setVolatile(true);
                   return load;
@@ -268,7 +268,7 @@ llvm::Value* resolveValue(CompilerContext& ctx, const YAML::Node& argNode, Compi
         return StringUtils::expandExpression(ctx, argStr, evaluator); // evaluator or nullptr handled nicely now
     }
     
-    return ctx.builder.CreateGlobalStringPtr(argStr);
+    return ctx.builder.CreateGlobalString(argStr);
 }
 
 } // namespace Utils
